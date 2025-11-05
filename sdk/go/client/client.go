@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agentfield/agentfield/sdk/go/types"
+	"github.com/your-org/agentfield/sdk/go/types"
 )
 
 // Client provides a thin wrapper over the AgentField control plane REST API.

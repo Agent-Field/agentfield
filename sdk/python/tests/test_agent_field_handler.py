@@ -131,7 +131,9 @@ async def test_register_with_agentfield_server_reorders_candidates(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_register_with_agentfield_server_propagates_request_exception(monkeypatch):
+async def test_register_with_agentfield_server_propagates_request_exception(
+    monkeypatch,
+):
     class DummyResponse:
         def __init__(self):
             self.status_code = 503

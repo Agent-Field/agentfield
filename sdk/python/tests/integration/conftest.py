@@ -72,7 +72,9 @@ def agentfield_binary(tmp_path_factory: pytest.TempPathFactory) -> Path:
     if not agentfield_go_root.exists():
         pytest.skip("AgentField server sources not available in this checkout")
     build_dir = tmp_path_factory.mktemp("agentfield-server-bin")
-    binary_name = "agentfield-test-server.exe" if os.name == "nt" else "agentfield-test-server"
+    binary_name = (
+        "agentfield-test-server.exe" if os.name == "nt" else "agentfield-test-server"
+    )
     binary_path = build_dir / binary_name
 
     releases_dir = agentfield_go_root / "dist" / "releases"
@@ -182,7 +184,9 @@ def agentfield_server(
         else:
             raise RuntimeError("AgentField server did not become healthy in time")
 
-        yield AgentFieldServerInfo(base_url=base_url, port=port, agentfield_home=agentfield_home)
+        yield AgentFieldServerInfo(
+            base_url=base_url, port=port, agentfield_home=agentfield_home
+        )
 
     finally:
         if process.poll() is None:

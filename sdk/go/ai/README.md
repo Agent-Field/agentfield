@@ -18,8 +18,8 @@ This package provides AI/LLM capabilities for the AgentField Go SDK, supporting 
 ```go
 import (
     "context"
-    "github.com/agentfield/agentfield/sdk/go/agent"
-    "github.com/agentfield/agentfield/sdk/go/ai"
+    "github.com/your-org/agentfield/sdk/go/agent"
+    "github.com/your-org/agentfield/sdk/go/ai"
 )
 
 // Create agent with AI configured

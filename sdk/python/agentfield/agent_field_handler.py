@@ -132,7 +132,9 @@ class AgentFieldHandler:
             if success:
                 if payload:
                     self.agent._apply_discovery_response(payload)
-                log_success(f"Registered node '{self.agent.node_id}' with AgentField server")
+                log_success(
+                    f"Registered node '{self.agent.node_id}' with AgentField server"
+                )
                 self.agent.agentfield_connected = True
 
                 # Attempt DID registration after successful AgentField registration
@@ -189,7 +191,9 @@ class AgentFieldHandler:
     ):  # pragma: no cover - long-running thread loop
         """Background worker that sends periodic heartbeats"""
         if not self.agent.agentfield_connected:
-            log_heartbeat("Heartbeat worker skipped - not connected to AgentField server")
+            log_heartbeat(
+                "Heartbeat worker skipped - not connected to AgentField server"
+            )
             return
 
         log_heartbeat(f"Starting heartbeat worker (interval: {interval}s)")

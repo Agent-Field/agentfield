@@ -2727,14 +2727,14 @@ func (ls *LocalStorage) CleanupWorkflow(ctx context.Context, identifier string, 
 	if trimmedID == "" {
 		errMsg := "workflow ID cannot be empty"
 		result.ErrorMessage = &errMsg
-		return result, fmt.Errorf(errMsg)
+		return result, errors.New(errMsg)
 	}
 
 	targets, err := ls.resolveWorkflowCleanupTargets(ctx, trimmedID)
 	if err != nil {
 		errMsg := fmt.Sprintf("failed to resolve workflow cleanup targets: %v", err)
 		result.ErrorMessage = &errMsg
-		return result, fmt.Errorf(errMsg)
+		return result, errors.New(errMsg)
 	}
 
 	if targets.primaryWorkflowID != "" {
@@ -2759,20 +2759,20 @@ func (ls *LocalStorage) CleanupWorkflow(ctx context.Context, identifier string, 
 	if err != nil {
 		errMsg := fmt.Sprintf("failed to begin cleanup transaction: %v", err)
 		result.ErrorMessage = &errMsg
-		return result, fmt.Errorf(errMsg)
+		return result, errors.New(errMsg)
 	}
 	defer tx.Rollback()
 
 	if err := ls.performWorkflowCleanup(ctx, tx, targets); err != nil {
 		errMsg := fmt.Sprintf("failed to cleanup workflow: %v", err)
 		result.ErrorMessage = &errMsg
-		return result, fmt.Errorf(errMsg)
+		return result, errors.New(errMsg)
 	}
 
 	if err := tx.Commit(); err != nil {
 		errMsg := fmt.Sprintf("failed to commit cleanup transaction: %v", err)
 		result.ErrorMessage = &errMsg
-		return result, fmt.Errorf(errMsg)
+		return result, errors.New(errMsg)
 	}
 
 	result.Success = true

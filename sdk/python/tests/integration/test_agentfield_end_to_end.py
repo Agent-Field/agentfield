@@ -57,7 +57,9 @@ async def test_agent_registration_and_status_propagation(agentfield_server, run_
     await agent.agentfield_handler.register_with_agentfield_server(runtime.port)
     assert agent.agentfield_connected is True
 
-    async with httpx.AsyncClient(base_url=agentfield_server.base_url, timeout=5.0) as client:
+    async with httpx.AsyncClient(
+        base_url=agentfield_server.base_url, timeout=5.0
+    ) as client:
         node = await _wait_for_node(client, agent.node_id)
         assert any(r["id"] == "ping" for r in node.get("reasoners", []))
 
@@ -89,7 +91,9 @@ async def test_reasoner_execution_roundtrip(agentfield_server, run_agent):
     agent._current_status = AgentStatus.READY
     await agent.agentfield_handler.send_enhanced_heartbeat()
 
-    async with httpx.AsyncClient(base_url=agentfield_server.base_url, timeout=5.0) as client:
+    async with httpx.AsyncClient(
+        base_url=agentfield_server.base_url, timeout=5.0
+    ) as client:
         await _wait_for_node(client, agent.node_id)
         await _wait_for_status(client, agent.node_id, expected="ready")
 

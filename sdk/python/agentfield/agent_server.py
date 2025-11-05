@@ -562,7 +562,10 @@ class AgentServer:
 
             # Stop heartbeat
             try:
-                if hasattr(self.agent, "agentfield_handler") and self.agent.agentfield_handler:
+                if (
+                    hasattr(self.agent, "agentfield_handler")
+                    and self.agent.agentfield_handler
+                ):
                     self.agent.agentfield_handler.stop_heartbeat()
                     if self.agent.dev_mode:
                         log_debug("Heartbeat stopped")
@@ -928,7 +931,10 @@ class AgentServer:
             """Resilient lifecycle startup: connection manager handles AgentField server connectivity"""
 
             # Initialize connection manager
-            from agentfield.connection_manager import ConnectionConfig, ConnectionManager
+            from agentfield.connection_manager import (
+                ConnectionConfig,
+                ConnectionManager,
+            )
 
             # Configure connection manager with reasonable retry interval
             config = ConnectionConfig(
@@ -942,7 +948,9 @@ class AgentServer:
             # Set up callbacks for connection state changes
             def on_connected():
                 if self.agent.dev_mode:
-                    log_info("Connected to AgentField server - full functionality available")
+                    log_info(
+                        "Connected to AgentField server - full functionality available"
+                    )
                 # Kick a heartbeat immediately so the control plane renews the lease
                 try:
                     asyncio.create_task(

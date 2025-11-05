@@ -448,7 +448,9 @@ class Agent(FastAPI):
         self.async_config = async_config or AsyncConfig.from_environment()
 
         # Initialize AgentFieldClient with async configuration
-        self.client = AgentFieldClient(base_url=agentfield_server, async_config=self.async_config)
+        self.client = AgentFieldClient(
+            base_url=agentfield_server, async_config=self.async_config
+        )
         self._current_execution_context: Optional[ExecutionContext] = None
 
         # Initialize async execution manager (will be lazily created when needed)
@@ -2128,7 +2130,8 @@ class Agent(FastAPI):
 
                 # Check if async execution is enabled and available
                 use_async_execution = (
-                    self.async_config.enable_async_execution and self.agentfield_connected
+                    self.async_config.enable_async_execution
+                    and self.agentfield_connected
                 )
 
                 if use_async_execution:

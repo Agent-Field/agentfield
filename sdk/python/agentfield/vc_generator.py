@@ -128,7 +128,9 @@ class VCGenerator:
 
             # Send VC generation request to AgentField Server
             response = requests.post(
-                f"{self.agentfield_server_url}/api/v1/execution/vc", json=vc_data, timeout=10
+                f"{self.agentfield_server_url}/api/v1/execution/vc",
+                json=vc_data,
+                timeout=10,
             )
 
             if response.status_code == 200:

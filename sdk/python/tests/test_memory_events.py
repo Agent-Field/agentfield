@@ -6,7 +6,11 @@ import websockets
 
 import pytest
 
-from agentfield.memory_events import PatternMatcher, EventSubscription, MemoryEventClient
+from agentfield.memory_events import (
+    PatternMatcher,
+    EventSubscription,
+    MemoryEventClient,
+)
 from agentfield.types import MemoryChangeEvent
 
 

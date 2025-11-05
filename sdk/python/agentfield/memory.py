@@ -21,7 +21,9 @@ class MemoryClient:
     and automatically includes execution context headers for proper scoping.
     """
 
-    def __init__(self, agentfield_client: AgentFieldClient, execution_context: ExecutionContext):
+    def __init__(
+        self, agentfield_client: AgentFieldClient, execution_context: ExecutionContext
+    ):
         self.agentfield_client = agentfield_client
         self.execution_context = execution_context
 

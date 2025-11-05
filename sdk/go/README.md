@@ -5,7 +5,7 @@ The AgentField Go SDK provides idiomatic Go bindings for interacting with the Ag
 ## Installation
 
 ```bash
-go get github.com/agentfield/agentfield/sdk/go
+go get github.com/your-org/agentfield/sdk/go
 ```
 
 ## Quick Start
@@ -17,7 +17,7 @@ import (
     "context"
     "log"
 
-    agentfieldagent "github.com/agentfield/agentfield/sdk/go/agent"
+    agentfieldagent "github.com/your-org/agentfield/sdk/go/agent"
 )
 
 func main() {

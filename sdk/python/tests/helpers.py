@@ -226,7 +226,9 @@ def create_test_agent(
             self.api_base = f"{base_url}/api/v1"
             self.async_config = async_config
 
-    def _agentfield_client_factory(base_url: str, async_config: Any) -> _FakeAgentFieldClient:
+    def _agentfield_client_factory(
+        base_url: str, async_config: Any
+    ) -> _FakeAgentFieldClient:
         return _FakeAgentFieldClient(base_url, async_config)
 
     class _FakeMemoryClient:

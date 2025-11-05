@@ -40,8 +40,12 @@ class AgentFieldLogger:
         # Configuration from environment variables - default to WARNING (only important events)
         self.log_level = os.getenv("AGENTFIELD_LOG_LEVEL", "WARNING").upper()
         self.truncate_length = int(os.getenv("AGENTFIELD_LOG_TRUNCATE", "200"))
-        self.show_payloads = os.getenv("AGENTFIELD_LOG_PAYLOADS", "false").lower() == "true"
-        self.show_tracking = os.getenv("AGENTFIELD_LOG_TRACKING", "false").lower() == "true"
+        self.show_payloads = (
+            os.getenv("AGENTFIELD_LOG_PAYLOADS", "false").lower() == "true"
+        )
+        self.show_tracking = (
+            os.getenv("AGENTFIELD_LOG_TRACKING", "false").lower() == "true"
+        )
         self.show_fire = os.getenv("AGENTFIELD_LOG_FIRE", "false").lower() == "true"
 
         # Set logger level based on configuration
