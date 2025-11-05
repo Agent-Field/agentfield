@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -292,7 +293,7 @@ func (cd *CapabilityDiscovery) discoverServerCapability(serverAlias string) (*MC
 	}
 
 	// Update config file with detected transport type
-	if capability != nil && capability.Transport != "" {
+	if capability.Transport != "" {
 		if err := cd.updateConfigWithTransport(serverAlias, capability.Transport); err != nil {
 			fmt.Printf("Warning: failed to update transport in config for %s: %v\n", serverAlias, err)
 		}
@@ -332,12 +333,7 @@ func (cd *CapabilityDiscovery) CacheCapabilities(serverAlias string, tools []MCP
 	// Convert resources to cached format
 	cachedResources := make([]CachedResource, len(resources))
 	for i, resource := range resources {
-		cachedResources[i] = CachedResource{
-			URI:         resource.URI,
-			Name:        resource.Name,
-			Description: resource.Description,
-			MimeType:    resource.MimeType,
-		}
+		cachedResources[i] = CachedResource(resource)
 	}
 
 	capabilities := struct {
@@ -521,19 +517,27 @@ func (cd *CapabilityDiscovery) tryStdioDiscovery(serverAlias string, metadata MC
 		stderr.Close()
 
 		if cmd.Process != nil {
+			forceKill := func(reason string) {
+				if killErr := cmd.Process.Kill(); killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
+					fmt.Printf("⚠️  Failed to force kill MCP server (%s): %v\n", reason, killErr)
+				}
+			}
+
 			// Try graceful shutdown first
 			if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 				// Force kill if graceful shutdown fails
-				cmd.Process.Kill()
+				forceKill("sigterm")
 			} else {
 				// Wait briefly for graceful shutdown
 				time.Sleep(1 * time.Second)
 				// Check if still running and force kill if needed
 				if cmd.ProcessState == nil || !cmd.ProcessState.Exited() {
-					cmd.Process.Kill()
+					forceKill("graceful timeout")
 				}
 			}
-			cmd.Wait() // Wait for cleanup
+			if waitErr := cmd.Wait(); waitErr != nil && !errors.Is(waitErr, os.ErrProcessDone) {
+				fmt.Printf("⚠️  MCP server wait returned error: %v\n", waitErr)
+			}
 		}
 	}()
 
@@ -1126,6 +1130,9 @@ func (cd *CapabilityDiscovery) parseMCPMetadata(mcpData map[string]interface{}) 
 }
 
 // Helper functions for extracting names from code patterns
+//
+//nolint:unused // Reserved for enhanced static analysis
+//nolint:unused // reserved for future JS analysis fallback improvements
 func (cd *CapabilityDiscovery) extractToolNameFromJS(line string) string {
 	// Simple extraction - could be enhanced
 	if strings.Contains(line, "CallToolRequestSchema") {
@@ -1135,6 +1142,8 @@ func (cd *CapabilityDiscovery) extractToolNameFromJS(line string) string {
 	return ""
 }
 
+//nolint:unused // Reserved for enhanced static analysis
+//nolint:unused // reserved for future JS analysis fallback improvements
 func (cd *CapabilityDiscovery) extractResourceNameFromJS(line string) string {
 	// Simple extraction - could be enhanced
 	if strings.Contains(line, "ListResourcesRequestSchema") {

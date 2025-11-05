@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/your-org/agentfield/control-plane/internal/events"
 	"github.com/your-org/agentfield/control-plane/pkg/types"
@@ -277,12 +276,4 @@ func (s *testExecutionStorage) QueryExecutionRecords(ctx context.Context, filter
 		results = append(results, &copy)
 	}
 	return results, nil
-}
-
-func ptrTime(t time.Time) *time.Time {
-	return &t
-}
-
-func ptrInt64(v int64) *int64 {
-	return &v
 }

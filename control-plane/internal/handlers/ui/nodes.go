@@ -80,8 +80,9 @@ func (h *NodesHandler) StreamNodeEventsHandler(c *gin.Context) {
 	}
 
 	if eventJSON, err := json.Marshal(initialEvent); err == nil {
-		c.Writer.WriteString("data: " + string(eventJSON) + "\n\n")
-		c.Writer.Flush()
+		if !writeSSE(c, eventJSON) {
+			return
+		}
 	}
 
 	// Set up context for handling client disconnection
@@ -105,8 +106,9 @@ func (h *NodesHandler) StreamNodeEventsHandler(c *gin.Context) {
 			}
 
 			// Send event to client using SSE format
-			c.Writer.WriteString("data: " + string(eventData) + "\n\n")
-			c.Writer.Flush()
+			if !writeSSE(c, eventData) {
+				return
+			}
 
 			logger.Logger.Debug().Msgf("📡 Sent node event to client %s: %s", subscriberID, event.Type)
 
@@ -117,8 +119,9 @@ func (h *NodesHandler) StreamNodeEventsHandler(c *gin.Context) {
 				"timestamp": time.Now().Format(time.RFC3339),
 			}
 			if heartbeatJSON, err := json.Marshal(heartbeatEvent); err == nil {
-				c.Writer.WriteString("data: " + string(heartbeatJSON) + "\n\n")
-				c.Writer.Flush()
+				if !writeSSE(c, heartbeatJSON) {
+					return
+				}
 			}
 
 		case <-ctx.Done():

@@ -2,13 +2,15 @@ package handlers
 
 import (
 	"encoding/json"
-	"github.com/your-org/agentfield/control-plane/internal/storage"
-	"github.com/your-org/agentfield/control-plane/pkg/types"
 	"net/http"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/your-org/agentfield/control-plane/internal/logger"
+	"github.com/your-org/agentfield/control-plane/internal/storage"
+	"github.com/your-org/agentfield/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -50,7 +52,9 @@ func (h *MemoryEventsHandler) WebSocketHandler(c *gin.Context) {
 	// Subscribe to memory changes
 	eventChan, err := h.storage.SubscribeToMemoryChanges(ctx, scope, scopeID)
 	if err != nil {
-		conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "failed to subscribe to events"))
+		if writeErr := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "failed to subscribe to events")); writeErr != nil {
+			logger.Logger.Warn().Err(writeErr).Msg("failed to send websocket close message")
+		}
 		return
 	}
 
@@ -58,7 +62,9 @@ func (h *MemoryEventsHandler) WebSocketHandler(c *gin.Context) {
 	go func() {
 		for {
 			if _, _, err := conn.NextReader(); err != nil {
-				conn.Close()
+				if closeErr := conn.Close(); closeErr != nil {
+					logger.Logger.Debug().Err(closeErr).Msg("websocket close returned error")
+				}
 				break
 			}
 		}

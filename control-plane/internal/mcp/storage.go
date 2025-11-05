@@ -174,7 +174,7 @@ func (s *YAMLConfigStorage) UpdateConfig(alias string, updateFn func(currentConf
 		return err
 	}
 
-	currentConfig, _ := cfg.Dependencies.MCPServers[alias] // currentConfig will be nil if not found
+	currentConfig := cfg.Dependencies.MCPServers[alias] // currentConfig will be nil if not found
 
 	newConfig, err := updateFn(currentConfig)
 	if err != nil {

@@ -2,6 +2,7 @@ package packages
 
 import (
 	"archive/zip"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -276,7 +277,9 @@ func (gi *GitHubInstaller) extractZip(src, dest string) error {
 		}
 
 		if file.FileInfo().IsDir() {
-			os.MkdirAll(path, file.FileInfo().Mode())
+			if err := os.MkdirAll(path, file.FileInfo().Mode()); err != nil {
+				return err
+			}
 			continue
 		}
 
@@ -361,7 +364,11 @@ func (gi *GitHubInstaller) updateRegistryWithGitHub(metadata *PackageMetadata, i
 	}
 
 	if data, err := os.ReadFile(registryPath); err == nil {
-		yaml.Unmarshal(data, registry)
+		if err := yaml.Unmarshal(data, registry); err != nil {
+			return fmt.Errorf("failed to parse registry %s: %w", registryPath, err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("failed to read registry %s: %w", registryPath, err)
 	}
 
 	// Add/update package entry with GitHub information

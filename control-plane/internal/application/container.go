@@ -3,14 +3,16 @@ package application
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"path/filepath"
+
 	"github.com/your-org/agentfield/control-plane/internal/cli/framework"
 	"github.com/your-org/agentfield/control-plane/internal/config"
 	"github.com/your-org/agentfield/control-plane/internal/core/services"
 	"github.com/your-org/agentfield/control-plane/internal/infrastructure/process"
 	"github.com/your-org/agentfield/control-plane/internal/infrastructure/storage"
+	"github.com/your-org/agentfield/control-plane/internal/logger"
 	didServices "github.com/your-org/agentfield/control-plane/internal/services"
 	storageInterface "github.com/your-org/agentfield/control-plane/internal/storage"
-	"path/filepath"
 )
 
 // CreateServiceContainer creates and wires up all services for the CLI commands
@@ -72,15 +74,21 @@ func CreateServiceContainer(cfg *config.Config, agentfieldHome string) *framewor
 			// Generate af server ID based on agentfield home directory
 			// This ensures each agentfield instance has a unique ID while being deterministic
 			agentfieldServerID := generateAgentFieldServerID(agentfieldHome)
-			didService.Initialize(agentfieldServerID)
+			if err := didService.Initialize(agentfieldServerID); err != nil {
+				logger.Logger.Warn().Err(err).Msg("failed to initialize DID service")
+				didService = nil
+			} else {
+				// Create VC service with database storage (required)
+				if storageProvider != nil {
+					vcService = didServices.NewVCService(&cfg.Features.DID, didService, storageProvider)
+				}
 
-			// Create VC service with database storage (required)
-			if storageProvider != nil {
-				vcService = didServices.NewVCService(&cfg.Features.DID, didService, storageProvider)
-			}
-
-			if vcService != nil {
-				vcService.Initialize()
+				if vcService != nil {
+					if err := vcService.Initialize(); err != nil {
+						logger.Logger.Warn().Err(err).Msg("failed to initialize VC service")
+						vcService = nil
+					}
+				}
 			}
 		}
 	}

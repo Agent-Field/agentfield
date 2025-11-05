@@ -74,14 +74,11 @@ func (ls *LocalStorage) startEventCleanup() {
 	ticker := time.NewTicker(1 * time.Hour) // Clean up every hour
 	defer ticker.Stop()
 
-	for {
-		select {
-		case <-ticker.C:
-			if ls.mode == "postgres" {
-				ls.cleanupExpiredEventsPostgres()
-			} else {
-				ls.cleanupExpiredEvents()
-			}
+	for range ticker.C {
+		if ls.mode == "postgres" {
+			ls.cleanupExpiredEventsPostgres()
+		} else {
+			ls.cleanupExpiredEvents()
 		}
 	}
 }

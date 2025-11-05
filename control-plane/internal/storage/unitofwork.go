@@ -209,11 +209,7 @@ func (uow *unitOfWorkImpl) executeCommit() error {
 		uow.tx = tx
 	}
 
-	defer func() {
-		if uow.tx != nil {
-			uow.tx.Rollback() // Will be no-op if tx.Commit() succeeds
-		}
-	}()
+	defer rollbackTx(uow.tx, "unitOfWork:executeCommit")
 
 	// Execute all changes in order
 	for i, change := range uow.changes {

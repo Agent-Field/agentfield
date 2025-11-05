@@ -538,7 +538,13 @@ func (s *AgentFieldServer) checkCacheHealth(ctx context.Context) gin.H {
 	}
 
 	// Clean up
-	s.cache.Delete(testKey)
+	if err := s.cache.Delete(testKey); err != nil {
+		return gin.H{
+			"status":        "unhealthy",
+			"message":       fmt.Sprintf("cache delete operation failed: %v", err),
+			"response_time": time.Since(startTime).Milliseconds(),
+		}
+	}
 
 	return gin.H{
 		"status":        "healthy",

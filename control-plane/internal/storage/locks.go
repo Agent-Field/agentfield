@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	locksBucket = "locks"
+	locksBucket = "locks" //nolint:unused // Reserved for future use
 )
 
 // AcquireLock attempts to acquire a distributed lock.

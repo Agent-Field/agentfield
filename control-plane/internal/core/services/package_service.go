@@ -307,7 +307,9 @@ type Spinner struct {
 }
 
 // Color helper methods
-func (ps *DefaultPackageService) green(text string) string  { return green(text) }
+func (ps *DefaultPackageService) green(text string) string { return green(text) }
+
+//nolint:unused // retained for console color helpers
 func (ps *DefaultPackageService) red(text string) string    { return red(text) }
 func (ps *DefaultPackageService) yellow(text string) string { return yellow(text) }
 func (ps *DefaultPackageService) blue(text string) string   { return blue(text) }
@@ -315,7 +317,9 @@ func (ps *DefaultPackageService) cyan(text string) string   { return cyan(text) 
 func (ps *DefaultPackageService) gray(text string) string   { return gray(text) }
 func (ps *DefaultPackageService) bold(text string) string   { return bold(text) }
 func (ps *DefaultPackageService) statusSuccess() string     { return statusSuccess }
-func (ps *DefaultPackageService) statusError() string       { return statusError }
+
+//nolint:unused // retained for console status helpers
+func (ps *DefaultPackageService) statusError() string { return statusError }
 
 // newSpinner creates a new spinner with the given message
 func (ps *DefaultPackageService) newSpinner(message string) *Spinner {
@@ -424,7 +428,9 @@ func (ps *DefaultPackageService) isPackageInstalled(packageName string) bool {
 	}
 
 	if data, err := os.ReadFile(registryPath); err == nil {
-		yaml.Unmarshal(data, registry)
+		if err := yaml.Unmarshal(data, registry); err != nil {
+			return false
+		}
 	}
 
 	_, exists := registry.Installed[packageName]
@@ -508,11 +514,9 @@ func (ps *DefaultPackageService) installDependencies(packagePath string, metadat
 			pipPath = filepath.Join(venvPath, "Scripts", "pip.exe") // Windows
 		}
 
-		// Upgrade pip first
+		// Upgrade pip first (ignore failures)
 		cmd = exec.Command(pipPath, "install", "--upgrade", "pip")
-		if _, err := cmd.CombinedOutput(); err != nil {
-			// Ignore pip upgrade failures
-		}
+		_, _ = cmd.CombinedOutput()
 
 		// Install from requirements.txt if it exists
 		requirementsPath := filepath.Join(packagePath, "requirements.txt")
@@ -561,7 +565,9 @@ func (ps *DefaultPackageService) updateRegistry(metadata *packages.PackageMetada
 	}
 
 	if data, err := os.ReadFile(registryPath); err == nil {
-		yaml.Unmarshal(data, registry)
+		if err := yaml.Unmarshal(data, registry); err != nil {
+			return fmt.Errorf("failed to parse registry: %w", err)
+		}
 	}
 
 	// Add/update package entry

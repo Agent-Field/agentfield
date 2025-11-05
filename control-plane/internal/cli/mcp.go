@@ -538,7 +538,7 @@ func runMCPRemoveCommand(cmd *cobra.Command, args []string, force bool) error {
 
 	if err := manager.Remove(alias); err != nil {
 		if !force && strings.Contains(err.Error(), "is running") {
-			PrintError(fmt.Sprintf("MCP server is running. Stop it first or use --force"))
+			PrintError("MCP server is running. Stop it first or use --force")
 			return err
 		}
 		PrintError(fmt.Sprintf("Failed to remove MCP server: %v", err))

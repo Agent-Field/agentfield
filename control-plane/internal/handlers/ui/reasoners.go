@@ -490,8 +490,9 @@ func (h *ReasonersHandler) StreamReasonerEventsHandler(c *gin.Context) {
 	}
 
 	if eventJSON, err := json.Marshal(initialEvent); err == nil {
-		c.Writer.WriteString("data: " + string(eventJSON) + "\n\n")
-		c.Writer.Flush()
+		if !writeSSE(c, eventJSON) {
+			return
+		}
 	}
 
 	// Set up context for handling client disconnection
@@ -516,8 +517,9 @@ func (h *ReasonersHandler) StreamReasonerEventsHandler(c *gin.Context) {
 				"timestamp": time.Now().Format(time.RFC3339),
 			}
 			if heartbeatJSON, err := json.Marshal(heartbeat); err == nil {
-				c.Writer.WriteString("data: " + string(heartbeatJSON) + "\n\n")
-				c.Writer.Flush()
+				if !writeSSE(c, heartbeatJSON) {
+					return
+				}
 			}
 		case event, ok := <-eventChan:
 			if !ok {
@@ -528,8 +530,9 @@ func (h *ReasonersHandler) StreamReasonerEventsHandler(c *gin.Context) {
 
 			// Convert event to JSON and send
 			if eventJSON, err := event.ToJSON(); err == nil {
-				c.Writer.WriteString("data: " + eventJSON + "\n\n")
-				c.Writer.Flush()
+				if !writeSSE(c, []byte(eventJSON)) {
+					return
+				}
 				fmt.Printf("📤 Sent reasoner event %s to client %s\n", event.Type, subscriberID)
 			}
 		}

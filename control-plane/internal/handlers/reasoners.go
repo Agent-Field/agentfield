@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,6 +22,15 @@ import (
 type ExecuteReasonerRequest struct {
 	Input   map[string]interface{} `json:"input" binding:"required"`
 	Context map[string]interface{} `json:"context,omitempty"`
+}
+
+func persistWorkflowExecution(ctx context.Context, storageProvider storage.StorageProvider, execution *types.WorkflowExecution) {
+	if err := storageProvider.StoreWorkflowExecution(ctx, execution); err != nil {
+		logger.Logger.Error().
+			Err(err).
+			Str("execution_id", execution.ExecutionID).
+			Msg("failed to persist workflow execution state")
+	}
 }
 
 // ExecuteReasonerResponse represents the response from executing a reasoner
@@ -181,7 +191,7 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 			duration := endTime.Sub(startTime).Milliseconds()
 			workflowExecution.DurationMS = &duration
 			workflowExecution.UpdatedAt = endTime
-			storageProvider.StoreWorkflowExecution(ctx, workflowExecution)
+			persistWorkflowExecution(ctx, storageProvider, workflowExecution)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create agent request"})
 			return
 		}
@@ -235,7 +245,7 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 			workflowExecution.UpdatedAt = endTime
 
 			// Store execution record
-			storageProvider.StoreWorkflowExecution(ctx, workflowExecution)
+			persistWorkflowExecution(ctx, storageProvider, workflowExecution)
 
 			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"error": fmt.Sprintf("failed to call agent node: %v", err),
@@ -258,7 +268,7 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 			workflowExecution.UpdatedAt = endTime
 
 			// Store execution record
-			storageProvider.StoreWorkflowExecution(ctx, workflowExecution)
+			persistWorkflowExecution(ctx, storageProvider, workflowExecution)
 
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read agent response"})
 			return
@@ -278,7 +288,7 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 			workflowExecution.UpdatedAt = endTime
 
 			// Store execution record
-			storageProvider.StoreWorkflowExecution(ctx, workflowExecution)
+			persistWorkflowExecution(ctx, storageProvider, workflowExecution)
 
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to parse agent response"})
 			return
@@ -295,10 +305,8 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 		workflowExecution.UpdatedAt = endTime
 
 		// Store execution record
-		if err := storageProvider.StoreWorkflowExecution(ctx, workflowExecution); err != nil {
-			// Log error but don't fail the request
-			logger.Logger.Error().Err(err).Msg("Failed to store workflow execution")
-		}
+		// Store execution record
+		persistWorkflowExecution(ctx, storageProvider, workflowExecution)
 
 		// Set response headers
 		c.Header("X-Workflow-ID", workflowID)
@@ -467,7 +475,7 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 			duration := endTime.Sub(startTime).Milliseconds()
 			workflowExecution.DurationMS = &duration
 			workflowExecution.UpdatedAt = endTime
-			storageProvider.StoreWorkflowExecution(ctx, workflowExecution)
+			persistWorkflowExecution(ctx, storageProvider, workflowExecution)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create agent request"})
 			return
 		}
@@ -521,7 +529,7 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 			workflowExecution.UpdatedAt = endTime
 
 			// Store execution record
-			storageProvider.StoreWorkflowExecution(ctx, workflowExecution)
+			persistWorkflowExecution(ctx, storageProvider, workflowExecution)
 
 			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"error": fmt.Sprintf("failed to call agent node: %v", err),
@@ -544,7 +552,7 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 			workflowExecution.UpdatedAt = endTime
 
 			// Store execution record
-			storageProvider.StoreWorkflowExecution(ctx, workflowExecution)
+			persistWorkflowExecution(ctx, storageProvider, workflowExecution)
 
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read agent response"})
 			return
@@ -564,7 +572,7 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 			workflowExecution.UpdatedAt = endTime
 
 			// Store execution record
-			storageProvider.StoreWorkflowExecution(ctx, workflowExecution)
+			persistWorkflowExecution(ctx, storageProvider, workflowExecution)
 
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to parse agent response"})
 			return
@@ -581,10 +589,7 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 		workflowExecution.UpdatedAt = endTime
 
 		// Store execution record
-		if err := storageProvider.StoreWorkflowExecution(ctx, workflowExecution); err != nil {
-			// Log error but don't fail the request
-			logger.Logger.Error().Err(err).Msg("Failed to store workflow execution")
-		}
+		persistWorkflowExecution(ctx, storageProvider, workflowExecution)
 
 		// Set response headers
 		c.Header("X-Workflow-ID", workflowID)

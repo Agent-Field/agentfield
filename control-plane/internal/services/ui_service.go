@@ -265,7 +265,7 @@ func (s *UIService) DeregisterClient(clientChan chan NodeEvent) {
 		// Use a safe close approach
 		defer func() {
 			if r := recover(); r != nil {
-				// Channel was already closed, ignore the panic
+				logger.Logger.Debug().Msg("attempted to close an already-closed SSE client channel")
 			}
 		}()
 		close(clientChan)

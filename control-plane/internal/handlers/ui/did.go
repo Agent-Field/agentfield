@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/your-org/agentfield/control-plane/internal/services"
@@ -303,7 +305,7 @@ func (h *DIDHandler) GetExecutionVCHandler(c *gin.Context) {
 		return
 	}
 
-	if executionVC.VCDocument == nil || len(executionVC.VCDocument) == 0 {
+	if len(executionVC.VCDocument) == 0 {
 		if executionVC.StorageURI == "" {
 			fmt.Printf("DEBUG: VC document is empty for execution_id: %s\n", executionID)
 			c.JSON(http.StatusNotFound, gin.H{"error": "VC document not found or empty"})
@@ -500,18 +502,17 @@ func (h *DIDHandler) ExportVCsHandler(c *gin.Context) {
 	// Parse query parameters for filtering
 	filters := &types.VCFilters{}
 
+	filters.Limit = 100 // default
 	if limit := c.Query("limit"); limit != "" {
-		if limitInt, err := fmt.Sscanf(limit, "%d", &filters.Limit); err == nil && limitInt == 1 {
-			// limit was successfully parsed
-		} else {
-			filters.Limit = 100 // default
+		if parsedLimit, err := strconv.Atoi(limit); err == nil {
+			filters.Limit = parsedLimit
 		}
-	} else {
-		filters.Limit = 100 // default
 	}
 
 	if offset := c.Query("offset"); offset != "" {
-		fmt.Sscanf(offset, "%d", &filters.Offset)
+		if parsedOffset, err := strconv.Atoi(offset); err == nil {
+			filters.Offset = parsedOffset
+		}
 	}
 
 	if status := c.Query("status"); status != "" {
@@ -860,38 +861,23 @@ func getDIDRole(did string, vc types.ExecutionVC) string {
 
 // sanitizeDIDForFilename sanitizes a DID string to be safe for use in filenames
 func sanitizeDIDForFilename(did string) string {
-	// Replace characters that are not safe for filenames
-	result := did
-	result = fmt.Sprintf("%s", result) // Ensure it's a string
+	replacer := strings.NewReplacer(
+		":", "_",
+		"/", "_",
+		"\\", "_",
+		"?", "_",
+		"*", "_",
+		"<", "_",
+		">", "_",
+		"|", "_",
+		"\"", "_",
+		" ", "_",
+	)
 
-	// Replace common DID characters that might cause issues in filenames
-	replacements := map[string]string{
-		":":  "_",
-		"/":  "_",
-		"\\": "_",
-		"?":  "_",
-		"*":  "_",
-		"<":  "_",
-		">":  "_",
-		"|":  "_",
-		"\"": "_",
-		" ":  "_",
+	sanitized := replacer.Replace(did)
+	if len(sanitized) > 100 {
+		sanitized = sanitized[:100]
 	}
 
-	for old, new := range replacements {
-		result = fmt.Sprintf("%s", result)
-		// Simple string replacement
-		for i := 0; i < len(result); i++ {
-			if i < len(result) && string(result[i]) == old {
-				result = result[:i] + new + result[i+1:]
-			}
-		}
-	}
-
-	// Limit length to avoid filesystem issues
-	if len(result) > 100 {
-		result = result[:100]
-	}
-
-	return result
+	return sanitized
 }

@@ -152,7 +152,9 @@ func (ds *DefaultDevService) runDev(packagePath string, options domain.DevOption
 	return nil
 }
 
-// getFreePort finds an available port in the range 8001-8999
+// getFreePort finds an available port in the range 8001-8999.
+//
+//nolint:unused // retained for future dev-service enhancements
 func (ds *DefaultDevService) getFreePort() (int, error) {
 	for port := 8001; port <= 8999; port++ {
 		if ds.isPortAvailable(port) {
@@ -162,7 +164,9 @@ func (ds *DefaultDevService) getFreePort() (int, error) {
 	return 0, fmt.Errorf("no free port available in range 8001-8999")
 }
 
-// isPortAvailable checks if a port is available
+// isPortAvailable checks if a port is available.
+//
+//nolint:unused // retained for future dev-service enhancements
 func (ds *DefaultDevService) isPortAvailable(port int) bool {
 	conn, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
@@ -270,7 +274,9 @@ func (ds *DefaultDevService) discoverAgentPort(timeout time.Duration) (int, erro
 	return 0, fmt.Errorf("could not discover agent port within %v after %d attempts", timeout, checkCount)
 }
 
-// waitForAgent waits for the agent to become ready in dev mode
+// waitForAgent waits for the agent to become ready in dev mode.
+//
+//nolint:unused // retained for future dev-service enhancements
 func (ds *DefaultDevService) waitForAgent(port int, timeout time.Duration) error {
 	client := &http.Client{Timeout: 2 * time.Second}
 	deadline := time.Now().Add(timeout)

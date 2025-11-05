@@ -2,6 +2,7 @@ package packages
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -315,7 +316,11 @@ func (gi *GitInstaller) updateRegistryWithGit(metadata *PackageMetadata, info *G
 	}
 
 	if data, err := os.ReadFile(registryPath); err == nil {
-		yaml.Unmarshal(data, registry)
+		if err := yaml.Unmarshal(data, registry); err != nil {
+			return fmt.Errorf("failed to parse registry %s: %w", registryPath, err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("failed to read registry %s: %w", registryPath, err)
 	}
 
 	// Determine source type based on URL

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec" // Added missing import
@@ -70,7 +71,11 @@ func (lv *LogViewer) ViewLogs(agentNodeName string) error {
 	}
 
 	if data, err := os.ReadFile(registryPath); err == nil {
-		yaml.Unmarshal(data, registry)
+		if err := yaml.Unmarshal(data, registry); err != nil {
+			return fmt.Errorf("failed to parse registry: %w", err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("failed to read registry: %w", err)
 	}
 
 	agentNode, exists := registry.Installed[agentNodeName]

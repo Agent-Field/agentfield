@@ -45,6 +45,7 @@ func TestSetupRoutesRegistersMetricsAndUI(t *testing.T) {
 	})
 }
 
+//nolint:unused // Reserved for future test cases
 type stubHealthMonitor struct {
 	*services.HealthMonitor
 }

@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"time"
 )
@@ -74,7 +76,9 @@ func (c *StdioMCPClient) DiscoverCapabilitiesFromProcess(config MCPServerConfig)
 	// Ensure process cleanup
 	defer func() {
 		if cmd.Process != nil {
-			cmd.Process.Kill()
+			if killErr := cmd.Process.Kill(); killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
+				fmt.Printf("WARN: failed to terminate MCP stdio process: %v\n", killErr)
+			}
 		}
 	}()
 

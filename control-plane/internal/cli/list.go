@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,7 +38,13 @@ func runListCommand(cmd *cobra.Command, args []string) {
 	}
 
 	if data, err := os.ReadFile(registryPath); err == nil {
-		yaml.Unmarshal(data, registry)
+		if err := yaml.Unmarshal(data, registry); err != nil {
+			cmd.PrintErrf("failed to parse registry: %v\n", err)
+			return
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		cmd.PrintErrf("failed to read registry: %v\n", err)
+		return
 	}
 
 	if len(registry.Installed) == 0 {

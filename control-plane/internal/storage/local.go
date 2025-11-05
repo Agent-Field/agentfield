@@ -1283,7 +1283,7 @@ func (ls *LocalStorage) ensureExecutionVCSchema() error {
 	committed := false
 	defer func() {
 		if !committed {
-			_ = tx.Rollback()
+			rollbackTx(tx, "migrate_execution_vcs")
 		}
 	}()
 
@@ -1349,7 +1349,7 @@ func (ls *LocalStorage) ensureWorkflowVCSchema() error {
 	committed := false
 	defer func() {
 		if !committed {
-			_ = tx.Rollback()
+			rollbackTx(tx, "migrate_workflow_vcs")
 		}
 	}()
 
@@ -1839,7 +1839,7 @@ func (ls *LocalStorage) storeWorkflowExecutionInternal(ctx context.Context, exec
 		}
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback() // Will be no-op if tx.Commit() succeeds
+	defer rollbackTx(tx, "storeWorkflowExecution:"+execution.ExecutionID)
 
 	// Execute the workflow insert using the transaction
 	if err := ls.executeWorkflowInsert(ctx, tx, execution); err != nil {
@@ -2100,7 +2100,7 @@ func (ls *LocalStorage) attemptWorkflowExecutionUpdate(ctx context.Context, exec
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback() // Will be no-op if tx.Commit() succeeds
+	defer rollbackTx(tx, "attemptWorkflowExecutionUpdate:"+executionID)
 
 	// Read the current execution within the transaction
 	currentExecution, err := ls.getWorkflowExecutionWithTx(txCtx, tx, executionID)
@@ -2675,7 +2675,7 @@ func (ls *LocalStorage) CleanupOldExecutions(ctx context.Context, retentionPerio
 	if err != nil {
 		return 0, fmt.Errorf("failed to begin cleanup transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer rollbackTx(tx, "cleanupOldExecutions")
 
 	// Delete executions in batch
 	// Use placeholders for safe deletion
@@ -2761,7 +2761,7 @@ func (ls *LocalStorage) CleanupWorkflow(ctx context.Context, identifier string, 
 		result.ErrorMessage = &errMsg
 		return result, errors.New(errMsg)
 	}
-	defer tx.Rollback()
+	defer rollbackTx(tx, "CleanupWorkflow:"+trimmedID)
 
 	if err := ls.performWorkflowCleanup(ctx, tx, targets); err != nil {
 		errMsg := fmt.Sprintf("failed to cleanup workflow: %v", err)
@@ -3083,6 +3083,7 @@ func (ls *LocalStorage) deleteWorkflowExecutions(ctx context.Context, tx DBTX, w
 	return int(rows), nil
 }
 
+//nolint:unused // retained for future workflow cleanup optimizations
 func (ls *LocalStorage) deleteWorkflowRuns(ctx context.Context, tx DBTX, primaryWorkflowID string, workflowIDs, runIDs []string) (int, error) {
 	conditions := []string{}
 	args := []interface{}{}
@@ -3932,7 +3933,7 @@ func (ls *LocalStorage) RegisterAgent(ctx context.Context, agent *types.AgentNod
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction for agent registration: %w", err)
 	}
-	defer tx.Rollback() // Will be no-op if tx.Commit() succeeds
+	defer rollbackTx(tx, "RegisterAgent:"+agent.ID)
 
 	// Execute the agent registration using the transaction
 	if err := ls.executeRegisterAgent(ctx, tx, agent); err != nil {
@@ -4098,7 +4099,7 @@ func (ls *LocalStorage) ListAgents(ctx context.Context, filters types.AgentFilte
 
 	// Add WHERE clause if there are conditions
 	if len(conditions) > 0 {
-		query += " WHERE " + fmt.Sprintf("%s", conditions[0])
+		query += " WHERE " + conditions[0]
 		for i := 1; i < len(conditions); i++ {
 			query += " AND " + conditions[i]
 		}
@@ -4183,7 +4184,7 @@ func (ls *LocalStorage) UpdateAgentHealth(ctx context.Context, id string, status
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction for agent health update: %w", err)
 	}
-	defer tx.Rollback() // Will be no-op if tx.Commit() succeeds
+	defer rollbackTx(tx, "UpdateAgentHealth:"+id)
 
 	// Execute the health update using the transaction
 	if err := ls.executeUpdateAgentHealth(ctx, tx, id, status); err != nil {
@@ -4276,7 +4277,7 @@ func (ls *LocalStorage) UpdateAgentHeartbeat(ctx context.Context, id string, hea
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction for agent heartbeat update: %w", err)
 	}
-	defer tx.Rollback() // Will be no-op if tx.Commit() succeeds
+	defer rollbackTx(tx, "UpdateAgentHeartbeat:"+id)
 
 	// Execute the heartbeat update using the transaction
 	if err := ls.executeUpdateAgentHeartbeat(ctx, tx, id, heartbeatTime); err != nil {
@@ -4319,7 +4320,7 @@ func (ls *LocalStorage) UpdateAgentLifecycleStatus(ctx context.Context, id strin
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction for agent lifecycle update: %w", err)
 	}
-	defer tx.Rollback() // Will be no-op if tx.Commit() succeeds
+	defer rollbackTx(tx, "UpdateAgentLifecycleStatus:"+id)
 
 	// Execute the lifecycle status update using the transaction
 	if err := ls.executeUpdateAgentLifecycleStatus(ctx, tx, id, status); err != nil {
@@ -4979,6 +4980,8 @@ func (ls *LocalStorage) GetReasonerPerformanceMetrics(ctx context.Context, reaso
 }
 
 // executeReasonerMetricsQuery performs the reasoner metrics query within a transaction
+//
+//nolint:unused // retained for upcoming analytics endpoints
 func (ls *LocalStorage) executeReasonerMetricsQuery(tx DBTX, nodeID, localReasonerID string) (*types.ReasonerPerformanceMetrics, error) {
 	// Query for metrics from workflow_executions table using separate node_id and reasoner_id
 	metricsQuery := `
@@ -5154,6 +5157,8 @@ func (ls *LocalStorage) GetReasonerExecutionHistory(ctx context.Context, reasone
 }
 
 // executeReasonerHistoryQuery performs the reasoner history query within a transaction
+//
+//nolint:unused // retained for upcoming analytics endpoints
 func (ls *LocalStorage) executeReasonerHistoryQuery(tx DBTX, nodeID, localReasonerID string, page, limit, offset int) (*types.ReasonerExecutionHistory, error) {
 	// Use a single optimized query with window functions to get both count and data efficiently
 	// This reduces lock time and improves performance
@@ -5377,7 +5382,7 @@ func (ls *LocalStorage) StoreAgentFieldServerDID(ctx context.Context, agentfield
 	}
 	defer func() {
 		if err != nil {
-			tx.Rollback()
+			rollbackTx(tx, "StoreAgentFieldServerDID")
 		}
 	}()
 
@@ -5438,7 +5443,7 @@ func (ls *LocalStorage) StoreAgentDIDWithComponents(ctx context.Context, agentID
 	}
 	defer func() {
 		if err != nil {
-			tx.Rollback()
+			rollbackTx(tx, "StoreAgentDIDWithComponents")
 		}
 	}()
 
@@ -5814,7 +5819,7 @@ func (ls *LocalStorage) StoreAgentDID(ctx context.Context, agentID, agentDID, ag
 	}
 	defer func() {
 		if err != nil {
-			tx.Rollback()
+			rollbackTx(tx, "StoreAgentDID")
 		}
 	}()
 
@@ -6020,7 +6025,7 @@ func (ls *LocalStorage) StoreComponentDID(ctx context.Context, componentID, comp
 	}
 	defer func() {
 		if err != nil {
-			tx.Rollback()
+			rollbackTx(tx, "StoreComponentDID")
 		}
 	}()
 
@@ -6453,7 +6458,7 @@ func (ls *LocalStorage) StoreWorkflowExecutionEvent(ctx context.Context, event *
 		if err != nil {
 			return fmt.Errorf("failed to begin transaction: %w", err)
 		}
-		defer tx.Rollback()
+		defer rollbackTx(tx, "StoreWorkflowExecutionEvent:"+event.ExecutionID)
 
 		if err := ls.storeWorkflowExecutionEventTx(ctx, tx, event); err != nil {
 			return err

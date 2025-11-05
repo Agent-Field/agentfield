@@ -4,6 +4,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -103,7 +104,9 @@ func (as *DefaultAgentService) RunAgent(name string, options domain.RunOptions) 
 	// 5. Wait for agent node to be ready
 	if err := as.waitForAgentNode(port, 10*time.Second); err != nil {
 		// Kill the process if it failed to start properly
-		as.processManager.Stop(pid)
+		if stopErr := as.processManager.Stop(pid); stopErr != nil {
+			return nil, fmt.Errorf("agent node failed to start: %w (additionally failed to stop process: %v)", err, stopErr)
+		}
 		return nil, fmt.Errorf("agent node failed to start: %w", err)
 	}
 
@@ -549,7 +552,11 @@ func (as *DefaultAgentService) updateRuntimeInfo(agentNodeName string, port, pid
 	// Load registry
 	registry := &packages.InstallationRegistry{}
 	if data, err := os.ReadFile(registryPath); err == nil {
-		yaml.Unmarshal(data, registry)
+		if err := yaml.Unmarshal(data, registry); err != nil {
+			return fmt.Errorf("failed to parse registry: %w", err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("failed to read registry: %w", err)
 	}
 
 	// Update runtime info

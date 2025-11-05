@@ -250,12 +250,9 @@ func StartNodeHeartbeat(interval time.Duration) {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
-		for {
-			select {
-			case <-ticker.C:
-				if GlobalNodeEventBus.GetSubscriberCount() > 0 {
-					PublishNodeHeartbeat()
-				}
+		for range ticker.C {
+			if GlobalNodeEventBus.GetSubscriberCount() > 0 {
+				PublishNodeHeartbeat()
 			}
 		}
 	}()

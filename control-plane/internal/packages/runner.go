@@ -2,6 +2,7 @@ package packages
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -62,7 +63,9 @@ func (ar *AgentNodeRunner) RunAgentNode(agentNodeName string) error {
 
 	// 5. Wait for agent node to be ready
 	if err := ar.waitForAgentNode(port, 10*time.Second); err != nil {
-		cmd.Process.Kill()
+		if killErr := cmd.Process.Kill(); killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
+			fmt.Printf("⚠️  Failed to kill agent node process: %v\n", killErr)
+		}
 		return fmt.Errorf("agent node failed to start: %w", err)
 	}
 
@@ -247,7 +250,9 @@ func (ar *AgentNodeRunner) updateRuntimeInfo(agentNodeName string, port, pid int
 	// Load registry
 	registry := &InstallationRegistry{}
 	if data, err := os.ReadFile(registryPath); err == nil {
-		yaml.Unmarshal(data, registry)
+		if err := yaml.Unmarshal(data, registry); err != nil {
+			return fmt.Errorf("failed to parse registry: %w", err)
+		}
 	}
 
 	// Update runtime info

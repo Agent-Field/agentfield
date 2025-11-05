@@ -16,18 +16,18 @@ var (
 		Help: "Number of workflow steps currently queued or in-flight for execution.",
 	})
 
-	workerInflightGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	workerInflightGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{ //nolint:unused // Reserved for future use
 		Name: "agentfield_worker_inflight",
 		Help: "Number of active worker executions grouped by agent node.",
 	}, []string{"agent"})
 
-	stepDurationHistogram = promauto.NewHistogramVec(prometheus.HistogramOpts{
+	stepDurationHistogram = promauto.NewHistogramVec(prometheus.HistogramOpts{ //nolint:unused // Reserved for future use
 		Name:    "agentfield_step_duration_seconds",
 		Help:    "Duration of workflow step executions split by terminal status.",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"status"})
 
-	stepRetriesCounter = promauto.NewCounterVec(prometheus.CounterOpts{
+	stepRetriesCounter = promauto.NewCounterVec(prometheus.CounterOpts{ //nolint:unused // Reserved for future use
 		Name: "agentfield_step_retries_total",
 		Help: "Total number of workflow step retry attempts grouped by agent node.",
 	}, []string{"agent"})
@@ -57,19 +57,23 @@ func recordWaiterCount(count int) {
 	waiterInflightGauge.Set(float64(count))
 }
 
+//nolint:unused // Reserved for future use
 func recordWorkerAcquire(agent string) {
 	workerInflightGauge.WithLabelValues(normalizeAgentLabel(agent)).Inc()
 }
 
+//nolint:unused // Reserved for future use
 func recordWorkerRelease(agent string) {
 	workerInflightGauge.WithLabelValues(normalizeAgentLabel(agent)).Dec()
 }
 
+//nolint:unused // Reserved for future use
 func observeStepDuration(status string, duration time.Duration) {
 	normalized := types.NormalizeExecutionStatus(status)
 	stepDurationHistogram.WithLabelValues(normalized).Observe(duration.Seconds())
 }
 
+//nolint:unused // Reserved for future use
 func incrementStepRetry(agent string) {
 	stepRetriesCounter.WithLabelValues(normalizeAgentLabel(agent)).Inc()
 }

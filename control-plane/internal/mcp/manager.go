@@ -208,7 +208,11 @@ func (m *MCPManager) Stop(alias string) error {
 		config.PID = 0
 		config.Status = string(StatusStopped)
 		config.StartedAt = nil
-		m.saveConfig(filepath.Join(m.projectDir, "packages", "mcp", alias, "config.json"), *config)
+		if err := m.saveConfig(filepath.Join(m.projectDir, "packages", "mcp", alias, "config.json"), *config); err != nil {
+			return fmt.Errorf("failed to persist MCP server config: %w", err)
+		}
+	} else if m.verbose {
+		fmt.Printf("WARN: Unable to load MCP config for %s during stop: %v\n", alias, err)
 	}
 
 	if m.verbose {
@@ -521,6 +525,8 @@ func (m *MCPManager) removeMCPFromAgentFieldYAML(alias string) error {
 }
 
 // loadMCPConfigsFromYAML loads MCP configurations from agentfield.yaml
+//
+//nolint:unused // Reserved for future YAML config support
 func (m *MCPManager) loadMCPConfigsFromYAML() (map[string]MCPServerConfig, error) {
 	agentfieldYAMLPath := filepath.Join(m.projectDir, "agentfield.yaml")
 
@@ -692,6 +698,8 @@ func (m *MCPManager) discoverFromLocalProcess(config MCPServerConfig) (*MCPManif
 }
 
 // connectAndDiscover connects to an MCP server endpoint and discovers capabilities
+//
+//nolint:unused // Reserved for future HTTP-based MCP discovery
 func (m *MCPManager) connectAndDiscover(endpoint string) (*MCPManifest, error) {
 	if m.verbose {
 		fmt.Printf("Connecting to MCP server at: %s\n", endpoint)
@@ -715,6 +723,8 @@ func (m *MCPManager) connectAndDiscover(endpoint string) (*MCPManifest, error) {
 }
 
 // parseCapabilityResponse parses a raw capability response into an MCPManifest
+//
+//nolint:unused // Reserved for future HTTP-based MCP discovery
 func (m *MCPManager) parseCapabilityResponse(response []byte) (*MCPManifest, error) {
 	var manifest MCPManifest
 	if err := json.Unmarshal(response, &manifest); err != nil {

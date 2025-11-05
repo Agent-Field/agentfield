@@ -88,7 +88,7 @@ Template Variables:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.Source = args[0]
 			// If --alias flag is not used, and a second positional arg is present, use it as alias.
-			if cmd.Flags().Changed("alias") == false && len(args) > 1 {
+			if !cmd.Flags().Changed("alias") && len(args) > 1 {
 				opts.Alias = args[1]
 			}
 			// verbose flag is typically a persistent flag from the root command.
@@ -169,9 +169,8 @@ func NewMCPAddCommand(projectDir string, opts *MCPAddOptions, verboseFlag bool) 
 	}
 
 	// Determine final alias
-	finalAlias := opts.Alias
-	if finalAlias == "" {
-		finalAlias = deriveAliasLocally(opts.Source) // Using local helper for now
+	if opts.Alias == "" {
+		opts.Alias = deriveAliasLocally(opts.Source) // Using local helper for now
 	}
 
 	// Construct MCPServerConfig (this will be part of the MCPAddCommand or its options)

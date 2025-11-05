@@ -178,12 +178,9 @@ func StartHeartbeat(interval time.Duration) {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
-		for {
-			select {
-			case <-ticker.C:
-				if GlobalReasonerEventBus.GetSubscriberCount() > 0 {
-					PublishHeartbeat()
-				}
+		for range ticker.C {
+			if GlobalReasonerEventBus.GetSubscriberCount() > 0 {
+				PublishHeartbeat()
 			}
 		}
 	}()

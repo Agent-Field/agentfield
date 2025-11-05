@@ -441,7 +441,9 @@ func (pi *PackageInstaller) isPackageInstalled(packageName string) bool {
 	}
 
 	if data, err := os.ReadFile(registryPath); err == nil {
-		yaml.Unmarshal(data, registry)
+		if err := yaml.Unmarshal(data, registry); err != nil {
+			return false
+		}
 	}
 
 	_, exists := registry.Installed[packageName]
@@ -525,11 +527,9 @@ func (pi *PackageInstaller) installDependencies(packagePath string, metadata *Pa
 			pipPath = filepath.Join(venvPath, "Scripts", "pip.exe") // Windows
 		}
 
-		// Upgrade pip first
+		// Upgrade pip first (ignore failures)
 		cmd = exec.Command(pipPath, "install", "--upgrade", "pip")
-		if _, err := cmd.CombinedOutput(); err != nil {
-			// Ignore pip upgrade failures
-		}
+		_, _ = cmd.CombinedOutput()
 
 		// Install from requirements.txt if it exists
 		requirementsPath := filepath.Join(packagePath, "requirements.txt")
@@ -578,7 +578,9 @@ func (pi *PackageInstaller) updateRegistry(metadata *PackageMetadata, sourcePath
 	}
 
 	if data, err := os.ReadFile(registryPath); err == nil {
-		yaml.Unmarshal(data, registry)
+		if err := yaml.Unmarshal(data, registry); err != nil {
+			return fmt.Errorf("failed to parse registry: %w", err)
+		}
 	}
 
 	// Ensure logs directory exists before setting LogFile path

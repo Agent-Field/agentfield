@@ -269,12 +269,7 @@ func (client *MCPProtocolClient) requestResourcesList(stdin io.Writer, stdout io
 	// Convert to our internal format
 	resources := make([]MCPResource, len(resourcesResponse.Resources))
 	for i, resource := range resourcesResponse.Resources {
-		resources[i] = MCPResource{
-			URI:         resource.URI,
-			Name:        resource.Name,
-			Description: resource.Description,
-			MimeType:    resource.MimeType,
-		}
+		resources[i] = MCPResource(resource)
 	}
 
 	return resources, nil
@@ -332,12 +327,7 @@ func (client *MCPProtocolClient) sendHTTPResourcesRequest(httpClient *http.Clien
 	// Convert to our internal format
 	resources := make([]MCPResource, len(resourcesResponse.Resources))
 	for i, resource := range resourcesResponse.Resources {
-		resources[i] = MCPResource{
-			URI:         resource.URI,
-			Name:        resource.Name,
-			Description: resource.Description,
-			MimeType:    resource.MimeType,
-		}
+		resources[i] = MCPResource(resource)
 	}
 
 	return resources, nil

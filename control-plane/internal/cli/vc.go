@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"strings"
@@ -167,7 +166,7 @@ func verifyVC(vcFilePath string, options VerifyOptions) error {
 
 	// Step 1: Read and parse VC file
 	step1 := VerificationStep{Step: 1, Description: "Reading VC file"}
-	vcData, err := ioutil.ReadFile(vcFilePath)
+	vcData, err := os.ReadFile(vcFilePath)
 	if err != nil {
 		step1.Success = false
 		step1.Error = fmt.Sprintf("Failed to read VC file: %v", err)
@@ -500,6 +499,7 @@ func extractPublicKeyFromDIDDoc(didDoc map[string]interface{}) (map[string]inter
 	return publicKeyJwk, nil
 }
 
+//nolint:unused // Reserved for future signature verification
 func verifyVCSignature(vcDoc types.VCDocument, resolution DIDResolutionInfo) (bool, error) {
 	// Create canonical representation for verification
 	vcCopy := vcDoc
@@ -533,6 +533,7 @@ func verifyVCSignature(vcDoc types.VCDocument, resolution DIDResolutionInfo) (bo
 	return ed25519.Verify(publicKey, canonicalBytes, signatureBytes), nil
 }
 
+//nolint:unused // Reserved for future signature verification
 func verifyWorkflowVCSignature(vcDoc types.WorkflowVCDocument, resolution DIDResolutionInfo) (bool, error) {
 	// Create canonical representation for verification
 	vcCopy := vcDoc

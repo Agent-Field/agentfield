@@ -32,6 +32,15 @@ type ExecutionHandler struct {
 	webhooks services.WebhookDispatcher
 }
 
+func writeSSE(c *gin.Context, payload []byte) bool {
+	if _, err := c.Writer.WriteString("data: " + string(payload) + "\n\n"); err != nil {
+		logger.Logger.Warn().Err(err).Msg("failed to write SSE payload")
+		return false
+	}
+	c.Writer.Flush()
+	return true
+}
+
 // NewExecutionHandler creates a new ExecutionHandler.
 func NewExecutionHandler(store storage.StorageProvider, payloadStore services.PayloadStore, webhooks services.WebhookDispatcher) *ExecutionHandler {
 	return &ExecutionHandler{
@@ -69,8 +78,9 @@ func (h *ExecutionHandler) StreamWorkflowNodeNotesHandler(c *gin.Context) {
 		"timestamp":   time.Now().Format(time.RFC3339),
 	}
 	if payload, err := json.Marshal(initialEvent); err == nil {
-		c.Writer.WriteString("data: " + string(payload) + "\n\n")
-		c.Writer.Flush()
+		if !writeSSE(c, payload) {
+			return
+		}
 	}
 
 	ctx := c.Request.Context()
@@ -87,16 +97,18 @@ func (h *ExecutionHandler) StreamWorkflowNodeNotesHandler(c *gin.Context) {
 				"timestamp": time.Now().Format(time.RFC3339),
 			}
 			if payload, err := json.Marshal(heartbeat); err == nil {
-				c.Writer.WriteString("data: " + string(payload) + "\n\n")
-				c.Writer.Flush()
+				if !writeSSE(c, payload) {
+					return
+				}
 			}
 		case event, ok := <-eventChan:
 			if !ok {
 				return
 			}
 			if payload, err := json.Marshal(event); err == nil {
-				c.Writer.WriteString("data: " + string(payload) + "\n\n")
-				c.Writer.Flush()
+				if !writeSSE(c, payload) {
+					return
+				}
 			}
 		}
 	}
@@ -619,16 +631,18 @@ func (h *ExecutionHandler) StreamExecutionEventsHandler(c *gin.Context) {
 				"timestamp": time.Now().Format(time.RFC3339),
 			}
 			if payload, err := json.Marshal(heartbeat); err == nil {
-				c.Writer.WriteString("data: " + string(payload) + "\n\n")
-				c.Writer.Flush()
+				if !writeSSE(c, payload) {
+					return
+				}
 			}
 		case event, ok := <-eventChan:
 			if !ok {
 				return
 			}
 			if payload, err := json.Marshal(event); err == nil {
-				c.Writer.WriteString("data: " + string(payload) + "\n\n")
-				c.Writer.Flush()
+				if !writeSSE(c, payload) {
+					return
+				}
 			}
 		}
 	}
@@ -902,10 +916,6 @@ func (h *ExecutionHandler) groupExecutionSummaries(summaries []ExecutionSummary,
 		grouped[bucket] = append(grouped[bucket], summary)
 	}
 	return grouped
-}
-
-func pointerString(value string) *string {
-	return &value
 }
 
 func formatRelativeTimeString(now, started time.Time) string {

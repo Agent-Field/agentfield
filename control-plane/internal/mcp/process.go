@@ -324,14 +324,12 @@ func (pm *ProcessManager) HealthCheck(config MCPServerConfig, port int) error {
 		fmt.Printf("Executing health check: %s\n", processedCmd)
 	}
 
-	// Execute health check
-	cmd := exec.Command("sh", "-c", processedCmd)
-
 	// Set timeout for health check
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd = exec.CommandContext(ctx, "sh", "-c", processedCmd)
+	// Execute health check with timeout
+	cmd := exec.CommandContext(ctx, "sh", "-c", processedCmd)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {

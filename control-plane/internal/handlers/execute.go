@@ -109,11 +109,7 @@ type asyncExecutionJob struct {
 }
 
 type asyncWorkerPool struct {
-	queue   chan asyncExecutionJob
-	metrics struct {
-		submitted uint64
-		rejected  uint64
-	}
+	queue chan asyncExecutionJob
 }
 
 type completionJob struct {

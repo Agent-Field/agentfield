@@ -39,7 +39,7 @@ var (
 			Foreground(lipgloss.Color("196")).
 			Bold(true)
 
-	successStyle = lipgloss.NewStyle().
+	successStyle = lipgloss.NewStyle(). //nolint:unused // Reserved for future use
 			Foreground(lipgloss.Color("42")).
 			Bold(true)
 )
@@ -56,7 +56,7 @@ type initModel struct {
 	textInput      string
 	err            error
 	done           bool
-	nonInteractive bool
+	nonInteractive bool //nolint:unused // Reserved for future use
 }
 
 func (m initModel) Init() tea.Cmd {
@@ -413,9 +413,15 @@ Example:
 	cmd.Flags().StringVarP(&authorEmail, "email", "e", "", "Author email for the project")
 	cmd.Flags().BoolVar(&nonInteractive, "non-interactive", false, "Run in non-interactive mode (use defaults)")
 
-	viper.BindPFlag("language", cmd.Flags().Lookup("language"))
-	viper.BindPFlag("author.name", cmd.Flags().Lookup("author"))
-	viper.BindPFlag("author.email", cmd.Flags().Lookup("email"))
+	if err := viper.BindPFlag("language", cmd.Flags().Lookup("language")); err != nil {
+		printError("failed to bind language flag: %v", err)
+	}
+	if err := viper.BindPFlag("author.name", cmd.Flags().Lookup("author")); err != nil {
+		printError("failed to bind author flag: %v", err)
+	}
+	if err := viper.BindPFlag("author.email", cmd.Flags().Lookup("email")); err != nil {
+		printError("failed to bind email flag: %v", err)
+	}
 
 	return cmd
 }
