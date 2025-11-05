@@ -5,7 +5,7 @@ The Haxen Go SDK provides idiomatic Go bindings for interacting with the Haxen c
 ## Installation
 
 ```bash
-go get github.com/your-org/haxen/sdk/go
+go get github.com/agentfield/haxen/sdk/go
 ```
 
 ## Quick Start
@@ -17,7 +17,7 @@ import (
     "context"
     "log"
 
-    haxenagent "github.com/your-org/haxen/sdk/go/agent"
+    haxenagent "github.com/agentfield/haxen/sdk/go/agent"
 )
 
 func main() {

@@ -18,8 +18,8 @@ This package provides AI/LLM capabilities for the Haxen Go SDK, supporting both 
 ```go
 import (
     "context"
-    "github.com/your-org/haxen/sdk/go/agent"
-    "github.com/your-org/haxen/sdk/go/ai"
+    "github.com/agentfield/haxen/sdk/go/agent"
+    "github.com/agentfield/haxen/sdk/go/ai"
 )
 
 // Create agent with AI configured

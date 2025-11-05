@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/your-org/haxen/sdk/go/types"
+	"github.com/agentfield/haxen/sdk/go/types"
 )
 
 // Client provides a thin wrapper over the Haxen control plane REST API.

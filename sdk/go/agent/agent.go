@@ -17,9 +17,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/your-org/haxen/sdk/go/ai"
-	"github.com/your-org/haxen/sdk/go/client"
-	"github.com/your-org/haxen/sdk/go/types"
+	"github.com/agentfield/haxen/sdk/go/ai"
+	"github.com/agentfield/haxen/sdk/go/client"
+	"github.com/agentfield/haxen/sdk/go/types"
 )
 
 type executionContextKey struct{}
