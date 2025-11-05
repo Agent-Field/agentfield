@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/your-org/brain/control-plane/internal/logger"
+	"github.com/your-org/haxen/control-plane/internal/logger"
 )
 
 // marshalDataWithLogging marshals data to JSON with proper error handling and logging

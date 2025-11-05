@@ -1,0 +1,25 @@
+name: "{{.ProjectName}}"
+version: "0.1.0"
+description: "{{.ProjectName}} agent"
+author: "{{.AuthorName}}"
+type: "agent-node"
+main: "main.py"
+
+agent_node:
+  node_id: "{{.NodeID}}"
+  default_port: {{.Port}}
+
+dependencies:
+  python: ["haxen-sdk"]
+
+capabilities:
+  reasoners: []
+  skills: []
+
+runtime:
+  auto_port: true
+  dev_mode: true
+
+metadata:
+  created_at: "{{.CreatedAt}}"
+  author_email: "{{.AuthorEmail}}"

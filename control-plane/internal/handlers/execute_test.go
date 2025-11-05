@@ -4,7 +4,7 @@
 package handlers
 
 import (
-	"github.com/your-org/brain/control-plane/pkg/types"
+	"github.com/your-org/haxen/control-plane/pkg/types"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -224,16 +224,16 @@ func (m *MockStorageProvider) GetDID(ctx context.Context, did string) (*types.DI
 func (m *MockStorageProvider) ListDIDs(ctx context.Context) ([]*types.DIDRegistryEntry, error) {
 	return nil, nil
 }
-func (m *MockStorageProvider) StoreBrainServerDID(ctx context.Context, brainServerID, rootDID string, masterSeed []byte, createdAt, lastKeyRotation time.Time) error {
+func (m *MockStorageProvider) StoreHaxenServerDID(ctx context.Context, haxenServerID, rootDID string, masterSeed []byte, createdAt, lastKeyRotation time.Time) error {
 	return nil
 }
-func (m *MockStorageProvider) GetBrainServerDID(ctx context.Context, brainServerID string) (*types.BrainServerDIDInfo, error) {
+func (m *MockStorageProvider) GetHaxenServerDID(ctx context.Context, haxenServerID string) (*types.HaxenServerDIDInfo, error) {
 	return nil, nil
 }
-func (m *MockStorageProvider) ListBrainServerDIDs(ctx context.Context) ([]*types.BrainServerDIDInfo, error) {
+func (m *MockStorageProvider) ListHaxenServerDIDs(ctx context.Context) ([]*types.HaxenServerDIDInfo, error) {
 	return nil, nil
 }
-func (m *MockStorageProvider) StoreAgentDID(ctx context.Context, agentID, agentDID, brainServerDID, publicKeyJWK string, derivationIndex int) error {
+func (m *MockStorageProvider) StoreAgentDID(ctx context.Context, agentID, agentDID, haxenServerDID, publicKeyJWK string, derivationIndex int) error {
 	return nil
 }
 func (m *MockStorageProvider) GetAgentDID(ctx context.Context, agentID string) (*types.AgentDIDInfo, error) {
@@ -251,7 +251,7 @@ func (m *MockStorageProvider) GetComponentDID(ctx context.Context, componentID s
 func (m *MockStorageProvider) ListComponentDIDs(ctx context.Context, agentDID string) ([]*types.ComponentDIDInfo, error) {
 	return nil, nil
 }
-func (m *MockStorageProvider) StoreAgentDIDWithComponents(ctx context.Context, agentID, agentDID, brainServerDID, publicKeyJWK string, derivationIndex int, components []interface{}) error {
+func (m *MockStorageProvider) StoreAgentDIDWithComponents(ctx context.Context, agentID, agentDID, haxenServerDID, publicKeyJWK string, derivationIndex int, components []interface{}) error {
 	return nil
 }
 func (m *MockStorageProvider) StoreExecutionVC(ctx context.Context, vcID, executionID, workflowID, sessionID, issuerDID, targetDID, callerDID, inputHash, outputHash, status string, vcDocument []byte, signature string, storageURI string, documentSizeBytes int64) error {

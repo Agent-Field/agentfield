@@ -12,22 +12,22 @@ import (
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
-	"github.com/your-org/brain/control-plane/internal/packages"
+	"github.com/your-org/haxen/control-plane/internal/packages"
 )
 
 // NewStopCommand creates the stop command
 func NewStopCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "stop <agent-node-name>",
-		Short: "Stop a running Brain agent node",
-		Long: `Stop a running Brain agent node package.
+		Short: "Stop a running Haxen agent node",
+		Long: `Stop a running Haxen agent node package.
 
 The agent node process will be terminated gracefully and its status
 will be updated in the registry.
 
 Examples:
-  brain stop email-helper
-  brain stop data-analyzer`,
+  haxen stop email-helper
+  haxen stop data-analyzer`,
 		Args: cobra.ExactArgs(1),
 		Run:  runStopCommand,
 	}
@@ -39,7 +39,7 @@ func runStopCommand(cmd *cobra.Command, args []string) {
 	agentNodeName := args[0]
 
 	stopper := &AgentNodeStopper{
-		BrainHome: getBrainHomeDir(),
+		HaxenHome: getHaxenHomeDir(),
 	}
 
 	if err := stopper.StopAgentNode(agentNodeName); err != nil {
@@ -50,7 +50,7 @@ func runStopCommand(cmd *cobra.Command, args []string) {
 
 // AgentNodeStopper handles stopping agent nodes
 type AgentNodeStopper struct {
-	BrainHome string
+	HaxenHome string
 }
 
 // StopAgentNode stops a running agent node
@@ -103,7 +103,7 @@ func (as *AgentNodeStopper) StopAgentNode(agentNodeName string) error {
 			req, err := http.NewRequest("POST", shutdownURL, bytes.NewReader(bodyBytes))
 			if err == nil {
 				req.Header.Set("Content-Type", "application/json")
-				req.Header.Set("User-Agent", "Brain-CLI/1.0")
+				req.Header.Set("User-Agent", "Haxen-CLI/1.0")
 				
 				client := &http.Client{Timeout: 10 * time.Second}
 				resp, err := client.Do(req)
@@ -168,7 +168,7 @@ func (as *AgentNodeStopper) StopAgentNode(agentNodeName string) error {
 
 // loadRegistry loads the installation registry
 func (as *AgentNodeStopper) loadRegistry() (*packages.InstallationRegistry, error) {
-	registryPath := filepath.Join(as.BrainHome, "installed.yaml")
+	registryPath := filepath.Join(as.HaxenHome, "installed.yaml")
 
 	registry := &packages.InstallationRegistry{
 		Installed: make(map[string]packages.InstalledPackage),
@@ -185,7 +185,7 @@ func (as *AgentNodeStopper) loadRegistry() (*packages.InstallationRegistry, erro
 
 // saveRegistry saves the installation registry
 func (as *AgentNodeStopper) saveRegistry(registry *packages.InstallationRegistry) error {
-	registryPath := filepath.Join(as.BrainHome, "installed.yaml")
+	registryPath := filepath.Join(as.HaxenHome, "installed.yaml")
 
 	data, err := yaml.Marshal(registry)
 	if err != nil {

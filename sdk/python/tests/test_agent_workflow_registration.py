@@ -1,9 +1,9 @@
 import pytest
 
-from brain_sdk.agent_workflow import AgentWorkflow
-from brain_sdk.agent_registry import set_current_agent, clear_current_agent
-from brain_sdk.decorators import _execute_with_tracking
-from brain_sdk.execution_context import (
+from haxen_sdk.agent_workflow import AgentWorkflow
+from haxen_sdk.agent_registry import set_current_agent, clear_current_agent
+from haxen_sdk.decorators import _execute_with_tracking
+from haxen_sdk.execution_context import (
     ExecutionContext,
     set_execution_context,
     reset_execution_context,
@@ -38,7 +38,7 @@ class DummyClient:
 class DummyAgent:
     def __init__(self):
         self.node_id = "agent-node"
-        self.brain_server = "http://brain.local"
+        self.haxen_server = "http://haxen.local"
         self.client = DummyClient()
         self.dev_mode = False
         self._current_execution_context = None

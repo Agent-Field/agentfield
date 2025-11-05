@@ -4,7 +4,7 @@ import type {
   AgentStatus,
   HealthStatus,
   LifecycleStatus,
-} from "@/types/brain";
+} from "@/types/haxen";
 import { cn } from "@/lib/utils";
 import { statusTone, type StatusTone } from "@/lib/theme";
 import {

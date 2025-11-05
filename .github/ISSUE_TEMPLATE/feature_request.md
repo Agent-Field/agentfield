@@ -1,6 +1,6 @@
 ---
 name: Feature Request
-about: Suggest an idea for Brain
+about: Suggest an idea for Haxen
 labels: enhancement
 ---
 

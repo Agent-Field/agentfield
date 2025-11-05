@@ -1,9 +1,9 @@
-// brain/internal/infrastructure/storage/filesystem.go
+// haxen/internal/infrastructure/storage/filesystem.go
 package storage
 
 import (
     "os"
-    "github.com/your-org/brain/control-plane/internal/core/interfaces"
+    "github.com/your-org/haxen/control-plane/internal/core/interfaces"
 )
 
 type DefaultFileSystemAdapter struct{}

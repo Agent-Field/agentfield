@@ -352,13 +352,13 @@ export function ExecutionHeader({
           <div className="flex items-center gap-2 group">
             <span>Request:</span>
             <code className="font-mono text-xs text-foreground bg-muted/30 px-1.5 py-0.5 rounded">
-              {execution.brain_request_id
-                ? truncateId(execution.brain_request_id)
+              {execution.haxen_request_id
+                ? truncateId(execution.haxen_request_id)
                 : "n/a"}
             </code>
-            {execution.brain_request_id && (
+            {execution.haxen_request_id && (
               <CopyButton
-                value={execution.brain_request_id}
+                value={execution.haxen_request_id}
                 variant="ghost"
                 size="icon"
                 className="h-4 w-4 p-0 opacity-0 transition-opacity group-hover:opacity-100 [&_svg]:h-3 [&_svg]:w-3"

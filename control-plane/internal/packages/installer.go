@@ -29,7 +29,7 @@ type UserEnvironmentConfig struct {
 	Optional []UserEnvironmentVar `yaml:"optional"`
 }
 
-// PackageMetadata represents the structure of brain-package.yaml
+// PackageMetadata represents the structure of haxen-package.yaml
 type PackageMetadata struct {
 	Name            string                 `yaml:"name"`
 	Version         string                 `yaml:"version"`
@@ -96,7 +96,7 @@ type RuntimeInfo struct {
 
 // PackageInstaller handles package installation
 type PackageInstaller struct {
-	BrainHome string
+	HaxenHome string
 	Verbose   bool
 }
 
@@ -210,7 +210,7 @@ func (pi *PackageInstaller) InstallPackage(sourcePath string, force bool) error 
 	}
 
 	// 3. Copy package to global location
-	destPath := filepath.Join(pi.BrainHome, "packages", metadata.Name)
+	destPath := filepath.Join(pi.HaxenHome, "packages", metadata.Name)
 	spinner = pi.newSpinner("Setting up environment")
 	spinner.Start()
 	if err := pi.copyPackage(sourcePath, destPath); err != nil {
@@ -239,7 +239,7 @@ func (pi *PackageInstaller) InstallPackage(sourcePath string, force bool) error 
 	// 6. Check for required environment variables and provide guidance
 	pi.checkEnvironmentVariables(metadata)
 	
-	fmt.Printf("\n%s %s\n", Blue("→"), Bold(fmt.Sprintf("Run: brain run %s", metadata.Name)))
+	fmt.Printf("\n%s %s\n", Blue("→"), Bold(fmt.Sprintf("Run: haxen run %s", metadata.Name)))
 
 	return nil
 }
@@ -261,7 +261,7 @@ func (pi *PackageInstaller) checkEnvironmentVariables(metadata *PackageMetadata)
 	if len(missingRequired) > 0 {
 		fmt.Printf("\n%s %s\n", Yellow("⚠"), Bold("Missing required environment variables:"))
 		for _, envVar := range missingRequired {
-			fmt.Printf("  %s\n", Cyan(fmt.Sprintf("brain config %s --set %s=your-value-here", metadata.Name, envVar.Name)))
+			fmt.Printf("  %s\n", Cyan(fmt.Sprintf("haxen config %s --set %s=your-value-here", metadata.Name, envVar.Name)))
 		}
 	}
 
@@ -281,7 +281,7 @@ func (pi *PackageInstaller) checkEnvironmentVariables(metadata *PackageMetadata)
 
 // PackageUninstaller handles package uninstallation
 type PackageUninstaller struct {
-	BrainHome string
+	HaxenHome string
 	Force     bool
 }
 
@@ -357,7 +357,7 @@ func (pu *PackageUninstaller) stopAgentNode(agentNode *InstalledPackage) error {
 
 // loadRegistry loads the installation registry
 func (pu *PackageUninstaller) loadRegistry() (*InstallationRegistry, error) {
-	registryPath := filepath.Join(pu.BrainHome, "installed.yaml")
+	registryPath := filepath.Join(pu.HaxenHome, "installed.yaml")
 
 	registry := &InstallationRegistry{
 		Installed: make(map[string]InstalledPackage),
@@ -374,7 +374,7 @@ func (pu *PackageUninstaller) loadRegistry() (*InstallationRegistry, error) {
 
 // saveRegistry saves the installation registry
 func (pu *PackageUninstaller) saveRegistry(registry *InstallationRegistry) error {
-	registryPath := filepath.Join(pu.BrainHome, "installed.yaml")
+	registryPath := filepath.Join(pu.HaxenHome, "installed.yaml")
 
 	data, err := yaml.Marshal(registry)
 	if err != nil {
@@ -390,10 +390,10 @@ func (pu *PackageUninstaller) saveRegistry(registry *InstallationRegistry) error
 
 // validatePackage checks if the package has required files
 func (pi *PackageInstaller) validatePackage(sourcePath string) error {
-	// Check if brain-package.yaml exists
-	packageYamlPath := filepath.Join(sourcePath, "brain-package.yaml")
+	// Check if haxen-package.yaml exists
+	packageYamlPath := filepath.Join(sourcePath, "haxen-package.yaml")
 	if _, err := os.Stat(packageYamlPath); os.IsNotExist(err) {
-		return fmt.Errorf("brain-package.yaml not found in %s", sourcePath)
+		return fmt.Errorf("haxen-package.yaml not found in %s", sourcePath)
 	}
 
 	// Check if main.py exists
@@ -405,26 +405,26 @@ func (pi *PackageInstaller) validatePackage(sourcePath string) error {
 	return nil
 }
 
-// parsePackageMetadata parses the brain-package.yaml file
+// parsePackageMetadata parses the haxen-package.yaml file
 func (pi *PackageInstaller) parsePackageMetadata(sourcePath string) (*PackageMetadata, error) {
-	packageYamlPath := filepath.Join(sourcePath, "brain-package.yaml")
+	packageYamlPath := filepath.Join(sourcePath, "haxen-package.yaml")
 
 	data, err := os.ReadFile(packageYamlPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read brain-package.yaml: %w", err)
+		return nil, fmt.Errorf("failed to read haxen-package.yaml: %w", err)
 	}
 
 	var metadata PackageMetadata
 	if err := yaml.Unmarshal(data, &metadata); err != nil {
-		return nil, fmt.Errorf("failed to parse brain-package.yaml: %w", err)
+		return nil, fmt.Errorf("failed to parse haxen-package.yaml: %w", err)
 	}
 
 	// Validate required fields
 	if metadata.Name == "" {
-		return nil, fmt.Errorf("package name is required in brain-package.yaml")
+		return nil, fmt.Errorf("package name is required in haxen-package.yaml")
 	}
 	if metadata.Version == "" {
-		return nil, fmt.Errorf("package version is required in brain-package.yaml")
+		return nil, fmt.Errorf("package version is required in haxen-package.yaml")
 	}
 	if metadata.Main == "" {
 		metadata.Main = "main.py" // Default
@@ -435,7 +435,7 @@ func (pi *PackageInstaller) parsePackageMetadata(sourcePath string) (*PackageMet
 
 // isPackageInstalled checks if a package is already installed
 func (pi *PackageInstaller) isPackageInstalled(packageName string) bool {
-	registryPath := filepath.Join(pi.BrainHome, "installed.yaml")
+	registryPath := filepath.Join(pi.HaxenHome, "installed.yaml")
 	registry := &InstallationRegistry{
 		Installed: make(map[string]InstalledPackage),
 	}
@@ -541,7 +541,7 @@ func (pi *PackageInstaller) installDependencies(packagePath string, metadata *Pa
 			}
 		}
 
-		// Install dependencies from brain-package.yaml
+		// Install dependencies from haxen-package.yaml
 		if len(metadata.Dependencies.Python) > 0 {
 			for _, dep := range metadata.Dependencies.Python {
 				cmd = exec.Command(pipPath, "install", dep)
@@ -570,7 +570,7 @@ func (pi *PackageInstaller) hasRequirementsFile(packagePath string) bool {
 
 // updateRegistry updates the installation registry with the new package
 func (pi *PackageInstaller) updateRegistry(metadata *PackageMetadata, sourcePath, destPath string) error {
-	registryPath := filepath.Join(pi.BrainHome, "installed.yaml")
+	registryPath := filepath.Join(pi.HaxenHome, "installed.yaml")
 
 	// Load existing registry or create new one
 	registry := &InstallationRegistry{
@@ -582,7 +582,7 @@ func (pi *PackageInstaller) updateRegistry(metadata *PackageMetadata, sourcePath
 	}
 
 	// Ensure logs directory exists before setting LogFile path
-	logsDir := filepath.Join(pi.BrainHome, "logs")
+	logsDir := filepath.Join(pi.HaxenHome, "logs")
 	if err := os.MkdirAll(logsDir, 0755); err != nil {
 		return fmt.Errorf("failed to create logs directory: %w", err)
 	}
@@ -602,7 +602,7 @@ func (pi *PackageInstaller) updateRegistry(metadata *PackageMetadata, sourcePath
 			Port:      nil,
 			PID:       nil,
 			StartedAt: nil,
-			LogFile:   filepath.Join(pi.BrainHome, "logs", metadata.Name+".log"),
+			LogFile:   filepath.Join(pi.HaxenHome, "logs", metadata.Name+".log"),
 		},
 	}
 

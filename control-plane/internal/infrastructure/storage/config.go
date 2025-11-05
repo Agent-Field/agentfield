@@ -1,11 +1,11 @@
-// brain/internal/infrastructure/storage/config.go
+// haxen/internal/infrastructure/storage/config.go
 package storage
 
 import (
     "os"
     "path/filepath"
-    "github.com/your-org/brain/control-plane/internal/core/domain"
-    "github.com/your-org/brain/control-plane/internal/core/interfaces"
+    "github.com/your-org/haxen/control-plane/internal/core/domain"
+    "github.com/your-org/haxen/control-plane/internal/core/interfaces"
     "gopkg.in/yaml.v3"
 )
 
@@ -17,9 +17,9 @@ func NewLocalConfigStorage(fs interfaces.FileSystemAdapter) interfaces.ConfigSto
     return &LocalConfigStorage{fs: fs}
 }
 
-func (s *LocalConfigStorage) LoadBrainConfig(path string) (*domain.BrainConfig, error) {
+func (s *LocalConfigStorage) LoadHaxenConfig(path string) (*domain.HaxenConfig, error) {
     if !s.fs.Exists(path) {
-        return &domain.BrainConfig{
+        return &domain.HaxenConfig{
             HomeDir:     filepath.Dir(path),
             Environment: make(map[string]string),
             MCP: domain.MCPConfig{
@@ -33,7 +33,7 @@ func (s *LocalConfigStorage) LoadBrainConfig(path string) (*domain.BrainConfig, 
         return nil, err
     }
 
-    var config domain.BrainConfig
+    var config domain.HaxenConfig
     if err := yaml.Unmarshal(data, &config); err != nil {
         return nil, err
     }
@@ -41,7 +41,7 @@ func (s *LocalConfigStorage) LoadBrainConfig(path string) (*domain.BrainConfig, 
     return &config, nil
 }
 
-func (s *LocalConfigStorage) SaveBrainConfig(path string, config *domain.BrainConfig) error {
+func (s *LocalConfigStorage) SaveHaxenConfig(path string, config *domain.HaxenConfig) error {
     data, err := yaml.Marshal(config)
     if err != nil {
         return err

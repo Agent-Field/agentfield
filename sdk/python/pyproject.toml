@@ -3,13 +3,13 @@ requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "brain-sdk"
+name = "haxen-sdk"
 version = "0.1.0"
-description = "Python SDK for the Brain control plane"
+description = "Python SDK for the Haxen control plane"
 readme = "README.md"
 license = {text = "Apache-2.0"}
 authors = [
-    {name = "Brain Maintainers"}
+    {name = "Haxen Maintainers"}
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -34,16 +34,16 @@ dependencies = [
     "aiohttp>=3.8",
     "websockets"
 ]
-keywords = ["brain", "sdk", "agents"]
+keywords = ["haxen", "sdk", "agents"]
 
 [project.urls]
-Homepage = "https://github.com/your-org/brain"
-Documentation = "https://github.com/your-org/brain/tree/main/docs"
-Issues = "https://github.com/your-org/brain/issues"
+Homepage = "https://github.com/your-org/haxen"
+Documentation = "https://github.com/your-org/haxen/tree/main/docs"
+Issues = "https://github.com/your-org/haxen/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["brain_sdk*"]
+include = ["haxen_sdk*"]
 exclude = ["tests*", "examples*"]
 
 [project.optional-dependencies]
@@ -72,17 +72,17 @@ markers = [
     "integration: tests that can touch network/services",
     "mcp: tests that exercise MCP/network interactions"
 ]
-addopts = "-ra -q -m \"not mcp\" --strict-markers --strict-config --cov=brain_sdk.client --cov=brain_sdk.agent_brain --cov=brain_sdk.execution_context --cov=brain_sdk.execution_state --cov=brain_sdk.memory --cov=brain_sdk.rate_limiter --cov=brain_sdk.result_cache --cov-report=term-missing:skip-covered"
+addopts = "-ra -q -m \"not mcp\" --strict-markers --strict-config --cov=haxen_sdk.client --cov=haxen_sdk.agent_haxen --cov=haxen_sdk.execution_context --cov=haxen_sdk.execution_state --cov=haxen_sdk.memory --cov=haxen_sdk.rate_limiter --cov=haxen_sdk.result_cache --cov-report=term-missing:skip-covered"
 asyncio_mode = "auto"
 
 [tool.coverage.run]
-source = ["brain_sdk"]
+source = ["haxen_sdk"]
 omit = [
-    "brain_sdk/agent_mcp.py",
-    "brain_sdk/dynamic_skills.py",
-    "brain_sdk/mcp_client.py",
-    "brain_sdk/mcp_manager.py",
-    "brain_sdk/mcp_stdio_bridge.py",
-    "brain_sdk/logger.py",
-    "brain_sdk/types.py",
+    "haxen_sdk/agent_mcp.py",
+    "haxen_sdk/dynamic_skills.py",
+    "haxen_sdk/mcp_client.py",
+    "haxen_sdk/mcp_manager.py",
+    "haxen_sdk/mcp_stdio_bridge.py",
+    "haxen_sdk/logger.py",
+    "haxen_sdk/types.py",
 ]

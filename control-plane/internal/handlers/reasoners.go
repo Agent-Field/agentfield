@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time" // Added for time.Now()
 
-	"github.com/your-org/brain/control-plane/internal/logger"
-	"github.com/your-org/brain/control-plane/internal/storage"
-	"github.com/your-org/brain/control-plane/internal/utils" // Added for ID generation
-	"github.com/your-org/brain/control-plane/pkg/types"      // Added for new types
+	"github.com/your-org/haxen/control-plane/internal/logger"
+	"github.com/your-org/haxen/control-plane/internal/storage"
+	"github.com/your-org/haxen/control-plane/internal/utils" // Added for ID generation
+	"github.com/your-org/haxen/control-plane/pkg/types"      // Added for new types
 
 	"github.com/gin-gonic/gin"
 )
@@ -37,8 +37,8 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 		ctx := c.Request.Context()
 		startTime := time.Now()
 
-		// Generate Brain Request ID
-		brainRequestID := utils.GenerateBrainRequestID()
+		// Generate Haxen Request ID
+		haxenRequestID := utils.GenerateHaxenRequestID()
 
 		// Extract headers
 		workflowID := c.GetHeader("X-Workflow-ID")
@@ -122,7 +122,7 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 		workflowExecution := &types.WorkflowExecution{
 			WorkflowID:     workflowID,
 			ExecutionID:    executionID,
-			BrainRequestID: brainRequestID,
+			HaxenRequestID: haxenRequestID,
 			AgentNodeID:    nodeID,
 			ReasonerID:     reasonerName,
 			Status:         "running",
@@ -189,7 +189,7 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 		agentReq.Header.Set("Content-Type", "application/json")
 		agentReq.Header.Set("X-Workflow-ID", workflowID)
 		agentReq.Header.Set("X-Execution-ID", executionID)
-		agentReq.Header.Set("X-Brain-Request-ID", brainRequestID)
+		agentReq.Header.Set("X-Haxen-Request-ID", haxenRequestID)
 		if parentWorkflowID != "" {
 			agentReq.Header.Set("X-Parent-Workflow-ID", parentWorkflowID)
 		}
@@ -303,7 +303,7 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 		// Set response headers
 		c.Header("X-Workflow-ID", workflowID)
 		c.Header("X-Execution-ID", executionID)
-		c.Header("X-Brain-Request-ID", brainRequestID)
+		c.Header("X-Haxen-Request-ID", haxenRequestID)
 		c.Header("X-Agent-Node-ID", nodeID)
 		c.Header("X-Duration-MS", fmt.Sprintf("%d", duration))
 
@@ -317,14 +317,14 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 	}
 }
 
-// ExecuteSkillHandler handles execution of skills via Brain server
+// ExecuteSkillHandler handles execution of skills via Haxen server
 func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 		startTime := time.Now()
 
-		// Generate Brain Request ID
-		brainRequestID := utils.GenerateBrainRequestID()
+		// Generate Haxen Request ID
+		haxenRequestID := utils.GenerateHaxenRequestID()
 
 		// Extract headers
 		workflowID := c.GetHeader("X-Workflow-ID")
@@ -408,7 +408,7 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 		workflowExecution := &types.WorkflowExecution{
 			WorkflowID:     workflowID,
 			ExecutionID:    executionID,
-			BrainRequestID: brainRequestID,
+			HaxenRequestID: haxenRequestID,
 			AgentNodeID:    nodeID,
 			ReasonerID:     skillName, // For skills, ReasonerID will store skillName
 			Status:         "running",
@@ -475,7 +475,7 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 		agentReq.Header.Set("Content-Type", "application/json")
 		agentReq.Header.Set("X-Workflow-ID", workflowID)
 		agentReq.Header.Set("X-Execution-ID", executionID)
-		agentReq.Header.Set("X-Brain-Request-ID", brainRequestID)
+		agentReq.Header.Set("X-Haxen-Request-ID", haxenRequestID)
 		if parentWorkflowID != "" {
 			agentReq.Header.Set("X-Parent-Workflow-ID", parentWorkflowID)
 		}
@@ -589,7 +589,7 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 		// Set response headers
 		c.Header("X-Workflow-ID", workflowID)
 		c.Header("X-Execution-ID", executionID)
-		c.Header("X-Brain-Request-ID", brainRequestID)
+		c.Header("X-Haxen-Request-ID", haxenRequestID)
 		c.Header("X-Agent-Node-ID", nodeID)
 		c.Header("X-Duration-MS", fmt.Sprintf("%d", duration))
 

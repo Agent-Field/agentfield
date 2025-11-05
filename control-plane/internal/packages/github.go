@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/your-org/brain/control-plane/internal/logger"
+	"github.com/your-org/haxen/control-plane/internal/logger"
 	"gopkg.in/yaml.v3"
 )
 
@@ -26,7 +26,7 @@ type GitHubPackageInfo struct {
 
 // GitHubInstaller handles GitHub package installation
 type GitHubInstaller struct {
-	BrainHome string
+	HaxenHome string
 	Verbose   bool
 }
 
@@ -161,7 +161,7 @@ func (gi *GitHubInstaller) InstallFromGitHub(githubURL string, force bool) error
 
 	// 4. Use existing installer for the rest
 	installer := &PackageInstaller{
-		BrainHome: gi.BrainHome,
+		HaxenHome: gi.HaxenHome,
 		Verbose:   gi.Verbose,
 	}
 
@@ -171,7 +171,7 @@ func (gi *GitHubInstaller) InstallFromGitHub(githubURL string, force bool) error
 	}
 
 	// Install using existing flow
-	destPath := filepath.Join(gi.BrainHome, "packages", metadata.Name)
+	destPath := filepath.Join(gi.HaxenHome, "packages", metadata.Name)
 	
 	spinner = gi.newSpinner("Setting up environment")
 	spinner.Start()
@@ -201,7 +201,7 @@ func (gi *GitHubInstaller) InstallFromGitHub(githubURL string, force bool) error
 	// Check for required environment variables
 	installer.checkEnvironmentVariables(metadata)
 	
-	logger.Logger.Info().Msgf("\n%s %s", Blue("→"), Bold(fmt.Sprintf("Run: brain run %s", metadata.Name)))
+	logger.Logger.Info().Msgf("\n%s %s", Blue("→"), Bold(fmt.Sprintf("Run: haxen run %s", metadata.Name)))
 
 	return nil
 }
@@ -209,7 +209,7 @@ func (gi *GitHubInstaller) InstallFromGitHub(githubURL string, force bool) error
 // downloadAndExtract downloads and extracts the GitHub archive
 func (gi *GitHubInstaller) downloadAndExtract(info *GitHubPackageInfo) (string, error) {
 	// Create temporary directory
-	tempDir, err := os.MkdirTemp("", "brain-github-install-")
+	tempDir, err := os.MkdirTemp("", "haxen-github-install-")
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp directory: %w", err)
 	}
@@ -308,7 +308,7 @@ func (gi *GitHubInstaller) extractZip(src, dest string) error {
 	return nil
 }
 
-// findPackageRoot finds the root directory containing brain-package.yaml
+// findPackageRoot finds the root directory containing haxen-package.yaml
 func (gi *GitHubInstaller) findPackageRoot(extractDir string) (string, error) {
 	var packageRoot string
 
@@ -317,7 +317,7 @@ func (gi *GitHubInstaller) findPackageRoot(extractDir string) (string, error) {
 			return err
 		}
 
-		if info.Name() == "brain-package.yaml" {
+		if info.Name() == "haxen-package.yaml" {
 			packageRoot = filepath.Dir(path)
 			return filepath.SkipDir // Found it, stop walking
 		}
@@ -330,7 +330,7 @@ func (gi *GitHubInstaller) findPackageRoot(extractDir string) (string, error) {
 	}
 
 	if packageRoot == "" {
-		return "", fmt.Errorf("brain-package.yaml not found in the repository")
+		return "", fmt.Errorf("haxen-package.yaml not found in the repository")
 	}
 
 	// Also check for main.py
@@ -342,10 +342,10 @@ func (gi *GitHubInstaller) findPackageRoot(extractDir string) (string, error) {
 	return packageRoot, nil
 }
 
-// parsePackageMetadata parses the brain-package.yaml file (reuse from installer.go)
+// parsePackageMetadata parses the haxen-package.yaml file (reuse from installer.go)
 func (gi *GitHubInstaller) parsePackageMetadata(packagePath string) (*PackageMetadata, error) {
 	installer := &PackageInstaller{
-		BrainHome: gi.BrainHome,
+		HaxenHome: gi.HaxenHome,
 		Verbose:   gi.Verbose,
 	}
 	return installer.parsePackageMetadata(packagePath)
@@ -353,7 +353,7 @@ func (gi *GitHubInstaller) parsePackageMetadata(packagePath string) (*PackageMet
 
 // updateRegistryWithGitHub updates the installation registry with GitHub source info
 func (gi *GitHubInstaller) updateRegistryWithGitHub(metadata *PackageMetadata, info *GitHubPackageInfo, sourcePath, destPath string) error {
-	registryPath := filepath.Join(gi.BrainHome, "installed.yaml")
+	registryPath := filepath.Join(gi.HaxenHome, "installed.yaml")
 
 	// Load existing registry or create new one
 	registry := &InstallationRegistry{
@@ -378,7 +378,7 @@ func (gi *GitHubInstaller) updateRegistryWithGitHub(metadata *PackageMetadata, i
 			Port:      nil,
 			PID:       nil,
 			StartedAt: nil,
-			LogFile:   filepath.Join(gi.BrainHome, "logs", metadata.Name+".log"),
+			LogFile:   filepath.Join(gi.HaxenHome, "logs", metadata.Name+".log"),
 		},
 	}
 

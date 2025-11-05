@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/your-org/brain/control-plane/pkg/types"
+	"github.com/your-org/haxen/control-plane/pkg/types"
 )
 
 func TestLocalStorageStoreWorkflowExecutionPersistsLifecycleFields(t *testing.T) {
@@ -17,8 +17,8 @@ func TestLocalStorageStoreWorkflowExecutionPersistsLifecycleFields(t *testing.T)
 	cfg := StorageConfig{
 		Mode: "local",
 		Local: LocalStorageConfig{
-			DatabasePath: filepath.Join(tempDir, "brain.db"),
-			KVStorePath:  filepath.Join(tempDir, "brain.bolt"),
+			DatabasePath: filepath.Join(tempDir, "haxen.db"),
+			KVStorePath:  filepath.Join(tempDir, "haxen.bolt"),
 		},
 	}
 
@@ -50,14 +50,14 @@ func TestLocalStorageStoreWorkflowExecutionPersistsLifecycleFields(t *testing.T)
 	}
 
 	execID := "exec_test"
-	brainRequestID := "req_test"
+	haxenRequestID := "req_test"
 	agentID := "agent_1"
 	reasonerID := "reasoner.alpha"
 
 	exec := &types.WorkflowExecution{
 		WorkflowID:     workflowID,
 		ExecutionID:    execID,
-		BrainRequestID: brainRequestID,
+		HaxenRequestID: haxenRequestID,
 		RunID:          &runID,
 		AgentNodeID:    agentID,
 		ReasonerID:     reasonerID,

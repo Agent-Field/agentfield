@@ -1,4 +1,4 @@
-// brain/internal/core/services/agent_service.go
+// haxen/internal/core/services/agent_service.go
 package services
 
 import (
@@ -14,9 +14,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/your-org/brain/control-plane/internal/core/interfaces"
-	"github.com/your-org/brain/control-plane/internal/core/domain"
-	"github.com/your-org/brain/control-plane/internal/packages"
+	"github.com/your-org/haxen/control-plane/internal/core/interfaces"
+	"github.com/your-org/haxen/control-plane/internal/core/domain"
+	"github.com/your-org/haxen/control-plane/internal/packages"
 	"gopkg.in/yaml.v3"
 )
 
@@ -26,7 +26,7 @@ type DefaultAgentService struct {
 	portManager     interfaces.PortManager
 	registryStorage interfaces.RegistryStorage
 	agentClient     interfaces.AgentClient
-	brainHome       string
+	haxenHome       string
 }
 
 // NewAgentService creates a new agent service instance
@@ -35,14 +35,14 @@ func NewAgentService(
 	portManager interfaces.PortManager,
 	registryStorage interfaces.RegistryStorage,
 	agentClient interfaces.AgentClient,
-	brainHome string,
+	haxenHome string,
 ) interfaces.AgentService {
 	return &DefaultAgentService{
 		processManager:  processManager,
 		portManager:     portManager,
 		registryStorage: registryStorage,
 		agentClient:     agentClient,
-		brainHome:       brainHome,
+		haxenHome:       haxenHome,
 	}
 }
 
@@ -107,7 +107,7 @@ func (as *DefaultAgentService) RunAgent(name string, options domain.RunOptions) 
 		return nil, fmt.Errorf("agent node failed to start: %w", err)
 	}
 
-	fmt.Printf("🧠 Agent node registered with Brain Server\n")
+	fmt.Printf("🧠 Agent node registered with Haxen Server\n")
 
 	// 6. Update registry with runtime info
 	if err := as.updateRuntimeInfo(name, port, pid); err != nil {
@@ -120,8 +120,8 @@ func (as *DefaultAgentService) RunAgent(name string, options domain.RunOptions) 
 	}
 
 	fmt.Printf("\n💡 Agent node running in background (PID: %d)\n", pid)
-	fmt.Printf("💡 View logs: brain logs %s\n", name)
-	fmt.Printf("💡 Stop agent node: brain stop %s\n", name)
+	fmt.Printf("💡 View logs: haxen logs %s\n", name)
+	fmt.Printf("💡 Stop agent node: haxen stop %s\n", name)
 
 	// Convert to domain model and return
 	runningAgent := as.convertToRunningAgent(agentNode)
@@ -387,7 +387,7 @@ func (as *DefaultAgentService) ListRunningAgents() ([]domain.RunningAgent, error
 // loadRegistryDirect loads the registry using direct file system access
 // TODO: Eventually replace with registryStorage interface usage
 func (as *DefaultAgentService) loadRegistryDirect() (*packages.InstallationRegistry, error) {
-	registryPath := filepath.Join(as.brainHome, "installed.yaml")
+	registryPath := filepath.Join(as.haxenHome, "installed.yaml")
 
 	registry := &packages.InstallationRegistry{
 		Installed: make(map[string]packages.InstalledPackage),
@@ -405,7 +405,7 @@ func (as *DefaultAgentService) loadRegistryDirect() (*packages.InstallationRegis
 // saveRegistryDirect saves the registry using direct file system access
 // TODO: Eventually replace with registryStorage interface usage
 func (as *DefaultAgentService) saveRegistryDirect(registry *packages.InstallationRegistry) error {
-	registryPath := filepath.Join(as.brainHome, "installed.yaml")
+	registryPath := filepath.Join(as.haxenHome, "installed.yaml")
 
 	data, err := yaml.Marshal(registry)
 	if err != nil {
@@ -446,7 +446,7 @@ func (as *DefaultAgentService) buildProcessConfig(agentNode packages.InstalledPa
 	// Prepare environment variables
 	env := os.Environ()
 	env = append(env, fmt.Sprintf("PORT=%d", port))
-	env = append(env, "BRAIN_SERVER_URL=http://localhost:8080")
+	env = append(env, "HAXEN_SERVER_URL=http://localhost:8080")
 
 	// Load environment variables from package .env file
 	if envVars, err := as.loadPackageEnvFile(agentNode.Path); err == nil {
@@ -544,7 +544,7 @@ func (as *DefaultAgentService) waitForAgentNode(port int, timeout time.Duration)
 
 // updateRuntimeInfo updates the registry with runtime information
 func (as *DefaultAgentService) updateRuntimeInfo(agentNodeName string, port, pid int) error {
-	registryPath := filepath.Join(as.brainHome, "installed.yaml")
+	registryPath := filepath.Join(as.haxenHome, "installed.yaml")
 
 	// Load registry
 	registry := &packages.InstallationRegistry{}

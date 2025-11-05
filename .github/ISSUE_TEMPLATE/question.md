@@ -1,6 +1,6 @@
 ---
 name: Question
-about: Ask a question about using Brain
+about: Ask a question about using Haxen
 labels: question
 ---
 

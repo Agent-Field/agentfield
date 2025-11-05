@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/your-org/brain/control-plane/pkg/types"
+	"github.com/your-org/haxen/control-plane/pkg/types"
 )
 
 // NewVCCommand creates the vc command with subcommands
@@ -20,7 +20,7 @@ func NewVCCommand() *cobra.Command {
 	vcCmd := &cobra.Command{
 		Use:   "vc",
 		Short: "Verifiable Credential operations",
-		Long:  `Commands for working with Brain Verifiable Credentials (VCs)`,
+		Long:  `Commands for working with Haxen Verifiable Credentials (VCs)`,
 	}
 
 	vcCmd.AddCommand(NewVCVerifyCommand())
@@ -36,8 +36,8 @@ func NewVCVerifyCommand() *cobra.Command {
 
 	verifyCmd := &cobra.Command{
 		Use:   "verify <vc-file.json>",
-		Short: "Verify a Brain Verifiable Credential",
-		Long: `Verify the cryptographic signature and integrity of a Brain Verifiable Credential.
+		Short: "Verify a Haxen Verifiable Credential",
+		Long: `Verify the cryptographic signature and integrity of a Haxen Verifiable Credential.
 This command supports offline verification with bundled DIDs and online verification with web resolution.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -203,7 +203,7 @@ func verifyVC(vcFilePath string, options VerifyOptions) error {
 			enhancedChain = convertLegacyChain(workflowChain)
 		} else {
 			step2.Success = false
-			step2.Error = "Invalid VC format: not a recognized Brain VC structure"
+			step2.Error = "Invalid VC format: not a recognized Haxen VC structure"
 			result.VerificationSteps = append(result.VerificationSteps, step2)
 			result.Valid = false
 			result.FormatValid = false
@@ -618,7 +618,7 @@ func outputPretty(result VCVerificationResult, verbose bool) error {
 		status = "✅ VALID"
 	}
 
-	fmt.Printf("Brain VC Verification: %s\n", status)
+	fmt.Printf("Haxen VC Verification: %s\n", status)
 	fmt.Printf("Type: %s\n", result.Type)
 
 	if result.WorkflowID != "" {

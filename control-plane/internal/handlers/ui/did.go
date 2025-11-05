@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/your-org/brain/control-plane/internal/services"
-	"github.com/your-org/brain/control-plane/internal/storage"
-	"github.com/your-org/brain/control-plane/pkg/types"
+	"github.com/your-org/haxen/control-plane/internal/services"
+	"github.com/your-org/haxen/control-plane/internal/storage"
+	"github.com/your-org/haxen/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -50,21 +50,21 @@ func (h *DIDHandler) GetNodeDIDHandler(c *gin.Context) {
 		return
 	}
 
-	// Get brain server ID dynamically
-	brainServerID, err := h.didService.GetBrainServerID()
+	// Get haxen server ID dynamically
+	haxenServerID, err := h.didService.GetHaxenServerID()
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"has_did":        false,
 			"did_status":     "inactive",
 			"reasoner_count": 0,
 			"skill_count":    0,
-			"error":          fmt.Sprintf("Failed to get brain server ID: %v", err),
+			"error":          fmt.Sprintf("Failed to get haxen server ID: %v", err),
 		})
 		return
 	}
 
-	// Get DID registry for the brain server (not the node)
-	registry, err := h.didService.GetRegistry(brainServerID)
+	// Get DID registry for the haxen server (not the node)
+	registry, err := h.didService.GetRegistry(haxenServerID)
 	if err != nil || registry == nil {
 		c.JSON(http.StatusOK, gin.H{
 			"has_did":        false,
@@ -98,7 +98,7 @@ func (h *DIDHandler) GetNodeDIDHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"did":             agentInfo.DID,
 		"agent_node_id":   nodeID,
-		"brain_server_id": registry.BrainServerID,
+		"haxen_server_id": registry.HaxenServerID,
 		"public_key_jwk":  agentInfo.PublicKeyJWK,
 		"derivation_path": agentInfo.DerivationPath,
 		"reasoners":       agentInfo.Reasoners,
@@ -591,7 +591,7 @@ func (h *DIDHandler) GetDIDResolutionBundleHandler(c *gin.Context) {
 			"component_dids":    []interface{}{},
 			"resolution_metadata": gin.H{
 				"resolved_at": time.Now().Format(time.RFC3339),
-				"resolver":    "brain-server",
+				"resolver":    "haxen-server",
 				"status":      "inactive",
 			},
 		})
@@ -633,7 +633,7 @@ func (h *DIDHandler) GetDIDResolutionBundleHandler(c *gin.Context) {
 						{
 							"id":              did + "#agent-service",
 							"type":            "AgentService",
-							"serviceEndpoint": fmt.Sprintf("https://brain-server/agents/%s", agentDID.AgentNodeID),
+							"serviceEndpoint": fmt.Sprintf("https://haxen-server/agents/%s", agentDID.AgentNodeID),
 						},
 					},
 				}
@@ -651,7 +651,7 @@ func (h *DIDHandler) GetDIDResolutionBundleHandler(c *gin.Context) {
 				serviceEndpoints = append(serviceEndpoints, gin.H{
 					"id":              did + "#agent-service",
 					"type":            "AgentService",
-					"serviceEndpoint": fmt.Sprintf("https://brain-server/agents/%s", agentDID.AgentNodeID),
+					"serviceEndpoint": fmt.Sprintf("https://haxen-server/agents/%s", agentDID.AgentNodeID),
 				})
 
 				// Add component DIDs (reasoners and skills)
@@ -708,7 +708,7 @@ func (h *DIDHandler) GetDIDResolutionBundleHandler(c *gin.Context) {
 							{
 								"id":              did + "#component-service",
 								"type":            fmt.Sprintf("%sService", componentDID.ComponentType),
-								"serviceEndpoint": fmt.Sprintf("https://brain-server/components/%s", componentDID.ComponentID),
+								"serviceEndpoint": fmt.Sprintf("https://haxen-server/components/%s", componentDID.ComponentID),
 							},
 						},
 					}
@@ -717,7 +717,7 @@ func (h *DIDHandler) GetDIDResolutionBundleHandler(c *gin.Context) {
 					serviceEndpoints = append(serviceEndpoints, gin.H{
 						"id":              did + "#component-service",
 						"type":            fmt.Sprintf("%sService", componentDID.ComponentType),
-						"serviceEndpoint": fmt.Sprintf("https://brain-server/components/%s", componentDID.ComponentID),
+						"serviceEndpoint": fmt.Sprintf("https://haxen-server/components/%s", componentDID.ComponentID),
 					})
 
 					break
@@ -753,9 +753,9 @@ func (h *DIDHandler) GetDIDResolutionBundleHandler(c *gin.Context) {
 	// Build resolution metadata
 	resolutionMetadata := gin.H{
 		"resolved_at": time.Now().Format(time.RFC3339),
-		"resolver":    "brain-server",
+		"resolver":    "haxen-server",
 		"status":      resolutionStatus,
-		"method":      "brain",
+		"method":      "haxen",
 	}
 
 	if resolutionStatus == "resolved" {
@@ -801,8 +801,8 @@ func (h *DIDHandler) DownloadDIDResolutionBundleHandler(c *gin.Context) {
 		"did": did,
 		"resolution_metadata": gin.H{
 			"resolved_at": time.Now().Format(time.RFC3339),
-			"resolver":    "brain-server",
-			"method":      "brain",
+			"resolver":    "haxen-server",
+			"method":      "haxen",
 		},
 		"bundle_type":  "did_resolution",
 		"generated_at": time.Now().Format(time.RFC3339),

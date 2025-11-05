@@ -1,4 +1,4 @@
-// brain/internal/core/services/package_service.go
+// haxen/internal/core/services/package_service.go
 package services
 
 import (
@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/your-org/brain/control-plane/internal/core/interfaces"
-	"github.com/your-org/brain/control-plane/internal/core/domain"
-	"github.com/your-org/brain/control-plane/internal/packages"
+	"github.com/your-org/haxen/control-plane/internal/core/interfaces"
+	"github.com/your-org/haxen/control-plane/internal/core/domain"
+	"github.com/your-org/haxen/control-plane/internal/packages"
 	"github.com/fatih/color"
 	"gopkg.in/yaml.v3"
 )
@@ -21,19 +21,19 @@ import (
 type DefaultPackageService struct {
 	registryStorage interfaces.RegistryStorage
 	fileSystem      interfaces.FileSystemAdapter
-	brainHome       string
+	haxenHome       string
 }
 
 // NewPackageService creates a new package service instance
 func NewPackageService(
 	registryStorage interfaces.RegistryStorage,
 	fileSystem interfaces.FileSystemAdapter,
-	brainHome string,
+	haxenHome string,
 ) interfaces.PackageService {
 	return &DefaultPackageService{
 		registryStorage: registryStorage,
 		fileSystem:      fileSystem,
-		brainHome:       brainHome,
+		haxenHome:       haxenHome,
 	}
 }
 
@@ -42,7 +42,7 @@ func (ps *DefaultPackageService) InstallPackage(source string, options domain.In
 	// Check if it's a Git URL (GitHub, GitLab, Bitbucket, etc.)
 	if packages.IsGitURL(source) {
 		installer := &packages.GitInstaller{
-			BrainHome: ps.brainHome,
+			HaxenHome: ps.haxenHome,
 			Verbose:   options.Verbose,
 		}
 		return installer.InstallFromGit(source, options.Force)
@@ -77,7 +77,7 @@ func (ps *DefaultPackageService) installLocalPackage(sourcePath string, force bo
 	}
 
 	// 3. Copy package to global location
-	destPath := filepath.Join(ps.brainHome, "packages", metadata.Name)
+	destPath := filepath.Join(ps.haxenHome, "packages", metadata.Name)
 	spinner = ps.newSpinner("Setting up environment")
 	spinner.Start()
 	if err := ps.copyPackage(sourcePath, destPath); err != nil {
@@ -106,7 +106,7 @@ func (ps *DefaultPackageService) installLocalPackage(sourcePath string, force bo
 	// 6. Check for required environment variables and provide guidance
 	ps.checkEnvironmentVariables(metadata)
 	
-	fmt.Printf("\n%s %s\n", ps.blue("→"), ps.bold(fmt.Sprintf("Run: brain run %s", metadata.Name)))
+	fmt.Printf("\n%s %s\n", ps.blue("→"), ps.bold(fmt.Sprintf("Run: haxen run %s", metadata.Name)))
 
 	return nil
 }
@@ -188,7 +188,7 @@ func (ps *DefaultPackageService) stopAgentNode(agentNode *packages.InstalledPack
 
 // saveRegistry saves the installation registry
 func (ps *DefaultPackageService) saveRegistry(registry *packages.InstallationRegistry) error {
-	registryPath := filepath.Join(ps.brainHome, "installed.yaml")
+	registryPath := filepath.Join(ps.haxenHome, "installed.yaml")
 
 	data, err := yaml.Marshal(registry)
 	if err != nil {
@@ -239,7 +239,7 @@ func (ps *DefaultPackageService) GetPackageInfo(name string) (*domain.InstalledP
 // loadRegistryDirect loads the registry using direct file system access
 // TODO: Eventually replace with registryStorage interface usage
 func (ps *DefaultPackageService) loadRegistryDirect() (*packages.InstallationRegistry, error) {
-	registryPath := filepath.Join(ps.brainHome, "installed.yaml")
+	registryPath := filepath.Join(ps.haxenHome, "installed.yaml")
 
 	registry := &packages.InstallationRegistry{
 		Installed: make(map[string]packages.InstalledPackage),
@@ -373,10 +373,10 @@ func (s *Spinner) Error(message string) {
 
 // validatePackage checks if the package has required files
 func (ps *DefaultPackageService) validatePackage(sourcePath string) error {
-	// Check if brain-package.yaml exists
-	packageYamlPath := filepath.Join(sourcePath, "brain-package.yaml")
+	// Check if haxen-package.yaml exists
+	packageYamlPath := filepath.Join(sourcePath, "haxen-package.yaml")
 	if _, err := os.Stat(packageYamlPath); os.IsNotExist(err) {
-		return fmt.Errorf("brain-package.yaml not found in %s", sourcePath)
+		return fmt.Errorf("haxen-package.yaml not found in %s", sourcePath)
 	}
 
 	// Check if main.py exists
@@ -388,26 +388,26 @@ func (ps *DefaultPackageService) validatePackage(sourcePath string) error {
 	return nil
 }
 
-// parsePackageMetadata parses the brain-package.yaml file
+// parsePackageMetadata parses the haxen-package.yaml file
 func (ps *DefaultPackageService) parsePackageMetadata(sourcePath string) (*packages.PackageMetadata, error) {
-	packageYamlPath := filepath.Join(sourcePath, "brain-package.yaml")
+	packageYamlPath := filepath.Join(sourcePath, "haxen-package.yaml")
 
 	data, err := os.ReadFile(packageYamlPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read brain-package.yaml: %w", err)
+		return nil, fmt.Errorf("failed to read haxen-package.yaml: %w", err)
 	}
 
 	var metadata packages.PackageMetadata
 	if err := yaml.Unmarshal(data, &metadata); err != nil {
-		return nil, fmt.Errorf("failed to parse brain-package.yaml: %w", err)
+		return nil, fmt.Errorf("failed to parse haxen-package.yaml: %w", err)
 	}
 
 	// Validate required fields
 	if metadata.Name == "" {
-		return nil, fmt.Errorf("package name is required in brain-package.yaml")
+		return nil, fmt.Errorf("package name is required in haxen-package.yaml")
 	}
 	if metadata.Version == "" {
-		return nil, fmt.Errorf("package version is required in brain-package.yaml")
+		return nil, fmt.Errorf("package version is required in haxen-package.yaml")
 	}
 	if metadata.Main == "" {
 		metadata.Main = "main.py" // Default
@@ -418,7 +418,7 @@ func (ps *DefaultPackageService) parsePackageMetadata(sourcePath string) (*packa
 
 // isPackageInstalled checks if a package is already installed
 func (ps *DefaultPackageService) isPackageInstalled(packageName string) bool {
-	registryPath := filepath.Join(ps.brainHome, "installed.yaml")
+	registryPath := filepath.Join(ps.haxenHome, "installed.yaml")
 	registry := &packages.InstallationRegistry{
 		Installed: make(map[string]packages.InstalledPackage),
 	}
@@ -524,7 +524,7 @@ func (ps *DefaultPackageService) installDependencies(packagePath string, metadat
 			}
 		}
 
-		// Install dependencies from brain-package.yaml
+		// Install dependencies from haxen-package.yaml
 		if len(metadata.Dependencies.Python) > 0 {
 			for _, dep := range metadata.Dependencies.Python {
 				cmd = exec.Command(pipPath, "install", dep)
@@ -553,7 +553,7 @@ func (ps *DefaultPackageService) hasRequirementsFile(packagePath string) bool {
 
 // updateRegistry updates the installation registry with the new package
 func (ps *DefaultPackageService) updateRegistry(metadata *packages.PackageMetadata, sourcePath, destPath string) error {
-	registryPath := filepath.Join(ps.brainHome, "installed.yaml")
+	registryPath := filepath.Join(ps.haxenHome, "installed.yaml")
 
 	// Load existing registry or create new one
 	registry := &packages.InstallationRegistry{
@@ -578,7 +578,7 @@ func (ps *DefaultPackageService) updateRegistry(metadata *packages.PackageMetada
 			Port:      nil,
 			PID:       nil,
 			StartedAt: nil,
-			LogFile:   filepath.Join(ps.brainHome, "logs", metadata.Name+".log"),
+			LogFile:   filepath.Join(ps.haxenHome, "logs", metadata.Name+".log"),
 		},
 	}
 
@@ -617,7 +617,7 @@ func (ps *DefaultPackageService) checkEnvironmentVariables(metadata *packages.Pa
 	if len(missingRequired) > 0 {
 		fmt.Printf("\n%s %s\n", ps.yellow("⚠"), ps.bold("Missing required environment variables:"))
 		for _, envVar := range missingRequired {
-			fmt.Printf("  %s\n", ps.cyan(fmt.Sprintf("brain config %s --set %s=your-value-here", metadata.Name, envVar.Name)))
+			fmt.Printf("  %s\n", ps.cyan(fmt.Sprintf("haxen config %s --set %s=your-value-here", metadata.Name, envVar.Name)))
 		}
 	}
 

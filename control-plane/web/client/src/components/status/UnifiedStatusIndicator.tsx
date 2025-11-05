@@ -1,5 +1,5 @@
 import { Badge } from "@/components/ui/badge";
-import type { AgentState, AgentStatus } from "@/types/brain";
+import type { AgentState, AgentStatus } from "@/types/haxen";
 import { cn } from "@/lib/utils";
 import { statusTone, type StatusTone } from "@/lib/theme";
 import type { ComponentProps } from "react";

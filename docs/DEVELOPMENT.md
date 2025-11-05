@@ -1,6 +1,6 @@
 # Development Guide
 
-This document provides instructions for working on the Brain monorepo locally.
+This document provides instructions for working on the Haxen monorepo locally.
 
 ## Prerequisites
 
@@ -12,8 +12,8 @@ This document provides instructions for working on the Brain monorepo locally.
 ## Initial Setup
 
 ```bash
-git clone https://github.com/your-org/brain.git
-cd brain
+git clone https://github.com/your-org/haxen.git
+cd haxen
 ./scripts/install.sh
 ```
 
@@ -47,16 +47,16 @@ The install script performs:
 
 Copy `control-plane/config/.env.example` to `.env` (if available) and adjust:
 
-- `BRAIN_DATABASE_URL` — PostgreSQL connection string.
-- `BRAIN_REDIS_URL` — Redis instance used for queues.
-- `BRAIN_JWT_SECRET` — Authentication secret (development only).
+- `HAXEN_DATABASE_URL` — PostgreSQL connection string.
+- `HAXEN_REDIS_URL` — Redis instance used for queues.
+- `HAXEN_JWT_SECRET` — Authentication secret (development only).
 
 ## Database Migrations
 
 ```bash
 cd control-plane
-goose -dir ./migrations postgres "$BRAIN_DATABASE_URL" status
-goose -dir ./migrations postgres "$BRAIN_DATABASE_URL" up
+goose -dir ./migrations postgres "$HAXEN_DATABASE_URL" status
+goose -dir ./migrations postgres "$HAXEN_DATABASE_URL" up
 ```
 
 ## Frontend Development

@@ -9,7 +9,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { useMode } from "@/contexts/ModeContext";
 import { cn } from "@/lib/utils";
-import type { MCPTool } from "@/types/brain";
+import type { MCPTool } from "@/types/haxen";
 import {
   ChevronDown,
   ChevronUp,

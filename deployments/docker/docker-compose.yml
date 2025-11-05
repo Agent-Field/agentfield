@@ -5,9 +5,9 @@ services:
     image: postgres:15-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: brain
-      POSTGRES_PASSWORD: brain
-      POSTGRES_DB: brain
+      POSTGRES_USER: haxen
+      POSTGRES_PASSWORD: haxen
+      POSTGRES_DB: haxen
     volumes:
       - pgdata:/var/lib/postgresql/data
 
@@ -17,9 +17,9 @@ services:
       context: ../..
       dockerfile: deployments/docker/Dockerfile.control-plane
     environment:
-      BRAIN_DATABASE_URL: postgres://brain:brain@postgres:5432/brain?sslmode=disable
-      BRAIN_REDIS_URL: redis://redis:6379/0
-      BRAIN_HTTP_ADDR: 0.0.0.0:8080
+      HAXEN_DATABASE_URL: postgres://haxen:haxen@postgres:5432/haxen?sslmode=disable
+      HAXEN_REDIS_URL: redis://redis:6379/0
+      HAXEN_HTTP_ADDR: 0.0.0.0:8080
     ports:
       - "8080:8080"
     depends_on:

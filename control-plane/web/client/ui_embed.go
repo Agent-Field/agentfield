@@ -1,4 +1,4 @@
-// UI embedding and route registration for Brain
+// UI embedding and route registration for Haxen
 
 package client
 

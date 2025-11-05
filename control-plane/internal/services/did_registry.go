@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/your-org/brain/control-plane/pkg/types"
-	"github.com/your-org/brain/control-plane/internal/storage"
+	"github.com/your-org/haxen/control-plane/pkg/types"
+	"github.com/your-org/haxen/control-plane/internal/storage"
 )
 
 // DIDRegistry manages the storage and retrieval of DID registries using database-only operations.
@@ -34,13 +34,13 @@ func (r *DIDRegistry) Initialize() error {
 	return r.loadRegistriesFromDatabase()
 }
 
-// GetRegistry retrieves a DID registry for a brain server.
+// GetRegistry retrieves a DID registry for a haxen server.
 // Returns (nil, nil) if registry doesn't exist, (nil, error) for actual errors.
-func (r *DIDRegistry) GetRegistry(brainServerID string) (*types.DIDRegistry, error) {
+func (r *DIDRegistry) GetRegistry(haxenServerID string) (*types.DIDRegistry, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	registry, exists := r.registries[brainServerID]
+	registry, exists := r.registries[haxenServerID]
 	if !exists {
 		// Return nil, nil for "not found" to distinguish from actual errors
 		return nil, nil
@@ -49,19 +49,19 @@ func (r *DIDRegistry) GetRegistry(brainServerID string) (*types.DIDRegistry, err
 	return registry, nil
 }
 
-// StoreRegistry stores a DID registry for a brain server.
+// StoreRegistry stores a DID registry for a haxen server.
 func (r *DIDRegistry) StoreRegistry(registry *types.DIDRegistry) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	// Store in memory
-	r.registries[registry.BrainServerID] = registry
+	r.registries[registry.HaxenServerID] = registry
 
 	// Persist to database
 	return r.saveRegistryToDatabase(registry)
 }
 
-// ListRegistries lists all brain server registries.
+// ListRegistries lists all haxen server registries.
 func (r *DIDRegistry) ListRegistries() ([]*types.DIDRegistry, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -74,13 +74,13 @@ func (r *DIDRegistry) ListRegistries() ([]*types.DIDRegistry, error) {
 	return registries, nil
 }
 
-// DeleteRegistry deletes a DID registry for a brain server.
-func (r *DIDRegistry) DeleteRegistry(brainServerID string) error {
+// DeleteRegistry deletes a DID registry for a haxen server.
+func (r *DIDRegistry) DeleteRegistry(haxenServerID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	// Remove from memory
-	delete(r.registries, brainServerID)
+	delete(r.registries, haxenServerID)
 
 	// TODO: Add database deletion method to storage interface
 	// For now, we'll just remove from memory
@@ -88,13 +88,13 @@ func (r *DIDRegistry) DeleteRegistry(brainServerID string) error {
 }
 
 // UpdateAgentStatus updates the status of an agent DID.
-func (r *DIDRegistry) UpdateAgentStatus(brainServerID, agentNodeID string, status types.AgentDIDStatus) error {
+func (r *DIDRegistry) UpdateAgentStatus(haxenServerID, agentNodeID string, status types.AgentDIDStatus) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	registry, exists := r.registries[brainServerID]
+	registry, exists := r.registries[haxenServerID]
 	if !exists {
-		return fmt.Errorf("registry not found for brain server: %s", brainServerID)
+		return fmt.Errorf("registry not found for haxen server: %s", haxenServerID)
 	}
 
 	agentInfo, exists := registry.AgentNodes[agentNodeID]
@@ -110,13 +110,13 @@ func (r *DIDRegistry) UpdateAgentStatus(brainServerID, agentNodeID string, statu
 }
 
 // FindDIDByComponent finds a DID by component type and function name.
-func (r *DIDRegistry) FindDIDByComponent(brainServerID, componentType, functionName string) (*types.DIDIdentity, error) {
+func (r *DIDRegistry) FindDIDByComponent(haxenServerID, componentType, functionName string) (*types.DIDIdentity, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	registry, exists := r.registries[brainServerID]
+	registry, exists := r.registries[haxenServerID]
 	if !exists {
-		return nil, fmt.Errorf("registry not found for brain server: %s", brainServerID)
+		return nil, fmt.Errorf("registry not found for haxen server: %s", haxenServerID)
 	}
 
 	// Search through all agent nodes
@@ -162,13 +162,13 @@ func (r *DIDRegistry) FindDIDByComponent(brainServerID, componentType, functionN
 }
 
 // GetAgentDIDs retrieves all DIDs for a specific agent node.
-func (r *DIDRegistry) GetAgentDIDs(brainServerID, agentNodeID string) (*types.DIDIdentityPackage, error) {
+func (r *DIDRegistry) GetAgentDIDs(haxenServerID, agentNodeID string) (*types.DIDIdentityPackage, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	registry, exists := r.registries[brainServerID]
+	registry, exists := r.registries[haxenServerID]
 	if !exists {
-		return nil, fmt.Errorf("registry not found for brain server: %s", brainServerID)
+		return nil, fmt.Errorf("registry not found for haxen server: %s", haxenServerID)
 	}
 
 	agentInfo, exists := registry.AgentNodes[agentNodeID]
@@ -208,7 +208,7 @@ func (r *DIDRegistry) GetAgentDIDs(brainServerID, agentNodeID string) (*types.DI
 		},
 		ReasonerDIDs:  reasonerDIDs,
 		SkillDIDs:     skillDIDs,
-		BrainServerID: brainServerID,
+		HaxenServerID: haxenServerID,
 	}, nil
 }
 
@@ -219,39 +219,39 @@ func (r *DIDRegistry) loadRegistriesFromDatabase() error {
 	}
 
 	ctx := context.Background()
-	// Load brain server DID information
-	brainServerDIDs, err := r.storageProvider.ListBrainServerDIDs(ctx)
+	// Load haxen server DID information
+	haxenServerDIDs, err := r.storageProvider.ListHaxenServerDIDs(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to list brain server DIDs: %w", err)
+		return fmt.Errorf("failed to list haxen server DIDs: %w", err)
 	}
 
-	// Create registries for each brain server
-	for _, brainServerDIDInfo := range brainServerDIDs {
+	// Create registries for each haxen server
+	for _, haxenServerDIDInfo := range haxenServerDIDs {
 		registry := &types.DIDRegistry{
-			BrainServerID:   brainServerDIDInfo.BrainServerID,
-			RootDID:         brainServerDIDInfo.RootDID,
-			MasterSeed:      brainServerDIDInfo.MasterSeed,
+			HaxenServerID:   haxenServerDIDInfo.HaxenServerID,
+			RootDID:         haxenServerDIDInfo.RootDID,
+			MasterSeed:      haxenServerDIDInfo.MasterSeed,
 			AgentNodes:      make(map[string]types.AgentDIDInfo),
 			TotalDIDs:       0,
-			CreatedAt:       brainServerDIDInfo.CreatedAt,
-			LastKeyRotation: brainServerDIDInfo.LastKeyRotation,
+			CreatedAt:       haxenServerDIDInfo.CreatedAt,
+			LastKeyRotation: haxenServerDIDInfo.LastKeyRotation,
 		}
 
-		// Load agent DIDs for this brain server
+		// Load agent DIDs for this haxen server
 		agentDIDs, err := r.storageProvider.ListAgentDIDs(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to list agent DIDs: %w", err)
 		}
 
 		for _, agentDIDInfo := range agentDIDs {
-			// Filter agents for this brain server (assuming we can match by some criteria)
-			// For now, we'll add all agents to the default brain server
-			// TODO: Add brain server filtering when the storage interface supports it
+			// Filter agents for this haxen server (assuming we can match by some criteria)
+			// For now, we'll add all agents to the default haxen server
+			// TODO: Add haxen server filtering when the storage interface supports it
 			
 			agentInfo := types.AgentDIDInfo{
 				DID:            agentDIDInfo.DID,
 				AgentNodeID:    agentDIDInfo.AgentNodeID,
-				BrainServerID:  brainServerDIDInfo.BrainServerID,
+				HaxenServerID:  haxenServerDIDInfo.HaxenServerID,
 				PublicKeyJWK:   agentDIDInfo.PublicKeyJWK,
 				DerivationPath: agentDIDInfo.DerivationPath,
 				Status:         agentDIDInfo.Status,
@@ -296,7 +296,7 @@ func (r *DIDRegistry) loadRegistriesFromDatabase() error {
 			registry.TotalDIDs++
 		}
 
-		r.registries[brainServerDIDInfo.BrainServerID] = registry
+		r.registries[haxenServerDIDInfo.HaxenServerID] = registry
 	}
 
 	return nil
@@ -309,17 +309,17 @@ func (r *DIDRegistry) saveRegistryToDatabase(registry *types.DIDRegistry) error 
 	}
 
 	ctx := context.Background()
-	// Store brain server DID information
-	err := r.storageProvider.StoreBrainServerDID(
+	// Store haxen server DID information
+	err := r.storageProvider.StoreHaxenServerDID(
 		ctx,
-		registry.BrainServerID,
+		registry.HaxenServerID,
 		registry.RootDID,
 		registry.MasterSeed,
 		registry.CreatedAt,
 		registry.LastKeyRotation,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to store brain server DID: %w", err)
+		return fmt.Errorf("failed to store haxen server DID: %w", err)
 	}
 
 	// Store each agent DID and its components using transaction-safe method
@@ -359,7 +359,7 @@ func (r *DIDRegistry) saveRegistryToDatabase(registry *types.DIDRegistry) error 
 			ctx,
 			agentInfo.AgentNodeID,
 			agentInfo.DID,
-			registry.BrainServerID, // Use brain server ID instead of root DID
+			registry.HaxenServerID, // Use haxen server ID instead of root DID
 			string(agentInfo.PublicKeyJWK),
 			derivationIndex,
 			components,

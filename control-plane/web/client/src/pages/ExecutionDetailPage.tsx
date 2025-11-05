@@ -224,9 +224,9 @@ export function ExecutionDetailPage() {
               onClick={execution.session_id ? navigateToSession : undefined}
             />
             <MetadataRow
-              label="Brain Request ID"
-              value={execution.brain_request_id || '—'}
-              copyValue={execution.brain_request_id || undefined}
+              label="Haxen Request ID"
+              value={execution.haxen_request_id || '—'}
+              copyValue={execution.haxen_request_id || undefined}
             />
             <MetadataRow
               label="Actor ID"

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/your-org/brain/control-plane/internal/config"
+	"github.com/your-org/haxen/control-plane/internal/config"
 
 	"github.com/stretchr/testify/require"
 )

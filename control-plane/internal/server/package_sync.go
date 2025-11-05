@@ -1,8 +1,8 @@
 package server
 
 import (
-	"github.com/your-org/brain/control-plane/internal/logger"
-	"github.com/your-org/brain/control-plane/pkg/types"
+	"github.com/your-org/haxen/control-plane/internal/logger"
+	"github.com/your-org/haxen/control-plane/pkg/types"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -47,9 +47,9 @@ type InstalledPackage struct {
 }
 
 // SyncPackagesFromRegistry ensures all packages in installed.yaml are present in the database.
-func SyncPackagesFromRegistry(brainHome string, storageProvider packageStorage) error {
+func SyncPackagesFromRegistry(haxenHome string, storageProvider packageStorage) error {
 	ctx := context.Background()
-	registryPath := filepath.Join(brainHome, "installed.yaml")
+	registryPath := filepath.Join(haxenHome, "installed.yaml")
 	data, err := os.ReadFile(registryPath)
 	if err != nil {
 		return nil // No registry, nothing to sync
@@ -64,8 +64,8 @@ func SyncPackagesFromRegistry(brainHome string, storageProvider packageStorage) 
 		if err == nil {
 			continue // Already present
 		}
-		// Load brain-package.yaml
-		packageYamlPath := filepath.Join(pkg.Path, "brain-package.yaml")
+		// Load haxen-package.yaml
+		packageYamlPath := filepath.Join(pkg.Path, "haxen-package.yaml")
 		packageYamlData, err := os.ReadFile(packageYamlPath)
 		if err != nil {
 			continue // Skip if missing
@@ -95,13 +95,13 @@ func SyncPackagesFromRegistry(brainHome string, storageProvider packageStorage) 
 }
 
 // StartPackageRegistryWatcher watches the installed.yaml registry and keeps storage in sync.
-func StartPackageRegistryWatcher(parentCtx context.Context, brainHome string, storageProvider packageStorage) (context.CancelFunc, error) {
+func StartPackageRegistryWatcher(parentCtx context.Context, haxenHome string, storageProvider packageStorage) (context.CancelFunc, error) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create registry watcher: %w", err)
 	}
 
-	registryDir := brainHome
+	registryDir := haxenHome
 	if err := watcher.Add(registryDir); err != nil {
 		watcher.Close()
 		return nil, fmt.Errorf("failed to watch registry directory %s: %w", registryDir, err)
@@ -122,7 +122,7 @@ func StartPackageRegistryWatcher(parentCtx context.Context, brainHome string, st
 	go func() {
 		defer watcher.Close()
 		defer close(syncCh)
-		registryFile := filepath.Join(brainHome, "installed.yaml")
+		registryFile := filepath.Join(haxenHome, "installed.yaml")
 		for {
 			select {
 			case event, ok := <-watcher.Events:
@@ -162,7 +162,7 @@ func StartPackageRegistryWatcher(parentCtx context.Context, brainHome string, st
 					return
 				}
 				time.Sleep(250 * time.Millisecond)
-				if err := SyncPackagesFromRegistry(brainHome, storageProvider); err != nil {
+				if err := SyncPackagesFromRegistry(haxenHome, storageProvider); err != nil {
 					logger.Logger.Error().Err(err).Msg("failed to sync packages from registry")
 				} else {
 					logger.Logger.Debug().Msg("registry sync completed")

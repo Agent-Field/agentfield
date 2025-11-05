@@ -8,7 +8,7 @@ import httpx
 import pytest
 import requests
 
-from brain_sdk.memory import (
+from haxen_sdk.memory import (
     GlobalMemoryClient,
     MemoryClient,
     MemoryInterface,
@@ -31,14 +31,14 @@ class DummyResponse:
 
 @pytest.fixture(autouse=True)
 def mute_debug_logs(monkeypatch):
-    monkeypatch.setattr("brain_sdk.logger.log_debug", lambda *args, **kwargs: None)
+    monkeypatch.setattr("haxen_sdk.logger.log_debug", lambda *args, **kwargs: None)
 
 
 @pytest.fixture
 def memory_client(dummy_headers):
     context = SimpleNamespace(to_headers=lambda: dict(dummy_headers))
-    brain_client = SimpleNamespace(api_base="http://brain.local/api/v1")
-    return MemoryClient(brain_client, context)
+    haxen_client = SimpleNamespace(api_base="http://haxen.local/api/v1")
+    return MemoryClient(haxen_client, context)
 
 
 @pytest.mark.unit
@@ -275,11 +275,11 @@ async def test_set_uses_async_request_when_available(dummy_headers):
         return OkResponse()
 
     context = SimpleNamespace(to_headers=lambda: dict(dummy_headers))
-    brain_client = SimpleNamespace(
-        api_base="http://brain.local/api/v1",
+    haxen_client = SimpleNamespace(
+        api_base="http://haxen.local/api/v1",
         _async_request=fake_async_request,
     )
-    client = MemoryClient(brain_client, context)
+    client = MemoryClient(haxen_client, context)
 
     await client.set("key", {"value": 1})
 

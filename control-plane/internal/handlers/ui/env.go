@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/your-org/brain/control-plane/internal/storage"
-	"github.com/your-org/brain/control-plane/internal/core/interfaces"
+	"github.com/your-org/haxen/control-plane/internal/storage"
+	"github.com/your-org/haxen/control-plane/internal/core/interfaces"
 
 	"github.com/gin-gonic/gin"
 )
@@ -18,7 +18,7 @@ import (
 type EnvHandler struct {
 	storage     storage.StorageProvider
 	agentService interfaces.AgentService
-	brainHome   string
+	haxenHome   string
 }
 
 // DELETE /api/ui/v1/agents/:agentId/env/:key
@@ -241,11 +241,11 @@ type EnvResponse struct {
 }
 
 // NewEnvHandler creates a new EnvHandler.
-func NewEnvHandler(storage storage.StorageProvider, agentService interfaces.AgentService, brainHome string) *EnvHandler {
+func NewEnvHandler(storage storage.StorageProvider, agentService interfaces.AgentService, haxenHome string) *EnvHandler {
 	return &EnvHandler{
 		storage:      storage,
 		agentService: agentService,
-		brainHome:    brainHome,
+		haxenHome:    haxenHome,
 	}
 }
 

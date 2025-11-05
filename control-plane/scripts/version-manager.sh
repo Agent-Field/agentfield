@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Brain Version Manager
+# Haxen Version Manager
 # Handles version tracking and incrementing for releases
 
 set -e
@@ -237,7 +237,7 @@ main() {
             show_version_info
             ;;
         "help"|"-h"|"--help")
-            echo "Brain Version Manager"
+            echo "Haxen Version Manager"
             echo ""
             echo "Usage:"
             echo "  $0 current        Show current version"

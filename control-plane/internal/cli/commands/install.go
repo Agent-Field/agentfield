@@ -3,8 +3,8 @@ package commands
 import (
 	"fmt"
 	"github.com/spf13/cobra"
-	"github.com/your-org/brain/control-plane/internal/cli/framework"
-	"github.com/your-org/brain/control-plane/internal/core/domain"
+	"github.com/your-org/haxen/control-plane/internal/cli/framework"
+	"github.com/your-org/haxen/control-plane/internal/core/domain"
 )
 
 // InstallCommand implements the install command using the new framework
@@ -28,7 +28,7 @@ func (cmd *InstallCommand) GetName() string {
 
 // GetDescription returns the command description
 func (cmd *InstallCommand) GetDescription() string {
-	return "Install a Brain agent node package for local use"
+	return "Install a Haxen agent node package for local use"
 }
 
 // BuildCobraCommand builds the Cobra command
@@ -39,17 +39,17 @@ func (cmd *InstallCommand) BuildCobraCommand() *cobra.Command {
 	cobraCmd := &cobra.Command{
 		Use:   "install <package-path>",
 		Short: cmd.GetDescription(),
-		Long: `Install a Brain agent node package for local use.
+		Long: `Install a Haxen agent node package for local use.
 
 The package can be:
 - A local directory path
 - A GitHub repository URL
-- A package name from the Brain registry
+- A package name from the Haxen registry
 
 Examples:
-  brain install ./my-agent
-  brain install https://github.com/user/agent-repo
-  brain install agent-name`,
+  haxen install ./my-agent
+  haxen install https://github.com/user/agent-repo
+  haxen install agent-name`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cobraCmd *cobra.Command, args []string) error {
 			// Update output formatter with verbose setting
@@ -66,7 +66,7 @@ Examples:
 
 // execute performs the actual installation
 func (cmd *InstallCommand) execute(packagePath string, force, verbose bool) error {
-	cmd.output.PrintHeader("Installing Brain Package")
+	cmd.output.PrintHeader("Installing Haxen Package")
 	cmd.output.PrintInfo(fmt.Sprintf("Package: %s", packagePath))
 	
 	if verbose {

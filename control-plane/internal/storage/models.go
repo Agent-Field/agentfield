@@ -106,7 +106,7 @@ type WorkflowExecutionModel struct {
 	ID                    int64      `gorm:"column:id;primaryKey;autoIncrement"`
 	WorkflowID            string     `gorm:"column:workflow_id;not null;index;index:idx_workflow_executions_workflow_status,priority:1"`
 	ExecutionID           string     `gorm:"column:execution_id;not null;uniqueIndex"`
-	BrainRequestID        string     `gorm:"column:brain_request_id;not null;index"`
+	HaxenRequestID        string     `gorm:"column:haxen_request_id;not null;index"`
 	RunID                 *string    `gorm:"column:run_id;index"`
 	SessionID             *string    `gorm:"column:session_id;index;index:idx_workflow_executions_session_status,priority:1;index:idx_workflow_executions_session_status_time,priority:1;index:idx_workflow_executions_session_time,priority:1"`
 	ActorID               *string    `gorm:"column:actor_id;index;index:idx_workflow_executions_actor_status,priority:1;index:idx_workflow_executions_actor_status_time,priority:1;index:idx_workflow_executions_actor_time,priority:1"`
@@ -260,7 +260,7 @@ type SessionModel struct {
 func (SessionModel) TableName() string { return "sessions" }
 
 type DIDRegistryModel struct {
-	BrainServerID       string    `gorm:"column:brain_server_id;primaryKey"`
+	HaxenServerID       string    `gorm:"column:haxen_server_id;primaryKey"`
 	MasterSeedEncrypted []byte    `gorm:"column:master_seed_encrypted;not null"`
 	RootDID             string    `gorm:"column:root_did;not null;unique"`
 	AgentNodes          string    `gorm:"column:agent_nodes;default:'{}'"`
@@ -274,7 +274,7 @@ func (DIDRegistryModel) TableName() string { return "did_registry" }
 type AgentDIDModel struct {
 	DID            string    `gorm:"column:did;primaryKey"`
 	AgentNodeID    string    `gorm:"column:agent_node_id;not null;index"`
-	BrainServerID  string    `gorm:"column:brain_server_id;not null;index"`
+	HaxenServerID  string    `gorm:"column:haxen_server_id;not null;index"`
 	PublicKeyJWK   string    `gorm:"column:public_key_jwk;not null"`
 	DerivationPath string    `gorm:"column:derivation_path;not null"`
 	Reasoners      string    `gorm:"column:reasoners;default:'{}'"`

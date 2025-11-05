@@ -18,7 +18,7 @@ import type {
   MCPTool,
   MCPToolTestRequest,
   MCPToolTestResponse,
-} from "@/types/brain";
+} from "@/types/haxen";
 import {
   CheckmarkFilled,
   Copy,

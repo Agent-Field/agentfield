@@ -4,7 +4,7 @@
 package storage
 
 import (
-	"github.com/your-org/brain/control-plane/pkg/types"
+	"github.com/your-org/haxen/control-plane/pkg/types"
 	"context" // Add context import
 	"encoding/json"
 	"os"
@@ -122,7 +122,7 @@ func TestWorkflowUnitOfWork_AtomicWorkflowExecution(t *testing.T) {
 	execution := &types.WorkflowExecution{
 		WorkflowID:        "test-workflow-001",
 		ExecutionID:       "test-execution-001",
-		BrainRequestID:    "test-request-001",
+		HaxenRequestID:    "test-request-001",
 		SessionID:         ptrString("test-session-001"),
 		ActorID:           ptrString("test-actor-001"),
 		AgentNodeID:       "test-agent-001",
@@ -240,7 +240,7 @@ func TestWorkflowUnitOfWork_UpdateWorkflowStatus(t *testing.T) {
 	execution := &types.WorkflowExecution{
 		WorkflowID:     "test-workflow-002",
 		ExecutionID:    "test-execution-002",
-		BrainRequestID: "test-request-002",
+		HaxenRequestID: "test-request-002",
 		AgentNodeID:    "test-agent-002",
 		ReasonerID:     "test-reasoner",
 		InputData:      json.RawMessage(`{"test": "input"}`),

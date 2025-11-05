@@ -7,20 +7,20 @@ import (
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
-	"github.com/your-org/brain/control-plane/internal/packages"
+	"github.com/your-org/haxen/control-plane/internal/packages"
 )
 
 // NewListCommand creates the list command
 func NewListCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List installed Brain agent node packages",
-		Long: `Display all installed Brain agent node packages with their status.
+		Short: "List installed Haxen agent node packages",
+		Long: `Display all installed Haxen agent node packages with their status.
 
 Shows package name, version, status (running/stopped), and port if running.
 
 Examples:
-  brain list`,
+  haxen list`,
 		Run: runListCommand,
 	}
 
@@ -28,8 +28,8 @@ Examples:
 }
 
 func runListCommand(cmd *cobra.Command, args []string) {
-	brainHome := getBrainHomeDir()
-	registryPath := filepath.Join(brainHome, "installed.yaml")
+	haxenHome := getHaxenHomeDir()
+	registryPath := filepath.Join(haxenHome, "installed.yaml")
 
 	// Load registry
 	registry := &packages.InstallationRegistry{
@@ -42,7 +42,7 @@ func runListCommand(cmd *cobra.Command, args []string) {
 
 	if len(registry.Installed) == 0 {
 		fmt.Println("📦 No agent node packages installed")
-		fmt.Println("💡 Install packages with: brain install <package-path>")
+		fmt.Println("💡 Install packages with: haxen install <package-path>")
 		return
 	}
 
@@ -69,7 +69,7 @@ func runListCommand(cmd *cobra.Command, args []string) {
 	}
 
 	fmt.Println("💡 Commands:")
-	fmt.Println("   brain run <name>     - Start an agent node")
-	fmt.Println("   brain stop <name>    - Stop a running agent node")
-	fmt.Println("   brain logs <name>    - View agent node logs")
+	fmt.Println("   haxen run <name>     - Start an agent node")
+	fmt.Println("   haxen stop <name>    - Stop a running agent node")
+	fmt.Println("   haxen logs <name>    - View agent node logs")
 }

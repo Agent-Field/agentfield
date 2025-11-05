@@ -18,7 +18,7 @@ import requests
 import uvicorn
 
 if TYPE_CHECKING:
-    from brain_sdk.agent import Agent
+    from haxen_sdk.agent import Agent
 
 
 def _find_free_port() -> int:
@@ -27,11 +27,11 @@ def _find_free_port() -> int:
         return sock.getsockname()[1]
 
 
-def _write_brain_config(config_path: Path, db_path: Path, kv_path: Path) -> None:
+def _write_haxen_config(config_path: Path, db_path: Path, kv_path: Path) -> None:
     db_uri = db_path.as_posix()
     kv_uri = kv_path.as_posix()
     config_content = f"""
-brain:
+haxen:
   port: 0
   mode: "local"
   request_timeout: 60s
@@ -59,23 +59,23 @@ agents:
 
 
 @dataclass
-class BrainServerInfo:
+class HaxenServerInfo:
     base_url: str
     port: int
-    brain_home: Path
+    haxen_home: Path
 
 
 @pytest.fixture(scope="session")
-def brain_binary(tmp_path_factory: pytest.TempPathFactory) -> Path:
+def haxen_binary(tmp_path_factory: pytest.TempPathFactory) -> Path:
     repo_root = Path(__file__).resolve().parents[4]
-    brain_go_root = repo_root / "apps" / "platform" / "brain"
-    if not brain_go_root.exists():
-        pytest.skip("Brain server sources not available in this checkout")
-    build_dir = tmp_path_factory.mktemp("brain-server-bin")
-    binary_name = "brain-test-server.exe" if os.name == "nt" else "brain-test-server"
+    haxen_go_root = repo_root / "apps" / "platform" / "haxen"
+    if not haxen_go_root.exists():
+        pytest.skip("Haxen server sources not available in this checkout")
+    build_dir = tmp_path_factory.mktemp("haxen-server-bin")
+    binary_name = "haxen-test-server.exe" if os.name == "nt" else "haxen-test-server"
     binary_path = build_dir / binary_name
 
-    releases_dir = brain_go_root / "dist" / "releases"
+    releases_dir = haxen_go_root / "dist" / "releases"
     os_part = sys.platform
     if os_part.startswith("darwin"):
         os_part = "darwin"
@@ -95,11 +95,11 @@ def brain_binary(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
     prebuilt_path: Optional[Path] = None
     if os_part:
-        candidate = releases_dir / f"brain-{os_part}-{arch_part}"
+        candidate = releases_dir / f"haxen-{os_part}-{arch_part}"
         if candidate.exists():
             prebuilt_path = candidate
         elif os_part == "darwin":
-            universal = releases_dir / "brain-darwin-arm64"
+            universal = releases_dir / "haxen-darwin-arm64"
             if universal.exists():
                 prebuilt_path = universal
 
@@ -108,30 +108,30 @@ def brain_binary(tmp_path_factory: pytest.TempPathFactory) -> Path:
         binary_path.chmod(0o755)
         return binary_path
 
-    build_cmd = ["go", "build", "-o", str(binary_path), "./cmd/brain"]
+    build_cmd = ["go", "build", "-o", str(binary_path), "./cmd/haxen"]
     env = os.environ.copy()
     env["GOCACHE"] = str(tmp_path_factory.mktemp("go-cache"))
     env["GOMODCACHE"] = str(tmp_path_factory.mktemp("go-modcache"))
-    subprocess.run(build_cmd, check=True, cwd=brain_go_root, env=env)
+    subprocess.run(build_cmd, check=True, cwd=haxen_go_root, env=env)
     return binary_path
 
 
 @pytest.fixture
-def brain_server(
-    tmp_path_factory: pytest.TempPathFactory, brain_binary: Path
-) -> Generator[BrainServerInfo, None, None]:
+def haxen_server(
+    tmp_path_factory: pytest.TempPathFactory, haxen_binary: Path
+) -> Generator[HaxenServerInfo, None, None]:
     repo_root = Path(__file__).resolve().parents[4]
-    brain_go_root = repo_root / "apps" / "platform" / "brain"
+    haxen_go_root = repo_root / "apps" / "platform" / "haxen"
 
-    brain_home = Path(tmp_path_factory.mktemp("brain-home"))
-    data_dir = brain_home / "data"
+    haxen_home = Path(tmp_path_factory.mktemp("haxen-home"))
+    data_dir = haxen_home / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    db_path = data_dir / "brain.db"
-    kv_path = data_dir / "brain.bolt"
-    config_path = brain_home / "brain.yaml"
+    db_path = data_dir / "haxen.db"
+    kv_path = data_dir / "haxen.bolt"
+    config_path = haxen_home / "haxen.yaml"
 
-    _write_brain_config(config_path, db_path, kv_path)
+    _write_haxen_config(config_path, db_path, kv_path)
 
     port = _find_free_port()
     base_url = f"http://127.0.0.1:{port}"
@@ -139,13 +139,13 @@ def brain_server(
     env = os.environ.copy()
     env.update(
         {
-            "BRAIN_HOME": str(brain_home),
-            "BRAIN_STORAGE_MODE": "local",
+            "HAXEN_HOME": str(haxen_home),
+            "HAXEN_STORAGE_MODE": "local",
         }
     )
 
     cmd = [
-        str(brain_binary),
+        str(haxen_binary),
         "server",
         "--backend-only",
         "--port",
@@ -155,7 +155,7 @@ def brain_server(
         "--no-vc-execution",
     ]
 
-    log_path = brain_home / "brain.log"
+    log_path = haxen_home / "haxen.log"
     log_file = log_path.open("w")
 
     process = subprocess.Popen(
@@ -163,7 +163,7 @@ def brain_server(
         stdout=log_file,
         stderr=subprocess.STDOUT,
         env=env,
-        cwd=brain_go_root,
+        cwd=haxen_go_root,
     )
 
     try:
@@ -171,7 +171,7 @@ def brain_server(
         deadline = time.time() + 60
         while time.time() < deadline:
             if process.poll() is not None:
-                raise RuntimeError("Brain server exited before becoming healthy")
+                raise RuntimeError("Haxen server exited before becoming healthy")
             try:
                 response = requests.get(health_url, timeout=1.0)
                 if response.status_code == 200:
@@ -180,9 +180,9 @@ def brain_server(
                 pass
             time.sleep(0.5)
         else:
-            raise RuntimeError("Brain server did not become healthy in time")
+            raise RuntimeError("Haxen server did not become healthy in time")
 
-        yield BrainServerInfo(base_url=base_url, port=port, brain_home=brain_home)
+        yield HaxenServerInfo(base_url=base_url, port=port, haxen_home=haxen_home)
 
     finally:
         if process.poll() is None:

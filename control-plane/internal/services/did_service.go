@@ -11,10 +11,10 @@ import (
 	"hash/fnv"
 	"time"
 
-	"github.com/your-org/brain/control-plane/internal/config"
-	"github.com/your-org/brain/control-plane/internal/logger"
-	"github.com/your-org/brain/control-plane/internal/storage"
-	"github.com/your-org/brain/control-plane/pkg/types"
+	"github.com/your-org/haxen/control-plane/internal/config"
+	"github.com/your-org/haxen/control-plane/internal/logger"
+	"github.com/your-org/haxen/control-plane/internal/storage"
+	"github.com/your-org/haxen/control-plane/pkg/types"
 )
 
 // DIDService handles DID generation, management, and resolution.
@@ -22,7 +22,7 @@ type DIDService struct {
 	config        *config.DIDConfig
 	keystore      *KeystoreService
 	registry      *DIDRegistry
-	brainServerID string
+	haxenServerID string
 }
 
 // NewDIDService creates a new DID service instance.
@@ -31,27 +31,27 @@ func NewDIDService(cfg *config.DIDConfig, keystore *KeystoreService, registry *D
 		config:        cfg,
 		keystore:      keystore,
 		registry:      registry,
-		brainServerID: "", // Will be set during initialization
+		haxenServerID: "", // Will be set during initialization
 	}
 }
 
-// Initialize initializes the DID service and creates brain server master seed if needed.
-func (s *DIDService) Initialize(brainServerID string) error {
+// Initialize initializes the DID service and creates haxen server master seed if needed.
+func (s *DIDService) Initialize(haxenServerID string) error {
 	if !s.config.Enabled {
 		return nil
 	}
 
-	// Store the brain server ID for dynamic resolution
-	s.brainServerID = brainServerID
+	// Store the haxen server ID for dynamic resolution
+	s.haxenServerID = haxenServerID
 
-	// Check if brain server already has a DID registry
-	registry, err := s.registry.GetRegistry(brainServerID)
+	// Check if haxen server already has a DID registry
+	registry, err := s.registry.GetRegistry(haxenServerID)
 	if err != nil {
 		return fmt.Errorf("failed to check existing registry: %w", err)
 	}
 
 	if registry == nil {
-		// Create new brain server registry
+		// Create new haxen server registry
 		masterSeed := make([]byte, 32)
 		if _, err := rand.Read(masterSeed); err != nil {
 			return fmt.Errorf("failed to generate master seed: %w", err)
@@ -65,7 +65,7 @@ func (s *DIDService) Initialize(brainServerID string) error {
 
 		// Create and store registry
 		registry = &types.DIDRegistry{
-			BrainServerID:   brainServerID,
+			HaxenServerID:   haxenServerID,
 			MasterSeed:      masterSeed,
 			RootDID:         rootDID,
 			AgentNodes:      make(map[string]types.AgentDIDInfo),
@@ -83,45 +83,45 @@ func (s *DIDService) Initialize(brainServerID string) error {
 	return nil
 }
 
-// GetBrainServerID returns the brain server ID for this DID service instance.
-// This method provides dynamic brain server ID resolution instead of hardcoded "default".
-func (s *DIDService) GetBrainServerID() (string, error) {
-	if s.brainServerID == "" {
-		return "", fmt.Errorf("brain server ID not initialized - call Initialize() first")
+// GetHaxenServerID returns the haxen server ID for this DID service instance.
+// This method provides dynamic haxen server ID resolution instead of hardcoded "default".
+func (s *DIDService) GetHaxenServerID() (string, error) {
+	if s.haxenServerID == "" {
+		return "", fmt.Errorf("haxen server ID not initialized - call Initialize() first")
 	}
-	return s.brainServerID, nil
+	return s.haxenServerID, nil
 }
 
-// getBrainServerID is an internal helper that returns the brain server ID.
-func (s *DIDService) getBrainServerID() (string, error) {
-	return s.GetBrainServerID()
+// getHaxenServerID is an internal helper that returns the haxen server ID.
+func (s *DIDService) getHaxenServerID() (string, error) {
+	return s.GetHaxenServerID()
 }
 
-// validateBrainServerRegistry ensures that the brain server registry exists before operations.
-func (s *DIDService) validateBrainServerRegistry() error {
-	brainServerID, err := s.getBrainServerID()
+// validateHaxenServerRegistry ensures that the haxen server registry exists before operations.
+func (s *DIDService) validateHaxenServerRegistry() error {
+	haxenServerID, err := s.getHaxenServerID()
 	if err != nil {
 		return err
 	}
 
-	registry, err := s.registry.GetRegistry(brainServerID)
+	registry, err := s.registry.GetRegistry(haxenServerID)
 	if err != nil {
-		return fmt.Errorf("failed to get brain server registry: %w", err)
+		return fmt.Errorf("failed to get haxen server registry: %w", err)
 	}
 
 	if registry == nil {
-		return fmt.Errorf("brain server registry not found for ID: %s - ensure Initialize() was called", brainServerID)
+		return fmt.Errorf("haxen server registry not found for ID: %s - ensure Initialize() was called", haxenServerID)
 	}
 
 	return nil
 }
 
-// GetRegistry retrieves a DID registry for a brain server.
-func (s *DIDService) GetRegistry(brainServerID string) (*types.DIDRegistry, error) {
+// GetRegistry retrieves a DID registry for a haxen server.
+func (s *DIDService) GetRegistry(haxenServerID string) (*types.DIDRegistry, error) {
 	if !s.config.Enabled {
 		return nil, fmt.Errorf("DID system is disabled")
 	}
-	return s.registry.GetRegistry(brainServerID)
+	return s.registry.GetRegistry(haxenServerID)
 }
 
 // RegisterAgent generates DIDs for an agent node and all its components.
@@ -134,11 +134,11 @@ func (s *DIDService) RegisterAgent(req *types.DIDRegistrationRequest) (*types.DI
 		}, nil
 	}
 
-	// Validate brain server registry exists
-	if err := s.validateBrainServerRegistry(); err != nil {
+	// Validate haxen server registry exists
+	if err := s.validateHaxenServerRegistry(); err != nil {
 		return &types.DIDRegistrationResponse{
 			Success: false,
-			Error:   fmt.Sprintf("brain server registry validation failed: %v", err),
+			Error:   fmt.Sprintf("haxen server registry validation failed: %v", err),
 		}, nil
 	}
 
@@ -184,17 +184,17 @@ func (s *DIDService) RegisterAgent(req *types.DIDRegistrationRequest) (*types.DI
 
 // handleNewRegistration handles registration for new agents (original logic).
 func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*types.DIDRegistrationResponse, error) {
-	// Get brain server ID dynamically
-	brainServerID, err := s.getBrainServerID()
+	// Get haxen server ID dynamically
+	haxenServerID, err := s.getHaxenServerID()
 	if err != nil {
 		return &types.DIDRegistrationResponse{
 			Success: false,
-			Error:   fmt.Sprintf("failed to get brain server ID: %v", err),
+			Error:   fmt.Sprintf("failed to get haxen server ID: %v", err),
 		}, nil
 	}
 
-	// Get brain server registry using dynamic ID
-	registry, err := s.registry.GetRegistry(brainServerID)
+	// Get haxen server registry using dynamic ID
+	registry, err := s.registry.GetRegistry(haxenServerID)
 	if err != nil {
 		return &types.DIDRegistrationResponse{
 			Success: false,
@@ -202,14 +202,14 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 		}, nil
 	}
 
-	// Generate brain server hash for derivation path
-	brainServerHash := s.hashBrainServerID(registry.BrainServerID)
+	// Generate haxen server hash for derivation path
+	haxenServerHash := s.hashHaxenServerID(registry.HaxenServerID)
 
 	// Get next agent index
 	agentIndex := len(registry.AgentNodes)
 
 	// Generate agent DID
-	agentPath := fmt.Sprintf("m/44'/%d'/%d'", brainServerHash, agentIndex)
+	agentPath := fmt.Sprintf("m/44'/%d'/%d'", haxenServerHash, agentIndex)
 	agentDID, agentPrivKey, agentPubKey, err := s.generateDIDWithKeys(registry.MasterSeed, agentPath)
 	if err != nil {
 		return &types.DIDRegistrationResponse{
@@ -232,7 +232,7 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 			continue
 		}
 
-		reasonerPath := fmt.Sprintf("m/44'/%d'/%d'/0'/%d'", brainServerHash, agentIndex, validReasonerIndex)
+		reasonerPath := fmt.Sprintf("m/44'/%d'/%d'/0'/%d'", haxenServerHash, agentIndex, validReasonerIndex)
 		reasonerDID, reasonerPrivKey, reasonerPubKey, err := s.generateDIDWithKeys(registry.MasterSeed, reasonerPath)
 		if err != nil {
 			return &types.DIDRegistrationResponse{
@@ -278,7 +278,7 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 			continue
 		}
 
-		skillPath := fmt.Sprintf("m/44'/%d'/%d'/1'/%d'", brainServerHash, agentIndex, validSkillIndex)
+		skillPath := fmt.Sprintf("m/44'/%d'/%d'/1'/%d'", haxenServerHash, agentIndex, validSkillIndex)
 		skillDID, skillPrivKey, skillPubKey, err := s.generateDIDWithKeys(registry.MasterSeed, skillPath)
 		if err != nil {
 			return &types.DIDRegistrationResponse{
@@ -347,7 +347,7 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 		},
 		ReasonerDIDs:  reasonerDIDs,
 		SkillDIDs:     skillDIDs,
-		BrainServerID: registry.BrainServerID,
+		HaxenServerID: registry.HaxenServerID,
 	}
 
 	// Debug log the response structure
@@ -370,24 +370,24 @@ func (s *DIDService) ResolveDID(did string) (*types.DIDIdentity, error) {
 		return nil, fmt.Errorf("DID system is disabled")
 	}
 
-	// Validate brain server registry exists
-	if err := s.validateBrainServerRegistry(); err != nil {
-		return nil, fmt.Errorf("brain server registry validation failed: %w", err)
+	// Validate haxen server registry exists
+	if err := s.validateHaxenServerRegistry(); err != nil {
+		return nil, fmt.Errorf("haxen server registry validation failed: %w", err)
 	}
 
-	// Get brain server ID dynamically
-	brainServerID, err := s.getBrainServerID()
+	// Get haxen server ID dynamically
+	haxenServerID, err := s.getHaxenServerID()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get brain server ID: %w", err)
+		return nil, fmt.Errorf("failed to get haxen server ID: %w", err)
 	}
 
-	// Get brain server registry using dynamic ID
-	registry, err := s.registry.GetRegistry(brainServerID)
+	// Get haxen server registry using dynamic ID
+	registry, err := s.registry.GetRegistry(haxenServerID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get DID registry: %w", err)
 	}
 
-	// Check if this is the brain server root DID
+	// Check if this is the haxen server root DID
 	if registry.RootDID == did {
 		// Regenerate private key for root DID using root derivation path
 		privateKeyJWK, err := s.regeneratePrivateKeyJWK(registry.MasterSeed, "m/44'/0'")
@@ -406,7 +406,7 @@ func (s *DIDService) ResolveDID(did string) (*types.DIDIdentity, error) {
 			PrivateKeyJWK:  privateKeyJWK,
 			PublicKeyJWK:   publicKeyJWK,
 			DerivationPath: "m/44'/0'",
-			ComponentType:  "brain_server",
+			ComponentType:  "haxen_server",
 		}, nil
 	}
 
@@ -574,10 +574,10 @@ func (s *DIDService) ed25519PublicKeyToJWK(publicKey ed25519.PublicKey) (string,
 	return string(jwkBytes), nil
 }
 
-// hashBrainServerID creates a deterministic hash of brain server ID for derivation paths.
-func (s *DIDService) hashBrainServerID(brainServerID string) uint32 {
+// hashHaxenServerID creates a deterministic hash of haxen server ID for derivation paths.
+func (s *DIDService) hashHaxenServerID(haxenServerID string) uint32 {
 	h := fnv.New32a()
-	h.Write([]byte(brainServerID))
+	h.Write([]byte(haxenServerID))
 	return h.Sum32() % (1 << 31) // Ensure it fits in BIP32 hardened derivation
 }
 
@@ -624,19 +624,19 @@ func (s *DIDService) ListAllAgentDIDs() ([]string, error) {
 		return nil, fmt.Errorf("DID system is disabled")
 	}
 
-	// Validate brain server registry exists
-	if err := s.validateBrainServerRegistry(); err != nil {
-		return nil, fmt.Errorf("brain server registry validation failed: %w", err)
+	// Validate haxen server registry exists
+	if err := s.validateHaxenServerRegistry(); err != nil {
+		return nil, fmt.Errorf("haxen server registry validation failed: %w", err)
 	}
 
-	// Get brain server ID dynamically
-	brainServerID, err := s.getBrainServerID()
+	// Get haxen server ID dynamically
+	haxenServerID, err := s.getHaxenServerID()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get brain server ID: %w", err)
+		return nil, fmt.Errorf("failed to get haxen server ID: %w", err)
 	}
 
-	// Get brain server registry using dynamic ID
-	registry, err := s.registry.GetRegistry(brainServerID)
+	// Get haxen server registry using dynamic ID
+	registry, err := s.registry.GetRegistry(haxenServerID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get DID registry: %w", err)
 	}
@@ -669,19 +669,19 @@ func (s *DIDService) BackfillExistingNodes(ctx context.Context, storageProvider 
 		return nil
 	}
 
-	// Validate brain server registry exists
-	if err := s.validateBrainServerRegistry(); err != nil {
-		return fmt.Errorf("brain server registry validation failed: %w", err)
+	// Validate haxen server registry exists
+	if err := s.validateHaxenServerRegistry(); err != nil {
+		return fmt.Errorf("haxen server registry validation failed: %w", err)
 	}
 
-	// Get brain server ID dynamically
-	brainServerID, err := s.getBrainServerID()
+	// Get haxen server ID dynamically
+	haxenServerID, err := s.getHaxenServerID()
 	if err != nil {
-		return fmt.Errorf("failed to get brain server ID: %w", err)
+		return fmt.Errorf("failed to get haxen server ID: %w", err)
 	}
 
 	// Get current DID registry using dynamic ID
-	registry, err := s.GetRegistry(brainServerID)
+	registry, err := s.GetRegistry(haxenServerID)
 	if err != nil {
 		return fmt.Errorf("failed to get DID registry: %w", err)
 	}
@@ -728,19 +728,19 @@ func (s *DIDService) GetExistingAgentDID(agentNodeID string) (*types.AgentDIDInf
 		return nil, fmt.Errorf("DID system is disabled")
 	}
 
-	// Validate brain server registry exists
-	if err := s.validateBrainServerRegistry(); err != nil {
-		return nil, fmt.Errorf("brain server registry validation failed: %w", err)
+	// Validate haxen server registry exists
+	if err := s.validateHaxenServerRegistry(); err != nil {
+		return nil, fmt.Errorf("haxen server registry validation failed: %w", err)
 	}
 
-	// Get brain server ID dynamically
-	brainServerID, err := s.getBrainServerID()
+	// Get haxen server ID dynamically
+	haxenServerID, err := s.getHaxenServerID()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get brain server ID: %w", err)
+		return nil, fmt.Errorf("failed to get haxen server ID: %w", err)
 	}
 
-	// Get brain server registry using dynamic ID
-	registry, err := s.registry.GetRegistry(brainServerID)
+	// Get haxen server registry using dynamic ID
+	registry, err := s.registry.GetRegistry(haxenServerID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get DID registry: %w", err)
 	}
@@ -868,22 +868,22 @@ func (s *DIDService) findSkillByID(skills []types.SkillDefinition, id string) *t
 
 // generateReasonerPath generates a derivation path for a reasoner.
 func (s *DIDService) generateReasonerPath(agentNodeID, reasonerID string) string {
-	// Get brain server ID dynamically
-	brainServerID, err := s.getBrainServerID()
+	// Get haxen server ID dynamically
+	haxenServerID, err := s.getHaxenServerID()
 	if err != nil {
-		logger.Logger.Error().Err(err).Msg("Failed to get brain server ID for reasoner path generation")
+		logger.Logger.Error().Err(err).Msg("Failed to get haxen server ID for reasoner path generation")
 		return ""
 	}
 
 	// Get registry to find agent index
-	registry, err := s.registry.GetRegistry(brainServerID)
+	registry, err := s.registry.GetRegistry(haxenServerID)
 	if err != nil {
 		logger.Logger.Error().Err(err).Msg("Failed to get registry for reasoner path generation")
 		return ""
 	}
 
-	// Generate brain server hash for derivation path
-	brainServerHash := s.hashBrainServerID(registry.BrainServerID)
+	// Generate haxen server hash for derivation path
+	haxenServerHash := s.hashHaxenServerID(registry.HaxenServerID)
 
 	// Find agent index (this is a simplified approach - in production you might want to store this)
 	agentIndex := 0
@@ -898,27 +898,27 @@ func (s *DIDService) generateReasonerPath(agentNodeID, reasonerID string) string
 	existingAgent := registry.AgentNodes[agentNodeID]
 	reasonerIndex := len(existingAgent.Reasoners)
 
-	return fmt.Sprintf("m/44'/%d'/%d'/0'/%d'", brainServerHash, agentIndex, reasonerIndex)
+	return fmt.Sprintf("m/44'/%d'/%d'/0'/%d'", haxenServerHash, agentIndex, reasonerIndex)
 }
 
 // generateSkillPath generates a derivation path for a skill.
 func (s *DIDService) generateSkillPath(agentNodeID, skillID string) string {
-	// Get brain server ID dynamically
-	brainServerID, err := s.getBrainServerID()
+	// Get haxen server ID dynamically
+	haxenServerID, err := s.getHaxenServerID()
 	if err != nil {
-		logger.Logger.Error().Err(err).Msg("Failed to get brain server ID for skill path generation")
+		logger.Logger.Error().Err(err).Msg("Failed to get haxen server ID for skill path generation")
 		return ""
 	}
 
 	// Get registry to find agent index
-	registry, err := s.registry.GetRegistry(brainServerID)
+	registry, err := s.registry.GetRegistry(haxenServerID)
 	if err != nil {
 		logger.Logger.Error().Err(err).Msg("Failed to get registry for skill path generation")
 		return ""
 	}
 
-	// Generate brain server hash for derivation path
-	brainServerHash := s.hashBrainServerID(registry.BrainServerID)
+	// Generate haxen server hash for derivation path
+	haxenServerHash := s.hashHaxenServerID(registry.HaxenServerID)
 
 	// Find agent index (this is a simplified approach - in production you might want to store this)
 	agentIndex := 0
@@ -933,16 +933,16 @@ func (s *DIDService) generateSkillPath(agentNodeID, skillID string) string {
 	existingAgent := registry.AgentNodes[agentNodeID]
 	skillIndex := len(existingAgent.Skills)
 
-	return fmt.Sprintf("m/44'/%d'/%d'/1'/%d'", brainServerHash, agentIndex, skillIndex)
+	return fmt.Sprintf("m/44'/%d'/%d'/1'/%d'", haxenServerHash, agentIndex, skillIndex)
 }
 
 // buildExistingIdentityPackage builds an identity package from existing agent DID info.
 func (s *DIDService) buildExistingIdentityPackage(existingAgent *types.AgentDIDInfo) types.DIDIdentityPackage {
-	// Get brain server ID dynamically
-	brainServerID, err := s.getBrainServerID()
+	// Get haxen server ID dynamically
+	haxenServerID, err := s.getHaxenServerID()
 	if err != nil {
-		logger.Logger.Error().Err(err).Msg("Failed to get brain server ID for identity package")
-		brainServerID = "unknown"
+		logger.Logger.Error().Err(err).Msg("Failed to get haxen server ID for identity package")
+		haxenServerID = "unknown"
 	}
 
 	// Build reasoner DIDs map
@@ -981,7 +981,7 @@ func (s *DIDService) buildExistingIdentityPackage(existingAgent *types.AgentDIDI
 		},
 		ReasonerDIDs:  reasonerDIDs,
 		SkillDIDs:     skillDIDs,
-		BrainServerID: brainServerID,
+		HaxenServerID: haxenServerID,
 	}
 }
 
@@ -1054,25 +1054,25 @@ func (s *DIDService) PartialRegisterAgent(req *types.PartialDIDRegistrationReque
 		}, nil
 	}
 
-	// Validate brain server registry exists
-	if err := s.validateBrainServerRegistry(); err != nil {
+	// Validate haxen server registry exists
+	if err := s.validateHaxenServerRegistry(); err != nil {
 		return &types.DIDRegistrationResponse{
 			Success: false,
-			Error:   fmt.Sprintf("brain server registry validation failed: %v", err),
+			Error:   fmt.Sprintf("haxen server registry validation failed: %v", err),
 		}, nil
 	}
 
-	// Get brain server ID dynamically
-	brainServerID, err := s.getBrainServerID()
+	// Get haxen server ID dynamically
+	haxenServerID, err := s.getHaxenServerID()
 	if err != nil {
 		return &types.DIDRegistrationResponse{
 			Success: false,
-			Error:   fmt.Sprintf("failed to get brain server ID: %v", err),
+			Error:   fmt.Sprintf("failed to get haxen server ID: %v", err),
 		}, nil
 	}
 
-	// Get brain server registry using dynamic ID
-	registry, err := s.registry.GetRegistry(brainServerID)
+	// Get haxen server registry using dynamic ID
+	registry, err := s.registry.GetRegistry(haxenServerID)
 	if err != nil {
 		return &types.DIDRegistrationResponse{
 			Success: false,
@@ -1222,7 +1222,7 @@ func (s *DIDService) PartialRegisterAgent(req *types.PartialDIDRegistrationReque
 		},
 		ReasonerDIDs:  newReasonerDIDs,
 		SkillDIDs:     newSkillDIDs,
-		BrainServerID: registry.BrainServerID,
+		HaxenServerID: registry.HaxenServerID,
 	}
 
 	logger.Logger.Debug().Msgf("✅ Partial registration successful for agent %s: %d new reasoners, %d new skills",
@@ -1244,25 +1244,25 @@ func (s *DIDService) DeregisterComponents(req *types.ComponentDeregistrationRequ
 		}, nil
 	}
 
-	// Validate brain server registry exists
-	if err := s.validateBrainServerRegistry(); err != nil {
+	// Validate haxen server registry exists
+	if err := s.validateHaxenServerRegistry(); err != nil {
 		return &types.ComponentDeregistrationResponse{
 			Success: false,
-			Error:   fmt.Sprintf("brain server registry validation failed: %v", err),
+			Error:   fmt.Sprintf("haxen server registry validation failed: %v", err),
 		}, nil
 	}
 
-	// Get brain server ID dynamically
-	brainServerID, err := s.getBrainServerID()
+	// Get haxen server ID dynamically
+	haxenServerID, err := s.getHaxenServerID()
 	if err != nil {
 		return &types.ComponentDeregistrationResponse{
 			Success: false,
-			Error:   fmt.Sprintf("failed to get brain server ID: %v", err),
+			Error:   fmt.Sprintf("failed to get haxen server ID: %v", err),
 		}, nil
 	}
 
-	// Get brain server registry using dynamic ID
-	registry, err := s.registry.GetRegistry(brainServerID)
+	// Get haxen server registry using dynamic ID
+	registry, err := s.registry.GetRegistry(haxenServerID)
 	if err != nil {
 		return &types.ComponentDeregistrationResponse{
 			Success: false,

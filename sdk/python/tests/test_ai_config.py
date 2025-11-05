@@ -1,4 +1,4 @@
-from brain_sdk.types import AIConfig
+from haxen_sdk.types import AIConfig
 
 
 def test_ai_config_defaults_and_to_dict():

@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/your-org/brain/sdk/go/types"
+	"github.com/your-org/haxen/sdk/go/types"
 )
 
-// Client provides a thin wrapper over the Brain control plane REST API.
+// Client provides a thin wrapper over the Haxen control plane REST API.
 type Client struct {
 	baseURL    *url.URL
 	httpClient *http.Client
@@ -193,12 +193,12 @@ func (c *Client) legacyHeartbeat(ctx context.Context, nodeID string, payload typ
 	}, nil
 }
 
-// APIError captures non-success responses from the Brain API.
+// APIError captures non-success responses from the Haxen API.
 type APIError struct {
 	StatusCode int
 	Body       []byte
 }
 
 func (e *APIError) Error() string {
-	return fmt.Sprintf("brain api error (%d): %s", e.StatusCode, strings.TrimSpace(string(e.Body)))
+	return fmt.Sprintf("haxen api error (%d): %s", e.StatusCode, strings.TrimSpace(string(e.Body)))
 }

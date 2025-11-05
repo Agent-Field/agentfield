@@ -5,7 +5,7 @@ import { Label } from '../ui/label';
 import { Switch } from '../ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { Button } from '../ui/button';
-import type { ConfigField as ConfigFieldType } from '../../types/brain';
+import type { ConfigField as ConfigFieldType } from '../../types/haxen';
 
 interface ConfigFieldProps {
   field: ConfigFieldType;

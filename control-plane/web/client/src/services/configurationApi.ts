@@ -1,4 +1,4 @@
-import type { ConfigurationSchema, AgentConfiguration, AgentPackage, AgentLifecycleInfo } from '../types/brain';
+import type { ConfigurationSchema, AgentConfiguration, AgentPackage, AgentLifecycleInfo } from '../types/haxen';
 
 const API_BASE = '/api/ui/v1';
 

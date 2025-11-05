@@ -71,7 +71,7 @@ export function EmptyReasonersState({
           tip: {
             icon: <Terminal className="h-5 w-5 text-muted-foreground" />,
             title: "Getting started",
-            body: "Launch an agent node to register reasoners with Brain. They will appear here as soon as they are online.",
+            body: "Launch an agent node to register reasoners with Haxen. They will appear here as soon as they are online.",
           },
         };
       

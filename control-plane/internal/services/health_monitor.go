@@ -1,12 +1,12 @@
 package services
 
 import (
-	"github.com/your-org/brain/control-plane/internal/core/domain"
-	"github.com/your-org/brain/control-plane/internal/core/interfaces"
-	"github.com/your-org/brain/control-plane/internal/events"
-	"github.com/your-org/brain/control-plane/internal/logger"
-	"github.com/your-org/brain/control-plane/internal/storage"
-	"github.com/your-org/brain/control-plane/pkg/types"
+	"github.com/your-org/haxen/control-plane/internal/core/domain"
+	"github.com/your-org/haxen/control-plane/internal/core/interfaces"
+	"github.com/your-org/haxen/control-plane/internal/events"
+	"github.com/your-org/haxen/control-plane/internal/logger"
+	"github.com/your-org/haxen/control-plane/internal/storage"
+	"github.com/your-org/haxen/control-plane/pkg/types"
 	"context"
 	"sync"
 	"time"

@@ -1,4 +1,4 @@
-module github.com/your-org/brain/control-plane
+module github.com/your-org/haxen/control-plane
 
 go 1.23.0
 

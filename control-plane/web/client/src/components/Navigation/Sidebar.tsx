@@ -54,7 +54,7 @@ export function Sidebar({ sections, isCollapsed = false }: SidebarProps) {
                   typography["heading-sm"],
                   "text-foreground font-semibold"
                 )}>
-                  Brain
+                  Haxen
                 </h1>
                 <p className={cn(
                   typography["helper-text"],

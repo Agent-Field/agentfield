@@ -1,12 +1,12 @@
-// brain/internal/infrastructure/storage/registry.go
+// haxen/internal/infrastructure/storage/registry.go
 package storage
 
 import (
     "encoding/json"
     "os"
     "path/filepath"
-    "github.com/your-org/brain/control-plane/internal/core/domain"
-    "github.com/your-org/brain/control-plane/internal/core/interfaces"
+    "github.com/your-org/haxen/control-plane/internal/core/domain"
+    "github.com/your-org/haxen/control-plane/internal/core/interfaces"
 )
 
 type LocalRegistryStorage struct {

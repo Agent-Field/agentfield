@@ -1,22 +1,22 @@
 package server
 
 import (
-	"github.com/your-org/brain/control-plane/internal/config"
-	"github.com/your-org/brain/control-plane/internal/core/interfaces"
-	coreservices "github.com/your-org/brain/control-plane/internal/core/services" // Core services
-	"github.com/your-org/brain/control-plane/internal/events"                     // Event system
-	"github.com/your-org/brain/control-plane/internal/handlers"                   // Agent handlers
-	"github.com/your-org/brain/control-plane/internal/handlers/ui"                // UI handlers
-	"github.com/your-org/brain/control-plane/internal/infrastructure/communication"
-	"github.com/your-org/brain/control-plane/internal/infrastructure/process"
-	infrastorage "github.com/your-org/brain/control-plane/internal/infrastructure/storage"
-	"github.com/your-org/brain/control-plane/internal/logger"
-	"github.com/your-org/brain/control-plane/internal/services" // Services
-	"github.com/your-org/brain/control-plane/internal/storage"
-	"github.com/your-org/brain/control-plane/internal/utils"
-	"github.com/your-org/brain/control-plane/pkg/adminpb"
-	"github.com/your-org/brain/control-plane/pkg/types"
-	client "github.com/your-org/brain/control-plane/web/client"
+	"github.com/your-org/haxen/control-plane/internal/config"
+	"github.com/your-org/haxen/control-plane/internal/core/interfaces"
+	coreservices "github.com/your-org/haxen/control-plane/internal/core/services" // Core services
+	"github.com/your-org/haxen/control-plane/internal/events"                     // Event system
+	"github.com/your-org/haxen/control-plane/internal/handlers"                   // Agent handlers
+	"github.com/your-org/haxen/control-plane/internal/handlers/ui"                // UI handlers
+	"github.com/your-org/haxen/control-plane/internal/infrastructure/communication"
+	"github.com/your-org/haxen/control-plane/internal/infrastructure/process"
+	infrastorage "github.com/your-org/haxen/control-plane/internal/infrastructure/storage"
+	"github.com/your-org/haxen/control-plane/internal/logger"
+	"github.com/your-org/haxen/control-plane/internal/services" // Services
+	"github.com/your-org/haxen/control-plane/internal/storage"
+	"github.com/your-org/haxen/control-plane/internal/utils"
+	"github.com/your-org/haxen/control-plane/pkg/adminpb"
+	"github.com/your-org/haxen/control-plane/pkg/types"
+	client "github.com/your-org/haxen/control-plane/web/client"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -38,8 +38,8 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// BrainServer represents the core Brain orchestration service.
-type BrainServer struct {
+// HaxenServer represents the core Haxen orchestration service.
+type HaxenServer struct {
 	adminpb.UnimplementedAdminReasonerServiceServer
 	storage               storage.StorageProvider
 	cache                 storage.CacheProvider
@@ -59,7 +59,7 @@ type BrainServer struct {
 	didService      *services.DIDService
 	vcService       *services.VCService
 	didRegistry     *services.DIDRegistry
-	brainHome       string
+	haxenHome       string
 	// Cleanup service
 	cleanupService        *handlers.ExecutionCleanupService
 	payloadStore          services.PayloadStore
@@ -70,16 +70,16 @@ type BrainServer struct {
 	webhookDispatcher     services.WebhookDispatcher
 }
 
-// NewBrainServer creates a new instance of the BrainServer.
-func NewBrainServer(cfg *config.Config) (*BrainServer, error) {
-	// Define brainHome at the very top
-	brainHome := os.Getenv("BRAIN_HOME")
-	if brainHome == "" {
+// NewHaxenServer creates a new instance of the HaxenServer.
+func NewHaxenServer(cfg *config.Config) (*HaxenServer, error) {
+	// Define haxenHome at the very top
+	haxenHome := os.Getenv("HAXEN_HOME")
+	if haxenHome == "" {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			return nil, err
 		}
-		brainHome = filepath.Join(homeDir, ".brain")
+		haxenHome = filepath.Join(homeDir, ".haxen")
 	}
 
 	dirs, err := utils.EnsureDataDirectories()
@@ -96,20 +96,20 @@ func NewBrainServer(cfg *config.Config) (*BrainServer, error) {
 	Router := gin.Default()
 
 	// Sync installed.yaml to database for package visibility
-	_ = SyncPackagesFromRegistry(brainHome, storageProvider)
+	_ = SyncPackagesFromRegistry(haxenHome, storageProvider)
 
 	// Initialize agent client for communication with agent nodes
 	agentClient := communication.NewHTTPAgentClient(storageProvider, 5*time.Second)
 
 	// Create infrastructure components for AgentService
 	fileSystem := infrastorage.NewFileSystemAdapter()
-	registryPath := filepath.Join(brainHome, "installed.json")
+	registryPath := filepath.Join(haxenHome, "installed.json")
 	registryStorage := infrastorage.NewLocalRegistryStorage(fileSystem, registryPath)
 	processManager := process.NewProcessManager()
 	portManager := process.NewPortManager()
 
 	// Create AgentService
-	agentService := coreservices.NewAgentService(processManager, portManager, registryStorage, agentClient, brainHome)
+	agentService := coreservices.NewAgentService(processManager, portManager, registryStorage, agentClient, haxenHome)
 
 	// Initialize StatusManager for unified status management
 	statusManagerConfig := services.StatusManagerConfig{
@@ -189,25 +189,25 @@ func NewBrainServer(cfg *config.Config) (*BrainServer, error) {
 			return nil, fmt.Errorf("failed to initialize VC service: %w", err)
 		}
 
-		// Generate brain server ID based on brain home directory
-		brainServerID := generateBrainServerID(brainHome)
+		// Generate haxen server ID based on haxen home directory
+		haxenServerID := generateHaxenServerID(haxenHome)
 
-		// Initialize brain server DID with dynamic ID
-		fmt.Printf("🧠 Initializing brain server DID (ID: %s)...\n", brainServerID)
-		if err := didService.Initialize(brainServerID); err != nil {
-			return nil, fmt.Errorf("failed to initialize brain server DID: %w", err)
+		// Initialize haxen server DID with dynamic ID
+		fmt.Printf("🧠 Initializing haxen server DID (ID: %s)...\n", haxenServerID)
+		if err := didService.Initialize(haxenServerID); err != nil {
+			return nil, fmt.Errorf("failed to initialize haxen server DID: %w", err)
 		}
 
-		// Validate that brain server DID was successfully created
-		registry, err := didService.GetRegistry(brainServerID)
+		// Validate that haxen server DID was successfully created
+		registry, err := didService.GetRegistry(haxenServerID)
 		if err != nil {
-			return nil, fmt.Errorf("failed to validate brain server DID creation: %w", err)
+			return nil, fmt.Errorf("failed to validate haxen server DID creation: %w", err)
 		}
 		if registry == nil || registry.RootDID == "" {
-			return nil, fmt.Errorf("brain server DID validation failed: registry or root DID is empty")
+			return nil, fmt.Errorf("haxen server DID validation failed: registry or root DID is empty")
 		}
 
-		fmt.Printf("✅ Brain server DID created successfully: %s\n", registry.RootDID)
+		fmt.Printf("✅ Haxen server DID created successfully: %s\n", registry.RootDID)
 
 		// Backfill existing nodes with DIDs
 		fmt.Println("🔄 Starting DID backfill for existing nodes...")
@@ -224,28 +224,28 @@ func NewBrainServer(cfg *config.Config) (*BrainServer, error) {
 	payloadStore := services.NewFilePayloadStore(dirs.PayloadsDir)
 
 	webhookDispatcher := services.NewWebhookDispatcher(storageProvider, services.WebhookDispatcherConfig{
-		Timeout:         cfg.Brain.ExecutionQueue.WebhookTimeout,
-		MaxAttempts:     cfg.Brain.ExecutionQueue.WebhookMaxAttempts,
-		RetryBackoff:    cfg.Brain.ExecutionQueue.WebhookRetryBackoff,
-		MaxRetryBackoff: cfg.Brain.ExecutionQueue.WebhookMaxRetryBackoff,
+		Timeout:         cfg.Haxen.ExecutionQueue.WebhookTimeout,
+		MaxAttempts:     cfg.Haxen.ExecutionQueue.WebhookMaxAttempts,
+		RetryBackoff:    cfg.Haxen.ExecutionQueue.WebhookRetryBackoff,
+		MaxRetryBackoff: cfg.Haxen.ExecutionQueue.WebhookMaxRetryBackoff,
 	})
 	if err := webhookDispatcher.Start(context.Background()); err != nil {
 		logger.Logger.Warn().Err(err).Msg("failed to start webhook dispatcher")
 	}
 
 	// Initialize execution cleanup service
-	cleanupService := handlers.NewExecutionCleanupService(storageProvider, cfg.Brain.ExecutionCleanup)
+	cleanupService := handlers.NewExecutionCleanupService(storageProvider, cfg.Haxen.ExecutionCleanup)
 
-	adminPort := cfg.Brain.Port + 100
-	if envPort := os.Getenv("BRAIN_ADMIN_GRPC_PORT"); envPort != "" {
+	adminPort := cfg.Haxen.Port + 100
+	if envPort := os.Getenv("HAXEN_ADMIN_GRPC_PORT"); envPort != "" {
 		if parsedPort, parseErr := strconv.Atoi(envPort); parseErr == nil {
 			adminPort = parsedPort
 		} else {
-			logger.Logger.Warn().Err(parseErr).Str("value", envPort).Msg("invalid BRAIN_ADMIN_GRPC_PORT, using default offset")
+			logger.Logger.Warn().Err(parseErr).Str("value", envPort).Msg("invalid HAXEN_ADMIN_GRPC_PORT, using default offset")
 		}
 	}
 
-	return &BrainServer{
+	return &HaxenServer{
 		storage:               storageProvider,
 		cache:                 cacheProvider,
 		Router:                Router,
@@ -261,7 +261,7 @@ func NewBrainServer(cfg *config.Config) (*BrainServer, error) {
 		didService:            didService,
 		vcService:             vcService,
 		didRegistry:           didRegistry,
-		brainHome:             brainHome,
+		haxenHome:             haxenHome,
 		cleanupService:        cleanupService,
 		payloadStore:          payloadStore,
 		webhookDispatcher:     webhookDispatcher,
@@ -270,8 +270,8 @@ func NewBrainServer(cfg *config.Config) (*BrainServer, error) {
 	}, nil
 }
 
-// Start initializes and starts the BrainServer.
-func (s *BrainServer) Start() error {
+// Start initializes and starts the HaxenServer.
+func (s *HaxenServer) Start() error {
 	// Setup routes
 	s.setupRoutes()
 
@@ -299,7 +299,7 @@ func (s *BrainServer) Start() error {
 	events.StartNodeHeartbeat(30 * time.Second)
 
 	if s.registryWatcherCancel == nil {
-		cancel, err := StartPackageRegistryWatcher(context.Background(), s.brainHome, s.storage)
+		cancel, err := StartPackageRegistryWatcher(context.Background(), s.haxenHome, s.storage)
 		if err != nil {
 			logger.Logger.Error().Err(err).Msg("failed to start package registry watcher")
 		} else {
@@ -313,10 +313,10 @@ func (s *BrainServer) Start() error {
 
 	// TODO: Implement WebSocket, gRPC
 	// Start HTTP server
-	return s.Router.Run(":" + strconv.Itoa(s.config.Brain.Port))
+	return s.Router.Run(":" + strconv.Itoa(s.config.Haxen.Port))
 }
 
-func (s *BrainServer) startAdminGRPCServer() error {
+func (s *HaxenServer) startAdminGRPCServer() error {
 	if s.adminGRPCServer != nil {
 		return nil
 	}
@@ -341,7 +341,7 @@ func (s *BrainServer) startAdminGRPCServer() error {
 }
 
 // ListReasoners implements the admin gRPC surface for listing registered reasoners.
-func (s *BrainServer) ListReasoners(ctx context.Context, _ *adminpb.ListReasonersRequest) (*adminpb.ListReasonersResponse, error) {
+func (s *HaxenServer) ListReasoners(ctx context.Context, _ *adminpb.ListReasonersRequest) (*adminpb.ListReasonersResponse, error) {
 	nodes, err := s.storage.ListAgents(ctx, types.AgentFilters{})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list agent nodes: %v", err)
@@ -368,8 +368,8 @@ func (s *BrainServer) ListReasoners(ctx context.Context, _ *adminpb.ListReasoner
 	return resp, nil
 }
 
-// Stop gracefully shuts down the BrainServer.
-func (s *BrainServer) Stop() error {
+// Stop gracefully shuts down the HaxenServer.
+func (s *HaxenServer) Stop() error {
 	if s.adminGRPCServer != nil {
 		s.adminGRPCServer.GracefulStop()
 	}
@@ -411,7 +411,7 @@ func (s *BrainServer) Stop() error {
 }
 
 // unregisterAgentFromMonitoring removes an agent from health monitoring
-func (s *BrainServer) unregisterAgentFromMonitoring(c *gin.Context) {
+func (s *HaxenServer) unregisterAgentFromMonitoring(c *gin.Context) {
 	nodeID := c.Param("node_id")
 	if nodeID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "node_id is required"})
@@ -430,7 +430,7 @@ func (s *BrainServer) unregisterAgentFromMonitoring(c *gin.Context) {
 }
 
 // healthCheckHandler provides comprehensive health check for container orchestration
-func (s *BrainServer) healthCheckHandler(c *gin.Context) {
+func (s *HaxenServer) healthCheckHandler(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
@@ -484,7 +484,7 @@ func (s *BrainServer) healthCheckHandler(c *gin.Context) {
 }
 
 // checkStorageHealth performs storage-specific health checks
-func (s *BrainServer) checkStorageHealth(ctx context.Context) gin.H {
+func (s *HaxenServer) checkStorageHealth(ctx context.Context) gin.H {
 	if s.storageHealthOverride != nil {
 		return s.storageHealthOverride(ctx)
 	}
@@ -507,7 +507,7 @@ func (s *BrainServer) checkStorageHealth(ctx context.Context) gin.H {
 }
 
 // checkCacheHealth performs cache-specific health checks
-func (s *BrainServer) checkCacheHealth(ctx context.Context) gin.H {
+func (s *HaxenServer) checkCacheHealth(ctx context.Context) gin.H {
 	if s.cacheHealthOverride != nil {
 		return s.cacheHealthOverride(ctx)
 	}
@@ -547,7 +547,7 @@ func (s *BrainServer) checkCacheHealth(ctx context.Context) gin.H {
 	}
 }
 
-func (s *BrainServer) setupRoutes() {
+func (s *HaxenServer) setupRoutes() {
 	// Configure CORS from configuration
 	corsConfig := cors.Config{
 		AllowOrigins:     s.config.API.CORS.AllowedOrigins,
@@ -613,7 +613,7 @@ func (s *BrainServer) setupRoutes() {
 				// Get the executable path and find UI dist relative to it
 				execPath, err := os.Executable()
 				if err != nil {
-					distPath = filepath.Join("apps", "platform", "brain", "web", "client", "dist")
+					distPath = filepath.Join("apps", "platform", "haxen", "web", "client", "dist")
 					if _, statErr := os.Stat(distPath); os.IsNotExist(statErr) {
 						distPath = filepath.Join("web", "client", "dist")
 					}
@@ -622,14 +622,14 @@ func (s *BrainServer) setupRoutes() {
 					// Look for web/client/dist relative to the executable directory
 					distPath = filepath.Join(execDir, "web", "client", "dist")
 
-					// If that doesn't exist, try going up one level (if binary is in apps/platform/brain/)
+					// If that doesn't exist, try going up one level (if binary is in apps/platform/haxen/)
 					if _, err := os.Stat(distPath); os.IsNotExist(err) {
-						distPath = filepath.Join(filepath.Dir(execDir), "apps", "platform", "brain", "web", "client", "dist")
+						distPath = filepath.Join(filepath.Dir(execDir), "apps", "platform", "haxen", "web", "client", "dist")
 					}
 
 					// Final fallback to current working directory
 					if _, err := os.Stat(distPath); os.IsNotExist(err) {
-						altPath := filepath.Join("apps", "platform", "brain", "web", "client", "dist")
+						altPath := filepath.Join("apps", "platform", "haxen", "web", "client", "dist")
 						if _, altErr := os.Stat(altPath); altErr == nil {
 							distPath = altPath
 						} else {
@@ -684,7 +684,7 @@ func (s *BrainServer) setupRoutes() {
 				agents.POST("/:agentId/config", configHandler.SetConfigHandler)
 
 				// Environment file endpoints
-				envHandler := ui.NewEnvHandler(s.storage, s.agentService, s.brainHome)
+				envHandler := ui.NewEnvHandler(s.storage, s.agentService, s.haxenHome)
 				agents.GET("/:agentId/env", envHandler.GetEnvHandler)
 				agents.PUT("/:agentId/env", envHandler.PutEnvHandler)
 				agents.PATCH("/:agentId/env", envHandler.PatchEnvHandler)
@@ -901,23 +901,23 @@ func (s *BrainServer) setupRoutes() {
 			// Register service-backed DID routes
 			didHandlers.RegisterRoutes(agentAPI)
 
-			// Add brain server DID endpoint
-			agentAPI.GET("/did/brain-server", func(c *gin.Context) {
-				// Get brain server ID dynamically
-				brainServerID, err := s.didService.GetBrainServerID()
+			// Add haxen server DID endpoint
+			agentAPI.GET("/did/haxen-server", func(c *gin.Context) {
+				// Get haxen server ID dynamically
+				haxenServerID, err := s.didService.GetHaxenServerID()
 				if err != nil {
 					c.JSON(http.StatusInternalServerError, gin.H{
-						"error":   "Failed to get brain server ID",
-						"details": fmt.Sprintf("Brain server ID error: %v", err),
+						"error":   "Failed to get haxen server ID",
+						"details": fmt.Sprintf("Haxen server ID error: %v", err),
 					})
 					return
 				}
 
-				// Get the actual brain server DID from the registry
-				registry, err := s.didService.GetRegistry(brainServerID)
+				// Get the actual haxen server DID from the registry
+				registry, err := s.didService.GetRegistry(haxenServerID)
 				if err != nil {
 					c.JSON(http.StatusInternalServerError, gin.H{
-						"error":   "Failed to get brain server DID",
+						"error":   "Failed to get haxen server DID",
 						"details": fmt.Sprintf("Registry error: %v", err),
 					})
 					return
@@ -925,24 +925,24 @@ func (s *BrainServer) setupRoutes() {
 
 				if registry == nil {
 					c.JSON(http.StatusNotFound, gin.H{
-						"error":   "Brain server DID not found",
-						"details": "No DID registry exists for brain server 'default'. The DID system may not be properly initialized.",
+						"error":   "Haxen server DID not found",
+						"details": "No DID registry exists for haxen server 'default'. The DID system may not be properly initialized.",
 					})
 					return
 				}
 
 				if registry.RootDID == "" {
 					c.JSON(http.StatusInternalServerError, gin.H{
-						"error":   "Brain server DID is empty",
+						"error":   "Haxen server DID is empty",
 						"details": "Registry exists but root DID is empty. The DID system may be corrupted.",
 					})
 					return
 				}
 
 				c.JSON(http.StatusOK, gin.H{
-					"brain_server_id":  "default",
-					"brain_server_did": registry.RootDID,
-					"message":          "Brain server DID retrieved successfully",
+					"haxen_server_id":  "default",
+					"haxen_server_did": registry.RootDID,
+					"message":          "Haxen server DID retrieved successfully",
 				})
 			})
 		} else {
@@ -995,7 +995,7 @@ func (s *BrainServer) setupRoutes() {
 					// Get the executable path and find UI dist relative to it
 					execPath, err := os.Executable()
 					if err != nil {
-						distPath = filepath.Join("apps", "platform", "brain", "web", "client", "dist")
+						distPath = filepath.Join("apps", "platform", "haxen", "web", "client", "dist")
 						if _, statErr := os.Stat(distPath); os.IsNotExist(statErr) {
 							distPath = filepath.Join("web", "client", "dist")
 						}
@@ -1004,14 +1004,14 @@ func (s *BrainServer) setupRoutes() {
 						// Look for web/client/dist relative to the executable directory
 						distPath = filepath.Join(execDir, "web", "client", "dist")
 
-						// If that doesn't exist, try going up one level (if binary is in apps/platform/brain/)
+						// If that doesn't exist, try going up one level (if binary is in apps/platform/haxen/)
 						if _, err := os.Stat(distPath); os.IsNotExist(err) {
-							distPath = filepath.Join(filepath.Dir(execDir), "apps", "platform", "brain", "web", "client", "dist")
+							distPath = filepath.Join(filepath.Dir(execDir), "apps", "platform", "haxen", "web", "client", "dist")
 						}
 
 						// Final fallback to current working directory
 						if _, err := os.Stat(distPath); os.IsNotExist(err) {
-							altPath := filepath.Join("apps", "platform", "brain", "web", "client", "dist")
+							altPath := filepath.Join("apps", "platform", "haxen", "web", "client", "dist")
 							if _, altErr := os.Stat(altPath); altErr == nil {
 								distPath = altPath
 							} else {
@@ -1029,22 +1029,22 @@ func (s *BrainServer) setupRoutes() {
 	}
 }
 
-// generateBrainServerID creates a deterministic brain server ID based on the brain home directory.
-// This ensures each brain instance has a unique ID while being deterministic for the same installation.
-func generateBrainServerID(brainHome string) string {
-	// Use the absolute path of brain home to generate a deterministic ID
-	absPath, err := filepath.Abs(brainHome)
+// generateHaxenServerID creates a deterministic haxen server ID based on the haxen home directory.
+// This ensures each haxen instance has a unique ID while being deterministic for the same installation.
+func generateHaxenServerID(haxenHome string) string {
+	// Use the absolute path of haxen home to generate a deterministic ID
+	absPath, err := filepath.Abs(haxenHome)
 	if err != nil {
 		// Fallback to the original path if absolute path fails
-		absPath = brainHome
+		absPath = haxenHome
 	}
 
-	// Create a hash of the brain home path to generate a unique but deterministic ID
+	// Create a hash of the haxen home path to generate a unique but deterministic ID
 	hash := sha256.Sum256([]byte(absPath))
 
-	// Use first 16 characters of the hex hash as the brain server ID
+	// Use first 16 characters of the hex hash as the haxen server ID
 	// This provides uniqueness while keeping the ID manageable
-	brainServerID := hex.EncodeToString(hash[:])[:16]
+	haxenServerID := hex.EncodeToString(hash[:])[:16]
 
-	return brainServerID
+	return haxenServerID
 }

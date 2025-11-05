@@ -1,29 +1,29 @@
-# Brain Python SDK
+# Haxen Python SDK
 
-The Brain SDK provides a production-ready Python interface for registering agents, executing workflows, and integrating with the Brain control plane.
+The Haxen SDK provides a production-ready Python interface for registering agents, executing workflows, and integrating with the Haxen control plane.
 
 ## Installation
 
 ```bash
-pip install brain-sdk
+pip install haxen-sdk
 ```
 
 To work on the SDK locally:
 
 ```bash
-git clone https://github.com/your-org/brain.git
-cd brain/sdk/python
+git clone https://github.com/your-org/haxen.git
+cd haxen/sdk/python
 python -m pip install -e .[dev]
 ```
 
 ## Quick Start
 
 ```python
-from brain_sdk import Agent
+from haxen_sdk import Agent
 
 agent = Agent(
     node_id="example-agent",
-    brain_server="http://localhost:8080",
+    haxen_server="http://localhost:8080",
     dev_mode=True,
 )
 
@@ -50,7 +50,7 @@ pytest
 To run coverage locally:
 
 ```bash
-pytest --cov=brain_sdk --cov-report=term-missing
+pytest --cov=haxen_sdk --cov-report=term-missing
 ```
 
 ## License

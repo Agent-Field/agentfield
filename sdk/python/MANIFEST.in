@@ -1,7 +1,7 @@
 include README.md
 include LICENSE
 include requirements.txt
-recursive-include brain_sdk *.py
+recursive-include haxen_sdk *.py
 exclude examples/*
 exclude tests/*
 global-exclude *.pyc

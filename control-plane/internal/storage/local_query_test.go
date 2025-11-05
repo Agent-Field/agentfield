@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/your-org/brain/control-plane/pkg/types"
+	"github.com/your-org/haxen/control-plane/pkg/types"
 
 	"github.com/stretchr/testify/require"
 )
@@ -20,8 +20,8 @@ func setupLocalStorage(t *testing.T) (*LocalStorage, context.Context) {
 	cfg := StorageConfig{
 		Mode: "local",
 		Local: LocalStorageConfig{
-			DatabasePath: filepath.Join(tempDir, "brain.db"),
-			KVStorePath:  filepath.Join(tempDir, "brain.bolt"),
+			DatabasePath: filepath.Join(tempDir, "haxen.db"),
+			KVStorePath:  filepath.Join(tempDir, "haxen.bolt"),
 		},
 	}
 
@@ -67,7 +67,7 @@ func TestQueryWorkflowExecutionsFiltersAndSearch(t *testing.T) {
 		{
 			WorkflowID:     "wf-root",
 			ExecutionID:    "exec-alpha",
-			BrainRequestID: "req-1",
+			HaxenRequestID: "req-1",
 			RunID:          &runID,
 			AgentNodeID:    "agent-one",
 			ReasonerID:     "reasoner.alpha",
@@ -81,7 +81,7 @@ func TestQueryWorkflowExecutionsFiltersAndSearch(t *testing.T) {
 		{
 			WorkflowID:     "wf-root",
 			ExecutionID:    "exec-beta",
-			BrainRequestID: "req-2",
+			HaxenRequestID: "req-2",
 			RunID:          &runID,
 			AgentNodeID:    "agent-two",
 			ReasonerID:     "reasoner.beta",
@@ -157,7 +157,7 @@ func TestQueryWorkflowDAGReturnsHierarchy(t *testing.T) {
 	root := &types.WorkflowExecution{
 		WorkflowID:     "wf-root",
 		ExecutionID:    "root-exec",
-		BrainRequestID: "req-root",
+		HaxenRequestID: "req-root",
 		RunID:          &runID,
 		AgentNodeID:    "agent-root",
 		ReasonerID:     "root",
@@ -172,7 +172,7 @@ func TestQueryWorkflowDAGReturnsHierarchy(t *testing.T) {
 	child := &types.WorkflowExecution{
 		WorkflowID:        "wf-root",
 		ExecutionID:       "child-exec",
-		BrainRequestID:    "req-child",
+		HaxenRequestID:    "req-child",
 		RunID:             &runID,
 		AgentNodeID:       "agent-child",
 		ReasonerID:        "child",

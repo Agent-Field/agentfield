@@ -3,8 +3,8 @@ package commands
 import (
 	"fmt"
 	"github.com/spf13/cobra"
-	"github.com/your-org/brain/control-plane/internal/cli/framework"
-	"github.com/your-org/brain/control-plane/internal/core/domain"
+	"github.com/your-org/haxen/control-plane/internal/cli/framework"
+	"github.com/your-org/haxen/control-plane/internal/core/domain"
 )
 
 // RunCommand implements the run command using the new framework
@@ -28,7 +28,7 @@ func (cmd *RunCommand) GetName() string {
 
 // GetDescription returns the command description
 func (cmd *RunCommand) GetDescription() string {
-	return "Run an installed Brain agent node package"
+	return "Run an installed Haxen agent node package"
 }
 
 // BuildCobraCommand builds the Cobra command
@@ -40,15 +40,15 @@ func (cmd *RunCommand) BuildCobraCommand() *cobra.Command {
 	cobraCmd := &cobra.Command{
 		Use:   "run <agent-node-name>",
 		Short: cmd.GetDescription(),
-		Long: `Start an installed Brain agent node package in the background.
+		Long: `Start an installed Haxen agent node package in the background.
 
 The agent node will be assigned an available port and registered with
-the Brain server if available.
+the Haxen server if available.
 
 Examples:
-  brain run email-helper
-  brain run data-analyzer --port 8005
-  brain run my-agent --detach=false`,
+  haxen run email-helper
+  haxen run data-analyzer --port 8005
+  haxen run my-agent --detach=false`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cobraCmd *cobra.Command, args []string) error {
 			// Update output formatter with verbose setting
@@ -66,7 +66,7 @@ Examples:
 
 // execute performs the actual agent execution
 func (cmd *RunCommand) execute(agentName string, port int, detach, verbose bool) error {
-	cmd.output.PrintHeader("Running Brain Agent")
+	cmd.output.PrintHeader("Running Haxen Agent")
 	cmd.output.PrintInfo(fmt.Sprintf("Agent: %s", agentName))
 	
 	if verbose {
@@ -118,8 +118,8 @@ func (cmd *RunCommand) execute(agentName string, port int, detach, verbose bool)
 	
 	if detach {
 		cmd.output.PrintInfo("Agent is running in the background")
-		cmd.output.PrintInfo("Use 'brain stop " + agentName + "' to stop the agent")
-		cmd.output.PrintInfo("Use 'brain logs " + agentName + "' to view logs")
+		cmd.output.PrintInfo("Use 'haxen stop " + agentName + "' to stop the agent")
+		cmd.output.PrintInfo("Use 'haxen logs " + agentName + "' to view logs")
 	}
 	
 	return nil

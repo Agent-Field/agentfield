@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/your-org/brain/control-plane/internal/packages"
+	"github.com/your-org/haxen/control-plane/internal/packages"
 )
 
 var (
@@ -26,8 +26,8 @@ This command will:
 - Clean up any associated logs
 
 Examples:
-  brain uninstall my-agent
-  brain uninstall sentiment-analyzer --force`,
+  haxen uninstall my-agent
+  haxen uninstall sentiment-analyzer --force`,
 		Args: cobra.ExactArgs(1),
 		Run:  runUninstallCommand,
 	}
@@ -42,7 +42,7 @@ func runUninstallCommand(cmd *cobra.Command, args []string) {
 
 	// Create uninstaller
 	uninstaller := &packages.PackageUninstaller{
-		BrainHome: getBrainHomeDir(),
+		HaxenHome: getHaxenHomeDir(),
 		Force:     uninstallForce,
 	}
 

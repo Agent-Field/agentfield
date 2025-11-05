@@ -1,8 +1,8 @@
 import pytest
 
-from brain_sdk.agent_workflow import AgentWorkflow
-from brain_sdk.execution_context import ExecutionContext
-from brain_sdk.agent_registry import set_current_agent, clear_current_agent
+from haxen_sdk.agent_workflow import AgentWorkflow
+from haxen_sdk.execution_context import ExecutionContext
+from haxen_sdk.agent_registry import set_current_agent, clear_current_agent
 from tests.helpers import StubAgent
 
 

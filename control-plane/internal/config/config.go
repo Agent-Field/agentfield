@@ -7,12 +7,12 @@ import (
 	"path/filepath"    // Added for filepath.Join
 	"time"
 
-	"github.com/your-org/brain/control-plane/internal/storage"
+	"github.com/your-org/haxen/control-plane/internal/storage"
 )
 
-// Config holds the entire configuration for the Brain server.
+// Config holds the entire configuration for the Haxen server.
 type Config struct {
-	Brain           BrainConfig           `yaml:"brain" mapstructure:"brain"`
+	Haxen           HaxenConfig           `yaml:"haxen" mapstructure:"haxen"`
 	Agents          AgentsConfig          `yaml:"agents" mapstructure:"agents"`
 	Features        FeatureConfig         `yaml:"features" mapstructure:"features"`
 	Storage         StorageConfig         `yaml:"storage" mapstructure:"storage"`                   // Added storage config
@@ -31,8 +31,8 @@ type UIConfig struct {
 	BackendURL string `yaml:"backend_url" mapstructure:"backend_url"` // URL of the backend if UI is separate
 }
 
-// BrainConfig holds the core Brain server configuration.
-type BrainConfig struct {
+// HaxenConfig holds the core Haxen server configuration.
+type HaxenConfig struct {
 	Port                    int                    `yaml:"port"`
 	DatabaseURL             string                 `yaml:"database_url"`
 	RedisURL                string                 `yaml:"redis_url"`
@@ -166,21 +166,21 @@ type CORSConfig struct {
 // with the implementation in the storage package.
 type StorageConfig = storage.StorageConfig
 
-// DataDirectoriesConfig holds configuration for Brain data directory paths
+// DataDirectoriesConfig holds configuration for Haxen data directory paths
 type DataDirectoriesConfig struct {
-	BrainHome        string `yaml:"brain_home" mapstructure:"brain_home"`                 // Can be overridden by BRAIN_HOME env var
-	DatabaseDir      string `yaml:"database_dir" mapstructure:"database_dir"`             // Relative to brain_home
-	KeysDir          string `yaml:"keys_dir" mapstructure:"keys_dir"`                     // Relative to brain_home
-	DIDRegistriesDir string `yaml:"did_registries_dir" mapstructure:"did_registries_dir"` // Relative to brain_home
-	VCsDir           string `yaml:"vcs_dir" mapstructure:"vcs_dir"`                       // Relative to brain_home
-	AgentsDir        string `yaml:"agents_dir" mapstructure:"agents_dir"`                 // Relative to brain_home
-	LogsDir          string `yaml:"logs_dir" mapstructure:"logs_dir"`                     // Relative to brain_home
-	ConfigDir        string `yaml:"config_dir" mapstructure:"config_dir"`                 // Relative to brain_home
-	TempDir          string `yaml:"temp_dir" mapstructure:"temp_dir"`                     // Relative to brain_home
+	HaxenHome        string `yaml:"haxen_home" mapstructure:"haxen_home"`                 // Can be overridden by HAXEN_HOME env var
+	DatabaseDir      string `yaml:"database_dir" mapstructure:"database_dir"`             // Relative to haxen_home
+	KeysDir          string `yaml:"keys_dir" mapstructure:"keys_dir"`                     // Relative to haxen_home
+	DIDRegistriesDir string `yaml:"did_registries_dir" mapstructure:"did_registries_dir"` // Relative to haxen_home
+	VCsDir           string `yaml:"vcs_dir" mapstructure:"vcs_dir"`                       // Relative to haxen_home
+	AgentsDir        string `yaml:"agents_dir" mapstructure:"agents_dir"`                 // Relative to haxen_home
+	LogsDir          string `yaml:"logs_dir" mapstructure:"logs_dir"`                     // Relative to haxen_home
+	ConfigDir        string `yaml:"config_dir" mapstructure:"config_dir"`                 // Relative to haxen_home
+	TempDir          string `yaml:"temp_dir" mapstructure:"temp_dir"`                     // Relative to haxen_home
 }
 
-// DefaultConfigPath is the default path for the brain configuration file.
-const DefaultConfigPath = "brain.yaml" // Or "./brain.yaml", "config/brain.yaml" depending on convention
+// DefaultConfigPath is the default path for the haxen configuration file.
+const DefaultConfigPath = "haxen.yaml" // Or "./haxen.yaml", "config/haxen.yaml" depending on convention
 
 // LoadConfig reads the configuration from the given path or default paths.
 func LoadConfig(configPath string) (*Config, error) {
@@ -194,7 +194,7 @@ func LoadConfig(configPath string) (*Config, error) {
 		// This part might need more sophisticated logic depending on project structure
 		// For now, let's assume configPath is either absolute or relative to CWD.
 		// If not found, try a common "config/" subdirectory
-		altPath := filepath.Join("config", "brain.yaml")
+		altPath := filepath.Join("config", "haxen.yaml")
 		if _, err2 := os.Stat(altPath); err2 == nil {
 			configPath = altPath
 		} else {

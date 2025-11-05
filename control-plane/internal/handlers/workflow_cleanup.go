@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/your-org/brain/control-plane/internal/storage"
+	"github.com/your-org/haxen/control-plane/internal/storage"
 
 	"github.com/gin-gonic/gin"
 )

@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/your-org/brain/control-plane/internal/config"
+	"github.com/your-org/haxen/control-plane/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -89,9 +89,9 @@ func (m *MCPManager) Add(config MCPServerConfig) error {
 		return fmt.Errorf("failed to save configuration: %w", err)
 	}
 
-	// Update brain.yaml
-	if err := m.updateBrainYAML(config); err != nil {
-		return fmt.Errorf("failed to update brain.yaml: %w", err)
+	// Update haxen.yaml
+	if err := m.updateHaxenYAML(config); err != nil {
+		return fmt.Errorf("failed to update haxen.yaml: %w", err)
 	}
 
 	// Attempt to start and discover capabilities
@@ -243,9 +243,9 @@ func (m *MCPManager) Remove(alias string) error {
 		return fmt.Errorf("failed to remove server directory: %w", err)
 	}
 
-	// Update brain.yaml
-	if err := m.removeMCPFromBrainYAML(alias); err != nil {
-		return fmt.Errorf("failed to update brain.yaml: %w", err)
+	// Update haxen.yaml
+	if err := m.removeMCPFromHaxenYAML(alias); err != nil {
+		return fmt.Errorf("failed to update haxen.yaml: %w", err)
 	}
 
 	if m.verbose {
@@ -399,20 +399,20 @@ func (m *MCPManager) getServerInfo(alias string) (*MCPServerInfo, error) {
 	return info, nil
 }
 
-// updateBrainYAML updates the brain.yaml file with the new MCP server
-func (m *MCPManager) updateBrainYAML(config MCPServerConfig) error {
-	brainYAMLPath := filepath.Join(m.projectDir, "brain.yaml")
+// updateHaxenYAML updates the haxen.yaml file with the new MCP server
+func (m *MCPManager) updateHaxenYAML(config MCPServerConfig) error {
+	haxenYAMLPath := filepath.Join(m.projectDir, "haxen.yaml")
 
-	// Read existing brain.yaml
-	data, err := os.ReadFile(brainYAMLPath)
+	// Read existing haxen.yaml
+	data, err := os.ReadFile(haxenYAMLPath)
 	if err != nil {
-		return fmt.Errorf("failed to read brain.yaml: %w", err)
+		return fmt.Errorf("failed to read haxen.yaml: %w", err)
 	}
 
 	// Parse YAML
 	var yamlConfig map[string]interface{}
 	if err := yaml.Unmarshal(data, &yamlConfig); err != nil {
-		return fmt.Errorf("failed to parse brain.yaml: %w", err)
+		return fmt.Errorf("failed to parse haxen.yaml: %w", err)
 	}
 
 	// Ensure dependencies section exists
@@ -474,30 +474,30 @@ func (m *MCPManager) updateBrainYAML(config MCPServerConfig) error {
 	// Write back to file
 	updatedData, err := yaml.Marshal(yamlConfig)
 	if err != nil {
-		return fmt.Errorf("failed to marshal brain.yaml: %w", err)
+		return fmt.Errorf("failed to marshal haxen.yaml: %w", err)
 	}
 
-	if err := os.WriteFile(brainYAMLPath, updatedData, 0644); err != nil {
-		return fmt.Errorf("failed to write brain.yaml: %w", err)
+	if err := os.WriteFile(haxenYAMLPath, updatedData, 0644); err != nil {
+		return fmt.Errorf("failed to write haxen.yaml: %w", err)
 	}
 
 	return nil
 }
 
-// removeMCPFromBrainYAML removes an MCP server from brain.yaml
-func (m *MCPManager) removeMCPFromBrainYAML(alias string) error {
-	brainYAMLPath := filepath.Join(m.projectDir, "brain.yaml")
+// removeMCPFromHaxenYAML removes an MCP server from haxen.yaml
+func (m *MCPManager) removeMCPFromHaxenYAML(alias string) error {
+	haxenYAMLPath := filepath.Join(m.projectDir, "haxen.yaml")
 
-	// Read existing brain.yaml
-	data, err := os.ReadFile(brainYAMLPath)
+	// Read existing haxen.yaml
+	data, err := os.ReadFile(haxenYAMLPath)
 	if err != nil {
-		return fmt.Errorf("failed to read brain.yaml: %w", err)
+		return fmt.Errorf("failed to read haxen.yaml: %w", err)
 	}
 
 	// Parse YAML
 	var config map[string]interface{}
 	if err := yaml.Unmarshal(data, &config); err != nil {
-		return fmt.Errorf("failed to parse brain.yaml: %w", err)
+		return fmt.Errorf("failed to parse haxen.yaml: %w", err)
 	}
 
 	// Navigate to mcp_servers section
@@ -510,28 +510,28 @@ func (m *MCPManager) removeMCPFromBrainYAML(alias string) error {
 	// Write back to file
 	updatedData, err := yaml.Marshal(config)
 	if err != nil {
-		return fmt.Errorf("failed to marshal brain.yaml: %w", err)
+		return fmt.Errorf("failed to marshal haxen.yaml: %w", err)
 	}
 
-	if err := os.WriteFile(brainYAMLPath, updatedData, 0644); err != nil {
-		return fmt.Errorf("failed to write brain.yaml: %w", err)
+	if err := os.WriteFile(haxenYAMLPath, updatedData, 0644); err != nil {
+		return fmt.Errorf("failed to write haxen.yaml: %w", err)
 	}
 
 	return nil
 }
 
-// loadMCPConfigsFromYAML loads MCP configurations from brain.yaml
+// loadMCPConfigsFromYAML loads MCP configurations from haxen.yaml
 func (m *MCPManager) loadMCPConfigsFromYAML() (map[string]MCPServerConfig, error) {
-	brainYAMLPath := filepath.Join(m.projectDir, "brain.yaml")
+	haxenYAMLPath := filepath.Join(m.projectDir, "haxen.yaml")
 
-	data, err := os.ReadFile(brainYAMLPath)
+	data, err := os.ReadFile(haxenYAMLPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read brain.yaml: %w", err)
+		return nil, fmt.Errorf("failed to read haxen.yaml: %w", err)
 	}
 
 	var config map[string]interface{}
 	if err := yaml.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse brain.yaml: %w", err)
+		return nil, fmt.Errorf("failed to parse haxen.yaml: %w", err)
 	}
 
 	configs := make(map[string]MCPServerConfig)
@@ -637,7 +637,7 @@ func (m *MCPManager) DiscoverCapabilities(alias string) (*MCPManifest, error) {
 	if m.verbose {
 		fmt.Printf("Successfully discovered capabilities for %s: %d tools, %d resources\n", 
 			alias, len(manifest.Tools), len(manifest.Resources))
-		fmt.Printf("Note: MCP skills will be auto-registered by Brain SDK when agent starts\n")
+		fmt.Printf("Note: MCP skills will be auto-registered by Haxen SDK when agent starts\n")
 	}
 
 	return manifest, nil

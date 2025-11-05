@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Brain Single Binary Builder
+# Haxen Single Binary Builder
 # This script creates a single, portable binary that includes:
 # - Go backend with universal path management
 # - Embedded UI
@@ -142,21 +142,21 @@ package main
 import (
  "fmt"
  "strings"
- "github.com/your-org/brain/control-plane/internal/utils"
+ "github.com/your-org/haxen/control-plane/internal/utils"
 )
 
 func main() {
- dirs, err := utils.GetBrainDataDirectories()
+ dirs, err := utils.GetHaxenDataDirectories()
  if err != nil {
   fmt.Printf("ERROR: %v\n", err)
   return
  }
 
- fmt.Printf("Brain Home: %s\n", dirs.BrainHome)
+ fmt.Printf("Haxen Home: %s\n", dirs.HaxenHome)
 
- // Verify that Brain Home points to ~/.brain
- if !strings.HasSuffix(dirs.BrainHome, ".brain") {
-  fmt.Printf("ERROR: Brain Home should end with .brain, got: %s\n", dirs.BrainHome)
+ // Verify that Haxen Home points to ~/.haxen
+ if !strings.HasSuffix(dirs.HaxenHome, ".haxen") {
+  fmt.Printf("ERROR: Haxen Home should end with .haxen, got: %s\n", dirs.HaxenHome)
   return
  }
 
@@ -168,9 +168,9 @@ func main() {
  }
  fmt.Printf("Database Path: %s\n", dbPath)
 
- // Verify database path is in ~/.brain/data/
- if !strings.Contains(dbPath, ".brain/data/brain.db") {
-  fmt.Printf("ERROR: Database path should be in ~/.brain/data/, got: %s\n", dbPath)
+ // Verify database path is in ~/.haxen/data/
+ if !strings.Contains(dbPath, ".haxen/data/haxen.db") {
+  fmt.Printf("ERROR: Database path should be in ~/.haxen/data/, got: %s\n", dbPath)
   return
  }
 
@@ -181,7 +181,7 @@ func main() {
   return
  }
 
- fmt.Println("SUCCESS: Path management system working correctly - database will be stored in ~/.brain/")
+ fmt.Println("SUCCESS: Path management system working correctly - database will be stored in ~/.haxen/")
 }
 EOF
 
@@ -266,7 +266,7 @@ build_binary() {
         -ldflags "$LDFLAGS" \
         -tags "embedded sqlite_fts5" \
         -o "$OUTPUT_DIR/$output_name" \
-        ./cmd/brain-server
+        ./cmd/haxen-server
 
     if [ $? -eq 0 ]; then
         # Get file size
@@ -305,10 +305,10 @@ build_all_binaries() {
 
     # Define platforms to build
     declare -a platforms=(
-        # "linux:amd64:brain-linux-amd64"
-        # "linux:arm64:brain-linux-arm64"
-        # "darwin:amd64:brain-darwin-amd64"
-        "darwin:arm64:brain-darwin-arm64"
+        # "linux:amd64:haxen-linux-amd64"
+        # "linux:arm64:haxen-linux-arm64"
+        # "darwin:amd64:haxen-darwin-amd64"
+        "darwin:arm64:haxen-darwin-arm64"
     )
 
     for platform in "${platforms[@]}"; do
@@ -336,10 +336,10 @@ generate_metadata() {
 
     # Generate SHA256 checksums
     if command_exists sha256sum; then
-        sha256sum brain-* > checksums.txt 2>/dev/null || true
+        sha256sum haxen-* > checksums.txt 2>/dev/null || true
         print_success "Generated checksums.txt"
     elif command_exists shasum; then
-        shasum -a 256 brain-* > checksums.txt 2>/dev/null || true
+        shasum -a 256 haxen-* > checksums.txt 2>/dev/null || true
         print_success "Generated checksums.txt"
     else
         print_warning "No checksum utility found, skipping checksum generation"
@@ -347,7 +347,7 @@ generate_metadata() {
 
     # Generate build info
     cat > build-info.txt << EOF
-Brain Single Binary Build Information
+Haxen Single Binary Build Information
 ====================================
 
 Build Version: $VERSION
@@ -358,31 +358,31 @@ Build OS: $(uname -s)
 Build Arch: $(uname -m)
 
 Features:
-- Universal Path Management (stores data in ~/.brain/)
+- Universal Path Management (stores data in ~/.haxen/)
 - Embedded Web UI
 - Cross-platform compatibility
 - Single binary deployment
 
 Usage:
-  ./brain-<platform>           # Start Brain server with UI
-  ./brain-<platform> --help    # Show help
-  ./brain-<platform> --backend-only  # Start without UI
+  ./haxen-<platform>           # Start Haxen server with UI
+  ./haxen-<platform> --help    # Show help
+  ./haxen-<platform> --backend-only  # Start without UI
 
 Data Storage:
-All Brain data is stored in ~/.brain/ directory:
-- ~/.brain/data/brain.db      # Main database
-- ~/.brain/data/brain.bolt    # Cache/KV store
-- ~/.brain/data/keys/         # DID cryptographic keys
-- ~/.brain/data/did_registries/  # DID registries
-- ~/.brain/data/vcs/          # Verifiable credentials
-- ~/.brain/agents/            # Installed agents
-- ~/.brain/logs/              # Application logs
-- ~/.brain/config/            # User configurations
+All Haxen data is stored in ~/.haxen/ directory:
+- ~/.haxen/data/haxen.db      # Main database
+- ~/.haxen/data/haxen.bolt    # Cache/KV store
+- ~/.haxen/data/keys/         # DID cryptographic keys
+- ~/.haxen/data/did_registries/  # DID registries
+- ~/.haxen/data/vcs/          # Verifiable credentials
+- ~/.haxen/agents/            # Installed agents
+- ~/.haxen/logs/              # Application logs
+- ~/.haxen/config/            # User configurations
 
 Environment Variables:
-- BRAIN_HOME: Override default ~/.brain directory
-- BRAIN_PORT: Override default port (8080)
-- BRAIN_CONFIG_FILE: Override config file location
+- HAXEN_HOME: Override default ~/.haxen directory
+- HAXEN_PORT: Override default port (8080)
+- HAXEN_CONFIG_FILE: Override config file location
 
 EOF
 
@@ -397,27 +397,27 @@ create_distribution() {
 
     # Create a README for the distribution
     cat > "$OUTPUT_DIR/README.md" << 'EOF'
-# Brain Single Binary Distribution
+# Haxen Single Binary Distribution
 
-This package contains pre-built Brain binaries for multiple platforms.
+This package contains pre-built Haxen binaries for multiple platforms.
 
 ## Quick Start
 
 1. Download the appropriate binary for your platform:
-   - `brain-linux-amd64` - Linux (Intel/AMD 64-bit)
-   - `brain-linux-arm64` - Linux (ARM 64-bit)
-   - `brain-darwin-amd64` - macOS (Intel)
-   - `brain-darwin-arm64` - macOS (Apple Silicon)
-   - `brain-windows-amd64.exe` - Windows (64-bit)
+   - `haxen-linux-amd64` - Linux (Intel/AMD 64-bit)
+   - `haxen-linux-arm64` - Linux (ARM 64-bit)
+   - `haxen-darwin-amd64` - macOS (Intel)
+   - `haxen-darwin-arm64` - macOS (Apple Silicon)
+   - `haxen-windows-amd64.exe` - Windows (64-bit)
 
 2. Make the binary executable (Linux/macOS):
    ```bash
-   chmod +x brain-*
+   chmod +x haxen-*
    ```
 
-3. Run Brain:
+3. Run Haxen:
    ```bash
-   ./brain-linux-amd64
+   ./haxen-linux-amd64
    ```
 
 4. Open your browser to http://localhost:8080
@@ -425,26 +425,26 @@ This package contains pre-built Brain binaries for multiple platforms.
 ## Features
 
 - **Single Binary**: Everything bundled in one executable
-- **Universal Storage**: All data stored in `~/.brain/` directory
+- **Universal Storage**: All data stored in `~/.haxen/` directory
 - **Embedded UI**: Web interface included in binary
 - **Cross-Platform**: Works on Linux, macOS, and Windows
 - **Portable**: Run from anywhere, data stays consistent
 
 ## Configuration
 
-Brain can be configured via:
-- Environment variables (BRAIN_HOME, BRAIN_PORT, etc.)
-- Configuration file (`~/.brain/brain.yaml`)
+Haxen can be configured via:
+- Environment variables (HAXEN_HOME, HAXEN_PORT, etc.)
+- Configuration file (`~/.haxen/haxen.yaml`)
 - Command line flags (`--port`, `--backend-only`, etc.)
 
 ## Data Directory
 
-All Brain data is stored in `~/.brain/`:
+All Haxen data is stored in `~/.haxen/`:
 ```
-~/.brain/
+~/.haxen/
 ├── data/
-│   ├── brain.db              # Main database
-│   ├── brain.bolt            # Cache
+│   ├── haxen.db              # Main database
+│   ├── haxen.bolt            # Cache
 │   ├── keys/                 # Cryptographic keys
 │   ├── did_registries/       # DID registries
 │   └── vcs/                  # Verifiable credentials
@@ -455,7 +455,7 @@ All Brain data is stored in `~/.brain/`:
 
 ## Support
 
-For issues and documentation, visit: https://github.com/your-org/brain
+For issues and documentation, visit: https://github.com/your-org/haxen
 EOF
 
     print_success "Created distribution README.md"
@@ -473,7 +473,7 @@ show_summary() {
     if [ -d "$OUTPUT_DIR" ]; then
         print_status "Output directory: $OUTPUT_DIR"
         print_status "Built files:"
-        ls -la "$OUTPUT_DIR" | grep -E "(brain-|checksums|build-info|README)"
+        ls -la "$OUTPUT_DIR" | grep -E "(haxen-|checksums|build-info|README)"
 
         # Calculate total size
         if command_exists du; then
@@ -487,21 +487,21 @@ show_summary() {
     echo ""
     print_status "To test your binary:"
     echo "  cd $OUTPUT_DIR"
-    echo "  ./brain-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/')"
+    echo "  ./haxen-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/')"
     echo ""
     print_status "The binary includes:"
     echo "  ✅ Go backend with universal path management"
     echo "  ✅ Embedded web UI"
     echo "  ✅ All dependencies bundled"
     echo "  ✅ Cross-platform compatibility"
-    echo "  ✅ Portable deployment (stores data in ~/.brain/)"
+    echo "  ✅ Portable deployment (stores data in ~/.haxen/)"
 }
 
 # Main build function
 main() {
-    print_header "Brain Single Binary Builder"
+    print_header "Haxen Single Binary Builder"
 
-    echo "Building Brain single binary with:"
+    echo "Building Haxen single binary with:"
     echo "  • Universal path management"
     echo "  • Embedded web UI"
     echo "  • Cross-platform support"
@@ -531,7 +531,7 @@ case "${1:-}" in
         test_path_system
         ;;
     "help"|"-h"|"--help")
-        echo "Brain Single Binary Builder"
+        echo "Haxen Single Binary Builder"
         echo ""
         echo "Usage:"
         echo "  $0                Build complete single binary package"

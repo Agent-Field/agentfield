@@ -1,4 +1,4 @@
-// Package logger provides a global zerolog logger for the Brain CLI.
+// Package logger provides a global zerolog logger for the Haxen CLI.
 package logger
 
 import (

@@ -125,7 +125,7 @@ func (c *StdioMCPClient) performDiscovery(stdin io.WriteCloser, stdout io.ReadCl
 				},
 			},
 			ClientInfo: ClientInfo{
-				Name:    "brain-mcp-client",
+				Name:    "haxen-mcp-client",
 				Version: "1.0.0",
 			},
 		},

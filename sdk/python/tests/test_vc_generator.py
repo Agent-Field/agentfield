@@ -2,7 +2,7 @@ import base64
 from datetime import datetime
 from types import SimpleNamespace
 
-from brain_sdk.vc_generator import VCGenerator
+from haxen_sdk.vc_generator import VCGenerator
 
 
 def make_execution_context():
@@ -18,7 +18,7 @@ def make_execution_context():
 
 
 def test_generate_execution_vc_success(monkeypatch):
-    generator = VCGenerator("http://brain")
+    generator = VCGenerator("http://haxen")
     generator.set_enabled(True)
 
     payload = {
@@ -41,7 +41,7 @@ def test_generate_execution_vc_success(monkeypatch):
         assert url.endswith("/execution/vc")
         return SimpleNamespace(status_code=200, json=lambda: payload)
 
-    monkeypatch.setattr("brain_sdk.vc_generator.requests.post", fake_post)
+    monkeypatch.setattr("haxen_sdk.vc_generator.requests.post", fake_post)
 
     vc = generator.generate_execution_vc(
         make_execution_context(), {"x": 1}, {"y": 2}, status="succeeded"
@@ -50,7 +50,7 @@ def test_generate_execution_vc_success(monkeypatch):
 
 
 def test_generate_execution_vc_disabled():
-    generator = VCGenerator("http://brain")
+    generator = VCGenerator("http://haxen")
     generator.set_enabled(False)
     assert (
         generator.generate_execution_vc(
@@ -61,18 +61,18 @@ def test_generate_execution_vc_disabled():
 
 
 def test_verify_vc(monkeypatch):
-    generator = VCGenerator("http://brain")
+    generator = VCGenerator("http://haxen")
 
     def fake_post(url, json=None, timeout=None):
         return SimpleNamespace(status_code=200, json=lambda: {"valid": True})
 
-    monkeypatch.setattr("brain_sdk.vc_generator.requests.post", fake_post)
+    monkeypatch.setattr("haxen_sdk.vc_generator.requests.post", fake_post)
     result = generator.verify_vc({"proof": {}})
     assert result == {"valid": True}
 
 
 def test_create_workflow_vc(monkeypatch):
-    generator = VCGenerator("http://brain")
+    generator = VCGenerator("http://haxen")
     payload = {
         "workflow_id": "wf-1",
         "session_id": "sess-1",
@@ -88,24 +88,24 @@ def test_create_workflow_vc(monkeypatch):
     def fake_post(url, json=None, timeout=None):
         return SimpleNamespace(status_code=200, json=lambda: payload)
 
-    monkeypatch.setattr("brain_sdk.vc_generator.requests.post", fake_post)
+    monkeypatch.setattr("haxen_sdk.vc_generator.requests.post", fake_post)
     vc = generator.create_workflow_vc("wf-1", "sess-1", ["vc-1"])
     assert vc.workflow_vc_id == "wvc-1"
 
 
 def test_get_workflow_vc_chain(monkeypatch):
-    generator = VCGenerator("http://brain")
+    generator = VCGenerator("http://haxen")
 
     def fake_get(url, timeout=None):
         return SimpleNamespace(status_code=200, json=lambda: {"chain": ["vc-1"]})
 
-    monkeypatch.setattr("brain_sdk.vc_generator.requests.get", fake_get)
+    monkeypatch.setattr("haxen_sdk.vc_generator.requests.get", fake_get)
     chain = generator.get_workflow_vc_chain("wf-1")
     assert chain == {"chain": ["vc-1"]}
 
 
 def test_serialize_data_for_json_base64():
-    generator = VCGenerator("http://brain")
+    generator = VCGenerator("http://haxen")
     generator.set_enabled(True)
     encoded = generator._serialize_data_for_json({"a": 1})
     decoded = base64.b64decode(encoded.encode()).decode()

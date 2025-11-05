@@ -1,6 +1,6 @@
 import pytest
 
-from brain_sdk.router import AgentRouter
+from haxen_sdk.router import AgentRouter
 
 
 class DummyAgent:

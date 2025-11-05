@@ -66,7 +66,7 @@ import type {
   MCPHealthResponseModeAware,
   MCPServerHealthForUI,
   MCPSummaryForUI,
-} from "@/types/brain";
+} from "@/types/haxen";
 import { useCallback, useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { EnhancedNodeDetailHeader } from "@/components/nodes";

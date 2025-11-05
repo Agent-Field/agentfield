@@ -1,6 +1,6 @@
 import time
-from brain_sdk.result_cache import ResultCache
-from brain_sdk.async_config import AsyncConfig
+from haxen_sdk.result_cache import ResultCache
+from haxen_sdk.async_config import AsyncConfig
 import asyncio
 
 

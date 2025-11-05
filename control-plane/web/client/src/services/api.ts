@@ -19,7 +19,7 @@ import type {
   ConfigSchemaResponse,
   AgentStatus,
   AgentStatusUpdate
-} from '../types/brain';
+} from '../types/haxen';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/ui/v1';
 

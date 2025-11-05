@@ -16,7 +16,7 @@ import (
 
 // AgentNodeRunner handles running agent nodes
 type AgentNodeRunner struct {
-	BrainHome string
+	HaxenHome string
 	Port      int
 	Detach    bool
 }
@@ -67,7 +67,7 @@ func (ar *AgentNodeRunner) RunAgentNode(agentNodeName string) error {
 		return fmt.Errorf("agent node failed to start: %w", err)
 	}
 
-	fmt.Printf("🧠 Agent node registered with Brain Server\n")
+	fmt.Printf("🧠 Agent node registered with Haxen Server\n")
 
 	// 6. Update registry with runtime info
 	if err := ar.updateRuntimeInfo(agentNodeName, port, cmd.Process.Pid); err != nil {
@@ -80,8 +80,8 @@ func (ar *AgentNodeRunner) RunAgentNode(agentNodeName string) error {
 	}
 
 	fmt.Printf("\n💡 Agent node running in background (PID: %d)\n", cmd.Process.Pid)
-	fmt.Printf("💡 View logs: brain logs %s\n", agentNodeName)
-	fmt.Printf("💡 Stop agent node: brain stop %s\n", agentNodeName)
+	fmt.Printf("💡 View logs: haxen logs %s\n", agentNodeName)
+	fmt.Printf("💡 Stop agent node: haxen stop %s\n", agentNodeName)
 
 	return nil
 }
@@ -111,7 +111,7 @@ func (ar *AgentNodeRunner) startAgentNodeProcess(agentNode InstalledPackage, por
 	// Prepare environment variables
 	env := os.Environ()
 	env = append(env, fmt.Sprintf("PORT=%d", port))
-	env = append(env, "BRAIN_SERVER_URL=http://localhost:8080")
+	env = append(env, "HAXEN_SERVER_URL=http://localhost:8080")
 
 	// Load environment variables from package .env file
 	if envVars, err := ar.loadPackageEnvFile(agentNode.Path); err == nil {
@@ -243,7 +243,7 @@ func (ar *AgentNodeRunner) displayCapabilities(agentNode InstalledPackage, port 
 
 // updateRuntimeInfo updates the registry with runtime information
 func (ar *AgentNodeRunner) updateRuntimeInfo(agentNodeName string, port, pid int) error {
-	registryPath := filepath.Join(ar.BrainHome, "installed.yaml")
+	registryPath := filepath.Join(ar.HaxenHome, "installed.yaml")
 
 	// Load registry
 	registry := &InstallationRegistry{}
@@ -272,7 +272,7 @@ func (ar *AgentNodeRunner) updateRuntimeInfo(agentNodeName string, port, pid int
 
 // loadRegistry loads the installation registry
 func (ar *AgentNodeRunner) loadRegistry() (*InstallationRegistry, error) {
-	registryPath := filepath.Join(ar.BrainHome, "installed.yaml")
+	registryPath := filepath.Join(ar.HaxenHome, "installed.yaml")
 
 	registry := &InstallationRegistry{
 		Installed: make(map[string]InstalledPackage),

@@ -11,4 +11,4 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir /tmp/python-sdk && \
     rm -rf /tmp/python-sdk
 
-CMD ["python", "-c", "print('Brain Python agent image ready. Override CMD to run your agent.')"]
+CMD ["python", "-c", "print('Haxen Python agent image ready. Override CMD to run your agent.')"]

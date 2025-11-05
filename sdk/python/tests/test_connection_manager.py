@@ -1,5 +1,5 @@
 import asyncio
-from brain_sdk.connection_manager import (
+from haxen_sdk.connection_manager import (
     ConnectionManager,
     ConnectionConfig,
     ConnectionState,
@@ -11,7 +11,7 @@ class FakeClient:
         return False, None  # simulate failure so start enters reconnection
 
 
-class FakeBrainHandler:
+class FakeHaxenHandler:
     async def send_enhanced_heartbeat(self):
         return True
 
@@ -19,7 +19,7 @@ class FakeBrainHandler:
 class FakeAgent:
     def __init__(self):
         self.client = FakeClient()
-        self.brain_handler = FakeBrainHandler()
+        self.haxen_handler = FakeHaxenHandler()
         self.node_id = "n"
         self.reasoners = []
         self.skills = []

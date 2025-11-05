@@ -5,9 +5,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from brain_sdk.async_config import AsyncConfig
-from brain_sdk.async_execution_manager import AsyncExecutionManager
-from brain_sdk.execution_state import ExecutionState, ExecutionStatus
+from haxen_sdk.async_config import AsyncConfig
+from haxen_sdk.async_execution_manager import AsyncExecutionManager
+from haxen_sdk.execution_state import ExecutionState, ExecutionStatus
 
 
 class _DummyResponse:

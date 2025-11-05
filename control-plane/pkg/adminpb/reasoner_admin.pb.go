@@ -211,7 +211,7 @@ const file_proto_admin_reasoner_admin_proto_rawDesc = "" +
 	"\x15ListReasonersResponse\x120\n" +
 	"\treasoners\x18\x01 \x03(\v2\x12.admin.v1.ReasonerR\treasoners2h\n" +
 	"\x14AdminReasonerService\x12P\n" +
-	"\rListReasoners\x12\x1e.admin.v1.ListReasonersRequest\x1a\x1f.admin.v1.ListReasonersResponseB\x1bZ\x19brain/pkg/adminpb;adminpbb\x06proto3"
+	"\rListReasoners\x12\x1e.admin.v1.ListReasonersRequest\x1a\x1f.admin.v1.ListReasonersResponseB\x1bZ\x19haxen/pkg/adminpb;adminpbb\x06proto3"
 
 var (
 	file_proto_admin_reasoner_admin_proto_rawDescOnce sync.Once

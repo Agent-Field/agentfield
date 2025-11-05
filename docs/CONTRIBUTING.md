@@ -1,6 +1,6 @@
 # Contributing Guide
 
-Thank you for your interest in contributing to Brain! This guide outlines how to propose changes, report issues, and participate in the community.
+Thank you for your interest in contributing to Haxen! This guide outlines how to propose changes, report issues, and participate in the community.
 
 ## Ground Rules
 

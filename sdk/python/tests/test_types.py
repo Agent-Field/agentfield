@@ -1,4 +1,4 @@
-from brain_sdk.types import (
+from haxen_sdk.types import (
     ExecutionHeaders,
     AgentStatus,
     HeartbeatData,

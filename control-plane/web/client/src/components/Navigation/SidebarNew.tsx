@@ -35,7 +35,7 @@ export function SidebarNew({ sections }: SidebarNewProps) {
                   <Icon name="dashboard" size={16} />
                 </div>
                 <div className="grid flex-1 text-left text-sm leading-tight">
-                  <span className="truncate font-semibold">Brain</span>
+                  <span className="truncate font-semibold">Haxen</span>
                   <span className="truncate text-xs">Open Control Plane</span>
                 </div>
               </NavLink>

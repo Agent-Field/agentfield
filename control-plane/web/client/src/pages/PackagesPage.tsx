@@ -25,7 +25,7 @@ import type {
   AgentConfiguration,
   AgentPackage,
   ConfigurationSchema,
-} from "../types/brain";
+} from "../types/haxen";
 
 const PackagesPageContent: React.FC = () => {
   const [selectedPackage, setSelectedPackage] = useState<AgentPackage | null>(

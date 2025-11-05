@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/your-org/brain/control-plane/internal/events"
-	"github.com/your-org/brain/control-plane/pkg/types"
+	"github.com/your-org/haxen/control-plane/internal/events"
+	"github.com/your-org/haxen/control-plane/pkg/types"
 )
 
 type testExecutionStorage struct {

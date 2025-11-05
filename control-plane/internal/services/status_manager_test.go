@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/your-org/brain/control-plane/internal/core/interfaces"
-	"github.com/your-org/brain/control-plane/internal/storage"
-	"github.com/your-org/brain/control-plane/pkg/types"
+	"github.com/your-org/haxen/control-plane/internal/core/interfaces"
+	"github.com/your-org/haxen/control-plane/internal/storage"
+	"github.com/your-org/haxen/control-plane/pkg/types"
 
 	"github.com/stretchr/testify/require"
 )
@@ -59,8 +59,8 @@ func setupStatusManagerStorage(t *testing.T) (storage.StorageProvider, context.C
 	cfg := storage.StorageConfig{
 		Mode: "local",
 		Local: storage.LocalStorageConfig{
-			DatabasePath: filepath.Join(tempDir, "brain.db"),
-			KVStorePath:  filepath.Join(tempDir, "brain.bolt"),
+			DatabasePath: filepath.Join(tempDir, "haxen.db"),
+			KVStorePath:  filepath.Join(tempDir, "haxen.bolt"),
 		},
 	}
 

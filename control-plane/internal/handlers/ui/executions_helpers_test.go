@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"github.com/your-org/brain/control-plane/internal/services"
+	"github.com/your-org/haxen/control-plane/internal/services"
 )
 
 type testPayloadStore struct {

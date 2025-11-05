@@ -65,16 +65,16 @@ cd control-plane
 go build ./...
 
 # Test cross-compilation
-GOOS=linux GOARCH=amd64 go build ./cmd/brain-server
-GOOS=darwin GOARCH=amd64 go build ./cmd/brain-server
-GOOS=windows GOARCH=amd64 go build ./cmd/brain-server
+GOOS=linux GOARCH=amd64 go build ./cmd/haxen-server
+GOOS=darwin GOARCH=amd64 go build ./cmd/haxen-server
+GOOS=windows GOARCH=amd64 go build ./cmd/haxen-server
 ```
 
 ### Docker Build Failures
 ```bash
 # Test Docker build locally
-docker build -f deployments/docker/Dockerfile.control-plane -t brain-control-plane:test .
-docker run --rm brain-control-plane:test --help
+docker build -f deployments/docker/Dockerfile.control-plane -t haxen-control-plane:test .
+docker run --rm haxen-control-plane:test --help
 ```
 
 ## Emergency Merges

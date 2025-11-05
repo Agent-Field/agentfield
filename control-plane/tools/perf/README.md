@@ -5,20 +5,20 @@ path introduced in the orchestration refactor.
 
 ## Quick start
 
-1. Build the gateway binary (or run `go run ./cmd/brain-server`). The production
+1. Build the gateway binary (or run `go run ./cmd/haxen-server`). The production
    build script is still the source of truth:
 
    ```bash
-   cd brain/apps/platform/brain
+   cd haxen/apps/platform/haxen
    ./build-single-binary.sh
-   ./dist/releases/brain-darwin-arm64 --config ./configs/local.yaml
+   ./dist/releases/haxen-darwin-arm64 --config ./configs/local.yaml
    ```
 
 2. Install the load-test dependencies in a virtual environment (or build the
    optional Docker image described below):
 
    ```bash
-   cd brain/apps/platform/brain/tools/perf
+   cd haxen/apps/platform/haxen/tools/perf
    python -m venv .venv
    source .venv/bin/activate
    pip install -r requirements.txt
@@ -48,7 +48,7 @@ path introduced in the orchestration refactor.
 Build the utility image from the repo root:
 
 ```bash
-docker build -t brain-perf ./apps/platform/brain/tools/perf
+docker build -t haxen-perf ./apps/platform/haxen/tools/perf
 ```
 
 Run it by either supplying CLI arguments or setting environment variables.
@@ -56,7 +56,7 @@ Examples (Linux users may need `--add-host host.docker.internal:host-gateway`):
 
 ```bash
 # Pass arguments directly
-docker run --rm --network host brain-perf \
+docker run --rm --network host haxen-perf \
   --base-url http://host.docker.internal:8080 \
   --target demo-agent.synthetic_nested \
   --mode async \
@@ -74,7 +74,7 @@ docker run --rm --network host \
   -e PRINT_FAILURES=true \
   -e METRICS_URL=http://host.docker.internal:8080/metrics \
   -e METRICS=process_resident_memory_bytes,go_goroutines \
-  brain-perf
+  haxen-perf
 ```
 
 Supported environment variables when no CLI arguments are provided:
@@ -101,24 +101,24 @@ so you can mix and match as needed.
 
 ### Local gateway stack (SQLite/GORM)
 
-To exercise the harness against a containerised Brain server backed by the new
+To exercise the harness against a containerised Haxen server backed by the new
 SQLite + GORM storage layer, reuse the Docker image from
-`apps/platform/brain/docker`:
+`apps/platform/haxen/docker`:
 
 ```bash
-# 1) Build and run the Brain server (see docker/README.md for details)
-docker build -t brain-local apps/platform/brain/docker
-docker run --rm -d --name brain-local \
+# 1) Build and run the Haxen server (see docker/README.md for details)
+docker build -t haxen-local apps/platform/haxen/docker
+docker run --rm -d --name haxen-local \
   -p 8080:8080 \
-  -v "$(pwd)/apps/platform/brain/data:/app/data" \
-  brain-local
+  -v "$(pwd)/apps/platform/haxen/data:/app/data" \
+  haxen-local
 
 # 2) Drive load with the harness (inside this directory)
 python nested_workflow_stress.py --base-url http://localhost:8080 \
   --target demo-agent.synthetic_nested --requests 200 --concurrency 16
 
-# 3) Stop the Brain container when finished
-docker stop brain-local
+# 3) Stop the Haxen container when finished
+docker stop haxen-local
 ```
 
 Because the server persists all durable state in SQLite, no external services or
@@ -163,7 +163,7 @@ Example `scenarios.json`:
 - **Backpressure verification**: Drive queue overload by setting
   `--requests` well above steady-state capacity. Watch for HTTP 429 responses
   (`status_counts` will include `queue_full`) and confirm Prometheus metrics
-  (`brain_gateway_queue_depth`, `brain_gateway_backpressure_total`) move as
+  (`haxen_gateway_queue_depth`, `haxen_gateway_backpressure_total`) move as
   expected.
 - **Memory/CPU sampling**: While the stress harness is running, capture runtime
   stats (`go tool pprof`, `top`, `ps`, or `gops stats`). Persist the JSON metrics

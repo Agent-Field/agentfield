@@ -2,9 +2,9 @@ import asyncio
 
 import pytest
 
-from brain_sdk.decorators import reasoner, _execute_with_tracking
-from brain_sdk.execution_context import ExecutionContext
-from brain_sdk.agent_registry import set_current_agent, clear_current_agent
+from haxen_sdk.decorators import reasoner, _execute_with_tracking
+from haxen_sdk.execution_context import ExecutionContext
+from haxen_sdk.agent_registry import set_current_agent, clear_current_agent
 from tests.helpers import StubAgent
 
 
@@ -48,9 +48,9 @@ async def test_execute_with_tracking_success(monkeypatch):
     async def record_complete(agent, ctx, result, duration_ms, payload):
         captured.setdefault("complete", []).append((ctx, result))
 
-    monkeypatch.setattr("brain_sdk.decorators._send_workflow_start", record_start)
+    monkeypatch.setattr("haxen_sdk.decorators._send_workflow_start", record_start)
     monkeypatch.setattr(
-        "brain_sdk.decorators._send_workflow_completion", record_complete
+        "haxen_sdk.decorators._send_workflow_completion", record_complete
     )
 
     agent = StubAgent()
@@ -92,9 +92,9 @@ async def test_execute_with_tracking_error(monkeypatch):
         calls.setdefault("error", []).append((ctx, message))
 
     monkeypatch.setattr(
-        "brain_sdk.decorators._send_workflow_start", lambda *a, **k: asyncio.sleep(0)
+        "haxen_sdk.decorators._send_workflow_start", lambda *a, **k: asyncio.sleep(0)
     )
-    monkeypatch.setattr("brain_sdk.decorators._send_workflow_error", record_error)
+    monkeypatch.setattr("haxen_sdk.decorators._send_workflow_error", record_error)
 
     agent = StubAgent()
     set_current_agent(agent)

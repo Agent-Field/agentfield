@@ -5,7 +5,7 @@ import type {
   MCPServerStatus,
   MCPHealthEvent,
   AppMode
-} from '../types/brain';
+} from '../types/haxen';
 
 /**
  * Status color mapping for MCP servers

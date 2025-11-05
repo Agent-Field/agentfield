@@ -1,5 +1,5 @@
 import React from 'react';
-import type { ReasonerDefinition } from '../types/brain';
+import type { ReasonerDefinition } from '../types/haxen';
 import { Badge } from '@/components/ui/badge';
 import { WatsonxAi } from '@/components/ui/icon-bridge';
 

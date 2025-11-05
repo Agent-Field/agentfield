@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from brain_sdk.agent_ai import AgentAI
+from haxen_sdk.agent_ai import AgentAI
 from tests.helpers import StubAgent
 
 
@@ -74,7 +74,7 @@ def setup_litellm_stub(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "litellm", module)
     monkeypatch.setitem(sys.modules, "litellm.utils", utils_module)
-    monkeypatch.setattr("brain_sdk.agent_ai.litellm", module, raising=False)
+    monkeypatch.setattr("haxen_sdk.agent_ai.litellm", module, raising=False)
     return module
 
 
@@ -91,7 +91,7 @@ def test_get_rate_limiter_cached(monkeypatch, agent_with_ai):
         def __init__(self, **kwargs):
             created.update(kwargs)
 
-    monkeypatch.setattr("brain_sdk.agent_ai.StatelessRateLimiter", DummyLimiter)
+    monkeypatch.setattr("haxen_sdk.agent_ai.StatelessRateLimiter", DummyLimiter)
 
     ai = AgentAI(agent_with_ai)
     limiter1 = ai._get_rate_limiter()
@@ -128,10 +128,10 @@ async def test_ai_simple_text(monkeypatch, agent_with_ai):
     monkeypatch.setattr(ai, "_ensure_model_limits_cached", lambda: asyncio.sleep(0))
     monkeypatch.setattr(ai, "_get_rate_limiter", lambda: DummyLimiter())
     monkeypatch.setattr(
-        "brain_sdk.agent_ai.AgentUtils.detect_input_type", lambda value: "text"
+        "haxen_sdk.agent_ai.AgentUtils.detect_input_type", lambda value: "text"
     )
     monkeypatch.setattr(
-        "brain_sdk.agent_ai.AgentUtils.serialize_result", lambda value: value
+        "haxen_sdk.agent_ai.AgentUtils.serialize_result", lambda value: value
     )
 
     result = await ai.ai("Hello world")
@@ -167,10 +167,10 @@ async def test_ai_uses_fallback_models(monkeypatch, agent_with_ai):
     monkeypatch.setattr(ai, "_ensure_model_limits_cached", lambda: asyncio.sleep(0))
     monkeypatch.setattr(ai, "_get_rate_limiter", lambda: limiter)
     monkeypatch.setattr(
-        "brain_sdk.agent_ai.AgentUtils.detect_input_type", lambda value: "text"
+        "haxen_sdk.agent_ai.AgentUtils.detect_input_type", lambda value: "text"
     )
     monkeypatch.setattr(
-        "brain_sdk.agent_ai.AgentUtils.serialize_result", lambda value: value
+        "haxen_sdk.agent_ai.AgentUtils.serialize_result", lambda value: value
     )
 
     result = await ai.ai("hello")
@@ -189,10 +189,10 @@ async def test_ai_skips_rate_limiter_when_disabled(monkeypatch, agent_with_ai):
     ai = AgentAI(agent_with_ai)
     monkeypatch.setattr(ai, "_ensure_model_limits_cached", lambda: asyncio.sleep(0))
     monkeypatch.setattr(
-        "brain_sdk.agent_ai.AgentUtils.detect_input_type", lambda value: "text"
+        "haxen_sdk.agent_ai.AgentUtils.detect_input_type", lambda value: "text"
     )
     monkeypatch.setattr(
-        "brain_sdk.agent_ai.AgentUtils.serialize_result", lambda value: value
+        "haxen_sdk.agent_ai.AgentUtils.serialize_result", lambda value: value
     )
 
     result = await ai.ai("hello")

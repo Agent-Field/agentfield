@@ -98,7 +98,7 @@ export interface WorkflowExecution {
   id: number;
   workflow_id: string;
   execution_id: string;
-  brain_request_id: string;
+  haxen_request_id: string;
   session_id?: string;
   actor_id?: string;
   agent_node_id: string;

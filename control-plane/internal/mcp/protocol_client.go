@@ -164,7 +164,7 @@ func (client *MCPProtocolClient) sendInitialize(stdin io.Writer) error {
 				"resources": map[string]interface{}{},
 			},
 			"clientInfo": map[string]interface{}{
-				"name":    "brain-mcp-client",
+				"name":    "haxen-mcp-client",
 				"version": "1.0.0",
 			},
 		},

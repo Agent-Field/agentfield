@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/your-org/brain/control-plane/internal/config"
+	"github.com/your-org/haxen/control-plane/internal/config"
 )
 
 // MCPCapability represents a discovered MCP server capability
@@ -182,7 +182,7 @@ func (cd *CapabilityDiscovery) discoverServerCapability(serverAlias string) (*MC
 	// Read config.json metadata file
 	metadataBytes, err := os.ReadFile(metadataPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read config.json (try running: brain mcp migrate %s): %w", serverAlias, err)
+		return nil, fmt.Errorf("failed to read config.json (try running: haxen mcp migrate %s): %w", serverAlias, err)
 	}
 
 	var metadata MCPServerConfig
@@ -627,7 +627,7 @@ func (cd *CapabilityDiscovery) performDiscoveryWithPipes(ctx context.Context, st
 				},
 			},
 			ClientInfo: ClientInfo{
-				Name:    "brain-mcp-client",
+				Name:    "haxen-mcp-client",
 				Version: "1.0.0",
 			},
 		},

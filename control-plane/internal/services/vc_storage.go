@@ -5,9 +5,9 @@ import (
     "encoding/json"
     "fmt"
 
-    "github.com/your-org/brain/control-plane/internal/logger"
-    "github.com/your-org/brain/control-plane/internal/storage"
-    "github.com/your-org/brain/control-plane/pkg/types"
+    "github.com/your-org/haxen/control-plane/internal/logger"
+    "github.com/your-org/haxen/control-plane/internal/storage"
+    "github.com/your-org/haxen/control-plane/pkg/types"
 )
 
 // VCStorage manages the storage and retrieval of verifiable credentials.

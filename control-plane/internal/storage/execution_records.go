@@ -1,8 +1,8 @@
 package storage
 
 import (
-	"github.com/your-org/brain/control-plane/internal/logger"
-	"github.com/your-org/brain/control-plane/pkg/types"
+	"github.com/your-org/haxen/control-plane/internal/logger"
+	"github.com/your-org/haxen/control-plane/pkg/types"
 	"context"
 	"database/sql"
 	"encoding/json"

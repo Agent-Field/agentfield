@@ -1,24 +1,24 @@
 # {{.ProjectName}}
 
-Minimal Brain agent scaffold generated on {{.CreatedAt}}.
+Minimal Haxen agent scaffold generated on {{.CreatedAt}}.
 
 ## What you get
 - `main.py` with one router, two reasoners, and one skill
 - Mock responses so you can run without LLM keys
 - Commented `app.ai(...)` and `app.call(...)` examples for when you're ready
 
-## Run it with the Brain server
-1. **Start the Brain control plane** (from any directory):
+## Run it with the Haxen server
+1. **Start the Haxen control plane** (from any directory):
    ```bash
-   brain dev
+   haxen dev
    ```
-   This launches the Brain server at `http://localhost:8080`.
+   This launches the Haxen server at `http://localhost:8080`.
 
 2. **Start this agent** (new terminal, inside the project directory):
    ```bash
-   brain run {{.ProjectName}}
+   haxen run {{.ProjectName}}
    ```
-   The CLI reads `brain-package.yaml`, picks a free port, and registers the node with the Brain server.
+   The CLI reads `haxen-package.yaml`, picks a free port, and registers the node with the Haxen server.
 
 3. **Optional debugging path:**
    ```bash
@@ -27,10 +27,10 @@ Minimal Brain agent scaffold generated on {{.CreatedAt}}.
    pip install -e .
    python main.py
    ```
-   Ensure `BRAIN_SERVER_URL` points at your running Brain server when using this shortcut.
+   Ensure `HAXEN_SERVER_URL` points at your running Haxen server when using this shortcut.
 
-## Call the reasoner through Brain
-All execution flows through the Brain server, not the agent's local port:
+## Call the reasoner through Haxen
+All execution flows through the Haxen server, not the agent's local port:
 
 ```bash
 curl -X POST \
@@ -44,9 +44,9 @@ The response includes the mock summary plus execution tracking metadata.
 ## Enable real AI later
 1. Add your model keys to `.env`
 2. Uncomment the `quickstart.ai(...)` or `quickstart.call(...)` snippets in `main.py`
-3. Restart the agent with `brain run {{.ProjectName}}`
+3. Restart the agent with `haxen run {{.ProjectName}}`
 
 ## Next tweaks
-- Rename `node_id` in `main.py` to match your Brain naming scheme
+- Rename `node_id` in `main.py` to match your Haxen naming scheme
 - Add more routers to keep larger projects organized
 - Replace the mock responses with your actual logic once credentials are in place

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/your-org/brain/control-plane/pkg/types"
+	"github.com/your-org/haxen/control-plane/pkg/types"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -12,33 +12,33 @@ import (
 
 var (
 	queueDepthGauge = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "brain_gateway_queue_depth",
+		Name: "haxen_gateway_queue_depth",
 		Help: "Number of workflow steps currently queued or in-flight for execution.",
 	})
 
 	workerInflightGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "brain_worker_inflight",
+		Name: "haxen_worker_inflight",
 		Help: "Number of active worker executions grouped by agent node.",
 	}, []string{"agent"})
 
 	stepDurationHistogram = promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "brain_step_duration_seconds",
+		Name:    "haxen_step_duration_seconds",
 		Help:    "Duration of workflow step executions split by terminal status.",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"status"})
 
 	stepRetriesCounter = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "brain_step_retries_total",
+		Name: "haxen_step_retries_total",
 		Help: "Total number of workflow step retry attempts grouped by agent node.",
 	}, []string{"agent"})
 
 	waiterInflightGauge = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "brain_waiters_inflight",
+		Name: "haxen_waiters_inflight",
 		Help: "Number of synchronous waiter channels currently registered.",
 	})
 
 	backpressureCounter = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "brain_gateway_backpressure_total",
+		Name: "haxen_gateway_backpressure_total",
 		Help: "Count of backpressure events emitted by the execution gateway grouped by reason.",
 	}, []string{"reason"})
 )

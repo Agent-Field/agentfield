@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/your-org/brain/control-plane/internal/storage"
-	"github.com/your-org/brain/control-plane/pkg/adminpb"
-	"github.com/your-org/brain/control-plane/pkg/types"
+	"github.com/your-org/haxen/control-plane/internal/storage"
+	"github.com/your-org/haxen/control-plane/pkg/adminpb"
+	"github.com/your-org/haxen/control-plane/pkg/types"
 
 	"github.com/stretchr/testify/require"
 )
@@ -23,8 +23,8 @@ func TestListReasonersAggregatesNodes(t *testing.T) {
 	cfg := storage.StorageConfig{
 		Mode: "local",
 		Local: storage.LocalStorageConfig{
-			DatabasePath: filepath.Join(tempDir, "brain.db"),
-			KVStorePath:  filepath.Join(tempDir, "brain.bolt"),
+			DatabasePath: filepath.Join(tempDir, "haxen.db"),
+			KVStorePath:  filepath.Join(tempDir, "haxen.bolt"),
 		},
 	}
 
@@ -37,7 +37,7 @@ func TestListReasonersAggregatesNodes(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = localStore.Close(ctx) })
 
-	srv := &BrainServer{storage: localStore}
+	srv := &HaxenServer{storage: localStore}
 
 	schema := json.RawMessage("{}")
 	node := &types.AgentNode{

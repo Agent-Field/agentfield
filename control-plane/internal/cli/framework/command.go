@@ -2,9 +2,9 @@ package framework
 
 import (
 	"github.com/spf13/cobra"
-	"github.com/your-org/brain/control-plane/internal/core/interfaces"
-	"github.com/your-org/brain/control-plane/internal/services"
-	"github.com/your-org/brain/control-plane/internal/storage"
+	"github.com/your-org/haxen/control-plane/internal/core/interfaces"
+	"github.com/your-org/haxen/control-plane/internal/services"
+	"github.com/your-org/haxen/control-plane/internal/storage"
 )
 
 // Command represents a CLI command that can be built into a Cobra command

@@ -12,8 +12,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"github.com/your-org/brain/control-plane/internal/logger"
-	"github.com/your-org/brain/control-plane/internal/templates"
+	"github.com/your-org/haxen/control-plane/internal/logger"
+	"github.com/your-org/haxen/control-plane/internal/templates"
 )
 
 // NewInitCommand builds a fresh Cobra command for initializing a new agent project.
@@ -23,18 +23,18 @@ func NewInitCommand() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "init [project-name]",
-		Short: "Initialize a new Brain agent project",
-		Long: `Initialize a new Brain agent project with a predefined
+		Short: "Initialize a new Haxen agent project",
+		Long: `Initialize a new Haxen agent project with a predefined
  directory structure and essential files.
  
  This command sets up a new project, including:
  - Python project structure (pyproject.toml, main.py, agent/...)
  - Basic agent implementation with example reasoner/skill
  - README.md, LICENSE, and .gitignore files
- - Configuration for connecting to the Brain control plane
+ - Configuration for connecting to the Haxen control plane
  
  Example:
-   brain init my-new-agent --author "John Doe" --email "john.doe@example.com"`,
+   haxen init my-new-agent --author "John Doe" --email "john.doe@example.com"`,
 		Args: cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			projectName := args[0]
@@ -118,8 +118,8 @@ func NewInitCommand() *cobra.Command {
 
 			fmt.Printf("\nNext steps:\n")
 			PrintInfo(fmt.Sprintf("cd %s", projectName))
-			PrintInfo("brain install .")
-			PrintInfo(fmt.Sprintf("brain run %s", projectName))
+			PrintInfo("haxen install .")
+			PrintInfo(fmt.Sprintf("haxen run %s", projectName))
 		},
 	}
 

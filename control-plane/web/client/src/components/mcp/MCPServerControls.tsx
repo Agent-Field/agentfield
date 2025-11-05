@@ -12,7 +12,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { useMode } from "@/contexts/ModeContext";
 import { cn } from "@/lib/utils";
-import type { MCPServerAction, MCPServerHealthForUI } from "@/types/brain";
+import type { MCPServerAction, MCPServerHealthForUI } from "@/types/haxen";
 import {
   CheckmarkFilled,
   ErrorFilled,

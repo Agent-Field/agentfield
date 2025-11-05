@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/your-org/brain/control-plane/internal/core/interfaces"
-	"github.com/your-org/brain/control-plane/internal/storage"
+	"github.com/your-org/haxen/control-plane/internal/core/interfaces"
+	"github.com/your-org/haxen/control-plane/internal/storage"
 )
 
 // HTTPAgentClient implements the AgentClient interface using HTTP communication
@@ -72,7 +72,7 @@ func (c *HTTPAgentClient) GetMCPHealth(ctx context.Context, nodeID string) (*int
 
 	// Set headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Brain-Server/1.0")
+	req.Header.Set("User-Agent", "Haxen-Server/1.0")
 
 	// Make the request
 	resp, err := c.httpClient.Do(req)
@@ -130,7 +130,7 @@ func (c *HTTPAgentClient) RestartMCPServer(ctx context.Context, nodeID, alias st
 
 	// Set headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Brain-Server/1.0")
+	req.Header.Set("User-Agent", "Haxen-Server/1.0")
 
 	// Make the request
 	resp, err := c.httpClient.Do(req)
@@ -183,7 +183,7 @@ func (c *HTTPAgentClient) GetMCPTools(ctx context.Context, nodeID, alias string)
 
 	// Set headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Brain-Server/1.0")
+	req.Header.Set("User-Agent", "Haxen-Server/1.0")
 
 	// Make the request
 	resp, err := c.httpClient.Do(req)
@@ -241,7 +241,7 @@ func (c *HTTPAgentClient) ShutdownAgent(ctx context.Context, nodeID string, grac
 
 	// Set headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Brain-Server/1.0")
+	req.Header.Set("User-Agent", "Haxen-Server/1.0")
 
 	// Make the request
 	resp, err := c.httpClient.Do(req)
@@ -301,7 +301,7 @@ func (c *HTTPAgentClient) GetAgentStatus(ctx context.Context, nodeID string) (*i
 
 		// Set headers
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("User-Agent", "Brain-Server/1.0")
+		req.Header.Set("User-Agent", "Haxen-Server/1.0")
 
 		// Make the request
 		resp, err := c.httpClient.Do(req)

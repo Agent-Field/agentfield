@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/your-org/brain/control-plane/internal/config" // Ensured this import is correct
-	"github.com/your-org/brain/control-plane/internal/mcp"
+	"github.com/your-org/haxen/control-plane/internal/config" // Ensured this import is correct
+	"github.com/your-org/haxen/control-plane/internal/mcp"
 
 	"github.com/spf13/cobra"
 )
@@ -16,8 +16,8 @@ import (
 func NewMCPCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "mcp",
-		Short: "Manage MCP servers in your Brain agent project",
-		Long: `Manage Model Context Protocol (MCP) servers in your Brain agent project.
+		Short: "Manage MCP servers in your Haxen agent project",
+		Long: `Manage Model Context Protocol (MCP) servers in your Haxen agent project.
 
 MCP servers provide external tools and resources that can be integrated into your agent.`,
 	}
@@ -54,15 +54,15 @@ func runMCPStatusCommand(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get current directory: %w", err)
 	}
 
-	if err := validateBrainProject(projectDir); err != nil {
+	if err := validateHaxenProject(projectDir); err != nil {
 		return err
 	}
 
-	cfg, err := config.LoadConfig(filepath.Join(projectDir, "brain.yaml"))
+	cfg, err := config.LoadConfig(filepath.Join(projectDir, "haxen.yaml"))
 	if err != nil {
-		cfg, err = config.LoadConfig("brain.yaml") // Fallback
+		cfg, err = config.LoadConfig("haxen.yaml") // Fallback
 		if err != nil {
-			return fmt.Errorf("failed to load brain configuration: %w", err)
+			return fmt.Errorf("failed to load haxen configuration: %w", err)
 		}
 	}
 	manager := mcp.NewMCPManager(cfg, projectDir, verbose)
@@ -75,7 +75,7 @@ func runMCPStatusCommand(cmd *cobra.Command, args []string) error {
 	
 	if len(servers) == 0 {
 		PrintInfo("No MCP servers installed")
-		fmt.Printf("\n%s %s\n", Blue("→"), "Add an MCP server: brain add --mcp @modelcontextprotocol/server-github")
+		fmt.Printf("\n%s %s\n", Blue("→"), "Add an MCP server: haxen add --mcp @modelcontextprotocol/server-github")
 		return nil
 	}
 
@@ -148,15 +148,15 @@ func runMCPStartCommand(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get current directory: %w", err)
 	}
 
-	if err := validateBrainProject(projectDir); err != nil {
+	if err := validateHaxenProject(projectDir); err != nil {
 		return err
 	}
 
-	cfg, err := config.LoadConfig(filepath.Join(projectDir, "brain.yaml"))
+	cfg, err := config.LoadConfig(filepath.Join(projectDir, "haxen.yaml"))
 	if err != nil {
-		cfg, err = config.LoadConfig("brain.yaml") // Fallback
+		cfg, err = config.LoadConfig("haxen.yaml") // Fallback
 		if err != nil {
-			return fmt.Errorf("failed to load brain configuration: %w", err)
+			return fmt.Errorf("failed to load haxen configuration: %w", err)
 		}
 	}
 	manager := mcp.NewMCPManager(cfg, projectDir, verbose)
@@ -194,15 +194,15 @@ func runMCPStopCommand(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get current directory: %w", err)
 	}
 
-	if err := validateBrainProject(projectDir); err != nil {
+	if err := validateHaxenProject(projectDir); err != nil {
 		return err
 	}
 
-	cfg, err := config.LoadConfig(filepath.Join(projectDir, "brain.yaml"))
+	cfg, err := config.LoadConfig(filepath.Join(projectDir, "haxen.yaml"))
 	if err != nil {
-		cfg, err = config.LoadConfig("brain.yaml") // Fallback
+		cfg, err = config.LoadConfig("haxen.yaml") // Fallback
 		if err != nil {
-			return fmt.Errorf("failed to load brain configuration: %w", err)
+			return fmt.Errorf("failed to load haxen configuration: %w", err)
 		}
 	}
 	manager := mcp.NewMCPManager(cfg, projectDir, verbose)
@@ -273,7 +273,7 @@ func runMCPLogsCommand(cmd *cobra.Command, args []string, follow bool, tail int)
 		return fmt.Errorf("failed to get current directory: %w", err)
 	}
 
-	if err := validateBrainProject(projectDir); err != nil {
+	if err := validateHaxenProject(projectDir); err != nil {
 		return err
 	}
 
@@ -317,7 +317,7 @@ func NewMCPSkillsGenerateCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "generate [alias]",
 		Short: "Generate skill files for MCP servers",
-		Long:  `Generate Python skill files that wrap MCP tools as Brain skills.`,
+		Long:  `Generate Python skill files that wrap MCP tools as Haxen skills.`,
 		Args:  cobra.MaximumNArgs(1),
 		RunE:  runMCPSkillsGenerateCommand,
 	}
@@ -333,7 +333,7 @@ func runMCPSkillsGenerateCommand(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get current directory: %w", err)
 	}
 
-	if err := validateBrainProject(projectDir); err != nil {
+	if err := validateHaxenProject(projectDir); err != nil {
 		return err
 	}
 
@@ -391,7 +391,7 @@ func runMCPSkillsListCommand(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get current directory: %w", err)
 	}
 
-	if err := validateBrainProject(projectDir); err != nil {
+	if err := validateHaxenProject(projectDir); err != nil {
 		return err
 	}
 
@@ -420,7 +420,7 @@ func runMCPSkillsListCommand(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  %s %s\n", Gray("File:"), entry.Name())
 		
 		// Try to get server info
-		if cfg, err := config.LoadConfig(filepath.Join(projectDir, "brain.yaml")); err == nil {
+		if cfg, err := config.LoadConfig(filepath.Join(projectDir, "haxen.yaml")); err == nil {
 			discovery := mcp.NewCapabilityDiscovery(cfg, projectDir)
 			if capability, err := discovery.GetServerCapability(alias); err == nil {
 				fmt.Printf("  %s %d tools available\n", Gray("Tools:"), len(capability.Tools))
@@ -430,7 +430,7 @@ func runMCPSkillsListCommand(cmd *cobra.Command, args []string) error {
 	
 	if skillCount == 0 {
 		PrintInfo("No auto-generated MCP skills found")
-		fmt.Printf("\n%s %s\n", Blue("→"), "Generate skills: brain mcp skills generate")
+		fmt.Printf("\n%s %s\n", Blue("→"), "Generate skills: haxen mcp skills generate")
 	} else {
 		fmt.Printf("\n%s %d skill files found\n", Gray("Total:"), skillCount)
 	}
@@ -456,15 +456,15 @@ func runMCPSkillsRefreshCommand(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get current directory: %w", err)
 	}
 
-	if err := validateBrainProject(projectDir); err != nil {
+	if err := validateHaxenProject(projectDir); err != nil {
 		return err
 	}
 
-	cfg, err := config.LoadConfig(filepath.Join(projectDir, "brain.yaml"))
+	cfg, err := config.LoadConfig(filepath.Join(projectDir, "haxen.yaml"))
 	if err != nil {
-		cfg, err = config.LoadConfig("brain.yaml") // Fallback
+		cfg, err = config.LoadConfig("haxen.yaml") // Fallback
 		if err != nil {
-			return fmt.Errorf("failed to load brain configuration: %w", err)
+			return fmt.Errorf("failed to load haxen configuration: %w", err)
 		}
 	}
 	manager := mcp.NewMCPManager(cfg, projectDir, verbose)
@@ -521,15 +521,15 @@ func runMCPRemoveCommand(cmd *cobra.Command, args []string, force bool) error {
 		return fmt.Errorf("failed to get current directory: %w", err)
 	}
 
-	if err := validateBrainProject(projectDir); err != nil {
+	if err := validateHaxenProject(projectDir); err != nil {
 		return err
 	}
 
-	cfg, err := config.LoadConfig(filepath.Join(projectDir, "brain.yaml"))
+	cfg, err := config.LoadConfig(filepath.Join(projectDir, "haxen.yaml"))
 	if err != nil {
-		cfg, err = config.LoadConfig("brain.yaml") // Fallback
+		cfg, err = config.LoadConfig("haxen.yaml") // Fallback
 		if err != nil {
-			return fmt.Errorf("failed to load brain configuration: %w", err)
+			return fmt.Errorf("failed to load haxen configuration: %w", err)
 		}
 	}
 	manager := mcp.NewMCPManager(cfg, projectDir, verbose)
@@ -574,15 +574,15 @@ func runMCPDiscoverCommand(cmd *cobra.Command, args []string, refresh bool) erro
 		return fmt.Errorf("failed to get current directory: %w", err)
 	}
 
-	if err := validateBrainProject(projectDir); err != nil {
+	if err := validateHaxenProject(projectDir); err != nil {
 		return err
 	}
 
-	cfg, err := config.LoadConfig(filepath.Join(projectDir, "brain.yaml"))
+	cfg, err := config.LoadConfig(filepath.Join(projectDir, "haxen.yaml"))
 	if err != nil {
-		cfg, err = config.LoadConfig("brain.yaml") // Fallback
+		cfg, err = config.LoadConfig("haxen.yaml") // Fallback
 		if err != nil {
-			return fmt.Errorf("failed to load brain configuration: %w", err)
+			return fmt.Errorf("failed to load haxen configuration: %w", err)
 		}
 	}
 	
@@ -677,15 +677,15 @@ func runMCPMigrateCommand(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get current directory: %w", err)
 	}
 
-	if err := validateBrainProject(projectDir); err != nil {
+	if err := validateHaxenProject(projectDir); err != nil {
 		return err
 	}
 
-	cfg, err := config.LoadConfig(filepath.Join(projectDir, "brain.yaml"))
+	cfg, err := config.LoadConfig(filepath.Join(projectDir, "haxen.yaml"))
 	if err != nil {
-		cfg, err = config.LoadConfig("brain.yaml") // Fallback
+		cfg, err = config.LoadConfig("haxen.yaml") // Fallback
 		if err != nil {
-			return fmt.Errorf("failed to load brain configuration: %w", err)
+			return fmt.Errorf("failed to load haxen configuration: %w", err)
 		}
 	}
 

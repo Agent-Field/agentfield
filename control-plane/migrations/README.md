@@ -1,6 +1,6 @@
 # DID Database Schema Migrations
 
-This directory contains SQL migration files for the DID (Decentralized Identity) implementation in the Brain platform. These migrations create the necessary database tables to support DID-based authentication, verifiable credentials, and workflow execution tracking.
+This directory contains SQL migration files for the DID (Decentralized Identity) implementation in the Haxen platform. These migrations create the necessary database tables to support DID-based authentication, verifiable credentials, and workflow execution tracking.
 
 ## Migration Files
 
@@ -106,18 +106,18 @@ Execute the migration files in order, or use the complete migration runner:
 
 ```sql
 -- Option 1: Run complete migration
-.read brain/migrations/000_migration_runner.sql
+.read haxen/migrations/000_migration_runner.sql
 
 -- Option 2: Run individual migrations
-.read brain/migrations/001_create_did_registry.sql
-.read brain/migrations/002_create_agent_dids.sql
-.read brain/migrations/003_create_component_dids.sql
-.read brain/migrations/004_create_execution_vcs.sql
-.read brain/migrations/005_create_workflow_vcs.sql
+.read haxen/migrations/001_create_did_registry.sql
+.read haxen/migrations/002_create_agent_dids.sql
+.read haxen/migrations/003_create_component_dids.sql
+.read haxen/migrations/004_create_execution_vcs.sql
+.read haxen/migrations/005_create_workflow_vcs.sql
 ```
 
 ### Integration with Go Services
-The existing DID services in `brain/internal/services/` and types in `brain/pkg/types/did_types.go` are designed to work with these database tables. The migration from file-based storage to database storage should be seamless.
+The existing DID services in `haxen/internal/services/` and types in `haxen/pkg/types/did_types.go` are designed to work with these database tables. The migration from file-based storage to database storage should be seamless.
 
 ## Migration from File Storage
 

@@ -228,10 +228,10 @@ export function DIDInfoModal({ nodeId, isOpen, onClose }: DIDInfoModalProps) {
                     </div>
                     <div className="flex items-center justify-between">
                       <span className="font-medium text-muted-foreground">
-                        Brain Server:
+                        Haxen Server:
                       </span>
                       <span className="text-foreground font-mono text-xs">
-                        {didInfo.brain_server_id}
+                        {didInfo.haxen_server_id}
                       </span>
                     </div>
                     <div className="flex items-start justify-between">
@@ -398,10 +398,10 @@ export function DIDInfoModal({ nodeId, isOpen, onClose }: DIDInfoModalProps) {
                       </div>
                       <div className="flex items-center justify-between">
                         <dt className="font-medium text-muted-foreground">
-                          Brain Server:
+                          Haxen Server:
                         </dt>
                         <dd className="font-mono text-foreground text-right max-w-[60%] break-all">
-                          {didInfo.brain_server_id}
+                          {didInfo.haxen_server_id}
                         </dd>
                       </div>
                       <div className="flex items-center justify-between">

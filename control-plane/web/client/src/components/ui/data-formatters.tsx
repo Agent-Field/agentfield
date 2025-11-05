@@ -4,7 +4,7 @@ import { cn } from "../../lib/utils";
 
 /**
  * Reusable data formatting components for consistent data display
- * across the Brain application. These components ensure uniform
+ * across the Haxen application. These components ensure uniform
  * formatting of timestamps, durations, file sizes, and other common data types.
  */
 

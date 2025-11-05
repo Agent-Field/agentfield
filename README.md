@@ -1,6 +1,6 @@
-# Brain Monorepo
+# Haxen Monorepo
 
-Brain is an open-source platform for building, deploying, and operating production-grade AI agents. This repository brings together the control plane, language-specific SDKs, deployment assets, and documentation required to run Brain in your own environment.
+Haxen is an open-source platform for building, deploying, and operating production-grade AI agents. This repository brings together the control plane, language-specific SDKs, deployment assets, and documentation required to run Haxen in your own environment.
 
 ## Repository Layout
 
@@ -17,8 +17,8 @@ Brain is an open-source platform for building, deploying, and operating producti
 ## Quick Start
 
 ```bash
-git clone https://github.com/your-org/brain.git
-cd brain
+git clone https://github.com/your-org/haxen.git
+cd haxen
 ./scripts/install.sh      # install Go, Python, and JS dependencies
 ./scripts/build-all.sh    # build control plane and SDKs
 ./scripts/test-all.sh     # run repository-wide test suites
@@ -57,5 +57,5 @@ We welcome issues and pull requests! Please review:
 
 ## License
 
-Brain is licensed under the Apache 2.0 License. See `LICENSE` for details.
+Haxen is licensed under the Apache 2.0 License. See `LICENSE` for details.
 

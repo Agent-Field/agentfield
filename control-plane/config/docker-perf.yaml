@@ -1,4 +1,4 @@
-brain:
+haxen:
   port: 8080
   mode: "local"
   max_concurrent_requests: 1024
@@ -78,13 +78,13 @@ features:
       hash_sensitive_data: true
     keystore:
       type: "local"
-      path: "/var/brain/data/keys"
+      path: "/var/haxen/data/keys"
       encryption: "AES-256-GCM"
       backup_enabled: true
       backup_interval: "24h"
 
 data_directories:
-  brain_home: "/var/brain"
+  haxen_home: "/var/haxen"
   database_dir: "data"
   keys_dir: "data/keys"
   did_registries_dir: "data/did_registries"

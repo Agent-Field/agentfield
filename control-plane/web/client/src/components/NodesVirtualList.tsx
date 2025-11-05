@@ -10,7 +10,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import type { AgentNodeSummary } from '../types/brain';
+import type { AgentNodeSummary } from '../types/haxen';
 import { NodeCard } from './NodeCard';
 import type { DensityMode } from './DensityToggle';
 import { getStatusPriority } from './ui/status-indicator';

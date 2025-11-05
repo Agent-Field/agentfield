@@ -38,7 +38,7 @@ type ExecutionWebhookStateUpdate struct {
 	LastError     *string
 }
 
-// ExecutionWebhookPayload defines the shape Brain sends to webhook consumers.
+// ExecutionWebhookPayload defines the shape Haxen sends to webhook consumers.
 type ExecutionWebhookPayload struct {
 	Event        string      `json:"event"`
 	ExecutionID  string      `json:"execution_id"`

@@ -3,7 +3,7 @@ import type {
   MCPTool,
   MCPToolsResponse,
   MCPToolTestResponse
-} from '../types/brain';
+} from '../types/haxen';
 import { getMCPTools, testMCPTool } from '../services/api';
 import { validateToolParameters } from '../utils/mcpUtils';
 

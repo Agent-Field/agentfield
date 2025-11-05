@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 import React from "react";
-import type { HealthStatus, LifecycleStatus } from "../../types/brain";
+import type { HealthStatus, LifecycleStatus } from "../../types/haxen";
 import type { CanonicalStatus } from "../../utils/status";
 import { getStatusLabel, getStatusTheme, normalizeExecutionStatus } from "../../utils/status";
 

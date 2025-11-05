@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/your-org/brain/control-plane/internal/storage"
-	"github.com/your-org/brain/control-plane/pkg/types"
+	"github.com/your-org/haxen/control-plane/internal/storage"
+	"github.com/your-org/haxen/control-plane/pkg/types"
 
 	"github.com/stretchr/testify/require"
 )
@@ -21,8 +21,8 @@ func setupTestStorage(t *testing.T) (storage.StorageProvider, context.Context) {
 	cfg := storage.StorageConfig{
 		Mode: "local",
 		Local: storage.LocalStorageConfig{
-			DatabasePath: filepath.Join(tempDir, "brain.db"),
-			KVStorePath:  filepath.Join(tempDir, "brain.bolt"),
+			DatabasePath: filepath.Join(tempDir, "haxen.db"),
+			KVStorePath:  filepath.Join(tempDir, "haxen.bolt"),
 		},
 	}
 
@@ -44,10 +44,10 @@ func setupTestStorage(t *testing.T) (storage.StorageProvider, context.Context) {
 func TestDIDRegistryInitializeAndLookup(t *testing.T) {
 	provider, ctx := setupTestStorage(t)
 
-	brainID := "brain-1"
+	haxenID := "haxen-1"
 	now := time.Now().UTC().Truncate(time.Second)
 
-	require.NoError(t, provider.StoreBrainServerDID(ctx, brainID, "did:brain:root", []byte("seed"), now, now))
+	require.NoError(t, provider.StoreHaxenServerDID(ctx, haxenID, "did:haxen:root", []byte("seed"), now, now))
 
 	components := []storage.ComponentDIDRequest{
 		{
@@ -66,34 +66,34 @@ func TestDIDRegistryInitializeAndLookup(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, provider.StoreAgentDIDWithComponents(ctx, "agent-1", "did:agent:1", brainID, "{}", 0, components))
+	require.NoError(t, provider.StoreAgentDIDWithComponents(ctx, "agent-1", "did:agent:1", haxenID, "{}", 0, components))
 
 	registry := NewDIDRegistryWithStorage(provider)
 	require.NoError(t, registry.Initialize())
 
-	loaded, err := registry.GetRegistry(brainID)
+	loaded, err := registry.GetRegistry(haxenID)
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
 	require.Contains(t, loaded.AgentNodes, "agent-1")
 
 	// Validate reasoner lookup
-	reasonerID, err := registry.FindDIDByComponent(brainID, "reasoner", "reasoner.fn")
+	reasonerID, err := registry.FindDIDByComponent(haxenID, "reasoner", "reasoner.fn")
 	require.NoError(t, err)
 	require.Equal(t, "did:reasoner:1", reasonerID.DID)
 
 	// Validate skill lookup
-	skillID, err := registry.FindDIDByComponent(brainID, "skill", "skill.fn")
+	skillID, err := registry.FindDIDByComponent(haxenID, "skill", "skill.fn")
 	require.NoError(t, err)
 	require.Equal(t, "did:skill:1", skillID.DID)
 
 	// Update status and ensure it is persisted in-memory
-	require.NoError(t, registry.UpdateAgentStatus(brainID, "agent-1", types.AgentDIDStatusActive))
+	require.NoError(t, registry.UpdateAgentStatus(haxenID, "agent-1", types.AgentDIDStatusActive))
 
-	loadedAfterUpdate, err := registry.GetRegistry(brainID)
+	loadedAfterUpdate, err := registry.GetRegistry(haxenID)
 	require.NoError(t, err)
 	require.Equal(t, types.AgentDIDStatusActive, loadedAfterUpdate.AgentNodes["agent-1"].Status)
 
-	packageResult, err := registry.GetAgentDIDs(brainID, "agent-1")
+	packageResult, err := registry.GetAgentDIDs(haxenID, "agent-1")
 	require.NoError(t, err)
 	require.Equal(t, "did:agent:1", packageResult.AgentDID.DID)
 	require.Contains(t, packageResult.ReasonerDIDs, "reasoner.fn")

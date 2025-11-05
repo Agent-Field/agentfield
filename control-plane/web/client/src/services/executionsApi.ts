@@ -155,7 +155,7 @@ function transformExecutionDetailsResponse(raw: any): WorkflowExecution {
     id: raw.id,
     workflow_id: raw.workflow_id,
     execution_id: raw.execution_id,
-    brain_request_id: raw.brain_request_id ?? "",
+    haxen_request_id: raw.haxen_request_id ?? "",
     session_id: raw.session_id ?? undefined,
     actor_id: raw.actor_id ?? undefined,
     agent_node_id: raw.agent_node_id,

@@ -10,32 +10,32 @@ import (
 	"github.com/fatih/color"
 )
 
-// getBrainHomeDir returns the Brain home directory (~/.brain) and ensures it exists
-func getBrainHomeDir() string {
+// getHaxenHomeDir returns the Haxen home directory (~/.haxen) and ensures it exists
+func getHaxenHomeDir() string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		PrintError(fmt.Sprintf("Failed to get user home directory: %v", err))
 		os.Exit(1)
 	}
 
-	brainHome := filepath.Join(homeDir, ".brain")
+	haxenHome := filepath.Join(homeDir, ".haxen")
 
-	// Ensure .brain directory exists
-	if err := os.MkdirAll(brainHome, 0755); err != nil {
-		PrintError(fmt.Sprintf("Failed to create .brain directory: %v", err))
+	// Ensure .haxen directory exists
+	if err := os.MkdirAll(haxenHome, 0755); err != nil {
+		PrintError(fmt.Sprintf("Failed to create .haxen directory: %v", err))
 		os.Exit(1)
 	}
 
 	// Ensure subdirectories exist
 	subdirs := []string{"packages", "logs", "config"}
 	for _, subdir := range subdirs {
-		if err := os.MkdirAll(filepath.Join(brainHome, subdir), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Join(haxenHome, subdir), 0755); err != nil {
 			PrintError(fmt.Sprintf("Failed to create %s directory: %v", subdir, err))
 			os.Exit(1)
 		}
 	}
 
-	return brainHome
+	return haxenHome
 }
 
 // Professional CLI status symbols

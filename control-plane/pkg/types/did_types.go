@@ -5,9 +5,9 @@ import (
 	"time"
 )
 
-// DIDRegistry represents the master DID registry for a brain server.
+// DIDRegistry represents the master DID registry for a haxen server.
 type DIDRegistry struct {
-	BrainServerID   string                    `json:"brain_server_id" db:"brain_server_id"`
+	HaxenServerID   string                    `json:"haxen_server_id" db:"haxen_server_id"`
 	MasterSeed      []byte                    `json:"master_seed" db:"master_seed_encrypted"`
 	RootDID         string                    `json:"root_did" db:"root_did"`
 	AgentNodes      map[string]AgentDIDInfo   `json:"agent_nodes" db:"agent_nodes"`
@@ -20,7 +20,7 @@ type DIDRegistry struct {
 type AgentDIDInfo struct {
 	DID            string                       `json:"did" db:"did"`
 	AgentNodeID    string                       `json:"agent_node_id" db:"agent_node_id"`
-	BrainServerID  string                       `json:"brain_server_id" db:"brain_server_id"`
+	HaxenServerID  string                       `json:"haxen_server_id" db:"haxen_server_id"`
 	PublicKeyJWK   json.RawMessage              `json:"public_key_jwk" db:"public_key_jwk"`
 	DerivationPath string                       `json:"derivation_path" db:"derivation_path"`
 	Reasoners      map[string]ReasonerDIDInfo   `json:"reasoners" db:"reasoners"`
@@ -105,7 +105,7 @@ type DIDIdentityPackage struct {
 	AgentDID      DIDIdentity            `json:"agent_did"`
 	ReasonerDIDs  map[string]DIDIdentity `json:"reasoner_dids"`
 	SkillDIDs     map[string]DIDIdentity `json:"skill_dids"`
-	BrainServerID string                 `json:"brain_server_id"`
+	HaxenServerID string                 `json:"haxen_server_id"`
 }
 
 // DIDIdentity represents a single DID identity with keys.
@@ -219,7 +219,7 @@ type VCProof struct {
 
 // DIDFilters holds filters for querying DIDs.
 type DIDFilters struct {
-	BrainServerID *string           `json:"brain_server_id,omitempty"`
+	HaxenServerID *string           `json:"haxen_server_id,omitempty"`
 	AgentNodeID   *string           `json:"agent_node_id,omitempty"`
 	ComponentType *string           `json:"component_type,omitempty"`
 	Status        *AgentDIDStatus   `json:"status,omitempty"`
@@ -354,9 +354,9 @@ type WorkflowVCInfo struct {
 	DocumentSize     int64      `json:"document_size_bytes" db:"document_size_bytes"`
 }
 
-// BrainServerDIDInfo represents brain server-level DID information stored in the database.
-type BrainServerDIDInfo struct {
-	BrainServerID   string    `json:"brain_server_id" db:"brain_server_id"`
+// HaxenServerDIDInfo represents haxen server-level DID information stored in the database.
+type HaxenServerDIDInfo struct {
+	HaxenServerID   string    `json:"haxen_server_id" db:"haxen_server_id"`
 	RootDID         string    `json:"root_did" db:"root_did"`
 	MasterSeed      []byte    `json:"master_seed" db:"master_seed_encrypted"`
 	CreatedAt       time.Time `json:"created_at" db:"created_at"`

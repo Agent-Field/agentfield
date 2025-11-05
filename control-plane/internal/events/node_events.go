@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/your-org/brain/control-plane/internal/logger"
+	"github.com/your-org/haxen/control-plane/internal/logger"
 )
 
 // NodeEventType represents the type of node event

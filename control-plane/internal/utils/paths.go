@@ -6,9 +6,9 @@ import (
 	"runtime"
 )
 
-// DataDirectories holds all the standardized paths for Brain data storage
+// DataDirectories holds all the standardized paths for Haxen data storage
 type DataDirectories struct {
-	BrainHome        string
+	HaxenHome        string
 	DataDir          string
 	DatabaseDir      string
 	KeysDir          string
@@ -23,49 +23,49 @@ type DataDirectories struct {
 	PayloadsDir      string
 }
 
-// GetBrainDataDirectories returns the standardized data directories for Brain
+// GetHaxenDataDirectories returns the standardized data directories for Haxen
 // It respects environment variables and provides sensible defaults
-func GetBrainDataDirectories() (*DataDirectories, error) {
-	// Determine Brain home directory
-	brainHome := os.Getenv("BRAIN_HOME")
-	if brainHome == "" {
+func GetHaxenDataDirectories() (*DataDirectories, error) {
+	// Determine Haxen home directory
+	haxenHome := os.Getenv("HAXEN_HOME")
+	if haxenHome == "" {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			return nil, err
 		}
-		brainHome = filepath.Join(homeDir, ".brain")
+		haxenHome = filepath.Join(homeDir, ".haxen")
 	}
 
 	// Create the data directories structure
 	dirs := &DataDirectories{
-		BrainHome:        brainHome,
-		DataDir:          filepath.Join(brainHome, "data"),
-		DatabaseDir:      filepath.Join(brainHome, "data"),
-		KeysDir:          filepath.Join(brainHome, "data", "keys"),
-		DIDRegistriesDir: filepath.Join(brainHome, "data", "did_registries"),
-		VCsDir:           filepath.Join(brainHome, "data", "vcs"),
-		VCsExecutionsDir: filepath.Join(brainHome, "data", "vcs", "executions"),
-		VCsWorkflowsDir:  filepath.Join(brainHome, "data", "vcs", "workflows"),
-		AgentsDir:        filepath.Join(brainHome, "agents"),
-		LogsDir:          filepath.Join(brainHome, "logs"),
-		ConfigDir:        filepath.Join(brainHome, "config"),
-		TempDir:          filepath.Join(brainHome, "temp"),
-		PayloadsDir:      filepath.Join(brainHome, "data", "payloads"),
+		HaxenHome:        haxenHome,
+		DataDir:          filepath.Join(haxenHome, "data"),
+		DatabaseDir:      filepath.Join(haxenHome, "data"),
+		KeysDir:          filepath.Join(haxenHome, "data", "keys"),
+		DIDRegistriesDir: filepath.Join(haxenHome, "data", "did_registries"),
+		VCsDir:           filepath.Join(haxenHome, "data", "vcs"),
+		VCsExecutionsDir: filepath.Join(haxenHome, "data", "vcs", "executions"),
+		VCsWorkflowsDir:  filepath.Join(haxenHome, "data", "vcs", "workflows"),
+		AgentsDir:        filepath.Join(haxenHome, "agents"),
+		LogsDir:          filepath.Join(haxenHome, "logs"),
+		ConfigDir:        filepath.Join(haxenHome, "config"),
+		TempDir:          filepath.Join(haxenHome, "temp"),
+		PayloadsDir:      filepath.Join(haxenHome, "data", "payloads"),
 	}
 
 	return dirs, nil
 }
 
-// EnsureDataDirectories creates all necessary Brain data directories
+// EnsureDataDirectories creates all necessary Haxen data directories
 func EnsureDataDirectories() (*DataDirectories, error) {
-	dirs, err := GetBrainDataDirectories()
+	dirs, err := GetHaxenDataDirectories()
 	if err != nil {
 		return nil, err
 	}
 
 	// Create all directories with appropriate permissions
 	directoriesToCreate := []string{
-		dirs.BrainHome,
+		dirs.HaxenHome,
 		dirs.DataDir,
 		dirs.DatabaseDir,
 		dirs.KeysDir,
@@ -101,36 +101,36 @@ func EnsureDataDirectories() (*DataDirectories, error) {
 	return dirs, nil
 }
 
-// GetDatabasePath returns the path to the main Brain database
+// GetDatabasePath returns the path to the main Haxen database
 func GetDatabasePath() (string, error) {
-	dirs, err := GetBrainDataDirectories()
+	dirs, err := GetHaxenDataDirectories()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dirs.DatabaseDir, "brain.db"), nil
+	return filepath.Join(dirs.DatabaseDir, "haxen.db"), nil
 }
 
-// GetKVStorePath returns the path to the Brain key-value store
+// GetKVStorePath returns the path to the Haxen key-value store
 func GetKVStorePath() (string, error) {
-	dirs, err := GetBrainDataDirectories()
+	dirs, err := GetHaxenDataDirectories()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dirs.DatabaseDir, "brain.bolt"), nil
+	return filepath.Join(dirs.DatabaseDir, "haxen.bolt"), nil
 }
 
 // GetAgentRegistryPath returns the path to the agent registry file
 func GetAgentRegistryPath() (string, error) {
-	dirs, err := GetBrainDataDirectories()
+	dirs, err := GetHaxenDataDirectories()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dirs.BrainHome, "installed.json"), nil
+	return filepath.Join(dirs.HaxenHome, "installed.json"), nil
 }
 
 // GetConfigPath returns the path to a configuration file
 func GetConfigPath(filename string) (string, error) {
-	dirs, err := GetBrainDataDirectories()
+	dirs, err := GetHaxenDataDirectories()
 	if err != nil {
 		return "", err
 	}
@@ -139,7 +139,7 @@ func GetConfigPath(filename string) (string, error) {
 
 // GetLogPath returns the path to a log file
 func GetLogPath(filename string) (string, error) {
-	dirs, err := GetBrainDataDirectories()
+	dirs, err := GetHaxenDataDirectories()
 	if err != nil {
 		return "", err
 	}
@@ -148,7 +148,7 @@ func GetLogPath(filename string) (string, error) {
 
 // GetTempPath returns the path to a temporary file
 func GetTempPath(filename string) (string, error) {
-	dirs, err := GetBrainDataDirectories()
+	dirs, err := GetHaxenDataDirectories()
 	if err != nil {
 		return "", err
 	}
@@ -181,13 +181,13 @@ func GetPlatformSpecificPaths() map[string]string {
 
 // ValidatePaths checks if all required paths are accessible
 func ValidatePaths() error {
-	dirs, err := GetBrainDataDirectories()
+	dirs, err := GetHaxenDataDirectories()
 	if err != nil {
 		return err
 	}
 
-	// Check if we can write to the Brain home directory
-	testFile := filepath.Join(dirs.BrainHome, ".write_test")
+	// Check if we can write to the Haxen home directory
+	testFile := filepath.Join(dirs.HaxenHome, ".write_test")
 	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
 		return err
 	}

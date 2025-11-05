@@ -1,4 +1,4 @@
-from brain_sdk.async_config import AsyncConfig
+from haxen_sdk.async_config import AsyncConfig
 
 
 def test_async_config_validate_defaults_ok():
@@ -34,12 +34,12 @@ def test_get_poll_interval_for_age():
 
 
 def test_from_environment_overrides(monkeypatch):
-    monkeypatch.setenv("BRAIN_ASYNC_MAX_EXECUTION_TIMEOUT", "123")
-    monkeypatch.setenv("BRAIN_ASYNC_BATCH_SIZE", "7")
-    monkeypatch.setenv("BRAIN_ASYNC_ENABLE_RESULT_CACHING", "false")
-    monkeypatch.setenv("BRAIN_ASYNC_ENABLE_EVENT_STREAM", "true")
-    monkeypatch.setenv("BRAIN_ASYNC_EVENT_STREAM_PATH", "/stream")
-    monkeypatch.setenv("BRAIN_ASYNC_EVENT_STREAM_RETRY_BACKOFF", "4.5")
+    monkeypatch.setenv("HAXEN_ASYNC_MAX_EXECUTION_TIMEOUT", "123")
+    monkeypatch.setenv("HAXEN_ASYNC_BATCH_SIZE", "7")
+    monkeypatch.setenv("HAXEN_ASYNC_ENABLE_RESULT_CACHING", "false")
+    monkeypatch.setenv("HAXEN_ASYNC_ENABLE_EVENT_STREAM", "true")
+    monkeypatch.setenv("HAXEN_ASYNC_EVENT_STREAM_PATH", "/stream")
+    monkeypatch.setenv("HAXEN_ASYNC_EVENT_STREAM_RETRY_BACKOFF", "4.5")
 
     cfg = AsyncConfig.from_environment()
     assert cfg.max_execution_timeout == 123

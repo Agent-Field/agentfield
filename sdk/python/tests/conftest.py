@@ -1,4 +1,4 @@
-# Pytest configuration and fixtures for Brain SDK tests
+# Pytest configuration and fixtures for Haxen SDK tests
 """
 Shared fixtures used by the actively supported open-source test suite.
 The helpers here focus on deterministic behaviour (frozen time, env patching,
@@ -21,8 +21,8 @@ import respx
 import responses as responses_lib
 from freezegun import freeze_time
 
-from brain_sdk.agent import Agent
-from brain_sdk.types import AIConfig, MemoryConfig
+from haxen_sdk.agent import Agent
+from haxen_sdk.types import AIConfig, MemoryConfig
 
 # Optional imports guarded for test envs
 try:
@@ -340,9 +340,9 @@ def litellm_mock(monkeypatch) -> LiteLLMMockController:
     return LiteLLMMockController(module=fake)
 
 
-class BrainHTTPMocks:
+class HaxenHTTPMocks:
     """
-    Helper wrapper that registers common Brain server endpoints on both:
+    Helper wrapper that registers common Haxen server endpoints on both:
     - httpx (via respx)
     - requests (via responses)
 
@@ -443,9 +443,9 @@ class BrainHTTPMocks:
 
 
 @pytest.fixture
-def http_mocks() -> BrainHTTPMocks:
+def http_mocks() -> HaxenHTTPMocks:
     """
-    Returns a helper for mocking Brain server endpoints on both httpx and requests.
+    Returns a helper for mocking Haxen server endpoints on both httpx and requests.
 
     Note:
         This works in concert with the autouse respx/responses wrappers already defined
@@ -455,9 +455,9 @@ def http_mocks() -> BrainHTTPMocks:
         def test_execute_headers_propagation(http_mocks, workflow_context):
             ctx, headers = workflow_context  # minimal by default
             http_mocks.mock_execute("n.reasoner", json={"result": {"ok": True}})
-            # ... call BrainClient.execute(...), ensure headers were passed ...
+            # ... call HaxenClient.execute(...), ensure headers were passed ...
     """
-    return BrainHTTPMocks()
+    return HaxenHTTPMocks()
 
 
 # ---------------------------- 4) Sample Agent Fixture ----------------------------
@@ -492,7 +492,7 @@ def mock_container_detection(monkeypatch):
             mock_container_detection(is_container=False)
             ...
     """
-    from brain_sdk import agent as agent_mod
+    from haxen_sdk import agent as agent_mod
 
     def _apply(is_container: bool = False):
         monkeypatch.setattr(
@@ -513,7 +513,7 @@ def mock_ip_detection(monkeypatch):
             env_patch.unset("AGENT_CALLBACK_URL")
             ...
     """
-    from brain_sdk import agent as agent_mod
+    from haxen_sdk import agent as agent_mod
 
     def _apply(container_ip: Optional[str] = None, local_ip: Optional[str] = None):
         monkeypatch.setattr(
@@ -551,7 +551,7 @@ def sample_agent(
 
     agent = Agent(
         node_id="test-node",
-        brain_server="http://localhost:8080",
+        haxen_server="http://localhost:8080",
         version="0.0.0",
         ai_config=sample_ai_config,
         memory_config=MemoryConfig(
@@ -567,7 +567,7 @@ def sample_agent(
 @pytest.fixture
 def fake_server(monkeypatch, request):
     """
-    Spins up an in-process FastAPI mock server and routes BrainClient calls to it WITHOUT real sockets.
+    Spins up an in-process FastAPI mock server and routes HaxenClient calls to it WITHOUT real sockets.
     This is suitable for contract tests while keeping network isolation.
 
     Endpoints:
@@ -579,7 +579,7 @@ def fake_server(monkeypatch, request):
 
     How it works:
       - Patches httpx.AsyncClient to use httpx.ASGITransport against the in-process FastAPI app.
-      - BrainClient(async) calls are transparently routed; no sockets required.
+      - HaxenClient(async) calls are transparently routed; no sockets required.
       - requests.* fallbacks are NOT routed here; rely on responses/respx for those.
 
     Returns:
@@ -591,7 +591,7 @@ def fake_server(monkeypatch, request):
     if FastAPI is None or httpx is None:
         pytest.skip("fastapi/httpx are required for fake_server fixture")
 
-    app = FastAPI(title="Brain Fake Server")
+    app = FastAPI(title="Haxen Fake Server")
 
     memory_store: Dict[str, Any] = {}
 
@@ -609,7 +609,7 @@ def fake_server(monkeypatch, request):
             "result": {"echo": payload.get("input", {}), "target": target},
             "metadata": {
                 "execution_id": "exec_" + uuid.uuid4().hex[:8],
-                "brain_request_id": "req_" + uuid.uuid4().hex[:8],
+                "haxen_request_id": "req_" + uuid.uuid4().hex[:8],
                 "agent_node_id": target.split(".")[0] if "." in target else "node",
                 "duration_ms": 12,
                 "timestamp": "2024-01-01T00:00:00Z",
@@ -673,7 +673,7 @@ def fake_server(monkeypatch, request):
 
 # ---------------------------- Notes and Cross-Cutting Concerns ----------------------------
 # - Agent.__init__ callback URL resolution is exercised via env_patch + mock_container_detection + mock_ip_detection
-# - BrainClient request/header propagation is covered by http_mocks and fake_server
+# - HaxenClient request/header propagation is covered by http_mocks and fake_server
 # - MemoryClient serialization and HTTP fallback paths are supported by http_mocks and fake_server
 # - AgentAI model limits caching and message trimming rely on litellm_mock + sample_ai_config
 # - AIConfig parameter merging and fallback logic can be tested via sample_ai_config overrides
@@ -696,11 +696,11 @@ def env_vars(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.fixture
 def dummy_headers():
-    """Baseline execution headers consumed by memory/brain client tests."""
+    """Baseline execution headers consumed by memory/haxen client tests."""
     return {
         "X-Workflow-ID": "wf-test",
         "X-Execution-ID": "exec-test",
-        "X-Brain-Request-ID": "req-test",
+        "X-Haxen-Request-ID": "req-test",
     }
 
 

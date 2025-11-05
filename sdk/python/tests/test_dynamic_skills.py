@@ -4,7 +4,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from brain_sdk.dynamic_skills import DynamicMCPSkillManager
+from haxen_sdk.dynamic_skills import DynamicMCPSkillManager
 
 
 class StubMCPClient:

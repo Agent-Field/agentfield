@@ -11,7 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ConfigurationField represents a single configuration field in brain-package.yaml
+// ConfigurationField represents a single configuration field in haxen-package.yaml
 type ConfigurationField struct {
 	Name        string `yaml:"name" json:"name"`
 	Description string `yaml:"description" json:"description"`
@@ -23,14 +23,14 @@ type ConfigurationField struct {
 	Max         *int   `yaml:"max" json:"max,omitempty"`               // for integer/float
 }
 
-// ConfigurationSchema represents the configuration schema from brain-package.yaml
+// ConfigurationSchema represents the configuration schema from haxen-package.yaml
 type ConfigurationSchema struct {
 	Required []ConfigurationField `yaml:"required" json:"required"`
 	Optional []ConfigurationField `yaml:"optional" json:"optional"`
 }
 
-// BrainPackageConfig represents the structure of brain-package.yaml
-type BrainPackageConfig struct {
+// HaxenPackageConfig represents the structure of haxen-package.yaml
+type HaxenPackageConfig struct {
 	Name            string              `yaml:"name"`
 	Version         string              `yaml:"version"`
 	Description     string              `yaml:"description"`
@@ -78,22 +78,22 @@ type MetadataConfig struct {
 	Platform    string `yaml:"platform"`
 }
 
-// LoadBrainPackageConfig loads and parses a brain-package.yaml file
-func LoadBrainPackageConfig(packagePath string) (*BrainPackageConfig, error) {
-	configPath := filepath.Join(packagePath, "brain-package.yaml")
+// LoadHaxenPackageConfig loads and parses a haxen-package.yaml file
+func LoadHaxenPackageConfig(packagePath string) (*HaxenPackageConfig, error) {
+	configPath := filepath.Join(packagePath, "haxen-package.yaml")
 	
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("brain-package.yaml not found at %s", configPath)
+		return nil, fmt.Errorf("haxen-package.yaml not found at %s", configPath)
 	}
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read brain-package.yaml: %w", err)
+		return nil, fmt.Errorf("failed to read haxen-package.yaml: %w", err)
 	}
 
-	var config BrainPackageConfig
+	var config HaxenPackageConfig
 	if err := yaml.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse brain-package.yaml: %w", err)
+		return nil, fmt.Errorf("failed to parse haxen-package.yaml: %w", err)
 	}
 
 	// Validate the configuration schema

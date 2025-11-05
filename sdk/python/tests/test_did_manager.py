@@ -1,6 +1,6 @@
 import datetime
 
-from brain_sdk.did_manager import DIDManager, DIDIdentityPackage
+from haxen_sdk.did_manager import DIDManager, DIDIdentityPackage
 
 
 def make_package():
@@ -30,12 +30,12 @@ def make_package():
                 "component_type": "skill",
             }
         },
-        "brain_server_id": "brain-1",
+        "haxen_server_id": "haxen-1",
     }
 
 
 def test_register_agent_success(monkeypatch):
-    manager = DIDManager("http://brain", "node")
+    manager = DIDManager("http://haxen", "node")
 
     class DummyResponse:
         status_code = 200
@@ -55,7 +55,7 @@ def test_register_agent_success(monkeypatch):
 
 
 def test_register_agent_failure_status(monkeypatch):
-    manager = DIDManager("http://brain", "node")
+    manager = DIDManager("http://haxen", "node")
 
     class DummyResponse:
         status_code = 500
@@ -68,7 +68,7 @@ def test_register_agent_failure_status(monkeypatch):
 
 
 def test_create_execution_context(monkeypatch):
-    manager = DIDManager("http://brain", "node")
+    manager = DIDManager("http://haxen", "node")
     package = manager._parse_identity_package(make_package())
     assert isinstance(package, DIDIdentityPackage)
     manager.identity_package = package
@@ -88,11 +88,11 @@ def test_create_execution_context(monkeypatch):
 
 
 def test_create_execution_context_missing_identity():
-    manager = DIDManager("http://brain", "node")
+    manager = DIDManager("http://haxen", "node")
     assert manager.create_execution_context("e", "w", "s", "a", "b") is None
 
 
 def test_get_identity_summary_disabled():
-    manager = DIDManager("http://brain", "node")
+    manager = DIDManager("http://haxen", "node")
     summary = manager.get_identity_summary()
     assert summary["enabled"] is False

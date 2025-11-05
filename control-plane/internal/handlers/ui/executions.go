@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/your-org/brain/control-plane/internal/logger"
-	"github.com/your-org/brain/control-plane/internal/services"
-	"github.com/your-org/brain/control-plane/internal/storage"
-	"github.com/your-org/brain/control-plane/pkg/types"
+	"github.com/your-org/haxen/control-plane/internal/logger"
+	"github.com/your-org/haxen/control-plane/internal/services"
+	"github.com/your-org/haxen/control-plane/internal/storage"
+	"github.com/your-org/haxen/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -145,7 +145,7 @@ type ExecutionDetailsResponse struct {
 	ID                int64                          `json:"id"`
 	ExecutionID       string                         `json:"execution_id"`
 	WorkflowID        string                         `json:"workflow_id"`
-	BrainRequestID    *string                        `json:"brain_request_id,omitempty"`
+	HaxenRequestID    *string                        `json:"haxen_request_id,omitempty"`
 	SessionID         *string                        `json:"session_id,omitempty"`
 	ActorID           *string                        `json:"actor_id,omitempty"`
 	AgentNodeID       string                         `json:"agent_node_id"`
@@ -691,7 +691,7 @@ func (h *ExecutionHandler) toExecutionDetails(ctx context.Context, exec *types.E
 		ID:                0,
 		ExecutionID:       exec.ExecutionID,
 		WorkflowID:        exec.RunID,
-		BrainRequestID:    nil,
+		HaxenRequestID:    nil,
 		SessionID:         exec.SessionID,
 		ActorID:           exec.ActorID,
 		AgentNodeID:       exec.AgentNodeID,

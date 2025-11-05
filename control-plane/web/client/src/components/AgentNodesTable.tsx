@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import type { AgentNodeSummary, AgentNode } from '../types/brain';
+import type { AgentNodeSummary, AgentNode } from '../types/haxen';
 import {
   Table,
   TableBody,
@@ -69,7 +69,7 @@ const AgentNodesTable: React.FC<AgentNodesTableProps> = ({ nodes, isLoading, err
           <Network_3 className="h-12 w-12 text-muted-foreground" />
         </div>
         <h3 className="text-heading-3 mb-2">No Agent Nodes</h3>
-        <p className="text-muted-foreground">No agent nodes are currently registered with the Brain server.</p>
+        <p className="text-muted-foreground">No agent nodes are currently registered with the Haxen server.</p>
       </div>
     );
   }

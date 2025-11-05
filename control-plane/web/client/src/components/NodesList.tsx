@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import type { AgentNodeSummary } from '../types/brain';
+import type { AgentNodeSummary } from '../types/haxen';
 import { getNodesSummary, streamNodeEvents } from '../services/api';
 import AgentNodesTable from './AgentNodesTable';
 import { Badge } from '@/components/ui/badge';
@@ -28,7 +28,7 @@ const NodesList: React.FC = () => {
       setTotalCount(data.count);
     } catch (err) {
       console.error('Failed to load nodes summary:', err);
-      setError('Failed to load agent nodes. Please ensure the Brain server is running and accessible.');
+      setError('Failed to load agent nodes. Please ensure the Haxen server is running and accessible.');
     } finally {
       setIsLoading(false);
     }

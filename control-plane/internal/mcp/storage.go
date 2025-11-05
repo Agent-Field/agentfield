@@ -31,7 +31,7 @@ type ConfigStorage interface {
 }
 
 // YAMLConfigStorage implements ConfigStorage using a YAML file.
-// It stores all MCP server configurations in a single brain.yaml file
+// It stores all MCP server configurations in a single haxen.yaml file
 // under the dependencies.mcp_servers key.
 type YAMLConfigStorage struct {
 	ProjectDir string
@@ -40,30 +40,30 @@ type YAMLConfigStorage struct {
 }
 
 // NewYAMLConfigStorage creates a new YAMLConfigStorage.
-// projectDir is the root directory of the brain project.
+// projectDir is the root directory of the haxen project.
 func NewYAMLConfigStorage(projectDir string) *YAMLConfigStorage {
 	return &YAMLConfigStorage{
 		ProjectDir: projectDir,
-		filePath:   filepath.Join(projectDir, "brain.yaml"),
+		filePath:   filepath.Join(projectDir, "haxen.yaml"),
 	}
 }
 
-// brainYAML represents the structure of the brain.yaml file.
+// haxenYAML represents the structure of the haxen.yaml file.
 // We only care about the mcp_servers part for this storage.
-type brainYAML struct {
+type haxenYAML struct {
 	Dependencies struct {
 		MCPServers map[string]*MCPServerConfig `yaml:"mcp_servers,omitempty"`
 	} `yaml:"dependencies,omitempty"`
-	// Other fields in brain.yaml are preserved but not directly managed here.
+	// Other fields in haxen.yaml are preserved but not directly managed here.
 	OtherFields map[string]interface{} `yaml:",inline"`
 }
 
-func (s *YAMLConfigStorage) loadBrainYAML() (*brainYAML, error) {
+func (s *YAMLConfigStorage) loadHaxenYAML() (*haxenYAML, error) {
 	data, err := os.ReadFile(s.filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// If brain.yaml doesn't exist, return an empty structure
-			return &brainYAML{
+			// If haxen.yaml doesn't exist, return an empty structure
+			return &haxenYAML{
 				Dependencies: struct {
 					MCPServers map[string]*MCPServerConfig `yaml:"mcp_servers,omitempty"`
 				}{
@@ -72,24 +72,24 @@ func (s *YAMLConfigStorage) loadBrainYAML() (*brainYAML, error) {
 				OtherFields: make(map[string]interface{}),
 			}, nil
 		}
-		return nil, fmt.Errorf("failed to read brain.yaml: %w", err)
+		return nil, fmt.Errorf("failed to read haxen.yaml: %w", err)
 	}
 
-	var cfg brainYAML
+	var cfg haxenYAML
 	// Initialize maps to avoid nil panics if sections are missing
 	cfg.Dependencies.MCPServers = make(map[string]*MCPServerConfig)
 	cfg.OtherFields = make(map[string]interface{})
 
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal brain.yaml: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal haxen.yaml: %w", err)
 	}
 	return &cfg, nil
 }
 
-func (s *YAMLConfigStorage) saveBrainYAML(cfg *brainYAML) error {
+func (s *YAMLConfigStorage) saveHaxenYAML(cfg *haxenYAML) error {
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
-		return fmt.Errorf("failed to marshal brain.yaml: %w", err)
+		return fmt.Errorf("failed to marshal haxen.yaml: %w", err)
 	}
 	return os.WriteFile(s.filePath, data, 0644)
 }
@@ -99,7 +99,7 @@ func (s *YAMLConfigStorage) LoadMCPServerConfig(alias string) (*MCPServerConfig,
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	cfg, err := s.loadBrainYAML()
+	cfg, err := s.loadHaxenYAML()
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +116,7 @@ func (s *YAMLConfigStorage) SaveMCPServerConfig(alias string, config *MCPServerC
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	cfg, err := s.loadBrainYAML()
+	cfg, err := s.loadHaxenYAML()
 	if err != nil {
 		return err
 	}
@@ -126,7 +126,7 @@ func (s *YAMLConfigStorage) SaveMCPServerConfig(alias string, config *MCPServerC
 	}
 	cfg.Dependencies.MCPServers[alias] = config
 
-	return s.saveBrainYAML(cfg)
+	return s.saveHaxenYAML(cfg)
 }
 
 // DeleteMCPServerConfig removes the configuration for a specific MCP server.
@@ -134,7 +134,7 @@ func (s *YAMLConfigStorage) DeleteMCPServerConfig(alias string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	cfg, err := s.loadBrainYAML()
+	cfg, err := s.loadHaxenYAML()
 	if err != nil {
 		return err
 	}
@@ -144,7 +144,7 @@ func (s *YAMLConfigStorage) DeleteMCPServerConfig(alias string) error {
 	}
 	delete(cfg.Dependencies.MCPServers, alias)
 
-	return s.saveBrainYAML(cfg)
+	return s.saveHaxenYAML(cfg)
 }
 
 // LoadAllMCPServerConfigs retrieves all stored MCP server configurations.
@@ -152,7 +152,7 @@ func (s *YAMLConfigStorage) LoadAllMCPServerConfigs() (map[string]*MCPServerConf
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	cfg, err := s.loadBrainYAML()
+	cfg, err := s.loadHaxenYAML()
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +169,7 @@ func (s *YAMLConfigStorage) UpdateConfig(alias string, updateFn func(currentConf
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	cfg, err := s.loadBrainYAML()
+	cfg, err := s.loadHaxenYAML()
 	if err != nil {
 		return err
 	}
@@ -195,7 +195,7 @@ func (s *YAMLConfigStorage) UpdateConfig(alias string, updateFn func(currentConf
 		cfg.Dependencies.MCPServers[alias] = newConfig
 	}
 
-	return s.saveBrainYAML(cfg)
+	return s.saveHaxenYAML(cfg)
 }
 
 // ListMCPServerAliases retrieves a list of all configured MCP server aliases.
@@ -203,7 +203,7 @@ func (s *YAMLConfigStorage) ListMCPServerAliases() ([]string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	cfg, err := s.loadBrainYAML()
+	cfg, err := s.loadHaxenYAML()
 	if err != nil {
 		return nil, err
 	}

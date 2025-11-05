@@ -1,4 +1,4 @@
-# Development/test dependencies for Brain SDK (Python 3.8+)
+# Development/test dependencies for Haxen SDK (Python 3.8+)
 # Install with: pip install -r requirements-dev.txt
 pytest>=7.4,<9
 pytest-asyncio>=0.21,<0.24

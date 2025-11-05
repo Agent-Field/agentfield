@@ -18,4 +18,4 @@ export type {
   MCPToolTestResponse,
   MCPServerMetrics,
   MCPNodeMetrics
-} from '@/types/brain';
+} from '@/types/haxen';

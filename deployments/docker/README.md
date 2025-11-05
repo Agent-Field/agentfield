@@ -1,4 +1,4 @@
-# Brain Docker Deployments
+# Haxen Docker Deployments
 
 This directory contains reference Dockerfiles and a Compose stack for local development.
 

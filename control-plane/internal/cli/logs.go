@@ -8,8 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
-	"github.com/your-org/brain/control-plane/internal/logger"
-	"github.com/your-org/brain/control-plane/internal/packages"
+	"github.com/your-org/haxen/control-plane/internal/logger"
+	"github.com/your-org/haxen/control-plane/internal/packages"
 )
 
 var (
@@ -21,14 +21,14 @@ var (
 func NewLogsCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "logs <agent-node-name>",
-		Short: "View logs for a Brain agent node",
-		Long: `Display logs for an installed Brain agent node package.
+		Short: "View logs for a Haxen agent node",
+		Long: `Display logs for an installed Haxen agent node package.
 
 Shows the most recent log entries from the agent node's log file.
 
 Examples:
-  brain logs email-helper
-  brain logs data-analyzer --follow`,
+  haxen logs email-helper
+  haxen logs data-analyzer --follow`,
 		Args: cobra.ExactArgs(1),
 		Run:  runLogsCommand,
 	}
@@ -43,7 +43,7 @@ func runLogsCommand(cmd *cobra.Command, args []string) {
 	agentNodeName := args[0]
 
 	logViewer := &LogViewer{
-		BrainHome: getBrainHomeDir(),
+		HaxenHome: getHaxenHomeDir(),
 		Follow:    logsFollow,
 		Tail:      logsTail,
 	}
@@ -56,7 +56,7 @@ func runLogsCommand(cmd *cobra.Command, args []string) {
 
 // LogViewer handles viewing agent node logs
 type LogViewer struct {
-	BrainHome string
+	HaxenHome string
 	Follow    bool
 	Tail      int
 }
@@ -64,7 +64,7 @@ type LogViewer struct {
 // ViewLogs displays logs for an agent node
 func (lv *LogViewer) ViewLogs(agentNodeName string) error {
 	// Load registry to get log file path
-	registryPath := filepath.Join(lv.BrainHome, "installed.yaml")
+	registryPath := filepath.Join(lv.HaxenHome, "installed.yaml")
 	registry := &packages.InstallationRegistry{
 		Installed: make(map[string]packages.InstalledPackage),
 	}

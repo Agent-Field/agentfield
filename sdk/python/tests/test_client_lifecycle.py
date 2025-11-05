@@ -2,8 +2,8 @@ import asyncio
 import sys
 import types
 
-from brain_sdk.client import BrainClient
-from brain_sdk.types import AgentStatus, HeartbeatData
+from haxen_sdk.client import HaxenClient
+from haxen_sdk.types import AgentStatus, HeartbeatData
 
 
 class DummyResponse:
@@ -28,11 +28,11 @@ def test_send_enhanced_heartbeat_sync_success_and_failure(monkeypatch):
         sent["calls"] += 1
         return DummyResponse(200)
 
-    import brain_sdk.client as client_mod
+    import haxen_sdk.client as client_mod
 
     monkeypatch.setattr(client_mod.requests, "post", ok_post)
 
-    bc = BrainClient(base_url="http://example")
+    bc = HaxenClient(base_url="http://example")
     hb = HeartbeatData(status=AgentStatus.READY, mcp_servers=[], timestamp="now")
     assert bc.send_enhanced_heartbeat_sync("node1", hb) is True
 
@@ -44,13 +44,13 @@ def test_send_enhanced_heartbeat_sync_success_and_failure(monkeypatch):
 
 
 def test_notify_graceful_shutdown_sync(monkeypatch):
-    import brain_sdk.client as client_mod
+    import haxen_sdk.client as client_mod
 
     def ok_post(url, headers, timeout):
         return DummyResponse(200)
 
     monkeypatch.setattr(client_mod.requests, "post", ok_post)
-    bc = BrainClient(base_url="http://example")
+    bc = HaxenClient(base_url="http://example")
     assert bc.notify_graceful_shutdown_sync("node1") is True
 
     def bad_post(url, headers, timeout):
@@ -61,8 +61,8 @@ def test_notify_graceful_shutdown_sync(monkeypatch):
 
 
 def test_register_agent_with_status_async(monkeypatch):
-    # Provide a dummy httpx module that BrainClient will use
-    from brain_sdk import client as client_mod
+    # Provide a dummy httpx module that HaxenClient will use
+    from haxen_sdk import client as client_mod
 
     class DummyAsyncClient:
         def __init__(self, *args, **kwargs):
@@ -90,7 +90,7 @@ def test_register_agent_with_status_async(monkeypatch):
         raising=False,
     )
 
-    bc = BrainClient(base_url="http://example")
+    bc = HaxenClient(base_url="http://example")
 
     async def run():
         return await bc.register_agent_with_status(

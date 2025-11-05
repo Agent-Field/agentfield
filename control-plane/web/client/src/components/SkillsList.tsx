@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Function, Information } from "@/components/ui/icon-bridge";
 import React, { useState } from "react";
-import type { SkillDefinition } from "../types/brain";
+import type { SkillDefinition } from "../types/haxen";
 import type { AgentDIDInfo, SkillDIDInfo } from "../types/did";
 import { DIDIdentityBadge, DIDStatusBadge } from "./did/DIDStatusBadge";
 import { useDIDNotifications } from "./ui/notification";

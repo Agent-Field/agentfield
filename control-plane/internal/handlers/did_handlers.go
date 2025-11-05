@@ -7,8 +7,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/your-org/brain/control-plane/internal/logger"
-	"github.com/your-org/brain/control-plane/pkg/types"
+	"github.com/your-org/haxen/control-plane/internal/logger"
+	"github.com/your-org/haxen/control-plane/pkg/types"
 )
 
 // DIDService defines the DID operations required by handlers.
@@ -417,10 +417,10 @@ func (h *DIDHandlers) GetDIDDocument(c *gin.Context) {
 		},
 		"service": []map[string]interface{}{
 			{
-				"id":              did + "#brain-service",
-				"type":            "BrainAgentService",
-				"serviceEndpoint": "https://brain.example.com/api/v1",
-				"description":     "Brain Agent Platform Service",
+				"id":              did + "#haxen-service",
+				"type":            "HaxenAgentService",
+				"serviceEndpoint": "https://haxen.example.com/api/v1",
+				"description":     "Haxen Agent Platform Service",
 			},
 		},
 	}

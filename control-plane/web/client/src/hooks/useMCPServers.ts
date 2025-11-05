@@ -3,7 +3,7 @@ import type {
   MCPServerActionResponse,
   MCPServerAction,
   MCPServerHealthForUI
-} from '../types/brain';
+} from '../types/haxen';
 import {
   startMCPServer,
   stopMCPServer,

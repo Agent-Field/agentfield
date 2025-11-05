@@ -3,7 +3,7 @@ import type {
   MCPServerMetrics,
   MCPNodeMetrics,
   MCPServerMetricsResponse
-} from '../types/brain';
+} from '../types/haxen';
 import { getMCPServerMetrics } from '../services/api';
 import { calculatePerformanceMetrics } from '../utils/mcpUtils';
 

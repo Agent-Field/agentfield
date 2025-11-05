@@ -1,6 +1,6 @@
-# Brain Control Plane
+# Haxen Control Plane
 
-The Brain control plane orchestrates agent workflows, manages verifiable credentials, serves the admin UI, and exposes REST/gRPC APIs consumed by the SDKs.
+The Haxen control plane orchestrates agent workflows, manages verifiable credentials, serves the admin UI, and exposes REST/gRPC APIs consumed by the SDKs.
 
 ## Requirements
 
@@ -16,12 +16,12 @@ The Brain control plane orchestrates agent workflows, manages verifiable credent
 go mod download
 npm --prefix web/client install
 
-# Run database migrations (requires BRAIN_DATABASE_URL)
-goose -dir ./migrations postgres "$BRAIN_DATABASE_URL" up
+# Run database migrations (requires HAXEN_DATABASE_URL)
+goose -dir ./migrations postgres "$HAXEN_DATABASE_URL" up
 
 # Start the control plane
-BRAIN_DATABASE_URL=postgres://brain:brain@localhost:5432/brain?sslmode=disable \
-BRAIN_REDIS_URL=redis://localhost:6379/0 \
+HAXEN_DATABASE_URL=postgres://haxen:haxen@localhost:5432/haxen?sslmode=disable \
+HAXEN_REDIS_URL=redis://localhost:6379/0 \
 go run ./cmd/server
 ```
 
@@ -29,12 +29,12 @@ Visit `http://localhost:8080/ui/` to access the embedded admin UI.
 
 ## Configuration
 
-Environment variables override `config/brain.yaml`. Common options:
+Environment variables override `config/haxen.yaml`. Common options:
 
-- `BRAIN_DATABASE_URL` – PostgreSQL DSN
-- `BRAIN_REDIS_URL` – Redis connection string
-- `BRAIN_HTTP_ADDR` – HTTP listen address (`0.0.0.0:8080` by default)
-- `BRAIN_LOG_LEVEL` – log verbosity (`info`, `debug`, etc.)
+- `HAXEN_DATABASE_URL` – PostgreSQL DSN
+- `HAXEN_REDIS_URL` – Redis connection string
+- `HAXEN_HTTP_ADDR` – HTTP listen address (`0.0.0.0:8080` by default)
+- `HAXEN_LOG_LEVEL` – log verbosity (`info`, `debug`, etc.)
 
 Sample config files live in `config/`.
 
@@ -53,8 +53,8 @@ Run the Go server alongside the UI so API calls resolve locally. During producti
 Migrations use [Goose](https://github.com/pressly/goose):
 
 ```bash
-BRAIN_DATABASE_URL=postgres://brain:brain@localhost:5432/brain?sslmode=disable \
-goose -dir ./migrations postgres "$BRAIN_DATABASE_URL" status
+HAXEN_DATABASE_URL=postgres://haxen:haxen@localhost:5432/haxen?sslmode=disable \
+goose -dir ./migrations postgres "$HAXEN_DATABASE_URL" status
 ```
 
 ## Testing

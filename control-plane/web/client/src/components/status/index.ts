@@ -11,4 +11,4 @@ export {
 } from './StatusBadge';
 
 // Re-export types for convenience
-export type { AgentStatus, AgentState, AgentStatusUpdate, StatusSource } from '../../types/brain';
+export type { AgentStatus, AgentState, AgentStatusUpdate, StatusSource } from '../../types/haxen';

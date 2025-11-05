@@ -27,8 +27,8 @@ func GenerateRunID() string {
 	return fmt.Sprintf("run_%s_%s", timestamp, random)
 }
 
-// GenerateBrainRequestID generates a new brain request ID
-func GenerateBrainRequestID() string {
+// GenerateHaxenRequestID generates a new haxen request ID
+func GenerateHaxenRequestID() string {
 	timestamp := time.Now().Format("20060102_150405")
 	random := generateRandomString(8)
 	return fmt.Sprintf("req_%s_%s", timestamp, random)

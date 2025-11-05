@@ -1,11 +1,11 @@
-# Brain Go SDK
+# Haxen Go SDK
 
-The Brain Go SDK provides idiomatic Go bindings for interacting with the Brain control plane.
+The Haxen Go SDK provides idiomatic Go bindings for interacting with the Haxen control plane.
 
 ## Installation
 
 ```bash
-go get github.com/your-org/brain/sdk/go
+go get github.com/your-org/haxen/sdk/go
 ```
 
 ## Quick Start
@@ -17,13 +17,13 @@ import (
     "context"
     "log"
 
-    brainagent "github.com/your-org/brain/sdk/go/agent"
+    haxenagent "github.com/your-org/haxen/sdk/go/agent"
 )
 
 func main() {
-    agent, err := brainagent.New(brainagent.Config{
+    agent, err := haxenagent.New(haxenagent.Config{
         NodeID:   "example-agent",
-        BrainURL: "http://localhost:8080",
+        HaxenURL: "http://localhost:8080",
     })
     if err != nil {
         log.Fatal(err)
@@ -41,8 +41,8 @@ func main() {
 
 ## Modules
 
-- `agent`: Build Brain-compatible agents and register reasoners/skills.
-- `client`: Low-level HTTP client for the Brain control plane.
+- `agent`: Build Haxen-compatible agents and register reasoners/skills.
+- `client`: Low-level HTTP client for the Haxen control plane.
 - `types`: Shared data structures and contracts.
 - `ai`: Helpers for interacting with AI providers via the control plane.
 

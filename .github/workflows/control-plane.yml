@@ -113,7 +113,7 @@ jobs:
         working-directory: control-plane
         run: |
           echo "Building for ${GOOS}/${GOARCH}"
-          go build -o /tmp/brain-server-${GOOS}-${GOARCH} ./cmd/brain-server
+          go build -o /tmp/haxen-server-${GOOS}-${GOARCH} ./cmd/haxen-server
 
   # Summary job that depends on all critical checks
   required-checks:

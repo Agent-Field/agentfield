@@ -6,7 +6,7 @@ import { useMemo, useState } from "react";
 
 import { useMode } from "@/contexts/ModeContext";
 import { cn } from "@/lib/utils";
-import type { MCPServerAction, MCPServerHealthForUI } from "@/types/brain";
+import type { MCPServerAction, MCPServerHealthForUI } from "@/types/haxen";
 import {
   CheckmarkFilled,
   CircleDash,

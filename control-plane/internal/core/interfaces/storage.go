@@ -1,7 +1,7 @@
-// brain/internal/core/interfaces/storage.go
+// haxen/internal/core/interfaces/storage.go
 package interfaces
 
-import "github.com/your-org/brain/control-plane/internal/core/domain"
+import "github.com/your-org/haxen/control-plane/internal/core/domain"
 
 type FileSystemAdapter interface {
     ReadFile(path string) ([]byte, error)
@@ -19,6 +19,6 @@ type RegistryStorage interface {
 }
 
 type ConfigStorage interface {
-    LoadBrainConfig(path string) (*domain.BrainConfig, error)
-    SaveBrainConfig(path string, config *domain.BrainConfig) error
+    LoadHaxenConfig(path string) (*domain.HaxenConfig, error)
+    SaveHaxenConfig(path string, config *domain.HaxenConfig) error
 }

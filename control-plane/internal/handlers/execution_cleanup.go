@@ -1,9 +1,9 @@
 package handlers
 
 import (
-	"github.com/your-org/brain/control-plane/internal/config"
-	"github.com/your-org/brain/control-plane/internal/logger"
-	"github.com/your-org/brain/control-plane/internal/storage"
+	"github.com/your-org/haxen/control-plane/internal/config"
+	"github.com/your-org/haxen/control-plane/internal/logger"
+	"github.com/your-org/haxen/control-plane/internal/storage"
 	"context"
 	"sync"
 	"time"

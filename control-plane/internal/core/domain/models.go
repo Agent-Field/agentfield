@@ -1,4 +1,4 @@
-// brain/internal/core/domain/models.go
+// haxen/internal/core/domain/models.go
 package domain
 
 import "time"
@@ -56,8 +56,8 @@ type InstalledPackage struct {
     InstalledAt time.Time         `json:"installed_at"`
 }
 
-// BrainConfig represents the Brain configuration
-type BrainConfig struct {
+// HaxenConfig represents the Haxen configuration
+type HaxenConfig struct {
     HomeDir     string            `json:"home_dir"`
     Environment map[string]string `json:"environment"`
     MCP         MCPConfig         `json:"mcp"`

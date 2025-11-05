@@ -276,8 +276,8 @@ function VerificationModal({
                       )}
                     </div>
                     <div className="flex justify-between">
-                      <span>Brain Standard</span>
-                      {verificationResult.compliance_checks.brain_standard_compliance ? (
+                      <span>Haxen Standard</span>
+                      {verificationResult.compliance_checks.haxen_standard_compliance ? (
                         <CheckmarkFilled size={16} className="text-green-500" />
                       ) : (
                         <CloseFilled size={16} className="text-red-500" />

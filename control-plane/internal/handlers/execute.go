@@ -16,10 +16,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/your-org/brain/control-plane/internal/logger"
-	"github.com/your-org/brain/control-plane/internal/services"
-	"github.com/your-org/brain/control-plane/internal/utils"
-	"github.com/your-org/brain/control-plane/pkg/types"
+	"github.com/your-org/haxen/control-plane/internal/logger"
+	"github.com/your-org/haxen/control-plane/internal/services"
+	"github.com/your-org/haxen/control-plane/internal/utils"
+	"github.com/your-org/haxen/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -883,12 +883,12 @@ func (p *asyncWorkerPool) submit(job asyncExecutionJob) bool {
 
 func getAsyncWorkerPool() *asyncWorkerPool {
 	asyncPoolOnce.Do(func() {
-		workerCount := resolveIntFromEnv("BRAIN_EXEC_ASYNC_WORKERS", runtime.NumCPU())
+		workerCount := resolveIntFromEnv("HAXEN_EXEC_ASYNC_WORKERS", runtime.NumCPU())
 		if workerCount <= 0 {
 			workerCount = runtime.NumCPU()
 		}
 
-		queueCapacity := resolveIntFromEnv("BRAIN_EXEC_ASYNC_QUEUE_CAPACITY", 1024)
+		queueCapacity := resolveIntFromEnv("HAXEN_EXEC_ASYNC_QUEUE_CAPACITY", 1024)
 		if queueCapacity <= 0 {
 			queueCapacity = 1024
 		}
@@ -916,7 +916,7 @@ func resolveIntFromEnv(key string, fallback int) int {
 
 func ensureCompletionWorker() {
 	completionOnce.Do(func() {
-		size := resolveIntFromEnv("BRAIN_EXEC_COMPLETION_QUEUE", 2048)
+		size := resolveIntFromEnv("HAXEN_EXEC_COMPLETION_QUEUE", 2048)
 		if size <= 0 {
 			size = 2048
 		}

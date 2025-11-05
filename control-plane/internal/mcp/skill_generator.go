@@ -8,7 +8,7 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/your-org/brain/control-plane/internal/config"
+	"github.com/your-org/haxen/control-plane/internal/config"
 )
 
 // SkillGenerator handles the generation of Python skill files from MCP tools
@@ -41,12 +41,12 @@ func (sg *SkillGenerator) GenerateSkillsForServer(serverAlias string) (*SkillGen
 
 	// Discover server capabilities using the new simplified architecture
 	// Load config for capability discovery
-	cfg, err := config.LoadConfig(filepath.Join(sg.projectDir, "brain.yaml"))
+	cfg, err := config.LoadConfig(filepath.Join(sg.projectDir, "haxen.yaml"))
 	if err != nil {
 		// Fallback to current directory
-		cfg, err = config.LoadConfig("brain.yaml")
+		cfg, err = config.LoadConfig("haxen.yaml")
 		if err != nil {
-			return nil, fmt.Errorf("failed to load brain configuration: %w", err)
+			return nil, fmt.Errorf("failed to load haxen configuration: %w", err)
 		}
 	}
 	
@@ -161,12 +161,12 @@ func getMapKeys(m map[string]interface{}) []string {
 // GenerateSkillsForAllServers generates skill files for all installed MCP servers
 func (sg *SkillGenerator) GenerateSkillsForAllServers() error {
 	// Load config for capability discovery
-	cfg, err := config.LoadConfig(filepath.Join(sg.projectDir, "brain.yaml"))
+	cfg, err := config.LoadConfig(filepath.Join(sg.projectDir, "haxen.yaml"))
 	if err != nil {
 		// Fallback to current directory
-		cfg, err = config.LoadConfig("brain.yaml")
+		cfg, err = config.LoadConfig("haxen.yaml")
 		if err != nil {
-			return fmt.Errorf("failed to load brain configuration: %w", err)
+			return fmt.Errorf("failed to load haxen configuration: %w", err)
 		}
 	}
 	
@@ -476,7 +476,7 @@ func (sg *SkillGenerator) generateDocString(tool MCPTool, parameters []SkillPara
 	}
 
 	docString.WriteString(`
-        execution_context (ExecutionContext, optional): Brain execution context for workflow tracking
+        execution_context (ExecutionContext, optional): Haxen execution context for workflow tracking
     
     Returns:
         Any: The result from the MCP tool execution
@@ -499,13 +499,13 @@ Do not modify this file manually - it will be regenerated when the MCP server is
 """
 
 from typing import Any, Dict, List, Optional
-from brain_sdk import app
-from brain_sdk.execution_context import ExecutionContext
-from brain_sdk.mcp.client import MCPClient
-from brain_sdk.mcp.exceptions import (
+from haxen_sdk import app
+from haxen_sdk.execution_context import ExecutionContext
+from haxen_sdk.mcp.client import MCPClient
+from haxen_sdk.mcp.exceptions import (
     MCPError, MCPConnectionError, MCPToolError, MCPTimeoutError
 )
-from brain_sdk.agent import Agent
+from haxen_sdk.agent import Agent
 
 # MCP server configuration
 MCP_ALIAS = "{{.ServerAlias}}"
@@ -533,7 +533,7 @@ async def _get_mcp_client(execution_context: Optional[ExecutionContext] = None) 
         is_healthy = await client.validate_server_health()
         if not is_healthy:
             raise MCPConnectionError(
-                f"MCP server '{MCP_ALIAS}' is not healthy. Please check server status with: brain mcp status {MCP_ALIAS}",
+                f"MCP server '{MCP_ALIAS}' is not healthy. Please check server status with: haxen mcp status {MCP_ALIAS}",
                 endpoint=f"mcp://{MCP_ALIAS}"
             )
         
@@ -551,7 +551,7 @@ async def _get_mcp_client(execution_context: Optional[ExecutionContext] = None) 
     except ValueError as e:
         # Handle unregistered alias
         raise MCPConnectionError(
-            f"MCP server '{MCP_ALIAS}' is not configured. Please install it with: brain add --mcp {MCP_ALIAS}",
+            f"MCP server '{MCP_ALIAS}' is not configured. Please install it with: haxen add --mcp {MCP_ALIAS}",
             endpoint=f"mcp://{MCP_ALIAS}"
         ) from e
     except Exception as e:

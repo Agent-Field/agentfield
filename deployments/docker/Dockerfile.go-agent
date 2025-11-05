@@ -9,4 +9,4 @@ RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/g
 
 ENV GO111MODULE=on
 
-CMD ["sh", "-c", "echo 'Brain Go agent image ready. Mount or COPY your agent source and override CMD to run it.' && tail -f /dev/null"]
+CMD ["sh", "-c", "echo 'Haxen Go agent image ready. Mount or COPY your agent source and override CMD to run it.' && tail -f /dev/null"]

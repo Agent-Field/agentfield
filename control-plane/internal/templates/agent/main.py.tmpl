@@ -6,14 +6,14 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
-from brain_sdk import Agent, AgentRouter
+from haxen_sdk import Agent, AgentRouter
 
-# Start the Brain control plane first: `brain dev`.
-# Then launch this node via `brain run {{.ProjectName}}` (or use the __main__ block below).
-# Feel free to rename this to whatever you call the agent in Brain.
+# Start the Haxen control plane first: `haxen dev`.
+# Then launch this node via `haxen run {{.ProjectName}}` (or use the __main__ block below).
+# Feel free to rename this to whatever you call the agent in Haxen.
 app = Agent(
     node_id="{{.NodeID}}",
-    brain_server=os.getenv("BRAIN_SERVER_URL", "http://localhost:8080"),
+    haxen_server=os.getenv("HAXEN_SERVER_URL", "http://localhost:8080"),
     dev_mode=True,
 )
 
@@ -71,5 +71,5 @@ app.include_router(quickstart)
 
 if __name__ == "__main__":
     print("🚀 Starting agent — Ctrl+C to stop")
-    print("ℹ️  Prefer `brain run {{.ProjectName}}` for automatic registration and restarts.")
+    print("ℹ️  Prefer `haxen run {{.ProjectName}}` for automatic registration and restarts.")
     app.serve(auto_port=True, host="0.0.0.0")

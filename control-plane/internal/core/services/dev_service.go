@@ -15,8 +15,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/your-org/brain/control-plane/internal/core/domain"
-	"github.com/your-org/brain/control-plane/internal/core/interfaces"
+	"github.com/your-org/haxen/control-plane/internal/core/domain"
+	"github.com/your-org/haxen/control-plane/internal/core/interfaces"
 )
 
 type DefaultDevService struct {
@@ -44,10 +44,10 @@ func (ds *DefaultDevService) RunInDevMode(path string, options domain.DevOptions
 		return fmt.Errorf("failed to resolve path: %w", err)
 	}
 
-	// Check if brain.yaml exists
-	brainYamlPath := filepath.Join(absPath, "brain.yaml")
-	if !ds.fileSystem.Exists(brainYamlPath) {
-		return fmt.Errorf("no brain.yaml found in %s", absPath)
+	// Check if haxen.yaml exists
+	haxenYamlPath := filepath.Join(absPath, "haxen.yaml")
+	if !ds.fileSystem.Exists(haxenYamlPath) {
+		return fmt.Errorf("no haxen.yaml found in %s", absPath)
 	}
 
 	return ds.runDev(absPath, options)
@@ -180,8 +180,8 @@ func (ds *DefaultDevService) startDevProcess(packagePath string, port int, optio
 	if port > 0 {
 		env = append(env, fmt.Sprintf("PORT=%d", port))
 	}
-	env = append(env, "BRAIN_SERVER_URL=http://localhost:8080")
-	env = append(env, "BRAIN_DEV_MODE=true")
+	env = append(env, "HAXEN_SERVER_URL=http://localhost:8080")
+	env = append(env, "HAXEN_DEV_MODE=true")
 
 	// Load environment variables from package .env file
 	if envVars, err := ds.loadDevEnvFile(packagePath); err == nil {

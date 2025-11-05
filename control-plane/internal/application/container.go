@@ -1,23 +1,23 @@
 package application
 
 import (
-	"github.com/your-org/brain/control-plane/internal/cli/framework"
-	"github.com/your-org/brain/control-plane/internal/config"
-	"github.com/your-org/brain/control-plane/internal/core/services"
-	"github.com/your-org/brain/control-plane/internal/infrastructure/process"
-	"github.com/your-org/brain/control-plane/internal/infrastructure/storage"
-	didServices "github.com/your-org/brain/control-plane/internal/services"
-	storageInterface "github.com/your-org/brain/control-plane/internal/storage"
+	"github.com/your-org/haxen/control-plane/internal/cli/framework"
+	"github.com/your-org/haxen/control-plane/internal/config"
+	"github.com/your-org/haxen/control-plane/internal/core/services"
+	"github.com/your-org/haxen/control-plane/internal/infrastructure/process"
+	"github.com/your-org/haxen/control-plane/internal/infrastructure/storage"
+	didServices "github.com/your-org/haxen/control-plane/internal/services"
+	storageInterface "github.com/your-org/haxen/control-plane/internal/storage"
 	"crypto/sha256"
 	"encoding/hex"
 	"path/filepath"
 )
 
 // CreateServiceContainer creates and wires up all services for the CLI commands
-func CreateServiceContainer(cfg *config.Config, brainHome string) *framework.ServiceContainer {
+func CreateServiceContainer(cfg *config.Config, haxenHome string) *framework.ServiceContainer {
 	// Create infrastructure components
 	fileSystem := storage.NewFileSystemAdapter()
-	registryPath := filepath.Join(brainHome, "installed.json")
+	registryPath := filepath.Join(haxenHome, "installed.json")
 	registryStorage := storage.NewLocalRegistryStorage(fileSystem, registryPath)
 	processManager := process.NewProcessManager()
 	portManager := process.NewPortManager()
@@ -32,8 +32,8 @@ func CreateServiceContainer(cfg *config.Config, brainHome string) *framework.Ser
 	}
 
 	// Create services
-	packageService := services.NewPackageService(registryStorage, fileSystem, brainHome)
-	agentService := services.NewAgentService(processManager, portManager, registryStorage, nil, brainHome) // nil agentClient for now
+	packageService := services.NewPackageService(registryStorage, fileSystem, haxenHome)
+	agentService := services.NewAgentService(processManager, portManager, registryStorage, nil, haxenHome) // nil agentClient for now
 	devService := services.NewDevService(processManager, portManager, fileSystem)
 
 	// Create DID services if enabled
@@ -69,10 +69,10 @@ func CreateServiceContainer(cfg *config.Config, brainHome string) *framework.Ser
 		if keystoreService != nil && didRegistry != nil {
 			didService = didServices.NewDIDService(&cfg.Features.DID, keystoreService, didRegistry)
 
-			// Generate brain server ID based on brain home directory
-			// This ensures each brain instance has a unique ID while being deterministic
-			brainServerID := generateBrainServerID(brainHome)
-			didService.Initialize(brainServerID)
+			// Generate haxen server ID based on haxen home directory
+			// This ensures each haxen instance has a unique ID while being deterministic
+			haxenServerID := generateHaxenServerID(haxenHome)
+			didService.Initialize(haxenServerID)
 
 			// Create VC service with database storage (required)
 			if storageProvider != nil {
@@ -98,28 +98,28 @@ func CreateServiceContainer(cfg *config.Config, brainHome string) *framework.Ser
 }
 
 // CreateServiceContainerWithDefaults creates a service container with default configuration
-func CreateServiceContainerWithDefaults(brainHome string) *framework.ServiceContainer {
+func CreateServiceContainerWithDefaults(haxenHome string) *framework.ServiceContainer {
 	// Use default config for now
 	cfg := &config.Config{} // This will be enhanced when config is properly structured
-	return CreateServiceContainer(cfg, brainHome)
+	return CreateServiceContainer(cfg, haxenHome)
 }
 
-// generateBrainServerID creates a deterministic brain server ID based on the brain home directory.
-// This ensures each brain instance has a unique ID while being deterministic for the same installation.
-func generateBrainServerID(brainHome string) string {
-	// Use the absolute path of brain home to generate a deterministic ID
-	absPath, err := filepath.Abs(brainHome)
+// generateHaxenServerID creates a deterministic haxen server ID based on the haxen home directory.
+// This ensures each haxen instance has a unique ID while being deterministic for the same installation.
+func generateHaxenServerID(haxenHome string) string {
+	// Use the absolute path of haxen home to generate a deterministic ID
+	absPath, err := filepath.Abs(haxenHome)
 	if err != nil {
 		// Fallback to the original path if absolute path fails
-		absPath = brainHome
+		absPath = haxenHome
 	}
 
-	// Create a hash of the brain home path to generate a unique but deterministic ID
+	// Create a hash of the haxen home path to generate a unique but deterministic ID
 	hash := sha256.Sum256([]byte(absPath))
 
-	// Use first 16 characters of the hex hash as the brain server ID
+	// Use first 16 characters of the hex hash as the haxen server ID
 	// This provides uniqueness while keeping the ID manageable
-	brainServerID := hex.EncodeToString(hash[:])[:16]
+	haxenServerID := hex.EncodeToString(hash[:])[:16]
 
-	return brainServerID
+	return haxenServerID
 }

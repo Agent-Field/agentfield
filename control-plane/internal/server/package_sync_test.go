@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/your-org/brain/control-plane/pkg/types"
+	"github.com/your-org/haxen/control-plane/pkg/types"
 
 	"github.com/stretchr/testify/require"
 )
@@ -14,8 +14,8 @@ import (
 func TestSyncPackagesFromRegistryStoresMissingPackages(t *testing.T) {
 	t.Parallel()
 
-	brainHome := t.TempDir()
-	pkgDir := filepath.Join(brainHome, "example-agent")
+	haxenHome := t.TempDir()
+	pkgDir := filepath.Join(haxenHome, "example-agent")
 	require.NoError(t, os.MkdirAll(pkgDir, 0o755))
 
 	installed := `installed:
@@ -27,17 +27,17 @@ func TestSyncPackagesFromRegistryStoresMissingPackages(t *testing.T) {
     source: local
     status: installed
 `
-	require.NoError(t, os.WriteFile(filepath.Join(brainHome, "installed.yaml"), []byte(installed), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(haxenHome, "installed.yaml"), []byte(installed), 0o644))
 
 	packageYAML := `name: Example Agent
 version: 1.0.0
 schema:
   type: object
 `
-	require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "brain-package.yaml"), []byte(packageYAML), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "haxen-package.yaml"), []byte(packageYAML), 0o644))
 
 	storage := newStubPackageStorage()
-	require.NoError(t, SyncPackagesFromRegistry(brainHome, storage))
+	require.NoError(t, SyncPackagesFromRegistry(haxenHome, storage))
 
 	pkg, ok := storage.packages["example-agent"]
 	require.True(t, ok)
@@ -48,20 +48,20 @@ schema:
 func TestSyncPackagesSkipsExistingEntries(t *testing.T) {
 	t.Parallel()
 
-	brainHome := t.TempDir()
+	haxenHome := t.TempDir()
 	installed := `installed:
   existing-agent:
     name: Existing
     version: 0.1.0
     description: already present
-    path: ` + brainHome + `
+    path: ` + haxenHome + `
 `
-	require.NoError(t, os.WriteFile(filepath.Join(brainHome, "installed.yaml"), []byte(installed), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(haxenHome, "installed.yaml"), []byte(installed), 0o644))
 
 	storage := newStubPackageStorage()
 	storage.packages["existing-agent"] = &types.AgentPackage{ID: "existing-agent", Name: "Existing", InstalledAt: time.Now()}
 
-	require.NoError(t, SyncPackagesFromRegistry(brainHome, storage))
+	require.NoError(t, SyncPackagesFromRegistry(haxenHome, storage))
 
 	require.Len(t, storage.packages, 1)
 }

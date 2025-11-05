@@ -6,8 +6,8 @@ import websockets
 
 import pytest
 
-from brain_sdk.memory_events import PatternMatcher, EventSubscription, MemoryEventClient
-from brain_sdk.types import MemoryChangeEvent
+from haxen_sdk.memory_events import PatternMatcher, EventSubscription, MemoryEventClient
+from haxen_sdk.types import MemoryChangeEvent
 
 
 def test_pattern_matcher_wildcards():
@@ -35,7 +35,7 @@ def test_event_subscription_matches_scoped_event():
 
 def test_memory_event_client_subscription_and_unsubscribe(monkeypatch):
     ctx = SimpleNamespace(to_headers=lambda: {"Authorization": "token"})
-    client = MemoryEventClient("http://brain", ctx)
+    client = MemoryEventClient("http://haxen", ctx)
 
     callback_called = asyncio.Event()
 
@@ -55,7 +55,7 @@ def test_memory_event_client_subscription_and_unsubscribe(monkeypatch):
 @pytest.mark.asyncio
 async def test_memory_event_client_history(monkeypatch):
     ctx = SimpleNamespace(to_headers=lambda: {"Authorization": "token"})
-    client = MemoryEventClient("http://brain", ctx)
+    client = MemoryEventClient("http://haxen", ctx)
 
     class DummyResponse:
         def __init__(self):
@@ -97,7 +97,7 @@ async def test_memory_event_client_history(monkeypatch):
 @pytest.mark.asyncio
 async def test_memory_event_client_connect_builds_ws_url(monkeypatch):
     ctx = SimpleNamespace(to_headers=lambda: {"Authorization": "token"})
-    client = MemoryEventClient("http://brain", ctx)
+    client = MemoryEventClient("http://haxen", ctx)
 
     record = {}
     listener_called = {}
@@ -114,7 +114,7 @@ async def test_memory_event_client_connect_builds_ws_url(monkeypatch):
     async def fake_listen(self):
         listener_called["run"] = True
 
-    monkeypatch.setattr("brain_sdk.memory_events.websockets.connect", fake_connect)
+    monkeypatch.setattr("haxen_sdk.memory_events.websockets.connect", fake_connect)
     monkeypatch.setattr(MemoryEventClient, "_listen", fake_listen, raising=False)
 
     await client.connect(
@@ -122,7 +122,7 @@ async def test_memory_event_client_connect_builds_ws_url(monkeypatch):
     )
     await asyncio.sleep(0)
 
-    assert record["url"].startswith("ws://brain")
+    assert record["url"].startswith("ws://haxen")
     assert "patterns=cart.*,order.*" in record["url"]
     assert "scope=session" in record["url"]
     assert "scope_id=abc" in record["url"]
@@ -133,7 +133,7 @@ async def test_memory_event_client_connect_builds_ws_url(monkeypatch):
 @pytest.mark.asyncio
 async def test_memory_event_client_listen_dispatches(monkeypatch):
     ctx = SimpleNamespace(to_headers=lambda: {})
-    client = MemoryEventClient("http://brain", ctx)
+    client = MemoryEventClient("http://haxen", ctx)
 
     received = []
 
@@ -189,7 +189,7 @@ async def test_memory_event_client_listen_dispatches(monkeypatch):
 @pytest.mark.asyncio
 async def test_memory_event_client_handle_reconnect(monkeypatch):
     ctx = SimpleNamespace(to_headers=lambda: {})
-    client = MemoryEventClient("http://brain", ctx)
+    client = MemoryEventClient("http://haxen", ctx)
     client._max_reconnect_attempts = 2
 
     sleeps = []
@@ -217,7 +217,7 @@ async def test_memory_event_client_handle_reconnect(monkeypatch):
 
 def test_on_change_decorator_marks_wrapper():
     ctx = SimpleNamespace(to_headers=lambda: {})
-    client = MemoryEventClient("http://brain", ctx)
+    client = MemoryEventClient("http://haxen", ctx)
     client.websocket = SimpleNamespace(open=True)
 
     @client.on_change("foo.*")
