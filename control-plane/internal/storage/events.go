@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"github.com/your-org/haxen/control-plane/pkg/types"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -10,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/boltdb/bolt"
 )
@@ -74,14 +75,11 @@ func (ls *LocalStorage) startEventCleanup() {
 	ticker := time.NewTicker(1 * time.Hour) // Clean up every hour
 	defer ticker.Stop()
 
-	for {
-		select {
-		case <-ticker.C:
-			if ls.mode == "postgres" {
-				ls.cleanupExpiredEventsPostgres()
-			} else {
-				ls.cleanupExpiredEvents()
-			}
+	for range ticker.C {
+		if ls.mode == "postgres" {
+			ls.cleanupExpiredEventsPostgres()
+		} else {
+			ls.cleanupExpiredEvents()
 		}
 	}
 }

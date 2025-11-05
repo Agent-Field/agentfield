@@ -10,22 +10,22 @@ import (
 type ReasonerEventType string
 
 const (
-	ReasonerOnline     ReasonerEventType = "reasoner_online"
-	ReasonerOffline    ReasonerEventType = "reasoner_offline"
-	ReasonerUpdated    ReasonerEventType = "reasoner_updated"
-	NodeStatusChanged  ReasonerEventType = "node_status_changed"
-	ReasonersRefresh   ReasonerEventType = "reasoners_refresh"
+	ReasonerOnline    ReasonerEventType = "reasoner_online"
+	ReasonerOffline   ReasonerEventType = "reasoner_offline"
+	ReasonerUpdated   ReasonerEventType = "reasoner_updated"
+	NodeStatusChanged ReasonerEventType = "node_status_changed"
+	ReasonersRefresh  ReasonerEventType = "reasoners_refresh"
 	Heartbeat         ReasonerEventType = "heartbeat"
 )
 
 // ReasonerEvent represents a reasoner state change event
 type ReasonerEvent struct {
-	Type        ReasonerEventType `json:"type"`
-	ReasonerID  string           `json:"reasoner_id,omitempty"`
-	NodeID      string           `json:"node_id,omitempty"`
-	Status      string           `json:"status,omitempty"`
-	Timestamp   time.Time        `json:"timestamp"`
-	Data        interface{}      `json:"data,omitempty"`
+	Type       ReasonerEventType `json:"type"`
+	ReasonerID string            `json:"reasoner_id,omitempty"`
+	NodeID     string            `json:"node_id,omitempty"`
+	Status     string            `json:"status,omitempty"`
+	Timestamp  time.Time         `json:"timestamp"`
+	Data       interface{}       `json:"data,omitempty"`
 }
 
 // ReasonerEventBus manages reasoner event broadcasting
@@ -48,7 +48,7 @@ func (bus *ReasonerEventBus) Subscribe(subscriberID string) chan ReasonerEvent {
 
 	ch := make(chan ReasonerEvent, 100) // Buffer to prevent blocking
 	bus.subscribers[subscriberID] = ch
-	
+
 	return ch
 }
 
@@ -67,7 +67,6 @@ func (bus *ReasonerEventBus) Unsubscribe(subscriberID string) {
 func (bus *ReasonerEventBus) Publish(event ReasonerEvent) {
 	bus.mutex.RLock()
 	defer bus.mutex.RUnlock()
-
 
 	for _, ch := range bus.subscribers {
 		select {
@@ -110,8 +109,7 @@ func PublishReasonerOnline(reasonerID, nodeID string, data interface{}) {
 		Timestamp:  time.Now(),
 		Data:       data,
 	}
-	
-	
+
 	GlobalReasonerEventBus.Publish(event)
 }
 
@@ -125,8 +123,7 @@ func PublishReasonerOffline(reasonerID, nodeID string, data interface{}) {
 		Timestamp:  time.Now(),
 		Data:       data,
 	}
-	
-	
+
 	GlobalReasonerEventBus.Publish(event)
 }
 
@@ -152,8 +149,7 @@ func PublishNodeStatusChanged(nodeID, status string, data interface{}) {
 		Timestamp: time.Now(),
 		Data:      data,
 	}
-	
-	
+
 	GlobalReasonerEventBus.Publish(event)
 }
 
@@ -181,13 +177,10 @@ func StartHeartbeat(interval time.Duration) {
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		
-		for {
-			select {
-			case <-ticker.C:
-				if GlobalReasonerEventBus.GetSubscriberCount() > 0 {
-					PublishHeartbeat()
-				}
+
+		for range ticker.C {
+			if GlobalReasonerEventBus.GetSubscriberCount() > 0 {
+				PublishHeartbeat()
 			}
 		}
 	}()

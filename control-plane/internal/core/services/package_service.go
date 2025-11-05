@@ -1,4 +1,4 @@
-// haxen/internal/core/services/package_service.go
+// agentfield/internal/core/services/package_service.go
 package services
 
 import (
@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/internal/core/interfaces"
-	"github.com/your-org/haxen/control-plane/internal/core/domain"
-	"github.com/your-org/haxen/control-plane/internal/packages"
+	"github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
+	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
+	"github.com/Agent-Field/agentfield/control-plane/internal/packages"
 	"github.com/fatih/color"
 	"gopkg.in/yaml.v3"
 )
@@ -21,19 +21,19 @@ import (
 type DefaultPackageService struct {
 	registryStorage interfaces.RegistryStorage
 	fileSystem      interfaces.FileSystemAdapter
-	haxenHome       string
+	agentfieldHome  string
 }
 
 // NewPackageService creates a new package service instance
 func NewPackageService(
 	registryStorage interfaces.RegistryStorage,
 	fileSystem interfaces.FileSystemAdapter,
-	haxenHome string,
+	agentfieldHome string,
 ) interfaces.PackageService {
 	return &DefaultPackageService{
 		registryStorage: registryStorage,
 		fileSystem:      fileSystem,
-		haxenHome:       haxenHome,
+		agentfieldHome:  agentfieldHome,
 	}
 }
 
@@ -42,12 +42,12 @@ func (ps *DefaultPackageService) InstallPackage(source string, options domain.In
 	// Check if it's a Git URL (GitHub, GitLab, Bitbucket, etc.)
 	if packages.IsGitURL(source) {
 		installer := &packages.GitInstaller{
-			HaxenHome: ps.haxenHome,
-			Verbose:   options.Verbose,
+			AgentFieldHome: ps.agentfieldHome,
+			Verbose:        options.Verbose,
 		}
 		return installer.InstallFromGit(source, options.Force)
 	}
-	
+
 	// Handle local package installation
 	return ps.installLocalPackage(source, options.Force, options.Verbose)
 }
@@ -77,7 +77,7 @@ func (ps *DefaultPackageService) installLocalPackage(sourcePath string, force bo
 	}
 
 	// 3. Copy package to global location
-	destPath := filepath.Join(ps.haxenHome, "packages", metadata.Name)
+	destPath := filepath.Join(ps.agentfieldHome, "packages", metadata.Name)
 	spinner = ps.newSpinner("Setting up environment")
 	spinner.Start()
 	if err := ps.copyPackage(sourcePath, destPath); err != nil {
@@ -102,11 +102,11 @@ func (ps *DefaultPackageService) installLocalPackage(sourcePath string, force bo
 
 	fmt.Printf("%s Installed %s v%s\n", ps.green(ps.statusSuccess()), ps.bold(metadata.Name), ps.gray(metadata.Version))
 	fmt.Printf("  %s %s\n", ps.gray("Location:"), destPath)
-	
+
 	// 6. Check for required environment variables and provide guidance
 	ps.checkEnvironmentVariables(metadata)
-	
-	fmt.Printf("\n%s %s\n", ps.blue("→"), ps.bold(fmt.Sprintf("Run: haxen run %s", metadata.Name)))
+
+	fmt.Printf("\n%s %s\n", ps.blue("→"), ps.bold(fmt.Sprintf("Run: af run %s", metadata.Name)))
 
 	return nil
 }
@@ -188,7 +188,7 @@ func (ps *DefaultPackageService) stopAgentNode(agentNode *packages.InstalledPack
 
 // saveRegistry saves the installation registry
 func (ps *DefaultPackageService) saveRegistry(registry *packages.InstallationRegistry) error {
-	registryPath := filepath.Join(ps.haxenHome, "installed.yaml")
+	registryPath := filepath.Join(ps.agentfieldHome, "installed.yaml")
 
 	data, err := yaml.Marshal(registry)
 	if err != nil {
@@ -239,7 +239,7 @@ func (ps *DefaultPackageService) GetPackageInfo(name string) (*domain.InstalledP
 // loadRegistryDirect loads the registry using direct file system access
 // TODO: Eventually replace with registryStorage interface usage
 func (ps *DefaultPackageService) loadRegistryDirect() (*packages.InstallationRegistry, error) {
-	registryPath := filepath.Join(ps.haxenHome, "installed.yaml")
+	registryPath := filepath.Join(ps.agentfieldHome, "installed.yaml")
 
 	registry := &packages.InstallationRegistry{
 		Installed: make(map[string]packages.InstalledPackage),
@@ -307,15 +307,19 @@ type Spinner struct {
 }
 
 // Color helper methods
-func (ps *DefaultPackageService) green(text string) string   { return green(text) }
-func (ps *DefaultPackageService) red(text string) string     { return red(text) }
-func (ps *DefaultPackageService) yellow(text string) string  { return yellow(text) }
-func (ps *DefaultPackageService) blue(text string) string    { return blue(text) }
-func (ps *DefaultPackageService) cyan(text string) string    { return cyan(text) }
-func (ps *DefaultPackageService) gray(text string) string    { return gray(text) }
-func (ps *DefaultPackageService) bold(text string) string    { return bold(text) }
+func (ps *DefaultPackageService) green(text string) string { return green(text) }
+
+//nolint:unused // retained for console color helpers
+func (ps *DefaultPackageService) red(text string) string    { return red(text) }
+func (ps *DefaultPackageService) yellow(text string) string { return yellow(text) }
+func (ps *DefaultPackageService) blue(text string) string   { return blue(text) }
+func (ps *DefaultPackageService) cyan(text string) string   { return cyan(text) }
+func (ps *DefaultPackageService) gray(text string) string   { return gray(text) }
+func (ps *DefaultPackageService) bold(text string) string   { return bold(text) }
 func (ps *DefaultPackageService) statusSuccess() string     { return statusSuccess }
-func (ps *DefaultPackageService) statusError() string       { return statusError }
+
+//nolint:unused // retained for console status helpers
+func (ps *DefaultPackageService) statusError() string { return statusError }
 
 // newSpinner creates a new spinner with the given message
 func (ps *DefaultPackageService) newSpinner(message string) *Spinner {
@@ -373,10 +377,10 @@ func (s *Spinner) Error(message string) {
 
 // validatePackage checks if the package has required files
 func (ps *DefaultPackageService) validatePackage(sourcePath string) error {
-	// Check if haxen-package.yaml exists
-	packageYamlPath := filepath.Join(sourcePath, "haxen-package.yaml")
+	// Check if agentfield-package.yaml exists
+	packageYamlPath := filepath.Join(sourcePath, "agentfield-package.yaml")
 	if _, err := os.Stat(packageYamlPath); os.IsNotExist(err) {
-		return fmt.Errorf("haxen-package.yaml not found in %s", sourcePath)
+		return fmt.Errorf("agentfield-package.yaml not found in %s", sourcePath)
 	}
 
 	// Check if main.py exists
@@ -388,26 +392,26 @@ func (ps *DefaultPackageService) validatePackage(sourcePath string) error {
 	return nil
 }
 
-// parsePackageMetadata parses the haxen-package.yaml file
+// parsePackageMetadata parses the agentfield-package.yaml file
 func (ps *DefaultPackageService) parsePackageMetadata(sourcePath string) (*packages.PackageMetadata, error) {
-	packageYamlPath := filepath.Join(sourcePath, "haxen-package.yaml")
+	packageYamlPath := filepath.Join(sourcePath, "agentfield-package.yaml")
 
 	data, err := os.ReadFile(packageYamlPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read haxen-package.yaml: %w", err)
+		return nil, fmt.Errorf("failed to read agentfield-package.yaml: %w", err)
 	}
 
 	var metadata packages.PackageMetadata
 	if err := yaml.Unmarshal(data, &metadata); err != nil {
-		return nil, fmt.Errorf("failed to parse haxen-package.yaml: %w", err)
+		return nil, fmt.Errorf("failed to parse agentfield-package.yaml: %w", err)
 	}
 
 	// Validate required fields
 	if metadata.Name == "" {
-		return nil, fmt.Errorf("package name is required in haxen-package.yaml")
+		return nil, fmt.Errorf("package name is required in agentfield-package.yaml")
 	}
 	if metadata.Version == "" {
-		return nil, fmt.Errorf("package version is required in haxen-package.yaml")
+		return nil, fmt.Errorf("package version is required in agentfield-package.yaml")
 	}
 	if metadata.Main == "" {
 		metadata.Main = "main.py" // Default
@@ -418,13 +422,15 @@ func (ps *DefaultPackageService) parsePackageMetadata(sourcePath string) (*packa
 
 // isPackageInstalled checks if a package is already installed
 func (ps *DefaultPackageService) isPackageInstalled(packageName string) bool {
-	registryPath := filepath.Join(ps.haxenHome, "installed.yaml")
+	registryPath := filepath.Join(ps.agentfieldHome, "installed.yaml")
 	registry := &packages.InstallationRegistry{
 		Installed: make(map[string]packages.InstalledPackage),
 	}
 
 	if data, err := os.ReadFile(registryPath); err == nil {
-		yaml.Unmarshal(data, registry)
+		if err := yaml.Unmarshal(data, registry); err != nil {
+			return false
+		}
 	}
 
 	_, exists := registry.Installed[packageName]
@@ -490,7 +496,7 @@ func (ps *DefaultPackageService) installDependencies(packagePath string, metadat
 	if len(metadata.Dependencies.Python) > 0 || ps.hasRequirementsFile(packagePath) {
 		// Create virtual environment
 		venvPath := filepath.Join(packagePath, "venv")
-		
+
 		cmd := exec.Command("python3", "-m", "venv", venvPath)
 		if _, err := cmd.CombinedOutput(); err != nil {
 			// Try with python if python3 fails
@@ -508,11 +514,9 @@ func (ps *DefaultPackageService) installDependencies(packagePath string, metadat
 			pipPath = filepath.Join(venvPath, "Scripts", "pip.exe") // Windows
 		}
 
-		// Upgrade pip first
+		// Upgrade pip first (ignore failures)
 		cmd = exec.Command(pipPath, "install", "--upgrade", "pip")
-		if _, err := cmd.CombinedOutput(); err != nil {
-			// Ignore pip upgrade failures
-		}
+		_, _ = cmd.CombinedOutput()
 
 		// Install from requirements.txt if it exists
 		requirementsPath := filepath.Join(packagePath, "requirements.txt")
@@ -524,7 +528,7 @@ func (ps *DefaultPackageService) installDependencies(packagePath string, metadat
 			}
 		}
 
-		// Install dependencies from haxen-package.yaml
+		// Install dependencies from agentfield-package.yaml
 		if len(metadata.Dependencies.Python) > 0 {
 			for _, dep := range metadata.Dependencies.Python {
 				cmd = exec.Command(pipPath, "install", dep)
@@ -553,7 +557,7 @@ func (ps *DefaultPackageService) hasRequirementsFile(packagePath string) bool {
 
 // updateRegistry updates the installation registry with the new package
 func (ps *DefaultPackageService) updateRegistry(metadata *packages.PackageMetadata, sourcePath, destPath string) error {
-	registryPath := filepath.Join(ps.haxenHome, "installed.yaml")
+	registryPath := filepath.Join(ps.agentfieldHome, "installed.yaml")
 
 	// Load existing registry or create new one
 	registry := &packages.InstallationRegistry{
@@ -561,7 +565,9 @@ func (ps *DefaultPackageService) updateRegistry(metadata *packages.PackageMetada
 	}
 
 	if data, err := os.ReadFile(registryPath); err == nil {
-		yaml.Unmarshal(data, registry)
+		if err := yaml.Unmarshal(data, registry); err != nil {
+			return fmt.Errorf("failed to parse registry: %w", err)
+		}
 	}
 
 	// Add/update package entry
@@ -578,7 +584,7 @@ func (ps *DefaultPackageService) updateRegistry(metadata *packages.PackageMetada
 			Port:      nil,
 			PID:       nil,
 			StartedAt: nil,
-			LogFile:   filepath.Join(ps.haxenHome, "logs", metadata.Name+".log"),
+			LogFile:   filepath.Join(ps.agentfieldHome, "logs", metadata.Name+".log"),
 		},
 	}
 
@@ -617,7 +623,7 @@ func (ps *DefaultPackageService) checkEnvironmentVariables(metadata *packages.Pa
 	if len(missingRequired) > 0 {
 		fmt.Printf("\n%s %s\n", ps.yellow("⚠"), ps.bold("Missing required environment variables:"))
 		for _, envVar := range missingRequired {
-			fmt.Printf("  %s\n", ps.cyan(fmt.Sprintf("haxen config %s --set %s=your-value-here", metadata.Name, envVar.Name)))
+			fmt.Printf("  %s\n", ps.cyan(fmt.Sprintf("af config %s --set %s=your-value-here", metadata.Name, envVar.Name)))
 		}
 	}
 

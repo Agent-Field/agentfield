@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/your-org/haxen/control-plane/internal/config"
-	"github.com/your-org/haxen/control-plane/internal/storage"
-	"github.com/your-org/haxen/control-plane/pkg/types"
+	"github.com/Agent-Field/agentfield/control-plane/internal/config"
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/stretchr/testify/require"
 )
@@ -27,14 +27,14 @@ func setupDIDTestEnvironment(t *testing.T) (*DIDService, *DIDRegistry, storage.S
 
 	service := NewDIDService(cfg, ks, registry)
 
-	haxenID := "haxen-test"
-	require.NoError(t, service.Initialize(haxenID))
+	agentfieldID := "agentfield-test"
+	require.NoError(t, service.Initialize(agentfieldID))
 
-	return service, registry, provider, ctx, haxenID
+	return service, registry, provider, ctx, agentfieldID
 }
 
 func TestDIDServiceRegisterAgentAndResolve(t *testing.T) {
-	service, registry, provider, ctx, haxenID := setupDIDTestEnvironment(t)
+	service, registry, provider, ctx, agentfieldID := setupDIDTestEnvironment(t)
 
 	req := &types.DIDRegistrationRequest{
 		AgentNodeID: "agent-alpha",
@@ -49,7 +49,7 @@ func TestDIDServiceRegisterAgentAndResolve(t *testing.T) {
 	require.Contains(t, resp.IdentityPackage.ReasonerDIDs, "reasoner.fn")
 	require.Contains(t, resp.IdentityPackage.SkillDIDs, "skill.fn")
 
-	storedRegistry, err := registry.GetRegistry(haxenID)
+	storedRegistry, err := registry.GetRegistry(agentfieldID)
 	require.NoError(t, err)
 	require.NotNil(t, storedRegistry)
 	require.Contains(t, storedRegistry.AgentNodes, "agent-alpha")
@@ -86,14 +86,14 @@ func TestDIDServiceValidateRegistryFailure(t *testing.T) {
 	cfg := &config.DIDConfig{Enabled: true, Keystore: config.KeystoreConfig{Path: keystoreDir, Type: "local"}}
 	service := NewDIDService(cfg, ks, registry)
 
-	err = service.validateHaxenServerRegistry()
+	err = service.validateAgentFieldServerRegistry()
 	require.Error(t, err)
 
-	haxenID := "haxen-validate"
-	require.NoError(t, service.Initialize(haxenID))
-	require.NoError(t, service.validateHaxenServerRegistry())
+	agentfieldID := "agentfield-validate"
+	require.NoError(t, service.Initialize(agentfieldID))
+	require.NoError(t, service.validateAgentFieldServerRegistry())
 
-	stored, err := registry.GetRegistry(haxenID)
+	stored, err := registry.GetRegistry(agentfieldID)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	require.False(t, stored.CreatedAt.IsZero())

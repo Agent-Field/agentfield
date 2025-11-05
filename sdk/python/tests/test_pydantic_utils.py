@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from haxen_sdk.pydantic_utils import (
+from agentfield.pydantic_utils import (
     is_pydantic_model,
     is_optional_type,
     get_optional_inner_type,

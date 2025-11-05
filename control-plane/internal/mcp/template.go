@@ -16,13 +16,13 @@ type TemplateProcessor struct {
 
 // TemplateVars holds all available template variables
 type TemplateVars struct {
-	Port        int    `json:"port"`
-	DataDir     string `json:"data_dir"`
-	ConfigFile  string `json:"config_file"`
-	LogFile     string `json:"log_file"`
-	ServerDir   string `json:"server_dir"`
-	ProjectDir  string `json:"project_dir"`
-	Alias       string `json:"alias"`
+	Port       int    `json:"port"`
+	DataDir    string `json:"data_dir"`
+	ConfigFile string `json:"config_file"`
+	LogFile    string `json:"log_file"`
+	ServerDir  string `json:"server_dir"`
+	ProjectDir string `json:"project_dir"`
+	Alias      string `json:"alias"`
 }
 
 // NewTemplateProcessor creates a new template processor
@@ -42,7 +42,7 @@ func (tp *TemplateProcessor) ProcessCommand(command string, vars TemplateVars) (
 	}
 
 	processed := command
-	
+
 	// Replace all template variables
 	processed = strings.ReplaceAll(processed, "{{port}}", strconv.Itoa(vars.Port))
 	processed = strings.ReplaceAll(processed, "{{data_dir}}", vars.DataDir)
@@ -80,7 +80,7 @@ func (tp *TemplateProcessor) ProcessCommands(commands []string, vars TemplateVar
 // CreateTemplateVars creates template variables for the given configuration and port
 func (tp *TemplateProcessor) CreateTemplateVars(config MCPServerConfig, port int) TemplateVars {
 	serverDir := filepath.Join(tp.dataDir, config.Alias)
-	
+
 	return TemplateVars{
 		Port:       port,
 		DataDir:    tp.dataDir,

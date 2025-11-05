@@ -4,14 +4,14 @@ import httpx
 import pytest
 from fastapi import APIRouter
 
-from haxen_sdk.router import AgentRouter
+from agentfield.router import AgentRouter
 
 from tests.helpers import create_test_agent
 
 
 @pytest.mark.asyncio
 async def test_agent_reasoner_routing_and_workflow(monkeypatch):
-    agent, haxen_client = create_test_agent(
+    agent, agentfield_client = create_test_agent(
         monkeypatch, callback_url="https://callback.example.com"
     )
 
@@ -38,9 +38,9 @@ async def test_agent_reasoner_routing_and_workflow(monkeypatch):
 
     agent.include_router(router, prefix="/ops")
 
-    await agent.haxen_handler.register_with_haxen_server(port=9100)
-    assert haxen_client.register_calls
-    registration = haxen_client.register_calls[-1]
+    await agent.agentfield_handler.register_with_agentfield_server(port=9100)
+    assert agentfield_client.register_calls
+    registration = agentfield_client.register_calls[-1]
     assert registration["base_url"] == "https://callback.example.com:9100"
     assert registration["reasoners"][0]["id"] == "double"
     assert registration["skills"][0]["id"] == "annotate"
@@ -165,7 +165,7 @@ async def test_callback_url_precedence_and_env(monkeypatch):
     explicit_agent, explicit_client = create_test_agent(
         monkeypatch, callback_url="https://explicit.example.com"
     )
-    await explicit_agent.haxen_handler.register_with_haxen_server(port=9200)
+    await explicit_agent.agentfield_handler.register_with_agentfield_server(port=9200)
     assert explicit_agent.base_url == "https://explicit.example.com:9200"
     assert (
         explicit_client.register_calls[-1]["base_url"]
@@ -173,6 +173,6 @@ async def test_callback_url_precedence_and_env(monkeypatch):
     )
 
     env_agent, env_client = create_test_agent(monkeypatch)
-    await env_agent.haxen_handler.register_with_haxen_server(port=9300)
+    await env_agent.agentfield_handler.register_with_agentfield_server(port=9300)
     assert env_agent.base_url == "https://env.example.com:9300"
     assert env_client.register_calls[-1]["base_url"] == "https://env.example.com:9300"

@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/internal/config"
-	"github.com/your-org/haxen/control-plane/internal/logger"
-	"github.com/your-org/haxen/control-plane/internal/storage"
-	"github.com/your-org/haxen/control-plane/pkg/types"
+	"github.com/Agent-Field/agentfield/control-plane/internal/config"
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
 // VCService handles verifiable credential generation, verification, and management.
@@ -143,21 +143,21 @@ func (s *VCService) GenerateExecutionVC(ctx *types.ExecutionContext, inputData, 
 
 	// Create execution VC
 	executionVC := &types.ExecutionVC{
-		VCID:        s.generateVCID(),
-		ExecutionID: ctx.ExecutionID,
-		WorkflowID:  ctx.WorkflowID,
-		SessionID:   ctx.SessionID,
-		IssuerDID:   ctx.CallerDID,
-		TargetDID:   ctx.TargetDID,
-		CallerDID:   ctx.CallerDID,
-		VCDocument:  json.RawMessage(vcDocBytes),
-		Signature:   signature,
-		StorageURI:  "",
+		VCID:         s.generateVCID(),
+		ExecutionID:  ctx.ExecutionID,
+		WorkflowID:   ctx.WorkflowID,
+		SessionID:    ctx.SessionID,
+		IssuerDID:    ctx.CallerDID,
+		TargetDID:    ctx.TargetDID,
+		CallerDID:    ctx.CallerDID,
+		VCDocument:   json.RawMessage(vcDocBytes),
+		Signature:    signature,
+		StorageURI:   "",
 		DocumentSize: int64(len(vcDocBytes)),
-		InputHash:   inputHash,
-		OutputHash:  outputHash,
-		Status:      dbStatus,
-		CreatedAt:   time.Now(),
+		InputHash:    inputHash,
+		OutputHash:   outputHash,
+		Status:       dbStatus,
+		CreatedAt:    time.Now(),
 	}
 
 	// Store VC
@@ -339,8 +339,8 @@ func (s *VCService) createVCDocument(ctx *types.ExecutionContext, callerIdentity
 			InputDataHash:  inputHash,
 			OutputDataHash: outputHash,
 			Metadata: map[string]interface{}{
-				"haxen_version": "1.0.0",
-				"vc_version":    "1.0",
+				"agentfield_version": "1.0.0",
+				"vc_version":         "1.0",
 			},
 		},
 	}
@@ -352,13 +352,13 @@ func (s *VCService) createVCDocument(ctx *types.ExecutionContext, callerIdentity
 	return &types.VCDocument{
 		Context: []string{
 			"https://www.w3.org/2018/credentials/v1",
-			"https://haxen.example.com/contexts/execution/v1",
+			"https://agentfield.example.com/contexts/execution/v1",
 		},
 		Type: []string{
 			"VerifiableCredential",
-			"HaxenExecutionCredential",
+			"AgentFieldExecutionCredential",
 		},
-		ID:                fmt.Sprintf("urn:haxen:vc:%s", vcID),
+		ID:                fmt.Sprintf("urn:agentfield:vc:%s", vcID),
 		Issuer:            ctx.CallerDID,
 		IssuanceDate:      time.Now().UTC().Format(time.RFC3339),
 		CredentialSubject: credentialSubject,
@@ -498,15 +498,15 @@ func (s *VCService) generateWorkflowVCDocument(workflowID string, executionVCs [
 		startTime = time.Now()
 	}
 
-	// Get haxen server DID as issuer using dynamic resolution
-	haxenServerID, err := s.didService.GetHaxenServerID()
+	// Get af server DID as issuer using dynamic resolution
+	agentfieldServerID, err := s.didService.GetAgentFieldServerID()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get haxen server ID: %w", err)
+		return nil, fmt.Errorf("failed to get af server ID: %w", err)
 	}
 
-	registry, err := s.didService.GetRegistry(haxenServerID)
+	registry, err := s.didService.GetRegistry(agentfieldServerID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get haxen server DID: %w", err)
+		return nil, fmt.Errorf("failed to get af server DID: %w", err)
 	}
 
 	issuerDID := registry.RootDID
@@ -581,17 +581,17 @@ func (s *VCService) createWorkflowVCDocument(workflowID, sessionID string, compo
 		SnapshotTime:   time.Now().UTC().Format(time.RFC3339),
 		Orchestrator: types.VCCaller{
 			DID:          issuerDID,
-			Type:         "haxen_server",
+			Type:         "agentfield_server",
 			AgentNodeDID: issuerDID,
 		},
 		Audit: types.VCAudit{
 			InputDataHash:  "", // Workflow-level doesn't have specific input/output
 			OutputDataHash: "",
 			Metadata: map[string]interface{}{
-				"haxen_version":    "1.0.0",
-				"vc_version":       "1.0",
-				"workflow_type":    "agent_execution_chain",
-				"total_executions": len(componentVCIDs),
+				"agentfield_version": "1.0.0",
+				"vc_version":         "1.0",
+				"workflow_type":      "agent_execution_chain",
+				"total_executions":   len(componentVCIDs),
 			},
 		},
 	}
@@ -604,13 +604,13 @@ func (s *VCService) createWorkflowVCDocument(workflowID, sessionID string, compo
 	return &types.WorkflowVCDocument{
 		Context: []string{
 			"https://www.w3.org/2018/credentials/v1",
-			"https://haxen.example.com/contexts/workflow/v1",
+			"https://agentfield.example.com/contexts/workflow/v1",
 		},
 		Type: []string{
 			"VerifiableCredential",
-			"HaxenWorkflowCredential",
+			"AgentFieldWorkflowCredential",
 		},
-		ID:                fmt.Sprintf("urn:haxen:workflow-vc:%s", vcID),
+		ID:                fmt.Sprintf("urn:agentfield:workflow-vc:%s", vcID),
 		Issuer:            issuerDID,
 		IssuanceDate:      time.Now().UTC().Format(time.RFC3339),
 		CredentialSubject: credentialSubject,
@@ -850,11 +850,11 @@ type SecurityAnalysis struct {
 
 // ComplianceChecks represents compliance and audit verification results
 type ComplianceChecks struct {
-	W3CCompliance           bool                `json:"w3c_compliance"`
-	HaxenStandardCompliance bool                `json:"haxen_standard_compliance"`
-	AuditTrailIntegrity     bool                `json:"audit_trail_integrity"`
-	DataIntegrityChecks     bool                `json:"data_integrity_checks"`
-	Issues                  []VerificationIssue `json:"issues"`
+	W3CCompliance                bool                `json:"w3c_compliance"`
+	AgentFieldStandardCompliance bool                `json:"agentfield_standard_compliance"`
+	AuditTrailIntegrity          bool                `json:"audit_trail_integrity"`
+	DataIntegrityChecks          bool                `json:"data_integrity_checks"`
+	Issues                       []VerificationIssue `json:"issues"`
 }
 
 // VerifyExecutionVCComprehensive performs comprehensive verification of an execution VC
@@ -1034,7 +1034,7 @@ func (s *VCService) performIntegrityChecks(execVC *types.ExecutionVC, vcDoc *typ
 		})
 	}
 
-	// CRITICAL CHECK 7: Status consistency (with Haxen system status mapping)
+	// CRITICAL CHECK 7: Status consistency (with AgentField system status mapping)
 	if !s.isStatusConsistent(execVC.Status, vcDoc.CredentialSubject.Execution.Status) {
 		result.FieldConsistency = false
 		result.Issues = append(result.Issues, VerificationIssue{
@@ -1170,11 +1170,11 @@ func (s *VCService) performSecurityAnalysis(execVC *types.ExecutionVC, vcDoc *ty
 // performComplianceChecks performs compliance verification
 func (s *VCService) performComplianceChecks(vcDoc *types.VCDocument) ComplianceChecks {
 	result := ComplianceChecks{
-		W3CCompliance:           true,
-		HaxenStandardCompliance: true,
-		AuditTrailIntegrity:     true,
-		DataIntegrityChecks:     true,
-		Issues:                  []VerificationIssue{},
+		W3CCompliance:                true,
+		AgentFieldStandardCompliance: true,
+		AuditTrailIntegrity:          true,
+		DataIntegrityChecks:          true,
+		Issues:                       []VerificationIssue{},
 	}
 
 	// Check W3C compliance
@@ -1188,14 +1188,14 @@ func (s *VCService) performComplianceChecks(vcDoc *types.VCDocument) ComplianceC
 		})
 	}
 
-	// Check Haxen standard compliance
-	if !s.checkHaxenStandardCompliance(vcDoc) {
-		result.HaxenStandardCompliance = false
+	// Check AgentField standard compliance
+	if !s.checkAgentFieldStandardCompliance(vcDoc) {
+		result.AgentFieldStandardCompliance = false
 		result.Issues = append(result.Issues, VerificationIssue{
-			Type:        "haxen_compliance_failure",
+			Type:        "agentfield_compliance_failure",
 			Severity:    "warning",
 			Component:   vcDoc.ID,
-			Description: "VC does not meet Haxen standard requirements",
+			Description: "VC does not meet AgentField standard requirements",
 		})
 	}
 
@@ -1275,9 +1275,9 @@ func (s *VCService) checkW3CCompliance(vcDoc *types.VCDocument) bool {
 	return true
 }
 
-func (s *VCService) checkHaxenStandardCompliance(vcDoc *types.VCDocument) bool {
-	// Check Haxen-specific compliance requirements
-	requiredTypes := []string{"VerifiableCredential", "HaxenExecutionCredential"}
+func (s *VCService) checkAgentFieldStandardCompliance(vcDoc *types.VCDocument) bool {
+	// Check AgentField-specific compliance requirements
+	requiredTypes := []string{"VerifiableCredential", "AgentFieldExecutionCredential"}
 	for _, required := range requiredTypes {
 		found := false
 		for _, vcType := range vcDoc.Type {
@@ -1312,7 +1312,7 @@ func (s *VCService) calculateOverallScore(result *ComprehensiveVCVerificationRes
 	return score
 }
 
-// isStatusConsistent checks if status values are consistent, accounting for Haxen system status mapping
+// isStatusConsistent checks if status values are consistent, accounting for AgentField system status mapping
 func (s *VCService) isStatusConsistent(metadataStatus, vcDocStatus string) bool {
 	return types.NormalizeExecutionStatus(metadataStatus) == types.NormalizeExecutionStatus(vcDocStatus)
 }
@@ -1366,11 +1366,11 @@ func (s *VCService) VerifyWorkflowVCComprehensive(workflowID string) (*Comprehen
 	}
 
 	allComplianceChecks := ComplianceChecks{
-		W3CCompliance:           true,
-		HaxenStandardCompliance: true,
-		AuditTrailIntegrity:     true,
-		DataIntegrityChecks:     true,
-		Issues:                  []VerificationIssue{},
+		W3CCompliance:                true,
+		AgentFieldStandardCompliance: true,
+		AuditTrailIntegrity:          true,
+		DataIntegrityChecks:          true,
+		Issues:                       []VerificationIssue{},
 	}
 
 	// Verify each execution VC in the workflow
@@ -1422,8 +1422,8 @@ func (s *VCService) VerifyWorkflowVCComprehensive(workflowID string) (*Comprehen
 		if !complianceChecks.W3CCompliance {
 			allComplianceChecks.W3CCompliance = false
 		}
-		if !complianceChecks.HaxenStandardCompliance {
-			allComplianceChecks.HaxenStandardCompliance = false
+		if !complianceChecks.AgentFieldStandardCompliance {
+			allComplianceChecks.AgentFieldStandardCompliance = false
 		}
 		if !complianceChecks.AuditTrailIntegrity {
 			allComplianceChecks.AuditTrailIntegrity = false
@@ -1482,12 +1482,12 @@ func (s *VCService) VerifyWorkflowVCComprehensive(workflowID string) (*Comprehen
 
 			// Check workflow VC compliance
 			if !s.checkWorkflowVCCompliance(&workflowVCDoc) {
-				allComplianceChecks.HaxenStandardCompliance = false
+				allComplianceChecks.AgentFieldStandardCompliance = false
 				allComplianceChecks.Issues = append(allComplianceChecks.Issues, VerificationIssue{
 					Type:        "workflow_compliance_failure",
 					Severity:    "warning",
 					Component:   vcChain.WorkflowVC.WorkflowVCID,
-					Description: "Workflow VC does not meet Haxen standard requirements",
+					Description: "Workflow VC does not meet AgentField standard requirements",
 				})
 			}
 		}
@@ -1559,10 +1559,10 @@ func (s *VCService) verifyWorkflowVCSignature(vcDoc *types.WorkflowVCDocument, i
 	return ed25519.Verify(publicKey, canonicalBytes, signatureBytes), nil
 }
 
-// checkWorkflowVCCompliance checks if a workflow VC meets Haxen standard compliance
+// checkWorkflowVCCompliance checks if a workflow VC meets AgentField standard compliance
 func (s *VCService) checkWorkflowVCCompliance(vcDoc *types.WorkflowVCDocument) bool {
-	// Check Haxen-specific compliance requirements for workflow VCs
-	requiredTypes := []string{"VerifiableCredential", "HaxenWorkflowCredential"}
+	// Check AgentField-specific compliance requirements for workflow VCs
+	requiredTypes := []string{"VerifiableCredential", "AgentFieldWorkflowCredential"}
 	for _, required := range requiredTypes {
 		found := false
 		for _, vcType := range vcDoc.Type {

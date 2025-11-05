@@ -2,15 +2,15 @@ from types import MethodType, SimpleNamespace
 
 import pytest
 
-from haxen_sdk.agent import Agent
-from haxen_sdk.agent_registry import set_current_agent, clear_current_agent
+from agentfield.agent import Agent
+from agentfield.agent_registry import set_current_agent, clear_current_agent
 
 
 @pytest.mark.asyncio
 async def test_call_local_reasoner_argument_mapping():
     agent = object.__new__(Agent)
     agent.node_id = "node"
-    agent.haxen_connected = True
+    agent.agentfield_connected = True
     agent.dev_mode = False
     agent.async_config = SimpleNamespace(
         enable_async_execution=False, fallback_to_sync=False
@@ -49,7 +49,7 @@ async def test_call_local_reasoner_argument_mapping():
 async def test_call_remote_target_uses_generic_arg_names():
     agent = object.__new__(Agent)
     agent.node_id = "node"
-    agent.haxen_connected = True
+    agent.agentfield_connected = True
     agent.dev_mode = False
     agent.async_config = SimpleNamespace(
         enable_async_execution=False, fallback_to_sync=False
@@ -78,10 +78,10 @@ async def test_call_remote_target_uses_generic_arg_names():
 
 
 @pytest.mark.asyncio
-async def test_call_raises_when_haxen_disconnected():
+async def test_call_raises_when_agentfield_disconnected():
     agent = object.__new__(Agent)
     agent.node_id = "node"
-    agent.haxen_connected = False
+    agent.agentfield_connected = False
     agent.dev_mode = False
     agent.async_config = SimpleNamespace(
         enable_async_execution=False, fallback_to_sync=False

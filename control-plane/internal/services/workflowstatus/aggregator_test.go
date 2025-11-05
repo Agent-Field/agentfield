@@ -1,9 +1,10 @@
 package workflowstatus
 
 import (
-	"github.com/your-org/haxen/control-plane/pkg/types"
 	"testing"
 	"time"
+
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
 func makeExecution(status string, startedAt time.Time, completedAt *time.Time, parent bool) *types.WorkflowExecution {

@@ -1,8 +1,9 @@
 package utils
 
 import (
-	"crypto/rand"
+	cryptoRand "crypto/rand"
 	"fmt"
+	mathrand "math/rand"
 	"time"
 )
 
@@ -27,8 +28,8 @@ func GenerateRunID() string {
 	return fmt.Sprintf("run_%s_%s", timestamp, random)
 }
 
-// GenerateHaxenRequestID generates a new haxen request ID
-func GenerateHaxenRequestID() string {
+// GenerateAgentFieldRequestID generates a new agentfield request ID
+func GenerateAgentFieldRequestID() string {
 	timestamp := time.Now().Format("20060102_150405")
 	random := generateRandomString(8)
 	return fmt.Sprintf("req_%s_%s", timestamp, random)
@@ -44,7 +45,14 @@ func ValidateWorkflowID(workflowID string) bool {
 func generateRandomString(length int) string {
 	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, length)
-	rand.Read(b)
+	if _, err := cryptoRand.Read(b); err != nil {
+		// Fallback to pseudo-random source if crypto source is unavailable.
+		src := mathrand.New(mathrand.NewSource(time.Now().UnixNano()))
+		for i := range b {
+			b[i] = charset[src.Intn(len(charset))]
+		}
+		return string(b)
+	}
 	for i := range b {
 		b[i] = charset[b[i]%byte(len(charset))]
 	}

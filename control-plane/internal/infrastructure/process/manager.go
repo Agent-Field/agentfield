@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/your-org/haxen/control-plane/internal/core/interfaces"
+	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
 )
 
 // DefaultProcessManager provides a default implementation for managing system processes.
@@ -101,11 +101,8 @@ func (pm *DefaultProcessManager) Stop(pid int) error {
 	}
 
 	// Wait for the process to actually terminate
-	_, waitErr := cmd.Process.Wait()
-	if waitErr != nil {
-		// Process might have already exited, which is fine
-		// We'll still clean up our tracking
-	}
+	// Ignore errors as process might have already exited
+	_, _ = cmd.Process.Wait()
 
 	// Clean up tracking
 	delete(pm.runningProcesses, pid)
@@ -127,18 +124,16 @@ func (pm *DefaultProcessManager) Status(pid int) (interfaces.ProcessInfo, error)
 	}
 
 	// Determine status
-	status := "unknown"
+	status := "stopped"
 	if cmd.Process != nil {
 		// Check if process is still running by sending signal 0
 		if err := cmd.Process.Signal(syscall.Signal(0)); err == nil {
 			status = "running"
 		} else {
-			status = "stopped"
 			// Clean up if process is no longer running
 			delete(pm.runningProcesses, pid)
 		}
 	} else {
-		status = "stopped"
 		delete(pm.runningProcesses, pid)
 	}
 

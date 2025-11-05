@@ -5,7 +5,7 @@ import httpx
 import pytest
 import requests
 
-from haxen_sdk.memory import (
+from agentfield.memory import (
     GlobalMemoryClient,
     MemoryClient,
     MemoryInterface,
@@ -88,11 +88,11 @@ async def test_memory_round_trip(monkeypatch, dummy_headers):
 
     monkeypatch.setattr(requests, "post", fake_post)
     monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: AsyncClientStub())
-    monkeypatch.setattr("haxen_sdk.logger.log_debug", lambda *args, **kwargs: None)
+    monkeypatch.setattr("agentfield.logger.log_debug", lambda *args, **kwargs: None)
 
     context = SimpleNamespace(to_headers=lambda: dict(dummy_headers))
-    haxen_client = SimpleNamespace(api_base="http://haxen.local/api/v1")
-    memory_client = MemoryClient(haxen_client, context)
+    agentfield_client = SimpleNamespace(api_base="http://agentfield.local/api/v1")
+    memory_client = MemoryClient(agentfield_client, context)
     interface = MemoryInterface(memory_client, SimpleNamespace())  # type: ignore[arg-type]
 
     # Default scope round-trip
@@ -116,11 +116,11 @@ async def test_memory_round_trip(monkeypatch, dummy_headers):
 
 @pytest.mark.functional
 @pytest.mark.asyncio
-async def test_memory_client_uses_haxen_async_request(dummy_headers):
+async def test_memory_client_uses_agentfield_async_request(dummy_headers):
     calls: list[tuple[str, str, dict]] = []
 
-    class DummyHaxenClient:
-        api_base = "http://haxen.local/api/v1"
+    class DummyAgentFieldClient:
+        api_base = "http://agentfield.local/api/v1"
 
         async def _async_request(self, method, url, **kwargs):
             calls.append((method, url, kwargs))
@@ -129,7 +129,7 @@ async def test_memory_client_uses_haxen_async_request(dummy_headers):
             return DummyAsyncResponse(200, {"ok": True})
 
     context = SimpleNamespace(to_headers=lambda: dict(dummy_headers))
-    memory_client = MemoryClient(DummyHaxenClient(), context)
+    memory_client = MemoryClient(DummyAgentFieldClient(), context)
 
     await memory_client.set("answer", 42)
     value = await memory_client.get("answer")

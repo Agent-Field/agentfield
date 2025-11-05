@@ -1,14 +1,15 @@
 package storage
 
 import (
-	"github.com/your-org/haxen/control-plane/internal/logger"
-	"github.com/your-org/haxen/control-plane/pkg/types"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
 // CreateExecutionRecord inserts a new execution row using the simplified schema.
@@ -103,7 +104,7 @@ func (ls *LocalStorage) UpdateExecutionRecord(ctx context.Context, executionID s
 	if err != nil {
 		return nil, fmt.Errorf("begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer rollbackTx(tx, "UpdateExecutionRecord:"+executionID)
 
 	row := tx.QueryRowContext(ctx, `
 		SELECT execution_id, run_id, parent_execution_id,
@@ -270,10 +271,6 @@ func (ls *LocalStorage) QueryExecutionRecords(ctx context.Context, filter types.
 		orderColumn = "created_at"
 	case "updated_at":
 		orderColumn = "updated_at"
-	case "started_at":
-		fallthrough
-	default:
-		orderColumn = "started_at"
 	}
 	orderDirection := "DESC"
 	if !filter.SortDescending {
@@ -361,7 +358,7 @@ func (ls *LocalStorage) MarkStaleExecutions(ctx context.Context, staleAfter time
 	if err != nil {
 		return 0, fmt.Errorf("begin stale execution transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer rollbackTx(tx, "MarkStaleExecutions")
 
 	updateStmt, err := tx.PrepareContext(ctx, `
 		UPDATE executions

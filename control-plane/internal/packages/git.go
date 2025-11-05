@@ -2,6 +2,7 @@ package packages
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"gopkg.in/yaml.v3"
 )
 
@@ -22,8 +23,8 @@ type GitPackageInfo struct {
 
 // GitInstaller handles Git package installation from any Git repository
 type GitInstaller struct {
-	HaxenHome string
-	Verbose   bool
+	AgentFieldHome string
+	Verbose        bool
 }
 
 // newSpinner creates a new spinner with the given message
@@ -49,8 +50,8 @@ func IsGitURL(url string) bool {
 // isHTTPSGitURL checks if it's an HTTPS URL that might be a Git repo
 func isHTTPSGitURL(url string) bool {
 	// Check if it's an HTTPS URL that might be a Git repo
-	return strings.HasPrefix(url, "https://") && 
-		strings.Contains(url, "/") && 
+	return strings.HasPrefix(url, "https://") &&
+		strings.Contains(url, "/") &&
 		!strings.HasSuffix(url, "/")
 }
 
@@ -59,7 +60,7 @@ func ParseGitURL(url string) (*GitPackageInfo, error) {
 	info := &GitPackageInfo{
 		URL: url,
 	}
-	
+
 	// Handle URLs with @ for branch/tag specification
 	// e.g., https://github.com/owner/repo@branch
 	// But not SSH URLs like git@github.com:owner/repo.git
@@ -83,7 +84,7 @@ func ParseGitURL(url string) (*GitPackageInfo, error) {
 	} else {
 		info.CloneURL = url
 	}
-	
+
 	return info, nil
 }
 
@@ -92,13 +93,13 @@ func checkGitAvailable() error {
 	if _, err := exec.LookPath("git"); err != nil {
 		return fmt.Errorf("git is required but not found in PATH\n\nPlease install Git:\n  • macOS: brew install git\n  • Ubuntu: sudo apt-get install git\n  • Windows: https://git-scm.com/download/win")
 	}
-	
+
 	// Check git version (optional - ensure modern git)
 	cmd := exec.Command("git", "--version")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("git installation appears to be broken")
 	}
-	
+
 	return nil
 }
 
@@ -124,26 +125,26 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 	// 1. Clone repository
 	spinner := gi.newSpinner("Cloning repository")
 	spinner.Start()
-	
+
 	tempDir, err := gi.cloneRepository(info)
 	if err != nil {
 		spinner.Error("Failed to clone repository")
 		return fmt.Errorf("failed to clone repository: %w", err)
 	}
 	defer os.RemoveAll(tempDir) // Always clean up
-	
+
 	spinner.Success("Repository cloned")
 
 	// 2. Find and validate package structure
 	spinner = gi.newSpinner("Validating package structure")
 	spinner.Start()
-	
+
 	packagePath, err := gi.findPackageRoot(tempDir)
 	if err != nil {
 		spinner.Error("Invalid package structure")
 		return fmt.Errorf("invalid package structure: %w", err)
 	}
-	
+
 	spinner.Success("Package structure validated")
 
 	// 3. Parse metadata to get package name
@@ -154,8 +155,8 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 
 	// 4. Use existing installer for the rest
 	installer := &PackageInstaller{
-		HaxenHome: gi.HaxenHome,
-		Verbose:   gi.Verbose,
+		AgentFieldHome: gi.AgentFieldHome,
+		Verbose:        gi.Verbose,
 	}
 
 	// Check if already installed
@@ -164,8 +165,8 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 	}
 
 	// Install using existing flow
-	destPath := filepath.Join(gi.HaxenHome, "packages", metadata.Name)
-	
+	destPath := filepath.Join(gi.AgentFieldHome, "packages", metadata.Name)
+
 	spinner = gi.newSpinner("Setting up environment")
 	spinner.Start()
 	if err := installer.copyPackage(packagePath, destPath); err != nil {
@@ -193,11 +194,11 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 		logger.Logger.Info().Msgf("  %s %s", Gray("Reference:"), info.Ref)
 	}
 	logger.Logger.Info().Msgf("  %s %s", Gray("Location:"), destPath)
-	
+
 	// Check for required environment variables
 	installer.checkEnvironmentVariables(metadata)
-	
-	logger.Logger.Info().Msgf("\n%s %s", Blue("→"), Bold(fmt.Sprintf("Run: haxen run %s", metadata.Name)))
+
+	logger.Logger.Info().Msgf("\n%s %s", Blue("→"), Bold(fmt.Sprintf("Run: af run %s", metadata.Name)))
 
 	return nil
 }
@@ -205,44 +206,44 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 // cloneRepository clones the Git repository with optimizations
 func (gi *GitInstaller) cloneRepository(info *GitPackageInfo) (string, error) {
 	// Create temporary directory
-	tempDir, err := os.MkdirTemp("", "haxen-git-install-")
+	tempDir, err := os.MkdirTemp("", "agentfield-git-install-")
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp directory: %w", err)
 	}
 
 	// Build git clone command with optimizations
 	args := []string{"clone"}
-	
+
 	// Shallow clone for efficiency (only latest commit)
 	args = append(args, "--depth", "1")
-	
+
 	// Clone specific branch/tag if specified
 	if info.Ref != "" {
 		args = append(args, "--branch", info.Ref)
 	}
-	
+
 	// Add URLs
 	args = append(args, info.CloneURL, tempDir)
 
 	// Execute git clone
 	cmd := exec.Command("git", args...)
-	
+
 	// Capture both stdout and stderr for better error messages
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	
+
 	if gi.Verbose {
 		logger.Logger.Info().Msgf("Executing: git %s", strings.Join(args, " "))
 	}
-	
+
 	if err := cmd.Run(); err != nil {
 		// Clean up temp directory on failure
 		os.RemoveAll(tempDir)
-		
+
 		// Provide helpful error messages based on common failure scenarios
 		stderrStr := stderr.String()
-		
+
 		if strings.Contains(stderrStr, "Authentication failed") || strings.Contains(stderrStr, "authentication failed") {
 			return "", fmt.Errorf("authentication failed - please check your credentials\n\nFor private repositories, you can:\n  • Use SSH: git@github.com:owner/repo.git\n  • Use token: https://token:your_token@github.com/owner/repo\n  • Configure Git credentials: git config --global credential.helper")
 		}
@@ -255,14 +256,14 @@ func (gi *GitInstaller) cloneRepository(info *GitPackageInfo) (string, error) {
 		if strings.Contains(stderrStr, "Could not resolve host") {
 			return "", fmt.Errorf("could not resolve host - please check your internet connection and the repository URL")
 		}
-		
+
 		return "", fmt.Errorf("git clone failed: %w\nError output: %s", err, stderrStr)
 	}
 
 	return tempDir, nil
 }
 
-// findPackageRoot finds the root directory containing haxen-package.yaml
+// findPackageRoot finds the root directory containing agentfield-package.yaml
 func (gi *GitInstaller) findPackageRoot(cloneDir string) (string, error) {
 	var packageRoot string
 
@@ -271,7 +272,7 @@ func (gi *GitInstaller) findPackageRoot(cloneDir string) (string, error) {
 			return err
 		}
 
-		if info.Name() == "haxen-package.yaml" {
+		if info.Name() == "agentfield-package.yaml" {
 			packageRoot = filepath.Dir(path)
 			return filepath.SkipDir // Found it, stop walking
 		}
@@ -284,7 +285,7 @@ func (gi *GitInstaller) findPackageRoot(cloneDir string) (string, error) {
 	}
 
 	if packageRoot == "" {
-		return "", fmt.Errorf("haxen-package.yaml not found in the repository")
+		return "", fmt.Errorf("agentfield-package.yaml not found in the repository")
 	}
 
 	// Also check for main.py
@@ -296,18 +297,18 @@ func (gi *GitInstaller) findPackageRoot(cloneDir string) (string, error) {
 	return packageRoot, nil
 }
 
-// parsePackageMetadata parses the haxen-package.yaml file (reuse from installer.go)
+// parsePackageMetadata parses the agentfield-package.yaml file (reuse from installer.go)
 func (gi *GitInstaller) parsePackageMetadata(packagePath string) (*PackageMetadata, error) {
 	installer := &PackageInstaller{
-		HaxenHome: gi.HaxenHome,
-		Verbose:   gi.Verbose,
+		AgentFieldHome: gi.AgentFieldHome,
+		Verbose:        gi.Verbose,
 	}
 	return installer.parsePackageMetadata(packagePath)
 }
 
 // updateRegistryWithGit updates the installation registry with Git source info
 func (gi *GitInstaller) updateRegistryWithGit(metadata *PackageMetadata, info *GitPackageInfo, sourcePath, destPath string) error {
-	registryPath := filepath.Join(gi.HaxenHome, "installed.yaml")
+	registryPath := filepath.Join(gi.AgentFieldHome, "installed.yaml")
 
 	// Load existing registry or create new one
 	registry := &InstallationRegistry{
@@ -315,7 +316,11 @@ func (gi *GitInstaller) updateRegistryWithGit(metadata *PackageMetadata, info *G
 	}
 
 	if data, err := os.ReadFile(registryPath); err == nil {
-		yaml.Unmarshal(data, registry)
+		if err := yaml.Unmarshal(data, registry); err != nil {
+			return fmt.Errorf("failed to parse registry %s: %w", registryPath, err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("failed to read registry %s: %w", registryPath, err)
 	}
 
 	// Determine source type based on URL
@@ -348,7 +353,7 @@ func (gi *GitInstaller) updateRegistryWithGit(metadata *PackageMetadata, info *G
 			Port:      nil,
 			PID:       nil,
 			StartedAt: nil,
-			LogFile:   filepath.Join(gi.HaxenHome, "logs", metadata.Name+".log"),
+			LogFile:   filepath.Join(gi.AgentFieldHome, "logs", metadata.Name+".log"),
 		},
 	}
 

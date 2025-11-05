@@ -1,4 +1,4 @@
-// UI embedding and route registration for Haxen
+// UI embedding and route registration for AgentField
 
 package client
 
@@ -29,7 +29,7 @@ func RegisterUIRoutes(router *gin.Engine) {
 
 	router.GET("/ui/*filepath", func(c *gin.Context) {
 		path := c.Param("filepath")
-		
+
 		// If accessing root UI path or a directory, serve index.html
 		if path == "/" || path == "" || strings.HasSuffix(path, "/") {
 			indexHTML, err := UIFiles.ReadFile("dist/index.html")
@@ -43,7 +43,7 @@ func RegisterUIRoutes(router *gin.Engine) {
 			c.String(http.StatusOK, string(indexHTML))
 			return
 		}
-		
+
 		// Check if it's a static asset by looking for common web asset file extensions
 		// This prevents reasoner IDs with dots (like "deepresearchagent.meta_research_methodology_reasoner")
 		// from being treated as static assets
@@ -71,7 +71,7 @@ func RegisterUIRoutes(router *gin.Engine) {
 			http.StripPrefix("/ui", fileServer).ServeHTTP(c.Writer, c.Request)
 			return
 		}
-		
+
 		// For all other paths (SPA routes), serve index.html
 		indexHTML, err := UIFiles.ReadFile("dist/index.html")
 		if err != nil {

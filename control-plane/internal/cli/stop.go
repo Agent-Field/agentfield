@@ -10,24 +10,24 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/packages"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
-	"github.com/your-org/haxen/control-plane/internal/packages"
 )
 
 // NewStopCommand creates the stop command
 func NewStopCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "stop <agent-node-name>",
-		Short: "Stop a running Haxen agent node",
-		Long: `Stop a running Haxen agent node package.
+		Short: "Stop a running AgentField agent node",
+		Long: `Stop a running AgentField agent node package.
 
 The agent node process will be terminated gracefully and its status
 will be updated in the registry.
 
 Examples:
-  haxen stop email-helper
-  haxen stop data-analyzer`,
+  af stop email-helper
+  af stop data-analyzer`,
 		Args: cobra.ExactArgs(1),
 		Run:  runStopCommand,
 	}
@@ -39,7 +39,7 @@ func runStopCommand(cmd *cobra.Command, args []string) {
 	agentNodeName := args[0]
 
 	stopper := &AgentNodeStopper{
-		HaxenHome: getHaxenHomeDir(),
+		AgentFieldHome: getAgentFieldHomeDir(),
 	}
 
 	if err := stopper.StopAgentNode(agentNodeName); err != nil {
@@ -50,7 +50,7 @@ func runStopCommand(cmd *cobra.Command, args []string) {
 
 // AgentNodeStopper handles stopping agent nodes
 type AgentNodeStopper struct {
-	HaxenHome string
+	AgentFieldHome string
 }
 
 // StopAgentNode stops a running agent node
@@ -87,24 +87,24 @@ func (as *AgentNodeStopper) StopAgentNode(agentNodeName string) error {
 	httpShutdownSuccess := false
 	if agentNode.Runtime.Port != nil {
 		fmt.Printf("🛑 Attempting graceful HTTP shutdown for agent %s on port %d\n", agentNodeName, *agentNode.Runtime.Port)
-		
+
 		// Construct agent base URL
 		baseURL := fmt.Sprintf("http://localhost:%d", *agentNode.Runtime.Port)
 		shutdownURL := fmt.Sprintf("%s/shutdown", baseURL)
-		
+
 		// Create shutdown request
 		requestBody := map[string]interface{}{
 			"graceful":        true,
 			"timeout_seconds": 30,
 		}
-		
+
 		bodyBytes, err := json.Marshal(requestBody)
 		if err == nil {
 			req, err := http.NewRequest("POST", shutdownURL, bytes.NewReader(bodyBytes))
 			if err == nil {
 				req.Header.Set("Content-Type", "application/json")
-				req.Header.Set("User-Agent", "Haxen-CLI/1.0")
-				
+				req.Header.Set("User-Agent", "AgentField-CLI/1.0")
+
 				client := &http.Client{Timeout: 10 * time.Second}
 				resp, err := client.Do(req)
 				if err == nil {
@@ -112,7 +112,7 @@ func (as *AgentNodeStopper) StopAgentNode(agentNodeName string) error {
 					if resp.StatusCode == 200 {
 						fmt.Printf("✅ HTTP shutdown request accepted for agent %s\n", agentNodeName)
 						httpShutdownSuccess = true
-						
+
 						// Wait a moment for graceful shutdown
 						time.Sleep(3 * time.Second)
 					} else {
@@ -128,7 +128,7 @@ func (as *AgentNodeStopper) StopAgentNode(agentNodeName string) error {
 	// If HTTP shutdown failed or not available, fall back to process signals
 	if !httpShutdownSuccess {
 		fmt.Printf("🔄 Falling back to process signal shutdown for agent %s\n", agentNodeName)
-		
+
 		// Send SIGTERM for graceful shutdown
 		if err := process.Signal(os.Interrupt); err != nil {
 			// If graceful shutdown fails, force kill
@@ -138,7 +138,7 @@ func (as *AgentNodeStopper) StopAgentNode(agentNodeName string) error {
 		} else {
 			// Wait for graceful shutdown, then check if still running
 			time.Sleep(3 * time.Second)
-			
+
 			// Check if process is still running
 			if err := process.Signal(syscall.Signal(0)); err == nil {
 				// Process still running, force kill
@@ -168,7 +168,7 @@ func (as *AgentNodeStopper) StopAgentNode(agentNodeName string) error {
 
 // loadRegistry loads the installation registry
 func (as *AgentNodeStopper) loadRegistry() (*packages.InstallationRegistry, error) {
-	registryPath := filepath.Join(as.HaxenHome, "installed.yaml")
+	registryPath := filepath.Join(as.AgentFieldHome, "installed.yaml")
 
 	registry := &packages.InstallationRegistry{
 		Installed: make(map[string]packages.InstalledPackage),
@@ -185,7 +185,7 @@ func (as *AgentNodeStopper) loadRegistry() (*packages.InstallationRegistry, erro
 
 // saveRegistry saves the installation registry
 func (as *AgentNodeStopper) saveRegistry(registry *packages.InstallationRegistry) error {
-	registryPath := filepath.Join(as.HaxenHome, "installed.yaml")
+	registryPath := filepath.Join(as.AgentFieldHome, "installed.yaml")
 
 	data, err := yaml.Marshal(registry)
 	if err != nil {

@@ -1,9 +1,9 @@
 -- Migration Runner: DID Schema Migration Script
--- Description: Complete DID database schema setup for the Haxen platform
+-- Description: Complete DID database schema setup for the AgentField platform
 -- Created: 2025-01-08
 -- 
 -- This script creates all necessary tables for the DID (Decentralized Identity) implementation
--- in the Haxen platform, enabling the transition from file-based to database-backed storage.
+-- in the AgentField platform, enabling the transition from file-based to database-backed storage.
 
 -- Create migrations tracking table
 CREATE TABLE IF NOT EXISTS schema_migrations (

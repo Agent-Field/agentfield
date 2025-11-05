@@ -1,7 +1,7 @@
 import socket
 import pytest
 
-from haxen_sdk.utils import get_free_port
+from agentfield.utils import get_free_port
 
 
 def test_get_free_port_iterates_until_success(monkeypatch):

@@ -17,14 +17,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/agentfield/haxen/sdk/go/ai"
-	"github.com/agentfield/haxen/sdk/go/client"
-	"github.com/agentfield/haxen/sdk/go/types"
+	"github.com/Agent-Field/agentfield/sdk/go/ai"
+	"github.com/Agent-Field/agentfield/sdk/go/client"
+	"github.com/Agent-Field/agentfield/sdk/go/types"
 )
 
 type executionContextKey struct{}
 
-// ExecutionContext captures the headers Haxen sends with each execution request.
+// ExecutionContext captures the headers AgentField sends with each execution request.
 type ExecutionContext struct {
 	RunID             string
 	ExecutionID       string
@@ -74,7 +74,7 @@ type Config struct {
 	NodeID        string
 	Version       string
 	TeamID        string
-	HaxenURL      string
+	AgentFieldURL string
 	ListenAddress string
 	PublicURL     string
 	Token         string
@@ -121,8 +121,8 @@ func New(cfg Config) (*Agent, error) {
 	if cfg.TeamID == "" {
 		cfg.TeamID = "default"
 	}
-	if cfg.HaxenURL == "" {
-		return nil, errors.New("config.HaxenURL is required")
+	if cfg.AgentFieldURL == "" {
+		return nil, errors.New("config.AgentFieldURL is required")
 	}
 	if cfg.ListenAddress == "" {
 		cfg.ListenAddress = ":8001"
@@ -141,7 +141,7 @@ func New(cfg Config) (*Agent, error) {
 		Timeout: 15 * time.Second,
 	}
 
-	c, err := client.New(cfg.HaxenURL, client.WithHTTPClient(httpClient), client.WithBearerToken(cfg.Token))
+	c, err := client.New(cfg.AgentFieldURL, client.WithHTTPClient(httpClient), client.WithBearerToken(cfg.Token))
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +203,7 @@ func (a *Agent) RegisterReasoner(name string, handler HandlerFunc, opts ...Reaso
 	a.reasoners[name] = meta
 }
 
-// Initialize registers the agent with the Haxen control plane without starting a listener.
+// Initialize registers the agent with the AgentField control plane without starting a listener.
 func (a *Agent) Initialize(ctx context.Context) error {
 	a.initMu.Lock()
 	defer a.initMu.Unlock()
@@ -295,7 +295,7 @@ func (a *Agent) registerNode(ctx context.Context) error {
 		return err
 	}
 
-	a.logger.Printf("node %s registered with Haxen", a.cfg.NodeID)
+	a.logger.Printf("node %s registered with AgentField", a.cfg.NodeID)
 	return nil
 }
 
@@ -399,7 +399,7 @@ func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-// Call invokes another reasoner via the Haxen control plane, preserving execution context.
+// Call invokes another reasoner via the AgentField control plane, preserving execution context.
 func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (map[string]any, error) {
 	if !strings.Contains(target, ".") {
 		target = fmt.Sprintf("%s.%s", a.cfg.NodeID, strings.TrimPrefix(target, "."))
@@ -417,7 +417,7 @@ func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (
 		return nil, fmt.Errorf("marshal call payload: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/api/v1/execute/%s", strings.TrimSuffix(a.cfg.HaxenURL, "/"), strings.TrimPrefix(target, "/"))
+	url := fmt.Sprintf("%s/api/v1/execute/%s", strings.TrimSuffix(a.cfg.AgentFieldURL, "/"), strings.TrimPrefix(target, "/"))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)

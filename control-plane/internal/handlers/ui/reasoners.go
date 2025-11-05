@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/internal/events"
-	"github.com/your-org/haxen/control-plane/internal/storage"
-	"github.com/your-org/haxen/control-plane/pkg/types"
+	"github.com/Agent-Field/agentfield/control-plane/internal/events"
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -28,26 +28,26 @@ func NewReasonersHandler(storageProvider storage.StorageProvider) *ReasonersHand
 // ReasonerWithNode represents a reasoner with its associated node information.
 type ReasonerWithNode struct {
 	// Reasoner identification
-	ReasonerID   string `json:"reasoner_id"`   // Format: "node_id.reasoner_id"
-	Name         string `json:"name"`          // Human-readable name
-	Description  string `json:"description"`   // Reasoner description
-	
+	ReasonerID  string `json:"reasoner_id"` // Format: "node_id.reasoner_id"
+	Name        string `json:"name"`        // Human-readable name
+	Description string `json:"description"` // Reasoner description
+
 	// Node context
-	NodeID       string             `json:"node_id"`
-	NodeStatus   types.HealthStatus `json:"node_status"`
-	NodeVersion  string             `json:"node_version"`
-	
+	NodeID      string             `json:"node_id"`
+	NodeStatus  types.HealthStatus `json:"node_status"`
+	NodeVersion string             `json:"node_version"`
+
 	// Reasoner details
-	InputSchema  interface{} `json:"input_schema"`
-	OutputSchema interface{} `json:"output_schema"`
+	InputSchema  interface{}        `json:"input_schema"`
+	OutputSchema interface{}        `json:"output_schema"`
 	MemoryConfig types.MemoryConfig `json:"memory_config"`
-	
+
 	// Performance metrics (placeholder for future implementation)
-	AvgResponseTime *int     `json:"avg_response_time_ms,omitempty"`
-	SuccessRate     *float64 `json:"success_rate,omitempty"`
-	TotalRuns       *int     `json:"total_runs,omitempty"`
+	AvgResponseTime *int       `json:"avg_response_time_ms,omitempty"`
+	SuccessRate     *float64   `json:"success_rate,omitempty"`
+	TotalRuns       *int       `json:"total_runs,omitempty"`
 	LastExecuted    *time.Time `json:"last_executed,omitempty"`
-	
+
 	// Timestamps
 	LastUpdated time.Time `json:"last_updated"`
 }
@@ -64,23 +64,23 @@ type ReasonersResponse struct {
 // GetAllReasonersHandler handles requests for all reasoners across all nodes.
 func (h *ReasonersHandler) GetAllReasonersHandler(c *gin.Context) {
 	// Parse query parameters
-	statusFilter := c.Query("status")        // "online", "offline", "all" (default: "all")
-	searchTerm := c.Query("search")          // Search in reasoner names/descriptions
-	limitStr := c.Query("limit")             // Pagination limit
-	offsetStr := c.Query("offset")           // Pagination offset
-	
+	statusFilter := c.Query("status") // "online", "offline", "all" (default: "all")
+	searchTerm := c.Query("search")   // Search in reasoner names/descriptions
+	limitStr := c.Query("limit")      // Pagination limit
+	offsetStr := c.Query("offset")    // Pagination offset
+
 	// Set defaults
 	if statusFilter == "" {
 		statusFilter = "all"
 	}
-	
+
 	limit := 50 // Default limit
 	if limitStr != "" {
 		if parsedLimit, err := strconv.Atoi(limitStr); err == nil && parsedLimit > 0 {
 			limit = parsedLimit
 		}
 	}
-	
+
 	offset := 0 // Default offset
 	if offsetStr != "" {
 		if parsedOffset, err := strconv.Atoi(offsetStr); err == nil && parsedOffset >= 0 {
@@ -94,7 +94,7 @@ func (h *ReasonersHandler) GetAllReasonersHandler(c *gin.Context) {
 		activeStatus := types.HealthStatusActive
 		filters.HealthStatus = &activeStatus
 	}
-	
+
 	ctx := c.Request.Context()
 	nodes, err := h.storage.ListAgents(ctx, filters)
 	if err != nil {
@@ -116,21 +116,21 @@ func (h *ReasonersHandler) GetAllReasonersHandler(c *gin.Context) {
 	}
 
 	for _, node := range nodes {
-		fmt.Printf("  Processing node %s with %d reasoners (status: %s)\n", 
+		fmt.Printf("  Processing node %s with %d reasoners (status: %s)\n",
 			node.ID, len(node.Reasoners), node.HealthStatus)
-		
+
 		for _, reasoner := range node.Reasoners {
 			// Create full reasoner ID
 			fullReasonerID := fmt.Sprintf("%s.%s", node.ID, reasoner.ID)
-			
+
 			// Extract name from reasoner ID (use ID as name for now)
 			name := reasoner.ID
 			description := fmt.Sprintf("Reasoner %s from node %s", reasoner.ID, node.ID)
-			
+
 			// DIAGNOSTIC LOG: Track reasoner status determination
 			fmt.Printf("🔍 REASONER_STATUS_DEBUG: Reasoner %s - NodeHealth: %s, NodeLifecycle: %s, LastHeartbeat: %s\n",
 				fullReasonerID, node.HealthStatus, node.LifecycleStatus, node.LastHeartbeat.Format(time.RFC3339))
-			
+
 			reasonerWithNode := ReasonerWithNode{
 				ReasonerID:   fullReasonerID,
 				Name:         name,
@@ -143,24 +143,24 @@ func (h *ReasonersHandler) GetAllReasonersHandler(c *gin.Context) {
 				MemoryConfig: reasoner.MemoryConfig,
 				LastUpdated:  node.LastHeartbeat,
 			}
-			
+
 			// Apply search filter
 			if searchTerm != "" {
 				searchLower := strings.ToLower(searchTerm)
 				if !strings.Contains(strings.ToLower(name), searchLower) &&
-				   !strings.Contains(strings.ToLower(description), searchLower) &&
-				   !strings.Contains(strings.ToLower(reasoner.ID), searchLower) {
+					!strings.Contains(strings.ToLower(description), searchLower) &&
+					!strings.Contains(strings.ToLower(reasoner.ID), searchLower) {
 					continue
 				}
 			}
-			
+
 			// Count by status
 			if node.HealthStatus == types.HealthStatusActive {
 				onlineCount++
 			} else {
 				offlineCount++
 			}
-			
+
 			allReasoners = append(allReasoners, reasonerWithNode)
 		}
 	}
@@ -187,14 +187,14 @@ func (h *ReasonersHandler) GetAllReasonersHandler(c *gin.Context) {
 	total := len(filteredReasoners)
 	start := offset
 	end := offset + limit
-	
+
 	if start > total {
 		start = total
 	}
 	if end > total {
 		end = total
 	}
-	
+
 	paginatedReasoners := filteredReasoners[start:end]
 
 	fmt.Printf("📋 Returning %d reasoners (total: %d, online: %d, offline: %d) from %d nodes\n",
@@ -272,11 +272,11 @@ func (h *ReasonersHandler) GetReasonerDetailsHandler(c *gin.Context) {
 
 // PerformanceMetrics represents performance data for a reasoner
 type PerformanceMetrics struct {
-	AvgResponseTimeMs    int                    `json:"avg_response_time_ms"`
-	SuccessRate          float64                `json:"success_rate"`
-	TotalExecutions      int                    `json:"total_executions"`
-	ExecutionsLast24h    int                    `json:"executions_last_24h"`
-	RecentExecutions     []RecentExecution      `json:"recent_executions"`
+	AvgResponseTimeMs int               `json:"avg_response_time_ms"`
+	SuccessRate       float64           `json:"success_rate"`
+	TotalExecutions   int               `json:"total_executions"`
+	ExecutionsLast24h int               `json:"executions_last_24h"`
+	RecentExecutions  []RecentExecution `json:"recent_executions"`
 }
 
 // RecentExecution represents a recent execution for metrics
@@ -340,7 +340,7 @@ func (h *ReasonersHandler) GetPerformanceMetricsHandler(c *gin.Context) {
 		return
 	}
 
-	fmt.Printf("📊 Retrieved performance metrics for reasoner %s: %d executions, %.2f%% success rate\n", 
+	fmt.Printf("📊 Retrieved performance metrics for reasoner %s: %d executions, %.2f%% success rate\n",
 		reasonerID, metrics.TotalExecutions, metrics.SuccessRate*100)
 
 	c.JSON(http.StatusOK, metrics)
@@ -357,12 +357,12 @@ func (h *ReasonersHandler) GetExecutionHistoryHandler(c *gin.Context) {
 	// Parse pagination parameters
 	pageStr := c.DefaultQuery("page", "1")
 	limitStr := c.DefaultQuery("limit", "20")
-	
+
 	page, err := strconv.Atoi(pageStr)
 	if err != nil || page < 1 {
 		page = 1
 	}
-	
+
 	limit, err := strconv.Atoi(limitStr)
 	if err != nil || limit < 1 || limit > 100 {
 		limit = 20
@@ -384,7 +384,7 @@ func (h *ReasonersHandler) GetExecutionHistoryHandler(c *gin.Context) {
 		return
 	}
 
-	fmt.Printf("📋 Retrieved execution history for reasoner %s: %d executions (page %d, limit %d)\n", 
+	fmt.Printf("📋 Retrieved execution history for reasoner %s: %d executions (page %d, limit %d)\n",
 		reasonerID, len(history.Executions), page, limit)
 
 	c.JSON(http.StatusOK, history)
@@ -477,7 +477,7 @@ func (h *ReasonersHandler) StreamReasonerEventsHandler(c *gin.Context) {
 
 	// Generate unique subscriber ID
 	subscriberID := fmt.Sprintf("reasoner_sse_%d_%s", time.Now().UnixNano(), c.ClientIP())
-	
+
 	// Subscribe to reasoner events
 	eventChan := events.GlobalReasonerEventBus.Subscribe(subscriberID)
 	defer events.GlobalReasonerEventBus.Unsubscribe(subscriberID)
@@ -488,15 +488,16 @@ func (h *ReasonersHandler) StreamReasonerEventsHandler(c *gin.Context) {
 		"message":   "Reasoner events stream connected",
 		"timestamp": time.Now().Format(time.RFC3339),
 	}
-	
+
 	if eventJSON, err := json.Marshal(initialEvent); err == nil {
-		c.Writer.WriteString("data: " + string(eventJSON) + "\n\n")
-		c.Writer.Flush()
+		if !writeSSE(c, eventJSON) {
+			return
+		}
 	}
 
 	// Set up context for handling client disconnection
 	ctx := c.Request.Context()
-	
+
 	// Send periodic heartbeat to keep connection alive
 	heartbeatTicker := time.NewTicker(30 * time.Second)
 	defer heartbeatTicker.Stop()
@@ -516,8 +517,9 @@ func (h *ReasonersHandler) StreamReasonerEventsHandler(c *gin.Context) {
 				"timestamp": time.Now().Format(time.RFC3339),
 			}
 			if heartbeatJSON, err := json.Marshal(heartbeat); err == nil {
-				c.Writer.WriteString("data: " + string(heartbeatJSON) + "\n\n")
-				c.Writer.Flush()
+				if !writeSSE(c, heartbeatJSON) {
+					return
+				}
 			}
 		case event, ok := <-eventChan:
 			if !ok {
@@ -525,11 +527,12 @@ func (h *ReasonersHandler) StreamReasonerEventsHandler(c *gin.Context) {
 				fmt.Printf("📡 Reasoner SSE channel closed for: %s\n", subscriberID)
 				return
 			}
-			
+
 			// Convert event to JSON and send
 			if eventJSON, err := event.ToJSON(); err == nil {
-				c.Writer.WriteString("data: " + eventJSON + "\n\n")
-				c.Writer.Flush()
+				if !writeSSE(c, []byte(eventJSON)) {
+					return
+				}
 				fmt.Printf("📤 Sent reasoner event %s to client %s\n", event.Type, subscriberID)
 			}
 		}

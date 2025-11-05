@@ -1,18 +1,19 @@
 package config
 
 import (
-	"fmt"              // Added for fmt.Errorf
-	"gopkg.in/yaml.v3" // Added for yaml.Unmarshal
-	"os"               // Added for os.Stat, os.ReadFile
-	"path/filepath"    // Added for filepath.Join
+	"fmt"           // Added for fmt.Errorf
+	"os"            // Added for os.Stat, os.ReadFile
+	"path/filepath" // Added for filepath.Join
 	"time"
 
-	"github.com/your-org/haxen/control-plane/internal/storage"
+	"gopkg.in/yaml.v3" // Added for yaml.Unmarshal
+
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 )
 
-// Config holds the entire configuration for the Haxen server.
+// Config holds the entire configuration for the AgentField server.
 type Config struct {
-	Haxen           HaxenConfig           `yaml:"haxen" mapstructure:"haxen"`
+	AgentField      AgentFieldConfig      `yaml:"agentfield" mapstructure:"agentfield"`
 	Agents          AgentsConfig          `yaml:"agents" mapstructure:"agents"`
 	Features        FeatureConfig         `yaml:"features" mapstructure:"features"`
 	Storage         StorageConfig         `yaml:"storage" mapstructure:"storage"`                   // Added storage config
@@ -31,8 +32,8 @@ type UIConfig struct {
 	BackendURL string `yaml:"backend_url" mapstructure:"backend_url"` // URL of the backend if UI is separate
 }
 
-// HaxenConfig holds the core Haxen server configuration.
-type HaxenConfig struct {
+// AgentFieldConfig holds the core AgentField server configuration.
+type AgentFieldConfig struct {
 	Port                    int                    `yaml:"port"`
 	DatabaseURL             string                 `yaml:"database_url"`
 	MaxConcurrentRequests   int                    `yaml:"max_concurrent_requests"`
@@ -165,21 +166,21 @@ type CORSConfig struct {
 // with the implementation in the storage package.
 type StorageConfig = storage.StorageConfig
 
-// DataDirectoriesConfig holds configuration for Haxen data directory paths
+// DataDirectoriesConfig holds configuration for AgentField data directory paths
 type DataDirectoriesConfig struct {
-	HaxenHome        string `yaml:"haxen_home" mapstructure:"haxen_home"`                 // Can be overridden by HAXEN_HOME env var
-	DatabaseDir      string `yaml:"database_dir" mapstructure:"database_dir"`             // Relative to haxen_home
-	KeysDir          string `yaml:"keys_dir" mapstructure:"keys_dir"`                     // Relative to haxen_home
-	DIDRegistriesDir string `yaml:"did_registries_dir" mapstructure:"did_registries_dir"` // Relative to haxen_home
-	VCsDir           string `yaml:"vcs_dir" mapstructure:"vcs_dir"`                       // Relative to haxen_home
-	AgentsDir        string `yaml:"agents_dir" mapstructure:"agents_dir"`                 // Relative to haxen_home
-	LogsDir          string `yaml:"logs_dir" mapstructure:"logs_dir"`                     // Relative to haxen_home
-	ConfigDir        string `yaml:"config_dir" mapstructure:"config_dir"`                 // Relative to haxen_home
-	TempDir          string `yaml:"temp_dir" mapstructure:"temp_dir"`                     // Relative to haxen_home
+	AgentFieldHome   string `yaml:"agentfield_home" mapstructure:"agentfield_home"`       // Can be overridden by AGENTFIELD_HOME env var
+	DatabaseDir      string `yaml:"database_dir" mapstructure:"database_dir"`             // Relative to agentfield_home
+	KeysDir          string `yaml:"keys_dir" mapstructure:"keys_dir"`                     // Relative to agentfield_home
+	DIDRegistriesDir string `yaml:"did_registries_dir" mapstructure:"did_registries_dir"` // Relative to agentfield_home
+	VCsDir           string `yaml:"vcs_dir" mapstructure:"vcs_dir"`                       // Relative to agentfield_home
+	AgentsDir        string `yaml:"agents_dir" mapstructure:"agents_dir"`                 // Relative to agentfield_home
+	LogsDir          string `yaml:"logs_dir" mapstructure:"logs_dir"`                     // Relative to agentfield_home
+	ConfigDir        string `yaml:"config_dir" mapstructure:"config_dir"`                 // Relative to agentfield_home
+	TempDir          string `yaml:"temp_dir" mapstructure:"temp_dir"`                     // Relative to agentfield_home
 }
 
-// DefaultConfigPath is the default path for the haxen configuration file.
-const DefaultConfigPath = "haxen.yaml" // Or "./haxen.yaml", "config/haxen.yaml" depending on convention
+// DefaultConfigPath is the default path for the af configuration file.
+const DefaultConfigPath = "agentfield.yaml" // Or "./agentfield.yaml", "config/agentfield.yaml" depending on convention
 
 // LoadConfig reads the configuration from the given path or default paths.
 func LoadConfig(configPath string) (*Config, error) {
@@ -193,7 +194,7 @@ func LoadConfig(configPath string) (*Config, error) {
 		// This part might need more sophisticated logic depending on project structure
 		// For now, let's assume configPath is either absolute or relative to CWD.
 		// If not found, try a common "config/" subdirectory
-		altPath := filepath.Join("config", "haxen.yaml")
+		altPath := filepath.Join("config", "agentfield.yaml")
 		if _, err2 := os.Stat(altPath); err2 == nil {
 			configPath = altPath
 		} else {

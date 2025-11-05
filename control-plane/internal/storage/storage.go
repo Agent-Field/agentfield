@@ -1,12 +1,13 @@
 package storage
 
 import (
-	"github.com/your-org/haxen/control-plane/internal/events"
-	"github.com/your-org/haxen/control-plane/pkg/types"
 	"context"
 	"fmt"
 	"os"
 	"time"
+
+	"github.com/Agent-Field/agentfield/control-plane/internal/events"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
 // StorageProvider is the interface for the primary data storage backend.
@@ -124,13 +125,13 @@ type StorageProvider interface {
 	GetDID(ctx context.Context, did string) (*types.DIDRegistryEntry, error)
 	ListDIDs(ctx context.Context) ([]*types.DIDRegistryEntry, error)
 
-	// Haxen Server DID operations
-	StoreHaxenServerDID(ctx context.Context, haxenServerID, rootDID string, masterSeed []byte, createdAt, lastKeyRotation time.Time) error
-	GetHaxenServerDID(ctx context.Context, haxenServerID string) (*types.HaxenServerDIDInfo, error)
-	ListHaxenServerDIDs(ctx context.Context) ([]*types.HaxenServerDIDInfo, error)
+	// AgentField Server DID operations
+	StoreAgentFieldServerDID(ctx context.Context, agentfieldServerID, rootDID string, masterSeed []byte, createdAt, lastKeyRotation time.Time) error
+	GetAgentFieldServerDID(ctx context.Context, agentfieldServerID string) (*types.AgentFieldServerDIDInfo, error)
+	ListAgentFieldServerDIDs(ctx context.Context) ([]*types.AgentFieldServerDIDInfo, error)
 
 	// Agent DID operations
-	StoreAgentDID(ctx context.Context, agentID, agentDID, haxenServerDID, publicKeyJWK string, derivationIndex int) error
+	StoreAgentDID(ctx context.Context, agentID, agentDID, agentfieldServerDID, publicKeyJWK string, derivationIndex int) error
 	GetAgentDID(ctx context.Context, agentID string) (*types.AgentDIDInfo, error)
 	ListAgentDIDs(ctx context.Context) ([]*types.AgentDIDInfo, error)
 
@@ -140,7 +141,7 @@ type StorageProvider interface {
 	ListComponentDIDs(ctx context.Context, agentDID string) ([]*types.ComponentDIDInfo, error)
 
 	// Multi-step DID operations with transaction safety
-	StoreAgentDIDWithComponents(ctx context.Context, agentID, agentDID, haxenServerDID, publicKeyJWK string, derivationIndex int, components []ComponentDIDRequest) error
+	StoreAgentDIDWithComponents(ctx context.Context, agentID, agentDID, agentfieldServerDID, publicKeyJWK string, derivationIndex int, components []ComponentDIDRequest) error
 
 	// Execution VC operations
 	StoreExecutionVC(ctx context.Context, vcID, executionID, workflowID, sessionID, issuerDID, targetDID, callerDID, inputHash, outputHash, status string, vcDocument []byte, signature string, storageURI string, documentSizeBytes int64) error
@@ -226,7 +227,7 @@ func (sf *StorageFactory) CreateStorage(config StorageConfig) (StorageProvider, 
 	}
 
 	// Allow environment variable to override mode
-	if envMode := os.Getenv("HAXEN_STORAGE_MODE"); envMode != "" {
+	if envMode := os.Getenv("AGENTFIELD_STORAGE_MODE"); envMode != "" {
 		mode = envMode
 	}
 

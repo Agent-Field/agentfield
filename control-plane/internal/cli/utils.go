@@ -10,32 +10,32 @@ import (
 	"github.com/fatih/color"
 )
 
-// getHaxenHomeDir returns the Haxen home directory (~/.haxen) and ensures it exists
-func getHaxenHomeDir() string {
+// getAgentFieldHomeDir returns the AgentField home directory (~/.agentfield) and ensures it exists
+func getAgentFieldHomeDir() string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		PrintError(fmt.Sprintf("Failed to get user home directory: %v", err))
 		os.Exit(1)
 	}
 
-	haxenHome := filepath.Join(homeDir, ".haxen")
+	agentfieldHome := filepath.Join(homeDir, ".agentfield")
 
-	// Ensure .haxen directory exists
-	if err := os.MkdirAll(haxenHome, 0755); err != nil {
-		PrintError(fmt.Sprintf("Failed to create .haxen directory: %v", err))
+	// Ensure .agentfield directory exists
+	if err := os.MkdirAll(agentfieldHome, 0755); err != nil {
+		PrintError(fmt.Sprintf("Failed to create .agentfield directory: %v", err))
 		os.Exit(1)
 	}
 
 	// Ensure subdirectories exist
 	subdirs := []string{"packages", "logs", "config"}
 	for _, subdir := range subdirs {
-		if err := os.MkdirAll(filepath.Join(haxenHome, subdir), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Join(agentfieldHome, subdir), 0755); err != nil {
 			PrintError(fmt.Sprintf("Failed to create %s directory: %v", subdir, err))
 			os.Exit(1)
 		}
 	}
 
-	return haxenHome
+	return agentfieldHome
 }
 
 // Professional CLI status symbols

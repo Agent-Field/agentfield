@@ -1,6 +1,6 @@
 # Development Guide
 
-This document provides instructions for working on the Haxen monorepo locally.
+This document provides instructions for working on the AgentField monorepo locally.
 
 ## Prerequisites
 
@@ -12,8 +12,8 @@ This document provides instructions for working on the Haxen monorepo locally.
 ## Initial Setup
 
 ```bash
-git clone https://github.com/your-org/haxen.git
-cd haxen
+git clone https://github.com/Agent-Field/agentfield.git
+cd agentfield
 ./scripts/install.sh
 ```
 
@@ -33,29 +33,29 @@ The install script performs:
 
 ## Useful Commands
 
-| Action | Command |
-| --- | --- |
-| Build everything | `./scripts/build-all.sh` |
-| Run tests | `./scripts/test-all.sh` |
-| Format Go code | `make fmt` |
-| Tidy Go modules | `make tidy` |
-| Run the control plane | `cd control-plane && go run cmd/server/main.go` |
-| Run UI in development | `cd control-plane/web && npm run dev` |
-| Start local stack | `docker compose -f deployments/docker/docker-compose.yml up` |
+| Action                | Command                                                      |
+| --------------------- | ------------------------------------------------------------ |
+| Build everything      | `./scripts/build-all.sh`                                     |
+| Run tests             | `./scripts/test-all.sh`                                      |
+| Format Go code        | `make fmt`                                                   |
+| Tidy Go modules       | `make tidy`                                                  |
+| Run the control plane | `cd control-plane && go run cmd/server/main.go`              |
+| Run UI in development | `cd control-plane/web && npm run dev`                        |
+| Start local stack     | `docker compose -f deployments/docker/docker-compose.yml up` |
 
 ## Environment Variables
 
 Copy `control-plane/config/.env.example` to `.env` (if available) and adjust:
 
-- `HAXEN_DATABASE_URL` — PostgreSQL connection string.
-- `HAXEN_JWT_SECRET` — Authentication secret (development only).
+- `AGENTFIELD_DATABASE_URL` — PostgreSQL connection string.
+- `AGENTFIELD_JWT_SECRET` — Authentication secret (development only).
 
 ## Database Migrations
 
 ```bash
 cd control-plane
-goose -dir ./migrations postgres "$HAXEN_DATABASE_URL" status
-goose -dir ./migrations postgres "$HAXEN_DATABASE_URL" up
+goose -dir ./migrations postgres "$AGENTFIELD_DATABASE_URL" status
+goose -dir ./migrations postgres "$AGENTFIELD_DATABASE_URL" up
 ```
 
 ## Frontend Development

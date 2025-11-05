@@ -6,11 +6,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/internal/core/interfaces"
-	"github.com/your-org/haxen/control-plane/internal/events"
-	"github.com/your-org/haxen/control-plane/internal/logger"
-	"github.com/your-org/haxen/control-plane/internal/storage"
-	"github.com/your-org/haxen/control-plane/pkg/types"
+	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
+	"github.com/Agent-Field/agentfield/control-plane/internal/events"
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
 // StatusManagerConfig holds configuration for the status manager
@@ -683,7 +683,12 @@ func (sm *StatusManager) checkTransitionTimeouts() {
 			ctx := context.Background()
 			if status, err := sm.GetAgentStatus(ctx, nodeID); err == nil {
 				status.CompleteTransition()
-				sm.persistStatus(ctx, nodeID, status)
+				if err := sm.persistStatus(ctx, nodeID, status); err != nil {
+					logger.Logger.Warn().
+						Err(err).
+						Str("node_id", nodeID).
+						Msg("failed to persist status during transition timeout")
+				}
 			}
 
 			delete(sm.activeTransitions, nodeID)

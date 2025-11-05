@@ -15,8 +15,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/internal/core/domain"
-	"github.com/your-org/haxen/control-plane/internal/core/interfaces"
+	"github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
+	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
 )
 
 type DefaultDevService struct {
@@ -44,10 +44,10 @@ func (ds *DefaultDevService) RunInDevMode(path string, options domain.DevOptions
 		return fmt.Errorf("failed to resolve path: %w", err)
 	}
 
-	// Check if haxen.yaml exists
-	haxenYamlPath := filepath.Join(absPath, "haxen.yaml")
-	if !ds.fileSystem.Exists(haxenYamlPath) {
-		return fmt.Errorf("no haxen.yaml found in %s", absPath)
+	// Check if agentfield.yaml exists
+	agentfieldYamlPath := filepath.Join(absPath, "agentfield.yaml")
+	if !ds.fileSystem.Exists(agentfieldYamlPath) {
+		return fmt.Errorf("no agentfield.yaml found in %s", absPath)
 	}
 
 	return ds.runDev(absPath, options)
@@ -152,7 +152,9 @@ func (ds *DefaultDevService) runDev(packagePath string, options domain.DevOption
 	return nil
 }
 
-// getFreePort finds an available port in the range 8001-8999
+// getFreePort finds an available port in the range 8001-8999.
+//
+//nolint:unused // retained for future dev-service enhancements
 func (ds *DefaultDevService) getFreePort() (int, error) {
 	for port := 8001; port <= 8999; port++ {
 		if ds.isPortAvailable(port) {
@@ -162,7 +164,9 @@ func (ds *DefaultDevService) getFreePort() (int, error) {
 	return 0, fmt.Errorf("no free port available in range 8001-8999")
 }
 
-// isPortAvailable checks if a port is available
+// isPortAvailable checks if a port is available.
+//
+//nolint:unused // retained for future dev-service enhancements
 func (ds *DefaultDevService) isPortAvailable(port int) bool {
 	conn, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
@@ -180,8 +184,8 @@ func (ds *DefaultDevService) startDevProcess(packagePath string, port int, optio
 	if port > 0 {
 		env = append(env, fmt.Sprintf("PORT=%d", port))
 	}
-	env = append(env, "HAXEN_SERVER_URL=http://localhost:8080")
-	env = append(env, "HAXEN_DEV_MODE=true")
+	env = append(env, "AGENTFIELD_SERVER_URL=http://localhost:8080")
+	env = append(env, "AGENTFIELD_DEV_MODE=true")
 
 	// Load environment variables from package .env file
 	if envVars, err := ds.loadDevEnvFile(packagePath); err == nil {
@@ -236,54 +240,56 @@ func (ds *DefaultDevService) startDevProcess(packagePath string, port int, optio
 func (ds *DefaultDevService) discoverAgentPort(timeout time.Duration) (int, error) {
 	client := &http.Client{Timeout: 2 * time.Second}
 	deadline := time.Now().Add(timeout)
-	
+
 	fmt.Printf("🔍 Discovering agent port...\n")
-	
+
 	checkCount := 0
-	
+
 	for time.Now().Before(deadline) {
 		checkCount++
-		
+
 		// Try ports in range 8001-8999
 		for port := 8001; port <= 8999; port++ {
 			resp, err := client.Get(fmt.Sprintf("http://localhost:%d/health", port))
-			
+
 			if err == nil && resp.StatusCode == 200 {
 				resp.Body.Close()
 				fmt.Printf("✅ Discovered agent on port %d after %d checks\n", port, checkCount)
 				return port, nil
 			}
-			
+
 			if resp != nil {
 				resp.Body.Close()
 			}
 		}
-		
+
 		// Log progress every 20 checks to avoid spam
 		if checkCount%20 == 0 {
 			fmt.Printf("🔄 Port discovery attempt %d...\n", checkCount)
 		}
-		
+
 		time.Sleep(500 * time.Millisecond)
 	}
 
 	return 0, fmt.Errorf("could not discover agent port within %v after %d attempts", timeout, checkCount)
 }
 
-// waitForAgent waits for the agent to become ready in dev mode
+// waitForAgent waits for the agent to become ready in dev mode.
+//
+//nolint:unused // retained for future dev-service enhancements
 func (ds *DefaultDevService) waitForAgent(port int, timeout time.Duration) error {
 	client := &http.Client{Timeout: 2 * time.Second}
 	deadline := time.Now().Add(timeout)
-	
+
 	fmt.Printf("🔍 Waiting for agent to become ready on port %d...\n", port)
-	
+
 	lastError := ""
 	checkCount := 0
-	
+
 	for time.Now().Before(deadline) {
 		checkCount++
 		resp, err := client.Get(fmt.Sprintf("http://localhost:%d/health", port))
-		
+
 		if err == nil {
 			if resp.StatusCode == 200 {
 				resp.Body.Close()
@@ -304,7 +310,7 @@ func (ds *DefaultDevService) waitForAgent(port int, timeout time.Duration) error
 			}
 			lastError = err.Error()
 		}
-		
+
 		time.Sleep(500 * time.Millisecond)
 	}
 
@@ -409,4 +415,3 @@ func (ds *DefaultDevService) loadDevEnvFile(packagePath string) (map[string]stri
 
 	return envVars, nil
 }
-

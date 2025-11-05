@@ -1,17 +1,18 @@
 package services
 
 import (
-	"github.com/your-org/haxen/control-plane/internal/core/domain"
-	"github.com/your-org/haxen/control-plane/internal/core/interfaces"
-	"github.com/your-org/haxen/control-plane/internal/events"
-	"github.com/your-org/haxen/control-plane/internal/logger"
-	"github.com/your-org/haxen/control-plane/internal/storage"
-	"github.com/your-org/haxen/control-plane/pkg/types"
 	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
+	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
+	"github.com/Agent-Field/agentfield/control-plane/internal/events"
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
 // NodeEvent represents a real-time event related to an agent node.
@@ -265,7 +266,7 @@ func (s *UIService) DeregisterClient(clientChan chan NodeEvent) {
 		// Use a safe close approach
 		defer func() {
 			if r := recover(); r != nil {
-				// Channel was already closed, ignore the panic
+				logger.Logger.Debug().Msg("attempted to close an already-closed SSE client channel")
 			}
 		}()
 		close(clientChan)

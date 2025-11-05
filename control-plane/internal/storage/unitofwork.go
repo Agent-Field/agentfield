@@ -1,12 +1,13 @@
 package storage
 
 import (
-	"github.com/your-org/haxen/control-plane/pkg/types"
 	"context"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
 // UnitOfWork manages a collection of changes as a single transaction
@@ -209,11 +210,7 @@ func (uow *unitOfWorkImpl) executeCommit() error {
 		uow.tx = tx
 	}
 
-	defer func() {
-		if uow.tx != nil {
-			uow.tx.Rollback() // Will be no-op if tx.Commit() succeeds
-		}
-	}()
+	defer rollbackTx(uow.tx, "unitOfWork:executeCommit")
 
 	// Execute all changes in order
 	for i, change := range uow.changes {

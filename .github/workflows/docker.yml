@@ -30,10 +30,10 @@ jobs:
           context: .
           file: deployments/docker/Dockerfile.control-plane
           load: true
-          tags: haxen-control-plane:test
+          tags: agentfield-control-plane:test
 
       - name: Smoke test control plane image
-        run: docker run --rm haxen-control-plane:test --help
+        run: docker run --rm agentfield-control-plane:test --help
 
   # Summary job that depends on all critical checks
   required-checks:

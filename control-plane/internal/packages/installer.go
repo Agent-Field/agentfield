@@ -17,10 +17,10 @@ import (
 type UserEnvironmentVar struct {
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
-	Type        string `yaml:"type"`        // "string", "secret", "integer", "boolean", "float"
+	Type        string `yaml:"type"` // "string", "secret", "integer", "boolean", "float"
 	Default     string `yaml:"default"`
 	Optional    bool   `yaml:"optional"`
-	Validation  string `yaml:"validation"`  // regex pattern
+	Validation  string `yaml:"validation"` // regex pattern
 }
 
 // UserEnvironmentConfig represents user-configurable environment variables
@@ -29,7 +29,7 @@ type UserEnvironmentConfig struct {
 	Optional []UserEnvironmentVar `yaml:"optional"`
 }
 
-// PackageMetadata represents the structure of haxen-package.yaml
+// PackageMetadata represents the structure of agentfield-package.yaml
 type PackageMetadata struct {
 	Name            string                 `yaml:"name"`
 	Version         string                 `yaml:"version"`
@@ -96,8 +96,8 @@ type RuntimeInfo struct {
 
 // PackageInstaller handles package installation
 type PackageInstaller struct {
-	HaxenHome string
-	Verbose   bool
+	AgentFieldHome string
+	Verbose        bool
 }
 
 // Spinner represents a CLI spinner for progress indication
@@ -186,7 +186,7 @@ func (s *Spinner) Error(message string) {
 func (pi *PackageInstaller) InstallPackage(sourcePath string, force bool) error {
 	// Import the CLI utilities
 	// Note: We'll need to import this properly, but for now let's define local functions
-	
+
 	// Get package name first for better messaging
 	metadata, err := pi.parsePackageMetadata(sourcePath)
 	if err != nil {
@@ -210,7 +210,7 @@ func (pi *PackageInstaller) InstallPackage(sourcePath string, force bool) error 
 	}
 
 	// 3. Copy package to global location
-	destPath := filepath.Join(pi.HaxenHome, "packages", metadata.Name)
+	destPath := filepath.Join(pi.AgentFieldHome, "packages", metadata.Name)
 	spinner = pi.newSpinner("Setting up environment")
 	spinner.Start()
 	if err := pi.copyPackage(sourcePath, destPath); err != nil {
@@ -235,11 +235,11 @@ func (pi *PackageInstaller) InstallPackage(sourcePath string, force bool) error 
 
 	fmt.Printf("%s Installed %s v%s\n", Green(StatusSuccess), Bold(metadata.Name), Gray(metadata.Version))
 	fmt.Printf("  %s %s\n", Gray("Location:"), destPath)
-	
+
 	// 6. Check for required environment variables and provide guidance
 	pi.checkEnvironmentVariables(metadata)
-	
-	fmt.Printf("\n%s %s\n", Blue("→"), Bold(fmt.Sprintf("Run: haxen run %s", metadata.Name)))
+
+	fmt.Printf("\n%s %s\n", Blue("→"), Bold(fmt.Sprintf("Run: af run %s", metadata.Name)))
 
 	return nil
 }
@@ -261,7 +261,7 @@ func (pi *PackageInstaller) checkEnvironmentVariables(metadata *PackageMetadata)
 	if len(missingRequired) > 0 {
 		fmt.Printf("\n%s %s\n", Yellow("⚠"), Bold("Missing required environment variables:"))
 		for _, envVar := range missingRequired {
-			fmt.Printf("  %s\n", Cyan(fmt.Sprintf("haxen config %s --set %s=your-value-here", metadata.Name, envVar.Name)))
+			fmt.Printf("  %s\n", Cyan(fmt.Sprintf("af config %s --set %s=your-value-here", metadata.Name, envVar.Name)))
 		}
 	}
 
@@ -281,8 +281,8 @@ func (pi *PackageInstaller) checkEnvironmentVariables(metadata *PackageMetadata)
 
 // PackageUninstaller handles package uninstallation
 type PackageUninstaller struct {
-	HaxenHome string
-	Force     bool
+	AgentFieldHome string
+	Force          bool
 }
 
 // UninstallPackage removes an installed package
@@ -357,7 +357,7 @@ func (pu *PackageUninstaller) stopAgentNode(agentNode *InstalledPackage) error {
 
 // loadRegistry loads the installation registry
 func (pu *PackageUninstaller) loadRegistry() (*InstallationRegistry, error) {
-	registryPath := filepath.Join(pu.HaxenHome, "installed.yaml")
+	registryPath := filepath.Join(pu.AgentFieldHome, "installed.yaml")
 
 	registry := &InstallationRegistry{
 		Installed: make(map[string]InstalledPackage),
@@ -374,7 +374,7 @@ func (pu *PackageUninstaller) loadRegistry() (*InstallationRegistry, error) {
 
 // saveRegistry saves the installation registry
 func (pu *PackageUninstaller) saveRegistry(registry *InstallationRegistry) error {
-	registryPath := filepath.Join(pu.HaxenHome, "installed.yaml")
+	registryPath := filepath.Join(pu.AgentFieldHome, "installed.yaml")
 
 	data, err := yaml.Marshal(registry)
 	if err != nil {
@@ -390,10 +390,10 @@ func (pu *PackageUninstaller) saveRegistry(registry *InstallationRegistry) error
 
 // validatePackage checks if the package has required files
 func (pi *PackageInstaller) validatePackage(sourcePath string) error {
-	// Check if haxen-package.yaml exists
-	packageYamlPath := filepath.Join(sourcePath, "haxen-package.yaml")
+	// Check if agentfield-package.yaml exists
+	packageYamlPath := filepath.Join(sourcePath, "agentfield-package.yaml")
 	if _, err := os.Stat(packageYamlPath); os.IsNotExist(err) {
-		return fmt.Errorf("haxen-package.yaml not found in %s", sourcePath)
+		return fmt.Errorf("agentfield-package.yaml not found in %s", sourcePath)
 	}
 
 	// Check if main.py exists
@@ -405,26 +405,26 @@ func (pi *PackageInstaller) validatePackage(sourcePath string) error {
 	return nil
 }
 
-// parsePackageMetadata parses the haxen-package.yaml file
+// parsePackageMetadata parses the agentfield-package.yaml file
 func (pi *PackageInstaller) parsePackageMetadata(sourcePath string) (*PackageMetadata, error) {
-	packageYamlPath := filepath.Join(sourcePath, "haxen-package.yaml")
+	packageYamlPath := filepath.Join(sourcePath, "agentfield-package.yaml")
 
 	data, err := os.ReadFile(packageYamlPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read haxen-package.yaml: %w", err)
+		return nil, fmt.Errorf("failed to read agentfield-package.yaml: %w", err)
 	}
 
 	var metadata PackageMetadata
 	if err := yaml.Unmarshal(data, &metadata); err != nil {
-		return nil, fmt.Errorf("failed to parse haxen-package.yaml: %w", err)
+		return nil, fmt.Errorf("failed to parse agentfield-package.yaml: %w", err)
 	}
 
 	// Validate required fields
 	if metadata.Name == "" {
-		return nil, fmt.Errorf("package name is required in haxen-package.yaml")
+		return nil, fmt.Errorf("package name is required in agentfield-package.yaml")
 	}
 	if metadata.Version == "" {
-		return nil, fmt.Errorf("package version is required in haxen-package.yaml")
+		return nil, fmt.Errorf("package version is required in agentfield-package.yaml")
 	}
 	if metadata.Main == "" {
 		metadata.Main = "main.py" // Default
@@ -435,13 +435,15 @@ func (pi *PackageInstaller) parsePackageMetadata(sourcePath string) (*PackageMet
 
 // isPackageInstalled checks if a package is already installed
 func (pi *PackageInstaller) isPackageInstalled(packageName string) bool {
-	registryPath := filepath.Join(pi.HaxenHome, "installed.yaml")
+	registryPath := filepath.Join(pi.AgentFieldHome, "installed.yaml")
 	registry := &InstallationRegistry{
 		Installed: make(map[string]InstalledPackage),
 	}
 
 	if data, err := os.ReadFile(registryPath); err == nil {
-		yaml.Unmarshal(data, registry)
+		if err := yaml.Unmarshal(data, registry); err != nil {
+			return false
+		}
 	}
 
 	_, exists := registry.Installed[packageName]
@@ -507,7 +509,7 @@ func (pi *PackageInstaller) installDependencies(packagePath string, metadata *Pa
 	if len(metadata.Dependencies.Python) > 0 || pi.hasRequirementsFile(packagePath) {
 		// Create virtual environment
 		venvPath := filepath.Join(packagePath, "venv")
-		
+
 		cmd := exec.Command("python3", "-m", "venv", venvPath)
 		if _, err := cmd.CombinedOutput(); err != nil {
 			// Try with python if python3 fails
@@ -525,11 +527,9 @@ func (pi *PackageInstaller) installDependencies(packagePath string, metadata *Pa
 			pipPath = filepath.Join(venvPath, "Scripts", "pip.exe") // Windows
 		}
 
-		// Upgrade pip first
+		// Upgrade pip first (ignore failures)
 		cmd = exec.Command(pipPath, "install", "--upgrade", "pip")
-		if _, err := cmd.CombinedOutput(); err != nil {
-			// Ignore pip upgrade failures
-		}
+		_, _ = cmd.CombinedOutput()
 
 		// Install from requirements.txt if it exists
 		requirementsPath := filepath.Join(packagePath, "requirements.txt")
@@ -541,7 +541,7 @@ func (pi *PackageInstaller) installDependencies(packagePath string, metadata *Pa
 			}
 		}
 
-		// Install dependencies from haxen-package.yaml
+		// Install dependencies from agentfield-package.yaml
 		if len(metadata.Dependencies.Python) > 0 {
 			for _, dep := range metadata.Dependencies.Python {
 				cmd = exec.Command(pipPath, "install", dep)
@@ -570,7 +570,7 @@ func (pi *PackageInstaller) hasRequirementsFile(packagePath string) bool {
 
 // updateRegistry updates the installation registry with the new package
 func (pi *PackageInstaller) updateRegistry(metadata *PackageMetadata, sourcePath, destPath string) error {
-	registryPath := filepath.Join(pi.HaxenHome, "installed.yaml")
+	registryPath := filepath.Join(pi.AgentFieldHome, "installed.yaml")
 
 	// Load existing registry or create new one
 	registry := &InstallationRegistry{
@@ -578,11 +578,13 @@ func (pi *PackageInstaller) updateRegistry(metadata *PackageMetadata, sourcePath
 	}
 
 	if data, err := os.ReadFile(registryPath); err == nil {
-		yaml.Unmarshal(data, registry)
+		if err := yaml.Unmarshal(data, registry); err != nil {
+			return fmt.Errorf("failed to parse registry: %w", err)
+		}
 	}
 
 	// Ensure logs directory exists before setting LogFile path
-	logsDir := filepath.Join(pi.HaxenHome, "logs")
+	logsDir := filepath.Join(pi.AgentFieldHome, "logs")
 	if err := os.MkdirAll(logsDir, 0755); err != nil {
 		return fmt.Errorf("failed to create logs directory: %w", err)
 	}
@@ -602,7 +604,7 @@ func (pi *PackageInstaller) updateRegistry(metadata *PackageMetadata, sourcePath
 			Port:      nil,
 			PID:       nil,
 			StartedAt: nil,
-			LogFile:   filepath.Join(pi.HaxenHome, "logs", metadata.Name+".log"),
+			LogFile:   filepath.Join(pi.AgentFieldHome, "logs", metadata.Name+".log"),
 		},
 	}
 

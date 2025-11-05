@@ -223,7 +223,7 @@ export function DIDIdentityCard({
           </Button>
         </div>
         <span className="text-xs text-gray-500">
-          Haxen Server: {didInfo.haxen_server_id}
+          AgentField Server: {didInfo.agentfield_server_id}
         </span>
       </div>
     </Card>

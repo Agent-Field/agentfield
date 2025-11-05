@@ -35,7 +35,7 @@ func (o *OutputFormatter) PrintWarning(message string) {
 	fmt.Printf("⚠️  %s\n", color.YellowString(message))
 }
 
-// PrintHeader prints a header message with haxen emoji and bold text
+// PrintHeader prints a header message with agentfield emoji and bold text
 func (o *OutputFormatter) PrintHeader(message string) {
 	fmt.Printf("\n%s %s\n", color.CyanString("🧠"), color.New(color.Bold).Sprint(message))
 }

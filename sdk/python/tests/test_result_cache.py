@@ -1,6 +1,6 @@
 import time
-from haxen_sdk.result_cache import ResultCache
-from haxen_sdk.async_config import AsyncConfig
+from agentfield.result_cache import ResultCache
+from agentfield.async_config import AsyncConfig
 import asyncio
 
 

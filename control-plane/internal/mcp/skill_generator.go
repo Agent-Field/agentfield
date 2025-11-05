@@ -8,7 +8,7 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/internal/config"
+	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 )
 
 // SkillGenerator handles the generation of Python skill files from MCP tools
@@ -41,15 +41,15 @@ func (sg *SkillGenerator) GenerateSkillsForServer(serverAlias string) (*SkillGen
 
 	// Discover server capabilities using the new simplified architecture
 	// Load config for capability discovery
-	cfg, err := config.LoadConfig(filepath.Join(sg.projectDir, "haxen.yaml"))
+	cfg, err := config.LoadConfig(filepath.Join(sg.projectDir, "agentfield.yaml"))
 	if err != nil {
 		// Fallback to current directory
-		cfg, err = config.LoadConfig("haxen.yaml")
+		cfg, err = config.LoadConfig("agentfield.yaml")
 		if err != nil {
-			return nil, fmt.Errorf("failed to load haxen configuration: %w", err)
+			return nil, fmt.Errorf("failed to load af configuration: %w", err)
 		}
 	}
-	
+
 	discovery := NewCapabilityDiscovery(cfg, sg.projectDir)
 	capability, err := discovery.GetServerCapability(serverAlias)
 	if err != nil {
@@ -161,15 +161,15 @@ func getMapKeys(m map[string]interface{}) []string {
 // GenerateSkillsForAllServers generates skill files for all installed MCP servers
 func (sg *SkillGenerator) GenerateSkillsForAllServers() error {
 	// Load config for capability discovery
-	cfg, err := config.LoadConfig(filepath.Join(sg.projectDir, "haxen.yaml"))
+	cfg, err := config.LoadConfig(filepath.Join(sg.projectDir, "agentfield.yaml"))
 	if err != nil {
 		// Fallback to current directory
-		cfg, err = config.LoadConfig("haxen.yaml")
+		cfg, err = config.LoadConfig("agentfield.yaml")
 		if err != nil {
-			return fmt.Errorf("failed to load haxen configuration: %w", err)
+			return fmt.Errorf("failed to load af configuration: %w", err)
 		}
 	}
-	
+
 	discovery := NewCapabilityDiscovery(cfg, sg.projectDir)
 	capabilities, err := discovery.DiscoverCapabilities()
 	if err != nil {
@@ -229,7 +229,7 @@ func (sg *SkillGenerator) generateSkillFileContent(capability *MCPCapability) (s
 			"InputSchema": tool.InputSchema,
 		}
 	}
-	
+
 	templateData := struct {
 		ServerAlias    string
 		ServerName     string
@@ -296,7 +296,7 @@ type SkillParameter struct {
 func (sg *SkillGenerator) generateSkillFunction(tool MCPTool, serverAlias string) (SkillFunction, error) {
 	// Generate function name: serveralias_toolname
 	functionName := sg.generateFunctionName(serverAlias, tool.Name)
-	
+
 	// Parse input schema to extract parameters
 	parameters, err := sg.parseInputSchema(tool.InputSchema)
 	if err != nil {
@@ -322,19 +322,19 @@ func (sg *SkillGenerator) generateFunctionName(serverAlias, toolName string) str
 	normalizedAlias := strings.ReplaceAll(serverAlias, "-", "_")
 	normalizedAlias = strings.ReplaceAll(normalizedAlias, ".", "_")
 	normalizedAlias = strings.ReplaceAll(normalizedAlias, "/", "_")
-	
+
 	// Then normalize the tool name
 	normalizedTool := strings.ReplaceAll(toolName, "-", "_")
 	normalizedTool = strings.ReplaceAll(normalizedTool, ".", "_")
 	normalizedTool = strings.ReplaceAll(normalizedTool, "/", "_")
-	
+
 	name := fmt.Sprintf("%s_%s", normalizedAlias, normalizedTool)
-	
+
 	// Ensure it starts with a letter or underscore
 	if len(name) > 0 && (name[0] >= '0' && name[0] <= '9') {
 		name = "_" + name
 	}
-	
+
 	return name
 }
 
@@ -447,14 +447,14 @@ func (sg *SkillGenerator) escapeForDocstring(s string) string {
 // generateDocString generates a Python docstring for the skill function
 func (sg *SkillGenerator) generateDocString(tool MCPTool, parameters []SkillParameter) string {
 	var docString strings.Builder
-	
+
 	// Escape the description for safe use in docstring
 	escapedDescription := sg.escapeForDocstring(tool.Description)
-	
+
 	docString.WriteString(fmt.Sprintf(`"""%s
-    
+
     This is an auto-generated skill function that wraps the MCP tool '%s'.
-    
+
     Args:`, escapedDescription, tool.Name))
 
 	for _, param := range parameters {
@@ -462,25 +462,25 @@ func (sg *SkillGenerator) generateDocString(tool MCPTool, parameters []SkillPara
 		if !param.Required {
 			required = ", optional"
 		}
-		
+
 		defaultInfo := ""
 		if param.Default != "" {
 			defaultInfo = fmt.Sprintf(", defaults to %s", param.Default)
 		}
-		
+
 		// Escape parameter description
 		escapedParamDesc := sg.escapeForDocstring(param.Description)
-		
+
 		docString.WriteString(fmt.Sprintf(`
         %s (%s%s): %s%s`, param.Name, param.Type, required, escapedParamDesc, defaultInfo))
 	}
 
 	docString.WriteString(`
-        execution_context (ExecutionContext, optional): Haxen execution context for workflow tracking
-    
+        execution_context (ExecutionContext, optional): AgentField execution context for workflow tracking
+
     Returns:
         Any: The result from the MCP tool execution
-        
+
     Raises:
         MCPError: If the MCP server is not available or the tool execution fails
     """`)
@@ -499,13 +499,13 @@ Do not modify this file manually - it will be regenerated when the MCP server is
 """
 
 from typing import Any, Dict, List, Optional
-from haxen_sdk import app
-from haxen_sdk.execution_context import ExecutionContext
-from haxen_sdk.mcp.client import MCPClient
-from haxen_sdk.mcp.exceptions import (
+from agentfield import app
+from agentfield.execution_context import ExecutionContext
+from agentfield.mcp.client import MCPClient
+from agentfield.mcp.exceptions import (
     MCPError, MCPConnectionError, MCPToolError, MCPTimeoutError
 )
-from haxen_sdk.agent import Agent
+from agentfield.agent import Agent
 
 # MCP server configuration
 MCP_ALIAS = "{{.ServerAlias}}"
@@ -528,15 +528,15 @@ async def _get_mcp_client(execution_context: Optional[ExecutionContext] = None) 
     try:
         # Get client from registry
         client = MCPClient.get_or_create(MCP_ALIAS)
-        
+
         # Validate server health
         is_healthy = await client.validate_server_health()
         if not is_healthy:
             raise MCPConnectionError(
-                f"MCP server '{MCP_ALIAS}' is not healthy. Please check server status with: haxen mcp status {MCP_ALIAS}",
+                f"MCP server '{MCP_ALIAS}' is not healthy. Please check server status with: af mcp status {MCP_ALIAS}",
                 endpoint=f"mcp://{MCP_ALIAS}"
             )
-        
+
         # Set execution context for workflow tracking
         if execution_context:
             client.set_execution_context(execution_context)
@@ -545,13 +545,13 @@ async def _get_mcp_client(execution_context: Optional[ExecutionContext] = None) 
             current_agent = Agent.get_current()
             if hasattr(current_agent, '_current_execution_context') and current_agent._current_execution_context:
                 client.set_execution_context(current_agent._current_execution_context)
-        
+
         return client
-        
+
     except ValueError as e:
         # Handle unregistered alias
         raise MCPConnectionError(
-            f"MCP server '{MCP_ALIAS}' is not configured. Please install it with: haxen add --mcp {MCP_ALIAS}",
+            f"MCP server '{MCP_ALIAS}' is not configured. Please install it with: af add --mcp {MCP_ALIAS}",
             endpoint=f"mcp://{MCP_ALIAS}"
         ) from e
     except Exception as e:
@@ -565,22 +565,22 @@ async def _get_mcp_client(execution_context: Optional[ExecutionContext] = None) 
 @app.skill(tags=["mcp", "{{$.ServerAlias}}"])
 async def {{.Name}}({{range $i, $param := .Parameters}}{{if $i}}, {{end}}{{$param.Name}}: {{$param.Type}}{{if not $param.Required}}{{if $param.Default}} = {{$param.Default}}{{else}} = None{{end}}{{end}}{{end}}{{if .Parameters}}, {{end}}execution_context: Optional[ExecutionContext] = None) -> Any:
     {{.DocString}}
-    
+
     try:
         # Get MCP client with execution context
         client = await _get_mcp_client(execution_context)
-        
+
         # Prepare arguments, filtering out None values for optional parameters
         kwargs = {}
         {{range .Parameters}}
         if {{.Name}} is not None:
             kwargs["{{.Name}}"] = {{.Name}}
         {{end}}
-        
+
         # Call the MCP tool
         result = await client.call_tool("{{.ToolName}}", kwargs)
         return result
-        
+
     except MCPConnectionError:
         # Re-raise connection errors as-is (they have helpful messages)
         raise

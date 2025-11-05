@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/your-org/haxen/control-plane/internal/events"
-	"github.com/your-org/haxen/control-plane/pkg/types"
 	"log"
 	"net/url"
 	"os"
@@ -19,6 +17,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Agent-Field/agentfield/control-plane/internal/events"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/boltdb/bolt"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -68,7 +69,7 @@ func (e *ValidationError) Error() string {
 // getWorkflowExecutionByID is a helper function that retrieves a workflow execution using DBTX interface
 func (ls *LocalStorage) getWorkflowExecutionByID(ctx context.Context, q DBTX, executionID string) (*types.WorkflowExecution, error) {
 	query := `
-		SELECT workflow_id, execution_id, haxen_request_id, run_id, session_id, actor_id,
+		SELECT workflow_id, execution_id, agentfield_request_id, run_id, session_id, actor_id,
 		       agent_node_id, parent_workflow_id, parent_execution_id, root_workflow_id, workflow_depth,
 		       reasoner_id, input_data, output_data, input_size, output_size,
 		       status, started_at, completed_at, duration_ms,
@@ -88,7 +89,7 @@ func (ls *LocalStorage) getWorkflowExecutionByID(ctx context.Context, q DBTX, ex
 	var leaseOwner sql.NullString
 	var leaseExpires sql.NullTime
 	err := row.Scan(
-		&execution.WorkflowID, &execution.ExecutionID, &execution.HaxenRequestID,
+		&execution.WorkflowID, &execution.ExecutionID, &execution.AgentFieldRequestID,
 		&runID, &execution.SessionID, &execution.ActorID, &execution.AgentNodeID,
 		&execution.ParentWorkflowID, &execution.ParentExecutionID, &execution.RootWorkflowID, &execution.WorkflowDepth,
 		&execution.ReasonerID, &inputData, &outputData,
@@ -518,7 +519,7 @@ func (ls *LocalStorage) initializeSQLite(ctx context.Context) error {
 
 	log.Printf("📁 Initializing SQLite database at: %s", dbPath)
 
-	busyTimeout := resolveEnvInt("HAXEN_SQLITE_BUSY_TIMEOUT_MS", 60000)
+	busyTimeout := resolveEnvInt("AGENTFIELD_SQLITE_BUSY_TIMEOUT_MS", 60000)
 	if busyTimeout <= 0 {
 		busyTimeout = 60000
 	}
@@ -533,12 +534,12 @@ func (ls *LocalStorage) initializeSQLite(ctx context.Context) error {
 
 	ls.db = newSQLDatabase(db, "local")
 
-	maxOpen := resolveEnvInt("HAXEN_SQLITE_MAX_OPEN_CONNS", 1)
+	maxOpen := resolveEnvInt("AGENTFIELD_SQLITE_MAX_OPEN_CONNS", 1)
 	if maxOpen <= 0 {
 		maxOpen = 1
 	}
 	ls.db.SetMaxOpenConns(maxOpen)
-	idleConns := resolveEnvInt("HAXEN_SQLITE_MAX_IDLE_CONNS", 1)
+	idleConns := resolveEnvInt("AGENTFIELD_SQLITE_MAX_IDLE_CONNS", 1)
 	if idleConns < 0 {
 		idleConns = 0
 	}
@@ -1122,7 +1123,7 @@ func (ls *LocalStorage) ensureSQLiteIndexes() error {
 		"CREATE INDEX IF NOT EXISTS idx_agent_nodes_health ON agent_nodes(health_status)",
 		"CREATE INDEX IF NOT EXISTS idx_agent_nodes_lifecycle ON agent_nodes(lifecycle_status)",
 		"CREATE INDEX IF NOT EXISTS idx_agent_dids_agent_node ON agent_dids(agent_node_id)",
-		"CREATE INDEX IF NOT EXISTS idx_agent_dids_haxen_server ON agent_dids(haxen_server_id)",
+		"CREATE INDEX IF NOT EXISTS idx_agent_dids_agentfield_server ON agent_dids(agentfield_server_id)",
 		"CREATE INDEX IF NOT EXISTS idx_component_dids_agent_did ON component_dids(agent_did)",
 		"CREATE INDEX IF NOT EXISTS idx_component_dids_type ON component_dids(component_type)",
 		"CREATE INDEX IF NOT EXISTS idx_execution_vcs_execution_id ON execution_vcs(execution_id)",
@@ -1283,7 +1284,7 @@ func (ls *LocalStorage) ensureExecutionVCSchema() error {
 	committed := false
 	defer func() {
 		if !committed {
-			_ = tx.Rollback()
+			rollbackTx(tx, "migrate_execution_vcs")
 		}
 	}()
 
@@ -1349,7 +1350,7 @@ func (ls *LocalStorage) ensureWorkflowVCSchema() error {
 	committed := false
 	defer func() {
 		if !committed {
-			_ = tx.Rollback()
+			rollbackTx(tx, "migrate_workflow_vcs")
 		}
 	}()
 
@@ -1839,7 +1840,7 @@ func (ls *LocalStorage) storeWorkflowExecutionInternal(ctx context.Context, exec
 		}
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback() // Will be no-op if tx.Commit() succeeds
+	defer rollbackTx(tx, "storeWorkflowExecution:"+execution.ExecutionID)
 
 	// Execute the workflow insert using the transaction
 	if err := ls.executeWorkflowInsert(ctx, tx, execution); err != nil {
@@ -1942,7 +1943,7 @@ func (ls *LocalStorage) retryDatabaseOperation(ctx context.Context, operationID 
 
 // sqliteWorkflowExecutionInsertQuery captures the column order for workflow execution inserts.
 const sqliteWorkflowExecutionInsertQuery = `INSERT INTO workflow_executions (
-	workflow_id, execution_id, haxen_request_id, run_id, session_id, actor_id,
+	workflow_id, execution_id, agentfield_request_id, run_id, session_id, actor_id,
 	agent_node_id, parent_workflow_id, parent_execution_id, root_workflow_id, workflow_depth,
 	reasoner_id, input_data, output_data, input_size, output_size,
 	status, started_at, completed_at, duration_ms,
@@ -2030,7 +2031,7 @@ func (ls *LocalStorage) executeWorkflowInsert(ctx context.Context, q DBTX, execu
 
 	// Execute INSERT query using the DBTX interface
 	_, err = q.ExecContext(ctx, insertQuery,
-		execution.WorkflowID, execution.ExecutionID, execution.HaxenRequestID, execution.RunID,
+		execution.WorkflowID, execution.ExecutionID, execution.AgentFieldRequestID, execution.RunID,
 		execution.SessionID, execution.ActorID, execution.AgentNodeID,
 		execution.ParentWorkflowID, execution.ParentExecutionID, execution.RootWorkflowID, execution.WorkflowDepth,
 		execution.ReasonerID, execution.InputData, execution.OutputData,
@@ -2100,7 +2101,7 @@ func (ls *LocalStorage) attemptWorkflowExecutionUpdate(ctx context.Context, exec
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback() // Will be no-op if tx.Commit() succeeds
+	defer rollbackTx(tx, "attemptWorkflowExecutionUpdate:"+executionID)
 
 	// Read the current execution within the transaction
 	currentExecution, err := ls.getWorkflowExecutionWithTx(txCtx, tx, executionID)
@@ -2296,7 +2297,7 @@ func (ls *LocalStorage) QueryWorkflowExecutions(ctx context.Context, filters typ
 	baseQuery := `
 		SELECT
 			workflow_executions.id, workflow_executions.workflow_id, workflow_executions.execution_id,
-			workflow_executions.haxen_request_id, workflow_executions.run_id, workflow_executions.session_id, workflow_executions.actor_id,
+			workflow_executions.agentfield_request_id, workflow_executions.run_id, workflow_executions.session_id, workflow_executions.actor_id,
 			workflow_executions.agent_node_id, workflow_executions.parent_workflow_id, workflow_executions.parent_execution_id,
 			workflow_executions.root_workflow_id, workflow_executions.workflow_depth,
 			workflow_executions.reasoner_id, workflow_executions.input_data, workflow_executions.output_data,
@@ -2424,7 +2425,7 @@ func (ls *LocalStorage) QueryWorkflowExecutions(ctx context.Context, filters typ
 
 		err := rows.Scan(
 			&execution.ID, &execution.WorkflowID, &execution.ExecutionID,
-			&execution.HaxenRequestID, &runID, &execution.SessionID, &execution.ActorID,
+			&execution.AgentFieldRequestID, &runID, &execution.SessionID, &execution.ActorID,
 			&execution.AgentNodeID, &execution.ParentWorkflowID, &execution.ParentExecutionID, &execution.RootWorkflowID,
 			&execution.WorkflowDepth, &execution.ReasonerID, &inputData,
 			&outputData, &execution.InputSize, &execution.OutputSize,
@@ -2498,7 +2499,7 @@ func (ls *LocalStorage) QueryWorkflowDAG(ctx context.Context, rootWorkflowID str
 		WITH RECURSIVE workflow_dag AS (
 			-- Base case: Find the root execution(s)
 			SELECT
-				id, workflow_id, execution_id, haxen_request_id, run_id, session_id, actor_id,
+				id, workflow_id, execution_id, agentfield_request_id, run_id, session_id, actor_id,
 				agent_node_id, parent_workflow_id, parent_execution_id, root_workflow_id,
 				workflow_depth, reasoner_id, input_data, output_data, input_size, output_size,
 				status, started_at, completed_at, duration_ms,
@@ -2516,7 +2517,7 @@ func (ls *LocalStorage) QueryWorkflowDAG(ctx context.Context, rootWorkflowID str
 
 			-- Recursive case: Find children of current level
 			SELECT
-				we.id, we.workflow_id, we.execution_id, we.haxen_request_id, we.run_id, we.session_id, we.actor_id,
+				we.id, we.workflow_id, we.execution_id, we.agentfield_request_id, we.run_id, we.session_id, we.actor_id,
 				we.agent_node_id, we.parent_workflow_id, we.parent_execution_id, we.root_workflow_id,
 				we.workflow_depth, we.reasoner_id, we.input_data, we.output_data, we.input_size, we.output_size,
 				we.status, we.started_at, we.completed_at, we.duration_ms,
@@ -2532,7 +2533,7 @@ func (ls *LocalStorage) QueryWorkflowDAG(ctx context.Context, rootWorkflowID str
 			  AND wd.path NOT LIKE '%' || we.execution_id || '%'  -- Cycle detection
 		)
 		SELECT
-			id, workflow_id, execution_id, haxen_request_id, run_id, session_id, actor_id,
+			id, workflow_id, execution_id, agentfield_request_id, run_id, session_id, actor_id,
 			agent_node_id, parent_workflow_id, parent_execution_id, root_workflow_id,
 			workflow_depth, reasoner_id, input_data, output_data, input_size, output_size,
 			status, started_at, completed_at, duration_ms,
@@ -2565,7 +2566,7 @@ func (ls *LocalStorage) QueryWorkflowDAG(ctx context.Context, rootWorkflowID str
 
 		err := rows.Scan(
 			&execution.ID, &execution.WorkflowID, &execution.ExecutionID,
-			&execution.HaxenRequestID, &runID, &execution.SessionID, &execution.ActorID,
+			&execution.AgentFieldRequestID, &runID, &execution.SessionID, &execution.ActorID,
 			&execution.AgentNodeID, &execution.ParentWorkflowID, &execution.ParentExecutionID, &execution.RootWorkflowID,
 			&execution.WorkflowDepth, &execution.ReasonerID, &inputData,
 			&outputData, &execution.InputSize, &execution.OutputSize,
@@ -2675,7 +2676,7 @@ func (ls *LocalStorage) CleanupOldExecutions(ctx context.Context, retentionPerio
 	if err != nil {
 		return 0, fmt.Errorf("failed to begin cleanup transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer rollbackTx(tx, "cleanupOldExecutions")
 
 	// Delete executions in batch
 	// Use placeholders for safe deletion
@@ -2727,14 +2728,14 @@ func (ls *LocalStorage) CleanupWorkflow(ctx context.Context, identifier string, 
 	if trimmedID == "" {
 		errMsg := "workflow ID cannot be empty"
 		result.ErrorMessage = &errMsg
-		return result, fmt.Errorf(errMsg)
+		return result, errors.New(errMsg)
 	}
 
 	targets, err := ls.resolveWorkflowCleanupTargets(ctx, trimmedID)
 	if err != nil {
 		errMsg := fmt.Sprintf("failed to resolve workflow cleanup targets: %v", err)
 		result.ErrorMessage = &errMsg
-		return result, fmt.Errorf(errMsg)
+		return result, errors.New(errMsg)
 	}
 
 	if targets.primaryWorkflowID != "" {
@@ -2759,20 +2760,20 @@ func (ls *LocalStorage) CleanupWorkflow(ctx context.Context, identifier string, 
 	if err != nil {
 		errMsg := fmt.Sprintf("failed to begin cleanup transaction: %v", err)
 		result.ErrorMessage = &errMsg
-		return result, fmt.Errorf(errMsg)
+		return result, errors.New(errMsg)
 	}
-	defer tx.Rollback()
+	defer rollbackTx(tx, "CleanupWorkflow:"+trimmedID)
 
 	if err := ls.performWorkflowCleanup(ctx, tx, targets); err != nil {
 		errMsg := fmt.Sprintf("failed to cleanup workflow: %v", err)
 		result.ErrorMessage = &errMsg
-		return result, fmt.Errorf(errMsg)
+		return result, errors.New(errMsg)
 	}
 
 	if err := tx.Commit(); err != nil {
 		errMsg := fmt.Sprintf("failed to commit cleanup transaction: %v", err)
 		result.ErrorMessage = &errMsg
-		return result, fmt.Errorf(errMsg)
+		return result, errors.New(errMsg)
 	}
 
 	result.Success = true
@@ -3083,6 +3084,7 @@ func (ls *LocalStorage) deleteWorkflowExecutions(ctx context.Context, tx DBTX, w
 	return int(rows), nil
 }
 
+//nolint:unused // retained for future workflow cleanup optimizations
 func (ls *LocalStorage) deleteWorkflowRuns(ctx context.Context, tx DBTX, primaryWorkflowID string, workflowIDs, runIDs []string) (int, error) {
 	conditions := []string{}
 	args := []interface{}{}
@@ -3932,7 +3934,7 @@ func (ls *LocalStorage) RegisterAgent(ctx context.Context, agent *types.AgentNod
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction for agent registration: %w", err)
 	}
-	defer tx.Rollback() // Will be no-op if tx.Commit() succeeds
+	defer rollbackTx(tx, "RegisterAgent:"+agent.ID)
 
 	// Execute the agent registration using the transaction
 	if err := ls.executeRegisterAgent(ctx, tx, agent); err != nil {
@@ -4098,7 +4100,7 @@ func (ls *LocalStorage) ListAgents(ctx context.Context, filters types.AgentFilte
 
 	// Add WHERE clause if there are conditions
 	if len(conditions) > 0 {
-		query += " WHERE " + fmt.Sprintf("%s", conditions[0])
+		query += " WHERE " + conditions[0]
 		for i := 1; i < len(conditions); i++ {
 			query += " AND " + conditions[i]
 		}
@@ -4183,7 +4185,7 @@ func (ls *LocalStorage) UpdateAgentHealth(ctx context.Context, id string, status
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction for agent health update: %w", err)
 	}
-	defer tx.Rollback() // Will be no-op if tx.Commit() succeeds
+	defer rollbackTx(tx, "UpdateAgentHealth:"+id)
 
 	// Execute the health update using the transaction
 	if err := ls.executeUpdateAgentHealth(ctx, tx, id, status); err != nil {
@@ -4276,7 +4278,7 @@ func (ls *LocalStorage) UpdateAgentHeartbeat(ctx context.Context, id string, hea
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction for agent heartbeat update: %w", err)
 	}
-	defer tx.Rollback() // Will be no-op if tx.Commit() succeeds
+	defer rollbackTx(tx, "UpdateAgentHeartbeat:"+id)
 
 	// Execute the heartbeat update using the transaction
 	if err := ls.executeUpdateAgentHeartbeat(ctx, tx, id, heartbeatTime); err != nil {
@@ -4319,7 +4321,7 @@ func (ls *LocalStorage) UpdateAgentLifecycleStatus(ctx context.Context, id strin
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction for agent lifecycle update: %w", err)
 	}
-	defer tx.Rollback() // Will be no-op if tx.Commit() succeeds
+	defer rollbackTx(tx, "UpdateAgentLifecycleStatus:"+id)
 
 	// Execute the lifecycle status update using the transaction
 	if err := ls.executeUpdateAgentLifecycleStatus(ctx, tx, id, status); err != nil {
@@ -4979,6 +4981,8 @@ func (ls *LocalStorage) GetReasonerPerformanceMetrics(ctx context.Context, reaso
 }
 
 // executeReasonerMetricsQuery performs the reasoner metrics query within a transaction
+//
+//nolint:unused // retained for upcoming analytics endpoints
 func (ls *LocalStorage) executeReasonerMetricsQuery(tx DBTX, nodeID, localReasonerID string) (*types.ReasonerPerformanceMetrics, error) {
 	// Query for metrics from workflow_executions table using separate node_id and reasoner_id
 	metricsQuery := `
@@ -5154,6 +5158,8 @@ func (ls *LocalStorage) GetReasonerExecutionHistory(ctx context.Context, reasone
 }
 
 // executeReasonerHistoryQuery performs the reasoner history query within a transaction
+//
+//nolint:unused // retained for upcoming analytics endpoints
 func (ls *LocalStorage) executeReasonerHistoryQuery(tx DBTX, nodeID, localReasonerID string, page, limit, offset int) (*types.ReasonerExecutionHistory, error) {
 	// Use a single optimized query with window functions to get both count and data efficiently
 	// This reduces lock time and improves performance
@@ -5337,20 +5343,20 @@ func (ls *LocalStorage) GetWorkflowExecutionEventBus() *events.EventBus[*types.W
 	return ls.workflowExecutionEventBus
 }
 
-// Haxen Server DID operations
-func (ls *LocalStorage) StoreHaxenServerDID(ctx context.Context, haxenServerID, rootDID string, masterSeed []byte, createdAt, lastKeyRotation time.Time) error {
+// AgentField Server DID operations
+func (ls *LocalStorage) StoreAgentFieldServerDID(ctx context.Context, agentfieldServerID, rootDID string, masterSeed []byte, createdAt, lastKeyRotation time.Time) error {
 	// Check context cancellation early
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("context cancelled during store haxen server DID: %w", err)
+		return fmt.Errorf("context cancelled during store af server DID: %w", err)
 	}
 
 	// Validate input parameters
-	if haxenServerID == "" {
+	if agentfieldServerID == "" {
 		return &ValidationError{
-			Field:   "haxen_server_id",
-			Value:   haxenServerID,
-			Reason:  "haxen server ID cannot be empty",
-			Context: "StoreHaxenServerDID",
+			Field:   "agentfield_server_id",
+			Value:   agentfieldServerID,
+			Reason:  "af server ID cannot be empty",
+			Context: "StoreAgentFieldServerDID",
 		}
 	}
 	if rootDID == "" {
@@ -5358,7 +5364,7 @@ func (ls *LocalStorage) StoreHaxenServerDID(ctx context.Context, haxenServerID, 
 			Field:   "root_did",
 			Value:   rootDID,
 			Reason:  "root DID cannot be empty",
-			Context: "StoreHaxenServerDID",
+			Context: "StoreAgentFieldServerDID",
 		}
 	}
 	if len(masterSeed) == 0 {
@@ -5366,7 +5372,7 @@ func (ls *LocalStorage) StoreHaxenServerDID(ctx context.Context, haxenServerID, 
 			Field:   "master_seed",
 			Value:   "<encrypted>",
 			Reason:  "master seed cannot be empty",
-			Context: "StoreHaxenServerDID",
+			Context: "StoreAgentFieldServerDID",
 		}
 	}
 
@@ -5377,21 +5383,21 @@ func (ls *LocalStorage) StoreHaxenServerDID(ctx context.Context, haxenServerID, 
 	}
 	defer func() {
 		if err != nil {
-			tx.Rollback()
+			rollbackTx(tx, "StoreAgentFieldServerDID")
 		}
 	}()
 
 	// Execute with retry logic
 	err = ls.retryOnConstraintFailure(ctx, func() error {
 		query := `
-                        INSERT OR REPLACE INTO did_registry (haxen_server_id, root_did, master_seed_encrypted, created_at, last_key_rotation, total_dids)
+                        INSERT OR REPLACE INTO did_registry (agentfield_server_id, root_did, master_seed_encrypted, created_at, last_key_rotation, total_dids)
                         VALUES (?, ?, ?, ?, ?, 0)
                 `
 		if ls.mode == "postgres" {
 			query = `
-                                INSERT INTO did_registry (haxen_server_id, root_did, master_seed_encrypted, created_at, last_key_rotation, total_dids)
+                                INSERT INTO did_registry (agentfield_server_id, root_did, master_seed_encrypted, created_at, last_key_rotation, total_dids)
                                 VALUES (?, ?, ?, ?, ?, 0)
-                                ON CONFLICT (haxen_server_id) DO UPDATE SET
+                                ON CONFLICT (agentfield_server_id) DO UPDATE SET
                                         root_did = EXCLUDED.root_did,
                                         master_seed_encrypted = EXCLUDED.master_seed_encrypted,
                                         created_at = EXCLUDED.created_at,
@@ -5399,9 +5405,9 @@ func (ls *LocalStorage) StoreHaxenServerDID(ctx context.Context, haxenServerID, 
                                         total_dids = did_registry.total_dids
                         `
 		}
-		_, execErr := tx.ExecContext(ctx, query, haxenServerID, rootDID, masterSeed, createdAt, lastKeyRotation)
+		_, execErr := tx.ExecContext(ctx, query, agentfieldServerID, rootDID, masterSeed, createdAt, lastKeyRotation)
 		if execErr != nil {
-			return fmt.Errorf("failed to store haxen server DID: %w", execErr)
+			return fmt.Errorf("failed to store af server DID: %w", execErr)
 		}
 		return nil
 	}, 3) // Retry up to 3 times for transient errors
@@ -5415,19 +5421,19 @@ func (ls *LocalStorage) StoreHaxenServerDID(ctx context.Context, haxenServerID, 
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	log.Printf("Successfully stored haxen server DID: haxen_server_id=%s, root_did=%s", haxenServerID, rootDID)
+	log.Printf("Successfully stored af server DID: agentfield_server_id=%s, root_did=%s", agentfieldServerID, rootDID)
 	return nil
 }
 
 // StoreAgentDIDWithComponents stores an agent DID along with its component DIDs in a single transaction
-func (ls *LocalStorage) StoreAgentDIDWithComponents(ctx context.Context, agentID, agentDID, haxenServerDID, publicKeyJWK string, derivationIndex int, components []ComponentDIDRequest) error {
+func (ls *LocalStorage) StoreAgentDIDWithComponents(ctx context.Context, agentID, agentDID, agentfieldServerDID, publicKeyJWK string, derivationIndex int, components []ComponentDIDRequest) error {
 	// Check context cancellation early
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("context cancelled during store agent DID with components: %w", err)
 	}
 
 	// Pre-storage validation
-	if err := ls.validateHaxenServerExists(ctx, haxenServerDID); err != nil {
+	if err := ls.validateAgentFieldServerExists(ctx, agentfieldServerDID); err != nil {
 		return fmt.Errorf("pre-storage validation failed: %w", err)
 	}
 
@@ -5438,7 +5444,7 @@ func (ls *LocalStorage) StoreAgentDIDWithComponents(ctx context.Context, agentID
 	}
 	defer func() {
 		if err != nil {
-			tx.Rollback()
+			rollbackTx(tx, "StoreAgentDIDWithComponents")
 		}
 	}()
 
@@ -5446,24 +5452,24 @@ func (ls *LocalStorage) StoreAgentDIDWithComponents(ctx context.Context, agentID
 	err = ls.retryOnConstraintFailure(ctx, func() error {
 		query := `
 			INSERT INTO agent_dids (
-				agent_node_id, did, haxen_server_id, public_key_jwk, derivation_path, registered_at, status
+				agent_node_id, did, agentfield_server_id, public_key_jwk, derivation_path, registered_at, status
 			) VALUES (?, ?, ?, ?, ?, ?, ?)`
 
 		derivationPath := fmt.Sprintf("m/44'/0'/0'/%d", derivationIndex)
-		_, execErr := tx.ExecContext(ctx, query, agentID, agentDID, haxenServerDID, publicKeyJWK, derivationPath, time.Now(), "active")
+		_, execErr := tx.ExecContext(ctx, query, agentID, agentDID, agentfieldServerDID, publicKeyJWK, derivationPath, time.Now(), "active")
 		if execErr != nil {
 			if strings.Contains(execErr.Error(), "UNIQUE constraint failed") || strings.Contains(execErr.Error(), "agent_dids") {
 				return &DuplicateDIDError{
-					DID:  fmt.Sprintf("agent:%s@%s", agentID, haxenServerDID),
+					DID:  fmt.Sprintf("agent:%s@%s", agentID, agentfieldServerDID),
 					Type: "agent",
 				}
 			}
 			if strings.Contains(execErr.Error(), "FOREIGN KEY constraint failed") {
 				return &ForeignKeyConstraintError{
 					Table:           "agent_dids",
-					Column:          "haxen_server_id",
+					Column:          "agentfield_server_id",
 					ReferencedTable: "did_registry",
-					ReferencedValue: haxenServerDID,
+					ReferencedValue: agentfieldServerDID,
 					Operation:       "INSERT",
 				}
 			}
@@ -5521,56 +5527,56 @@ func (ls *LocalStorage) StoreAgentDIDWithComponents(ctx context.Context, agentID
 	return nil
 }
 
-func (ls *LocalStorage) GetHaxenServerDID(ctx context.Context, haxenServerID string) (*types.HaxenServerDIDInfo, error) {
+func (ls *LocalStorage) GetAgentFieldServerDID(ctx context.Context, agentfieldServerID string) (*types.AgentFieldServerDIDInfo, error) {
 	// Check context cancellation early
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("context cancelled during get haxen server DID: %w", err)
+		return nil, fmt.Errorf("context cancelled during get af server DID: %w", err)
 	}
 
 	query := `
-		SELECT haxen_server_id, root_did, master_seed_encrypted, created_at, last_key_rotation
-		FROM did_registry WHERE haxen_server_id = ?
+		SELECT agentfield_server_id, root_did, master_seed_encrypted, created_at, last_key_rotation
+		FROM did_registry WHERE agentfield_server_id = ?
 	`
-	row := ls.db.QueryRowContext(ctx, query, haxenServerID)
-	info := &types.HaxenServerDIDInfo{}
+	row := ls.db.QueryRowContext(ctx, query, agentfieldServerID)
+	info := &types.AgentFieldServerDIDInfo{}
 
-	err := row.Scan(&info.HaxenServerID, &info.RootDID, &info.MasterSeed, &info.CreatedAt, &info.LastKeyRotation)
+	err := row.Scan(&info.AgentFieldServerID, &info.RootDID, &info.MasterSeed, &info.CreatedAt, &info.LastKeyRotation)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil // Return nil, nil for "not found"
 		}
-		return nil, fmt.Errorf("failed to get haxen server DID: %w", err)
+		return nil, fmt.Errorf("failed to get af server DID: %w", err)
 	}
 	return info, nil
 }
 
-func (ls *LocalStorage) ListHaxenServerDIDs(ctx context.Context) ([]*types.HaxenServerDIDInfo, error) {
+func (ls *LocalStorage) ListAgentFieldServerDIDs(ctx context.Context) ([]*types.AgentFieldServerDIDInfo, error) {
 	// Check context cancellation early
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("context cancelled during list haxen server DIDs: %w", err)
+		return nil, fmt.Errorf("context cancelled during list af server DIDs: %w", err)
 	}
 
 	query := `
-		SELECT haxen_server_id, root_did, master_seed_encrypted, created_at, last_key_rotation
+		SELECT agentfield_server_id, root_did, master_seed_encrypted, created_at, last_key_rotation
 		FROM did_registry ORDER BY created_at DESC
 	`
 	rows, err := ls.db.QueryContext(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list haxen server DIDs: %w", err)
+		return nil, fmt.Errorf("failed to list af server DIDs: %w", err)
 	}
 	defer rows.Close()
 
-	var infos []*types.HaxenServerDIDInfo
+	var infos []*types.AgentFieldServerDIDInfo
 	for rows.Next() {
 		// Check context cancellation during iteration
 		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("context cancelled during haxen server DID list iteration: %w", err)
+			return nil, fmt.Errorf("context cancelled during af server DID list iteration: %w", err)
 		}
 
-		info := &types.HaxenServerDIDInfo{}
-		err := rows.Scan(&info.HaxenServerID, &info.RootDID, &info.MasterSeed, &info.CreatedAt, &info.LastKeyRotation)
+		info := &types.AgentFieldServerDIDInfo{}
+		err := rows.Scan(&info.AgentFieldServerID, &info.RootDID, &info.MasterSeed, &info.CreatedAt, &info.LastKeyRotation)
 		if err != nil {
-			return nil, fmt.Errorf("failed to scan haxen server DID: %w", err)
+			return nil, fmt.Errorf("failed to scan af server DID: %w", err)
 		}
 		infos = append(infos, info)
 	}
@@ -5669,31 +5675,31 @@ func (ls *LocalStorage) ListDIDs(ctx context.Context) ([]*types.DIDRegistryEntry
 	return entries, nil
 }
 
-// validateHaxenServerExists checks if a haxen server registry exists
-func (ls *LocalStorage) validateHaxenServerExists(ctx context.Context, haxenServerID string) error {
-	if haxenServerID == "" {
+// validateAgentFieldServerExists checks if a af server registry exists
+func (ls *LocalStorage) validateAgentFieldServerExists(ctx context.Context, agentfieldServerID string) error {
+	if agentfieldServerID == "" {
 		return &ValidationError{
-			Field:   "haxen_server_id",
-			Value:   haxenServerID,
-			Reason:  "haxen server ID cannot be empty",
+			Field:   "agentfield_server_id",
+			Value:   agentfieldServerID,
+			Reason:  "af server ID cannot be empty",
 			Context: "pre-storage validation",
 		}
 	}
 
-	query := `SELECT 1 FROM did_registry WHERE haxen_server_id = ? LIMIT 1`
+	query := `SELECT 1 FROM did_registry WHERE agentfield_server_id = ? LIMIT 1`
 	var exists int
-	err := ls.db.QueryRowContext(ctx, query, haxenServerID).Scan(&exists)
+	err := ls.db.QueryRowContext(ctx, query, agentfieldServerID).Scan(&exists)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return &ForeignKeyConstraintError{
 				Table:           "agent_dids",
-				Column:          "haxen_server_id",
+				Column:          "agentfield_server_id",
 				ReferencedTable: "did_registry",
-				ReferencedValue: haxenServerID,
+				ReferencedValue: agentfieldServerID,
 				Operation:       "INSERT",
 			}
 		}
-		return fmt.Errorf("failed to validate haxen server existence: %w", err)
+		return fmt.Errorf("failed to validate af server existence: %w", err)
 	}
 	return nil
 }
@@ -5770,14 +5776,14 @@ func (ls *LocalStorage) retryOnConstraintFailure(ctx context.Context, operation 
 }
 
 // Agent DID operations
-func (ls *LocalStorage) StoreAgentDID(ctx context.Context, agentID, agentDID, haxenServerDID, publicKeyJWK string, derivationIndex int) error {
+func (ls *LocalStorage) StoreAgentDID(ctx context.Context, agentID, agentDID, agentfieldServerDID, publicKeyJWK string, derivationIndex int) error {
 	// Check context cancellation early
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("context cancelled during store agent DID: %w", err)
 	}
 
 	// Pre-storage validation
-	if err := ls.validateHaxenServerExists(ctx, haxenServerDID); err != nil {
+	if err := ls.validateAgentFieldServerExists(ctx, agentfieldServerDID); err != nil {
 		return fmt.Errorf("pre-storage validation failed: %w", err)
 	}
 
@@ -5814,7 +5820,7 @@ func (ls *LocalStorage) StoreAgentDID(ctx context.Context, agentID, agentDID, ha
 	}
 	defer func() {
 		if err != nil {
-			tx.Rollback()
+			rollbackTx(tx, "StoreAgentDID")
 		}
 	}()
 
@@ -5823,17 +5829,17 @@ func (ls *LocalStorage) StoreAgentDID(ctx context.Context, agentID, agentDID, ha
 		// INSERT-only query - no ON CONFLICT clause for security
 		query := `
 			INSERT INTO agent_dids (
-				agent_node_id, did, haxen_server_id, public_key_jwk, derivation_path, registered_at, status
+				agent_node_id, did, agentfield_server_id, public_key_jwk, derivation_path, registered_at, status
 			) VALUES (?, ?, ?, ?, ?, ?, ?)`
 
 		derivationPath := fmt.Sprintf("m/44'/0'/0'/%d", derivationIndex)
-		_, execErr := tx.ExecContext(ctx, query, agentID, agentDID, haxenServerDID, publicKeyJWK, derivationPath, time.Now(), "active")
+		_, execErr := tx.ExecContext(ctx, query, agentID, agentDID, agentfieldServerDID, publicKeyJWK, derivationPath, time.Now(), "active")
 		if execErr != nil {
 			// Check if this is a unique constraint violation (duplicate agent DID)
 			if strings.Contains(execErr.Error(), "UNIQUE constraint failed") || strings.Contains(execErr.Error(), "agent_dids") {
-				log.Printf("Duplicate agent DID entry detected: agent_id=%s, haxen_server_id=%s", agentID, haxenServerDID)
+				log.Printf("Duplicate agent DID entry detected: agent_id=%s, agentfield_server_id=%s", agentID, agentfieldServerDID)
 				return &DuplicateDIDError{
-					DID:  fmt.Sprintf("agent:%s@%s", agentID, haxenServerDID),
+					DID:  fmt.Sprintf("agent:%s@%s", agentID, agentfieldServerDID),
 					Type: "agent",
 				}
 			}
@@ -5841,9 +5847,9 @@ func (ls *LocalStorage) StoreAgentDID(ctx context.Context, agentID, agentDID, ha
 			if strings.Contains(execErr.Error(), "FOREIGN KEY constraint failed") {
 				return &ForeignKeyConstraintError{
 					Table:           "agent_dids",
-					Column:          "haxen_server_id",
+					Column:          "agentfield_server_id",
 					ReferencedTable: "did_registry",
-					ReferencedValue: haxenServerDID,
+					ReferencedValue: agentfieldServerDID,
 					Operation:       "INSERT",
 				}
 			}
@@ -5872,7 +5878,7 @@ func (ls *LocalStorage) GetAgentDID(ctx context.Context, agentID string) (*types
 	}
 
 	query := `
-		SELECT agent_node_id, did, haxen_server_id, public_key_jwk, derivation_path,
+		SELECT agent_node_id, did, agentfield_server_id, public_key_jwk, derivation_path,
 		       reasoners, skills, status, registered_at
 		FROM agent_dids WHERE agent_node_id = ?`
 
@@ -5880,7 +5886,7 @@ func (ls *LocalStorage) GetAgentDID(ctx context.Context, agentID string) (*types
 	info := &types.AgentDIDInfo{}
 
 	var reasonersJSON, skillsJSON, publicKeyJWK string
-	err := row.Scan(&info.AgentNodeID, &info.DID, &info.HaxenServerID, &publicKeyJWK,
+	err := row.Scan(&info.AgentNodeID, &info.DID, &info.AgentFieldServerID, &publicKeyJWK,
 		&info.DerivationPath, &reasonersJSON, &skillsJSON, &info.Status, &info.RegisteredAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -5917,7 +5923,7 @@ func (ls *LocalStorage) ListAgentDIDs(ctx context.Context) ([]*types.AgentDIDInf
 	}
 
 	query := `
-		SELECT agent_node_id, did, haxen_server_id, public_key_jwk, derivation_path,
+		SELECT agent_node_id, did, agentfield_server_id, public_key_jwk, derivation_path,
 		       reasoners, skills, status, registered_at
 		FROM agent_dids ORDER BY registered_at DESC`
 
@@ -5936,7 +5942,7 @@ func (ls *LocalStorage) ListAgentDIDs(ctx context.Context) ([]*types.AgentDIDInf
 
 		info := &types.AgentDIDInfo{}
 		var reasonersJSON, skillsJSON, publicKeyJWK string
-		err := rows.Scan(&info.AgentNodeID, &info.DID, &info.HaxenServerID, &publicKeyJWK,
+		err := rows.Scan(&info.AgentNodeID, &info.DID, &info.AgentFieldServerID, &publicKeyJWK,
 			&info.DerivationPath, &reasonersJSON, &skillsJSON, &info.Status, &info.RegisteredAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan agent DID: %w", err)
@@ -6020,7 +6026,7 @@ func (ls *LocalStorage) StoreComponentDID(ctx context.Context, componentID, comp
 	}
 	defer func() {
 		if err != nil {
-			tx.Rollback()
+			rollbackTx(tx, "StoreComponentDID")
 		}
 	}()
 
@@ -6453,7 +6459,7 @@ func (ls *LocalStorage) StoreWorkflowExecutionEvent(ctx context.Context, event *
 		if err != nil {
 			return fmt.Errorf("failed to begin transaction: %w", err)
 		}
-		defer tx.Rollback()
+		defer rollbackTx(tx, "StoreWorkflowExecutionEvent:"+event.ExecutionID)
 
 		if err := ls.storeWorkflowExecutionEventTx(ctx, tx, event); err != nil {
 			return err

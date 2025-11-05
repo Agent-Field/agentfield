@@ -1,6 +1,6 @@
 import pytest
 
-from haxen_sdk.router import AgentRouter
+from agentfield.router import AgentRouter
 
 
 class DummyAgent:

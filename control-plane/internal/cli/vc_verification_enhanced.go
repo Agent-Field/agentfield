@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/pkg/types"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
 // EnhancedVCVerifier provides comprehensive VC verification with all integrity checks
@@ -83,11 +83,11 @@ type SecurityAnalysis struct {
 
 // ComplianceChecks represents compliance and audit verification results
 type ComplianceChecks struct {
-	W3CCompliance           bool                `json:"w3c_compliance"`
-	HaxenStandardCompliance bool                `json:"haxen_standard_compliance"`
-	AuditTrailIntegrity     bool                `json:"audit_trail_integrity"`
-	DataIntegrityChecks     bool                `json:"data_integrity_checks"`
-	Issues                  []VerificationIssue `json:"issues"`
+	W3CCompliance                bool                `json:"w3c_compliance"`
+	AgentFieldStandardCompliance bool                `json:"agentfield_standard_compliance"`
+	AuditTrailIntegrity          bool                `json:"audit_trail_integrity"`
+	DataIntegrityChecks          bool                `json:"data_integrity_checks"`
+	Issues                       []VerificationIssue `json:"issues"`
 }
 
 // VerifyEnhancedVCChain performs comprehensive verification of a VC chain
@@ -198,7 +198,7 @@ func (v *EnhancedVCVerifier) verifyExecutionVCComprehensive(execVC types.Executi
 		return result
 	}
 
-	// CRITICAL CHECK 7: Status consistency (with Haxen system status mapping)
+	// CRITICAL CHECK 7: Status consistency (with AgentField system status mapping)
 	if !v.isStatusConsistent(execVC.Status, vcDoc.CredentialSubject.Execution.Status) {
 		result.Valid = false
 		result.Error = fmt.Sprintf("Status mismatch: metadata=%s, vc_document=%s", execVC.Status, vcDoc.CredentialSubject.Execution.Status)
@@ -387,11 +387,11 @@ func (v *EnhancedVCVerifier) performSecurityAnalysis(chain EnhancedVCChain) Secu
 // performComplianceChecks performs compliance verification
 func (v *EnhancedVCVerifier) performComplianceChecks(chain EnhancedVCChain) ComplianceChecks {
 	result := ComplianceChecks{
-		W3CCompliance:           true,
-		HaxenStandardCompliance: true,
-		AuditTrailIntegrity:     true,
-		DataIntegrityChecks:     true,
-		Issues:                  []VerificationIssue{},
+		W3CCompliance:                true,
+		AgentFieldStandardCompliance: true,
+		AuditTrailIntegrity:          true,
+		DataIntegrityChecks:          true,
+		Issues:                       []VerificationIssue{},
 	}
 
 	// Check W3C compliance for each VC
@@ -581,7 +581,7 @@ func (v *EnhancedVCVerifier) calculateOverallScore(result *ComprehensiveVerifica
 	return score
 }
 
-// isStatusConsistent checks if status values are consistent, accounting for Haxen system status mapping
+// isStatusConsistent checks if status values are consistent, accounting for AgentField system status mapping
 func (v *EnhancedVCVerifier) isStatusConsistent(metadataStatus, vcDocStatus string) bool {
 	return types.NormalizeExecutionStatus(metadataStatus) == types.NormalizeExecutionStatus(vcDocStatus)
 }

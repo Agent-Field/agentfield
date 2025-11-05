@@ -1,18 +1,19 @@
 package storage
 
 import (
-	"github.com/your-org/haxen/control-plane/pkg/types"
 	"context"
 	"database/sql"
 	"fmt"
 	"time"
+
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/boltdb/bolt"
 	"github.com/google/uuid"
 )
 
 const (
-	locksBucket = "locks"
+	locksBucket = "locks" //nolint:unused // Reserved for future use
 )
 
 // AcquireLock attempts to acquire a distributed lock.

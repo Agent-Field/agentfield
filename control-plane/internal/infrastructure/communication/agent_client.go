@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/internal/core/interfaces"
-	"github.com/your-org/haxen/control-plane/internal/storage"
+	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 )
 
 // HTTPAgentClient implements the AgentClient interface using HTTP communication
@@ -19,7 +19,7 @@ type HTTPAgentClient struct {
 	httpClient *http.Client
 	storage    storage.StorageProvider
 	timeout    time.Duration
-	
+
 	// Cache for MCP health data (30-second TTL)
 	cache      map[string]*CachedMCPHealth
 	cacheMutex sync.RWMutex
@@ -72,7 +72,7 @@ func (c *HTTPAgentClient) GetMCPHealth(ctx context.Context, nodeID string) (*int
 
 	// Set headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Haxen-Server/1.0")
+	req.Header.Set("User-Agent", "AgentField-Server/1.0")
 
 	// Make the request
 	resp, err := c.httpClient.Do(req)
@@ -87,10 +87,10 @@ func (c *HTTPAgentClient) GetMCPHealth(ctx context.Context, nodeID string) (*int
 		return &interfaces.MCPHealthResponse{
 			Servers: []interfaces.MCPServerHealth{},
 			Summary: interfaces.MCPSummary{
-				TotalServers:  0,
+				TotalServers:   0,
 				RunningServers: 0,
-				TotalTools:    0,
-				OverallHealth: 1.0, // Consider healthy if no MCP servers
+				TotalTools:     0,
+				OverallHealth:  1.0, // Consider healthy if no MCP servers
 			},
 		}, nil
 	}
@@ -130,7 +130,7 @@ func (c *HTTPAgentClient) RestartMCPServer(ctx context.Context, nodeID, alias st
 
 	// Set headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Haxen-Server/1.0")
+	req.Header.Set("User-Agent", "AgentField-Server/1.0")
 
 	// Make the request
 	resp, err := c.httpClient.Do(req)
@@ -183,7 +183,7 @@ func (c *HTTPAgentClient) GetMCPTools(ctx context.Context, nodeID, alias string)
 
 	// Set headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Haxen-Server/1.0")
+	req.Header.Set("User-Agent", "AgentField-Server/1.0")
 
 	// Make the request
 	resp, err := c.httpClient.Do(req)
@@ -241,7 +241,7 @@ func (c *HTTPAgentClient) ShutdownAgent(ctx context.Context, nodeID string, grac
 
 	// Set headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Haxen-Server/1.0")
+	req.Header.Set("User-Agent", "AgentField-Server/1.0")
 
 	// Make the request
 	resp, err := c.httpClient.Do(req)
@@ -275,7 +275,7 @@ func (c *HTTPAgentClient) GetAgentStatus(ctx context.Context, nodeID string) (*i
 	if err != nil {
 		return nil, fmt.Errorf("failed to get agent node %s: %w", nodeID, err)
 	}
-	
+
 	// Check for nil agent (can happen when database returns no error but also no rows)
 	if agent == nil {
 		return nil, fmt.Errorf("agent node %s not found in storage", nodeID)
@@ -287,11 +287,11 @@ func (c *HTTPAgentClient) GetAgentStatus(ctx context.Context, nodeID string) (*i
 	// Implement retry logic (1 retry for transient network failures)
 	maxRetries := 1
 	var lastErr error
-	
+
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		// Create timeout context for each attempt (2-3 seconds)
 		timeoutCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		
+
 		// Create HTTP request with timeout context
 		req, err := http.NewRequestWithContext(timeoutCtx, "GET", statusURL, nil)
 		if err != nil {
@@ -301,12 +301,12 @@ func (c *HTTPAgentClient) GetAgentStatus(ctx context.Context, nodeID string) (*i
 
 		// Set headers
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("User-Agent", "Haxen-Server/1.0")
+		req.Header.Set("User-Agent", "AgentField-Server/1.0")
 
 		// Make the request
 		resp, err := c.httpClient.Do(req)
 		cancel() // Always cancel the timeout context
-		
+
 		if err != nil {
 			lastErr = err
 			// Check if this is a transient network error that might benefit from retry
@@ -337,7 +337,7 @@ func (c *HTTPAgentClient) GetAgentStatus(ctx context.Context, nodeID string) (*i
 
 		return &statusResponse, nil
 	}
-	
+
 	// All retries exhausted
 	return nil, fmt.Errorf("failed after %d retries, last error: %w", maxRetries+1, lastErr)
 }
@@ -401,8 +401,8 @@ func (c *HTTPAgentClient) GetCacheStats() map[string]interface{} {
 
 	for nodeID, cached := range c.cache {
 		entry := map[string]interface{}{
-			"node_id":   nodeID,
-			"timestamp": cached.Timestamp,
+			"node_id":     nodeID,
+			"timestamp":   cached.Timestamp,
 			"age_seconds": time.Since(cached.Timestamp).Seconds(),
 		}
 		stats["entries"] = append(stats["entries"].([]map[string]interface{}), entry)
@@ -430,7 +430,7 @@ func isRetryableError(err error) bool {
 	if err == nil {
 		return false
 	}
-	
+
 	errStr := err.Error()
 	// Common transient errors that might benefit from retry
 	transientErrors := []string{
@@ -440,12 +440,12 @@ func isRetryableError(err error) bool {
 		"temporary failure",
 		"network is unreachable",
 	}
-	
+
 	for _, transient := range transientErrors {
 		if strings.Contains(strings.ToLower(errStr), transient) {
 			return true
 		}
 	}
-	
+
 	return false
 }

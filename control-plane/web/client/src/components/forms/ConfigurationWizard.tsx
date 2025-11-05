@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui
 import { Badge } from '../ui/badge';
 import { ChevronLeft, ChevronRight, Check, Settings, Package, Info } from '@/components/ui/icon-bridge';
 import { ConfigurationForm } from './ConfigurationForm';
-import type { ConfigurationSchema, AgentConfiguration, AgentPackage } from '../../types/haxen';
+import type { ConfigurationSchema, AgentConfiguration, AgentPackage } from '../../types/agentfield';
 
 interface ConfigurationWizardProps {
   package: AgentPackage;

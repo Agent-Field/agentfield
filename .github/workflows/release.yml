@@ -150,7 +150,7 @@ jobs:
           OWNER: ${{ github.repository_owner }}
         run: |
           owner="$(echo "${OWNER}" | tr '[:upper:]' '[:lower:]')"
-          image="ghcr.io/${owner}/haxen-control-plane"
+          image="ghcr.io/${owner}/agentfield-control-plane"
           if [ "${EVENT_NAME}" = "push" ]; then
             tag="${REF_NAME}"
           else

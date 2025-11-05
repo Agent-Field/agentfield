@@ -1,4 +1,4 @@
-from haxen_sdk.agent_registry import (
+from agentfield.agent_registry import (
     set_current_agent,
     get_current_agent_instance,
     clear_current_agent,

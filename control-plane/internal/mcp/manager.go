@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/internal/config"
+	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -39,11 +39,11 @@ func (m *MCPManager) Add(config MCPServerConfig) error {
 	if config.Alias == "" {
 		return fmt.Errorf("alias is required")
 	}
-	
+
 	if config.URL == "" && config.RunCmd == "" {
 		return fmt.Errorf("either URL or run command is required")
 	}
-	
+
 	if config.URL != "" && config.RunCmd != "" {
 		return fmt.Errorf("URL and run command are mutually exclusive")
 	}
@@ -59,7 +59,7 @@ func (m *MCPManager) Add(config MCPServerConfig) error {
 
 	// Create server directory
 	serverDir := filepath.Join(m.projectDir, "packages", "mcp", config.Alias)
-	
+
 	// Handle force flag - remove existing directory if it exists
 	if config.Force {
 		if _, err := os.Stat(serverDir); err == nil {
@@ -71,7 +71,7 @@ func (m *MCPManager) Add(config MCPServerConfig) error {
 			}
 		}
 	}
-	
+
 	if err := os.MkdirAll(serverDir, 0755); err != nil {
 		return fmt.Errorf("failed to create server directory: %w", err)
 	}
@@ -89,9 +89,9 @@ func (m *MCPManager) Add(config MCPServerConfig) error {
 		return fmt.Errorf("failed to save configuration: %w", err)
 	}
 
-	// Update haxen.yaml
-	if err := m.updateHaxenYAML(config); err != nil {
-		return fmt.Errorf("failed to update haxen.yaml: %w", err)
+	// Update agentfield.yaml
+	if err := m.updateAgentFieldYAML(config); err != nil {
+		return fmt.Errorf("failed to update agentfield.yaml: %w", err)
 	}
 
 	// Attempt to start and discover capabilities
@@ -111,7 +111,7 @@ func (m *MCPManager) Add(config MCPServerConfig) error {
 		} else if capability != nil && m.verbose {
 			fmt.Printf("Updated config with transport type: %s\n", capability.Transport)
 		}
-		
+
 		// Stop the server after discovery (it will be started again when needed)
 		if err := m.Stop(config.Alias); err != nil {
 			if m.verbose {
@@ -170,7 +170,7 @@ func (m *MCPManager) Start(alias string) (*MCPProcess, error) {
 	config.PID = process.Config.PID
 	config.Status = string(StatusRunning)
 	config.StartedAt = &now
-	
+
 	if err := m.saveConfig(filepath.Join(m.projectDir, "packages", "mcp", alias, "config.json"), *config); err != nil {
 		if m.verbose {
 			fmt.Printf("Warning: failed to update configuration: %v\n", err)
@@ -208,7 +208,11 @@ func (m *MCPManager) Stop(alias string) error {
 		config.PID = 0
 		config.Status = string(StatusStopped)
 		config.StartedAt = nil
-		m.saveConfig(filepath.Join(m.projectDir, "packages", "mcp", alias, "config.json"), *config)
+		if err := m.saveConfig(filepath.Join(m.projectDir, "packages", "mcp", alias, "config.json"), *config); err != nil {
+			return fmt.Errorf("failed to persist MCP server config: %w", err)
+		}
+	} else if m.verbose {
+		fmt.Printf("WARN: Unable to load MCP config for %s during stop: %v\n", alias, err)
 	}
 
 	if m.verbose {
@@ -243,9 +247,9 @@ func (m *MCPManager) Remove(alias string) error {
 		return fmt.Errorf("failed to remove server directory: %w", err)
 	}
 
-	// Update haxen.yaml
-	if err := m.removeMCPFromHaxenYAML(alias); err != nil {
-		return fmt.Errorf("failed to update haxen.yaml: %w", err)
+	// Update agentfield.yaml
+	if err := m.removeMCPFromAgentFieldYAML(alias); err != nil {
+		return fmt.Errorf("failed to update agentfield.yaml: %w", err)
 	}
 
 	if m.verbose {
@@ -323,7 +327,7 @@ func (m *MCPManager) Restart(alias string) error {
 // Logs returns a reader for the server logs
 func (m *MCPManager) Logs(alias string, follow bool, lines int) (io.ReadCloser, error) {
 	logFile := filepath.Join(m.projectDir, "packages", "mcp", alias, fmt.Sprintf("%s.log", alias))
-	
+
 	if _, err := os.Stat(logFile); os.IsNotExist(err) {
 		return nil, fmt.Errorf("log file not found for server %s", alias)
 	}
@@ -399,20 +403,20 @@ func (m *MCPManager) getServerInfo(alias string) (*MCPServerInfo, error) {
 	return info, nil
 }
 
-// updateHaxenYAML updates the haxen.yaml file with the new MCP server
-func (m *MCPManager) updateHaxenYAML(config MCPServerConfig) error {
-	haxenYAMLPath := filepath.Join(m.projectDir, "haxen.yaml")
+// updateAgentFieldYAML updates the agentfield.yaml file with the new MCP server
+func (m *MCPManager) updateAgentFieldYAML(config MCPServerConfig) error {
+	agentfieldYAMLPath := filepath.Join(m.projectDir, "agentfield.yaml")
 
-	// Read existing haxen.yaml
-	data, err := os.ReadFile(haxenYAMLPath)
+	// Read existing agentfield.yaml
+	data, err := os.ReadFile(agentfieldYAMLPath)
 	if err != nil {
-		return fmt.Errorf("failed to read haxen.yaml: %w", err)
+		return fmt.Errorf("failed to read agentfield.yaml: %w", err)
 	}
 
 	// Parse YAML
 	var yamlConfig map[string]interface{}
 	if err := yaml.Unmarshal(data, &yamlConfig); err != nil {
-		return fmt.Errorf("failed to parse haxen.yaml: %w", err)
+		return fmt.Errorf("failed to parse agentfield.yaml: %w", err)
 	}
 
 	// Ensure dependencies section exists
@@ -474,30 +478,30 @@ func (m *MCPManager) updateHaxenYAML(config MCPServerConfig) error {
 	// Write back to file
 	updatedData, err := yaml.Marshal(yamlConfig)
 	if err != nil {
-		return fmt.Errorf("failed to marshal haxen.yaml: %w", err)
+		return fmt.Errorf("failed to marshal agentfield.yaml: %w", err)
 	}
 
-	if err := os.WriteFile(haxenYAMLPath, updatedData, 0644); err != nil {
-		return fmt.Errorf("failed to write haxen.yaml: %w", err)
+	if err := os.WriteFile(agentfieldYAMLPath, updatedData, 0644); err != nil {
+		return fmt.Errorf("failed to write agentfield.yaml: %w", err)
 	}
 
 	return nil
 }
 
-// removeMCPFromHaxenYAML removes an MCP server from haxen.yaml
-func (m *MCPManager) removeMCPFromHaxenYAML(alias string) error {
-	haxenYAMLPath := filepath.Join(m.projectDir, "haxen.yaml")
+// removeMCPFromAgentFieldYAML removes an MCP server from agentfield.yaml
+func (m *MCPManager) removeMCPFromAgentFieldYAML(alias string) error {
+	agentfieldYAMLPath := filepath.Join(m.projectDir, "agentfield.yaml")
 
-	// Read existing haxen.yaml
-	data, err := os.ReadFile(haxenYAMLPath)
+	// Read existing agentfield.yaml
+	data, err := os.ReadFile(agentfieldYAMLPath)
 	if err != nil {
-		return fmt.Errorf("failed to read haxen.yaml: %w", err)
+		return fmt.Errorf("failed to read agentfield.yaml: %w", err)
 	}
 
 	// Parse YAML
 	var config map[string]interface{}
 	if err := yaml.Unmarshal(data, &config); err != nil {
-		return fmt.Errorf("failed to parse haxen.yaml: %w", err)
+		return fmt.Errorf("failed to parse agentfield.yaml: %w", err)
 	}
 
 	// Navigate to mcp_servers section
@@ -510,28 +514,30 @@ func (m *MCPManager) removeMCPFromHaxenYAML(alias string) error {
 	// Write back to file
 	updatedData, err := yaml.Marshal(config)
 	if err != nil {
-		return fmt.Errorf("failed to marshal haxen.yaml: %w", err)
+		return fmt.Errorf("failed to marshal agentfield.yaml: %w", err)
 	}
 
-	if err := os.WriteFile(haxenYAMLPath, updatedData, 0644); err != nil {
-		return fmt.Errorf("failed to write haxen.yaml: %w", err)
+	if err := os.WriteFile(agentfieldYAMLPath, updatedData, 0644); err != nil {
+		return fmt.Errorf("failed to write agentfield.yaml: %w", err)
 	}
 
 	return nil
 }
 
-// loadMCPConfigsFromYAML loads MCP configurations from haxen.yaml
+// loadMCPConfigsFromYAML loads MCP configurations from agentfield.yaml
+//
+//nolint:unused // Reserved for future YAML config support
 func (m *MCPManager) loadMCPConfigsFromYAML() (map[string]MCPServerConfig, error) {
-	haxenYAMLPath := filepath.Join(m.projectDir, "haxen.yaml")
+	agentfieldYAMLPath := filepath.Join(m.projectDir, "agentfield.yaml")
 
-	data, err := os.ReadFile(haxenYAMLPath)
+	data, err := os.ReadFile(agentfieldYAMLPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read haxen.yaml: %w", err)
+		return nil, fmt.Errorf("failed to read agentfield.yaml: %w", err)
 	}
 
 	var config map[string]interface{}
 	if err := yaml.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse haxen.yaml: %w", err)
+		return nil, fmt.Errorf("failed to parse agentfield.yaml: %w", err)
 	}
 
 	configs := make(map[string]MCPServerConfig)
@@ -635,9 +641,9 @@ func (m *MCPManager) DiscoverCapabilities(alias string) (*MCPManifest, error) {
 	}
 
 	if m.verbose {
-		fmt.Printf("Successfully discovered capabilities for %s: %d tools, %d resources\n", 
+		fmt.Printf("Successfully discovered capabilities for %s: %d tools, %d resources\n",
 			alias, len(manifest.Tools), len(manifest.Resources))
-		fmt.Printf("Note: MCP skills will be auto-registered by Haxen SDK when agent starts\n")
+		fmt.Printf("Note: MCP skills will be auto-registered by AgentField SDK when agent starts\n")
 	}
 
 	return manifest, nil
@@ -692,6 +698,8 @@ func (m *MCPManager) discoverFromLocalProcess(config MCPServerConfig) (*MCPManif
 }
 
 // connectAndDiscover connects to an MCP server endpoint and discovers capabilities
+//
+//nolint:unused // Reserved for future HTTP-based MCP discovery
 func (m *MCPManager) connectAndDiscover(endpoint string) (*MCPManifest, error) {
 	if m.verbose {
 		fmt.Printf("Connecting to MCP server at: %s\n", endpoint)
@@ -715,6 +723,8 @@ func (m *MCPManager) connectAndDiscover(endpoint string) (*MCPManifest, error) {
 }
 
 // parseCapabilityResponse parses a raw capability response into an MCPManifest
+//
+//nolint:unused // Reserved for future HTTP-based MCP discovery
 func (m *MCPManager) parseCapabilityResponse(response []byte) (*MCPManifest, error) {
 	var manifest MCPManifest
 	if err := json.Unmarshal(response, &manifest); err != nil {
@@ -757,7 +767,7 @@ func (m *MCPManager) GenerateSkills(alias string, manifest *MCPManifest) error {
 
 	// Use the new SkillGenerator instead of the old template-based approach
 	generator := NewSkillGenerator(m.projectDir, m.verbose)
-	
+
 	result, err := generator.GenerateSkillsForServer(alias)
 	if err != nil {
 		return fmt.Errorf("failed to generate skills: %w", err)

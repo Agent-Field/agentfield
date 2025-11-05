@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,10 +10,10 @@ import (
 	"strings"
 	"time" // Added for time.Now()
 
-	"github.com/your-org/haxen/control-plane/internal/logger"
-	"github.com/your-org/haxen/control-plane/internal/storage"
-	"github.com/your-org/haxen/control-plane/internal/utils" // Added for ID generation
-	"github.com/your-org/haxen/control-plane/pkg/types"      // Added for new types
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
+	"github.com/Agent-Field/agentfield/control-plane/internal/utils" // Added for ID generation
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"      // Added for new types
 
 	"github.com/gin-gonic/gin"
 )
@@ -21,6 +22,15 @@ import (
 type ExecuteReasonerRequest struct {
 	Input   map[string]interface{} `json:"input" binding:"required"`
 	Context map[string]interface{} `json:"context,omitempty"`
+}
+
+func persistWorkflowExecution(ctx context.Context, storageProvider storage.StorageProvider, execution *types.WorkflowExecution) {
+	if err := storageProvider.StoreWorkflowExecution(ctx, execution); err != nil {
+		logger.Logger.Error().
+			Err(err).
+			Str("execution_id", execution.ExecutionID).
+			Msg("failed to persist workflow execution state")
+	}
 }
 
 // ExecuteReasonerResponse represents the response from executing a reasoner
@@ -37,8 +47,8 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 		ctx := c.Request.Context()
 		startTime := time.Now()
 
-		// Generate Haxen Request ID
-		haxenRequestID := utils.GenerateHaxenRequestID()
+		// Generate AgentField Request ID
+		agentfieldRequestID := utils.GenerateAgentFieldRequestID()
 
 		// Extract headers
 		workflowID := c.GetHeader("X-Workflow-ID")
@@ -120,15 +130,15 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 
 		// Create workflow execution record
 		workflowExecution := &types.WorkflowExecution{
-			WorkflowID:     workflowID,
-			ExecutionID:    executionID,
-			HaxenRequestID: haxenRequestID,
-			AgentNodeID:    nodeID,
-			ReasonerID:     reasonerName,
-			Status:         "running",
-			StartedAt:      startTime,
-			CreatedAt:      startTime,
-			UpdatedAt:      startTime,
+			WorkflowID:          workflowID,
+			ExecutionID:         executionID,
+			AgentFieldRequestID: agentfieldRequestID,
+			AgentNodeID:         nodeID,
+			ReasonerID:          reasonerName,
+			Status:              "running",
+			StartedAt:           startTime,
+			CreatedAt:           startTime,
+			UpdatedAt:           startTime,
 		}
 
 		// Set optional fields
@@ -181,7 +191,7 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 			duration := endTime.Sub(startTime).Milliseconds()
 			workflowExecution.DurationMS = &duration
 			workflowExecution.UpdatedAt = endTime
-			storageProvider.StoreWorkflowExecution(ctx, workflowExecution)
+			persistWorkflowExecution(ctx, storageProvider, workflowExecution)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create agent request"})
 			return
 		}
@@ -189,7 +199,7 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 		agentReq.Header.Set("Content-Type", "application/json")
 		agentReq.Header.Set("X-Workflow-ID", workflowID)
 		agentReq.Header.Set("X-Execution-ID", executionID)
-		agentReq.Header.Set("X-Haxen-Request-ID", haxenRequestID)
+		agentReq.Header.Set("X-AgentField-Request-ID", agentfieldRequestID)
 		if parentWorkflowID != "" {
 			agentReq.Header.Set("X-Parent-Workflow-ID", parentWorkflowID)
 		}
@@ -235,7 +245,7 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 			workflowExecution.UpdatedAt = endTime
 
 			// Store execution record
-			storageProvider.StoreWorkflowExecution(ctx, workflowExecution)
+			persistWorkflowExecution(ctx, storageProvider, workflowExecution)
 
 			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"error": fmt.Sprintf("failed to call agent node: %v", err),
@@ -258,7 +268,7 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 			workflowExecution.UpdatedAt = endTime
 
 			// Store execution record
-			storageProvider.StoreWorkflowExecution(ctx, workflowExecution)
+			persistWorkflowExecution(ctx, storageProvider, workflowExecution)
 
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read agent response"})
 			return
@@ -278,7 +288,7 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 			workflowExecution.UpdatedAt = endTime
 
 			// Store execution record
-			storageProvider.StoreWorkflowExecution(ctx, workflowExecution)
+			persistWorkflowExecution(ctx, storageProvider, workflowExecution)
 
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to parse agent response"})
 			return
@@ -295,15 +305,13 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 		workflowExecution.UpdatedAt = endTime
 
 		// Store execution record
-		if err := storageProvider.StoreWorkflowExecution(ctx, workflowExecution); err != nil {
-			// Log error but don't fail the request
-			logger.Logger.Error().Err(err).Msg("Failed to store workflow execution")
-		}
+		// Store execution record
+		persistWorkflowExecution(ctx, storageProvider, workflowExecution)
 
 		// Set response headers
 		c.Header("X-Workflow-ID", workflowID)
 		c.Header("X-Execution-ID", executionID)
-		c.Header("X-Haxen-Request-ID", haxenRequestID)
+		c.Header("X-AgentField-Request-ID", agentfieldRequestID)
 		c.Header("X-Agent-Node-ID", nodeID)
 		c.Header("X-Duration-MS", fmt.Sprintf("%d", duration))
 
@@ -317,14 +325,14 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 	}
 }
 
-// ExecuteSkillHandler handles execution of skills via Haxen server
+// ExecuteSkillHandler handles execution of skills via AgentField server
 func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 		startTime := time.Now()
 
-		// Generate Haxen Request ID
-		haxenRequestID := utils.GenerateHaxenRequestID()
+		// Generate AgentField Request ID
+		agentfieldRequestID := utils.GenerateAgentFieldRequestID()
 
 		// Extract headers
 		workflowID := c.GetHeader("X-Workflow-ID")
@@ -406,15 +414,15 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 
 		// Create workflow execution record
 		workflowExecution := &types.WorkflowExecution{
-			WorkflowID:     workflowID,
-			ExecutionID:    executionID,
-			HaxenRequestID: haxenRequestID,
-			AgentNodeID:    nodeID,
-			ReasonerID:     skillName, // For skills, ReasonerID will store skillName
-			Status:         "running",
-			StartedAt:      startTime,
-			CreatedAt:      startTime,
-			UpdatedAt:      startTime,
+			WorkflowID:          workflowID,
+			ExecutionID:         executionID,
+			AgentFieldRequestID: agentfieldRequestID,
+			AgentNodeID:         nodeID,
+			ReasonerID:          skillName, // For skills, ReasonerID will store skillName
+			Status:              "running",
+			StartedAt:           startTime,
+			CreatedAt:           startTime,
+			UpdatedAt:           startTime,
 		}
 
 		// Set optional fields
@@ -467,7 +475,7 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 			duration := endTime.Sub(startTime).Milliseconds()
 			workflowExecution.DurationMS = &duration
 			workflowExecution.UpdatedAt = endTime
-			storageProvider.StoreWorkflowExecution(ctx, workflowExecution)
+			persistWorkflowExecution(ctx, storageProvider, workflowExecution)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create agent request"})
 			return
 		}
@@ -475,7 +483,7 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 		agentReq.Header.Set("Content-Type", "application/json")
 		agentReq.Header.Set("X-Workflow-ID", workflowID)
 		agentReq.Header.Set("X-Execution-ID", executionID)
-		agentReq.Header.Set("X-Haxen-Request-ID", haxenRequestID)
+		agentReq.Header.Set("X-AgentField-Request-ID", agentfieldRequestID)
 		if parentWorkflowID != "" {
 			agentReq.Header.Set("X-Parent-Workflow-ID", parentWorkflowID)
 		}
@@ -521,7 +529,7 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 			workflowExecution.UpdatedAt = endTime
 
 			// Store execution record
-			storageProvider.StoreWorkflowExecution(ctx, workflowExecution)
+			persistWorkflowExecution(ctx, storageProvider, workflowExecution)
 
 			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"error": fmt.Sprintf("failed to call agent node: %v", err),
@@ -544,7 +552,7 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 			workflowExecution.UpdatedAt = endTime
 
 			// Store execution record
-			storageProvider.StoreWorkflowExecution(ctx, workflowExecution)
+			persistWorkflowExecution(ctx, storageProvider, workflowExecution)
 
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read agent response"})
 			return
@@ -564,7 +572,7 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 			workflowExecution.UpdatedAt = endTime
 
 			// Store execution record
-			storageProvider.StoreWorkflowExecution(ctx, workflowExecution)
+			persistWorkflowExecution(ctx, storageProvider, workflowExecution)
 
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to parse agent response"})
 			return
@@ -581,15 +589,12 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 		workflowExecution.UpdatedAt = endTime
 
 		// Store execution record
-		if err := storageProvider.StoreWorkflowExecution(ctx, workflowExecution); err != nil {
-			// Log error but don't fail the request
-			logger.Logger.Error().Err(err).Msg("Failed to store workflow execution")
-		}
+		persistWorkflowExecution(ctx, storageProvider, workflowExecution)
 
 		// Set response headers
 		c.Header("X-Workflow-ID", workflowID)
 		c.Header("X-Execution-ID", executionID)
-		c.Header("X-Haxen-Request-ID", haxenRequestID)
+		c.Header("X-AgentField-Request-ID", agentfieldRequestID)
 		c.Header("X-Agent-Node-ID", nodeID)
 		c.Header("X-Duration-MS", fmt.Sprintf("%d", duration))
 

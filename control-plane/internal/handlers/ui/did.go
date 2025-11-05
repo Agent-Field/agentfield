@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/internal/services"
-	"github.com/your-org/haxen/control-plane/internal/storage"
-	"github.com/your-org/haxen/control-plane/pkg/types"
+	"github.com/Agent-Field/agentfield/control-plane/internal/services"
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -50,21 +52,21 @@ func (h *DIDHandler) GetNodeDIDHandler(c *gin.Context) {
 		return
 	}
 
-	// Get haxen server ID dynamically
-	haxenServerID, err := h.didService.GetHaxenServerID()
+	// Get af server ID dynamically
+	agentfieldServerID, err := h.didService.GetAgentFieldServerID()
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"has_did":        false,
 			"did_status":     "inactive",
 			"reasoner_count": 0,
 			"skill_count":    0,
-			"error":          fmt.Sprintf("Failed to get haxen server ID: %v", err),
+			"error":          fmt.Sprintf("Failed to get af server ID: %v", err),
 		})
 		return
 	}
 
-	// Get DID registry for the haxen server (not the node)
-	registry, err := h.didService.GetRegistry(haxenServerID)
+	// Get DID registry for the af server (not the node)
+	registry, err := h.didService.GetRegistry(agentfieldServerID)
 	if err != nil || registry == nil {
 		c.JSON(http.StatusOK, gin.H{
 			"has_did":        false,
@@ -96,15 +98,15 @@ func (h *DIDHandler) GetNodeDIDHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"did":             agentInfo.DID,
-		"agent_node_id":   nodeID,
-		"haxen_server_id": registry.HaxenServerID,
-		"public_key_jwk":  agentInfo.PublicKeyJWK,
-		"derivation_path": agentInfo.DerivationPath,
-		"reasoners":       agentInfo.Reasoners,
-		"skills":          agentInfo.Skills,
-		"status":          status,
-		"registered_at":   agentInfo.RegisteredAt.Format(time.RFC3339),
+		"did":                  agentInfo.DID,
+		"agent_node_id":        nodeID,
+		"agentfield_server_id": registry.AgentFieldServerID,
+		"public_key_jwk":       agentInfo.PublicKeyJWK,
+		"derivation_path":      agentInfo.DerivationPath,
+		"reasoners":            agentInfo.Reasoners,
+		"skills":               agentInfo.Skills,
+		"status":               status,
+		"registered_at":        agentInfo.RegisteredAt.Format(time.RFC3339),
 	})
 }
 
@@ -252,9 +254,9 @@ func (h *DIDHandler) GetExecutionVCStatusHandler(c *gin.Context) {
 		}
 	} else if executionVC.StorageURI != "" {
 		vcDocumentForResponse = map[string]interface{}{
-			"storage_uri":          executionVC.StorageURI,
+			"storage_uri":         executionVC.StorageURI,
 			"document_size_bytes": executionVC.DocumentSize,
-			"note":                 "VC document stored via external URI",
+			"note":                "VC document stored via external URI",
 		}
 		documentStatus = "external"
 	} else {
@@ -303,7 +305,7 @@ func (h *DIDHandler) GetExecutionVCHandler(c *gin.Context) {
 		return
 	}
 
-	if executionVC.VCDocument == nil || len(executionVC.VCDocument) == 0 {
+	if len(executionVC.VCDocument) == 0 {
 		if executionVC.StorageURI == "" {
 			fmt.Printf("DEBUG: VC document is empty for execution_id: %s\n", executionID)
 			c.JSON(http.StatusNotFound, gin.H{"error": "VC document not found or empty"})
@@ -500,18 +502,17 @@ func (h *DIDHandler) ExportVCsHandler(c *gin.Context) {
 	// Parse query parameters for filtering
 	filters := &types.VCFilters{}
 
+	filters.Limit = 100 // default
 	if limit := c.Query("limit"); limit != "" {
-		if limitInt, err := fmt.Sscanf(limit, "%d", &filters.Limit); err == nil && limitInt == 1 {
-			// limit was successfully parsed
-		} else {
-			filters.Limit = 100 // default
+		if parsedLimit, err := strconv.Atoi(limit); err == nil {
+			filters.Limit = parsedLimit
 		}
-	} else {
-		filters.Limit = 100 // default
 	}
 
 	if offset := c.Query("offset"); offset != "" {
-		fmt.Sscanf(offset, "%d", &filters.Offset)
+		if parsedOffset, err := strconv.Atoi(offset); err == nil {
+			filters.Offset = parsedOffset
+		}
 	}
 
 	if status := c.Query("status"); status != "" {
@@ -591,7 +592,7 @@ func (h *DIDHandler) GetDIDResolutionBundleHandler(c *gin.Context) {
 			"component_dids":    []interface{}{},
 			"resolution_metadata": gin.H{
 				"resolved_at": time.Now().Format(time.RFC3339),
-				"resolver":    "haxen-server",
+				"resolver":    "agentfield-server",
 				"status":      "inactive",
 			},
 		})
@@ -633,7 +634,7 @@ func (h *DIDHandler) GetDIDResolutionBundleHandler(c *gin.Context) {
 						{
 							"id":              did + "#agent-service",
 							"type":            "AgentService",
-							"serviceEndpoint": fmt.Sprintf("https://haxen-server/agents/%s", agentDID.AgentNodeID),
+							"serviceEndpoint": fmt.Sprintf("https://agentfield-server/agents/%s", agentDID.AgentNodeID),
 						},
 					},
 				}
@@ -651,7 +652,7 @@ func (h *DIDHandler) GetDIDResolutionBundleHandler(c *gin.Context) {
 				serviceEndpoints = append(serviceEndpoints, gin.H{
 					"id":              did + "#agent-service",
 					"type":            "AgentService",
-					"serviceEndpoint": fmt.Sprintf("https://haxen-server/agents/%s", agentDID.AgentNodeID),
+					"serviceEndpoint": fmt.Sprintf("https://agentfield-server/agents/%s", agentDID.AgentNodeID),
 				})
 
 				// Add component DIDs (reasoners and skills)
@@ -708,7 +709,7 @@ func (h *DIDHandler) GetDIDResolutionBundleHandler(c *gin.Context) {
 							{
 								"id":              did + "#component-service",
 								"type":            fmt.Sprintf("%sService", componentDID.ComponentType),
-								"serviceEndpoint": fmt.Sprintf("https://haxen-server/components/%s", componentDID.ComponentID),
+								"serviceEndpoint": fmt.Sprintf("https://agentfield-server/components/%s", componentDID.ComponentID),
 							},
 						},
 					}
@@ -717,7 +718,7 @@ func (h *DIDHandler) GetDIDResolutionBundleHandler(c *gin.Context) {
 					serviceEndpoints = append(serviceEndpoints, gin.H{
 						"id":              did + "#component-service",
 						"type":            fmt.Sprintf("%sService", componentDID.ComponentType),
-						"serviceEndpoint": fmt.Sprintf("https://haxen-server/components/%s", componentDID.ComponentID),
+						"serviceEndpoint": fmt.Sprintf("https://agentfield-server/components/%s", componentDID.ComponentID),
 					})
 
 					break
@@ -753,9 +754,9 @@ func (h *DIDHandler) GetDIDResolutionBundleHandler(c *gin.Context) {
 	// Build resolution metadata
 	resolutionMetadata := gin.H{
 		"resolved_at": time.Now().Format(time.RFC3339),
-		"resolver":    "haxen-server",
+		"resolver":    "agentfield-server",
 		"status":      resolutionStatus,
-		"method":      "haxen",
+		"method":      "agentfield",
 	}
 
 	if resolutionStatus == "resolved" {
@@ -801,8 +802,8 @@ func (h *DIDHandler) DownloadDIDResolutionBundleHandler(c *gin.Context) {
 		"did": did,
 		"resolution_metadata": gin.H{
 			"resolved_at": time.Now().Format(time.RFC3339),
-			"resolver":    "haxen-server",
-			"method":      "haxen",
+			"resolver":    "agentfield-server",
+			"method":      "agentfield",
 		},
 		"bundle_type":  "did_resolution",
 		"generated_at": time.Now().Format(time.RFC3339),
@@ -860,38 +861,23 @@ func getDIDRole(did string, vc types.ExecutionVC) string {
 
 // sanitizeDIDForFilename sanitizes a DID string to be safe for use in filenames
 func sanitizeDIDForFilename(did string) string {
-	// Replace characters that are not safe for filenames
-	result := did
-	result = fmt.Sprintf("%s", result) // Ensure it's a string
+	replacer := strings.NewReplacer(
+		":", "_",
+		"/", "_",
+		"\\", "_",
+		"?", "_",
+		"*", "_",
+		"<", "_",
+		">", "_",
+		"|", "_",
+		"\"", "_",
+		" ", "_",
+	)
 
-	// Replace common DID characters that might cause issues in filenames
-	replacements := map[string]string{
-		":":  "_",
-		"/":  "_",
-		"\\": "_",
-		"?":  "_",
-		"*":  "_",
-		"<":  "_",
-		">":  "_",
-		"|":  "_",
-		"\"": "_",
-		" ":  "_",
+	sanitized := replacer.Replace(did)
+	if len(sanitized) > 100 {
+		sanitized = sanitized[:100]
 	}
 
-	for old, new := range replacements {
-		result = fmt.Sprintf("%s", result)
-		// Simple string replacement
-		for i := 0; i < len(result); i++ {
-			if i < len(result) && string(result[i]) == old {
-				result = result[:i] + new + result[i+1:]
-			}
-		}
-	}
-
-	// Limit length to avoid filesystem issues
-	if len(result) > 100 {
-		result = result[:100]
-	}
-
-	return result
+	return sanitized
 }

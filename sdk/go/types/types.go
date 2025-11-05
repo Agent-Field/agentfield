@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// ReasonerDefinition mirrors the Haxen server registration contract.
+// ReasonerDefinition mirrors the AgentField server registration contract.
 type ReasonerDefinition struct {
 	ID           string          `json:"id"`
 	InputSchema  json.RawMessage `json:"input_schema"`

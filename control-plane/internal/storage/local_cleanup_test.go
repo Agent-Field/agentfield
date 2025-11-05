@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/pkg/types"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/stretchr/testify/require"
 )
@@ -20,8 +20,8 @@ func TestLocalStorageCleanupWorkflowByRunID(t *testing.T) {
 	cfg := StorageConfig{
 		Mode: "local",
 		Local: LocalStorageConfig{
-			DatabasePath: filepath.Join(tempDir, "haxen.db"),
-			KVStorePath:  filepath.Join(tempDir, "haxen.bolt"),
+			DatabasePath: filepath.Join(tempDir, "agentfield.db"),
+			KVStorePath:  filepath.Join(tempDir, "agentfield.bolt"),
 		},
 	}
 
@@ -67,22 +67,22 @@ func TestLocalStorageCleanupWorkflowByRunID(t *testing.T) {
 	}
 
 	exec := &types.WorkflowExecution{
-		WorkflowID:     workflowID,
-		ExecutionID:    "exec_cleanup_test",
-		HaxenRequestID: "req_cleanup_test",
-		RunID:          &runID,
-		AgentNodeID:    "agent_cleanup",
-		ReasonerID:     "reasoner.cleanup",
-		InputData:      json.RawMessage("{}"),
-		OutputData:     json.RawMessage("{}"),
-		InputSize:      0,
-		OutputSize:     0,
-		Status:         string(types.ExecutionStatusRunning),
-		StartedAt:      now,
-		CreatedAt:      now,
-		UpdatedAt:      now,
-		WorkflowDepth:  0,
-		WorkflowTags:   []string{},
+		WorkflowID:          workflowID,
+		ExecutionID:         "exec_cleanup_test",
+		AgentFieldRequestID: "req_cleanup_test",
+		RunID:               &runID,
+		AgentNodeID:         "agent_cleanup",
+		ReasonerID:          "reasoner.cleanup",
+		InputData:           json.RawMessage("{}"),
+		OutputData:          json.RawMessage("{}"),
+		InputSize:           0,
+		OutputSize:          0,
+		Status:              string(types.ExecutionStatusRunning),
+		StartedAt:           now,
+		CreatedAt:           now,
+		UpdatedAt:           now,
+		WorkflowDepth:       0,
+		WorkflowTags:        []string{},
 	}
 	if err := ls.StoreWorkflowExecution(ctx, exec); err != nil {
 		t.Fatalf("store workflow execution: %v", err)
@@ -157,8 +157,8 @@ func TestLocalStorageCleanupOldExecutions(t *testing.T) {
 	cfg := StorageConfig{
 		Mode: "local",
 		Local: LocalStorageConfig{
-			DatabasePath: filepath.Join(tempDir, "haxen.db"),
-			KVStorePath:  filepath.Join(tempDir, "haxen.bolt"),
+			DatabasePath: filepath.Join(tempDir, "agentfield.db"),
+			KVStorePath:  filepath.Join(tempDir, "agentfield.bolt"),
 		},
 	}
 
@@ -179,17 +179,17 @@ func TestLocalStorageCleanupOldExecutions(t *testing.T) {
 
 	insertExecution := func(executionID string, completedAt time.Time) {
 		exec := &types.WorkflowExecution{
-			WorkflowID:     workflowID,
-			ExecutionID:    executionID,
-			HaxenRequestID: executionID + "_req",
-			AgentNodeID:    "agent",
-			ReasonerID:     "reasoner",
-			Status:         "completed",
-			StartedAt:      completedAt,
-			CreatedAt:      completedAt,
-			UpdatedAt:      completedAt,
-			WorkflowDepth:  0,
-			WorkflowTags:   []string{},
+			WorkflowID:          workflowID,
+			ExecutionID:         executionID,
+			AgentFieldRequestID: executionID + "_req",
+			AgentNodeID:         "agent",
+			ReasonerID:          "reasoner",
+			Status:              "completed",
+			StartedAt:           completedAt,
+			CreatedAt:           completedAt,
+			UpdatedAt:           completedAt,
+			WorkflowDepth:       0,
+			WorkflowTags:        []string{},
 		}
 		exec.CompletedAt = &completedAt
 		require.NoError(t, ls.StoreWorkflowExecution(ctx, exec))

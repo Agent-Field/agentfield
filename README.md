@@ -4,7 +4,7 @@
 
 **A Kubernetes-style control plane that runs AI agents like microservices: REST/gRPC APIs, async webhooks, and cryptographic identity for every agent and execution.**
 
-Write agents. Haxen deploys, scales, observes, and proves what happened.
+Write agents. AgentField deploys, scales, observes, and proves what happened.
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/go-1.21+-00ADD8.svg)](https://go.dev/)
@@ -12,7 +12,7 @@ Write agents. Haxen deploys, scales, observes, and proves what happened.
 [![Deploy with Docker](https://img.shields.io/badge/deploy-docker-2496ED.svg)](https://docs.docker.com/)
 [![Discord](https://img.shields.io/badge/discord-join-5865F2.svg)](https://discord.gg/your-discord)
 
-**[📚 Docs](https://haxen.ai/docs)** • **[⚡ Quickstart](#-try-haxen-in-2-minutes)** • **[💬 Discord](https://discord.gg/your-discord)**
+**[📚 Docs](https://agentfield.ai/docs)** • **[⚡ Quickstart](#-try-agentfield-in-2-minutes)** • **[💬 Discord](https://discord.gg/your-discord)**
 
 </div>
 
@@ -26,35 +26,35 @@ Write agents. Haxen deploys, scales, observes, and proves what happened.
 - **Run anywhere**: local dev, Docker, Kubernetes, cloud
 
 ```bash
-curl -fsSL https://haxen.ai/install.sh | bash && haxen init my-agents
+curl -fsSL https://agentfield.ai/install.sh | bash && af init my-agents
 ```
 
 ---
 
-## 🚀 Try Haxen in 2 Minutes
+## 🚀 Try AgentField in 2 Minutes
 
 ### Option 1: Local Install
 
 ```bash
 # macOS/Linux - install CLI
-curl -fsSL https://haxen.ai/install.sh | bash
+curl -fsSL https://agentfield.ai/install.sh | bash
 
 # Start control plane + create your first agent
-haxen dev
-haxen init my-agents && cd my-agents
-haxen run
+af dev
+af init my-agents && cd my-agents
+af run
 ```
 
 ### Option 2: Docker Compose
 
 ```bash
-git clone https://github.com/agentfield/haxen
-cd haxen && docker compose up
+git clone https://github.com/agentfield/agentfield
+cd agentfield && docker compose up
 ```
 
 Your control plane is running at `http://localhost:8080`
 
-**[📚 Full quickstart guide →](https://haxen.ai/docs/quick-start)** • **[💬 Need help? Discord](https://discord.gg/your-discord)**
+**[📚 Full quickstart guide →](https://agentfield.ai/docs/quick-start)** • **[💬 Need help? Discord](https://discord.gg/your-discord)**
 
 ---
 
@@ -63,7 +63,7 @@ Your control plane is running at `http://localhost:8080`
 Write your first agent—automatically get a REST API:
 
 ```python
-from haxen_sdk import Agent
+from agentfield import Agent
 
 # Create an agent
 app = Agent("greeting-agent")
@@ -77,7 +77,7 @@ async def say_hello(name: str) -> dict:
 
 **Deploy:**
 ```bash
-haxen run
+af run
 ```
 
 **Call from anywhere** (REST API auto-generated):
@@ -96,17 +96,17 @@ curl -X POST http://localhost:8080/api/v1/execute/greeting-agent.say_hello \
 
 **That's it.** One function = production-ready service.
 
-**[📚 Docs](https://haxen.ai/docs)** • **[⚡ More examples](https://github.com/agentfield/haxen-examples)** • **[💬 Discord](https://discord.gg/your-discord)**
+**[📚 Docs](https://agentfield.ai/docs)** • **[⚡ More examples](https://github.com/agentfield/agentfield-examples)** • **[💬 Discord](https://discord.gg/your-discord)**
 
 ---
 
-## Why Haxen?
+## Why AgentField?
 
-Agent frameworks are great for **prototypes**. Haxen builds agents **and** runs them at production scale.
+Agent frameworks are great for **prototypes**. AgentField builds agents **and** runs them at production scale.
 
-### What Hurts Today → What Haxen Does Automatically
+### What Hurts Today → What AgentField Does Automatically
 
-| 🔴 **Without Haxen**                                                                                         | 🟢 **With Haxen**                                                                                                                                           |
+| 🔴 **Without AgentField**                                                                                         | 🟢 **With AgentField**                                                                                                                                           |
 | ----------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Monolithic deployments** — one team's change forces everyone to redeploy                                  | **Independent deployment** — teams ship agents on their own schedule, zero coordination                                                                    |
 | **No native APIs** — your React app needs custom wrappers to call agents                                    | **REST & OpenAPI by default** (gRPC optional) — every function is an endpoint, auto-documented                                                             |
@@ -119,12 +119,12 @@ Agent frameworks are great for **prototypes**. Haxen builds agents **and** runs 
 
 ```
 Traditional Frameworks = Flask (single app)
-Haxen = Kubernetes + Auth0 for AI (distributed infrastructure + identity)
+AgentField = Kubernetes + Auth0 for AI (distributed infrastructure + identity)
 ```
 
-> **Haxen isn't a framework you extend with infrastructure. It IS the infrastructure.**
+> **AgentField isn't a framework you extend with infrastructure. It IS the infrastructure.**
 
-Bring your own model/tooling; Haxen handles runtime, scale, and proof.
+Bring your own model/tooling; AgentField handles runtime, scale, and proof.
 
 ---
 
@@ -133,7 +133,7 @@ Bring your own model/tooling; Haxen handles runtime, scale, and proof.
 **The scenario:** Customer support system with 3 coordinating agents.
 
 ```python
-from haxen_sdk import Agent
+from agentfield import Agent
 
 # Agent 1: Support orchestrator (Team: Customer Success)
 support = Agent("support-agent")
@@ -157,8 +157,8 @@ async def handle_ticket(ticket: dict) -> dict:
 
 **Deploy:**
 ```bash
-haxen dev           # Start control plane
-haxen run           # Deploy your agent
+af dev           # Start control plane
+af run           # Deploy your agent
 ```
 
 **You get automatically:**
@@ -174,14 +174,14 @@ haxen run           # Deploy your agent
 **From your React app:**
 ```javascript
 // Call agents via REST API (no custom SDK needed)
-const response = await fetch('http://haxen:8080/api/v1/execute/support-agent.handle_ticket', {
+const response = await fetch('http://agentfield:8080/api/v1/execute/support-agent.handle_ticket', {
   method: 'POST',
   body: JSON.stringify({ input: { ticket: {...} } })
 });
 
 // Stream real-time updates
 const eventSource = new EventSource(
-  `http://haxen:8080/api/v1/workflows/runs/${runId}/events/stream`
+  `http://agentfield:8080/api/v1/workflows/runs/${runId}/events/stream`
 );
 eventSource.onmessage = (e) => {
   console.log('Agent update:', JSON.parse(e.data));
@@ -189,7 +189,7 @@ eventSource.onmessage = (e) => {
 ```
 
 **🎨 UI SCREENSHOT #1 (HERO): Add here**
-> **What to show:** Workflow DAG visualization from the Haxen UI showing the 3 agents (support-agent → sentiment-agent, support-agent → kb-agent, support-agent → escalation-agent) with execution times, status indicators (green checkmarks), and the visual graph. This is the "wow" moment that shows developers the automatic observability.
+> **What to show:** Workflow DAG visualization from the AgentField UI showing the 3 agents (support-agent → sentiment-agent, support-agent → kb-agent, support-agent → escalation-agent) with execution times, status indicators (green checkmarks), and the visual graph. This is the "wow" moment that shows developers the automatic observability.
 >
 > **Recommended dimensions:** 1200x700px, annotate with arrows pointing to: "Auto-generated DAG", "Execution times", "Agent-to-agent calls"
 
@@ -201,7 +201,7 @@ kubectl scale deployment sentiment-agent --replicas=10
 
 ### That's the difference.
 
-Haxen **is** the infrastructure you'd otherwise spend 3 months building.
+AgentField **is** the infrastructure you'd otherwise spend 3 months building.
 
 ---
 
@@ -222,7 +222,7 @@ Haxen **is** the infrastructure you'd otherwise spend 3 months building.
 
 ...and many more !
 
-**📚 [Runtime docs →](https://haxen.ai/docs/runtime)**
+**📚 [Runtime docs →](https://agentfield.ai/docs/runtime)**
 
 ### 📊 Scale & Ops
 
@@ -240,7 +240,7 @@ Haxen **is** the infrastructure you'd otherwise spend 3 months building.
 
 **How Prometheus metrics are injected:** The control plane acts as a reverse proxy for agent traffic. All agent-to-agent calls and executions flow through the control plane, which records latency, error rates, and throughput **without requiring agents to instrument their code**. Metrics are exposed at `/metrics` in Prometheus format.
 
-**📚 [Scale & ops docs →](https://haxen.ai/docs/observability)**
+**📚 [Scale & ops docs →](https://agentfield.ai/docs/observability)**
 
 ### 🔒 Identity & Audit
 
@@ -250,7 +250,7 @@ Haxen **is** the infrastructure you'd otherwise spend 3 months building.
 | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
 | **W3C DIDs**                   | Every agent gets a Decentralized Identifier (`did:web` or `did:key`); cryptographic identity for non-repudiation       |
 | **W3C Verifiable Credentials** | Opt-in per agent; each execution generates a VC (JSON-LD format) with signed input/output hashes                       |
-| **Tamper-proof audit trails**  | Export full VC chains for regulators; verify offline with `haxen verify audit.json` (no access to your systems needed) |
+| **Tamper-proof audit trails**  | Export full VC chains for regulators; verify offline with `af verify audit.json` (no access to your systems needed) |
 | **Non-repudiation**            | Agents cryptographically sign decisions; can't deny their actions                                                      |
 | **Policy engine**              | Define rules for which executions require VCs (e.g., "all financial decisions > $10K")                                 |
 | **Export formats**             | W3C VC JSON-LD (standard); import into compliance tools                                                                |
@@ -271,21 +271,21 @@ async def approve_loan(application: dict) -> Decision:
 **For auditors/compliance:**
 ```bash
 # Export cryptographic proof chain
-curl http://haxen:8080/api/v1/did/workflow/wf_abc123/vc-chain > audit.json
+curl http://agentfield:8080/api/v1/did/workflow/wf_abc123/vc-chain > audit.json
 
 # Verify offline (no access to your systems needed)
-haxen verify audit.json
+af verify audit.json
 # ✓ All signatures valid (W3C VC spec)
 # ✓ No tampering detected
 # ✓ Complete provenance chain
 ```
 
 **🎨 UI SCREENSHOT #2: Add here**
-> **What to show:** Haxen UI showing the DID/VC verification interface. Display a workflow with DIDs for each agent, the VC chain visualization, and the verification status (green checkmarks showing "All signatures valid").
+> **What to show:** AgentField UI showing the DID/VC verification interface. Display a workflow with DIDs for each agent, the VC chain visualization, and the verification status (green checkmarks showing "All signatures valid").
 >
 > **Caption:** "W3C DIDs and Verifiable Credentials—tamper-proof audit trails for compliance"
 
-**📚 [Identity & audit docs →](https://haxen.ai/docs/identity)**
+**📚 [Identity & audit docs →](https://agentfield.ai/docs/identity)**
 
 ---
 
@@ -293,7 +293,7 @@ haxen verify audit.json
 
 ### Deploy AI Agents Like Kubernetes Deploys Containers
 
-Haxen uses a **two-layer design**: a stateless **control plane** (like K8s control plane) and independent **agent nodes** (like pods):
+AgentField uses a **two-layer design**: a stateless **control plane** (like K8s control plane) and independent **agent nodes** (like pods):
 
 <div align="center">
 <img src="assets/arch.png" alt="AgentField Architecture - Control Plane and Agent Nodes" width="100%" />
@@ -301,7 +301,7 @@ Haxen uses a **two-layer design**: a stateless **control plane** (like K8s contr
 
 ```
 ┌───────────────────────────────────────────────────────────────────┐
-│                   HAXEN CONTROL PLANE                             │
+│                   AGENTFIELD CONTROL PLANE                             │
 │           (Stateless Go Services - Scale Horizontally)            │
 ├───────────────────────────────────────────────────────────────────┤
 │                                                                   │
@@ -341,11 +341,11 @@ Haxen uses a **two-layer design**: a stateless **control plane** (like K8s contr
 
 ### Think Kubernetes, But for AI
 
-| Kubernetes             | Haxen                 | What It Means                                  |
+| Kubernetes             | AgentField                 | What It Means                                  |
 | ---------------------- | --------------------- | ---------------------------------------------- |
 | **Pods**               | **Agent Nodes**       | Your AI agent runs in a container              |
 | **Services**           | **Agent Registry**    | Control plane discovers agents automatically   |
-| **kubectl apply**      | **haxen run**         | Deploy your agent independently                |
+| **kubectl apply**      | **af run**         | Deploy your agent independently                |
 | **Horizontal scaling** | **Scale agent nodes** | Add more replicas per agent                    |
 | **Service mesh**       | **Control plane**     | Automatic routing, observability, state        |
 | **Ingress**            | **API Gateway**       | Every agent function is a REST endpoint        |
@@ -354,7 +354,7 @@ Haxen uses a **two-layer design**: a stateless **control plane** (like K8s contr
 ### How It Works
 
 1. **Write agents in any language** — Python SDK, Go SDK, or raw REST/gRPC
-2. **Deploy as containers** — `docker build` + `haxen run` or `kubectl apply`
+2. **Deploy as containers** — `docker build` + `af run` or `kubectl apply`
 3. **Control plane orchestrates** — routing, state, workflows, identity, observability
 4. **Agent nodes scale independently** — each team owns their nodes, deploys on their schedule
 5. **Everything auto-coordinates** — agents call each other via control plane, memory syncs, workflows track
@@ -363,13 +363,13 @@ Haxen uses a **two-layer design**: a stateless **control plane** (like K8s contr
 
 **Language Flexibility:** Use our Python/Go SDKs for convenience, or implement the REST/gRPC protocol directly in any language. The control plane is language-agnostic by design.
 
-**[📚 Detailed architecture docs →](https://haxen.ai/docs/architecture)**
+**[📚 Detailed architecture docs →](https://agentfield.ai/docs/architecture)**
 
 ---
 
-## When to Use Haxen (And When Not To)
+## When to Use AgentField (And When Not To)
 
-### ✅ Use Haxen If:
+### ✅ Use AgentField If:
 
 - You're building **multi-agent systems** that need to coordinate
 - You need **independent deployment**—multiple teams, different schedules
@@ -380,7 +380,7 @@ Haxen uses a **two-layer design**: a stateless **control plane** (like K8s contr
 
 ### ❌ Start with a Framework If:
 
-- You're **learning agent concepts** and want the simplest possible start (try LangChain or CrewAI first, then migrate to Haxen when you need production features)
+- You're **learning agent concepts** and want the simplest possible start (try LangChain or CrewAI first, then migrate to AgentField when you need production features)
 - You're building a **single-agent chatbot** that will never scale beyond one service
 - You don't need REST APIs, observability, or multi-agent coordination
 - You're prototyping and don't plan to deploy to production
@@ -388,9 +388,9 @@ Haxen uses a **two-layer design**: a stateless **control plane** (like K8s contr
 ### The Bottom Line
 
 **Frameworks = Build agents** (perfect for learning)
-**Haxen = Build and run agents at any scale** (perfect from prototype to production)
+**AgentField = Build and run agents at any scale** (perfect from prototype to production)
 
-You can start with Haxen and skip migration pain later. Or start with a framework and migrate when you hit the pain points above.
+You can start with AgentField and skip migration pain later. Or start with a framework and migrate when you hit the pain points above.
 
 ---
 
@@ -398,25 +398,25 @@ You can start with Haxen and skip migration pain later. Or start with a framewor
 
 **Local dev:**
 ```bash
-haxen dev && haxen run
+af dev && af run
 ```
 
 **Docker Compose:**
 ```yaml
 services:
-  haxen-server:
-    image: haxen/server:latest
+  agentfield-server:
+    image: agentfield/server:latest
     ports: ["8080:8080"]
 
   my-agent:
     build: ./agents/my-agent
     environment:
-      - HAXEN_SERVER=http://haxen-server:8080
+      - AGENTFIELD_SERVER=http://agentfield-server:8080
 ```
 
 **Kubernetes:**
 ```bash
-kubectl apply -f haxen-control-plane.yaml
+kubectl apply -f agentfield-control-plane.yaml
 kubectl apply -f my-agent-deployment.yaml
 kubectl scale deployment my-agent --replicas=10
 ```
@@ -425,18 +425,18 @@ kubectl scale deployment my-agent --replicas=10
 
 Each agent deploys independently. Control plane coordinates automatically.
 
-**[📚 Full deployment guides →](https://haxen.ai/docs/deployment)**
+**[📚 Full deployment guides →](https://agentfield.ai/docs/deployment)**
 
 ---
 
 ## 🌍 Community & Contributing
 
-We're building Haxen in the open. Join us:
+We're building AgentField in the open. Join us:
 
 - **[💬 Discord](https://discord.gg/your-discord)** — Get help, share projects, discuss architecture
-- **[📚 Documentation](https://haxen.ai/docs)** — Guides, API reference, examples
-- **[💡 GitHub Discussions](https://github.com/agentfield/haxen/discussions)** — Feature requests, Q&A
-- **[🐦 Twitter/X](https://x.com/haxen_dev)** — Updates and announcements
+- **[📚 Documentation](https://agentfield.ai/docs)** — Guides, API reference, examples
+- **[💡 GitHub Discussions](https://github.com/agentfield/agentfield/discussions)** — Feature requests, Q&A
+- **[🐦 Twitter/X](https://x.com/agentfield_dev)** — Updates and announcements
 
 ### Contributing
 
@@ -453,7 +453,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and guidelines.
 
 Agents authenticate to the control plane via API keys (configurable per environment). The control plane handles all inter-agent routing—agents don't need to authenticate to each other.
 
-For **end-user auth** (e.g., React app calling agents), you can integrate your existing auth system (JWT, OAuth) at the API gateway layer. Haxen respects your auth headers and passes them to agents via context.
+For **end-user auth** (e.g., React app calling agents), you can integrate your existing auth system (JWT, OAuth) at the API gateway layer. AgentField respects your auth headers and passes them to agents via context.
 
 **W3C DIDs** are for **identity** (proving which agent made a decision), not access control.
 
@@ -473,7 +473,7 @@ Benchmark: 10K requests/sec sustained on a single control plane instance (4 core
 <details>
 <summary><strong>Can I use my own observability stack?</strong></summary>
 
-Yes. Haxen exposes:
+Yes. AgentField exposes:
 - **Prometheus metrics** at `/metrics` (scrape with your existing Prometheus)
 - **Structured logs** (JSON) to stdout/stderr (ship to your log aggregator)
 - **OpenTelemetry traces** (opt-in, export to Jaeger/Datadog/etc.)
@@ -485,13 +485,13 @@ The built-in workflow DAG UI is optional—you can disable it and use your own d
 <details>
 <summary><strong>Is this vendor-neutral? Can I switch models/providers?</strong></summary>
 
-**100% vendor-neutral.** Haxen is infrastructure, not a model provider.
+**100% vendor-neutral.** AgentField is infrastructure, not a model provider.
 
 - Use **any LLM**: OpenAI, Anthropic, local Ollama, Hugging Face, etc.
 - Use **any framework**: Call LangChain, CrewAI, raw model APIs—your choice
 - Use **any language**: Python SDK, Go SDK, or raw REST/gRPC
 
-Haxen handles deployment, orchestration, and observability. You control the AI logic.
+AgentField handles deployment, orchestration, and observability. You control the AI logic.
 
 </details>
 
@@ -499,11 +499,11 @@ Haxen handles deployment, orchestration, and observability. You control the AI l
 
 ## 📖 Resources
 
-- **[📚 Documentation](https://haxen.ai/docs)** — Complete guides and API reference
-- **[⚡ Quick Start Tutorial](https://haxen.ai/docs/quick-start)** — Build your first agent in 5 minutes
-- **[🏗️ Architecture Deep Dive](https://haxen.ai/docs/architecture)** — How Haxen works under the hood
-- **[📦 Examples Repository](https://github.com/agentfield/haxen-examples)** — Production-ready agent templates
-- **[📝 Blog](https://haxen.ai/blog)** — Tutorials, case studies, best practices
+- **[📚 Documentation](https://agentfield.ai/docs)** — Complete guides and API reference
+- **[⚡ Quick Start Tutorial](https://agentfield.ai/docs/quick-start)** — Build your first agent in 5 minutes
+- **[🏗️ Architecture Deep Dive](https://agentfield.ai/docs/architecture)** — How AgentField works under the hood
+- **[📦 Examples Repository](https://github.com/agentfield/agentfield-examples)** — Production-ready agent templates
+- **[📝 Blog](https://agentfield.ai/blog)** — Tutorials, case studies, best practices
 
 ---
 
@@ -515,7 +515,7 @@ Haxen handles deployment, orchestration, and observability. You control the AI l
 
 **Join the future of autonomous software**
 
-**[🌐 Website](https://haxen.ai) • [📚 Docs](https://haxen.ai/docs) • [💬 Discord](https://discord.gg/your-discord) • [🐦 Twitter](https://x.com/haxen_dev)**
+**[🌐 Website](https://agentfield.ai) • [📚 Docs](https://agentfield.ai/docs) • [💬 Discord](https://discord.gg/your-discord) • [🐦 Twitter](https://x.com/agentfield_dev)**
 
 **License:** [Apache 2.0](LICENSE)
 

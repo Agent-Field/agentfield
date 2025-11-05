@@ -6,9 +6,9 @@ import (
 	"runtime"
 )
 
-// DataDirectories holds all the standardized paths for Haxen data storage
+// DataDirectories holds all the standardized paths for AgentField data storage
 type DataDirectories struct {
-	HaxenHome        string
+	AgentFieldHome   string
 	DataDir          string
 	DatabaseDir      string
 	KeysDir          string
@@ -23,49 +23,49 @@ type DataDirectories struct {
 	PayloadsDir      string
 }
 
-// GetHaxenDataDirectories returns the standardized data directories for Haxen
+// GetAgentFieldDataDirectories returns the standardized data directories for AgentField
 // It respects environment variables and provides sensible defaults
-func GetHaxenDataDirectories() (*DataDirectories, error) {
-	// Determine Haxen home directory
-	haxenHome := os.Getenv("HAXEN_HOME")
-	if haxenHome == "" {
+func GetAgentFieldDataDirectories() (*DataDirectories, error) {
+	// Determine AgentField home directory
+	agentfieldHome := os.Getenv("AGENTFIELD_HOME")
+	if agentfieldHome == "" {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			return nil, err
 		}
-		haxenHome = filepath.Join(homeDir, ".haxen")
+		agentfieldHome = filepath.Join(homeDir, ".agentfield")
 	}
 
 	// Create the data directories structure
 	dirs := &DataDirectories{
-		HaxenHome:        haxenHome,
-		DataDir:          filepath.Join(haxenHome, "data"),
-		DatabaseDir:      filepath.Join(haxenHome, "data"),
-		KeysDir:          filepath.Join(haxenHome, "data", "keys"),
-		DIDRegistriesDir: filepath.Join(haxenHome, "data", "did_registries"),
-		VCsDir:           filepath.Join(haxenHome, "data", "vcs"),
-		VCsExecutionsDir: filepath.Join(haxenHome, "data", "vcs", "executions"),
-		VCsWorkflowsDir:  filepath.Join(haxenHome, "data", "vcs", "workflows"),
-		AgentsDir:        filepath.Join(haxenHome, "agents"),
-		LogsDir:          filepath.Join(haxenHome, "logs"),
-		ConfigDir:        filepath.Join(haxenHome, "config"),
-		TempDir:          filepath.Join(haxenHome, "temp"),
-		PayloadsDir:      filepath.Join(haxenHome, "data", "payloads"),
+		AgentFieldHome:   agentfieldHome,
+		DataDir:          filepath.Join(agentfieldHome, "data"),
+		DatabaseDir:      filepath.Join(agentfieldHome, "data"),
+		KeysDir:          filepath.Join(agentfieldHome, "data", "keys"),
+		DIDRegistriesDir: filepath.Join(agentfieldHome, "data", "did_registries"),
+		VCsDir:           filepath.Join(agentfieldHome, "data", "vcs"),
+		VCsExecutionsDir: filepath.Join(agentfieldHome, "data", "vcs", "executions"),
+		VCsWorkflowsDir:  filepath.Join(agentfieldHome, "data", "vcs", "workflows"),
+		AgentsDir:        filepath.Join(agentfieldHome, "agents"),
+		LogsDir:          filepath.Join(agentfieldHome, "logs"),
+		ConfigDir:        filepath.Join(agentfieldHome, "config"),
+		TempDir:          filepath.Join(agentfieldHome, "temp"),
+		PayloadsDir:      filepath.Join(agentfieldHome, "data", "payloads"),
 	}
 
 	return dirs, nil
 }
 
-// EnsureDataDirectories creates all necessary Haxen data directories
+// EnsureDataDirectories creates all necessary AgentField data directories
 func EnsureDataDirectories() (*DataDirectories, error) {
-	dirs, err := GetHaxenDataDirectories()
+	dirs, err := GetAgentFieldDataDirectories()
 	if err != nil {
 		return nil, err
 	}
 
 	// Create all directories with appropriate permissions
 	directoriesToCreate := []string{
-		dirs.HaxenHome,
+		dirs.AgentFieldHome,
 		dirs.DataDir,
 		dirs.DatabaseDir,
 		dirs.KeysDir,
@@ -101,36 +101,36 @@ func EnsureDataDirectories() (*DataDirectories, error) {
 	return dirs, nil
 }
 
-// GetDatabasePath returns the path to the main Haxen database
+// GetDatabasePath returns the path to the main AgentField database
 func GetDatabasePath() (string, error) {
-	dirs, err := GetHaxenDataDirectories()
+	dirs, err := GetAgentFieldDataDirectories()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dirs.DatabaseDir, "haxen.db"), nil
+	return filepath.Join(dirs.DatabaseDir, "agentfield.db"), nil
 }
 
-// GetKVStorePath returns the path to the Haxen key-value store
+// GetKVStorePath returns the path to the AgentField key-value store
 func GetKVStorePath() (string, error) {
-	dirs, err := GetHaxenDataDirectories()
+	dirs, err := GetAgentFieldDataDirectories()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dirs.DatabaseDir, "haxen.bolt"), nil
+	return filepath.Join(dirs.DatabaseDir, "agentfield.bolt"), nil
 }
 
 // GetAgentRegistryPath returns the path to the agent registry file
 func GetAgentRegistryPath() (string, error) {
-	dirs, err := GetHaxenDataDirectories()
+	dirs, err := GetAgentFieldDataDirectories()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dirs.HaxenHome, "installed.json"), nil
+	return filepath.Join(dirs.AgentFieldHome, "installed.json"), nil
 }
 
 // GetConfigPath returns the path to a configuration file
 func GetConfigPath(filename string) (string, error) {
-	dirs, err := GetHaxenDataDirectories()
+	dirs, err := GetAgentFieldDataDirectories()
 	if err != nil {
 		return "", err
 	}
@@ -139,7 +139,7 @@ func GetConfigPath(filename string) (string, error) {
 
 // GetLogPath returns the path to a log file
 func GetLogPath(filename string) (string, error) {
-	dirs, err := GetHaxenDataDirectories()
+	dirs, err := GetAgentFieldDataDirectories()
 	if err != nil {
 		return "", err
 	}
@@ -148,7 +148,7 @@ func GetLogPath(filename string) (string, error) {
 
 // GetTempPath returns the path to a temporary file
 func GetTempPath(filename string) (string, error) {
-	dirs, err := GetHaxenDataDirectories()
+	dirs, err := GetAgentFieldDataDirectories()
 	if err != nil {
 		return "", err
 	}
@@ -181,13 +181,13 @@ func GetPlatformSpecificPaths() map[string]string {
 
 // ValidatePaths checks if all required paths are accessible
 func ValidatePaths() error {
-	dirs, err := GetHaxenDataDirectories()
+	dirs, err := GetAgentFieldDataDirectories()
 	if err != nil {
 		return err
 	}
 
-	// Check if we can write to the Haxen home directory
-	testFile := filepath.Join(dirs.HaxenHome, ".write_test")
+	// Check if we can write to the AgentField home directory
+	testFile := filepath.Join(dirs.AgentFieldHome, ".write_test")
 	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
 		return err
 	}

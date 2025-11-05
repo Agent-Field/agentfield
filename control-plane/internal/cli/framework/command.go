@@ -1,10 +1,10 @@
 package framework
 
 import (
+	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
+	"github.com/Agent-Field/agentfield/control-plane/internal/services"
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/spf13/cobra"
-	"github.com/your-org/haxen/control-plane/internal/core/interfaces"
-	"github.com/your-org/haxen/control-plane/internal/services"
-	"github.com/your-org/haxen/control-plane/internal/storage"
 )
 
 // Command represents a CLI command that can be built into a Cobra command
@@ -16,14 +16,14 @@ type Command interface {
 
 // ServiceContainer holds all the services that commands might need
 type ServiceContainer struct {
-	PackageService   interfaces.PackageService
-	AgentService     interfaces.AgentService
-	DevService       interfaces.DevService
-	DIDService       *services.DIDService
-	VCService        *services.VCService
-	KeystoreService  *services.KeystoreService
-	DIDRegistry      *services.DIDRegistry
-	StorageProvider  storage.StorageProvider
+	PackageService  interfaces.PackageService
+	AgentService    interfaces.AgentService
+	DevService      interfaces.DevService
+	DIDService      *services.DIDService
+	VCService       *services.VCService
+	KeystoreService *services.KeystoreService
+	DIDRegistry     *services.DIDRegistry
+	StorageProvider storage.StorageProvider
 }
 
 // BaseCommand provides common functionality for all commands

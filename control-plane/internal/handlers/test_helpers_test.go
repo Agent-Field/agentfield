@@ -4,10 +4,9 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 
-	"github.com/your-org/haxen/control-plane/internal/events"
-	"github.com/your-org/haxen/control-plane/pkg/types"
+	"github.com/Agent-Field/agentfield/control-plane/internal/events"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
 type testExecutionStorage struct {
@@ -277,12 +276,4 @@ func (s *testExecutionStorage) QueryExecutionRecords(ctx context.Context, filter
 		results = append(results, &copy)
 	}
 	return results, nil
-}
-
-func ptrTime(t time.Time) *time.Time {
-	return &t
-}
-
-func ptrInt64(v int64) *int64 {
-	return &v
 }

@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/internal/events"
-	"github.com/your-org/haxen/control-plane/internal/storage"
-	"github.com/your-org/haxen/control-plane/pkg/types"
+	"github.com/Agent-Field/agentfield/control-plane/internal/events"
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -454,31 +454,31 @@ func (m *MockStorageProvider) ListDIDs(ctx context.Context) ([]*types.DIDRegistr
 	return args.Get(0).([]*types.DIDRegistryEntry), args.Error(1)
 }
 
-// Haxen Server DID operations
-func (m *MockStorageProvider) StoreHaxenServerDID(ctx context.Context, haxenServerID, rootDID string, masterSeed []byte, createdAt, lastKeyRotation time.Time) error {
-	args := m.Called(ctx, haxenServerID, rootDID, masterSeed, createdAt, lastKeyRotation)
+// AgentField Server DID operations
+func (m *MockStorageProvider) StoreAgentFieldServerDID(ctx context.Context, agentfieldServerID, rootDID string, masterSeed []byte, createdAt, lastKeyRotation time.Time) error {
+	args := m.Called(ctx, agentfieldServerID, rootDID, masterSeed, createdAt, lastKeyRotation)
 	return args.Error(0)
 }
 
-func (m *MockStorageProvider) GetHaxenServerDID(ctx context.Context, haxenServerID string) (*types.HaxenServerDIDInfo, error) {
-	args := m.Called(ctx, haxenServerID)
+func (m *MockStorageProvider) GetAgentFieldServerDID(ctx context.Context, agentfieldServerID string) (*types.AgentFieldServerDIDInfo, error) {
+	args := m.Called(ctx, agentfieldServerID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*types.HaxenServerDIDInfo), args.Error(1)
+	return args.Get(0).(*types.AgentFieldServerDIDInfo), args.Error(1)
 }
 
-func (m *MockStorageProvider) ListHaxenServerDIDs(ctx context.Context) ([]*types.HaxenServerDIDInfo, error) {
+func (m *MockStorageProvider) ListAgentFieldServerDIDs(ctx context.Context) ([]*types.AgentFieldServerDIDInfo, error) {
 	args := m.Called(ctx)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]*types.HaxenServerDIDInfo), args.Error(1)
+	return args.Get(0).([]*types.AgentFieldServerDIDInfo), args.Error(1)
 }
 
 // Agent DID operations
-func (m *MockStorageProvider) StoreAgentDID(ctx context.Context, agentID, agentDID, haxenServerDID, publicKeyJWK string, derivationIndex int) error {
-	args := m.Called(ctx, agentID, agentDID, haxenServerDID, publicKeyJWK, derivationIndex)
+func (m *MockStorageProvider) StoreAgentDID(ctx context.Context, agentID, agentDID, agentfieldServerDID, publicKeyJWK string, derivationIndex int) error {
+	args := m.Called(ctx, agentID, agentDID, agentfieldServerDID, publicKeyJWK, derivationIndex)
 	return args.Error(0)
 }
 

@@ -54,7 +54,7 @@ export function Sidebar({ sections, isCollapsed = false }: SidebarProps) {
                   typography["heading-sm"],
                   "text-foreground font-semibold"
                 )}>
-                  Haxen
+                  AgentField
                 </h1>
                 <p className={cn(
                   typography["helper-text"],

@@ -1,14 +1,15 @@
 package services
 
 import (
-	"github.com/your-org/haxen/control-plane/internal/storage"
-	"github.com/your-org/haxen/control-plane/pkg/types"
 	"context"
 	"fmt"
 	"sync"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
+
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 )
 
 // ExecutionEvent represents a real-time event related to executions.
@@ -311,6 +312,7 @@ func (s *ExecutionsUIService) convertToUISummary(exec *types.WorkflowExecution) 
 	}
 }
 
+//nolint:unused // retained for future UI sorting enhancements
 func (s *ExecutionsUIService) sortExecutions(executions []ExecutionSummaryForUI, sortBy, sortOrder string) {
 	// Implementation for sorting executions
 	// TODO: Implement sorting logic based on sortBy and sortOrder

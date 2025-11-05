@@ -19,7 +19,7 @@ import {
   Identification,
 } from "@/components/ui/icon-bridge";
 import { cn } from "@/lib/utils";
-import type { ReasonerDefinition, SkillDefinition } from "@/types/haxen";
+import type { ReasonerDefinition, SkillDefinition } from "@/types/agentfield";
 import type { ReasonerDIDInfo, SkillDIDInfo } from "@/types/did";
 
 interface ReasonersSkillsTableProps {

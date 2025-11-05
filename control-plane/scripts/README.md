@@ -1,6 +1,6 @@
-# Haxen Server Release Scripts
+# AgentField Server Release Scripts
 
-This directory contains automation scripts for building and releasing Haxen Server binaries to GitHub.
+This directory contains automation scripts for building and releasing AgentField Server binaries to GitHub.
 
 ## Overview
 
@@ -95,13 +95,13 @@ User-friendly installation script for end users.
 **Usage:**
 ```bash
 # Quick install (user-specific, no sudo)
-curl -sSL https://raw.githubusercontent.com/your-org/haxen/main/scripts/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/Agent-Field/agentfield/main/scripts/install.sh | bash
 
 # System-wide install (requires sudo)
-curl -sSL https://raw.githubusercontent.com/your-org/haxen/main/scripts/install.sh | bash -s -- --system
+curl -sSL https://raw.githubusercontent.com/Agent-Field/agentfield/main/scripts/install.sh | bash -s -- --system
 
 # Custom directory
-curl -sSL https://raw.githubusercontent.com/your-org/haxen/main/scripts/install.sh | bash -s -- --dir ~/bin
+curl -sSL https://raw.githubusercontent.com/Agent-Field/agentfield/main/scripts/install.sh | bash -s -- --dir ~/bin
 ```
 
 ## Workflow
@@ -110,7 +110,7 @@ curl -sSL https://raw.githubusercontent.com/your-org/haxen/main/scripts/install.
 
 1. **Prepare for release:**
    ```bash
-   cd apps/platform/haxen/scripts
+   cd apps/platform/agentfield/scripts
    ./release.sh dry-run    # Check prerequisites and preview
    ```
 
@@ -142,10 +142,10 @@ curl -sSL https://raw.githubusercontent.com/your-org/haxen/main/scripts/install.
 ### Build Output
 
 Each release creates these assets:
-- `haxen-linux-amd64` - Linux Intel/AMD binary
-- `haxen-linux-arm64` - Linux ARM binary  
-- `haxen-darwin-amd64` - macOS Intel binary
-- `haxen-darwin-arm64` - macOS Apple Silicon binary
+- `agentfield-linux-amd64` - Linux Intel/AMD binary
+- `agentfield-linux-arm64` - Linux ARM binary
+- `agentfield-darwin-amd64` - macOS Intel binary
+- `agentfield-darwin-arm64` - macOS Apple Silicon binary
 - `checksums.txt` - SHA256 checksums
 - `build-info.txt` - Build metadata
 - `README.md` - Installation instructions
@@ -153,18 +153,18 @@ Each release creates these assets:
 ## Configuration
 
 ### GitHub Repository
-The scripts are configured for: `your-org/haxen`
+The scripts are configured for: `Agent-Field/agentfield`
 
 To change the repository, set the environment variable:
 ```bash
-export GITHUB_REPO="your-org/your-repo"
+export GITHUB_REPO="Agent-Field/your-repo"
 ./release.sh
 ```
 
 ### Build Configuration
 The release script uses the existing `../build-single-binary.sh` with these settings:
 - Embedded UI included
-- Universal path management (stores data in `~/.haxen/`)
+- Universal path management (stores data in `~/.agentfield/`)
 - Cross-platform binaries
 - Single binary deployment
 
@@ -248,7 +248,7 @@ gh release delete v0.1.0-alpha.X
 ### Complete Release Workflow
 ```bash
 # 1. Check current state
-cd apps/platform/haxen/scripts
+cd apps/platform/agentfield/scripts
 ./version-manager.sh info
 
 # 2. Test the release process
@@ -264,10 +264,10 @@ gh release list
 ### User Installation Testing
 ```bash
 # Test the installation script
-curl -sSL https://raw.githubusercontent.com/your-org/haxen/main/scripts/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/Agent-Field/agentfield/main/scripts/install.sh | bash
 
 # Verify installation
-haxen --help
+agentfield --help
 ```
 
 ### Build Only (No Release)
@@ -282,7 +282,7 @@ ls -la ../dist/releases/
 ## File Structure
 
 ```
-apps/platform/haxen/scripts/
+apps/platform/agentfield/scripts/
 ├── README.md              # This documentation
 ├── .version              # Version tracking file
 ├── version-manager.sh    # Version management script

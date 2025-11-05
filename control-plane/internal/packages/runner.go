@@ -2,6 +2,7 @@ package packages
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -16,11 +17,10 @@ import (
 
 // AgentNodeRunner handles running agent nodes
 type AgentNodeRunner struct {
-	HaxenHome string
-	Port      int
-	Detach    bool
+	AgentFieldHome string
+	Port           int
+	Detach         bool
 }
-
 
 // RunAgentNode starts an installed agent node
 func (ar *AgentNodeRunner) RunAgentNode(agentNodeName string) error {
@@ -63,11 +63,13 @@ func (ar *AgentNodeRunner) RunAgentNode(agentNodeName string) error {
 
 	// 5. Wait for agent node to be ready
 	if err := ar.waitForAgentNode(port, 10*time.Second); err != nil {
-		cmd.Process.Kill()
+		if killErr := cmd.Process.Kill(); killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
+			fmt.Printf("⚠️  Failed to kill agent node process: %v\n", killErr)
+		}
 		return fmt.Errorf("agent node failed to start: %w", err)
 	}
 
-	fmt.Printf("🧠 Agent node registered with Haxen Server\n")
+	fmt.Printf("🧠 Agent node registered with AgentField Server\n")
 
 	// 6. Update registry with runtime info
 	if err := ar.updateRuntimeInfo(agentNodeName, port, cmd.Process.Pid); err != nil {
@@ -80,8 +82,8 @@ func (ar *AgentNodeRunner) RunAgentNode(agentNodeName string) error {
 	}
 
 	fmt.Printf("\n💡 Agent node running in background (PID: %d)\n", cmd.Process.Pid)
-	fmt.Printf("💡 View logs: haxen logs %s\n", agentNodeName)
-	fmt.Printf("💡 Stop agent node: haxen stop %s\n", agentNodeName)
+	fmt.Printf("💡 View logs: af logs %s\n", agentNodeName)
+	fmt.Printf("💡 Stop agent node: af stop %s\n", agentNodeName)
 
 	return nil
 }
@@ -111,7 +113,7 @@ func (ar *AgentNodeRunner) startAgentNodeProcess(agentNode InstalledPackage, por
 	// Prepare environment variables
 	env := os.Environ()
 	env = append(env, fmt.Sprintf("PORT=%d", port))
-	env = append(env, "HAXEN_SERVER_URL=http://localhost:8080")
+	env = append(env, "AGENTFIELD_SERVER_URL=http://localhost:8080")
 
 	// Load environment variables from package .env file
 	if envVars, err := ar.loadPackageEnvFile(agentNode.Path); err == nil {
@@ -124,7 +126,7 @@ func (ar *AgentNodeRunner) startAgentNodeProcess(agentNode InstalledPackage, por
 	// Prepare command - use virtual environment if available
 	var pythonPath string
 	venvPath := filepath.Join(agentNode.Path, "venv")
-	
+
 	// Check if virtual environment exists
 	if _, err := os.Stat(filepath.Join(venvPath, "bin", "python")); err == nil {
 		pythonPath = filepath.Join(venvPath, "bin", "python")
@@ -137,7 +139,7 @@ func (ar *AgentNodeRunner) startAgentNodeProcess(agentNode InstalledPackage, por
 		pythonPath = "python"
 		fmt.Printf("⚠️  Virtual environment not found, using system Python\n")
 	}
-	
+
 	cmd := exec.Command(pythonPath, "main.py")
 	cmd.Dir = agentNode.Path
 	cmd.Env = env
@@ -243,12 +245,14 @@ func (ar *AgentNodeRunner) displayCapabilities(agentNode InstalledPackage, port 
 
 // updateRuntimeInfo updates the registry with runtime information
 func (ar *AgentNodeRunner) updateRuntimeInfo(agentNodeName string, port, pid int) error {
-	registryPath := filepath.Join(ar.HaxenHome, "installed.yaml")
+	registryPath := filepath.Join(ar.AgentFieldHome, "installed.yaml")
 
 	// Load registry
 	registry := &InstallationRegistry{}
 	if data, err := os.ReadFile(registryPath); err == nil {
-		yaml.Unmarshal(data, registry)
+		if err := yaml.Unmarshal(data, registry); err != nil {
+			return fmt.Errorf("failed to parse registry: %w", err)
+		}
 	}
 
 	// Update runtime info
@@ -272,7 +276,7 @@ func (ar *AgentNodeRunner) updateRuntimeInfo(agentNodeName string, port, pid int
 
 // loadRegistry loads the installation registry
 func (ar *AgentNodeRunner) loadRegistry() (*InstallationRegistry, error) {
-	registryPath := filepath.Join(ar.HaxenHome, "installed.yaml")
+	registryPath := filepath.Join(ar.AgentFieldHome, "installed.yaml")
 
 	registry := &InstallationRegistry{
 		Installed: make(map[string]InstalledPackage),
@@ -290,7 +294,7 @@ func (ar *AgentNodeRunner) loadRegistry() (*InstallationRegistry, error) {
 // loadPackageEnvFile loads environment variables from package .env file
 func (ar *AgentNodeRunner) loadPackageEnvFile(packagePath string) (map[string]string, error) {
 	envPath := filepath.Join(packagePath, ".env")
-	
+
 	data, err := os.ReadFile(envPath)
 	if err != nil {
 		return nil, err
@@ -298,24 +302,24 @@ func (ar *AgentNodeRunner) loadPackageEnvFile(packagePath string) (map[string]st
 
 	envVars := make(map[string]string)
 	lines := strings.Split(string(data), "\n")
-	
+
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		
+
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) == 2 {
 			key := strings.TrimSpace(parts[0])
 			value := strings.TrimSpace(parts[1])
-			
+
 			// Remove quotes if present
 			if (strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"")) ||
-			   (strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'")) {
+				(strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'")) {
 				value = value[1 : len(value)-1]
 			}
-			
+
 			envVars[key] = value
 		}
 	}

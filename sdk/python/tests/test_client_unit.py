@@ -2,7 +2,7 @@ import re
 
 import pytest
 
-from haxen_sdk.client import HaxenClient
+from agentfield.client import AgentFieldClient
 
 
 class DummyContext:
@@ -22,7 +22,7 @@ class DummyManager:
 
 
 def test_generate_id_prefix_and_uniqueness():
-    client = HaxenClient()
+    client = AgentFieldClient()
     first = client._generate_id("exec")
     second = client._generate_id("exec")
     assert first.startswith("exec_")
@@ -32,7 +32,7 @@ def test_generate_id_prefix_and_uniqueness():
 
 
 def test_get_headers_with_context_merges_workflow_headers():
-    client = HaxenClient()
+    client = AgentFieldClient()
     client._current_workflow_context = DummyContext({"X-Workflow-ID": "wf-1"})
 
     combined = client._get_headers_with_context({"Authorization": "Bearer token"})
@@ -42,7 +42,7 @@ def test_get_headers_with_context_merges_workflow_headers():
 
 
 def test_build_event_stream_headers_filters_keys():
-    client = HaxenClient()
+    client = AgentFieldClient()
     headers = {
         "Authorization": "Bearer token",
         "X-Custom": "value",
@@ -61,7 +61,7 @@ def test_build_event_stream_headers_filters_keys():
 
 
 def test_maybe_update_event_stream_headers_uses_context_when_enabled():
-    client = HaxenClient()
+    client = AgentFieldClient()
     client.async_config.enable_event_stream = True
     client._async_execution_manager = DummyManager()
     client._current_workflow_context = DummyContext({"X-Workflow-ID": "wf-ctx"})
@@ -73,7 +73,7 @@ def test_maybe_update_event_stream_headers_uses_context_when_enabled():
 
 
 def test_maybe_update_event_stream_headers_prefers_source_headers():
-    client = HaxenClient()
+    client = AgentFieldClient()
     client.async_config.enable_event_stream = True
     manager = DummyManager()
     client._async_execution_manager = manager
@@ -92,7 +92,7 @@ def test_maybe_update_event_stream_headers_prefers_source_headers():
     ],
 )
 def test_maybe_update_event_stream_headers_without_manager(source_headers, expected):
-    client = HaxenClient()
+    client = AgentFieldClient()
     client.async_config.enable_event_stream = True
     client._current_workflow_context = DummyContext({"X-Workflow-ID": "wf-ctx"})
 

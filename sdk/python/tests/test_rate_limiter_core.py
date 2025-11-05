@@ -4,7 +4,7 @@ import random
 
 import pytest
 
-from haxen_sdk.rate_limiter import RateLimitError, StatelessRateLimiter
+from agentfield.rate_limiter import RateLimitError, StatelessRateLimiter
 
 
 class DummyHTTPError(Exception):
@@ -49,7 +49,7 @@ async def test_execute_with_retry_eventual_success(monkeypatch):
     async def fake_sleep(delay):
         attempts["sleeps"].append(delay)
 
-    monkeypatch.setattr("haxen_sdk.rate_limiter.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("agentfield.rate_limiter.asyncio.sleep", fake_sleep)
 
     async def flaky_call():
         attempts["count"] += 1
@@ -73,7 +73,7 @@ async def test_execute_with_retry_gives_up(monkeypatch):
     async def fake_sleep(delay):
         pass
 
-    monkeypatch.setattr("haxen_sdk.rate_limiter.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("agentfield.rate_limiter.asyncio.sleep", fake_sleep)
 
     async def always_fail():
         raise DummyHTTPError()
@@ -168,7 +168,7 @@ async def test_circuit_breaker_blocks_and_recovers(monkeypatch):
     async def fake_sleep(delay):
         return None
 
-    monkeypatch.setattr("haxen_sdk.rate_limiter.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("agentfield.rate_limiter.asyncio.sleep", fake_sleep)
 
     class Clock:
         def __init__(self, value: float):
@@ -181,7 +181,7 @@ async def test_circuit_breaker_blocks_and_recovers(monkeypatch):
             self.value += seconds
 
     clock = Clock(100.0)
-    monkeypatch.setattr("haxen_sdk.rate_limiter.time.time", clock.time)
+    monkeypatch.setattr("agentfield.rate_limiter.time.time", clock.time)
 
     async def always_limit():
         raise DummyHTTPError()

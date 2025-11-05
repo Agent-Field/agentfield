@@ -5,9 +5,9 @@ services:
     image: postgres:15-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: haxen
-      POSTGRES_PASSWORD: haxen
-      POSTGRES_DB: haxen
+      POSTGRES_USER: agentfield
+      POSTGRES_PASSWORD: agentfield
+      POSTGRES_DB: agentfield
     volumes:
       - pgdata:/var/lib/postgresql/data
 
@@ -17,8 +17,8 @@ services:
       context: ../..
       dockerfile: deployments/docker/Dockerfile.control-plane
     environment:
-      HAXEN_DATABASE_URL: postgres://haxen:haxen@postgres:5432/haxen?sslmode=disable
-      HAXEN_HTTP_ADDR: 0.0.0.0:8080
+      AGENTFIELD_DATABASE_URL: postgres://agentfield:agentfield@postgres:5432/agentfield?sslmode=disable
+      AGENTFIELD_HTTP_ADDR: 0.0.0.0:8080
     ports:
       - "8080:8080"
     depends_on:

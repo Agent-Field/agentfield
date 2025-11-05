@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"time"
 )
@@ -22,7 +24,6 @@ func NewStdioMCPClient(verbose bool) *StdioMCPClient {
 	}
 }
 
-
 // DiscoverCapabilitiesFromProcess discovers capabilities from a stdio-based MCP server process
 func (c *StdioMCPClient) DiscoverCapabilitiesFromProcess(config MCPServerConfig) ([]MCPTool, []MCPResource, error) {
 	if c.verbose {
@@ -35,7 +36,7 @@ func (c *StdioMCPClient) DiscoverCapabilitiesFromProcess(config MCPServerConfig)
 
 	// Start the MCP server process
 	cmd := exec.CommandContext(ctx, "sh", "-c", config.RunCmd)
-	
+
 	// Set working directory if specified
 	if config.WorkingDir != "" {
 		cmd.Dir = config.WorkingDir
@@ -75,7 +76,9 @@ func (c *StdioMCPClient) DiscoverCapabilitiesFromProcess(config MCPServerConfig)
 	// Ensure process cleanup
 	defer func() {
 		if cmd.Process != nil {
-			cmd.Process.Kill()
+			if killErr := cmd.Process.Kill(); killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
+				fmt.Printf("WARN: failed to terminate MCP stdio process: %v\n", killErr)
+			}
 		}
 	}()
 
@@ -125,7 +128,7 @@ func (c *StdioMCPClient) performDiscovery(stdin io.WriteCloser, stdout io.ReadCl
 				},
 			},
 			ClientInfo: ClientInfo{
-				Name:    "haxen-mcp-client",
+				Name:    "agentfield-mcp-client",
 				Version: "1.0.0",
 			},
 		},

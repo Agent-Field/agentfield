@@ -139,7 +139,7 @@ type AgentNode struct {
 	Version string `json:"version" db:"version"`
 
 	// Serverless support
-	DeploymentType string  `json:"deployment_type" db:"deployment_type"` // "long_running" or "serverless"
+	DeploymentType string  `json:"deployment_type" db:"deployment_type"`         // "long_running" or "serverless"
 	InvocationURL  *string `json:"invocation_url,omitempty" db:"invocation_url"` // For serverless agents
 
 	CallbackDiscovery *CallbackDiscoveryInfo `json:"callback_discovery,omitempty" db:"-"`
@@ -157,7 +157,7 @@ type AgentNode struct {
 	Metadata AgentMetadata `json:"metadata" db:"metadata"`
 }
 
-// CallbackDiscoveryInfo captures how the Haxen server resolved an agent callback URL.
+// CallbackDiscoveryInfo captures how the AgentField server resolved an agent callback URL.
 type CallbackDiscoveryInfo struct {
 	Mode        string               `json:"mode,omitempty"`
 	Preferred   string               `json:"preferred,omitempty"`
@@ -599,13 +599,13 @@ type WorkflowExecution struct {
 	ID int64 `json:"id" db:"id"`
 
 	// Core IDs
-	WorkflowID     string  `json:"workflow_id" db:"workflow_id"`
-	ExecutionID    string  `json:"execution_id" db:"execution_id"`
-	HaxenRequestID string  `json:"haxen_request_id" db:"haxen_request_id"`
-	RunID          *string `json:"run_id,omitempty" db:"run_id"`
-	SessionID      *string `json:"session_id,omitempty" db:"session_id"`
-	ActorID        *string `json:"actor_id,omitempty" db:"actor_id"`
-	AgentNodeID    string  `json:"agent_node_id" db:"agent_node_id"`
+	WorkflowID          string  `json:"workflow_id" db:"workflow_id"`
+	ExecutionID         string  `json:"execution_id" db:"execution_id"`
+	AgentFieldRequestID string  `json:"agentfield_request_id" db:"agentfield_request_id"`
+	RunID               *string `json:"run_id,omitempty" db:"run_id"`
+	SessionID           *string `json:"session_id,omitempty" db:"session_id"`
+	ActorID             *string `json:"actor_id,omitempty" db:"actor_id"`
+	AgentNodeID         string  `json:"agent_node_id" db:"agent_node_id"`
 
 	// DAG Relationship Fields
 	ParentWorkflowID  *string `json:"parent_workflow_id,omitempty" db:"parent_workflow_id"`

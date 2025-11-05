@@ -18,7 +18,7 @@ import type {
   MCPTool,
   MCPToolTestRequest,
   MCPToolTestResponse,
-} from "@/types/haxen";
+} from "@/types/agentfield";
 import {
   CheckmarkFilled,
   Copy,

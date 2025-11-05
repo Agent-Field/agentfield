@@ -21,41 +21,41 @@ type MCPOperationError struct {
 type MCPOperationErrorType string
 
 const (
-	OpErrorTypeInstallation      MCPOperationErrorType = "installation"
-	OpErrorTypeBuild            MCPOperationErrorType = "build"
-	OpErrorTypeStartup          MCPOperationErrorType = "startup"
+	OpErrorTypeInstallation        MCPOperationErrorType = "installation"
+	OpErrorTypeBuild               MCPOperationErrorType = "build"
+	OpErrorTypeStartup             MCPOperationErrorType = "startup"
 	OpErrorTypeCapabilityDiscovery MCPOperationErrorType = "capability_discovery"
-	OpErrorTypeValidation       MCPOperationErrorType = "validation"
-	OpErrorTypeConfiguration   MCPOperationErrorType = "configuration"
-	OpErrorTypeTemplate        MCPOperationErrorType = "template"
-	OpErrorTypeProtocol        MCPOperationErrorType = "protocol"
-	OpErrorTypeEnvironment     MCPOperationErrorType = "environment"
+	OpErrorTypeValidation          MCPOperationErrorType = "validation"
+	OpErrorTypeConfiguration       MCPOperationErrorType = "configuration"
+	OpErrorTypeTemplate            MCPOperationErrorType = "template"
+	OpErrorTypeProtocol            MCPOperationErrorType = "protocol"
+	OpErrorTypeEnvironment         MCPOperationErrorType = "environment"
 )
 
 // Error implements the error interface
 func (e *MCPOperationError) Error() string {
 	var parts []string
-	
+
 	if e.ServerID != "" {
 		parts = append(parts, fmt.Sprintf("server '%s'", e.ServerID))
 	}
-	
+
 	if e.Operation != "" {
 		parts = append(parts, fmt.Sprintf("operation '%s'", e.Operation))
 	}
-	
+
 	parts = append(parts, string(e.Type), "failed")
-	
+
 	if e.Message != "" {
 		parts = append(parts, "-", e.Message)
 	}
-	
+
 	result := strings.Join(parts, " ")
-	
+
 	if e.Cause != nil {
 		result += fmt.Sprintf(": %v", e.Cause)
 	}
-	
+
 	return result
 }
 
@@ -67,26 +67,26 @@ func (e *MCPOperationError) Unwrap() error {
 // DetailedError returns a detailed error message including stdout/stderr and context
 func (e *MCPOperationError) DetailedError() string {
 	var details []string
-	
+
 	details = append(details, e.Error())
-	
+
 	if len(e.Context) > 0 {
 		details = append(details, "\nContext:")
 		for key, value := range e.Context {
 			details = append(details, fmt.Sprintf("  %s: %s", key, value))
 		}
 	}
-	
+
 	if e.Stdout != "" {
 		details = append(details, "\nStdout:")
 		details = append(details, e.Stdout)
 	}
-	
+
 	if e.Stderr != "" {
 		details = append(details, "\nStderr:")
 		details = append(details, e.Stderr)
 	}
-	
+
 	return strings.Join(details, "\n")
 }
 
@@ -101,7 +101,7 @@ func (e *MCPOperationError) GetSuggestion() string {
 			return "Set NODE_ENV environment variable (e.g., --env NODE_ENV=production)"
 		}
 		return "Check that all required environment variables are set"
-		
+
 	case OpErrorTypeStartup:
 		if strings.Contains(e.Message, "permission denied") {
 			return "Check file permissions and ensure the executable is accessible"
@@ -110,7 +110,7 @@ func (e *MCPOperationError) GetSuggestion() string {
 			return "Ensure the required runtime (node, python, etc.) is installed and in PATH"
 		}
 		return "Check server configuration and ensure all dependencies are installed"
-		
+
 	case OpErrorTypeInstallation:
 		if strings.Contains(e.Message, "npm install") {
 			return "Try running 'npm install' manually in the server directory"
@@ -119,16 +119,16 @@ func (e *MCPOperationError) GetSuggestion() string {
 			return "Try running 'pip install' manually in the server directory"
 		}
 		return "Check network connectivity and package availability"
-		
+
 	case OpErrorTypeBuild:
 		if strings.Contains(e.Message, "typescript") || strings.Contains(e.Message, "tsc") {
 			return "Ensure TypeScript is installed and tsconfig.json is valid"
 		}
 		return "Check build configuration and ensure all build dependencies are available"
-		
+
 	case OpErrorTypeCapabilityDiscovery:
 		return "Server may require specific environment variables or configuration to start properly"
-		
+
 	default:
 		return "Check the detailed error output above for more information"
 	}
@@ -181,7 +181,7 @@ func CommandExecutionError(operation, serverID, command string, cause error, std
 	} else if strings.Contains(operation, "start") {
 		errorType = OpErrorTypeStartup
 	}
-	
+
 	return NewMCPOperationErrorWithCause(errorType, operation, serverID, fmt.Sprintf("command failed: %s", command), cause).
 		WithContext("command", command).
 		WithOutput(stdout, stderr)
@@ -234,7 +234,7 @@ func (f *ErrorFormatter) Format(err error) string {
 	if !ok {
 		return err.Error()
 	}
-	
+
 	if f.Verbose {
 		result := mcpErr.DetailedError()
 		suggestion := mcpErr.GetSuggestion()
@@ -243,7 +243,7 @@ func (f *ErrorFormatter) Format(err error) string {
 		}
 		return result
 	}
-	
+
 	result := mcpErr.Error()
 	suggestion := mcpErr.GetSuggestion()
 	if suggestion != "" {

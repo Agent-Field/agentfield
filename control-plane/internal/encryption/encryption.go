@@ -100,7 +100,7 @@ func (es *EncryptionService) Decrypt(ciphertext string) (string, error) {
 // EncryptConfigurationValues encrypts sensitive values in a configuration map
 func (es *EncryptionService) EncryptConfigurationValues(config map[string]interface{}, secretFields []string) (map[string]interface{}, error) {
 	result := make(map[string]interface{})
-	
+
 	// Copy all values
 	for key, value := range config {
 		result[key] = value
@@ -125,7 +125,7 @@ func (es *EncryptionService) EncryptConfigurationValues(config map[string]interf
 // DecryptConfigurationValues decrypts sensitive values in a configuration map
 func (es *EncryptionService) DecryptConfigurationValues(config map[string]interface{}, secretFields []string) (map[string]interface{}, error) {
 	result := make(map[string]interface{})
-	
+
 	// Copy all values
 	for key, value := range config {
 		result[key] = value

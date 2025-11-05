@@ -1,11 +1,11 @@
-# Haxen Go SDK
+# AgentField Go SDK
 
-The Haxen Go SDK provides idiomatic Go bindings for interacting with the Haxen control plane.
+The AgentField Go SDK provides idiomatic Go bindings for interacting with the AgentField control plane.
 
 ## Installation
 
 ```bash
-go get github.com/agentfield/haxen/sdk/go
+go get github.com/Agent-Field/agentfield/sdk/go
 ```
 
 ## Quick Start
@@ -17,13 +17,13 @@ import (
     "context"
     "log"
 
-    haxenagent "github.com/agentfield/haxen/sdk/go/agent"
+    agentfieldagent "github.com/Agent-Field/agentfield/sdk/go/agent"
 )
 
 func main() {
-    agent, err := haxenagent.New(haxenagent.Config{
+    agent, err := agentfieldagent.New(agentfieldagent.Config{
         NodeID:   "example-agent",
-        HaxenURL: "http://localhost:8080",
+        AgentFieldURL: "http://localhost:8080",
     })
     if err != nil {
         log.Fatal(err)
@@ -41,8 +41,8 @@ func main() {
 
 ## Modules
 
-- `agent`: Build Haxen-compatible agents and register reasoners/skills.
-- `client`: Low-level HTTP client for the Haxen control plane.
+- `agent`: Build AgentField-compatible agents and register reasoners/skills.
+- `client`: Low-level HTTP client for the AgentField control plane.
 - `types`: Shared data structures and contracts.
 - `ai`: Helpers for interacting with AI providers via the control plane.
 

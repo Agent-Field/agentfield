@@ -25,7 +25,7 @@ import type {
   AgentConfiguration,
   AgentPackage,
   ConfigurationSchema,
-} from "../types/haxen";
+} from "../types/agentfield";
 
 const PackagesPageContent: React.FC = () => {
   const [selectedPackage, setSelectedPackage] = useState<AgentPackage | null>(
