@@ -12,10 +12,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/internal/logger"
-	"github.com/your-org/haxen/control-plane/internal/services" // Import services package
-	"github.com/your-org/haxen/control-plane/internal/storage"
-	"github.com/your-org/haxen/control-plane/pkg/types"
+	"github.com/your-org/agentfield/control-plane/internal/logger"
+	"github.com/your-org/agentfield/control-plane/internal/services" // Import services package
+	"github.com/your-org/agentfield/control-plane/internal/storage"
+	"github.com/your-org/agentfield/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
@@ -1139,7 +1139,7 @@ func RegisterServerlessAgentHandler(storageProvider storage.StorageProvider, uiS
 		if err != nil {
 			logger.Logger.Error().Err(err).Msgf("❌ Failed to call discovery endpoint: %s", discoveryURL)
 			c.JSON(http.StatusBadGateway, gin.H{
-				"error": "Failed to discover serverless agent",
+				"error":   "Failed to discover serverless agent",
 				"details": fmt.Sprintf("Could not reach discovery endpoint: %v", err),
 			})
 			return
@@ -1149,7 +1149,7 @@ func RegisterServerlessAgentHandler(storageProvider storage.StorageProvider, uiS
 		if resp.StatusCode != http.StatusOK {
 			logger.Logger.Error().Msgf("❌ Discovery endpoint returned status %d", resp.StatusCode)
 			c.JSON(http.StatusBadGateway, gin.H{
-				"error": "Discovery endpoint failed",
+				"error":   "Discovery endpoint failed",
 				"details": fmt.Sprintf("Discovery endpoint returned status %d", resp.StatusCode),
 			})
 			return
@@ -1157,20 +1157,20 @@ func RegisterServerlessAgentHandler(storageProvider storage.StorageProvider, uiS
 
 		// Parse discovery response
 		var discoveryData struct {
-			NodeID     string `json:"node_id"`
-			Version    string `json:"version"`
-			Reasoners  []struct {
-				ID          string                 `json:"id"`
-				Name        string                 `json:"name"`
-				Description string                 `json:"description"`
-				InputSchema map[string]interface{} `json:"input_schema"`
+			NodeID    string `json:"node_id"`
+			Version   string `json:"version"`
+			Reasoners []struct {
+				ID           string                 `json:"id"`
+				Name         string                 `json:"name"`
+				Description  string                 `json:"description"`
+				InputSchema  map[string]interface{} `json:"input_schema"`
 				OutputSchema map[string]interface{} `json:"output_schema"`
 			} `json:"reasoners"`
 			Skills []struct {
-				ID          string                 `json:"id"`
-				Name        string                 `json:"name"`
-				Description string                 `json:"description"`
-				InputSchema map[string]interface{} `json:"input_schema"`
+				ID           string                 `json:"id"`
+				Name         string                 `json:"name"`
+				Description  string                 `json:"description"`
+				InputSchema  map[string]interface{} `json:"input_schema"`
 				OutputSchema map[string]interface{} `json:"output_schema"`
 			} `json:"skills"`
 		}
@@ -1178,7 +1178,7 @@ func RegisterServerlessAgentHandler(storageProvider storage.StorageProvider, uiS
 		if err := json.NewDecoder(resp.Body).Decode(&discoveryData); err != nil {
 			logger.Logger.Error().Err(err).Msg("❌ Failed to parse discovery response")
 			c.JSON(http.StatusBadGateway, gin.H{
-				"error": "Invalid discovery response",
+				"error":   "Invalid discovery response",
 				"details": fmt.Sprintf("Could not parse discovery data: %v", err),
 			})
 			return
@@ -1187,7 +1187,7 @@ func RegisterServerlessAgentHandler(storageProvider storage.StorageProvider, uiS
 		// Validate required fields
 		if discoveryData.NodeID == "" {
 			c.JSON(http.StatusBadRequest, gin.H{
-				"error": "Invalid discovery response",
+				"error":   "Invalid discovery response",
 				"details": "node_id is missing from discovery response",
 			})
 			return
@@ -1221,21 +1221,21 @@ func RegisterServerlessAgentHandler(storageProvider storage.StorageProvider, uiS
 		executionURL := strings.TrimSuffix(req.InvocationURL, "/") + "/execute"
 
 		newNode := types.AgentNode{
-			ID:               discoveryData.NodeID,
-			TeamID:           "default", // Default team for serverless agents
-			BaseURL:          req.InvocationURL,
-			Version:          discoveryData.Version,
-			DeploymentType:   "serverless",
-			InvocationURL:    &executionURL,
-			Reasoners:        reasoners,
-			Skills:           skills,
-			RegisteredAt:     time.Now().UTC(),
-			LastHeartbeat:    time.Now().UTC(),
-			HealthStatus:     types.HealthStatusUnknown, // Serverless agents don't have persistent health
-			LifecycleStatus:  types.AgentStatusReady,    // Serverless agents are always ready
+			ID:              discoveryData.NodeID,
+			TeamID:          "default", // Default team for serverless agents
+			BaseURL:         req.InvocationURL,
+			Version:         discoveryData.Version,
+			DeploymentType:  "serverless",
+			InvocationURL:   &executionURL,
+			Reasoners:       reasoners,
+			Skills:          skills,
+			RegisteredAt:    time.Now().UTC(),
+			LastHeartbeat:   time.Now().UTC(),
+			HealthStatus:    types.HealthStatusUnknown, // Serverless agents don't have persistent health
+			LifecycleStatus: types.AgentStatusReady,    // Serverless agents are always ready
 			Metadata: types.AgentMetadata{
 				Custom: map[string]interface{}{
-					"serverless": true,
+					"serverless":    true,
 					"discovery_url": discoveryURL,
 				},
 			},
@@ -1251,7 +1251,7 @@ func RegisterServerlessAgentHandler(storageProvider storage.StorageProvider, uiS
 		if err := storageProvider.RegisterAgent(ctx, &newNode); err != nil {
 			logger.Logger.Error().Err(err).Msg("❌ Failed to register serverless agent")
 			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": "Failed to register serverless agent",
+				"error":   "Failed to register serverless agent",
 				"details": err.Error(),
 			})
 			return
@@ -1285,12 +1285,12 @@ func RegisterServerlessAgentHandler(storageProvider storage.StorageProvider, uiS
 			"success": true,
 			"message": "Serverless agent registered successfully",
 			"node": gin.H{
-				"id": newNode.ID,
-				"version": newNode.Version,
+				"id":              newNode.ID,
+				"version":         newNode.Version,
 				"deployment_type": newNode.DeploymentType,
-				"invocation_url": newNode.InvocationURL,
+				"invocation_url":  newNode.InvocationURL,
 				"reasoners_count": len(newNode.Reasoners),
-				"skills_count": len(newNode.Skills),
+				"skills_count":    len(newNode.Skills),
 			},
 		})
 	}

@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/internal/services"
-	"github.com/your-org/haxen/control-plane/pkg/types"
+	"github.com/your-org/agentfield/control-plane/internal/services"
+	"github.com/your-org/agentfield/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"

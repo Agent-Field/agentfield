@@ -1,4 +1,4 @@
-// haxen/internal/core/services/agent_service.go
+// agentfield/internal/core/services/agent_service.go
 package services
 
 import (
@@ -14,9 +14,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/internal/core/interfaces"
-	"github.com/your-org/haxen/control-plane/internal/core/domain"
-	"github.com/your-org/haxen/control-plane/internal/packages"
+	"github.com/your-org/agentfield/control-plane/internal/core/domain"
+	"github.com/your-org/agentfield/control-plane/internal/core/interfaces"
+	"github.com/your-org/agentfield/control-plane/internal/packages"
 	"gopkg.in/yaml.v3"
 )
 
@@ -26,7 +26,7 @@ type DefaultAgentService struct {
 	portManager     interfaces.PortManager
 	registryStorage interfaces.RegistryStorage
 	agentClient     interfaces.AgentClient
-	haxenHome       string
+	agentfieldHome  string
 }
 
 // NewAgentService creates a new agent service instance
@@ -35,14 +35,14 @@ func NewAgentService(
 	portManager interfaces.PortManager,
 	registryStorage interfaces.RegistryStorage,
 	agentClient interfaces.AgentClient,
-	haxenHome string,
+	agentfieldHome string,
 ) interfaces.AgentService {
 	return &DefaultAgentService{
 		processManager:  processManager,
 		portManager:     portManager,
 		registryStorage: registryStorage,
 		agentClient:     agentClient,
-		haxenHome:       haxenHome,
+		agentfieldHome:  agentfieldHome,
 	}
 }
 
@@ -107,7 +107,7 @@ func (as *DefaultAgentService) RunAgent(name string, options domain.RunOptions) 
 		return nil, fmt.Errorf("agent node failed to start: %w", err)
 	}
 
-	fmt.Printf("🧠 Agent node registered with Haxen Server\n")
+	fmt.Printf("🧠 Agent node registered with AgentField Server\n")
 
 	// 6. Update registry with runtime info
 	if err := as.updateRuntimeInfo(name, port, pid); err != nil {
@@ -120,8 +120,8 @@ func (as *DefaultAgentService) RunAgent(name string, options domain.RunOptions) 
 	}
 
 	fmt.Printf("\n💡 Agent node running in background (PID: %d)\n", pid)
-	fmt.Printf("💡 View logs: haxen logs %s\n", name)
-	fmt.Printf("💡 Stop agent node: haxen stop %s\n", name)
+	fmt.Printf("💡 View logs: af logs %s\n", name)
+	fmt.Printf("💡 Stop agent node: af stop %s\n", name)
 
 	// Convert to domain model and return
 	runningAgent := as.convertToRunningAgent(agentNode)
@@ -179,19 +179,19 @@ func (as *DefaultAgentService) StopAgent(name string) error {
 	httpShutdownSuccess := false
 	if as.agentClient != nil {
 		fmt.Printf("🛑 Attempting graceful HTTP shutdown for agent %s\n", name)
-		
+
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		
+
 		// Construct node ID from agent name (assuming they match)
 		nodeID := name
-		
+
 		// Try graceful shutdown with 30-second timeout
 		shutdownResp, err := as.agentClient.ShutdownAgent(ctx, nodeID, true, 30)
 		if err == nil && shutdownResp != nil && shutdownResp.Status == "shutting_down" {
 			fmt.Printf("✅ HTTP shutdown request accepted for agent %s\n", name)
 			httpShutdownSuccess = true
-			
+
 			// Wait a moment for the agent to shut down gracefully
 			time.Sleep(2 * time.Second)
 		} else {
@@ -202,7 +202,7 @@ func (as *DefaultAgentService) StopAgent(name string) error {
 	// If HTTP shutdown failed or not available, fall back to process signals
 	if !httpShutdownSuccess {
 		fmt.Printf("🔄 Falling back to process signal shutdown for agent %s\n", name)
-		
+
 		if pkg.Runtime.PID == nil {
 			return fmt.Errorf("no PID found for agent %s", name)
 		}
@@ -229,7 +229,7 @@ func (as *DefaultAgentService) StopAgent(name string) error {
 			if err := process.Kill(); err != nil {
 				// Handle "process already finished" gracefully
 				if strings.Contains(err.Error(), "process already finished") ||
-				   strings.Contains(err.Error(), "no such process") {
+					strings.Contains(err.Error(), "no such process") {
 					fmt.Printf("Process %d for agent %s already finished - updating registry\n", *pkg.Runtime.PID, name)
 				} else {
 					return fmt.Errorf("failed to kill process: %w", err)
@@ -238,7 +238,7 @@ func (as *DefaultAgentService) StopAgent(name string) error {
 		} else {
 			// Wait a moment for graceful shutdown, then force kill if needed
 			time.Sleep(3 * time.Second)
-			
+
 			// Check if process is still running
 			if err := process.Signal(syscall.Signal(0)); err == nil {
 				// Process still running, force kill
@@ -322,7 +322,7 @@ func (as *DefaultAgentService) GetAgentStatus(name string) (*domain.AgentStatus,
 // Returns (actuallyRunning, wasReconciled)
 func (as *DefaultAgentService) reconcileProcessState(pkg *packages.InstalledPackage, name string) (bool, bool) {
 	registryRunning := pkg.Status == "running"
-	
+
 	// If registry says not running, trust it (no process to check)
 	if !registryRunning {
 		return false, false
@@ -387,7 +387,7 @@ func (as *DefaultAgentService) ListRunningAgents() ([]domain.RunningAgent, error
 // loadRegistryDirect loads the registry using direct file system access
 // TODO: Eventually replace with registryStorage interface usage
 func (as *DefaultAgentService) loadRegistryDirect() (*packages.InstallationRegistry, error) {
-	registryPath := filepath.Join(as.haxenHome, "installed.yaml")
+	registryPath := filepath.Join(as.agentfieldHome, "installed.yaml")
 
 	registry := &packages.InstallationRegistry{
 		Installed: make(map[string]packages.InstalledPackage),
@@ -405,7 +405,7 @@ func (as *DefaultAgentService) loadRegistryDirect() (*packages.InstallationRegis
 // saveRegistryDirect saves the registry using direct file system access
 // TODO: Eventually replace with registryStorage interface usage
 func (as *DefaultAgentService) saveRegistryDirect(registry *packages.InstallationRegistry) error {
-	registryPath := filepath.Join(as.haxenHome, "installed.yaml")
+	registryPath := filepath.Join(as.agentfieldHome, "installed.yaml")
 
 	data, err := yaml.Marshal(registry)
 	if err != nil {
@@ -446,7 +446,7 @@ func (as *DefaultAgentService) buildProcessConfig(agentNode packages.InstalledPa
 	// Prepare environment variables
 	env := os.Environ()
 	env = append(env, fmt.Sprintf("PORT=%d", port))
-	env = append(env, "HAXEN_SERVER_URL=http://localhost:8080")
+	env = append(env, "AGENTFIELD_SERVER_URL=http://localhost:8080")
 
 	// Load environment variables from package .env file
 	if envVars, err := as.loadPackageEnvFile(agentNode.Path); err == nil {
@@ -459,52 +459,52 @@ func (as *DefaultAgentService) buildProcessConfig(agentNode packages.InstalledPa
 	// Determine Python path - use virtual environment if available
 	var pythonPath string
 	venvPath := filepath.Join(agentNode.Path, "venv")
-	
+
 	// Check if virtual environment exists (Unix/Linux/macOS)
 	if _, err := os.Stat(filepath.Join(venvPath, "bin", "python")); err == nil {
 		pythonPath = filepath.Join(venvPath, "bin", "python")
 		fmt.Printf("🐍 Using virtual environment: %s\n", venvPath)
-		
+
 		// Complete virtual environment activation for Unix/Linux/macOS
 		venvBinPath := filepath.Join(venvPath, "bin")
-		
+
 		// Set VIRTUAL_ENV first (required for proper activation)
 		env = append(env, fmt.Sprintf("VIRTUAL_ENV=%s", venvPath))
-		
+
 		// Prepend virtual environment bin to PATH (critical for package resolution)
 		currentPath := os.Getenv("PATH")
 		env = append(env, fmt.Sprintf("PATH=%s:%s", venvBinPath, currentPath))
-		
+
 		// Unset PYTHONHOME to avoid conflicts with virtual environment
 		env = append(env, "PYTHONHOME=")
-		
+
 		// Set PYTHONPATH to ensure proper module resolution
 		env = append(env, fmt.Sprintf("PYTHONPATH=%s", filepath.Join(venvPath, "lib")))
-		
+
 		fmt.Printf("✅ Virtual environment fully activated with PATH=%s\n", venvBinPath)
-		
+
 	} else if _, err := os.Stat(filepath.Join(venvPath, "Scripts", "python.exe")); err == nil {
 		pythonPath = filepath.Join(venvPath, "Scripts", "python.exe") // Windows
 		fmt.Printf("🐍 Using virtual environment: %s\n", venvPath)
-		
+
 		// Complete virtual environment activation for Windows
 		venvScriptsPath := filepath.Join(venvPath, "Scripts")
-		
+
 		// Set VIRTUAL_ENV first (required for proper activation)
 		env = append(env, fmt.Sprintf("VIRTUAL_ENV=%s", venvPath))
-		
+
 		// Prepend virtual environment Scripts to PATH (critical for package resolution)
 		currentPath := os.Getenv("PATH")
 		env = append(env, fmt.Sprintf("PATH=%s;%s", venvScriptsPath, currentPath))
-		
+
 		// Unset PYTHONHOME to avoid conflicts with virtual environment
 		env = append(env, "PYTHONHOME=")
-		
+
 		// Set PYTHONPATH to ensure proper module resolution
 		env = append(env, fmt.Sprintf("PYTHONPATH=%s", filepath.Join(venvPath, "Lib", "site-packages")))
-		
+
 		fmt.Printf("✅ Virtual environment fully activated with PATH=%s\n", venvScriptsPath)
-		
+
 	} else {
 		// Try to find python3 or python
 		if pythonPath = as.findPythonExecutable(); pythonPath == "" {
@@ -544,7 +544,7 @@ func (as *DefaultAgentService) waitForAgentNode(port int, timeout time.Duration)
 
 // updateRuntimeInfo updates the registry with runtime information
 func (as *DefaultAgentService) updateRuntimeInfo(agentNodeName string, port, pid int) error {
-	registryPath := filepath.Join(as.haxenHome, "installed.yaml")
+	registryPath := filepath.Join(as.agentfieldHome, "installed.yaml")
 
 	// Load registry
 	registry := &packages.InstallationRegistry{}
@@ -645,7 +645,7 @@ func (as *DefaultAgentService) findAgentInRegistry(registry *packages.Installati
 	for registryName, agentNode := range registry.Installed {
 		normalizedRegistryName := strings.ReplaceAll(registryName, "-", "")
 		normalizedInputName := strings.ReplaceAll(name, "-", "")
-		
+
 		if normalizedRegistryName == normalizedInputName {
 			return agentNode, registryName, true
 		}
@@ -658,7 +658,7 @@ func (as *DefaultAgentService) findAgentInRegistry(registry *packages.Installati
 // loadPackageEnvFile loads environment variables from package .env file
 func (as *DefaultAgentService) loadPackageEnvFile(packagePath string) (map[string]string, error) {
 	envPath := filepath.Join(packagePath, ".env")
-	
+
 	data, err := os.ReadFile(envPath)
 	if err != nil {
 		return nil, err
@@ -666,24 +666,24 @@ func (as *DefaultAgentService) loadPackageEnvFile(packagePath string) (map[strin
 
 	envVars := make(map[string]string)
 	lines := strings.Split(string(data), "\n")
-	
+
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		
+
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) == 2 {
 			key := strings.TrimSpace(parts[0])
 			value := strings.TrimSpace(parts[1])
-			
+
 			// Remove quotes if present
 			if (strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"")) ||
-			   (strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'")) {
+				(strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'")) {
 				value = value[1 : len(value)-1]
 			}
-			
+
 			envVars[key] = value
 		}
 	}
@@ -695,17 +695,17 @@ func (as *DefaultAgentService) loadPackageEnvFile(packagePath string) (map[strin
 func (as *DefaultAgentService) findPythonExecutable() string {
 	// Try common Python executable names in order of preference
 	candidates := []string{"python3", "python", "python3.11", "python3.10", "python3.9", "python3.8"}
-	
+
 	for _, candidate := range candidates {
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate
 		}
-		
+
 		// Also try to find in PATH
 		if path, err := exec.LookPath(candidate); err == nil {
 			return path
 		}
 	}
-	
+
 	return "" // Not found
 }

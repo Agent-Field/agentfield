@@ -6,7 +6,7 @@ import {
 } from "@/components/ui/icon-bridge";
 import { cn } from "@/lib/utils";
 import { getNodeStatusPresentation } from "@/utils/node-status";
-import type { HealthStatus, LifecycleStatus } from "@/types/haxen";
+import type { HealthStatus, LifecycleStatus } from "@/types/agentfield";
 import type { ReactNode } from "react";
 
 interface EnhancedNodeDetailHeaderProps {

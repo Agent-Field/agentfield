@@ -17,10 +17,10 @@ COPY control-plane/ ./control-plane/
 COPY --from=ui-builder /app/web/dist ./control-plane/web/client/dist
 
 RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/go/pkg/mod \
-    cd control-plane && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /app/bin/haxen-server ./cmd/haxen-server
+    cd control-plane && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /app/bin/agentfield-server ./cmd/agentfield-server
 
 FROM gcr.io/distroless/base-debian12
-COPY --from=go-builder /app/bin/haxen-server /usr/local/bin/haxen-server
-COPY --from=go-builder /app/control-plane/config /etc/haxen/config
+COPY --from=go-builder /app/bin/agentfield-server /usr/local/bin/agentfield-server
+COPY --from=go-builder /app/control-plane/config /etc/agentfield/config
 USER nonroot:nonroot
-ENTRYPOINT ["/usr/local/bin/haxen-server"]
+ENTRYPOINT ["/usr/local/bin/agentfield-server"]

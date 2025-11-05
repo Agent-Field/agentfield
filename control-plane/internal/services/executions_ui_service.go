@@ -1,14 +1,14 @@
 package services
 
 import (
-	"github.com/your-org/haxen/control-plane/internal/storage"
-	"github.com/your-org/haxen/control-plane/pkg/types"
 	"context"
 	"fmt"
+	"github.com/your-org/agentfield/control-plane/internal/storage"
+	"github.com/your-org/agentfield/control-plane/pkg/types"
 	"sync"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/internal/logger"
+	"github.com/your-org/agentfield/control-plane/internal/logger"
 )
 
 // ExecutionEvent represents a real-time event related to executions.

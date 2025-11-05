@@ -1,15 +1,15 @@
 package services
 
 import (
-	"github.com/your-org/haxen/control-plane/internal/core/domain"
-	"github.com/your-org/haxen/control-plane/internal/core/interfaces"
-	"github.com/your-org/haxen/control-plane/internal/events"
-	"github.com/your-org/haxen/control-plane/internal/logger"
-	"github.com/your-org/haxen/control-plane/internal/storage"
-	"github.com/your-org/haxen/control-plane/pkg/types"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/your-org/agentfield/control-plane/internal/core/domain"
+	"github.com/your-org/agentfield/control-plane/internal/core/interfaces"
+	"github.com/your-org/agentfield/control-plane/internal/events"
+	"github.com/your-org/agentfield/control-plane/internal/logger"
+	"github.com/your-org/agentfield/control-plane/internal/storage"
+	"github.com/your-org/agentfield/control-plane/pkg/types"
 	"sync"
 	"time"
 )

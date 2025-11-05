@@ -15,7 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"github.com/your-org/haxen/control-plane/internal/templates"
+	"github.com/your-org/agentfield/control-plane/internal/templates"
 )
 
 var (
@@ -153,7 +153,7 @@ func (m initModel) View() string {
 	var s strings.Builder
 
 	// Title
-	s.WriteString(titleStyle.Render("🎯 Creating Haxen Agent") + "\n\n")
+	s.WriteString(titleStyle.Render("🎯 Creating AgentField Agent") + "\n\n")
 
 	switch m.step {
 	case 0: // Project name
@@ -200,21 +200,21 @@ func NewInitCommand() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "init [project-name]",
-		Short: "Initialize a new Haxen agent project",
-		Long: `Initialize a new Haxen agent project with a predefined
+		Short: "Initialize a new AgentField agent project",
+		Long: `Initialize a new AgentField agent project with a predefined
 directory structure and essential files.
 
 This command sets up a new project, including:
 - Language-specific project structure (Python or Go)
 - Basic agent implementation with example reasoner
 - README.md and .gitignore files
-- Configuration for connecting to the Haxen control plane
+- Configuration for connecting to the AgentField control plane
 
 Example:
-  haxen init                    # Interactive mode
-  haxen init my-new-agent       # With project name
-  haxen init my-agent --language python
-  haxen init my-agent -l go --author "John Doe" --email "john@example.com"`,
+  af init                    # Interactive mode
+  af init my-new-agent       # With project name
+  af init my-agent --language python
+  af init my-agent -l go --author "John Doe" --email "john@example.com"`,
 		Args: cobra.MaximumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			var projectName string
@@ -373,7 +373,7 @@ Example:
 				fmt.Println("  2. go mod download")
 			}
 
-			fmt.Println("  3. haxen server                    # Start Haxen server")
+			fmt.Println("  3. af server                    # Start AgentField server")
 
 			if language == "python" {
 				fmt.Println("  4. python main.py                  # Start your agent")
@@ -402,7 +402,7 @@ Example:
 
 			fmt.Println("  4. Restart your agent")
 			fmt.Println()
-			printInfo("Learn more: https://docs.haxen.ai")
+			printInfo("Learn more: https://docs.agentfield.ai")
 			fmt.Println()
 			printSuccess("Happy building! 🎉")
 		},

@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/your-org/haxen/control-plane/internal/storage"
-	"github.com/your-org/haxen/control-plane/pkg/types"
+	"github.com/your-org/agentfield/control-plane/internal/storage"
+	"github.com/your-org/agentfield/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -30,30 +30,30 @@ type PackageListResponse struct {
 
 // PackageInfo represents package information in the list
 type PackageInfo struct {
-	ID                      string `json:"id"`
-	Name                    string `json:"name"`
-	Version                 string `json:"version"`
-	Status                  string `json:"status"`
-	InstallPath             string `json:"install_path"`
-	ConfigurationRequired   bool   `json:"configuration_required"`
-	ConfigurationComplete   bool   `json:"configuration_complete"`
-	RunningNodeID           string `json:"running_node_id,omitempty"`
-	LastStarted             string `json:"last_started,omitempty"`
-	ProcessID               int    `json:"process_id,omitempty"`
-	Port                    int    `json:"port,omitempty"`
-	Description             string `json:"description"`
-	Author                  string `json:"author"`
+	ID                    string `json:"id"`
+	Name                  string `json:"name"`
+	Version               string `json:"version"`
+	Status                string `json:"status"`
+	InstallPath           string `json:"install_path"`
+	ConfigurationRequired bool   `json:"configuration_required"`
+	ConfigurationComplete bool   `json:"configuration_complete"`
+	RunningNodeID         string `json:"running_node_id,omitempty"`
+	LastStarted           string `json:"last_started,omitempty"`
+	ProcessID             int    `json:"process_id,omitempty"`
+	Port                  int    `json:"port,omitempty"`
+	Description           string `json:"description"`
+	Author                string `json:"author"`
 }
 
 // PackageDetailsResponse represents detailed package information
 type PackageDetailsResponse struct {
-	ID          string                 `json:"id"`
-	Name        string                 `json:"name"`
-	Version     string                 `json:"version"`
-	Description string                 `json:"description"`
-	Author      string                 `json:"author"`
-	InstallPath string                 `json:"install_path"`
-	Status      string                 `json:"status"`
+	ID            string               `json:"id"`
+	Name          string               `json:"name"`
+	Version       string               `json:"version"`
+	Description   string               `json:"description"`
+	Author        string               `json:"author"`
+	InstallPath   string               `json:"install_path"`
+	Status        string               `json:"status"`
 	Configuration PackageConfiguration `json:"configuration"`
 	Capabilities  *PackageCapabilities `json:"capabilities,omitempty"`
 	Runtime       *PackageRuntime      `json:"runtime,omitempty"`
@@ -69,17 +69,17 @@ type PackageConfiguration struct {
 
 // PackageCapabilities represents package capabilities
 type PackageCapabilities struct {
-	Reasoners   []ReasonerDefinition   `json:"reasoners"`
-	Skills      []SkillDefinition      `json:"skills"`
-	MCPServers  []MCPServerDefinition  `json:"mcp_servers"`
+	Reasoners  []ReasonerDefinition  `json:"reasoners"`
+	Skills     []SkillDefinition     `json:"skills"`
+	MCPServers []MCPServerDefinition `json:"mcp_servers"`
 }
 
 // ReasonerDefinition represents a reasoner definition
 type ReasonerDefinition struct {
-	ID          string                 `json:"id"`
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"input_schema"`
+	ID           string                 `json:"id"`
+	Name         string                 `json:"name"`
+	Description  string                 `json:"description"`
+	InputSchema  map[string]interface{} `json:"input_schema"`
 	OutputSchema map[string]interface{} `json:"output_schema,omitempty"`
 }
 
@@ -141,7 +141,7 @@ func (h *PackageHandler) ListPackagesHandler(c *gin.Context) {
 		// Check configuration status
 		configRequired := len(pkg.ConfigurationSchema) > 0
 		configComplete := false
-		
+
 		if configRequired {
 			// Check if configuration exists and is complete
 			config, err := h.storage.GetAgentConfiguration(ctx, pkg.ID, pkg.ID)
@@ -256,14 +256,14 @@ func (h *PackageHandler) GetPackageDetailsHandler(c *gin.Context) {
 func (h *PackageHandler) determinePackageStatus(ctx context.Context, pkg *types.AgentPackage) string {
 	// Check if configuration is required
 	configRequired := len(pkg.ConfigurationSchema) > 0
-	
+
 	if configRequired {
 		// Check configuration status
 		config, err := h.storage.GetAgentConfiguration(ctx, pkg.ID, pkg.ID)
 		if err != nil {
 			return "not_configured"
 		}
-		
+
 		switch config.Status {
 		case types.ConfigurationStatusDraft:
 			return "configured"
@@ -275,7 +275,7 @@ func (h *PackageHandler) determinePackageStatus(ctx context.Context, pkg *types.
 			return "not_configured"
 		}
 	}
-	
+
 	// No configuration required
 	// TODO: Check if agent is running
 	// For now, return "configured" until lifecycle management is implemented
@@ -285,11 +285,11 @@ func (h *PackageHandler) determinePackageStatus(ctx context.Context, pkg *types.
 // matchesSearch checks if a package matches the search query
 func (h *PackageHandler) matchesSearch(pkg *types.AgentPackage, search string) bool {
 	search = strings.ToLower(search)
-	
+
 	return strings.Contains(strings.ToLower(pkg.Name), search) ||
-		   strings.Contains(strings.ToLower(h.safeStringValue(pkg.Description)), search) ||
-		   strings.Contains(strings.ToLower(h.safeStringValue(pkg.Author)), search) ||
-		   strings.Contains(strings.ToLower(pkg.ID), search)
+		strings.Contains(strings.ToLower(h.safeStringValue(pkg.Description)), search) ||
+		strings.Contains(strings.ToLower(h.safeStringValue(pkg.Author)), search) ||
+		strings.Contains(strings.ToLower(pkg.ID), search)
 }
 
 // safeStringValue safely converts a *string to string, returning empty string if nil

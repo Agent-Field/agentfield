@@ -1,27 +1,27 @@
 package server
 
 import (
-	"github.com/your-org/haxen/control-plane/internal/config"
-	"github.com/your-org/haxen/control-plane/internal/core/interfaces"
-	coreservices "github.com/your-org/haxen/control-plane/internal/core/services" // Core services
-	"github.com/your-org/haxen/control-plane/internal/events"                     // Event system
-	"github.com/your-org/haxen/control-plane/internal/handlers"                   // Agent handlers
-	"github.com/your-org/haxen/control-plane/internal/handlers/ui"                // UI handlers
-	"github.com/your-org/haxen/control-plane/internal/infrastructure/communication"
-	"github.com/your-org/haxen/control-plane/internal/infrastructure/process"
-	infrastorage "github.com/your-org/haxen/control-plane/internal/infrastructure/storage"
-	"github.com/your-org/haxen/control-plane/internal/logger"
-	"github.com/your-org/haxen/control-plane/internal/services" // Services
-	"github.com/your-org/haxen/control-plane/internal/storage"
-	"github.com/your-org/haxen/control-plane/internal/utils"
-	"github.com/your-org/haxen/control-plane/pkg/adminpb"
-	"github.com/your-org/haxen/control-plane/pkg/types"
-	client "github.com/your-org/haxen/control-plane/web/client"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/your-org/agentfield/control-plane/internal/config"
+	"github.com/your-org/agentfield/control-plane/internal/core/interfaces"
+	coreservices "github.com/your-org/agentfield/control-plane/internal/core/services" // Core services
+	"github.com/your-org/agentfield/control-plane/internal/events"                     // Event system
+	"github.com/your-org/agentfield/control-plane/internal/handlers"                   // Agent handlers
+	"github.com/your-org/agentfield/control-plane/internal/handlers/ui"                // UI handlers
+	"github.com/your-org/agentfield/control-plane/internal/infrastructure/communication"
+	"github.com/your-org/agentfield/control-plane/internal/infrastructure/process"
+	infrastorage "github.com/your-org/agentfield/control-plane/internal/infrastructure/storage"
+	"github.com/your-org/agentfield/control-plane/internal/logger"
+	"github.com/your-org/agentfield/control-plane/internal/services" // Services
+	"github.com/your-org/agentfield/control-plane/internal/storage"
+	"github.com/your-org/agentfield/control-plane/internal/utils"
+	"github.com/your-org/agentfield/control-plane/pkg/adminpb"
+	"github.com/your-org/agentfield/control-plane/pkg/types"
+	client "github.com/your-org/agentfield/control-plane/web/client"
 	"net"
 	"net/http"
 	"os"
@@ -38,8 +38,8 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// HaxenServer represents the core Haxen orchestration service.
-type HaxenServer struct {
+// AgentFieldServer represents the core AgentField orchestration service.
+type AgentFieldServer struct {
 	adminpb.UnimplementedAdminReasonerServiceServer
 	storage               storage.StorageProvider
 	cache                 storage.CacheProvider
@@ -59,7 +59,7 @@ type HaxenServer struct {
 	didService      *services.DIDService
 	vcService       *services.VCService
 	didRegistry     *services.DIDRegistry
-	haxenHome       string
+	agentfieldHome  string
 	// Cleanup service
 	cleanupService        *handlers.ExecutionCleanupService
 	payloadStore          services.PayloadStore
@@ -70,16 +70,16 @@ type HaxenServer struct {
 	webhookDispatcher     services.WebhookDispatcher
 }
 
-// NewHaxenServer creates a new instance of the HaxenServer.
-func NewHaxenServer(cfg *config.Config) (*HaxenServer, error) {
-	// Define haxenHome at the very top
-	haxenHome := os.Getenv("HAXEN_HOME")
-	if haxenHome == "" {
+// NewAgentFieldServer creates a new instance of the AgentFieldServer.
+func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
+	// Define agentfieldHome at the very top
+	agentfieldHome := os.Getenv("AGENTFIELD_HOME")
+	if agentfieldHome == "" {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			return nil, err
 		}
-		haxenHome = filepath.Join(homeDir, ".haxen")
+		agentfieldHome = filepath.Join(homeDir, ".agentfield")
 	}
 
 	dirs, err := utils.EnsureDataDirectories()
@@ -96,20 +96,20 @@ func NewHaxenServer(cfg *config.Config) (*HaxenServer, error) {
 	Router := gin.Default()
 
 	// Sync installed.yaml to database for package visibility
-	_ = SyncPackagesFromRegistry(haxenHome, storageProvider)
+	_ = SyncPackagesFromRegistry(agentfieldHome, storageProvider)
 
 	// Initialize agent client for communication with agent nodes
 	agentClient := communication.NewHTTPAgentClient(storageProvider, 5*time.Second)
 
 	// Create infrastructure components for AgentService
 	fileSystem := infrastorage.NewFileSystemAdapter()
-	registryPath := filepath.Join(haxenHome, "installed.json")
+	registryPath := filepath.Join(agentfieldHome, "installed.json")
 	registryStorage := infrastorage.NewLocalRegistryStorage(fileSystem, registryPath)
 	processManager := process.NewProcessManager()
 	portManager := process.NewPortManager()
 
 	// Create AgentService
-	agentService := coreservices.NewAgentService(processManager, portManager, registryStorage, agentClient, haxenHome)
+	agentService := coreservices.NewAgentService(processManager, portManager, registryStorage, agentClient, agentfieldHome)
 
 	// Initialize StatusManager for unified status management
 	statusManagerConfig := services.StatusManagerConfig{
@@ -189,25 +189,25 @@ func NewHaxenServer(cfg *config.Config) (*HaxenServer, error) {
 			return nil, fmt.Errorf("failed to initialize VC service: %w", err)
 		}
 
-		// Generate haxen server ID based on haxen home directory
-		haxenServerID := generateHaxenServerID(haxenHome)
+		// Generate af server ID based on agentfield home directory
+		agentfieldServerID := generateAgentFieldServerID(agentfieldHome)
 
-		// Initialize haxen server DID with dynamic ID
-		fmt.Printf("🧠 Initializing haxen server DID (ID: %s)...\n", haxenServerID)
-		if err := didService.Initialize(haxenServerID); err != nil {
-			return nil, fmt.Errorf("failed to initialize haxen server DID: %w", err)
+		// Initialize af server DID with dynamic ID
+		fmt.Printf("🧠 Initializing af server DID (ID: %s)...\n", agentfieldServerID)
+		if err := didService.Initialize(agentfieldServerID); err != nil {
+			return nil, fmt.Errorf("failed to initialize af server DID: %w", err)
 		}
 
-		// Validate that haxen server DID was successfully created
-		registry, err := didService.GetRegistry(haxenServerID)
+		// Validate that af server DID was successfully created
+		registry, err := didService.GetRegistry(agentfieldServerID)
 		if err != nil {
-			return nil, fmt.Errorf("failed to validate haxen server DID creation: %w", err)
+			return nil, fmt.Errorf("failed to validate af server DID creation: %w", err)
 		}
 		if registry == nil || registry.RootDID == "" {
-			return nil, fmt.Errorf("haxen server DID validation failed: registry or root DID is empty")
+			return nil, fmt.Errorf("af server DID validation failed: registry or root DID is empty")
 		}
 
-		fmt.Printf("✅ Haxen server DID created successfully: %s\n", registry.RootDID)
+		fmt.Printf("✅ AgentField server DID created successfully: %s\n", registry.RootDID)
 
 		// Backfill existing nodes with DIDs
 		fmt.Println("🔄 Starting DID backfill for existing nodes...")
@@ -224,28 +224,28 @@ func NewHaxenServer(cfg *config.Config) (*HaxenServer, error) {
 	payloadStore := services.NewFilePayloadStore(dirs.PayloadsDir)
 
 	webhookDispatcher := services.NewWebhookDispatcher(storageProvider, services.WebhookDispatcherConfig{
-		Timeout:         cfg.Haxen.ExecutionQueue.WebhookTimeout,
-		MaxAttempts:     cfg.Haxen.ExecutionQueue.WebhookMaxAttempts,
-		RetryBackoff:    cfg.Haxen.ExecutionQueue.WebhookRetryBackoff,
-		MaxRetryBackoff: cfg.Haxen.ExecutionQueue.WebhookMaxRetryBackoff,
+		Timeout:         cfg.AgentField.ExecutionQueue.WebhookTimeout,
+		MaxAttempts:     cfg.AgentField.ExecutionQueue.WebhookMaxAttempts,
+		RetryBackoff:    cfg.AgentField.ExecutionQueue.WebhookRetryBackoff,
+		MaxRetryBackoff: cfg.AgentField.ExecutionQueue.WebhookMaxRetryBackoff,
 	})
 	if err := webhookDispatcher.Start(context.Background()); err != nil {
 		logger.Logger.Warn().Err(err).Msg("failed to start webhook dispatcher")
 	}
 
 	// Initialize execution cleanup service
-	cleanupService := handlers.NewExecutionCleanupService(storageProvider, cfg.Haxen.ExecutionCleanup)
+	cleanupService := handlers.NewExecutionCleanupService(storageProvider, cfg.AgentField.ExecutionCleanup)
 
-	adminPort := cfg.Haxen.Port + 100
-	if envPort := os.Getenv("HAXEN_ADMIN_GRPC_PORT"); envPort != "" {
+	adminPort := cfg.AgentField.Port + 100
+	if envPort := os.Getenv("AGENTFIELD_ADMIN_GRPC_PORT"); envPort != "" {
 		if parsedPort, parseErr := strconv.Atoi(envPort); parseErr == nil {
 			adminPort = parsedPort
 		} else {
-			logger.Logger.Warn().Err(parseErr).Str("value", envPort).Msg("invalid HAXEN_ADMIN_GRPC_PORT, using default offset")
+			logger.Logger.Warn().Err(parseErr).Str("value", envPort).Msg("invalid AGENTFIELD_ADMIN_GRPC_PORT, using default offset")
 		}
 	}
 
-	return &HaxenServer{
+	return &AgentFieldServer{
 		storage:               storageProvider,
 		cache:                 cacheProvider,
 		Router:                Router,
@@ -261,7 +261,7 @@ func NewHaxenServer(cfg *config.Config) (*HaxenServer, error) {
 		didService:            didService,
 		vcService:             vcService,
 		didRegistry:           didRegistry,
-		haxenHome:             haxenHome,
+		agentfieldHome:        agentfieldHome,
 		cleanupService:        cleanupService,
 		payloadStore:          payloadStore,
 		webhookDispatcher:     webhookDispatcher,
@@ -270,8 +270,8 @@ func NewHaxenServer(cfg *config.Config) (*HaxenServer, error) {
 	}, nil
 }
 
-// Start initializes and starts the HaxenServer.
-func (s *HaxenServer) Start() error {
+// Start initializes and starts the AgentFieldServer.
+func (s *AgentFieldServer) Start() error {
 	// Setup routes
 	s.setupRoutes()
 
@@ -299,7 +299,7 @@ func (s *HaxenServer) Start() error {
 	events.StartNodeHeartbeat(30 * time.Second)
 
 	if s.registryWatcherCancel == nil {
-		cancel, err := StartPackageRegistryWatcher(context.Background(), s.haxenHome, s.storage)
+		cancel, err := StartPackageRegistryWatcher(context.Background(), s.agentfieldHome, s.storage)
 		if err != nil {
 			logger.Logger.Error().Err(err).Msg("failed to start package registry watcher")
 		} else {
@@ -313,10 +313,10 @@ func (s *HaxenServer) Start() error {
 
 	// TODO: Implement WebSocket, gRPC
 	// Start HTTP server
-	return s.Router.Run(":" + strconv.Itoa(s.config.Haxen.Port))
+	return s.Router.Run(":" + strconv.Itoa(s.config.AgentField.Port))
 }
 
-func (s *HaxenServer) startAdminGRPCServer() error {
+func (s *AgentFieldServer) startAdminGRPCServer() error {
 	if s.adminGRPCServer != nil {
 		return nil
 	}
@@ -341,7 +341,7 @@ func (s *HaxenServer) startAdminGRPCServer() error {
 }
 
 // ListReasoners implements the admin gRPC surface for listing registered reasoners.
-func (s *HaxenServer) ListReasoners(ctx context.Context, _ *adminpb.ListReasonersRequest) (*adminpb.ListReasonersResponse, error) {
+func (s *AgentFieldServer) ListReasoners(ctx context.Context, _ *adminpb.ListReasonersRequest) (*adminpb.ListReasonersResponse, error) {
 	nodes, err := s.storage.ListAgents(ctx, types.AgentFilters{})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list agent nodes: %v", err)
@@ -368,8 +368,8 @@ func (s *HaxenServer) ListReasoners(ctx context.Context, _ *adminpb.ListReasoner
 	return resp, nil
 }
 
-// Stop gracefully shuts down the HaxenServer.
-func (s *HaxenServer) Stop() error {
+// Stop gracefully shuts down the AgentFieldServer.
+func (s *AgentFieldServer) Stop() error {
 	if s.adminGRPCServer != nil {
 		s.adminGRPCServer.GracefulStop()
 	}
@@ -411,7 +411,7 @@ func (s *HaxenServer) Stop() error {
 }
 
 // unregisterAgentFromMonitoring removes an agent from health monitoring
-func (s *HaxenServer) unregisterAgentFromMonitoring(c *gin.Context) {
+func (s *AgentFieldServer) unregisterAgentFromMonitoring(c *gin.Context) {
 	nodeID := c.Param("node_id")
 	if nodeID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "node_id is required"})
@@ -430,7 +430,7 @@ func (s *HaxenServer) unregisterAgentFromMonitoring(c *gin.Context) {
 }
 
 // healthCheckHandler provides comprehensive health check for container orchestration
-func (s *HaxenServer) healthCheckHandler(c *gin.Context) {
+func (s *AgentFieldServer) healthCheckHandler(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
@@ -484,7 +484,7 @@ func (s *HaxenServer) healthCheckHandler(c *gin.Context) {
 }
 
 // checkStorageHealth performs storage-specific health checks
-func (s *HaxenServer) checkStorageHealth(ctx context.Context) gin.H {
+func (s *AgentFieldServer) checkStorageHealth(ctx context.Context) gin.H {
 	if s.storageHealthOverride != nil {
 		return s.storageHealthOverride(ctx)
 	}
@@ -507,7 +507,7 @@ func (s *HaxenServer) checkStorageHealth(ctx context.Context) gin.H {
 }
 
 // checkCacheHealth performs cache-specific health checks
-func (s *HaxenServer) checkCacheHealth(ctx context.Context) gin.H {
+func (s *AgentFieldServer) checkCacheHealth(ctx context.Context) gin.H {
 	if s.cacheHealthOverride != nil {
 		return s.cacheHealthOverride(ctx)
 	}
@@ -547,7 +547,7 @@ func (s *HaxenServer) checkCacheHealth(ctx context.Context) gin.H {
 	}
 }
 
-func (s *HaxenServer) setupRoutes() {
+func (s *AgentFieldServer) setupRoutes() {
 	// Configure CORS from configuration
 	corsConfig := cors.Config{
 		AllowOrigins:     s.config.API.CORS.AllowedOrigins,
@@ -613,7 +613,7 @@ func (s *HaxenServer) setupRoutes() {
 				// Get the executable path and find UI dist relative to it
 				execPath, err := os.Executable()
 				if err != nil {
-					distPath = filepath.Join("apps", "platform", "haxen", "web", "client", "dist")
+					distPath = filepath.Join("apps", "platform", "agentfield", "web", "client", "dist")
 					if _, statErr := os.Stat(distPath); os.IsNotExist(statErr) {
 						distPath = filepath.Join("web", "client", "dist")
 					}
@@ -622,14 +622,14 @@ func (s *HaxenServer) setupRoutes() {
 					// Look for web/client/dist relative to the executable directory
 					distPath = filepath.Join(execDir, "web", "client", "dist")
 
-					// If that doesn't exist, try going up one level (if binary is in apps/platform/haxen/)
+					// If that doesn't exist, try going up one level (if binary is in apps/platform/agentfield/)
 					if _, err := os.Stat(distPath); os.IsNotExist(err) {
-						distPath = filepath.Join(filepath.Dir(execDir), "apps", "platform", "haxen", "web", "client", "dist")
+						distPath = filepath.Join(filepath.Dir(execDir), "apps", "platform", "agentfield", "web", "client", "dist")
 					}
 
 					// Final fallback to current working directory
 					if _, err := os.Stat(distPath); os.IsNotExist(err) {
-						altPath := filepath.Join("apps", "platform", "haxen", "web", "client", "dist")
+						altPath := filepath.Join("apps", "platform", "agentfield", "web", "client", "dist")
 						if _, altErr := os.Stat(altPath); altErr == nil {
 							distPath = altPath
 						} else {
@@ -684,7 +684,7 @@ func (s *HaxenServer) setupRoutes() {
 				agents.POST("/:agentId/config", configHandler.SetConfigHandler)
 
 				// Environment file endpoints
-				envHandler := ui.NewEnvHandler(s.storage, s.agentService, s.haxenHome)
+				envHandler := ui.NewEnvHandler(s.storage, s.agentService, s.agentfieldHome)
 				agents.GET("/:agentId/env", envHandler.GetEnvHandler)
 				agents.PUT("/:agentId/env", envHandler.PutEnvHandler)
 				agents.PATCH("/:agentId/env", envHandler.PatchEnvHandler)
@@ -901,23 +901,23 @@ func (s *HaxenServer) setupRoutes() {
 			// Register service-backed DID routes
 			didHandlers.RegisterRoutes(agentAPI)
 
-			// Add haxen server DID endpoint
-			agentAPI.GET("/did/haxen-server", func(c *gin.Context) {
-				// Get haxen server ID dynamically
-				haxenServerID, err := s.didService.GetHaxenServerID()
+			// Add af server DID endpoint
+			agentAPI.GET("/did/agentfield-server", func(c *gin.Context) {
+				// Get af server ID dynamically
+				agentfieldServerID, err := s.didService.GetAgentFieldServerID()
 				if err != nil {
 					c.JSON(http.StatusInternalServerError, gin.H{
-						"error":   "Failed to get haxen server ID",
-						"details": fmt.Sprintf("Haxen server ID error: %v", err),
+						"error":   "Failed to get af server ID",
+						"details": fmt.Sprintf("AgentField server ID error: %v", err),
 					})
 					return
 				}
 
-				// Get the actual haxen server DID from the registry
-				registry, err := s.didService.GetRegistry(haxenServerID)
+				// Get the actual af server DID from the registry
+				registry, err := s.didService.GetRegistry(agentfieldServerID)
 				if err != nil {
 					c.JSON(http.StatusInternalServerError, gin.H{
-						"error":   "Failed to get haxen server DID",
+						"error":   "Failed to get af server DID",
 						"details": fmt.Sprintf("Registry error: %v", err),
 					})
 					return
@@ -925,24 +925,24 @@ func (s *HaxenServer) setupRoutes() {
 
 				if registry == nil {
 					c.JSON(http.StatusNotFound, gin.H{
-						"error":   "Haxen server DID not found",
-						"details": "No DID registry exists for haxen server 'default'. The DID system may not be properly initialized.",
+						"error":   "AgentField server DID not found",
+						"details": "No DID registry exists for af server 'default'. The DID system may not be properly initialized.",
 					})
 					return
 				}
 
 				if registry.RootDID == "" {
 					c.JSON(http.StatusInternalServerError, gin.H{
-						"error":   "Haxen server DID is empty",
+						"error":   "AgentField server DID is empty",
 						"details": "Registry exists but root DID is empty. The DID system may be corrupted.",
 					})
 					return
 				}
 
 				c.JSON(http.StatusOK, gin.H{
-					"haxen_server_id":  "default",
-					"haxen_server_did": registry.RootDID,
-					"message":          "Haxen server DID retrieved successfully",
+					"agentfield_server_id":  "default",
+					"agentfield_server_did": registry.RootDID,
+					"message":               "AgentField server DID retrieved successfully",
 				})
 			})
 		} else {
@@ -995,7 +995,7 @@ func (s *HaxenServer) setupRoutes() {
 					// Get the executable path and find UI dist relative to it
 					execPath, err := os.Executable()
 					if err != nil {
-						distPath = filepath.Join("apps", "platform", "haxen", "web", "client", "dist")
+						distPath = filepath.Join("apps", "platform", "agentfield", "web", "client", "dist")
 						if _, statErr := os.Stat(distPath); os.IsNotExist(statErr) {
 							distPath = filepath.Join("web", "client", "dist")
 						}
@@ -1004,14 +1004,14 @@ func (s *HaxenServer) setupRoutes() {
 						// Look for web/client/dist relative to the executable directory
 						distPath = filepath.Join(execDir, "web", "client", "dist")
 
-						// If that doesn't exist, try going up one level (if binary is in apps/platform/haxen/)
+						// If that doesn't exist, try going up one level (if binary is in apps/platform/agentfield/)
 						if _, err := os.Stat(distPath); os.IsNotExist(err) {
-							distPath = filepath.Join(filepath.Dir(execDir), "apps", "platform", "haxen", "web", "client", "dist")
+							distPath = filepath.Join(filepath.Dir(execDir), "apps", "platform", "agentfield", "web", "client", "dist")
 						}
 
 						// Final fallback to current working directory
 						if _, err := os.Stat(distPath); os.IsNotExist(err) {
-							altPath := filepath.Join("apps", "platform", "haxen", "web", "client", "dist")
+							altPath := filepath.Join("apps", "platform", "agentfield", "web", "client", "dist")
 							if _, altErr := os.Stat(altPath); altErr == nil {
 								distPath = altPath
 							} else {
@@ -1029,22 +1029,22 @@ func (s *HaxenServer) setupRoutes() {
 	}
 }
 
-// generateHaxenServerID creates a deterministic haxen server ID based on the haxen home directory.
-// This ensures each haxen instance has a unique ID while being deterministic for the same installation.
-func generateHaxenServerID(haxenHome string) string {
-	// Use the absolute path of haxen home to generate a deterministic ID
-	absPath, err := filepath.Abs(haxenHome)
+// generateAgentFieldServerID creates a deterministic af server ID based on the agentfield home directory.
+// This ensures each agentfield instance has a unique ID while being deterministic for the same installation.
+func generateAgentFieldServerID(agentfieldHome string) string {
+	// Use the absolute path of agentfield home to generate a deterministic ID
+	absPath, err := filepath.Abs(agentfieldHome)
 	if err != nil {
 		// Fallback to the original path if absolute path fails
-		absPath = haxenHome
+		absPath = agentfieldHome
 	}
 
-	// Create a hash of the haxen home path to generate a unique but deterministic ID
+	// Create a hash of the agentfield home path to generate a unique but deterministic ID
 	hash := sha256.Sum256([]byte(absPath))
 
-	// Use first 16 characters of the hex hash as the haxen server ID
+	// Use first 16 characters of the hex hash as the af server ID
 	// This provides uniqueness while keeping the ID manageable
-	haxenServerID := hex.EncodeToString(hash[:])[:16]
+	agentfieldServerID := hex.EncodeToString(hash[:])[:16]
 
-	return haxenServerID
+	return agentfieldServerID
 }

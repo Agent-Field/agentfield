@@ -8,7 +8,7 @@ import (
 var workflowExecutionLifecycleColumns = []string{
 	"workflow_id",
 	"execution_id",
-	"haxen_request_id",
+	"agentfield_request_id",
 	"run_id",
 	"session_id",
 	"actor_id",

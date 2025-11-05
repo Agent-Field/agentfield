@@ -1,7 +1,7 @@
 package interfaces
 
 import (
-	"github.com/your-org/haxen/control-plane/internal/core/domain"
+	"github.com/your-org/agentfield/control-plane/internal/core/domain"
 )
 
 // PackageService defines the contract for package management operations.

@@ -1,4 +1,4 @@
-// Package logger provides a global zerolog logger for the Haxen CLI.
+// Package logger provides a global zerolog logger for the AgentField CLI.
 package logger
 
 import (

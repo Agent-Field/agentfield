@@ -1,4 +1,4 @@
-"""Shared testing utilities for Haxen SDK unit tests."""
+"""Shared testing utilities for AgentField SDK unit tests."""
 
 from __future__ import annotations
 
@@ -8,11 +8,11 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
-from haxen_sdk.types import AgentStatus, HeartbeatData
+from agentfield.types import AgentStatus, HeartbeatData
 
 
-class DummyHaxenClient:
-    """Simple in-memory haxen client used to capture registration calls."""
+class DummyAgentFieldClient:
+    """Simple in-memory agentfield client used to capture registration calls."""
 
     def __init__(self):
         self.register_calls: List[Dict[str, Any]] = []
@@ -59,14 +59,14 @@ class StubAgent:
     """Light-weight stand-in for Agent used across module tests."""
 
     node_id: str = "stub-node"
-    haxen_server: str = "http://haxen"
+    agentfield_server: str = "http://agentfield"
     callback_url: Optional[str] = None
     base_url: Optional[str] = None
     version: str = "0.0.0"
     dev_mode: bool = False
     ai_config: Any = None
     async_config: Any = None
-    client: DummyHaxenClient = field(default_factory=DummyHaxenClient)
+    client: DummyAgentFieldClient = field(default_factory=DummyAgentFieldClient)
     did_manager: Any = None
     mcp_handler: Any = field(
         default_factory=lambda: type(
@@ -75,7 +75,7 @@ class StubAgent:
     )
     reasoners: List[Dict[str, Any]] = field(default_factory=list)
     skills: List[Dict[str, Any]] = field(default_factory=list)
-    haxen_connected: bool = True
+    agentfield_connected: bool = True
     _current_status: AgentStatus = AgentStatus.STARTING
     callback_candidates: List[str] = field(default_factory=list)
 
@@ -140,7 +140,7 @@ class StubAgent:
 
 
 class DummyAsyncExecutionManager:
-    """Simple async execution manager used in tests for HaxenClient async flows."""
+    """Simple async execution manager used in tests for AgentFieldClient async flows."""
 
     def __init__(self):
         self.submissions: List[Dict[str, Any]] = []
@@ -193,7 +193,7 @@ class DummyAsyncExecutionManager:
 
 
 __all__ = [
-    "DummyHaxenClient",
+    "DummyAgentFieldClient",
     "DummyAsyncExecutionManager",
     "StubAgent",
     "create_test_agent",
@@ -206,32 +206,32 @@ def create_test_agent(
     node_id: str = "test-agent",
     callback_url: Optional[str] = None,
     dev_mode: bool = False,
-) -> Tuple[Any, DummyHaxenClient]:
+) -> Tuple[Any, DummyAgentFieldClient]:
     """Construct a fully initialized Agent with key dependencies stubbed out.
 
     This helper isolates network-bound components so functional tests can exercise
-    FastAPI routing, workflow notifications, and Haxen registration without
+    FastAPI routing, workflow notifications, and AgentField registration without
     touching external services.
     """
 
-    from haxen_sdk.agent import Agent
-    from haxen_sdk.agent_workflow import AgentWorkflow
+    from agentfield.agent import Agent
+    from agentfield.agent_workflow import AgentWorkflow
 
     memory_store: Dict[str, Any] = {}
 
-    class _FakeHaxenClient(DummyHaxenClient):
+    class _FakeAgentFieldClient(DummyAgentFieldClient):
         def __init__(self, base_url: str, async_config: Any):
             super().__init__()
             self.base_url = base_url
             self.api_base = f"{base_url}/api/v1"
             self.async_config = async_config
 
-    def _haxen_client_factory(base_url: str, async_config: Any) -> _FakeHaxenClient:
-        return _FakeHaxenClient(base_url, async_config)
+    def _agentfield_client_factory(base_url: str, async_config: Any) -> _FakeAgentFieldClient:
+        return _FakeAgentFieldClient(base_url, async_config)
 
     class _FakeMemoryClient:
-        def __init__(self, haxen_client: Any, execution_context: Any):
-            self.haxen_client = haxen_client
+        def __init__(self, agentfield_client: Any, execution_context: Any):
+            self.agentfield_client = agentfield_client
             self.execution_context = execution_context
 
         async def set(self, key: str, data: Any, scope: Optional[str] = None) -> None:
@@ -287,8 +287,8 @@ def create_test_agent(
             pass
 
     class _FakeDIDManager:
-        def __init__(self, haxen_server: str, node: str):
-            self.haxen_server = haxen_server
+        def __init__(self, agentfield_server: str, node: str):
+            self.agentfield_server = agentfield_server
             self.node_id = node
             self.registered: Dict[str, Any] = {}
 
@@ -390,17 +390,17 @@ def create_test_agent(
         events.append(("update", payload))
         self.agent._captured_workflow_events = events
 
-    monkeypatch.setattr("haxen_sdk.agent.HaxenClient", _haxen_client_factory)
-    monkeypatch.setattr("haxen_sdk.agent.MemoryClient", _FakeMemoryClient)
-    monkeypatch.setattr("haxen_sdk.agent.MemoryEventClient", _FakeMemoryEventClient)
-    monkeypatch.setattr("haxen_sdk.agent.AgentMCP", _FakeAgentMCP)
-    monkeypatch.setattr("haxen_sdk.agent.MCPManager", _FakeMCPManager)
-    monkeypatch.setattr("haxen_sdk.agent.MCPClientRegistry", _FakeMCPClientRegistry)
+    monkeypatch.setattr("agentfield.agent.AgentFieldClient", _agentfield_client_factory)
+    monkeypatch.setattr("agentfield.agent.MemoryClient", _FakeMemoryClient)
+    monkeypatch.setattr("agentfield.agent.MemoryEventClient", _FakeMemoryEventClient)
+    monkeypatch.setattr("agentfield.agent.AgentMCP", _FakeAgentMCP)
+    monkeypatch.setattr("agentfield.agent.MCPManager", _FakeMCPManager)
+    monkeypatch.setattr("agentfield.agent.MCPClientRegistry", _FakeMCPClientRegistry)
     monkeypatch.setattr(
-        "haxen_sdk.agent.DynamicMCPSkillManager", _FakeDynamicSkillManager
+        "agentfield.agent.DynamicMCPSkillManager", _FakeDynamicSkillManager
     )
-    monkeypatch.setattr("haxen_sdk.agent.DIDManager", _FakeDIDManager)
-    monkeypatch.setattr("haxen_sdk.agent.VCGenerator", _FakeVCGenerator)
+    monkeypatch.setattr("agentfield.agent.DIDManager", _FakeDIDManager)
+    monkeypatch.setattr("agentfield.agent.VCGenerator", _FakeVCGenerator)
     monkeypatch.setattr(
         AgentWorkflow, "notify_call_start", _record_call_start, raising=False
     )
@@ -419,7 +419,7 @@ def create_test_agent(
 
     agent = Agent(
         node_id=node_id,
-        haxen_server="http://haxen",
+        agentfield_server="http://agentfield",
         version="1.2.3",
         callback_url=callback_url,
         dev_mode=dev_mode,

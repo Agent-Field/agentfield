@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/your-org/haxen/control-plane/pkg/types"
+	"github.com/your-org/agentfield/control-plane/pkg/types"
 )
 
 // NewVCCommand creates the vc command with subcommands
@@ -20,7 +20,7 @@ func NewVCCommand() *cobra.Command {
 	vcCmd := &cobra.Command{
 		Use:   "vc",
 		Short: "Verifiable Credential operations",
-		Long:  `Commands for working with Haxen Verifiable Credentials (VCs)`,
+		Long:  `Commands for working with AgentField Verifiable Credentials (VCs)`,
 	}
 
 	vcCmd.AddCommand(NewVCVerifyCommand())
@@ -36,8 +36,8 @@ func NewVCVerifyCommand() *cobra.Command {
 
 	verifyCmd := &cobra.Command{
 		Use:   "verify <vc-file.json>",
-		Short: "Verify a Haxen Verifiable Credential",
-		Long: `Verify the cryptographic signature and integrity of a Haxen Verifiable Credential.
+		Short: "Verify a AgentField Verifiable Credential",
+		Long: `Verify the cryptographic signature and integrity of a AgentField Verifiable Credential.
 This command supports offline verification with bundled DIDs and online verification with web resolution.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -69,25 +69,25 @@ type VerifyOptions struct {
 
 // DIDResolutionInfo represents DID resolution information
 type DIDResolutionInfo struct {
-	DID           string                 `json:"did"`
-	Method        string                 `json:"method"`
-	PublicKeyJWK  map[string]interface{} `json:"public_key_jwk"`
-	WebURL        string                 `json:"web_url,omitempty"`
-	CachedAt      string                 `json:"cached_at,omitempty"`
-	ResolvedFrom  string                 `json:"resolved_from"`
+	DID          string                 `json:"did"`
+	Method       string                 `json:"method"`
+	PublicKeyJWK map[string]interface{} `json:"public_key_jwk"`
+	WebURL       string                 `json:"web_url,omitempty"`
+	CachedAt     string                 `json:"cached_at,omitempty"`
+	ResolvedFrom string                 `json:"resolved_from"`
 }
 
 // EnhancedVCChain represents a VC chain with DID resolution bundle
 type EnhancedVCChain struct {
-	WorkflowID            string                        `json:"workflow_id"`
-	GeneratedAt           string                        `json:"generated_at"`
-	TotalExecutions       int                           `json:"total_executions"`
-	CompletedExecutions   int                           `json:"completed_executions"`
-	WorkflowStatus        string                        `json:"workflow_status"`
-	ExecutionVCs          []types.ExecutionVC           `json:"execution_vcs"`
-	WorkflowVC            types.WorkflowVC              `json:"workflow_vc"`
-	DIDResolutionBundle   map[string]DIDResolutionInfo  `json:"did_resolution_bundle,omitempty"`
-	VerificationMetadata  VerificationMetadata          `json:"verification_metadata,omitempty"`
+	WorkflowID           string                       `json:"workflow_id"`
+	GeneratedAt          string                       `json:"generated_at"`
+	TotalExecutions      int                          `json:"total_executions"`
+	CompletedExecutions  int                          `json:"completed_executions"`
+	WorkflowStatus       string                       `json:"workflow_status"`
+	ExecutionVCs         []types.ExecutionVC          `json:"execution_vcs"`
+	WorkflowVC           types.WorkflowVC             `json:"workflow_vc"`
+	DIDResolutionBundle  map[string]DIDResolutionInfo `json:"did_resolution_bundle,omitempty"`
+	VerificationMetadata VerificationMetadata         `json:"verification_metadata,omitempty"`
 }
 
 // VerificationMetadata contains metadata about the verification process
@@ -100,18 +100,18 @@ type VerificationMetadata struct {
 
 // VCVerificationResult represents the comprehensive verification result
 type VCVerificationResult struct {
-	Valid              bool                    `json:"valid"`
-	Type               string                  `json:"type"`
-	WorkflowID         string                  `json:"workflow_id,omitempty"`
-	SignatureValid     bool                    `json:"signature_valid"`
-	FormatValid        bool                    `json:"format_valid"`
-	Message            string                  `json:"message"`
-	Error              string                  `json:"error,omitempty"`
-	VerifiedAt         string                  `json:"verified_at"`
-	ComponentResults   []ComponentVerification `json:"component_results,omitempty"`
-	DIDResolutions     []DIDResolutionResult   `json:"did_resolutions,omitempty"`
-	VerificationSteps  []VerificationStep      `json:"verification_steps,omitempty"`
-	Summary            VerificationSummary     `json:"summary"`
+	Valid             bool                    `json:"valid"`
+	Type              string                  `json:"type"`
+	WorkflowID        string                  `json:"workflow_id,omitempty"`
+	SignatureValid    bool                    `json:"signature_valid"`
+	FormatValid       bool                    `json:"format_valid"`
+	Message           string                  `json:"message"`
+	Error             string                  `json:"error,omitempty"`
+	VerifiedAt        string                  `json:"verified_at"`
+	ComponentResults  []ComponentVerification `json:"component_results,omitempty"`
+	DIDResolutions    []DIDResolutionResult   `json:"did_resolutions,omitempty"`
+	VerificationSteps []VerificationStep      `json:"verification_steps,omitempty"`
+	Summary           VerificationSummary     `json:"summary"`
 }
 
 // ComponentVerification represents verification result for a single component
@@ -149,12 +149,12 @@ type VerificationStep struct {
 
 // VerificationSummary provides a high-level summary
 type VerificationSummary struct {
-	TotalComponents     int `json:"total_components"`
-	ValidComponents     int `json:"valid_components"`
-	TotalDIDs          int `json:"total_dids"`
-	ResolvedDIDs       int `json:"resolved_dids"`
-	TotalSignatures    int `json:"total_signatures"`
-	ValidSignatures    int `json:"valid_signatures"`
+	TotalComponents int `json:"total_components"`
+	ValidComponents int `json:"valid_components"`
+	TotalDIDs       int `json:"total_dids"`
+	ResolvedDIDs    int `json:"resolved_dids"`
+	TotalSignatures int `json:"total_signatures"`
+	ValidSignatures int `json:"valid_signatures"`
 }
 
 func verifyVC(vcFilePath string, options VerifyOptions) error {
@@ -203,7 +203,7 @@ func verifyVC(vcFilePath string, options VerifyOptions) error {
 			enhancedChain = convertLegacyChain(workflowChain)
 		} else {
 			step2.Success = false
-			step2.Error = "Invalid VC format: not a recognized Haxen VC structure"
+			step2.Error = "Invalid VC format: not a recognized AgentField VC structure"
 			result.VerificationSteps = append(result.VerificationSteps, step2)
 			result.Valid = false
 			result.FormatValid = false
@@ -224,14 +224,14 @@ func verifyVC(vcFilePath string, options VerifyOptions) error {
 	step4 := VerificationStep{Step: 4, Description: "Resolving DIDs"}
 	didResolutions := make(map[string]DIDResolutionInfo)
 	resolvedCount := 0
-	
+
 	for _, did := range uniqueDIDs {
 		resolution, err := resolveDID(did, enhancedChain.DIDResolutionBundle, options)
 		didResult := DIDResolutionResult{
 			DID:    did,
 			Method: getDIDMethod(did),
 		}
-		
+
 		if err != nil {
 			didResult.Success = false
 			didResult.Error = err.Error()
@@ -246,7 +246,7 @@ func verifyVC(vcFilePath string, options VerifyOptions) error {
 		}
 		result.DIDResolutions = append(result.DIDResolutions, didResult)
 	}
-	
+
 	step4.Success = resolvedCount > 0
 	step4.Details = fmt.Sprintf("Resolved %d/%d DIDs", resolvedCount, len(uniqueDIDs))
 	if resolvedCount == 0 {
@@ -256,18 +256,18 @@ func verifyVC(vcFilePath string, options VerifyOptions) error {
 
 	// Step 5: Enhanced comprehensive verification
 	step5 := VerificationStep{Step: 5, Description: "Performing comprehensive verification"}
-	
+
 	// Use the enhanced verifier for comprehensive checks
 	enhancedVerifier := NewEnhancedVCVerifier(didResolutions, options.Verbose)
 	comprehensiveResult := enhancedVerifier.VerifyEnhancedVCChain(enhancedChain)
-	
+
 	// Convert comprehensive result to legacy format for compatibility
 	validSignatures := 0
 	totalSignatures := len(enhancedChain.ExecutionVCs)
 	if enhancedChain.WorkflowVC.VCDocument != nil {
 		totalSignatures++
 	}
-	
+
 	for _, compResult := range comprehensiveResult.ComponentResults {
 		if compResult.SignatureValid {
 			validSignatures++
@@ -285,7 +285,7 @@ func verifyVC(vcFilePath string, options VerifyOptions) error {
 		}
 		result.ComponentResults = append(result.ComponentResults, legacyResult)
 	}
-	
+
 	step5.Success = comprehensiveResult.Valid
 	step5.Details = fmt.Sprintf("Comprehensive verification completed - Score: %.1f/100", comprehensiveResult.OverallScore)
 	if !comprehensiveResult.Valid {
@@ -308,7 +308,7 @@ func verifyVC(vcFilePath string, options VerifyOptions) error {
 	// Final result based on comprehensive verification
 	result.SignatureValid = comprehensiveResult.SecurityAnalysis.SecurityScore > 80.0
 	result.Valid = comprehensiveResult.Valid
-	
+
 	if result.Valid {
 		result.Message = fmt.Sprintf("Workflow VC chain verified successfully (Score: %.1f/100)", comprehensiveResult.OverallScore)
 	} else {
@@ -322,8 +322,8 @@ func verifyVC(vcFilePath string, options VerifyOptions) error {
 	result.Summary = VerificationSummary{
 		TotalComponents: len(enhancedChain.ExecutionVCs),
 		ValidComponents: len(result.ComponentResults),
-		TotalDIDs:      len(uniqueDIDs),
-		ResolvedDIDs:   resolvedCount,
+		TotalDIDs:       len(uniqueDIDs),
+		ResolvedDIDs:    resolvedCount,
 		TotalSignatures: totalSignatures,
 		ValidSignatures: validSignatures,
 	}
@@ -402,7 +402,7 @@ func resolveWebDID(did string) (DIDResolutionInfo, error) {
 	}
 
 	url := fmt.Sprintf("https://%s%s", domain, path)
-	
+
 	resp, err := http.Get(url)
 	if err != nil {
 		return DIDResolutionInfo{}, fmt.Errorf("failed to fetch DID document: %v", err)
@@ -438,14 +438,14 @@ func resolveFromWeb(did, resolver string) (DIDResolutionInfo, error) {
 	if strings.HasPrefix(did, "did:key:") {
 		return resolveKeyDID(did)
 	}
-	
+
 	// For other methods, would need a universal resolver
 	return DIDResolutionInfo{}, fmt.Errorf("web resolution not supported for DID method: %s", getDIDMethod(did))
 }
 
 func resolveFromCustom(did, resolver string) (DIDResolutionInfo, error) {
 	url := fmt.Sprintf("%s/%s", strings.TrimSuffix(resolver, "/"), did)
-	
+
 	resp, err := http.Get(url)
 	if err != nil {
 		return DIDResolutionInfo{}, fmt.Errorf("failed to resolve DID: %v", err)
@@ -618,7 +618,7 @@ func outputPretty(result VCVerificationResult, verbose bool) error {
 		status = "✅ VALID"
 	}
 
-	fmt.Printf("Haxen VC Verification: %s\n", status)
+	fmt.Printf("AgentField VC Verification: %s\n", status)
 	fmt.Printf("Type: %s\n", result.Type)
 
 	if result.WorkflowID != "" {

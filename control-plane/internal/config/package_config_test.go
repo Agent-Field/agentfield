@@ -6,11 +6,11 @@ import (
 	"testing"
 )
 
-func TestLoadHaxenPackageConfig(t *testing.T) {
+func TestLoadAgentFieldPackageConfig(t *testing.T) {
 	// Create a temporary test directory
 	tempDir := t.TempDir()
-	
-	// Create a test haxen-package.yaml
+
+	// Create a test agentfield-package.yaml
 	testConfig := `
 name: "test-agent"
 version: "1.0.0"
@@ -24,7 +24,7 @@ agent_node:
   default_port: 8001
 
 dependencies:
-  python: ["haxen-sdk>=1.0.0"]
+  python: ["agentfield>=1.0.0"]
 
 capabilities:
   reasoners:
@@ -73,17 +73,17 @@ metadata:
   created_at: "2025-06-20"
   sdk_version: "1.0.0"
   language: "python"
-  platform: "haxen-agent-node"
+  platform: "agentfield-agent-node"
 `
 
-	configPath := filepath.Join(tempDir, "haxen-package.yaml")
+	configPath := filepath.Join(tempDir, "agentfield-package.yaml")
 	err := os.WriteFile(configPath, []byte(testConfig), 0644)
 	if err != nil {
 		t.Fatalf("Failed to write test config: %v", err)
 	}
 
 	// Test loading the configuration
-	config, err := LoadHaxenPackageConfig(tempDir)
+	config, err := LoadAgentFieldPackageConfig(tempDir)
 	if err != nil {
 		t.Fatalf("Failed to load config: %v", err)
 	}
@@ -240,8 +240,8 @@ func TestGetConfigurationWithDefaults(t *testing.T) {
 	}
 
 	config := map[string]string{
-		"API_KEY":     "sk-abc123",
-		"MAX_TOKENS":  "3000", // Override default
+		"API_KEY":    "sk-abc123",
+		"MAX_TOKENS": "3000", // Override default
 	}
 
 	result := GetConfigurationWithDefaults(schema, config)

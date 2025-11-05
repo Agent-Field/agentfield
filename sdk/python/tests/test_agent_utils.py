@@ -1,7 +1,7 @@
 import pytest
 from pydantic import BaseModel
 
-from haxen_sdk.agent_utils import AgentUtils
+from agentfield.agent_utils import AgentUtils
 
 
 def test_detect_input_type_and_helpers(tmp_path):

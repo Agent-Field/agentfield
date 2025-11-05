@@ -1,6 +1,6 @@
-# Haxen Control Plane
+# AgentField Control Plane
 
-The Haxen control plane orchestrates agent workflows, manages verifiable credentials, serves the admin UI, and exposes REST/gRPC APIs consumed by the SDKs.
+The AgentField control plane orchestrates agent workflows, manages verifiable credentials, serves the admin UI, and exposes REST/gRPC APIs consumed by the SDKs.
 
 ## Requirements
 
@@ -15,11 +15,11 @@ The Haxen control plane orchestrates agent workflows, manages verifiable credent
 go mod download
 npm --prefix web/client install
 
-# Run database migrations (requires HAXEN_DATABASE_URL)
-goose -dir ./migrations postgres "$HAXEN_DATABASE_URL" up
+# Run database migrations (requires AGENTFIELD_DATABASE_URL)
+goose -dir ./migrations postgres "$AGENTFIELD_DATABASE_URL" up
 
 # Start the control plane
-HAXEN_DATABASE_URL=postgres://haxen:haxen@localhost:5432/haxen?sslmode=disable \
+AGENTFIELD_DATABASE_URL=postgres://agentfield:agentfield@localhost:5432/agentfield?sslmode=disable \
 go run ./cmd/server
 ```
 
@@ -27,11 +27,11 @@ Visit `http://localhost:8080/ui/` to access the embedded admin UI.
 
 ## Configuration
 
-Environment variables override `config/haxen.yaml`. Common options:
+Environment variables override `config/agentfield.yaml`. Common options:
 
-- `HAXEN_DATABASE_URL` – PostgreSQL DSN
-- `HAXEN_HTTP_ADDR` – HTTP listen address (`0.0.0.0:8080` by default)
-- `HAXEN_LOG_LEVEL` – log verbosity (`info`, `debug`, etc.)
+- `AGENTFIELD_DATABASE_URL` – PostgreSQL DSN
+- `AGENTFIELD_HTTP_ADDR` – HTTP listen address (`0.0.0.0:8080` by default)
+- `AGENTFIELD_LOG_LEVEL` – log verbosity (`info`, `debug`, etc.)
 
 Sample config files live in `config/`.
 
@@ -50,8 +50,8 @@ Run the Go server alongside the UI so API calls resolve locally. During producti
 Migrations use [Goose](https://github.com/pressly/goose):
 
 ```bash
-HAXEN_DATABASE_URL=postgres://haxen:haxen@localhost:5432/haxen?sslmode=disable \
-goose -dir ./migrations postgres "$HAXEN_DATABASE_URL" status
+AGENTFIELD_DATABASE_URL=postgres://agentfield:agentfield@localhost:5432/agentfield?sslmode=disable \
+goose -dir ./migrations postgres "$AGENTFIELD_DATABASE_URL" status
 ```
 
 ## Testing

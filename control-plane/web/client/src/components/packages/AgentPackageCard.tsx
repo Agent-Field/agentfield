@@ -16,7 +16,7 @@ import {
   CircleFilled
 } from '@/components/ui/icon-bridge';
 import { getConfigurationStatusBadge, getAgentStatusBadge } from '../../services/configurationApi';
-import type { AgentPackage, AgentLifecycleInfo } from '../../types/haxen';
+import type { AgentPackage, AgentLifecycleInfo } from '../../types/agentfield';
 
 interface AgentPackageCardProps {
   package: AgentPackage;

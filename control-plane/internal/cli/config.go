@@ -13,31 +13,31 @@ import (
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 
-	"github.com/your-org/haxen/control-plane/internal/packages"
+	"github.com/your-org/agentfield/control-plane/internal/packages"
 )
 
 var (
-	configList   bool
-	configSet    string
-	configUnset  string
+	configList  bool
+	configSet   string
+	configUnset string
 )
 
 // NewConfigCommand creates the config command
 func NewConfigCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config <package-name>",
-		Short: "Configure environment variables for an installed Haxen agent package",
-		Long: `Configure environment variables for an installed Haxen agent package.
+		Short: "Configure environment variables for an installed AgentField agent package",
+		Long: `Configure environment variables for an installed AgentField agent package.
 
 This command allows you to set up required and optional environment variables
 for installed packages. It will prompt for each variable and create a .env file
 in the package directory that will be loaded when the agent runs.
 
 Examples:
-  haxen config my-agent                    # Interactive configuration
-  haxen config my-agent --list            # List current configuration
-  haxen config my-agent --set KEY=VALUE   # Set specific variable
-  haxen config my-agent --unset KEY       # Remove variable`,
+  af config my-agent                    # Interactive configuration
+  af config my-agent --list            # List current configuration
+  af config my-agent --set KEY=VALUE   # Set specific variable
+  af config my-agent --unset KEY       # Remove variable`,
 		Args: cobra.ExactArgs(1),
 		Run:  runConfigCommand,
 	}
@@ -51,10 +51,10 @@ Examples:
 
 func runConfigCommand(cmd *cobra.Command, args []string) {
 	packageName := args[0]
-	haxenHome := getHaxenHomeDir()
+	agentfieldHome := getAgentFieldHomeDir()
 
 	configManager := &PackageConfigManager{
-		HaxenHome: haxenHome,
+		AgentFieldHome: agentfieldHome,
 	}
 
 	if configList {
@@ -97,7 +97,7 @@ func runConfigCommand(cmd *cobra.Command, args []string) {
 
 // PackageConfigManager handles environment configuration for packages
 type PackageConfigManager struct {
-	HaxenHome string
+	AgentFieldHome string
 }
 
 // InteractiveConfig runs interactive configuration for a package
@@ -139,7 +139,7 @@ func (pcm *PackageConfigManager) InteractiveConfig(packageName string) error {
 			if currentValue == "" {
 				currentValue = envVar.Default
 			}
-			
+
 			value, err := pcm.promptForVariable(envVar, currentValue)
 			if err != nil {
 				return err
@@ -159,7 +159,7 @@ func (pcm *PackageConfigManager) InteractiveConfig(packageName string) error {
 	}
 
 	fmt.Printf("✅ Environment configuration saved to: %s/.env\n", packagePath)
-	fmt.Printf("💡 Run 'haxen run %s' to start the agent with these settings\n", packageName)
+	fmt.Printf("💡 Run 'af run %s' to start the agent with these settings\n", packageName)
 
 	return nil
 }
@@ -361,7 +361,7 @@ func (pcm *PackageConfigManager) UnsetVariable(packageName, key string) error {
 // loadPackageMetadata loads package metadata and returns the package path
 func (pcm *PackageConfigManager) loadPackageMetadata(packageName string) (*packages.PackageMetadata, string, error) {
 	// Load registry to get package path
-	registryPath := filepath.Join(pcm.HaxenHome, "installed.yaml")
+	registryPath := filepath.Join(pcm.AgentFieldHome, "installed.yaml")
 	registry := &packages.InstallationRegistry{
 		Installed: make(map[string]packages.InstalledPackage),
 	}
@@ -378,7 +378,7 @@ func (pcm *PackageConfigManager) loadPackageMetadata(packageName string) (*packa
 	}
 
 	// Load package metadata
-	metadataPath := filepath.Join(installedPackage.Path, "haxen-package.yaml")
+	metadataPath := filepath.Join(installedPackage.Path, "agentfield-package.yaml")
 	data, err := os.ReadFile(metadataPath)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to read package metadata: %w", err)
@@ -395,7 +395,7 @@ func (pcm *PackageConfigManager) loadPackageMetadata(packageName string) (*packa
 // loadEnvFile loads environment variables from .env file
 func (pcm *PackageConfigManager) loadEnvFile(packagePath string) (map[string]string, error) {
 	envPath := filepath.Join(packagePath, ".env")
-	
+
 	data, err := os.ReadFile(envPath)
 	if err != nil {
 		return nil, err
@@ -403,24 +403,24 @@ func (pcm *PackageConfigManager) loadEnvFile(packagePath string) (map[string]str
 
 	envVars := make(map[string]string)
 	lines := strings.Split(string(data), "\n")
-	
+
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		
+
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) == 2 {
 			key := strings.TrimSpace(parts[0])
 			value := strings.TrimSpace(parts[1])
-			
+
 			// Remove quotes if present
 			if (strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"")) ||
-			   (strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'")) {
+				(strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'")) {
 				value = value[1 : len(value)-1]
 			}
-			
+
 			envVars[key] = value
 		}
 	}
@@ -431,12 +431,12 @@ func (pcm *PackageConfigManager) loadEnvFile(packagePath string) (map[string]str
 // saveEnvFile saves environment variables to .env file
 func (pcm *PackageConfigManager) saveEnvFile(packagePath string, envVars map[string]string) error {
 	envPath := filepath.Join(packagePath, ".env")
-	
+
 	var lines []string
-	lines = append(lines, "# Environment variables for Haxen agent")
-	lines = append(lines, "# Generated by 'haxen config' command")
+	lines = append(lines, "# Environment variables for AgentField agent")
+	lines = append(lines, "# Generated by 'af config' command")
 	lines = append(lines, "")
-	
+
 	for key, value := range envVars {
 		// Quote values that contain spaces or special characters
 		if strings.ContainsAny(value, " \t\n\r\"'\\$") {
@@ -444,7 +444,7 @@ func (pcm *PackageConfigManager) saveEnvFile(packagePath string, envVars map[str
 		}
 		lines = append(lines, fmt.Sprintf("%s=%s", key, value))
 	}
-	
+
 	content := strings.Join(lines, "\n") + "\n"
 	return os.WriteFile(envPath, []byte(content), 0600) // Restrictive permissions for secrets
 }

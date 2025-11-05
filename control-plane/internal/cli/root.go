@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/your-org/haxen/control-plane/internal/application"
-	"github.com/your-org/haxen/control-plane/internal/cli/commands"
-	"github.com/your-org/haxen/control-plane/internal/config"
-	"github.com/your-org/haxen/control-plane/internal/logger"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"github.com/your-org/agentfield/control-plane/internal/application"
+	"github.com/your-org/agentfield/control-plane/internal/cli/commands"
+	"github.com/your-org/agentfield/control-plane/internal/config"
+	"github.com/your-org/agentfield/control-plane/internal/logger"
 )
 
 var (
@@ -24,12 +24,13 @@ var (
 	postgresURLFlag string
 )
 
-// NewRootCommand creates and returns the root Cobra command for the Haxen CLI.
+// NewRootCommand creates and returns the root Cobra command for the AgentField CLI.
 func NewRootCommand(runServerFunc func(cmd *cobra.Command, args []string)) *cobra.Command {
 	RootCmd := &cobra.Command{
-		Use:   "haxen",
-		Short: "Haxen AI Agent Platform",
-		Long:  `Haxen is a comprehensive AI agent platform for building, managing, and deploying AI agent capabilities.`,
+		Use:     "af",
+		Aliases: []string{"agentfield"},
+		Short:   "AgentField AI Agent Platform",
+		Long:    `AgentField is a comprehensive AI agent platform for building, managing, and deploying AI agent capabilities.`,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			// Initialize logging based on verbose flag
 			logger.InitLogger(verbose)
@@ -41,14 +42,14 @@ func NewRootCommand(runServerFunc func(cmd *cobra.Command, args []string)) *cobr
 		// Default to server mode when no subcommand is provided (backward compatibility)
 		Run: runServerFunc,
 	}
-	RootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "Path to configuration file (e.g., config/haxen.yaml)")
+	RootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "Path to configuration file (e.g., config/agentfield.yaml)")
 	RootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose logging")
 
 	// Flags for the server command (moved from main.go)
 	RootCmd.PersistentFlags().BoolVar(&openBrowserFlag, "open", true, "Open browser to UI (if UI is enabled)")
 	RootCmd.PersistentFlags().BoolVar(&uiDevFlag, "ui-dev", false, "Run with UI development server (proxies to backend)")
 	RootCmd.PersistentFlags().BoolVar(&backendOnlyFlag, "backend-only", false, "Run only backend APIs, UI served separately")
-	RootCmd.PersistentFlags().IntVar(&portFlag, "port", 0, "Port for the haxen server (overrides config if set)")
+	RootCmd.PersistentFlags().IntVar(&portFlag, "port", 0, "Port for the af server (overrides config if set)")
 	RootCmd.PersistentFlags().BoolVar(&noVCExecution, "no-vc-execution", false, "Disable generating verifiable credentials for executions")
 	RootCmd.PersistentFlags().StringVar(&storageModeFlag, "storage-mode", "", "Override the storage backend (local or postgres)")
 	RootCmd.PersistentFlags().StringVar(&postgresURLFlag, "postgres-url", "", "PostgreSQL connection URL or DSN (implies --storage-mode=postgres)")
@@ -60,7 +61,7 @@ func NewRootCommand(runServerFunc func(cmd *cobra.Command, args []string)) *cobr
 
 	// Create service container for framework commands
 	cfg := &config.Config{} // Use default config for now
-	services := application.CreateServiceContainer(cfg, getHaxenHomeDir())
+	services := application.CreateServiceContainer(cfg, getAgentFieldHomeDir())
 
 	// Add framework-based commands (migrated commands)
 	installCommand := commands.NewInstallCommand(services)
@@ -85,8 +86,8 @@ func NewRootCommand(runServerFunc func(cmd *cobra.Command, args []string)) *cobr
 	// Add the server command
 	serverCmd := &cobra.Command{
 		Use:   "server",
-		Short: "Run the Haxen AI Agent Platform server",
-		Long:  `Starts the Haxen AI Agent Platform server, providing API endpoints and UI.`,
+		Short: "Run the AgentField AI Agent Platform server",
+		Long:  `Starts the AgentField AI Agent Platform server, providing API endpoints and UI.`,
 		Run:   runServerFunc,
 	}
 	RootCmd.AddCommand(serverCmd)
@@ -103,7 +104,7 @@ func initConfig() {
 		// Search config in current directory and "config" directory
 		viper.AddConfigPath(".")
 		viper.AddConfigPath("./config")
-		viper.SetConfigName("haxen")
+		viper.SetConfigName("agentfield")
 		viper.SetConfigType("yaml")
 	}
 

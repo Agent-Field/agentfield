@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/internal/logger"
-	"github.com/your-org/haxen/control-plane/internal/services"
-	"github.com/your-org/haxen/control-plane/internal/storage"
-	"github.com/your-org/haxen/control-plane/pkg/types"
+	"github.com/your-org/agentfield/control-plane/internal/logger"
+	"github.com/your-org/agentfield/control-plane/internal/services"
+	"github.com/your-org/agentfield/control-plane/internal/storage"
+	"github.com/your-org/agentfield/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -142,36 +142,36 @@ type ExecutionStatsResponse struct {
 
 // ExecutionDetailsResponse represents detailed execution information.
 type ExecutionDetailsResponse struct {
-	ID                int64                          `json:"id"`
-	ExecutionID       string                         `json:"execution_id"`
-	WorkflowID        string                         `json:"workflow_id"`
-	HaxenRequestID    *string                        `json:"haxen_request_id,omitempty"`
-	SessionID         *string                        `json:"session_id,omitempty"`
-	ActorID           *string                        `json:"actor_id,omitempty"`
-	AgentNodeID       string                         `json:"agent_node_id"`
-	ParentWorkflowID  *string                        `json:"parent_workflow_id,omitempty"`
-	RootWorkflowID    *string                        `json:"root_workflow_id,omitempty"`
-	WorkflowDepth     *int                           `json:"workflow_depth,omitempty"`
-	ReasonerID        string                         `json:"reasoner_id"`
-	InputData         interface{}                    `json:"input_data"`
-	OutputData        interface{}                    `json:"output_data"`
-	InputSize         int                            `json:"input_size"`
-	OutputSize        int                            `json:"output_size"`
-	WorkflowName      *string                        `json:"workflow_name,omitempty"`
-	WorkflowTags      []string                       `json:"workflow_tags"`
-	Status            string                         `json:"status"`
-	StartedAt         *string                        `json:"started_at,omitempty"`
-	CompletedAt       *string                        `json:"completed_at,omitempty"`
-	DurationMS        *int                           `json:"duration_ms,omitempty"`
-	ErrorMessage      *string                        `json:"error_message,omitempty"`
-	RetryCount        int                            `json:"retry_count"`
-	CreatedAt         string                         `json:"created_at"`
-	UpdatedAt         *string                        `json:"updated_at,omitempty"`
-	Notes             []types.ExecutionNote          `json:"notes"`
-	NotesCount        int                            `json:"notes_count"`
-	LatestNote        *types.ExecutionNote           `json:"latest_note,omitempty"`
-	WebhookRegistered bool                           `json:"webhook_registered"`
-	WebhookEvents     []*types.ExecutionWebhookEvent `json:"webhook_events,omitempty"`
+	ID                  int64                          `json:"id"`
+	ExecutionID         string                         `json:"execution_id"`
+	WorkflowID          string                         `json:"workflow_id"`
+	AgentFieldRequestID *string                        `json:"agentfield_request_id,omitempty"`
+	SessionID           *string                        `json:"session_id,omitempty"`
+	ActorID             *string                        `json:"actor_id,omitempty"`
+	AgentNodeID         string                         `json:"agent_node_id"`
+	ParentWorkflowID    *string                        `json:"parent_workflow_id,omitempty"`
+	RootWorkflowID      *string                        `json:"root_workflow_id,omitempty"`
+	WorkflowDepth       *int                           `json:"workflow_depth,omitempty"`
+	ReasonerID          string                         `json:"reasoner_id"`
+	InputData           interface{}                    `json:"input_data"`
+	OutputData          interface{}                    `json:"output_data"`
+	InputSize           int                            `json:"input_size"`
+	OutputSize          int                            `json:"output_size"`
+	WorkflowName        *string                        `json:"workflow_name,omitempty"`
+	WorkflowTags        []string                       `json:"workflow_tags"`
+	Status              string                         `json:"status"`
+	StartedAt           *string                        `json:"started_at,omitempty"`
+	CompletedAt         *string                        `json:"completed_at,omitempty"`
+	DurationMS          *int                           `json:"duration_ms,omitempty"`
+	ErrorMessage        *string                        `json:"error_message,omitempty"`
+	RetryCount          int                            `json:"retry_count"`
+	CreatedAt           string                         `json:"created_at"`
+	UpdatedAt           *string                        `json:"updated_at,omitempty"`
+	Notes               []types.ExecutionNote          `json:"notes"`
+	NotesCount          int                            `json:"notes_count"`
+	LatestNote          *types.ExecutionNote           `json:"latest_note,omitempty"`
+	WebhookRegistered   bool                           `json:"webhook_registered"`
+	WebhookEvents       []*types.ExecutionWebhookEvent `json:"webhook_events,omitempty"`
 }
 
 type EnhancedExecution struct {
@@ -688,36 +688,36 @@ func (h *ExecutionHandler) toExecutionDetails(ctx context.Context, exec *types.E
 	webhookEvents := exec.WebhookEvents
 
 	return ExecutionDetailsResponse{
-		ID:                0,
-		ExecutionID:       exec.ExecutionID,
-		WorkflowID:        exec.RunID,
-		HaxenRequestID:    nil,
-		SessionID:         exec.SessionID,
-		ActorID:           exec.ActorID,
-		AgentNodeID:       exec.AgentNodeID,
-		ParentWorkflowID:  exec.ParentExecutionID,
-		RootWorkflowID:    nil,
-		WorkflowDepth:     nil,
-		ReasonerID:        exec.ReasonerID,
-		InputData:         inputData,
-		OutputData:        outputData,
-		InputSize:         inputSize,
-		OutputSize:        outputSize,
-		WorkflowName:      nil,
-		WorkflowTags:      nil,
-		Status:            types.NormalizeExecutionStatus(exec.Status),
-		StartedAt:         startedAt,
-		CompletedAt:       completedAt,
-		DurationMS:        durationPtr,
-		ErrorMessage:      exec.ErrorMessage,
-		RetryCount:        0,
-		CreatedAt:         exec.StartedAt.Format(time.RFC3339),
-		UpdatedAt:         &updated,
-		Notes:             nil,
-		NotesCount:        0,
-		LatestNote:        nil,
-		WebhookRegistered: webhookRegistered,
-		WebhookEvents:     webhookEvents,
+		ID:                  0,
+		ExecutionID:         exec.ExecutionID,
+		WorkflowID:          exec.RunID,
+		AgentFieldRequestID: nil,
+		SessionID:           exec.SessionID,
+		ActorID:             exec.ActorID,
+		AgentNodeID:         exec.AgentNodeID,
+		ParentWorkflowID:    exec.ParentExecutionID,
+		RootWorkflowID:      nil,
+		WorkflowDepth:       nil,
+		ReasonerID:          exec.ReasonerID,
+		InputData:           inputData,
+		OutputData:          outputData,
+		InputSize:           inputSize,
+		OutputSize:          outputSize,
+		WorkflowName:        nil,
+		WorkflowTags:        nil,
+		Status:              types.NormalizeExecutionStatus(exec.Status),
+		StartedAt:           startedAt,
+		CompletedAt:         completedAt,
+		DurationMS:          durationPtr,
+		ErrorMessage:        exec.ErrorMessage,
+		RetryCount:          0,
+		CreatedAt:           exec.StartedAt.Format(time.RFC3339),
+		UpdatedAt:           &updated,
+		Notes:               nil,
+		NotesCount:          0,
+		LatestNote:          nil,
+		WebhookRegistered:   webhookRegistered,
+		WebhookEvents:       webhookEvents,
 	}
 }
 

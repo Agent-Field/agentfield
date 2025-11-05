@@ -1,6 +1,6 @@
 # Go SDK AI Package
 
-This package provides AI/LLM capabilities for the Haxen Go SDK, supporting both OpenAI and OpenRouter APIs with structured output support.
+This package provides AI/LLM capabilities for the AgentField Go SDK, supporting both OpenAI and OpenRouter APIs with structured output support.
 
 ## Features
 
@@ -18,8 +18,8 @@ This package provides AI/LLM capabilities for the Haxen Go SDK, supporting both 
 ```go
 import (
     "context"
-    "github.com/agentfield/haxen/sdk/go/agent"
-    "github.com/agentfield/haxen/sdk/go/ai"
+    "github.com/agentfield/agentfield/sdk/go/agent"
+    "github.com/agentfield/agentfield/sdk/go/ai"
 )
 
 // Create agent with AI configured
@@ -27,7 +27,7 @@ aiConfig := ai.DefaultConfig() // Reads from env vars
 agent, err := agent.New(agent.Config{
     NodeID:   "my-agent",
     Version:  "1.0.0",
-    HaxenURL: "http://localhost:8080",
+    AgentFieldURL: "http://localhost:8080",
     AIConfig: aiConfig,
 })
 

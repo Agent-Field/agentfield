@@ -1,7 +1,7 @@
 package workflowstatus
 
 import (
-	"github.com/your-org/haxen/control-plane/pkg/types"
+	"github.com/your-org/agentfield/control-plane/pkg/types"
 	"testing"
 	"time"
 )

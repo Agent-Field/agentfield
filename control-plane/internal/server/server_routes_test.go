@@ -5,8 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/your-org/haxen/control-plane/internal/config"
-	"github.com/your-org/haxen/control-plane/internal/services"
+	"github.com/your-org/agentfield/control-plane/internal/config"
+	"github.com/your-org/agentfield/control-plane/internal/services"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -17,7 +17,7 @@ func TestSetupRoutesRegistersMetricsAndUI(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 
-	srv := &HaxenServer{
+	srv := &AgentFieldServer{
 		Router: gin.New(),
 		config: &config.Config{
 			UI:  config.UIConfig{Enabled: true, Mode: "embedded"},
@@ -54,7 +54,7 @@ func TestUnregisterAgentFromMonitoringResponses(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 
-	srv := &HaxenServer{}
+	srv := &AgentFieldServer{}
 
 	t.Run("missing node id returns 400", func(t *testing.T) {
 		req, _ := http.NewRequest(http.MethodDelete, "/internal/nodes//monitor", nil)

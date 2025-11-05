@@ -11,47 +11,47 @@ import (
 	"hash/fnv"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/internal/config"
-	"github.com/your-org/haxen/control-plane/internal/logger"
-	"github.com/your-org/haxen/control-plane/internal/storage"
-	"github.com/your-org/haxen/control-plane/pkg/types"
+	"github.com/your-org/agentfield/control-plane/internal/config"
+	"github.com/your-org/agentfield/control-plane/internal/logger"
+	"github.com/your-org/agentfield/control-plane/internal/storage"
+	"github.com/your-org/agentfield/control-plane/pkg/types"
 )
 
 // DIDService handles DID generation, management, and resolution.
 type DIDService struct {
-	config        *config.DIDConfig
-	keystore      *KeystoreService
-	registry      *DIDRegistry
-	haxenServerID string
+	config             *config.DIDConfig
+	keystore           *KeystoreService
+	registry           *DIDRegistry
+	agentfieldServerID string
 }
 
 // NewDIDService creates a new DID service instance.
 func NewDIDService(cfg *config.DIDConfig, keystore *KeystoreService, registry *DIDRegistry) *DIDService {
 	return &DIDService{
-		config:        cfg,
-		keystore:      keystore,
-		registry:      registry,
-		haxenServerID: "", // Will be set during initialization
+		config:             cfg,
+		keystore:           keystore,
+		registry:           registry,
+		agentfieldServerID: "", // Will be set during initialization
 	}
 }
 
-// Initialize initializes the DID service and creates haxen server master seed if needed.
-func (s *DIDService) Initialize(haxenServerID string) error {
+// Initialize initializes the DID service and creates af server master seed if needed.
+func (s *DIDService) Initialize(agentfieldServerID string) error {
 	if !s.config.Enabled {
 		return nil
 	}
 
-	// Store the haxen server ID for dynamic resolution
-	s.haxenServerID = haxenServerID
+	// Store the af server ID for dynamic resolution
+	s.agentfieldServerID = agentfieldServerID
 
-	// Check if haxen server already has a DID registry
-	registry, err := s.registry.GetRegistry(haxenServerID)
+	// Check if af server already has a DID registry
+	registry, err := s.registry.GetRegistry(agentfieldServerID)
 	if err != nil {
 		return fmt.Errorf("failed to check existing registry: %w", err)
 	}
 
 	if registry == nil {
-		// Create new haxen server registry
+		// Create new af server registry
 		masterSeed := make([]byte, 32)
 		if _, err := rand.Read(masterSeed); err != nil {
 			return fmt.Errorf("failed to generate master seed: %w", err)
@@ -65,13 +65,13 @@ func (s *DIDService) Initialize(haxenServerID string) error {
 
 		// Create and store registry
 		registry = &types.DIDRegistry{
-			HaxenServerID:   haxenServerID,
-			MasterSeed:      masterSeed,
-			RootDID:         rootDID,
-			AgentNodes:      make(map[string]types.AgentDIDInfo),
-			TotalDIDs:       1,
-			CreatedAt:       time.Now(),
-			LastKeyRotation: time.Now(),
+			AgentFieldServerID: agentfieldServerID,
+			MasterSeed:         masterSeed,
+			RootDID:            rootDID,
+			AgentNodes:         make(map[string]types.AgentDIDInfo),
+			TotalDIDs:          1,
+			CreatedAt:          time.Now(),
+			LastKeyRotation:    time.Now(),
 		}
 
 		if err := s.registry.StoreRegistry(registry); err != nil {
@@ -83,45 +83,45 @@ func (s *DIDService) Initialize(haxenServerID string) error {
 	return nil
 }
 
-// GetHaxenServerID returns the haxen server ID for this DID service instance.
-// This method provides dynamic haxen server ID resolution instead of hardcoded "default".
-func (s *DIDService) GetHaxenServerID() (string, error) {
-	if s.haxenServerID == "" {
-		return "", fmt.Errorf("haxen server ID not initialized - call Initialize() first")
+// GetAgentFieldServerID returns the af server ID for this DID service instance.
+// This method provides dynamic af server ID resolution instead of hardcoded "default".
+func (s *DIDService) GetAgentFieldServerID() (string, error) {
+	if s.agentfieldServerID == "" {
+		return "", fmt.Errorf("af server ID not initialized - call Initialize() first")
 	}
-	return s.haxenServerID, nil
+	return s.agentfieldServerID, nil
 }
 
-// getHaxenServerID is an internal helper that returns the haxen server ID.
-func (s *DIDService) getHaxenServerID() (string, error) {
-	return s.GetHaxenServerID()
+// getAgentFieldServerID is an internal helper that returns the af server ID.
+func (s *DIDService) getAgentFieldServerID() (string, error) {
+	return s.GetAgentFieldServerID()
 }
 
-// validateHaxenServerRegistry ensures that the haxen server registry exists before operations.
-func (s *DIDService) validateHaxenServerRegistry() error {
-	haxenServerID, err := s.getHaxenServerID()
+// validateAgentFieldServerRegistry ensures that the af server registry exists before operations.
+func (s *DIDService) validateAgentFieldServerRegistry() error {
+	agentfieldServerID, err := s.getAgentFieldServerID()
 	if err != nil {
 		return err
 	}
 
-	registry, err := s.registry.GetRegistry(haxenServerID)
+	registry, err := s.registry.GetRegistry(agentfieldServerID)
 	if err != nil {
-		return fmt.Errorf("failed to get haxen server registry: %w", err)
+		return fmt.Errorf("failed to get af server registry: %w", err)
 	}
 
 	if registry == nil {
-		return fmt.Errorf("haxen server registry not found for ID: %s - ensure Initialize() was called", haxenServerID)
+		return fmt.Errorf("af server registry not found for ID: %s - ensure Initialize() was called", agentfieldServerID)
 	}
 
 	return nil
 }
 
-// GetRegistry retrieves a DID registry for a haxen server.
-func (s *DIDService) GetRegistry(haxenServerID string) (*types.DIDRegistry, error) {
+// GetRegistry retrieves a DID registry for a af server.
+func (s *DIDService) GetRegistry(agentfieldServerID string) (*types.DIDRegistry, error) {
 	if !s.config.Enabled {
 		return nil, fmt.Errorf("DID system is disabled")
 	}
-	return s.registry.GetRegistry(haxenServerID)
+	return s.registry.GetRegistry(agentfieldServerID)
 }
 
 // RegisterAgent generates DIDs for an agent node and all its components.
@@ -134,11 +134,11 @@ func (s *DIDService) RegisterAgent(req *types.DIDRegistrationRequest) (*types.DI
 		}, nil
 	}
 
-	// Validate haxen server registry exists
-	if err := s.validateHaxenServerRegistry(); err != nil {
+	// Validate af server registry exists
+	if err := s.validateAgentFieldServerRegistry(); err != nil {
 		return &types.DIDRegistrationResponse{
 			Success: false,
-			Error:   fmt.Sprintf("haxen server registry validation failed: %v", err),
+			Error:   fmt.Sprintf("af server registry validation failed: %v", err),
 		}, nil
 	}
 
@@ -184,17 +184,17 @@ func (s *DIDService) RegisterAgent(req *types.DIDRegistrationRequest) (*types.DI
 
 // handleNewRegistration handles registration for new agents (original logic).
 func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*types.DIDRegistrationResponse, error) {
-	// Get haxen server ID dynamically
-	haxenServerID, err := s.getHaxenServerID()
+	// Get af server ID dynamically
+	agentfieldServerID, err := s.getAgentFieldServerID()
 	if err != nil {
 		return &types.DIDRegistrationResponse{
 			Success: false,
-			Error:   fmt.Sprintf("failed to get haxen server ID: %v", err),
+			Error:   fmt.Sprintf("failed to get af server ID: %v", err),
 		}, nil
 	}
 
-	// Get haxen server registry using dynamic ID
-	registry, err := s.registry.GetRegistry(haxenServerID)
+	// Get af server registry using dynamic ID
+	registry, err := s.registry.GetRegistry(agentfieldServerID)
 	if err != nil {
 		return &types.DIDRegistrationResponse{
 			Success: false,
@@ -202,14 +202,14 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 		}, nil
 	}
 
-	// Generate haxen server hash for derivation path
-	haxenServerHash := s.hashHaxenServerID(registry.HaxenServerID)
+	// Generate af server hash for derivation path
+	agentfieldServerHash := s.hashAgentFieldServerID(registry.AgentFieldServerID)
 
 	// Get next agent index
 	agentIndex := len(registry.AgentNodes)
 
 	// Generate agent DID
-	agentPath := fmt.Sprintf("m/44'/%d'/%d'", haxenServerHash, agentIndex)
+	agentPath := fmt.Sprintf("m/44'/%d'/%d'", agentfieldServerHash, agentIndex)
 	agentDID, agentPrivKey, agentPubKey, err := s.generateDIDWithKeys(registry.MasterSeed, agentPath)
 	if err != nil {
 		return &types.DIDRegistrationResponse{
@@ -232,7 +232,7 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 			continue
 		}
 
-		reasonerPath := fmt.Sprintf("m/44'/%d'/%d'/0'/%d'", haxenServerHash, agentIndex, validReasonerIndex)
+		reasonerPath := fmt.Sprintf("m/44'/%d'/%d'/0'/%d'", agentfieldServerHash, agentIndex, validReasonerIndex)
 		reasonerDID, reasonerPrivKey, reasonerPubKey, err := s.generateDIDWithKeys(registry.MasterSeed, reasonerPath)
 		if err != nil {
 			return &types.DIDRegistrationResponse{
@@ -278,7 +278,7 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 			continue
 		}
 
-		skillPath := fmt.Sprintf("m/44'/%d'/%d'/1'/%d'", haxenServerHash, agentIndex, validSkillIndex)
+		skillPath := fmt.Sprintf("m/44'/%d'/%d'/1'/%d'", agentfieldServerHash, agentIndex, validSkillIndex)
 		skillDID, skillPrivKey, skillPubKey, err := s.generateDIDWithKeys(registry.MasterSeed, skillPath)
 		if err != nil {
 			return &types.DIDRegistrationResponse{
@@ -345,9 +345,9 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 			DerivationPath: agentPath,
 			ComponentType:  "agent",
 		},
-		ReasonerDIDs:  reasonerDIDs,
-		SkillDIDs:     skillDIDs,
-		HaxenServerID: registry.HaxenServerID,
+		ReasonerDIDs:       reasonerDIDs,
+		SkillDIDs:          skillDIDs,
+		AgentFieldServerID: registry.AgentFieldServerID,
 	}
 
 	// Debug log the response structure
@@ -370,24 +370,24 @@ func (s *DIDService) ResolveDID(did string) (*types.DIDIdentity, error) {
 		return nil, fmt.Errorf("DID system is disabled")
 	}
 
-	// Validate haxen server registry exists
-	if err := s.validateHaxenServerRegistry(); err != nil {
-		return nil, fmt.Errorf("haxen server registry validation failed: %w", err)
+	// Validate af server registry exists
+	if err := s.validateAgentFieldServerRegistry(); err != nil {
+		return nil, fmt.Errorf("af server registry validation failed: %w", err)
 	}
 
-	// Get haxen server ID dynamically
-	haxenServerID, err := s.getHaxenServerID()
+	// Get af server ID dynamically
+	agentfieldServerID, err := s.getAgentFieldServerID()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get haxen server ID: %w", err)
+		return nil, fmt.Errorf("failed to get af server ID: %w", err)
 	}
 
-	// Get haxen server registry using dynamic ID
-	registry, err := s.registry.GetRegistry(haxenServerID)
+	// Get af server registry using dynamic ID
+	registry, err := s.registry.GetRegistry(agentfieldServerID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get DID registry: %w", err)
 	}
 
-	// Check if this is the haxen server root DID
+	// Check if this is the af server root DID
 	if registry.RootDID == did {
 		// Regenerate private key for root DID using root derivation path
 		privateKeyJWK, err := s.regeneratePrivateKeyJWK(registry.MasterSeed, "m/44'/0'")
@@ -406,7 +406,7 @@ func (s *DIDService) ResolveDID(did string) (*types.DIDIdentity, error) {
 			PrivateKeyJWK:  privateKeyJWK,
 			PublicKeyJWK:   publicKeyJWK,
 			DerivationPath: "m/44'/0'",
-			ComponentType:  "haxen_server",
+			ComponentType:  "agentfield_server",
 		}, nil
 	}
 
@@ -574,10 +574,10 @@ func (s *DIDService) ed25519PublicKeyToJWK(publicKey ed25519.PublicKey) (string,
 	return string(jwkBytes), nil
 }
 
-// hashHaxenServerID creates a deterministic hash of haxen server ID for derivation paths.
-func (s *DIDService) hashHaxenServerID(haxenServerID string) uint32 {
+// hashAgentFieldServerID creates a deterministic hash of af server ID for derivation paths.
+func (s *DIDService) hashAgentFieldServerID(agentfieldServerID string) uint32 {
 	h := fnv.New32a()
-	h.Write([]byte(haxenServerID))
+	h.Write([]byte(agentfieldServerID))
 	return h.Sum32() % (1 << 31) // Ensure it fits in BIP32 hardened derivation
 }
 
@@ -624,19 +624,19 @@ func (s *DIDService) ListAllAgentDIDs() ([]string, error) {
 		return nil, fmt.Errorf("DID system is disabled")
 	}
 
-	// Validate haxen server registry exists
-	if err := s.validateHaxenServerRegistry(); err != nil {
-		return nil, fmt.Errorf("haxen server registry validation failed: %w", err)
+	// Validate af server registry exists
+	if err := s.validateAgentFieldServerRegistry(); err != nil {
+		return nil, fmt.Errorf("af server registry validation failed: %w", err)
 	}
 
-	// Get haxen server ID dynamically
-	haxenServerID, err := s.getHaxenServerID()
+	// Get af server ID dynamically
+	agentfieldServerID, err := s.getAgentFieldServerID()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get haxen server ID: %w", err)
+		return nil, fmt.Errorf("failed to get af server ID: %w", err)
 	}
 
-	// Get haxen server registry using dynamic ID
-	registry, err := s.registry.GetRegistry(haxenServerID)
+	// Get af server registry using dynamic ID
+	registry, err := s.registry.GetRegistry(agentfieldServerID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get DID registry: %w", err)
 	}
@@ -669,19 +669,19 @@ func (s *DIDService) BackfillExistingNodes(ctx context.Context, storageProvider 
 		return nil
 	}
 
-	// Validate haxen server registry exists
-	if err := s.validateHaxenServerRegistry(); err != nil {
-		return fmt.Errorf("haxen server registry validation failed: %w", err)
+	// Validate af server registry exists
+	if err := s.validateAgentFieldServerRegistry(); err != nil {
+		return fmt.Errorf("af server registry validation failed: %w", err)
 	}
 
-	// Get haxen server ID dynamically
-	haxenServerID, err := s.getHaxenServerID()
+	// Get af server ID dynamically
+	agentfieldServerID, err := s.getAgentFieldServerID()
 	if err != nil {
-		return fmt.Errorf("failed to get haxen server ID: %w", err)
+		return fmt.Errorf("failed to get af server ID: %w", err)
 	}
 
 	// Get current DID registry using dynamic ID
-	registry, err := s.GetRegistry(haxenServerID)
+	registry, err := s.GetRegistry(agentfieldServerID)
 	if err != nil {
 		return fmt.Errorf("failed to get DID registry: %w", err)
 	}
@@ -728,19 +728,19 @@ func (s *DIDService) GetExistingAgentDID(agentNodeID string) (*types.AgentDIDInf
 		return nil, fmt.Errorf("DID system is disabled")
 	}
 
-	// Validate haxen server registry exists
-	if err := s.validateHaxenServerRegistry(); err != nil {
-		return nil, fmt.Errorf("haxen server registry validation failed: %w", err)
+	// Validate af server registry exists
+	if err := s.validateAgentFieldServerRegistry(); err != nil {
+		return nil, fmt.Errorf("af server registry validation failed: %w", err)
 	}
 
-	// Get haxen server ID dynamically
-	haxenServerID, err := s.getHaxenServerID()
+	// Get af server ID dynamically
+	agentfieldServerID, err := s.getAgentFieldServerID()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get haxen server ID: %w", err)
+		return nil, fmt.Errorf("failed to get af server ID: %w", err)
 	}
 
-	// Get haxen server registry using dynamic ID
-	registry, err := s.registry.GetRegistry(haxenServerID)
+	// Get af server registry using dynamic ID
+	registry, err := s.registry.GetRegistry(agentfieldServerID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get DID registry: %w", err)
 	}
@@ -868,22 +868,22 @@ func (s *DIDService) findSkillByID(skills []types.SkillDefinition, id string) *t
 
 // generateReasonerPath generates a derivation path for a reasoner.
 func (s *DIDService) generateReasonerPath(agentNodeID, reasonerID string) string {
-	// Get haxen server ID dynamically
-	haxenServerID, err := s.getHaxenServerID()
+	// Get af server ID dynamically
+	agentfieldServerID, err := s.getAgentFieldServerID()
 	if err != nil {
-		logger.Logger.Error().Err(err).Msg("Failed to get haxen server ID for reasoner path generation")
+		logger.Logger.Error().Err(err).Msg("Failed to get af server ID for reasoner path generation")
 		return ""
 	}
 
 	// Get registry to find agent index
-	registry, err := s.registry.GetRegistry(haxenServerID)
+	registry, err := s.registry.GetRegistry(agentfieldServerID)
 	if err != nil {
 		logger.Logger.Error().Err(err).Msg("Failed to get registry for reasoner path generation")
 		return ""
 	}
 
-	// Generate haxen server hash for derivation path
-	haxenServerHash := s.hashHaxenServerID(registry.HaxenServerID)
+	// Generate af server hash for derivation path
+	agentfieldServerHash := s.hashAgentFieldServerID(registry.AgentFieldServerID)
 
 	// Find agent index (this is a simplified approach - in production you might want to store this)
 	agentIndex := 0
@@ -898,27 +898,27 @@ func (s *DIDService) generateReasonerPath(agentNodeID, reasonerID string) string
 	existingAgent := registry.AgentNodes[agentNodeID]
 	reasonerIndex := len(existingAgent.Reasoners)
 
-	return fmt.Sprintf("m/44'/%d'/%d'/0'/%d'", haxenServerHash, agentIndex, reasonerIndex)
+	return fmt.Sprintf("m/44'/%d'/%d'/0'/%d'", agentfieldServerHash, agentIndex, reasonerIndex)
 }
 
 // generateSkillPath generates a derivation path for a skill.
 func (s *DIDService) generateSkillPath(agentNodeID, skillID string) string {
-	// Get haxen server ID dynamically
-	haxenServerID, err := s.getHaxenServerID()
+	// Get af server ID dynamically
+	agentfieldServerID, err := s.getAgentFieldServerID()
 	if err != nil {
-		logger.Logger.Error().Err(err).Msg("Failed to get haxen server ID for skill path generation")
+		logger.Logger.Error().Err(err).Msg("Failed to get af server ID for skill path generation")
 		return ""
 	}
 
 	// Get registry to find agent index
-	registry, err := s.registry.GetRegistry(haxenServerID)
+	registry, err := s.registry.GetRegistry(agentfieldServerID)
 	if err != nil {
 		logger.Logger.Error().Err(err).Msg("Failed to get registry for skill path generation")
 		return ""
 	}
 
-	// Generate haxen server hash for derivation path
-	haxenServerHash := s.hashHaxenServerID(registry.HaxenServerID)
+	// Generate af server hash for derivation path
+	agentfieldServerHash := s.hashAgentFieldServerID(registry.AgentFieldServerID)
 
 	// Find agent index (this is a simplified approach - in production you might want to store this)
 	agentIndex := 0
@@ -933,16 +933,16 @@ func (s *DIDService) generateSkillPath(agentNodeID, skillID string) string {
 	existingAgent := registry.AgentNodes[agentNodeID]
 	skillIndex := len(existingAgent.Skills)
 
-	return fmt.Sprintf("m/44'/%d'/%d'/1'/%d'", haxenServerHash, agentIndex, skillIndex)
+	return fmt.Sprintf("m/44'/%d'/%d'/1'/%d'", agentfieldServerHash, agentIndex, skillIndex)
 }
 
 // buildExistingIdentityPackage builds an identity package from existing agent DID info.
 func (s *DIDService) buildExistingIdentityPackage(existingAgent *types.AgentDIDInfo) types.DIDIdentityPackage {
-	// Get haxen server ID dynamically
-	haxenServerID, err := s.getHaxenServerID()
+	// Get af server ID dynamically
+	agentfieldServerID, err := s.getAgentFieldServerID()
 	if err != nil {
-		logger.Logger.Error().Err(err).Msg("Failed to get haxen server ID for identity package")
-		haxenServerID = "unknown"
+		logger.Logger.Error().Err(err).Msg("Failed to get af server ID for identity package")
+		agentfieldServerID = "unknown"
 	}
 
 	// Build reasoner DIDs map
@@ -979,9 +979,9 @@ func (s *DIDService) buildExistingIdentityPackage(existingAgent *types.AgentDIDI
 			DerivationPath: existingAgent.DerivationPath,
 			ComponentType:  "agent",
 		},
-		ReasonerDIDs:  reasonerDIDs,
-		SkillDIDs:     skillDIDs,
-		HaxenServerID: haxenServerID,
+		ReasonerDIDs:       reasonerDIDs,
+		SkillDIDs:          skillDIDs,
+		AgentFieldServerID: agentfieldServerID,
 	}
 }
 
@@ -1054,25 +1054,25 @@ func (s *DIDService) PartialRegisterAgent(req *types.PartialDIDRegistrationReque
 		}, nil
 	}
 
-	// Validate haxen server registry exists
-	if err := s.validateHaxenServerRegistry(); err != nil {
+	// Validate af server registry exists
+	if err := s.validateAgentFieldServerRegistry(); err != nil {
 		return &types.DIDRegistrationResponse{
 			Success: false,
-			Error:   fmt.Sprintf("haxen server registry validation failed: %v", err),
+			Error:   fmt.Sprintf("af server registry validation failed: %v", err),
 		}, nil
 	}
 
-	// Get haxen server ID dynamically
-	haxenServerID, err := s.getHaxenServerID()
+	// Get af server ID dynamically
+	agentfieldServerID, err := s.getAgentFieldServerID()
 	if err != nil {
 		return &types.DIDRegistrationResponse{
 			Success: false,
-			Error:   fmt.Sprintf("failed to get haxen server ID: %v", err),
+			Error:   fmt.Sprintf("failed to get af server ID: %v", err),
 		}, nil
 	}
 
-	// Get haxen server registry using dynamic ID
-	registry, err := s.registry.GetRegistry(haxenServerID)
+	// Get af server registry using dynamic ID
+	registry, err := s.registry.GetRegistry(agentfieldServerID)
 	if err != nil {
 		return &types.DIDRegistrationResponse{
 			Success: false,
@@ -1220,9 +1220,9 @@ func (s *DIDService) PartialRegisterAgent(req *types.PartialDIDRegistrationReque
 			DerivationPath: existingAgent.DerivationPath,
 			ComponentType:  "agent",
 		},
-		ReasonerDIDs:  newReasonerDIDs,
-		SkillDIDs:     newSkillDIDs,
-		HaxenServerID: registry.HaxenServerID,
+		ReasonerDIDs:       newReasonerDIDs,
+		SkillDIDs:          newSkillDIDs,
+		AgentFieldServerID: registry.AgentFieldServerID,
 	}
 
 	logger.Logger.Debug().Msgf("✅ Partial registration successful for agent %s: %d new reasoners, %d new skills",
@@ -1244,25 +1244,25 @@ func (s *DIDService) DeregisterComponents(req *types.ComponentDeregistrationRequ
 		}, nil
 	}
 
-	// Validate haxen server registry exists
-	if err := s.validateHaxenServerRegistry(); err != nil {
+	// Validate af server registry exists
+	if err := s.validateAgentFieldServerRegistry(); err != nil {
 		return &types.ComponentDeregistrationResponse{
 			Success: false,
-			Error:   fmt.Sprintf("haxen server registry validation failed: %v", err),
+			Error:   fmt.Sprintf("af server registry validation failed: %v", err),
 		}, nil
 	}
 
-	// Get haxen server ID dynamically
-	haxenServerID, err := s.getHaxenServerID()
+	// Get af server ID dynamically
+	agentfieldServerID, err := s.getAgentFieldServerID()
 	if err != nil {
 		return &types.ComponentDeregistrationResponse{
 			Success: false,
-			Error:   fmt.Sprintf("failed to get haxen server ID: %v", err),
+			Error:   fmt.Sprintf("failed to get af server ID: %v", err),
 		}, nil
 	}
 
-	// Get haxen server registry using dynamic ID
-	registry, err := s.registry.GetRegistry(haxenServerID)
+	// Get af server registry using dynamic ID
+	registry, err := s.registry.GetRegistry(agentfieldServerID)
 	if err != nil {
 		return &types.ComponentDeregistrationResponse{
 			Success: false,

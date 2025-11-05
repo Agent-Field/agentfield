@@ -11,51 +11,51 @@ import (
 // MCPServerConfig represents the simplified MCP configuration
 type MCPServerConfig struct {
 	// Core identification
-	Alias        string            `yaml:"alias" json:"alias"`
-	Description  string            `yaml:"description,omitempty" json:"description,omitempty"`
-	
+	Alias       string `yaml:"alias" json:"alias"`
+	Description string `yaml:"description,omitempty" json:"description,omitempty"`
+
 	// Connection (mutually exclusive)
-	URL          string            `yaml:"url,omitempty" json:"url,omitempty"`           // For remote MCPs
-	RunCmd       string            `yaml:"run,omitempty" json:"run,omitempty"`          // For local MCPs
-	
+	URL    string `yaml:"url,omitempty" json:"url,omitempty"` // For remote MCPs
+	RunCmd string `yaml:"run,omitempty" json:"run,omitempty"` // For local MCPs
+
 	// Transport type (stdio or http)
-	Transport    string            `yaml:"transport,omitempty" json:"transport,omitempty"`
-	
+	Transport string `yaml:"transport,omitempty" json:"transport,omitempty"`
+
 	// Setup (optional - runs once during add)
-	SetupCmds    []string          `yaml:"setup,omitempty" json:"setup,omitempty"`
-	
+	SetupCmds []string `yaml:"setup,omitempty" json:"setup,omitempty"`
+
 	// Runtime configuration
-	WorkingDir   string            `yaml:"working_dir,omitempty" json:"working_dir,omitempty"`
-	Env          map[string]string `yaml:"environment,omitempty" json:"environment,omitempty"`
-	Timeout      time.Duration     `yaml:"timeout,omitempty" json:"timeout,omitempty"`
-	
+	WorkingDir string            `yaml:"working_dir,omitempty" json:"working_dir,omitempty"`
+	Env        map[string]string `yaml:"environment,omitempty" json:"environment,omitempty"`
+	Timeout    time.Duration     `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+
 	// Health & Monitoring
-	HealthCheck  string            `yaml:"health_check,omitempty" json:"health_check,omitempty"`
-	Port         int               `yaml:"port,omitempty" json:"port,omitempty"` // Auto-assigned if 0
-	
+	HealthCheck string `yaml:"health_check,omitempty" json:"health_check,omitempty"`
+	Port        int    `yaml:"port,omitempty" json:"port,omitempty"` // Auto-assigned if 0
+
 	// Metadata
-	Version      string            `yaml:"version,omitempty" json:"version,omitempty"`
-	Tags         []string          `yaml:"tags,omitempty" json:"tags,omitempty"`
-	
+	Version string   `yaml:"version,omitempty" json:"version,omitempty"`
+	Tags    []string `yaml:"tags,omitempty" json:"tags,omitempty"`
+
 	// Installation options
-	Force        bool              `yaml:"-" json:"-"` // Force reinstall, not persisted
-	
+	Force bool `yaml:"-" json:"-"` // Force reinstall, not persisted
+
 	// Internal runtime fields
-	PID          int               `yaml:"-" json:"pid,omitempty"`
-	Status       string            `yaml:"-" json:"status,omitempty"`
-	StartedAt    *time.Time        `yaml:"-" json:"started_at,omitempty"`
+	PID       int        `yaml:"-" json:"pid,omitempty"`
+	Status    string     `yaml:"-" json:"status,omitempty"`
+	StartedAt *time.Time `yaml:"-" json:"started_at,omitempty"`
 }
 
 // MCPProcess represents a running MCP server
 type MCPProcess struct {
-	Config    MCPServerConfig   `json:"config"`
-	Cmd       *exec.Cmd         `json:"-"`
-	Stdin     io.WriteCloser    `json:"-"`
-	Stdout    io.ReadCloser     `json:"-"`
-	Stderr    io.ReadCloser     `json:"-"`
-	Context   context.Context   `json:"-"`
-	Cancel    context.CancelFunc `json:"-"`
-	LogFile   string            `json:"log_file"`
+	Config  MCPServerConfig    `json:"config"`
+	Cmd     *exec.Cmd          `json:"-"`
+	Stdin   io.WriteCloser     `json:"-"`
+	Stdout  io.ReadCloser      `json:"-"`
+	Stderr  io.ReadCloser      `json:"-"`
+	Context context.Context    `json:"-"`
+	Cancel  context.CancelFunc `json:"-"`
+	LogFile string             `json:"log_file"`
 }
 
 // MCPServerStatus represents the status of an MCP server

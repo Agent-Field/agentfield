@@ -14,6 +14,7 @@ import (
 )
 
 // UIFiles embeds the entire web/client/dist directory into the binary
+//
 //go:embed web/client/dist
 var UIFiles embed.FS
 

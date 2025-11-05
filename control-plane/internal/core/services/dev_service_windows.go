@@ -2,7 +2,6 @@
 
 package services
 
-
 // DevService is a stub for Windows builds.
 type DevService struct{}
 

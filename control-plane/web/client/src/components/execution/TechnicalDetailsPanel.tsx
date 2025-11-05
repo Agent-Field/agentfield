@@ -68,8 +68,8 @@ export function TechnicalDetailsPanel({ execution }: TechnicalDetailsPanelProps)
             value={execution.session_id}
           />
           <DetailItem
-            label="Haxen Request ID"
-            value={execution.haxen_request_id}
+            label="AgentField Request ID"
+            value={execution.agentfield_request_id}
           />
           <DetailItem
             label="Actor ID"

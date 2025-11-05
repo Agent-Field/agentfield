@@ -3,7 +3,7 @@ package storage
 import (
 	"fmt"
 
-	"github.com/your-org/haxen/control-plane/pkg/types"
+	"github.com/your-org/agentfield/control-plane/pkg/types"
 )
 
 type InvalidExecutionStateTransitionError struct {

@@ -23,7 +23,6 @@ func NewMCPProtocolClient(verbose bool) *MCPProtocolClient {
 	}
 }
 
-
 // DiscoverCapabilitiesFromProcess discovers capabilities from a running MCP process
 func (client *MCPProtocolClient) DiscoverCapabilitiesFromProcess(process *MCPProcess) ([]MCPTool, []MCPResource, error) {
 	if client.verbose {
@@ -164,7 +163,7 @@ func (client *MCPProtocolClient) sendInitialize(stdin io.Writer) error {
 				"resources": map[string]interface{}{},
 			},
 			"clientInfo": map[string]interface{}{
-				"name":    "haxen-mcp-client",
+				"name":    "agentfield-mcp-client",
 				"version": "1.0.0",
 			},
 		},
@@ -177,7 +176,7 @@ func (client *MCPProtocolClient) sendInitialize(stdin io.Writer) error {
 func (client *MCPProtocolClient) waitForInitializeResponse(stdout io.Reader) error {
 	scanner := bufio.NewScanner(stdout)
 	scanner.Scan()
-	
+
 	var response MCPResponse
 	if err := json.Unmarshal(scanner.Bytes(), &response); err != nil {
 		return fmt.Errorf("failed to parse initialize response: %w", err)
@@ -428,7 +427,7 @@ func (client *MCPProtocolClient) StartMCPServerForDiscovery(config MCPServerConf
 		if err != nil {
 			return nil, fmt.Errorf("failed to process environment variables: %w", err)
 		}
-		
+
 		for key, value := range processedEnv {
 			cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value))
 		}

@@ -61,7 +61,7 @@ export function EnhancedNodesHeader({
   onAddServerless,
   onReconnect,
   actions,
-  subtitle = "Monitor and manage your AI agent nodes in the Haxen orchestration platform.",
+  subtitle = "Monitor and manage your AI agent nodes in the AgentField orchestration platform.",
 }: EnhancedNodesHeaderProps) {
   const ConnectionIcon = isConnected ? WifiHigh : WifiSlash;
   const connectionLabel = isConnected

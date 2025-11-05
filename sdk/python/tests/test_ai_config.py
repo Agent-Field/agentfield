@@ -1,4 +1,4 @@
-from haxen_sdk.types import AIConfig
+from agentfield.types import AIConfig
 
 
 def test_ai_config_defaults_and_to_dict():

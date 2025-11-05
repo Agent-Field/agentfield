@@ -1,5 +1,5 @@
 import { getNodesSummary } from './api';
-import type { AgentNodeSummary } from '../types/haxen';
+import type { AgentNodeSummary } from '../types/agentfield';
 
 export interface SearchResult {
   id: string;

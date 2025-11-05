@@ -1,10 +1,10 @@
-from haxen_sdk import Agent, AIConfig
+from agentfield import Agent, AIConfig
 from reasoners import reasoners_router
 
 # Basic agent setup - works immediately
 app = Agent(
     node_id="{{.NodeID}}",
-    haxen_server="http://localhost:8080",
+    agentfield_server="http://localhost:8080",
     version="1.0.0",
     dev_mode=True,
 

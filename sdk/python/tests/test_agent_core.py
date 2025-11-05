@@ -4,9 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from haxen_sdk.agent import Agent
-from haxen_sdk.agent_registry import get_current_agent_instance
-from haxen_sdk.execution_context import (
+from agentfield.agent import Agent
+from agentfield.agent_registry import get_current_agent_instance
+from agentfield.execution_context import (
     ExecutionContext,
     set_execution_context,
     reset_execution_context,
@@ -16,14 +16,14 @@ from haxen_sdk.execution_context import (
 def make_agent_stub():
     agent = object.__new__(Agent)
     agent.node_id = "node"
-    agent.haxen_server = "http://haxen"
+    agent.agentfield_server = "http://agentfield"
     agent.dev_mode = False
     agent.async_config = SimpleNamespace(
         enable_async_execution=True, fallback_to_sync=True
     )
     agent._async_execution_manager = None
     agent._current_execution_context = None
-    agent.client = SimpleNamespace(api_base="http://haxen/api/v1")
+    agent.client = SimpleNamespace(api_base="http://agentfield/api/v1")
     return agent
 
 
@@ -121,7 +121,7 @@ async def test_note_sends_async_request(monkeypatch):
         ClientTimeout=DummyTimeout, ClientSession=DummySession
     )
     monkeypatch.setitem(sys.modules, "aiohttp", stub_aiohttp)
-    monkeypatch.setattr("haxen_sdk.agent.aiohttp", stub_aiohttp)
+    monkeypatch.setattr("agentfield.agent.aiohttp", stub_aiohttp)
 
     context = SimpleNamespace(to_headers=lambda: {"X-Workflow-ID": "wf"})
     monkeypatch.setattr(agent, "_get_current_execution_context", lambda: context)
@@ -142,6 +142,6 @@ async def test_note_sends_async_request(monkeypatch):
     agent.note("hello", tags=["debug"])
     await asyncio.gather(*tasks)
 
-    assert called["url"].startswith("http://haxen/api/ui/v1")
+    assert called["url"].startswith("http://agentfield/api/ui/v1")
     assert called["json"]["message"] == "hello"
     assert called["json"]["tags"] == ["debug"]

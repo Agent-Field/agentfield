@@ -18,4 +18,4 @@ export type {
   MCPToolTestResponse,
   MCPServerMetrics,
   MCPNodeMetrics
-} from '@/types/haxen';
+} from '@/types/agentfield';

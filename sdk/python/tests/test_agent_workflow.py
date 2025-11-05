@@ -1,8 +1,8 @@
 import pytest
 
-from haxen_sdk.agent_workflow import AgentWorkflow
-from haxen_sdk.execution_context import ExecutionContext
-from haxen_sdk.agent_registry import set_current_agent, clear_current_agent
+from agentfield.agent_workflow import AgentWorkflow
+from agentfield.execution_context import ExecutionContext
+from agentfield.agent_registry import set_current_agent, clear_current_agent
 from tests.helpers import StubAgent
 
 

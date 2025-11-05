@@ -1,4 +1,4 @@
-module github.com/your-org/haxen/control-plane
+module github.com/your-org/agentfield/control-plane
 
 go 1.24.0
 

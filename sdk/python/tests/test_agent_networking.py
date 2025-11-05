@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from haxen_sdk import agent as agent_mod
-from haxen_sdk.agent import (
+from agentfield import agent as agent_mod
+from agentfield.agent import (
     ExecutionContext,
     _build_callback_candidates,
     _normalize_candidate,
@@ -96,7 +96,7 @@ def test_build_callback_candidates_prefers_env(monkeypatch):
     monkeypatch.setattr(agent_mod, "_detect_local_ip", lambda: "10.0.0.5")
     monkeypatch.setattr(agent_mod.socket, "gethostname", lambda: "agent-host")
     monkeypatch.setenv("AGENT_CALLBACK_URL", "https://env.example")
-    monkeypatch.setenv("RAILWAY_SERVICE_NAME", "haxen")
+    monkeypatch.setenv("RAILWAY_SERVICE_NAME", "agentfield")
     monkeypatch.setenv("RAILWAY_ENVIRONMENT", "prod")
 
     candidates = _build_callback_candidates(None, 9090)

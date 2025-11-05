@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/your-org/haxen/control-plane/internal/storage"
-	"github.com/your-org/haxen/control-plane/pkg/types"
+	"github.com/your-org/agentfield/control-plane/internal/storage"
+	"github.com/your-org/agentfield/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -157,7 +157,7 @@ func (h *ConfigHandler) SetConfigHandler(c *gin.Context) {
 
 	if !validationResult.Valid {
 		c.JSON(http.StatusBadRequest, map[string]interface{}{
-			"error":            "configuration validation failed",
+			"error":             "configuration validation failed",
 			"validation_errors": validationResult.Errors,
 		})
 		return
@@ -171,7 +171,7 @@ func (h *ConfigHandler) SetConfigHandler(c *gin.Context) {
 
 	// Check if configuration already exists
 	existingConfig, err := h.storage.GetAgentConfiguration(ctx, agentID, packageID)
-	
+
 	if err != nil {
 		// Configuration doesn't exist, create new one
 		newConfig := &types.AgentConfiguration{

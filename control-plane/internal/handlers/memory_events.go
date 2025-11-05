@@ -1,9 +1,9 @@
 package handlers
 
 import (
-	"github.com/your-org/haxen/control-plane/internal/storage"
-	"github.com/your-org/haxen/control-plane/pkg/types"
 	"encoding/json"
+	"github.com/your-org/agentfield/control-plane/internal/storage"
+	"github.com/your-org/agentfield/control-plane/pkg/types"
 	"net/http"
 	"path/filepath"
 	"strconv"

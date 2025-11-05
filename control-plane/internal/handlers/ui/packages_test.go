@@ -9,7 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/your-org/haxen/control-plane/pkg/types"
+	"github.com/your-org/agentfield/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -48,21 +48,21 @@ func TestListPackagesHandler(t *testing.T) {
 	author := "Test Author"
 	packages := []*types.AgentPackage{
 		{
-			ID:          "test-package-1",
-			Name:        "Test Package 1",
-			Version:     "1.0.0",
-			Description: &description,
-			Author:      &author,
-			InstallPath: "/path/to/package1",
+			ID:                  "test-package-1",
+			Name:                "Test Package 1",
+			Version:             "1.0.0",
+			Description:         &description,
+			Author:              &author,
+			InstallPath:         "/path/to/package1",
 			ConfigurationSchema: json.RawMessage(`{"required": {"api_key": {"type": "secret"}}}`),
 		},
 		{
-			ID:          "test-package-2",
-			Name:        "Test Package 2",
-			Version:     "2.0.0",
-			Description: nil,
-			Author:      nil,
-			InstallPath: "/path/to/package2",
+			ID:                  "test-package-2",
+			Name:                "Test Package 2",
+			Version:             "2.0.0",
+			Description:         nil,
+			Author:              nil,
+			InstallPath:         "/path/to/package2",
 			ConfigurationSchema: json.RawMessage(`{}`),
 		},
 	}

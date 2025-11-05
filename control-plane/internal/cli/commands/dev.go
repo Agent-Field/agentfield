@@ -4,8 +4,8 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"github.com/your-org/haxen/control-plane/internal/cli/framework"
-	"github.com/your-org/haxen/control-plane/internal/core/domain"
+	"github.com/your-org/agentfield/control-plane/internal/cli/framework"
+	"github.com/your-org/agentfield/control-plane/internal/core/domain"
 )
 
 type DevCommand struct {
@@ -25,7 +25,7 @@ func (cmd *DevCommand) GetName() string {
 }
 
 func (cmd *DevCommand) GetDescription() string {
-	return "Run a Haxen agent package in development mode"
+	return "Run a AgentField agent package in development mode"
 }
 
 func (cmd *DevCommand) BuildCobraCommand() *cobra.Command {
@@ -36,19 +36,19 @@ func (cmd *DevCommand) BuildCobraCommand() *cobra.Command {
 	cobraCmd := &cobra.Command{
 		Use:   "dev [path]",
 		Short: cmd.GetDescription(),
-		Long: `Run a Haxen agent package in development mode from the current directory or specified path.
+		Long: `Run a AgentField agent package in development mode from the current directory or specified path.
 
 This command is designed for local development and testing. It will:
-- Look for haxen.yaml in the current directory (or specified path)
+- Look for agentfield.yaml in the current directory (or specified path)
 - Start the agent without requiring installation
 - Provide verbose logging for development
 - Optionally watch for file changes and auto-restart
 
 Examples:
-  haxen dev                    # Run package in current directory
-  haxen dev ./my-agent         # Run package in specified directory
-  haxen dev --port 8005        # Use specific port
-  haxen dev --watch            # Watch for changes and auto-restart`,
+  af dev                    # Run package in current directory
+  af dev ./my-agent         # Run package in specified directory
+  af dev --port 8005        # Use specific port
+  af dev --watch            # Watch for changes and auto-restart`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cobraCmd *cobra.Command, args []string) error {
 			return cmd.execute(args, port, watch, verbose)
@@ -71,7 +71,7 @@ func (cmd *DevCommand) execute(args []string, port int, watch, verbose bool) err
 		packagePath = "."
 	}
 
-	cmd.output.PrintHeader("🚀 Haxen Development Mode")
+	cmd.output.PrintHeader("🚀 AgentField Development Mode")
 	cmd.output.PrintInfo(fmt.Sprintf("Package path: %s", packagePath))
 
 	// Create dev options

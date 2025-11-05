@@ -1,12 +1,12 @@
 package storage
 
 import (
-	"github.com/your-org/haxen/control-plane/internal/logger"
-	"github.com/your-org/haxen/control-plane/pkg/types"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/your-org/agentfield/control-plane/internal/logger"
+	"github.com/your-org/agentfield/control-plane/pkg/types"
 	"strings"
 	"time"
 )

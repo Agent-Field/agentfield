@@ -3,7 +3,7 @@ import type {
   MCPServerActionResponse,
   MCPServerAction,
   MCPServerHealthForUI
-} from '../types/haxen';
+} from '../types/agentfield';
 import {
   startMCPServer,
   stopMCPServer,

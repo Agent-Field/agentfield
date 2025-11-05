@@ -1,3 +1,3 @@
-module github.com/agentfield/haxen/sdk/go
+module github.com/your-org/agentfield/sdk/go
 
 go 1.21

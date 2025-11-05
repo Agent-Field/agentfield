@@ -1,4 +1,4 @@
-from haxen_sdk.status import normalize_status, is_terminal, TERMINAL_STATUSES
+from agentfield.status import normalize_status, is_terminal, TERMINAL_STATUSES
 
 
 def test_status_normalization_all_values():

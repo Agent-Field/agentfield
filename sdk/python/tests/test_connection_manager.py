@@ -1,5 +1,5 @@
 import asyncio
-from haxen_sdk.connection_manager import (
+from agentfield.connection_manager import (
     ConnectionManager,
     ConnectionConfig,
     ConnectionState,
@@ -11,7 +11,7 @@ class FakeClient:
         return False, None  # simulate failure so start enters reconnection
 
 
-class FakeHaxenHandler:
+class FakeAgentFieldHandler:
     async def send_enhanced_heartbeat(self):
         return True
 
@@ -19,7 +19,7 @@ class FakeHaxenHandler:
 class FakeAgent:
     def __init__(self):
         self.client = FakeClient()
-        self.haxen_handler = FakeHaxenHandler()
+        self.agentfield_handler = FakeAgentFieldHandler()
         self.node_id = "n"
         self.reasoners = []
         self.skills = []

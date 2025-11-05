@@ -1,5 +1,5 @@
 import base64
-from haxen_sdk.multimodal_response import AudioOutput, ImageOutput, FileOutput
+from agentfield.multimodal_response import AudioOutput, ImageOutput, FileOutput
 
 
 def test_audio_output_save_and_get_bytes(tmp_path):

@@ -1,6 +1,6 @@
 ---
 name: Question
-about: Ask a question about using Haxen
+about: Ask a question about using AgentField
 labels: question
 ---
 

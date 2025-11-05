@@ -11,14 +11,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/internal/storage"
+	"github.com/your-org/agentfield/control-plane/internal/storage"
 
 	"github.com/gin-gonic/gin"
 	"gopkg.in/yaml.v3"
 )
 
 func TestCheckStorageHealthOverride(t *testing.T) {
-	srv := &HaxenServer{
+	srv := &AgentFieldServer{
 		storageHealthOverride: func(context.Context) gin.H {
 			return gin.H{"status": "healthy"}
 		},
@@ -31,7 +31,7 @@ func TestCheckStorageHealthOverride(t *testing.T) {
 }
 
 func TestCheckStorageHealthWithoutStorage(t *testing.T) {
-	srv := &HaxenServer{}
+	srv := &AgentFieldServer{}
 	result := srv.checkStorageHealth(context.Background())
 	if status, ok := result["status"].(string); !ok || status != "healthy" {
 		t.Fatalf("expected default healthy status when storage nil, got %+v", result)
@@ -39,7 +39,7 @@ func TestCheckStorageHealthWithoutStorage(t *testing.T) {
 }
 
 func TestCheckStorageHealthContextError(t *testing.T) {
-	srv := &HaxenServer{}
+	srv := &AgentFieldServer{}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -108,7 +108,7 @@ func (c *fakeCache) Publish(channel string, message interface{}) error {
 
 func TestCheckCacheHealthHealthy(t *testing.T) {
 	cache := newFakeCache()
-	srv := &HaxenServer{cache: cache}
+	srv := &AgentFieldServer{cache: cache}
 
 	result := srv.checkCacheHealth(context.Background())
 	if status, ok := result["status"].(string); !ok || status != "healthy" {
@@ -119,7 +119,7 @@ func TestCheckCacheHealthHealthy(t *testing.T) {
 func TestCheckCacheHealthSetError(t *testing.T) {
 	cache := newFakeCache()
 	cache.setErr = context.DeadlineExceeded
-	srv := &HaxenServer{cache: cache}
+	srv := &AgentFieldServer{cache: cache}
 
 	result := srv.checkCacheHealth(context.Background())
 	if status, ok := result["status"].(string); !ok || status != "unhealthy" {
@@ -130,7 +130,7 @@ func TestCheckCacheHealthSetError(t *testing.T) {
 func TestCheckCacheHealthGetError(t *testing.T) {
 	cache := newFakeCache()
 	cache.getErr = context.DeadlineExceeded
-	srv := &HaxenServer{cache: cache}
+	srv := &AgentFieldServer{cache: cache}
 
 	result := srv.checkCacheHealth(context.Background())
 	if status, ok := result["status"].(string); !ok || status != "unhealthy" {
@@ -140,7 +140,7 @@ func TestCheckCacheHealthGetError(t *testing.T) {
 
 func TestHealthCheckHandlerHealthy(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	srv := &HaxenServer{
+	srv := &AgentFieldServer{
 		storageHealthOverride: func(context.Context) gin.H { return gin.H{"status": "healthy"} },
 		cacheHealthOverride:   func(context.Context) gin.H { return gin.H{"status": "healthy"} },
 	}
@@ -167,7 +167,7 @@ func TestHealthCheckHandlerHealthy(t *testing.T) {
 
 func TestHealthCheckHandlerCacheOptional(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	srv := &HaxenServer{
+	srv := &AgentFieldServer{
 		storageHealthOverride: func(context.Context) gin.H { return gin.H{"status": "healthy"} },
 	}
 
@@ -195,7 +195,7 @@ func TestHealthCheckHandlerCacheOptional(t *testing.T) {
 
 func TestHealthCheckHandlerUnhealthyStorage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	srv := &HaxenServer{
+	srv := &AgentFieldServer{
 		storageHealthOverride: func(context.Context) gin.H { return gin.H{"status": "unhealthy"} },
 		cacheHealthOverride:   func(context.Context) gin.H { return gin.H{"status": "healthy"} },
 	}
@@ -214,7 +214,7 @@ func TestHealthCheckHandlerUnhealthyStorage(t *testing.T) {
 
 func TestHealthCheckHandlerWithoutStorage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	srv := &HaxenServer{}
+	srv := &AgentFieldServer{}
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -228,13 +228,13 @@ func TestHealthCheckHandlerWithoutStorage(t *testing.T) {
 	}
 }
 
-func TestGenerateHaxenServerIDDeterministic(t *testing.T) {
-	dir1 := filepath.Join("/tmp", "haxen-test-1")
-	dir2 := filepath.Join("/tmp", "haxen-test-2")
+func TestGenerateAgentFieldServerIDDeterministic(t *testing.T) {
+	dir1 := filepath.Join("/tmp", "agentfield-test-1")
+	dir2 := filepath.Join("/tmp", "agentfield-test-2")
 
-	id1 := generateHaxenServerID(dir1)
-	id1Again := generateHaxenServerID(dir1)
-	id2 := generateHaxenServerID(dir2)
+	id1 := generateAgentFieldServerID(dir1)
+	id1Again := generateAgentFieldServerID(dir1)
+	id2 := generateAgentFieldServerID(dir2)
 
 	if id1 != id1Again {
 		t.Fatal("expected deterministic ID for same path")
@@ -246,7 +246,7 @@ func TestGenerateHaxenServerIDDeterministic(t *testing.T) {
 
 func TestUnregisterAgentFromMonitoring_NoNodeID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	srv := &HaxenServer{}
+	srv := &AgentFieldServer{}
 
 	router := gin.New()
 	router.DELETE("/nodes/:node_id/monitoring", srv.unregisterAgentFromMonitoring)
@@ -262,7 +262,7 @@ func TestUnregisterAgentFromMonitoring_NoNodeID(t *testing.T) {
 
 func TestUnregisterAgentFromMonitoring_NoMonitor(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	srv := &HaxenServer{}
+	srv := &AgentFieldServer{}
 
 	router := gin.New()
 	router.DELETE("/nodes/:node_id/monitoring", srv.unregisterAgentFromMonitoring)
@@ -279,30 +279,30 @@ func TestUnregisterAgentFromMonitoring_NoMonitor(t *testing.T) {
 func TestSyncPackagesFromRegistry(t *testing.T) {
 	storage := newStubPackageStorage()
 
-	haxenHome := t.TempDir()
-	pkgDir := filepath.Join(haxenHome, "packages", "mypkg")
+	agentfieldHome := t.TempDir()
+	pkgDir := filepath.Join(agentfieldHome, "packages", "mypkg")
 	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
 		t.Fatalf("failed to create package dir: %v", err)
 	}
 
 	packageContent := []byte(`name: Test Package\nversion: 1.0.0`)
-	if err := os.WriteFile(filepath.Join(pkgDir, "haxen-package.yaml"), packageContent, 0o644); err != nil {
-		t.Fatalf("failed to write haxen-package.yaml: %v", err)
+	if err := os.WriteFile(filepath.Join(pkgDir, "agentfield-package.yaml"), packageContent, 0o644); err != nil {
+		t.Fatalf("failed to write agentfield-package.yaml: %v", err)
 	}
 
 	installedContent := []byte("installed:\n  test-package:\n    name: Test Package\n    version: \"1.0.0\"\n    description: Test description\n    path: \"" + pkgDir + "\"\n    source: local\n")
-	if err := os.WriteFile(filepath.Join(haxenHome, "installed.yaml"), installedContent, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(agentfieldHome, "installed.yaml"), installedContent, 0o644); err != nil {
 		t.Fatalf("failed to write installed.yaml: %v", err)
 	}
 	var reg InstallationRegistry
-	if data, err := os.ReadFile(filepath.Join(haxenHome, "installed.yaml")); err == nil {
+	if data, err := os.ReadFile(filepath.Join(agentfieldHome, "installed.yaml")); err == nil {
 		_ = yaml.Unmarshal(data, &reg)
 	}
 	if len(reg.Installed) == 0 {
 		t.Fatal("expected registry to contain installed package")
 	}
 
-	if err := SyncPackagesFromRegistry(haxenHome, storage); err != nil {
+	if err := SyncPackagesFromRegistry(agentfieldHome, storage); err != nil {
 		t.Fatalf("SyncPackagesFromRegistry returned error: %v", err)
 	}
 
@@ -313,9 +313,9 @@ func TestSyncPackagesFromRegistry(t *testing.T) {
 
 func TestSyncPackagesFromRegistryMissingFile(t *testing.T) {
 	storage := newStubPackageStorage()
-	haxenHome := t.TempDir()
+	agentfieldHome := t.TempDir()
 
-	if err := SyncPackagesFromRegistry(haxenHome, storage); err != nil {
+	if err := SyncPackagesFromRegistry(agentfieldHome, storage); err != nil {
 		t.Fatalf("expected nil error when registry file missing, got %v", err)
 	}
 	if len(storage.packages) != 0 {

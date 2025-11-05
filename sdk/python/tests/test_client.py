@@ -6,8 +6,8 @@ import types
 import pytest
 import requests
 
-from haxen_sdk.client import HaxenClient
-from haxen_sdk.types import AgentStatus, HeartbeatData
+from agentfield.client import AgentFieldClient
+from agentfield.types import AgentStatus, HeartbeatData
 
 
 @pytest.fixture(autouse=True)
@@ -64,7 +64,7 @@ def install_httpx_stub(monkeypatch, *, on_request):
         Timeout=lambda *args, **kwargs: None,
     )
 
-    import haxen_sdk.client as client_mod
+    import agentfield.client as client_mod
 
     monkeypatch.setitem(sys.modules, "httpx", module)
     client_mod.httpx = module
@@ -100,12 +100,12 @@ def test_execute_sync_injects_run_id(monkeypatch):
             }
         )
 
-    import haxen_sdk.client as client_mod
+    import agentfield.client as client_mod
 
     monkeypatch.setattr(client_mod.requests, "post", fake_post)
     monkeypatch.setattr(client_mod.requests, "get", fake_get)
 
-    client = HaxenClient(base_url="http://example.com")
+    client = AgentFieldClient(base_url="http://example.com")
     result = client.execute_sync("node.reasoner", {"payload": 1})
 
     assert result["status"] == "succeeded"
@@ -143,12 +143,12 @@ def test_execute_sync_respects_parent_header(monkeypatch):
             }
         )
 
-    import haxen_sdk.client as client_mod
+    import agentfield.client as client_mod
 
     monkeypatch.setattr(client_mod.requests, "post", fake_post)
     monkeypatch.setattr(client_mod.requests, "get", fake_get)
 
-    client = HaxenClient(base_url="http://example.com")
+    client = AgentFieldClient(base_url="http://example.com")
     result = client.execute_sync(
         "node.reasoner",
         {"payload": 1},
@@ -182,7 +182,7 @@ def test_execute_async_uses_httpx(monkeypatch):
 
     install_httpx_stub(monkeypatch, on_request=on_request)
 
-    client = HaxenClient(base_url="http://example.com")
+    client = AgentFieldClient(base_url="http://example.com")
     result = asyncio.run(client.execute("node.reasoner", {"payload": 1}))
 
     assert result["result"] == {"async": True}
@@ -228,7 +228,7 @@ async def test_execute_async_falls_back_to_requests(monkeypatch):
             }
         )
 
-    import haxen_sdk.client as client_mod
+    import agentfield.client as client_mod
 
     client_mod.httpx = None
     monkeypatch.setattr(
@@ -246,7 +246,7 @@ async def test_execute_async_falls_back_to_requests(monkeypatch):
 
     monkeypatch.setattr(requests.Session, "request", fake_session_request)
 
-    client = HaxenClient(base_url="http://example.com")
+    client = AgentFieldClient(base_url="http://example.com")
     result = await client.execute("node.reasoner", {"payload": 1})
 
     assert result["status"] == "succeeded"
@@ -265,13 +265,13 @@ async def test_async_heartbeat(monkeypatch):
 
     install_httpx_stub(monkeypatch, on_request=on_request)
 
-    import haxen_sdk.client as client_mod
+    import agentfield.client as client_mod
 
     monkeypatch.setattr(
         client_mod.requests, "post", lambda *args, **kwargs: DummyResponse({}, 200)
     )
 
-    client = HaxenClient(base_url="http://example.com")
+    client = AgentFieldClient(base_url="http://example.com")
     heartbeat = HeartbeatData(status=AgentStatus.READY, mcp_servers=[], timestamp="now")
 
     assert await client.send_enhanced_heartbeat("node", heartbeat) is True
@@ -290,11 +290,11 @@ def test_sync_heartbeat(monkeypatch):
         urls.append(url)
         return DummyResp()
 
-    import haxen_sdk.client as client_mod
+    import agentfield.client as client_mod
 
     monkeypatch.setattr(client_mod.requests, "post", fake_post)
 
-    client = HaxenClient(base_url="http://example.com")
+    client = AgentFieldClient(base_url="http://example.com")
     heartbeat = HeartbeatData(status=AgentStatus.READY, mcp_servers=[], timestamp="now")
 
     assert client.send_enhanced_heartbeat_sync("node", heartbeat) is True
@@ -329,13 +329,13 @@ def test_register_node_and_health(monkeypatch):
         calls.setdefault("get", []).append(url)
         return DummyResp({"nodes": ["n1"]})
 
-    import haxen_sdk.client as client_mod
+    import agentfield.client as client_mod
 
     monkeypatch.setattr(client_mod.requests, "post", fake_post)
     monkeypatch.setattr(client_mod.requests, "put", fake_put)
     monkeypatch.setattr(client_mod.requests, "get", fake_get)
 
-    client = HaxenClient(base_url="http://example.com")
+    client = AgentFieldClient(base_url="http://example.com")
     assert client.register_node({"id": "n1"}) == {"ok": True}
     assert client.update_health("n1", {"status": "up"}) == {"status": "updated"}
     assert client.get_nodes() == {"nodes": ["n1"]}
@@ -355,7 +355,7 @@ async def test_register_agent(monkeypatch):
 
     install_httpx_stub(monkeypatch, on_request=on_request)
 
-    client = HaxenClient(base_url="http://example.com")
+    client = AgentFieldClient(base_url="http://example.com")
     ok, payload = await client.register_agent("node-1", [], [], base_url="http://agent")
     assert ok is True
     assert payload == {}

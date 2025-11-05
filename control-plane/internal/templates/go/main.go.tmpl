@@ -5,15 +5,15 @@ import (
 	"log"
 	"os"
 
-	"github.com/agentfield/haxen/sdk/go/agent"
-	"github.com/agentfield/haxen/sdk/go/ai"
+	"github.com/agentfield/agentfield/sdk/go/agent"
+	"github.com/agentfield/agentfield/sdk/go/ai"
 )
 
 func main() {
 	cfg := agent.Config{
 		NodeID:        "{{.NodeID}}",
 		Version:       "1.0.0",
-		HaxenURL:      "http://localhost:8080",
+		AgentFieldURL:      "http://localhost:8080",
 		ListenAddress: ":0", // Auto-discover available port
 
 		// 🔧 Uncomment to enable AI features:

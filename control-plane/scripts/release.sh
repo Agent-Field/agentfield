@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Haxen Release Automation Script
+# AgentField Release Automation Script
 # Builds binaries and creates GitHub releases with auto-incrementing versions
 
 set -e
@@ -21,9 +21,9 @@ BUILD_SCRIPT="$PROJECT_ROOT/build-single-binary.sh"
 DIST_DIR="$PROJECT_ROOT/dist/releases"
 
 # GitHub configuration
-GITHUB_REPO="your-org/haxen"
+GITHUB_REPO="your-org/agentfield"
 GITHUB_OWNER="your-org"
-GITHUB_REPO_NAME="haxen"
+GITHUB_REPO_NAME="agentfield"
 
 print_header() {
     echo -e "${CYAN}================================${NC}"
@@ -187,10 +187,10 @@ build_binaries() {
     
     # Check for expected binaries
     local expected_binaries=(
-        "haxen-linux-amd64"
-        "haxen-linux-arm64"
-        "haxen-darwin-amd64"
-        "haxen-darwin-arm64"
+        "agentfield-linux-amd64"
+        "agentfield-linux-arm64"
+        "agentfield-darwin-amd64"
+        "agentfield-darwin-arm64"
     )
     
     local missing_binaries=()
@@ -220,7 +220,7 @@ build_binaries() {
     
     # Show build summary
     print_status "Built files:"
-    ls -la "$DIST_DIR" | grep -E "(haxen-|checksums|build-info|README)"
+    ls -la "$DIST_DIR" | grep -E "(agentfield-|checksums|build-info|README)"
 }
 
 # Generate release notes
@@ -236,9 +236,9 @@ generate_release_notes() {
     fi
     
     cat > "$release_notes_file" << EOF
-# Haxen $NEXT_TAG (Pre-release)
+# AgentField $NEXT_TAG (Pre-release)
 
-This is a pre-release version of Haxen for testing purposes.
+This is a pre-release version of AgentField for testing purposes.
 
 ## 🚀 What's New
 
@@ -252,9 +252,9 @@ EOF
     else
         echo "### Initial Alpha Release" >> "$release_notes_file"
         echo "" >> "$release_notes_file"
-        echo "- Initial release of Haxen Server" >> "$release_notes_file"
+        echo "- Initial release of AgentField Server" >> "$release_notes_file"
         echo "- Single binary deployment with embedded UI" >> "$release_notes_file"
-        echo "- Universal path management (stores data in ~/.haxen/)" >> "$release_notes_file"
+        echo "- Universal path management (stores data in ~/.agentfield/)" >> "$release_notes_file"
         echo "- Cross-platform support (Linux, macOS)" >> "$release_notes_file"
     fi
     
@@ -264,38 +264,38 @@ EOF
 
 ### Quick Install (Recommended)
 ```bash
-    curl -sSL https://raw.githubusercontent.com/your-org/haxen/main/scripts/install.sh | bash
+    curl -sSL https://raw.githubusercontent.com/your-org/agentfield/main/scripts/install.sh | bash
 ```
 
 ### Manual Download
 1. Download the appropriate binary for your platform from the assets below
-2. Make it executable: `chmod +x haxen-*`
-3. Run: `./haxen-linux-amd64` (or your platform's binary)
+2. Make it executable: `chmod +x agentfield-*`
+3. Run: `./agentfield-linux-amd64` (or your platform's binary)
 4. Open http://localhost:8080 in your browser
 
 ## 🏗️ Available Binaries
 
-- **haxen-linux-amd64** - Linux (Intel/AMD 64-bit)
-- **haxen-linux-arm64** - Linux (ARM 64-bit)  
-- **haxen-darwin-amd64** - macOS (Intel)
-- **haxen-darwin-arm64** - macOS (Apple Silicon)
+- **agentfield-linux-amd64** - Linux (Intel/AMD 64-bit)
+- **agentfield-linux-arm64** - Linux (ARM 64-bit)  
+- **agentfield-darwin-amd64** - macOS (Intel)
+- **agentfield-darwin-arm64** - macOS (Apple Silicon)
 
 ## 🔧 Features
 
 - **Single Binary**: Everything bundled in one executable
-- **Universal Storage**: All data stored in `~/.haxen/` directory
+- **Universal Storage**: All data stored in `~/.agentfield/` directory
 - **Embedded UI**: Web interface included in binary
 - **Cross-Platform**: Works on Linux and macOS
 - **Portable**: Run from anywhere, data stays consistent
 
 ## 📁 Data Directory
 
-All Haxen data is stored in `~/.haxen/`:
+All AgentField data is stored in `~/.agentfield/`:
 ```
-~/.haxen/
+~/.agentfield/
 ├── data/
-│   ├── haxen.db              # Main database
-│   ├── haxen.bolt            # Cache
+│   ├── agentfield.db              # Main database
+│   ├── agentfield.bolt            # Cache
 │   ├── keys/                 # Cryptographic keys
 │   ├── did_registries/       # DID registries
 │   └── vcs/                  # Verifiable credentials
@@ -310,7 +310,7 @@ This is an alpha pre-release intended for testing and development. Not recommend
 
 ## 🐛 Issues & Support
 
-Report issues at: https://github.com/your-org/haxen/issues
+Report issues at: https://github.com/your-org/agentfield/issues
 
 EOF
     
@@ -338,7 +338,7 @@ create_github_release() {
     # Create GitHub release
     print_status "Creating GitHub release..."
     gh release create "$NEXT_TAG" \
-        --title "Haxen $NEXT_TAG" \
+        --title "AgentField $NEXT_TAG" \
         --notes-file "$release_notes_file" \
         --prerelease \
         --repo "$GITHUB_REPO"
@@ -354,10 +354,10 @@ upload_assets() {
     
     # List of assets to upload
     local assets=(
-        "haxen-linux-amd64"
-        "haxen-linux-arm64"
-        "haxen-darwin-amd64"
-        "haxen-darwin-arm64"
+        "agentfield-linux-amd64"
+        "agentfield-linux-arm64"
+        "agentfield-darwin-amd64"
+        "agentfield-darwin-arm64"
         "checksums.txt"
         "build-info.txt"
         "README.md"
@@ -413,7 +413,7 @@ cleanup() {
 
 # Main release function
 main() {
-    print_header "Haxen Server Release Automation"
+    print_header "AgentField Server Release Automation"
     
     echo "This script will:"
     echo "  • Check prerequisites and authentication"
@@ -459,7 +459,7 @@ case "${1:-}" in
         print_success "Build completed - no release created"
         ;;
     "help"|"-h"|"--help")
-        echo "Haxen Release Automation Script"
+        echo "AgentField Release Automation Script"
         echo ""
         echo "Usage:"
         echo "  $0                Create full release (build + GitHub release)"

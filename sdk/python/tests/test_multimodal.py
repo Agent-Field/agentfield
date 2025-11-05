@@ -1,4 +1,4 @@
-from haxen_sdk.multimodal import image_from_file, audio_from_file, file_from_path
+from agentfield.multimodal import image_from_file, audio_from_file, file_from_path
 
 
 def test_image_from_file_and_audio_from_file(tmp_path):

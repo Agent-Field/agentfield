@@ -1,4 +1,4 @@
-from haxen_sdk.types import (
+from agentfield.types import (
     ExecutionHeaders,
     AgentStatus,
     HeartbeatData,

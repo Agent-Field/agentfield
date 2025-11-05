@@ -1,11 +1,11 @@
-// haxen/internal/infrastructure/process/port_manager.go
+// agentfield/internal/infrastructure/process/port_manager.go
 package process
 
 import (
 	"fmt"
 	"net"
 
-	"github.com/your-org/haxen/control-plane/internal/core/interfaces"
+	"github.com/your-org/agentfield/control-plane/internal/core/interfaces"
 )
 
 // DefaultPortManager provides a default implementation for managing network ports.

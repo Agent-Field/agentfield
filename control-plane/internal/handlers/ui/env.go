@@ -8,17 +8,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/internal/storage"
-	"github.com/your-org/haxen/control-plane/internal/core/interfaces"
+	"github.com/your-org/agentfield/control-plane/internal/core/interfaces"
+	"github.com/your-org/agentfield/control-plane/internal/storage"
 
 	"github.com/gin-gonic/gin"
 )
 
 // EnvHandler provides handlers for .env file management operations.
 type EnvHandler struct {
-	storage     storage.StorageProvider
-	agentService interfaces.AgentService
-	haxenHome   string
+	storage        storage.StorageProvider
+	agentService   interfaces.AgentService
+	agentfieldHome string
 }
 
 // DELETE /api/ui/v1/agents/:agentId/env/:key
@@ -120,10 +120,10 @@ func (h *EnvHandler) DeleteEnvVarHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message":   "variable deleted from .env file",
-		"agent_id":  agentID,
+		"message":    "variable deleted from .env file",
+		"agent_id":   agentID,
 		"package_id": packageID,
-		"key":       key,
+		"key":        key,
 	})
 }
 
@@ -224,8 +224,8 @@ func (h *EnvHandler) PatchEnvHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message":   ".env file patched successfully",
-		"agent_id":  agentID,
+		"message":    ".env file patched successfully",
+		"agent_id":   agentID,
 		"package_id": packageID,
 	})
 }
@@ -241,11 +241,11 @@ type EnvResponse struct {
 }
 
 // NewEnvHandler creates a new EnvHandler.
-func NewEnvHandler(storage storage.StorageProvider, agentService interfaces.AgentService, haxenHome string) *EnvHandler {
+func NewEnvHandler(storage storage.StorageProvider, agentService interfaces.AgentService, agentfieldHome string) *EnvHandler {
 	return &EnvHandler{
-		storage:      storage,
-		agentService: agentService,
-		haxenHome:    haxenHome,
+		storage:        storage,
+		agentService:   agentService,
+		agentfieldHome: agentfieldHome,
 	}
 }
 
@@ -419,8 +419,8 @@ func (h *EnvHandler) PutEnvHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message":   ".env file updated successfully",
-		"agent_id":  agentID,
+		"message":    ".env file updated successfully",
+		"agent_id":   agentID,
 		"package_id": packageID,
 	})
 }

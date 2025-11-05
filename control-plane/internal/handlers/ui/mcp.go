@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/internal/core/domain"
-	"github.com/your-org/haxen/control-plane/internal/core/interfaces"
-	"github.com/your-org/haxen/control-plane/internal/services"
+	"github.com/your-org/agentfield/control-plane/internal/core/domain"
+	"github.com/your-org/agentfield/control-plane/internal/core/interfaces"
+	"github.com/your-org/agentfield/control-plane/internal/services"
 
 	"github.com/gin-gonic/gin"
 )
@@ -205,7 +205,7 @@ func (h *MCPHandler) GetMCPStatusHandler(c *gin.Context) {
 			totalMCPServers += summary.MCPSummary.TotalServers
 			runningMCPServers += summary.MCPSummary.RunningServers
 			totalTools += summary.MCPSummary.TotalTools
-			
+
 			// Calculate weighted average health
 			if summary.MCPSummary.TotalServers > 0 {
 				overallHealth = (overallHealth + summary.MCPSummary.OverallHealth) / 2
@@ -270,7 +270,7 @@ func (h *MCPHandler) GetMCPEventsHandler(c *gin.Context) {
 		"timestamp": time.Now().Format(time.RFC3339),
 		"message":   "Connected to MCP events stream",
 	}
-	
+
 	// Write SSE formatted data
 	c.SSEvent("mcp-event", initialEvent)
 	w.Flush()
@@ -316,6 +316,6 @@ func (h *MCPHandler) GetMCPMetricsHandler(c *gin.Context) {
 		"node_id":   nodeID,
 		"timestamp": time.Now(),
 	}
-	
+
 	c.JSON(http.StatusOK, response)
 }

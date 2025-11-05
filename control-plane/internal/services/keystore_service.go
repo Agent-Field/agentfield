@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/your-org/haxen/control-plane/internal/config"
+	"github.com/your-org/agentfield/control-plane/internal/config"
 )
 
 // KeystoreService handles secure storage and management of cryptographic keys.

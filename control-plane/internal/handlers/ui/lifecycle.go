@@ -6,10 +6,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/your-org/haxen/control-plane/internal/core/domain"
-	"github.com/your-org/haxen/control-plane/internal/core/interfaces"
-	"github.com/your-org/haxen/control-plane/internal/storage"
-	"github.com/your-org/haxen/control-plane/pkg/types"
+	"github.com/your-org/agentfield/control-plane/internal/core/domain"
+	"github.com/your-org/agentfield/control-plane/internal/core/interfaces"
+	"github.com/your-org/agentfield/control-plane/internal/storage"
+	"github.com/your-org/agentfield/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -34,7 +34,7 @@ func (h *LifecycleHandler) getAgentBaseURL(ctx context.Context, agentID string, 
 	if registeredAgent, err := h.storage.GetAgent(ctx, agentID); err == nil && registeredAgent != nil && registeredAgent.BaseURL != "" {
 		return registeredAgent.BaseURL
 	}
-	
+
 	// Fallback to localhost construction for locally running agents
 	return "http://localhost:" + strconv.Itoa(port)
 }
@@ -51,7 +51,7 @@ func (h *LifecycleHandler) buildEndpoints(ctx context.Context, agentID string, p
 
 // StartAgentRequest represents the request body for starting an agent
 type StartAgentRequest struct {
-	Port   *int `json:"port,omitempty"`
+	Port   *int  `json:"port,omitempty"`
 	Detach *bool `json:"detach,omitempty"`
 }
 
@@ -180,11 +180,11 @@ func (h *LifecycleHandler) GetAgentStatusHandler(c *gin.Context) {
 	if err != nil {
 		// Agent not installed, return basic status
 		response := map[string]interface{}{
-			"agent_id":    agentID,
-			"name":        agentPackage.Name,
-			"is_running":  false,
-			"status":      "not_installed",
-			"message":     "agent package found but not installed",
+			"agent_id":   agentID,
+			"name":       agentPackage.Name,
+			"is_running": false,
+			"status":     "not_installed",
+			"message":    "agent package found but not installed",
 		}
 		c.JSON(http.StatusOK, response)
 		return
@@ -318,14 +318,14 @@ func (h *LifecycleHandler) ReconcileAgentHandler(c *gin.Context) {
 
 	// Return reconciled status
 	response := map[string]interface{}{
-		"agent_id":    agentID,
-		"status":      "reconciled",
-		"is_running":  status.IsRunning,
-		"pid":         status.PID,
-		"port":        status.Port,
-		"last_seen":   status.LastSeen,
-		"uptime":      status.Uptime,
-		"message":     "agent state reconciled with actual process state",
+		"agent_id":   agentID,
+		"status":     "reconciled",
+		"is_running": status.IsRunning,
+		"pid":        status.PID,
+		"port":       status.Port,
+		"last_seen":  status.LastSeen,
+		"uptime":     status.Uptime,
+		"message":    "agent state reconciled with actual process state",
 	}
 
 	c.JSON(http.StatusOK, response)

@@ -46,7 +46,7 @@ var executionStatusAliases = map[string]ExecutionStatus{
 	"processing":  ExecutionStatusRunning,
 }
 
-// NormalizeExecutionStatus maps arbitrary status strings onto the canonical execution statuses used by the Haxen platform.
+// NormalizeExecutionStatus maps arbitrary status strings onto the canonical execution statuses used by the AgentField platform.
 // Unknown or unsupported statuses resolve to ExecutionStatusUnknown.
 func NormalizeExecutionStatus(status string) string {
 	normalized := ExecutionStatus(strings.ToLower(strings.TrimSpace(status)))

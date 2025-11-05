@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/internal/logger"
+	"github.com/your-org/agentfield/control-plane/internal/logger"
 	"gopkg.in/yaml.v3"
 )
 
@@ -26,8 +26,8 @@ type GitHubPackageInfo struct {
 
 // GitHubInstaller handles GitHub package installation
 type GitHubInstaller struct {
-	HaxenHome string
-	Verbose   bool
+	AgentFieldHome string
+	Verbose        bool
 }
 
 // newSpinner creates a new spinner with the given message
@@ -131,26 +131,26 @@ func (gi *GitHubInstaller) InstallFromGitHub(githubURL string, force bool) error
 	// 1. Download archive
 	spinner := gi.newSpinner("Downloading package from GitHub")
 	spinner.Start()
-	
+
 	tempDir, err := gi.downloadAndExtract(info)
 	if err != nil {
 		spinner.Error("Failed to download package")
 		return fmt.Errorf("failed to download package: %w", err)
 	}
 	defer os.RemoveAll(tempDir) // Clean up temp directory
-	
+
 	spinner.Success("Package downloaded and extracted")
 
 	// 2. Validate package structure
 	spinner = gi.newSpinner("Validating package structure")
 	spinner.Start()
-	
+
 	packagePath, err := gi.findPackageRoot(tempDir)
 	if err != nil {
 		spinner.Error("Invalid package structure")
 		return fmt.Errorf("invalid package structure: %w", err)
 	}
-	
+
 	spinner.Success("Package structure validated")
 
 	// 3. Parse metadata to get package name
@@ -161,8 +161,8 @@ func (gi *GitHubInstaller) InstallFromGitHub(githubURL string, force bool) error
 
 	// 4. Use existing installer for the rest
 	installer := &PackageInstaller{
-		HaxenHome: gi.HaxenHome,
-		Verbose:   gi.Verbose,
+		AgentFieldHome: gi.AgentFieldHome,
+		Verbose:        gi.Verbose,
 	}
 
 	// Check if already installed
@@ -171,8 +171,8 @@ func (gi *GitHubInstaller) InstallFromGitHub(githubURL string, force bool) error
 	}
 
 	// Install using existing flow
-	destPath := filepath.Join(gi.HaxenHome, "packages", metadata.Name)
-	
+	destPath := filepath.Join(gi.AgentFieldHome, "packages", metadata.Name)
+
 	spinner = gi.newSpinner("Setting up environment")
 	spinner.Start()
 	if err := installer.copyPackage(packagePath, destPath); err != nil {
@@ -197,11 +197,11 @@ func (gi *GitHubInstaller) InstallFromGitHub(githubURL string, force bool) error
 	logger.Logger.Info().Msgf("%s Installed %s v%s from GitHub", Green(StatusSuccess), Bold(metadata.Name), Gray(metadata.Version))
 	logger.Logger.Info().Msgf("  %s %s", Gray("Source:"), fmt.Sprintf("%s/%s@%s", info.Owner, info.Repo, info.Ref))
 	logger.Logger.Info().Msgf("  %s %s", Gray("Location:"), destPath)
-	
+
 	// Check for required environment variables
 	installer.checkEnvironmentVariables(metadata)
-	
-	logger.Logger.Info().Msgf("\n%s %s", Blue("→"), Bold(fmt.Sprintf("Run: haxen run %s", metadata.Name)))
+
+	logger.Logger.Info().Msgf("\n%s %s", Blue("→"), Bold(fmt.Sprintf("Run: af run %s", metadata.Name)))
 
 	return nil
 }
@@ -209,7 +209,7 @@ func (gi *GitHubInstaller) InstallFromGitHub(githubURL string, force bool) error
 // downloadAndExtract downloads and extracts the GitHub archive
 func (gi *GitHubInstaller) downloadAndExtract(info *GitHubPackageInfo) (string, error) {
 	// Create temporary directory
-	tempDir, err := os.MkdirTemp("", "haxen-github-install-")
+	tempDir, err := os.MkdirTemp("", "agentfield-github-install-")
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp directory: %w", err)
 	}
@@ -269,7 +269,7 @@ func (gi *GitHubInstaller) extractZip(src, dest string) error {
 
 	for _, file := range reader.File {
 		path := filepath.Join(dest, file.Name)
-		
+
 		// Security check: ensure path is within destination
 		if !strings.HasPrefix(path, filepath.Clean(dest)+string(os.PathSeparator)) {
 			return fmt.Errorf("invalid file path: %s", file.Name)
@@ -308,7 +308,7 @@ func (gi *GitHubInstaller) extractZip(src, dest string) error {
 	return nil
 }
 
-// findPackageRoot finds the root directory containing haxen-package.yaml
+// findPackageRoot finds the root directory containing agentfield-package.yaml
 func (gi *GitHubInstaller) findPackageRoot(extractDir string) (string, error) {
 	var packageRoot string
 
@@ -317,7 +317,7 @@ func (gi *GitHubInstaller) findPackageRoot(extractDir string) (string, error) {
 			return err
 		}
 
-		if info.Name() == "haxen-package.yaml" {
+		if info.Name() == "agentfield-package.yaml" {
 			packageRoot = filepath.Dir(path)
 			return filepath.SkipDir // Found it, stop walking
 		}
@@ -330,7 +330,7 @@ func (gi *GitHubInstaller) findPackageRoot(extractDir string) (string, error) {
 	}
 
 	if packageRoot == "" {
-		return "", fmt.Errorf("haxen-package.yaml not found in the repository")
+		return "", fmt.Errorf("agentfield-package.yaml not found in the repository")
 	}
 
 	// Also check for main.py
@@ -342,18 +342,18 @@ func (gi *GitHubInstaller) findPackageRoot(extractDir string) (string, error) {
 	return packageRoot, nil
 }
 
-// parsePackageMetadata parses the haxen-package.yaml file (reuse from installer.go)
+// parsePackageMetadata parses the agentfield-package.yaml file (reuse from installer.go)
 func (gi *GitHubInstaller) parsePackageMetadata(packagePath string) (*PackageMetadata, error) {
 	installer := &PackageInstaller{
-		HaxenHome: gi.HaxenHome,
-		Verbose:   gi.Verbose,
+		AgentFieldHome: gi.AgentFieldHome,
+		Verbose:        gi.Verbose,
 	}
 	return installer.parsePackageMetadata(packagePath)
 }
 
 // updateRegistryWithGitHub updates the installation registry with GitHub source info
 func (gi *GitHubInstaller) updateRegistryWithGitHub(metadata *PackageMetadata, info *GitHubPackageInfo, sourcePath, destPath string) error {
-	registryPath := filepath.Join(gi.HaxenHome, "installed.yaml")
+	registryPath := filepath.Join(gi.AgentFieldHome, "installed.yaml")
 
 	// Load existing registry or create new one
 	registry := &InstallationRegistry{
@@ -378,7 +378,7 @@ func (gi *GitHubInstaller) updateRegistryWithGitHub(metadata *PackageMetadata, i
 			Port:      nil,
 			PID:       nil,
 			StartedAt: nil,
-			LogFile:   filepath.Join(gi.HaxenHome, "logs", metadata.Name+".log"),
+			LogFile:   filepath.Join(gi.AgentFieldHome, "logs", metadata.Name+".log"),
 		},
 	}
 

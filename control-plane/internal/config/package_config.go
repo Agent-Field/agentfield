@@ -11,26 +11,26 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ConfigurationField represents a single configuration field in haxen-package.yaml
+// ConfigurationField represents a single configuration field in agentfield-package.yaml
 type ConfigurationField struct {
-	Name        string `yaml:"name" json:"name"`
-	Description string `yaml:"description" json:"description"`
-	Type        string `yaml:"type" json:"type"` // "string", "secret", "integer", "float", "boolean", "select"
-	Default     string `yaml:"default" json:"default,omitempty"`
-	Validation  string `yaml:"validation" json:"validation,omitempty"` // regex pattern
-	Options     []string `yaml:"options" json:"options,omitempty"`     // for select type
-	Min         *int   `yaml:"min" json:"min,omitempty"`               // for integer/float
-	Max         *int   `yaml:"max" json:"max,omitempty"`               // for integer/float
+	Name        string   `yaml:"name" json:"name"`
+	Description string   `yaml:"description" json:"description"`
+	Type        string   `yaml:"type" json:"type"` // "string", "secret", "integer", "float", "boolean", "select"
+	Default     string   `yaml:"default" json:"default,omitempty"`
+	Validation  string   `yaml:"validation" json:"validation,omitempty"` // regex pattern
+	Options     []string `yaml:"options" json:"options,omitempty"`       // for select type
+	Min         *int     `yaml:"min" json:"min,omitempty"`               // for integer/float
+	Max         *int     `yaml:"max" json:"max,omitempty"`               // for integer/float
 }
 
-// ConfigurationSchema represents the configuration schema from haxen-package.yaml
+// ConfigurationSchema represents the configuration schema from agentfield-package.yaml
 type ConfigurationSchema struct {
 	Required []ConfigurationField `yaml:"required" json:"required"`
 	Optional []ConfigurationField `yaml:"optional" json:"optional"`
 }
 
-// HaxenPackageConfig represents the structure of haxen-package.yaml
-type HaxenPackageConfig struct {
+// AgentFieldPackageConfig represents the structure of agentfield-package.yaml
+type AgentFieldPackageConfig struct {
 	Name            string              `yaml:"name"`
 	Version         string              `yaml:"version"`
 	Description     string              `yaml:"description"`
@@ -72,28 +72,28 @@ type RuntimeConfig struct {
 }
 
 type MetadataConfig struct {
-	CreatedAt   string `yaml:"created_at"`
-	SDKVersion  string `yaml:"sdk_version"`
-	Language    string `yaml:"language"`
-	Platform    string `yaml:"platform"`
+	CreatedAt  string `yaml:"created_at"`
+	SDKVersion string `yaml:"sdk_version"`
+	Language   string `yaml:"language"`
+	Platform   string `yaml:"platform"`
 }
 
-// LoadHaxenPackageConfig loads and parses a haxen-package.yaml file
-func LoadHaxenPackageConfig(packagePath string) (*HaxenPackageConfig, error) {
-	configPath := filepath.Join(packagePath, "haxen-package.yaml")
-	
+// LoadAgentFieldPackageConfig loads and parses a agentfield-package.yaml file
+func LoadAgentFieldPackageConfig(packagePath string) (*AgentFieldPackageConfig, error) {
+	configPath := filepath.Join(packagePath, "agentfield-package.yaml")
+
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("haxen-package.yaml not found at %s", configPath)
+		return nil, fmt.Errorf("agentfield-package.yaml not found at %s", configPath)
 	}
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read haxen-package.yaml: %w", err)
+		return nil, fmt.Errorf("failed to read agentfield-package.yaml: %w", err)
 	}
 
-	var config HaxenPackageConfig
+	var config AgentFieldPackageConfig
 	if err := yaml.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse haxen-package.yaml: %w", err)
+		return nil, fmt.Errorf("failed to parse agentfield-package.yaml: %w", err)
 	}
 
 	// Validate the configuration schema
@@ -254,19 +254,19 @@ func ValidateConfiguration(schema *ConfigurationSchema, config map[string]string
 // GetConfigurationWithDefaults returns configuration with default values applied
 func GetConfigurationWithDefaults(schema *ConfigurationSchema, config map[string]string) map[string]string {
 	result := make(map[string]string)
-	
+
 	// Copy provided values
 	for k, v := range config {
 		result[k] = v
 	}
-	
+
 	// Apply defaults for missing optional fields
 	for _, field := range schema.Optional {
 		if _, exists := result[field.Name]; !exists && field.Default != "" {
 			result[field.Name] = field.Default
 		}
 	}
-	
+
 	return result
 }
 

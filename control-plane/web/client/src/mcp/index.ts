@@ -123,4 +123,4 @@ export type {
   MCPHealthResponseUser,
   MCPHealthResponseDeveloper,
   AppMode
-} from '../types/haxen';
+} from '../types/agentfield';

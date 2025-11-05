@@ -1,4 +1,4 @@
-project_name: haxen-control-plane
+project_name: agentfield-control-plane
 
 before:
   hooks:
@@ -6,10 +6,10 @@ before:
     - npm --prefix control-plane/web/client run build
 
 builds:
-  - id: haxen-control-plane
+  - id: agentfield-control-plane
     dir: control-plane
-    main: ./cmd/server
-    binary: haxen-server
+    main: ./cmd/agentfield-server
+    binary: agentfield-server
     env:
       - CGO_ENABLED=0
     goos:
@@ -26,9 +26,9 @@ builds:
       - -s -w
 
 archives:
-  - id: haxen-control-plane
+  - id: agentfield-control-plane
     builds:
-      - haxen-control-plane
+      - agentfield-control-plane
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     format_overrides:
       - goos: windows

@@ -4,25 +4,25 @@
 # MCP Endpoints Testing Script
 # =============================================================================
 # This script tests all the new MCP health integration endpoints implemented
-# in the Haxen server. It includes comprehensive testing for all 4 endpoints
+# in the AgentField server. It includes comprehensive testing for all 4 endpoints
 # with both success and error scenarios.
 #
 # Prerequisites:
-# - Haxen server running on http://localhost:8080 (default)
+# - AgentField server running on http://localhost:8080 (default)
 # - jq installed for JSON formatting (brew install jq on macOS)
 # - curl available (should be pre-installed)
 # - At least one agent node running and registered
 #
 # Usage:
-#   chmod +x haxen/scripts/test-mcp-endpoints.sh
-#   ./haxen/scripts/test-mcp-endpoints.sh
+#   chmod +x agentfield/scripts/test-mcp-endpoints.sh
+#   ./agentfield/scripts/test-mcp-endpoints.sh
 #
 # =============================================================================
 
 set -e  # Exit on any error
 
 # Configuration
-HAXEN_SERVER="${HAXEN_SERVER:-http://localhost:8080}"
+AGENTFIELD_SERVER="${AGENTFIELD_SERVER:-http://localhost:8080}"
 VERBOSE="${VERBOSE:-false}"
 SLEEP_BETWEEN_TESTS="${SLEEP_BETWEEN_TESTS:-2}"
 
@@ -74,16 +74,16 @@ check_dependencies() {
     log_success "All dependencies are available"
 }
 
-# Check if Haxen server is running
-check_haxen_server() {
-    log_info "Checking if Haxen server is running at $HAXEN_SERVER..."
+# Check if AgentField server is running
+check_agentfield_server() {
+    log_info "Checking if AgentField server is running at $AGENTFIELD_SERVER..."
     
-    if curl -s --connect-timeout 5 "$HAXEN_SERVER/health" > /dev/null 2>&1; then
-        log_success "Haxen server is running"
+    if curl -s --connect-timeout 5 "$AGENTFIELD_SERVER/health" > /dev/null 2>&1; then
+        log_success "AgentField server is running"
     else
-        log_error "Haxen server is not responding at $HAXEN_SERVER"
-        log_error "Please ensure the Haxen server is running:"
-        log_error "  cd haxen/apps/platform/haxen && go run cmd/haxen-server/main.go"
+        log_error "AgentField server is not responding at $AGENTFIELD_SERVER"
+        log_error "Please ensure the AgentField server is running:"
+        log_error "  cd agentfield/apps/platform/agentfield && go run cmd/agentfield-server/main.go"
         exit 1
     fi
 }
@@ -93,10 +93,10 @@ get_test_nodes() {
     log_info "Fetching available nodes for testing..."
     
     local response
-    response=$(curl -s "$HAXEN_SERVER/api/ui/v1/nodes" 2>/dev/null)
+    response=$(curl -s "$AGENTFIELD_SERVER/api/ui/v1/nodes" 2>/dev/null)
     
     if [ $? -ne 0 ] || [ -z "$response" ]; then
-        log_error "Failed to fetch nodes from Haxen server"
+        log_error "Failed to fetch nodes from AgentField server"
         return 1
     fi
     
@@ -185,7 +185,7 @@ test_overall_mcp_status() {
     log_separator
     
     execute_curl "GET" \
-        "$HAXEN_SERVER/api/ui/v1/mcp/status" \
+        "$AGENTFIELD_SERVER/api/ui/v1/mcp/status" \
         "Get overall MCP status across all nodes" \
         "" \
         "200"
@@ -203,7 +203,7 @@ test_node_mcp_health_user() {
     fi
     
     execute_curl "GET" \
-        "$HAXEN_SERVER/api/ui/v1/nodes/$FIRST_NODE_ID/mcp/health" \
+        "$AGENTFIELD_SERVER/api/ui/v1/nodes/$FIRST_NODE_ID/mcp/health" \
         "Get MCP health for node $FIRST_NODE_ID (user mode)" \
         "" \
         "200"
@@ -221,7 +221,7 @@ test_node_mcp_health_developer() {
     fi
     
     execute_curl "GET" \
-        "$HAXEN_SERVER/api/ui/v1/nodes/$FIRST_NODE_ID/mcp/health?mode=developer" \
+        "$AGENTFIELD_SERVER/api/ui/v1/nodes/$FIRST_NODE_ID/mcp/health?mode=developer" \
         "Get MCP health for node $FIRST_NODE_ID (developer mode)" \
         "" \
         "200"
@@ -241,7 +241,7 @@ test_mcp_server_restart() {
     # First, try to get available MCP servers for this node
     log_info "Getting available MCP servers for node $FIRST_NODE_ID..."
     local health_response
-    health_response=$(curl -s "$HAXEN_SERVER/api/ui/v1/nodes/$FIRST_NODE_ID/mcp/health?mode=developer" 2>/dev/null)
+    health_response=$(curl -s "$AGENTFIELD_SERVER/api/ui/v1/nodes/$FIRST_NODE_ID/mcp/health?mode=developer" 2>/dev/null)
     
     if [ $? -eq 0 ] && [ -n "$health_response" ]; then
         local server_alias
@@ -250,14 +250,14 @@ test_mcp_server_restart() {
         if [ -n "$server_alias" ] && [ "$server_alias" != "null" ]; then
             log_info "Found MCP server alias: $server_alias"
             execute_curl "POST" \
-                "$HAXEN_SERVER/api/ui/v1/nodes/$FIRST_NODE_ID/mcp/servers/$server_alias/restart" \
+                "$AGENTFIELD_SERVER/api/ui/v1/nodes/$FIRST_NODE_ID/mcp/servers/$server_alias/restart" \
                 "Restart MCP server '$server_alias' on node $FIRST_NODE_ID" \
                 "" \
                 "200"
         else
             log_warning "No MCP servers found for node $FIRST_NODE_ID, testing with dummy alias"
             execute_curl "POST" \
-                "$HAXEN_SERVER/api/ui/v1/nodes/$FIRST_NODE_ID/mcp/servers/test-server/restart" \
+                "$AGENTFIELD_SERVER/api/ui/v1/nodes/$FIRST_NODE_ID/mcp/servers/test-server/restart" \
                 "Restart MCP server 'test-server' on node $FIRST_NODE_ID (should fail)" \
                 "" \
                 "404"
@@ -265,7 +265,7 @@ test_mcp_server_restart() {
     else
         log_warning "Could not fetch MCP servers, testing with dummy alias"
         execute_curl "POST" \
-            "$HAXEN_SERVER/api/ui/v1/nodes/$FIRST_NODE_ID/mcp/servers/test-server/restart" \
+            "$AGENTFIELD_SERVER/api/ui/v1/nodes/$FIRST_NODE_ID/mcp/servers/test-server/restart" \
             "Restart MCP server 'test-server' on node $FIRST_NODE_ID (should fail)" \
             "" \
             "404"
@@ -286,7 +286,7 @@ test_mcp_tools_listing() {
     # First, try to get available MCP servers for this node
     log_info "Getting available MCP servers for node $FIRST_NODE_ID..."
     local health_response
-    health_response=$(curl -s "$HAXEN_SERVER/api/ui/v1/nodes/$FIRST_NODE_ID/mcp/health?mode=developer" 2>/dev/null)
+    health_response=$(curl -s "$AGENTFIELD_SERVER/api/ui/v1/nodes/$FIRST_NODE_ID/mcp/health?mode=developer" 2>/dev/null)
     
     if [ $? -eq 0 ] && [ -n "$health_response" ]; then
         local server_alias
@@ -295,14 +295,14 @@ test_mcp_tools_listing() {
         if [ -n "$server_alias" ] && [ "$server_alias" != "null" ]; then
             log_info "Found MCP server alias: $server_alias"
             execute_curl "GET" \
-                "$HAXEN_SERVER/api/ui/v1/nodes/$FIRST_NODE_ID/mcp/servers/$server_alias/tools" \
+                "$AGENTFIELD_SERVER/api/ui/v1/nodes/$FIRST_NODE_ID/mcp/servers/$server_alias/tools" \
                 "Get tools for MCP server '$server_alias' on node $FIRST_NODE_ID" \
                 "" \
                 "200"
         else
             log_warning "No MCP servers found for node $FIRST_NODE_ID, testing with dummy alias"
             execute_curl "GET" \
-                "$HAXEN_SERVER/api/ui/v1/nodes/$FIRST_NODE_ID/mcp/servers/test-server/tools" \
+                "$AGENTFIELD_SERVER/api/ui/v1/nodes/$FIRST_NODE_ID/mcp/servers/test-server/tools" \
                 "Get tools for MCP server 'test-server' on node $FIRST_NODE_ID (should fail)" \
                 "" \
                 "404"
@@ -310,7 +310,7 @@ test_mcp_tools_listing() {
     else
         log_warning "Could not fetch MCP servers, testing with dummy alias"
         execute_curl "GET" \
-            "$HAXEN_SERVER/api/ui/v1/nodes/$FIRST_NODE_ID/mcp/servers/test-server/tools" \
+            "$AGENTFIELD_SERVER/api/ui/v1/nodes/$FIRST_NODE_ID/mcp/servers/test-server/tools" \
             "Get tools for MCP server 'test-server' on node $FIRST_NODE_ID (should fail)" \
             "" \
             "404"
@@ -325,7 +325,7 @@ test_error_cases() {
     
     # Test with invalid node ID
     execute_curl "GET" \
-        "$HAXEN_SERVER/api/ui/v1/nodes/invalid-node-id/mcp/health" \
+        "$AGENTFIELD_SERVER/api/ui/v1/nodes/invalid-node-id/mcp/health" \
         "Get MCP health for invalid node ID (should fail)" \
         "" \
         "404"
@@ -333,13 +333,13 @@ test_error_cases() {
     # Test with non-existent server alias
     if [ -n "$FIRST_NODE_ID" ]; then
         execute_curl "GET" \
-            "$HAXEN_SERVER/api/ui/v1/nodes/$FIRST_NODE_ID/mcp/servers/non-existent-server/tools" \
+            "$AGENTFIELD_SERVER/api/ui/v1/nodes/$FIRST_NODE_ID/mcp/servers/non-existent-server/tools" \
             "Get tools for non-existent MCP server (should fail)" \
             "" \
             "404"
         
         execute_curl "POST" \
-            "$HAXEN_SERVER/api/ui/v1/nodes/$FIRST_NODE_ID/mcp/servers/non-existent-server/restart" \
+            "$AGENTFIELD_SERVER/api/ui/v1/nodes/$FIRST_NODE_ID/mcp/servers/non-existent-server/restart" \
             "Restart non-existent MCP server (should fail)" \
             "" \
             "404"
@@ -357,7 +357,7 @@ test_sse_events() {
     
     # Test SSE connection briefly
     timeout 5 curl -s -H "Accept: text/event-stream" \
-        "$HAXEN_SERVER/api/ui/v1/events" 2>/dev/null || true
+        "$AGENTFIELD_SERVER/api/ui/v1/events" 2>/dev/null || true
     
     log_info "SSE connection test completed (use browser or SSE client for full testing)"
 }
@@ -371,13 +371,13 @@ main() {
     echo -e "${NC}"
     
     log_info "Starting MCP endpoints testing..."
-    log_info "Haxen Server: $HAXEN_SERVER"
+    log_info "AgentField Server: $AGENTFIELD_SERVER"
     log_info "Verbose Mode: $VERBOSE"
     echo ""
     
     # Pre-flight checks
     check_dependencies
-    check_haxen_server
+    check_agentfield_server
     get_test_nodes
     
     # Run all tests
@@ -404,10 +404,10 @@ main() {
     log_info "  - Server restart: Success confirmation message"
     log_info ""
     log_info "Common troubleshooting:"
-    log_info "  - Ensure Haxen server is running: go run cmd/haxen-server/main.go"
+    log_info "  - Ensure AgentField server is running: go run cmd/agentfield-server/main.go"
     log_info "  - Ensure at least one agent is running and registered"
     log_info "  - Check agent MCP server configurations"
-    log_info "  - Verify network connectivity to $HAXEN_SERVER"
+    log_info "  - Verify network connectivity to $AGENTFIELD_SERVER"
     
     echo ""
 }
@@ -420,7 +420,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -s|--server)
-            HAXEN_SERVER="$2"
+            AGENTFIELD_SERVER="$2"
             shift 2
             ;;
         -h|--help)
@@ -428,11 +428,11 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  -v, --verbose     Enable verbose curl output"
-            echo "  -s, --server URL  Set Haxen server URL (default: http://localhost:8080)"
+            echo "  -s, --server URL  Set AgentField server URL (default: http://localhost:8080)"
             echo "  -h, --help        Show this help message"
             echo ""
             echo "Environment variables:"
-            echo "  HAXEN_SERVER           Haxen server URL"
+            echo "  AGENTFIELD_SERVER           AgentField server URL"
             echo "  VERBOSE               Enable verbose mode (true/false)"
             echo "  SLEEP_BETWEEN_TESTS   Seconds to sleep between tests (default: 2)"
             exit 0

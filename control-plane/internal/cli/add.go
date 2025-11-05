@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/internal/config"
-	"github.com/your-org/haxen/control-plane/internal/mcp"
+	"github.com/your-org/agentfield/control-plane/internal/config"
+	"github.com/your-org/agentfield/control-plane/internal/mcp"
 
 	"github.com/spf13/cobra"
 )
@@ -43,28 +43,28 @@ func NewAddCommand() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "add <source> [alias]",
-		Short: "Add dependencies to your Haxen agent project",
-		Long: `Add dependencies to your Haxen agent project.
+		Short: "Add dependencies to your AgentField agent project",
+		Long: `Add dependencies to your AgentField agent project.
 
 Supports adding MCP servers and regular agent packages with advanced configuration options.
 
 Examples:
   # Remote MCP servers (URL-based)
-  haxen add --mcp --url https://github.com/modelcontextprotocol/server-github
-  haxen add --mcp --url https://github.com/ferrislucas/iterm-mcp github-tools
+  af add --mcp --url https://github.com/modelcontextprotocol/server-github
+  af add --mcp --url https://github.com/ferrislucas/iterm-mcp github-tools
 
   # Local MCP servers with custom commands
-  haxen add --mcp my-server --run "node server.js --port {{port}}" \
+  af add --mcp my-server --run "node server.js --port {{port}}" \
     --setup "npm install" --setup "npm run build"
   
   # Python MCP server with environment variables
-  haxen add --mcp python-server --run "python server.py --port {{port}}" \
+  af add --mcp python-server --run "python server.py --port {{port}}" \
     --setup "pip install -r requirements.txt" \
     --env "PYTHONPATH={{server_dir}}" \
     --working-dir "./src"
 
   # Advanced configuration with health checks
-  haxen add --mcp enterprise-server \
+  af add --mcp enterprise-server \
     --url https://github.com/company/mcp-server \
     --run "node dist/server.js --port {{port}} --config {{config_file}}" \
     --setup "npm install" --setup "npm run build" \
@@ -74,8 +74,8 @@ Examples:
     --tags "enterprise" --tags "production"
 
   # Regular agent packages (future)
-  haxen add github.com/haxen-helpers/email-utils
-  haxen add github.com/openai/prompt-templates
+  af add github.com/agentfield-helpers/email-utils
+  af add github.com/openai/prompt-templates
 
 Template Variables:
   {{port}}        - Dynamically assigned port number
@@ -121,7 +121,7 @@ func runAddCommandWithOptions(opts *MCPAddOptions, verbose bool) error {
 		return fmt.Errorf("failed to get current directory: %w", err)
 	}
 
-	if err := validateHaxenProject(projectDir); err != nil {
+	if err := validateAgentFieldProject(projectDir); err != nil {
 		return err
 	}
 
@@ -138,10 +138,10 @@ func runAddCommandWithOptions(opts *MCPAddOptions, verbose bool) error {
 	return fmt.Errorf("only MCP server dependencies are currently supported. Use --mcp flag")
 }
 
-func validateHaxenProject(projectDir string) error {
-	haxenYAMLPath := filepath.Join(projectDir, "haxen.yaml")
-	if _, err := os.Stat(haxenYAMLPath); os.IsNotExist(err) {
-		return fmt.Errorf("not a Haxen project directory (haxen.yaml not found)")
+func validateAgentFieldProject(projectDir string) error {
+	agentfieldYAMLPath := filepath.Join(projectDir, "agentfield.yaml")
+	if _, err := os.Stat(agentfieldYAMLPath); os.IsNotExist(err) {
+		return fmt.Errorf("not a AgentField project directory (agentfield.yaml not found)")
 	}
 	return nil
 }
@@ -159,12 +159,12 @@ type MCPAddCommand struct {
 // It performs initial processing and validation.
 func NewMCPAddCommand(projectDir string, opts *MCPAddOptions, verboseFlag bool) (*MCPAddCommand, error) {
 	// Load application configuration
-	appCfg, err := config.LoadConfig(filepath.Join(projectDir, "haxen.yaml"))
+	appCfg, err := config.LoadConfig(filepath.Join(projectDir, "agentfield.yaml"))
 	if err != nil {
-		// Fallback for safety, though haxen.yaml should exist due to validateHaxenProject
-		appCfg, err = config.LoadConfig("haxen.yaml")
+		// Fallback for safety, though agentfield.yaml should exist due to validateAgentFieldProject
+		appCfg, err = config.LoadConfig("agentfield.yaml")
 		if err != nil {
-			return nil, fmt.Errorf("failed to load haxen configuration: %w. Ensure haxen.yaml exists", err)
+			return nil, fmt.Errorf("failed to load af configuration: %w. Ensure agentfield.yaml exists", err)
 		}
 	}
 
@@ -188,7 +188,6 @@ func NewMCPAddCommand(projectDir string, opts *MCPAddOptions, verboseFlag bool) 
 	//    return nil, fmt.Errorf("MCP configuration validation failed:\n%s", validationErrs.Error())
 	// }
 
-
 	return &MCPAddCommand{
 		ProjectDir: projectDir,
 		Opts:       opts,
@@ -209,7 +208,7 @@ func (cmd *MCPAddCommand) Execute() error {
 	if finalAlias == "" {
 		finalAlias = deriveAliasLocally(cmd.Opts.Source)
 	}
-	
+
 	// This check should use the refined alias
 	if !cmd.Opts.Force && finalAlias != "" {
 		if mcpExists(cmd.ProjectDir, finalAlias) {
@@ -252,16 +251,16 @@ func (cmd *MCPAddCommand) Execute() error {
 	// TODO: Issue 4 - Re-enable validation with new simplified architecture
 	// Temporarily disabled validator to avoid compilation errors
 	/*
-	// Integrate mcp.ConfigValidator (from Task 1.3)
-	validator := mcp.NewBasicConfigValidator()
-	validationErrs := validator.Validate(mcpServerCfg)
-	if len(validationErrs) > 0 {
-	   return fmt.Errorf("MCP configuration validation failed:\n%s", validationErrs.Error())
-	}
+		// Integrate mcp.ConfigValidator (from Task 1.3)
+		validator := mcp.NewBasicConfigValidator()
+		validationErrs := validator.Validate(mcpServerCfg)
+		if len(validationErrs) > 0 {
+		   return fmt.Errorf("MCP configuration validation failed:\n%s", validationErrs.Error())
+		}
 	*/
 
 	fmt.Printf("  %s Adding MCP server...\n", Blue("→"))
-	
+
 	// Use the new simplified Add method
 	if err := cmd.Manager.Add(mcpServerCfg); err != nil {
 		fmt.Printf("  %s %s\n", Red(StatusError), err.Error())
@@ -304,8 +303,8 @@ func (cmd *MCPAddCommand) Execute() error {
 	fmt.Printf("  %s Capabilities discovery and skill generation handled by manager\n", Gray(StatusInfo))
 
 	fmt.Printf("\n%s %s\n", Blue("→"), Bold("Next steps:"))
-	fmt.Printf("  %s Start the MCP server: %s\n", Gray("1."), Cyan(fmt.Sprintf("haxen mcp start %s", mcpServerCfg.Alias)))
-	fmt.Printf("  %s Check status: %s\n", Gray("2."), Cyan("haxen mcp status"))
+	fmt.Printf("  %s Start the MCP server: %s\n", Gray("1."), Cyan(fmt.Sprintf("af mcp start %s", mcpServerCfg.Alias)))
+	fmt.Printf("  %s Check status: %s\n", Gray("2."), Cyan("af mcp status"))
 	fmt.Printf("  %s Use MCP tools as regular skills: %s\n", Gray("3."), Cyan(fmt.Sprintf("await app.call(\"%s_<tool_name>\", ...)", mcpServerCfg.Alias)))
 	fmt.Printf("  %s Generated skill file: %s\n", Gray("4."), Gray(fmt.Sprintf("skills/mcp_%s.py", mcpServerCfg.Alias)))
 
@@ -316,7 +315,7 @@ func (cmd *MCPAddCommand) Execute() error {
 // func addMCPServer(projectDir string, opts *MCPAddOptions, verbose bool) error {
 //	fmt.Printf("Adding MCP server: %s\n", Bold(opts.Source))
 //
-//	appCfg, err := config.LoadConfig(filepath.Join(projectDir, "haxen.yaml"))
+//	appCfg, err := config.LoadConfig(filepath.Join(projectDir, "agentfield.yaml"))
 // The orphaned code block that started with "if err != nil {" and was a remnant
 // of the original addMCPServer function body has been removed by this replacement.
 // The logic is now consolidated within MCPAddCommand.Execute().
@@ -330,14 +329,20 @@ func mcpExists(projectDir, alias string) bool {
 // deriveAliasLocally is a placeholder for a more robust alias derivation.
 // Ideally, this logic resides in the mcp package or is more comprehensive.
 func deriveAliasLocally(source string) string {
-	if strings.Contains(source, "@modelcontextprotocol/server-github") { return "github" }
-	if strings.Contains(source, "@modelcontextprotocol/server-memory") { return "memory" }
-	if strings.Contains(source, "@modelcontextprotocol/server-filesystem") { return "filesystem" }
-	
+	if strings.Contains(source, "@modelcontextprotocol/server-github") {
+		return "github"
+	}
+	if strings.Contains(source, "@modelcontextprotocol/server-memory") {
+		return "memory"
+	}
+	if strings.Contains(source, "@modelcontextprotocol/server-filesystem") {
+		return "filesystem"
+	}
+
 	// Basic derivation from source string (e.g., github:owner/repo -> repo)
 	parts := strings.Split(source, "/")
 	namePart := parts[len(parts)-1]
-	
+
 	nameParts := strings.SplitN(namePart, "@", 2) // remove version if any
 	namePart = nameParts[0]
 
@@ -345,10 +350,10 @@ func deriveAliasLocally(source string) string {
 	if len(nameParts) > 1 {
 		namePart = nameParts[1]
 	}
-	
+
 	// Sanitize for use as a directory name (simple version)
 	namePart = strings.ReplaceAll(namePart, ".", "_")
-	
+
 	if namePart == "" {
 		return "mcp_server" // Default fallback
 	}

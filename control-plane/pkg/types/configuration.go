@@ -32,19 +32,19 @@ const (
 
 // AgentPackage represents an installed agent package
 type AgentPackage struct {
-	ID                string                 `json:"id" db:"id"`
-	Name              string                 `json:"name" db:"name"`
-	Version           string                 `json:"version" db:"version"`
-	Description       *string                `json:"description,omitempty" db:"description"`
-	Author            *string                `json:"author,omitempty" db:"author"`
-	Repository        *string                `json:"repository,omitempty" db:"repository"`
-	InstallPath       string                 `json:"install_path" db:"install_path"`
-	ConfigurationSchema json.RawMessage      `json:"configuration_schema" db:"configuration_schema"`
-	Status            PackageStatus          `json:"status" db:"status"`
-	ConfigurationStatus ConfigurationStatus  `json:"configuration_status" db:"configuration_status"`
-	InstalledAt       time.Time              `json:"installed_at" db:"installed_at"`
-	UpdatedAt         time.Time              `json:"updated_at" db:"updated_at"`
-	Metadata          PackageMetadata        `json:"metadata" db:"metadata"`
+	ID                  string              `json:"id" db:"id"`
+	Name                string              `json:"name" db:"name"`
+	Version             string              `json:"version" db:"version"`
+	Description         *string             `json:"description,omitempty" db:"description"`
+	Author              *string             `json:"author,omitempty" db:"author"`
+	Repository          *string             `json:"repository,omitempty" db:"repository"`
+	InstallPath         string              `json:"install_path" db:"install_path"`
+	ConfigurationSchema json.RawMessage     `json:"configuration_schema" db:"configuration_schema"`
+	Status              PackageStatus       `json:"status" db:"status"`
+	ConfigurationStatus ConfigurationStatus `json:"configuration_status" db:"configuration_status"`
+	InstalledAt         time.Time           `json:"installed_at" db:"installed_at"`
+	UpdatedAt           time.Time           `json:"updated_at" db:"updated_at"`
+	Metadata            PackageMetadata     `json:"metadata" db:"metadata"`
 }
 
 // PackageStatus represents the status of an agent package
@@ -60,29 +60,29 @@ const (
 
 // PackageMetadata holds extensible metadata for an agent package
 type PackageMetadata struct {
-	Dependencies    []string               `json:"dependencies,omitempty"`
-	Runtime         *RuntimeMetadata       `json:"runtime,omitempty"`
-	Configuration   *ConfigurationMetadata `json:"configuration,omitempty"`
-	Custom          map[string]interface{} `json:"custom,omitempty"`
+	Dependencies  []string               `json:"dependencies,omitempty"`
+	Runtime       *RuntimeMetadata       `json:"runtime,omitempty"`
+	Configuration *ConfigurationMetadata `json:"configuration,omitempty"`
+	Custom        map[string]interface{} `json:"custom,omitempty"`
 }
 
 // RuntimeMetadata holds runtime-related metadata for a package
 type RuntimeMetadata struct {
-	Language        string            `json:"language"`
-	Version         string            `json:"version"`
-	Environment     map[string]string `json:"environment,omitempty"`
-	ProcessID       *int              `json:"process_id,omitempty"`
-	StartedAt       *time.Time        `json:"started_at,omitempty"`
-	HealthCheckURL  *string           `json:"health_check_url,omitempty"`
+	Language       string            `json:"language"`
+	Version        string            `json:"version"`
+	Environment    map[string]string `json:"environment,omitempty"`
+	ProcessID      *int              `json:"process_id,omitempty"`
+	StartedAt      *time.Time        `json:"started_at,omitempty"`
+	HealthCheckURL *string           `json:"health_check_url,omitempty"`
 }
 
 // ConfigurationMetadata holds configuration-related metadata
 type ConfigurationMetadata struct {
-	RequiredFields  []string `json:"required_fields,omitempty"`
-	OptionalFields  []string `json:"optional_fields,omitempty"`
-	SecretFields    []string `json:"secret_fields,omitempty"`
-	LastValidated   *time.Time `json:"last_validated,omitempty"`
-	ValidationErrors []string `json:"validation_errors,omitempty"`
+	RequiredFields   []string   `json:"required_fields,omitempty"`
+	OptionalFields   []string   `json:"optional_fields,omitempty"`
+	SecretFields     []string   `json:"secret_fields,omitempty"`
+	LastValidated    *time.Time `json:"last_validated,omitempty"`
+	ValidationErrors []string   `json:"validation_errors,omitempty"`
 }
 
 // ConfigurationFilters holds filters for querying agent configurations

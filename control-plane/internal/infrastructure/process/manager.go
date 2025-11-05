@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/your-org/haxen/control-plane/internal/core/interfaces"
+	"github.com/your-org/agentfield/control-plane/internal/core/interfaces"
 )
 
 // DefaultProcessManager provides a default implementation for managing system processes.

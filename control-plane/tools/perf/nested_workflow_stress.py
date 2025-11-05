@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lightweight load generator for Haxen durable execution flows.
+"""Lightweight load generator for AgentField durable execution flows.
 
 This script exercises the /execute and /execute/async gateways with configurable
 concurrency, nested payload parameters, and adaptive polling. It records latency
@@ -57,8 +57,8 @@ DEFAULT_METRIC_KEYS = [
     "process_resident_memory_bytes",
     "go_memstats_heap_alloc_bytes",
     "go_goroutines",
-    "haxen_gateway_queue_depth",
-    "haxen_worker_inflight",
+    "agentfield_gateway_queue_depth",
+    "agentfield_worker_inflight",
 ]
 
 import httpx
@@ -89,8 +89,8 @@ def load_template(path: Optional[Path]) -> Optional[str]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Haxen durable execution load tester")
-    parser.add_argument("--base-url", default=os.getenv("HAXEN_BASE_URL", "http://localhost:8080"))
+    parser = argparse.ArgumentParser(description="AgentField durable execution load tester")
+    parser.add_argument("--base-url", default=os.getenv("AGENTFIELD_BASE_URL", "http://localhost:8080"))
     parser.add_argument("--target", required=True, help="Target in node.reasoner form")
     parser.add_argument("--mode", choices=["sync", "async"], default="sync")
     parser.add_argument("--requests", type=int, default=100)

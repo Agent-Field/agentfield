@@ -1,6 +1,6 @@
 ---
 name: Feature Request
-about: Suggest an idea for Haxen
+about: Suggest an idea for AgentField
 labels: enhancement
 ---
 

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Haxen is a Kubernetes-style control plane for AI agents. It provides production infrastructure for deploying, orchestrating, and observing multi-agent systems with cryptographic identity and audit trails.
+AgentField is a Kubernetes-style control plane for AI agents. It provides production infrastructure for deploying, orchestrating, and observing multi-agent systems with cryptographic identity and audit trails.
 
 **Architecture:** Three-tier monorepo
 - **Control Plane** (Go): Orchestration server providing REST/gRPC APIs, workflow execution, observability, and cryptographic identity
@@ -36,21 +36,21 @@ make build
 **Local mode** (uses SQLite + BoltDB, no external dependencies):
 ```bash
 cd control-plane
-go run ./cmd/haxen dev
-# Or: go run ./cmd/haxen-server
+go run ./cmd/af dev
+# Or: go run ./cmd/agentfield-server
 ```
 
 **Cloud mode** (requires PostgreSQL):
 ```bash
 # Run migrations first
 cd control-plane
-export HAXEN_DATABASE_URL="postgres://haxen:haxen@localhost:5432/haxen?sslmode=disable"
-goose -dir ./migrations postgres "$HAXEN_DATABASE_URL" up
+export AGENTFIELD_DATABASE_URL="postgres://agentfield:agentfield@localhost:5432/agentfield?sslmode=disable"
+goose -dir ./migrations postgres "$AGENTFIELD_DATABASE_URL" up
 
 # Start server
-HAXEN_STORAGE_MODE=postgresql \
-HAXEN_DATABASE_URL="postgres://haxen:haxen@localhost:5432/haxen?sslmode=disable" \
-go run ./cmd/haxen-server
+AGENTFIELD_STORAGE_MODE=postgresql \
+AGENTFIELD_DATABASE_URL="postgres://agentfield:agentfield@localhost:5432/agentfield?sslmode=disable" \
+go run ./cmd/agentfield-server
 ```
 
 **Docker Compose** (includes PostgreSQL):
@@ -82,7 +82,7 @@ cd sdk/go && go test ./...
 cd sdk/python && pytest
 
 # Python tests with coverage:
-cd sdk/python && pytest --cov=haxen_sdk --cov-report=term-missing
+cd sdk/python && pytest --cov=agentfield --cov-report=term-missing
 
 # Web UI linting:
 cd control-plane/web/client && npm run lint
@@ -103,13 +103,13 @@ cd sdk/python && ruff format .
 ### Database Migrations
 ```bash
 cd control-plane
-export HAXEN_DATABASE_URL="postgres://haxen:haxen@localhost:5432/haxen?sslmode=disable"
+export AGENTFIELD_DATABASE_URL="postgres://agentfield:agentfield@localhost:5432/agentfield?sslmode=disable"
 
 # Check migration status
-goose -dir ./migrations postgres "$HAXEN_DATABASE_URL" status
+goose -dir ./migrations postgres "$AGENTFIELD_DATABASE_URL" status
 
 # Apply all pending migrations
-goose -dir ./migrations postgres "$HAXEN_DATABASE_URL" up
+goose -dir ./migrations postgres "$AGENTFIELD_DATABASE_URL" up
 
 # Create new migration
 goose -dir ./migrations create <migration_name> sql
@@ -123,7 +123,7 @@ npm run dev    # Runs on http://localhost:5173
 
 # In parallel, run the control plane server to handle API calls
 cd control-plane
-go run ./cmd/haxen-server
+go run ./cmd/agentfield-server
 ```
 
 The UI dev server proxies API requests to the control plane. In production, the UI is embedded via Go's `embed` package.
@@ -133,8 +133,8 @@ The UI dev server proxies API requests to the control plane. In production, the 
 ### Control Plane Structure (`control-plane/`)
 
 **Entry Points:**
-- `cmd/haxen/` - Unified CLI with server + dev/init commands
-- `cmd/haxen-server/` - Standalone server binary
+- `cmd/agentfield/` - Unified CLI with server + dev/init commands
+- `cmd/agentfield-server/` - Standalone server binary
 
 **Core Packages (`internal/`):**
 - `cli/` - CLI command definitions and routing
@@ -149,16 +149,16 @@ The UI dev server proxies API requests to the control plane. In production, the 
 - `mcp/` - Model Context Protocol integration
 - `logger/` - Structured logging (zerolog)
 - `config/` - Configuration management (Viper)
-- `templates/` - Code generation templates for `haxen init`
+- `templates/` - Code generation templates for `af init`
 - `utils/` - Shared utilities
 - `encryption/` - Cryptographic primitives for DID/VC
 - `packages/` - Shared internal packages
 - `embedded/` - Embedded assets (web UI dist)
 
 **Configuration:**
-- Environment variables take precedence over `config/haxen.yaml`
+- Environment variables take precedence over `config/agentfield.yaml`
 - See `control-plane/.env.example` for all options
-- Key modes: `HAXEN_MODE=local` (SQLite/BoltDB) vs `HAXEN_STORAGE_MODE=postgresql` (cloud)
+- Key modes: `AGENTFIELD_MODE=local` (SQLite/BoltDB) vs `AGENTFIELD_STORAGE_MODE=postgresql` (cloud)
 
 **Database Schema:**
 - `migrations/` - SQL migrations managed by Goose
@@ -166,9 +166,9 @@ The UI dev server proxies API requests to the control plane. In production, the 
 
 ### SDK Structure
 
-**Python SDK (`sdk/python/haxen_sdk/`):**
+**Python SDK (`sdk/python/agentfield/`):**
 - Built on FastAPI/Uvicorn for agent HTTP servers
-- Key modules: `Agent`, `agent_haxen`, `client`, `execution_context`, `memory`, `ai`
+- Key modules: `Agent`, `agent_field_handler`, `client`, `execution_context`, `memory`, `ai`
 - Agents register "reasoners" (decorated functions) that become REST endpoints
 - Test with: `pytest` (see `pyproject.toml` for test markers: unit, functional, integration)
 - Install locally: `pip install -e .[dev]`
@@ -189,21 +189,21 @@ The UI dev server proxies API requests to the control plane. In production, the 
 ### Creating a New Agent (Python)
 ```bash
 # Generate agent scaffold (run from repo root or any directory)
-haxen init my-agent
+af init my-agent
 cd my-agent
 
 # Edit agent code (auto-generated template)
-# Run agent locally (connects to control plane at HAXEN_SERVER env var or --server flag)
-haxen run
+# Run agent locally (connects to control plane at AGENTFIELD_SERVER env var or --server flag)
+af run
 ```
 
 ### Creating a New Agent (Go)
 ```go
-import haxenagent "github.com/agentfield/haxen/sdk/go/agent"
+import agentfieldagent "github.com/agentfield/agentfield/sdk/go/agent"
 
-agent, _ := haxenagent.New(haxenagent.Config{
+agent, _ := agentfieldagent.New(agentfieldagent.Config{
     NodeID:   "my-agent",
-    HaxenURL: "http://localhost:8080",
+    AgentFieldURL: "http://localhost:8080",
 })
 agent.RegisterSkill("greet", func(ctx context.Context, input map[string]any) (any, error) {
     return map[string]any{"message": "hello"}, nil
@@ -249,7 +249,7 @@ Storage interface is unified—services call storage layer methods, storage laye
 
 ### Configuration Precedence
 1. Environment variables (highest priority)
-2. Config file (`config/haxen.yaml` or `HAXEN_CONFIG_FILE` path)
+2. Config file (`config/agentfield.yaml` or `AGENTFIELD_CONFIG_FILE` path)
 3. Defaults in code
 
 ### Agent-to-Agent Communication
@@ -269,17 +269,17 @@ Automatically synced by control plane. Agents access via SDK methods: `agent.mem
 - Opt-in per agent: Set `app.vc_generator.set_enabled(True)` in Python or equivalent in Go
 - Control plane generates W3C Verifiable Credentials for each execution
 - Export audit trails: `GET /api/v1/did/workflow/{workflow_id}/vc-chain`
-- Verify offline: `haxen verify audit.json`
+- Verify offline: `af verify audit.json`
 
 ## Module Naming
 
 **Control Plane (Go):**
-- Use `github.com/your-org/haxen/control-plane` as module path
-- Internal packages: `github.com/your-org/haxen/control-plane/internal/<package>`
+- Use `github.com/your-org/agentfield/control-plane` as module path
+- Internal packages: `github.com/your-org/agentfield/control-plane/internal/<package>`
 
 **SDKs:**
-- Python: `haxen_sdk` (PyPI package)
-- Go: `github.com/agentfield/haxen/sdk/go` (import path)
+- Python: `agentfield` (PyPI package)
+- Go: `github.com/agentfield/agentfield/sdk/go` (import path)
 
 ## Release Process
 
@@ -290,23 +290,23 @@ Releases are automated via `.github/workflows/release.yml` and `.goreleaser.yml`
 
 ## Debugging Tips
 
-- **Control plane not starting:** Check `HAXEN_DATABASE_URL` is set correctly (PostgreSQL mode) or ensure SQLite file path is writable (local mode)
+- **Control plane not starting:** Check `AGENTFIELD_DATABASE_URL` is set correctly (PostgreSQL mode) or ensure SQLite file path is writable (local mode)
 - **Migrations failing:** Ensure PostgreSQL is running and connection string is correct. Check migration status with `goose status`
-- **Agent can't connect:** Verify `HAXEN_SERVER` env var points to control plane (default: `http://localhost:8080`)
+- **Agent can't connect:** Verify `AGENTFIELD_SERVER` env var points to control plane (default: `http://localhost:8080`)
 - **UI not loading:** In dev, ensure both Vite dev server (`npm run dev`) and control plane server are running. In prod, ensure `make build` was run to embed UI in binary
 - **Agent execution stuck:** Check workflow DAG in UI (`/ui/workflows`) for errors. Check agent logs for exceptions.
-- **Database connection pool exhausted:** Increase `HAXEN_STORAGE_POSTGRES_MAX_CONNECTIONS` in config
+- **Database connection pool exhausted:** Increase `AGENTFIELD_STORAGE_POSTGRES_MAX_CONNECTIONS` in config
 
 ## Environment Variables Reference
 
 See `control-plane/.env.example` for comprehensive list. Key vars:
-- `HAXEN_PORT` - HTTP server port (default: 8080)
-- `HAXEN_MODE` - `local` or `cloud`
-- `HAXEN_STORAGE_MODE` - `local`, `postgresql`, or `cloud`
-- `HAXEN_DATABASE_URL` - PostgreSQL connection string
-- `HAXEN_UI_ENABLED` - Enable/disable web UI
-- `HAXEN_UI_MODE` - `embedded` (production) or `development` (Vite proxy)
-- `HAXEN_CONFIG_FILE` - Path to config YAML
+- `AGENTFIELD_PORT` - HTTP server port (default: 8080)
+- `AGENTFIELD_MODE` - `local` or `cloud`
+- `AGENTFIELD_STORAGE_MODE` - `local`, `postgresql`, or `cloud`
+- `AGENTFIELD_DATABASE_URL` - PostgreSQL connection string
+- `AGENTFIELD_UI_ENABLED` - Enable/disable web UI
+- `AGENTFIELD_UI_MODE` - `embedded` (production) or `development` (Vite proxy)
+- `AGENTFIELD_CONFIG_FILE` - Path to config YAML
 - `GIN_MODE` - `debug` or `release`
 - `LOG_LEVEL` - `debug`, `info`, `warn`, `error`
 

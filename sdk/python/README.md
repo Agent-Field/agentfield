@@ -1,29 +1,29 @@
-# Haxen Python SDK
+# AgentField Python SDK
 
-The Haxen SDK provides a production-ready Python interface for registering agents, executing workflows, and integrating with the Haxen control plane.
+The AgentField SDK provides a production-ready Python interface for registering agents, executing workflows, and integrating with the AgentField control plane.
 
 ## Installation
 
 ```bash
-pip install haxen-sdk
+pip install agentfield
 ```
 
 To work on the SDK locally:
 
 ```bash
-git clone https://github.com/your-org/haxen.git
-cd haxen/sdk/python
+git clone https://github.com/your-org/agentfield.git
+cd agentfield/sdk/python
 python -m pip install -e .[dev]
 ```
 
 ## Quick Start
 
 ```python
-from haxen_sdk import Agent
+from agentfield import Agent
 
 agent = Agent(
     node_id="example-agent",
-    haxen_server="http://localhost:8080",
+    agentfield_server="http://localhost:8080",
     dev_mode=True,
 )
 
@@ -50,7 +50,7 @@ pytest
 To run coverage locally:
 
 ```bash
-pytest --cov=haxen_sdk --cov-report=term-missing
+pytest --cov=agentfield --cov-report=term-missing
 ```
 
 ## License

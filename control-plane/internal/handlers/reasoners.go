@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time" // Added for time.Now()
 
-	"github.com/your-org/haxen/control-plane/internal/logger"
-	"github.com/your-org/haxen/control-plane/internal/storage"
-	"github.com/your-org/haxen/control-plane/internal/utils" // Added for ID generation
-	"github.com/your-org/haxen/control-plane/pkg/types"      // Added for new types
+	"github.com/your-org/agentfield/control-plane/internal/logger"
+	"github.com/your-org/agentfield/control-plane/internal/storage"
+	"github.com/your-org/agentfield/control-plane/internal/utils" // Added for ID generation
+	"github.com/your-org/agentfield/control-plane/pkg/types"      // Added for new types
 
 	"github.com/gin-gonic/gin"
 )
@@ -37,8 +37,8 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 		ctx := c.Request.Context()
 		startTime := time.Now()
 
-		// Generate Haxen Request ID
-		haxenRequestID := utils.GenerateHaxenRequestID()
+		// Generate AgentField Request ID
+		agentfieldRequestID := utils.GenerateAgentFieldRequestID()
 
 		// Extract headers
 		workflowID := c.GetHeader("X-Workflow-ID")
@@ -120,15 +120,15 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 
 		// Create workflow execution record
 		workflowExecution := &types.WorkflowExecution{
-			WorkflowID:     workflowID,
-			ExecutionID:    executionID,
-			HaxenRequestID: haxenRequestID,
-			AgentNodeID:    nodeID,
-			ReasonerID:     reasonerName,
-			Status:         "running",
-			StartedAt:      startTime,
-			CreatedAt:      startTime,
-			UpdatedAt:      startTime,
+			WorkflowID:          workflowID,
+			ExecutionID:         executionID,
+			AgentFieldRequestID: agentfieldRequestID,
+			AgentNodeID:         nodeID,
+			ReasonerID:          reasonerName,
+			Status:              "running",
+			StartedAt:           startTime,
+			CreatedAt:           startTime,
+			UpdatedAt:           startTime,
 		}
 
 		// Set optional fields
@@ -189,7 +189,7 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 		agentReq.Header.Set("Content-Type", "application/json")
 		agentReq.Header.Set("X-Workflow-ID", workflowID)
 		agentReq.Header.Set("X-Execution-ID", executionID)
-		agentReq.Header.Set("X-Haxen-Request-ID", haxenRequestID)
+		agentReq.Header.Set("X-AgentField-Request-ID", agentfieldRequestID)
 		if parentWorkflowID != "" {
 			agentReq.Header.Set("X-Parent-Workflow-ID", parentWorkflowID)
 		}
@@ -303,7 +303,7 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 		// Set response headers
 		c.Header("X-Workflow-ID", workflowID)
 		c.Header("X-Execution-ID", executionID)
-		c.Header("X-Haxen-Request-ID", haxenRequestID)
+		c.Header("X-AgentField-Request-ID", agentfieldRequestID)
 		c.Header("X-Agent-Node-ID", nodeID)
 		c.Header("X-Duration-MS", fmt.Sprintf("%d", duration))
 
@@ -317,14 +317,14 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 	}
 }
 
-// ExecuteSkillHandler handles execution of skills via Haxen server
+// ExecuteSkillHandler handles execution of skills via AgentField server
 func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 		startTime := time.Now()
 
-		// Generate Haxen Request ID
-		haxenRequestID := utils.GenerateHaxenRequestID()
+		// Generate AgentField Request ID
+		agentfieldRequestID := utils.GenerateAgentFieldRequestID()
 
 		// Extract headers
 		workflowID := c.GetHeader("X-Workflow-ID")
@@ -406,15 +406,15 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 
 		// Create workflow execution record
 		workflowExecution := &types.WorkflowExecution{
-			WorkflowID:     workflowID,
-			ExecutionID:    executionID,
-			HaxenRequestID: haxenRequestID,
-			AgentNodeID:    nodeID,
-			ReasonerID:     skillName, // For skills, ReasonerID will store skillName
-			Status:         "running",
-			StartedAt:      startTime,
-			CreatedAt:      startTime,
-			UpdatedAt:      startTime,
+			WorkflowID:          workflowID,
+			ExecutionID:         executionID,
+			AgentFieldRequestID: agentfieldRequestID,
+			AgentNodeID:         nodeID,
+			ReasonerID:          skillName, // For skills, ReasonerID will store skillName
+			Status:              "running",
+			StartedAt:           startTime,
+			CreatedAt:           startTime,
+			UpdatedAt:           startTime,
 		}
 
 		// Set optional fields
@@ -475,7 +475,7 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 		agentReq.Header.Set("Content-Type", "application/json")
 		agentReq.Header.Set("X-Workflow-ID", workflowID)
 		agentReq.Header.Set("X-Execution-ID", executionID)
-		agentReq.Header.Set("X-Haxen-Request-ID", haxenRequestID)
+		agentReq.Header.Set("X-AgentField-Request-ID", agentfieldRequestID)
 		if parentWorkflowID != "" {
 			agentReq.Header.Set("X-Parent-Workflow-ID", parentWorkflowID)
 		}
@@ -589,7 +589,7 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 		// Set response headers
 		c.Header("X-Workflow-ID", workflowID)
 		c.Header("X-Execution-ID", executionID)
-		c.Header("X-Haxen-Request-ID", haxenRequestID)
+		c.Header("X-AgentField-Request-ID", agentfieldRequestID)
 		c.Header("X-Agent-Node-ID", nodeID)
 		c.Header("X-Duration-MS", fmt.Sprintf("%d", duration))
 

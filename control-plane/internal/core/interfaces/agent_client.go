@@ -12,16 +12,16 @@ import (
 type AgentClient interface {
 	// GetMCPHealth retrieves MCP health information from an agent node
 	GetMCPHealth(ctx context.Context, nodeID string) (*MCPHealthResponse, error)
-	
+
 	// RestartMCPServer restarts a specific MCP server on an agent node
 	RestartMCPServer(ctx context.Context, nodeID, alias string) error
-	
+
 	// GetMCPTools retrieves the list of tools from a specific MCP server
 	GetMCPTools(ctx context.Context, nodeID, alias string) (*MCPToolsResponse, error)
-	
+
 	// ShutdownAgent requests graceful shutdown of an agent node via HTTP
 	ShutdownAgent(ctx context.Context, nodeID string, graceful bool, timeoutSeconds int) (*AgentShutdownResponse, error)
-	
+
 	// GetAgentStatus retrieves detailed status information from an agent node
 	GetAgentStatus(ctx context.Context, nodeID string) (*AgentStatusResponse, error)
 }
@@ -42,18 +42,18 @@ func (ft *FlexibleTime) UnmarshalJSON(data []byte) error {
 	if string(data) == "null" {
 		return nil
 	}
-	
+
 	// Remove quotes from JSON string
 	timeStr := strings.Trim(string(data), `"`)
-	
+
 	// Try parsing with different formats
 	formats := []string{
-		time.RFC3339Nano,           // "2006-01-02T15:04:05.999999999Z07:00"
-		time.RFC3339,               // "2006-01-02T15:04:05Z07:00"
+		time.RFC3339Nano,             // "2006-01-02T15:04:05.999999999Z07:00"
+		time.RFC3339,                 // "2006-01-02T15:04:05Z07:00"
 		"2006-01-02T15:04:05.999999", // Without timezone (microseconds)
-		"2006-01-02T15:04:05",      // Without timezone (seconds)
+		"2006-01-02T15:04:05",        // Without timezone (seconds)
 	}
-	
+
 	for _, format := range formats {
 		if t, err := time.Parse(format, timeStr); err == nil {
 			// If no timezone was provided, assume UTC
@@ -64,7 +64,7 @@ func (ft *FlexibleTime) UnmarshalJSON(data []byte) error {
 			return nil
 		}
 	}
-	
+
 	return fmt.Errorf("unable to parse time: %s", timeStr)
 }
 
@@ -79,7 +79,7 @@ func (ft FlexibleTime) MarshalJSON() ([]byte, error) {
 // MCPServerHealth represents the health status of a single MCP server
 type MCPServerHealth struct {
 	Alias           string        `json:"alias"`
-	Status          string        `json:"status"`          // "running", "stopped", "error", "starting"
+	Status          string        `json:"status"` // "running", "stopped", "error", "starting"
 	ToolCount       int           `json:"tool_count"`
 	StartedAt       *FlexibleTime `json:"started_at"`
 	LastHealthCheck *FlexibleTime `json:"last_health_check"`
@@ -92,10 +92,10 @@ type MCPServerHealth struct {
 
 // MCPSummary represents aggregated MCP health metrics
 type MCPSummary struct {
-	TotalServers    int     `json:"total_servers"`
-	RunningServers  int     `json:"running_servers"`
-	TotalTools      int     `json:"total_tools"`
-	OverallHealth   float64 `json:"overall_health"`   // 0.0 to 1.0
+	TotalServers   int     `json:"total_servers"`
+	RunningServers int     `json:"running_servers"`
+	TotalTools     int     `json:"total_tools"`
+	OverallHealth  float64 `json:"overall_health"` // 0.0 to 1.0
 }
 
 // MCPToolsResponse represents the tools available from an MCP server
@@ -118,23 +118,23 @@ type MCPRestartResponse struct {
 
 // AgentShutdownResponse represents the response from requesting agent shutdown
 type AgentShutdownResponse struct {
-	Status                 string `json:"status"`                    // "shutting_down", "error"
-	Graceful               bool   `json:"graceful"`
-	TimeoutSeconds         int    `json:"timeout_seconds,omitempty"`
-	EstimatedShutdownTime  string `json:"estimated_shutdown_time,omitempty"`
-	Message                string `json:"message"`
+	Status                string `json:"status"` // "shutting_down", "error"
+	Graceful              bool   `json:"graceful"`
+	TimeoutSeconds        int    `json:"timeout_seconds,omitempty"`
+	EstimatedShutdownTime string `json:"estimated_shutdown_time,omitempty"`
+	Message               string `json:"message"`
 }
 
 // AgentStatusResponse represents detailed status information from an agent
 type AgentStatusResponse struct {
-	Status        string                 `json:"status"`          // "running", "stopping", "error"
-	Uptime        string                 `json:"uptime"`          // Human-readable uptime
-	UptimeSeconds int                    `json:"uptime_seconds"`  // Uptime in seconds
-	PID           int                    `json:"pid"`             // Process ID
-	Version       string                 `json:"version"`         // Agent version
-	NodeID        string                 `json:"node_id"`         // Agent node ID
-	LastActivity  string                 `json:"last_activity"`   // ISO timestamp
-	Resources     map[string]interface{} `json:"resources"`       // Resource usage info
+	Status        string                 `json:"status"`                // "running", "stopping", "error"
+	Uptime        string                 `json:"uptime"`                // Human-readable uptime
+	UptimeSeconds int                    `json:"uptime_seconds"`        // Uptime in seconds
+	PID           int                    `json:"pid"`                   // Process ID
+	Version       string                 `json:"version"`               // Agent version
+	NodeID        string                 `json:"node_id"`               // Agent node ID
+	LastActivity  string                 `json:"last_activity"`         // ISO timestamp
+	Resources     map[string]interface{} `json:"resources"`             // Resource usage info
 	MCPServers    map[string]interface{} `json:"mcp_servers,omitempty"` // MCP server info
-	Message       string                 `json:"message,omitempty"` // Additional status message
+	Message       string                 `json:"message,omitempty"`     // Additional status message
 }

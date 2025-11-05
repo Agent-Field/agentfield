@@ -7,12 +7,12 @@ import (
 
 // MCPSummaryForUI represents MCP health summary optimized for UI display
 type MCPSummaryForUI struct {
-	TotalServers    int     `json:"total_servers"`
-	RunningServers  int     `json:"running_servers"`
-	TotalTools      int     `json:"total_tools"`
-	OverallHealth   float64 `json:"overall_health"`
-	HasIssues       bool    `json:"has_issues"`
-	
+	TotalServers   int     `json:"total_servers"`
+	RunningServers int     `json:"running_servers"`
+	TotalTools     int     `json:"total_tools"`
+	OverallHealth  float64 `json:"overall_health"`
+	HasIssues      bool    `json:"has_issues"`
+
 	// User mode: simplified capability status
 	CapabilitiesAvailable bool   `json:"capabilities_available"`
 	ServiceStatus         string `json:"service_status"` // "ready", "degraded", "unavailable"
@@ -21,14 +21,14 @@ type MCPSummaryForUI struct {
 // AgentNodeDetailsForUI represents detailed agent node information including MCP data
 type AgentNodeDetailsForUI struct {
 	// Embed the base agent node data
-	ID                  string                 `json:"id"`
-	TeamID              string                 `json:"team_id"`
-	BaseURL             string                 `json:"base_url"`
-	Version             string                 `json:"version"`
-	HealthStatus        string                 `json:"health_status"`
-	LastHeartbeat       time.Time              `json:"last_heartbeat"`
-	RegisteredAt        time.Time              `json:"registered_at"`
-	
+	ID            string    `json:"id"`
+	TeamID        string    `json:"team_id"`
+	BaseURL       string    `json:"base_url"`
+	Version       string    `json:"version"`
+	HealthStatus  string    `json:"health_status"`
+	LastHeartbeat time.Time `json:"last_heartbeat"`
+	RegisteredAt  time.Time `json:"registered_at"`
+
 	// MCP-specific data (only in developer mode)
 	MCPServers []MCPServerHealthForUI `json:"mcp_servers,omitempty"`
 	MCPSummary *MCPSummaryForUI       `json:"mcp_summary,omitempty"`
@@ -46,7 +46,7 @@ type MCPServerHealthForUI struct {
 	ProcessID       int        `json:"process_id,omitempty"`
 	SuccessRate     float64    `json:"success_rate,omitempty"`
 	AvgResponseTime int        `json:"avg_response_time_ms,omitempty"`
-	
+
 	// UI-specific fields
 	StatusIcon      string `json:"status_icon"`      // Icon name for UI
 	StatusColor     string `json:"status_color"`     // Color code for UI
@@ -82,10 +82,10 @@ type MCPServerHealthData struct {
 
 // MCPSummaryData represents raw MCP summary data
 type MCPSummaryData struct {
-	TotalServers    int     `json:"total_servers"`
-	RunningServers  int     `json:"running_servers"`
-	TotalTools      int     `json:"total_tools"`
-	OverallHealth   float64 `json:"overall_health"`
+	TotalServers   int     `json:"total_servers"`
+	RunningServers int     `json:"running_servers"`
+	TotalTools     int     `json:"total_tools"`
+	OverallHealth  float64 `json:"overall_health"`
 }
 
 // MCPHealthMode represents the mode for MCP health data display
@@ -124,11 +124,11 @@ func TransformMCPHealthForMode(data *MCPHealthResponseData, mode MCPHealthMode) 
 
 	// Create summary
 	summary := &MCPSummaryForUI{
-		TotalServers:  data.Summary.TotalServers,
+		TotalServers:   data.Summary.TotalServers,
 		RunningServers: data.Summary.RunningServers,
-		TotalTools:    data.Summary.TotalTools,
-		OverallHealth: data.Summary.OverallHealth,
-		HasIssues:     data.Summary.RunningServers < data.Summary.TotalServers || data.Summary.OverallHealth < 0.8,
+		TotalTools:     data.Summary.TotalTools,
+		OverallHealth:  data.Summary.OverallHealth,
+		HasIssues:      data.Summary.RunningServers < data.Summary.TotalServers || data.Summary.OverallHealth < 0.8,
 	}
 
 	// Set user-mode specific fields
@@ -206,7 +206,7 @@ func formatUptime(startedAt *time.Time) string {
 	if startedAt == nil {
 		return "N/A"
 	}
-	
+
 	duration := time.Since(*startedAt)
 	if duration < time.Minute {
 		return "< 1m"

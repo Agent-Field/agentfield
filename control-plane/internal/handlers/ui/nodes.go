@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/internal/events"
-	"github.com/your-org/haxen/control-plane/internal/logger"
-	"github.com/your-org/haxen/control-plane/internal/services"
+	"github.com/your-org/agentfield/control-plane/internal/events"
+	"github.com/your-org/agentfield/control-plane/internal/logger"
+	"github.com/your-org/agentfield/control-plane/internal/services"
 
 	"github.com/gin-gonic/gin"
 )
@@ -67,7 +67,7 @@ func (h *NodesHandler) StreamNodeEventsHandler(c *gin.Context) {
 
 	// Generate unique subscriber ID
 	subscriberID := fmt.Sprintf("node_sse_%d_%s", time.Now().UnixNano(), c.ClientIP())
-	
+
 	// Subscribe to node events using the dedicated event bus
 	eventChan := events.GlobalNodeEventBus.Subscribe(subscriberID)
 	defer events.GlobalNodeEventBus.Unsubscribe(subscriberID)
@@ -78,7 +78,7 @@ func (h *NodesHandler) StreamNodeEventsHandler(c *gin.Context) {
 		"message":   "Node events stream connected",
 		"timestamp": time.Now().Format(time.RFC3339),
 	}
-	
+
 	if eventJSON, err := json.Marshal(initialEvent); err == nil {
 		c.Writer.WriteString("data: " + string(eventJSON) + "\n\n")
 		c.Writer.Flush()
@@ -86,7 +86,7 @@ func (h *NodesHandler) StreamNodeEventsHandler(c *gin.Context) {
 
 	// Set up context for handling client disconnection
 	ctx := c.Request.Context()
-	
+
 	// Send periodic heartbeat to keep connection alive
 	heartbeatTicker := time.NewTicker(30 * time.Second)
 	defer heartbeatTicker.Stop()
@@ -103,13 +103,13 @@ func (h *NodesHandler) StreamNodeEventsHandler(c *gin.Context) {
 				logger.Logger.Error().Err(err).Msg("❌ Error marshalling node event")
 				continue
 			}
-			
+
 			// Send event to client using SSE format
 			c.Writer.WriteString("data: " + string(eventData) + "\n\n")
 			c.Writer.Flush()
-			
+
 			logger.Logger.Debug().Msgf("📡 Sent node event to client %s: %s", subscriberID, event.Type)
-			
+
 		case <-heartbeatTicker.C:
 			// Send heartbeat to keep connection alive
 			heartbeatEvent := map[string]interface{}{
@@ -120,7 +120,7 @@ func (h *NodesHandler) StreamNodeEventsHandler(c *gin.Context) {
 				c.Writer.WriteString("data: " + string(heartbeatJSON) + "\n\n")
 				c.Writer.Flush()
 			}
-			
+
 		case <-ctx.Done():
 			// Client disconnected
 			logger.Logger.Debug().Msgf("🔌 Node SSE client disconnected: %s", subscriberID)

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/your-org/haxen/control-plane/pkg/types"
+	"github.com/your-org/agentfield/control-plane/pkg/types"
 )
 
 func TestLocalStorageStoreWorkflowExecutionPersistsLifecycleFields(t *testing.T) {
@@ -17,8 +17,8 @@ func TestLocalStorageStoreWorkflowExecutionPersistsLifecycleFields(t *testing.T)
 	cfg := StorageConfig{
 		Mode: "local",
 		Local: LocalStorageConfig{
-			DatabasePath: filepath.Join(tempDir, "haxen.db"),
-			KVStorePath:  filepath.Join(tempDir, "haxen.bolt"),
+			DatabasePath: filepath.Join(tempDir, "agentfield.db"),
+			KVStorePath:  filepath.Join(tempDir, "agentfield.bolt"),
 		},
 	}
 
@@ -50,21 +50,21 @@ func TestLocalStorageStoreWorkflowExecutionPersistsLifecycleFields(t *testing.T)
 	}
 
 	execID := "exec_test"
-	haxenRequestID := "req_test"
+	agentfieldRequestID := "req_test"
 	agentID := "agent_1"
 	reasonerID := "reasoner.alpha"
 
 	exec := &types.WorkflowExecution{
-		WorkflowID:     workflowID,
-		ExecutionID:    execID,
-		HaxenRequestID: haxenRequestID,
-		RunID:          &runID,
-		AgentNodeID:    agentID,
-		ReasonerID:     reasonerID,
-		Status:         string(types.ExecutionStatusPending),
-		StartedAt:      now,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		WorkflowID:          workflowID,
+		ExecutionID:         execID,
+		AgentFieldRequestID: agentfieldRequestID,
+		RunID:               &runID,
+		AgentNodeID:         agentID,
+		ReasonerID:          reasonerID,
+		Status:              string(types.ExecutionStatusPending),
+		StartedAt:           now,
+		CreatedAt:           now,
+		UpdatedAt:           now,
 	}
 
 	if err := ls.StoreWorkflowExecution(ctx, exec); err != nil {

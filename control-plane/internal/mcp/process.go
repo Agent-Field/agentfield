@@ -40,7 +40,7 @@ func (pm *ProcessManager) StartLocalMCP(config MCPServerConfig) (*MCPProcess, er
 
 	// Create template variables
 	vars := pm.template.CreateTemplateVars(config, port)
-	
+
 	// Process run command
 	processedCmd, err := pm.template.ProcessCommand(config.RunCmd, vars)
 	if err != nil {
@@ -77,7 +77,7 @@ func (pm *ProcessManager) StartLocalMCP(config MCPServerConfig) (*MCPProcess, er
 			cancel()
 			return nil, fmt.Errorf("failed to process environment variables: %w", err)
 		}
-		
+
 		for key, value := range processedEnv {
 			cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value))
 		}
@@ -160,7 +160,7 @@ func (pm *ProcessManager) MonitorProcess(process *MCPProcess, onExit func(alias 
 
 	// Wait for process to finish
 	err := process.Cmd.Wait()
-	
+
 	// Update status
 	if err != nil {
 		process.Config.Status = string(StatusError)
@@ -187,10 +187,10 @@ func (pm *ProcessManager) ExecuteSetupCommands(config MCPServerConfig) error {
 	}
 
 	serverDir := filepath.Join(pm.projectDir, "packages", "mcp", config.Alias)
-	
+
 	// Create template variables (port 0 for setup)
 	vars := pm.template.CreateTemplateVars(config, 0)
-	
+
 	// Process setup commands
 	processedCmds, err := pm.template.ProcessCommands(config.SetupCmds, vars)
 	if err != nil {
@@ -217,14 +217,14 @@ func (pm *ProcessManager) ExecuteSetupCommands(config MCPServerConfig) error {
 
 		execCmd := exec.Command("sh", "-c", cmd)
 		execCmd.Dir = workingDir
-		
+
 		// Set environment variables
 		if len(config.Env) > 0 {
 			processedEnv, err := pm.template.ProcessEnvironment(config.Env, vars)
 			if err != nil {
 				return fmt.Errorf("failed to process environment variables: %w", err)
 			}
-			
+
 			for key, value := range processedEnv {
 				execCmd.Env = append(execCmd.Env, fmt.Sprintf("%s=%s", key, value))
 			}
@@ -247,7 +247,7 @@ func (pm *ProcessManager) ExecuteSetupCommands(config MCPServerConfig) error {
 func (pm *ProcessManager) ExecuteRunCommand(config MCPServerConfig, port int) (*exec.Cmd, error) {
 	// Create template variables
 	vars := pm.template.CreateTemplateVars(config, port)
-	
+
 	// Process run command
 	processedCmd, err := pm.template.ProcessCommand(config.RunCmd, vars)
 	if err != nil {
@@ -274,7 +274,7 @@ func (pm *ProcessManager) ExecuteRunCommand(config MCPServerConfig, port int) (*
 		if err != nil {
 			return nil, fmt.Errorf("failed to process environment variables: %w", err)
 		}
-		
+
 		for key, value := range processedEnv {
 			cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value))
 		}
@@ -313,7 +313,7 @@ func (pm *ProcessManager) HealthCheck(config MCPServerConfig, port int) error {
 
 	// Create template variables
 	vars := pm.template.CreateTemplateVars(config, port)
-	
+
 	// Process health check command
 	processedCmd, err := pm.template.ProcessCommand(config.HealthCheck, vars)
 	if err != nil {
@@ -326,13 +326,13 @@ func (pm *ProcessManager) HealthCheck(config MCPServerConfig, port int) error {
 
 	// Execute health check
 	cmd := exec.Command("sh", "-c", processedCmd)
-	
+
 	// Set timeout for health check
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	
+
 	cmd = exec.CommandContext(ctx, "sh", "-c", processedCmd)
-	
+
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("health check failed: %s\nOutput: %s", err, string(output))
@@ -402,7 +402,7 @@ func (pm *ProcessManager) IsProcessRunning(process *MCPProcess) bool {
 // GetProcessLogs returns a reader for the process logs
 func (pm *ProcessManager) GetProcessLogs(alias string, follow bool, lines int) (io.ReadCloser, error) {
 	logFile := filepath.Join(pm.projectDir, "packages", "mcp", alias, fmt.Sprintf("%s.log", alias))
-	
+
 	if _, err := os.Stat(logFile); os.IsNotExist(err) {
 		return nil, fmt.Errorf("log file not found for server %s", alias)
 	}

@@ -1,10 +1,10 @@
 package storage
 
 import (
-	"github.com/your-org/haxen/control-plane/pkg/types"
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/your-org/agentfield/control-plane/pkg/types"
 	"time"
 
 	"github.com/boltdb/bolt"
