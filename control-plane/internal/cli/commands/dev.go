@@ -3,9 +3,9 @@ package commands
 import (
 	"fmt"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/cli/framework"
+	"github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
 	"github.com/spf13/cobra"
-	"github.com/your-org/agentfield/control-plane/internal/cli/framework"
-	"github.com/your-org/agentfield/control-plane/internal/core/domain"
 )
 
 type DevCommand struct {

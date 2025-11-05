@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/your-org/agentfield/control-plane/internal/logger"
-	"github.com/your-org/agentfield/control-plane/pkg/types"
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
 type WebhookStore interface {

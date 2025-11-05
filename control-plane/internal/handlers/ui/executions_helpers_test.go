@@ -8,8 +8,8 @@ import (
 	"io"
 	"testing"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/stretchr/testify/require"
-	"github.com/your-org/agentfield/control-plane/internal/services"
 )
 
 type testPayloadStore struct {

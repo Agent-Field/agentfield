@@ -1,10 +1,10 @@
 package framework
 
 import (
+	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
+	"github.com/Agent-Field/agentfield/control-plane/internal/services"
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/spf13/cobra"
-	"github.com/your-org/agentfield/control-plane/internal/core/interfaces"
-	"github.com/your-org/agentfield/control-plane/internal/services"
-	"github.com/your-org/agentfield/control-plane/internal/storage"
 )
 
 // Command represents a CLI command that can be built into a Cobra command

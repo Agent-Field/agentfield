@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/your-org/agentfield/control-plane/internal/events"
-	"github.com/your-org/agentfield/control-plane/pkg/types"
 	"log"
 	"net/url"
 	"os"
@@ -19,6 +17,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Agent-Field/agentfield/control-plane/internal/events"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/boltdb/bolt"
 	"github.com/jackc/pgx/v5/pgconn"

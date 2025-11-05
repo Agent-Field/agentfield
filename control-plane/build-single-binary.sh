@@ -142,7 +142,7 @@ package main
 import (
  "fmt"
  "strings"
- "github.com/your-org/agentfield/control-plane/internal/utils"
+ "github.com/Agent-Field/agentfield/control-plane/internal/utils"
 )
 
 func main() {
@@ -455,7 +455,7 @@ All AgentField data is stored in `~/.agentfield/`:
 
 ## Support
 
-For issues and documentation, visit: https://github.com/your-org/agentfield
+For issues and documentation, visit: https://github.com/Agent-Field/agentfield
 EOF
 
     print_success "Created distribution README.md"

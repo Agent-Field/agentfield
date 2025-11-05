@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/your-org/agentfield/control-plane/pkg/types"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
 type stubPackageStorage struct {

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/your-org/agentfield/control-plane/internal/logger"
-	"github.com/your-org/agentfield/control-plane/pkg/types"
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
 // CreateExecutionRecord inserts a new execution row using the simplified schema.

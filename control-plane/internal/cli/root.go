@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/application"
+	"github.com/Agent-Field/agentfield/control-plane/internal/cli/commands"
+	"github.com/Agent-Field/agentfield/control-plane/internal/config"
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"github.com/your-org/agentfield/control-plane/internal/application"
-	"github.com/your-org/agentfield/control-plane/internal/cli/commands"
-	"github.com/your-org/agentfield/control-plane/internal/config"
-	"github.com/your-org/agentfield/control-plane/internal/logger"
 )
 
 var (

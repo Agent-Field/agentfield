@@ -18,8 +18,8 @@ This package provides AI/LLM capabilities for the AgentField Go SDK, supporting 
 ```go
 import (
     "context"
-    "github.com/your-org/agentfield/sdk/go/agent"
-    "github.com/your-org/agentfield/sdk/go/ai"
+    "github.com/Agent-Field/agentfield/sdk/go/agent"
+    "github.com/Agent-Field/agentfield/sdk/go/ai"
 )
 
 // Create agent with AI configured
@@ -205,14 +205,14 @@ agent.RegisterReasoner("smart_reasoner", func(ctx context.Context, input map[str
 
 The Go SDK provides similar functionality to the Python SDK's `agent.ai()` method:
 
-| Feature | Python SDK | Go SDK |
-|---------|-----------|--------|
-| Simple text calls | `agent.ai("prompt")` | `agent.AI(ctx, "prompt")` |
-| System prompts | `system="..."` kwarg | `ai.WithSystem("...")` option |
-| Structured outputs | `schema=Model` kwarg | `ai.WithSchema(Model{})` option |
-| Streaming | `stream=True` kwarg | `agent.AIStream()` method |
-| Model override | `model="..."` kwarg | `ai.WithModel("...")` option |
-| Temperature | `temperature=0.7` kwarg | `ai.WithTemperature(0.7)` option |
+| Feature            | Python SDK              | Go SDK                           |
+| ------------------ | ----------------------- | -------------------------------- |
+| Simple text calls  | `agent.ai("prompt")`    | `agent.AI(ctx, "prompt")`        |
+| System prompts     | `system="..."` kwarg    | `ai.WithSystem("...")` option    |
+| Structured outputs | `schema=Model` kwarg    | `ai.WithSchema(Model{})` option  |
+| Streaming          | `stream=True` kwarg     | `agent.AIStream()` method        |
+| Model override     | `model="..."` kwarg     | `ai.WithModel("...")` option     |
+| Temperature        | `temperature=0.7` kwarg | `ai.WithTemperature(0.7)` option |
 
 ## Error Handling
 

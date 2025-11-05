@@ -37,9 +37,9 @@ dependencies = [
 keywords = ["agentfield", "sdk", "agents"]
 
 [project.urls]
-Homepage = "https://github.com/your-org/agentfield"
-Documentation = "https://github.com/your-org/agentfield/tree/main/docs"
-Issues = "https://github.com/your-org/agentfield/issues"
+Homepage = "https://github.com/Agent-Field/agentfield"
+Documentation = "https://github.com/Agent-Field/agentfield/tree/main/docs"
+Issues = "https://github.com/Agent-Field/agentfield/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]

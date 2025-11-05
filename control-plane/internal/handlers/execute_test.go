@@ -7,11 +7,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/your-org/agentfield/control-plane/pkg/types"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"

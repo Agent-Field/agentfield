@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/your-org/agentfield/control-plane/internal/core/interfaces"
-	"github.com/your-org/agentfield/control-plane/internal/storage"
+	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 )
 
 // HTTPAgentClient implements the AgentClient interface using HTTP communication

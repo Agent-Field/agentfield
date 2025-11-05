@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package admin.v1;
 
-option go_package = "github.com/your-org/agentfield/control-plane/pkg/adminpb;adminpb";
+option go_package = "github.com/Agent-Field/agentfield/control-plane/pkg/adminpb;adminpb";
 
 // AdminReasonerService exposes control-surface operations for reasoning components.
 service AdminReasonerService {

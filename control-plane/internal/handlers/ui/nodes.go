@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/your-org/agentfield/control-plane/internal/events"
-	"github.com/your-org/agentfield/control-plane/internal/logger"
-	"github.com/your-org/agentfield/control-plane/internal/services"
+	"github.com/Agent-Field/agentfield/control-plane/internal/events"
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 
 	"github.com/gin-gonic/gin"
 )

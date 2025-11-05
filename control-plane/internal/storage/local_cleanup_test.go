@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/your-org/agentfield/control-plane/pkg/types"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/stretchr/testify/require"
 )

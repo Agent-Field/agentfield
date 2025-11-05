@@ -15,8 +15,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/your-org/agentfield/control-plane/internal/core/domain"
-	"github.com/your-org/agentfield/control-plane/internal/core/interfaces"
+	"github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
+	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
 )
 
 type DefaultDevService struct {

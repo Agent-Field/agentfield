@@ -8,7 +8,7 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/your-org/agentfield/control-plane/internal/config"
+	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 )
 
 // SkillGenerator handles the generation of Python skill files from MCP tools
@@ -452,9 +452,9 @@ func (sg *SkillGenerator) generateDocString(tool MCPTool, parameters []SkillPara
 	escapedDescription := sg.escapeForDocstring(tool.Description)
 
 	docString.WriteString(fmt.Sprintf(`"""%s
-    
+
     This is an auto-generated skill function that wraps the MCP tool '%s'.
-    
+
     Args:`, escapedDescription, tool.Name))
 
 	for _, param := range parameters {
@@ -477,10 +477,10 @@ func (sg *SkillGenerator) generateDocString(tool MCPTool, parameters []SkillPara
 
 	docString.WriteString(`
         execution_context (ExecutionContext, optional): AgentField execution context for workflow tracking
-    
+
     Returns:
         Any: The result from the MCP tool execution
-        
+
     Raises:
         MCPError: If the MCP server is not available or the tool execution fails
     """`)
@@ -528,7 +528,7 @@ async def _get_mcp_client(execution_context: Optional[ExecutionContext] = None) 
     try:
         # Get client from registry
         client = MCPClient.get_or_create(MCP_ALIAS)
-        
+
         # Validate server health
         is_healthy = await client.validate_server_health()
         if not is_healthy:
@@ -536,7 +536,7 @@ async def _get_mcp_client(execution_context: Optional[ExecutionContext] = None) 
                 f"MCP server '{MCP_ALIAS}' is not healthy. Please check server status with: af mcp status {MCP_ALIAS}",
                 endpoint=f"mcp://{MCP_ALIAS}"
             )
-        
+
         # Set execution context for workflow tracking
         if execution_context:
             client.set_execution_context(execution_context)
@@ -545,9 +545,9 @@ async def _get_mcp_client(execution_context: Optional[ExecutionContext] = None) 
             current_agent = Agent.get_current()
             if hasattr(current_agent, '_current_execution_context') and current_agent._current_execution_context:
                 client.set_execution_context(current_agent._current_execution_context)
-        
+
         return client
-        
+
     except ValueError as e:
         # Handle unregistered alias
         raise MCPConnectionError(
@@ -565,22 +565,22 @@ async def _get_mcp_client(execution_context: Optional[ExecutionContext] = None) 
 @app.skill(tags=["mcp", "{{$.ServerAlias}}"])
 async def {{.Name}}({{range $i, $param := .Parameters}}{{if $i}}, {{end}}{{$param.Name}}: {{$param.Type}}{{if not $param.Required}}{{if $param.Default}} = {{$param.Default}}{{else}} = None{{end}}{{end}}{{end}}{{if .Parameters}}, {{end}}execution_context: Optional[ExecutionContext] = None) -> Any:
     {{.DocString}}
-    
+
     try:
         # Get MCP client with execution context
         client = await _get_mcp_client(execution_context)
-        
+
         # Prepare arguments, filtering out None values for optional parameters
         kwargs = {}
         {{range .Parameters}}
         if {{.Name}} is not None:
             kwargs["{{.Name}}"] = {{.Name}}
         {{end}}
-        
+
         # Call the MCP tool
         result = await client.call_tool("{{.ToolName}}", kwargs)
         return result
-        
+
     except MCPConnectionError:
         # Re-raise connection errors as-is (they have helpful messages)
         raise

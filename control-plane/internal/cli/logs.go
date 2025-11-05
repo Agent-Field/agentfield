@@ -7,9 +7,9 @@ import (
 	"os/exec" // Added missing import
 	"path/filepath"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/packages"
 	"github.com/spf13/cobra"
-	"github.com/your-org/agentfield/control-plane/internal/logger"
-	"github.com/your-org/agentfield/control-plane/internal/packages"
 	"gopkg.in/yaml.v3"
 )
 

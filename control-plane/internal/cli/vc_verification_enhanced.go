@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/your-org/agentfield/control-plane/pkg/types"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
 // EnhancedVCVerifier provides comprehensive VC verification with all integrity checks

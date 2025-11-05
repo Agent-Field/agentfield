@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/your-org/agentfield/control-plane/pkg/types"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
 func TestLocalStorageStoreWorkflowExecutionPersistsLifecycleFields(t *testing.T) {

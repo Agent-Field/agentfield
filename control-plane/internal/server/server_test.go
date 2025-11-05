@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/your-org/agentfield/control-plane/internal/storage"
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 
 	"github.com/gin-gonic/gin"
 	"gopkg.in/yaml.v3"

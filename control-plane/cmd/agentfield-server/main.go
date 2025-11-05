@@ -2,11 +2,6 @@ package main
 
 import (
 	"fmt"
-	"github.com/your-org/agentfield/control-plane/internal/cli"
-	"github.com/your-org/agentfield/control-plane/internal/config"
-	"github.com/your-org/agentfield/control-plane/internal/server"
-	"github.com/your-org/agentfield/control-plane/internal/utils"
-	"github.com/your-org/agentfield/control-plane/web/client"
 	"log"
 	"os"
 	"os/exec"
@@ -14,6 +9,12 @@ import (
 	"runtime"
 	"strconv"
 	"time"
+
+	"github.com/Agent-Field/agentfield/control-plane/internal/cli"
+	"github.com/Agent-Field/agentfield/control-plane/internal/config"
+	"github.com/Agent-Field/agentfield/control-plane/internal/server"
+	"github.com/Agent-Field/agentfield/control-plane/internal/utils"
+	"github.com/Agent-Field/agentfield/control-plane/web/client"
 
 	"github.com/spf13/cobra" // Import cobra
 	"github.com/spf13/viper"

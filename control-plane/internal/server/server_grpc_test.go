@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/your-org/agentfield/control-plane/internal/storage"
-	"github.com/your-org/agentfield/control-plane/pkg/adminpb"
-	"github.com/your-org/agentfield/control-plane/pkg/types"
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/adminpb"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/stretchr/testify/require"
 )

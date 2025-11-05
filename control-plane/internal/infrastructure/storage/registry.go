@@ -3,10 +3,11 @@ package storage
 
 import (
 	"encoding/json"
-	"github.com/your-org/agentfield/control-plane/internal/core/domain"
-	"github.com/your-org/agentfield/control-plane/internal/core/interfaces"
 	"os"
 	"path/filepath"
+
+	"github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
+	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
 )
 
 type LocalRegistryStorage struct {

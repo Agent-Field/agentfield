@@ -95,13 +95,13 @@ User-friendly installation script for end users.
 **Usage:**
 ```bash
 # Quick install (user-specific, no sudo)
-curl -sSL https://raw.githubusercontent.com/your-org/agentfield/main/scripts/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/Agent-Field/agentfield/main/scripts/install.sh | bash
 
 # System-wide install (requires sudo)
-curl -sSL https://raw.githubusercontent.com/your-org/agentfield/main/scripts/install.sh | bash -s -- --system
+curl -sSL https://raw.githubusercontent.com/Agent-Field/agentfield/main/scripts/install.sh | bash -s -- --system
 
 # Custom directory
-curl -sSL https://raw.githubusercontent.com/your-org/agentfield/main/scripts/install.sh | bash -s -- --dir ~/bin
+curl -sSL https://raw.githubusercontent.com/Agent-Field/agentfield/main/scripts/install.sh | bash -s -- --dir ~/bin
 ```
 
 ## Workflow
@@ -143,7 +143,7 @@ curl -sSL https://raw.githubusercontent.com/your-org/agentfield/main/scripts/ins
 
 Each release creates these assets:
 - `agentfield-linux-amd64` - Linux Intel/AMD binary
-- `agentfield-linux-arm64` - Linux ARM binary  
+- `agentfield-linux-arm64` - Linux ARM binary
 - `agentfield-darwin-amd64` - macOS Intel binary
 - `agentfield-darwin-arm64` - macOS Apple Silicon binary
 - `checksums.txt` - SHA256 checksums
@@ -153,11 +153,11 @@ Each release creates these assets:
 ## Configuration
 
 ### GitHub Repository
-The scripts are configured for: `your-org/agentfield`
+The scripts are configured for: `Agent-Field/agentfield`
 
 To change the repository, set the environment variable:
 ```bash
-export GITHUB_REPO="your-org/your-repo"
+export GITHUB_REPO="Agent-Field/your-repo"
 ./release.sh
 ```
 
@@ -264,7 +264,7 @@ gh release list
 ### User Installation Testing
 ```bash
 # Test the installation script
-curl -sSL https://raw.githubusercontent.com/your-org/agentfield/main/scripts/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/Agent-Field/agentfield/main/scripts/install.sh | bash
 
 # Verify installation
 agentfield --help

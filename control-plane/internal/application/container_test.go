@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/your-org/agentfield/control-plane/internal/config"
-	storagecfg "github.com/your-org/agentfield/control-plane/internal/storage"
+	"github.com/Agent-Field/agentfield/control-plane/internal/config"
+	storagecfg "github.com/Agent-Field/agentfield/control-plane/internal/storage"
 )
 
 func TestCreateServiceContainerWithoutDID(t *testing.T) {

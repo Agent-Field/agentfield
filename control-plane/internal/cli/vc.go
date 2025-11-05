@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 	"github.com/spf13/cobra"
-	"github.com/your-org/agentfield/control-plane/pkg/types"
 )
 
 // NewVCCommand creates the vc command with subcommands

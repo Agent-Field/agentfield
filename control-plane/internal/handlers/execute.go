@@ -16,10 +16,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/your-org/agentfield/control-plane/internal/logger"
-	"github.com/your-org/agentfield/control-plane/internal/services"
-	"github.com/your-org/agentfield/control-plane/internal/utils"
-	"github.com/your-org/agentfield/control-plane/pkg/types"
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/services"
+	"github.com/Agent-Field/agentfield/control-plane/internal/utils"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
 )

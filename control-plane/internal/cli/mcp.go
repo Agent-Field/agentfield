@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/your-org/agentfield/control-plane/internal/config" // Ensured this import is correct
-	"github.com/your-org/agentfield/control-plane/internal/mcp"
+	"github.com/Agent-Field/agentfield/control-plane/internal/config" // Ensured this import is correct
+	"github.com/Agent-Field/agentfield/control-plane/internal/mcp"
 
 	"github.com/spf13/cobra"
 )

@@ -1,13 +1,14 @@
 package config
 
 import (
-	"fmt"              // Added for fmt.Errorf
-	"gopkg.in/yaml.v3" // Added for yaml.Unmarshal
-	"os"               // Added for os.Stat, os.ReadFile
-	"path/filepath"    // Added for filepath.Join
+	"fmt"           // Added for fmt.Errorf
+	"os"            // Added for os.Stat, os.ReadFile
+	"path/filepath" // Added for filepath.Join
 	"time"
 
-	"github.com/your-org/agentfield/control-plane/internal/storage"
+	"gopkg.in/yaml.v3" // Added for yaml.Unmarshal
+
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 )
 
 // Config holds the entire configuration for the AgentField server.

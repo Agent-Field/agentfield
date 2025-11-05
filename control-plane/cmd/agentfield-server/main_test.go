@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/your-org/agentfield/control-plane/internal/config"
-	"github.com/your-org/agentfield/control-plane/internal/server"
+	"github.com/Agent-Field/agentfield/control-plane/internal/config"
+	"github.com/Agent-Field/agentfield/control-plane/internal/server"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"

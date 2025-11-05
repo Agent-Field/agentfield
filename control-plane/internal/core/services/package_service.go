@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
+	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
+	"github.com/Agent-Field/agentfield/control-plane/internal/packages"
 	"github.com/fatih/color"
-	"github.com/your-org/agentfield/control-plane/internal/core/domain"
-	"github.com/your-org/agentfield/control-plane/internal/core/interfaces"
-	"github.com/your-org/agentfield/control-plane/internal/packages"
 	"gopkg.in/yaml.v3"
 )
 

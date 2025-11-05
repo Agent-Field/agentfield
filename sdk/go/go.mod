@@ -1,3 +1,3 @@
-module github.com/your-org/agentfield/sdk/go
+module github.com/Agent-Field/agentfield/sdk/go
 
 go 1.21

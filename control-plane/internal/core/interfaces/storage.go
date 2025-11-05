@@ -1,7 +1,7 @@
 // agentfield/internal/core/interfaces/storage.go
 package interfaces
 
-import "github.com/your-org/agentfield/control-plane/internal/core/domain"
+import "github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
 
 type FileSystemAdapter interface {
 	ReadFile(path string) ([]byte, error)

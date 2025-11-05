@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/your-org/agentfield/control-plane/internal/config"
+	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 )
 
 // MCPCapability represents a discovered MCP server capability

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/your-org/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 )
 
 // marshalDataWithLogging marshals data to JSON with proper error handling and logging

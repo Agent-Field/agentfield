@@ -4,8 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/your-org/agentfield/control-plane/pkg/types"
 	"time"
+
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/boltdb/bolt"
 	"github.com/google/uuid"

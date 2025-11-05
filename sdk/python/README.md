@@ -11,7 +11,7 @@ pip install agentfield
 To work on the SDK locally:
 
 ```bash
-git clone https://github.com/your-org/agentfield.git
+git clone https://github.com/Agent-Field/agentfield.git
 cd agentfield/sdk/python
 python -m pip install -e .[dev]
 ```

@@ -199,7 +199,7 @@ af run
 
 ### Creating a New Agent (Go)
 ```go
-import agentfieldagent "github.com/your-org/agentfield/sdk/go/agent"
+import agentfieldagent "github.com/Agent-Field/agentfield/sdk/go/agent"
 
 agent, _ := agentfieldagent.New(agentfieldagent.Config{
     NodeID:   "my-agent",
@@ -274,12 +274,12 @@ Automatically synced by control plane. Agents access via SDK methods: `agent.mem
 ## Module Naming
 
 **Control Plane (Go):**
-- Use `github.com/your-org/agentfield/control-plane` as module path
-- Internal packages: `github.com/your-org/agentfield/control-plane/internal/<package>`
+- Use `github.com/Agent-Field/agentfield/control-plane` as module path
+- Internal packages: `github.com/Agent-Field/agentfield/control-plane/internal/<package>`
 
 **SDKs:**
 - Python: `agentfield` (PyPI package)
-- Go: `github.com/your-org/agentfield/sdk/go` (import path)
+- Go: `github.com/Agent-Field/agentfield/sdk/go` (import path)
 
 ## Release Process
 

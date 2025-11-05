@@ -5,8 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/your-org/agentfield/control-plane/internal/config"
-	"github.com/your-org/agentfield/control-plane/internal/services"
+	"github.com/Agent-Field/agentfield/control-plane/internal/config"
+	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"

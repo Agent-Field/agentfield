@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/your-org/agentfield/control-plane/internal/storage"
-	"github.com/your-org/agentfield/control-plane/pkg/types"
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
 // DIDRegistry manages the storage and retrieval of DID registries using database-only operations.

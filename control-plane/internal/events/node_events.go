@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/your-org/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 )
 
 // NodeEventType represents the type of node event

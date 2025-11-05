@@ -12,7 +12,7 @@ This document provides instructions for working on the AgentField monorepo local
 ## Initial Setup
 
 ```bash
-git clone https://github.com/your-org/agentfield.git
+git clone https://github.com/Agent-Field/agentfield.git
 cd agentfield
 ./scripts/install.sh
 ```
@@ -33,15 +33,15 @@ The install script performs:
 
 ## Useful Commands
 
-| Action | Command |
-| --- | --- |
-| Build everything | `./scripts/build-all.sh` |
-| Run tests | `./scripts/test-all.sh` |
-| Format Go code | `make fmt` |
-| Tidy Go modules | `make tidy` |
-| Run the control plane | `cd control-plane && go run cmd/server/main.go` |
-| Run UI in development | `cd control-plane/web && npm run dev` |
-| Start local stack | `docker compose -f deployments/docker/docker-compose.yml up` |
+| Action                | Command                                                      |
+| --------------------- | ------------------------------------------------------------ |
+| Build everything      | `./scripts/build-all.sh`                                     |
+| Run tests             | `./scripts/test-all.sh`                                      |
+| Format Go code        | `make fmt`                                                   |
+| Tidy Go modules       | `make tidy`                                                  |
+| Run the control plane | `cd control-plane && go run cmd/server/main.go`              |
+| Run UI in development | `cd control-plane/web && npm run dev`                        |
+| Start local stack     | `docker compose -f deployments/docker/docker-compose.yml up` |
 
 ## Environment Variables
 

@@ -6,11 +6,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/your-org/agentfield/control-plane/internal/core/interfaces"
-	"github.com/your-org/agentfield/control-plane/internal/events"
-	"github.com/your-org/agentfield/control-plane/internal/logger"
-	"github.com/your-org/agentfield/control-plane/internal/storage"
-	"github.com/your-org/agentfield/control-plane/pkg/types"
+	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
+	"github.com/Agent-Field/agentfield/control-plane/internal/events"
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
 // StatusManagerConfig holds configuration for the status manager

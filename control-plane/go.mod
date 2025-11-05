@@ -1,4 +1,4 @@
-module github.com/your-org/agentfield/control-plane
+module github.com/Agent-Field/agentfield/control-plane
 
 go 1.24.0
 

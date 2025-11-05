@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/your-org/agentfield/control-plane/internal/handlers"
-	"github.com/your-org/agentfield/control-plane/internal/storage"
-	"github.com/your-org/agentfield/control-plane/pkg/types"
+	"github.com/Agent-Field/agentfield/control-plane/internal/handlers"
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
 )

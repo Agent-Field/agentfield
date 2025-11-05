@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/your-org/agentfield/control-plane/internal/config"
-	"github.com/your-org/agentfield/control-plane/internal/mcp"
+	"github.com/Agent-Field/agentfield/control-plane/internal/config"
+	"github.com/Agent-Field/agentfield/control-plane/internal/mcp"
 
 	"github.com/spf13/cobra"
 )
@@ -56,7 +56,7 @@ Examples:
   # Local MCP servers with custom commands
   af add --mcp my-server --run "node server.js --port {{port}}" \
     --setup "npm install" --setup "npm run build"
-  
+
   # Python MCP server with environment variables
   af add --mcp python-server --run "python server.py --port {{port}}" \
     --setup "pip install -r requirements.txt" \

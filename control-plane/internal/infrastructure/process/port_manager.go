@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/your-org/agentfield/control-plane/internal/core/interfaces"
+	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
 )
 
 // DefaultPortManager provides a default implementation for managing network ports.

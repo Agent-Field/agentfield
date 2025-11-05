@@ -6,22 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/your-org/agentfield/control-plane/internal/config"
-	"github.com/your-org/agentfield/control-plane/internal/core/interfaces"
-	coreservices "github.com/your-org/agentfield/control-plane/internal/core/services" // Core services
-	"github.com/your-org/agentfield/control-plane/internal/events"                     // Event system
-	"github.com/your-org/agentfield/control-plane/internal/handlers"                   // Agent handlers
-	"github.com/your-org/agentfield/control-plane/internal/handlers/ui"                // UI handlers
-	"github.com/your-org/agentfield/control-plane/internal/infrastructure/communication"
-	"github.com/your-org/agentfield/control-plane/internal/infrastructure/process"
-	infrastorage "github.com/your-org/agentfield/control-plane/internal/infrastructure/storage"
-	"github.com/your-org/agentfield/control-plane/internal/logger"
-	"github.com/your-org/agentfield/control-plane/internal/services" // Services
-	"github.com/your-org/agentfield/control-plane/internal/storage"
-	"github.com/your-org/agentfield/control-plane/internal/utils"
-	"github.com/your-org/agentfield/control-plane/pkg/adminpb"
-	"github.com/your-org/agentfield/control-plane/pkg/types"
-	client "github.com/your-org/agentfield/control-plane/web/client"
 	"net"
 	"net/http"
 	"os"
@@ -29,6 +13,23 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Agent-Field/agentfield/control-plane/internal/config"
+	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
+	coreservices "github.com/Agent-Field/agentfield/control-plane/internal/core/services" // Core services
+	"github.com/Agent-Field/agentfield/control-plane/internal/events"                     // Event system
+	"github.com/Agent-Field/agentfield/control-plane/internal/handlers"                   // Agent handlers
+	"github.com/Agent-Field/agentfield/control-plane/internal/handlers/ui"                // UI handlers
+	"github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/communication"
+	"github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/process"
+	infrastorage "github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/storage"
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/services" // Services
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
+	"github.com/Agent-Field/agentfield/control-plane/internal/utils"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/adminpb"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
+	client "github.com/Agent-Field/agentfield/control-plane/web/client"
 
 	"github.com/gin-contrib/cors" // CORS middleware
 	"github.com/gin-gonic/gin"

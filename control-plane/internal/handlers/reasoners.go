@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time" // Added for time.Now()
 
-	"github.com/your-org/agentfield/control-plane/internal/logger"
-	"github.com/your-org/agentfield/control-plane/internal/storage"
-	"github.com/your-org/agentfield/control-plane/internal/utils" // Added for ID generation
-	"github.com/your-org/agentfield/control-plane/pkg/types"      // Added for new types
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
+	"github.com/Agent-Field/agentfield/control-plane/internal/utils" // Added for ID generation
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"      // Added for new types
 
 	"github.com/gin-gonic/gin"
 )
