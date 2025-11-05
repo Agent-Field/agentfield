@@ -5,7 +5,7 @@ SHELL := /usr/bin/env bash
 all: build
 
 install:
-	./scripts/install.sh
+	./scripts/install-dev-deps.sh
 
 build: control-plane sdk-go sdk-python
 

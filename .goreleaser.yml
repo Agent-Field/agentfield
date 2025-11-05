@@ -1,4 +1,4 @@
-project_name: agentfield-control-plane
+project_name: agentfield
 
 before:
   hooks:
@@ -6,10 +6,10 @@ before:
     - npm --prefix control-plane/web/client run build
 
 builds:
-  - id: agentfield-control-plane
+  - id: agentfield
     dir: control-plane
-    main: ./cmd/agentfield-server
-    binary: agentfield-server
+    main: ./cmd/af
+    binary: agentfield
     env:
       - CGO_ENABLED=0
     goos:
@@ -24,25 +24,57 @@ builds:
         goarch: arm64
     ldflags:
       - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{.Date}}
+    tags:
+      - embedded
 
 archives:
-  - id: agentfield-control-plane
+  - id: agentfield
     builds:
-      - agentfield-control-plane
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    format_overrides:
-      - goos: windows
-        format: zip
+      - agentfield
+    name_template: "agentfield-{{ .Os }}-{{ .Arch }}"
+    format: binary
     files:
-      - LICENSE
-      - README.md
-      - control-plane/config/**/*
+      - none
 
 checksum:
-  name_template: "{{ .ProjectName }}_checksums.txt"
+  name_template: "checksums.txt"
+  algorithm: sha256
 
 release:
+  github:
+    owner: Agent-Field
+    name: agentfield
+  draft: false
   prerelease: auto
+  name_template: "AgentField v{{.Version}}"
+  header: |
+    ## AgentField v{{.Version}}
+
+    ### Installation
+
+    ```bash
+    curl -fsSL https://agentfield.ai/install.sh | bash
+    ```
+
+    Or with version pinning:
+
+    ```bash
+    VERSION={{.Version}} curl -fsSL https://agentfield.ai/install.sh | bash
+    ```
+
+    ### Manual Download
+
+    Download the binary for your platform below, make it executable, and move it to your PATH.
 
 changelog:
-  use: git
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - '^ci:'

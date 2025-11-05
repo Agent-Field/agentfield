@@ -31,6 +31,75 @@ curl -fsSL https://agentfield.ai/install.sh | bash && af init my-agents
 
 ---
 
+## 📦 Installation
+
+### Quick Install (Recommended)
+
+**macOS & Linux:**
+```bash
+curl -fsSL https://agentfield.ai/install.sh | bash
+```
+
+**Windows (PowerShell):**
+```powershell
+iwr -useb https://agentfield.ai/install.ps1 | iex
+```
+
+The installer:
+- ✅ Automatically detects your OS and architecture
+- ✅ Downloads the correct binary for your platform
+- ✅ Verifies checksums (SHA256)
+- ✅ Installs to `~/.agentfield/bin` (no sudo required)
+- ✅ Configures your PATH automatically
+
+After installation, verify:
+```bash
+agentfield --version
+```
+
+### Version Pinning
+
+Install a specific version:
+
+**macOS & Linux:**
+```bash
+VERSION=v1.0.0 curl -fsSL https://agentfield.ai/install.sh | bash
+```
+
+**Windows (PowerShell):**
+```powershell
+$env:VERSION="v1.0.0"; iwr -useb https://agentfield.ai/install.ps1 | iex
+```
+
+### Manual Installation
+
+1. Download the binary for your platform from [Releases](https://github.com/Agent-Field/agentfield/releases/latest):
+   - macOS Intel: `agentfield-darwin-amd64`
+   - macOS Apple Silicon: `agentfield-darwin-arm64`
+   - Linux x86_64: `agentfield-linux-amd64`
+   - Linux ARM64: `agentfield-linux-arm64`
+   - Windows: `agentfield-windows-amd64.exe`
+
+2. Make it executable and move to your PATH:
+   ```bash
+   chmod +x agentfield-*
+   mv agentfield-* ~/.local/bin/agentfield
+   ```
+
+3. Add to PATH (if not already):
+   ```bash
+   export PATH="$HOME/.local/bin:$PATH"
+   ```
+
+### Uninstall
+
+```bash
+rm -rf ~/.agentfield
+# Remove PATH entry from ~/.bashrc or ~/.zshrc
+```
+
+---
+
 ## 🚀 Try AgentField in 2 Minutes
 
 ### Option 1: Local Install
