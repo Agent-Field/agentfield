@@ -1,6 +1,6 @@
 <div align="center">
 
-# Haxen
+<img src="assets/github.png" alt="AgentField - Kubernetes, for AI Agents" width="100%" />
 
 **A Kubernetes-style control plane that runs AI agents like microservices: REST/gRPC APIs, async webhooks, and cryptographic identity for every agent and execution.**
 
