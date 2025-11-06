@@ -50,7 +50,7 @@ jobs:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: ${{ runner.os }}-release-go-${{ hashFiles('**/go.sum') }}
+          key: ${{ runner.os }}-release-go-${{ hashFiles('control-plane/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-release-go-
 
@@ -101,6 +101,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PUBLISH_RELEASE_INPUT: ${{ github.event.inputs.publish_release }}
           VERSION_INPUT: ${{ github.event.inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
             if [ "${PUBLISH_RELEASE_INPUT}" = "true" ]; then
@@ -114,13 +115,17 @@ jobs:
               git tag -a "${VERSION_INPUT}" -m "Release ${VERSION_INPUT}"
               echo "args=release --clean" >> "$GITHUB_OUTPUT"
               echo "release_upload=true" >> "$GITHUB_OUTPUT"
+              echo "tag_name=${VERSION_INPUT}" >> "$GITHUB_OUTPUT"
             else
               echo "args=release --clean --skip-publish --snapshot" >> "$GITHUB_OUTPUT"
               echo "release_upload=false" >> "$GITHUB_OUTPUT"
+              echo "tag_name=" >> "$GITHUB_OUTPUT"
             fi
           else
+            # Tag push - use the pushed tag name
             echo "args=release --clean" >> "$GITHUB_OUTPUT"
             echo "release_upload=true" >> "$GITHUB_OUTPUT"
+            echo "tag_name=${REF_NAME}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Run GoReleaser
@@ -148,6 +153,7 @@ jobs:
         if: steps.goreleaser.outputs.release_upload == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.goreleaser.outputs.tag_name }}
           files: |
             sdk/python/dist/*.whl
             sdk/python/dist/*.tar.gz
