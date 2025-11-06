@@ -12,7 +12,7 @@ builds:
   - id: agentfield-linux-amd64
     dir: control-plane
     main: ./cmd/af
-    binary: agentfield
+    binary: agentfield-linux-amd64
     env:
       - CGO_ENABLED=1
     goos:
@@ -27,12 +27,11 @@ builds:
     tags:
       - embedded
       - sqlite_fts5
-    no_unique_dist_dir: true
 
   - id: agentfield-linux-arm64
     dir: control-plane
     main: ./cmd/af
-    binary: agentfield
+    binary: agentfield-linux-arm64
     env:
       - CGO_ENABLED=1
       - CC=aarch64-linux-gnu-gcc
@@ -48,12 +47,11 @@ builds:
     tags:
       - embedded
       - sqlite_fts5
-    no_unique_dist_dir: true
 
   - id: agentfield-darwin-amd64
     dir: control-plane
     main: ./cmd/af
-    binary: agentfield
+    binary: agentfield-darwin-amd64
     env:
       - CGO_ENABLED=1
     goos:
@@ -68,12 +66,11 @@ builds:
     tags:
       - embedded
       - sqlite_fts5
-    no_unique_dist_dir: true
 
   - id: agentfield-darwin-arm64
     dir: control-plane
     main: ./cmd/af
-    binary: agentfield
+    binary: agentfield-darwin-arm64
     env:
       - CGO_ENABLED=1
     goos:
@@ -88,7 +85,6 @@ builds:
     tags:
       - embedded
       - sqlite_fts5
-    no_unique_dist_dir: true
 
   # Windows build disabled - focus on Linux and macOS for now
   # - id: agentfield-windows-amd64

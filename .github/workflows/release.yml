@@ -175,6 +175,24 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Flatten binaries to dist root
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== Original dist/ structure ==="
+          ls -lah dist/
+
+          # Move binaries from subdirectories to dist root
+          find dist/ -type f -name "agentfield-*" -exec mv {} dist/ \; 2>/dev/null || true
+
+          # Remove empty subdirectories
+          find dist/ -mindepth 1 -type d -empty -delete 2>/dev/null || true
+
+          echo ""
+          echo "=== Flattened dist/ directory ==="
+          ls -lah dist/agentfield-* 2>/dev/null || echo "No binaries found"
+
       - name: Rename artifact metadata
         shell: bash
         run: |
