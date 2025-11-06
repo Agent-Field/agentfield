@@ -32,10 +32,10 @@ builds:
       - embedded
     no_unique_dist_dir: true
 
-# Skip archives - we want raw binaries
+# Don't create archives - ship raw binaries
 archives:
-  - format: binary
-    name_template: "{{ .Binary }}"
+  - id: default
+    format: binary
 
 checksum:
   name_template: "checksums.txt"
@@ -88,8 +88,18 @@ release:
     - **Windows:** `agentfield-windows-amd64.exe`
 
 changelog:
-  use: github
+  use: git
   sort: asc
+  abbrev: 0
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Bug Fixes
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Others
+      order: 999
   filters:
     exclude:
       - '^docs:'
