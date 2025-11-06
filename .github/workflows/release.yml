@@ -3,6 +3,14 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
+      version:
+        description: 'Release version (e.g., v0.1.0) - required for publishing'
+        type: string
+        required: false
+      publish_release:
+        description: 'Publish to GitHub Releases (creates binaries for install script)'
+        type: boolean
+        default: false
       publish_pypi:
         description: 'Publish Python SDK to PyPI'
         type: boolean
@@ -85,10 +93,25 @@ jobs:
         id: goreleaser
         env:
           EVENT_NAME: ${{ github.event_name }}
+          PUBLISH_RELEASE_INPUT: ${{ github.event.inputs.publish_release }}
+          VERSION_INPUT: ${{ github.event.inputs.version }}
         run: |
           if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
-            echo "args=release --clean --skip-publish --snapshot" >> "$GITHUB_OUTPUT"
-            echo "release_upload=false" >> "$GITHUB_OUTPUT"
+            if [ "${PUBLISH_RELEASE_INPUT}" = "true" ]; then
+              if [ -z "${VERSION_INPUT}" ]; then
+                echo "ERROR: version input is required when publish_release is true"
+                exit 1
+              fi
+              # Create a tag for the release
+              git config user.name "github-actions[bot]"
+              git config user.email "github-actions[bot]@users.noreply.github.com"
+              git tag -a "${VERSION_INPUT}" -m "Release ${VERSION_INPUT}"
+              echo "args=release --clean" >> "$GITHUB_OUTPUT"
+              echo "release_upload=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "args=release --clean --skip-publish --snapshot" >> "$GITHUB_OUTPUT"
+              echo "release_upload=false" >> "$GITHUB_OUTPUT"
+            fi
           else
             echo "args=release --clean" >> "$GITHUB_OUTPUT"
             echo "release_upload=true" >> "$GITHUB_OUTPUT"
