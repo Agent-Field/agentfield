@@ -66,6 +66,12 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      - name: Build Web UI
+        working-directory: control-plane/web/client
+        run: |
+          npm ci
+          npm run build
+
       - name: Determine publish flags
         id: flags
         env:
@@ -120,7 +126,7 @@ jobs:
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
-          version: latest
+          version: '~> v2'
           args: ${{ steps.goreleaser.outputs.args }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -203,3 +209,5 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.docker_meta.outputs.image }}:${{ steps.docker_meta.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
