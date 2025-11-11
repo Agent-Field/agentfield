@@ -10,6 +10,7 @@ from .execution_context import (
     set_execution_context,
     reset_execution_context,
 )
+from fastapi.encoders import jsonable_encoder
 
 
 class AgentWorkflow:
@@ -183,7 +184,8 @@ class AgentWorkflow:
 
         url = base_url.rstrip("/") + "/api/v1/workflow/executions/events"
         try:
-            await client._async_request("POST", url, json=payload)
+            safe_payload = jsonable_encoder(payload)
+            await client._async_request("POST", url, json=safe_payload)
         except Exception:  # pragma: no cover - best effort logging
             if getattr(self.agent, "dev_mode", False):
                 log_debug("Failed to publish workflow update", exc_info=True)

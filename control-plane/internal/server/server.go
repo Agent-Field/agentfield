@@ -878,6 +878,7 @@ func (s *AgentFieldServer) setupRoutes() {
 		// Execution notes endpoints for app.note() feature
 		agentAPI.POST("/executions/note", handlers.AddExecutionNoteHandler(s.storage))
 		agentAPI.GET("/executions/:execution_id/notes", handlers.GetExecutionNotesHandler(s.storage))
+		agentAPI.POST("/workflow/executions/events", handlers.WorkflowExecutionEventHandler(s.storage))
 
 		// Workflow endpoints will be reintroduced once the simplified execution pipeline lands.
 

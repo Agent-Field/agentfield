@@ -6,6 +6,7 @@ import socket
 import threading
 import time
 import urllib.parse
+import sys
 from contextlib import asynccontextmanager
 from datetime import datetime
 from functools import wraps
@@ -1586,6 +1587,18 @@ class Agent(FastAPI):
             router._attach_agent(self)
             normalized_prefix = prefix.rstrip("/") if prefix else ""
 
+            def _replace_module_reference(original_func: Callable, tracked_func: Callable) -> None:
+                module_name = getattr(original_func, "__module__", None)
+                attr_name = getattr(original_func, "__name__", None)
+                if not module_name or not attr_name:
+                    return
+                module = sys.modules.get(module_name)
+                if module is None:
+                    return
+                current = getattr(module, attr_name, None)
+                if current is original_func:
+                    setattr(module, attr_name, tracked_func)
+
             def _sanitize_prefix_for_id(value: Optional[str]) -> List[str]:
                 if not value:
                     return []
@@ -1630,6 +1643,7 @@ class Agent(FastAPI):
                 )
 
                 decorated = self.reasoner(path=resolved_path, name=reasoner_id)(func)
+                _replace_module_reference(func, decorated)
                 entry["func"] = decorated
                 entry["registered"] = True
 
@@ -1663,6 +1677,7 @@ class Agent(FastAPI):
                     path=resolved_path,
                     name=skill_id,
                 )(func)
+                _replace_module_reference(func, decorated)
                 entry["func"] = decorated
                 entry["registered"] = True
 

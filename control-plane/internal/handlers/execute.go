@@ -32,6 +32,9 @@ type ExecutionStore interface {
 	UpdateExecutionRecord(ctx context.Context, executionID string, update func(*types.Execution) (*types.Execution, error)) (*types.Execution, error)
 	QueryExecutionRecords(ctx context.Context, filter types.ExecutionFilter) ([]*types.Execution, error)
 	RegisterExecutionWebhook(ctx context.Context, webhook *types.ExecutionWebhook) error
+	StoreWorkflowExecution(ctx context.Context, execution *types.WorkflowExecution) error
+	UpdateWorkflowExecution(ctx context.Context, executionID string, updateFunc func(*types.WorkflowExecution) (*types.WorkflowExecution, error)) error
+	GetWorkflowExecution(ctx context.Context, executionID string) (*types.WorkflowExecution, error)
 }
 
 // ExecuteRequest represents an execution request from an agent client.
@@ -460,6 +463,8 @@ func (c *executionController) prepareExecution(ctx context.Context, ginCtx *gin.
 		exec.WebhookRegistered = false
 	}
 
+	c.ensureWorkflowExecutionRecord(ctx, exec, target, agentPayloadBytes)
+
 	return &preparedExecution{
 		exec:              exec,
 		requestBody:       agentPayloadBytes,
@@ -531,6 +536,14 @@ func (c *executionController) completeExecution(ctx context.Context, plan *prepa
 			return current, nil
 		})
 		if err == nil {
+			c.updateWorkflowExecutionFinalState(
+				ctx,
+				plan.exec.ExecutionID,
+				types.ExecutionStatusSucceeded,
+				result,
+				elapsed,
+				nil,
+			)
 			if plan.webhookRegistered || (updated != nil && updated.WebhookRegistered) {
 				c.triggerWebhook(plan.exec.ExecutionID)
 			}
@@ -569,6 +582,14 @@ func (c *executionController) failExecution(ctx context.Context, plan *preparedE
 			return current, nil
 		})
 		if err == nil {
+			c.updateWorkflowExecutionFinalState(
+				ctx,
+				plan.exec.ExecutionID,
+				types.ExecutionStatusFailed,
+				result,
+				elapsed,
+				&errMsg,
+			)
 			if plan.webhookRegistered || (updated != nil && updated.WebhookRegistered) {
 				c.triggerWebhook(plan.exec.ExecutionID)
 			}
@@ -775,6 +796,153 @@ func renderStatus(exec *types.Execution) ExecutionStatusResponse {
 		WebhookRegistered: exec.WebhookRegistered,
 		WebhookEvents:     exec.WebhookEvents,
 	}
+}
+
+func (c *executionController) ensureWorkflowExecutionRecord(ctx context.Context, exec *types.Execution, target *parsedTarget, payload []byte) {
+	workflowExec := c.buildWorkflowExecutionRecord(ctx, exec, target, payload)
+	if workflowExec == nil {
+		return
+	}
+
+	if err := c.store.StoreWorkflowExecution(ctx, workflowExec); err != nil {
+		logger.Logger.Error().
+			Err(err).
+			Str("execution_id", exec.ExecutionID).
+			Msg("failed to persist workflow execution state")
+	}
+}
+
+func (c *executionController) buildWorkflowExecutionRecord(ctx context.Context, exec *types.Execution, target *parsedTarget, payload []byte) *types.WorkflowExecution {
+	if exec == nil || target == nil {
+		return nil
+	}
+
+	runID := exec.RunID
+	if runID == "" {
+		runID = utils.GenerateRunID()
+	}
+
+	rootWorkflowID, parentWorkflowID, depth := c.deriveWorkflowHierarchy(ctx, exec)
+
+	startTime := exec.StartedAt
+	if startTime.IsZero() {
+		startTime = time.Now().UTC()
+	}
+
+	workflowName := fmt.Sprintf("%s.%s", exec.NodeID, exec.ReasonerID)
+	runIDCopy := runID
+	workflowExec := &types.WorkflowExecution{
+		WorkflowID:          runID,
+		ExecutionID:         exec.ExecutionID,
+		AgentFieldRequestID: utils.GenerateAgentFieldRequestID(),
+		RunID:               &runIDCopy,
+		SessionID:           exec.SessionID,
+		ActorID:             exec.ActorID,
+		AgentNodeID:         exec.AgentNodeID,
+		ParentWorkflowID:    parentWorkflowID,
+		ParentExecutionID:   exec.ParentExecutionID,
+		RootWorkflowID:      rootWorkflowID,
+		WorkflowDepth:       depth,
+		ReasonerID:          exec.ReasonerID,
+		Status:              string(exec.Status),
+		WorkflowName:        &workflowName,
+		StartedAt:           startTime,
+		CreatedAt:           startTime,
+		UpdatedAt:           startTime,
+		Notes:               []types.ExecutionNote{},
+	}
+
+	if len(payload) > 0 {
+		cloned := cloneBytes(payload)
+		workflowExec.InputData = json.RawMessage(cloned)
+		workflowExec.InputSize = len(cloned)
+	}
+
+	if target.TargetType != "" {
+		workflowExec.WorkflowTags = []string{target.TargetType}
+	} else {
+		workflowExec.WorkflowTags = []string{}
+	}
+
+	return workflowExec
+}
+
+func (c *executionController) deriveWorkflowHierarchy(ctx context.Context, exec *types.Execution) (*string, *string, int) {
+	runID := exec.RunID
+	rootWorkflowID := pointerString(runID)
+	var parentWorkflowID *string
+	depth := 0
+
+	if exec.ParentExecutionID != nil {
+		parentExecution, err := c.store.GetWorkflowExecution(ctx, *exec.ParentExecutionID)
+		if err != nil {
+			logger.Logger.Debug().
+				Err(err).
+				Str("execution_id", exec.ExecutionID).
+				Str("parent_execution_id", *exec.ParentExecutionID).
+				Msg("failed to load parent workflow execution")
+		}
+		if parentExecution != nil {
+			parentWorkflowID = pointerString(parentExecution.WorkflowID)
+			if parentExecution.RootWorkflowID != nil {
+				rootWorkflowID = parentExecution.RootWorkflowID
+			} else {
+				rootWorkflowID = pointerString(parentExecution.WorkflowID)
+			}
+			depth = parentExecution.WorkflowDepth + 1
+		} else {
+			depth = 1
+		}
+	}
+
+	return rootWorkflowID, parentWorkflowID, depth
+}
+
+func (c *executionController) updateWorkflowExecutionFinalState(
+	ctx context.Context,
+	executionID string,
+	status types.ExecutionStatus,
+	result []byte,
+	elapsed time.Duration,
+	errorMessage *string,
+) {
+	err := c.store.UpdateWorkflowExecution(ctx, executionID, func(current *types.WorkflowExecution) (*types.WorkflowExecution, error) {
+		if current == nil {
+			return nil, fmt.Errorf("execution with ID %s not found", executionID)
+		}
+		now := time.Now().UTC()
+		current.Status = string(status)
+		current.UpdatedAt = now
+		completedAt := now
+		current.CompletedAt = &completedAt
+		duration := elapsed.Milliseconds()
+		current.DurationMS = &duration
+		if len(result) > 0 {
+			cloned := cloneBytes(result)
+			current.OutputData = json.RawMessage(cloned)
+			current.OutputSize = len(cloned)
+		} else {
+			current.OutputData = nil
+			current.OutputSize = 0
+		}
+		current.ErrorMessage = errorMessage
+		return current, nil
+	})
+	if err != nil {
+		logger.Logger.Error().
+			Err(err).
+			Str("execution_id", executionID).
+			Msg("failed to update workflow execution state")
+	}
+}
+
+func cloneBytes(src []byte) []byte {
+	if src == nil {
+		return nil
+	}
+	dst := make([]byte, len(src))
+	copy(dst, src)
+	return dst
 }
 
 func writeExecutionError(ctx *gin.Context, err error) {

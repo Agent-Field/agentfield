@@ -109,7 +109,7 @@ const StringField: React.FC<FieldComponentProps> = ({ id, value, inputProps }) =
   return (
     <AutoExpandingTextarea
       id={id}
-      value={value ?? ""}
+      defaultValue={value ?? ""}
       onChange={(event) => onChange?.(event)}
       onBlur={(event) => onBlur?.(event)}
       name={name}
@@ -122,11 +122,12 @@ const StringField: React.FC<FieldComponentProps> = ({ id, value, inputProps }) =
 
 const NumberField: React.FC<FieldComponentProps> = ({ id, value, inputProps }) => {
   const { ref, onChange, onBlur, name, rest } = normalizeInputProps(inputProps);
+  const initialValue = value === undefined || value === null ? "" : String(value);
   return (
     <Input
       id={id}
       type="number"
-      value={value === undefined || value === null ? "" : String(value)}
+      defaultValue={initialValue}
       onChange={(event) => {
         const next = event.target.value;
         if (next === "") {
@@ -155,13 +156,21 @@ const NumberField: React.FC<FieldComponentProps> = ({ id, value, inputProps }) =
 
 const BooleanField: React.FC<FieldComponentProps> = ({ id, value, inputProps }) => {
   const { ref, onChange, onBlur, name, rest } = normalizeInputProps(inputProps);
-  const checked = Boolean(value);
+  const [checked, setChecked] = useState(Boolean(value));
+
+  useEffect(() => {
+    setChecked(Boolean(value));
+  }, [value]);
+
   return (
     <div className="flex items-center gap-2">
       <Switch
         id={id}
         checked={checked}
-        onCheckedChange={(next) => emitSyntheticChange({ onChange, name }, next)}
+        onCheckedChange={(next) => {
+          setChecked(next);
+          emitSyntheticChange({ onChange, name }, next);
+        }}
         onBlur={onBlur}
         name={name}
         ref={(element) => assignRef(ref, element)}
@@ -184,7 +193,7 @@ const DateField: React.FC<FieldComponentProps> = ({ id, value, inputProps }) => 
     <Input
       id={id}
       type="date"
-      value={normalised}
+      defaultValue={normalised}
       onChange={(event) => onChange?.(event)}
       onBlur={(event) => onBlur?.(event)}
       name={name}
@@ -198,11 +207,17 @@ const SelectField: React.FC<FieldComponentProps> = ({ id, value, field, inputPro
   const { onChange, name, rest } = normalizeInputProps(inputProps);
   const options = field.options ?? [];
   const serialisedValue = value === undefined || value === null ? "" : String(value);
+  const [selectedValue, setSelectedValue] = useState(serialisedValue);
+
+  useEffect(() => {
+    setSelectedValue(serialisedValue);
+  }, [serialisedValue]);
 
   return (
     <Select
-      value={serialisedValue}
+      value={selectedValue}
       onValueChange={(next) => {
+        setSelectedValue(next);
         emitSyntheticChange({ onChange, name }, next);
       }}
       {...rest}
