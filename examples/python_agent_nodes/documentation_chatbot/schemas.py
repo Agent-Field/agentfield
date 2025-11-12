@@ -37,6 +37,21 @@ class QueryPlan(BaseModel):
     refusal_condition: str
 
 
+class QuestionFocus(BaseModel):
+    """Normalized question context extracted from conversation text."""
+
+    question: str
+    key_terms: List[str]
+    context_note: str
+
+
+class SearchAngles(BaseModel):
+    """Additional targeted queries to widen retrieval coverage."""
+
+    queries: List[str]
+    focus: str = Field(description="Short note on what the extra queries target")
+
+
 class Citation(BaseModel):
     """Citation metadata for rendering inline references."""
 
@@ -70,14 +85,16 @@ class ContextWindow(BaseModel):
     contexts: List[ContextChunk]
 
 
-class AnswerCritique(BaseModel):
+class AnswerCheck(BaseModel):
     """Meta-judgement about whether an answer is complete and grounded."""
 
     verdict: str = Field(description="One sentence summary of quality")
     needs_more_context: bool = Field(description="True if answer should retrieve more")
-    missing_topics: List[str] = Field(default_factory=list)
-    hallucination_risk: str = Field(description="low/medium/high assessment")
-    improvements: List[str] = Field(default_factory=list, description="Bullets for how to improve answer")
+    missing_terms: List[str] = Field(default_factory=list)
+    unsupported_claims: List[str] = Field(
+        default_factory=list,
+        description="Answer statements not found in context",
+    )
 
 
 class DocAnswer(BaseModel):

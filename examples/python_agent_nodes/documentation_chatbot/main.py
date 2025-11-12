@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 import sys
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Sequence, Tuple
 
 from agentfield import AIConfig, Agent
 from agentfield.logger import log_info
@@ -19,7 +20,7 @@ if __package__ in (None, ""):
 from chunking import chunk_markdown_text, is_supported_file, read_text
 from embedding import embed_query, embed_texts
 from schemas import (
-    AnswerCritique,
+    AnswerCheck,
     Citation,
     ContextChunk,
     ContextWindow,
@@ -27,6 +28,8 @@ from schemas import (
     IngestReport,
     InlineAnswer,
     QueryPlan,
+    QuestionFocus,
+    SearchAngles,
 )
 
 app = Agent(
@@ -208,6 +211,12 @@ def _ensure_window(data: Any) -> ContextWindow:
     return ContextWindow.model_validate(data)
 
 
+def _ensure_angles(data: Any) -> SearchAngles:
+    if isinstance(data, SearchAngles):
+        return data
+    return SearchAngles.model_validate(data)
+
+
 def _merge_lists(base: List[str], additions: List[str]) -> List[str]:
     seen = set()
     merged: List[str] = []
@@ -220,6 +229,89 @@ def _merge_lists(base: List[str], additions: List[str]) -> List[str]:
         seen.add(value_clean.lower())
         merged.append(value_clean)
     return merged
+
+
+def _literal_mismatches(answer: str, contexts: Sequence[ContextChunk]) -> List[str]:
+    literals = re.findall(r"`([^`]+)`", answer)
+    if not literals:
+        return []
+
+    corpus = "\n".join(entry.text for entry in contexts).lower()
+    gaps: List[str] = []
+    for literal in literals:
+        cleaned = literal.strip()
+        if not cleaned:
+            continue
+        if cleaned.lower() not in corpus:
+            gaps.append(f"`{cleaned}` not found in context")
+    return gaps
+
+
+def _context_inventory(contexts: Sequence[ContextChunk]) -> List[str]:
+    inventory: List[str] = []
+    for entry in contexts:
+        citation = entry.citation
+        descriptor = f"{citation.relative_path}:{citation.section or 'section?'}"
+        inventory.append(descriptor)
+    return inventory
+
+
+def _extract_terms(items: Sequence[str]) -> List[str]:
+    """Reduce critique strings into concise search tokens."""
+
+    extracted: List[str] = []
+    for item in items:
+        literals = re.findall(r"`([^`]+)`", item)
+        if literals:
+            extracted.extend(literals)
+        else:
+            extracted.append(item)
+    cleaned = [value.strip() for value in extracted if value.strip()]
+    return cleaned
+
+
+ReasonerFunc = Callable[..., Awaitable[Any]]
+
+
+async def _call_reasoner(
+    reasoner_name: str,
+    func: ReasonerFunc,
+    **kwargs: Any,
+) -> Any:
+    """
+    Try cross-agent call first for observability; fall back to local execution if control plane is down.
+    """
+
+    full_id = f"{app.node_id}.{reasoner_name}"
+    try:
+        return await app.call(full_id, **kwargs)
+    except Exception as exc:  # pragma: no cover - depends on network state
+        if "AgentField server unavailable" not in str(exc):
+            raise
+        log_info(
+            f"[fallback] Control plane unavailable for {reasoner_name}; running locally."
+        )
+        return await func(**kwargs)
+
+
+@app.reasoner()
+async def qa_focus_question(user_input: str) -> QuestionFocus:
+    """Reduce conversation blobs into a crisp current question + key terms."""
+
+    return await app.ai(
+        system=(
+            "You extract the actionable question from chat transcripts. "
+            "Ignore refusal text. Return a short clean question, 2-4 key terms, and a note if additional context matters."
+        ),
+        user=(
+            "Conversation fragment:\n"
+            f"{user_input}\n\n"
+            "Identify the user's latest question in plain language. "
+            "List essential nouns/phrases that MUST appear in the answer. "
+            "Mention any context that should influence retrieval (e.g., product area, feature set)."
+        ),
+        schema=QuestionFocus,
+    )
 
 
 @app.reasoner()
@@ -238,23 +330,95 @@ and a refusal condition describing when to say you lack information.""",
 
 
 @app.reasoner()
+async def qa_generate_queries(question: str, plan: Dict[str, Any]) -> SearchAngles:
+    """Produce complementary search angles to run in parallel."""
+
+    plan_obj = _ensure_plan(plan)
+    return await app.ai(
+        system=(
+            "You propose extra focused search queries for documentation retrieval. "
+            "Keep them short (<=6 words) and targeted."
+        ),
+        user=(
+            f"Question: {question}\n"
+            f"Existing search terms: {plan_obj.search_terms}\n"
+            "List 2-3 complementary search queries that cover different facets or synonyms.\n"
+            "Also explain in one short phrase what they focus on."
+        ),
+        schema=SearchAngles,
+    )
+
+
+@app.reasoner()
+async def qa_refine_queries(
+    question: str,
+    plan: Dict[str, Any],
+    critique: Dict[str, Any],
+    known_queries: List[str],
+    context_summary: List[str],
+) -> SearchAngles:
+    """Suggest additional focused queries based on critique feedback."""
+
+    plan_obj = _ensure_plan(plan)
+    check = AnswerCheck.model_validate(critique)
+
+    return await app.ai(
+        system=(
+            "You propose new search phrases to fill evidence gaps. "
+            "Avoid repeating known queries."
+        ),
+        user=(
+            f"Question: {question}\n"
+            f"Plan search terms: {plan_obj.search_terms}\n"
+            f"Known queries: {known_queries}\n"
+            f"Context inventory: {context_summary}\n"
+            f"Critique verdict: {check.verdict}\n"
+            f"Missing terms: {check.missing_terms}\n"
+            f"Unsupported claims: {check.unsupported_claims}\n"
+            "Return 2-3 short queries plus a one-line focus on what they target."
+        ),
+        schema=SearchAngles,
+    )
+
+
+@app.reasoner()
 async def qa_retrieve(
     question: str,
     namespace: str,
     plan: Dict[str, Any],
+    queries: Dict[str, Any],
     top_k: int = 6,
     min_score: float = 0.35,
 ) -> ContextWindow:
     """Retrieve the highest-signal snippets for the current plan."""
 
     plan_obj = _ensure_plan(plan)
+    angles = _ensure_angles(queries)
 
-    query_embedding = embed_query(" \n".join([question] + plan_obj.search_terms))
+    search_basket = _merge_lists(
+        [question], plan_obj.search_terms + angles.queries
+    )
     global_memory = app.memory.global_scope
-    raw_hits = await global_memory.similarity_search(query_embedding, top_k=top_k * 3)
 
-    filtered_hits = _filter_hits(raw_hits, namespace=namespace, min_score=min_score)
-    context_entries = _build_context_entries(filtered_hits[:top_k])
+    best_by_key: Dict[str, Dict] = {}
+    for text in search_basket:
+        embedding = embed_query(text)
+        raw_hits = await global_memory.similarity_search(
+            query_embedding=embedding, top_k=top_k * 2
+        )
+        filtered_hits = _filter_hits(raw_hits, namespace=namespace, min_score=min_score)
+        for hit in filtered_hits:
+            key = hit.get("key")
+            if not key:
+                continue
+            existing = best_by_key.get(key)
+            if not existing or hit.get("score", 0) > existing.get("score", 0):
+                best_by_key[key] = hit
+
+    sorted_hits = sorted(
+        best_by_key.values(), key=lambda h: h.get("score", 0), reverse=True
+    )
+    context_entries = _build_context_entries(sorted_hits[:top_k])
     return ContextWindow(contexts=context_entries)
 
 
@@ -286,7 +450,8 @@ async def qa_synthesize(
     return await app.ai(
         system=(
             "You are a precise documentation assistant. Answer ONLY when the info is in the context map. "
-            "Always respond using GitHub-flavored Markdown and keep citation keys inline like [A] or [B][D]. "
+            "Always respond using GitHub-flavored Markdown (2-4 concise sentences or bullets) and keep citation keys inline like [A] or [B][D]. "
+            "Only mention API names, CLI commands, or config values if the exact literal string appears in the snippets. "
             "If the context is insufficient, respond with a short markdown note explaining that."
         ),
         user=(
@@ -309,7 +474,7 @@ async def qa_review(
     plan: Dict[str, Any],
     contexts: Dict[str, Any],
     answer: str,
-) -> AnswerCritique:
+) -> AnswerCheck:
     """Meta-review the draft answer for completeness and grounding."""
 
     plan_obj = _ensure_plan(plan)
@@ -319,7 +484,9 @@ async def qa_review(
     return await app.ai(
         system=(
             "You audit documentation answers for completeness and hallucinations. "
-            "Be strict: request more context whenever key terms are missing or evidence is weak."
+            "Be strict: mark needs_more_context whenever key terms are missing OR the context lacks the cited facts. "
+            "List every unsupported_claim (claims in the draft that you cannot locate verbatim or in paraphrased form inside the context). "
+            "Do not invent facts; if the answer overreaches, flag it."
         ),
         user=(
             f"Question: {question}\n"
@@ -329,9 +496,10 @@ async def qa_review(
             "Context provided:\n"
             f"{context_prompt}\n\n"
             "Decide if the answer is well-supported. "
-            "If missing details, list the concrete topics or entities that need more retrieval."
+            "If missing details, list the concrete topics or entities that need more retrieval. "
+            "For unsupported_claims, quote short snippets from the answer that are NOT present anywhere in the context."
         ),
-        schema=AnswerCritique,
+        schema=AnswerCheck,
     )
 
 
@@ -340,37 +508,43 @@ async def _run_iteration(
     question: str,
     namespace: str,
     plan: QueryPlan,
+    angles: SearchAngles,
     top_k: int,
     min_score: float,
-) -> tuple[ContextWindow, InlineAnswer, AnswerCritique]:
+) -> tuple[ContextWindow, InlineAnswer, AnswerCheck]:
     plan_payload = plan.model_dump()
+    angle_payload = angles.model_dump()
 
-    context_data = await app.call(
-        "documentation-chatbot.qa_retrieve",
+    context_data = await _call_reasoner(
+        "qa_retrieve",
+        qa_retrieve,
         question=question,
         namespace=namespace,
         plan=plan_payload,
+        queries=angle_payload,
         top_k=top_k,
         min_score=min_score,
     )
     context_window = _ensure_window(context_data)
 
-    inline_data = await app.call(
-        "documentation-chatbot.qa_synthesize",
+    inline_data = await _call_reasoner(
+        "qa_synthesize",
+        qa_synthesize,
         question=question,
         plan=plan_payload,
         contexts=context_window.model_dump(),
     )
     inline_answer = InlineAnswer.model_validate(inline_data)
 
-    critique_data = await app.call(
-        "documentation-chatbot.qa_review",
+    critique_data = await _call_reasoner(
+        "qa_review",
+        qa_review,
         question=question,
         plan=plan_payload,
         contexts=context_window.model_dump(),
         answer=inline_answer.answer,
     )
-    critique = AnswerCritique.model_validate(critique_data)
+    critique = AnswerCheck.model_validate(critique_data)
 
     return context_window, inline_answer, critique
 
@@ -384,57 +558,132 @@ async def qa_answer(
 ) -> DocAnswer:
     """Orchestrate planning → retrieval → synthesis → self-review."""
 
-    plan_data = await app.call("documentation-chatbot.qa_plan", question=question)
-    plan = _ensure_plan(plan_data)
+    focus_data = await _call_reasoner(
+        "qa_focus_question", qa_focus_question, user_input=question
+    )
+    focus = QuestionFocus.model_validate(focus_data)
+    core_question = focus.question.strip() or question
 
-    max_attempts = 2
+    plan_data = await _call_reasoner("qa_plan", qa_plan, question=core_question)
+    plan = _ensure_plan(plan_data)
+    if focus.key_terms:
+        plan = plan.model_copy(
+            update={
+                "must_include": _merge_lists(plan.must_include, focus.key_terms),
+                "search_terms": _merge_lists(plan.search_terms, focus.key_terms),
+            }
+        )
+    angles_data = await _call_reasoner(
+        "qa_generate_queries",
+        qa_generate_queries,
+        question=core_question,
+        plan=plan.model_dump(),
+    )
+    angles = _ensure_angles(angles_data)
+    visited_queries = list(angles.queries)
+
+    max_attempts = 3
     attempt = 0
     latest_contexts = ContextWindow(contexts=[])
     latest_answer = InlineAnswer(answer="I do not know yet.", cited_keys=[])
-    latest_critique = AnswerCritique(
+    latest_critique = AnswerCheck(
         verdict="insufficient",
         needs_more_context=True,
-        missing_topics=[],
-        hallucination_risk="low",
-        improvements=[],
+        missing_terms=[],
+        unsupported_claims=[],
     )
 
     while attempt < max_attempts:
         attempt += 1
         latest_contexts, latest_answer, latest_critique = await _run_iteration(
-            question=question,
+            question=core_question,
             namespace=namespace,
             plan=plan,
+            angles=angles,
             top_k=top_k,
             min_score=min_score,
         )
 
+        literal_gaps = _literal_mismatches(
+            latest_answer.answer, latest_contexts.contexts
+        )
+        if literal_gaps:
+            latest_critique.unsupported_claims = _merge_lists(
+                latest_critique.unsupported_claims, literal_gaps
+            )
+            latest_critique.needs_more_context = True
+            log_info(
+                f"[qa_answer] Inline literal gaps detected: {literal_gaps}. "
+                "Marking review as needing more context."
+            )
+
         if not latest_critique.needs_more_context:
             break
 
-        if not latest_critique.missing_topics:
+        if not (latest_critique.missing_terms or latest_critique.unsupported_claims):
             # No guidance on what to fetch—stop to avoid loops.
             break
 
+        raw_expansions = latest_critique.missing_terms + latest_critique.unsupported_claims
+        expansions = _extract_terms(raw_expansions)
         plan = plan.model_copy(
             update={
-                "search_terms": _merge_lists(
-                    plan.search_terms, latest_critique.missing_topics
-                ),
+                "search_terms": _merge_lists(plan.search_terms, expansions),
                 "must_include": _merge_lists(
-                    plan.must_include, latest_critique.missing_topics
+                    plan.must_include, latest_critique.missing_terms
                 ),
             }
         )
         log_info(
-            f"[qa_answer] Critique requested more context ({latest_critique.missing_topics}); "
+            f"[qa_answer] Critique requested more context ({latest_critique.missing_terms}); "
             "expanding search terms and retrying."
+        )
+        refinement = await _call_reasoner(
+            "qa_refine_queries",
+            qa_refine_queries,
+            question=core_question,
+            plan=plan.model_dump(),
+            critique=latest_critique.model_dump(),
+            known_queries=visited_queries,
+            context_summary=_context_inventory(latest_contexts.contexts),
+        )
+        new_angles = _ensure_angles(refinement)
+        merged_queries = _merge_lists(visited_queries, new_angles.queries)
+        visited_queries = merged_queries
+        angles = SearchAngles(
+            queries=merged_queries,
+            focus=new_angles.focus or angles.focus,
         )
 
     if not latest_contexts.contexts:
         refusal = (
             "I did not find that in the documentation yet. "
             f"(Plan refusal condition: {plan.refusal_condition})"
+        )
+        return DocAnswer(answer=refusal, citations=[], plan=plan)
+
+    final_literal_gaps = _literal_mismatches(
+        latest_answer.answer, latest_contexts.contexts
+    )
+    if final_literal_gaps:
+        latest_critique.unsupported_claims = _merge_lists(
+            latest_critique.unsupported_claims, final_literal_gaps
+        )
+        log_info(
+            f"[qa_answer] Final literal mismatch check failed: {final_literal_gaps}"
+        )
+
+    if latest_critique.unsupported_claims:
+        refusal = (
+            "I cannot answer from the documentation because these statements lack evidence: "
+            + "; ".join(latest_critique.unsupported_claims)
+        )
+        return DocAnswer(answer=refusal, citations=[], plan=plan)
+
+    if latest_critique.needs_more_context:
+        refusal = (
+            "I could not gather enough grounded context to answer. "
+            f"(Reason: {latest_critique.verdict})"
         )
         return DocAnswer(answer=refusal, citations=[], plan=plan)
 
@@ -470,6 +719,12 @@ if __name__ == "__main__":
     print(f"🌐 Control Plane: {app.agentfield_server}")
     print("Endpoints:")
     print("  • /skills/ingest_folder → documentation-chatbot.ingest_folder")
+    print("  • /reasoners/qa_focus_question → documentation-chatbot.qa_focus_question")
     print("  • /reasoners/qa_plan → documentation-chatbot.qa_plan")
+    print("  • /reasoners/qa_generate_queries → documentation-chatbot.qa_generate_queries")
+    print("  • /reasoners/qa_refine_queries → documentation-chatbot.qa_refine_queries")
+    print("  • /reasoners/qa_retrieve → documentation-chatbot.qa_retrieve")
+    print("  • /reasoners/qa_synthesize → documentation-chatbot.qa_synthesize")
+    print("  • /reasoners/qa_review → documentation-chatbot.qa_review")
     print("  • /reasoners/qa_answer → documentation-chatbot.qa_answer")
     app.run(auto_port=True)

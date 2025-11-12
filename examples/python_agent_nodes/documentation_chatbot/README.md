@@ -4,7 +4,7 @@ A production-ready Retrieval-Augmented Generation (RAG) node designed to answer 
 
 ## Highlights
 - **Single-file agent** – ingestion and Q&A sit right on the agent, no prefixes or extra routers to manage.
-- **Agentic planning** – `qa_plan → qa_retrieve → qa_synthesize → qa_review` automatically forms a call graph in the control plane.
+- **Agentic planning** – `qa_plan → qa_generate_queries → qa_retrieve → qa_synthesize → qa_review ↺ qa_refine_queries` automatically forms a call graph in the control plane.
 - **Self-critiquing answers** – every response is reviewed for grounding/completeness; if the critique flags gaps we re-retrieve and rewrite.
 - **Inline citations** – the LLM only sees a `key -> snippet` context map, so it references short keys (`[A]`, `[B]`) that you can later swap for rich UI citations.
 - **Chunk metadata** – every chunk keeps `relative_path`, `section`, `line_start/line_end`, and similarity score for transparent answers.
@@ -71,15 +71,18 @@ documentation_chatbot/
 ## Design notes
 - **Namespace aware** – keep multiple doc sets isolated by sending a `namespace` argument to both ingestion + QA.
 - **Citation safety** – the LLM only has access to the `key -> snippet` map, so every fact must be backed by a retrieved chunk key. We can later post-process `[A]` → "syncing/architecture.md · lines 42-58".
-- **Multi-reasoner call graph** – `qa_answer` calls `qa_plan`, `qa_retrieve`, `qa_synthesize`, and `qa_review`, so you can inspect each phase independently in the control plane.
+- **Multi-reasoner call graph** – `qa_answer` now chains `qa_focus_question → qa_plan → qa_generate_queries → qa_retrieve → qa_synthesize → qa_review` (with optional `qa_refine_queries` loops), so each phase is observable in the control plane.
 - **Hallucination guardrails** – the review reasoner halts finalization if the draft answer lacks evidence, forcing a refined retrieval pass before returning to users.
 - **Extensible** – swap `fastembed` for any embedding model (update `DOC_EMBED_MODEL` env var) or plug in extra reasoners for telemetry.
 
 ### Extra endpoints for debugging
+- `/reasoners/qa_focus_question` – inspect how the agent distills conversation blobs into a clean question.
 - `/reasoners/qa_plan` – view the retrieval instructions.
+- `/reasoners/qa_generate_queries` – inspect the complementary search angles that broaden retrieval.
+- `/reasoners/qa_refine_queries` – see the follow-up search prompts generated whenever the critic asks for more context.
 - `/reasoners/qa_retrieve` – inspect the snippet window chosen for the current plan.
 - `/reasoners/qa_synthesize` – see the raw markdown answer with inline citation keys.
-- `/reasoners/qa_review` – get the critique verdict (needs_more_context, missing_topics, etc.).
+- `/reasoners/qa_review` – get the critique verdict (needs_more_context, missing_terms, unsupported_claims).
 
 ## Environment variables
 | Variable | Description | Default |
@@ -91,4 +94,4 @@ documentation_chatbot/
 ## Next steps
 - Add schedulers/watchers to auto re-ingest docs on git changes.
 - Stream answers token-by-token via AgentField streaming APIs.
-- Layer evaluators (unit tests) that hit the `/reasoners/docs/qa/answer` endpoint with canonical Q&A pairs to detect regressions.
+- Layer evaluators (unit tests) that hit the `/reasoners/qa_answer` endpoint with canonical Q&A pairs to detect regressions.
