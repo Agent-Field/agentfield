@@ -1862,7 +1862,21 @@ class Agent(FastAPI):
                     self._current_execution_context = None
                     self._clear_current()
 
-            # Register skill metadata
+            def _build_invocation_payload(args: tuple, kwargs: dict) -> Dict[str, Any]:
+                try:
+                    bound = sig.bind_partial(*args, **kwargs)
+                    bound.apply_defaults()
+                    payload = {
+                        name: value
+                        for name, value in bound.arguments.items()
+                        if name != "self"
+                    }
+                    return payload
+                except Exception:
+                    payload = {f"arg_{idx}": value for idx, value in enumerate(args)}
+                    payload.update({k: v for k, v in kwargs.items() if k != "self"})
+                    return payload
+
             self.skills.append(
                 {
                     "id": skill_id,
@@ -1874,10 +1888,124 @@ class Agent(FastAPI):
                 }
             )
 
-            if skill_id != func_name:
-                setattr(self, skill_id, getattr(self, func_name, func))
+            original_func = func
+            is_async = asyncio.iscoroutinefunction(original_func)
 
-            return func
+            async def _run_async_skill(*args, **kwargs):
+                current_context = get_current_context()
+                if not current_context or not self.workflow_handler:
+                    return await original_func(*args, **kwargs)
+
+                child_context = current_context.create_child_context()
+                child_context.reasoner_name = skill_id
+                token = set_execution_context(child_context)
+                previous_ctx = self._current_execution_context
+                self._current_execution_context = child_context
+                input_payload = _build_invocation_payload(args, kwargs)
+
+                await self.workflow_handler.notify_call_start(
+                    child_context.execution_id,
+                    child_context,
+                    skill_id,
+                    input_payload,
+                    parent_execution_id=current_context.execution_id,
+                )
+
+                start_time = time.time()
+                try:
+                    result = await original_func(*args, **kwargs)
+                    duration_ms = int((time.time() - start_time) * 1000)
+                    await self.workflow_handler.notify_call_complete(
+                        child_context.execution_id,
+                        child_context.workflow_id,
+                        result,
+                        duration_ms,
+                        child_context,
+                        input_data=input_payload,
+                        parent_execution_id=current_context.execution_id,
+                    )
+                    return result
+                except Exception as exc:
+                    duration_ms = int((time.time() - start_time) * 1000)
+                    await self.workflow_handler.notify_call_error(
+                        child_context.execution_id,
+                        child_context.workflow_id,
+                        str(exc),
+                        duration_ms,
+                        child_context,
+                        input_data=input_payload,
+                        parent_execution_id=current_context.execution_id,
+                    )
+                    raise
+                finally:
+                    reset_execution_context(token)
+                    self._current_execution_context = previous_ctx
+
+            def _run_sync_skill(*args, **kwargs):
+                current_context = get_current_context()
+                if not current_context or not self.agentfield_server:
+                    return original_func(*args, **kwargs)
+
+                child_context = current_context.create_child_context()
+                child_context.reasoner_name = skill_id
+                token = set_execution_context(child_context)
+                previous_ctx = self._current_execution_context
+                self._current_execution_context = child_context
+
+                input_payload = _build_invocation_payload(args, kwargs)
+                start_time = time.time()
+
+                self._emit_workflow_event_sync(
+                    child_context,
+                    skill_id,
+                    status="running",
+                    input_data=input_payload,
+                    parent_execution_id=current_context.execution_id,
+                )
+
+                try:
+                    result = original_func(*args, **kwargs)
+                    duration_ms = int((time.time() - start_time) * 1000)
+                    self._emit_workflow_event_sync(
+                        child_context,
+                        skill_id,
+                        status="succeeded",
+                        input_data=input_payload,
+                        result=result,
+                        duration_ms=duration_ms,
+                        parent_execution_id=current_context.execution_id,
+                    )
+                    return result
+                except Exception as exc:
+                    duration_ms = int((time.time() - start_time) * 1000)
+                    self._emit_workflow_event_sync(
+                        child_context,
+                        skill_id,
+                        status="failed",
+                        input_data=input_payload,
+                        error=str(exc),
+                        duration_ms=duration_ms,
+                        parent_execution_id=current_context.execution_id,
+                    )
+                    raise
+                finally:
+                    reset_execution_context(token)
+                    self._current_execution_context = previous_ctx
+
+            if is_async:
+                tracked_callable = _run_async_skill
+            else:
+                tracked_callable = _run_sync_skill
+
+            setattr(tracked_callable, "_original_func", original_func)
+            setattr(tracked_callable, "_is_tracked_replacement", True)
+
+            if skill_id != func_name:
+                setattr(self, skill_id, getattr(self, func_name, tracked_callable))
+            else:
+                setattr(self, func_name, tracked_callable)
+
+            return tracked_callable
 
         if direct_registration:
             return decorator(direct_registration)
@@ -2910,6 +3038,63 @@ class Agent(FastAPI):
             delattr(Agent, "_current_agent")
         # Also clear from thread-local storage
         clear_current_agent()
+
+    def _emit_workflow_event_sync(
+        self,
+        context: ExecutionContext,
+        component_id: str,
+        status: str,
+        *,
+        input_data: Optional[Dict[str, Any]] = None,
+        result: Optional[Any] = None,
+        error: Optional[str] = None,
+        duration_ms: Optional[int] = None,
+        parent_execution_id: Optional[str] = None,
+    ) -> None:
+        """Best-effort synchronous workflow event emitter for local skill calls."""
+
+        if not self.agentfield_server:
+            return
+
+        try:
+            import requests
+        except ImportError:
+            if self.dev_mode:
+                log_warn("requests library unavailable, skipping workflow event emission")
+            return
+
+        payload: Dict[str, Any] = {
+            "execution_id": context.execution_id,
+            "workflow_id": context.workflow_id,
+            "run_id": context.run_id,
+            "reasoner_id": component_id,
+            "type": component_id,
+            "agent_node_id": self.node_id,
+            "status": status,
+            "parent_execution_id": parent_execution_id,
+            "parent_workflow_id": context.parent_workflow_id
+            or context.workflow_id,
+        }
+
+        if input_data is not None:
+            payload["input_data"] = jsonable_encoder(input_data)
+        if result is not None:
+            payload["result"] = jsonable_encoder(result)
+        if error is not None:
+            payload["error"] = error
+        if duration_ms is not None:
+            payload["duration_ms"] = duration_ms
+
+        url = self.agentfield_server.rstrip("/") + "/api/v1/workflow/executions/events"
+        try:
+            response = requests.post(url, json=payload, timeout=5)
+            if response.status_code >= 400 and self.dev_mode:
+                log_warn(
+                    f"Workflow event ({status}) for {component_id} failed: {response.status_code} {response.text}"
+                )
+        except Exception as exc:
+            if self.dev_mode:
+                log_warn(f"Failed to emit workflow event for {component_id}: {exc}")
 
     def _setup_signal_handlers(
         self,
