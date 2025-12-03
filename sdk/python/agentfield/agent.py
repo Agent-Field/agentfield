@@ -569,7 +569,7 @@ class Agent(FastAPI):
         self._call_semaphore: Optional[asyncio.Semaphore] = None
         self._call_semaphore_guard = threading.Lock()
 
-    def handle_serverless(self, event: dict, adapter: Callable | None = None) -> dict:
+    def handle_serverless(self, event: dict, adapter: Optional[Callable] = None) -> dict:
         """
         Universal serverless handler for executing reasoners and skills.
 
