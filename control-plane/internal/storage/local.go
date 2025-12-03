@@ -4070,6 +4070,10 @@ func (ls *LocalStorage) RegisterAgent(ctx context.Context, agent *types.AgentNod
 		return fmt.Errorf("context cancelled during register agent: %w", err)
 	}
 
+	if strings.TrimSpace(agent.DeploymentType) == "" {
+		agent.DeploymentType = "long_running"
+	}
+
 	// Begin transaction for atomic operation
 	tx, err := ls.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -4094,14 +4098,16 @@ func (ls *LocalStorage) RegisterAgent(ctx context.Context, agent *types.AgentNod
 func (ls *LocalStorage) executeRegisterAgent(ctx context.Context, q DBTX, agent *types.AgentNode) error {
 	query := `
 		INSERT INTO agent_nodes (
-			id, team_id, base_url, version, reasoners, skills,
+			id, team_id, base_url, version, deployment_type, invocation_url, reasoners, skills,
 			communication_config, health_status, lifecycle_status, last_heartbeat,
 			registered_at, features, metadata
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			team_id = excluded.team_id,
 			base_url = excluded.base_url,
 			version = excluded.version,
+			deployment_type = excluded.deployment_type,
+			invocation_url = excluded.invocation_url,
 			reasoners = excluded.reasoners,
 			skills = excluded.skills,
 			communication_config = excluded.communication_config,
@@ -4133,7 +4139,7 @@ func (ls *LocalStorage) executeRegisterAgent(ctx context.Context, q DBTX, agent 
 	}
 
 	_, err = q.ExecContext(ctx, query,
-		agent.ID, agent.TeamID, agent.BaseURL, agent.Version,
+		agent.ID, agent.TeamID, agent.BaseURL, agent.Version, agent.DeploymentType, agent.InvocationURL,
 		reasonersJSON, skillsJSON, commConfigJSON, agent.HealthStatus, agent.LifecycleStatus,
 		agent.LastHeartbeat, agent.RegisteredAt, featuresJSON, metadataJSON,
 	)
@@ -4154,7 +4160,7 @@ func (ls *LocalStorage) GetAgent(ctx context.Context, id string) (*types.AgentNo
 
 	query := `
 		SELECT
-			id, team_id, base_url, version, reasoners, skills,
+			id, team_id, base_url, version, deployment_type, invocation_url, reasoners, skills,
 			communication_config, health_status, lifecycle_status, last_heartbeat,
 			registered_at, features, metadata
 		FROM agent_nodes WHERE id = ?`
@@ -4164,9 +4170,10 @@ func (ls *LocalStorage) GetAgent(ctx context.Context, id string) (*types.AgentNo
 	agent := &types.AgentNode{}
 	var reasonersJSON, skillsJSON, commConfigJSON, featuresJSON, metadataJSON []byte
 	var healthStatusStr, lifecycleStatusStr string
+	var invocationURL sql.NullString
 
 	err := row.Scan(
-		&agent.ID, &agent.TeamID, &agent.BaseURL, &agent.Version,
+		&agent.ID, &agent.TeamID, &agent.BaseURL, &agent.Version, &agent.DeploymentType, &invocationURL,
 		&reasonersJSON, &skillsJSON, &commConfigJSON, &healthStatusStr, &lifecycleStatusStr,
 		&agent.LastHeartbeat, &agent.RegisteredAt, &featuresJSON, &metadataJSON,
 	)
@@ -4180,6 +4187,13 @@ func (ls *LocalStorage) GetAgent(ctx context.Context, id string) (*types.AgentNo
 
 	agent.HealthStatus = types.HealthStatus(healthStatusStr)
 	agent.LifecycleStatus = types.AgentLifecycleStatus(lifecycleStatusStr)
+	if invocationURL.Valid && strings.TrimSpace(invocationURL.String) != "" {
+		url := strings.TrimSpace(invocationURL.String)
+		agent.InvocationURL = &url
+	}
+	if strings.TrimSpace(agent.DeploymentType) == "" {
+		agent.DeploymentType = "long_running"
+	}
 
 	if len(reasonersJSON) > 0 {
 		if err := json.Unmarshal(reasonersJSON, &agent.Reasoners); err != nil {
@@ -4219,8 +4233,8 @@ func (ls *LocalStorage) ListAgents(ctx context.Context, filters types.AgentFilte
 	// Build query with filters
 	query := `
 		SELECT
-			id, team_id, base_url, version, reasoners, skills,
-			communication_config, health_status, last_heartbeat,
+			id, team_id, base_url, version, deployment_type, invocation_url, reasoners, skills,
+			communication_config, health_status, lifecycle_status, last_heartbeat,
 			registered_at, features, metadata
 		FROM agent_nodes`
 
@@ -4264,11 +4278,12 @@ func (ls *LocalStorage) ListAgents(ctx context.Context, filters types.AgentFilte
 
 		agent := &types.AgentNode{}
 		var reasonersJSON, skillsJSON, commConfigJSON, featuresJSON, metadataJSON []byte
-		var healthStatusStr string
+		var healthStatusStr, lifecycleStatusStr string
+		var invocationURL sql.NullString
 
 		err := rows.Scan(
-			&agent.ID, &agent.TeamID, &agent.BaseURL, &agent.Version,
-			&reasonersJSON, &skillsJSON, &commConfigJSON, &healthStatusStr,
+			&agent.ID, &agent.TeamID, &agent.BaseURL, &agent.Version, &agent.DeploymentType, &invocationURL,
+			&reasonersJSON, &skillsJSON, &commConfigJSON, &healthStatusStr, &lifecycleStatusStr,
 			&agent.LastHeartbeat, &agent.RegisteredAt, &featuresJSON, &metadataJSON,
 		)
 		if err != nil {
@@ -4276,6 +4291,14 @@ func (ls *LocalStorage) ListAgents(ctx context.Context, filters types.AgentFilte
 		}
 
 		agent.HealthStatus = types.HealthStatus(healthStatusStr)
+		agent.LifecycleStatus = types.AgentLifecycleStatus(lifecycleStatusStr)
+		if invocationURL.Valid && strings.TrimSpace(invocationURL.String) != "" {
+			url := strings.TrimSpace(invocationURL.String)
+			agent.InvocationURL = &url
+		}
+		if strings.TrimSpace(agent.DeploymentType) == "" {
+			agent.DeploymentType = "long_running"
+		}
 
 		if len(reasonersJSON) > 0 {
 			if err := json.Unmarshal(reasonersJSON, &agent.Reasoners); err != nil {
