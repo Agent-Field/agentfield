@@ -2848,8 +2848,13 @@ class Agent(FastAPI):
                 )
 
             # Extract the actual result from the response and return as dict
-            if isinstance(result, dict) and "result" in result:
-                extracted_result = result["result"]
+            if isinstance(result, dict):
+                if result.get("result") is not None:
+                    extracted_result = result["result"]
+                elif "body" in result:
+                    extracted_result = result["body"]
+                else:
+                    extracted_result = result
             else:
                 extracted_result = result
 
