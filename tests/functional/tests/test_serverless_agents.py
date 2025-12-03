@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import socket
 import sys
 import threading
@@ -58,46 +59,47 @@ async def _wait_for_port(host: str, port: int, timeout: float = 15.0, process=No
     raise AssertionError(f"Port {host}:{port} did not open in time: {last_error}")
 
 
-async def _register_serverless(async_http_client, invocation_url: str, *, retries: int = 6):
-    # Prefer CLI to match DX; fall back to HTTP only if CLI is unavailable.
-    cli_result = await _register_serverless_via_cli(invocation_url)
-    if cli_result.get("ok"):
-        return {"source": "cli"}
-    if cli_result.get("error") == "missing-cli":
-        # Fall back to API registration for environments without af on PATH
-        pass
-    elif cli_result.get("error"):
-        raise AssertionError(f"af nodes register-serverless failed: {cli_result}")
+async def _register_serverless(_async_http_client, invocation_url: str, *, retries: int = 6):
+    """
+    Register a serverless function using the CLI exactly as documented.
 
+    The control plane Docker image already builds and installs the CLI as `af`,
+    so we treat a missing CLI as a hard failure rather than silently falling
+    back to the HTTP API. Retries help absorb the control plane coming online.
+    """
     last_error = None
     for attempt in range(retries):
-        resp = await async_http_client.post(
-            "/api/v1/nodes/register-serverless",
-            json={"invocation_url": invocation_url},
-            timeout=20.0,
-        )
-        if resp.status_code in (200, 201):
-            return resp.json()
-        last_error = resp.text
+        cli_result = await _register_serverless_via_cli(invocation_url)
+        if cli_result.get("ok"):
+            return cli_result
+        last_error = cli_result
         await asyncio.sleep(0.5)
-    raise AssertionError(f"Failed to register serverless agent at {invocation_url}: {last_error}")
+
+    raise AssertionError(f"af nodes register-serverless failed: {last_error}")
 
 
 async def _register_serverless_via_cli(invocation_url: str):
+    bin_override = os.environ.get("AF_BIN") or os.environ.get("AGENTFIELD_CLI")
+    candidates = [bin_override] if bin_override else []
+    candidates.extend(["af", "agentfield"])
+
+    af_bin: Optional[str] = None
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = shutil.which(candidate)
+        if path:
+            af_bin = path
+            break
+
+    if not af_bin:
+        return {"ok": False, "error": "missing-cli", "candidates": candidates}
+
     env = os.environ.copy()
     env.setdefault("AGENTFIELD_SERVER", env.get("CONTROL_PLANE_URL", "http://localhost:8080"))
     token = env.get("AGENTFIELD_TOKEN")
 
-    cmd = [
-        "af",
-        "nodes",
-        "register-serverless",
-        "--url",
-        invocation_url,
-        "--server",
-        env["AGENTFIELD_SERVER"],
-        "--json",
-    ]
+    cmd = [af_bin, "nodes", "register-serverless", "--url", invocation_url, "--json"]
     if token:
         cmd.extend(["--token", token])
 
@@ -121,13 +123,13 @@ async def _register_serverless_via_cli(invocation_url: str):
             "stdout": stdout.decode(),
         }
 
+    payload = {}
     if stdout:
         try:
-            json.loads(stdout.decode())
+            payload = json.loads(stdout.decode())
         except json.JSONDecodeError:
-            # best-effort parse, not fatal
-            pass
-    return {"ok": True}
+            payload = {"raw": stdout.decode()}
+    return {"ok": True, "response": payload}
 
 
 @asynccontextmanager
@@ -321,6 +323,49 @@ async def test_typescript_serverless_agent(async_http_client, control_plane_url)
 
 @pytest.mark.functional
 @pytest.mark.asyncio
+async def test_typescript_serverless_chain(async_http_client, control_plane_url):
+    child_id = unique_node_id("ts-svless-child")
+    parent_id = unique_node_id("ts-svless-parent")
+
+    async with run_ts_serverless_agent(child_id, control_plane_url) as (child_url, child_process):
+        await _register_serverless(async_http_client, child_url)
+
+        async with run_ts_serverless_agent(parent_id, control_plane_url) as (
+            parent_url,
+            parent_process,
+        ):
+            await _register_serverless(async_http_client, parent_url)
+
+            resp = await async_http_client.post(
+                f"/api/v1/reasoners/{parent_id}.relay",
+                json={"input": {"target": f"{child_id}.hello", "name": "ts-child"}},
+                timeout=40.0,
+            )
+
+            if resp.status_code != 200:
+                # Collect logs for debugging without blocking indefinitely if the process is still alive.
+                if child_process.returncode is None:
+                    child_process.terminate()
+                child_stdout, child_stderr = await child_process.communicate()
+
+                if parent_process.returncode is None:
+                    parent_process.terminate()
+                parent_stdout, parent_stderr = await parent_process.communicate()
+
+                print("TS child stdout:", child_stdout.decode(), file=sys.stderr)
+                print("TS child stderr:", child_stderr.decode(), file=sys.stderr)
+                print("TS parent stdout:", parent_stdout.decode(), file=sys.stderr)
+                print("TS parent stderr:", parent_stderr.decode(), file=sys.stderr)
+
+            assert resp.status_code == 200, resp.text
+            result = resp.json().get("result", {})
+            downstream = result.get("downstream", {})
+            assert downstream.get("greeting") == "Hello, ts-child!"
+            assert downstream.get("executionId"), "child execution id should propagate"
+
+
+@pytest.mark.functional
+@pytest.mark.asyncio
 async def test_go_serverless_agent(async_http_client, control_plane_url):
     node_id = unique_node_id("go-svless")
 
@@ -336,3 +381,28 @@ async def test_go_serverless_agent(async_http_client, control_plane_url):
         result = resp.json().get("result", {})
         assert result.get("greeting") == "Hello, gopher!"
         assert result.get("execution_id")
+
+
+@pytest.mark.functional
+@pytest.mark.asyncio
+async def test_go_serverless_chain(async_http_client, control_plane_url):
+    child_id = unique_node_id("go-svless-child")
+    parent_id = unique_node_id("go-svless-parent")
+
+    async with run_go_serverless_agent(child_id, control_plane_url) as child_url:
+        await _register_serverless(async_http_client, child_url)
+
+        async with run_go_serverless_agent(parent_id, control_plane_url) as parent_url:
+            await _register_serverless(async_http_client, parent_url)
+
+            resp = await async_http_client.post(
+                f"/api/v1/reasoners/{parent_id}.relay",
+                json={"input": {"target": f"{child_id}.hello", "message": "gopher-child"}},
+                timeout=40.0,
+            )
+            assert resp.status_code == 200, resp.text
+
+            result = resp.json().get("result", {})
+            downstream = result.get("downstream", {})
+            assert downstream.get("greeting") == "Hello, gopher-child!"
+            assert downstream.get("execution_id"), "child execution id should propagate"
