@@ -10,6 +10,7 @@ invocation, and parent/child call wiring all work without heartbeats.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import socket
 import sys
@@ -58,6 +59,14 @@ async def _wait_for_port(host: str, port: int, timeout: float = 15.0, process=No
 
 
 async def _register_serverless(async_http_client, invocation_url: str, *, retries: int = 6):
+    # Prefer CLI to match DX; fallback to HTTP if CLI is unavailable.
+    try:
+        await _register_serverless_via_cli(invocation_url)
+        return {"source": "cli"}
+    except Exception:
+        # Fallback to API registration for compatibility
+        pass
+
     last_error = None
     for attempt in range(retries):
         resp = await async_http_client.post(
@@ -70,6 +79,43 @@ async def _register_serverless(async_http_client, invocation_url: str, *, retrie
         last_error = resp.text
         await asyncio.sleep(0.5)
     raise AssertionError(f"Failed to register serverless agent at {invocation_url}: {last_error}")
+
+
+async def _register_serverless_via_cli(invocation_url: str):
+    env = os.environ.copy()
+    env.setdefault("AGENTFIELD_SERVER", env.get("CONTROL_PLANE_URL", "http://localhost:8080"))
+    token = env.get("AGENTFIELD_TOKEN")
+
+    cmd = [
+        "af",
+        "nodes",
+        "register-serverless",
+        "--url",
+        invocation_url,
+        "--server",
+        env["AGENTFIELD_SERVER"],
+        "--json",
+    ]
+    if token:
+        cmd.extend(["--token", token])
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"CLI register-serverless failed (code {proc.returncode}): {stderr.decode()}"
+        )
+    if stdout:
+        try:
+            json.loads(stdout.decode())
+        except json.JSONDecodeError:
+            # best-effort parse, not fatal
+            pass
 
 
 @asynccontextmanager
