@@ -637,6 +637,10 @@ class Agent(FastAPI):
                 if self.dev_mode:
                     log_warn(f"Auto-registration failed: {e}")
 
+        # Serverless invocations arrive via the control plane; mark as connected so
+        # cross-agent calls can route through the gateway without a lease loop.
+        self.agentfield_connected = True
+
         # Parse event format for execution
         reasoner_name = (
             event.get("reasoner") or event.get("target") or event.get("skill")
