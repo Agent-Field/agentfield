@@ -4191,13 +4191,6 @@ func (ls *LocalStorage) GetAgent(ctx context.Context, id string) (*types.AgentNo
 		url := strings.TrimSpace(invocationURL.String)
 		agent.InvocationURL = &url
 	}
-	if strings.TrimSpace(agent.DeploymentType) == "" {
-		if agent.InvocationURL != nil && strings.TrimSpace(*agent.InvocationURL) != "" {
-			agent.DeploymentType = "serverless"
-		} else {
-			agent.DeploymentType = "long_running"
-		}
-	}
 
 	if len(reasonersJSON) > 0 {
 		if err := json.Unmarshal(reasonersJSON, &agent.Reasoners); err != nil {
@@ -4222,6 +4215,18 @@ func (ls *LocalStorage) GetAgent(ctx context.Context, id string) (*types.AgentNo
 	if len(metadataJSON) > 0 {
 		if err := json.Unmarshal(metadataJSON, &agent.Metadata); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal agent metadata: %w", err)
+		}
+	}
+	if strings.TrimSpace(agent.DeploymentType) == "" {
+		if agent.InvocationURL != nil && strings.TrimSpace(*agent.InvocationURL) != "" {
+			agent.DeploymentType = "serverless"
+		} else if agent.Metadata.Custom != nil {
+			if v, ok := agent.Metadata.Custom["serverless"]; ok && fmt.Sprint(v) == "true" {
+				agent.DeploymentType = "serverless"
+			}
+		}
+		if strings.TrimSpace(agent.DeploymentType) == "" {
+			agent.DeploymentType = "long_running"
 		}
 	}
 
@@ -4300,13 +4305,6 @@ func (ls *LocalStorage) ListAgents(ctx context.Context, filters types.AgentFilte
 			url := strings.TrimSpace(invocationURL.String)
 			agent.InvocationURL = &url
 		}
-		if strings.TrimSpace(agent.DeploymentType) == "" {
-			if agent.InvocationURL != nil && strings.TrimSpace(*agent.InvocationURL) != "" {
-				agent.DeploymentType = "serverless"
-			} else {
-				agent.DeploymentType = "long_running"
-			}
-		}
 
 		if len(reasonersJSON) > 0 {
 			if err := json.Unmarshal(reasonersJSON, &agent.Reasoners); err != nil {
@@ -4331,6 +4329,18 @@ func (ls *LocalStorage) ListAgents(ctx context.Context, filters types.AgentFilte
 		if len(metadataJSON) > 0 {
 			if err := json.Unmarshal(metadataJSON, &agent.Metadata); err != nil {
 				return nil, fmt.Errorf("failed to unmarshal agent metadata: %w", err)
+			}
+		}
+		if strings.TrimSpace(agent.DeploymentType) == "" {
+			if agent.InvocationURL != nil && strings.TrimSpace(*agent.InvocationURL) != "" {
+				agent.DeploymentType = "serverless"
+			} else if agent.Metadata.Custom != nil {
+				if v, ok := agent.Metadata.Custom["serverless"]; ok && fmt.Sprint(v) == "true" {
+					agent.DeploymentType = "serverless"
+				}
+			}
+			if strings.TrimSpace(agent.DeploymentType) == "" {
+				agent.DeploymentType = "long_running"
 			}
 		}
 
