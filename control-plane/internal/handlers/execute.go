@@ -845,6 +845,15 @@ func (c *executionController) callAgent(ctx context.Context, plan *preparedExecu
 		return nil, time.Since(start), false, fmt.Errorf("read agent response: %w", err)
 	}
 
+	if plan.agent.DeploymentType == "serverless" {
+		logger.Logger.Debug().
+			Str("agent", plan.target.NodeID).
+			Str("reasoner", plan.target.TargetName).
+			Str("url", url).
+			Int("status", resp.StatusCode).
+			Msgf("serverless response: %s", truncateForLog(body))
+	}
+
 	if resp.StatusCode >= http.StatusBadRequest {
 		return body, time.Since(start), false, fmt.Errorf("agent error (%d): %s", resp.StatusCode, truncateForLog(body))
 	}

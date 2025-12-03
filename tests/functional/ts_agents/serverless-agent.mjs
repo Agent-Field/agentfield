@@ -43,7 +43,7 @@ agent.reasoner('hello', async (ctx) => ({
 }));
 
 agent.reasoner('relay', async (ctx) => {
-  const target = (process.env.TS_CHILD_TARGET ?? ctx.input.target) as string | undefined;
+  const target = process.env.TS_CHILD_TARGET ?? ctx.input.target;
   if (!target) {
     return { error: 'target is required' };
   }

@@ -737,7 +737,9 @@ func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
 
 	ctx := contextWithExecution(r.Context(), execCtx)
 
-	if execCtx.ExecutionID != "" && strings.TrimSpace(a.cfg.AgentFieldURL) != "" {
+	// In serverless mode we want a synchronous execution so the control plane can return
+	// the result immediately; skip the async path even if an execution ID is present.
+	if a.cfg.DeploymentType != "serverless" && execCtx.ExecutionID != "" && strings.TrimSpace(a.cfg.AgentFieldURL) != "" {
 		go a.executeReasonerAsync(reasoner, cloneInputMap(input), execCtx)
 		writeJSON(w, http.StatusAccepted, map[string]any{
 			"status":        "processing",
