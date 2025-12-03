@@ -4192,7 +4192,11 @@ func (ls *LocalStorage) GetAgent(ctx context.Context, id string) (*types.AgentNo
 		agent.InvocationURL = &url
 	}
 	if strings.TrimSpace(agent.DeploymentType) == "" {
-		agent.DeploymentType = "long_running"
+		if agent.InvocationURL != nil && strings.TrimSpace(*agent.InvocationURL) != "" {
+			agent.DeploymentType = "serverless"
+		} else {
+			agent.DeploymentType = "long_running"
+		}
 	}
 
 	if len(reasonersJSON) > 0 {
@@ -4297,7 +4301,11 @@ func (ls *LocalStorage) ListAgents(ctx context.Context, filters types.AgentFilte
 			agent.InvocationURL = &url
 		}
 		if strings.TrimSpace(agent.DeploymentType) == "" {
-			agent.DeploymentType = "long_running"
+			if agent.InvocationURL != nil && strings.TrimSpace(*agent.InvocationURL) != "" {
+				agent.DeploymentType = "serverless"
+			} else {
+				agent.DeploymentType = "long_running"
+			}
 		}
 
 		if len(reasonersJSON) > 0 {
