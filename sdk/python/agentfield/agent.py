@@ -693,10 +693,7 @@ class Agent(FastAPI):
                 else:
                     result = func(**input_data)
 
-                return {
-                    "statusCode": 200,
-                    "body": {"result": result, "status": "success"},
-                }
+                return {"statusCode": 200, "body": result}
             else:
                 return {
                     "statusCode": 404,
@@ -704,7 +701,7 @@ class Agent(FastAPI):
                 }
 
         except Exception as e:
-            return {"statusCode": 500, "body": {"error": str(e), "status": "error"}}
+            return {"statusCode": 500, "body": {"error": str(e)}}
         finally:
             # Clean up execution context
             self._current_execution_context = None

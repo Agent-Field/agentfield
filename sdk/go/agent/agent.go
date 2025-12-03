@@ -551,7 +551,12 @@ func (a *Agent) HandleServerlessEvent(ctx context.Context, event map[string]any,
 	if err != nil {
 		return map[string]any{"error": err.Error()}, http.StatusInternalServerError, nil
 	}
-	return result, http.StatusOK, nil
+
+	// Normalize to map for consistent JSON responses.
+	if payload, ok := result.(map[string]any); ok {
+		return payload, http.StatusOK, nil
+	}
+	return map[string]any{"result": result}, http.StatusOK, nil
 }
 
 func (a *Agent) handler() http.Handler {
