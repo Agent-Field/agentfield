@@ -514,6 +514,46 @@ func (a *Agent) Execute(ctx context.Context, reasonerName string, input map[stri
 	return reasoner.Handler(ctx, input)
 }
 
+// HandleServerlessEvent allows custom serverless entrypoints to normalize arbitrary
+// platform events (Lambda, Vercel, Supabase, etc.) before delegating to the agent.
+// The adapter can rewrite the incoming event into the generic payload that
+// handleExecute expects: keys like path, target/reasoner, input, execution_context.
+func (a *Agent) HandleServerlessEvent(ctx context.Context, event map[string]any, adapter func(map[string]any) map[string]any) (map[string]any, int, error) {
+	if adapter != nil {
+		event = adapter(event)
+	}
+
+	path := stringFromMap(event, "path", "rawPath")
+	reasoner := stringFromMap(event, "reasoner", "target", "skill")
+	if reasoner == "" && path != "" {
+		cleaned := strings.Trim(path, "/")
+		parts := strings.Split(cleaned, "/")
+		if len(parts) >= 2 && (parts[0] == "execute" || parts[0] == "reasoners" || parts[0] == "skills") {
+			reasoner = parts[1]
+		} else if len(parts) == 1 {
+			reasoner = parts[0]
+		}
+	}
+	if reasoner == "" {
+		return map[string]any{"error": "missing target or reasoner"}, http.StatusBadRequest, nil
+	}
+
+	input := extractInputFromServerless(event)
+	execCtx := a.buildExecutionContextFromServerless(&http.Request{Header: http.Header{}}, event, reasoner)
+	ctx = contextWithExecution(ctx, execCtx)
+
+	handler, ok := a.reasoners[reasoner]
+	if !ok {
+		return map[string]any{"error": "reasoner not found"}, http.StatusNotFound, nil
+	}
+
+	result, err := handler.Handler(ctx, input)
+	if err != nil {
+		return map[string]any{"error": err.Error()}, http.StatusInternalServerError, nil
+	}
+	return result, http.StatusOK, nil
+}
+
 func (a *Agent) handler() http.Handler {
 	a.handlerOnce.Do(func() {
 		mux := http.NewServeMux()

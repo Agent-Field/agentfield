@@ -117,7 +117,7 @@ export class Agent {
     this.skills.includeRouter(router);
   }
 
-  handler(): AgentHandler {
+  handler(adapter?: (event: any, context?: any) => ServerlessEvent): AgentHandler {
     return async (event: any, res?: any): Promise<ServerlessResponse | void> => {
       // If a response object is provided, treat this as a standard HTTP request (e.g., Vercel/Netlify)
       if (res && typeof res === 'object' && typeof (res as any).setHeader === 'function') {
@@ -125,7 +125,8 @@ export class Agent {
       }
 
       // Fallback to a generic serverless event contract (AWS Lambda, Cloud Functions, etc.)
-      return this.handleServerlessEvent(event as ServerlessEvent);
+      const normalized = adapter ? adapter(event) : (event as ServerlessEvent);
+      return this.handleServerlessEvent(normalized);
     };
   }
 

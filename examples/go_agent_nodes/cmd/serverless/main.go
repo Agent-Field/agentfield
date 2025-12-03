@@ -64,6 +64,17 @@ func main() {
 	if err := http.ListenAndServe(addr, srv.Handler()); err != nil {
 		log.Fatal(err)
 	}
+
+	// For platforms that invoke a function instead of an HTTP listener, you can adapt
+	// the event and delegate to the agent:
+	//
+	// func LambdaHandler(ctx context.Context, event map[string]any) (map[string]any, error) {
+	//     result, status, err := srv.HandleServerlessEvent(ctx, event, nil) // adapter optional
+	//     if err != nil {
+	//         return map[string]any{"statusCode": 500, "body": map[string]any{"error": err.Error()}}, nil
+	//     }
+	//     return map[string]any{"statusCode": status, "body": result}, nil
+	// }
 }
 
 func defaultString(value, fallback string) string {

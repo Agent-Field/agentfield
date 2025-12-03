@@ -569,7 +569,7 @@ class Agent(FastAPI):
         self._call_semaphore: Optional[asyncio.Semaphore] = None
         self._call_semaphore_guard = threading.Lock()
 
-    def handle_serverless(self, event: dict) -> dict:
+    def handle_serverless(self, event: dict, adapter: callable | None = None) -> dict:
         """
         Universal serverless handler for executing reasoners and skills.
 
@@ -609,6 +609,15 @@ class Agent(FastAPI):
             ```
         """
         import asyncio
+
+        if adapter:
+            try:
+                event = adapter(event) or event
+            except Exception as exc:  # pragma: no cover - adapter failures
+                return {
+                    "statusCode": 400,
+                    "body": {"error": f"serverless adapter failed: {exc}"},
+                }
 
         # Check if this is a discovery request
         path = event.get("path") or event.get("rawPath") or ""

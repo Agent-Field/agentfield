@@ -28,7 +28,29 @@ agent.reasoner('relay', async (ctx) => {
 });
 
 // Exported handler works for AWS Lambda/Cloud Functions and raw HTTP (Vercel/Netlify).
-export const handler = agent.handler();
+// You can adapt any platform-specific event shape here (e.g., Supabase/Netlify payloads).
+export const handler = agent.handler((event) => {
+  const body = typeof event?.body === 'string' ? safeJson(event.body) : event?.body;
+  const input = event?.input ?? body?.input ?? body ?? {};
+  return {
+    path: event?.rawPath || event?.path || '/execute',
+    headers: event?.headers ?? {},
+    queryStringParameters: event?.queryStringParameters ?? event?.query ?? {},
+    reasoner: event?.reasoner ?? event?.target,
+    target: event?.target ?? event?.reasoner,
+    input,
+    executionContext: event?.executionContext ?? event?.execution_context
+  };
+});
+
+function safeJson(value: string | undefined) {
+  if (!value) return {};
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
+  }
+}
 
 // Optional local runner for smoke-testing without heartbeats.
 if (import.meta.url === `file://${process.argv[1]}`) {

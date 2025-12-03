@@ -186,6 +186,8 @@ export interface ServerlessResponse {
   body: any;
 }
 
+export type ServerlessAdapter = (event: any, context?: any) => ServerlessEvent;
+
 export type AgentHandler = (
   event: ServerlessEvent | http.IncomingMessage,
   res?: http.ServerResponse
