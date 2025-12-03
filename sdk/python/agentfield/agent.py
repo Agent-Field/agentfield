@@ -640,6 +640,9 @@ class Agent(FastAPI):
         # Serverless invocations arrive via the control plane; mark as connected so
         # cross-agent calls can route through the gateway without a lease loop.
         self.agentfield_connected = True
+        # Serverless handlers should avoid async execute polling; force sync path.
+        if getattr(self.async_config, "enable_async_execution", True):
+            self.async_config.enable_async_execution = False
 
         # Parse event format for execution
         reasoner_name = (
