@@ -59,13 +59,15 @@ async def _wait_for_port(host: str, port: int, timeout: float = 15.0, process=No
 
 
 async def _register_serverless(async_http_client, invocation_url: str, *, retries: int = 6):
-    # Prefer CLI to match DX; fallback to HTTP if CLI is unavailable.
-    try:
-        await _register_serverless_via_cli(invocation_url)
+    # Prefer CLI to match DX; fall back to HTTP only if CLI is unavailable.
+    cli_result = await _register_serverless_via_cli(invocation_url)
+    if cli_result.get("ok"):
         return {"source": "cli"}
-    except Exception:
-        # Fallback to API registration for compatibility
+    if cli_result.get("error") == "missing-cli":
+        # Fall back to API registration for environments without af on PATH
         pass
+    elif cli_result.get("error"):
+        raise AssertionError(f"af nodes register-serverless failed: {cli_result}")
 
     last_error = None
     for attempt in range(retries):
@@ -99,23 +101,33 @@ async def _register_serverless_via_cli(invocation_url: str):
     if token:
         cmd.extend(["--token", token])
 
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=env,
-    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+    except FileNotFoundError:
+        return {"ok": False, "error": "missing-cli"}
+
     stdout, stderr = await proc.communicate()
     if proc.returncode != 0:
-        raise RuntimeError(
-            f"CLI register-serverless failed (code {proc.returncode}): {stderr.decode()}"
-        )
+        return {
+            "ok": False,
+            "error": "cli-failed",
+            "code": proc.returncode,
+            "stderr": stderr.decode(),
+            "stdout": stdout.decode(),
+        }
+
     if stdout:
         try:
             json.loads(stdout.decode())
         except json.JSONDecodeError:
             # best-effort parse, not fatal
             pass
+    return {"ok": True}
 
 
 @asynccontextmanager
