@@ -165,21 +165,29 @@ async def run_python_serverless_agent(node_id: str, control_plane_url: str) -> A
     async def discover():
         return await asyncio.to_thread(app.handle_serverless, {"path": "/discover"})
 
-    @fastapi_app.post("/execute")
-    async def execute(request: Request):
+    async def _handle(request: Request, override_path: Optional[str] = None):
         payload = await request.json()
-        result = await asyncio.to_thread(app.handle_serverless, {"path": "/execute", **payload})
+        path = override_path or payload.get("path") or "/execute"
+        result = await asyncio.to_thread(app.handle_serverless, {"path": path, **payload})
         status = result.get("statusCode", 200)
         body = result.get("body", result)
         return JSONResponse(content=body, status_code=status)
+
+    @fastapi_app.post("/execute")
+    async def execute(request: Request):
+        return await _handle(request, "/execute")
+
+    @fastapi_app.post("/{full_path:path}")
+    async def execute_catch_all(full_path: str, request: Request):
+        return await _handle(request, f"/{full_path}")
 
     port = _get_free_port()
     config = uvicorn.Config(
         app=fastapi_app,
         host=TEST_BIND_HOST,
         port=port,
-        log_level="error",
-        access_log=False,
+        log_level="warning",
+        access_log=True,
     )
     server = uvicorn.Server(config)
     loop = asyncio.new_event_loop()
@@ -318,7 +326,8 @@ async def test_typescript_serverless_agent(async_http_client, control_plane_url)
         assert resp.status_code == 200, resp.text
         result = resp.json().get("result", {})
         assert result.get("greeting") == "Hello, TS Lambda!"
-        assert result.get("execution_id")
+        exec_id = result.get("execution_id") or result.get("executionId")
+        assert exec_id
 
 
 @pytest.mark.functional
@@ -361,7 +370,7 @@ async def test_typescript_serverless_chain(async_http_client, control_plane_url)
             result = resp.json().get("result", {})
             downstream = result.get("downstream", {})
             assert downstream.get("greeting") == "Hello, ts-child!"
-            assert downstream.get("executionId"), "child execution id should propagate"
+            assert downstream.get("executionId") or downstream.get("execution_id"), "child execution id should propagate"
 
 
 @pytest.mark.functional
