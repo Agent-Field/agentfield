@@ -113,13 +113,14 @@ type Reasoner struct {
 
 // Config drives Agent behaviour.
 type Config struct {
-	NodeID        string
-	Version       string
-	TeamID        string
-	AgentFieldURL string
-	ListenAddress string
-	PublicURL     string
-	Token         string
+	NodeID         string
+	Version        string
+	TeamID         string
+	AgentFieldURL  string
+	ListenAddress  string
+	PublicURL      string
+	Token          string
+	DeploymentType string
 
 	LeaseRefreshInterval time.Duration
 	DisableLeaseLoop     bool
@@ -185,6 +186,9 @@ func New(cfg Config) (*Agent, error) {
 	}
 	if cfg.PublicURL == "" {
 		cfg.PublicURL = "http://localhost" + cfg.ListenAddress
+	}
+	if strings.TrimSpace(cfg.DeploymentType) == "" {
+		cfg.DeploymentType = "long_running"
 	}
 	if cfg.LeaseRefreshInterval <= 0 {
 		cfg.LeaseRefreshInterval = 2 * time.Minute
@@ -293,6 +297,28 @@ func cloneInputMap(input map[string]any) map[string]any {
 		copied[k] = v
 	}
 	return copied
+}
+
+func stringFromMap(m map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if val, ok := m[key]; ok {
+			if str, ok := val.(string); ok && strings.TrimSpace(str) != "" {
+				return strings.TrimSpace(str)
+			}
+		}
+	}
+	return ""
+}
+
+func rawToMap(raw json.RawMessage) map[string]any {
+	if len(raw) == 0 {
+		return map[string]any{}
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return map[string]any{}
+	}
+	return out
 }
 
 // RegisterReasoner makes a handler available at /reasoners/{name}.
@@ -425,7 +451,8 @@ func (a *Agent) registerNode(ctx context.Context) error {
 				"language": "go",
 			},
 		},
-		Features: map[string]any{},
+		Features:       map[string]any{},
+		DeploymentType: a.cfg.DeploymentType,
 	}
 
 	_, err := a.client.RegisterNode(ctx, payload)
@@ -491,6 +518,9 @@ func (a *Agent) handler() http.Handler {
 	a.handlerOnce.Do(func() {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/health", a.healthHandler)
+		mux.HandleFunc("/discover", a.handleDiscover)
+		mux.HandleFunc("/execute", a.handleExecute)
+		mux.HandleFunc("/execute/", a.handleExecute)
 		mux.HandleFunc("/reasoners/", a.handleReasoner)
 		a.router = mux
 	})
@@ -499,6 +529,167 @@ func (a *Agent) handler() http.Handler {
 
 func (a *Agent) healthHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+}
+
+func (a *Agent) handleDiscover(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, a.discoveryPayload())
+}
+
+func (a *Agent) discoveryPayload() map[string]any {
+	reasoners := make([]map[string]any, 0, len(a.reasoners))
+	for _, reasoner := range a.reasoners {
+		reasoners = append(reasoners, map[string]any{
+			"id":            reasoner.Name,
+			"input_schema":  rawToMap(reasoner.InputSchema),
+			"output_schema": rawToMap(reasoner.OutputSchema),
+			"tags":          []string{},
+		})
+	}
+
+	deployment := strings.TrimSpace(a.cfg.DeploymentType)
+	if deployment == "" {
+		deployment = "long_running"
+	}
+
+	return map[string]any{
+		"node_id":         a.cfg.NodeID,
+		"version":         a.cfg.Version,
+		"deployment_type": deployment,
+		"reasoners":       reasoners,
+		"skills":          []map[string]any{},
+	}
+}
+
+func (a *Agent) handleExecute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	targetName := strings.TrimPrefix(r.URL.Path, "/execute")
+	targetName = strings.TrimPrefix(targetName, "/")
+
+	var payload map[string]any
+	if r.Body != nil {
+		defer r.Body.Close()
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, fmt.Sprintf("invalid JSON: %v", err), http.StatusBadRequest)
+			return
+		}
+	}
+	if payload == nil {
+		payload = make(map[string]any)
+	}
+
+	reasonerName := strings.TrimSpace(targetName)
+	if reasonerName == "" {
+		reasonerName = stringFromMap(payload, "reasoner", "target", "skill")
+	}
+
+	if reasonerName == "" {
+		http.Error(w, "missing target or reasoner", http.StatusBadRequest)
+		return
+	}
+
+	reasoner, ok := a.reasoners[reasonerName]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	input := extractInputFromServerless(payload)
+	execCtx := a.buildExecutionContextFromServerless(r, payload, reasonerName)
+	ctx := contextWithExecution(r.Context(), execCtx)
+
+	result, err := reasoner.Handler(ctx, input)
+	if err != nil {
+		a.logger.Printf("reasoner %s failed: %v", reasonerName, err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+func extractInputFromServerless(payload map[string]any) map[string]any {
+	if payload == nil {
+		return map[string]any{}
+	}
+
+	if raw, ok := payload["input"]; ok {
+		if m, ok := raw.(map[string]any); ok {
+			return m
+		}
+		return map[string]any{"value": raw}
+	}
+
+	filtered := make(map[string]any)
+	for k, v := range payload {
+		switch strings.ToLower(k) {
+		case "target", "reasoner", "skill", "type", "target_type", "path", "execution_context", "executioncontext", "context":
+			continue
+		default:
+			filtered[k] = v
+		}
+	}
+	return filtered
+}
+
+func (a *Agent) buildExecutionContextFromServerless(r *http.Request, payload map[string]any, reasonerName string) ExecutionContext {
+	execCtx := ExecutionContext{
+		RunID:             strings.TrimSpace(r.Header.Get("X-Run-ID")),
+		ExecutionID:       strings.TrimSpace(r.Header.Get("X-Execution-ID")),
+		ParentExecutionID: strings.TrimSpace(r.Header.Get("X-Parent-Execution-ID")),
+		SessionID:         strings.TrimSpace(r.Header.Get("X-Session-ID")),
+		ActorID:           strings.TrimSpace(r.Header.Get("X-Actor-ID")),
+		WorkflowID:        strings.TrimSpace(r.Header.Get("X-Workflow-ID")),
+		AgentNodeID:       a.cfg.NodeID,
+		ReasonerName:      reasonerName,
+		StartedAt:         time.Now(),
+	}
+
+	if ctxMap, ok := payload["execution_context"].(map[string]any); ok {
+		if execCtx.ExecutionID == "" {
+			execCtx.ExecutionID = stringFromMap(ctxMap, "execution_id", "executionId")
+		}
+		if execCtx.RunID == "" {
+			execCtx.RunID = stringFromMap(ctxMap, "run_id", "runId")
+		}
+		if execCtx.WorkflowID == "" {
+			execCtx.WorkflowID = stringFromMap(ctxMap, "workflow_id", "workflowId")
+		}
+		if execCtx.ParentExecutionID == "" {
+			execCtx.ParentExecutionID = stringFromMap(ctxMap, "parent_execution_id", "parentExecutionId")
+		}
+		if execCtx.SessionID == "" {
+			execCtx.SessionID = stringFromMap(ctxMap, "session_id", "sessionId")
+		}
+		if execCtx.ActorID == "" {
+			execCtx.ActorID = stringFromMap(ctxMap, "actor_id", "actorId")
+		}
+	}
+
+	if execCtx.RunID == "" {
+		execCtx.RunID = generateRunID()
+	}
+	if execCtx.ExecutionID == "" {
+		execCtx.ExecutionID = generateExecutionID()
+	}
+	if execCtx.WorkflowID == "" {
+		execCtx.WorkflowID = execCtx.RunID
+	}
+	if execCtx.RootWorkflowID == "" {
+		execCtx.RootWorkflowID = execCtx.WorkflowID
+	}
+	if execCtx.ParentWorkflowID == "" && execCtx.ParentExecutionID != "" {
+		execCtx.ParentWorkflowID = execCtx.RootWorkflowID
+	}
+
+	return execCtx
 }
 
 func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
@@ -690,6 +881,9 @@ func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (
 	req.Header.Set("X-Run-ID", runID)
 	if execCtx.ExecutionID != "" {
 		req.Header.Set("X-Parent-Execution-ID", execCtx.ExecutionID)
+	}
+	if execCtx.WorkflowID != "" {
+		req.Header.Set("X-Workflow-ID", execCtx.WorkflowID)
 	}
 	if execCtx.SessionID != "" {
 		req.Header.Set("X-Session-ID", execCtx.SessionID)

@@ -713,7 +713,13 @@ func (c *executionController) prepareExecution(ctx context.Context, ginCtx *gin.
 	for key, value := range req.Input {
 		agentPayload[key] = value
 	}
-	agentPayloadBytes, err := json.Marshal(agentPayload)
+
+	var agentPayloadBytes []byte
+	if agent.DeploymentType == "serverless" {
+		agentPayloadBytes, err = json.Marshal(buildServerlessPayload(target, exec, headers, agentPayload))
+	} else {
+		agentPayloadBytes, err = json.Marshal(agentPayload)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("encode agent payload: %w", err)
 	}
@@ -773,7 +779,7 @@ func (c *executionController) prepareExecution(ctx context.Context, ginCtx *gin.
 		exec.WebhookRegistered = false
 	}
 
-	c.ensureWorkflowExecutionRecord(ctx, exec, target, agentPayloadBytes)
+	c.ensureWorkflowExecutionRecord(ctx, exec, target, storedPayload)
 
 	return &preparedExecution{
 		exec:              exec,
@@ -797,6 +803,7 @@ func (c *executionController) callAgent(ctx context.Context, plan *preparedExecu
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Run-ID", plan.exec.RunID)
 	req.Header.Set("X-Execution-ID", plan.exec.ExecutionID)
+	req.Header.Set("X-Workflow-ID", plan.exec.RunID)
 	if plan.exec.ParentExecutionID != nil {
 		req.Header.Set("X-Parent-Execution-ID", *plan.exec.ParentExecutionID)
 	}
@@ -1016,6 +1023,47 @@ func buildAgentURL(agent *types.AgentNode, target *parsedTarget) string {
 		return fmt.Sprintf("%s/skills/%s", base, target.TargetName)
 	}
 	return fmt.Sprintf("%s/reasoners/%s", base, target.TargetName)
+}
+
+func buildServerlessPayload(target *parsedTarget, exec *types.Execution, headers executionHeaders, input map[string]interface{}) map[string]interface{} {
+	if target == nil || exec == nil {
+		return map[string]interface{}{
+			"input": input,
+		}
+	}
+
+	execCtx := map[string]interface{}{
+		"execution_id": exec.ExecutionID,
+		"run_id":       exec.RunID,
+		"workflow_id":  exec.RunID,
+	}
+
+	if headers.parentExecutionID != nil && *headers.parentExecutionID != "" {
+		execCtx["parent_execution_id"] = *headers.parentExecutionID
+	}
+	if headers.sessionID != nil && *headers.sessionID != "" {
+		execCtx["session_id"] = *headers.sessionID
+	}
+	if headers.actorID != nil && *headers.actorID != "" {
+		execCtx["actor_id"] = *headers.actorID
+	}
+
+	payload := map[string]interface{}{
+		"path":              fmt.Sprintf("/execute/%s", target.TargetName),
+		"target":            target.TargetName,
+		"reasoner":          target.TargetName,
+		"input":             input,
+		"execution_context": execCtx,
+	}
+
+	if target.TargetType != "" {
+		payload["type"] = target.TargetType
+		if target.TargetType == "skill" {
+			payload["skill"] = target.TargetName
+		}
+	}
+
+	return payload
 }
 
 type normalizedWebhookConfig struct {

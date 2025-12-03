@@ -611,10 +611,10 @@ class Agent(FastAPI):
         import asyncio
 
         # Check if this is a discovery request
-        path = event.get("path", "")
+        path = event.get("path") or event.get("rawPath") or ""
         action = event.get("action", "")
 
-        if path == "/discover" or action == "discover":
+        if path == "/discover" or path.endswith("/discover") or action == "discover":
             # Return agent metadata for AgentField server registration
             return self._handle_discovery()
 
@@ -629,9 +629,27 @@ class Agent(FastAPI):
                     log_warn(f"Auto-registration failed: {e}")
 
         # Parse event format for execution
-        reasoner_name = event.get("reasoner") or event.get("target")
+        reasoner_name = (
+            event.get("reasoner") or event.get("target") or event.get("skill")
+        )
+        if not reasoner_name and path:
+            # Support paths like /execute/<target> or /reasoners/<name>
+            cleaned_path = path.split("?", 1)[0].strip("/")
+            parts = cleaned_path.split("/")
+            if parts and parts[0] not in ("", "discover"):
+                if len(parts) >= 2 and parts[0] in ("execute", "reasoners", "skills"):
+                    reasoner_name = parts[1]
+                elif parts[0] in ("execute", "reasoners", "skills"):
+                    reasoner_name = None
+                elif parts:
+                    reasoner_name = parts[-1]
+
         input_data = event.get("input") or event.get("input_data", {})
-        execution_context_data = event.get("execution_context", {})
+        execution_context_data = (
+            event.get("execution_context")
+            or event.get("executionContext")
+            or {}
+        )
 
         if not reasoner_name:
             return {
