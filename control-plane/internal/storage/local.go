@@ -4229,6 +4229,12 @@ func (ls *LocalStorage) GetAgent(ctx context.Context, id string) (*types.AgentNo
 			agent.DeploymentType = "long_running"
 		}
 	}
+	if agent.DeploymentType == "serverless" && (agent.InvocationURL == nil || strings.TrimSpace(*agent.InvocationURL) == "") {
+		if trimmed := strings.TrimSpace(agent.BaseURL); trimmed != "" {
+			execURL := strings.TrimSuffix(trimmed, "/") + "/execute"
+			agent.InvocationURL = &execURL
+		}
+	}
 
 	return agent, nil
 }
@@ -4341,6 +4347,12 @@ func (ls *LocalStorage) ListAgents(ctx context.Context, filters types.AgentFilte
 			}
 			if strings.TrimSpace(agent.DeploymentType) == "" {
 				agent.DeploymentType = "long_running"
+			}
+		}
+		if agent.DeploymentType == "serverless" && (agent.InvocationURL == nil || strings.TrimSpace(*agent.InvocationURL) == "") {
+			if trimmed := strings.TrimSpace(agent.BaseURL); trimmed != "" {
+				execURL := strings.TrimSuffix(trimmed, "/") + "/execute"
+				agent.InvocationURL = &execURL
 			}
 		}
 
