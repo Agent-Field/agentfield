@@ -1014,8 +1014,15 @@ func buildAgentURL(agent *types.AgentNode, target *parsedTarget) string {
 	if agent == nil {
 		return ""
 	}
-	if agent.DeploymentType == "serverless" && agent.InvocationURL != nil && *agent.InvocationURL != "" {
-		return *agent.InvocationURL
+	if agent.DeploymentType == "serverless" {
+		if agent.InvocationURL != nil && *agent.InvocationURL != "" {
+			return *agent.InvocationURL
+		}
+		base := strings.TrimSuffix(agent.BaseURL, "/")
+		if base == "" {
+			return ""
+		}
+		return fmt.Sprintf("%s/execute", base)
 	}
 
 	base := strings.TrimSuffix(agent.BaseURL, "/")
