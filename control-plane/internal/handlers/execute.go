@@ -709,6 +709,20 @@ func (c *executionController) prepareExecution(ctx context.Context, ginCtx *gin.
 		return nil, fmt.Errorf("encode execution payload: %w", err)
 	}
 
+	exec := &types.Execution{
+		ExecutionID:       executionID,
+		RunID:             runID,
+		ParentExecutionID: headers.parentExecutionID,
+		AgentNodeID:       agent.ID,
+		ReasonerID:        target.TargetName,
+		NodeID:            target.NodeID,
+		Status:            types.ExecutionStatusRunning,
+		InputPayload:      json.RawMessage(storedPayload),
+		StartedAt:         now,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+
 	agentPayload := make(map[string]interface{}, len(req.Input))
 	for key, value := range req.Input {
 		agentPayload[key] = value
@@ -725,21 +739,7 @@ func (c *executionController) prepareExecution(ctx context.Context, ginCtx *gin.
 	}
 
 	inputURI := c.savePayload(ctx, storedPayload)
-
-	exec := &types.Execution{
-		ExecutionID:       executionID,
-		RunID:             runID,
-		ParentExecutionID: headers.parentExecutionID,
-		AgentNodeID:       agent.ID,
-		ReasonerID:        target.TargetName,
-		NodeID:            target.NodeID,
-		Status:            types.ExecutionStatusRunning,
-		InputPayload:      json.RawMessage(storedPayload),
-		InputURI:          inputURI,
-		StartedAt:         now,
-		CreatedAt:         now,
-		UpdatedAt:         now,
-	}
+	exec.InputURI = inputURI
 
 	if headers.sessionID != nil {
 		exec.SessionID = headers.sessionID
