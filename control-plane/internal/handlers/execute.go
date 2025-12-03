@@ -681,6 +681,17 @@ func (c *executionController) prepareExecution(ctx context.Context, ginCtx *gin.
 	if agent == nil {
 		return nil, fmt.Errorf("agent '%s' not found", target.NodeID)
 	}
+	if agent.DeploymentType == "" && agent.Metadata.Custom != nil {
+		if v, ok := agent.Metadata.Custom["serverless"]; ok && fmt.Sprint(v) == "true" {
+			agent.DeploymentType = "serverless"
+		}
+	}
+	if agent.DeploymentType == "serverless" && (agent.InvocationURL == nil || strings.TrimSpace(*agent.InvocationURL) == "") {
+		if trimmed := strings.TrimSpace(agent.BaseURL); trimmed != "" {
+			execURL := strings.TrimSuffix(trimmed, "/") + "/execute"
+			agent.InvocationURL = &execURL
+		}
+	}
 
 	targetType, err := determineTargetType(agent, target.TargetName)
 	if err != nil {
