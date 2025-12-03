@@ -655,9 +655,7 @@ class Agent(FastAPI):
 
         input_data = event.get("input") or event.get("input_data", {})
         execution_context_data = (
-            event.get("execution_context")
-            or event.get("executionContext")
-            or {}
+            event.get("execution_context") or event.get("executionContext") or {}
         )
 
         if not reasoner_name:
@@ -667,16 +665,33 @@ class Agent(FastAPI):
             }
 
         # Create execution context
+        exec_id = execution_context_data.get(
+            "execution_id", f"exec_{int(time.time() * 1000)}"
+        )
+        run_id = execution_context_data.get("run_id") or execution_context_data.get(
+            "workflow_id"
+        )
+        if not run_id:
+            run_id = f"wf_{int(time.time() * 1000)}"
+        workflow_id = execution_context_data.get("workflow_id", run_id)
+
         execution_context = ExecutionContext(
-            execution_id=execution_context_data.get(
-                "execution_id", f"exec_{int(time.time() * 1000)}"
-            ),
-            workflow_id=execution_context_data.get(
-                "workflow_id", f"wf_{int(time.time() * 1000)}"
-            ),
+            run_id=run_id,
+            execution_id=exec_id,
+            agent_instance=self,
             agent_node_id=self.node_id,
             reasoner_name=reasoner_name,
             parent_execution_id=execution_context_data.get("parent_execution_id"),
+            session_id=execution_context_data.get("session_id"),
+            actor_id=execution_context_data.get("actor_id"),
+            caller_did=execution_context_data.get("caller_did"),
+            target_did=execution_context_data.get("target_did"),
+            agent_node_did=execution_context_data.get(
+                "agent_node_did", execution_context_data.get("agent_did")
+            ),
+            workflow_id=workflow_id,
+            parent_workflow_id=execution_context_data.get("parent_workflow_id"),
+            root_workflow_id=execution_context_data.get("root_workflow_id"),
         )
 
         # Set execution context
