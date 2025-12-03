@@ -181,7 +181,64 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 
 		// Prepare request to agent node with workflow context propagation
 		agentURL := fmt.Sprintf("%s/reasoners/%s", targetNode.BaseURL, reasonerName)
-		agentReq, err := http.NewRequestWithContext(ctx, http.MethodPost, agentURL, bytes.NewBuffer(inputJSON))
+		agentBody := inputJSON
+
+		if targetNode.DeploymentType == "serverless" {
+			target := &parsedTarget{
+				NodeID:     nodeID,
+				TargetName: reasonerName,
+				TargetType: "reasoner",
+			}
+			var parentPtr, sessionPtr, actorPtr *string
+			if parentExecutionID != "" {
+				parentPtr = &parentExecutionID
+			}
+			if sessionID != "" {
+				sessionPtr = &sessionID
+			}
+			if actorID != "" {
+				actorPtr = &actorID
+			}
+			headers := executionHeaders{
+				runID:             workflowID,
+				parentExecutionID: parentPtr,
+				sessionID:         sessionPtr,
+				actorID:           actorPtr,
+			}
+			now := time.Now().UTC()
+			exec := &types.Execution{
+				ExecutionID:       executionID,
+				RunID:             workflowID,
+				ParentExecutionID: parentPtr,
+				AgentNodeID:       nodeID,
+				ReasonerID:        reasonerName,
+				NodeID:            nodeID,
+				Status:            types.ExecutionStatusRunning,
+				StartedAt:         now,
+				CreatedAt:         now,
+				UpdatedAt:         now,
+			}
+			agentURL = buildAgentURL(targetNode, target)
+
+			serverlessPayload, err := json.Marshal(buildServerlessPayload(target, exec, headers, req.Input))
+			if err != nil {
+				endTime := time.Now()
+				workflowExecution.Status = types.ExecutionStatusFailed
+				errorMsg := fmt.Sprintf("failed to encode serverless payload: %v", err)
+				workflowExecution.ErrorMessage = &errorMsg
+				workflowExecution.CompletedAt = &endTime
+				duration := endTime.Sub(startTime).Milliseconds()
+				workflowExecution.DurationMS = &duration
+				workflowExecution.UpdatedAt = endTime
+				persistWorkflowExecution(ctx, storageProvider, workflowExecution)
+
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to encode serverless payload"})
+				return
+			}
+			agentBody = serverlessPayload
+		}
+
+		agentReq, err := http.NewRequestWithContext(ctx, http.MethodPost, agentURL, bytes.NewBuffer(agentBody))
 		if err != nil {
 			workflowExecution.Status = types.ExecutionStatusFailed
 			errorMessage := fmt.Sprintf("failed to create agent request: %v", err)
@@ -200,6 +257,9 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 		agentReq.Header.Set("X-Workflow-ID", workflowID)
 		agentReq.Header.Set("X-Execution-ID", executionID)
 		agentReq.Header.Set("X-AgentField-Request-ID", agentfieldRequestID)
+		if targetNode.DeploymentType == "serverless" {
+			agentReq.Header.Set("X-Run-ID", workflowID)
+		}
 		if parentWorkflowID != "" {
 			agentReq.Header.Set("X-Parent-Workflow-ID", parentWorkflowID)
 		}
