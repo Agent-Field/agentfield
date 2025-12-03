@@ -23,6 +23,7 @@ from typing import AsyncIterator, Optional, Tuple
 import pytest
 import uvicorn
 from agentfield import Agent
+from agentfield.async_config import AsyncConfig
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -142,6 +143,7 @@ async def run_python_serverless_agent(node_id: str, control_plane_url: str) -> A
         agentfield_server=control_plane_url,
         auto_register=False,
         dev_mode=True,
+        async_config=AsyncConfig(enable_async_execution=False, fallback_to_sync=True),
     )
 
     @app.reasoner()

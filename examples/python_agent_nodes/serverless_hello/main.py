@@ -8,6 +8,7 @@ local execution for smoke tests.
 
 import os
 from agentfield import Agent
+from agentfield.async_config import AsyncConfig
 
 
 # Minimal agent with no heartbeat/lease loop. The control plane discovers
@@ -17,6 +18,7 @@ app = Agent(
     agentfield_server=os.getenv("AGENTFIELD_URL", "http://localhost:8080"),
     auto_register=False,
     dev_mode=True,
+    async_config=AsyncConfig(enable_async_execution=False, fallback_to_sync=True),
 )
 
 
