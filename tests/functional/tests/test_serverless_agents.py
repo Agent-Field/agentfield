@@ -158,7 +158,7 @@ async def run_python_serverless_agent(node_id: str, control_plane_url: str) -> A
 
     @app.reasoner()
     async def relay(target: str, message: str = "ping") -> dict:  # type: ignore[return-type]
-        downstream = await app.call(target, message=message)
+        downstream = await app.call(target, name=message)
         return {"downstream": downstream, "parent_execution_id": getattr(app.ctx, "execution_id", None)}
 
     fastapi_app = FastAPI()

@@ -39,7 +39,7 @@ async def ping_child(target: str, message: str) -> dict:
     Optional cross-agent call to prove parent/child wiring works in
     serverless mode. Set TARGET_NODE to something like "child-agent.echo".
     """
-    downstream = await app.call(target, message=message)
+    downstream = await app.call(target, name=message)
     return {"from": app.node_id, "child": downstream}
 
 
