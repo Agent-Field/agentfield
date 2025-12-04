@@ -1,64 +1,172 @@
 # Release Process
 
-This document describes how to create a new release of AgentField.
+This document describes how to create releases for AgentField using the **two-tier release system**.
+
+## Overview
+
+AgentField uses a two-tier release model that separates **staging** (prerelease) from **production** releases:
+
+| Environment | Version Format | Python Registry | npm Tag | Docker Tag | GitHub Release | Trigger |
+|-------------|----------------|-----------------|---------|------------|----------------|---------|
+| **Staging** | `0.1.19-rc.1` | TestPyPI | `@next` | `staging-X.Y.Z-rc.N` | Pre-release | **Automatic** (push to main) |
+| **Production** | `0.1.19` | PyPI | `@latest` | `vX.Y.Z` + `latest` | Release | **Manual** (workflow dispatch) |
+
+### Key Points
+
+- **Staging releases are automatic**: Every push to `main` that changes code triggers a staging release
+- **Production releases are manual**: Only triggered via GitHub Actions workflow dispatch
+- **No version gaps**: Production versions are clean sequential numbers (0.1.18, 0.1.19, 0.1.20...)
+
+### Version Flow Example
+
+```
+Current production: 0.1.18
+
+Development cycle for 0.1.19:
+  -> PR merged to main    -> Auto: 0.1.19-rc.1  (TestPyPI, npm @next)
+  -> Bug fix merged       -> Auto: 0.1.19-rc.2  (automatic increment)
+  -> Another fix merged   -> Auto: 0.1.19-rc.3  (automatic increment)
+  -> Manual trigger       -> Prod: 0.1.19       (PyPI, npm @latest)
+
+Next cycle:
+  -> PR merged            -> Auto: 0.1.20-rc.1
+  -> More changes         -> Auto: 0.1.20-rc.2...
+  -> Manual trigger       -> Prod: 0.1.20
+
+Result: Clean sequential production versions with no gaps!
+```
+
+---
 
 ## Prerequisites
 
 - Ensure all changes are merged to the main branch
 - All tests are passing
 - Documentation is up to date
-- Changelog is updated
 
-## Release Methods
+### Required Secrets
 
-You have **two options** to create a release:
+The following secrets must be configured in GitHub repository settings:
 
-### Option 1: Manual Workflow Trigger (Recommended for Testing)
+| Secret | Description |
+|--------|-------------|
+| `PYPI_API_TOKEN` | Production PyPI token (for production releases) |
+| `TEST_PYPI_API_TOKEN` | TestPyPI token (for staging releases) |
+| `NPM_TOKEN` | npm registry token |
+| `GITHUB_TOKEN` | Auto-provided by GitHub Actions |
 
-Use the GitHub Actions UI to manually trigger a release:
+---
 
-1. Go to: https://github.com/Agent-Field/agentfield/actions/workflows/release.yml
+## Release Types
+
+### Staging Release (Pre-release) - AUTOMATIC
+
+Staging releases are **automatically triggered** when code is pushed to `main`. This includes:
+- Direct pushes to main
+- Merged pull requests
+
+**Trigger paths** (changes to these files trigger a staging release):
+- `control-plane/**` - Control plane changes
+- `sdk/**` - SDK changes (Python, TypeScript, Go)
+- `VERSION` - Version file changes
+- `.github/workflows/release.yml` - Release workflow changes
+
+**What happens automatically:**
+1. Version bumps to next `-rc.N` (e.g., `0.1.19-rc.1` -> `0.1.19-rc.2`)
+2. Publishes to TestPyPI
+3. Publishes to npm with `@next` tag
+4. Pushes Docker image with `staging-` prefix
+5. Creates GitHub pre-release
+
+**Artifacts published to:**
+- Python: TestPyPI (https://test.pypi.org)
+- TypeScript: npm with `@next` tag
+- Docker: `ghcr.io/agent-field/agentfield-control-plane:staging-X.Y.Z-rc.N`
+- Binaries: GitHub Pre-release
+
+**Manual staging release (optional):**
+
+If you need to manually trigger a staging release (e.g., with different options):
+1. Go to Actions -> [Release workflow](https://github.com/Agent-Field/agentfield/actions/workflows/release.yml)
 2. Click "Run workflow"
-3. Fill in the form:
-   - **Branch:** Select `main` (or your release branch)
-   - **Version:** Enter version (e.g., `v0.1.0`) - **REQUIRED if publishing**
-   - **Publish to GitHub Releases:** ✅ Check this to create a public release
-   - **Publish Python SDK to PyPI:** ✅ Check if you want to publish to PyPI
-   - **Push Docker image:** ✅ Check if you want to push Docker image
-4. Click "Run workflow"
+3. Select `release_environment: staging`
+4. Optionally change `release_component` for minor/major bumps
+5. Click "Run workflow"
 
-**What happens:**
-- ✅ Builds binaries for all platforms (macOS Intel/ARM, Linux amd64/arm64, Windows)
-- ✅ Generates `checksums.txt` with SHA256 hashes
-- ✅ Creates GitHub release with all binaries
-- ✅ Publishes to PyPI (if checked)
-- ✅ Pushes Docker image (if checked)
-- ✅ Makes the install script work: `curl -fsSL https://agentfield.ai/install.sh | bash`
-
-### Option 2: Git Tag Push (Recommended for Production)
-
-Create and push a git tag:
+**Testing staging releases:**
 
 ```bash
-# Make sure you're on main and up to date
-git checkout main
-git pull origin main
+# Binary
+curl -fsSL https://agentfield.ai/install-staging.sh | bash
 
-# Create an annotated tag
-git tag -a v0.1.0 -m "Release v0.1.0"
+# Or directly from GitHub
+curl -fsSL https://raw.githubusercontent.com/Agent-Field/agentfield/main/scripts/install-staging.sh | bash
 
-# Push the tag to trigger the release workflow
-git push origin v0.1.0
+# Python (from TestPyPI)
+pip install --index-url https://test.pypi.org/simple/ \
+  --extra-index-url https://pypi.org/simple/ \
+  agentfield==0.1.19rc1
+
+# TypeScript
+npm install @agentfield/sdk@next
+
+# Docker
+docker pull ghcr.io/agent-field/agentfield-control-plane:staging-0.1.19-rc.1
 ```
 
+### Production Release - MANUAL
+
+Production releases are **manually triggered** via GitHub Actions workflow dispatch.
+
+**When to use:**
+- After staging releases have been tested
+- Ready for public release
+- You've verified the staging version works correctly
+
+**Steps:**
+1. Ensure staging release(s) have been tested
+2. Go to Actions -> [Release workflow](https://github.com/Agent-Field/agentfield/actions/workflows/release.yml)
+3. Click "Run workflow"
+4. Fill in the form:
+   - **release_environment:** `production` (default for manual triggers)
+   - **release_component:** `patch` (usually - will finalize from prerelease)
+   - **publish_pypi:** Check to publish to PyPI
+   - **publish_npm:** Check to publish with `@latest` tag
+   - **publish_docker:** Check to push Docker image
+5. Click "Run workflow"
+
 **What happens:**
-- ✅ GitHub Actions automatically detects the tag
-- ✅ Builds and publishes everything (binaries, PyPI, Docker)
-- ✅ Creates GitHub release
+1. Version finalizes from `0.1.19-rc.N` to `0.1.19`
+2. Publishes to PyPI (production)
+3. Publishes to npm with `@latest` tag
+4. Pushes Docker image with version tag + `latest`
+5. Creates GitHub release (not pre-release)
+
+**Artifacts published to:**
+- Python: PyPI (https://pypi.org)
+- TypeScript: npm with `@latest` tag
+- Docker: `ghcr.io/agent-field/agentfield-control-plane:vX.Y.Z` + `:latest`
+- Binaries: GitHub Release (public)
+
+**Installing production releases:**
+
+```bash
+# Binary (recommended)
+curl -fsSL https://agentfield.ai/install.sh | bash
+
+# Python
+pip install agentfield
+
+# TypeScript
+npm install @agentfield/sdk
+
+# Docker
+docker pull ghcr.io/agent-field/agentfield-control-plane:latest
+```
+
+---
 
 ## Release Artifacts
-
-When a release is published, the following artifacts are created:
 
 ### GitHub Release Assets
 ```
@@ -66,149 +174,169 @@ agentfield-darwin-amd64          # macOS Intel binary
 agentfield-darwin-arm64          # macOS Apple Silicon binary
 agentfield-linux-amd64           # Linux x86_64 binary
 agentfield-linux-arm64           # Linux ARM64 binary
-agentfield-windows-amd64.exe     # Windows 64-bit binary
 checksums.txt                    # SHA256 checksums for all binaries
 agentfield-X.Y.Z-py3-none-any.whl   # Python wheel
 agentfield-X.Y.Z.tar.gz             # Python source distribution
 ```
 
-### PyPI Package
-- Package: `agentfield`
-- URL: https://pypi.org/project/agentfield/
+### Registry Packages
 
-### Docker Image
-- Image: `ghcr.io/agent-field/agentfield-control-plane:vX.Y.Z`
-- Registry: GitHub Container Registry
+| Registry | Staging | Production |
+|----------|---------|------------|
+| PyPI | https://test.pypi.org/project/agentfield/ | https://pypi.org/project/agentfield/ |
+| npm | `@agentfield/sdk@next` | `@agentfield/sdk@latest` |
+| Docker | `ghcr.io/agent-field/agentfield-control-plane:staging-*` | `ghcr.io/agent-field/agentfield-control-plane:v*` |
+
+---
 
 ## Install Script Compatibility
 
-After a release is published, users can install using:
+### Production Install
 
-**macOS/Linux:**
 ```bash
-# Latest version
+# Latest stable version
 curl -fsSL https://agentfield.ai/install.sh | bash
 
 # Specific version
-VERSION=v0.1.0 curl -fsSL https://agentfield.ai/install.sh | bash
+VERSION=v0.1.19 curl -fsSL https://agentfield.ai/install.sh | bash
 ```
 
-**Windows:**
-```powershell
-# Latest version
-iwr -useb https://agentfield.ai/install.ps1 | iex
+### Staging Install
 
-# Specific version
-$env:VERSION="v0.1.0"; iwr -useb https://agentfield.ai/install.ps1 | iex
+```bash
+# Latest prerelease version
+curl -fsSL https://agentfield.ai/install-staging.sh | bash
+
+# Specific prerelease version
+VERSION=v0.1.19-rc.1 curl -fsSL https://agentfield.ai/install-staging.sh | bash
 ```
 
-The install scripts:
-- Download binaries from GitHub releases
-- Verify SHA256 checksums
-- Install to `~/.agentfield/bin`
-- Configure PATH automatically
+**Key differences:**
+- Staging installs to `~/.agentfield-staging/bin` (separate from production)
+- Staging creates `af-staging` symlink instead of `af`
+- Staging script fetches the latest prerelease from GitHub API
+
+---
 
 ## Version Numbering
 
-Follow semantic versioning: `vMAJOR.MINOR.PATCH`
+Follow semantic versioning: `vMAJOR.MINOR.PATCH[-PRERELEASE]`
 
 - **MAJOR:** Breaking changes
 - **MINOR:** New features (backward compatible)
 - **PATCH:** Bug fixes (backward compatible)
+- **PRERELEASE:** Staging identifier (`-rc.1`, `-beta.1`, `-alpha.1`)
 
 Examples:
-- `v0.1.0` - Initial release
-- `v0.2.0` - New features added
-- `v0.2.1` - Bug fixes
-- `v1.0.0` - First stable release
+- `v0.1.18` - Current production
+- `v0.1.19-rc.1` - First staging release for 0.1.19
+- `v0.1.19-rc.2` - Second staging release (bug fix)
+- `v0.1.19` - Production release (finalizes from rc)
+- `v0.2.0-rc.1` - Staging for minor version bump
 
-## Testing a Release
+---
 
-### Test Manual Workflow (No Publish)
+## Testing Releases
 
-1. Go to: https://github.com/Agent-Field/agentfield/actions/workflows/release.yml
-2. Run workflow with:
-   - **Publish to GitHub Releases:** ❌ UNCHECKED
-   - **Publish Python SDK to PyPI:** ❌ UNCHECKED
-   - **Push Docker image:** ❌ UNCHECKED
-3. Download artifacts from the workflow run to test locally
+### Verify Automatic Staging Release
 
-This builds everything without publishing.
+After merging a PR or pushing to `main`:
 
-### Test Published Release
-
-After publishing a release, test the installation:
-
-```bash
-# Test install script
-VERSION=v0.1.0 bash scripts/install.sh
-
-# Verify installation
-agentfield --version
-
-# Test uninstall
-bash scripts/uninstall.sh
-```
-
-## Rollback
-
-If a release has issues:
-
-### Delete GitHub Release
-1. Go to: https://github.com/Agent-Field/agentfield/releases
-2. Click on the problematic release
-3. Click "Delete release"
-4. Delete the git tag:
+1. Check the [Actions tab](https://github.com/Agent-Field/agentfield/actions/workflows/release.yml) for the automatic run
+2. Verify:
+   - [ ] Workflow triggered automatically
+   - [ ] Version bumped to `X.Y.Z-rc.N` (e.g., `0.1.19-rc.1`)
+   - [ ] Python package appears on TestPyPI
+   - [ ] `npm install @agentfield/sdk@next` installs new version
+   - [ ] GitHub release marked as "Pre-release"
+   - [ ] Docker image tagged `staging-X.Y.Z-rc.N`
+3. Test `install-staging.sh`:
    ```bash
-   git tag -d v0.1.0
-   git push origin :refs/tags/v0.1.0
+   curl -fsSL https://raw.githubusercontent.com/Agent-Field/agentfield/main/scripts/install-staging.sh | bash
+   ~/.agentfield-staging/bin/agentfield --version
    ```
 
-### Unpublish from PyPI
-**Warning:** PyPI does not allow re-uploading the same version. You must:
-1. Yank the version (marks as unavailable): https://pypi.org/manage/project/agentfield/releases/
-2. Release a new patch version (e.g., `v0.1.1`)
+### Multiple Staging Releases
 
-### Remove Docker Image
+Each push to `main` automatically increments the rc number:
+- First push: `0.1.19-rc.1`
+- Second push: `0.1.19-rc.2`
+- Third push: `0.1.19-rc.3`
+- etc.
+
+All previous staging artifacts remain available.
+
+### Test Production Release
+
+1. After staging validation, trigger with `release_environment: production`
+2. Verify:
+   - [ ] Version finalizes to `X.Y.Z` (e.g., `0.1.19`, no `-rc.N` suffix)
+   - [ ] Python package appears on PyPI
+   - [ ] `npm install @agentfield/sdk` gets new version
+   - [ ] GitHub release NOT marked as "Pre-release"
+   - [ ] Docker image tagged `vX.Y.Z` and `latest`
+3. Test `install.sh`:
+   ```bash
+   curl -fsSL https://agentfield.ai/install.sh | bash
+   ~/.agentfield/bin/agentfield --version
+   ```
+
+---
+
+## Rollback Procedures
+
+### Staging Rollback
+
+| Component | Procedure |
+|-----------|-----------|
+| TestPyPI | Can delete and re-upload (more permissive than PyPI) |
+| npm @next | `npm unpublish @agentfield/sdk@X.Y.Z-rc.N` (within 72 hours) or publish new rc |
+| Docker staging | Delete image tag from GHCR via GitHub UI or CLI |
+| GitHub | Delete the prerelease from Releases page |
+
+### Production Rollback
+
+| Component | Procedure |
+|-----------|-----------|
+| PyPI | Cannot re-upload same version; must yank + bump patch version |
+| npm @latest | `npm deprecate` or publish new patch; unpublish within 72 hours |
+| Docker latest | Push previous version as `:latest` |
+| GitHub | Mark release as prerelease or delete |
+
+**To delete a release and tag:**
 ```bash
-# Delete from GitHub Container Registry
-gh api -X DELETE /user/packages/container/agentfield-control-plane/versions/VERSION_ID
+# Delete the git tag
+git tag -d v0.1.19
+git push origin :refs/tags/v0.1.19
+
+# Then delete from GitHub Releases UI
 ```
+
+---
 
 ## Checklist
 
-Before releasing, ensure:
-
+### Before Staging Release
 - [ ] All tests pass (`make test`)
 - [ ] Linting passes (`make lint`)
-- [ ] Documentation is updated
+- [ ] Changes are documented
+- [ ] No critical security issues
+
+### Before Production Release
+- [ ] Staging release has been tested
+- [ ] SDK installation verified (TestPyPI, npm @next)
+- [ ] Binary installation verified (`install-staging.sh`)
+- [ ] Docker image tested
 - [ ] CHANGELOG.md is updated
-- [ ] Version numbers are bumped
-- [ ] No TODO or FIXME comments for critical features
 - [ ] README.md examples work
-- [ ] All security advisories addressed
 
-## First Release (v0.1.0)
-
-For the first release, use the **manual workflow trigger** method:
-
-1. Merge this PR (the installation system)
-2. Go to Actions → Release workflow
-3. Fill in:
-   - **Version:** `v0.1.0`
-   - **Publish to GitHub Releases:** ✅ CHECK
-   - **Publish Python SDK to PyPI:** ✅ CHECK (if ready)
-   - **Push Docker image:** ✅ CHECK (if ready)
-4. Run workflow
-5. Wait for workflow to complete
-6. Verify release: https://github.com/Agent-Field/agentfield/releases/tag/v0.1.0
-7. Test install script: `curl -fsSL https://agentfield.ai/install.sh | bash`
+---
 
 ## Hosting Install Scripts
 
 The install scripts need to be accessible at:
-- `https://agentfield.ai/install.sh`
-- `https://agentfield.ai/install.ps1`
+- `https://agentfield.ai/install.sh` (production)
+- `https://agentfield.ai/install-staging.sh` (staging)
 - `https://agentfield.ai/uninstall.sh`
 
 **Options:**
@@ -216,6 +344,7 @@ The install scripts need to be accessible at:
 1. **GitHub Raw URLs (Temporary):**
    ```
    https://raw.githubusercontent.com/Agent-Field/agentfield/main/scripts/install.sh
+   https://raw.githubusercontent.com/Agent-Field/agentfield/main/scripts/install-staging.sh
    ```
 
 2. **Website Rewrites (Recommended):**
@@ -224,12 +353,23 @@ The install scripts need to be accessible at:
 3. **CDN (Production):**
    Host on a CDN for reliability and speed.
 
+---
+
 ## Troubleshooting
 
-### GoReleaser Fails
+### TestPyPI Token Not Configured
 
-**Error:** `tag doesn't exist`
-**Solution:** Make sure the tag is created before GoReleaser runs. The workflow now creates the tag automatically when using manual trigger with `publish_release=true`.
+**Error:** `403 Forbidden` when publishing to TestPyPI
+**Solution:**
+1. Create an account on https://test.pypi.org (separate from PyPI)
+2. Create the `agentfield` project on TestPyPI
+3. Generate an API token scoped to the project
+4. Add `TEST_PYPI_API_TOKEN` secret to GitHub repository
+
+### No Prerelease Found
+
+**Error:** `install-staging.sh` reports "No prerelease version found"
+**Solution:** There are no staging releases yet. Create one first using the workflow.
 
 ### Checksums Don't Match
 
@@ -242,16 +382,17 @@ The install scripts need to be accessible at:
    ```
 3. If mismatched, delete the release and re-run the workflow
 
-### Install Script 404
+### npm Publish Fails
 
-**Error:** `Failed to download binary`
+**Error:** `npm ERR! 403` when publishing
 **Solution:**
-1. Verify the release exists: https://github.com/Agent-Field/agentfield/releases
-2. Check binary naming matches: `agentfield-{os}-{arch}`
-3. Ensure workflow completed successfully
+1. Verify `NPM_TOKEN` is valid
+2. Check you have publish permissions for the package
+3. Ensure the version doesn't already exist on npm
+
+---
 
 ## Support
 
 For release issues, contact:
 - GitHub Issues: https://github.com/Agent-Field/agentfield/issues
-- Maintainers: @[your-team]
