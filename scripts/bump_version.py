@@ -190,10 +190,7 @@ def apply_version(version: SemVer) -> None:
     update_pyproject(version)
     update_init(version)
     update_pkg_info(version)
-    # Only update example requirements for stable releases.
-    # Prereleases go to TestPyPI, not PyPI, so examples would fail to install.
-    if not version.prerelease:
-        update_requirements(version)
+    update_requirements(version)
     update_go_template(version)
     update_ts_package_json(version)
 

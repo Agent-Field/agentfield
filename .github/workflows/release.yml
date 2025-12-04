@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       release_environment:
-        description: 'Target environment (staging=TestPyPI/npm@next, production=PyPI/npm@latest)'
+        description: 'Target environment (staging=prerelease, production=stable release)'
         type: choice
         options:
           - staging
@@ -38,7 +38,7 @@ on:
         type: string
         required: false
       publish_pypi:
-        description: 'Publish Python SDK (staging=TestPyPI, production=PyPI)'
+        description: 'Publish Python SDK to PyPI'
         type: boolean
         default: true
       publish_npm:
@@ -363,8 +363,8 @@ jobs:
             # Staging binary (use --staging flag)
             curl -fsSL https://agentfield.ai/install.sh | bash -s -- --staging
 
-            # Python SDK (from TestPyPI)
-            pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ agentfield
+            # Python SDK (prerelease - requires --pre flag)
+            pip install --pre agentfield
 
             # TypeScript SDK
             npm install @agentfield/sdk@next
@@ -410,22 +410,8 @@ jobs:
           name: python-sdk-dist
           path: sdk/python/dist
 
-      - name: Publish to TestPyPI (staging)
-        if: |
-          needs.prepare.outputs.environment == 'staging' &&
-          needs.prepare.outputs.publish_pypi == 'true'
-        working-directory: sdk/python
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.TEST_PYPI_API_TOKEN }}
-        run: |
-          python -m pip install --upgrade twine
-          twine upload --repository-url https://test.pypi.org/legacy/ dist/*
-
-      - name: Publish to PyPI (production)
-        if: |
-          needs.prepare.outputs.environment == 'production' &&
-          needs.prepare.outputs.publish_pypi == 'true'
+      - name: Publish to PyPI
+        if: needs.prepare.outputs.publish_pypi == 'true'
         working-directory: sdk/python
         env:
           TWINE_USERNAME: __token__

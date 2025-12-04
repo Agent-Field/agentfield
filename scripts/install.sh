@@ -531,8 +531,8 @@ print_success_message() {
 
   if [[ "$STAGING" == "1" ]]; then
     printf "${BOLD}Testing SDKs:${NC}\n"
-    printf "  Python (TestPyPI):\n"
-    printf "     ${CYAN}pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ agentfield${NC}\n"
+    printf "  Python (prerelease):\n"
+    printf "     ${CYAN}pip install --pre agentfield${NC}\n"
     printf "\n"
     printf "  TypeScript:\n"
     printf "     ${CYAN}npm install @agentfield/sdk@next${NC}\n"

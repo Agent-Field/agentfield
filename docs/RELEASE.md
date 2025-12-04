@@ -8,8 +8,8 @@ AgentField uses a two-tier release model that separates **staging** (prerelease)
 
 | Environment | Version Format | Python Registry | npm Tag | Docker Tag | GitHub Release | Trigger |
 |-------------|----------------|-----------------|---------|------------|----------------|---------|
-| **Staging** | `0.1.19-rc.1` | TestPyPI | `@next` | `staging-X.Y.Z-rc.N` | Pre-release | **Automatic** (push to main) |
-| **Production** | `0.1.19` | PyPI | `@latest` | `vX.Y.Z` + `latest` | Release | **Manual** (workflow dispatch) |
+| **Staging** | `0.1.19-rc.1` | PyPI (prerelease) | `@next` | `staging-X.Y.Z-rc.N` | Pre-release | **Automatic** (push to main) |
+| **Production** | `0.1.19` | PyPI (stable) | `@latest` | `vX.Y.Z` + `latest` | Release | **Manual** (workflow dispatch) |
 
 ### Key Points
 
@@ -23,7 +23,7 @@ AgentField uses a two-tier release model that separates **staging** (prerelease)
 Current production: 0.1.18
 
 Development cycle for 0.1.19:
-  -> PR merged to main    -> Auto: 0.1.19-rc.1  (TestPyPI, npm @next)
+  -> PR merged to main    -> Auto: 0.1.19-rc.1  (PyPI prerelease, npm @next)
   -> Bug fix merged       -> Auto: 0.1.19-rc.2  (automatic increment)
   -> Another fix merged   -> Auto: 0.1.19-rc.3  (automatic increment)
   -> Manual trigger       -> Prod: 0.1.19       (PyPI, npm @latest)
@@ -50,8 +50,7 @@ The following secrets must be configured in GitHub repository settings:
 
 | Secret | Description |
 |--------|-------------|
-| `PYPI_API_TOKEN` | Production PyPI token (for production releases) |
-| `TEST_PYPI_API_TOKEN` | TestPyPI token (for staging releases) |
+| `PYPI_API_TOKEN` | PyPI token (for all Python releases) |
 | `NPM_TOKEN` | npm registry token |
 | `GITHUB_TOKEN` | Auto-provided by GitHub Actions |
 
@@ -73,13 +72,13 @@ Staging releases are **automatically triggered** when code is pushed to `main`. 
 
 **What happens automatically:**
 1. Version bumps to next `-rc.N` (e.g., `0.1.19-rc.1` -> `0.1.19-rc.2`)
-2. Publishes to TestPyPI
+2. Publishes to PyPI as prerelease (excluded from `pip install` by default per [PEP 440](https://peps.python.org/pep-0440/))
 3. Publishes to npm with `@next` tag
 4. Pushes Docker image with `staging-` prefix
 5. Creates GitHub pre-release
 
 **Artifacts published to:**
-- Python: TestPyPI (https://test.pypi.org)
+- Python: PyPI as prerelease (`pip install --pre agentfield`)
 - TypeScript: npm with `@next` tag
 - Docker: `ghcr.io/agent-field/agentfield-control-plane:staging-X.Y.Z-rc.N`
 - Binaries: GitHub Pre-release
@@ -102,10 +101,8 @@ curl -fsSL https://agentfield.ai/install.sh | bash -s -- --staging
 # Or directly from GitHub
 curl -fsSL https://raw.githubusercontent.com/Agent-Field/agentfield/main/scripts/install.sh | bash -s -- --staging
 
-# Python (from TestPyPI)
-pip install --index-url https://test.pypi.org/simple/ \
-  --extra-index-url https://pypi.org/simple/ \
-  agentfield==0.1.19rc1
+# Python (prerelease - requires --pre flag)
+pip install --pre agentfield
 
 # TypeScript
 npm install @agentfield/sdk@next
@@ -183,7 +180,7 @@ agentfield-X.Y.Z.tar.gz             # Python source distribution
 
 | Registry | Staging | Production |
 |----------|---------|------------|
-| PyPI | https://test.pypi.org/project/agentfield/ | https://pypi.org/project/agentfield/ |
+| PyPI | `pip install --pre agentfield` | `pip install agentfield` |
 | npm | `@agentfield/sdk@next` | `@agentfield/sdk@latest` |
 | Docker | `ghcr.io/agent-field/agentfield-control-plane:staging-*` | `ghcr.io/agent-field/agentfield-control-plane:v*` |
 
@@ -249,7 +246,7 @@ After merging a PR or pushing to `main`:
 2. Verify:
    - [ ] Workflow triggered automatically
    - [ ] Version bumped to `X.Y.Z-rc.N` (e.g., `0.1.19-rc.1`)
-   - [ ] Python package appears on TestPyPI
+   - [ ] Python prerelease package appears on PyPI
    - [ ] `npm install @agentfield/sdk@next` installs new version
    - [ ] GitHub release marked as "Pre-release"
    - [ ] Docker image tagged `staging-X.Y.Z-rc.N`
@@ -292,7 +289,7 @@ All previous staging artifacts remain available.
 
 | Component | Procedure |
 |-----------|-----------|
-| TestPyPI | Can delete and re-upload (more permissive than PyPI) |
+| PyPI prerelease | Cannot re-upload same version; must yank + bump rc number |
 | npm @next | `npm unpublish @agentfield/sdk@X.Y.Z-rc.N` (within 72 hours) or publish new rc |
 | Docker staging | Delete image tag from GHCR via GitHub UI or CLI |
 | GitHub | Delete the prerelease from Releases page |
@@ -327,7 +324,7 @@ git push origin :refs/tags/v0.1.19
 
 ### Before Production Release
 - [ ] Staging release has been tested
-- [ ] SDK installation verified (TestPyPI, npm @next)
+- [ ] SDK installation verified (`pip install --pre`, npm @next)
 - [ ] Binary installation verified (`install.sh --staging`)
 - [ ] Docker image tested
 - [ ] CHANGELOG.md is updated
@@ -357,15 +354,6 @@ The install scripts need to be accessible at:
 ---
 
 ## Troubleshooting
-
-### TestPyPI Token Not Configured
-
-**Error:** `403 Forbidden` when publishing to TestPyPI
-**Solution:**
-1. Create an account on https://test.pypi.org (separate from PyPI)
-2. Create the `agentfield` project on TestPyPI
-3. Generate an API token scoped to the project
-4. Add `TEST_PYPI_API_TOKEN` secret to GitHub repository
 
 ### No Prerelease Found
 

@@ -17,13 +17,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 Implement automatic staging releases and manual production releases:
 
-- Staging: Automatic on push to main (TestPyPI, npm @next, staging-* Docker)
+- Staging: Automatic on push to main (PyPI prerelease, npm @next, staging-* Docker)
 - Production: Manual workflow dispatch (PyPI, npm @latest, vX.Y.Z + latest Docker)
 
 Changes:
 - Add push trigger with path filters for automatic staging
 - Replace release_channel with release_environment input
-- Split PyPI publishing: TestPyPI (staging) vs PyPI (production)
+- Unified PyPI publishing for both staging (prerelease) and production
 - Split npm publishing: @next tag (staging) vs @latest (production)
 - Conditional Docker tagging: staging-X.Y.Z vs vX.Y.Z + latest
 - Add install-staging.sh for testing prerelease binaries
