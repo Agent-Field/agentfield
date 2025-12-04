@@ -28,6 +28,7 @@ import {
 } from '../memory/MemoryInterface.js';
 import { DidClient } from '../did/DidClient.js';
 import { DidInterface } from '../did/DidInterface.js';
+import { DidManager } from '../did/DidManager.js';
 import { matchesPattern } from '../utils/pattern.js';
 import { WorkflowReporter } from '../workflow/WorkflowReporter.js';
 import type { DiscoveryOptions } from '../types/agent.js';
@@ -49,6 +50,7 @@ export class Agent {
   private readonly memoryClient: MemoryClient;
   private readonly memoryEventClient: MemoryEventClient;
   private readonly didClient: DidClient;
+  private readonly didManager: DidManager;
   private readonly memoryWatchers: Array<{ pattern: string; handler: MemoryWatchHandler; scope?: string; scopeId?: string }> = [];
   private readonly mcpClientRegistry?: MCPClientRegistry;
   private readonly mcpToolRegistrar?: MCPToolRegistrar;
@@ -79,6 +81,7 @@ export class Agent {
     this.memoryClient = new MemoryClient(this.config.agentFieldUrl!, this.config.defaultHeaders);
     this.memoryEventClient = new MemoryEventClient(this.config.agentFieldUrl!, this.config.defaultHeaders);
     this.didClient = new DidClient(this.config.agentFieldUrl!, this.config.defaultHeaders);
+    this.didManager = new DidManager(this.didClient, this.config.nodeId);
     this.memoryEventClient.onEvent((event) => this.dispatchMemoryEvent(event));
 
     if (this.config.mcp?.servers?.length) {
@@ -188,12 +191,27 @@ export class Agent {
     });
   }
 
-  getDidInterface(metadata: ExecutionMetadata, defaultInput?: any) {
+  getDidInterface(metadata: ExecutionMetadata, defaultInput?: any, targetName?: string) {
+    // Resolve DIDs from the identity package if available
+    const agentNodeDid = metadata.agentNodeDid
+      ?? this.didManager.getAgentDid()
+      ?? this.config.defaultHeaders?.['X-Agent-Node-DID']?.toString();
+
+    // For caller DID: use provided value, or fall back to agent DID
+    const callerDid = metadata.callerDid ?? this.didManager.getAgentDid();
+
+    // For target DID: use provided value, or resolve from function name
+    const targetDid = metadata.targetDid
+      ?? (targetName ? this.didManager.getFunctionDid(targetName) : undefined)
+      ?? this.didManager.getAgentDid();
+
     return new DidInterface({
       client: this.didClient,
       metadata: {
         ...metadata,
-        agentNodeDid: metadata.agentNodeDid ?? this.config.defaultHeaders?.['X-Agent-Node-DID']?.toString()
+        agentNodeDid,
+        callerDid,
+        targetDid
       },
       enabled: Boolean(this.config.didEnabled),
       defaultInput
@@ -305,7 +323,7 @@ export class Agent {
               aiClient: this.aiClient,
               memory: this.getMemoryInterface(execCtx.metadata),
               workflow: this.getWorkflowReporter(execCtx.metadata),
-              did: this.getDidInterface(execCtx.metadata, input)
+              did: this.getDidInterface(execCtx.metadata, input, name)
             })
           );
           await emitEvent('succeeded', result);
@@ -809,7 +827,7 @@ export class Agent {
           aiClient: this.aiClient,
           memory: this.getMemoryInterface(params.metadata),
           workflow: this.getWorkflowReporter(params.metadata),
-          did: this.getDidInterface(params.metadata, params.input)
+          did: this.getDidInterface(params.metadata, params.input, params.targetName)
         });
 
         const result = await reasoner.handler(ctx);
@@ -861,7 +879,7 @@ export class Agent {
           agent: this,
           memory: this.getMemoryInterface(params.metadata),
           workflow: this.getWorkflowReporter(params.metadata),
-          did: this.getDidInterface(params.metadata, params.input)
+          did: this.getDidInterface(params.metadata, params.input, params.targetName)
         });
 
         const result = await skill.handler(ctx);
@@ -901,6 +919,23 @@ export class Agent {
         reasoners,
         skills
       });
+
+      // Register with DID system if enabled
+      if (this.config.didEnabled) {
+        try {
+          const didRegistered = await this.didManager.registerAgent(reasoners, skills);
+          if (didRegistered) {
+            const summary = this.didManager.getIdentitySummary();
+            console.log(`[DID] Agent registered with DID: ${summary.agentDid}`);
+            console.log(`[DID] Reasoner DIDs: ${summary.reasonerCount}, Skill DIDs: ${summary.skillCount}`);
+          }
+        } catch (didErr) {
+          if (!this.config.devMode) {
+            console.warn('[DID] DID registration failed:', didErr);
+          }
+          // DID registration failure is non-fatal - agent can still operate without VCs
+        }
+      }
     } catch (err) {
       if (!this.config.devMode) {
         throw err;

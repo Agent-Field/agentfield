@@ -11,6 +11,7 @@ export * from './memory/MemoryEventClient.js';
 export * from './workflow/WorkflowReporter.js';
 export * from './did/DidClient.js';
 export * from './did/DidInterface.js';
+export * from './did/DidManager.js';
 export * from './mcp/MCPClient.js';
 export * from './mcp/MCPClientRegistry.js';
 export * from './mcp/MCPToolRegistrar.js';
