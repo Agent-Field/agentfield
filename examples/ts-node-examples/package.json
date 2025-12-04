@@ -8,7 +8,8 @@
     "lint": "tsc --noEmit",
     "dev:discovery": "tsx discovery-memory/main.ts",
     "dev:simulation": "tsx simulation/main.ts",
-    "dev:init-example": "tsx init-example/main.ts"
+    "dev:init-example": "tsx init-example/main.ts",
+    "dev:vc": "tsx verifiable-credentials/main.ts"
   },
   "dependencies": {
     "@agentfield/sdk": "file:../../sdk/typescript",
