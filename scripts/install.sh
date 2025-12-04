@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 # AgentField CLI Installer
-# Usage: curl -fsSL https://agentfield.ai/install.sh | bash
-# Version pinning: VERSION=v1.0.0 curl -fsSL https://agentfield.ai/install.sh | bash
+# Usage:
+#   Production:  curl -fsSL https://agentfield.ai/install.sh | bash
+#   Staging:     curl -fsSL https://agentfield.ai/install.sh | bash -s -- --staging
+#   Version pin: VERSION=v1.0.0 curl -fsSL https://agentfield.ai/install.sh | bash
 
 set -e
 
 # Configuration
 REPO="Agent-Field/agentfield"
-INSTALL_DIR="${AGENTFIELD_INSTALL_DIR:-$HOME/.agentfield/bin}"
-VERSION="${VERSION:-latest}"
 VERBOSE="${VERBOSE:-0}"
 SKIP_PATH_CONFIG="${SKIP_PATH_CONFIG:-0}"
+
+# Channel configuration (production vs staging)
+# Can be set via --staging flag or STAGING=1 environment variable
+STAGING="${STAGING:-0}"
 
 # Color codes
 RED='\033[0;31m'
@@ -18,6 +22,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
@@ -25,11 +30,66 @@ NC='\033[0m' # No Color
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 
+# Parse arguments
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --staging)
+        STAGING=1
+        shift
+        ;;
+      --verbose|-v)
+        VERBOSE=1
+        shift
+        ;;
+      --help|-h)
+        echo "AgentField CLI Installer"
+        echo ""
+        echo "Usage:"
+        echo "  curl -fsSL https://agentfield.ai/install.sh | bash"
+        echo "  curl -fsSL https://agentfield.ai/install.sh | bash -s -- --staging"
+        echo ""
+        echo "Options:"
+        echo "  --staging    Install latest prerelease/staging version"
+        echo "  --verbose    Enable verbose output"
+        echo "  --help       Show this help message"
+        echo ""
+        echo "Environment variables:"
+        echo "  VERSION              Specific version to install (e.g., v0.1.19)"
+        echo "  STAGING=1            Same as --staging flag"
+        echo "  VERBOSE=1            Same as --verbose flag"
+        echo "  SKIP_PATH_CONFIG=1   Skip PATH configuration"
+        echo "  AGENTFIELD_INSTALL_DIR  Custom install directory"
+        exit 0
+        ;;
+      *)
+        print_warning "Unknown option: $1"
+        shift
+        ;;
+    esac
+  done
+}
+
+# Set install directory based on channel
+set_install_dir() {
+  if [[ "$STAGING" == "1" ]]; then
+    INSTALL_DIR="${AGENTFIELD_INSTALL_DIR:-$HOME/.agentfield-staging/bin}"
+    SYMLINK_NAME="af-staging"
+  else
+    INSTALL_DIR="${AGENTFIELD_INSTALL_DIR:-$HOME/.agentfield/bin}"
+    SYMLINK_NAME="af"
+  fi
+}
+
 # Print functions
 print_banner() {
   local width=64
   local inner_width=$((width - 2))
   local title="AgentField CLI Installer"
+
+  if [[ "$STAGING" == "1" ]]; then
+    title="AgentField CLI Installer (STAGING)"
+  fi
 
   local horizontal_line
   horizontal_line=$(printf '%*s' "$inner_width" '' | tr ' ' '═')
@@ -42,10 +102,20 @@ print_banner() {
   printf -v left_spaces '%*s' "$padding_left" ''
   printf -v right_spaces '%*s' "$padding_right" ''
 
-  printf "${CYAN}╔%s╗${NC}\n" "$horizontal_line"
-  printf "${CYAN}║${NC}%s${BOLD}%s${NC}%s${CYAN}║${NC}\n" "$left_spaces" "$title" "$right_spaces"
-  printf "${CYAN}╚%s╝${NC}\n" "$horizontal_line"
-  printf "\n"
+  if [[ "$STAGING" == "1" ]]; then
+    printf "${MAGENTA}╔%s╗${NC}\n" "$horizontal_line"
+    printf "${MAGENTA}║${NC}%s${BOLD}${YELLOW}%s${NC}%s${MAGENTA}║${NC}\n" "$left_spaces" "$title" "$right_spaces"
+    printf "${MAGENTA}╚%s╝${NC}\n" "$horizontal_line"
+    printf "\n"
+    printf "${YELLOW}WARNING: This installs a STAGING/PRE-RELEASE version.${NC}\n"
+    printf "${YELLOW}For production use: curl -fsSL https://agentfield.ai/install.sh | bash${NC}\n"
+    printf "\n"
+  else
+    printf "${CYAN}╔%s╗${NC}\n" "$horizontal_line"
+    printf "${CYAN}║${NC}%s${BOLD}%s${NC}%s${CYAN}║${NC}\n" "$left_spaces" "$title" "$right_spaces"
+    printf "${CYAN}╚%s╝${NC}\n" "$horizontal_line"
+    printf "\n"
+  fi
 }
 
 print_info() {
@@ -122,9 +192,9 @@ detect_arch() {
   esac
 }
 
-# Get latest version from GitHub API
-get_latest_version() {
-  print_verbose "Fetching latest version from GitHub API..."
+# Get latest stable version from GitHub API
+get_latest_stable_version() {
+  print_verbose "Fetching latest stable version from GitHub API..."
 
   local latest_url="https://api.github.com/repos/$REPO/releases/latest"
   local version
@@ -141,6 +211,47 @@ get_latest_version() {
   if [[ -z "$version" ]]; then
     print_error "Failed to determine latest version from GitHub API"
     print_info "You can manually specify a version: VERSION=v1.0.0 $0"
+    exit 1
+  fi
+
+  echo "$version"
+}
+
+# Get latest prerelease version from GitHub API
+get_latest_prerelease_version() {
+  print_verbose "Fetching latest prerelease version from GitHub API..."
+
+  local releases_url="https://api.github.com/repos/$REPO/releases"
+  local version
+
+  if command -v curl >/dev/null 2>&1; then
+    # Get all releases and find the first prerelease
+    version=$(curl -fsSL "$releases_url" 2>/dev/null | \
+      grep -E '"tag_name"|"prerelease"' | \
+      paste - - | \
+      grep '"prerelease": true' | \
+      head -1 | \
+      sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/')
+  elif command -v wget >/dev/null 2>&1; then
+    version=$(wget -qO- "$releases_url" 2>/dev/null | \
+      grep -E '"tag_name"|"prerelease"' | \
+      paste - - | \
+      grep '"prerelease": true' | \
+      head -1 | \
+      sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/')
+  else
+    print_error "Neither curl nor wget found. Please install one of them."
+    exit 1
+  fi
+
+  if [[ -z "$version" ]]; then
+    print_error "No prerelease version found"
+    print_info ""
+    print_info "There may not be any staging releases available yet."
+    print_info "Check available releases: https://github.com/$REPO/releases"
+    print_info ""
+    print_info "To install a specific version:"
+    print_info "  VERSION=v0.1.19-rc.1 $0"
     exit 1
   fi
 
@@ -246,13 +357,13 @@ install_binary() {
   cp "$binary_path" "$install_dir/agentfield"
   chmod +x "$install_dir/agentfield"
 
-  # Create af symlink for convenience (best effort)
+  # Create symlink for convenience (best effort)
   local symlink_created=0
-  if ln -sf "$install_dir/agentfield" "$install_dir/af"; then
+  if ln -sf "$install_dir/agentfield" "$install_dir/$SYMLINK_NAME"; then
     symlink_created=1
-    print_verbose "Created symlink: af -> agentfield"
+    print_verbose "Created symlink: $SYMLINK_NAME -> agentfield"
   else
-    print_warning "Could not create af symlink; ensure filesystem supports symlinks"
+    print_warning "Could not create $SYMLINK_NAME symlink; ensure filesystem supports symlinks"
   fi
 
   # On macOS, remove quarantine attribute
@@ -260,15 +371,15 @@ install_binary() {
     print_verbose "Removing macOS quarantine attribute..."
     xattr -d com.apple.quarantine "$install_dir/agentfield" 2>/dev/null || true
     if [[ "$symlink_created" -eq 1 ]]; then
-      xattr -d com.apple.quarantine "$install_dir/af" 2>/dev/null || true
+      xattr -d com.apple.quarantine "$install_dir/$SYMLINK_NAME" 2>/dev/null || true
     fi
   fi
 
   print_success "Binary installed to $install_dir/agentfield"
   if [[ "$symlink_created" -eq 1 ]]; then
-    print_success "Symlink created: $install_dir/af"
+    print_success "Symlink created: $install_dir/$SYMLINK_NAME"
   else
-    print_info "You can create a manual shortcut named 'af' pointing to $install_dir/agentfield if desired."
+    print_info "You can create a manual shortcut named '$SYMLINK_NAME' pointing to $install_dir/agentfield if desired."
   fi
 }
 
@@ -291,6 +402,11 @@ configure_path() {
 
   local shell_config=""
   local path_line="export PATH=\"$install_dir:\$PATH\""
+  local comment="# AgentField CLI"
+
+  if [[ "$STAGING" == "1" ]]; then
+    comment="# AgentField CLI (STAGING)"
+  fi
 
   case "$shell_name" in
     bash)
@@ -328,7 +444,7 @@ configure_path() {
 
   # Add to PATH
   echo "" >> "$shell_config"
-  echo "# AgentField CLI" >> "$shell_config"
+  echo "$comment" >> "$shell_config"
   echo "$path_line" >> "$shell_config"
 
   print_success "PATH configured in $shell_config"
@@ -368,9 +484,20 @@ verify_installation() {
 # Print success message
 print_success_message() {
   printf "\n"
-  printf "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}\n"
-  printf "${GREEN}║${NC}  ${BOLD}AgentField CLI installed successfully!${NC}                      ${GREEN}║${NC}\n"
-  printf "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}\n"
+
+  if [[ "$STAGING" == "1" ]]; then
+    printf "${YELLOW}╔══════════════════════════════════════════════════════════════╗${NC}\n"
+    printf "${YELLOW}║${NC}  ${BOLD}AgentField CLI (STAGING) installed successfully!${NC}            ${YELLOW}║${NC}\n"
+    printf "${YELLOW}╚══════════════════════════════════════════════════════════════╝${NC}\n"
+    printf "\n"
+    printf "${YELLOW}NOTE: This is a STAGING version for testing purposes.${NC}\n"
+    printf "${YELLOW}It is installed separately from production in ~/.agentfield-staging${NC}\n"
+  else
+    printf "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}\n"
+    printf "${GREEN}║${NC}  ${BOLD}AgentField CLI installed successfully!${NC}                      ${GREEN}║${NC}\n"
+    printf "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}\n"
+  fi
+
   printf "\n"
   printf "${BOLD}Next steps:${NC}\n"
   printf "\n"
@@ -399,20 +526,37 @@ print_success_message() {
 
   printf "\n"
   printf "  2. Verify installation:\n"
-  printf "     ${CYAN}agentfield --version${NC}\n"
+  printf "     ${CYAN}%s --version${NC}\n" "$SYMLINK_NAME"
   printf "\n"
-  printf "  3. Initialize your first agent:\n"
-  printf "     ${CYAN}agentfield init my-agent${NC}\n"
+
+  if [[ "$STAGING" == "1" ]]; then
+    printf "${BOLD}Testing SDKs:${NC}\n"
+    printf "  Python (TestPyPI):\n"
+    printf "     ${CYAN}pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ agentfield${NC}\n"
+    printf "\n"
+    printf "  TypeScript:\n"
+    printf "     ${CYAN}npm install @agentfield/sdk@next${NC}\n"
+  else
+    printf "  3. Initialize your first agent:\n"
+    printf "     ${CYAN}agentfield init my-agent${NC}\n"
+  fi
+
   printf "\n"
   printf "${BOLD}Resources:${NC}\n"
   printf "  Documentation: ${BLUE}https://agentfield.ai/docs${NC}\n"
   printf "  GitHub:        ${BLUE}https://github.com/$REPO${NC}\n"
-  printf "  Support:       ${BLUE}https://github.com/$REPO/issues${NC}\n"
+  printf "  Releases:      ${BLUE}https://github.com/$REPO/releases${NC}\n"
   printf "\n"
 }
 
 # Main installation flow
 main() {
+  # Parse command line arguments
+  parse_args "$@"
+
+  # Set install directory based on channel
+  set_install_dir
+
   print_banner
 
   # Detect platform
@@ -424,11 +568,21 @@ main() {
   print_info "Detected platform: $os-$arch"
 
   # Determine version
-  if [[ "$VERSION" == "latest" ]]; then
-    VERSION=$(get_latest_version)
+  if [[ -z "${VERSION:-}" ]] || [[ "$VERSION" == "latest" ]] || [[ "$VERSION" == "latest-prerelease" ]]; then
+    if [[ "$STAGING" == "1" ]]; then
+      VERSION=$(get_latest_prerelease_version)
+      print_warning "Installing STAGING version: $VERSION"
+    else
+      VERSION=$(get_latest_stable_version)
+      print_info "Installing version: $VERSION"
+    fi
+  else
+    if [[ "$STAGING" == "1" ]]; then
+      print_warning "Installing STAGING version: $VERSION"
+    else
+      print_info "Installing version: $VERSION"
+    fi
   fi
-
-  print_info "Installing version: $VERSION"
 
   # Construct binary name and URL
   local binary_name="agentfield-$os-$arch"

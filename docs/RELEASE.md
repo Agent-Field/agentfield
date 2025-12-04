@@ -96,11 +96,11 @@ If you need to manually trigger a staging release (e.g., with different options)
 **Testing staging releases:**
 
 ```bash
-# Binary
-curl -fsSL https://agentfield.ai/install-staging.sh | bash
+# Binary (using --staging flag)
+curl -fsSL https://agentfield.ai/install.sh | bash -s -- --staging
 
 # Or directly from GitHub
-curl -fsSL https://raw.githubusercontent.com/Agent-Field/agentfield/main/scripts/install-staging.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Agent-Field/agentfield/main/scripts/install.sh | bash -s -- --staging
 
 # Python (from TestPyPI)
 pip install --index-url https://test.pypi.org/simple/ \
@@ -204,17 +204,20 @@ VERSION=v0.1.19 curl -fsSL https://agentfield.ai/install.sh | bash
 ### Staging Install
 
 ```bash
-# Latest prerelease version
-curl -fsSL https://agentfield.ai/install-staging.sh | bash
+# Latest prerelease version (using --staging flag)
+curl -fsSL https://agentfield.ai/install.sh | bash -s -- --staging
+
+# Or using environment variable
+STAGING=1 curl -fsSL https://agentfield.ai/install.sh | bash
 
 # Specific prerelease version
-VERSION=v0.1.19-rc.1 curl -fsSL https://agentfield.ai/install-staging.sh | bash
+VERSION=v0.1.19-rc.1 curl -fsSL https://agentfield.ai/install.sh | bash -s -- --staging
 ```
 
-**Key differences:**
-- Staging installs to `~/.agentfield-staging/bin` (separate from production)
-- Staging creates `af-staging` symlink instead of `af`
-- Staging script fetches the latest prerelease from GitHub API
+**Key differences when using `--staging`:**
+- Installs to `~/.agentfield-staging/bin` (separate from production)
+- Creates `af-staging` symlink instead of `af`
+- Fetches the latest prerelease from GitHub API
 
 ---
 
@@ -250,9 +253,9 @@ After merging a PR or pushing to `main`:
    - [ ] `npm install @agentfield/sdk@next` installs new version
    - [ ] GitHub release marked as "Pre-release"
    - [ ] Docker image tagged `staging-X.Y.Z-rc.N`
-3. Test `install-staging.sh`:
+3. Test staging install:
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/Agent-Field/agentfield/main/scripts/install-staging.sh | bash
+   curl -fsSL https://raw.githubusercontent.com/Agent-Field/agentfield/main/scripts/install.sh | bash -s -- --staging
    ~/.agentfield-staging/bin/agentfield --version
    ```
 
@@ -325,7 +328,7 @@ git push origin :refs/tags/v0.1.19
 ### Before Production Release
 - [ ] Staging release has been tested
 - [ ] SDK installation verified (TestPyPI, npm @next)
-- [ ] Binary installation verified (`install-staging.sh`)
+- [ ] Binary installation verified (`install.sh --staging`)
 - [ ] Docker image tested
 - [ ] CHANGELOG.md is updated
 - [ ] README.md examples work
@@ -335,8 +338,7 @@ git push origin :refs/tags/v0.1.19
 ## Hosting Install Scripts
 
 The install scripts need to be accessible at:
-- `https://agentfield.ai/install.sh` (production)
-- `https://agentfield.ai/install-staging.sh` (staging)
+- `https://agentfield.ai/install.sh` (handles both production and staging via `--staging` flag)
 - `https://agentfield.ai/uninstall.sh`
 
 **Options:**
@@ -344,7 +346,6 @@ The install scripts need to be accessible at:
 1. **GitHub Raw URLs (Temporary):**
    ```
    https://raw.githubusercontent.com/Agent-Field/agentfield/main/scripts/install.sh
-   https://raw.githubusercontent.com/Agent-Field/agentfield/main/scripts/install-staging.sh
    ```
 
 2. **Website Rewrites (Recommended):**
@@ -368,7 +369,7 @@ The install scripts need to be accessible at:
 
 ### No Prerelease Found
 
-**Error:** `install-staging.sh` reports "No prerelease version found"
+**Error:** `install.sh --staging` reports "No prerelease version found"
 **Solution:** There are no staging releases yet. Create one first using the workflow.
 
 ### Checksums Don't Match

@@ -360,8 +360,8 @@ jobs:
             ### Installation
 
             ${{ needs.prepare.outputs.environment == 'staging' && '```bash
-            # Staging binary
-            curl -fsSL https://agentfield.ai/install-staging.sh | bash
+            # Staging binary (use --staging flag)
+            curl -fsSL https://agentfield.ai/install.sh | bash -s -- --staging
 
             # Python SDK (from TestPyPI)
             pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ agentfield
