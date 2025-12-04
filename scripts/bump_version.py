@@ -190,7 +190,11 @@ def apply_version(version: SemVer) -> None:
     update_pyproject(version)
     update_init(version)
     update_pkg_info(version)
-    update_requirements(version)
+    # Only update example requirements for stable releases.
+    # Prereleases are excluded by pip install by default (PEP 440),
+    # so examples would fail to install without --pre flag.
+    if not version.prerelease:
+        update_requirements(version)
     update_go_template(version)
     update_ts_package_json(version)
 
