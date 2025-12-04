@@ -156,7 +156,7 @@ reasonersRouter.reasoner<AnalyzeInput, AnalyzeOutput>(
     const text = ctx.input.text ?? '';
 
     // Report progress
-    await ctx.workflow.progress(10, { status: 'running', note: 'Starting analysis' });
+    await ctx.workflow.progress(10, { status: 'Starting analysis' });
 
     let analysis: AnalysisResult;
 
@@ -174,11 +174,7 @@ Respond as JSON only, no markdown.`,
         }
       );
 
-      const parsed = typeof raw === 'string'
-        ? JSON.parse(raw.replace(/```(json)?/gi, '').trim())
-        : raw;
-
-      analysis = analysisSchema.parse(parsed);
+      analysis = raw;
     } catch (aiError) {
       // Fallback for when AI is not configured
       console.warn('[AI] AI analysis failed, using fallback:', aiError);
@@ -190,7 +186,7 @@ Respond as JSON only, no markdown.`,
       };
     }
 
-    await ctx.workflow.progress(80, { status: 'running', note: 'Analysis complete, generating VC' });
+    await ctx.workflow.progress(80, { status: 'Analysis complete, generating VC' });
 
     const result: AnalyzeOutput = {
       ...analysis,
@@ -400,8 +396,7 @@ reasonersRouter.reasoner<ChainInput, ChainOutput>(
       const stepStart = Date.now();
 
       await ctx.workflow.progress(Math.round(((i + 1) / steps.length) * 80), {
-        status: 'running',
-        note: `Executing step: ${step}`,
+        status: `Executing step: ${step}`,
       });
 
       // Simulate step processing
@@ -472,8 +467,7 @@ reasonersRouter.reasoner<ChainInput, ChainOutput>(
     }
 
     await ctx.workflow.progress(90, {
-      status: 'running',
-      note: 'Generating final workflow VC',
+      status: 'Generating final workflow VC',
     });
 
     const result: ChainOutput = {
