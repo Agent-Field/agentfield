@@ -13,7 +13,7 @@ import {
 } from "recharts";
 import type { WorkflowTimelineNode } from "../../types/workflows";
 import { format } from "date-fns";
-import { Badge } from "@/components/ui/badge";
+
 import { ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
