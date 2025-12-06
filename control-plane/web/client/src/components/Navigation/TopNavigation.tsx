@@ -139,7 +139,7 @@ export function TopNavigation() {
         "bg-gradient-to-r from-bg-base via-bg-subtle to-bg-base",
         "backdrop-blur-xl border-none", // Borderless design
         "shadow-soft transition-all duration-200",
-        "px-6 lg:px-8" // Better horizontal padding
+        "px-4 md:px-6 lg:px-8" // Better horizontal padding
       )}
     >
       {/* Left Section - Refined Breadcrumbs */}
@@ -151,28 +151,36 @@ export function TopNavigation() {
         {/* Enhanced Breadcrumbs using shadcn component */}
         <Breadcrumb>
           <BreadcrumbList>
-            {breadcrumbs.map((crumb, index) => (
-              <React.Fragment key={crumb.href}>
-                <BreadcrumbItem>
-                  {index === breadcrumbs.length - 1 ? (
-                    <BreadcrumbPage className="max-w-[200px] truncate" title={crumb.label}>
-                      {crumb.label}
-                    </BreadcrumbPage>
-                  ) : (
-                    <BreadcrumbLink asChild>
-                      <Link
-                        to={crumb.href}
-                        className="max-w-[200px] truncate"
-                        title={crumb.label}
-                      >
+            {breadcrumbs.map((crumb, index) => {
+              const isFirst = index === 0;
+              const isLast = index === breadcrumbs.length - 1;
+              const isHiddenOnMobile = !isFirst && !isLast;
+
+              return (
+                <React.Fragment key={crumb.href}>
+                  <BreadcrumbItem className={cn(isHiddenOnMobile && "hidden md:inline-flex")}>
+                    {isLast ? (
+                      <BreadcrumbPage className="max-w-[150px] md:max-w-[200px] truncate" title={crumb.label}>
                         {crumb.label}
-                      </Link>
-                    </BreadcrumbLink>
+                      </BreadcrumbPage>
+                    ) : (
+                      <BreadcrumbLink asChild>
+                        <Link
+                          to={crumb.href}
+                          className="max-w-[150px] md:max-w-[200px] truncate"
+                          title={crumb.label}
+                        >
+                          {crumb.label}
+                        </Link>
+                      </BreadcrumbLink>
+                    )}
+                  </BreadcrumbItem>
+                  {index < breadcrumbs.length - 1 && (
+                    <BreadcrumbSeparator className={cn(isHiddenOnMobile && "hidden md:list-item")} />
                   )}
-                </BreadcrumbItem>
-                {index < breadcrumbs.length - 1 && <BreadcrumbSeparator />}
-              </React.Fragment>
-            ))}
+                </React.Fragment>
+              );
+            })}
           </BreadcrumbList>
         </Breadcrumb>
       </div>

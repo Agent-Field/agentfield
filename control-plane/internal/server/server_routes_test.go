@@ -77,8 +77,8 @@ func (s *stubStorage) QueryExecutions(ctx context.Context, filters types.Executi
 func (s *stubStorage) QueryWorkflowExecutions(ctx context.Context, filters types.WorkflowExecutionFilters) ([]*types.WorkflowExecution, error) {
 	return nil, nil
 }
-func (s *stubStorage) QueryRunSummaries(ctx context.Context, filter types.ExecutionFilter) ([]*storage.RunSummaryAggregation, error) {
-	return nil, nil
+func (s *stubStorage) QueryRunSummaries(ctx context.Context, filter types.ExecutionFilter) ([]*storage.RunSummaryAggregation, int, error) {
+	return nil, 0, nil
 }
 func (s *stubStorage) GetExecutionWebhook(ctx context.Context, executionID string) (*types.ExecutionWebhook, error) {
 	return nil, nil

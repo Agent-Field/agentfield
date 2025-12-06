@@ -71,31 +71,31 @@ function AppContent() {
           {/* Main Content Area */}
           <main className="flex flex-1 min-w-0 flex-col overflow-y-auto overflow-x-hidden">
             <Routes>
-              <Route path="/" element={<div className="p-6 lg:p-8 min-h-full"><RootRedirect /></div>} />
-              <Route path="/dashboard" element={<div className="p-6 lg:p-8 min-h-full"><EnhancedDashboardPage /></div>} />
-              <Route path="/nodes" element={<div className="p-6 lg:p-8 min-h-full"><NodesPage /></div>} />
-              <Route path="/nodes/:nodeId" element={<div className="p-6 lg:p-8 min-h-full"><NodeDetailPage /></div>} />
-              <Route path="/reasoners/all" element={<div className="p-6 lg:p-8 min-h-full"><AllReasonersPage /></div>} />
+              <Route path="/" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><RootRedirect /></div>} />
+              <Route path="/dashboard" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><EnhancedDashboardPage /></div>} />
+              <Route path="/nodes" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><NodesPage /></div>} />
+              <Route path="/nodes/:nodeId" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><NodeDetailPage /></div>} />
+              <Route path="/reasoners/all" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><AllReasonersPage /></div>} />
               <Route
                 path="/reasoners/:fullReasonerId"
-                element={<div className="p-6 lg:p-8 min-h-full"><ReasonerDetailPage /></div>}
+                element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><ReasonerDetailPage /></div>}
               />
-              <Route path="/executions" element={<div className="p-6 lg:p-8 min-h-full"><ExecutionsPage /></div>} />
+              <Route path="/executions" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><ExecutionsPage /></div>} />
               <Route
                 path="/executions/:executionId"
-                element={<div className="p-6 lg:p-8 min-h-full"><EnhancedExecutionDetailPage /></div>}
+                element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><EnhancedExecutionDetailPage /></div>}
               />
-              <Route path="/workflows" element={<div className="p-6 lg:p-8 min-h-full"><WorkflowsPage /></div>} />
+              <Route path="/workflows" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><WorkflowsPage /></div>} />
               <Route
                 path="/workflows/:workflowId"
                 element={<EnhancedWorkflowDetailPage />}
               />
-              <Route path="/packages" element={<div className="p-6 lg:p-8 min-h-full"><PackagesPage /></div>} />
-              <Route path="/settings" element={<div className="p-6 lg:p-8 min-h-full"><SettingsPage /></div>} />
-              <Route path="/agents" element={<div className="p-6 lg:p-8 min-h-full"><AgentsPage /></div>} />
-              <Route path="/identity/dids" element={<div className="p-6 lg:p-8 min-h-full"><DIDExplorerPage /></div>} />
-              <Route path="/identity/credentials" element={<div className="p-6 lg:p-8 min-h-full"><CredentialsPage /></div>} />
-              <Route path="/test/deckgl" element={<div className="p-6 lg:p-8 min-h-full"><WorkflowDeckGLTestPage /></div>} />
+              <Route path="/packages" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><PackagesPage /></div>} />
+              <Route path="/settings" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><SettingsPage /></div>} />
+              <Route path="/agents" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><AgentsPage /></div>} />
+              <Route path="/identity/dids" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><DIDExplorerPage /></div>} />
+              <Route path="/identity/credentials" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><CredentialsPage /></div>} />
+              <Route path="/test/deckgl" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><WorkflowDeckGLTestPage /></div>} />
             </Routes>
           </main>
         </SidebarInset>

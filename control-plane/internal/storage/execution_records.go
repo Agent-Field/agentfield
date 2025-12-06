@@ -12,6 +12,9 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
+// maxNodesForDepthCalc caps the number of executions for which we compute DAG depth to avoid heavy queries.
+const maxNodesForDepthCalc = 1000
+
 // CreateExecutionRecord inserts a new execution row using the simplified schema.
 func (ls *LocalStorage) CreateExecutionRecord(ctx context.Context, exec *types.Execution) error {
 	if exec == nil {
@@ -310,8 +313,9 @@ func (ls *LocalStorage) QueryExecutionRecords(ctx context.Context, filter types.
 }
 
 // QueryRunSummaries returns aggregated statistics for workflow runs without fetching all execution records.
-// This is highly efficient for workflows with millions of nodes as it uses database-level GROUP BY and COUNT.
-func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.ExecutionFilter) ([]*RunSummaryAggregation, error) {
+// The implementation uses a single GROUP BY query plus a lightweight COUNT for total runs to stay fast even
+// when page_size is large.
+func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.ExecutionFilter) ([]*RunSummaryAggregation, int, error) {
 	var (
 		where []string
 		args  []interface{}
@@ -343,74 +347,264 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 		args = append(args, filter.EndTime.UTC())
 	}
 
-	// Step 1: Get distinct run_ids with their earliest timestamps for sorting
-	distinctQuery := strings.Builder{}
-	distinctQuery.WriteString(`
-		SELECT run_id, MIN(started_at) as earliest_started
-		FROM executions`)
-
+	whereClause := ""
 	if len(where) > 0 {
-		distinctQuery.WriteString(" WHERE ")
-		distinctQuery.WriteString(strings.Join(where, " AND "))
-	}
-
-	distinctQuery.WriteString(" GROUP BY run_id")
-	distinctQuery.WriteString(" ORDER BY earliest_started DESC")
-
-	if filter.Limit > 0 {
-		distinctQuery.WriteString(fmt.Sprintf(" LIMIT %d", filter.Limit))
-	}
-	if filter.Offset > 0 {
-		distinctQuery.WriteString(fmt.Sprintf(" OFFSET %d", filter.Offset))
+		whereClause = " WHERE " + strings.Join(where, " AND ")
 	}
 
 	db := ls.requireSQLDB()
 
-	// Log the query for debugging
-	logger.Logger.Debug().
-		Str("query", distinctQuery.String()).
-		Interface("args", args).
-		Msg("Executing run summary query")
+	// Query total run count up front so pagination metadata is accurate without extra round trips.
+	countQuery := "SELECT COUNT(DISTINCT run_id) FROM executions" + whereClause
+	var totalRuns int
+	if err := db.QueryRowContext(ctx, countQuery, args...).Scan(&totalRuns); err != nil {
+		return nil, 0, fmt.Errorf("count run_ids: %w", err)
+	}
+	if totalRuns == 0 {
+		return []*RunSummaryAggregation{}, 0, nil
+	}
 
-	rows, err := db.QueryContext(ctx, distinctQuery.String(), args...)
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	orderColumn := mapRunSummarySortColumn(filter.SortBy)
+	orderDirection := "DESC"
+	if !filter.SortDescending {
+		orderDirection = "ASC"
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			run_id,
+			MIN(started_at) AS earliest_started,
+			MAX(COALESCE(updated_at, started_at)) AS latest_activity,
+			COUNT(*) AS total_executions,
+			SUM(CASE WHEN LOWER(status) = 'succeeded' THEN 1 ELSE 0 END) AS succeeded_count,
+			SUM(CASE WHEN LOWER(status) = 'failed' THEN 1 ELSE 0 END) AS failed_count,
+			SUM(CASE WHEN LOWER(status) = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_count,
+			SUM(CASE WHEN LOWER(status) = 'timeout' THEN 1 ELSE 0 END) AS timeout_count,
+			SUM(CASE WHEN LOWER(status) = 'running' THEN 1 ELSE 0 END) AS running_count,
+			SUM(CASE WHEN LOWER(status) = 'pending' THEN 1 ELSE 0 END) AS pending_count,
+			SUM(CASE WHEN LOWER(status) = 'queued' THEN 1 ELSE 0 END) AS queued_count,
+			SUM(CASE WHEN LOWER(status) IN ('running','pending','queued') THEN 1 ELSE 0 END) AS active_executions,
+			MAX(CASE WHEN parent_execution_id IS NULL OR parent_execution_id = '' THEN execution_id END) AS root_execution_id,
+			MAX(CASE WHEN parent_execution_id IS NULL OR parent_execution_id = '' THEN agent_node_id END) AS root_agent_node_id,
+			MAX(CASE WHEN parent_execution_id IS NULL OR parent_execution_id = '' THEN reasoner_id END) AS root_reasoner_id,
+			MAX(session_id) AS session_id,
+			MAX(actor_id) AS actor_id,
+			CASE
+				WHEN SUM(CASE WHEN LOWER(status) IN ('failed','cancelled','timeout') THEN 1 ELSE 0 END) > 0 THEN 2
+				WHEN SUM(CASE WHEN LOWER(status) IN ('running','pending','queued') THEN 1 ELSE 0 END) > 0 THEN 1
+				ELSE 0
+			END AS status_rank
+		FROM executions
+		%s
+		GROUP BY run_id
+		ORDER BY %s %s
+		LIMIT %d OFFSET %d`,
+		whereClause, orderColumn, orderDirection, limit, offset)
+
+	logger.Logger.Debug().
+		Str("query", query).
+		Interface("args", args).
+		Int("total_runs", totalRuns).
+		Msg("Executing run summary aggregation query")
+
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query distinct run_ids: %w", err)
+		return nil, 0, fmt.Errorf("query run summaries: %w", err)
 	}
 	defer rows.Close()
 
-	var runIDs []string
+	summaries := make([]*RunSummaryAggregation, 0, limit)
+	runIDsForDepth := make([]string, 0, limit)
+	summaryByRunID := make(map[string]*RunSummaryAggregation, limit)
+
 	for rows.Next() {
-		var runID string
-		var earliestStarted string // SQLite stores timestamps as strings
-		if err := rows.Scan(&runID, &earliestStarted); err != nil {
-			return nil, fmt.Errorf("scan run_id: %w", err)
+		var (
+			runID              string
+			earliestStartedVal interface{}
+			latestActivityVal  interface{}
+			totalExecutions    int
+			succeededCount     int
+			failedCount        int
+			cancelledCount     int
+			timeoutCount       int
+			runningCount       int
+			pendingCount       int
+			queuedCount        int
+			activeExecutions   int
+			rootExecutionID    sql.NullString
+			rootAgentNodeID    sql.NullString
+			rootReasonerID     sql.NullString
+			sessionID          sql.NullString
+			actorID            sql.NullString
+			statusRank         int
+		)
+
+		if err := rows.Scan(
+			&runID,
+			&earliestStartedVal,
+			&latestActivityVal,
+			&totalExecutions,
+			&succeededCount,
+			&failedCount,
+			&cancelledCount,
+			&timeoutCount,
+			&runningCount,
+			&pendingCount,
+			&queuedCount,
+			&activeExecutions,
+			&rootExecutionID,
+			&rootAgentNodeID,
+			&rootReasonerID,
+			&sessionID,
+			&actorID,
+			&statusRank,
+		); err != nil {
+			return nil, 0, fmt.Errorf("scan run summary: %w", err)
 		}
-		runIDs = append(runIDs, runID)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate run_ids: %w", err)
-	}
+		_ = statusRank
 
-	logger.Logger.Debug().Int("count", len(runIDs)).Strs("run_ids", runIDs).Msg("Found run IDs")
-
-	if len(runIDs) == 0 {
-		logger.Logger.Info().Msg("No run IDs found matching filter")
-		return []*RunSummaryAggregation{}, nil
-	}
-
-	// Step 2: Get aggregated statistics for each run
-	summaries := make([]*RunSummaryAggregation, 0, len(runIDs))
-
-	for _, runID := range runIDs {
-		summary, err := ls.getRunAggregation(ctx, runID)
-		if err != nil {
-			logger.Logger.Warn().Str("run_id", runID).Err(err).Msg("failed to get run aggregation, skipping")
-			continue
+		summary := &RunSummaryAggregation{
+			RunID:           runID,
+			TotalExecutions: totalExecutions,
+			StatusCounts: map[string]int{
+				string(types.ExecutionStatusSucceeded): succeededCount,
+				string(types.ExecutionStatusFailed):    failedCount,
+				string(types.ExecutionStatusCancelled): cancelledCount,
+				string(types.ExecutionStatusTimeout):   timeoutCount,
+				string(types.ExecutionStatusRunning):   runningCount,
+				string(types.ExecutionStatusPending):   pendingCount,
+				string(types.ExecutionStatusQueued):    queuedCount,
+			},
+			ActiveExecutions: activeExecutions,
+			// MaxDepth is calculated separately for eligible runs after the aggregation query.
+			MaxDepth: -1,
 		}
+
+		if err := assignTimeValue(&summary.EarliestStarted, earliestStartedVal); err != nil {
+			logger.Logger.Warn().
+				Str("run_id", runID).
+				Interface("value", earliestStartedVal).
+				Err(err).
+				Msg("failed to parse earliest_started for run summary; using current time as fallback")
+			summary.EarliestStarted = time.Now().UTC()
+		}
+
+		if err := assignTimeValue(&summary.LatestStarted, latestActivityVal); err != nil {
+			logger.Logger.Warn().
+				Str("run_id", runID).
+				Interface("value", latestActivityVal).
+				Err(err).
+				Msg("failed to parse latest_activity for run summary; using earliest_started as fallback")
+			summary.LatestStarted = summary.EarliestStarted
+		}
+
+		if rootExecutionID.Valid && rootExecutionID.String != "" {
+			summary.RootExecutionID = &rootExecutionID.String
+		}
+		if rootAgentNodeID.Valid && rootAgentNodeID.String != "" {
+			summary.RootAgentNodeID = &rootAgentNodeID.String
+		}
+		if rootReasonerID.Valid && rootReasonerID.String != "" {
+			summary.RootReasonerID = &rootReasonerID.String
+		}
+		if sessionID.Valid && sessionID.String != "" {
+			summary.SessionID = &sessionID.String
+		}
+		if actorID.Valid && actorID.String != "" {
+			summary.ActorID = &actorID.String
+		}
+
+		summaryByRunID[runID] = summary
+		if totalExecutions <= maxNodesForDepthCalc {
+			runIDsForDepth = append(runIDsForDepth, runID)
+		}
+
 		summaries = append(summaries, summary)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate run summaries: %w", err)
+	}
 
-	return summaries, nil
+	if len(runIDsForDepth) > 0 {
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(runIDsForDepth)), ",")
+		depthQuery := fmt.Sprintf(`
+			SELECT run_id, execution_id, parent_execution_id
+			FROM executions
+			WHERE run_id IN (%s)`, placeholders)
+
+		depthArgs := make([]interface{}, len(runIDsForDepth))
+		for i, runID := range runIDsForDepth {
+			depthArgs[i] = runID
+		}
+
+		depthRows, err := db.QueryContext(ctx, depthQuery, depthArgs...)
+		if err != nil {
+			return nil, 0, fmt.Errorf("query depth info: %w", err)
+		}
+		defer depthRows.Close()
+
+		execInfosByRun := make(map[string][]execDepthInfo, len(runIDsForDepth))
+
+		for depthRows.Next() {
+			var (
+				runID    string
+				execID   string
+				parentID sql.NullString
+			)
+			if err := depthRows.Scan(&runID, &execID, &parentID); err != nil {
+				return nil, 0, fmt.Errorf("scan depth info: %w", err)
+			}
+			var parentPtr *string
+			if parentID.Valid && parentID.String != "" {
+				parentPtr = &parentID.String
+			}
+			execInfosByRun[runID] = append(execInfosByRun[runID], execDepthInfo{
+				executionID:       execID,
+				parentExecutionID: parentPtr,
+			})
+		}
+		if err := depthRows.Err(); err != nil {
+			return nil, 0, fmt.Errorf("iterate depth info: %w", err)
+		}
+
+		for _, runID := range runIDsForDepth {
+			if summary, ok := summaryByRunID[runID]; ok {
+				summary.MaxDepth = computeMaxDepth(execInfosByRun[runID])
+			}
+		}
+	}
+
+	return summaries, totalRuns, nil
+}
+
+// mapRunSummarySortColumn restricts ORDER BY to vetted columns to avoid SQL injection and
+// to map friendly sort keys to the aggregated column names.
+func mapRunSummarySortColumn(sortBy string) string {
+	switch strings.ToLower(strings.TrimSpace(sortBy)) {
+	case "started_at", "created_at":
+		return "earliest_started"
+	case "status":
+		return "status_rank"
+	case "total_steps", "total_executions", "nodes":
+		return "total_executions"
+	case "failed_steps", "failed":
+		return "failed_count"
+	case "active_executions", "active":
+		return "active_executions"
+	case "updated_at", "latest_activity", "latest":
+		return "latest_activity"
+	default:
+		return "latest_activity"
+	}
 }
 
 // getRunAggregation computes aggregated statistics for a single run using efficient SQL queries
@@ -531,8 +725,6 @@ func (ls *LocalStorage) getRunAggregation(ctx context.Context, runID string) (*R
 
 	// Query 4: Calculate max depth (this is more expensive but still better than fetching all records)
 	// For workflows with > 1k nodes, skip depth calculation to avoid memory issues
-	const maxNodesForDepthCalc = 1000
-
 	if summary.TotalExecutions > maxNodesForDepthCalc {
 		// For very large workflows, estimate depth or skip it
 		// TODO: Consider storing depth in the database for efficiency

@@ -1,5 +1,6 @@
 "use client";
 
+
 import { useMemo, useState } from "react";
 import { Renew, Security, Terminal } from "@/components/ui/icon-bridge";
 import { useExecutionVCStatus } from "../hooks/useVCVerification";
@@ -8,9 +9,11 @@ import StatusIndicator from "./ui/status-indicator";
 import { VerifiableCredentialBadge } from "./vc/VerifiableCredentialBadge";
 import { CompactTable } from "./ui/CompactTable";
 import { FastTableSearch, createSearchMatcher } from "./ui/FastTableSearch";
+import { useIsMobile } from "../hooks/use-mobile";
 
 // Compact grid layout - reduced from 7 columns to 6 for better spacing
-const GRID_TEMPLATE = "72px minmax(200px,1fr) 120px 80px 64px 120px";
+const GRID_TEMPLATE_DESKTOP = "72px minmax(200px,1fr) 120px 80px 64px 120px";
+const GRID_TEMPLATE_MOBILE = "40px minmax(140px,1fr) 80px";
 
 interface CompactExecutionsTableProps {
   executions: EnhancedExecution[];
@@ -55,6 +58,7 @@ export function CompactExecutionsTable({
   onRefresh,
 }: CompactExecutionsTableProps) {
   const [searchQuery, setSearchQuery] = useState("");
+  const isMobile = useIsMobile();
 
   // Define search fields for executions
   const searchFields = [
@@ -77,10 +81,10 @@ export function CompactExecutionsTable({
     setSearchQuery(query);
   };
 
-  const columns = [
+  const allColumns = [
     {
       key: "status",
-      header: "Status",
+      header: isMobile ? "" : "Status",
       sortable: true,
       align: "left" as const,
       render: (execution: EnhancedExecution) => (
@@ -121,7 +125,7 @@ export function CompactExecutionsTable({
       key: "when",
       header: "Started",
       sortable: true,
-      align: "left" as const,
+      align: (isMobile ? "right" : "left") as "left" | "right",
       render: (execution: EnhancedExecution) => (
         <div className="text-secondary-foundation timestamp-foundation">
           {execution.relative_time}
@@ -168,12 +172,21 @@ export function CompactExecutionsTable({
     },
   ];
 
+  const columns = useMemo(() => {
+    if (isMobile) {
+      return allColumns.filter((col) =>
+        ["status", "task_name", "when"].includes(col.key)
+      );
+    }
+    return allColumns;
+  }, [isMobile]);
+
   return (
     <div className="space-y-4">
       {/* Search */}
       <FastTableSearch
         onSearch={handleSearch}
-        placeholder="Search executions by reasoner, agent, ID, status..."
+        placeholder={isMobile ? "Search executions..." : "Search executions by reasoner, agent, ID, status..."}
         resultCount={filteredExecutions.length}
         totalCount={executions.length}
         disabled={loading}
@@ -191,7 +204,7 @@ export function CompactExecutionsTable({
         onLoadMore={onLoadMore}
         onRowClick={onExecutionClick}
         columns={columns}
-        gridTemplate={GRID_TEMPLATE}
+        gridTemplate={isMobile ? GRID_TEMPLATE_MOBILE : GRID_TEMPLATE_DESKTOP}
         emptyState={{
           title: searchQuery ? "No matching executions" : "No executions yet",
           description: searchQuery
@@ -225,3 +238,4 @@ export function CompactExecutionsTable({
     </div>
   );
 }
+

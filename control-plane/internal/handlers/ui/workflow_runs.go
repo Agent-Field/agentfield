@@ -100,7 +100,7 @@ func (h *WorkflowRunHandler) ListWorkflowRunsHandler(c *gin.Context) {
 	filter := types.ExecutionFilter{
 		Limit:          pageSize,
 		Offset:         offset,
-		SortBy:         sanitizeExecutionSortField(c.DefaultQuery("sort_by", "started_at")),
+		SortBy:         sanitizeRunSortField(c.DefaultQuery("sort_by", "updated_at")),
 		SortDescending: strings.ToLower(c.DefaultQuery("sort_order", "desc")) != "asc",
 	}
 
@@ -123,7 +123,7 @@ func (h *WorkflowRunHandler) ListWorkflowRunsHandler(c *gin.Context) {
 	}
 
 	// Use the efficient aggregation method that scales to millions of nodes
-	runAggregations, err := h.storage.QueryRunSummaries(ctx, filter)
+	runAggregations, totalRuns, err := h.storage.QueryRunSummaries(ctx, filter)
 	if err != nil {
 		// Log the actual error for debugging
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -139,11 +139,15 @@ func (h *WorkflowRunHandler) ListWorkflowRunsHandler(c *gin.Context) {
 		summaries = append(summaries, convertAggregationToSummary(agg))
 	}
 
-	hasMore := len(runAggregations) == pageSize
+	totalCount := totalRuns
+	if totalCount == 0 {
+		totalCount = len(runAggregations)
+	}
+	hasMore := page*pageSize < totalCount
 
 	response := WorkflowRunListResponse{
 		Runs:       summaries,
-		TotalCount: len(summaries),
+		TotalCount: totalCount,
 		Page:       page,
 		PageSize:   pageSize,
 		HasMore:    hasMore,
@@ -403,7 +407,7 @@ func (h *WorkflowRunHandler) loadRunSummary(ctx context.Context, runID string) *
 		Offset: 0,
 	}
 
-	summaries, err := h.storage.QueryRunSummaries(ctx, filter)
+	summaries, _, err := h.storage.QueryRunSummaries(ctx, filter)
 	if err != nil {
 		logger.Logger.Warn().
 			Str("run_id", runID).
@@ -507,4 +511,24 @@ func parsePositiveIntWithin(value string, fallback, min, max int) int {
 		return max
 	}
 	return v
+}
+
+// sanitizeRunSortField maps friendly sort keys from the UI to backend field names used for ordering.
+func sanitizeRunSortField(field string) string {
+	switch strings.ToLower(strings.TrimSpace(field)) {
+	case "started_at", "started", "created_at":
+		return "started_at"
+	case "status":
+		return "status"
+	case "total_steps", "total_executions", "nodes":
+		return "total_steps"
+	case "failed_steps", "failed":
+		return "failed_steps"
+	case "active_executions", "active":
+		return "active_executions"
+	case "updated_at", "latest_activity", "latest":
+		return "updated_at"
+	default:
+		return "updated_at"
+	}
 }

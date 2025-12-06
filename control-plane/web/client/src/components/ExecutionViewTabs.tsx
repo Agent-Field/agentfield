@@ -133,19 +133,19 @@ export function ExecutionViewTabs({ className }: ExecutionViewTabsProps) {
       const sortOptions = viewState.viewMode === 'workflows' ? WORKFLOW_SORT_OPTIONS : SORT_OPTIONS;
       const sortField = sortOptions.find(opt => opt.value === viewState.sortBy)?.field || 'started_at';
 
-      const result = await getExecutionsByViewMode(
-        viewState.viewMode,
-        viewState.filters,
-        viewState.page,
-        viewState.pageSize,
-        sortField,
-        viewState.sortOrder
-      );
+      const [result, statsResult] = await Promise.all([
+        getExecutionsByViewMode(
+          viewState.viewMode,
+          viewState.filters,
+          viewState.page,
+          viewState.pageSize,
+          sortField,
+          viewState.sortOrder
+        ),
+        getExecutionViewStats(viewState.viewMode, viewState.filters),
+      ]);
 
       setData(result);
-
-      // Fetch stats
-      const statsResult = await getExecutionViewStats(viewState.viewMode, viewState.filters);
       setStats(statsResult);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch data');

@@ -4,7 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Zap, GaugeCircle, Timer, Activity } from "@/components/ui/icon-bridge";
-import { VelocityChart } from "./VelocityChart";
+import { ExecutionScatterPlot } from "./ExecutionScatterPlot";
+import { AgentHealthHeatmap } from "./AgentHealthHeatmap";
 import type { WorkflowSummary, WorkflowTimelineNode } from "../../types/workflows";
 import { normalizeExecutionStatus, getStatusLabel } from "../../utils/status";
 
@@ -239,18 +240,33 @@ export function EnhancedWorkflowPerformance({
                   </div>
                 )}
 
+                {/* Primary Visualization: Scatter Plot */}
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <h3 className="text-heading-3 flex items-center gap-2">
-                      <GaugeCircle className="w-4 h-4" /> Execution velocity
+                      <GaugeCircle className="w-4 h-4" /> Execution Velocity & Health
                     </h3>
-                    <span className="text-body-small">Durations across time</span>
+                    <span className="text-body-small">Individual executions over time</span>
                   </div>
-                  <VelocityChart timedNodes={timedNodes} />
+                  <ExecutionScatterPlot
+                    timedNodes={timedNodes}
+                    onNodeClick={(id: string) => onNodeSelection([id], true)}
+                  />
+                </div>
+
+                {/* Secondary Visualization: Agent Heatmap */}
+                <div className="space-y-4 pt-4 border-t border-border/50">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-heading-3 flex items-center gap-2">
+                       <Activity className="w-4 h-4" /> Agent Health Map
+                    </h3>
+                    <span className="text-body-small">Failure patterns by agent</span>
+                  </div>
+                  <AgentHealthHeatmap timedNodes={timedNodes} />
                 </div>
 
                 {bottlenecks.length > 0 && (
-                  <div className="space-y-3">
+                  <div className="space-y-3 pt-4 border-t border-border/50">
                     <div className="flex items-center gap-2 text-heading-3">
                       <Timer className="w-4 h-4" /> Top bottlenecks
                     </div>
@@ -297,9 +313,9 @@ export function EnhancedWorkflowPerformance({
                 )}
 
                 {agentPerformance.length > 0 && (
-                  <div className="space-y-3">
+                  <div className="space-y-3 pt-4 border-t border-border/50">
                     <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-                      <Activity className="w-4 h-4" /> Agent impact
+                      <Activity className="w-4 h-4" /> Agent Aggregate Impact
                     </div>
                     <ResponsiveGrid columns={{ base: 1, md: 2 }} gap="sm" align="start">
                       {agentPerformance.map((agent) => (
@@ -326,7 +342,7 @@ export function EnhancedWorkflowPerformance({
                 )}
 
                 {depthPerformance.length > 0 && (
-                  <div className="space-y-3">
+                  <div className="space-y-3 pt-4 border-t border-border/50">
                     <div className="text-sm font-semibold text-foreground">Depth profile</div>
                     <ResponsiveGrid columns={{ base: 1, md: 2, lg: 4 }} gap="sm" align="start">
                       {depthPerformance.map((depth) => (
@@ -341,22 +357,22 @@ export function EnhancedWorkflowPerformance({
                 )}
 
                 {selectedMetrics.count > 0 && (
-                  <div className="space-y-3">
-                    <div className="text-sm font-semibold text-foreground">Selected nodes</div>
+                  <div className="space-y-3 pt-4 border-t border-border/50 bg-muted/5 -mx-6 px-6 pb-6 mb-[-24px]">
+                    <div className="text-sm font-semibold text-foreground pt-4">Selected nodes Analysis</div>
                     <ResponsiveGrid columns={{ base: 1, md: 2, lg: 4 }} gap="sm" align="start">
-                      <div className="rounded-lg border border-border/60 bg-muted/15 p-3">
+                      <div className="rounded-lg border border-border bg-background p-3">
                         <div className="text-body-small">Selected</div>
                         <div className="text-heading-3 text-foreground">{selectedMetrics.count}</div>
                       </div>
-                      <div className="rounded-lg border border-border/60 bg-muted/15 p-3">
+                      <div className="rounded-lg border border-border bg-background p-3">
                         <div className="text-body-small">Measured</div>
                         <div className="text-heading-3 text-foreground">{selectedMetrics.timedCount}</div>
                       </div>
-                      <div className="rounded-lg border border-border/60 bg-muted/15 p-3">
+                      <div className="rounded-lg border border-border bg-background p-3">
                         <div className="text-body-small">Avg duration</div>
                         <div className="text-heading-3 text-foreground">{formatDuration(selectedMetrics.averageDuration)}</div>
                       </div>
-                      <div className="rounded-lg border border-border/60 bg-muted/15 p-3">
+                      <div className="rounded-lg border border-border bg-background p-3">
                         <div className="text-body-small">Succeeded</div>
                         <div className="text-heading-3 text-foreground">{selectedMetrics.successCount}</div>
                       </div>

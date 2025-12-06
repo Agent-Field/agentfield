@@ -9,6 +9,7 @@ import {
   Layers,
 } from "@/components/ui/icon-bridge";
 import { Badge } from "../ui/badge";
+import { useIsMobile } from "@/hooks/use-mobile";
 import {
   AnimatedTabs,
   AnimatedTabsList,
@@ -39,6 +40,7 @@ export function EnhancedWorkflowTabs({
   vcChain,
   className
 }: EnhancedWorkflowTabsProps) {
+  const isMobile = useIsMobile();
   const normalizedStatus = normalizeExecutionStatus(workflow.status);
 
   const timeline = dagData?.timeline ?? [];
@@ -122,13 +124,20 @@ export function EnhancedWorkflowTabs({
   ];
 
   return (
-    <div className={cn("h-12 bg-background flex items-center px-6", className)}>
+    <div className={cn(
+      "h-12 bg-background flex items-center overflow-x-auto scrollbar-hide",
+      isMobile ? "px-4" : "px-6",
+      className
+    )}>
       <AnimatedTabs
         value={activeTab}
         onValueChange={(value) => onTabChange(value as WorkflowTabId)}
-        className="h-full"
+        className="h-full min-w-0"
       >
-        <AnimatedTabsList className="h-full gap-1">
+        <AnimatedTabsList className={cn(
+          "h-full gap-1",
+          isMobile ? "flex-nowrap" : ""
+        )}>
           {tabs.map((tab) => {
             const Icon = tab.icon;
 
@@ -136,7 +145,7 @@ export function EnhancedWorkflowTabs({
               <AnimatedTabsTrigger
                 key={tab.id}
                 value={tab.id}
-                className="gap-2 px-3 py-2"
+                className="gap-2 px-3 py-2 flex-shrink-0"
                 title={`${tab.description} (Cmd/Ctrl + ${tab.shortcut})`}
               >
                 <Icon className="w-4 h-4" />
@@ -154,7 +163,10 @@ export function EnhancedWorkflowTabs({
       </AnimatedTabs>
 
       {/* Tab Context Info */}
-      <div className="flex items-center gap-4 ml-6 text-body-small">
+      <div className={cn(
+        "flex items-center gap-4 ml-6 text-body-small",
+        isMobile ? "hidden" : "flex"
+      )}>
         {/* Current Tab Info */}
         {activeTab === 'graph' && timeline.length > 0 && (
           <div className="flex items-center gap-4">
@@ -209,7 +221,10 @@ export function EnhancedWorkflowTabs({
       </div>
 
       {/* Right Side Actions */}
-      <div className="ml-auto flex items-center gap-2">
+      <div className={cn(
+        "ml-auto flex items-center gap-2",
+        isMobile ? "hidden" : "flex"
+      )}>
         {/* Workflow Status */}
         <div className="flex items-center gap-2 text-xs">
           <div

@@ -45,7 +45,7 @@ func TestQueryRunSummariesParsesTextTimestamps(t *testing.T) {
 		require.NoError(t, ls.CreateExecutionRecord(ctx, exec))
 	}
 
-	results, err := ls.QueryRunSummaries(ctx, types.ExecutionFilter{})
+	results, _, err := ls.QueryRunSummaries(ctx, types.ExecutionFilter{})
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 
