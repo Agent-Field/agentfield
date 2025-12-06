@@ -94,6 +94,7 @@ type KeystoreConfig struct {
 // APIConfig holds configuration for API settings
 type APIConfig struct {
 	CORS CORSConfig `yaml:"cors" mapstructure:"cors"`
+	Auth AuthConfig `yaml:"auth" mapstructure:"auth"`
 }
 
 // CORSConfig holds CORS configuration
@@ -103,6 +104,14 @@ type CORSConfig struct {
 	AllowedHeaders   []string `yaml:"allowed_headers" mapstructure:"allowed_headers"`
 	ExposedHeaders   []string `yaml:"exposed_headers" mapstructure:"exposed_headers"`
 	AllowCredentials bool     `yaml:"allow_credentials" mapstructure:"allow_credentials"`
+}
+
+// AuthConfig holds API authentication configuration.
+type AuthConfig struct {
+	// APIKey is checked against headers or query params. Empty disables auth.
+	APIKey string `yaml:"api_key" mapstructure:"api_key"`
+	// SkipPaths allows bypassing auth for specific endpoints (e.g., health).
+	SkipPaths []string `yaml:"skip_paths" mapstructure:"skip_paths"`
 }
 
 // StorageConfig is an alias of the storage layer's configuration so callers can
@@ -144,8 +153,21 @@ func LoadConfig(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse configuration file %s: %w", configPath, err)
 	}
 
-	// Apply defaults or perform validation if needed here
-	// e.g., cfg.UI.Mode = "embedded" if cfg.UI.Mode == ""
+	// Apply environment variable overrides
+	applyEnvOverrides(&cfg)
 
 	return &cfg, nil
+}
+
+// applyEnvOverrides applies environment variable overrides to the config.
+// Environment variables take precedence over YAML config values.
+func applyEnvOverrides(cfg *Config) {
+	// API Authentication
+	if apiKey := os.Getenv("AGENTFIELD_API_KEY"); apiKey != "" {
+		cfg.API.Auth.APIKey = apiKey
+	}
+	// Also support the nested path format for consistency
+	if apiKey := os.Getenv("AGENTFIELD_API_AUTH_API_KEY"); apiKey != "" {
+		cfg.API.Auth.APIKey = apiKey
+	}
 }

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { getGlobalApiKey } from '../../../services/api';
 
 interface CachedNodeDetails {
   data: NodeDetails;
@@ -57,7 +58,12 @@ export function useNodeDetails(executionId?: string): UseNodeDetailsReturn {
       // Fetch execution details from the API (using same endpoint as ExecutionDetailPage)
       console.log(`🔍 SIDEBAR DEBUG: Fetching execution details for ${executionId}`);
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/ui/v1';
-      const response = await fetch(`${API_BASE_URL}/executions/${executionId}/details`);
+      const headers: HeadersInit = {};
+      const apiKey = getGlobalApiKey();
+      if (apiKey) {
+        headers['X-API-Key'] = apiKey;
+      }
+      const response = await fetch(`${API_BASE_URL}/executions/${executionId}/details`, { headers });
 
       if (!response.ok) {
         console.error(`🔍 SIDEBAR DEBUG: API response not ok: ${response.status} ${response.statusText}`);

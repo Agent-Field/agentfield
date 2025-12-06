@@ -325,6 +325,9 @@ func TestCompleteWithMessages(t *testing.T) {
 }
 
 func TestStreamComplete(t *testing.T) {
+	// Use a channel to keep the handler alive until client is done reading
+	done := make(chan struct{})
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "text/event-stream", r.Header.Get("Accept"))
 
@@ -345,8 +348,12 @@ func TestStreamComplete(t *testing.T) {
 				f.Flush()
 			}
 		}
+
+		// Wait for client to signal it's done reading
+		<-done
 	}))
 	defer server.Close()
+	defer close(done)
 
 	config := &Config{
 		APIKey:  "test-key",
@@ -441,7 +448,7 @@ func TestSSEDecoder(t *testing.T) {
 		{
 			name:     "multiple chunks",
 			input:    "data: {\"id\":\"test\",\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\ndata: {\"id\":\"test\",\"choices\":[{\"delta\":{\"content\":\"b\"}}]}\n\n",
-			expected: 1, // Decoder processes one at a time, may need multiple calls
+			expected: 2, // Decoder correctly processes all available messages
 			wantErr:  false,
 		},
 		{

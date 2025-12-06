@@ -6,12 +6,18 @@ import type {
   WorkflowDAGLightweightResponse,
 } from '../types/workflows';
 import { normalizeExecutionStatus } from '../utils/status';
+import { getGlobalApiKey } from './api';
 
 const API_V1_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/ui/v1';
 const API_V2_BASE_URL = import.meta.env.VITE_API_V2_BASE_URL || '/api/ui/v2';
 
 async function fetchWrapper<T>(url: string, options?: RequestInit, baseUrl: string = API_V1_BASE_URL): Promise<T> {
-  const response = await fetch(`${baseUrl}${url}`, options);
+  const headers = new Headers(options?.headers || {});
+  const apiKey = getGlobalApiKey();
+  if (apiKey) {
+    headers.set('X-API-Key', apiKey);
+  }
+  const response = await fetch(`${baseUrl}${url}`, { ...options, headers });
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({
       message: 'Request failed with status ' + response.status

@@ -20,6 +20,8 @@ import { WorkflowsPage } from "./pages/WorkflowsPage.tsx";
 import { WorkflowDeckGLTestPage } from "./pages/WorkflowDeckGLTestPage";
 import { DIDExplorerPage } from "./pages/DIDExplorerPage";
 import { CredentialsPage } from "./pages/CredentialsPage";
+import { AuthProvider } from "./contexts/AuthContext";
+import { AuthGuard } from "./components/AuthGuard";
 
 // Placeholder pages for new routes
 
@@ -113,9 +115,13 @@ function App() {
       disableTransitionOnChange
     >
       <ModeProvider>
-        <Router basename={import.meta.env.VITE_BASE_PATH || "/ui"}>
-          <AppContent />
-        </Router>
+        <AuthProvider>
+          <AuthGuard>
+            <Router basename={import.meta.env.VITE_BASE_PATH || "/ui"}>
+              <AppContent />
+            </Router>
+          </AuthGuard>
+        </AuthProvider>
       </ModeProvider>
     </ThemeProvider>
   );

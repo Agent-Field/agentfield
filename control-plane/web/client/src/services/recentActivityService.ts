@@ -1,4 +1,5 @@
 import type { RecentActivityResponse } from '../types/recentActivity';
+import { getGlobalApiKey } from './api';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/ui/v1';
 
@@ -8,6 +9,12 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/ui/v1';
 async function fetchWrapper<T>(url: string, options?: RequestInit & { timeout?: number }): Promise<T> {
   const { timeout = 8000, ...fetchOptions } = options || {};
 
+  const headers = new Headers(fetchOptions.headers || {});
+  const apiKey = getGlobalApiKey();
+  if (apiKey) {
+    headers.set('X-API-Key', apiKey);
+  }
+
   // Create AbortController for timeout
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
@@ -15,6 +22,7 @@ async function fetchWrapper<T>(url: string, options?: RequestInit & { timeout?: 
   try {
     const response = await fetch(`${API_BASE_URL}${url}`, {
       ...fetchOptions,
+      headers,
       signal: controller.signal,
     });
 

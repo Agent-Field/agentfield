@@ -26,6 +26,7 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services" // Services
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
+	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 	"github.com/Agent-Field/agentfield/control-plane/internal/utils"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/adminpb"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
@@ -344,7 +345,13 @@ func (s *AgentFieldServer) startAdminGRPCServer() error {
 	}
 
 	s.adminListener = lis
-	s.adminGRPCServer = grpc.NewServer()
+	opts := []grpc.ServerOption{}
+	if s.config.API.Auth.APIKey != "" {
+		opts = append(opts, grpc.UnaryInterceptor(
+			middleware.APIKeyUnaryInterceptor(s.config.API.Auth.APIKey),
+		))
+	}
+	s.adminGRPCServer = grpc.NewServer(opts...)
 	adminpb.RegisterAdminReasonerServiceServer(s.adminGRPCServer, s)
 
 	go func() {
@@ -588,7 +595,7 @@ func (s *AgentFieldServer) setupRoutes() {
 		corsConfig.AllowMethods = []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}
 	}
 	if len(corsConfig.AllowHeaders) == 0 {
-		corsConfig.AllowHeaders = []string{"Origin", "Content-Type", "Accept", "Authorization"}
+		corsConfig.AllowHeaders = []string{"Origin", "Content-Type", "Accept", "Authorization", "X-API-Key"}
 	}
 
 	s.Router.Use(cors.New(corsConfig))
@@ -618,6 +625,15 @@ func (s *AgentFieldServer) setupRoutes() {
 		c.Request = c.Request.WithContext(timeoutCtx)
 		c.Next()
 	})
+
+	// API key authentication middleware (supports headers + api_key query param)
+	s.Router.Use(middleware.APIKeyAuth(middleware.AuthConfig{
+		APIKey:    s.config.API.Auth.APIKey,
+		SkipPaths: s.config.API.Auth.SkipPaths,
+	}))
+	if s.config.API.Auth.APIKey != "" {
+		logger.Logger.Info().Msg("🔐 API key authentication enabled")
+	}
 
 	// Expose Prometheus metrics
 	s.Router.GET("/metrics", gin.WrapH(promhttp.Handler()))

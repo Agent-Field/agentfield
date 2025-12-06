@@ -22,12 +22,50 @@ import type {
 } from '../types/agentfield';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/ui/v1';
+const STORAGE_KEY = "af_api_key";
+
+// Simple obfuscation for localStorage; not meant as real security.
+const decryptKey = (value: string): string => {
+  try {
+    return atob(value).split("").reverse().join("");
+  } catch {
+    return "";
+  }
+};
+
+// Initialize API key from localStorage immediately when this module loads
+// This ensures the key is available before any API calls are made
+let globalApiKey: string | null = (() => {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      const key = decryptKey(stored);
+      if (key) return key;
+    }
+  } catch {
+    // localStorage might not be available
+  }
+  return null;
+})();
+
+export function setGlobalApiKey(key: string | null) {
+  globalApiKey = key;
+}
+
+export function getGlobalApiKey(): string | null {
+  return globalApiKey;
+}
 
 /**
  * Enhanced fetch wrapper with MCP-specific error handling, retry logic, and timeout support
  */
 async function fetchWrapper<T>(url: string, options?: RequestInit & { timeout?: number }): Promise<T> {
   const { timeout = 10000, ...fetchOptions } = options || {};
+
+  const headers = new Headers(fetchOptions.headers || {});
+  if (globalApiKey) {
+    headers.set('X-API-Key', globalApiKey);
+  }
 
   // Create AbortController for timeout
   const controller = new AbortController();
@@ -36,6 +74,7 @@ async function fetchWrapper<T>(url: string, options?: RequestInit & { timeout?: 
   try {
     const response = await fetch(`${API_BASE_URL}${url}`, {
       ...fetchOptions,
+      headers,
       signal: controller.signal,
     });
 
@@ -115,7 +154,11 @@ export async function getNodeDetails(nodeId: string): Promise<AgentNode> {
 }
 
 export function streamNodeEvents(): EventSource {
-  return new EventSource(`${API_BASE_URL}/nodes/events`);
+  const apiKey = getGlobalApiKey();
+  const url = apiKey
+    ? `${API_BASE_URL}/nodes/events?api_key=${encodeURIComponent(apiKey)}`
+    : `${API_BASE_URL}/nodes/events`;
+  return new EventSource(url);
 }
 
 // ============================================================================
@@ -250,7 +293,11 @@ export async function getMCPServerMetrics(
  * Subscribe to MCP health events via Server-Sent Events
  */
 export function subscribeMCPHealthEvents(nodeId: string): EventSource {
-  return new EventSource(`${API_BASE_URL}/nodes/${nodeId}/mcp/events`);
+  const apiKey = getGlobalApiKey();
+  const url = apiKey
+    ? `${API_BASE_URL}/nodes/${nodeId}/mcp/events?api_key=${encodeURIComponent(apiKey)}`
+    : `${API_BASE_URL}/nodes/${nodeId}/mcp/events`;
+  return new EventSource(url);
 }
 
 /**
@@ -453,7 +500,11 @@ export async function stopAgentWithStatus(nodeId: string): Promise<AgentStatus> 
  * Subscribe to unified status events via Server-Sent Events
  */
 export function subscribeToUnifiedStatusEvents(): EventSource {
-  return new EventSource(`${API_BASE_URL}/nodes/events`);
+  const apiKey = getGlobalApiKey();
+  const url = apiKey
+    ? `${API_BASE_URL}/nodes/events?api_key=${encodeURIComponent(apiKey)}`
+    : `${API_BASE_URL}/nodes/events`;
+  return new EventSource(url);
 }
 
 // ============================================================================
@@ -485,9 +536,14 @@ export async function registerServerlessAgent(invocationUrl: string): Promise<{
   const timeoutId = setTimeout(() => controller.abort(), timeout);
 
   try {
+    const headers = new Headers({ 'Content-Type': 'application/json' });
+    if (globalApiKey) {
+      headers.set('X-API-Key', globalApiKey);
+    }
+
     const response = await fetch(`${API_V1_BASE}/nodes/register-serverless`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ invocation_url: invocationUrl }),
       signal: controller.signal,
     });

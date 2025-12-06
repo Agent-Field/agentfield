@@ -366,6 +366,7 @@ class Agent(FastAPI):
         callback_url: Optional[str] = None,
         auto_register: bool = True,
         vc_enabled: Optional[bool] = True,
+        api_key: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -405,6 +406,8 @@ class Agent(FastAPI):
             vc_enabled (bool | None, optional): Controls default VC generation policy for this agent node.
                                          True enables VCs for all reasoners/skills (default), False disables,
                                          and None defers entirely to platform defaults.
+            api_key (str, optional): API key for authenticating with the AgentField control plane.
+                                    When set, will be sent as X-API-Key header on all requests.
             **kwargs: Additional keyword arguments passed to FastAPI constructor.
 
         Example:
@@ -470,9 +473,12 @@ class Agent(FastAPI):
         # Initialize async configuration
         self.async_config = async_config or AsyncConfig.from_environment()
 
-        # Initialize AgentFieldClient with async configuration
+        # Store API key for authentication
+        self.api_key = api_key
+
+        # Initialize AgentFieldClient with async configuration and API key
         self.client = AgentFieldClient(
-            base_url=agentfield_server, async_config=self.async_config
+            base_url=agentfield_server, async_config=self.async_config, api_key=api_key
         )
         self._current_execution_context: Optional[ExecutionContext] = None
 
@@ -766,10 +772,12 @@ class Agent(FastAPI):
         """Initialize DID and VC components."""
         try:
             # Initialize DID Manager
-            self.did_manager = DIDManager(self.agentfield_server, self.node_id)
+            self.did_manager = DIDManager(
+                self.agentfield_server, self.node_id, self.api_key
+            )
 
             # Initialize VC Generator
-            self.vc_generator = VCGenerator(self.agentfield_server)
+            self.vc_generator = VCGenerator(self.agentfield_server, self.api_key)
 
             if self.dev_mode:
                 log_debug("DID system initialized")
@@ -784,7 +792,7 @@ class Agent(FastAPI):
         """Scans for methods decorated with @on_change and registers them as listeners."""
         if not self.memory_event_client:
             self.memory_event_client = MemoryEventClient(
-                self.agentfield_server, self._get_current_execution_context()
+                self.agentfield_server, self._get_current_execution_context(), self.api_key
             )
 
         for name, method in inspect.getmembers(self, predicate=inspect.ismethod):
@@ -903,7 +911,7 @@ class Agent(FastAPI):
         )
         if not self.memory_event_client:
             self.memory_event_client = MemoryEventClient(
-                self.agentfield_server, self._get_current_execution_context()
+                self.agentfield_server, self._get_current_execution_context(), self.api_key
             )
         return MemoryInterface(memory_client, self.memory_event_client)
 
@@ -3261,7 +3269,10 @@ class Agent(FastAPI):
 
         url = self.agentfield_server.rstrip("/") + "/api/v1/workflow/executions/events"
         try:
-            response = requests.post(url, json=payload, timeout=5)
+            headers = {"Content-Type": "application/json"}
+            if self.api_key:
+                headers["X-API-Key"] = self.api_key
+            response = requests.post(url, json=payload, headers=headers, timeout=5)
             if response.status_code >= 400 and self.dev_mode:
                 log_warn(
                     f"Workflow event ({status}) for {component_id} failed: {response.status_code} {response.text}"

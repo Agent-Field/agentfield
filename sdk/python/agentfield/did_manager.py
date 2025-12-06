@@ -61,18 +61,28 @@ class DIDManager:
     - Integration with agent lifecycle
     """
 
-    def __init__(self, agentfield_server_url: str, agent_node_id: str):
+    def __init__(
+        self, agentfield_server_url: str, agent_node_id: str, api_key: Optional[str] = None
+    ):
         """
         Initialize DID Manager.
 
         Args:
             agentfield_server_url: URL of the AgentField Server
             agent_node_id: Unique identifier for this agent node
+            api_key: Optional API key for authentication
         """
         self.agentfield_server_url = agentfield_server_url.rstrip("/")
         self.agent_node_id = agent_node_id
+        self.api_key = api_key
         self.identity_package: Optional[DIDIdentityPackage] = None
         self.enabled = False
+
+    def _get_auth_headers(self) -> Dict[str, str]:
+        """Return auth headers if API key is configured."""
+        if not self.api_key:
+            return {}
+        return {"X-API-Key": self.api_key}
 
     def register_agent(
         self, reasoners: List[Dict[str, Any]], skills: List[Dict[str, Any]]
@@ -101,9 +111,12 @@ class DIDManager:
             }
 
             # Send registration request to AgentField Server
+            headers = {"Content-Type": "application/json"}
+            headers.update(self._get_auth_headers())
             response = requests.post(
                 f"{self.agentfield_server_url}/api/v1/did/register",
                 json=registration_data,
+                headers=headers,
                 timeout=30,
             )
 
@@ -216,7 +229,9 @@ class DIDManager:
         """
         try:
             response = requests.get(
-                f"{self.agentfield_server_url}/api/v1/did/resolve/{did}", timeout=10
+                f"{self.agentfield_server_url}/api/v1/did/resolve/{did}",
+                headers=self._get_auth_headers(),
+                timeout=10,
             )
 
             if response.status_code == 200:

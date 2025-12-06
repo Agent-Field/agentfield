@@ -25,6 +25,7 @@ from routers import (
 app = Agent(
     node_id="documentation-chatbot",
     agentfield_server=f"{os.getenv('AGENTFIELD_SERVER')}",
+    api_key=os.getenv("AGENTFIELD_API_KEY"),
     ai_config=AIConfig(
         model=os.getenv("AI_MODEL", "openrouter/openai/gpt-4o-mini"),
     ),

@@ -12,11 +12,17 @@ import type {
   WorkflowVCStatusBatchResponse
 } from '../types/did';
 import { normalizeExecutionStatus, isSuccessStatus, isFailureStatus } from '../utils/status';
+import { getGlobalApiKey } from './api';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/ui/v1';
 
 async function fetchWrapper<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${url}`, options);
+  const headers = new Headers(options?.headers || {});
+  const apiKey = getGlobalApiKey();
+  if (apiKey) {
+    headers.set('X-API-Key', apiKey);
+  }
+  const response = await fetch(`${API_BASE_URL}${url}`, { ...options, headers });
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({
       message: 'Request failed with status ' + response.status

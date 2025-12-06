@@ -79,9 +79,10 @@ class EventSubscription:
 class MemoryEventClient:
     """Enhanced memory event client with pattern-based subscriptions and event history."""
 
-    def __init__(self, base_url: str, execution_context):
+    def __init__(self, base_url: str, execution_context, api_key: Optional[str] = None):
         self.base_url = base_url.replace("http", "ws")
         self.execution_context = execution_context
+        self.api_key = api_key
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
         self.is_listening = False
         # Lazily initialize the lock inside an active event loop to avoid
@@ -136,6 +137,8 @@ class MemoryEventClient:
 
             try:
                 headers = self.execution_context.to_headers()
+                if self.api_key:
+                    headers["X-API-Key"] = self.api_key
                 ws_url = f"{self.base_url}/api/v1/memory/events/ws"
 
                 # Add query parameters for server-side filtering
@@ -312,6 +315,8 @@ class MemoryEventClient:
 
             async with httpx.AsyncClient() as client:
                 headers = self.execution_context.to_headers()
+                if self.api_key:
+                    headers["X-API-Key"] = self.api_key
 
                 # Build query parameters
                 params: Dict[str, Any] = {"limit": limit}
@@ -355,6 +360,8 @@ class MemoryEventClient:
             import requests
 
             headers = self.execution_context.to_headers()
+            if self.api_key:
+                headers["X-API-Key"] = self.api_key
 
             # Build query parameters
             params = {"limit": limit}

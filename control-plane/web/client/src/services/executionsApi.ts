@@ -16,11 +16,18 @@ import type {
   NotesFilters,
 } from "../types/notes";
 import { normalizeExecutionStatus } from "../utils/status";
+import { getGlobalApiKey } from "./api";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api/ui/v1";
 
 async function fetchWrapper<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${url}`, options);
+  const headers = new Headers(options?.headers || {});
+  const apiKey = getGlobalApiKey();
+  if (apiKey) {
+    headers.set("X-API-Key", apiKey);
+  }
+
+  const response = await fetch(`${API_BASE_URL}${url}`, { ...options, headers });
   if (!response.ok) {
     const errorData = await response
       .json()
@@ -266,7 +273,11 @@ export async function getExecutionStats(
 
 // Stream real-time execution events
 export function streamExecutionEvents(): EventSource {
-  return new EventSource(`${API_BASE_URL}/executions/events`);
+  const apiKey = getGlobalApiKey();
+  const url = apiKey
+    ? `${API_BASE_URL}/executions/events?api_key=${encodeURIComponent(apiKey)}`
+    : `${API_BASE_URL}/executions/events`;
+  return new EventSource(url);
 }
 
 // Helper functions for common filtering scenarios
@@ -503,7 +514,8 @@ export async function getExecutionNoteTags(
 
 // Stream real-time notes updates for an execution
 export function streamExecutionNotes(executionId: string): EventSource {
-  return new EventSource(
-    `${API_BASE_URL}/executions/${executionId}/notes/stream`,
-  );
+  const apiKey = getGlobalApiKey();
+  const baseUrl = `${API_BASE_URL}/executions/${executionId}/notes/stream`;
+  const url = apiKey ? `${baseUrl}?api_key=${encodeURIComponent(apiKey)}` : baseUrl;
+  return new EventSource(url);
 }

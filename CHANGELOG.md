@@ -6,6 +6,512 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.20] - 2025-12-04
+
+## [0.1.20-rc.3] - 2025-12-04
+
+
+### Fixed
+
+- Fix(sdk/typescript): add DID registration to enable VC generation (#60)
+
+* fix(release): skip example requirements for prereleases
+
+Restore the check to skip updating example requirements for prerelease
+versions. Even though prereleases are now published to PyPI, pip install
+excludes them by default per PEP 440. Users running `pip install -r
+requirements.txt` would fail without the `--pre` flag.
+
+Examples should always pin to stable versions so they work out of the box.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+* fix(sdk/typescript): add DID registration to enable VC generation
+
+The TypeScript SDK was not registering with the DID system, causing VC
+generation to fail with "failed to resolve caller DID: DID not found".
+
+This change adds DID registration to match the Python SDK's behavior:
+
+- Add DIDIdentity types and registerAgent() to DidClient
+- Create DidManager class to store identity package after registration
+- Integrate DidManager into Agent.ts to auto-register on startup
+- Update getDidInterface() to resolve DIDs from stored identity package
+
+When didEnabled is true, the agent now:
+1. Registers with /api/v1/nodes/register (existing)
+2. Registers with /api/v1/did/register (new)
+3. Stores identity package for DID resolution
+4. Auto-populates callerDid/targetDid when generating VCs
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+* feat(examples): add verifiable credentials TypeScript example
+
+Add a complete VC example demonstrating:
+- Basic text processing with explicit VC generation
+- AI-powered analysis with VC audit trail
+- Data transformation with integrity proof
+- Multi-step workflow with chained VCs
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+* fix(examples): fix linting errors in VC TypeScript example
+
+- Remove invalid `note` property from workflow.progress calls
+- Simplify AI response handling since schema already returns parsed type
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude <noreply@anthropic.com> (bd097e1)
+
+- Fix(release): skip example requirements for prereleases (#59)
+
+Restore the check to skip updating example requirements for prerelease
+versions. Even though prereleases are now published to PyPI, pip install
+excludes them by default per PEP 440. Users running `pip install -r
+requirements.txt` would fail without the `--pre` flag.
+
+Examples should always pin to stable versions so they work out of the box.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-authored-by: Claude <noreply@anthropic.com> (1b7d9b8)
+
+## [0.1.20-rc.2] - 2025-12-04
+
+
+### Added
+
+- Feat(release): unify PyPI publishing for all releases (#58)
+
+Publish all Python SDK releases (both prerelease and stable) to PyPI
+instead of using TestPyPI for prereleases.
+
+Per PEP 440, prerelease versions (e.g., 0.1.20rc1) are excluded by
+default from `pip install` - users must explicitly use `--pre` flag.
+This simplifies the release process and removes the need for the
+TEST_PYPI_API_TOKEN secret.
+
+Changes:
+- Merge TestPyPI and PyPI publish steps into single PyPI step
+- Update release notes to show `pip install --pre` for staging
+- Update install.sh staging output
+- Re-enable example requirements updates for prereleases
+- Update RELEASE.md documentation
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-authored-by: Claude <noreply@anthropic.com> (ebf7020)
+
+
+
+### Fixed
+
+- Fix(release): fix example requirements and prevent future staging bumps (#56)
+
+* fix(examples): revert to stable agentfield version (0.1.19)
+
+The staging release bumped example requirements to 0.1.20-rc.1, but
+RC versions are published to TestPyPI, not PyPI. This caused Railway
+deployments to fail because pip couldn't find the package.
+
+Revert to the last stable version (0.1.19) which is available on PyPI.
+
+* fix(release): skip example requirements bump for prerelease versions
+
+Prerelease versions are published to TestPyPI, not PyPI. If we bump
+example requirements.txt files to require a prerelease version,
+Railway deployments will fail because pip looks at PyPI by default.
+
+Now bump_version.py only updates example requirements for stable
+releases, ensuring deployed examples always use versions available
+on PyPI. (c86bec5)
+
+## [0.1.20-rc.1] - 2025-12-04
+
+
+### Added
+
+- Feat(release): add two-tier staging/production release system (#53)
+
+* feat(release): add two-tier staging/production release system
+
+Implement automatic staging releases and manual production releases:
+
+- Staging: Automatic on push to main (PyPI prerelease, npm @next, staging-* Docker)
+- Production: Manual workflow dispatch (PyPI, npm @latest, vX.Y.Z + latest Docker)
+
+Changes:
+- Add push trigger with path filters for automatic staging
+- Replace release_channel with release_environment input
+- Unified PyPI publishing for both staging (prerelease) and production
+- Split npm publishing: @next tag (staging) vs @latest (production)
+- Conditional Docker tagging: staging-X.Y.Z vs vX.Y.Z + latest
+- Add install-staging.sh for testing prerelease binaries
+- Update RELEASE.md with two-tier documentation
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+* refactor(install): consolidate staging into single install.sh with --staging flag
+
+Instead of separate install.sh and install-staging.sh scripts:
+- Single install.sh handles both production and staging
+- Use --staging flag or STAGING=1 env var for prerelease installs
+- Eliminates code drift between scripts
+
+Usage:
+  Production: curl -fsSL .../install.sh | bash
+  Staging:    curl -fsSL .../install.sh | bash -s -- --staging
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude <noreply@anthropic.com> (3bd748d)
+
+- Feat(sdk/typescript): expand AI provider support to 10 providers
+
+Add 6 new AI providers to the TypeScript SDK:
+- Google (Gemini models)
+- Mistral AI
+- Groq
+- xAI (Grok)
+- DeepSeek
+- Cohere
+
+Also add explicit handling for OpenRouter and Ollama with sensible defaults.
+
+Changes:
+- Update AIConfig type with new provider options
+- Refactor buildModel() with switch statement for all providers
+- Refactor buildEmbeddingModel() with proper embedding support
+  (Google, Mistral, Cohere have native embedding; others throw)
+- Add 27 unit tests for provider selection and embedding support
+- Install @ai-sdk/google, @ai-sdk/mistral, @ai-sdk/groq,
+  @ai-sdk/xai, @ai-sdk/deepseek, @ai-sdk/cohere packages
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com> (b06b5b5)
+
+
+
+### Other
+
+- Update versions (a7912f5)
+
+## [0.1.19] - 2025-12-04
+
+
+### Fixed
+
+- Fix(ui): add API key header to sidebar execution details fetch
+
+The useNodeDetails hook was making a raw fetch() call without including
+the X-API-Key header, causing 401 errors in staging where API key
+authentication is enabled. Other API calls in the codebase use
+fetchWrapper functions that properly inject the key. (f0ec542)
+
+## [0.1.18] - 2025-12-03
+
+
+### Fixed
+
+- Fix(sdk): inject API key into all HTTP requests
+
+The Python SDK was not including the X-API-Key header in HTTP requests
+made through AgentFieldClient._async_request(), causing 401 errors when
+the control plane has authentication enabled.
+
+This fix injects the API key into request headers automatically when:
+- The client has an api_key configured
+- The header isn't already set (avoids overwriting explicit headers)
+
+Fixes async status updates and memory operations (vector search, etc.)
+that were failing with 401 Unauthorized.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com> (97673bc)
+
+## [0.1.17] - 2025-12-03
+
+
+### Fixed
+
+- Fix(control-plane): remove redundant WebSocket origin check
+
+The WebSocket upgrader's CheckOrigin was rejecting server-to-server
+connections (like from Python SDK agents) that don't have an Origin
+header. This caused 403 errors when agents tried to connect to memory
+events WebSocket endpoint with auth enabled.
+
+The origin check was redundant because:
+1. Auth middleware already validates API keys before this handler
+2. If auth is enabled, only valid API key holders reach this point
+3. If auth is disabled, all connections are allowed anyway
+
+Removes the origin checking logic and simplifies NewMemoryEventsHandler
+to just take the storage provider.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com> (44f05c4)
+
+## [0.1.16] - 2025-12-03
+
+
+### Fixed
+
+- Fix(example): use IPv4 binding for documentation-chatbot
+
+The documentation chatbot was binding to `::` (IPv6 all interfaces) which
+causes Railway internal networking to fail with "connection refused" since
+Railway routes traffic over IPv4.
+
+Removed explicit host parameter to use the SDK default of `0.0.0.0` which
+binds to IPv4 all interfaces.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com> (2c1b205)
+
+- Fix(python-sdk): include API key in memory events WebSocket connections
+
+The MemoryEventClient was not including the X-API-Key header when
+connecting to the memory events WebSocket endpoint, causing 401 errors
+when the control plane has authentication enabled.
+
+Changes:
+- Add optional api_key parameter to MemoryEventClient constructor
+- Include X-API-Key header in WebSocket connect() method
+- Include X-API-Key header in history() method (both httpx and requests)
+- Pass api_key from Agent to MemoryEventClient in both instantiation sites
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com> (eda95fc)
+
+
+
+### Other
+
+- Revert "fix(example): use IPv4 binding for documentation-chatbot"
+
+This reverts commit 2c1b2053e37f4fcc968ad0805b71ef89cf9d6d9d. (576a96c)
+
+## [0.1.15] - 2025-12-03
+
+
+### Fixed
+
+- Fix(python-sdk): update test mocks for api_key parameter
+
+Update test helpers and mocks to accept the new api_key parameter:
+- Add api_key field to StubAgent dataclass
+- Add api_key parameter to _FakeDIDManager and _FakeVCGenerator
+- Add headers parameter to VC generator test mocks
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com> (301e276)
+
+- Fix(python-sdk): add missing API key headers to DID/VC and workflow methods
+
+Comprehensive fix for API key authentication across all SDK HTTP requests:
+
+DID Manager (did_manager.py):
+- Added api_key parameter to __init__
+- Added _get_auth_headers() helper method
+- Fixed register_agent() to include X-API-Key header
+- Fixed resolve_did() to include X-API-Key header
+
+VC Generator (vc_generator.py):
+- Added api_key parameter to __init__
+- Added _get_auth_headers() helper method
+- Fixed generate_execution_vc() to include X-API-Key header
+- Fixed verify_vc() to include X-API-Key header
+- Fixed get_workflow_vc_chain() to include X-API-Key header
+- Fixed create_workflow_vc() to include X-API-Key header
+- Fixed export_vcs() to include X-API-Key header
+
+Agent Field Handler (agent_field_handler.py):
+- Fixed _send_heartbeat() to include X-API-Key header
+
+Agent (agent.py):
+- Fixed emit_workflow_event() to include X-API-Key header
+- Updated _initialize_did_system() to pass api_key to DIDManager and VCGenerator
+
+All HTTP requests to AgentField control plane now properly include authentication headers when API key is configured.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com> (2517549)
+
+- Fix(python-sdk): add missing API key headers to sync methods
+
+Add authentication headers to register_node(), update_health(), and
+get_nodes() methods that were missing X-API-Key headers in requests.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com> (0c2977d)
+
+
+
+### Other
+
+- Add Go SDK CallLocal workflow tracking (64c6217)
+
+- Fix Python SDK to include API key in register/heartbeat requests
+
+The SDK's AgentFieldClient stored the api_key but several methods were
+not including it in their HTTP requests, causing 401 errors when
+authentication is enabled on the control plane:
+
+- register_agent()
+- register_agent_with_status()
+- send_enhanced_heartbeat() / send_enhanced_heartbeat_sync()
+- notify_graceful_shutdown() / notify_graceful_shutdown_sync()
+
+Also updated documentation-chatbot example to pass AGENTFIELD_API_KEY
+from environment to the Agent constructor.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com> (1e6a095)
+
+## [0.1.14] - 2025-12-03
+
+
+### Added
+
+- Feat: expose api_key at Agent level and fix test lint issues
+
+- Add api_key parameter to Agent class constructor
+- Pass api_key to AgentFieldClient for authentication
+- Document api_key parameter in Agent docstring
+- Fix unused loop variable in ensure_event_loop test fixture
+
+Addresses reviewer feedback that api_key should be exposed at Agent
+level since end users don't interact directly with AgentFieldClient.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com> (6567bd0)
+
+- Feat: add API key authentication to control plane and SDKs
+
+This adds optional API key authentication to the AgentField control plane
+with support in all SDKs (Python, Go, TypeScript).
+
+## Control Plane Changes
+
+- Add `api_key` config option in agentfield.yaml
+- Add HTTP auth middleware (X-API-Key header, Bearer token, query param)
+- Add gRPC auth interceptor (x-api-key metadata, Bearer token)
+- Skip auth for /api/v1/health, /metrics, and /ui/* paths
+- UI prompts for API key when auth is required and stores in localStorage
+
+## SDK Changes
+
+- Python: Add `api_key` parameter to AgentFieldClient
+- Go: Add `WithAPIKey()` option to client
+- TypeScript: Add `apiKey` option to client config
+
+## Tests
+
+- Add comprehensive HTTP auth middleware tests (14 tests)
+- Add gRPC auth interceptor tests (11 tests)
+- Add Python SDK auth tests (17 tests)
+- Add Go SDK auth tests (10 tests)
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com> (3f8e45c)
+
+
+
+### Fixed
+
+- Fix: resolve flaky SSE decoder test in Go SDK
+
+- Persist accumulated buffer across Decode() calls in SSEDecoder
+- Check for complete messages in buffer before reading more data
+- Add synchronization in test to prevent handler from closing early
+- Update test expectation for multiple chunks (now correctly returns 2)
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com> (32d6d6d)
+
+- Fix: update test helper to accept api_key parameter
+
+Update _FakeAgentFieldClient and _agentfield_client_factory to accept
+the new api_key parameter that was added to AgentFieldClient.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com> (092f8e0)
+
+- Fix: remove unused import and variable in test_client_auth
+
+- Remove unused `requests` import
+- Remove unused `result` variable assignment
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com> (8b93711)
+
+- Fix: stop reasoner raw JSON editor from resetting (c604833)
+
+- Fix(ci): add packages:write permission to publish job for GHCR push
+
+The publish job had its own permissions block that overrode the
+workflow-level permissions. Added packages:write to allow Docker
+image push to ghcr.io.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com> (269ac29)
+
+
+
+### Other
+
+- Updated favcoin (d1712c2)
+
+
+
+### Testing
+
+- Test: add tests for Agent and AgentRouter api_key exposure
+
+- Test Agent stores api_key and passes it to client
+- Test Agent works without api_key
+- Test AgentRouter delegates api_key to attached agent
+- Test AgentRouter delegates client to attached agent
+- Test unattached router raises RuntimeError
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com> (31cd0b1)
+
 ## [0.1.13] - 2025-12-02
 
 

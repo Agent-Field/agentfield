@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { getGlobalApiKey } from '../services/api';
 
 /**
  * Configuration options for SSE connection
@@ -184,9 +185,16 @@ export function useSSE<T = any>(
     closeConnection();
 
     try {
-      const eventSource = new EventSource(url);
+      let finalUrl = url;
+      const apiKey = getGlobalApiKey();
+      if (apiKey) {
+        const separator = url.includes('?') ? '&' : '?';
+        finalUrl = `${url}${separator}api_key=${encodeURIComponent(apiKey)}`;
+      }
+
+      const eventSource = new EventSource(finalUrl);
       eventSourceRef.current = eventSource;
-      console.log('🔌 SSE: EventSource created for URL:', url);
+      console.log('🔌 SSE: EventSource created for URL:', finalUrl);
 
       eventSource.onopen = () => {
         if (!mountedRef.current) return;

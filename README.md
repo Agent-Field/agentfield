@@ -6,6 +6,8 @@
 
 ### **Deploy, Scale, Observe, and Prove.**
 
+*When AI moves from chatbots into backends—making decisions, not just answering questions—it needs infrastructure, not frameworks.*
+
 [![License](https://img.shields.io/badge/license-Apache%202.0-7c3aed.svg?style=flat&labelColor=1e1e2e)](LICENSE)
 [![Downloads](https://img.shields.io/github/downloads/Agent-Field/agentfield/total?style=flat&logo=github&logoColor=white&color=7c3aed&labelColor=1e1e2e)](https://github.com/Agent-Field/agentfield/releases)
 [![Last Commit](https://img.shields.io/github/last-commit/Agent-Field/agentfield?style=flat&logo=git&logoColor=white&color=7c3aed&labelColor=1e1e2e)](https://github.com/Agent-Field/agentfield/commits/main)
@@ -29,17 +31,34 @@
 
 **AgentField is the backend infrastructure layer for autonomous AI.**
 
-AI has outgrown frameworks. When agents move from answering questions to making decisions—approving refunds, coordinating supply chains, managing portfolios—they need backend infrastructure, not prompt wrappers.
+AI has outgrown frameworks and is moving from chatbots into backends—making decisions about refunds, coordinating supply chains, managing portfolios. These agents need infrastructure, not prompt wrappers.
 
-AgentField is an open-source **control plane** that treats AI agents as first-class backend services. The control plane handles the hard parts like:
+AgentField is an open-source **control plane** that treats AI agents as first-class backend services and makes agents production-ready.
 
+**Scale Infrastructure** *(think: Kubernetes)*
 - **Routing & Discovery**: Agents find and call each other through standard REST APIs
 - **Async Execution**: Fire-and-forget tasks that run for minutes, hours, or days
 - **Durable State**: Built-in memory with vector search—no Redis or Pinecone required
 - **Observability**: Automatic workflow DAGs, Prometheus metrics, structured logs
-- **Trust**: W3C DIDs and Verifiable Credentials for compliance-ready audit trails
+
+**Trust Infrastructure** *(think: Okta, rebuilt for agents)*
+- **W3C DIDs**: Every agent gets a cryptographic identity—not a shared API key
+- **Verifiable Credentials**: Tamper-proof audit trails for every action
+- **Policy Enforcement**: Boundaries enforced by infrastructure, not prompts
 
 Write [Python](https://agentfield.ai/api/python-sdk/overview), [Go](https://agentfield.ai/api/go-sdk/overview), [TypeScript](https://agentfield.ai/api/typescript-sdk/overview), or call via [REST](https://agentfield.ai/api/rest-api/overview). Get production infrastructure automatically.
+
+---
+
+## The AI Backend
+
+Software keeps adding layers when complexity demands it. Frontend/backend separation. Data lakes and pipelines. Now: a **reasoning layer** that sits alongside your services, making decisions that used to be hardcoded.
+
+We call this the AI Backend. Not a chatbot, not a copilot—infrastructure for software that can think.
+
+**Guided autonomy:** Agents that reason freely within boundaries you define. Predictable enough to trust. Flexible enough to be useful.
+
+📖 **[Read: The AI Backend](https://agentfield.ai/blog/ai-backend)** — Our thesis on why every serious backend will need a reasoning layer.
 
 ---
 
@@ -211,7 +230,10 @@ af init my-agent  # No --defaults flag
 <summary><strong>Docker / Troubleshooting</strong></summary>
 
 If running AgentField in Docker, set a callback URL so the Control Plane can reach your agent:
-
+```bash
+docker run -p 8080:8080 ghcr.io/agent-field/agentfield-control-plane:latest
+```
+for agent nodes
 ```bash
 export AGENT_CALLBACK_URL="http://host.docker.internal:8001"
 ```
@@ -313,7 +335,7 @@ AgentField isn't a framework you extend. It's infrastructure you deploy on.
 
 ## Identity & Trust
 
-When your agents make decisions that affect money, data, or systems, "check the logs" isn't enough.
+When agents move from answering questions to making decisions, approving refunds, coordinating supply chains, moving money, "check the logs" isn't enough.
 
 AgentField gives every agent a [W3C Decentralized Identifier (DID)](https://www.w3.org/TR/did-core/)—a cryptographic identity. Every execution produces a Verifiable Credential: a tamper-proof receipt showing exactly what happened, who authorized it, and the full delegation chain.
 
@@ -322,7 +344,11 @@ AgentField gives every agent a [W3C Decentralized Identifier (DID)](https://www.
 curl http://localhost:8080/api/ui/v1/workflows/{workflow_id}/vc-chain
 ```
 
-For compliance teams: mathematical proof, not trust. [Full documentation](https://agentfield.ai/docs/core-concepts/identity-and-trust).
+For compliance teams: mathematical proof, not trust.
+
+📖 **[Read: IAM for AI Backends](https://agentfield.ai/blog/iam-ai-backends)** — Why OAuth can't secure autonomous software, and what replaces it.
+
+[Full documentation →](https://agentfield.ai/docs/core-concepts/identity-and-trust)
 
 
 
@@ -339,19 +365,33 @@ For compliance teams: mathematical proof, not trust. [Full documentation](https:
 ## Is AgentField for you?
 
 ### Yes if:
+- You're building an **AI backend** - agents that make decisions, not just answer questions
 - You're building **multi-agent systems** that need to coordinate
 - You need **production infrastructure**: async, retries, observability
 - You want agents as **standard backend services** with REST APIs
 - You need **audit trails** for compliance or debugging
 - You have **multiple teams** deploying agents independently
 
-### No if:
-- You're building a **single chatbot** (use LangChain, CrewAI—they're great for that)
-- You're **just prototyping** and don't need production concerns yet
+### Not yet if:
+- You're building a **single chatbot** (prompt orchestration frameworks like LangChain, CrewAI, LlamaIndex etc.. are great for that)
+- You're **prototyping** and don't need production concerns yet
+
+*When you're ready to ship agents to production, we'll be here.*
 
 ---
 
-If you are **Backend Engineers** shipping AI into production who want standard APIs, not magic or **Platform Teams** who don't want to build another homegrown orchestrator or **Enterprise Teams** in regulated industries (Finance, Health) needing audit trails.or **Frontend Developers** who just want to `fetch()` an agent without Python headaches, agentfield is built for you.
+If you are **Backend Engineers** shipping AI into production who want standard APIs, not magic or **Platform Teams** who don't want to build another homegrown orchestrator or **Enterprise Teams** in regulated industries (Finance, Health) needing audit trails or **Frontend Developers** who just want to `fetch()` an agent without Python headaches, AgentField is built for you.
+
+---
+
+## Learn More
+
+- 📖 **[The AI Backend](https://agentfield.ai/blog/ai-backend)** — Why every backend needs a reasoning layer
+- 📖 **[IAM for AI Backends](https://agentfield.ai/blog/iam-ai-backends)** — Why agents need identity, not just API keys
+- 📚 **[Documentation](https://agentfield.ai/docs)** — Full technical reference
+- 🚀 **[Examples](https://agentfield.ai/examples)** — Production patterns and use cases
+
+---
 
 ## Community
 

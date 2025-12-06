@@ -7,6 +7,12 @@ import {
 } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
+import { createGoogleGenerativeAI } from '@ai-sdk/google';
+import { createMistral } from '@ai-sdk/mistral';
+import { createGroq } from '@ai-sdk/groq';
+import { createXai } from '@ai-sdk/xai';
+import { createDeepSeek } from '@ai-sdk/deepseek';
+import { createCohere } from '@ai-sdk/cohere';
 import type { z } from 'zod';
 import type { AIConfig } from '../types/agent.js';
 import { StatelessRateLimiter } from './RateLimiter.js';
@@ -163,41 +169,144 @@ export class AIClient {
     const provider = options.provider ?? this.config.provider ?? 'openai';
     const modelName = options.model ?? this.config.model ?? 'gpt-4o';
 
-    if (provider === 'anthropic') {
-      const anthropic = createAnthropic({
-        apiKey: this.config.apiKey,
-        baseURL: this.config.baseUrl
-      });
-      return anthropic(modelName);
+    switch (provider) {
+      case 'anthropic': {
+        const anthropic = createAnthropic({
+          apiKey: this.config.apiKey,
+          baseURL: this.config.baseUrl
+        });
+        return anthropic(modelName);
+      }
+
+      case 'google': {
+        const google = createGoogleGenerativeAI({
+          apiKey: this.config.apiKey,
+          baseURL: this.config.baseUrl
+        });
+        return google(modelName);
+      }
+
+      case 'mistral': {
+        const mistral = createMistral({
+          apiKey: this.config.apiKey,
+          baseURL: this.config.baseUrl
+        });
+        return mistral(modelName);
+      }
+
+      case 'groq': {
+        const groq = createGroq({
+          apiKey: this.config.apiKey,
+          baseURL: this.config.baseUrl
+        });
+        return groq(modelName);
+      }
+
+      case 'xai': {
+        const xai = createXai({
+          apiKey: this.config.apiKey,
+          baseURL: this.config.baseUrl
+        });
+        return xai(modelName);
+      }
+
+      case 'deepseek': {
+        const deepseek = createDeepSeek({
+          apiKey: this.config.apiKey,
+          baseURL: this.config.baseUrl
+        });
+        return deepseek(modelName);
+      }
+
+      case 'cohere': {
+        const cohere = createCohere({
+          apiKey: this.config.apiKey,
+          baseURL: this.config.baseUrl
+        });
+        return cohere(modelName);
+      }
+
+      case 'openrouter': {
+        // OpenRouter is OpenAI-compatible
+        const openrouter = createOpenAI({
+          apiKey: this.config.apiKey,
+          baseURL: this.config.baseUrl ?? 'https://openrouter.ai/api/v1'
+        });
+        return openrouter(modelName);
+      }
+
+      case 'ollama': {
+        // Ollama is OpenAI-compatible
+        const ollama = createOpenAI({
+          apiKey: this.config.apiKey ?? 'ollama', // Ollama doesn't need real key
+          baseURL: this.config.baseUrl ?? 'http://localhost:11434/v1'
+        });
+        return ollama(modelName);
+      }
+
+      case 'openai':
+      default: {
+        const openai = createOpenAI({
+          apiKey: this.config.apiKey,
+          baseURL: this.config.baseUrl
+        });
+        return openai(modelName);
+      }
     }
-
-    // Default to OpenAI / OpenRouter compatible models
-    const openai = createOpenAI({
-      apiKey: this.config.apiKey,
-      baseURL: this.config.baseUrl
-    });
-
-    return openai(modelName);
   }
 
   private buildEmbeddingModel(options: AIEmbeddingOptions) {
     const provider = options.provider ?? this.config.provider ?? 'openai';
     const modelName = options.model ?? this.config.embeddingModel ?? 'text-embedding-3-small';
 
-    if (provider === 'anthropic') {
-      throw new Error('Embedding generation is not supported for Anthropic provider');
+    // Providers without embedding support
+    const noEmbeddingProviders = ['anthropic', 'xai', 'deepseek', 'groq'];
+    if (noEmbeddingProviders.includes(provider)) {
+      throw new Error(`Embedding generation is not supported for ${provider} provider`);
     }
 
-    const openai = createOpenAI({
-      apiKey: this.config.apiKey,
-      baseURL: this.config.baseUrl
-    });
+    switch (provider) {
+      case 'google': {
+        const google = createGoogleGenerativeAI({
+          apiKey: this.config.apiKey,
+          baseURL: this.config.baseUrl
+        });
+        return google.textEmbeddingModel(modelName);
+      }
 
-    if (typeof openai.embedding !== 'function') {
-      throw new Error('Embedding model is not available for the configured provider');
+      case 'mistral': {
+        const mistral = createMistral({
+          apiKey: this.config.apiKey,
+          baseURL: this.config.baseUrl
+        });
+        return mistral.textEmbeddingModel(modelName);
+      }
+
+      case 'cohere': {
+        const cohere = createCohere({
+          apiKey: this.config.apiKey,
+          baseURL: this.config.baseUrl
+        });
+        return cohere.textEmbeddingModel(modelName);
+      }
+
+      case 'openai':
+      case 'openrouter':
+      case 'ollama':
+      default: {
+        const openai = createOpenAI({
+          apiKey: this.config.apiKey ?? (provider === 'ollama' ? 'ollama' : undefined),
+          baseURL:
+            this.config.baseUrl ??
+            (provider === 'openrouter'
+              ? 'https://openrouter.ai/api/v1'
+              : provider === 'ollama'
+                ? 'http://localhost:11434/v1'
+                : undefined)
+        });
+        return openai.embedding(modelName);
+      }
     }
-
-    return openai.embedding(modelName);
   }
 
   private getRateLimiter() {

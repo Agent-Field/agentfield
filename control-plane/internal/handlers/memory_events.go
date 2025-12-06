@@ -18,20 +18,22 @@ import (
 
 // MemoryEventsHandler handles real-time memory event subscriptions.
 type MemoryEventsHandler struct {
-	storage storage.StorageProvider
+	storage  storage.StorageProvider
+	upgrader websocket.Upgrader
 }
 
 // NewMemoryEventsHandler creates a new MemoryEventsHandler.
+// Origin checking is not needed because auth middleware already validates API keys
+// before requests reach this handler.
 func NewMemoryEventsHandler(storage storage.StorageProvider) *MemoryEventsHandler {
 	return &MemoryEventsHandler{
 		storage: storage,
+		upgrader: websocket.Upgrader{
+			CheckOrigin: func(r *http.Request) bool {
+				return true
+			},
+		},
 	}
-}
-
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true // Allow all origins for now
-	},
 }
 
 func normalizePatterns(raw string) []string {
@@ -53,7 +55,7 @@ func normalizePatterns(raw string) []string {
 // WebSocketHandler handles WebSocket connections for memory events.
 func (h *MemoryEventsHandler) WebSocketHandler(c *gin.Context) {
 	ctx := c.Request.Context()
-	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	conn, err := h.upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		// upgrader.Upgrade automatically sends an error response, so just return
 		return
@@ -115,7 +117,6 @@ func (h *MemoryEventsHandler) SSEHandler(c *gin.Context) {
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
 	c.Writer.Header().Set("Cache-Control", "no-cache")
 	c.Writer.Header().Set("Connection", "keep-alive")
-	c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 
 	// Parse query parameters for filtering
 	scope := c.Query("scope")

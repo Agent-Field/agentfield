@@ -173,9 +173,12 @@ class AgentFieldHandler:
             return  # Skip heartbeat if not connected to AgentField
 
         try:
+            headers = {"Content-Type": "application/json"}
+            if self.agent.api_key:
+                headers["X-API-Key"] = self.agent.api_key
             response = requests.post(
                 f"{self.agent.agentfield_server}/api/v1/nodes/{self.agent.node_id}/heartbeat",
-                headers={"Content-Type": "application/json"},
+                headers=headers,
                 timeout=5,
             )
             if response.status_code == 200:

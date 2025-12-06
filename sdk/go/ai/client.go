@@ -239,32 +239,27 @@ func (c *Client) StreamComplete(ctx context.Context, prompt string, opts ...Opti
 
 // SSEDecoder decodes Server-Sent Events from a stream.
 type SSEDecoder struct {
-	reader io.Reader
+	reader      io.Reader
+	accumulated []byte
+	buf         []byte
 }
 
 // NewSSEDecoder creates a new SSE decoder.
 func NewSSEDecoder(r io.Reader) *SSEDecoder {
-	return &SSEDecoder{reader: r}
+	return &SSEDecoder{
+		reader: r,
+		buf:    make([]byte, 8192),
+	}
 }
 
 // Decode reads and decodes the next SSE chunk.
 func (d *SSEDecoder) Decode() (StreamChunk, error) {
-	buf := make([]byte, 8192)
-	var accumulated []byte
-
 	for {
-		n, err := d.reader.Read(buf)
-		if err != nil {
-			return StreamChunk{}, err
-		}
-
-		accumulated = append(accumulated, buf[:n]...)
-		data := string(accumulated)
-
-		// Look for complete SSE message
+		// First check if we already have a complete message in accumulated buffer
+		data := string(d.accumulated)
 		if idx := strings.Index(data, "\n\n"); idx >= 0 {
 			message := data[:idx]
-			accumulated = []byte(data[idx+2:])
+			d.accumulated = []byte(data[idx+2:])
 
 			// Parse SSE message
 			if strings.HasPrefix(message, "data: ") {
@@ -283,7 +278,16 @@ func (d *SSEDecoder) Decode() (StreamChunk, error) {
 
 				return chunk, nil
 			}
+			continue // Non-data message, try next
 		}
+
+		// Need more data
+		n, err := d.reader.Read(d.buf)
+		if err != nil {
+			return StreamChunk{}, err
+		}
+
+		d.accumulated = append(d.accumulated, d.buf[:n]...)
 	}
 }
 

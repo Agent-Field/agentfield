@@ -37,7 +37,7 @@ def test_generate_execution_vc_success(monkeypatch):
         "created_at": datetime.utcnow().isoformat() + "Z",
     }
 
-    def fake_post(url, json=None, timeout=None):
+    def fake_post(url, json=None, headers=None, timeout=None):
         assert url.endswith("/execution/vc")
         return SimpleNamespace(status_code=200, json=lambda: payload)
 
@@ -63,7 +63,7 @@ def test_generate_execution_vc_disabled():
 def test_verify_vc(monkeypatch):
     generator = VCGenerator("http://agentfield")
 
-    def fake_post(url, json=None, timeout=None):
+    def fake_post(url, json=None, headers=None, timeout=None):
         return SimpleNamespace(status_code=200, json=lambda: {"valid": True})
 
     monkeypatch.setattr("agentfield.vc_generator.requests.post", fake_post)
@@ -85,7 +85,7 @@ def test_create_workflow_vc(monkeypatch):
         "completed_steps": 1,
     }
 
-    def fake_post(url, json=None, timeout=None):
+    def fake_post(url, json=None, headers=None, timeout=None):
         return SimpleNamespace(status_code=200, json=lambda: payload)
 
     monkeypatch.setattr("agentfield.vc_generator.requests.post", fake_post)
@@ -96,7 +96,7 @@ def test_create_workflow_vc(monkeypatch):
 def test_get_workflow_vc_chain(monkeypatch):
     generator = VCGenerator("http://agentfield")
 
-    def fake_get(url, timeout=None):
+    def fake_get(url, headers=None, timeout=None):
         return SimpleNamespace(status_code=200, json=lambda: {"chain": ["vc-1"]})
 
     monkeypatch.setattr("agentfield.vc_generator.requests.get", fake_get)

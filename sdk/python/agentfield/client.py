@@ -86,10 +86,12 @@ class AgentFieldClient:
     def __init__(
         self,
         base_url: str = "http://localhost:8080",
+        api_key: Optional[str] = None,
         async_config: Optional[AsyncConfig] = None,
     ):
         self.base_url = base_url
         self.api_base = f"{base_url}/api/v1"
+        self.api_key = api_key
 
         # Async execution components
         self.async_config = async_config or AsyncConfig()
@@ -141,12 +143,19 @@ class AgentFieldClient:
                 sanitized[key] = str(value)
         return sanitized
 
+    def _get_auth_headers(self) -> Dict[str, str]:
+        """Return auth headers if configured."""
+        if not self.api_key:
+            return {}
+        return {"X-API-Key": self.api_key}
+
     def _get_headers_with_context(
         self, headers: Optional[Dict[str, str]] = None
     ) -> Dict[str, str]:
         """Merge caller headers with the active workflow context headers."""
 
-        merged = dict(headers or {})
+        merged = self._get_auth_headers()
+        merged.update(headers or {})
         context = getattr(self, "_current_workflow_context", None)
         if context and hasattr(context, "to_headers"):
             try:
@@ -348,6 +357,13 @@ class AgentFieldClient:
 
     async def _async_request(self, method: str, url: str, **kwargs):
         """Perform an HTTP request using the shared async client with sync fallback."""
+        # Inject API key into headers if available
+        if self.api_key:
+            if "headers" not in kwargs:
+                kwargs["headers"] = {}
+            if "X-API-Key" not in kwargs["headers"]:
+                kwargs["headers"]["X-API-Key"] = self.api_key
+
         try:
             client = await self.get_async_http_client()
         except RuntimeError:
@@ -441,7 +457,11 @@ class AgentFieldClient:
 
     def register_node(self, node_data: Dict[str, Any]) -> Dict[str, Any]:
         """Register agent node with AgentField server"""
-        response = requests.post(f"{self.api_base}/nodes/register", json=node_data)
+        response = requests.post(
+            f"{self.api_base}/nodes/register",
+            json=node_data,
+            headers=self._get_auth_headers(),
+        )
         response.raise_for_status()  # Raise an exception for bad status codes
         return response.json()
 
@@ -450,14 +470,19 @@ class AgentFieldClient:
     ) -> Dict[str, Any]:
         """Update node health status"""
         response = requests.put(
-            f"{self.api_base}/nodes/{node_id}/health", json=health_data
+            f"{self.api_base}/nodes/{node_id}/health",
+            json=health_data,
+            headers=self._get_auth_headers(),
         )
         response.raise_for_status()  # Raise an exception for bad status codes
         return response.json()
 
     def get_nodes(self) -> Dict[str, Any]:
         """Get all registered nodes"""
-        response = requests.get(f"{self.api_base}/nodes")
+        response = requests.get(
+            f"{self.api_base}/nodes",
+            headers=self._get_auth_headers(),
+        )
         response.raise_for_status()  # Raise an exception for bad status codes
         return response.json()
 
@@ -527,6 +552,7 @@ class AgentFieldClient:
                 "POST",
                 f"{self.api_base}/nodes/register",
                 json=registration_data,
+                headers=self._get_auth_headers(),
                 timeout=30.0,
             )
             payload: Optional[Dict[str, Any]] = None
@@ -869,11 +895,13 @@ class AgentFieldClient:
             True if heartbeat was successful, False otherwise
         """
         try:
+            headers = {"Content-Type": "application/json"}
+            headers.update(self._get_auth_headers())
             response = await self._async_request(
                 "POST",
                 f"{self.api_base}/nodes/{node_id}/heartbeat",
                 json=heartbeat_data.to_dict(),
-                headers={"Content-Type": "application/json"},
+                headers=headers,
                 timeout=5.0,
             )
             response.raise_for_status()
@@ -895,10 +923,12 @@ class AgentFieldClient:
             True if heartbeat was successful, False otherwise
         """
         try:
+            headers = {"Content-Type": "application/json"}
+            headers.update(self._get_auth_headers())
             response = requests.post(
                 f"{self.api_base}/nodes/{node_id}/heartbeat",
                 json=heartbeat_data.to_dict(),
-                headers={"Content-Type": "application/json"},
+                headers=headers,
                 timeout=5.0,
             )
             response.raise_for_status()
@@ -917,10 +947,12 @@ class AgentFieldClient:
             True if notification was successful, False otherwise
         """
         try:
+            headers = {"Content-Type": "application/json"}
+            headers.update(self._get_auth_headers())
             response = await self._async_request(
                 "POST",
                 f"{self.api_base}/nodes/{node_id}/shutdown",
-                headers={"Content-Type": "application/json"},
+                headers=headers,
                 timeout=5.0,
             )
             response.raise_for_status()
@@ -939,9 +971,11 @@ class AgentFieldClient:
             True if notification was successful, False otherwise
         """
         try:
+            headers = {"Content-Type": "application/json"}
+            headers.update(self._get_auth_headers())
             response = requests.post(
                 f"{self.api_base}/nodes/{node_id}/shutdown",
-                headers={"Content-Type": "application/json"},
+                headers=headers,
                 timeout=5.0,
             )
             response.raise_for_status()
@@ -1007,6 +1041,7 @@ class AgentFieldClient:
                 "POST",
                 f"{self.api_base}/nodes/register",
                 json=registration_data,
+                headers=self._get_auth_headers(),
                 timeout=10.0,
             )
 

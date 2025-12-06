@@ -1,6 +1,43 @@
 import { Buffer } from 'node:buffer';
 import axios, { type AxiosInstance } from 'axios';
 
+// ============================================================================
+// DID Identity Types
+// ============================================================================
+
+export interface DIDIdentity {
+  did: string;
+  privateKeyJwk: string;
+  publicKeyJwk: string;
+  derivationPath: string;
+  componentType: string;
+  functionName?: string;
+}
+
+export interface DIDIdentityPackage {
+  agentDid: DIDIdentity;
+  reasonerDids: Record<string, DIDIdentity>;
+  skillDids: Record<string, DIDIdentity>;
+  agentfieldServerId: string;
+}
+
+export interface DIDRegistrationRequest {
+  agentNodeId: string;
+  reasoners: Array<{ id: string; [key: string]: any }>;
+  skills: Array<{ id: string; [key: string]: any }>;
+}
+
+export interface DIDRegistrationResponse {
+  success: boolean;
+  identityPackage?: DIDIdentityPackage;
+  message?: string;
+  error?: string;
+}
+
+// ============================================================================
+// Credential Types
+// ============================================================================
+
 export interface ExecutionCredential {
   vcId: string;
   executionId: string;
@@ -80,6 +117,68 @@ export class DidClient {
   constructor(baseUrl: string, defaultHeaders?: Record<string, string | number | boolean | undefined>) {
     this.http = axios.create({ baseURL: baseUrl.replace(/\/$/, '') });
     this.defaultHeaders = this.sanitizeHeaders(defaultHeaders ?? {});
+  }
+
+  /**
+   * Register an agent with the DID system and obtain an identity package.
+   * This must be called before generating VCs to get the caller/target DIDs.
+   */
+  async registerAgent(request: DIDRegistrationRequest): Promise<DIDRegistrationResponse> {
+    const payload = {
+      agent_node_id: request.agentNodeId,
+      reasoners: request.reasoners,
+      skills: request.skills
+    };
+
+    const res = await this.http.post('/api/v1/did/register', payload, {
+      headers: this.mergeHeaders()
+    });
+
+    const data = res.data ?? {};
+    if (!data.success) {
+      return {
+        success: false,
+        error: data.error ?? 'DID registration failed'
+      };
+    }
+
+    return {
+      success: true,
+      identityPackage: this.parseIdentityPackage(data.identity_package),
+      message: data.message
+    };
+  }
+
+  private parseIdentityPackage(pkg: any): DIDIdentityPackage {
+    const parseIdentity = (data: any): DIDIdentity => ({
+      did: data?.did ?? '',
+      privateKeyJwk: data?.private_key_jwk ?? '',
+      publicKeyJwk: data?.public_key_jwk ?? '',
+      derivationPath: data?.derivation_path ?? '',
+      componentType: data?.component_type ?? '',
+      functionName: data?.function_name
+    });
+
+    const reasonerDids: Record<string, DIDIdentity> = {};
+    if (pkg?.reasoner_dids) {
+      for (const [name, data] of Object.entries(pkg.reasoner_dids)) {
+        reasonerDids[name] = parseIdentity(data);
+      }
+    }
+
+    const skillDids: Record<string, DIDIdentity> = {};
+    if (pkg?.skill_dids) {
+      for (const [name, data] of Object.entries(pkg.skill_dids)) {
+        skillDids[name] = parseIdentity(data);
+      }
+    }
+
+    return {
+      agentDid: parseIdentity(pkg?.agent_did),
+      reasonerDids,
+      skillDids,
+      agentfieldServerId: pkg?.agentfield_server_id ?? ''
+    };
   }
 
   async generateCredential(params: GenerateCredentialParams): Promise<ExecutionCredential> {

@@ -8,8 +8,17 @@ import type {
   AsyncExecuteResponse,
   ExecutionStatusResponse
 } from '../types/execution';
+import { getGlobalApiKey } from './api';
 
 const API_BASE_URL = '/api/ui/v1';
+const withAuthHeaders = (headers?: HeadersInit) => {
+  const merged = new Headers(headers || {});
+  const apiKey = getGlobalApiKey();
+  if (apiKey) {
+    merged.set('X-API-Key', apiKey);
+  }
+  return merged;
+};
 
 export class ReasonersApiError extends Error {
   public status?: number;
@@ -44,7 +53,7 @@ export const reasonersApi = {
     const url = `${API_BASE_URL}/reasoners/all${params.toString() ? `?${params.toString()}` : ''}`;
 
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { headers: withAuthHeaders() });
 
       if (!response.ok) {
         throw new ReasonersApiError(
@@ -80,7 +89,7 @@ export const reasonersApi = {
     const url = `${API_BASE_URL}/reasoners/${encodeURIComponent(reasonerId)}/details`;
 
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { headers: withAuthHeaders() });
 
       if (!response.ok) {
         if (response.status === 404) {
@@ -112,9 +121,9 @@ export const reasonersApi = {
     try {
       const response = await fetch(url, {
         method: 'POST',
-        headers: {
+        headers: withAuthHeaders({
           'Content-Type': 'application/json',
-        },
+        }),
         body: JSON.stringify(request),
       });
 
@@ -166,9 +175,9 @@ export const reasonersApi = {
     try {
       const response = await fetch(url, {
         method: 'POST',
-        headers: {
+        headers: withAuthHeaders({
           'Content-Type': 'application/json',
-        },
+        }),
         body: JSON.stringify(request),
       });
 
@@ -213,7 +222,7 @@ export const reasonersApi = {
     const url = `/api/v1/executions/${encodeURIComponent(executionId)}`;
 
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { headers: withAuthHeaders() });
 
       if (!response.ok) {
         if (response.status === 404) {
@@ -255,7 +264,7 @@ export const reasonersApi = {
     const url = `${API_BASE_URL}/reasoners/${encodeURIComponent(reasonerId)}/metrics`;
 
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { headers: withAuthHeaders() });
 
       if (!response.ok) {
         throw new ReasonersApiError(
@@ -290,7 +299,7 @@ export const reasonersApi = {
     const url = `${API_BASE_URL}/reasoners/${encodeURIComponent(reasonerId)}/executions?${params.toString()}`;
 
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { headers: withAuthHeaders() });
 
       if (!response.ok) {
         throw new ReasonersApiError(
@@ -316,7 +325,7 @@ export const reasonersApi = {
     const url = `${API_BASE_URL}/reasoners/${encodeURIComponent(reasonerId)}/templates`;
 
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { headers: withAuthHeaders() });
 
       if (!response.ok) {
         throw new ReasonersApiError(
@@ -347,9 +356,9 @@ export const reasonersApi = {
     try {
       const response = await fetch(url, {
         method: 'POST',
-        headers: {
+        headers: withAuthHeaders({
           'Content-Type': 'application/json',
-        },
+        }),
         body: JSON.stringify(template),
       });
 
@@ -378,7 +387,10 @@ export const reasonersApi = {
     onError?: (error: Error) => void,
     onConnect?: () => void
   ): EventSource => {
-    const url = `${API_BASE_URL}/reasoners/events`;
+    const apiKey = getGlobalApiKey();
+    const url = apiKey
+      ? `${API_BASE_URL}/reasoners/events?api_key=${encodeURIComponent(apiKey)}`
+      : `${API_BASE_URL}/reasoners/events`;
     console.log('🔄 Attempting to create SSE connection to:', url);
     const eventSource = new EventSource(url);
 

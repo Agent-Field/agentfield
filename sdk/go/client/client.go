@@ -20,6 +20,7 @@ type Client struct {
 	baseURL    *url.URL
 	httpClient *http.Client
 	token      string
+	apiKey     string
 }
 
 // Option mutates Client configuration.
@@ -38,6 +39,13 @@ func WithHTTPClient(h *http.Client) Option {
 func WithBearerToken(token string) Option {
 	return func(c *Client) {
 		c.token = token
+	}
+}
+
+// WithAPIKey sets the X-API-Key header for each request.
+func WithAPIKey(key string) Option {
+	return func(c *Client) {
+		c.apiKey = key
 	}
 }
 
@@ -150,6 +158,9 @@ func (c *Client) do(ctx context.Context, method string, endpoint string, body an
 
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	if c.apiKey != "" {
+		req.Header.Set("X-API-Key", c.apiKey)
 	}
 
 	resp, err := c.httpClient.Do(req)

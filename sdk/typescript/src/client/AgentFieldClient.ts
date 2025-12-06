@@ -26,7 +26,12 @@ export class AgentFieldClient {
     const baseURL = (config.agentFieldUrl ?? 'http://localhost:8080').replace(/\/$/, '');
     this.http = axios.create({ baseURL });
     this.config = config;
-    this.defaultHeaders = this.sanitizeHeaders(config.defaultHeaders ?? {});
+
+    const mergedHeaders = { ...(config.defaultHeaders ?? {}) };
+    if (config.apiKey) {
+      mergedHeaders['X-API-Key'] = config.apiKey;
+    }
+    this.defaultHeaders = this.sanitizeHeaders(mergedHeaders);
   }
 
   async register(payload: any) {

@@ -61,15 +61,23 @@ class VCGenerator:
     - Integration with AgentField Server
     """
 
-    def __init__(self, agentfield_server_url: str):
+    def __init__(self, agentfield_server_url: str, api_key: Optional[str] = None):
         """
         Initialize VC Generator.
 
         Args:
             agentfield_server_url: URL of the AgentField Server
+            api_key: Optional API key for authentication
         """
         self.agentfield_server_url = agentfield_server_url.rstrip("/")
+        self.api_key = api_key
         self.enabled = False
+
+    def _get_auth_headers(self) -> Dict[str, str]:
+        """Return auth headers if API key is configured."""
+        if not self.api_key:
+            return {}
+        return {"X-API-Key": self.api_key}
 
     def set_enabled(self, enabled: bool):
         """Enable or disable VC generation."""
@@ -127,9 +135,12 @@ class VCGenerator:
             }
 
             # Send VC generation request to AgentField Server
+            headers = {"Content-Type": "application/json"}
+            headers.update(self._get_auth_headers())
             response = requests.post(
                 f"{self.agentfield_server_url}/api/v1/execution/vc",
                 json=vc_data,
+                headers=headers,
                 timeout=10,
             )
 
@@ -162,9 +173,12 @@ class VCGenerator:
         try:
             verification_data = {"vc_document": vc_document}
 
+            headers = {"Content-Type": "application/json"}
+            headers.update(self._get_auth_headers())
             response = requests.post(
                 f"{self.agentfield_server_url}/api/v1/did/verify",
                 json=verification_data,
+                headers=headers,
                 timeout=10,
             )
 
@@ -193,6 +207,7 @@ class VCGenerator:
         try:
             response = requests.get(
                 f"{self.agentfield_server_url}/api/v1/did/workflow/{workflow_id}/vc-chain",
+                headers=self._get_auth_headers(),
                 timeout=10,
             )
 
@@ -228,9 +243,12 @@ class VCGenerator:
                 "execution_vc_ids": execution_vc_ids,
             }
 
+            headers = {"Content-Type": "application/json"}
+            headers.update(self._get_auth_headers())
             response = requests.post(
                 f"{self.agentfield_server_url}/api/v1/did/workflow/{workflow_id}/vc",
                 json=workflow_data,
+                headers=headers,
                 timeout=10,
             )
 
@@ -265,6 +283,7 @@ class VCGenerator:
             response = requests.get(
                 f"{self.agentfield_server_url}/api/v1/did/export/vcs",
                 params=params,
+                headers=self._get_auth_headers(),
                 timeout=30,
             )
 

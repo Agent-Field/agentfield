@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/cli"
@@ -204,7 +205,13 @@ func runServer(cmd *cobra.Command, args []string) {
 func loadConfig(configFile string) (*config.Config, error) {
 	// Set environment variable prefixes
 	viper.SetEnvPrefix("AGENTFIELD")
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
+
+	// Explicitly bind environment variables for API auth config
+	// This is needed because Viper's AutomaticEnv only works for keys that exist in config
+	_ = viper.BindEnv("api.auth.api_key", "AGENTFIELD_API_KEY")
+	_ = viper.BindEnv("api.auth.api_key", "AGENTFIELD_API_AUTH_API_KEY")
 
 	// Get the directory where the binary is located for UI paths
 	execPath, err := os.Executable()

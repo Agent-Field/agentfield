@@ -1,4 +1,5 @@
 import type { ConfigurationSchema, AgentConfiguration, AgentPackage, AgentLifecycleInfo } from '../types/agentfield';
+import { getGlobalApiKey } from './api';
 
 const API_BASE = '/api/ui/v1';
 
@@ -12,6 +13,15 @@ export class ConfigurationApiError extends Error {
   }
 }
 
+const addAuthHeaders = (options: RequestInit = {}): RequestInit => {
+  const headers = new Headers(options.headers || {});
+  const apiKey = getGlobalApiKey();
+  if (apiKey) {
+    headers.set('X-API-Key', apiKey);
+  }
+  return { ...options, headers };
+};
+
 const fetchWithTimeout = async (url: string, options: RequestInit & { timeout?: number } = {}) => {
   const { timeout = 10000, ...fetchOptions } = options;
 
@@ -20,7 +30,7 @@ const fetchWithTimeout = async (url: string, options: RequestInit & { timeout?: 
 
   try {
     const response = await fetch(url, {
-      ...fetchOptions,
+      ...addAuthHeaders(fetchOptions),
       signal: controller.signal,
     });
     clearTimeout(timeoutId);
@@ -72,7 +82,7 @@ export const getAgentEnvFile = async (
   packageId: string
 ): Promise<EnvResponse> => {
   const url = `${API_BASE}/agents/${agentId}/env?packageId=${encodeURIComponent(packageId)}`;
-  const response = await fetch(url);
+  const response = await fetch(url, addAuthHeaders());
   return handleResponse(response);
 };
 
@@ -82,11 +92,11 @@ export const setAgentEnvFile = async (
   variables: Record<string, string>
 ): Promise<void> => {
   const url = `${API_BASE}/agents/${agentId}/env?packageId=${encodeURIComponent(packageId)}`;
-  const response = await fetch(url, {
+  const response = await fetch(url, addAuthHeaders({
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ variables }),
-  });
+  }));
   await handleResponse(response);
 };
 
@@ -96,11 +106,11 @@ export const patchAgentEnvFile = async (
   variables: Record<string, string>
 ): Promise<void> => {
   const url = `${API_BASE}/agents/${agentId}/env?packageId=${encodeURIComponent(packageId)}`;
-  const response = await fetch(url, {
+  const response = await fetch(url, addAuthHeaders({
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ variables }),
-  });
+  }));
   await handleResponse(response);
 };
 
@@ -110,19 +120,19 @@ export const deleteAgentEnvVar = async (
   key: string
 ): Promise<void> => {
   const url = `${API_BASE}/agents/${agentId}/env/${encodeURIComponent(key)}?packageId=${encodeURIComponent(packageId)}`;
-  const response = await fetch(url, { method: 'DELETE' });
+  const response = await fetch(url, addAuthHeaders({ method: 'DELETE' }));
   await handleResponse(response);
 };
 
 // Configuration Schema API
 export const getConfigurationSchema = async (agentId: string): Promise<ConfigurationSchema> => {
-  const response = await fetch(`${API_BASE}/agents/${agentId}/config/schema`);
+  const response = await fetch(`${API_BASE}/agents/${agentId}/config/schema`, addAuthHeaders());
   return handleResponse(response);
 };
 
 // Configuration Management API
 export const getAgentConfiguration = async (agentId: string): Promise<AgentConfiguration> => {
-  const response = await fetch(`${API_BASE}/agents/${agentId}/config`);
+  const response = await fetch(`${API_BASE}/agents/${agentId}/config`, addAuthHeaders());
   return handleResponse(response);
 };
 
@@ -130,13 +140,13 @@ export const setAgentConfiguration = async (
   agentId: string,
   configuration: AgentConfiguration
 ): Promise<void> => {
-  const response = await fetch(`${API_BASE}/agents/${agentId}/config`, {
+  const response = await fetch(`${API_BASE}/agents/${agentId}/config`, addAuthHeaders({
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(configuration),
-  });
+  }));
 
   await handleResponse(response);
 };
@@ -148,12 +158,12 @@ export const getAgentPackages = async (search?: string): Promise<AgentPackage[]>
     url.searchParams.set('search', search);
   }
 
-  const response = await fetch(url.toString());
+  const response = await fetch(url.toString(), addAuthHeaders());
   return handleResponse(response);
 };
 
 export const getAgentPackageDetails = async (packageId: string): Promise<AgentPackage> => {
-  const response = await fetch(`${API_BASE}/agents/packages/${packageId}/details`);
+  const response = await fetch(`${API_BASE}/agents/packages/${packageId}/details`, addAuthHeaders());
   return handleResponse(response);
 };
 
@@ -183,12 +193,12 @@ export const reconcileAgent = async (agentId: string): Promise<any> => {
 };
 
 export const getAgentStatus = async (agentId: string): Promise<AgentLifecycleInfo> => {
-  const response = await fetch(`${API_BASE}/agents/${agentId}/status`);
+  const response = await fetch(`${API_BASE}/agents/${agentId}/status`, addAuthHeaders());
   return handleResponse(response);
 };
 
 export const getRunningAgents = async (): Promise<AgentLifecycleInfo[]> => {
-  const response = await fetch(`${API_BASE}/agents/running`);
+  const response = await fetch(`${API_BASE}/agents/running`, addAuthHeaders());
   return handleResponse(response);
 };
 

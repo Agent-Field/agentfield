@@ -552,3 +552,233 @@ func TestDo_RequestHeaders(t *testing.T) {
 func intPtr(i int) *int {
 	return &i
 }
+
+// =====================================================
+// API Key Authentication Tests
+// =====================================================
+
+func TestWithAPIKey(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseURL string
+		opts    []Option
+		check   func(t *testing.T, c *Client)
+	}{
+		{
+			name:    "with API key",
+			baseURL: "https://api.example.com",
+			opts:    []Option{WithAPIKey("test-api-key")},
+			check: func(t *testing.T, c *Client) {
+				assert.Equal(t, "test-api-key", c.apiKey)
+			},
+		},
+		{
+			name:    "without API key",
+			baseURL: "https://api.example.com",
+			opts:    nil,
+			check: func(t *testing.T, c *Client) {
+				assert.Equal(t, "", c.apiKey)
+			},
+		},
+		{
+			name:    "with both API key and bearer token",
+			baseURL: "https://api.example.com",
+			opts:    []Option{WithAPIKey("api-key"), WithBearerToken("bearer-token")},
+			check: func(t *testing.T, c *Client) {
+				assert.Equal(t, "api-key", c.apiKey)
+				assert.Equal(t, "bearer-token", c.token)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, err := New(tt.baseURL, tt.opts...)
+			assert.NoError(t, err)
+			assert.NotNil(t, c)
+			if tt.check != nil {
+				tt.check(t, c)
+			}
+		})
+	}
+}
+
+func TestAPIKeyHeader(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify X-API-Key header is set
+		apiKey := r.Header.Get("X-API-Key")
+		assert.Equal(t, "secret-api-key", apiKey)
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, WithAPIKey("secret-api-key"))
+	require.NoError(t, err)
+
+	var resp map[string]string
+	err = client.do(context.Background(), http.MethodGet, "/test", nil, &resp)
+	assert.NoError(t, err)
+	assert.Equal(t, "ok", resp["status"])
+}
+
+func TestAPIKeyAndBearerTokenHeaders(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Both headers should be present when both are configured
+		apiKey := r.Header.Get("X-API-Key")
+		assert.Equal(t, "my-api-key", apiKey)
+
+		auth := r.Header.Get("Authorization")
+		assert.Equal(t, "Bearer my-bearer-token", auth)
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, WithAPIKey("my-api-key"), WithBearerToken("my-bearer-token"))
+	require.NoError(t, err)
+
+	err = client.do(context.Background(), http.MethodGet, "/test", nil, nil)
+	assert.NoError(t, err)
+}
+
+func TestNoAuthHeaders(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Neither header should be present
+		apiKey := r.Header.Get("X-API-Key")
+		assert.Empty(t, apiKey, "X-API-Key should be empty")
+
+		auth := r.Header.Get("Authorization")
+		assert.Empty(t, auth, "Authorization should be empty")
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL)
+	require.NoError(t, err)
+
+	err = client.do(context.Background(), http.MethodGet, "/test", nil, nil)
+	assert.NoError(t, err)
+}
+
+func TestRegisterNodeWithAPIKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify X-API-Key header
+		apiKey := r.Header.Get("X-API-Key")
+		assert.Equal(t, "register-api-key", apiKey)
+
+		// Also verify no Authorization header when only API key is set
+		auth := r.Header.Get("Authorization")
+		assert.Empty(t, auth)
+
+		resp := types.NodeRegistrationResponse{
+			ID:      "node-1",
+			Success: true,
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, WithAPIKey("register-api-key"))
+	require.NoError(t, err)
+
+	payload := types.NodeRegistrationRequest{
+		ID:        "node-1",
+		TeamID:    "team-1",
+		BaseURL:   "https://example.com",
+		Version:   "1.0.0",
+		Reasoners: []types.ReasonerDefinition{},
+		Skills:    []types.SkillDefinition{},
+		CommunicationConfig: types.CommunicationConfig{
+			Protocols: []string{"http"},
+		},
+		HealthStatus:  "healthy",
+		LastHeartbeat: time.Now(),
+		RegisteredAt:  time.Now(),
+	}
+
+	resp, err := client.RegisterNode(context.Background(), payload)
+	assert.NoError(t, err)
+	assert.NotNil(t, resp)
+	assert.True(t, resp.Success)
+}
+
+func TestUpdateStatusWithAPIKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify X-API-Key header
+		apiKey := r.Header.Get("X-API-Key")
+		assert.Equal(t, "status-api-key", apiKey)
+
+		resp := types.LeaseResponse{
+			LeaseSeconds:     120,
+			NextLeaseRenewal: time.Now().Add(120 * time.Second).UTC().Format(time.RFC3339),
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, WithAPIKey("status-api-key"))
+	require.NoError(t, err)
+
+	payload := types.NodeStatusUpdate{
+		Phase:       "ready",
+		HealthScore: intPtr(100),
+	}
+
+	resp, err := client.UpdateStatus(context.Background(), "node-1", payload)
+	assert.NoError(t, err)
+	assert.NotNil(t, resp)
+	assert.Equal(t, 120, resp.LeaseSeconds)
+}
+
+func TestShutdownWithAPIKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify X-API-Key header
+		apiKey := r.Header.Get("X-API-Key")
+		assert.Equal(t, "shutdown-api-key", apiKey)
+
+		resp := types.LeaseResponse{
+			LeaseSeconds:     0,
+			NextLeaseRenewal: "",
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, WithAPIKey("shutdown-api-key"))
+	require.NoError(t, err)
+
+	payload := types.ShutdownRequest{
+		Reason: "graceful shutdown",
+	}
+
+	resp, err := client.Shutdown(context.Background(), "node-1", payload)
+	assert.NoError(t, err)
+	assert.NotNil(t, resp)
+}
+
+func TestUnauthorizedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Simulate unauthorized response
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error": "unauthorized", "message": "invalid or missing API key"}`))
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL)
+	require.NoError(t, err)
+
+	var resp map[string]string
+	err = client.do(context.Background(), http.MethodGet, "/test", nil, &resp)
+
+	assert.Error(t, err)
+	apiErr, ok := err.(*APIError)
+	assert.True(t, ok)
+	assert.Equal(t, http.StatusUnauthorized, apiErr.StatusCode)
+	assert.Contains(t, string(apiErr.Body), "unauthorized")
+}
