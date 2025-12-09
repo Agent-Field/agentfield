@@ -2708,6 +2708,10 @@ class Agent(FastAPI):
         # Prepare headers with proper workflow tracking
         headers = current_context.to_headers()
 
+        # Ensure the current execution is the parent for sub-calls (not the inherited parent)
+        # This fixes workflow graph attribution for local skill calls
+        headers["X-Parent-Execution-ID"] = current_context.execution_id
+
         # DISABLED: Same-agent call detection - Force all calls through AgentField server
         # This ensures all app.call() requests go through the AgentField server for proper
         # workflow tracking, execution context, and distributed processing
