@@ -27,10 +27,30 @@ This test suite runs end-to-end functional tests in an isolated Docker environme
 
 - The AgentField control plane starts correctly
 - Python agents can register and communicate with the control plane
-- Reasoners execute successfully with real LLM calls (OpenRouter)
+- Reasoners execute successfully (with or without LLM calls)
 - Execution metadata (workflow IDs, timing, etc.) is properly tracked
 - Quick Start documentation (README + docs) stays accurate end-to-end
 - Both storage modes (SQLite and PostgreSQL) work correctly
+
+### Test Categories
+
+**Core Infrastructure Tests (24 tests - No LLM required):**
+- Control plane health checks
+- Agent registration and discovery
+- Multi-agent communication via `app.call()`
+- Memory system (global, agent, session, run scopes)
+- Workflow orchestration and scoping headers
+- Router prefixes and execution paths
+- Go SDK integration and CLI
+- TypeScript agent integration
+- Serverless agent execution
+- Verifiable credentials (DID/VC)
+
+**LLM Integration Tests (2 tests - OpenRouter required):**
+- `test_hello_world_with_openrouter` - Validates LLM-based reasoning with a simple math question
+- `test_readme_quick_start_summarize_flow` - Tests web content summarization with LLM
+
+**Coverage:** External contributors can run 92% of functional tests without any API keys!
 
 ## 🏗️ Architecture
 
@@ -312,11 +332,31 @@ Edit `docker/agentfield-test.yaml` to customize:
 
 ### GitHub Actions
 
-Tests run automatically on push/PR. Configure the secret:
+Tests run automatically on push/PR with **different behavior for internal vs external contributors**:
+
+#### For External Contributors (Forked Repositories)
+- **24 out of 26 tests run** (92% coverage)
+- **2 OpenRouter-dependent tests are automatically skipped**
+- **No API key required** - external contributors don't need access to secrets
+- Tests marked with `@pytest.mark.openrouter` are excluded
+- Still validates all core functionality:
+  - Agent registration and discovery
+  - Control plane APIs
+  - Multi-agent communication
+  - Memory system
+  - Workflow orchestration
+  - Go/TypeScript SDK integration
+
+#### For Internal Contributors (Maintainers)
+- **All 26 tests run** (100% coverage)
+- **OpenRouter API key required** - configured as repository secret
+- Tests include LLM integration validation
+
+To configure the secret for maintainers:
 
 1. Go to repository Settings → Secrets → Actions
 2. Add `OPENROUTER_API_KEY` with your key
-3. Tests will run on every push/PR
+3. All tests will run on every push/PR from the main repository
 
 ### Manual Trigger
 
