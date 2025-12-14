@@ -40,11 +40,11 @@ jobs:
     
     env:
       # Only provide OpenRouter API key for push events and internal PRs (not from forks)
-      OPENROUTER_API_KEY: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.fork == false) && secrets.OPENROUTER_API_KEY || '' }}
-      OPENROUTER_MODEL: ${{ github.event.inputs.openrouter_model || 'openrouter/google/gemini-2.5-flash-lite' }}
+      OPENROUTER_API_KEY: ${{ ((github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false)) && secrets.OPENROUTER_API_KEY) || '' }}
+      OPENROUTER_MODEL: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.openrouter_model) || 'openrouter/google/gemini-2.5-flash-lite' }}
       # For fork PRs, skip OpenRouter-dependent tests via a quoted marker expression.
       # NOTE: quotes inside a single env var like PYTEST_ARGS do NOT survive shell word-splitting.
-      PYTEST_MARK_EXPR: ${{ github.event.pull_request.head.repo.fork == true && 'not openrouter' || '' }}
+      PYTEST_MARK_EXPR: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true && 'not openrouter') || '' }}
       PYTEST_ARGS: -v
       DOCKER_BUILDKIT: 1
       COMPOSE_DOCKER_CLI_BUILD: 1
@@ -72,7 +72,7 @@ jobs:
       - name: Verify test configuration
         run: |
           EVENT_NAME="${{ github.event_name }}"
-          IS_FORK="${{ github.event.pull_request.head.repo.fork }}"
+          IS_FORK="${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork) || 'false' }}"
 
           if [ "$IS_FORK" = "true" ]; then
             echo "ℹ️  External contributor PR detected"
