@@ -28,6 +28,7 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openrouter/google/gemini-2.5-flash-lite}
       STORAGE_MODE: local
+      PYTEST_MARK_EXPR: ${PYTEST_MARK_EXPR:-}
       PYTEST_ARGS: ${PYTEST_ARGS:--v}
       TEST_TIMEOUT: ${TEST_TIMEOUT:-300}
       TEST_AGENT_BIND_HOST: ${TEST_AGENT_BIND_HOST:-0.0.0.0}
@@ -45,7 +46,11 @@ services:
       sh -c "
       echo 'Waiting for control plane to be fully ready...' &&
       wait-for-services.sh &&
-      pytest $$PYTEST_ARGS --junit-xml=/reports/junit-local.xml --tb=short
+      if [ -n \"$$PYTEST_MARK_EXPR\" ]; then
+        pytest -m \"$$PYTEST_MARK_EXPR\" $$PYTEST_ARGS --junit-xml=/reports/junit-local.xml --tb=short;
+      else
+        pytest $$PYTEST_ARGS --junit-xml=/reports/junit-local.xml --tb=short;
+      fi
       "
 
 networks:
