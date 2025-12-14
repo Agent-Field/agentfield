@@ -6,13 +6,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
-## [Unreleased]
-
-### Fixed
-
-- Fix(cli): fix init command input handling issues including j/k keys not registering,
-  ctrl+c not cancelling, and special keys being typed as text
-
 ## [0.1.21-rc.2] - 2025-12-10
 
 
