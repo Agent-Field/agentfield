@@ -43,7 +43,7 @@ jobs:
       OPENROUTER_API_KEY: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.fork == false) && secrets.OPENROUTER_API_KEY || '' }}
       OPENROUTER_MODEL: ${{ github.event.inputs.openrouter_model || 'openrouter/google/gemini-2.5-flash-lite' }}
       # Skip OpenRouter-dependent tests for external contributors
-      PYTEST_ARGS: ${{ github.event.pull_request.head.repo.fork == true && '-m "not openrouter" -v' || '-v' }}
+      PYTEST_ARGS: ${{ github.event.pull_request.head.repo.fork == true && '-m not openrouter -v' || '-v' }}
       DOCKER_BUILDKIT: 1
       COMPOSE_DOCKER_CLI_BUILD: 1
     
@@ -75,7 +75,7 @@ jobs:
           if [ "$IS_FORK" = "true" ]; then
             echo "ℹ️  External contributor PR detected"
             echo "✓ Running 24/26 functional tests (skipping 2 OpenRouter-dependent tests)"
-            echo "✓ Tests requiring OpenRouter will be skipped: -m 'not openrouter'"
+            echo "✓ Tests requiring OpenRouter will be skipped: -m not openrouter"
           elif [ "$EVENT_NAME" = "push" ] || [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             if [ -z "$OPENROUTER_API_KEY" ]; then
               echo "::error::OPENROUTER_API_KEY secret is not set"
