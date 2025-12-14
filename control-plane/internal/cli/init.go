@@ -56,6 +56,7 @@ type initModel struct {
 	textInput      string
 	err            error
 	done           bool
+	cancelled      bool
 	nonInteractive bool //nolint:unused // Reserved for future use
 }
 
@@ -66,39 +67,49 @@ func (m initModel) Init() tea.Cmd {
 func (m initModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Global key handlers
 		switch msg.String() {
-		case "ctrl+c", "q":
+		case "ctrl+c":
+			m.cancelled = true
 			m.done = true
 			return m, tea.Quit
-
 		case "enter":
 			return m.handleEnter()
+		}
 
-		case "up", "k":
-			if m.step == 1 && len(m.choices) > 0 {
-				m.cursor--
-				if m.cursor < 0 {
-					m.cursor = len(m.choices) - 1
+		// Step-specific handling
+		if m.step == 1 {
+			// Language selection - handle navigation
+			switch msg.String() {
+			case "up", "k":
+				if len(m.choices) > 0 {
+					m.cursor--
+					if m.cursor < 0 {
+						m.cursor = len(m.choices) - 1
+					}
+				}
+			case "down", "j":
+				if len(m.choices) > 0 {
+					m.cursor++
+					if m.cursor >= len(m.choices) {
+						m.cursor = 0
+					}
 				}
 			}
-
-		case "down", "j":
-			if m.step == 1 && len(m.choices) > 0 {
-				m.cursor++
-				if m.cursor >= len(m.choices) {
-					m.cursor = 0
+		} else {
+			// Text input steps (0, 2, 3)
+			switch msg.String() {
+			case "backspace":
+				if len(m.textInput) > 0 {
+					m.textInput = m.textInput[:len(m.textInput)-1]
 				}
-			}
-
-		case "backspace":
-			if len(m.textInput) > 0 {
-				m.textInput = m.textInput[:len(m.textInput)-1]
-			}
-
-		default:
-			// Handle text input for project name, author name and email
-			if m.step == 0 || m.step == 2 || m.step == 3 {
-				m.textInput += msg.String()
+			case "ctrl+u":
+				m.textInput = ""
+			default:
+				// Only accept printable runes
+				if msg.Type == tea.KeyRunes {
+					m.textInput += msg.String()
+				}
 			}
 		}
 	}
@@ -166,12 +177,10 @@ func (m initModel) View() string {
 	case 1: // Language selection
 		s.WriteString(promptStyle.Render("? Select language:") + "\n\n")
 		for i, choice := range m.choices {
-			cursor := " "
 			if m.cursor == i {
-				cursor = "❯"
-				s.WriteString(selectedStyle.Render(fmt.Sprintf("%s %s\n", cursor, choice)))
+				s.WriteString("❯ " + selectedStyle.Render(choice) + "\n")
 			} else {
-				s.WriteString(fmt.Sprintf("%s %s\n", cursor, choice))
+				s.WriteString("  " + choice + "\n")
 			}
 		}
 		s.WriteString("\n" + helpStyle.Render("Use ↑/↓ to navigate, Enter to select"))
@@ -268,6 +277,10 @@ Example:
 				}
 
 				m := finalModel.(initModel)
+				if m.cancelled {
+					fmt.Println("\nOperation cancelled.")
+					return nil
+				}
 				if projectName == "" {
 					projectName = m.projectName
 				}
