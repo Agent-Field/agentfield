@@ -2,6 +2,7 @@ import asyncio
 import importlib.util
 import os
 import signal
+import urllib.parse
 from datetime import datetime
 from typing import Optional
 
@@ -835,8 +836,6 @@ class AgentServer:
         # Smart port resolution with priority order
         if port is None:
             # Check for AgentField CLI integration via environment variable
-            import os
-
             env_port = os.getenv("PORT")
             if env_port and env_port.isdigit():
                 suggested_port = int(env_port)
@@ -899,9 +898,6 @@ class AgentServer:
         # Set base_url for registration - preserve explicit callback URL if set
         if not self.agent.base_url:
             # Check AGENT_CALLBACK_URL environment variable before defaulting to localhost
-            import os
-            import urllib.parse
-
             env_callback_url = os.getenv("AGENT_CALLBACK_URL")
             if env_callback_url:
                 # Parse the environment variable URL to extract the hostname
@@ -926,8 +922,6 @@ class AgentServer:
                 self.agent.base_url = f"http://localhost:{port}"
         else:
             # Update port in existing base_url if needed
-            import urllib.parse
-
             parsed = urllib.parse.urlparse(self.agent.base_url)
             if parsed.port != port:
                 # Update the port in the existing URL, but preserve the hostname
