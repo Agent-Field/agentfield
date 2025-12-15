@@ -132,6 +132,10 @@ type Config struct {
 
 	// CLIConfig controls CLI-specific behaviour and help text.
 	CLIConfig *CLIConfig
+
+	// MemoryBackend allows plugging in a custom memory storage backend.
+	// If nil, an in-memory backend is used (data lost on restart).
+	MemoryBackend MemoryBackend
 }
 
 // CLIConfig controls CLI behaviour and presentation.
@@ -153,6 +157,7 @@ type Agent struct {
 	httpClient *http.Client
 	reasoners  map[string]*Reasoner
 	aiClient   *ai.Client // AI/LLM client
+	memory     *Memory    // Memory system for state management
 
 	serverMu sync.RWMutex
 	server   *http.Server
@@ -216,6 +221,7 @@ func New(cfg Config) (*Agent, error) {
 		httpClient: httpClient,
 		reasoners:  make(map[string]*Reasoner),
 		aiClient:   aiClient,
+		memory:     NewMemory(cfg.MemoryBackend),
 		stopLease:  make(chan struct{}),
 		logger:     cfg.Logger,
 	}
@@ -1211,4 +1217,21 @@ func (a *Agent) AIStream(ctx context.Context, prompt string, opts ...ai.Option) 
 // ExecutionContextFrom returns the execution context embedded in the provided context, if any.
 func ExecutionContextFrom(ctx context.Context) ExecutionContext {
 	return executionContextFrom(ctx)
+}
+
+// Memory returns the agent's memory system for state management.
+// Memory provides hierarchical scoped storage (workflow, session, user, global).
+//
+// Example usage:
+//
+//	// Store in default (session) scope
+//	agent.Memory().Set(ctx, "key", "value")
+//
+//	// Retrieve from session scope
+//	val, _ := agent.Memory().Get(ctx, "key")
+//
+//	// Use global scope for cross-session data
+//	agent.Memory().GlobalScope().Set(ctx, "shared_key", data)
+func (a *Agent) Memory() *Memory {
+	return a.memory
 }
