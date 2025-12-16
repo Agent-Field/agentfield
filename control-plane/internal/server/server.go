@@ -807,6 +807,10 @@ func (s *AgentFieldServer) setupRoutes() {
 				workflows.POST("/vc-status", didHandler.GetWorkflowVCStatusBatchHandler)
 				workflows.GET("/:workflowId/vc-chain", didHandler.GetWorkflowVCChainHandler)
 				workflows.POST("/:workflowId/verify-vc", didHandler.VerifyWorkflowVCComprehensiveHandler)
+
+				// Workflow notes SSE streaming
+				workflowNotesHandler := ui.NewExecutionHandler(s.storage, s.payloadStore, s.webhookDispatcher)
+				workflows.GET("/:workflowId/notes/events", workflowNotesHandler.StreamWorkflowNodeNotesHandler)
 			}
 
 			// Reasoners management group
