@@ -21,6 +21,7 @@ type ExecutionRecordModel struct {
 	StartedAt         time.Time  `gorm:"column:started_at;not null;index"`
 	CompletedAt       *time.Time `gorm:"column:completed_at"`
 	DurationMS        *int64     `gorm:"column:duration_ms"`
+	Notes             string     `gorm:"column:notes;default:'[]'"`
 	CreatedAt         time.Time  `gorm:"column:created_at;autoCreateTime"`
 	UpdatedAt         time.Time  `gorm:"column:updated_at;autoUpdateTime"`
 }

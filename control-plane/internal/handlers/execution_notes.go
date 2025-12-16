@@ -15,9 +15,9 @@ import (
 
 // ExecutionNoteStorage captures the storage operations required for execution note handlers.
 type ExecutionNoteStorage interface {
-	UpdateWorkflowExecution(ctx context.Context, executionID string, updateFunc func(*types.WorkflowExecution) (*types.WorkflowExecution, error)) error
+	GetExecutionRecord(ctx context.Context, executionID string) (*types.Execution, error)
+	UpdateExecutionRecord(ctx context.Context, executionID string, updateFunc func(*types.Execution) (*types.Execution, error)) (*types.Execution, error)
 	GetExecutionEventBus() *events.ExecutionEventBus
-	GetWorkflowExecution(ctx context.Context, executionID string) (*types.WorkflowExecution, error)
 }
 
 // AddNoteRequest represents the request body for adding a note to an execution
@@ -77,14 +77,14 @@ func AddExecutionNoteHandler(storageProvider ExecutionNoteStorage) gin.HandlerFu
 
 		// Update the execution with the new note
 		ctx := context.Background()
-		var workflowID string
-		err := storageProvider.UpdateWorkflowExecution(ctx, executionID, func(execution *types.WorkflowExecution) (*types.WorkflowExecution, error) {
+		var runID string
+		updated, err := storageProvider.UpdateExecutionRecord(ctx, executionID, func(execution *types.Execution) (*types.Execution, error) {
 			if execution == nil {
 				return nil, fmt.Errorf("execution with ID %s not found", executionID)
 			}
 
-			// Store workflow ID for SSE event
-			workflowID = execution.WorkflowID
+			// Store run ID for SSE event (run_id is the workflow ID equivalent)
+			runID = execution.RunID
 
 			// Initialize notes if nil
 			if execution.Notes == nil {
@@ -98,28 +98,28 @@ func AddExecutionNoteHandler(storageProvider ExecutionNoteStorage) gin.HandlerFu
 			return execution, nil
 		})
 
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to add note: %v", err)})
+			return
+		}
+
 		// Broadcast SSE event for workflow node notes if update was successful
-		if err == nil && workflowID != "" {
+		if updated != nil && runID != "" {
 			event := events.ExecutionEvent{
 				Type:        "workflow_note_added",
 				ExecutionID: executionID,
-				WorkflowID:  workflowID,
-				AgentNodeID: "", // We don't have agent node ID in this context
+				WorkflowID:  runID, // Use run_id as workflow_id for SSE events
+				AgentNodeID: updated.AgentNodeID,
 				Status:      "note_added",
 				Timestamp:   time.Now(),
 				Data: map[string]interface{}{
-					"workflow_id":  workflowID,
+					"workflow_id":  runID,
 					"execution_id": executionID,
 					"note":         note,
 					"timestamp":    time.Now().Format(time.RFC3339),
 				},
 			}
 			storageProvider.GetExecutionEventBus().Publish(event)
-		}
-
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to add note: %v", err)})
-			return
 		}
 
 		c.JSON(http.StatusOK, AddNoteResponse{
@@ -153,7 +153,7 @@ func GetExecutionNotesHandler(storageProvider ExecutionNoteStorage) gin.HandlerF
 
 		// Get the execution
 		ctx := context.Background()
-		execution, err := storageProvider.GetWorkflowExecution(ctx, executionID)
+		execution, err := storageProvider.GetExecutionRecord(ctx, executionID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get execution: %v", err)})
 			return

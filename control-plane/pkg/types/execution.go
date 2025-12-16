@@ -35,6 +35,9 @@ type Execution struct {
 	SessionID *string `json:"session_id,omitempty" db:"session_id"`
 	ActorID   *string `json:"actor_id,omitempty" db:"actor_id"`
 
+	// Notes for debugging and tracking
+	Notes []ExecutionNote `json:"notes,omitempty" db:"notes"`
+
 	// Webhook state (computed, not stored in executions table)
 	WebhookRegistered bool                     `json:"webhook_registered,omitempty" db:"-"`
 	WebhookEvents     []*ExecutionWebhookEvent `json:"webhook_events,omitempty" db:"-"`

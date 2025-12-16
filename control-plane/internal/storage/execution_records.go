@@ -38,8 +38,19 @@ func (ls *LocalStorage) CreateExecutionRecord(ctx context.Context, exec *types.E
 			input_uri, result_uri,
 			session_id, actor_id,
 			started_at, completed_at, duration_ms,
+			notes,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	// Serialize notes to JSON
+	var notesJSON []byte
+	if len(exec.Notes) > 0 {
+		var err error
+		notesJSON, err = json.Marshal(exec.Notes)
+		if err != nil {
+			return fmt.Errorf("marshal notes: %w", err)
+		}
+	}
 
 	_, err := db.ExecContext(
 		ctx,
@@ -61,6 +72,7 @@ func (ls *LocalStorage) CreateExecutionRecord(ctx context.Context, exec *types.E
 		exec.StartedAt,
 		exec.CompletedAt,
 		exec.DurationMS,
+		notesJSON,
 		exec.CreatedAt,
 		exec.UpdatedAt,
 	)
@@ -80,6 +92,7 @@ func (ls *LocalStorage) GetExecutionRecord(ctx context.Context, executionID stri
 		       input_uri, result_uri,
 		       session_id, actor_id,
 		       started_at, completed_at, duration_ms,
+		       notes,
 		       created_at, updated_at
 		FROM executions
 	WHERE execution_id = ?`
@@ -116,6 +129,7 @@ func (ls *LocalStorage) UpdateExecutionRecord(ctx context.Context, executionID s
 		       input_uri, result_uri,
 		       session_id, actor_id,
 		       started_at, completed_at, duration_ms,
+		       notes,
 		       created_at, updated_at
 		FROM executions
 		WHERE execution_id = ?`, executionID)
@@ -138,6 +152,15 @@ func (ls *LocalStorage) UpdateExecutionRecord(ctx context.Context, executionID s
 	}
 	updated.UpdatedAt = time.Now().UTC()
 
+	// Serialize notes to JSON
+	var notesJSON []byte
+	if len(updated.Notes) > 0 {
+		notesJSON, err = json.Marshal(updated.Notes)
+		if err != nil {
+			return nil, fmt.Errorf("marshal notes: %w", err)
+		}
+	}
+
 	update := `
 		UPDATE executions SET
 			run_id = ?,
@@ -156,6 +179,7 @@ func (ls *LocalStorage) UpdateExecutionRecord(ctx context.Context, executionID s
 			started_at = ?,
 			completed_at = ?,
 			duration_ms = ?,
+			notes = ?,
 			updated_at = ?
 		WHERE execution_id = ?`
 
@@ -178,6 +202,7 @@ func (ls *LocalStorage) UpdateExecutionRecord(ctx context.Context, executionID s
 		updated.StartedAt,
 		updated.CompletedAt,
 		updated.DurationMS,
+		notesJSON,
 		updated.UpdatedAt,
 		updated.ExecutionID,
 	)
@@ -249,6 +274,7 @@ func (ls *LocalStorage) QueryExecutionRecords(ctx context.Context, filter types.
 		       input_uri, result_uri,
 		       session_id, actor_id,
 		       started_at, completed_at, duration_ms,
+		       notes,
 		       created_at, updated_at
 		FROM executions`)
 
@@ -1012,6 +1038,7 @@ func scanExecution(scanner interface {
 		errorMessage                 sql.NullString
 		completedAt                  sql.NullTime
 		durationMS                   sql.NullInt64
+		notesJSON                    []byte
 	)
 
 	err := scanner.Scan(
@@ -1032,6 +1059,7 @@ func scanExecution(scanner interface {
 		&exec.StartedAt,
 		&completedAt,
 		&durationMS,
+		&notesJSON,
 		&exec.CreatedAt,
 		&exec.UpdatedAt,
 	)
@@ -1071,6 +1099,11 @@ func scanExecution(scanner interface {
 	if durationMS.Valid {
 		val := durationMS.Int64
 		exec.DurationMS = &val
+	}
+	if len(notesJSON) > 0 {
+		if err := json.Unmarshal(notesJSON, &exec.Notes); err != nil {
+			return nil, fmt.Errorf("unmarshal notes: %w", err)
+		}
 	}
 
 	return &exec, nil
