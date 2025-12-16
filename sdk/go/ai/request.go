@@ -17,6 +17,10 @@ type Request struct {
 	// Messages for the chat completion
 	Messages []Message `json:"messages"`
 
+	// APIKeyOverride overrides the client's configured API key for this request only.
+	// This is used to support per-call api_key overrides for parity with the Python SDK.
+	APIKeyOverride string `json:"-"`
+
 	// Model to use (overrides default)
 	Model string `json:"model,omitempty"`
 
@@ -61,6 +65,14 @@ func WithSystem(content string) Option {
 func WithModel(model string) Option {
 	return func(r *Request) error {
 		r.Model = model
+		return nil
+	}
+}
+
+// WithAPIKey overrides the client's configured API key for this request only.
+func WithAPIKey(apiKey string) Option {
+	return func(r *Request) error {
+		r.APIKeyOverride = apiKey
 		return nil
 	}
 }

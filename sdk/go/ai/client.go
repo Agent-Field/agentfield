@@ -94,7 +94,11 @@ func (c *Client) doRequest(ctx context.Context, req *Request) (*Response, error)
 
 	// Set headers
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.config.APIKey)
+	apiKey := c.config.APIKey
+	if strings.TrimSpace(req.APIKeyOverride) != "" {
+		apiKey = req.APIKeyOverride
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// Add OpenRouter-specific headers if applicable
 	if c.config.IsOpenRouter() {
@@ -186,7 +190,11 @@ func (c *Client) StreamComplete(ctx context.Context, prompt string, opts ...Opti
 
 		// Set headers
 		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("Authorization", "Bearer "+c.config.APIKey)
+		apiKey := c.config.APIKey
+		if strings.TrimSpace(req.APIKeyOverride) != "" {
+			apiKey = req.APIKeyOverride
+		}
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 		httpReq.Header.Set("Accept", "text/event-stream")
 
 		// Add OpenRouter-specific headers if applicable

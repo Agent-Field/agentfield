@@ -118,6 +118,34 @@ func TestComplete(t *testing.T) {
 	assert.Len(t, resp.Choices, 1)
 }
 
+func TestComplete_WithAPIKeyOverride(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "Bearer override-key", r.Header.Get("Authorization"))
+
+		resp := Response{
+			Choices: []Choice{
+				{Message: Message{Content: "ok"}},
+			},
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	config := &Config{
+		APIKey:  "default-key",
+		BaseURL: server.URL,
+		Model:   "gpt-4o",
+	}
+
+	client, err := NewClient(config)
+	require.NoError(t, err)
+
+	resp, err := client.Complete(context.Background(), "Hello", WithAPIKey("override-key"))
+	assert.NoError(t, err)
+	assert.NotNil(t, resp)
+}
+
 func TestComplete_WithOptions(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req Request
