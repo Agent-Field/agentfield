@@ -19,16 +19,16 @@ func TestAddExecutionNoteHandler_AppendsNoteAndPublishesEvent(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	executionID := "exec-1"
-	workflowID := "wf-1"
+	runID := "wf-1" // run_id is the workflow ID equivalent
 
 	storage := newTestExecutionStorage(nil)
-	exec := &types.WorkflowExecution{
+	exec := &types.Execution{
 		ExecutionID: executionID,
-		WorkflowID:  workflowID,
+		RunID:       runID,
 		Notes:       []types.ExecutionNote{},
 		UpdatedAt:   time.Now(),
 	}
-	require.NoError(t, storage.StoreWorkflowExecution(context.Background(), exec))
+	require.NoError(t, storage.CreateExecutionRecord(context.Background(), exec))
 
 	// Subscribe to event bus to ensure event emitted
 	subscriber := storage.GetExecutionEventBus().Subscribe("test-subscriber")
@@ -56,7 +56,7 @@ func TestAddExecutionNoteHandler_AppendsNoteAndPublishesEvent(t *testing.T) {
 	require.Equal(t, []string{"debug"}, payload.Note.Tags)
 
 	// Verify execution updated
-	updated, err := storage.GetWorkflowExecution(context.Background(), executionID)
+	updated, err := storage.GetExecutionRecord(context.Background(), executionID)
 	require.NoError(t, err)
 	require.Len(t, updated.Notes, 1)
 	require.Equal(t, "This is a note", updated.Notes[0].Message)
@@ -64,7 +64,7 @@ func TestAddExecutionNoteHandler_AppendsNoteAndPublishesEvent(t *testing.T) {
 	// Ensure event published
 	select {
 	case evt := <-subscriber:
-		require.Equal(t, workflowID, evt.WorkflowID)
+		require.Equal(t, runID, evt.WorkflowID)
 		require.Equal(t, executionID, evt.ExecutionID)
 		require.Equal(t, "note_added", evt.Status)
 	case <-time.After(time.Second):
@@ -77,14 +77,14 @@ func TestGetExecutionNotesHandler_ReturnsFilteredNotes(t *testing.T) {
 
 	executionID := "exec-2"
 	storage := newTestExecutionStorage(nil)
-	exec := &types.WorkflowExecution{
+	exec := &types.Execution{
 		ExecutionID: executionID,
 		Notes: []types.ExecutionNote{
 			{Message: "note-one", Tags: []string{"debug"}},
 			{Message: "note-two", Tags: []string{"info"}},
 		},
 	}
-	require.NoError(t, storage.StoreWorkflowExecution(context.Background(), exec))
+	require.NoError(t, storage.CreateExecutionRecord(context.Background(), exec))
 
 	router := gin.New()
 	router.GET("/api/v1/executions/:execution_id/notes", GetExecutionNotesHandler(storage))
