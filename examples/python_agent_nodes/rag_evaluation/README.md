@@ -92,7 +92,7 @@ The system runs four evaluation metrics in parallel:
 3. **Hallucination** - Hybrid: ML verification (fast) -> LLM escalation (uncertain cases only)
 4. **Constitutional** - Parallel principle checks -> weighted aggregation
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed mermaid diagrams.
+See the [documentation](https://agentfield.dev/examples/complete-agents/rag-evaluator) for detailed diagrams and explanations.
 
 ## Endpoints
 
@@ -176,6 +176,5 @@ rag_evaluation/
 │   └── ner.py                   # spaCy NER
 ├── ui/                          # Next.js web interface
 ├── requirements.txt             # Core dependencies
-├── requirements-ml.txt          # ML dependencies (optional)
-└── ARCHITECTURE.md              # Detailed diagrams
+└── requirements-ml.txt          # ML dependencies (optional)
 ```
