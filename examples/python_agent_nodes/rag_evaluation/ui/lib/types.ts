@@ -10,11 +10,11 @@ export interface EvaluationInput {
 
 // Available models for selection (using full OpenRouter model IDs)
 export const AVAILABLE_MODELS = [
-  'openrouter/google/gemini-2.0-flash-001',
-  'openrouter/anthropic/claude-3.5-sonnet',
   'openrouter/openai/gpt-4o',
-  'openrouter/deepseek/deepseek-chat-v3-0324',
+  'openrouter/google/gemini-2.5-flash',
+  'openrouter/anthropic/claude-3.5-sonnet',
   'openrouter/meta-llama/llama-3.3-70b-instruct',
+  'openrouter/deepseek/deepseek-chat-v3-0324',
 ] as const
 
 export type ModelId = typeof AVAILABLE_MODELS[number] | string
