@@ -29,7 +29,7 @@ This directory contains example agents demonstrating AgentField's capabilities a
 | [agentic_rag](python_agent_nodes/agentic_rag/) | Production-grade document Q&A | Ensemble retrieval, Hallucination prevention, Citations |
 | [deep_research_agent](python_agent_nodes/deep_research_agent/) | Recursive research planning | Task decomposition, Web search (Tavily), Parallel execution |
 | [documentation_chatbot](python_agent_nodes/documentation_chatbot/) | Enterprise RAG system | 3-reasoner architecture, Markdown-aware chunking, Inline citations |
-| [rag_evaluation](python_agent_nodes/rag_evaluation/) | Multi-metric QA assessment | Faithfulness, Relevance, Hallucination detection, Constitutional checks |
+| [rag_evaluation](python_agent_nodes/rag_evaluation/) | Multi-metric QA assessment | Faithfulness, Relevance, Hallucination detection, Constitutional checks. [Docs →](https://agentfield.ai/examples/complete-agents/rag-evaluator) |
 | [simulation_engine](python_agent_nodes/simulation_engine/) | Domain-agnostic multi-agent simulation | 100+ parallel reasoners, Scenario analysis, Sentiment modeling |
 | [serverless_hello](python_agent_nodes/serverless_hello/) | Serverless deployment pattern | Lambda/Cloud Functions handler, Cross-agent calling |
 
