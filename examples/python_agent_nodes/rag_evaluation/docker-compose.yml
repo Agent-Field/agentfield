@@ -1,0 +1,43 @@
+services:
+  control-plane:
+    image: ghcr.io/agent-field/agentfield-control-plane:latest
+    environment:
+      AGENTFIELD_STORAGE_MODE: local
+      AGENTFIELD_HTTP_ADDR: 0.0.0.0:8080
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+    ports:
+      - "8080:8080"
+    volumes:
+      - agentfield-data:/data
+
+  rag-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Set to false for faster builds without ML dependencies
+        INSTALL_ML_DEPS: ${INSTALL_ML_DEPS:-true}
+    environment:
+      AGENTFIELD_SERVER: http://control-plane:8080
+      AGENT_CALLBACK_URL: http://rag-agent:8001
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      PORT: 8001
+    ports:
+      - "8001:8001"
+    depends_on:
+      - control-plane
+    restart: on-failure
+
+  ui:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8080
+    ports:
+      - "3000:3000"
+    depends_on:
+      - rag-agent
+
+volumes:
+  agentfield-data:
