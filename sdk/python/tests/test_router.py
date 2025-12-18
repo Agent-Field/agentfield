@@ -59,7 +59,10 @@ def test_reasoner_and_skill_registration():
     def sample_skill():
         return "skill"
 
-    assert router.reasoners[0]["func"] is sample_reasoner
+    # The decorator returns a wrapper; original func is stored in entry["func"]
+    # and also accessible via wrapper._original_func
+    assert router.reasoners[0]["func"] is sample_reasoner._original_func
+    assert router.reasoners[0]["wrapper"] is sample_reasoner
     assert router.reasoners[0]["path"] == "/foo"
     assert router.reasoners[0]["tags"] == ["base"]
 
@@ -80,7 +83,9 @@ def test_router_supports_parentheses_free_decorators():
     def inline_skill():
         return "ok"
 
-    assert router.reasoners[0]["func"] is inline_reasoner
+    # The decorator returns a wrapper for reasoners
+    assert router.reasoners[0]["func"] is inline_reasoner._original_func
+    assert router.reasoners[0]["wrapper"] is inline_reasoner
     assert router.reasoners[0]["path"] is None
     assert router.skills[0]["func"] is inline_skill
     assert router.skills[0]["path"] is None

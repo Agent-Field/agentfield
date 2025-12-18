@@ -2267,6 +2267,10 @@ class Agent(FastAPI):
                 entry["func"] = decorated
                 entry["registered"] = True
 
+                # Register tracked function for lazy-binding in router wrappers
+                # This enables direct reasoner-to-reasoner calls to go through tracking
+                router._tracked_functions[func.__name__] = decorated
+
             for entry in router.skills:
                 if entry.get("registered"):
                     continue

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import functools
 import inspect
 
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
@@ -19,6 +21,7 @@ class AgentRouter:
         self.reasoners: List[Dict[str, Any]] = []
         self.skills: List[Dict[str, Any]] = []
         self._agent: Optional["Agent"] = None
+        self._tracked_functions: Dict[str, Callable] = {}
 
     # ------------------------------------------------------------------
     # Registration helpers
@@ -29,7 +32,12 @@ class AgentRouter:
         tags: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> Callable[[Callable], Callable]:
-        """Store a reasoner definition for later registration on an Agent."""
+        """Store a reasoner definition for later registration on an Agent.
+
+        Returns a wrapper function that delegates to the tracked version once
+        the router is attached to an agent. This ensures that direct calls
+        between reasoners go through workflow tracking.
+        """
 
         direct_registration: Optional[Callable] = None
         decorator_path = path
@@ -42,18 +50,39 @@ class AgentRouter:
             direct_registration = decorator_path
             decorator_path = None
 
+        router_ref = self
+
         def decorator(func: Callable) -> Callable:
-            merged_tags = self.tags + (decorator_tags or [])
-            self.reasoners.append(
+            merged_tags = router_ref.tags + (decorator_tags or [])
+            func_name = func.__name__
+
+            @functools.wraps(func)
+            async def wrapper(*args: Any, **kw: Any) -> Any:
+                # Look up the tracked function at call time
+                tracked = router_ref._tracked_functions.get(func_name)
+                if tracked is not None and tracked is not wrapper:
+                    # Call the tracked version for proper workflow instrumentation
+                    return await tracked(*args, **kw)
+                # Fallback to original if not yet registered
+                if asyncio.iscoroutinefunction(func):
+                    return await func(*args, **kw)
+                return func(*args, **kw)
+
+            # Store metadata on the wrapper
+            wrapper._is_router_reasoner = True
+            wrapper._original_func = func
+
+            router_ref.reasoners.append(
                 {
                     "func": func,
+                    "wrapper": wrapper,
                     "path": decorator_path,
                     "tags": merged_tags,
                     "kwargs": dict(decorator_kwargs),
                     "registered": False,
                 }
             )
-            return func
+            return wrapper
 
         if direct_registration:
             return decorator(direct_registration)
