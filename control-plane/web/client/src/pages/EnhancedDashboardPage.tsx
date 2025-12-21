@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import  { useMemo } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,11 +11,15 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusIndicator } from "@/components/ui/StatusIndicator";
-import { MetricCard } from "@/components/ui/MetricCard";
+import { TrendMetricCard } from "@/components/ui/TrendMetricCard";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { PageHeader } from "../components/PageHeader";
 import { ResponsiveGrid } from "@/components/layout/ResponsiveGrid";
-import { useEnhancedDashboardSimple } from "@/hooks/useEnhancedDashboard";
+import { useEnhancedDashboard } from "@/hooks/useEnhancedDashboard";
+import { useDashboardTimeRange } from "@/hooks/useDashboardTimeRange";
+import { TimeRangeSelector } from "@/components/dashboard/TimeRangeSelector";
+import { HotspotPanel } from "@/components/dashboard/HotspotPanel";
+import { ActivityHeatmap } from "@/components/dashboard/ActivityHeatmap";
 import type {
   EnhancedDashboardResponse,
   ExecutionTrendPoint,
@@ -23,6 +27,7 @@ import type {
   ActiveWorkflowRun,
   CompletedExecutionStat,
   IncidentItem,
+  ComparisonData,
 } from "@/types/dashboard";
 import { cn } from "@/lib/utils";
 import {
@@ -38,7 +43,6 @@ import {
   Cpu,
   Server,
 } from "@/components/ui/icon-bridge";
-import type { IconComponent } from "@/components/ui/icon-bridge";
 import {
   ResponsiveContainer,
   ComposedChart,
@@ -77,8 +81,26 @@ const formatTimestamp = (value?: string) => {
 };
 
 export function EnhancedDashboardPage() {
+  // Time range state with URL persistence
+  const {
+    timeRange,
+    setPreset,
+    toggleCompare,
+    getApiParams,
+    label: timeRangeLabel,
+  } = useDashboardTimeRange("24h");
+
+  // Get API params from time range state
+  const apiParams = getApiParams();
+
+  // Fetch dashboard data with time range params
   const { data, loading, error, hasError, refresh, clearError, isRefreshing } =
-    useEnhancedDashboardSimple();
+    useEnhancedDashboard({
+      preset: apiParams.preset,
+      startTime: apiParams.startTime,
+      endTime: apiParams.endTime,
+      compare: apiParams.compare,
+    });
 
   const reasonerStats = useMemo<ReasonerSummary[]>(() => {
     if (!data) {
@@ -239,29 +261,35 @@ export function EnhancedDashboardPage() {
     return null;
   }
 
-  const generatedAt = formatTimestamp(data.generated_at);
-
   return (
     <div className="space-y-6 animate-fade-in">
       <PageHeader
         title="Dashboard"
         description="Monitor agent health, workflow performance, and system throughput across your distributed cluster."
         aside={
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="pill" size="sm" className="font-mono">
-              {generatedAt}
-            </Badge>
-            <Button
-              onClick={refresh}
-              variant="outline"
-              size="sm"
-              disabled={isRefreshing}
-            >
-              <RefreshCw
-                className={cn("h-3 w-3", isRefreshing && "animate-spin")}
-              />
-              {isRefreshing ? "Refreshing" : "Refresh"}
-            </Button>
+          <div className="flex flex-wrap items-center gap-3">
+            <TimeRangeSelector
+              value={timeRange.preset}
+              onChange={setPreset}
+              compare={timeRange.compare}
+              onCompareChange={toggleCompare}
+            />
+            <div className="flex items-center gap-2">
+              <Badge variant="pill" size="sm" className="font-mono">
+                {timeRangeLabel}
+              </Badge>
+              <Button
+                onClick={refresh}
+                variant="outline"
+                size="sm"
+                disabled={isRefreshing}
+              >
+                <RefreshCw
+                  className={cn("h-3 w-3", isRefreshing && "animate-spin")}
+                />
+                {isRefreshing ? "Refreshing" : "Refresh"}
+              </Button>
+            </div>
           </div>
         }
       />
@@ -280,28 +308,60 @@ export function EnhancedDashboardPage() {
         <OverviewStrip
           overview={data.overview}
           trends={data.execution_trends.last_24h}
+          trendPoints={data.execution_trends.last_7_days}
+          comparison={data.comparison}
         />
       </div>
 
+      {/* Row 1: Trend Analysis - Execution Trends + Activity Patterns */}
       <ResponsiveGrid
         columns={{ base: 1, md: 6, lg: 12 }}
         flow="dense"
-        className="auto-rows-[minmax(220px,auto)] md:auto-rows-[minmax(240px,auto)] lg:auto-rows-[minmax(260px,auto)]"
+        className="auto-rows-[minmax(220px,auto)] md:auto-rows-[minmax(280px,auto)]"
         gap="md"
       >
         <ResponsiveGrid.Item span={{ md: 6, lg: 7, xl: 8, "2xl": 7 }} className="animate-slide-in" style={{ animationDelay: "100ms" }}>
           <ExecutionTrendsCard
             trendPoints={data.execution_trends.last_7_days}
-            windowMetrics={data.execution_trends.last_24h}
           />
         </ResponsiveGrid.Item>
-        <ResponsiveGrid.Item span={{ md: 3, lg: 5, xl: 4, "2xl": 5 }} className="animate-slide-in" style={{ animationDelay: "150ms" }}>
-          <IncidentPanel incidents={data.incidents} />
+        <ResponsiveGrid.Item span={{ md: 6, lg: 5, xl: 4, "2xl": 5 }} className="animate-slide-in" style={{ animationDelay: "150ms" }}>
+          <ActivityHeatmap
+            heatmapData={data.activity_patterns?.hourly_heatmap || []}
+            className="h-full"
+          />
         </ResponsiveGrid.Item>
-        <ResponsiveGrid.Item span={{ md: 3, lg: 7, xl: 6, "2xl": 7 }} className="animate-slide-in" style={{ animationDelay: "200ms" }}>
+      </ResponsiveGrid>
+
+      {/* Row 2: Problem Diagnosis - Hotspots + Incidents */}
+      <ResponsiveGrid
+        columns={{ base: 1, lg: 2 }}
+        gap="md"
+        className="animate-slide-in"
+        style={{ animationDelay: "200ms" }}
+      >
+        <ResponsiveGrid.Item>
+          <HotspotPanel
+            hotspots={data.hotspots?.top_failing_reasoners || []}
+            className="h-[300px]"
+          />
+        </ResponsiveGrid.Item>
+        <ResponsiveGrid.Item>
+          <IncidentPanel incidents={data.incidents} className="h-[300px]" />
+        </ResponsiveGrid.Item>
+      </ResponsiveGrid>
+
+      {/* Row 3: Detailed drill-downs - Workflow Insights + Reasoner Activity */}
+      <ResponsiveGrid
+        columns={{ base: 1, md: 6, lg: 12 }}
+        flow="dense"
+        className="auto-rows-[minmax(260px,auto)]"
+        gap="md"
+      >
+        <ResponsiveGrid.Item span={{ md: 6, lg: 7, xl: 6, "2xl": 7 }} className="animate-slide-in" style={{ animationDelay: "250ms" }}>
           <WorkflowInsightsPanel insights={data.workflows} />
         </ResponsiveGrid.Item>
-        <ResponsiveGrid.Item span={{ md: 6, lg: 5, xl: 6, "2xl": 5 }} className="animate-slide-in" style={{ animationDelay: "250ms" }}>
+        <ResponsiveGrid.Item span={{ md: 6, lg: 5, xl: 6, "2xl": 5 }} className="animate-slide-in" style={{ animationDelay: "300ms" }}>
           <ReasonerActivityPanel
             reasoners={reasonerStats}
             agentSummary={data.agent_health}
@@ -315,74 +375,91 @@ export function EnhancedDashboardPage() {
 interface OverviewStripProps {
   overview: EnhancedDashboardResponse["overview"];
   trends: EnhancedDashboardResponse["execution_trends"]["last_24h"];
+  trendPoints?: ExecutionTrendPoint[];
+  comparison?: ComparisonData;
 }
 
-type OverviewCard = {
-  label: string;
-  value: string;
-  delta: string;
-  icon: IconComponent;
-};
-
-function OverviewStrip({ overview, trends }: OverviewStripProps) {
-  const cards: OverviewCard[] = useMemo(
-    () => [
-      {
-        label: "Agents online",
-        value: `${overview.active_agents}/${overview.total_agents}`,
-        delta:
-          overview.degraded_agents > 0
-            ? `${overview.degraded_agents} degraded`
-            : `${overview.offline_agents} offline`,
-        icon: Users,
-      },
-      {
-        label: "Executions (24h)",
-        value: numberFormatter.format(overview.executions_last_24h),
-        delta: `${decimalFormatter.format(trends.throughput_per_hour)} / hr`,
-        icon: Activity,
-      },
-      {
-        label: "Success rate",
-        value: formatPercentage(overview.success_rate_24h),
-        delta: `${numberFormatter.format(trends.succeeded)} succeeded`,
-        icon: Gauge,
-      },
-      {
-        label: "Avg duration (24h)",
-        value: formatDuration(overview.average_duration_ms_24h),
-        delta: `Median ${formatDuration(overview.median_duration_ms_24h)}`,
-        icon: Timer,
-      },
-    ],
-    [overview, trends]
+function OverviewStrip({ overview, trends, trendPoints, comparison }: OverviewStripProps) {
+  // Extract sparkline data from trend points
+  const executionsSparkline = useMemo(
+    () => trendPoints?.map((p) => p.total) || [],
+    [trendPoints]
+  );
+  const successSparkline = useMemo(
+    () => trendPoints?.map((p) => p.succeeded) || [],
+    [trendPoints]
   );
 
   return (
     <ResponsiveGrid variant="dashboard">
-      {cards.map((card) => (
-        <MetricCard
-          key={card.label}
-          label={card.label}
-          value={card.value}
-          delta={card.delta}
-          icon={card.icon}
-          size="md"
-          variant="default"
-        />
-      ))}
+      {/* Agents Online */}
+      <TrendMetricCard
+        label="Agents online"
+        value={`${overview.active_agents}/${overview.total_agents}`}
+        subtitle={
+          overview.degraded_agents > 0
+            ? `${overview.degraded_agents} degraded`
+            : `${overview.offline_agents} offline`
+        }
+        icon={Users}
+      />
+
+      {/* Executions */}
+      <TrendMetricCard
+        label="Executions"
+        value={numberFormatter.format(overview.executions_last_24h)}
+        currentValue={comparison ? overview.executions_last_24h : undefined}
+        previousValue={
+          comparison
+            ? overview.executions_last_24h - comparison.overview_delta.executions_delta
+            : undefined
+        }
+        trendPolarity="up-is-good"
+        sparklineData={executionsSparkline}
+        subtitle={`${decimalFormatter.format(trends.throughput_per_hour)} / hr`}
+        icon={Activity}
+      />
+
+      {/* Success Rate */}
+      <TrendMetricCard
+        label="Success rate"
+        value={formatPercentage(overview.success_rate_24h)}
+        currentValue={comparison ? overview.success_rate_24h : undefined}
+        previousValue={
+          comparison
+            ? overview.success_rate_24h - comparison.overview_delta.success_rate_delta
+            : undefined
+        }
+        trendPolarity="up-is-good"
+        sparklineData={successSparkline}
+        subtitle={`${numberFormatter.format(trends.succeeded)} succeeded`}
+        icon={Gauge}
+      />
+
+      {/* Avg Duration */}
+      <TrendMetricCard
+        label="Avg duration"
+        value={formatDuration(overview.average_duration_ms_24h)}
+        currentValue={comparison ? overview.average_duration_ms_24h : undefined}
+        previousValue={
+          comparison
+            ? overview.average_duration_ms_24h - comparison.overview_delta.avg_duration_delta_ms
+            : undefined
+        }
+        trendPolarity="down-is-good"
+        subtitle={`Median ${formatDuration(overview.median_duration_ms_24h)}`}
+        icon={Timer}
+      />
     </ResponsiveGrid>
   );
 }
 
 interface ExecutionTrendsCardProps {
   trendPoints: ExecutionTrendPoint[];
-  windowMetrics: EnhancedDashboardResponse["execution_trends"]["last_24h"];
 }
 
 function ExecutionTrendsCard({
   trendPoints,
-  windowMetrics,
 }: ExecutionTrendsCardProps) {
   const chartData = trendPoints.map((point) => ({
     ...point,
@@ -404,8 +481,8 @@ function ExecutionTrendsCard({
         </CardTitle>
         <Badge variant="pill">Last 7 days</Badge>
       </CardHeader>
-      <CardContent className="flex flex-1 flex-col gap-6 p-5 pt-0">
-        <div className="h-52 w-full">
+      <CardContent className="flex flex-1 flex-col p-5 pt-0">
+        <div className="h-full min-h-[180px] w-full">
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart
               data={chartData}
@@ -479,43 +556,8 @@ function ExecutionTrendsCard({
             </ComposedChart>
           </ResponsiveContainer>
         </div>
-        <ResponsiveGrid variant="metrics" align="start">
-          <MetricTile
-            label="Executions"
-            value={numberFormatter.format(windowMetrics.total)}
-            helper={`${decimalFormatter.format(windowMetrics.throughput_per_hour)} / hr`}
-          />
-          <MetricTile
-            label="Success rate"
-            value={formatPercentage(windowMetrics.success_rate)}
-            helper={`${numberFormatter.format(windowMetrics.succeeded)} succeeded`}
-          />
-          <MetricTile
-            label="Avg duration"
-            value={formatDuration(windowMetrics.average_duration_ms)}
-            helper={`${numberFormatter.format(windowMetrics.failed)} failed`}
-          />
-        </ResponsiveGrid>
       </CardContent>
     </Card>
-  );
-}
-
-interface MetricTileProps {
-  label: string;
-  value: string;
-  helper?: string;
-}
-
-function MetricTile({ label, value, helper }: MetricTileProps) {
-  return (
-    <div className="rounded-xl border border-border/60 bg-muted/20 px-4 py-3 transition-all hover:bg-muted/30">
-      <p className="text-label">{label}</p>
-      <p className="mt-2 text-heading-2 font-mono tracking-tight">{value}</p>
-      {helper && (
-        <p className="text-xs text-text-secondary mt-1 font-medium">{helper}</p>
-      )}
-    </div>
   );
 }
 
@@ -553,118 +595,150 @@ function WorkflowInsightsPanel({ insights }: WorkflowInsightsPanelProps) {
           <Zap className="h-4 w-4" /> Workflow intelligence
         </CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-1 flex-col min-h-0 p-5 pt-0">
-        <ResponsiveGrid variant="detail" gap="md" align="start" className="flex-1 min-h-0">
-          <InsightsGroup
-            title="Top workflows"
-            empty="No executions recorded in the last 7 days."
-            items={insights.top_workflows}
-            render={(workflow: WorkflowStat, index: number) => (
-              <Link
-                to={`/workflows/${workflow.workflow_id}/enhanced`}
-                className={cn(
-                  "group relative block transition-all hover:border-border hover:bg-muted/30 min-w-0",
-                  cardVariants({ variant: "muted", interactive: false }),
-                  "pl-10 pr-3 py-3"
-                )}
-              >
-                {/* Rank Badge */}
-                <div className="absolute left-3 top-3 flex h-5 w-5 items-center justify-center rounded-full bg-background border border-border text-[10px] font-mono font-medium text-muted-foreground shadow-sm group-hover:border-primary/50 group-hover:text-primary transition-colors">
-                  {index + 1}
-                </div>
-
-                <div className="space-y-2 min-w-0">
-                  <div className="flex justify-between items-start gap-2">
-                    <p className="font-medium text-sm text-foreground truncate">
-                      {workflow.name || workflow.workflow_id}
-                    </p>
-                    <span className="text-xs font-mono text-muted-foreground whitespace-nowrap">
-                      {numberFormatter.format(workflow.total_executions)} runs
-                    </span>
-                  </div>
-
-                  <div className="space-y-1">
-                    <div className="flex justify-between text-[10px] text-muted-foreground">
-                      <span>Success Rate</span>
-                      <span className={cn(
-                        "font-mono",
-                        workflow.success_rate >= 95 ? "text-emerald-500" : workflow.success_rate >= 80 ? "text-amber-500" : "text-destructive"
-                      )}>
-                        {formatPercentage(workflow.success_rate)}
-                      </span>
+      <CardContent className="flex flex-1 flex-col min-h-0 p-5 pt-3">
+        <ResponsiveGrid
+          columns={{ base: 1, lg: 2 }}
+          gap="lg"
+          align="start"
+          className="flex-1 min-h-0"
+        >
+          {/* Left column: Top Workflows */}
+          <div className="flex flex-col h-full gap-3">
+            <div className="flex items-center gap-2 text-label flex-shrink-0">
+              <GitCommit className="h-3.5 w-3.5" />
+              Top workflows
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-2 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-border/50">
+              {insights.top_workflows.length === 0 ? (
+                <p className="text-xs text-muted-foreground italic">No executions recorded in the last 7 days.</p>
+              ) : (
+                insights.top_workflows.map((workflow: WorkflowStat, index: number) => (
+                  <Link
+                    key={workflow.workflow_id}
+                    to={`/workflows/${workflow.workflow_id}/enhanced`}
+                    className={cn(
+                      "group relative block transition-all hover:border-border hover:bg-muted/30 min-w-0",
+                      cardVariants({ variant: "muted", interactive: false }),
+                      "pl-10 pr-3 py-2.5"
+                    )}
+                  >
+                    {/* Rank Badge */}
+                    <div className="absolute left-3 top-2.5 flex h-5 w-5 items-center justify-center rounded-full bg-background border border-border text-[10px] font-mono font-medium text-muted-foreground shadow-sm group-hover:border-primary/50 group-hover:text-primary transition-colors">
+                      {index + 1}
                     </div>
-                    <ProgressBar value={workflow.success_rate} />
-                  </div>
-                </div>
-              </Link>
-            )}
-          />
 
-          <div className="space-y-8">
-            <InsightsGroup
-              title="Active runs"
-              empty="No workflows running right now."
-              items={insights.active_runs}
-              render={(run: ActiveWorkflowRun) => (
-                <Link
-                  to={`/executions/${run.execution_id}`}
-                  className={cn(
-                    "group block transition-all hover:border-primary/30 hover:shadow-md min-w-0 relative overflow-hidden",
-                    cardVariants({ variant: "muted", interactive: false }),
-                    "px-3 py-2.5 text-xs bg-background/50 backdrop-blur-sm border-primary/20"
-                  )}
-                >
-                  <div className="absolute top-0 left-0 w-0.5 h-full bg-primary/50 group-hover:bg-primary transition-colors" />
-                  <div className="flex items-center justify-between min-w-0 gap-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="relative flex h-2 w-2">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
-                      </span>
-                      <p className="font-medium text-foreground truncate">
-                        {run.name || run.workflow_id}
+                    <div className="space-y-1.5 min-w-0">
+                      <div className="flex justify-between items-start gap-2">
+                        <p className="font-medium text-sm text-foreground truncate">
+                          {workflow.name || workflow.workflow_id}
+                        </p>
+                        <span className="text-xs font-mono text-muted-foreground whitespace-nowrap">
+                          {numberFormatter.format(workflow.total_executions)} runs
+                        </span>
+                      </div>
+
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[10px] text-muted-foreground">
+                          <span>Success Rate</span>
+                          <span className={cn(
+                            "font-mono",
+                            workflow.success_rate >= 95 ? "text-emerald-500" : workflow.success_rate >= 80 ? "text-amber-500" : "text-destructive"
+                          )}>
+                            {formatPercentage(workflow.success_rate)}
+                          </span>
+                        </div>
+                        <ProgressBar value={workflow.success_rate} />
+                      </div>
+                    </div>
+                  </Link>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* Right column: Active Runs + Longest Recent Runs */}
+          <div className="flex flex-col h-full gap-6">
+            {/* Active Runs Section - fixed height */}
+            <div className="space-y-3 flex-shrink-0">
+              <div className="flex items-center gap-2 text-label">
+                <GitCommit className="h-3.5 w-3.5" />
+                Active runs
+              </div>
+              {insights.active_runs.length === 0 ? (
+                <p className="text-xs text-muted-foreground italic">No workflows running right now.</p>
+              ) : (
+                <div className="space-y-2 max-h-[120px] overflow-y-auto pr-1 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-border/50">
+                  {insights.active_runs.map((run: ActiveWorkflowRun) => (
+                    <Link
+                      key={run.execution_id}
+                      to={`/executions/${run.execution_id}`}
+                      className={cn(
+                        "group block transition-all hover:border-primary/30 hover:shadow-md min-w-0 relative overflow-hidden",
+                        cardVariants({ variant: "muted", interactive: false }),
+                        "px-3 py-2 text-xs bg-background/50 backdrop-blur-sm border-primary/20"
+                      )}
+                    >
+                      <div className="absolute top-0 left-0 w-0.5 h-full bg-primary/50 group-hover:bg-primary transition-colors" />
+                      <div className="flex items-center justify-between min-w-0 gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="relative flex h-2 w-2">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+                          </span>
+                          <p className="font-medium text-foreground truncate">
+                            {run.name || run.workflow_id}
+                          </p>
+                        </div>
+                        <span className="text-primary font-mono text-[10px] flex-shrink-0 bg-primary/10 px-1.5 py-0.5 rounded-full">
+                          {formatDuration(run.elapsed_ms)}
+                        </span>
+                      </div>
+                      <p className="mt-1 pl-4 text-muted-foreground truncate font-mono text-[10px]">
+                        {run.execution_id}
+                      </p>
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Longest Recent Runs Section - fills remaining space */}
+            <div className="flex flex-col flex-1 min-h-0 gap-3">
+              <div className="flex items-center gap-2 text-label flex-shrink-0">
+                <GitCommit className="h-3.5 w-3.5" />
+                Longest recent runs
+              </div>
+              {insights.longest_executions.length === 0 ? (
+                <p className="text-xs text-muted-foreground italic">Insufficient completed runs.</p>
+              ) : (
+                <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-2 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-border/50">
+                  {insights.longest_executions.map((execution: CompletedExecutionStat) => (
+                    <div
+                      key={execution.execution_id}
+                      className={cn(
+                        cardVariants({ variant: "muted", interactive: false }),
+                        "px-3 py-2 text-xs min-w-0"
+                      )}
+                    >
+                      <div className="flex justify-between items-center gap-2">
+                        <p className="font-medium text-foreground truncate">
+                          {execution.name || execution.workflow_id}
+                        </p>
+                        <span className={cn(
+                          "font-mono text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0",
+                          execution.duration_ms > 60000 ? "bg-amber-500/10 text-amber-600" : "bg-muted text-muted-foreground"
+                        )}>
+                          {formatDuration(execution.duration_ms)}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-muted-foreground truncate text-[10px]">
+                        Completed {formatTimestamp(execution.completed_at)}
                       </p>
                     </div>
-                    <span className="text-primary font-mono text-[10px] flex-shrink-0 bg-primary/10 px-1.5 py-0.5 rounded-full">
-                      {formatDuration(run.elapsed_ms)}
-                    </span>
-                  </div>
-                  <p className="mt-1.5 pl-4 text-muted-foreground truncate font-mono text-[10px]">
-                    {run.execution_id}
-                  </p>
-                </Link>
-              )}
-            />
-
-            <InsightsGroup
-              title="Longest recent runs"
-              empty="Insufficient completed runs."
-              items={insights.longest_executions}
-              render={(execution: CompletedExecutionStat) => (
-                <div
-                  className={cn(
-                    cardVariants({ variant: "muted", interactive: false }),
-                    "px-3 py-2 text-xs min-w-0"
-                  )}
-                >
-                  <div className="flex justify-between items-center gap-2">
-                    <p className="font-medium text-foreground truncate">
-                      {execution.name || execution.workflow_id}
-                    </p>
-                    <span className={cn(
-                      "font-mono text-[10px] px-1.5 py-0.5 rounded-full",
-                      execution.duration_ms > 60000 ? "bg-amber-500/10 text-amber-600" : "bg-muted text-muted-foreground"
-                    )}>
-                      {formatDuration(execution.duration_ms)}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-muted-foreground truncate text-[10px]">
-                    Completed {formatTimestamp(execution.completed_at)}
-                  </p>
+                  ))}
                 </div>
               )}
-            />
-
+            </div>
           </div>
         </ResponsiveGrid>
       </CardContent>
@@ -672,46 +746,17 @@ function WorkflowInsightsPanel({ insights }: WorkflowInsightsPanelProps) {
   );
 }
 
-interface InsightsGroupProps<T> {
-  title: string;
-  empty: string;
-  items: T[];
-  render: (item: T, index: number) => React.ReactElement;
-}
-
-function InsightsGroup<T>({
-  title,
-  empty,
-  items,
-  render,
-}: InsightsGroupProps<T>) {
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-2 text-label">
-        <GitCommit className="h-3.5 w-3.5" />
-        {title}
-      </div>
-      <div className="space-y-3">
-        {items.length === 0 ? (
-          <p className="text-xs text-muted-foreground italic pl-1">{empty}</p>
-        ) : (
-          items.map((item, index) => <div key={index}>{render(item, index)}</div>)
-        )}
-      </div>
-    </div>
-  );
-}
-
 interface IncidentPanelProps {
   incidents: IncidentItem[];
+  className?: string;
 }
 
-function IncidentPanel({ incidents }: IncidentPanelProps) {
+function IncidentPanel({ incidents, className }: IncidentPanelProps) {
   return (
     <Card
       variant="surface"
       interactive={false}
-      className="flex h-full flex-col"
+      className={cn("flex h-full flex-col", className)}
     >
       <CardHeader className="p-5 pb-2">
         <CardTitle className="flex items-center gap-2">

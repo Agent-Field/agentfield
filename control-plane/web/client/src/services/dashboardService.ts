@@ -108,13 +108,50 @@ export async function getDashboardSummaryWithRetry(
 }
 
 /**
+ * Parameters for fetching enhanced dashboard data
+ */
+export interface EnhancedDashboardParams {
+  preset?: '1h' | '24h' | '7d' | '30d' | 'custom';
+  startTime?: string; // RFC3339 format
+  endTime?: string;   // RFC3339 format
+  compare?: boolean;
+}
+
+/**
+ * Build query string from dashboard parameters
+ */
+function buildDashboardQueryString(params: EnhancedDashboardParams): string {
+  const queryParams = new URLSearchParams();
+
+  if (params.preset) {
+    queryParams.set('preset', params.preset);
+  }
+  if (params.preset === 'custom' && params.startTime && params.endTime) {
+    queryParams.set('start_time', params.startTime);
+    queryParams.set('end_time', params.endTime);
+  }
+  if (params.compare) {
+    queryParams.set('compare', 'true');
+  }
+
+  const queryString = queryParams.toString();
+  return queryString ? `?${queryString}` : '';
+}
+
+/**
  * Get enhanced dashboard summary data
  * GET /api/ui/v1/dashboard/enhanced
+ *
+ * @param params - Optional parameters for time range and comparison
  */
-export async function getEnhancedDashboardSummary(): Promise<EnhancedDashboardResponse> {
+export async function getEnhancedDashboardSummary(
+  params: EnhancedDashboardParams = {}
+): Promise<EnhancedDashboardResponse> {
+  const queryString = buildDashboardQueryString(params);
+
   return retryOperation(() =>
-    fetchWrapper<EnhancedDashboardResponse>('/dashboard/enhanced', {
-      timeout: 10000
+    fetchWrapper<EnhancedDashboardResponse>(`/dashboard/enhanced${queryString}`, {
+      timeout: 15000 // Slightly longer timeout for larger time ranges
     })
   );
 }

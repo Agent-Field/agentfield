@@ -32,13 +32,70 @@ export interface DashboardState {
   isStale: boolean;
 }
 
+// Time range types
+export type TimeRangePreset = '1h' | '24h' | '7d' | '30d' | 'custom';
+
+export interface TimeRangeInfo {
+  start_time: string;
+  end_time: string;
+  preset?: TimeRangePreset;
+}
+
+// Comparison data types
+export interface ComparisonData {
+  previous_period: TimeRangeInfo;
+  overview_delta: EnhancedOverviewDelta;
+}
+
+export interface EnhancedOverviewDelta {
+  executions_delta: number;
+  executions_delta_pct: number;
+  success_rate_delta: number;
+  avg_duration_delta_ms: number;
+  avg_duration_delta_pct: number;
+}
+
+// Hotspot types
+export interface HotspotSummary {
+  top_failing_reasoners: HotspotItem[];
+}
+
+export interface HotspotItem {
+  reasoner_id: string;
+  total_executions: number;
+  failed_executions: number;
+  error_rate: number;
+  contribution_pct: number;
+  top_errors: ErrorCount[];
+}
+
+export interface ErrorCount {
+  message: string;
+  count: number;
+}
+
+// Activity heatmap types
+export interface ActivityPatterns {
+  hourly_heatmap: HeatmapCell[][];
+}
+
+export interface HeatmapCell {
+  total: number;
+  failed: number;
+  error_rate: number;
+}
+
 export interface EnhancedDashboardResponse {
   generated_at: string;
+  time_range: TimeRangeInfo;
   overview: EnhancedDashboardOverview;
   execution_trends: ExecutionTrendSummary;
   agent_health: AgentHealthSummary;
   workflows: EnhancedWorkflowInsights;
   incidents: IncidentItem[];
+  comparison?: ComparisonData;
+  hotspots: HotspotSummary;
+  activity_patterns: ActivityPatterns;
 }
 
 export interface EnhancedDashboardOverview {

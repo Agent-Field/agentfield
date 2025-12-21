@@ -1,15 +1,35 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type {
   EnhancedDashboardResponse,
-  DashboardError
+  DashboardError,
+  TimeRangePreset
 } from '../types/dashboard';
-import { getEnhancedDashboardSummary } from '../services/dashboardService';
+import { getEnhancedDashboardSummary, type EnhancedDashboardParams } from '../services/dashboardService';
 
 interface EnhancedDashboardOptions {
   refreshInterval?: number;
   cacheTtl?: number;
+  /** Time range preset - affects cache TTL */
+  preset?: TimeRangePreset;
+  /** Custom start time (ISO string) - only used when preset is 'custom' */
+  startTime?: string;
+  /** Custom end time (ISO string) - only used when preset is 'custom' */
+  endTime?: string;
+  /** Whether to include comparison data */
+  compare?: boolean;
   onDataUpdate?: (data: EnhancedDashboardResponse) => void;
   onError?: (error: DashboardError) => void;
+}
+
+/** Get appropriate cache TTL based on time range preset */
+function getCacheTtlForPreset(preset?: TimeRangePreset): number {
+  switch (preset) {
+    case '1h': return 30000;   // 30 seconds
+    case '24h': return 60000;  // 1 minute
+    case '7d': return 120000;  // 2 minutes
+    case '30d': return 300000; // 5 minutes
+    default: return 60000;     // 1 minute default
+  }
 }
 
 interface EnhancedDashboardState {
@@ -23,10 +43,29 @@ interface EnhancedDashboardState {
 export function useEnhancedDashboard(options: EnhancedDashboardOptions = {}) {
   const {
     refreshInterval = 45000,
-    cacheTtl = 60000,
+    preset,
+    startTime,
+    endTime,
+    compare = false,
     onDataUpdate,
     onError
   } = options;
+
+  // Dynamic cache TTL based on preset
+  const cacheTtl = options.cacheTtl ?? getCacheTtlForPreset(preset);
+
+  // Build API params - memoized to use as dependency
+  const apiParams = useMemo((): EnhancedDashboardParams => ({
+    preset,
+    startTime,
+    endTime,
+    compare,
+  }), [preset, startTime, endTime, compare]);
+
+  // Generate cache key based on params
+  const cacheKey = useMemo(() => {
+    return `${preset || '24h'}-${startTime || ''}-${endTime || ''}-${compare}`;
+  }, [preset, startTime, endTime, compare]);
 
   const [state, setState] = useState<EnhancedDashboardState>({
     data: null,
@@ -116,12 +155,12 @@ export function useEnhancedDashboard(options: EnhancedDashboardOptions = {}) {
     setState(prev => ({ ...prev, loading: true, error: null }));
 
     try {
-      const data = await getEnhancedDashboardSummary();
+      const data = await getEnhancedDashboardSummary(apiParams);
       handleData(data);
     } catch (error) {
       handleError(error as Error);
     }
-  }, [handleData, handleError, isCacheValid]);
+  }, [handleData, handleError, isCacheValid, apiParams]);
 
   const scheduleRefresh = useCallback(() => {
     if (refreshInterval > 0) {
@@ -140,6 +179,7 @@ export function useEnhancedDashboard(options: EnhancedDashboardOptions = {}) {
     setState(prev => ({ ...prev, error: null, isStale: false }));
   }, []);
 
+  // Initial fetch on mount
   useEffect(() => {
     mountedRef.current = true;
     fetchDashboard();
@@ -148,7 +188,15 @@ export function useEnhancedDashboard(options: EnhancedDashboardOptions = {}) {
       mountedRef.current = false;
       clearRefreshTimeout();
     };
-  }, [fetchDashboard, clearRefreshTimeout]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Refetch when time range changes
+  useEffect(() => {
+    // Clear cache when params change
+    cacheRef.current = { data: null, timestamp: 0 };
+    fetchDashboard(true);
+  }, [cacheKey, fetchDashboard]);
 
   useEffect(() => {
     if (state.data && !state.loading) {

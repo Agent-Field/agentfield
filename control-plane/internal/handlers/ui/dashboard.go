@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sort"
 	"sync"
@@ -96,14 +97,85 @@ func (c *DashboardCache) Set(data *DashboardSummaryResponse) {
 	c.timestamp = time.Now()
 }
 
+// TimeRangePreset represents standard time range options
+type TimeRangePreset string
+
+const (
+	TimeRangePreset1h  TimeRangePreset = "1h"
+	TimeRangePreset24h TimeRangePreset = "24h"
+	TimeRangePreset7d  TimeRangePreset = "7d"
+	TimeRangePreset30d TimeRangePreset = "30d"
+	TimeRangePresetCustom TimeRangePreset = "custom"
+)
+
+// TimeRangeInfo describes the time range used for the dashboard query
+type TimeRangeInfo struct {
+	StartTime time.Time       `json:"start_time"`
+	EndTime   time.Time       `json:"end_time"`
+	Preset    TimeRangePreset `json:"preset,omitempty"`
+}
+
+// ComparisonData contains delta information comparing current to previous period
+type ComparisonData struct {
+	PreviousPeriod TimeRangeInfo           `json:"previous_period"`
+	OverviewDelta  EnhancedOverviewDelta   `json:"overview_delta"`
+}
+
+// EnhancedOverviewDelta contains changes compared to the previous period
+type EnhancedOverviewDelta struct {
+	ExecutionsDelta     int     `json:"executions_delta"`
+	ExecutionsDeltaPct  float64 `json:"executions_delta_pct"`
+	SuccessRateDelta    float64 `json:"success_rate_delta"`
+	AvgDurationDeltaMs  float64 `json:"avg_duration_delta_ms"`
+	AvgDurationDeltaPct float64 `json:"avg_duration_delta_pct"`
+}
+
+// HotspotSummary contains top error contributors by reasoner
+type HotspotSummary struct {
+	TopFailingReasoners []HotspotItem `json:"top_failing_reasoners"`
+}
+
+// HotspotItem represents a single reasoner's failure statistics
+type HotspotItem struct {
+	ReasonerID        string       `json:"reasoner_id"`
+	TotalExecutions   int          `json:"total_executions"`
+	FailedExecutions  int          `json:"failed_executions"`
+	ErrorRate         float64      `json:"error_rate"`
+	ContributionPct   float64      `json:"contribution_pct"`
+	TopErrors         []ErrorCount `json:"top_errors"`
+}
+
+// ErrorCount tracks error message frequency
+type ErrorCount struct {
+	Message string `json:"message"`
+	Count   int    `json:"count"`
+}
+
+// ActivityPatterns contains temporal patterns for failures and usage
+type ActivityPatterns struct {
+	// HourlyHeatmap is a 7x24 matrix [dayOfWeek][hourOfDay]
+	HourlyHeatmap [][]HeatmapCell `json:"hourly_heatmap"`
+}
+
+// HeatmapCell contains execution statistics for a specific day/hour combination
+type HeatmapCell struct {
+	Total     int     `json:"total"`
+	Failed    int     `json:"failed"`
+	ErrorRate float64 `json:"error_rate"`
+}
+
 // Enhanced dashboard response structures
 type EnhancedDashboardResponse struct {
-	GeneratedAt     time.Time          `json:"generated_at"`
-	Overview        EnhancedOverview   `json:"overview"`
-	ExecutionTrends ExecutionTrends    `json:"execution_trends"`
-	AgentHealth     AgentHealthSummary `json:"agent_health"`
-	Workflows       WorkflowInsights   `json:"workflows"`
-	Incidents       []IncidentItem     `json:"incidents"`
+	GeneratedAt      time.Time           `json:"generated_at"`
+	TimeRange        TimeRangeInfo       `json:"time_range"`
+	Overview         EnhancedOverview    `json:"overview"`
+	ExecutionTrends  ExecutionTrends     `json:"execution_trends"`
+	AgentHealth      AgentHealthSummary  `json:"agent_health"`
+	Workflows        WorkflowInsights    `json:"workflows"`
+	Incidents        []IncidentItem      `json:"incidents"`
+	Comparison       *ComparisonData     `json:"comparison,omitempty"`
+	Hotspots         HotspotSummary      `json:"hotspots"`
+	ActivityPatterns ActivityPatterns    `json:"activity_patterns"`
 }
 
 type EnhancedOverview struct {
@@ -210,39 +282,97 @@ type IncidentItem struct {
 	Error       string     `json:"error,omitempty"`
 }
 
-// EnhancedDashboardCache provides caching for the enhanced dashboard response
-type EnhancedDashboardCache struct {
+// enhancedCacheEntry holds cached data with timestamp
+type enhancedCacheEntry struct {
 	data      *EnhancedDashboardResponse
 	timestamp time.Time
-	mutex     sync.RWMutex
-	ttl       time.Duration
+}
+
+// EnhancedDashboardCache provides time-range-aware caching for the enhanced dashboard response
+type EnhancedDashboardCache struct {
+	entries  map[string]*enhancedCacheEntry
+	mutex    sync.RWMutex
+	maxSize  int
 }
 
 // NewEnhancedDashboardCache creates a new cache instance for enhanced dashboard data
 func NewEnhancedDashboardCache() *EnhancedDashboardCache {
 	return &EnhancedDashboardCache{
-		ttl: 30 * time.Second,
+		entries: make(map[string]*enhancedCacheEntry),
+		maxSize: 10, // LRU limit
 	}
+}
+
+// getTTLForPreset returns the appropriate cache TTL based on time range
+func getTTLForPreset(preset TimeRangePreset) time.Duration {
+	switch preset {
+	case TimeRangePreset1h:
+		return 30 * time.Second
+	case TimeRangePreset24h:
+		return 60 * time.Second
+	case TimeRangePreset7d:
+		return 2 * time.Minute
+	case TimeRangePreset30d:
+		return 5 * time.Minute
+	default:
+		return 60 * time.Second
+	}
+}
+
+// generateCacheKey creates a cache key from time range parameters
+func generateCacheKey(startTime, endTime time.Time, compare bool) string {
+	// Round to hour for better cache reuse
+	startHour := startTime.Truncate(time.Hour).Unix()
+	endHour := endTime.Truncate(time.Hour).Unix()
+	compareStr := "0"
+	if compare {
+		compareStr = "1"
+	}
+	return fmt.Sprintf("%d-%d-%s", startHour, endHour, compareStr)
 }
 
 // Get retrieves cached enhanced dashboard data if still valid
-func (c *EnhancedDashboardCache) Get() (*EnhancedDashboardResponse, bool) {
+func (c *EnhancedDashboardCache) Get(key string, preset TimeRangePreset) (*EnhancedDashboardResponse, bool) {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
 
-	if c.data != nil && time.Since(c.timestamp) < c.ttl {
-		return c.data, true
+	entry, exists := c.entries[key]
+	if !exists {
+		return nil, false
 	}
-	return nil, false
+
+	ttl := getTTLForPreset(preset)
+	if time.Since(entry.timestamp) >= ttl {
+		return nil, false
+	}
+
+	return entry.data, true
 }
 
-// Set stores enhanced dashboard data in the cache
-func (c *EnhancedDashboardCache) Set(data *EnhancedDashboardResponse) {
+// Set stores enhanced dashboard data in the cache with LRU eviction
+func (c *EnhancedDashboardCache) Set(key string, data *EnhancedDashboardResponse) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	c.data = data
-	c.timestamp = time.Now()
+	// Simple LRU: if at capacity, remove oldest entry
+	if len(c.entries) >= c.maxSize {
+		var oldestKey string
+		var oldestTime time.Time
+		for k, entry := range c.entries {
+			if oldestKey == "" || entry.timestamp.Before(oldestTime) {
+				oldestKey = k
+				oldestTime = entry.timestamp
+			}
+		}
+		if oldestKey != "" {
+			delete(c.entries, oldestKey)
+		}
+	}
+
+	c.entries[key] = &enhancedCacheEntry{
+		data:      data,
+		timestamp: time.Now(),
+	}
 }
 
 // GetDashboardSummaryHandler handles dashboard summary requests
@@ -339,24 +469,94 @@ func (h *DashboardHandler) GetDashboardSummaryHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+// parseTimeRangeParams extracts time range from query parameters
+func parseTimeRangeParams(c *gin.Context, now time.Time) (startTime, endTime time.Time, preset TimeRangePreset, err error) {
+	presetStr := c.DefaultQuery("preset", "24h")
+	preset = TimeRangePreset(presetStr)
+
+	// Round to hour for consistent cache behavior
+	roundedNow := now.Truncate(time.Hour).Add(time.Hour) // Include current hour
+
+	switch preset {
+	case TimeRangePreset1h:
+		startTime = roundedNow.Add(-1 * time.Hour)
+		endTime = roundedNow
+	case TimeRangePreset24h:
+		startTime = roundedNow.Add(-24 * time.Hour)
+		endTime = roundedNow
+	case TimeRangePreset7d:
+		startTime = roundedNow.AddDate(0, 0, -7)
+		endTime = roundedNow
+	case TimeRangePreset30d:
+		startTime = roundedNow.AddDate(0, 0, -30)
+		endTime = roundedNow
+	case TimeRangePresetCustom:
+		startStr := c.Query("start_time")
+		endStr := c.Query("end_time")
+		if startStr == "" || endStr == "" {
+			logger.Logger.Warn().Msg("start_time and end_time required for custom range, falling back to 24h")
+			return now.Add(-24*time.Hour), now, TimeRangePreset24h, nil
+		}
+		startTime, err = time.Parse(time.RFC3339, startStr)
+		if err != nil {
+			logger.Logger.Warn().Err(err).Msg("invalid start_time format, falling back to 24h")
+			return now.Add(-24*time.Hour), now, TimeRangePreset24h, nil
+		}
+		endTime, err = time.Parse(time.RFC3339, endStr)
+		if err != nil {
+			logger.Logger.Warn().Err(err).Msg("invalid end_time format, falling back to 24h")
+			return now.Add(-24*time.Hour), now, TimeRangePreset24h, nil
+		}
+	default:
+		// Default to 24h
+		preset = TimeRangePreset24h
+		startTime = roundedNow.Add(-24 * time.Hour)
+		endTime = roundedNow
+	}
+
+	return startTime, endTime, preset, nil
+}
+
+// calculateComparisonPeriod returns the previous period for comparison
+func calculateComparisonPeriod(startTime, endTime time.Time) (prevStart, prevEnd time.Time) {
+	duration := endTime.Sub(startTime)
+	return startTime.Add(-duration), startTime
+}
+
 // GetEnhancedDashboardSummaryHandler handles requests for the enhanced dashboard view
 // GET /api/ui/v1/dashboard/enhanced
+// Query params:
+//   - preset: "1h", "24h", "7d", "30d", "custom" (default: "24h")
+//   - start_time: RFC3339 timestamp (required if preset=custom)
+//   - end_time: RFC3339 timestamp (required if preset=custom)
+//   - compare: "true" to include comparison data (default: "false")
 func (h *DashboardHandler) GetEnhancedDashboardSummaryHandler(c *gin.Context) {
 	ctx := c.Request.Context()
 	now := time.Now().UTC()
 
-	// Serve from cache when available
-	if cached, found := h.enhancedCache.Get(); found {
-		logger.Logger.Debug().Msg("Returning cached enhanced dashboard summary")
+	// Parse time range from query params
+	startTime, endTime, preset, err := parseTimeRangeParams(c, now)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid time range parameters"})
+		return
+	}
+
+	// Check if comparison is requested
+	enableComparison := c.Query("compare") == "true"
+
+	// Generate cache key and check cache
+	cacheKey := generateCacheKey(startTime, endTime, enableComparison)
+	if cached, found := h.enhancedCache.Get(cacheKey, preset); found {
+		logger.Logger.Debug().Str("key", cacheKey).Msg("Returning cached enhanced dashboard summary")
 		c.JSON(http.StatusOK, cached)
 		return
 	}
 
-	sevenDaysAgo := now.AddDate(0, 0, -7)
+	// Query executions for the specified time range
 	filters := types.ExecutionFilter{
-		StartTime:      &sevenDaysAgo,
-		EndTime:        &now,
-		Limit:          10000,
+		StartTime:      &startTime,
+		EndTime:        &endTime,
+		Limit:          50000,
 		SortBy:         "started_at",
 		SortDescending: false,
 	}
@@ -388,23 +588,383 @@ func (h *DashboardHandler) GetEnhancedDashboardSummaryHandler(c *gin.Context) {
 		return
 	}
 
-	overview := h.buildEnhancedOverview(now, agents, executions)
-	trends := buildExecutionTrends(now, executions)
+	// Build time range info
+	timeRange := TimeRangeInfo{
+		StartTime: startTime,
+		EndTime:   endTime,
+		Preset:    preset,
+	}
+
+	overview := h.buildEnhancedOverviewForRange(agents, executions, startTime, endTime)
+	trends := buildExecutionTrendsForRange(executions, startTime, endTime, preset)
 	agentHealth := h.buildAgentHealthSummary(ctx, agents)
 	workflows := buildWorkflowInsights(executions, runningExecutions)
 	incidents := buildIncidentItems(executions, 10)
+	hotspots := buildHotspotSummary(executions)
+	activityPatterns := buildActivityPatterns(executions)
 
 	response := &EnhancedDashboardResponse{
-		GeneratedAt:     now,
-		Overview:        overview,
-		ExecutionTrends: trends,
-		AgentHealth:     agentHealth,
-		Workflows:       workflows,
-		Incidents:       incidents,
+		GeneratedAt:      now,
+		TimeRange:        timeRange,
+		Overview:         overview,
+		ExecutionTrends:  trends,
+		AgentHealth:      agentHealth,
+		Workflows:        workflows,
+		Incidents:        incidents,
+		Hotspots:         hotspots,
+		ActivityPatterns: activityPatterns,
 	}
 
-	h.enhancedCache.Set(response)
+	// Calculate comparison data if requested
+	if enableComparison {
+		prevStart, prevEnd := calculateComparisonPeriod(startTime, endTime)
+		prevFilters := types.ExecutionFilter{
+			StartTime:      &prevStart,
+			EndTime:        &prevEnd,
+			Limit:          50000,
+			SortBy:         "started_at",
+			SortDescending: false,
+		}
+
+		prevExecutions, err := h.store.QueryExecutionRecords(ctx, prevFilters)
+		if err == nil {
+			prevOverview := h.buildEnhancedOverviewForRange(agents, prevExecutions, prevStart, prevEnd)
+			response.Comparison = buildComparisonData(overview, prevOverview, prevStart, prevEnd)
+		}
+	}
+
+	h.enhancedCache.Set(cacheKey, response)
 	c.JSON(http.StatusOK, response)
+}
+
+// buildEnhancedOverviewForRange builds overview metrics for a specific time range
+func (h *DashboardHandler) buildEnhancedOverviewForRange(agents []*types.AgentNode, executions []*types.Execution, startTime, endTime time.Time) EnhancedOverview {
+	overview := EnhancedOverview{TotalAgents: len(agents)}
+
+	for _, agent := range agents {
+		overview.TotalReasoners += len(agent.Reasoners)
+		overview.TotalSkills += len(agent.Skills)
+
+		isDegraded := agent.LifecycleStatus == types.AgentStatusDegraded || agent.HealthStatus == types.HealthStatusInactive
+		if isDegraded {
+			overview.DegradedAgents++
+			continue
+		}
+
+		status, err := h.agentService.GetAgentStatus(agent.ID)
+		if err != nil {
+			overview.OfflineAgents++
+			continue
+		}
+
+		if status != nil && status.IsRunning {
+			overview.ActiveAgents++
+		} else {
+			overview.OfflineAgents++
+		}
+	}
+
+	if overview.OfflineAgents < 0 {
+		overview.OfflineAgents = 0
+	}
+
+	var durationSamples []int64
+	var durationSum float64
+	var durationCount float64
+	var successCount, failedCount int
+
+	for _, exec := range executions {
+		overview.ExecutionsLast24h++ // Repurposed as "executions in range"
+
+		normalized := types.NormalizeExecutionStatus(exec.Status)
+		switch normalized {
+		case string(types.ExecutionStatusSucceeded):
+			successCount++
+		case string(types.ExecutionStatusFailed), string(types.ExecutionStatusCancelled), string(types.ExecutionStatusTimeout):
+			failedCount++
+		}
+
+		if exec.DurationMS != nil {
+			d := *exec.DurationMS
+			durationSamples = append(durationSamples, d)
+			durationSum += float64(d)
+			durationCount++
+		}
+	}
+
+	overview.ExecutionsLast7d = len(executions)
+	if len(executions) > 0 {
+		overview.SuccessRate24h = (float64(successCount) / float64(len(executions))) * 100
+	}
+	if durationCount > 0 {
+		overview.AverageDurationMs24h = durationSum / durationCount
+	}
+	overview.MedianDurationMs24h = computeMedian(durationSamples)
+
+	return overview
+}
+
+// buildExecutionTrendsForRange builds trends for the specified time range
+func buildExecutionTrendsForRange(executions []*types.Execution, startTime, endTime time.Time, preset TimeRangePreset) ExecutionTrends {
+	trend := ExecutionTrends{}
+	duration := endTime.Sub(startTime)
+
+	// Determine bucket size based on preset
+	var bucketDuration time.Duration
+	var numBuckets int
+	switch preset {
+	case TimeRangePreset1h:
+		bucketDuration = 5 * time.Minute
+		numBuckets = 12
+	case TimeRangePreset24h:
+		bucketDuration = time.Hour
+		numBuckets = 24
+	case TimeRangePreset7d:
+		bucketDuration = 24 * time.Hour
+		numBuckets = 7
+	case TimeRangePreset30d:
+		bucketDuration = 24 * time.Hour
+		numBuckets = 30
+	default:
+		// For custom, use day buckets capped at 30
+		bucketDuration = 24 * time.Hour
+		numBuckets = int(duration.Hours() / 24)
+		if numBuckets > 30 {
+			numBuckets = 30
+		}
+		if numBuckets < 1 {
+			numBuckets = 1
+		}
+	}
+
+	// Create buckets
+	dayBuckets := make(map[string]*ExecutionTrendPoint)
+	orderedKeys := make([]string, 0, numBuckets)
+
+	for i := numBuckets - 1; i >= 0; i-- {
+		bucketTime := endTime.Add(-time.Duration(i) * bucketDuration)
+		var key string
+		if bucketDuration >= 24*time.Hour {
+			key = bucketTime.Format("2006-01-02")
+		} else {
+			key = bucketTime.Format("2006-01-02T15:04")
+		}
+		orderedKeys = append(orderedKeys, key)
+		dayBuckets[key] = &ExecutionTrendPoint{Date: key}
+	}
+
+	var totalInRange, successInRange, failedInRange int
+	var durationSum float64
+	var durationCount float64
+
+	for _, exec := range executions {
+		var bucketKey string
+		if bucketDuration >= 24*time.Hour {
+			bucketKey = exec.StartedAt.Format("2006-01-02")
+		} else {
+			// Round to bucket
+			bucketKey = exec.StartedAt.Truncate(bucketDuration).Format("2006-01-02T15:04")
+		}
+
+		if point, ok := dayBuckets[bucketKey]; ok {
+			point.Total++
+			normalized := types.NormalizeExecutionStatus(exec.Status)
+			switch normalized {
+			case string(types.ExecutionStatusSucceeded):
+				point.Succeeded++
+			case string(types.ExecutionStatusFailed), string(types.ExecutionStatusCancelled), string(types.ExecutionStatusTimeout):
+				point.Failed++
+			}
+		}
+
+		totalInRange++
+		normalized := types.NormalizeExecutionStatus(exec.Status)
+		switch normalized {
+		case string(types.ExecutionStatusSucceeded):
+			successInRange++
+		case string(types.ExecutionStatusFailed), string(types.ExecutionStatusCancelled), string(types.ExecutionStatusTimeout):
+			failedInRange++
+		}
+
+		if exec.DurationMS != nil {
+			durationSum += float64(*exec.DurationMS)
+			durationCount++
+		}
+	}
+
+	trend.Last7Days = make([]ExecutionTrendPoint, 0, len(orderedKeys))
+	for _, key := range orderedKeys {
+		trend.Last7Days = append(trend.Last7Days, *dayBuckets[key])
+	}
+
+	trend.Last24h.Total = totalInRange
+	trend.Last24h.Succeeded = successInRange
+	trend.Last24h.Failed = failedInRange
+	if totalInRange > 0 {
+		trend.Last24h.SuccessRate = (float64(successInRange) / float64(totalInRange)) * 100
+		hours := duration.Hours()
+		if hours > 0 {
+			trend.Last24h.ThroughputPerHour = float64(totalInRange) / hours
+		}
+	}
+	if durationCount > 0 {
+		trend.Last24h.AverageDurationMs = durationSum / durationCount
+	}
+
+	return trend
+}
+
+// buildComparisonData creates comparison metrics between current and previous periods
+func buildComparisonData(current, previous EnhancedOverview, prevStart, prevEnd time.Time) *ComparisonData {
+	delta := EnhancedOverviewDelta{}
+
+	// Executions delta
+	delta.ExecutionsDelta = current.ExecutionsLast24h - previous.ExecutionsLast24h
+	if previous.ExecutionsLast24h > 0 {
+		delta.ExecutionsDeltaPct = (float64(delta.ExecutionsDelta) / float64(previous.ExecutionsLast24h)) * 100
+	}
+
+	// Success rate delta
+	delta.SuccessRateDelta = current.SuccessRate24h - previous.SuccessRate24h
+
+	// Duration delta
+	delta.AvgDurationDeltaMs = current.AverageDurationMs24h - previous.AverageDurationMs24h
+	if previous.AverageDurationMs24h > 0 {
+		delta.AvgDurationDeltaPct = (delta.AvgDurationDeltaMs / previous.AverageDurationMs24h) * 100
+	}
+
+	return &ComparisonData{
+		PreviousPeriod: TimeRangeInfo{
+			StartTime: prevStart,
+			EndTime:   prevEnd,
+		},
+		OverviewDelta: delta,
+	}
+}
+
+// buildHotspotSummary aggregates failures by reasoner
+func buildHotspotSummary(executions []*types.Execution) HotspotSummary {
+	type reasonerStats struct {
+		total      int
+		failed     int
+		errorMsgs  map[string]int
+	}
+
+	statsMap := make(map[string]*reasonerStats)
+	totalFailures := 0
+
+	for _, exec := range executions {
+		if exec.ReasonerID == "" {
+			continue
+		}
+
+		stats, ok := statsMap[exec.ReasonerID]
+		if !ok {
+			stats = &reasonerStats{errorMsgs: make(map[string]int)}
+			statsMap[exec.ReasonerID] = stats
+		}
+
+		stats.total++
+
+		normalized := types.NormalizeExecutionStatus(exec.Status)
+		if normalized == string(types.ExecutionStatusFailed) ||
+			normalized == string(types.ExecutionStatusCancelled) ||
+			normalized == string(types.ExecutionStatusTimeout) {
+			stats.failed++
+			totalFailures++
+
+			if exec.ErrorMessage != nil && *exec.ErrorMessage != "" {
+				// Truncate long error messages
+				errMsg := *exec.ErrorMessage
+				if len(errMsg) > 100 {
+					errMsg = errMsg[:100] + "..."
+				}
+				stats.errorMsgs[errMsg]++
+			}
+		}
+	}
+
+	// Convert to slice and sort by failure count
+	items := make([]HotspotItem, 0, len(statsMap))
+	for reasonerID, stats := range statsMap {
+		if stats.failed == 0 {
+			continue
+		}
+
+		item := HotspotItem{
+			ReasonerID:       reasonerID,
+			TotalExecutions:  stats.total,
+			FailedExecutions: stats.failed,
+		}
+
+		if stats.total > 0 {
+			item.ErrorRate = (float64(stats.failed) / float64(stats.total)) * 100
+		}
+		if totalFailures > 0 {
+			item.ContributionPct = (float64(stats.failed) / float64(totalFailures)) * 100
+		}
+
+		// Get top errors (up to 3)
+		topErrors := make([]ErrorCount, 0, 3)
+		for msg, count := range stats.errorMsgs {
+			topErrors = append(topErrors, ErrorCount{Message: msg, Count: count})
+		}
+		sort.Slice(topErrors, func(i, j int) bool {
+			return topErrors[i].Count > topErrors[j].Count
+		})
+		if len(topErrors) > 3 {
+			topErrors = topErrors[:3]
+		}
+		item.TopErrors = topErrors
+
+		items = append(items, item)
+	}
+
+	// Sort by failure count descending
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].FailedExecutions > items[j].FailedExecutions
+	})
+
+	// Limit to top 10
+	if len(items) > 10 {
+		items = items[:10]
+	}
+
+	return HotspotSummary{TopFailingReasoners: items}
+}
+
+// buildActivityPatterns creates a 7x24 heatmap of execution activity
+func buildActivityPatterns(executions []*types.Execution) ActivityPatterns {
+	// Initialize 7x24 grid (Sunday=0 through Saturday=6)
+	heatmap := make([][]HeatmapCell, 7)
+	for day := 0; day < 7; day++ {
+		heatmap[day] = make([]HeatmapCell, 24)
+	}
+
+	for _, exec := range executions {
+		dayOfWeek := int(exec.StartedAt.Weekday())
+		hourOfDay := exec.StartedAt.Hour()
+
+		heatmap[dayOfWeek][hourOfDay].Total++
+
+		normalized := types.NormalizeExecutionStatus(exec.Status)
+		if normalized == string(types.ExecutionStatusFailed) ||
+			normalized == string(types.ExecutionStatusCancelled) ||
+			normalized == string(types.ExecutionStatusTimeout) {
+			heatmap[dayOfWeek][hourOfDay].Failed++
+		}
+	}
+
+	// Calculate error rates
+	for day := 0; day < 7; day++ {
+		for hour := 0; hour < 24; hour++ {
+			if heatmap[day][hour].Total > 0 {
+				heatmap[day][hour].ErrorRate = (float64(heatmap[day][hour].Failed) / float64(heatmap[day][hour].Total)) * 100
+			}
+		}
+	}
+
+	return ActivityPatterns{HourlyHeatmap: heatmap}
 }
 
 func (h *DashboardHandler) buildEnhancedOverview(now time.Time, agents []*types.AgentNode, executions []*types.Execution) EnhancedOverview {
