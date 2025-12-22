@@ -337,6 +337,26 @@ func (s *stubStorage) CountExecutionVCs(ctx context.Context, filters types.VCFil
 	return 0, nil
 }
 
+// Observability webhook operations
+func (s *stubStorage) GetObservabilityWebhook(ctx context.Context) (*types.ObservabilityWebhookConfig, error) {
+	return nil, nil
+}
+func (s *stubStorage) SetObservabilityWebhook(ctx context.Context, config *types.ObservabilityWebhookConfig) error {
+	return nil
+}
+func (s *stubStorage) DeleteObservabilityWebhook(ctx context.Context) error { return nil }
+
+// Dead Letter Queue operations
+func (s *stubStorage) AddToDeadLetterQueue(ctx context.Context, event *types.ObservabilityEvent, errorMessage string, retryCount int) error {
+	return nil
+}
+func (s *stubStorage) GetDeadLetterQueueCount(ctx context.Context) (int64, error) { return 0, nil }
+func (s *stubStorage) GetDeadLetterQueue(ctx context.Context, limit, offset int) ([]types.ObservabilityDeadLetterEntry, error) {
+	return nil, nil
+}
+func (s *stubStorage) DeleteFromDeadLetterQueue(ctx context.Context, ids []int64) error { return nil }
+func (s *stubStorage) ClearDeadLetterQueue(ctx context.Context) error                   { return nil }
+
 // stubPayloadStore implements services.PayloadStore
 type stubPayloadStore struct{}
 
