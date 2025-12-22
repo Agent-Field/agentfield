@@ -51,6 +51,71 @@ The control plane orchestrates agent workflows, provides API endpoints, manages 
 4. Background jobs and workflows are queued via `internal/workflows`.
 5. Persistent state lives in PostgreSQL (default) and is versioned by `migrations`.
 
+### Observability Webhook
+
+The control plane provides a one-way data push mechanism for external observability systems. This allows you to build custom dashboards, alerting, and analytics by ingesting real-time lifecycle events from the control plane.
+
+**Purpose:**
+- Stream lifecycle events about agents, reasoners, and executions
+- Monitor what's online/offline across your agent fleet
+- Track workflow execution progress and outcomes
+- Build custom observability dashboards with your preferred tools
+
+**Event Types:**
+
+| Source | Events |
+|--------|--------|
+| Node | `node_registered`, `node_unregistered`, `node_status_changed` |
+| Reasoner | `reasoner_registered`, `reasoner_unregistered`, `reasoner_status_changed` |
+| Execution | `execution_created`, `execution_started`, `execution_completed`, `execution_failed` |
+
+**Configuration:**
+
+Configure via the REST API or Web UI:
+
+```bash
+# Enable webhook forwarding
+curl -X POST http://localhost:8080/api/v1/ui/observability/webhook \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://your-endpoint.example.com/events",
+    "secret": "your-hmac-secret",
+    "headers": {"Authorization": "Bearer your-token"}
+  }'
+```
+
+**Payload Format:**
+
+Events are delivered in batches as JSON:
+
+```json
+{
+  "batch_id": "uuid",
+  "timestamp": "2025-01-15T10:30:00Z",
+  "events": [
+    {
+      "event_type": "execution_completed",
+      "event_source": "execution",
+      "timestamp": "2025-01-15T10:29:59Z",
+      "data": {
+        "execution_id": "exec-123",
+        "agent_id": "my-agent",
+        "status": "completed"
+      }
+    }
+  ]
+}
+```
+
+**Security:**
+- HMAC-SHA256 signature in `X-AgentField-Signature` header when secret is configured
+- Custom headers for authentication (API keys, bearer tokens)
+
+**Reliability:**
+- Automatic retries with exponential backoff on delivery failures
+- Dead letter queue (DLQ) for events that fail after max retries
+- DLQ management via API: list failed events, redrive, or clear
+
 ## SDKs
 
 ### Python (`sdk/python`)

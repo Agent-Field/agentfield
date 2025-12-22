@@ -280,8 +280,11 @@ func (sm *StatusManager) GetAgentStatusSnapshot(ctx context.Context, nodeID stri
 
 // UpdateAgentStatus updates the agent status with reconciliation
 func (sm *StatusManager) UpdateAgentStatus(ctx context.Context, nodeID string, update *types.AgentStatusUpdate) error {
-	// Get current status
-	currentStatus, err := sm.GetAgentStatus(ctx, nodeID)
+	// Get current status using snapshot (no live health check) to preserve the true "old" state
+	// for event broadcasting. Using GetAgentStatus here would perform a live health check,
+	// which could return the same state as the update, causing oldStatus == newStatus
+	// and preventing status change events from being broadcast.
+	currentStatus, err := sm.GetAgentStatusSnapshot(ctx, nodeID, nil)
 	if err != nil {
 		return fmt.Errorf("failed to get current status: %w", err)
 	}
