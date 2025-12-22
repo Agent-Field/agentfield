@@ -175,6 +175,18 @@ type StorageProvider interface {
 	StoreWorkflowVC(ctx context.Context, workflowVCID, workflowID, sessionID string, componentVCIDs []string, status string, startTime, endTime *time.Time, totalSteps, completedSteps int, storageURI string, documentSizeBytes int64) error
 	GetWorkflowVC(ctx context.Context, workflowVCID string) (*types.WorkflowVCInfo, error)
 	ListWorkflowVCs(ctx context.Context, workflowID string) ([]*types.WorkflowVCInfo, error)
+
+	// Observability Webhook configuration (singleton pattern)
+	GetObservabilityWebhook(ctx context.Context) (*types.ObservabilityWebhookConfig, error)
+	SetObservabilityWebhook(ctx context.Context, config *types.ObservabilityWebhookConfig) error
+	DeleteObservabilityWebhook(ctx context.Context) error
+
+	// Observability Dead Letter Queue
+	AddToDeadLetterQueue(ctx context.Context, event *types.ObservabilityEvent, errorMessage string, retryCount int) error
+	GetDeadLetterQueueCount(ctx context.Context) (int64, error)
+	GetDeadLetterQueue(ctx context.Context, limit, offset int) ([]types.ObservabilityDeadLetterEntry, error)
+	DeleteFromDeadLetterQueue(ctx context.Context, ids []int64) error
+	ClearDeadLetterQueue(ctx context.Context) error
 }
 
 // ComponentDIDRequest represents a component DID to be stored

@@ -68,8 +68,9 @@ type AgentFieldServer struct {
 	registryWatcherCancel context.CancelFunc
 	adminGRPCServer       *grpc.Server
 	adminListener         net.Listener
-	adminGRPCPort         int
-	webhookDispatcher     services.WebhookDispatcher
+	adminGRPCPort            int
+	webhookDispatcher        services.WebhookDispatcher
+	observabilityForwarder   services.ObservabilityForwarder
 }
 
 // NewAgentFieldServer creates a new instance of the AgentFieldServer.
@@ -235,6 +236,21 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		logger.Logger.Warn().Err(err).Msg("failed to start webhook dispatcher")
 	}
 
+	// Initialize observability forwarder for external webhook integration
+	observabilityForwarder := services.NewObservabilityForwarder(storageProvider, services.ObservabilityForwarderConfig{
+		BatchSize:       10,
+		BatchTimeout:    time.Second,
+		HTTPTimeout:     10 * time.Second,
+		MaxAttempts:     3,
+		RetryBackoff:    time.Second,
+		MaxRetryBackoff: 30 * time.Second,
+		WorkerCount:     2,
+		QueueSize:       1000,
+	})
+	if err := observabilityForwarder.Start(context.Background()); err != nil {
+		logger.Logger.Warn().Err(err).Msg("failed to start observability forwarder")
+	}
+
 	// Initialize execution cleanup service
 	cleanupService := handlers.NewExecutionCleanupService(storageProvider, cfg.AgentField.ExecutionCleanup)
 
@@ -266,9 +282,10 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		agentfieldHome:        agentfieldHome,
 		cleanupService:        cleanupService,
 		payloadStore:          payloadStore,
-		webhookDispatcher:     webhookDispatcher,
-		registryWatcherCancel: nil,
-		adminGRPCPort:         adminPort,
+		webhookDispatcher:        webhookDispatcher,
+		observabilityForwarder:   observabilityForwarder,
+		registryWatcherCancel:    nil,
+		adminGRPCPort:            adminPort,
 	}, nil
 }
 
@@ -428,6 +445,15 @@ func (s *AgentFieldServer) Stop() error {
 	// Stop UI service heartbeat
 	if s.uiService != nil {
 		s.uiService.StopHeartbeat()
+	}
+
+	// Stop observability forwarder
+	if s.observabilityForwarder != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.observabilityForwarder.Stop(ctx); err != nil {
+			logger.Logger.Error().Err(err).Msg("Failed to stop observability forwarder")
+		}
 	}
 
 	// TODO: Implement graceful shutdown for HTTP, WebSocket, gRPC
@@ -1013,6 +1039,19 @@ func (s *AgentFieldServer) setupRoutes() {
 				Msg("DID routes NOT registered - conditions not met")
 		}
 		// Note: Removed unused/unimplemented DID endpoint placeholders for system simplification
+
+		// Settings API routes (observability webhook configuration)
+		settings := agentAPI.Group("/settings")
+		{
+			obsHandler := ui.NewObservabilityWebhookHandler(s.storage, s.observabilityForwarder)
+			settings.GET("/observability-webhook", obsHandler.GetWebhookHandler)
+			settings.POST("/observability-webhook", obsHandler.SetWebhookHandler)
+			settings.DELETE("/observability-webhook", obsHandler.DeleteWebhookHandler)
+			settings.GET("/observability-webhook/status", obsHandler.GetStatusHandler)
+			settings.POST("/observability-webhook/redrive", obsHandler.RedriveHandler)
+			settings.GET("/observability-webhook/dlq", obsHandler.GetDeadLetterQueueHandler)
+			settings.DELETE("/observability-webhook/dlq", obsHandler.ClearDeadLetterQueueHandler)
+		}
 	}
 
 	// SPA fallback - serve index.html for all /ui/* routes that don't match static files

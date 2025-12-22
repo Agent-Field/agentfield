@@ -382,3 +382,31 @@ type ExecutionWebhookModel struct {
 }
 
 func (ExecutionWebhookModel) TableName() string { return "execution_webhooks" }
+
+// ObservabilityWebhookModel represents the global observability webhook configuration.
+// This is a singleton table with only one row (id='global').
+type ObservabilityWebhookModel struct {
+	ID        string    `gorm:"column:id;primaryKey;default:'global'"`
+	URL       string    `gorm:"column:url;not null"`
+	Secret    *string   `gorm:"column:secret"`
+	Headers   string    `gorm:"column:headers;default:'{}'"`
+	Enabled   bool      `gorm:"column:enabled;not null;default:true"`
+	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt time.Time `gorm:"column:updated_at;autoUpdateTime"`
+}
+
+func (ObservabilityWebhookModel) TableName() string { return "observability_webhooks" }
+
+// ObservabilityDeadLetterQueueModel represents failed observability events for retry.
+type ObservabilityDeadLetterQueueModel struct {
+	ID             int64     `gorm:"column:id;primaryKey;autoIncrement"`
+	EventType      string    `gorm:"column:event_type;not null"`
+	EventSource    string    `gorm:"column:event_source;not null"`
+	EventTimestamp time.Time `gorm:"column:event_timestamp;not null"`
+	Payload        string    `gorm:"column:payload;not null"`
+	ErrorMessage   string    `gorm:"column:error_message;not null"`
+	RetryCount     int       `gorm:"column:retry_count;not null;default:0"`
+	CreatedAt      time.Time `gorm:"column:created_at;autoCreateTime"`
+}
+
+func (ObservabilityDeadLetterQueueModel) TableName() string { return "observability_dead_letter_queue" }

@@ -73,5 +73,18 @@ export const navigationSections: NavigationSection[] = [
         description: 'View and verify execution credentials'
       }
     ]
+  },
+  {
+    id: 'settings',
+    title: 'Settings',
+    items: [
+      {
+        id: 'observability-webhook',
+        label: 'Observability Webhook',
+        href: '/settings/observability-webhook',
+        icon: 'settings',
+        description: 'Configure external event forwarding'
+      }
+    ]
   }
 ];
