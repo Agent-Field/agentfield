@@ -87,18 +87,27 @@ func (h *ObservabilityWebhookHandler) SetWebhookHandler(c *gin.Context) {
 		enabled = *req.Enabled
 	}
 
+	// Check if updating existing
+	existing, _ := h.storage.GetObservabilityWebhook(ctx)
+
+	secret := req.Secret
+	if secret != nil && *secret == "" {
+		secret = nil
+	}
+	if secret == nil && existing != nil {
+		secret = existing.Secret
+	}
+
 	config := &types.ObservabilityWebhookConfig{
 		ID:        "global",
 		URL:       req.URL,
-		Secret:    req.Secret,
+		Secret:    secret,
 		Headers:   req.Headers,
 		Enabled:   enabled,
 		CreatedAt: time.Now().UTC(),
 		UpdatedAt: time.Now().UTC(),
 	}
 
-	// Check if updating existing
-	existing, _ := h.storage.GetObservabilityWebhook(ctx)
 	if existing != nil {
 		config.CreatedAt = existing.CreatedAt
 	}
