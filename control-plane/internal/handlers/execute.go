@@ -544,7 +544,7 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 }
 
 func (c *executionController) publishExecutionEvent(exec *types.Execution, status string, data map[string]interface{}) {
-	if c.eventBus == nil || exec == nil {
+	if exec == nil {
 		return
 	}
 
@@ -565,7 +565,10 @@ func (c *executionController) publishExecutionEvent(exec *types.Execution, statu
 		Timestamp:   time.Now(),
 		Data:        data,
 	}
-	c.eventBus.Publish(event)
+	if c.eventBus != nil {
+		c.eventBus.Publish(event)
+	}
+	events.GlobalExecutionEventBus.Publish(event)
 }
 
 // waitForExecutionCompletion waits for an execution to complete by subscribing to the event bus.
@@ -893,6 +896,11 @@ func (c *executionController) completeExecution(ctx context.Context, plan *prepa
 			if plan.webhookRegistered || (updated != nil && updated.WebhookRegistered) {
 				c.triggerWebhook(plan.exec.ExecutionID)
 			}
+			eventData := map[string]interface{}{}
+			if payload := decodeJSON(result); payload != nil {
+				eventData["result"] = payload
+			}
+			c.publishExecutionEvent(updated, string(types.ExecutionStatusSucceeded), eventData)
 			return nil
 		}
 		lastErr = err
@@ -939,6 +947,13 @@ func (c *executionController) failExecution(ctx context.Context, plan *preparedE
 			if plan.webhookRegistered || (updated != nil && updated.WebhookRegistered) {
 				c.triggerWebhook(plan.exec.ExecutionID)
 			}
+			eventData := map[string]interface{}{
+				"error": errMsg,
+			}
+			if payload := decodeJSON(result); payload != nil {
+				eventData["result"] = payload
+			}
+			c.publishExecutionEvent(updated, string(types.ExecutionStatusFailed), eventData)
 			return nil
 		}
 		lastErr = err

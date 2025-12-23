@@ -621,17 +621,21 @@ func (f *observabilityForwarder) computeBackoff(attempt int) time.Duration {
 // Event transformers
 
 func (f *observabilityForwarder) transformExecutionEvent(e events.ExecutionEvent) types.ObservabilityEvent {
+	data := map[string]interface{}{
+		"execution_id":  e.ExecutionID,
+		"workflow_id":   e.WorkflowID,
+		"agent_node_id": e.AgentNodeID,
+		"status":        e.Status,
+	}
+	if e.Data != nil {
+		data["payload"] = e.Data
+	}
+
 	return types.ObservabilityEvent{
 		EventType:   string(e.Type),
 		EventSource: "execution",
 		Timestamp:   e.Timestamp.Format(time.RFC3339),
-		Data: map[string]interface{}{
-			"execution_id":  e.ExecutionID,
-			"workflow_id":   e.WorkflowID,
-			"agent_node_id": e.AgentNodeID,
-			"status":        e.Status,
-			"data":          e.Data,
-		},
+		Data:        data,
 	}
 }
 
@@ -653,7 +657,7 @@ func (f *observabilityForwarder) transformNodeEvent(e events.NodeEvent) types.Ob
 		data["reason"] = e.Reason
 	}
 	if e.Data != nil {
-		data["data"] = e.Data
+		data["payload"] = e.Data
 	}
 
 	return types.ObservabilityEvent{
@@ -665,16 +669,20 @@ func (f *observabilityForwarder) transformNodeEvent(e events.NodeEvent) types.Ob
 }
 
 func (f *observabilityForwarder) transformReasonerEvent(e events.ReasonerEvent) types.ObservabilityEvent {
+	data := map[string]interface{}{
+		"reasoner_id": e.ReasonerID,
+		"node_id":     e.NodeID,
+		"status":      e.Status,
+	}
+	if e.Data != nil {
+		data["payload"] = e.Data
+	}
+
 	return types.ObservabilityEvent{
 		EventType:   string(e.Type),
 		EventSource: "reasoner",
 		Timestamp:   e.Timestamp.Format(time.RFC3339),
-		Data: map[string]interface{}{
-			"reasoner_id": e.ReasonerID,
-			"node_id":     e.NodeID,
-			"status":      e.Status,
-			"data":        e.Data,
-		},
+		Data:        data,
 	}
 }
 

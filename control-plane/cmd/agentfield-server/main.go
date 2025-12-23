@@ -260,8 +260,12 @@ func loadConfig(configFile string) (*config.Config, error) {
 		} else {
 			viper.SetConfigName("agentfield") // name of config file (without extension)
 			viper.SetConfigType("yaml")       // type of the config file
-			viper.AddConfigPath("./config")   // path to look for the config file in
-			viper.AddConfigPath(".")          // optionally look for config in the working directory
+			// Look for config in user's home directory first, then local paths
+			if homeDir, err := os.UserHomeDir(); err == nil {
+				viper.AddConfigPath(filepath.Join(homeDir, ".agentfield"))
+			}
+			viper.AddConfigPath("./config") // path to look for the config file in
+			viper.AddConfigPath(".")        // optionally look for config in the working directory
 		}
 
 		if err := viper.ReadInConfig(); err != nil {

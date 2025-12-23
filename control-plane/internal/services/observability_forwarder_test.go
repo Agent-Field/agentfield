@@ -298,6 +298,7 @@ func TestObservabilityForwarder_TransformExecutionEvent(t *testing.T) {
 	require.Equal(t, "wf-456", data["workflow_id"])
 	require.Equal(t, "agent-789", data["agent_node_id"])
 	require.Equal(t, "succeeded", data["status"])
+	require.Equal(t, execEvent.Data, data["payload"])
 }
 
 // Test event transformation - node events
@@ -331,6 +332,7 @@ func TestObservabilityForwarder_TransformNodeEvent(t *testing.T) {
 	require.Equal(t, "agent connected", data["reason"])
 	require.Equal(t, "offline", data["old_status"])
 	require.Equal(t, "online", data["new_status"])
+	require.Equal(t, nodeEvent.Data, data["payload"])
 }
 
 // Test event transformation - reasoner events
@@ -358,6 +360,7 @@ func TestObservabilityForwarder_TransformReasonerEvent(t *testing.T) {
 	require.Equal(t, "reasoner-123", data["reasoner_id"])
 	require.Equal(t, "node-456", data["node_id"])
 	require.Equal(t, "online", data["status"])
+	require.Equal(t, reasonerEvent.Data, data["payload"])
 }
 
 // Test backoff computation
