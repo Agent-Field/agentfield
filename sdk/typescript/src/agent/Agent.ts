@@ -31,6 +31,7 @@ import { DidClient } from '../did/DidClient.js';
 import { DidInterface } from '../did/DidInterface.js';
 import { DidManager } from '../did/DidManager.js';
 import { matchesPattern } from '../utils/pattern.js';
+import { toJsonSchema } from '../utils/schema.js';
 import { WorkflowReporter } from '../workflow/WorkflowReporter.js';
 import type { DiscoveryOptions } from '../types/agent.js';
 import type { MCPToolRegistration } from '../types/mcp.js';
@@ -742,8 +743,8 @@ export class Agent {
   private reasonerDefinitions() {
     return this.reasoners.all().map((r) => ({
       id: r.name,
-      input_schema: r.options?.inputSchema ?? {},
-      output_schema: r.options?.outputSchema ?? {},
+      input_schema: toJsonSchema(r.options?.inputSchema),
+      output_schema: toJsonSchema(r.options?.outputSchema),
       memory_config: r.options?.memoryConfig ?? {
         auto_inject: [] as string[],
         memory_retention: '',
@@ -756,7 +757,7 @@ export class Agent {
   private skillDefinitions() {
     return this.skills.all().map((s) => ({
       id: s.name,
-      input_schema: s.options?.inputSchema ?? {},
+      input_schema: toJsonSchema(s.options?.inputSchema),
       tags: s.options?.tags ?? []
     }));
   }
