@@ -16,14 +16,15 @@ jobs:
 
       - name: Detect AI assistance in commits
         id: detect
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           echo "Checking commits for AI assistance signatures..."
 
           # Get all commit messages and bodies
           COMMIT_LOG=$(git log --format='%s%n%b' origin/${{ github.base_ref }}..HEAD 2>/dev/null || echo "")
 
-          # Also check the PR body if available
-          PR_BODY="${{ github.event.pull_request.body }}"
+          # PR_BODY is passed via environment variable to avoid shell injection
 
           # Combine for searching
           SEARCH_TEXT="$COMMIT_LOG"$'\n'"$PR_BODY"
