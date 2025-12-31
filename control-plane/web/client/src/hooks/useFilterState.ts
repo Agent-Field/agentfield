@@ -16,7 +16,7 @@ interface UseFilterStateOptions {
 
 export interface UseFilterStateReturn {
   tags: FilterTag[];
-  filters: ExecutionFilters;
+  filters: Partial<ExecutionFilters>;
   grouping: ExecutionGrouping;
   hasFilters: boolean;
   updateTags: (tags: FilterTag[]) => void;
