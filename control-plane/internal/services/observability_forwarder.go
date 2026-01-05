@@ -28,6 +28,8 @@ type ObservabilityWebhookStore interface {
 	GetDeadLetterQueue(ctx context.Context, limit, offset int) ([]types.ObservabilityDeadLetterEntry, error)
 	DeleteFromDeadLetterQueue(ctx context.Context, ids []int64) error
 	ClearDeadLetterQueue(ctx context.Context) error
+	// ListAgents is used for periodic system state snapshots
+	ListAgents(ctx context.Context, filters types.AgentFilters) ([]*types.AgentNode, error)
 }
 
 // ObservabilityForwarder subscribes to all event buses and forwards events to configured webhook.
@@ -50,6 +52,7 @@ type ObservabilityForwarderConfig struct {
 	WorkerCount       int           // Number of parallel workers (default: 2)
 	QueueSize         int           // Internal queue size (default: 1000)
 	ResponseBodyLimit int           // Max response body to capture (default: 16KB)
+	SnapshotInterval  time.Duration // Interval for system state snapshots (default: 60s, 0 to disable)
 }
 
 type observabilityForwarder struct {
@@ -117,6 +120,9 @@ func normalizeObservabilityConfig(cfg ObservabilityForwarderConfig) Observabilit
 	if result.ResponseBodyLimit <= 0 {
 		result.ResponseBodyLimit = 16 * 1024
 	}
+	if result.SnapshotInterval == 0 {
+		result.SnapshotInterval = 60 * time.Second // Default to 1 minute snapshots
+	}
 	return result
 }
 
@@ -145,6 +151,12 @@ func (f *observabilityForwarder) Start(ctx context.Context) error {
 	go f.subscribeExecutionEvents()
 	go f.subscribeNodeEvents()
 	go f.subscribeReasonerEvents()
+
+	// Start system state snapshot publisher if interval is positive
+	if f.cfg.SnapshotInterval > 0 {
+		f.wg.Add(1)
+		go f.publishSystemStateSnapshots()
+	}
 
 	logger.Logger.Info().Msg("observability forwarder started")
 	return nil
@@ -422,6 +434,125 @@ func (f *observabilityForwarder) subscribeReasonerEvents() {
 			f.enqueueEvent(f.transformReasonerEvent(event))
 		}
 	}
+}
+
+// publishSystemStateSnapshots periodically publishes a snapshot of all agents and their reasoners.
+func (f *observabilityForwarder) publishSystemStateSnapshots() {
+	defer f.wg.Done()
+
+	ticker := time.NewTicker(f.cfg.SnapshotInterval)
+	defer ticker.Stop()
+
+	// Publish an initial snapshot on startup
+	f.publishSnapshot()
+
+	for {
+		select {
+		case <-f.ctx.Done():
+			return
+		case <-ticker.C:
+			f.publishSnapshot()
+		}
+	}
+}
+
+// publishSnapshot queries all agents and publishes a system state snapshot event.
+func (f *observabilityForwarder) publishSnapshot() {
+	// Check if webhook is configured and enabled before doing the work
+	f.mu.RLock()
+	cfg := f.webhookCfg
+	f.mu.RUnlock()
+
+	if cfg == nil || !cfg.Enabled {
+		return
+	}
+
+	// Query all agents
+	agents, err := f.store.ListAgents(context.Background(), types.AgentFilters{})
+	if err != nil {
+		logger.Logger.Warn().Err(err).Msg("failed to query agents for system state snapshot")
+		return
+	}
+
+	// Build the snapshot data
+	agentSnapshots := make([]map[string]interface{}, 0, len(agents))
+	var healthyCount, unhealthyCount, activeCount, inactiveCount int
+
+	for _, agent := range agents {
+		// Count by health status
+		switch agent.HealthStatus {
+		case types.HealthStatusActive:
+			healthyCount++
+		default:
+			unhealthyCount++
+		}
+
+		// Count by lifecycle status
+		switch agent.LifecycleStatus {
+		case types.AgentStatusReady:
+			activeCount++
+		default:
+			inactiveCount++
+		}
+
+		// Build reasoner list
+		reasoners := make([]map[string]interface{}, 0, len(agent.Reasoners))
+		for _, r := range agent.Reasoners {
+			reasoners = append(reasoners, map[string]interface{}{
+				"id":            r.ID,
+				"input_schema":  r.InputSchema,
+				"output_schema": r.OutputSchema,
+			})
+		}
+
+		// Build skills list
+		skills := make([]map[string]interface{}, 0, len(agent.Skills))
+		for _, s := range agent.Skills {
+			skills = append(skills, map[string]interface{}{
+				"id":           s.ID,
+				"input_schema": s.InputSchema,
+				"tags":         s.Tags,
+			})
+		}
+
+		agentSnapshots = append(agentSnapshots, map[string]interface{}{
+			"id":               agent.ID,
+			"base_url":         agent.BaseURL,
+			"version":          agent.Version,
+			"deployment_type":  agent.DeploymentType,
+			"health_status":    string(agent.HealthStatus),
+			"lifecycle_status": string(agent.LifecycleStatus),
+			"last_heartbeat":   agent.LastHeartbeat.Format(time.RFC3339),
+			"registered_at":    agent.RegisteredAt.Format(time.RFC3339),
+			"reasoners":        reasoners,
+			"skills":           skills,
+		})
+	}
+
+	snapshotData := map[string]interface{}{
+		"agents":          agentSnapshots,
+		"total_agents":    len(agents),
+		"healthy_agents":  healthyCount,
+		"unhealthy_agents": unhealthyCount,
+		"active_agents":   activeCount,
+		"inactive_agents": inactiveCount,
+	}
+
+	// Create and enqueue the observability event directly
+	event := types.ObservabilityEvent{
+		EventType:   string(events.SystemStateSnapshot),
+		EventSource: "system",
+		Timestamp:   time.Now().Format(time.RFC3339),
+		Data:        snapshotData,
+	}
+
+	f.enqueueEvent(event)
+
+	logger.Logger.Debug().
+		Int("total_agents", len(agents)).
+		Int("healthy", healthyCount).
+		Int("active", activeCount).
+		Msg("published system state snapshot")
 }
 
 // enqueueEvent adds an event to the queue, dropping if full.

@@ -128,6 +128,10 @@ func (hm *HealthMonitor) UnregisterAgent(nodeID string) {
 			if err := hm.storage.UpdateAgentHealth(ctx, nodeID, types.HealthStatusInactive); err != nil {
 				logger.Logger.Error().Err(err).Msgf("❌ Failed to update agent %s status to inactive", nodeID)
 			}
+			// Also update lifecycle status to offline for consistency
+			if err := hm.storage.UpdateAgentLifecycleStatus(ctx, nodeID, types.AgentStatusOffline); err != nil {
+				logger.Logger.Error().Err(err).Msgf("❌ Failed to update agent %s lifecycle status to offline", nodeID)
+			}
 
 			// Broadcast offline event (legacy)
 			if hm.uiService != nil {
@@ -332,6 +336,17 @@ func (hm *HealthMonitor) checkAgentHealth(agent *ActiveAgent) {
 				if err := hm.storage.UpdateAgentHealth(ctx, agent.NodeID, newStatus); err != nil {
 					logger.Logger.Error().Err(err).Msgf("❌ Failed to update health status for agent %s", agent.NodeID)
 					return
+				}
+
+				// Also update lifecycle status for consistency
+				var lifecycleStatus types.AgentLifecycleStatus
+				if newStatus == types.HealthStatusActive {
+					lifecycleStatus = types.AgentStatusReady
+				} else {
+					lifecycleStatus = types.AgentStatusOffline
+				}
+				if err := hm.storage.UpdateAgentLifecycleStatus(ctx, agent.NodeID, lifecycleStatus); err != nil {
+					logger.Logger.Error().Err(err).Msgf("❌ Failed to update lifecycle status for agent %s", agent.NodeID)
 				}
 
 				// Broadcast status change events (legacy)

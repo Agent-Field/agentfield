@@ -300,6 +300,26 @@ func (sm *StatusManager) UpdateAgentStatus(ctx context.Context, nodeID string, u
 			if err := sm.handleStateTransition(nodeID, &newStatus, *update.State, update.Reason); err != nil {
 				return fmt.Errorf("failed to handle state transition: %w", err)
 			}
+
+			// Auto-sync lifecycle status with state changes to ensure consistency
+			// This prevents lifecycle_status from remaining "ready" when the agent goes offline
+			switch *update.State {
+			case types.AgentStateInactive, types.AgentStateStopping:
+				// Agent is going offline - set lifecycle to offline
+				if newStatus.LifecycleStatus != types.AgentStatusOffline {
+					newStatus.LifecycleStatus = types.AgentStatusOffline
+				}
+			case types.AgentStateActive:
+				// Agent is coming online - set lifecycle to ready if it was offline
+				if newStatus.LifecycleStatus == types.AgentStatusOffline || newStatus.LifecycleStatus == "" {
+					newStatus.LifecycleStatus = types.AgentStatusReady
+				}
+			case types.AgentStateStarting:
+				// Agent is starting - set lifecycle to starting
+				if newStatus.LifecycleStatus == types.AgentStatusOffline || newStatus.LifecycleStatus == "" {
+					newStatus.LifecycleStatus = types.AgentStatusStarting
+				}
+			}
 		}
 	}
 
@@ -307,6 +327,7 @@ func (sm *StatusManager) UpdateAgentStatus(ctx context.Context, nodeID string, u
 		newStatus.HealthScore = *update.HealthScore
 	}
 
+	// Apply explicit lifecycle status update (can override the auto-sync above)
 	if update.LifecycleStatus != nil {
 		newStatus.LifecycleStatus = *update.LifecycleStatus
 	}
@@ -479,6 +500,40 @@ func (sm *StatusManager) isImmediateTransition(from, to types.AgentState) bool {
 
 // persistStatus persists the status to storage
 func (sm *StatusManager) persistStatus(ctx context.Context, nodeID string, status *types.AgentStatus) error {
+	// DEFENSIVE: Enforce lifecycle_status consistency with state before persisting.
+	// This ensures that even if the auto-sync logic didn't run (e.g., state wasn't changing),
+	// the lifecycle_status will be correct in storage. This fixes the bug where offline nodes
+	// were incorrectly showing lifecycle_status: "ready" in events and snapshots.
+	switch status.State {
+	case types.AgentStateInactive, types.AgentStateStopping:
+		if status.LifecycleStatus != types.AgentStatusOffline {
+			logger.Logger.Debug().
+				Str("node_id", nodeID).
+				Str("state", string(status.State)).
+				Str("old_lifecycle", string(status.LifecycleStatus)).
+				Msg("🔧 Enforcing lifecycle_status=offline for inactive/stopping agent")
+			status.LifecycleStatus = types.AgentStatusOffline
+		}
+	case types.AgentStateActive:
+		if status.LifecycleStatus == types.AgentStatusOffline {
+			logger.Logger.Debug().
+				Str("node_id", nodeID).
+				Str("state", string(status.State)).
+				Str("old_lifecycle", string(status.LifecycleStatus)).
+				Msg("🔧 Enforcing lifecycle_status=ready for active agent")
+			status.LifecycleStatus = types.AgentStatusReady
+		}
+	case types.AgentStateStarting:
+		if status.LifecycleStatus == types.AgentStatusOffline {
+			logger.Logger.Debug().
+				Str("node_id", nodeID).
+				Str("state", string(status.State)).
+				Str("old_lifecycle", string(status.LifecycleStatus)).
+				Msg("🔧 Enforcing lifecycle_status=starting for starting agent")
+			status.LifecycleStatus = types.AgentStatusStarting
+		}
+	}
+
 	// Update health status
 	if err := sm.storage.UpdateAgentHealth(ctx, nodeID, status.HealthStatus); err != nil {
 		return fmt.Errorf("failed to update health status: %w", err)

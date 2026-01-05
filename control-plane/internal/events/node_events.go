@@ -28,6 +28,9 @@ const (
 	NodeStateTransition      NodeEventType = "node_state_transition"
 	NodeStatusRefreshed      NodeEventType = "node_status_refreshed"
 	BulkStatusUpdate         NodeEventType = "bulk_status_update"
+
+	// System state snapshot - periodic inventory of all agents and reasoners
+	SystemStateSnapshot NodeEventType = "system_state_snapshot"
 )
 
 // NodeEvent represents a node state change event
@@ -465,6 +468,19 @@ func PublishNodeHealthChangedEnhanced(nodeID string, oldHealth, newHealth string
 	}
 
 	logger.Logger.Debug().Msgf("🔍 NODE_EVENT_DEBUG: Publishing Enhanced NodeHealthChanged event - NodeID: %s, %s -> %s", nodeID, oldHealth, newHealth)
+
+	GlobalNodeEventBus.Publish(event)
+}
+
+// PublishSystemStateSnapshot publishes a system state snapshot event containing all agents and their reasoners
+func PublishSystemStateSnapshot(data interface{}) {
+	event := NodeEvent{
+		Type:      SystemStateSnapshot,
+		Timestamp: time.Now(),
+		Data:      data,
+	}
+
+	logger.Logger.Debug().Msg("[NodeEventBus] Publishing SystemStateSnapshot event")
 
 	GlobalNodeEventBus.Publish(event)
 }
