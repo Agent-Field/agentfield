@@ -1,30 +1,31 @@
 #!/bin/bash
-# Start control plane in Docker with hot-reload
+# Start control plane with hot-reload using Air
 #
 # Usage:
-#   ./dev.sh           # SQLite mode (default)
-#   ./dev.sh postgres  # PostgreSQL mode
-#   ./dev.sh down      # Stop containers
-#   ./dev.sh clean     # Stop and remove volumes
+#   ./dev.sh           # Start with hot-reload (SQLite mode)
+#   ./dev.sh postgres  # Start with PostgreSQL (set AGENTFIELD_DATABASE_URL first)
+#
+# Prerequisites:
+#   go install github.com/air-verse/air@v1.61.7
 
 set -e
 cd "$(dirname "$0")"
 
+# Check if air is installed
+if ! command -v air &> /dev/null; then
+    echo "Air not found. Installing..."
+    go install github.com/air-verse/air@v1.61.7
+fi
+
 case "${1:-}" in
   postgres|pg)
-    echo "Starting control plane with PostgreSQL..."
-    docker compose -f docker-compose.dev.yml --profile postgres up
-    ;;
-  down|stop)
-    echo "Stopping containers..."
-    docker compose -f docker-compose.dev.yml --profile postgres down
-    ;;
-  clean)
-    echo "Stopping and removing volumes..."
-    docker compose -f docker-compose.dev.yml --profile postgres down -v
+    echo "Starting control plane with PostgreSQL (hot-reload)..."
+    export AGENTFIELD_STORAGE_MODE=postgresql
+    air -c .air.toml
     ;;
   *)
-    echo "Starting control plane with SQLite..."
-    docker compose -f docker-compose.dev.yml up
+    echo "Starting control plane with SQLite (hot-reload)..."
+    export AGENTFIELD_STORAGE_MODE=local
+    air -c .air.toml
     ;;
 esac
