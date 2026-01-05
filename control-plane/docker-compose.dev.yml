@@ -1,0 +1,87 @@
+# Docker Compose for local development with hot-reload
+#
+# Usage:
+#   docker compose -f docker-compose.dev.yml up        # SQLite mode (default)
+#   docker compose -f docker-compose.dev.yml --profile postgres up  # PostgreSQL mode
+#
+# The control plane will automatically rebuild and restart when Go files change.
+
+services:
+  control-plane:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    ports:
+      - "8080:8080"
+    environment:
+      # SQLite/local mode (no external dependencies)
+      AGENTFIELD_STORAGE_MODE: local
+      AGENTFIELD_HOME: /data
+      AGENTFIELD_HTTP_ADDR: 0.0.0.0:8080
+      AGENTFIELD_LOG_LEVEL: debug
+      GIN_MODE: debug
+      CGO_ENABLED: "1"
+    volumes:
+      # Mount source code for hot-reload
+      - .:/app
+      # Persist data directory
+      - dev-data:/data
+      # Use named volume for Go build cache (faster rebuilds)
+      - go-build-cache:/root/.cache/go-build
+      - go-mod-cache:/go/pkg/mod
+    # Keep container running and show logs
+    tty: true
+    stdin_open: true
+
+  # PostgreSQL mode - use with: docker compose --profile postgres up
+  control-plane-pg:
+    profiles: ["postgres"]
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    ports:
+      - "8080:8080"
+    environment:
+      AGENTFIELD_STORAGE_MODE: postgres
+      AGENTFIELD_HOME: /data
+      AGENTFIELD_HTTP_ADDR: 0.0.0.0:8080
+      AGENTFIELD_LOG_LEVEL: debug
+      AGENTFIELD_DATABASE_URL: postgres://agentfield:agentfield@postgres:5432/agentfield?sslmode=disable
+      AGENTFIELD_POSTGRES_URL: postgres://agentfield:agentfield@postgres:5432/agentfield?sslmode=disable
+      AGENTFIELD_STORAGE_POSTGRES_URL: postgres://agentfield:agentfield@postgres:5432/agentfield?sslmode=disable
+      GIN_MODE: debug
+      CGO_ENABLED: "1"
+    volumes:
+      - .:/app
+      - dev-data-pg:/data
+      - go-build-cache:/root/.cache/go-build
+      - go-mod-cache:/go/pkg/mod
+    depends_on:
+      postgres:
+        condition: service_healthy
+    tty: true
+    stdin_open: true
+
+  postgres:
+    profiles: ["postgres"]
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: agentfield
+      POSTGRES_PASSWORD: agentfield
+      POSTGRES_DB: agentfield
+    volumes:
+      - pgdata-dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentfield"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "5432:5432"
+
+volumes:
+  dev-data:
+  dev-data-pg:
+  pgdata-dev:
+  go-build-cache:
+  go-mod-cache:

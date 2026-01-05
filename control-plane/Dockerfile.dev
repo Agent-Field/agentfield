@@ -1,0 +1,34 @@
+# Development Dockerfile with hot-reload support
+# Uses Air (https://github.com/air-verse/air) for automatic rebuild on file changes
+
+FROM golang:1.24-bookworm
+
+# Install build dependencies for CGO (required for SQLite)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Air for hot-reload (v1.61.7 is compatible with Go 1.24)
+RUN go install github.com/air-verse/air@v1.61.7
+
+WORKDIR /app
+
+# Copy go.mod and go.sum first for better layer caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy Air configuration
+COPY .air.toml ./
+
+# The rest of the source code will be mounted as a volume
+# This allows hot-reload to detect changes
+
+# Create tmp directory for Air builds
+RUN mkdir -p tmp
+
+# Expose the default port
+EXPOSE 8080
+
+# Run Air for hot-reload development
+CMD ["air", "-c", ".air.toml"]
