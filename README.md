@@ -14,6 +14,7 @@
 [![Go](https://img.shields.io/badge/go-1.21+-00ADD8.svg?style=flat&labelColor=1e1e2e&logo=go&logoColor=white)](https://go.dev/)
 [![Python](https://img.shields.io/badge/python-3.9+-3776AB.svg?style=flat&labelColor=1e1e2e&logo=python&logoColor=white)](https://www.python.org/)
 [![Deploy with Docker](https://img.shields.io/badge/deploy-docker-2496ED.svg?style=flat&labelColor=1e1e2e&logo=docker&logoColor=white)](https://docs.docker.com/)
+[![Discord](https://img.shields.io/badge/discord-join%20us-5865F2.svg?style=flat&labelColor=1e1e2e&logo=discord&logoColor=white)](https://discord.gg/aBHaXMkpqh)
 
 **[Docs](https://agentfield.ai/docs)** | **[Quick Start](https://agentfield.ai/docs/quick-start)** | **[Python SDK](https://agentfield.ai/api/python-sdk/overview)** | **[Go SDK](https://agentfield.ai/api/go-sdk/overview)** | **[TypeScript SDK](https://agentfield.ai/api/typescript-sdk/overview)** | **[REST API](https://agentfield.ai/api/rest-api/overview)**
 
