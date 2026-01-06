@@ -110,7 +110,7 @@ pip install --pre agentfield
 npm install @agentfield/sdk@next
 
 # Docker
-docker pull agentfield/control-plane:staging-0.1.19-rc.1
+docker pull agentfield/control-plane:staging-0.1.28-rc.4
 ```
 
 ### Production Release - MANUAL
@@ -197,7 +197,7 @@ agentfield-X.Y.Z.tar.gz             # Python source distribution
 curl -fsSL https://agentfield.ai/install.sh | bash
 
 # Specific version
-VERSION=v0.1.19 curl -fsSL https://agentfield.ai/install.sh | bash
+VERSION=v0.1.28 curl -fsSL https://agentfield.ai/install.sh | bash
 ```
 
 ### Staging Install
@@ -210,7 +210,7 @@ curl -fsSL https://agentfield.ai/install.sh | bash -s -- --staging
 STAGING=1 curl -fsSL https://agentfield.ai/install.sh | bash
 
 # Specific prerelease version
-VERSION=v0.1.19-rc.1 curl -fsSL https://agentfield.ai/install.sh | bash -s -- --staging
+VERSION=v0.1.28-rc.4 curl -fsSL https://agentfield.ai/install.sh | bash -s -- --staging
 ```
 
 **Key differences when using `--staging`:**
