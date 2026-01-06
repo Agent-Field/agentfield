@@ -1,0 +1,263 @@
+name: Contributor Reminders
+
+# Reminds assigned contributors about their issues and frees up stale assignments
+# so other contributors can pick up the work
+
+on:
+  schedule:
+    # Run daily at 9 AM UTC
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (no actual changes)'
+        type: boolean
+        default: false
+
+permissions:
+  issues: write
+  pull-requests: read
+
+env:
+  # Configurable thresholds (in days)
+  FIRST_REMINDER_DAYS: 7
+  SECOND_REMINDER_DAYS: 14
+  UNASSIGN_DAYS: 21
+
+jobs:
+  check-assigned-issues:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check assigned issues without linked PRs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const dryRun = context.payload.inputs?.dry_run === 'true';
+            const firstReminderDays = parseInt(process.env.FIRST_REMINDER_DAYS);
+            const secondReminderDays = parseInt(process.env.SECOND_REMINDER_DAYS);
+            const unassignDays = parseInt(process.env.UNASSIGN_DAYS);
+
+            console.log(`Configuration: First reminder: ${firstReminderDays}d, Second: ${secondReminderDays}d, Unassign: ${unassignDays}d`);
+            console.log(`Dry run mode: ${dryRun}`);
+
+            // Get all open issues that have assignees
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100
+            });
+
+            // Filter to only issues (not PRs) with assignees
+            const assignedIssues = issues.filter(issue =>
+              !issue.pull_request &&
+              issue.assignees &&
+              issue.assignees.length > 0
+            );
+
+            console.log(`Found ${assignedIssues.length} assigned issues`);
+
+            // Get all open PRs to check for linked issues
+            const pullRequests = await github.paginate(github.rest.pulls.list, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100
+            });
+
+            // Extract issue numbers referenced in PR bodies/titles
+            const linkedIssueNumbers = new Set();
+            for (const pr of pullRequests) {
+              const text = `${pr.title} ${pr.body || ''}`;
+              // Match patterns like: #123, fixes #123, closes #123, resolves #123
+              const matches = text.match(/(close[sd]?|fix(e[sd])?|resolve[sd]?)?[\s:]*#(\d+)/gi) || [];
+              for (const match of matches) {
+                const num = match.match(/#(\d+)/);
+                if (num) linkedIssueNumbers.add(parseInt(num[1]));
+              }
+            }
+
+            console.log(`Issues with linked PRs: ${[...linkedIssueNumbers].join(', ') || 'none'}`);
+
+            const now = new Date();
+            let summary = { reminded: 0, secondReminder: 0, unassigned: 0, skipped: 0 };
+
+            for (const issue of assignedIssues) {
+              const issueNumber = issue.number;
+              const assignees = issue.assignees.map(a => a.login);
+              const labels = issue.labels.map(l => l.name);
+
+              // Skip if there's already a linked PR
+              if (linkedIssueNumbers.has(issueNumber)) {
+                console.log(`#${issueNumber}: Has linked PR, skipping`);
+                summary.skipped++;
+                continue;
+              }
+
+              // Skip issues with certain labels (e.g., on-hold, blocked)
+              if (labels.some(l => ['on-hold', 'blocked', 'wontfix', 'duplicate'].includes(l.toLowerCase()))) {
+                console.log(`#${issueNumber}: Has blocking label, skipping`);
+                summary.skipped++;
+                continue;
+              }
+
+              // Find the most recent assignment event or use issue creation date
+              const events = await github.rest.issues.listEvents({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                per_page: 100
+              });
+
+              // Find the most recent assignment
+              const assignmentEvents = events.data
+                .filter(e => e.event === 'assigned')
+                .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+              const lastAssignmentDate = assignmentEvents.length > 0
+                ? new Date(assignmentEvents[0].created_at)
+                : new Date(issue.created_at);
+
+              const daysSinceAssignment = Math.floor((now - lastAssignmentDate) / (1000 * 60 * 60 * 24));
+
+              console.log(`#${issueNumber}: Assigned to ${assignees.join(', ')}, ${daysSinceAssignment} days since assignment`);
+
+              // Check for recent activity from assignee (comments)
+              const comments = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                per_page: 50
+              });
+
+              const recentAssigneeComment = comments.data
+                .filter(c => assignees.includes(c.user.login))
+                .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+
+              const lastActivityDate = recentAssigneeComment
+                ? new Date(recentAssigneeComment.created_at)
+                : lastAssignmentDate;
+
+              const daysSinceActivity = Math.floor((now - lastActivityDate) / (1000 * 60 * 60 * 24));
+
+              // Check existing reminder labels
+              const hasFirstReminder = labels.includes('reminder-sent');
+              const hasSecondReminder = labels.includes('needs-update');
+
+              // Determine action based on days since activity
+              if (daysSinceActivity >= unassignDays && hasSecondReminder) {
+                // Time to unassign
+                console.log(`#${issueNumber}: Unassigning after ${daysSinceActivity} days of inactivity`);
+
+                if (!dryRun) {
+                  // Remove assignees
+                  for (const assignee of assignees) {
+                    await github.rest.issues.removeAssignees({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      issue_number: issueNumber,
+                      assignees: [assignee]
+                    });
+                  }
+
+                  // Update labels
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issueNumber,
+                    name: 'needs-update'
+                  }).catch(() => {});
+
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issueNumber,
+                    name: 'reminder-sent'
+                  }).catch(() => {});
+
+                  await github.rest.issues.addLabels({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issueNumber,
+                    labels: ['help wanted']
+                  });
+
+                  // Post comment
+                  const assigneeMentions = assignees.map(a => `@${a}`).join(' ');
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issueNumber,
+                    body: `Hi ${assigneeMentions},\n\nIt's been ${daysSinceActivity} days since the last update on this issue. To keep the project moving, we've unassigned this issue so other contributors can pick it up.\n\n**No worries at all!** Life happens, and we totally understand. If you'd like to continue working on this, just comment here and we'll reassign it to you.\n\nThis issue is now available for anyone who'd like to contribute. Check out our contribution guidelines if you're interested!\n\nThanks for your interest in AgentField! :heart:`
+                  });
+                }
+                summary.unassigned++;
+
+              } else if (daysSinceActivity >= secondReminderDays && hasFirstReminder && !hasSecondReminder) {
+                // Send second reminder
+                console.log(`#${issueNumber}: Sending second reminder after ${daysSinceActivity} days`);
+
+                if (!dryRun) {
+                  await github.rest.issues.addLabels({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issueNumber,
+                    labels: ['needs-update']
+                  });
+
+                  const assigneeMentions = assignees.map(a => `@${a}`).join(' ');
+                  const daysLeft = unassignDays - daysSinceActivity;
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issueNumber,
+                    body: `Hi ${assigneeMentions},\n\nJust checking in again! It's been ${daysSinceActivity} days since we last heard from you on this issue.\n\n**Quick options:**\n- :speech_balloon: Drop a comment with a progress update\n- :link: Link a draft PR if you've started working on it\n- :wave: Let us know if you'd like to be unassigned (no judgment!)\n\nIf we don't hear back in **${daysLeft} days**, we'll unassign this issue to give other contributors a chance to help.\n\nThanks for understanding!`
+                  });
+                }
+                summary.secondReminder++;
+
+              } else if (daysSinceActivity >= firstReminderDays && !hasFirstReminder) {
+                // Send first reminder
+                console.log(`#${issueNumber}: Sending first reminder after ${daysSinceActivity} days`);
+
+                if (!dryRun) {
+                  await github.rest.issues.addLabels({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issueNumber,
+                    labels: ['reminder-sent']
+                  });
+
+                  const assigneeMentions = assignees.map(a => `@${a}`).join(' ');
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issueNumber,
+                    body: `Hey ${assigneeMentions}! :wave:\n\nJust a friendly reminder that you're assigned to this issue. It's been about a week since assignment.\n\n**How's it going?** We'd love to hear:\n- Any progress updates?\n- Running into any blockers we can help with?\n- Need more time? (Totally fine!)\n\nA quick comment helps us know you're still interested. If your plans have changed, no worries at all - just let us know and we can find another contributor.\n\nThanks for contributing to AgentField! :rocket:`
+                  });
+                }
+                summary.reminded++;
+
+              } else {
+                console.log(`#${issueNumber}: No action needed (${daysSinceActivity} days since activity)`);
+                summary.skipped++;
+              }
+            }
+
+            // Output summary
+            console.log('\n--- Summary ---');
+            console.log(`First reminders sent: ${summary.reminded}`);
+            console.log(`Second reminders sent: ${summary.secondReminder}`);
+            console.log(`Issues unassigned: ${summary.unassigned}`);
+            console.log(`Issues skipped: ${summary.skipped}`);
+
+            // Create summary for GitHub Actions
+            const summaryText = `## Contributor Reminder Summary\n\n` +
+              `| Action | Count |\n|--------|-------|\n` +
+              `| First reminders | ${summary.reminded} |\n` +
+              `| Second reminders | ${summary.secondReminder} |\n` +
+              `| Unassigned | ${summary.unassigned} |\n` +
+              `| Skipped | ${summary.skipped} |\n\n` +
+              `*Dry run: ${dryRun}*`;
+
+            await core.summary.addRaw(summaryText).write();
