@@ -1,6 +1,6 @@
 services:
   control-plane:
-    image: ghcr.io/agent-field/agentfield-control-plane:latest
+    image: agentfield/control-plane:latest
     environment:
       AGENTFIELD_STORAGE_MODE: local
       AGENTFIELD_HTTP_ADDR: 0.0.0.0:8080

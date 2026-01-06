@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: control-plane
-          image: ghcr.io/agent-field/agentfield-control-plane:latest
+          image: agentfield/control-plane:latest
           args: ["server", "--open=false"]
           ports:
             - name: http

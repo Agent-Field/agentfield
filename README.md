@@ -230,7 +230,7 @@ If running the **control plane in Docker** and your **agent node runs outside th
 
 **Option A (agent on your host, control plane in Docker):**
 ```bash
-docker run -p 8080:8080 ghcr.io/agent-field/agentfield-control-plane:latest
+docker run -p 8080:8080 agentfield/control-plane:latest
 
 # Python agents (recommended)
 export AGENTFIELD_URL="http://localhost:8080"

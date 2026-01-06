@@ -2,7 +2,7 @@ controlPlane:
   replicaCount: 1
 
   image:
-    repository: ghcr.io/agent-field/agentfield-control-plane
+    repository: agentfield/control-plane
     tag: latest
     pullPolicy: IfNotPresent
 
