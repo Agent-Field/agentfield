@@ -460,14 +460,12 @@ jobs:
         if: needs.prepare.outputs.publish_docker == 'true'
         id: docker_meta
         env:
-          OWNER: ${{ github.repository_owner }}
           TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
           VERSION: ${{ needs.prepare.outputs.version }}
           ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
         run: |
           set -euo pipefail
-          owner="$(echo "${OWNER}" | tr '[:upper:]' '[:lower:]')"
-          image="ghcr.io/${owner}/agentfield-control-plane"
+          image="agentfield/control-plane"
           echo "image=${image}" >> "$GITHUB_OUTPUT"
 
           if [ "${ENVIRONMENT}" = "staging" ]; then
@@ -482,13 +480,12 @@ jobs:
         if: needs.prepare.outputs.publish_docker == 'true'
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GitHub Container Registry
+      - name: Log in to Docker Hub
         if: needs.prepare.outputs.publish_docker == 'true'
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push control plane image
         if: needs.prepare.outputs.publish_docker == 'true'
