@@ -1,0 +1,6 @@
+venv/
+venv312/
+__pycache__/
+*.pyc
+benchmark
+.DS_Store

@@ -1,0 +1,16 @@
+{
+  "name": "agentfield-ts-benchmark",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "benchmark": "tsx benchmark.ts",
+    "benchmark:json": "tsx benchmark.ts --json"
+  },
+  "dependencies": {
+    "@agent-field/sdk": "file:../../../../sdk/typescript"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0",
+    "@types/node": "^20.0.0"
+  }
+}
