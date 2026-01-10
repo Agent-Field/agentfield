@@ -10,25 +10,57 @@ from agentfield.rate_limiter import StatelessRateLimiter
 from httpx import HTTPStatusError
 from pydantic import BaseModel
 
-# Expose module-level symbols for patching in tests
-try:
-    import litellm as litellm  # type: ignore
-except Exception:  # pragma: no cover - test environments may not have litellm
+# Lazy loading for heavy LLM libraries to reduce memory footprint
+# These are only imported when AI features are actually used
+_litellm = None
+_openai = None
 
-    class _LiteLLMStub:
-        pass
 
-    litellm = _LiteLLMStub()  # type: ignore
+def _get_litellm():
+    """Lazy import of litellm - only loads when AI features are used."""
+    global _litellm
+    if _litellm is None:
+        try:
+            import litellm
+            litellm.suppress_debug_info = True
+            _litellm = litellm
+        except Exception:  # pragma: no cover
+            class _LiteLLMStub:
+                pass
+            _litellm = _LiteLLMStub()
+    return _litellm
 
-try:
-    import openai as openai  # type: ignore
-except Exception:  # pragma: no cover - test environments may not have openai
 
-    class _OpenAIStub:
-        class OpenAI:
-            pass
+def _get_openai():
+    """Lazy import of openai - only loads when AI features are used."""
+    global _openai
+    if _openai is None:
+        try:
+            import openai
+            _openai = openai
+        except Exception:  # pragma: no cover
+            class _OpenAIStub:
+                class OpenAI:
+                    pass
+            _openai = _OpenAIStub()
+    return _openai
 
-    openai = _OpenAIStub()  # type: ignore
+
+# Backward compatibility: expose as module-level but with lazy loading
+class _LazyModule:
+    """Lazy module proxy that defers import until attribute access."""
+    def __init__(self, loader):
+        self._loader = loader
+        self._module = None
+
+    def __getattr__(self, name):
+        if self._module is None:
+            self._module = self._loader()
+        return getattr(self._module, name)
+
+
+litellm = _LazyModule(_get_litellm)
+openai = _LazyModule(_get_openai)
 
 
 class AgentAI:

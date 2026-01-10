@@ -367,6 +367,8 @@ class Agent(FastAPI):
         auto_register: bool = True,
         vc_enabled: Optional[bool] = True,
         api_key: Optional[str] = None,
+        enable_mcp: bool = False,
+        enable_did: bool = True,
         **kwargs,
     ):
         """
@@ -512,12 +514,18 @@ class Agent(FastAPI):
         self.vc_generator: Optional[VCGenerator] = None
         self.did_enabled = False
 
+        # Store MCP/DID feature flags for conditional initialization
+        self._enable_mcp = enable_mcp
+        self._enable_did = enable_did
+
         # Add connection management for resilient AgentField server connectivity
         self.connection_manager: Optional[ConnectionManager] = None
 
-        # Initialize handlers
-        self.ai_handler = AgentAI(self)
-        self.cli_handler = AgentCLI(self)
+        # Initialize handlers (some are lazy-loaded for performance)
+        # Lazy handlers - created on first access to reduce memory footprint
+        self._ai_handler: Optional[AgentAI] = None
+        self._cli_handler: Optional[AgentCLI] = None
+        # Eager handlers - required for core agent functionality
         self.mcp_handler = AgentMCP(self)
         self.agentfield_handler = AgentFieldHandler(self)
         self.workflow_handler = AgentWorkflow(self)
@@ -526,30 +534,32 @@ class Agent(FastAPI):
         # Register this agent instance for enhanced decorator system
         set_current_agent(self)
 
-        # Initialize MCP components through the handler
-        try:
-            agent_dir = self.mcp_handler._detect_agent_directory()
-            self.mcp_manager = MCPManager(agent_dir, self.dev_mode)
-            self.mcp_client_registry = MCPClientRegistry(self.dev_mode)
+        # Initialize MCP components through the handler (if enabled)
+        if self._enable_mcp:
+            try:
+                agent_dir = self.mcp_handler._detect_agent_directory()
+                self.mcp_manager = MCPManager(agent_dir, self.dev_mode)
+                self.mcp_client_registry = MCPClientRegistry(self.dev_mode)
 
-            if self.dev_mode:
-                log_debug(f"Initialized MCP Manager in {agent_dir}")
-
-            # Initialize Dynamic Skill Manager when both MCP components are available
-            if self.mcp_manager and self.mcp_client_registry:
-                self.dynamic_skill_manager = DynamicMCPSkillManager(self, self.dev_mode)
                 if self.dev_mode:
-                    log_debug("Dynamic MCP skill manager initialized")
+                    log_debug(f"Initialized MCP Manager in {agent_dir}")
 
-        except Exception as e:
-            if self.dev_mode:
-                log_error(f"Failed to initialize MCP Manager: {e}")
-            self.mcp_manager = None
-            self.mcp_client_registry = None
-            self.dynamic_skill_manager = None
+                # Initialize Dynamic Skill Manager when both MCP components are available
+                if self.mcp_manager and self.mcp_client_registry:
+                    self.dynamic_skill_manager = DynamicMCPSkillManager(self, self.dev_mode)
+                    if self.dev_mode:
+                        log_debug("Dynamic MCP skill manager initialized")
 
-        # Initialize DID components
-        self._initialize_did_system()
+            except Exception as e:
+                if self.dev_mode:
+                    log_error(f"Failed to initialize MCP Manager: {e}")
+                self.mcp_manager = None
+                self.mcp_client_registry = None
+                self.dynamic_skill_manager = None
+
+        # Initialize DID components (if enabled)
+        if self._enable_did:
+            self._initialize_did_system()
 
         # Setup standard AgentField routes and memory event listeners
         self.server_handler.setup_agentfield_routes()
@@ -574,6 +584,21 @@ class Agent(FastAPI):
             self._max_concurrent_calls = default_limit
         self._call_semaphore: Optional[asyncio.Semaphore] = None
         self._call_semaphore_guard = threading.Lock()
+
+    # Lazy property accessors for performance-heavy handlers
+    @property
+    def ai_handler(self) -> AgentAI:
+        """Lazy-loaded AI handler - only initialized when AI features are used."""
+        if self._ai_handler is None:
+            self._ai_handler = AgentAI(self)
+        return self._ai_handler
+
+    @property
+    def cli_handler(self) -> AgentCLI:
+        """Lazy-loaded CLI handler - only initialized when CLI is invoked."""
+        if self._cli_handler is None:
+            self._cli_handler = AgentCLI(self)
+        return self._cli_handler
 
     def handle_serverless(self, event: dict, adapter: Optional[Callable] = None) -> dict:
         """

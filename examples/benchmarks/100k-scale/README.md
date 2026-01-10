@@ -61,26 +61,32 @@ cd langchain-bench && python benchmark.py
 |-----------|----------|--------------|--------|----------------|-------------|------------|
 | **AgentField Go** | 100,000 | 17.3 ms | 26.7 MB | 280 B | 1.0 µs | 8.2M req/s |
 | **AgentField TS** | 50,000 | 16.7 ms | 13.2 MB | 276 B | 0.3 µs | 5.0M req/s |
-| **AgentField Python** | 5,000 | 2,973 ms | 127 MB | 26.7 KB | 0.2 µs | 7.0M req/s |
+| **AgentField Python** | 10,000 | 5,797 ms | 251.9 MB | 26.4 KB | 0.17 µs | 7.5M req/s |
 | **LangChain Python** | 1,000 | 483 ms | 10.3 MB | 10.8 KB | 118.7 µs | 15.6K req/s |
+
+**Python SDK Additional Metrics:**
+- Agent Init: 1.07 ms (one-time overhead, no handlers)
+- Agent Memory: 0.10 MB (one-time overhead)
+- Cold Start: 1.39 ms (Agent + 1 handler)
 
 ### Key Findings
 
 **Registration Speed (normalized to 100K handlers)**
 - Go: 17.3 ms
 - TypeScript: ~33.4 ms (extrapolated from 50K)
-- Python (AgentField): ~59,460 ms (extrapolated from 5K)
+- Python (AgentField): ~57,970 ms (extrapolated from 10K)
 - LangChain: ~48,300 ms (extrapolated from 1K)
 
 **Memory Efficiency**
 - Go: **280 bytes/handler** (most efficient)
 - TypeScript: **276 bytes/handler**
-- AgentField Python: 26.7 KB/handler
+- AgentField Python: 26.4 KB/handler (includes Pydantic models + FastAPI routes)
 - LangChain: 10.8 KB/handler
 
 **Throughput**
 - Go: **8.2M req/s** (single-threaded theoretical)
 - TypeScript: **5.0M req/s**
+- AgentField Python: **7.5M req/s** (single-threaded theoretical)
 - LangChain: 15.6K req/s (**~520x slower than Go**)
 
 ### Visualizations
