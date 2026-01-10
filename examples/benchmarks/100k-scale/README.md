@@ -108,11 +108,9 @@ cd langchain-bench && python benchmark.py
 ### Visualizations
 
 ![Benchmark Summary](results/benchmark_summary.png)
-![Registration Comparison](results/registration_comparison.png)
-![Memory Comparison](results/memory_comparison.png)
-![Latency Distribution](results/latency_distribution.png)
+![Latency Comparison](results/latency_comparison.png)
 
-See `results/` directory for all raw data and additional visualizations.
+See `results/` directory for raw data.
 
 ## Reproducing
 

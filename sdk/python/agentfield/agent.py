@@ -1536,10 +1536,22 @@ class Agent(FastAPI):
             @self.post(endpoint_path)
             async def endpoint(request: Request):
                 # Parse body manually
-                body = await request.json()
+                try:
+                    body = await request.json()
+                except Exception:
+                    return JSONResponse(
+                        status_code=400,
+                        content={"detail": "Invalid JSON body"},
+                    )
 
                 # Validate input at runtime (replaces Pydantic validation)
-                validated_input = self._validate_handler_input(body, handler_input_fields)
+                try:
+                    validated_input = self._validate_handler_input(body, handler_input_fields)
+                except ValueError as e:
+                    return JSONResponse(
+                        status_code=422,
+                        content={"detail": str(e)},
+                    )
 
                 async def run_reasoner() -> Any:
                     return await self._execute_reasoner_endpoint(
@@ -2109,10 +2121,22 @@ class Agent(FastAPI):
             @self.post(endpoint_path)
             async def endpoint(request: Request):
                 # Parse body manually
-                body = await request.json()
+                try:
+                    body = await request.json()
+                except Exception:
+                    return JSONResponse(
+                        status_code=400,
+                        content={"detail": "Invalid JSON body"},
+                    )
 
                 # Validate input at runtime (replaces Pydantic validation)
-                validated_input = self._validate_handler_input(body, handler_input_fields)
+                try:
+                    validated_input = self._validate_handler_input(body, handler_input_fields)
+                except ValueError as e:
+                    return JSONResponse(
+                        status_code=422,
+                        content={"detail": str(e)},
+                    )
 
                 # Extract execution context from request headers
                 execution_context = ExecutionContext.from_request(request, self.node_id)

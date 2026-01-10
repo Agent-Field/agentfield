@@ -88,7 +88,7 @@ async def test_agent_reasoner_custom_name(monkeypatch):
         return {"report_id": report_id}
 
     assert any(r["id"] == "reports_generate" for r in agent.reasoners)
-    assert "reports_generate" in agent._reasoner_return_types
+    assert "reports_generate" in agent._reasoner_registry
     assert hasattr(agent, "reports_generate")
 
     async with httpx.AsyncClient(
@@ -157,7 +157,7 @@ async def test_agent_router_prefix_registration(monkeypatch):
 
     assert any(r["id"] == "demo_hello" for r in agent.reasoners)
     assert any(s["id"] == "demo_repeat" for s in agent.skills)
-    assert "demo_hello" in agent._reasoner_return_types
+    assert "demo_hello" in agent._reasoner_registry
     assert hasattr(agent, "demo_hello")
     assert hasattr(agent, "demo_repeat")
 
