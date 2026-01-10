@@ -195,7 +195,9 @@ jobs:
         id: bench
         working-directory: sdk/typescript
         run: |
-          npx tsx -e "
+          # Write benchmark script to file to use ESM modules properly
+          cat > /tmp/bench.mjs << 'BENCHEOF'
+          // Memory test (synchronous)
           const start = process.memoryUsage().heapUsed;
 
           // Simulate handler registration
@@ -219,7 +221,9 @@ jobs:
           times.sort((a, b) => a - b);
           const p99 = times[Math.floor(times.length * 0.99)];
           console.log('latency=' + p99.toFixed(2));
-          " 2>&1 | tee bench.txt
+          BENCHEOF
+
+          node /tmp/bench.mjs 2>&1 | tee bench.txt
 
           echo "memory=$(grep 'memory=' bench.txt | cut -d= -f2)" >> $GITHUB_OUTPUT
           echo "latency=$(grep 'latency=' bench.txt | cut -d= -f2)" >> $GITHUB_OUTPUT
