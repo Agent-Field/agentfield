@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
-AgentField Benchmark Analysis & Visualization
+AgentField Benchmark Visualization
 
-Creates technical, publication-quality plots for GitHub README.
-Consolidated visualization with scientific styling.
+Creates a single, clean, publication-quality figure comparing frameworks.
 """
 
 import json
@@ -11,31 +10,29 @@ from pathlib import Path
 from typing import Optional
 
 import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
 import numpy as np
 
-# Scientific plot styling
+# Clean, minimal styling
 plt.rcParams.update({
     "figure.dpi": 150,
     "savefig.dpi": 300,
     "font.family": "sans-serif",
-    "font.size": 10,
-    "axes.labelsize": 11,
-    "axes.titlesize": 12,
+    "font.size": 11,
+    "axes.labelsize": 12,
+    "axes.titlesize": 13,
     "axes.spines.top": False,
     "axes.spines.right": False,
     "axes.grid": True,
-    "grid.alpha": 0.3,
-    "legend.framealpha": 0.9,
-    "legend.edgecolor": "0.8",
+    "grid.alpha": 0.2,
+    "grid.linewidth": 0.5,
 })
 
-# Color palette - professional and accessible
+# Professional color palette
 COLORS = {
-    "go": "#00ADD8",
-    "typescript": "#3178C6",
-    "python": "#3776AB",
-    "langchain": "#6B7280",
+    "AgentField_Go": "#00ADD8",
+    "AgentField_TypeScript": "#3178C6",
+    "AgentField_Python": "#306998",
+    "LangChain_Python": "#1C3C3C",
 }
 
 LABELS = {
@@ -47,7 +44,7 @@ LABELS = {
 
 
 def load_results(results_dir: Path) -> dict:
-    """Load all benchmark results from JSON files."""
+    """Load benchmark results from JSON files."""
     results = {}
     for f in results_dir.glob("*.json"):
         if f.name.startswith(("AgentField", "LangChain")):
@@ -58,224 +55,103 @@ def load_results(results_dir: Path) -> dict:
     return results
 
 
-def get_metric(results: dict, framework_lang: str, metric: str) -> Optional[float]:
-    """Extract a specific metric from results."""
-    if framework_lang not in results:
+def get_metric(results: dict, framework: str, metric: str) -> Optional[float]:
+    """Extract a metric value."""
+    if framework not in results:
         return None
-    for r in results[framework_lang].get("results", []):
+    for r in results[framework].get("results", []):
         if r.get("metric") == metric:
             return r.get("value")
     return None
 
 
-def get_raw_data(results: dict, framework_lang: str, key: str) -> Optional[list]:
-    """Extract raw data array from results."""
-    if framework_lang not in results:
-        return None
-    return results[framework_lang].get("raw_data", {}).get(key)
-
-
-def plot_consolidated_summary(results: dict, output_dir: Path):
+def create_benchmark_figure(results: dict, output_dir: Path):
     """
-    Create a single consolidated figure with 4 key metrics.
+    Create a single clean figure with 4 key metrics.
 
-    Layout: 2x2 grid showing:
-    - Registration time (ms)
-    - Memory per handler (bytes/KB)
-    - Latency p99 (µs)
-    - Throughput (req/s)
+    Uses horizontal bar charts with log scale for fair comparison
+    across vastly different magnitudes.
     """
-    fig, axes = plt.subplots(2, 2, figsize=(12, 9))
-    fig.suptitle("AgentField Benchmark Summary", fontsize=14, fontweight="bold", y=0.98)
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig.suptitle("AgentField Framework Benchmark", fontsize=16, fontweight="bold", y=0.95)
 
-    frameworks_order = [
-        ("AgentField_Go", "go"),
-        ("AgentField_TypeScript", "typescript"),
-        ("AgentField_Python", "python"),
-        ("LangChain_Python", "langchain"),
-    ]
+    # Framework order (best to worst for visual hierarchy)
+    frameworks = ["AgentField_Go", "AgentField_TypeScript", "AgentField_Python", "LangChain_Python"]
 
-    # 1. Registration Time (top-left)
-    ax = axes[0, 0]
-    names, times, colors = [], [], []
-    for key, color_key in frameworks_order:
-        t = get_metric(results, key, "registration_time_mean_ms")
-        if t is not None:
-            names.append(LABELS[key])
-            times.append(t)
-            colors.append(COLORS[color_key])
+    def plot_metric(ax, metric_name, alt_metric, title, unit, lower_is_better=True):
+        """Plot a single metric as horizontal bars."""
+        values = []
+        labels = []
+        colors = []
 
-    if names:
-        bars = ax.barh(names, times, color=colors, edgecolor="white", linewidth=0.5)
-        ax.set_xlabel("Time (ms)")
-        ax.set_title("Handler Registration Time", fontweight="bold")
+        for fw in frameworks:
+            v = get_metric(results, fw, metric_name) or get_metric(results, fw, alt_metric)
+            if v is not None:
+                values.append(v)
+                labels.append(LABELS[fw])
+                colors.append(COLORS[fw])
+
+        if not values:
+            ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
+            return
+
+        y_pos = np.arange(len(labels))
+        bars = ax.barh(y_pos, values, color=colors, edgecolor="white", linewidth=1, height=0.6)
+
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(labels)
         ax.invert_yaxis()
-        for bar, t in zip(bars, times):
-            ax.text(t + max(times) * 0.02, bar.get_y() + bar.get_height() / 2,
-                    f"{t:.1f} ms", va="center", fontsize=9)
-        ax.set_xlim(0, max(times) * 1.25)
+        ax.set_xlabel(unit)
+        ax.set_title(title, fontweight="bold", pad=10)
 
-    # 2. Memory per Handler (top-right)
-    ax = axes[0, 1]
-    names, memory, colors = [], [], []
-    for key, color_key in frameworks_order:
-        m = get_metric(results, key, "memory_per_handler_bytes") or \
-            get_metric(results, key, "memory_per_tool_bytes")
-        if m is not None:
-            names.append(LABELS[key])
-            memory.append(m)
-            colors.append(COLORS[color_key])
+        # Use log scale for large range differences
+        if max(values) / (min(values) + 0.001) > 10:
+            ax.set_xscale("log")
 
-    if names:
-        bars = ax.barh(names, memory, color=colors, edgecolor="white", linewidth=0.5)
-        ax.set_xlabel("Bytes per Handler")
-        ax.set_title("Memory Efficiency", fontweight="bold")
-        ax.invert_yaxis()
-        for bar, m in zip(bars, memory):
-            label = f"{m:.0f} B" if m < 1024 else f"{m/1024:.1f} KB"
-            ax.text(m + max(memory) * 0.02, bar.get_y() + bar.get_height() / 2,
-                    label, va="center", fontsize=9)
-        ax.set_xlim(0, max(memory) * 1.25)
+        # Add value labels
+        for bar, val in zip(bars, values):
+            # Format based on magnitude
+            if val >= 1_000_000:
+                label = f"{val/1_000_000:.1f}M"
+            elif val >= 1_000:
+                label = f"{val/1_000:.1f}K"
+            elif val >= 1:
+                label = f"{val:.1f}"
+            else:
+                label = f"{val:.2f}"
 
-    # 3. Latency p99 (bottom-left)
-    ax = axes[1, 0]
-    names, latency, colors = [], [], []
-    for key, color_key in frameworks_order:
-        l = get_metric(results, key, "request_latency_p99_us") or \
-            get_metric(results, key, "invocation_latency_p99_us")
-        if l is not None:
-            names.append(LABELS[key])
-            latency.append(l)
-            colors.append(COLORS[color_key])
+            # Position label inside or outside bar
+            x_pos = bar.get_width()
+            ax.text(x_pos * 1.05, bar.get_y() + bar.get_height()/2,
+                    label, va="center", fontsize=10, fontweight="bold")
 
-    if names:
-        bars = ax.barh(names, latency, color=colors, edgecolor="white", linewidth=0.5)
-        ax.set_xlabel("Latency (µs)")
-        ax.set_title("Request Latency (p99)", fontweight="bold")
-        ax.invert_yaxis()
-        ax.set_xscale("log")
-        for bar, l in zip(bars, latency):
-            ax.text(l * 1.1, bar.get_y() + bar.get_height() / 2,
-                    f"{l:.2f} µs", va="center", fontsize=9)
+    # Plot 4 key metrics
+    plot_metric(axes[0, 0],
+                "registration_time_mean_ms", "registration_time_mean_ms",
+                "Registration Time", "milliseconds")
 
-    # 4. Throughput (bottom-right)
-    ax = axes[1, 1]
-    names, throughput, colors = [], [], []
-    for key, color_key in frameworks_order:
-        t = get_metric(results, key, "theoretical_single_thread_rps")
-        if t is not None:
-            names.append(LABELS[key])
-            throughput.append(t)
-            colors.append(COLORS[color_key])
+    plot_metric(axes[0, 1],
+                "memory_per_handler_bytes", "memory_per_tool_bytes",
+                "Memory per Handler", "bytes")
 
-    if names:
-        bars = ax.barh(names, throughput, color=colors, edgecolor="white", linewidth=0.5)
-        ax.set_xlabel("Requests per Second")
-        ax.set_title("Theoretical Throughput", fontweight="bold")
-        ax.invert_yaxis()
-        ax.set_xscale("log")
-        ax.xaxis.set_major_formatter(ticker.FuncFormatter(
-            lambda x, p: f"{x/1e6:.1f}M" if x >= 1e6 else f"{x/1e3:.0f}K" if x >= 1e3 else f"{x:.0f}"
-        ))
-        for bar, t in zip(bars, throughput):
-            label = f"{t/1e6:.1f}M" if t >= 1e6 else f"{t/1e3:.0f}K"
-            ax.text(t * 1.1, bar.get_y() + bar.get_height() / 2,
-                    label, va="center", fontsize=9)
+    plot_metric(axes[1, 0],
+                "request_latency_p99_us", "invocation_latency_p99_us",
+                "Request Latency (p99)", "microseconds")
 
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    plot_metric(axes[1, 1],
+                "theoretical_single_thread_rps", "theoretical_single_thread_rps",
+                "Throughput", "requests/second")
+
+    plt.tight_layout(rect=[0, 0.02, 1, 0.93])
+
+    # Add legend at bottom
+    handles = [plt.Rectangle((0,0), 1, 1, color=COLORS[fw]) for fw in frameworks if fw in results]
+    labels = [LABELS[fw] for fw in frameworks if fw in results]
+    fig.legend(handles, labels, loc="lower center", ncol=4, frameon=False, fontsize=11)
+
     fig.savefig(output_dir / "benchmark_summary.png", bbox_inches="tight", facecolor="white")
     plt.close()
     print(f"Saved: {output_dir / 'benchmark_summary.png'}")
-
-
-def plot_latency_comparison(results: dict, output_dir: Path):
-    """
-    Create a detailed latency comparison with CDF curves.
-    Scientific visualization showing distribution characteristics.
-    """
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
-    fig.suptitle("Latency Distribution Analysis", fontsize=14, fontweight="bold", y=1.02)
-
-    frameworks_order = [
-        ("AgentField_Go", "go", "Go SDK"),
-        ("AgentField_TypeScript", "typescript", "TypeScript SDK"),
-        ("AgentField_Python", "python", "Python SDK"),
-        ("LangChain_Python", "langchain", "LangChain"),
-    ]
-
-    # Left: CDF plot
-    for key, color_key, label in frameworks_order:
-        raw = get_raw_data(results, key, "request_latency_us") or \
-              get_raw_data(results, key, "invocation_latency_us")
-        if raw:
-            sorted_data = np.sort(raw)
-            cdf = np.arange(1, len(sorted_data) + 1) / len(sorted_data)
-            ax1.plot(sorted_data, cdf * 100, label=label,
-                     color=COLORS[color_key], linewidth=2)
-
-    ax1.set_xlabel("Latency (µs)")
-    ax1.set_ylabel("Percentile (%)")
-    ax1.set_title("Cumulative Distribution (CDF)", fontweight="bold")
-    ax1.set_xscale("log")
-    ax1.set_ylim(0, 100)
-    ax1.axhline(y=99, color="gray", linestyle="--", alpha=0.5, linewidth=1)
-    ax1.axhline(y=95, color="gray", linestyle=":", alpha=0.5, linewidth=1)
-    ax1.text(ax1.get_xlim()[1] * 0.7, 99.5, "p99", fontsize=8, color="gray")
-    ax1.text(ax1.get_xlim()[1] * 0.7, 95.5, "p95", fontsize=8, color="gray")
-    ax1.legend(loc="lower right", fontsize=10)
-
-    # Right: Box plot
-    data_to_plot = []
-    labels = []
-    colors_list = []
-
-    for key, color_key, label in frameworks_order:
-        raw = get_raw_data(results, key, "request_latency_us") or \
-              get_raw_data(results, key, "invocation_latency_us")
-        if raw:
-            # Sample if too many points for cleaner visualization
-            if len(raw) > 1000:
-                raw = np.random.choice(raw, 1000, replace=False).tolist()
-            data_to_plot.append(raw)
-            labels.append(label)
-            colors_list.append(COLORS[color_key])
-
-    if data_to_plot:
-        bp = ax2.boxplot(
-            data_to_plot,
-            tick_labels=labels,
-            patch_artist=True,
-            showfliers=False,
-            medianprops={"color": "black", "linewidth": 2},
-            whiskerprops={"linewidth": 1.5},
-            capprops={"linewidth": 1.5},
-        )
-
-        for patch, color in zip(bp["boxes"], colors_list):
-            patch.set_facecolor(color)
-            patch.set_alpha(0.7)
-
-        ax2.set_ylabel("Latency (µs)")
-        ax2.set_title("Latency Distribution (Box Plot)", fontweight="bold")
-        ax2.set_yscale("log")
-
-        # Add median annotations
-        for i, data in enumerate(data_to_plot):
-            median = np.median(data)
-            ax2.annotate(
-                f"{median:.2f}µs",
-                xy=(i + 1, median),
-                xytext=(15, 0),
-                textcoords="offset points",
-                fontsize=9,
-                va="center",
-                arrowprops=dict(arrowstyle="-", color="gray", alpha=0.5),
-            )
-
-    plt.tight_layout()
-    fig.savefig(output_dir / "latency_comparison.png", bbox_inches="tight", facecolor="white")
-    plt.close()
-    print(f"Saved: {output_dir / 'latency_comparison.png'}")
 
 
 def main():
@@ -289,17 +165,12 @@ def main():
     results = load_results(results_dir)
 
     if not results:
-        print("No benchmark results found. Run the benchmarks first.")
+        print("No benchmark results found.")
         return
 
-    print(f"Loaded results for: {list(results.keys())}")
-    print()
-
-    # Generate consolidated visualizations (only 2 images)
-    plot_consolidated_summary(results, results_dir)
-    plot_latency_comparison(results, results_dir)
-
-    print("\nVisualization complete! Generated 2 publication-quality figures.")
+    print(f"Loaded: {list(results.keys())}")
+    create_benchmark_figure(results, results_dir)
+    print("\nVisualization complete!")
 
 
 if __name__ == "__main__":
