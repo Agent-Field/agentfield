@@ -8,7 +8,6 @@ Run with: pytest tests/test_memory_performance.py -v
 """
 
 import gc
-import sys
 import time
 import tracemalloc
 from dataclasses import dataclass
@@ -48,7 +47,7 @@ def measure_memory(func, iterations: int = 1000) -> MemoryMetrics:
     tracemalloc.start()
     start_time = time.time()
 
-    result = func(iterations)
+    func(iterations)  # Execute function for memory measurement (result unused)
 
     gc.collect()
     current, peak = tracemalloc.get_traced_memory()
@@ -221,7 +220,7 @@ class TestClientSessionReuse:
         # Reset shared session
         AgentFieldClient._shared_sync_session = None
 
-        client = AgentFieldClient(base_url="http://localhost:8080")
+        AgentFieldClient(base_url="http://localhost:8080")  # Creates shared session
 
         assert AgentFieldClient._shared_sync_session is not None, \
             "Shared session should be created"
@@ -231,10 +230,10 @@ class TestClientSessionReuse:
         # Reset shared session
         AgentFieldClient._shared_sync_session = None
 
-        client1 = AgentFieldClient(base_url="http://localhost:8080")
+        AgentFieldClient(base_url="http://localhost:8080")  # First client
         session1 = AgentFieldClient._shared_sync_session
 
-        client2 = AgentFieldClient(base_url="http://localhost:8081")
+        AgentFieldClient(base_url="http://localhost:8081")  # Second client
         session2 = AgentFieldClient._shared_sync_session
 
         assert session1 is session2, "Clients should share session"

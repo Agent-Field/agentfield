@@ -60,7 +60,7 @@ from agentfield.pydantic_utils import convert_function_args, should_convert_args
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
-from pydantic import create_model, BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError
 from dataclasses import dataclass, field
 import weakref
 
@@ -799,24 +799,24 @@ class Agent(FastAPI):
                         actual_type = non_none[0]
 
                 # Basic type coercion
-                if actual_type == int:
+                if actual_type is int:
                     result[name] = int(value)
-                elif actual_type == float:
+                elif actual_type is float:
                     result[name] = float(value)
-                elif actual_type == str:
+                elif actual_type is str:
                     result[name] = str(value)
-                elif actual_type == bool:
+                elif actual_type is bool:
                     if isinstance(value, bool):
                         result[name] = value
                     elif isinstance(value, str):
                         result[name] = value.lower() in ("true", "1", "yes")
                     else:
                         result[name] = bool(value)
-                elif actual_type == dict or getattr(actual_type, "__origin__", None) is dict:
+                elif actual_type is dict or getattr(actual_type, "__origin__", None) is dict:
                     if not isinstance(value, dict):
                         raise ValueError(f"Field '{name}' must be a dict")
                     result[name] = dict(value)
-                elif actual_type == list or getattr(actual_type, "__origin__", None) is list:
+                elif actual_type is list or getattr(actual_type, "__origin__", None) is list:
                     if not isinstance(value, list):
                         raise ValueError(f"Field '{name}' must be a list")
                     result[name] = list(value)
@@ -1584,7 +1584,6 @@ class Agent(FastAPI):
             # 🔥 ENHANCED: Comprehensive function replacement for unified tracking
             # Use weakref to avoid circular reference: Agent → tracked_func → Agent
             original_func = func
-            agent_ref = weakref.ref(self)
             workflow_ref = weakref.ref(self.workflow_handler) if self.workflow_handler else None
 
             async def tracked_func(*args, **kwargs):
