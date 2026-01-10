@@ -1,6 +1,6 @@
 # AgentField Scale Benchmark
 
-A rigorous, reproducible benchmark comparing agent framework performance at scale.
+A rigorous, reproducible benchmark measuring agent framework performance at scale.
 
 ## Methodology
 
@@ -29,12 +29,12 @@ A rigorous, reproducible benchmark comparing agent framework performance at scal
 |-----------|----------|---------|-------|
 | AgentField Go SDK | Go 1.21+ | latest | Native Go implementation |
 | AgentField TypeScript SDK | Node.js 20+ | latest | Native TS implementation |
-| AgentField Python SDK | Python 3.12+ | latest | FastAPI-based, memory-optimized |
-| LangChain | Python 3.12+ | 0.1.x | Industry standard baseline |
+| AgentField Python SDK | Python 3.12+ | latest | FastAPI-based |
+| LangChain | Python 3.12+ | 0.1.x | StructuredTool-based |
 
 ### Workload Definition
 
-**"Agent"**: A handler that can process requests with:
+**"Handler"**: A function that can process requests with:
 - Input validation (JSON schema)
 - Simple computation (no I/O, no LLM calls)
 - Structured output
@@ -59,35 +59,51 @@ cd langchain-bench && python benchmark.py
 
 | Framework | Handlers | Registration | Memory | Memory/Handler | Latency p99 | Throughput |
 |-----------|----------|--------------|--------|----------------|-------------|------------|
-| **AgentField Go** | 100,000 | 17.3 ms | 26.7 MB | 280 B | 1.0 µs | 8.2M req/s |
-| **AgentField TS** | 50,000 | 16.7 ms | 13.2 MB | 276 B | 0.3 µs | 5.0M req/s |
-| **AgentField Python** | 10,000 | 5,797 ms | 251.9 MB | 26.4 KB | 0.17 µs | 7.5M req/s |
-| **LangChain Python** | 1,000 | 483 ms | 10.3 MB | 10.8 KB | 118.7 µs | 15.6K req/s |
+| AgentField Go | 100,000 | 17.3 ms | 26.7 MB | 280 B | 1.0 µs | 8.2M req/s |
+| AgentField TS | 100,000 | 13.5 ms | 13.2 MB | 276 B | 0.25 µs | 4.0M req/s |
+| AgentField Python | 10,000 | 624 ms | 72.7 MB | 7.4 KB | 0.21 µs | 4.8M req/s |
+| LangChain | 1,000 | 497 ms | 10.6 MB | 11.1 KB | 147.8 µs | 6.8K req/s |
 
 **Python SDK Additional Metrics:**
-- Agent Init: 1.07 ms (one-time overhead, no handlers)
+- Agent Init: 1.15 ms (one-time overhead, no handlers)
 - Agent Memory: 0.10 MB (one-time overhead)
-- Cold Start: 1.39 ms (Agent + 1 handler)
+- Cold Start: 1.12 ms (Agent + 1 handler)
 
-### Key Findings
+### Normalized Comparison (1000 handlers)
 
-**Registration Speed (normalized to 100K handlers)**
-- Go: 17.3 ms
-- TypeScript: ~33.4 ms (extrapolated from 50K)
-- Python (AgentField): ~57,970 ms (extrapolated from 10K)
-- LangChain: ~48,300 ms (extrapolated from 1K)
+| Metric | AgentField Python | LangChain |
+|--------|-------------------|-----------|
+| Registration | 62 ms | 497 ms |
+| Memory/Handler | 7.6 KB | 11.1 KB |
+| Latency p99 | 0.21 µs | 147.8 µs |
+| Cold Start | 1.12 ms | 0.74 ms |
 
-**Memory Efficiency**
-- Go: **280 bytes/handler** (most efficient)
-- TypeScript: **276 bytes/handler**
-- AgentField Python: 26.4 KB/handler (includes Pydantic models + FastAPI routes)
-- LangChain: 10.8 KB/handler
+### Registration Speed (extrapolated to 100K handlers)
 
-**Throughput**
-- Go: **8.2M req/s** (single-threaded theoretical)
-- TypeScript: **5.0M req/s**
-- AgentField Python: **7.5M req/s** (single-threaded theoretical)
-- LangChain: 15.6K req/s (**~520x slower than Go**)
+| Framework | Time |
+|-----------|------|
+| Go | 17.3 ms |
+| TypeScript | 13.5 ms |
+| Python (AgentField) | ~6,240 ms |
+| LangChain | ~49,700 ms |
+
+### Memory per Handler
+
+| Framework | Memory/Handler |
+|-----------|----------------|
+| Go | 280 bytes |
+| TypeScript | 276 bytes |
+| AgentField Python | 7.4 KB |
+| LangChain | 11.1 KB |
+
+### Throughput (single-threaded theoretical)
+
+| Framework | Requests/sec |
+|-----------|--------------|
+| Go | 8.2M |
+| TypeScript | 4.0M |
+| AgentField Python | 4.8M |
+| LangChain | 6.8K |
 
 ### Visualizations
 
@@ -115,19 +131,19 @@ pip install -r requirements.txt
 ./run_benchmarks.sh
 ```
 
-## Potential Criticisms & Responses
+## Notes
 
-### "Registering handlers isn't real work"
-We measure actual request processing throughput and latency, not just registration.
-
-### "What about LLM call overhead?"
-LLM latency dominates (100ms-10s). Framework overhead (0.1-10ms) is negligible for LLM workloads but critical for:
+### Handler Registration
+Registration time measures the overhead of setting up handlers/tools. This matters for:
 - Agent orchestration (routing between agents)
 - Tool execution (non-LLM tools)
 - High-frequency agent systems
 
-### "Is the comparison fair?"
-All frameworks perform identical work: receive JSON, validate, compute, return JSON. No framework-specific optimizations.
+### LLM Call Overhead
+LLM latency dominates (100ms-10s). Framework overhead (0.1-10ms) is typically negligible for LLM-bound workloads.
 
-### "What about memory leaks?"
-We run sustained load tests and measure memory growth over time.
+### Comparison Fairness
+All frameworks perform identical work: receive JSON, validate, compute, return JSON. No framework-specific optimizations applied.
+
+### Memory Stability
+Sustained load tests measure memory growth over time to detect leaks.

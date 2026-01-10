@@ -270,7 +270,7 @@ def main():
         print(f"Tools: {args.tools} | Iterations: {args.iterations} | Warmup: {args.warmup}\n")
 
     # Registration benchmark
-    reg_tools = min(args.tools, 1000)  # LangChain is slower
+    reg_tools = min(args.tools, 1000)  # Limit to 1000 for reasonable benchmark time
     reg_times = benchmark_tool_registration(reg_tools, args.iterations, args.warmup, verbose)
     if reg_times:
         reg_stats = calculate_stats(reg_times)

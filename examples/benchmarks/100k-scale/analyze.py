@@ -462,14 +462,14 @@ def plot_summary_dashboard(results: dict, output_dir: Path):
     ]
     ax6.legend(handles=legend_elements, loc="center", fontsize=12)
 
-    # Add key insight text
+    # Add memory ratio text
     go_mem = get_metric(results, "AgentField_Go", "memory_per_handler_bytes")
     lc_mem = get_metric(results, "LangChain_Python", "memory_per_tool_bytes")
     if go_mem and lc_mem:
         ratio = lc_mem / go_mem
         ax6.text(
             0.5, 0.2,
-            f"Go is {ratio:.0f}x more memory efficient",
+            f"Memory ratio (LangChain/Go): {ratio:.0f}x",
             ha="center", fontsize=11, fontweight="bold", color=COLORS["highlight"],
             transform=ax6.transAxes,
         )

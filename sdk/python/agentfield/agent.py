@@ -61,6 +61,36 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import create_model, BaseModel, ValidationError
+from dataclasses import dataclass, field
+import weakref
+
+
+# Memory-efficient handler entry classes using __slots__
+@dataclass(slots=True)
+class ReasonerEntry:
+    """Minimal reasoner metadata - uses __slots__ for memory efficiency.
+
+    Stores only essential data; schemas generated on-demand to reduce memory.
+    """
+    id: str
+    func: Callable
+    input_types: Dict[str, tuple]  # (type, default) tuples - not Pydantic model
+    output_type: type
+    tags: List[str] = field(default_factory=list)
+    vc_enabled: Optional[bool] = None
+    # Note: input_schema and output_schema are generated on-demand via _get_handler_schema()
+
+
+@dataclass(slots=True)
+class SkillEntry:
+    """Minimal skill metadata - uses __slots__ for memory efficiency."""
+    id: str
+    func: Callable
+    input_types: Dict[str, tuple]  # (type, default) tuples
+    output_type: type
+    tags: List[str] = field(default_factory=list)
+    vc_enabled: Optional[bool] = None
+
 
 # Import aiohttp for fire-and-forget HTTP calls
 try:
@@ -446,13 +476,17 @@ class Agent(FastAPI):
         self.node_id = node_id
         self.agentfield_server = agentfield_server
         self.version = version
-        self.reasoners = []
-        self.skills = []
-        self._agent_vc_enabled: Optional[bool] = vc_enabled
+
+        # Memory-efficient handler registries (replaces old list-based storage)
+        # Using Dict[str, Entry] with __slots__ dataclasses for minimal footprint
+        self._reasoner_registry: Dict[str, ReasonerEntry] = {}
+        self._skill_registry: Dict[str, SkillEntry] = {}
+
+        # VC override tracking (still needed for _effective_component_vc_setting)
         self._reasoner_vc_overrides: Dict[str, bool] = {}
         self._skill_vc_overrides: Dict[str, bool] = {}
-        # Track declared return types separately to avoid polluting JSON metadata
-        self._reasoner_return_types: Dict[str, Type] = {}
+
+        self._agent_vc_enabled: Optional[bool] = vc_enabled
         self.base_url = None
         self.callback_candidates: List[str] = []
         self.callback_url = callback_url  # Store the explicit callback URL
@@ -599,6 +633,203 @@ class Agent(FastAPI):
         if self._cli_handler is None:
             self._cli_handler = AgentCLI(self)
         return self._cli_handler
+
+    @property
+    def reasoners(self) -> List[Dict]:
+        """Generate reasoner metadata list from registry (backward compatible).
+
+        This property generates the legacy list format on-demand from the memory-efficient
+        registry. Schemas are generated only when this property is accessed.
+        """
+        result = []
+        for entry in self._reasoner_registry.values():
+            result.append(self._entry_to_metadata(entry, "reasoner"))
+        return result
+
+    @reasoners.setter
+    def reasoners(self, value: List[Dict]) -> None:
+        """Allow setting reasoners for backward compatibility (deprecated)."""
+        self._reasoners_legacy = value
+
+    @property
+    def skills(self) -> List[Dict]:
+        """Generate skill metadata list from registry (backward compatible)."""
+        result = []
+        for entry in self._skill_registry.values():
+            result.append(self._entry_to_metadata(entry, "skill"))
+        return result
+
+    @skills.setter
+    def skills(self, value: List[Dict]) -> None:
+        """Allow setting skills for backward compatibility (deprecated)."""
+        self._skills_legacy = value
+
+    def _entry_to_metadata(self, entry: Union[ReasonerEntry, SkillEntry], kind: str) -> Dict:
+        """Convert a registry entry to legacy metadata dict format with on-demand schema generation."""
+        # Generate input schema from stored types
+        input_schema = self._types_to_json_schema(entry.input_types)
+
+        # Generate output schema from stored type
+        output_schema = self._type_to_json_schema(entry.output_type)
+
+        metadata = {
+            "id": entry.id,
+            "input_schema": input_schema,
+            "output_schema": output_schema,
+            "memory_config": self.memory_config.to_dict(),
+            "return_type_hint": getattr(entry.output_type, "__name__", str(entry.output_type)),
+            "tags": entry.tags,
+            "vc_enabled": entry.vc_enabled if entry.vc_enabled is not None else self._agent_vc_enabled,
+        }
+        return metadata
+
+    def _types_to_json_schema(self, input_types: Dict[str, tuple]) -> Dict:
+        """Convert Python types dict to JSON schema (on-demand generation)."""
+        properties = {}
+        required = []
+
+        for name, (typ, default) in input_types.items():
+            properties[name] = self._type_to_json_schema(typ)
+            if default is ...:  # Required field (no default)
+                required.append(name)
+
+        schema = {
+            "type": "object",
+            "properties": properties,
+        }
+        if required:
+            schema["required"] = required
+        return schema
+
+    def _type_to_json_schema(self, typ: type) -> Dict:
+        """Convert a Python type to JSON schema."""
+        # Handle None/NoneType
+        if typ is None or typ is type(None):
+            return {"type": "null"}
+
+        # Handle basic types
+        type_map = {
+            str: {"type": "string"},
+            int: {"type": "integer"},
+            float: {"type": "number"},
+            bool: {"type": "boolean"},
+            list: {"type": "array"},
+            dict: {"type": "object"},
+            bytes: {"type": "string", "format": "binary"},
+        }
+
+        if typ in type_map:
+            return type_map[typ]
+
+        # Handle Pydantic models
+        if hasattr(typ, "model_json_schema"):
+            return typ.model_json_schema()
+
+        # Handle typing constructs (List, Dict, Optional, etc.)
+        origin = getattr(typ, "__origin__", None)
+        if origin is list:
+            args = getattr(typ, "__args__", (Any,))
+            return {"type": "array", "items": self._type_to_json_schema(args[0]) if args else {}}
+        if origin is dict:
+            return {"type": "object", "additionalProperties": True}
+        if origin is Union:
+            args = getattr(typ, "__args__", ())
+            # Handle Optional (Union with None)
+            non_none = [a for a in args if a is not type(None)]
+            if len(non_none) == 1:
+                return self._type_to_json_schema(non_none[0])
+            return {"anyOf": [self._type_to_json_schema(a) for a in args]}
+
+        # Default fallback
+        return {"type": "object"}
+
+    def _validate_handler_input(self, data: dict, input_types: Dict[str, tuple]) -> dict:
+        """
+        Validate input data against expected types at runtime.
+
+        Replaces Pydantic model validation with lightweight runtime validation.
+        Saves ~1.5-2 KB per handler by not creating Pydantic classes.
+
+        Args:
+            data: Raw input dict from request body
+            input_types: Dict mapping field names to (type, default) tuples
+
+        Returns:
+            Validated dict with type coercion applied
+
+        Raises:
+            ValueError: If required field is missing or type conversion fails
+        """
+        result = {}
+
+        for name, (expected_type, default) in input_types.items():
+            # Check if field is present
+            if name not in data:
+                if default is ...:  # Required field (no default)
+                    raise ValueError(f"Missing required field: {name}")
+                result[name] = default
+                continue
+
+            value = data[name]
+
+            # Handle None values
+            if value is None:
+                # Check if Optional type
+                origin = getattr(expected_type, "__origin__", None)
+                if origin is Union:
+                    args = getattr(expected_type, "__args__", ())
+                    if type(None) in args:
+                        result[name] = None
+                        continue
+                # Not Optional, use default if available
+                if default is not ...:
+                    result[name] = default
+                    continue
+                raise ValueError(f"Field '{name}' cannot be None")
+
+            # Type coercion for basic types
+            try:
+                # Get the actual type (unwrap Optional)
+                actual_type = expected_type
+                origin = getattr(expected_type, "__origin__", None)
+                if origin is Union:
+                    args = getattr(expected_type, "__args__", ())
+                    non_none = [a for a in args if a is not type(None)]
+                    if len(non_none) == 1:
+                        actual_type = non_none[0]
+
+                # Basic type coercion
+                if actual_type == int:
+                    result[name] = int(value)
+                elif actual_type == float:
+                    result[name] = float(value)
+                elif actual_type == str:
+                    result[name] = str(value)
+                elif actual_type == bool:
+                    if isinstance(value, bool):
+                        result[name] = value
+                    elif isinstance(value, str):
+                        result[name] = value.lower() in ("true", "1", "yes")
+                    else:
+                        result[name] = bool(value)
+                elif actual_type == dict or getattr(actual_type, "__origin__", None) is dict:
+                    if not isinstance(value, dict):
+                        raise ValueError(f"Field '{name}' must be a dict")
+                    result[name] = dict(value)
+                elif actual_type == list or getattr(actual_type, "__origin__", None) is list:
+                    if not isinstance(value, list):
+                        raise ValueError(f"Field '{name}' must be a list")
+                    result[name] = list(value)
+                elif hasattr(actual_type, "model_validate"):
+                    # Pydantic model - use its validation
+                    result[name] = actual_type.model_validate(value)
+                else:
+                    # Pass through for complex/unknown types
+                    result[name] = value
+            except (ValueError, TypeError) as e:
+                raise ValueError(f"Invalid value for field '{name}': {e}")
+
+        return result
 
     def handle_serverless(self, event: dict, adapter: Optional[Callable] = None) -> dict:
         """
@@ -1277,7 +1508,7 @@ class Agent(FastAPI):
             type_hints = get_type_hints(func)
             sig = inspect.signature(func)
 
-            # Create input schema from function parameters
+            # Extract input types from function parameters (no Pydantic model creation)
             input_fields = {}
             for param_name, param in sig.parameters.items():
                 if param_name not in ["self", "execution_context"]:
@@ -1289,7 +1520,8 @@ class Agent(FastAPI):
                     )
                     input_fields[param_name] = (param_type, default_value)
 
-            InputSchema = create_model(f"{func_name}Input", **input_fields)
+            # NOTE: Removed create_model() - saves ~1.5-2 KB per handler
+            # Validation is done at runtime via _validate_handler_input()
 
             # Persist VC override preference
             self._set_reasoner_vc_override(reasoner_id, vc_enabled)
@@ -1297,15 +1529,24 @@ class Agent(FastAPI):
             # Get output schema from return type hint
             return_type = type_hints.get("return", dict)
 
-            # Create FastAPI endpoint
-            @self.post(endpoint_path, response_model=return_type)
-            async def endpoint(input_data: InputSchema, request: Request):
+            # Store input_fields for runtime validation (captured by closure)
+            handler_input_fields = input_fields
+
+            # Create FastAPI endpoint with generic dict input (runtime validation)
+            @self.post(endpoint_path)
+            async def endpoint(request: Request):
+                # Parse body manually
+                body = await request.json()
+
+                # Validate input at runtime (replaces Pydantic validation)
+                validated_input = self._validate_handler_input(body, handler_input_fields)
+
                 async def run_reasoner() -> Any:
                     return await self._execute_reasoner_endpoint(
                         reasoner_id=reasoner_id,
                         func=func,
                         signature=sig,
-                        input_model=input_data,
+                        input_data=validated_input,
                         request=request,
                     )
 
@@ -1329,10 +1570,14 @@ class Agent(FastAPI):
                 return await run_reasoner()
 
             # 🔥 ENHANCED: Comprehensive function replacement for unified tracking
+            # Use weakref to avoid circular reference: Agent → tracked_func → Agent
             original_func = func
+            agent_ref = weakref.ref(self)
+            workflow_ref = weakref.ref(self.workflow_handler) if self.workflow_handler else None
 
             async def tracked_func(*args, **kwargs):
-                """Enhanced tracked function with unified execution pipeline and context inheritance"""
+                """Enhanced tracked function with unified execution pipeline and context inheritance.
+                Uses weakref to break circular references and enable immediate GC."""
                 # 🔥 CRITICAL FIX: Always use workflow tracking for direct reasoner calls
                 # The previous logic was preventing workflow notifications for direct calls
 
@@ -1346,9 +1591,12 @@ class Agent(FastAPI):
 
                     return await _execute_with_tracking(original_func, *args, **kwargs)
                 else:
-                    # 🔥 FIX: Always use the agent's workflow handler for tracking
-                    # This ensures that direct reasoner calls get proper workflow notifications
-                    return await self.workflow_handler.execute_with_tracking(
+                    # 🔥 FIX: Use weakref to avoid holding strong reference to agent
+                    workflow_handler = workflow_ref() if workflow_ref else None
+                    if workflow_handler is None:
+                        # Agent was garbage collected, call function directly
+                        return await original_func(*args, **kwargs)
+                    return await workflow_handler.execute_with_tracking(
                         original_func, args, kwargs
                     )
 
@@ -1368,34 +1616,22 @@ class Agent(FastAPI):
                         resolved_tags = [str(decorator_tag_attr)]
             setattr(tracked_func, "_reasoner_tags", resolved_tags)
 
-            # Register reasoner metadata
-            output_schema = {}
-            if hasattr(return_type, "model_json_schema"):
-                # If it's a Pydantic model, get its schema
-                output_schema = return_type.model_json_schema()
-            elif hasattr(return_type, "__annotations__"):
-                # If it's a typed class, create a simple schema
-                output_schema = {"type": "object", "properties": {}}
-            else:
-                # Default schema for basic types
-                output_schema = {"type": "object"}
-
-            # Store reasoner metadata for registration (JSON serializable only)
-            reasoner_metadata = {
-                "id": reasoner_id,
-                "input_schema": InputSchema.model_json_schema(),
-                "output_schema": output_schema,
-                "memory_config": self.memory_config.to_dict(),
-                "return_type_hint": getattr(return_type, "__name__", str(return_type)),
-            }
-            reasoner_metadata["tags"] = resolved_tags
-            reasoner_metadata["vc_enabled"] = self._effective_component_vc_setting(
+            # Store in memory-efficient registry (schemas generated on-demand)
+            vc_setting = self._effective_component_vc_setting(
                 reasoner_id, self._reasoner_vc_overrides
             )
+            self._reasoner_registry[reasoner_id] = ReasonerEntry(
+                id=reasoner_id,
+                func=func,
+                input_types=input_fields,  # Store (type, default) tuples, not Pydantic model
+                output_type=return_type,
+                tags=resolved_tags,
+                vc_enabled=vc_setting,
+            )
 
-            self.reasoners.append(reasoner_metadata)
-            # Preserve the actual return type for local schema reconstruction
-            self._reasoner_return_types[reasoner_id] = return_type
+            # NOTE: Legacy storage removed - reasoners property generates list on-demand
+            # self.reasoners.append(reasoner_metadata)  # REMOVED - use _reasoner_registry
+            # self._reasoner_return_types[reasoner_id] = return_type  # REMOVED - stored in entry
 
             # 🔥 CRITICAL: Comprehensive function replacement (re-enabled for workflow tracking)
             self.workflow_handler.replace_function_references(
@@ -1423,14 +1659,14 @@ class Agent(FastAPI):
         reasoner_id: str,
         func: Callable,
         signature: inspect.Signature,
-        input_model: BaseModel,
+        input_data: Dict[str, Any],
         request: Request,
     ) -> Any:
         import asyncio
         import time
 
         execution_context = ExecutionContext.from_request(request, self.node_id)
-        payload_dict = input_model.model_dump()
+        payload_dict = input_data  # Already a dict from runtime validation
 
         self._current_execution_context = execution_context
         context_token = set_execution_context(execution_context)
@@ -1862,14 +2098,22 @@ class Agent(FastAPI):
                     )
                     input_fields[param_name] = (param_type, default_value)
 
-            InputSchema = create_model(f"{func_name}Input", **input_fields)
+            # NOTE: Removed create_model() - saves ~1.5-2 KB per handler
+            # Store input_fields for runtime validation (captured by closure)
+            handler_input_fields = input_fields
 
             # Get output schema from return type hint
             return_type = type_hints.get("return", dict)
 
-            # Create FastAPI endpoint
-            @self.post(endpoint_path, response_model=return_type)
-            async def endpoint(input_data: InputSchema, request: Request):
+            # Create FastAPI endpoint with generic dict input (runtime validation)
+            @self.post(endpoint_path)
+            async def endpoint(request: Request):
+                # Parse body manually
+                body = await request.json()
+
+                # Validate input at runtime (replaces Pydantic validation)
+                validated_input = self._validate_handler_input(body, handler_input_fields)
+
                 # Extract execution context from request headers
                 execution_context = ExecutionContext.from_request(request, self.node_id)
 
@@ -1897,8 +2141,8 @@ class Agent(FastAPI):
                         execution_context, did_execution_context
                     )
 
-                # Convert input to function arguments
-                input_payload = input_data.model_dump()
+                # Use validated input directly (already a dict)
+                input_payload = validated_input
 
                 # 🔥 NEW: Automatic Pydantic model conversion (FastAPI-like behavior)
                 # Use the original function for type hint inspection
@@ -2043,16 +2287,20 @@ class Agent(FastAPI):
                     payload.update({k: v for k, v in kwargs.items() if k != "self"})
                     return payload
 
-            self.skills.append(
-                {
-                    "id": skill_id,
-                    "input_schema": InputSchema.model_json_schema(),
-                    "tags": decorator_tags or [],
-                    "vc_enabled": self._effective_component_vc_setting(
-                        skill_id, self._skill_vc_overrides
-                    ),
-                }
+            # Store in memory-efficient registry (schemas generated on-demand)
+            resolved_tags = list(decorator_tags) if decorator_tags else []
+            vc_setting = self._effective_component_vc_setting(
+                skill_id, self._skill_vc_overrides
             )
+            self._skill_registry[skill_id] = SkillEntry(
+                id=skill_id,
+                func=func,
+                input_types=input_fields,  # Store (type, default) tuples, not Pydantic model
+                output_type=return_type,
+                tags=resolved_tags,
+                vc_enabled=vc_setting,
+            )
+            # NOTE: Legacy self.skills.append() removed - skills property generates list on-demand
 
             original_func = func
             is_async = asyncio.iscoroutinefunction(original_func)
