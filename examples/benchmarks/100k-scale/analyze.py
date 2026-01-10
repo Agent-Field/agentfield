@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-AgentField Benchmark Visualization
+Agent Framework Benchmark Visualization
 
 Creates a single, clean, publication-quality figure comparing frameworks.
+AgentField SDKs shown in blue family (visually grouped), external frameworks in distinct colors.
 """
 
 import json
@@ -27,19 +28,25 @@ plt.rcParams.update({
     "grid.linewidth": 0.5,
 })
 
-# Professional color palette
+# Color palette: AgentField SDKs in blue gradient, others in warm/neutral tones
 COLORS = {
-    "AgentField_Go": "#00ADD8",
-    "AgentField_TypeScript": "#3178C6",
-    "AgentField_Python": "#306998",
-    "LangChain_Python": "#1C3C3C",
+    # AgentField SDKs - Blue family (visually grouped)
+    "AgentField_Go": "#0D2137",         # Deep navy
+    "AgentField_TypeScript": "#1A5276", # Medium blue
+    "AgentField_Python": "#3498DB",     # Bright blue
+    # External frameworks - Distinct warm/neutral colors
+    "PydanticAI_Python": "#8E44AD",     # Purple
+    "LangChain_Python": "#C0392B",      # Red
+    "CrewAI_Python": "#7F8C8D",         # Gray
 }
 
 LABELS = {
-    "AgentField_Go": "Go SDK",
-    "AgentField_TypeScript": "TypeScript SDK",
-    "AgentField_Python": "Python SDK",
+    "AgentField_Go": "AgentField (Go)",
+    "AgentField_TypeScript": "AgentField (TS)",
+    "AgentField_Python": "AgentField (Python)",
+    "PydanticAI_Python": "Pydantic AI",
     "LangChain_Python": "LangChain",
+    "CrewAI_Python": "CrewAI",
 }
 
 
@@ -47,7 +54,7 @@ def load_results(results_dir: Path) -> dict:
     """Load benchmark results from JSON files."""
     results = {}
     for f in results_dir.glob("*.json"):
-        if f.name.startswith(("AgentField", "LangChain")):
+        if f.name.startswith(("AgentField", "LangChain", "PydanticAI", "CrewAI")):
             with open(f) as fp:
                 data = json.load(fp)
                 key = f"{data.get('framework', 'unknown')}_{data.get('language', 'unknown')}"
@@ -68,17 +75,21 @@ def get_metric(results: dict, framework: str, metric: str) -> Optional[float]:
 def create_benchmark_figure(results: dict, output_dir: Path):
     """
     Create a single clean figure with 4 key metrics.
-
-    Uses horizontal bar charts with log scale for fair comparison
-    across vastly different magnitudes.
     """
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle("AgentField Framework Benchmark", fontsize=16, fontweight="bold", y=0.95)
+    fig.suptitle("Agent Framework Benchmark Comparison", fontsize=16, fontweight="bold", y=0.95)
 
-    # Framework order (best to worst for visual hierarchy)
-    frameworks = ["AgentField_Go", "AgentField_TypeScript", "AgentField_Python", "LangChain_Python"]
+    # Framework order: AgentField SDKs first (grouped), then external
+    frameworks = [
+        "AgentField_Go",
+        "AgentField_TypeScript",
+        "AgentField_Python",
+        "PydanticAI_Python",
+        "LangChain_Python",
+        "CrewAI_Python",
+    ]
 
-    def plot_metric(ax, metric_name, alt_metric, title, unit, lower_is_better=True):
+    def plot_metric(ax, metric_name, alt_metric, title, unit):
         """Plot a single metric as horizontal bars."""
         values = []
         labels = []
@@ -96,7 +107,7 @@ def create_benchmark_figure(results: dict, output_dir: Path):
             return
 
         y_pos = np.arange(len(labels))
-        bars = ax.barh(y_pos, values, color=colors, edgecolor="white", linewidth=1, height=0.6)
+        bars = ax.barh(y_pos, values, color=colors, edgecolor="white", linewidth=1, height=0.65)
 
         ax.set_yticks(y_pos)
         ax.set_yticklabels(labels)
@@ -110,7 +121,6 @@ def create_benchmark_figure(results: dict, output_dir: Path):
 
         # Add value labels
         for bar, val in zip(bars, values):
-            # Format based on magnitude
             if val >= 1_000_000:
                 label = f"{val/1_000_000:.1f}M"
             elif val >= 1_000:
@@ -120,15 +130,14 @@ def create_benchmark_figure(results: dict, output_dir: Path):
             else:
                 label = f"{val:.2f}"
 
-            # Position label inside or outside bar
             x_pos = bar.get_width()
-            ax.text(x_pos * 1.05, bar.get_y() + bar.get_height()/2,
+            ax.text(x_pos * 1.08, bar.get_y() + bar.get_height()/2,
                     label, va="center", fontsize=10, fontweight="bold")
 
     # Plot 4 key metrics
     plot_metric(axes[0, 0],
                 "registration_time_mean_ms", "registration_time_mean_ms",
-                "Registration Time", "milliseconds")
+                "Registration Time (1000 handlers)", "milliseconds")
 
     plot_metric(axes[0, 1],
                 "memory_per_handler_bytes", "memory_per_tool_bytes",
@@ -136,18 +145,20 @@ def create_benchmark_figure(results: dict, output_dir: Path):
 
     plot_metric(axes[1, 0],
                 "request_latency_p99_us", "invocation_latency_p99_us",
-                "Request Latency (p99)", "microseconds")
+                "Invocation Latency (p99)", "microseconds")
 
     plot_metric(axes[1, 1],
                 "theoretical_single_thread_rps", "theoretical_single_thread_rps",
                 "Throughput", "requests/second")
 
-    plt.tight_layout(rect=[0, 0.02, 1, 0.93])
+    plt.tight_layout(rect=[0, 0.06, 1, 0.93])
 
-    # Add legend at bottom
-    handles = [plt.Rectangle((0,0), 1, 1, color=COLORS[fw]) for fw in frameworks if fw in results]
-    labels = [LABELS[fw] for fw in frameworks if fw in results]
-    fig.legend(handles, labels, loc="lower center", ncol=4, frameon=False, fontsize=11)
+    # Add legend with visual grouping
+    present = [fw for fw in frameworks if fw in results]
+    handles = [plt.Rectangle((0,0), 1, 1, color=COLORS[fw]) for fw in present]
+    legend_labels = [LABELS[fw] for fw in present]
+    fig.legend(handles, legend_labels, loc="lower center", ncol=min(len(present), 6),
+               frameon=True, framealpha=0.95, edgecolor="0.8", fontsize=10)
 
     fig.savefig(output_dir / "benchmark_summary.png", bbox_inches="tight", facecolor="white")
     plt.close()
