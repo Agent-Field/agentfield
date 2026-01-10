@@ -14,6 +14,18 @@ interface UseFilterStateOptions {
   syncWithUrl?: boolean;
 }
 
+export interface UseFilterStateReturn {
+  tags: FilterTag[];
+  filters: Partial<ExecutionFilters>;
+  grouping: ExecutionGrouping;
+  hasFilters: boolean;
+  updateTags: (tags: FilterTag[]) => void;
+  addTag: (tag: FilterTag) => void;
+  removeTag: (tagId: string) => void;
+  clearTags: () => void;
+}
+
+
 export function useFilterState({
   initialFilters = {},
   initialGrouping = {
@@ -22,7 +34,7 @@ export function useFilterState({
     sort_order: 'desc',
   },
   syncWithUrl = true,
-}: UseFilterStateOptions = {}) {
+}: UseFilterStateOptions = {}):UseFilterStateReturn {
   // Initialize tags from URL or initial values
   const [tags, setTags] = useState<FilterTag[]>(() => {
     if (syncWithUrl && typeof window !== 'undefined') {

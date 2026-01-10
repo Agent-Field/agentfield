@@ -52,6 +52,8 @@ The following secrets must be configured in GitHub repository settings:
 |--------|-------------|
 | `PYPI_API_TOKEN` | PyPI token (for all Python releases) |
 | `NPM_TOKEN` | npm registry token |
+| `DOCKERHUB_USERNAME` | Docker Hub username |
+| `DOCKERHUB_TOKEN` | Docker Hub access token |
 | `GITHUB_TOKEN` | Auto-provided by GitHub Actions |
 
 ---
@@ -80,7 +82,7 @@ Staging releases are **automatically triggered** when code is pushed to `main`. 
 **Artifacts published to:**
 - Python: PyPI as prerelease (`pip install --pre agentfield`)
 - TypeScript: npm with `@next` tag
-- Docker: `ghcr.io/agent-field/agentfield-control-plane:staging-X.Y.Z-rc.N`
+- Docker: `agentfield/control-plane:staging-X.Y.Z-rc.N`
 - Binaries: GitHub Pre-release
 
 **Manual staging release (optional):**
@@ -108,7 +110,7 @@ pip install --pre agentfield
 npm install @agentfield/sdk@next
 
 # Docker
-docker pull ghcr.io/agent-field/agentfield-control-plane:staging-0.1.19-rc.1
+docker pull agentfield/control-plane:staging-0.1.28-rc.4
 ```
 
 ### Production Release - MANUAL
@@ -142,7 +144,7 @@ Production releases are **manually triggered** via GitHub Actions workflow dispa
 **Artifacts published to:**
 - Python: PyPI (https://pypi.org)
 - TypeScript: npm with `@latest` tag
-- Docker: `ghcr.io/agent-field/agentfield-control-plane:vX.Y.Z` + `:latest`
+- Docker: `agentfield/control-plane:vX.Y.Z` + `:latest`
 - Binaries: GitHub Release (public)
 
 **Installing production releases:**
@@ -158,7 +160,7 @@ pip install agentfield
 npm install @agentfield/sdk
 
 # Docker
-docker pull ghcr.io/agent-field/agentfield-control-plane:latest
+docker pull agentfield/control-plane:latest
 ```
 
 ---
@@ -182,7 +184,7 @@ agentfield-X.Y.Z.tar.gz             # Python source distribution
 |----------|---------|------------|
 | PyPI | `pip install --pre agentfield` | `pip install agentfield` |
 | npm | `@agentfield/sdk@next` | `@agentfield/sdk@latest` |
-| Docker | `ghcr.io/agent-field/agentfield-control-plane:staging-*` | `ghcr.io/agent-field/agentfield-control-plane:v*` |
+| Docker | `agentfield/control-plane:staging-*` | `agentfield/control-plane:v*` |
 
 ---
 
@@ -195,7 +197,7 @@ agentfield-X.Y.Z.tar.gz             # Python source distribution
 curl -fsSL https://agentfield.ai/install.sh | bash
 
 # Specific version
-VERSION=v0.1.19 curl -fsSL https://agentfield.ai/install.sh | bash
+VERSION=v0.1.28 curl -fsSL https://agentfield.ai/install.sh | bash
 ```
 
 ### Staging Install
@@ -208,7 +210,7 @@ curl -fsSL https://agentfield.ai/install.sh | bash -s -- --staging
 STAGING=1 curl -fsSL https://agentfield.ai/install.sh | bash
 
 # Specific prerelease version
-VERSION=v0.1.19-rc.1 curl -fsSL https://agentfield.ai/install.sh | bash -s -- --staging
+VERSION=v0.1.28-rc.4 curl -fsSL https://agentfield.ai/install.sh | bash -s -- --staging
 ```
 
 **Key differences when using `--staging`:**
@@ -291,7 +293,7 @@ All previous staging artifacts remain available.
 |-----------|-----------|
 | PyPI prerelease | Cannot re-upload same version; must yank + bump rc number |
 | npm @next | `npm unpublish @agentfield/sdk@X.Y.Z-rc.N` (within 72 hours) or publish new rc |
-| Docker staging | Delete image tag from GHCR via GitHub UI or CLI |
+| Docker staging | Delete image tag from Docker Hub via web UI or CLI |
 | GitHub | Delete the prerelease from Releases page |
 
 ### Production Rollback

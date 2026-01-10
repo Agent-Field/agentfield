@@ -45,14 +45,14 @@ class AsyncConfig:
     batch_poll_interval: float = 0.1  # 100ms - interval for batch polling
 
     # Caching Configuration
-    result_cache_ttl: float = 600.0  # 10 minutes - cache completed results
-    result_cache_max_size: int = 20000  # Maximum cached results
+    result_cache_ttl: float = 120.0  # 2 minutes - cache completed results
+    result_cache_max_size: int = 5000  # Maximum cached results (reduced for memory)
 
     # Memory Management
-    cleanup_interval: float = 30.0  # 30 seconds - cleanup completed executions
-    max_completed_executions: int = 4000  # Keep max 4000 completed executions
+    cleanup_interval: float = 10.0  # 10 seconds - cleanup completed executions
+    max_completed_executions: int = 1000  # Keep max 1000 completed executions
     completed_execution_retention_seconds: float = (
-        600.0  # Retain completed executions for 10 minutes
+        60.0  # Retain completed executions for 1 minute
     )
 
     # Retry and Backoff Configuration

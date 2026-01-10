@@ -262,6 +262,9 @@ class ExecutionState:
         except Exception:
             pass  # Size calculation is optional
 
+        # Clear input_data to free memory after completion
+        self.input_data = {}
+
     def set_error(
         self, error_message: str, error_details: Optional[Dict[str, Any]] = None
     ) -> None:
@@ -276,6 +279,9 @@ class ExecutionState:
         self.error_details = error_details
         self.update_status(ExecutionStatus.FAILED)
 
+        # Clear input_data to free memory after failure
+        self.input_data = {}
+
     def cancel(self, reason: Optional[str] = None) -> None:
         """
         Cancel the execution.
@@ -287,11 +293,17 @@ class ExecutionState:
         self._cancellation_reason = reason
         self.update_status(ExecutionStatus.CANCELLED)
 
+        # Clear input_data to free memory after cancellation
+        self.input_data = {}
+
     def timeout_execution(self) -> None:
         """Mark the execution as timed out."""
         self.update_status(
             ExecutionStatus.TIMEOUT, f"Execution timed out after {self.timeout} seconds"
         )
+
+        # Clear input_data to free memory after timeout
+        self.input_data = {}
 
     def update_poll_interval(self, new_interval: float) -> None:
         """

@@ -1,0 +1,44 @@
+# Air configuration for hot-reload development
+# https://github.com/air-verse/air
+
+root = "."
+tmp_dir = "tmp"
+
+[build]
+# Build command - builds the control plane server
+cmd = "go build -tags 'sqlite_fts5' -o ./tmp/agentfield-server ./cmd/agentfield-server"
+# Binary to run
+bin = "./tmp/agentfield-server"
+# Watch these file extensions
+include_ext = ["go", "yaml", "yml"]
+# Exclude directories from watching
+exclude_dir = ["tmp", "vendor", "web/client/node_modules", "web/client/dist", ".git"]
+# Exclude files
+exclude_file = []
+# Exclude regex patterns
+exclude_regex = ["_test\\.go$"]
+# Delay before triggering rebuild (in milliseconds)
+delay = 1000
+# Stop running old binary when building
+stop_on_error = true
+# Send interrupt signal before killing (for graceful shutdown)
+send_interrupt = true
+# Delay after sending interrupt before killing
+kill_delay = 500
+
+[log]
+# Show log time
+time = true
+# Only show main log (hide runner, watcher logs)
+main_only = false
+
+[color]
+# Customize colors (green for build success, red for errors)
+main = "magenta"
+watcher = "cyan"
+build = "yellow"
+runner = "green"
+
+[misc]
+# Delete tmp directory on exit
+clean_on_exit = true

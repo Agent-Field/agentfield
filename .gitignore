@@ -13,6 +13,7 @@ dist/
 **/dist/
 coverage.out
 *.test
+tmp/
 
 # Python
 __pycache__/

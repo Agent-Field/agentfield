@@ -6,6 +6,9 @@ on:
 
 jobs:
   detect-ai:
+    # Disabled: GITHUB_TOKEN lacks write permissions on PRs from forked repos,
+    # causing label addition to fail. Re-enable when a PAT or GitHub App is configured.
+    if: false
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -206,6 +206,9 @@ func (c *executionController) handleSync(ctx *gin.Context) {
 		return
 	}
 
+	// Emit execution started event with full reasoner context
+	c.publishExecutionStartedEvent(plan)
+
 	resultBody, elapsed, asyncAccepted, callErr := c.callAgent(reqCtx, plan)
 
 	// If agent returned HTTP 202 (async acknowledgment), wait for callback completion
@@ -329,6 +332,9 @@ func (c *executionController) handleAsync(ctx *gin.Context) {
 		writeExecutionError(ctx, err)
 		return
 	}
+
+	// Emit execution started event with full reasoner context
+	c.publishExecutionStartedEvent(plan)
 
 	pool := getAsyncWorkerPool()
 	job := asyncExecutionJob{
@@ -544,6 +550,10 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 }
 
 func (c *executionController) publishExecutionEvent(exec *types.Execution, status string, data map[string]interface{}) {
+	c.publishExecutionEventWithReasonerInfo(exec, status, data, nil, nil)
+}
+
+func (c *executionController) publishExecutionEventWithReasonerInfo(exec *types.Execution, status string, data map[string]interface{}, agent *types.AgentNode, reasonerID *string) {
 	if exec == nil {
 		return
 	}
@@ -554,6 +564,65 @@ func (c *executionController) publishExecutionEvent(exec *types.Execution, statu
 		eventType = events.ExecutionCompleted
 	case string(types.ExecutionStatusFailed):
 		eventType = events.ExecutionFailed
+	case string(types.ExecutionStatusRunning):
+		eventType = events.ExecutionStarted
+	case "created":
+		eventType = events.ExecutionCreated
+	}
+
+	// Ensure data map exists
+	if data == nil {
+		data = make(map[string]interface{})
+	}
+
+	// Add reasoner_id to the event data
+	rID := exec.ReasonerID
+	if reasonerID != nil && *reasonerID != "" {
+		rID = *reasonerID
+	}
+	if rID != "" {
+		data["reasoner_id"] = rID
+	}
+
+	// Add node_id to the event data
+	if exec.NodeID != "" {
+		data["node_id"] = exec.NodeID
+	}
+
+	// Add reasoner definitions if agent info is available
+	if agent != nil {
+		// Find the specific reasoner being executed
+		for _, r := range agent.Reasoners {
+			if r.ID == rID {
+				data["reasoner"] = map[string]interface{}{
+					"id":            r.ID,
+					"input_schema":  r.InputSchema,
+					"output_schema": r.OutputSchema,
+				}
+				break
+			}
+		}
+
+		// Include all reasoners on this agent node for back-population
+		if len(agent.Reasoners) > 0 {
+			reasonerList := make([]map[string]interface{}, 0, len(agent.Reasoners))
+			for _, r := range agent.Reasoners {
+				reasonerList = append(reasonerList, map[string]interface{}{
+					"id":            r.ID,
+					"input_schema":  r.InputSchema,
+					"output_schema": r.OutputSchema,
+				})
+			}
+			data["agent_reasoners"] = reasonerList
+		}
+
+		// Include agent node info
+		data["agent_node"] = map[string]interface{}{
+			"id":              agent.ID,
+			"base_url":        agent.BaseURL,
+			"version":         agent.Version,
+			"deployment_type": agent.DeploymentType,
+		}
 	}
 
 	event := events.ExecutionEvent{
@@ -569,6 +638,30 @@ func (c *executionController) publishExecutionEvent(exec *types.Execution, statu
 		c.eventBus.Publish(event)
 	}
 	events.GlobalExecutionEventBus.Publish(event)
+}
+
+// publishExecutionStartedEvent emits the ExecutionStarted event with full reasoner context
+func (c *executionController) publishExecutionStartedEvent(plan *preparedExecution) {
+	if plan == nil || plan.exec == nil {
+		return
+	}
+
+	data := map[string]interface{}{
+		"target_type": plan.targetType,
+	}
+
+	// Include input payload info (not the full payload, just metadata)
+	if len(plan.exec.InputPayload) > 0 {
+		data["input_size"] = len(plan.exec.InputPayload)
+	}
+
+	c.publishExecutionEventWithReasonerInfo(
+		plan.exec,
+		string(types.ExecutionStatusRunning),
+		data,
+		plan.agent,
+		&plan.target.TargetName,
+	)
 }
 
 // waitForExecutionCompletion waits for an execution to complete by subscribing to the event bus.
@@ -900,7 +993,7 @@ func (c *executionController) completeExecution(ctx context.Context, plan *prepa
 			if payload := decodeJSON(result); payload != nil {
 				eventData["result"] = payload
 			}
-			c.publishExecutionEvent(updated, string(types.ExecutionStatusSucceeded), eventData)
+			c.publishExecutionEventWithReasonerInfo(updated, string(types.ExecutionStatusSucceeded), eventData, plan.agent, &plan.target.TargetName)
 			return nil
 		}
 		lastErr = err
@@ -953,7 +1046,7 @@ func (c *executionController) failExecution(ctx context.Context, plan *preparedE
 			if payload := decodeJSON(result); payload != nil {
 				eventData["result"] = payload
 			}
-			c.publishExecutionEvent(updated, string(types.ExecutionStatusFailed), eventData)
+			c.publishExecutionEventWithReasonerInfo(updated, string(types.ExecutionStatusFailed), eventData, plan.agent, &plan.target.TargetName)
 			return nil
 		}
 		lastErr = err

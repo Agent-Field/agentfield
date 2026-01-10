@@ -111,6 +111,11 @@ func (m *mockObservabilityStore) ClearDeadLetterQueue(ctx context.Context) error
 	return nil
 }
 
+func (m *mockObservabilityStore) ListAgents(ctx context.Context, filters types.AgentFilters) ([]*types.AgentNode, error) {
+	// Return empty list for tests - can be extended as needed
+	return []*types.AgentNode{}, nil
+}
+
 // Test config normalization
 func TestNormalizeObservabilityConfig(t *testing.T) {
 	t.Run("uses defaults when values are zero", func(t *testing.T) {

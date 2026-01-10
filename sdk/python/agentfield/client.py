@@ -83,6 +83,10 @@ class _Submission:
 
 
 class AgentFieldClient:
+    # Shared session for sync requests (class-level for reuse)
+    _shared_sync_session: Optional[requests.Session] = None
+    _shared_sync_session_lock: Optional[asyncio.Lock] = None
+
     def __init__(
         self,
         base_url: str = "http://localhost:8080",
@@ -101,6 +105,10 @@ class AgentFieldClient:
         self._result_cache = ResultCache(self.async_config)
         self._latest_event_stream_headers: Dict[str, str] = {}
         self._current_workflow_context = None
+
+        # Initialize shared sync session if not already created
+        if AgentFieldClient._shared_sync_session is None:
+            AgentFieldClient._init_shared_sync_session()
 
     def _generate_id(self, prefix: str) -> str:
         timestamp = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
@@ -371,29 +379,48 @@ class AgentFieldClient:
 
         return await client.request(method, url, **kwargs)
 
-    @staticmethod
-    def _sync_request(method: str, url: str, **kwargs):
-        """Blocking HTTP request helper used when httpx is unavailable."""
+    @classmethod
+    def _init_shared_sync_session(cls) -> None:
+        """Initialize the shared sync session with proper configuration."""
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+
+        session = requests.Session()
+        # Configure adapter with retry logic and connection pooling
+        adapter = HTTPAdapter(
+            max_retries=Retry(total=3, backoff_factor=0.3),
+            pool_connections=20,
+            pool_maxsize=20,
+        )
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        session.headers.update({
+            "User-Agent": "AgentFieldSDK/1.0",
+            "Accept": "application/json",
+        })
+        cls._shared_sync_session = session
+
+    @classmethod
+    def _get_sync_session(cls) -> requests.Session:
+        """Get the shared sync session, initializing if needed."""
+        if cls._shared_sync_session is None:
+            cls._init_shared_sync_session()
+        return cls._shared_sync_session
+
+    @classmethod
+    def _sync_request(cls, method: str, url: str, **kwargs):
+        """Blocking HTTP request helper using shared session for connection reuse."""
         # DIAGNOSTIC: Add request size logging
         if "json" in kwargs:
             import json
 
             json_size = len(json.dumps(kwargs["json"]).encode("utf-8"))
             logger.debug(
-                f"🔍 SYNC_REQUEST: Making {method} request to {url} with JSON payload size: {json_size} bytes"
+                f"SYNC_REQUEST: Making {method} request to {url} with JSON payload size: {json_size} bytes"
             )
 
-        # Configure session with proper settings for large payloads
-        session = requests.Session()
-
-        # Configure adapter with larger buffer sizes for handling large JSON responses
-        from requests.adapters import HTTPAdapter
-        from urllib3.util.retry import Retry
-
-        # Create custom adapter with larger buffer sizes
-        adapter = HTTPAdapter(max_retries=Retry(total=3, backoff_factor=0.3))
-        session.mount("http://", adapter)
-        session.mount("https://", adapter)
+        # Get shared session (reuses connections)
+        session = cls._get_sync_session()
 
         # Set default headers if not provided
         if "headers" not in kwargs:
@@ -403,42 +430,35 @@ class AgentFieldClient:
         if "json" in kwargs and "Content-Type" not in kwargs["headers"]:
             kwargs["headers"]["Content-Type"] = "application/json"
 
-        # Add User-Agent if not present
-        if "User-Agent" not in kwargs["headers"]:
-            kwargs["headers"]["User-Agent"] = "AgentFieldSDK/1.0"
-
         # DIAGNOSTIC: Log request details
-        logger.debug(f"🔍 SYNC_REQUEST: Headers: {kwargs.get('headers', {})}")
+        logger.debug(f"SYNC_REQUEST: Headers: {kwargs.get('headers', {})}")
 
         # Configure stream=False to ensure we read the full response
         # This prevents truncation issues with large JSON responses
         if "stream" not in kwargs:
             kwargs["stream"] = False
 
-        try:
-            response = session.request(method, url, **kwargs)
+        response = session.request(method, url, **kwargs)
 
-            # DIAGNOSTIC: Log response details
-            logger.debug(
-                f"🔍 SYNC_RESPONSE: Status {response.status_code}, Content-Length: {response.headers.get('Content-Length', 'unknown')}"
+        # DIAGNOSTIC: Log response details
+        logger.debug(
+            f"SYNC_RESPONSE: Status {response.status_code}, Content-Length: {response.headers.get('Content-Length', 'unknown')}"
+        )
+
+        # Check if response might be truncated
+        content_length = response.headers.get("Content-Length")
+        if content_length and len(response.content) != int(content_length):
+            logger.error(
+                f"RESPONSE_TRUNCATION: Expected {content_length} bytes, got {len(response.content)} bytes"
             )
 
-            # Check if response might be truncated
-            content_length = response.headers.get("Content-Length")
-            if content_length and len(response.content) != int(content_length):
-                logger.error(
-                    f"🚨 RESPONSE_TRUNCATION: Expected {content_length} bytes, got {len(response.content)} bytes"
-                )
+        # Check for exactly 4096 bytes which indicates truncation
+        if len(response.content) == 4096:
+            logger.error(
+                "POSSIBLE_TRUNCATION: Response is exactly 4096 bytes - likely truncated!"
+            )
 
-            # Check for exactly 4096 bytes which indicates truncation
-            if len(response.content) == 4096:
-                logger.error(
-                    "🚨 POSSIBLE_TRUNCATION: Response is exactly 4096 bytes - likely truncated!"
-                )
-
-            return response
-        finally:
-            session.close()
+        return response
 
     async def aclose(self) -> None:
         """Close shared resources such as async HTTP clients and managers."""

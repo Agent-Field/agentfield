@@ -731,6 +731,14 @@ class AsyncExecutionManager:
 
                             buffer += decoded
 
+                            # Prevent unbounded buffer growth (1MB limit)
+                            if len(buffer) > 1024 * 1024:
+                                logger.warn(
+                                    "SSE buffer exceeded 1MB limit, clearing to prevent memory leak"
+                                )
+                                buffer = ""
+                                continue
+
                             while "\n\n" in buffer:
                                 raw_event, buffer = buffer.split("\n\n", 1)
                                 data_lines = []

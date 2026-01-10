@@ -6,6 +6,206 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.29-rc.1] - 2026-01-09
+
+
+### Added
+
+- Feat(ci): add contributor reminder and assignment tracking workflows (#132)
+
+Add automated system to remind assigned contributors and free up stale assignments:
+
+- contributor-reminders.yml: Scheduled daily check that:
+  - Sends friendly reminder at 7 days without activity
+  - Sends second reminder at 14 days with unassign warning
+  - Unassigns and re-labels as 'help wanted' at 21 days
+  - Skips issues with linked PRs or blocking labels
+  - Supports dry-run mode for testing
+
+- issue-assignment-tracking.yml: Real-time event handling that:
+  - Welcomes new assignees with timeline expectations
+  - Clears reminder labels when assignees comment
+  - Clears labels when assignee opens linked PR
+  - Auto-adds 'help wanted' when last assignee leaves
+
+This improves contributor experience by setting clear expectations
+while ensuring stale assignments don't block other contributors. (7bbac52)
+
+
+
+### Documentation
+
+- Docs: update Docker image references to Docker Hub (#134)
+
+* docs: update Docker image references to Docker Hub
+
+Update all references from ghcr.io/agent-field/agentfield-control-plane
+to agentfield/control-plane (Docker Hub).
+
+Files updated:
+- deployments/kubernetes/base/control-plane-deployment.yaml
+- deployments/helm/agentfield/values.yaml
+- examples/python_agent_nodes/rag_evaluation/docker-compose.yml
+- README.md
+- docs/RELEASE.md (includes new DOCKERHUB_* secrets documentation)
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+
+* fix: use real version numbers in RELEASE.md examples
+
+Update example commands to use actual versions that exist:
+- Docker: staging-0.1.28-rc.4 (not 0.1.19-rc.1)
+- Install script: v0.1.28 and v0.1.28-rc.4
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (feeaa21)
+
+
+
+### Other
+
+- Add test connection_manager (#135) (247da4d)
+
+## [0.1.28] - 2026-01-06
+
+## [0.1.28-rc.4] - 2026-01-06
+
+
+### Chores
+
+- Chore(ci): migrate Docker publishing from GHCR to Docker Hub (#133)
+
+- Change image path from ghcr.io/agent-field/agentfield-control-plane to agentfield/control-plane
+- Update login step to use Docker Hub credentials (DOCKERHUB_USERNAME, DOCKERHUB_TOKEN)
+- Remove unused OWNER env var from Docker metadata step
+
+This enables Docker Hub analytics for image pulls. Requires adding
+DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets to the repository.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (e6abe54)
+
+
+
+### Documentation
+
+- Docs: add Discord community badge to README (#131)
+
+Add a Discord badge near the top of README.md to invite users to join
+the community. Uses Discord's official brand color (#5865F2) and matches
+the existing badge styling.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-authored-by: Claude <noreply@anthropic.com> (81fb1c5)
+
+## [0.1.28-rc.3] - 2026-01-05
+
+
+### Fixed
+
+- Fix(control-plane): enforce lifecycle_status consistency with agent state (#130)
+
+When agents go offline, the control plane was incorrectly keeping
+lifecycle_status as "ready" even though health_status correctly showed
+"inactive". This caused observability webhooks to receive inconsistent
+data where offline nodes appeared online based on lifecycle_status.
+
+Changes:
+- Add defensive lifecycle_status enforcement in persistStatus()
+  to ensure consistency with agent state before writing to storage
+- Update health_monitor.go fallback paths to also update lifecycle_status
+- Add SystemStateSnapshot event type for periodic agent inventory
+- Enhance execution events with full reasoner context and metadata
+- Add ListAgents to ObservabilityWebhookStore interface for snapshots
+
+The fix ensures both node_offline events and system_state_snapshot
+events (every 60s) correctly report lifecycle_status: "offline" for
+offline agents.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-authored-by: Claude <noreply@anthropic.com> (67c67c4)
+
+## [0.1.28-rc.2] - 2026-01-05
+
+
+### Other
+
+- Switch hot-reload dev setup from Docker to native Air (#129)
+
+Removes Docker-based dev setup in favor of running Air directly in the
+host environment. This avoids networking issues between Docker and host
+(especially on WSL2 where host.docker.internal has limitations).
+
+Changes:
+- Remove Dockerfile.dev and docker-compose.dev.yml
+- Update dev.sh to run Air natively (auto-installs if missing)
+- Update README.md with simplified instructions
+
+Usage remains simple: ./dev.sh
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-authored-by: Claude <noreply@anthropic.com> (670c0ba)
+
+## [0.1.28-rc.1] - 2026-01-05
+
+
+### Other
+
+- Hot reload controlplane local setup (#128) (690d481)
+
+## [0.1.27] - 2026-01-02
+
+## [0.1.27-rc.1] - 2026-01-01
+
+
+### CI
+
+- Ci: disable AI label workflow for fork compatibility
+
+The AI label workflow fails on PRs from forked repositories because
+GITHUB_TOKEN lacks write permissions. Since many contributions come
+from forks, disabling the workflow until a proper solution (PAT or
+GitHub App) is implemented.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com> (6dbc908)
+
+
+
+### Other
+
+- Add explicit return type to useFilterState hook (#127)
+
+* Add explicit return type to useFilterState hook
+
+* fix(types): use Partial<ExecutionFilters> in UseFilterStateReturn
+
+The convertTagsToApiFormat function returns Partial<ExecutionFilters>,
+so the return type interface must match to avoid TypeScript errors.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (f2168e0)
+
+## [0.1.26] - 2025-12-27
+
 ## [0.1.26-rc.3] - 2025-12-27
 
 
