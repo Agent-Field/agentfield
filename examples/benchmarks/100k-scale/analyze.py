@@ -28,25 +28,21 @@ plt.rcParams.update({
     "grid.linewidth": 0.5,
 })
 
-# Color palette: AgentField SDKs in blue gradient, others in warm/neutral tones
+# Color palette: AgentField SDKs in blue gradient, LangChain in distinct color
 COLORS = {
     # AgentField SDKs - Blue family (visually grouped)
     "AgentField_Go": "#0D2137",         # Deep navy
     "AgentField_TypeScript": "#1A5276", # Medium blue
     "AgentField_Python": "#3498DB",     # Bright blue
-    # External frameworks - Distinct warm/neutral colors
-    "PydanticAI_Python": "#8E44AD",     # Purple
+    # External frameworks
     "LangChain_Python": "#C0392B",      # Red
-    "CrewAI_Python": "#7F8C8D",         # Gray
 }
 
 LABELS = {
     "AgentField_Go": "AgentField (Go)",
     "AgentField_TypeScript": "AgentField (TS)",
     "AgentField_Python": "AgentField (Python)",
-    "PydanticAI_Python": "Pydantic AI",
     "LangChain_Python": "LangChain",
-    "CrewAI_Python": "CrewAI",
 }
 
 
@@ -54,7 +50,7 @@ def load_results(results_dir: Path) -> dict:
     """Load benchmark results from JSON files."""
     results = {}
     for f in results_dir.glob("*.json"):
-        if f.name.startswith(("AgentField", "LangChain", "PydanticAI", "CrewAI")):
+        if f.name.startswith(("AgentField", "LangChain")):
             with open(f) as fp:
                 data = json.load(fp)
                 key = f"{data.get('framework', 'unknown')}_{data.get('language', 'unknown')}"
@@ -84,9 +80,7 @@ def create_benchmark_figure(results: dict, output_dir: Path):
         "AgentField_Go",
         "AgentField_TypeScript",
         "AgentField_Python",
-        "PydanticAI_Python",
         "LangChain_Python",
-        "CrewAI_Python",
     ]
 
     def plot_metric(ax, metric_name, alt_metric, title, unit):
