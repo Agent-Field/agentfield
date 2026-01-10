@@ -1,0 +1,28 @@
+{
+  "version": "1.0",
+  "updated": "2024-01-10",
+  "description": "Baseline performance metrics for PR regression detection",
+  "thresholds": {
+    "memory_warning_pct": 10,
+    "memory_fail_pct": 25,
+    "latency_warning_pct": 20,
+    "latency_fail_pct": 50
+  },
+  "metrics": {
+    "python": {
+      "memory_per_handler_kb": 7.4,
+      "latency_p99_us": 0.21,
+      "handlers_tested": 10000
+    },
+    "go": {
+      "memory_per_handler_bytes": 280,
+      "latency_p99_us": 1.0,
+      "handlers_tested": 100000
+    },
+    "typescript": {
+      "memory_per_handler_bytes": 276,
+      "latency_p99_us": 0.25,
+      "handlers_tested": 100000
+    }
+  }
+}
