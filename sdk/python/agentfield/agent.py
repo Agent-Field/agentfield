@@ -64,9 +64,12 @@ from pydantic import BaseModel, ValidationError
 from dataclasses import dataclass, field
 import weakref
 
+# Use slots=True for memory efficiency on Python 3.10+, fallback for older versions
+_dataclass_kwargs = {"slots": True} if sys.version_info >= (3, 10) else {}
 
-# Memory-efficient handler entry classes using __slots__
-@dataclass(slots=True)
+
+# Memory-efficient handler entry classes using __slots__ (on Python 3.10+)
+@dataclass(**_dataclass_kwargs)
 class ReasonerEntry:
     """Minimal reasoner metadata - uses __slots__ for memory efficiency.
 
@@ -81,7 +84,7 @@ class ReasonerEntry:
     # Note: input_schema and output_schema are generated on-demand via _get_handler_schema()
 
 
-@dataclass(slots=True)
+@dataclass(**_dataclass_kwargs)
 class SkillEntry:
     """Minimal skill metadata - uses __slots__ for memory efficiency."""
     id: str
