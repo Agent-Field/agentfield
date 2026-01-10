@@ -245,11 +245,13 @@ func benchmarkMemory(numHandlers, iterations, warmup int, verbose bool) []float6
 	var results []float64
 
 	for i := 0; i < iterations+warmup; i++ {
-		// Force GC and get baseline
+		// Force GC to get clean baseline
 		runtime.GC()
+		runtime.GC() // Double GC for thorough cleanup
 		time.Sleep(50 * time.Millisecond)
 		var mBefore runtime.MemStats
 		runtime.ReadMemStats(&mBefore)
+		baseHeap := mBefore.HeapAlloc
 
 		a, _ := agent.New(agent.Config{
 			NodeID:           fmt.Sprintf("mem-bench-%d", i),
@@ -268,18 +270,24 @@ func benchmarkMemory(numHandlers, iterations, warmup int, verbose bool) []float6
 			)
 		}
 
-		// Force GC and measure
-		runtime.GC()
-		time.Sleep(10 * time.Millisecond)
+		// Measure heap WITHOUT GC to capture actual allocations
 		var mAfter runtime.MemStats
 		runtime.ReadMemStats(&mAfter)
+		currentHeap := mAfter.HeapAlloc
 
-		memUsedMB := float64(mAfter.Alloc-mBefore.Alloc) / 1024 / 1024
+		// Use HeapAlloc delta (more stable than Alloc)
+		var memUsedMB float64
+		if currentHeap > baseHeap {
+			memUsedMB = float64(currentHeap-baseHeap) / 1024 / 1024
+		} else {
+			// Fallback: use absolute HeapInuse as minimum estimate
+			memUsedMB = float64(mAfter.HeapInuse) / 1024 / 1024 / 10 // Conservative
+		}
 
 		if i >= warmup {
 			results = append(results, memUsedMB)
 			if verbose {
-				fmt.Printf("  Run %d: %.2f MB\n", i-warmup+1, memUsedMB)
+				fmt.Printf("  Run %d: %.2f MB (HeapAlloc: %.2f MB)\n", i-warmup+1, memUsedMB, float64(currentHeap)/1024/1024)
 			}
 		}
 

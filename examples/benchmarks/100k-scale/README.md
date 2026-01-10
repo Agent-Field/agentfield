@@ -28,8 +28,9 @@ A rigorous, reproducible benchmark comparing agent framework performance at scal
 | Framework | Language | Version | Notes |
 |-----------|----------|---------|-------|
 | AgentField Go SDK | Go 1.21+ | latest | Native Go implementation |
-| AgentField Python SDK | Python 3.11+ | latest | FastAPI-based |
-| LangChain | Python 3.11+ | 0.1.x | Industry standard baseline |
+| AgentField TypeScript SDK | Node.js 20+ | latest | Native TS implementation |
+| AgentField Python SDK | Python 3.12+ | latest | FastAPI-based, memory-optimized |
+| LangChain | Python 3.12+ | 0.1.x | Industry standard baseline |
 
 ### Workload Definition
 
@@ -54,7 +55,42 @@ cd langchain-bench && python benchmark.py
 
 ## Results
 
-See `results/` directory for raw data and visualizations.
+### Summary (Latest Run)
+
+| Framework | Handlers | Registration | Memory | Memory/Handler | Latency p99 | Throughput |
+|-----------|----------|--------------|--------|----------------|-------------|------------|
+| **AgentField Go** | 100,000 | 17.3 ms | 26.7 MB | 280 B | 1.0 µs | 8.2M req/s |
+| **AgentField TS** | 50,000 | 16.7 ms | 13.2 MB | 276 B | 0.3 µs | 5.0M req/s |
+| **AgentField Python** | 5,000 | 2,973 ms | 127 MB | 26.7 KB | 0.2 µs | 7.0M req/s |
+| **LangChain Python** | 1,000 | 483 ms | 10.3 MB | 10.8 KB | 118.7 µs | 15.6K req/s |
+
+### Key Findings
+
+**Registration Speed (normalized to 100K handlers)**
+- Go: 17.3 ms
+- TypeScript: ~33.4 ms (extrapolated from 50K)
+- Python (AgentField): ~59,460 ms (extrapolated from 5K)
+- LangChain: ~48,300 ms (extrapolated from 1K)
+
+**Memory Efficiency**
+- Go: **280 bytes/handler** (most efficient)
+- TypeScript: **276 bytes/handler**
+- AgentField Python: 26.7 KB/handler
+- LangChain: 10.8 KB/handler
+
+**Throughput**
+- Go: **8.2M req/s** (single-threaded theoretical)
+- TypeScript: **5.0M req/s**
+- LangChain: 15.6K req/s (**~520x slower than Go**)
+
+### Visualizations
+
+![Benchmark Summary](results/benchmark_summary.png)
+![Registration Comparison](results/registration_comparison.png)
+![Memory Comparison](results/memory_comparison.png)
+![Latency Distribution](results/latency_distribution.png)
+
+See `results/` directory for all raw data and additional visualizations.
 
 ## Reproducing
 
