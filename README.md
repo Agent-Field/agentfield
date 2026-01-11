@@ -313,6 +313,25 @@ AgentField isn't a framework you extend. It's infrastructure you deploy on.
 | **Long-running**   | Timeouts, hacks            | Designed for batch      | Hours/days, durable execution           |
 | **Audit**          | Logs (trust me)            | Logs                    | Cryptographic proofs (W3C DIDs/VCs)     |
 
+### Performance
+
+**AgentField SDKs at Scale** (100,000 handlers)
+
+| | Go | TypeScript | Python |
+|---|---:|---:|---:|
+| Registration | 17 ms | 14 ms | ~5.7 s |
+| Memory/Handler | 280 B | 276 B | 7.5 KB |
+| Throughput | 8.2M req/s | 4.0M req/s | 6.7M req/s |
+
+**vs Other Frameworks** (1,000 handlers, same language)
+
+| | AgentField | LangChain | CrewAI | Mastra |
+|---|---:|---:|---:|---:|
+| Registration | 57 ms (py) / 14 ms (ts) | 483 ms | 200 ms | 365 ms |
+| Memory/Handler | 7.5 KB (py) / 276 B (ts) | 10.8 KB | 14.3 KB | 1.8 KB |
+
+<sub>Apple M1. Handler registration + invocation overhead (no LLM). [Methodology →](examples/benchmarks/100k-scale/)</sub>
+
 **Not a DAG builder.** Agents decide what to do next—dynamically. The control plane tracks the execution graph automatically.
 
 **Not tool attachment.** You don't just give an LLM a bag of MCP tools and hope. You define **Reasoners** (AI logic) and **Skills** (deterministic code) with explicit boundaries. [Learn more](https://agentfield.ai/docs/core-concepts/reasoners-and-skills).
