@@ -191,31 +191,53 @@ jobs:
           fi
         continue-on-error: true
 
+      - name: Build
+        working-directory: sdk/typescript
+        run: npm run build
+
       - name: Benchmark
         id: bench
         working-directory: sdk/typescript
         run: |
-          # Write benchmark script to file to use ESM modules properly
-          cat > /tmp/bench.mjs << 'BENCHEOF'
-          // Memory test (synchronous)
-          const start = process.memoryUsage().heapUsed;
+          # Write benchmark script that uses the actual SDK
+          cat > bench.mjs << 'BENCHEOF'
+          import { Agent } from './dist/index.js';
 
-          // Simulate handler registration
-          const handlers = new Map();
-          for (let i = 0; i < 50000; i++) {
-            handlers.set('handler-' + i, async (ctx) => ({ id: i }));
+          // Force garbage collection if available
+          if (global.gc) global.gc();
+
+          // Memory test - measure actual SDK overhead
+          const startHeap = process.memoryUsage().heapUsed;
+
+          // Create agent (one-time overhead, not counted per-handler)
+          const agent = new Agent({
+            nodeId: 'bench',
+            agentFieldUrl: 'http://localhost:8080',
+            port: 9999,
+            didEnabled: false
+          });
+
+          const handlerCount = 1000;
+
+          // Register handlers using the actual SDK API
+          for (let i = 0; i < handlerCount; i++) {
+            const idx = i;
+            agent.reasoner(`handler-${i}`, async (ctx) => ({ id: idx }));
           }
 
-          const end = process.memoryUsage().heapUsed;
-          const memPerHandler = (end - start) / 50000;
+          if (global.gc) global.gc();
+
+          const endHeap = process.memoryUsage().heapUsed;
+          const memPerHandler = (endHeap - startHeap) / handlerCount;
           console.log('memory=' + memPerHandler.toFixed(0));
 
-          // Latency test
+          // Latency test - measure handler lookup and execution
           const times = [];
-          const handler = async (input) => ({ result: true });
           for (let i = 0; i < 10000; i++) {
+            const name = `handler-${i % handlerCount}`;
             const s = performance.now();
-            await handler({ test: true });
+            const def = agent.reasoners.get(name);
+            if (def) await def.handler({ input: {} });
             times.push((performance.now() - s) * 1000);
           }
           times.sort((a, b) => a - b);
@@ -223,7 +245,7 @@ jobs:
           console.log('latency=' + p99.toFixed(2));
           BENCHEOF
 
-          node /tmp/bench.mjs 2>&1 | tee bench.txt
+          node --expose-gc bench.mjs 2>&1 | tee bench.txt
 
           echo "memory=$(grep 'memory=' bench.txt | cut -d= -f2)" >> $GITHUB_OUTPUT
           echo "latency=$(grep 'latency=' bench.txt | cut -d= -f2)" >> $GITHUB_OUTPUT
