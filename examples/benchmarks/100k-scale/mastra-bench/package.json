@@ -1,0 +1,17 @@
+{
+  "name": "mastra-benchmark",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "benchmark": "tsx benchmark.ts",
+    "benchmark:json": "tsx benchmark.ts --json"
+  },
+  "dependencies": {
+    "@mastra/core": "^0.10.0",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0",
+    "@types/node": "^20.0.0"
+  }
+}

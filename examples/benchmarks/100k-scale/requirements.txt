@@ -6,6 +6,9 @@ numpy>=1.24
 # LangChain baseline (optional)
 langchain-core>=0.1.0
 
+# CrewAI baseline (optional)
+crewai>=0.80.0
+
 # AgentField Python SDK dependencies
 fastapi>=0.100
 uvicorn>=0.20

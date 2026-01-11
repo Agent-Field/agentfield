@@ -31,6 +31,8 @@ A rigorous, reproducible benchmark measuring agent framework performance at scal
 | AgentField TypeScript SDK | Node.js 20+ | latest | Native TS implementation |
 | AgentField Python SDK | Python 3.12+ | latest | FastAPI-based |
 | LangChain | Python 3.12+ | 0.1.x | StructuredTool-based |
+| CrewAI | Python 3.12+ | latest | @tool decorator-based |
+| Mastra | Node.js 20+ | latest | createTool-based |
 
 ### Workload Definition
 
@@ -51,6 +53,8 @@ This isolates framework overhead from external dependencies.
 cd go-bench && go run .
 cd python-bench && python benchmark.py
 cd langchain-bench && python benchmark.py
+cd crewai-bench && python benchmark.py
+cd mastra-bench && npx tsx benchmark.ts
 ```
 
 ## Results
