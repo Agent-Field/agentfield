@@ -60,7 +60,7 @@
   "bugs": {
     "url": "https://github.com/Agent-Field/agentfield/issues"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": [
     "agentfield",
     "ai-agents",
