@@ -31,6 +31,10 @@ const sentimentSchema = z.object({
 });
 type SentimentResult = z.infer<typeof sentimentSchema>;
 
+const analyzeSentimentOutputSchema = sentimentSchema.extend({
+  text: z.string()
+});
+
 reasonersRouter.reasoner<{ text: string }, SentimentResult & { text: string }>(
   'analyzeSentiment',
   async (ctx) => {
@@ -73,8 +77,14 @@ reasonersRouter.reasoner<{ text: string }, SentimentResult & { text: string }>(
     });
 
     return { ...sentiment, text: ctx.input.text };
-  }
+  },
+  { outputSchema: analyzeSentimentOutputSchema }
 );
+
+const processWithNotesOutputSchema = z.object({
+  processed: z.number(),
+  notes: z.number()
+});
 
 reasonersRouter.reasoner<{ items: string[] }, { processed: number; notes: number }>(
   'processWithNotes',
@@ -109,5 +119,6 @@ reasonersRouter.reasoner<{ items: string[] }, { processed: number; notes: number
       processed: processed.length,
       notes: notesSent
     };
-  }
+  },
+  { outputSchema: processWithNotesOutputSchema }
 );

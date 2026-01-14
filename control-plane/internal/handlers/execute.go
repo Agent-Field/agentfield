@@ -540,11 +540,15 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 		}
 	}
 
-	c.publishExecutionEvent(updated, normalizedStatus, map[string]interface{}{
+	eventData := map[string]interface{}{
 		"result":   req.Result,
 		"error":    req.Error,
 		"progress": req.Progress,
-	})
+	}
+	if inputPayload := decodeJSON(updated.InputPayload); inputPayload != nil {
+		eventData["input"] = inputPayload
+	}
+	c.publishExecutionEvent(updated, normalizedStatus, eventData)
 
 	ctx.JSON(http.StatusOK, renderStatus(updated))
 }
@@ -993,6 +997,9 @@ func (c *executionController) completeExecution(ctx context.Context, plan *prepa
 			if payload := decodeJSON(result); payload != nil {
 				eventData["result"] = payload
 			}
+			if inputPayload := decodeJSON(plan.exec.InputPayload); inputPayload != nil {
+				eventData["input"] = inputPayload
+			}
 			c.publishExecutionEventWithReasonerInfo(updated, string(types.ExecutionStatusSucceeded), eventData, plan.agent, &plan.target.TargetName)
 			return nil
 		}
@@ -1045,6 +1052,9 @@ func (c *executionController) failExecution(ctx context.Context, plan *preparedE
 			}
 			if payload := decodeJSON(result); payload != nil {
 				eventData["result"] = payload
+			}
+			if inputPayload := decodeJSON(plan.exec.InputPayload); inputPayload != nil {
+				eventData["input"] = inputPayload
 			}
 			c.publishExecutionEventWithReasonerInfo(updated, string(types.ExecutionStatusFailed), eventData, plan.agent, &plan.target.TargetName)
 			return nil
