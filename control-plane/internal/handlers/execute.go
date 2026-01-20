@@ -603,6 +603,19 @@ func (c *executionController) publishExecutionEventWithReasonerInfo(exec *types.
 			}
 		}
 
+		// Find the specific skill being executed
+		for _, s := range agent.Skills {
+			if s.ID == rID {
+				data["skill"] = map[string]interface{}{
+					"id":           s.ID,
+					"input_schema": s.InputSchema,
+					"tags":         s.Tags,
+				}
+				data["skill_id"] = s.ID
+				break
+			}
+		}
+
 		// Include all reasoners on this agent node for back-population
 		if len(agent.Reasoners) > 0 {
 			reasonerList := make([]map[string]interface{}, 0, len(agent.Reasoners))
@@ -614,6 +627,19 @@ func (c *executionController) publishExecutionEventWithReasonerInfo(exec *types.
 				})
 			}
 			data["agent_reasoners"] = reasonerList
+		}
+
+		// Include all skills on this agent node for back-population
+		if len(agent.Skills) > 0 {
+			skillList := make([]map[string]interface{}, 0, len(agent.Skills))
+			for _, s := range agent.Skills {
+				skillList = append(skillList, map[string]interface{}{
+					"id":           s.ID,
+					"input_schema": s.InputSchema,
+					"tags":         s.Tags,
+				})
+			}
+			data["agent_skills"] = skillList
 		}
 
 		// Include agent node info
