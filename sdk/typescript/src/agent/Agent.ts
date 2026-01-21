@@ -969,9 +969,7 @@ export class Agent {
       try {
         await this.agentFieldClient.heartbeat('ready');
       } catch (err) {
-        if (!this.config.devMode) {
-          console.warn('Heartbeat failed', err);
-        }
+        console.warn('Heartbeat failed', err);
       }
     };
 

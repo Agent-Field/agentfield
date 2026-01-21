@@ -6,6 +6,84 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.32] - 2026-01-21
+
+## [0.1.32-rc.4] - 2026-01-21
+
+
+### Added
+
+- Feat(deploy): add Railway template for one-click deployment (#149)
+
+* feat(deploy): add Railway template for one-click deployment
+
+Add Railway configuration for easy deployment of the control plane with PostgreSQL:
+- railway.toml and railway.json at repo root for Railway auto-detection
+- Dockerfile reference to existing control-plane build
+- Health check configuration (/api/v1/health)
+- README with setup instructions and deploy button
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+* fix: use correct CLI installation command
+
+---------
+
+Co-authored-by: Claude <noreply@anthropic.com> (7375d4f)
+
+
+
+### Fixed
+
+- Fix(ts-sdk): add HTTP timeout and always log heartbeat failures (#152)
+
+- Add 30-second timeout to axios client to prevent requests from hanging
+  indefinitely on network issues (matches Python SDK behavior)
+- Always log heartbeat failures regardless of devMode setting to aid
+  debugging when agents go offline
+
+This fixes an issue where TypeScript agents would silently stop working
+after ~5 minutes on Railway (and potentially other cloud platforms) due to
+network requests hanging forever without any error logs.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-authored-by: Claude <noreply@anthropic.com> (8aedc5c)
+
+- Fix: add cache mount IDs for Railway compatibility (#150)
+
+* feat(deploy): add Railway template for one-click deployment
+
+Add Railway configuration for easy deployment of the control plane with PostgreSQL:
+- railway.toml and railway.json at repo root for Railway auto-detection
+- Dockerfile reference to existing control-plane build
+- Health check configuration (/api/v1/health)
+- README with setup instructions and deploy button
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+* fix: use correct CLI installation command
+
+* fix: add cache mount IDs for Railway compatibility
+
+Railway's Docker builder requires explicit id parameters for cache mounts.
+Added id=npm-cache, id=go-build-cache, and id=go-mod-cache to the
+respective cache mount directives.
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+
+* fix: remove BuildKit cache mounts for Railway compatibility
+
+Railway's builder has specific cache mount requirements that differ from
+standard BuildKit. Removing cache mounts entirely - Railway has its own
+layer caching, so builds still benefit from caching.
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude <noreply@anthropic.com> (8ea9ecb)
+
 ## [0.1.32-rc.3] - 2026-01-20
 
 

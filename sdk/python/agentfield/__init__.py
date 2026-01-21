@@ -78,4 +78,4 @@ __all__ = [
     "register_provider",
 ]
 
-__version__ = "0.1.32-rc.3"
+__version__ = "0.1.32"
