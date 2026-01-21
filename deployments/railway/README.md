@@ -51,23 +51,50 @@ export AGENTFIELD_SERVER=https://your-app.up.railway.app
 af run
 ```
 
-## Deploy an Example Agent
+## Deploy an Example Agent on Railway
 
-Once your control plane is running, deploy an agent to connect to it:
+Add a demo agent to your Railway project alongside the control plane:
+
+1. In your Railway project, click **New** → **GitHub Repo**
+2. Select the same `Agent-Field/agentfield` repo
+3. In service settings, set:
+   - **Root Directory**: `examples/ts-node-examples/init-example`
+   - **Dockerfile Path**: `Dockerfile`
+4. Add these environment variables:
+
+| Variable | Value | Description |
+|----------|-------|-------------|
+| `AGENTFIELD_URL` | `${{agentfield.RAILWAY_PUBLIC_DOMAIN}}` | Links to control plane |
+| `PORT` | `8005` | Agent server port |
+| `OPENAI_API_KEY` | Your API key | Optional - for AI reasoners |
+
+5. Deploy and test:
+
+```bash
+# Echo reasoner (no AI needed)
+curl -X POST https://your-control-plane.up.railway.app/api/v1/execute/init-example.demo_echo \
+  -H "Content-Type: application/json" \
+  -d '{"input": {"message": "Hello Railway!"}}'
+
+# Sentiment analysis (requires OPENAI_API_KEY)
+curl -X POST https://your-control-plane.up.railway.app/api/v1/execute/init-example.demo_analyzeSentiment \
+  -H "Content-Type: application/json" \
+  -d '{"input": {"text": "I love this deployment!"}}'
+```
+
+## Run Agent Locally
+
+Alternatively, run an agent locally that connects to your Railway control plane:
 
 ```bash
 # Clone and navigate to an example
 git clone https://github.com/Agent-Field/agentfield.git
-cd agentfield/examples/python_agent_nodes/hello_world
+cd agentfield/examples/ts-node-examples/init-example
 
-# Set the control plane URL
-export AGENTFIELD_SERVER=https://your-control-plane.up.railway.app
-
-# Run locally or deploy to Railway as a separate service
-python main.py
+# Install and run
+npm install
+AGENTFIELD_URL=https://your-control-plane.up.railway.app npm start
 ```
-
-Or use the TypeScript init-example at `examples/ts-node-examples/init-example/`.
 
 ## Local Development
 
