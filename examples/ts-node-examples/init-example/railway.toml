@@ -1,8 +1,0 @@
-[build]
-builder = "dockerfile"
-dockerfilePath = "Dockerfile"
-
-[deploy]
-# No healthcheck - agent doesn't expose /api/v1/health
-restartPolicyType = "on_failure"
-restartPolicyMaxRetries = 3
