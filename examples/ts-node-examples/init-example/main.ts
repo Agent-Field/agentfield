@@ -9,7 +9,7 @@ async function main() {
     port: Number(process.env.PORT ?? 8005),
     version: '1.0.0',
     devMode: true,
-
+    apiKey: process.env.AGENTFIELD_API_KEY,
     aiConfig: {
       provider: 'openai',
       model: 'gpt-4o',
