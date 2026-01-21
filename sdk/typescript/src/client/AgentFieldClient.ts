@@ -24,7 +24,7 @@ export class AgentFieldClient {
 
   constructor(config: AgentConfig) {
     const baseURL = (config.agentFieldUrl ?? 'http://localhost:8080').replace(/\/$/, '');
-    this.http = axios.create({ baseURL });
+    this.http = axios.create({ baseURL, timeout: 30000 });
     this.config = config;
 
     const mergedHeaders = { ...(config.defaultHeaders ?? {}) };
