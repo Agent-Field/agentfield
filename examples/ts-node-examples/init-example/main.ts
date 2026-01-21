@@ -7,6 +7,7 @@ async function main() {
     nodeId: process.env.AGENT_ID ?? "init-example",
     agentFieldUrl: process.env.AGENTFIELD_URL ?? 'http://localhost:8080',
     port: Number(process.env.PORT ?? 8005),
+    publicUrl: process.env.AGENT_CALLBACK_URL,
     version: '1.0.0',
     devMode: true,
     apiKey: process.env.AGENTFIELD_API_KEY,

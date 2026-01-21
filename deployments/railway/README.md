@@ -1,110 +1,149 @@
-# AgentField Railway Template
+# AgentField Railway Deployment
 
-Deploy the AgentField control plane with PostgreSQL on Railway.
+Deploy AgentField control plane with PostgreSQL and agent nodes on Railway using Docker images.
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template?template=https://github.com/Agent-Field/agentfield&envs=AGENTFIELD_STORAGE_MODE,AGENTFIELD_HTTP_ADDR,AGENTFIELD_STORAGE_POSTGRES_ENABLE_AUTO_MIGRATION,AGENTFIELD_UI_ENABLED&AGENTFIELD_STORAGE_MODE=postgres&AGENTFIELD_HTTP_ADDR=0.0.0.0:${{PORT}}&AGENTFIELD_STORAGE_POSTGRES_ENABLE_AUTO_MIGRATION=true&AGENTFIELD_UI_ENABLED=true)
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Railway Project                          │
+│                                                              │
+│  ┌──────────────────┐    ┌──────────────────┐               │
+│  │  Control Plane   │    │    PostgreSQL    │               │
+│  │  (Docker Image)  │───▶│   (with pgvector)│               │
+│  │                  │    │                  │               │
+│  │  - Web UI        │    └──────────────────┘               │
+│  │  - REST API      │                                       │
+│  │  - Agent Registry│                                       │
+│  └────────┬─────────┘                                       │
+│           │                                                  │
+│           ▼                                                  │
+│  ┌──────────────────┐                                       │
+│  │   Agent Node     │                                       │
+│  │  (Docker Image)  │                                       │
+│  │                  │                                       │
+│  │  - Reasoners     │                                       │
+│  │  - Skills        │                                       │
+│  └──────────────────┘                                       │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ## Quick Setup
 
-1. Click "Deploy on Railway" above
-2. Add a **PostgreSQL** plugin to your project
-3. Add this environment variable to the control-plane service:
-   ```
-   AGENTFIELD_POSTGRES_URL=${{Postgres.DATABASE_URL}}
-   ```
-4. Deploy and access the dashboard at your Railway URL
+### 1. Create a New Railway Project
 
-## What Gets Deployed
+Go to [railway.app](https://railway.app) and create a new empty project.
 
-- **Control Plane** - AgentField orchestration server with embedded Web UI
-- **PostgreSQL** - Add via Railway plugin (required)
+### 2. Add PostgreSQL
 
-## Environment Variables
+1. Click **New** → **Database** → **Add PostgreSQL**
+2. Railway will provision a PostgreSQL instance automatically
 
-Configure these in your Railway service:
+### 3. Deploy Control Plane
+
+1. Click **New** → **Docker Image**
+2. Enter: `ghcr.io/agent-field/agentfield:latest`
+3. Add these environment variables:
 
 | Variable | Value | Description |
 |----------|-------|-------------|
 | `AGENTFIELD_STORAGE_MODE` | `postgres` | Use PostgreSQL backend |
-| `AGENTFIELD_POSTGRES_URL` | `${{Postgres.DATABASE_URL}}` | Auto-wired from Railway |
-| `AGENTFIELD_HTTP_ADDR` | `0.0.0.0:${{PORT}}` | Railway assigns port |
-| `AGENTFIELD_STORAGE_POSTGRES_ENABLE_AUTO_MIGRATION` | `true` | Run migrations on startup |
-| `AGENTFIELD_UI_ENABLED` | `true` | Enable web dashboard |
+| `AGENTFIELD_STORAGE_POSTGRES_URL` | `${{Postgres.DATABASE_URL}}` | Auto-wired from Railway |
+| `AGENTFIELD_API_KEY` | (generate a secure key) | API key for authentication |
 
-## After Deployment
+4. In **Settings** → **Networking**, click **Generate Domain** to get a public URL
+5. Deploy - the control plane will auto-migrate the database on startup
 
-1. Open the deployed URL to access the AgentField dashboard
-2. Create your first agent:
+### 4. Deploy an Agent Node (Optional)
 
-```bash
-# Install the CLI
-curl -sSf https://agentfield.ai/get | sh
-
-# Initialize a new agent
-af init my-agent
-cd my-agent
-
-# Point to your Railway deployment
-export AGENTFIELD_SERVER=https://your-app.up.railway.app
-
-# Run the agent
-af run
-```
-
-## Deploy an Example Agent on Railway
-
-Add a demo agent to your Railway project alongside the control plane:
-
-1. In your Railway project, click **New** → **GitHub Repo**
-2. Select the same `Agent-Field/agentfield` repo
-3. In service settings, set:
-   - **Root Directory**: `examples/ts-node-examples/init-example`
-   - **Dockerfile Path**: `Dockerfile`
-4. Add these environment variables:
+1. Click **New** → **Docker Image**
+2. Enter: `ghcr.io/agent-field/init-example:latest`
+3. Add these environment variables:
 
 | Variable | Value | Description |
 |----------|-------|-------------|
-| `AGENTFIELD_URL` | `${{agentfield.RAILWAY_PUBLIC_DOMAIN}}` | Links to control plane |
+| `AGENTFIELD_URL` | `http://${{control-plane.RAILWAY_PRIVATE_DOMAIN}}:8080` | Internal URL to control plane |
+| `AGENTFIELD_API_KEY` | (same as control plane) | Must match control plane key |
+| `AGENT_CALLBACK_URL` | `http://${{RAILWAY_PRIVATE_DOMAIN}}:8005` | URL for control plane to reach this agent |
 | `PORT` | `8005` | Agent server port |
-| `OPENAI_API_KEY` | Your API key | Optional - for AI reasoners |
+| `OPENAI_API_KEY` | (your key) | Optional - for AI reasoners |
 
-5. Deploy and test:
+> **Note:** Replace `control-plane` with your control plane service name if different. The `AGENT_CALLBACK_URL` is critical - without it, the agent will show as "offline" in the UI because the control plane can't reach it for health checks.
+
+## Environment Variables Reference
+
+### Control Plane
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `AGENTFIELD_STORAGE_MODE` | Yes | Set to `postgres` for PostgreSQL |
+| `AGENTFIELD_STORAGE_POSTGRES_URL` | Yes | PostgreSQL connection string |
+| `AGENTFIELD_API_KEY` | Recommended | API key for authentication |
+| `AGENTFIELD_UI_ENABLED` | No | Enable web UI (default: true) |
+
+### Agent Node
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `AGENTFIELD_URL` | Yes | URL to control plane |
+| `AGENTFIELD_API_KEY` | Yes* | Must match control plane key |
+| `AGENT_CALLBACK_URL` | Yes | URL for control plane to reach this agent for health checks |
+| `PORT` | No | Agent HTTP port (default: 8005) |
+| `AGENT_ID` | No | Custom agent ID |
+
+*Required if control plane has `AGENTFIELD_API_KEY` set.
+
+## Testing Your Deployment
+
+Once deployed, test the agent via the control plane:
 
 ```bash
+# Set your control plane URL
+export CP_URL=https://your-control-plane.up.railway.app
+
 # Echo reasoner (no AI needed)
-curl -X POST https://your-control-plane.up.railway.app/api/v1/execute/init-example.demo_echo \
+curl -X POST $CP_URL/api/v1/execute/init-example.demo_echo \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: your-api-key" \
   -d '{"input": {"message": "Hello Railway!"}}'
 
-# Sentiment analysis (requires OPENAI_API_KEY)
-curl -X POST https://your-control-plane.up.railway.app/api/v1/execute/init-example.demo_analyzeSentiment \
+# Sentiment analysis (requires OPENAI_API_KEY on agent)
+curl -X POST $CP_URL/api/v1/execute/init-example.demo_analyzeSentiment \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: your-api-key" \
   -d '{"input": {"text": "I love this deployment!"}}'
 ```
 
 ## Run Agent Locally
 
-Alternatively, run an agent locally that connects to your Railway control plane:
+Connect a local agent to your Railway control plane:
 
 ```bash
-# Clone and navigate to an example
+# Using the CLI
+curl -sSf https://agentfield.ai/get | sh
+af init my-agent
+cd my-agent
+
+export AGENTFIELD_SERVER=https://your-control-plane.up.railway.app
+export AGENTFIELD_API_KEY=your-api-key
+af run
+
+# Or run an example directly
 git clone https://github.com/Agent-Field/agentfield.git
 cd agentfield/examples/ts-node-examples/init-example
-
-# Install and run
 npm install
-AGENTFIELD_URL=https://your-control-plane.up.railway.app npm start
+AGENTFIELD_URL=https://your-control-plane.up.railway.app \
+AGENTFIELD_API_KEY=your-api-key \
+npm start
 ```
 
 ## Local Development
 
-```bash
-# Clone the repo
-git clone https://github.com/Agent-Field/agentfield.git
-cd agentfield
+For local development with Docker Compose:
 
-# Run locally with Docker Compose
-cd deployments/docker
+```bash
+git clone https://github.com/Agent-Field/agentfield.git
+cd agentfield/deployments/docker
 docker compose up
 ```
 
@@ -113,3 +152,4 @@ docker compose up
 - [Documentation](https://github.com/Agent-Field/agentfield)
 - [Examples](https://github.com/Agent-Field/agentfield/tree/main/examples)
 - [Python SDK](https://pypi.org/project/agentfield/)
+- [TypeScript SDK](https://www.npmjs.com/package/@agentfield/sdk)
