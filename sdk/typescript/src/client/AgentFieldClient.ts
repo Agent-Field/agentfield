@@ -1,4 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
+import http from 'node:http';
+import https from 'node:https';
 import type {
   AgentConfig,
   DiscoveryOptions,
@@ -8,6 +10,21 @@ import type {
   CompactDiscoveryResponse,
   HealthStatus
 } from '../types/agent.js';
+
+// Shared HTTP agents with connection pooling to prevent socket exhaustion
+const httpAgent = new http.Agent({
+  keepAlive: true,
+  maxSockets: 10,
+  maxFreeSockets: 5,
+  timeout: 30000
+});
+
+const httpsAgent = new https.Agent({
+  keepAlive: true,
+  maxSockets: 10,
+  maxFreeSockets: 5,
+  timeout: 30000
+});
 
 export interface ExecutionStatusUpdate {
   status?: string;
@@ -24,7 +41,12 @@ export class AgentFieldClient {
 
   constructor(config: AgentConfig) {
     const baseURL = (config.agentFieldUrl ?? 'http://localhost:8080').replace(/\/$/, '');
-    this.http = axios.create({ baseURL });
+    this.http = axios.create({
+      baseURL,
+      timeout: 30000,
+      httpAgent,
+      httpsAgent
+    });
     this.config = config;
 
     const mergedHeaders = { ...(config.defaultHeaders ?? {}) };
@@ -335,11 +357,12 @@ export class AgentFieldClient {
       ...executionHeaders
     });
 
-    const uiHttp = axios.create({ baseURL: uiApiBaseUrl });
-    const request = uiHttp
-      .post('/executions/note', payload, {
+    const request = axios
+      .post(`${uiApiBaseUrl}/executions/note`, payload, {
         headers,
-        timeout: devMode ? 5000 : 10000
+        timeout: devMode ? 5000 : 10000,
+        httpAgent,
+        httpsAgent
       })
       .catch(() => {});
     void request;
