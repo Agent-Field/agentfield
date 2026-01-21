@@ -2,7 +2,7 @@ FROM --platform=$BUILDPLATFORM node:20-alpine AS ui-builder
 WORKDIR /app/web
 
 COPY control-plane/web/client/package*.json ./
-RUN --mount=type=cache,id=npm-cache,target=/root/.npm npm ci
+RUN npm ci
 COPY control-plane/web/client/ .
 RUN npm run build
 
@@ -21,14 +21,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY control-plane/go.mod control-plane/go.sum ./control-plane/
-RUN --mount=type=cache,id=go-build-cache,target=/root/.cache/go-build --mount=type=cache,id=go-mod-cache,target=/go/pkg/mod \
-    cd control-plane && go mod download
+RUN cd control-plane && go mod download
 
 COPY control-plane/ ./control-plane/
 COPY --from=ui-builder /app/web/dist ./control-plane/web/client/dist
 
-RUN --mount=type=cache,id=go-build-cache,target=/root/.cache/go-build --mount=type=cache,id=go-mod-cache,target=/go/pkg/mod \
-    cd control-plane && \
+RUN cd control-plane && \
     if [ "${TARGETARCH}" = "arm64" ]; then export CC=aarch64-linux-gnu-gcc; else export CC=gcc; fi && \
     GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -tags "embedded sqlite_fts5" -o /app/bin/agentfield-server ./cmd/agentfield-server
 
