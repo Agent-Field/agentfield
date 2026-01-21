@@ -1,6 +1,23 @@
+import http from 'node:http';
+import https from 'node:https';
 import axios, { type AxiosInstance } from 'axios';
 import type { MCPServerConfig } from '../types/agent.js';
 import type { MCPTool } from '../types/mcp.js';
+
+// Shared HTTP agents with connection pooling to prevent socket exhaustion
+const httpAgent = new http.Agent({
+  keepAlive: true,
+  maxSockets: 10,
+  maxFreeSockets: 5,
+  timeout: 30000
+});
+
+const httpsAgent = new https.Agent({
+  keepAlive: true,
+  maxSockets: 10,
+  maxFreeSockets: 5,
+  timeout: 30000
+});
 
 export class MCPClient {
   readonly alias: string;
@@ -23,7 +40,10 @@ export class MCPClient {
     this.baseUrl = (config.url ?? `http://localhost:${config.port}`).replace(/\/$/, '');
     this.http = axios.create({
       baseURL: this.baseUrl,
-      headers: config.headers
+      headers: config.headers,
+      timeout: 30000,
+      httpAgent,
+      httpsAgent
     });
     this.devMode = Boolean(devMode);
   }

@@ -1,5 +1,22 @@
 import axios, { AxiosInstance, isAxiosError } from 'axios';
+import http from 'node:http';
+import https from 'node:https';
 import type { MemoryScope } from '../types/agent.js';
+
+// Shared HTTP agents with connection pooling to prevent socket exhaustion
+const httpAgent = new http.Agent({
+  keepAlive: true,
+  maxSockets: 10,
+  maxFreeSockets: 5,
+  timeout: 30000
+});
+
+const httpsAgent = new https.Agent({
+  keepAlive: true,
+  maxSockets: 10,
+  maxFreeSockets: 5,
+  timeout: 30000
+});
 
 export interface MemoryRequestMetadata {
   workflowId?: string;
@@ -40,7 +57,10 @@ export class MemoryClient {
 
   constructor(baseUrl: string, defaultHeaders?: Record<string, string | number | boolean | undefined>) {
     this.http = axios.create({
-      baseURL: baseUrl.replace(/\/$/, '')
+      baseURL: baseUrl.replace(/\/$/, ''),
+      timeout: 30000,
+      httpAgent,
+      httpsAgent
     });
     this.defaultHeaders = this.sanitizeHeaders(defaultHeaders ?? {});
   }

@@ -1,5 +1,22 @@
 import { Buffer } from 'node:buffer';
+import http from 'node:http';
+import https from 'node:https';
 import axios, { type AxiosInstance } from 'axios';
+
+// Shared HTTP agents with connection pooling to prevent socket exhaustion
+const httpAgent = new http.Agent({
+  keepAlive: true,
+  maxSockets: 10,
+  maxFreeSockets: 5,
+  timeout: 30000
+});
+
+const httpsAgent = new https.Agent({
+  keepAlive: true,
+  maxSockets: 10,
+  maxFreeSockets: 5,
+  timeout: 30000
+});
 
 // ============================================================================
 // DID Identity Types
@@ -115,7 +132,12 @@ export class DidClient {
   private readonly defaultHeaders: Record<string, string>;
 
   constructor(baseUrl: string, defaultHeaders?: Record<string, string | number | boolean | undefined>) {
-    this.http = axios.create({ baseURL: baseUrl.replace(/\/$/, '') });
+    this.http = axios.create({
+      baseURL: baseUrl.replace(/\/$/, ''),
+      timeout: 30000,
+      httpAgent,
+      httpsAgent
+    });
     this.defaultHeaders = this.sanitizeHeaders(defaultHeaders ?? {});
   }
 
