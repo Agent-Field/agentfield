@@ -38,10 +38,7 @@ Configure these in your Railway service:
 
 ```bash
 # Install the CLI
-go install github.com/Agent-Field/agentfield/control-plane/cmd/af@latest
-
-# Or use pip
-pip install agentfield
+curl -sSf https://agentfield.ai/get | sh
 
 # Initialize a new agent
 af init my-agent
