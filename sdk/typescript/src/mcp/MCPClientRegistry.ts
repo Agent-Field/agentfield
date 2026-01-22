@@ -24,6 +24,10 @@ export class MCPClientRegistry {
     return Array.from(this.clients.values());
   }
 
+  clear(): void {
+    this.clients.clear();
+  }
+
   async healthSummary(): Promise<MCPHealthSummary> {
     if (!this.clients.size) {
       return {

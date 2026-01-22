@@ -10,6 +10,7 @@ export class MemoryEventClient {
   private reconnectDelay = 1000;
   private closed = false;
   private reconnectPending = false;
+  private reconnectTimer?: ReturnType<typeof setTimeout>;
   private readonly headers: Record<string, string>;
 
   constructor(baseUrl: string, headers?: Record<string, string | number | boolean | undefined>) {
@@ -32,6 +33,11 @@ export class MemoryEventClient {
   }
 
   private cleanup() {
+    // Clear any pending reconnect timer
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
     if (this.ws) {
       // Remove all listeners to prevent reconnect triggers during cleanup
       this.ws.removeAllListeners();
@@ -75,7 +81,8 @@ export class MemoryEventClient {
     if (this.closed || this.reconnectPending) return;
     this.reconnectPending = true;
 
-    setTimeout(() => {
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = undefined;
       if (this.closed) return;
       this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000);
       this.connect();

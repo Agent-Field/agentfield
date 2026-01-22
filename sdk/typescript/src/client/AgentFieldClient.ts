@@ -1,6 +1,4 @@
 import axios, { AxiosInstance } from 'axios';
-import http from 'node:http';
-import https from 'node:https';
 import type {
   AgentConfig,
   DiscoveryOptions,
@@ -10,22 +8,7 @@ import type {
   CompactDiscoveryResponse,
   HealthStatus
 } from '../types/agent.js';
-
-// Shared HTTP agents with connection pooling to prevent socket exhaustion
-// maxTotalSockets limits total connections across all hosts (IPv4 + IPv6)
-const httpAgent = new http.Agent({
-  keepAlive: true,
-  maxSockets: 10,
-  maxTotalSockets: 50,
-  maxFreeSockets: 5
-});
-
-const httpsAgent = new https.Agent({
-  keepAlive: true,
-  maxSockets: 10,
-  maxTotalSockets: 50,
-  maxFreeSockets: 5
-});
+import { httpAgent, httpsAgent } from '../utils/httpAgents.js';
 
 export interface ExecutionStatusUpdate {
   status?: string;

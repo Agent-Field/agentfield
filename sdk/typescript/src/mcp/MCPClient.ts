@@ -1,24 +1,7 @@
-import http from 'node:http';
-import https from 'node:https';
 import axios, { type AxiosInstance } from 'axios';
 import type { MCPServerConfig } from '../types/agent.js';
 import type { MCPTool } from '../types/mcp.js';
-
-// Shared HTTP agents with connection pooling to prevent socket exhaustion
-// maxTotalSockets limits total connections across all hosts (IPv4 + IPv6)
-const httpAgent = new http.Agent({
-  keepAlive: true,
-  maxSockets: 10,
-  maxTotalSockets: 50,
-  maxFreeSockets: 5
-});
-
-const httpsAgent = new https.Agent({
-  keepAlive: true,
-  maxSockets: 10,
-  maxTotalSockets: 50,
-  maxFreeSockets: 5
-});
+import { httpAgent, httpsAgent } from '../utils/httpAgents.js';
 
 export class MCPClient {
   readonly alias: string;
