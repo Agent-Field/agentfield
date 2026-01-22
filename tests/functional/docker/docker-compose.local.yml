@@ -47,9 +47,9 @@ services:
       echo 'Waiting for control plane to be fully ready...' &&
       wait-for-services.sh &&
       if [ -n \"$$PYTEST_MARK_EXPR\" ]; then
-        pytest -m \"$$PYTEST_MARK_EXPR\" $$PYTEST_ARGS --junit-xml=/reports/junit-local.xml --tb=short;
+        pytest -n auto -m \"$$PYTEST_MARK_EXPR\" $$PYTEST_ARGS --junit-xml=/reports/junit-local.xml --tb=short;
       else
-        pytest $$PYTEST_ARGS --junit-xml=/reports/junit-local.xml --tb=short;
+        pytest -n auto $$PYTEST_ARGS --junit-xml=/reports/junit-local.xml --tb=short;
       fi
       "
 
