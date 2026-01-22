@@ -9,6 +9,7 @@ export class MemoryEventClient {
   private handlers: MemoryEventHandler[] = [];
   private reconnectDelay = 1000;
   private closed = false;
+  private reconnectPending = false;
   private readonly headers: Record<string, string>;
 
   constructor(baseUrl: string, headers?: Record<string, string | number | boolean | undefined>) {
@@ -27,10 +28,24 @@ export class MemoryEventClient {
 
   stop() {
     this.closed = true;
-    this.ws?.close();
+    this.cleanup();
+  }
+
+  private cleanup() {
+    if (this.ws) {
+      // Remove all listeners to prevent reconnect triggers during cleanup
+      this.ws.removeAllListeners();
+      // Terminate forcefully to ensure socket is closed
+      this.ws.terminate();
+      this.ws = undefined;
+    }
   }
 
   private connect() {
+    // Clean up any existing connection first
+    this.cleanup();
+    this.reconnectPending = false;
+
     this.ws = new WebSocket(this.url, { headers: this.headers });
 
     this.ws.on('open', () => {
@@ -49,13 +64,19 @@ export class MemoryEventClient {
       }
     });
 
-    this.ws.on('close', () => this.scheduleReconnect());
-    this.ws.on('error', () => this.scheduleReconnect());
+    // Use a single handler for both close and error to prevent duplicate reconnects
+    const handleDisconnect = () => this.scheduleReconnect();
+    this.ws.on('close', handleDisconnect);
+    this.ws.on('error', handleDisconnect);
   }
 
   private scheduleReconnect() {
-    if (this.closed) return;
+    // Prevent duplicate reconnect scheduling
+    if (this.closed || this.reconnectPending) return;
+    this.reconnectPending = true;
+
     setTimeout(() => {
+      if (this.closed) return;
       this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000);
       this.connect();
     }, this.reconnectDelay);

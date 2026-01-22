@@ -8,7 +8,7 @@
         "dev": "tsx main.ts"
     },
     "dependencies": {
-        "@agentfield/sdk": "^0.1.35",
+        "@agentfield/sdk": "^0.1.36",
         "dotenv": "^16.4.5",
         "zod": "^3.22.4"
     },
