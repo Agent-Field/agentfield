@@ -690,12 +690,12 @@ func TestExecuteStreamWithRetry_Success(t *testing.T) {
 		ch := make(chan StreamChunk, 3)
 		ec := make(chan error)
 
-		go func() {
-			defer close(ch)
-			defer close(ec)
-			ch <- StreamChunk{Choices: []StreamChoice{{Delta: StreamDelta{Content: "Hello"}}}}
-			ch <- StreamChunk{Choices: []StreamChoice{{Delta: StreamDelta{Content: " World"}}}}
-		}()
+	go func() {
+		defer close(ch)
+		defer close(ec)
+		ch <- StreamChunk{Choices: []StreamDelta{{Delta: MessageDelta{Content: "Hello"}}}}
+		ch <- StreamChunk{Choices: []StreamDelta{{Delta: MessageDelta{Content: " World"}}}}
+	}()
 
 		return ch, ec
 	})
@@ -737,13 +737,13 @@ func TestExecuteStreamWithRetry_RateLimitThenSuccess(t *testing.T) {
 			defer close(ch)
 			defer close(ec)
 
-			if callCount < 3 {
-				ec <- errRateLimit
-				return
-			}
+		if callCount < 3 {
+			ec <- errRateLimit
+			return
+		}
 
-			ch <- StreamChunk{Choices: []StreamChoice{{Delta: StreamDelta{Content: "Success"}}}}
-		}()
+		ch <- StreamChunk{Choices: []StreamDelta{{Delta: MessageDelta{Content: "Success"}}}}
+	}()
 
 		return ch, ec
 	})

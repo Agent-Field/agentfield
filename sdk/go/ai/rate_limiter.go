@@ -337,42 +337,51 @@ func (rl *RateLimiter) ExecuteStreamWithRetry(ctx context.Context, fn func() (<-
 		// Execute the streaming function
 		resultChunkCh, resultErrCh := fn()
 
-		// Forward chunks
-		for {
+		// Forward chunks - prioritize reading all chunks before checking errors
+		streamErr := error(nil)
+		chunksDone := false
+		
+		for !chunksDone {
 			select {
 			case <-ctx.Done():
 				errCh <- ctx.Err()
 				return
 			case chunk, ok := <-resultChunkCh:
 				if !ok {
-					// Stream completed successfully
-					rl.updateCircuitBreaker(true)
-					return
+					// Chunk channel closed, now check for any errors
+					chunksDone = true
+					break
 				}
 				chunkCh <- chunk
 			case err, ok := <-resultErrCh:
-				if !ok {
-					// Error channel closed without error
-					rl.updateCircuitBreaker(true)
-					return
+				if ok && err != nil {
+					// Store error but continue reading chunks
+					streamErr = err
 				}
-
-				lastErr = err
-
-				// Check if this is a rate limit error
-				if !isRateLimitError(err) {
-					// Not a rate limit error - forward and return
-					errCh <- err
-					return
-				}
-
-				// Update circuit breaker for rate limit failure
-				rl.updateCircuitBreaker(false)
-
-				// Break inner loop to retry
-				goto retry
 			}
 		}
+
+		// Now check if there was an error after all chunks are read
+		if streamErr != nil {
+			lastErr = streamErr
+
+			// Check if this is a rate limit error
+			if !isRateLimitError(streamErr) {
+				// Not a rate limit error - forward and return
+				errCh <- streamErr
+				return
+			}
+
+			// Update circuit breaker for rate limit failure
+			rl.updateCircuitBreaker(false)
+
+			// Break inner loop to retry
+			goto retry
+		}
+
+		// Stream completed successfully
+		rl.updateCircuitBreaker(true)
+		return
 
 		retry:
 			// Check if we've exceeded max retries

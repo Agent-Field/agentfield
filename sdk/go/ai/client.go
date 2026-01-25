@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // Client provides AI/LLM capabilities using OpenAI or OpenRouter API.
