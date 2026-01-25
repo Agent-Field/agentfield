@@ -10,6 +10,7 @@ This package provides AI/LLM capabilities for the AgentField Go SDK, supporting 
 - ✅ **Type-Safe**: Automatic conversion from Go structs to JSON schemas
 - ✅ **Functional Options**: Clean, idiomatic Go API with functional options pattern
 - ✅ **Automatic Configuration**: Reads from environment variables by default
+- ✅ **Rate Limiting**: Built-in exponential backoff and circuit breaker for production resilience (see [Rate Limiter Usage Guide](./RATE_LIMITER_USAGE.md))
 
 ## Quick Start
 

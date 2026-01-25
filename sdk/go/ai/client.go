@@ -8,12 +8,14 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // Client provides AI/LLM capabilities using OpenAI or OpenRouter API.
 type Client struct {
-	config     *Config
-	httpClient *http.Client
+	config      *Config
+	httpClient  *http.Client
+	rateLimiter *RateLimiter
 }
 
 // NewClient creates a new AI client with the given configuration.
@@ -26,8 +28,45 @@ func NewClient(config *Config) (*Client, error) {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
 
+	// Initialize rate limiter if not disabled
+	var rateLimiter *RateLimiter
+	if !config.DisableRateLimiter {
+		// Apply defaults for zero values
+		rlConfig := RateLimiterConfig{
+			MaxRetries:              config.RateLimitMaxRetries,
+			BaseDelay:               config.RateLimitBaseDelay,
+			MaxDelay:                config.RateLimitMaxDelay,
+			JitterFactor:            config.RateLimitJitterFactor,
+			CircuitBreakerThreshold: config.CircuitBreakerThreshold,
+			CircuitBreakerTimeout:   config.CircuitBreakerTimeout,
+		}
+		
+		// Apply defaults if not specified
+		if rlConfig.MaxRetries == 0 {
+			rlConfig.MaxRetries = 5
+		}
+		if rlConfig.BaseDelay == 0 {
+			rlConfig.BaseDelay = time.Second
+		}
+		if rlConfig.MaxDelay == 0 {
+			rlConfig.MaxDelay = 30 * time.Second
+		}
+		if rlConfig.JitterFactor == 0 {
+			rlConfig.JitterFactor = 0.1
+		}
+		if rlConfig.CircuitBreakerThreshold == 0 {
+			rlConfig.CircuitBreakerThreshold = 5
+		}
+		if rlConfig.CircuitBreakerTimeout == 0 {
+			rlConfig.CircuitBreakerTimeout = 60 * time.Second
+		}
+		
+		rateLimiter = NewRateLimiter(rlConfig)
+	}
+
 	return &Client{
-		config: config,
+		config:      config,
+		rateLimiter: rateLimiter,
 		httpClient: &http.Client{
 			Timeout: config.Timeout,
 		},
@@ -53,7 +92,13 @@ func (c *Client) Complete(ctx context.Context, prompt string, opts ...Option) (*
 		}
 	}
 
-	// Make HTTP request
+	// Make HTTP request with rate limiting
+	if c.rateLimiter != nil {
+		return c.rateLimiter.ExecuteWithRetry(ctx, func() (*Response, error) {
+			return c.doRequest(ctx, req)
+		})
+	}
+
 	return c.doRequest(ctx, req)
 }
 
@@ -71,6 +116,13 @@ func (c *Client) CompleteWithMessages(ctx context.Context, messages []Message, o
 		if err := opt(req); err != nil {
 			return nil, fmt.Errorf("apply option: %w", err)
 		}
+	}
+
+	// Make HTTP request with rate limiting
+	if c.rateLimiter != nil {
+		return c.rateLimiter.ExecuteWithRetry(ctx, func() (*Response, error) {
+			return c.doRequest(ctx, req)
+		})
 	}
 
 	return c.doRequest(ctx, req)
@@ -144,32 +196,49 @@ func (c *Client) doRequest(ctx context.Context, req *Request) (*Response, error)
 // StreamComplete makes a streaming chat completion request.
 // Returns a channel of response chunks.
 func (c *Client) StreamComplete(ctx context.Context, prompt string, opts ...Option) (<-chan StreamChunk, <-chan error) {
+	// Build request with streaming enabled
+	opts = append(opts, WithStream())
+	req := &Request{
+		Messages: []Message{
+			{Role: "user", Content: prompt},
+		},
+		Model:       c.config.Model,
+		Temperature: &c.config.Temperature,
+		MaxTokens:   &c.config.MaxTokens,
+		Stream:      true,
+	}
+
+	// Apply options
+	for _, opt := range opts {
+		// If option application fails, return error channels immediately
+		if err := opt(req); err != nil {
+			chunkCh := make(chan StreamChunk)
+			errCh := make(chan error, 1)
+			close(chunkCh)
+			errCh <- fmt.Errorf("apply option: %w", err)
+			close(errCh)
+			return chunkCh, errCh
+		}
+	}
+
+	// Use rate limiter if enabled
+	if c.rateLimiter != nil {
+		return c.rateLimiter.ExecuteStreamWithRetry(ctx, func() (<-chan StreamChunk, <-chan error) {
+			return c.doStreamRequest(ctx, req)
+		})
+	}
+
+	return c.doStreamRequest(ctx, req)
+}
+
+// doStreamRequest executes the streaming HTTP request.
+func (c *Client) doStreamRequest(ctx context.Context, req *Request) (<-chan StreamChunk, <-chan error) {
 	chunkCh := make(chan StreamChunk)
 	errCh := make(chan error, 1)
 
 	go func() {
 		defer close(chunkCh)
 		defer close(errCh)
-
-		// Build request with streaming enabled
-		opts = append(opts, WithStream())
-		req := &Request{
-			Messages: []Message{
-				{Role: "user", Content: prompt},
-			},
-			Model:       c.config.Model,
-			Temperature: &c.config.Temperature,
-			MaxTokens:   &c.config.MaxTokens,
-			Stream:      true,
-		}
-
-		// Apply options
-		for _, opt := range opts {
-			if err := opt(req); err != nil {
-				errCh <- fmt.Errorf("apply option: %w", err)
-				return
-			}
-		}
 
 		// Marshal request
 		body, err := json.Marshal(req)

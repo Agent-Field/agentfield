@@ -33,6 +33,15 @@ type Config struct {
 
 	// Optional: Site name for OpenRouter rankings
 	SiteName string
+
+	// Rate Limiter Configuration
+	RateLimitMaxRetries         int           // Maximum number of retry attempts (default: 5)
+	RateLimitBaseDelay          time.Duration // Base delay for exponential backoff (default: 1s)
+	RateLimitMaxDelay           time.Duration // Maximum delay between retries (default: 30s)
+	RateLimitJitterFactor       float64       // Jitter factor 0.0-1.0 (default: 0.1)
+	CircuitBreakerThreshold     int           // Consecutive failures before opening circuit (default: 5)
+	CircuitBreakerTimeout       time.Duration // Time before attempting to close circuit (default: 60s)
+	DisableRateLimiter          bool          // Disable rate limiting completely (default: false)
 }
 
 // DefaultConfig returns a Config with sensible defaults.
