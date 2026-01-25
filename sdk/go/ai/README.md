@@ -10,7 +10,7 @@ This package provides AI/LLM capabilities for the AgentField Go SDK, supporting 
 - ✅ **Type-Safe**: Automatic conversion from Go structs to JSON schemas
 - ✅ **Functional Options**: Clean, idiomatic Go API with functional options pattern
 - ✅ **Automatic Configuration**: Reads from environment variables by default
-- ✅ **Rate Limiting**: Built-in exponential backoff and circuit breaker for production resilience (see [Rate Limiter Usage Guide](./RATE_LIMITER_USAGE.md))
+- ✅ **Rate Limiting**: Built-in exponential backoff and circuit breaker for production resilience (see Rate Limiting section below)
 
 ## Quick Start
 
@@ -234,12 +234,83 @@ if err := response.Into(&result); err != nil {
 }
 ```
 
+## Rate Limiting
+
+The Go SDK includes built-in rate limiting with exponential backoff and circuit breaker patterns for production resilience.
+
+### Configuration
+
+Rate limiting is **enabled by default** with sensible defaults:
+
+```go
+config := ai.DefaultConfig()
+// Uses default rate limiting:
+// - MaxRetries: 5
+// - BaseDelay: 1 second
+// - MaxDelay: 30 seconds
+// - JitterFactor: 0.1
+// - CircuitBreakerThreshold: 5 consecutive failures
+// - CircuitBreakerTimeout: 60 seconds
+```
+
+### Custom Configuration
+
+```go
+config := &ai.Config{
+    APIKey:  os.Getenv("OPENAI_API_KEY"),
+    Model:   "gpt-4o",
+    
+    // Custom rate limiting
+    RateLimitMaxRetries:         10,
+    RateLimitBaseDelay:          500 * time.Millisecond,
+    RateLimitMaxDelay:           60 * time.Second,
+    RateLimitJitterFactor:       0.2,
+    CircuitBreakerThreshold:     3,
+    CircuitBreakerTimeout:       30 * time.Second,
+}
+```
+
+### Disable Rate Limiting
+
+```go
+config := ai.DefaultConfig()
+config.DisableRateLimiter = true  // Disable rate limiting completely
+```
+
+### How It Works
+
+**Exponential Backoff**: Delays increase exponentially (1s → 2s → 4s → 8s...)
+**Jitter**: Adds randomness to prevent thundering herd
+**Circuit Breaker**: Opens after N consecutive failures, prevents cascade
+**Automatic Detection**: Identifies rate limit errors from status codes and error messages
+
+### Thread Safety
+
+The AI client and rate limiter are safe for concurrent use by multiple goroutines:
+
+```go
+agent, _ := agent.New(config)
+
+// Safe to call from multiple goroutines
+var wg sync.WaitGroup
+for i := 0; i < 10; i++ {
+    wg.Add(1)
+    go func() {
+        defer wg.Done()
+        response, err := agent.AI(ctx, "Hello")
+        // Process response
+    }()
+}
+wg.Wait()
+```
+
 ## Performance Considerations
 
 1. **Connection Pooling**: The HTTP client uses connection pooling for efficient requests
 2. **Context Cancellation**: Always use contexts with timeouts for AI calls
 3. **Streaming**: Use streaming for long responses to improve perceived latency
 4. **Model Selection**: Choose appropriate models for your use case (faster models = lower latency)
+5. **Rate Limiting**: Built-in rate limiting handles API throttling automatically
 
 ## Examples
 

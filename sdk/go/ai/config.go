@@ -76,6 +76,15 @@ func DefaultConfig() *Config {
 		Temperature: 0.7,
 		MaxTokens:   4096,
 		Timeout:     30 * time.Second,
+
+		// Rate Limiter Defaults
+		RateLimitMaxRetries:         5,
+		RateLimitBaseDelay:          time.Second,
+		RateLimitMaxDelay:           30 * time.Second,
+		RateLimitJitterFactor:       0.1,
+		CircuitBreakerThreshold:     5,
+		CircuitBreakerTimeout:       60 * time.Second,
+		DisableRateLimiter:          false,
 	}
 }
 

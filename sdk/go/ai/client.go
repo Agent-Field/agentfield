@@ -31,37 +31,14 @@ func NewClient(config *Config) (*Client, error) {
 	// Initialize rate limiter if not disabled
 	var rateLimiter *RateLimiter
 	if !config.DisableRateLimiter {
-		// Apply defaults for zero values
-		rlConfig := RateLimiterConfig{
+		rateLimiter = NewRateLimiter(RateLimiterConfig{
 			MaxRetries:              config.RateLimitMaxRetries,
 			BaseDelay:               config.RateLimitBaseDelay,
 			MaxDelay:                config.RateLimitMaxDelay,
 			JitterFactor:            config.RateLimitJitterFactor,
 			CircuitBreakerThreshold: config.CircuitBreakerThreshold,
 			CircuitBreakerTimeout:   config.CircuitBreakerTimeout,
-		}
-		
-		// Apply defaults if not specified
-		if rlConfig.MaxRetries == 0 {
-			rlConfig.MaxRetries = 5
-		}
-		if rlConfig.BaseDelay == 0 {
-			rlConfig.BaseDelay = time.Second
-		}
-		if rlConfig.MaxDelay == 0 {
-			rlConfig.MaxDelay = 30 * time.Second
-		}
-		if rlConfig.JitterFactor == 0 {
-			rlConfig.JitterFactor = 0.1
-		}
-		if rlConfig.CircuitBreakerThreshold == 0 {
-			rlConfig.CircuitBreakerThreshold = 5
-		}
-		if rlConfig.CircuitBreakerTimeout == 0 {
-			rlConfig.CircuitBreakerTimeout = 60 * time.Second
-		}
-		
-		rateLimiter = NewRateLimiter(rlConfig)
+		})
 	}
 
 	return &Client{

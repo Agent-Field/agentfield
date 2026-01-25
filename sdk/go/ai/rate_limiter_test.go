@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -628,4 +629,292 @@ func TestExecuteWithRetry_EdgeCases(t *testing.T) {
 			t.Errorf("Expected ErrRateLimitExceeded, got %v", err)
 		}
 	})
+}
+
+func TestRateLimiter_ConcurrentAccess(t *testing.T) {
+	rl := NewRateLimiter(RateLimiterConfig{
+		MaxRetries:              3,
+		BaseDelay:               10 * time.Millisecond,
+		CircuitBreakerThreshold: 10, // High threshold to avoid circuit opening during test
+	})
+
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	successCount := 0
+	var mu sync.Mutex
+
+	// Run 100 concurrent requests
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			
+			// Alternate between success and failure to test concurrent state updates
+			result, err := rl.ExecuteWithRetry(ctx, func() (*Response, error) {
+				if id%2 == 0 {
+					return &Response{}, nil
+				}
+				return nil, errNotRateLimit // Non-rate-limit error for faster test
+			})
+
+			if err == nil && result != nil {
+				mu.Lock()
+				successCount++
+				mu.Unlock()
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Should have ~50 successes (even IDs)
+	if successCount < 45 || successCount > 55 {
+		t.Errorf("Expected ~50 successes, got %d", successCount)
+	}
+
+	// Should not panic or race
+	t.Logf("Concurrent access test passed with %d successes", successCount)
+}
+
+func TestExecuteStreamWithRetry_Success(t *testing.T) {
+	rl := NewRateLimiter(RateLimiterConfig{
+		MaxRetries: 3,
+		BaseDelay:  10 * time.Millisecond,
+	})
+
+	ctx := context.Background()
+	callCount := 0
+
+	chunkCh, errCh := rl.ExecuteStreamWithRetry(ctx, func() (<-chan StreamChunk, <-chan error) {
+		callCount++
+		ch := make(chan StreamChunk, 3)
+		ec := make(chan error)
+
+		go func() {
+			defer close(ch)
+			defer close(ec)
+			ch <- StreamChunk{Choices: []StreamChoice{{Delta: StreamDelta{Content: "Hello"}}}}
+			ch <- StreamChunk{Choices: []StreamChoice{{Delta: StreamDelta{Content: " World"}}}}
+		}()
+
+		return ch, ec
+	})
+
+	var content strings.Builder
+	for chunk := range chunkCh {
+		if len(chunk.Choices) > 0 {
+			content.WriteString(chunk.Choices[0].Delta.Content)
+		}
+	}
+
+	err := <-errCh
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+	if content.String() != "Hello World" {
+		t.Errorf("Expected 'Hello World', got '%s'", content.String())
+	}
+	if callCount != 1 {
+		t.Errorf("Expected 1 call, got %d", callCount)
+	}
+}
+
+func TestExecuteStreamWithRetry_RateLimitThenSuccess(t *testing.T) {
+	rl := NewRateLimiter(RateLimiterConfig{
+		MaxRetries: 3,
+		BaseDelay:  10 * time.Millisecond,
+	})
+
+	ctx := context.Background()
+	callCount := 0
+
+	chunkCh, errCh := rl.ExecuteStreamWithRetry(ctx, func() (<-chan StreamChunk, <-chan error) {
+		callCount++
+		ch := make(chan StreamChunk)
+		ec := make(chan error, 1)
+
+		go func() {
+			defer close(ch)
+			defer close(ec)
+
+			if callCount < 3 {
+				ec <- errRateLimit
+				return
+			}
+
+			ch <- StreamChunk{Choices: []StreamChoice{{Delta: StreamDelta{Content: "Success"}}}}
+		}()
+
+		return ch, ec
+	})
+
+	var content strings.Builder
+	for chunk := range chunkCh {
+		if len(chunk.Choices) > 0 {
+			content.WriteString(chunk.Choices[0].Delta.Content)
+		}
+	}
+
+	err := <-errCh
+	if err != nil {
+		t.Errorf("Expected no error after retries, got %v", err)
+	}
+	if content.String() != "Success" {
+		t.Errorf("Expected 'Success', got '%s'", content.String())
+	}
+	if callCount != 3 {
+		t.Errorf("Expected 3 calls (2 rate limits + success), got %d", callCount)
+	}
+}
+
+func TestExecuteStreamWithRetry_MaxRetriesExceeded(t *testing.T) {
+	rl := NewRateLimiter(RateLimiterConfig{
+		MaxRetries: 2,
+		BaseDelay:  10 * time.Millisecond,
+	})
+
+	ctx := context.Background()
+	callCount := 0
+
+	chunkCh, errCh := rl.ExecuteStreamWithRetry(ctx, func() (<-chan StreamChunk, <-chan error) {
+		callCount++
+		ch := make(chan StreamChunk)
+		ec := make(chan error, 1)
+
+		go func() {
+			defer close(ch)
+			defer close(ec)
+			ec <- errRateLimit
+		}()
+
+		return ch, ec
+	})
+
+	// Consume all chunks (should be none)
+	for range chunkCh {
+	}
+
+	err := <-errCh
+	if err == nil {
+		t.Error("Expected error after max retries")
+	}
+	if !errors.Is(err, ErrRateLimitExceeded) {
+		t.Errorf("Expected ErrRateLimitExceeded, got %v", err)
+	}
+	if callCount != 3 { // maxRetries=2 means 3 total attempts
+		t.Errorf("Expected 3 calls, got %d", callCount)
+	}
+}
+
+func TestExecuteStreamWithRetry_NonRateLimitError(t *testing.T) {
+	rl := NewRateLimiter(RateLimiterConfig{
+		MaxRetries: 3,
+		BaseDelay:  10 * time.Millisecond,
+	})
+
+	ctx := context.Background()
+	callCount := 0
+
+	chunkCh, errCh := rl.ExecuteStreamWithRetry(ctx, func() (<-chan StreamChunk, <-chan error) {
+		callCount++
+		ch := make(chan StreamChunk)
+		ec := make(chan error, 1)
+
+		go func() {
+			defer close(ch)
+			defer close(ec)
+			ec <- errNotRateLimit
+		}()
+
+		return ch, ec
+	})
+
+	// Consume all chunks
+	for range chunkCh {
+	}
+
+	err := <-errCh
+	if err == nil {
+		t.Error("Expected error")
+	}
+	if !errors.Is(err, errNotRateLimit) {
+		t.Errorf("Expected errNotRateLimit, got %v", err)
+	}
+	if callCount != 1 {
+		t.Errorf("Expected 1 call (no retry for non-rate-limit error), got %d", callCount)
+	}
+}
+
+func TestGetCircuitState(t *testing.T) {
+	rl := NewRateLimiter(RateLimiterConfig{
+		CircuitBreakerThreshold: 2,
+		CircuitBreakerTimeout:   100 * time.Millisecond,
+	})
+
+	// Initially closed
+	if state := rl.GetCircuitState(); state != CircuitClosed {
+		t.Errorf("Expected CircuitClosed, got %v", state)
+	}
+
+	// Trigger failures to open circuit
+	rl.updateCircuitBreaker(false)
+	rl.updateCircuitBreaker(false)
+
+	// Should be open
+	if state := rl.GetCircuitState(); state != CircuitOpen {
+		t.Errorf("Expected CircuitOpen, got %v", state)
+	}
+
+	// Check consecutive failures
+	if failures := rl.GetConsecutiveFailures(); failures != 2 {
+		t.Errorf("Expected 2 consecutive failures, got %d", failures)
+	}
+
+	// Wait for timeout
+	time.Sleep(150 * time.Millisecond)
+
+	// Should be half-open
+	if state := rl.GetCircuitState(); state != CircuitHalfOpen {
+		t.Errorf("Expected CircuitHalfOpen, got %v", state)
+	}
+
+	// Success should close it
+	rl.updateCircuitBreaker(true)
+
+	if state := rl.GetCircuitState(); state != CircuitClosed {
+		t.Errorf("Expected CircuitClosed after success, got %v", state)
+	}
+	if failures := rl.GetConsecutiveFailures(); failures != 0 {
+		t.Errorf("Expected 0 consecutive failures after success, got %d", failures)
+	}
+}
+
+func TestCircuitBreakerCallbacks(t *testing.T) {
+	openCalled := false
+	closeCalled := false
+
+	rl := NewRateLimiter(RateLimiterConfig{
+		CircuitBreakerThreshold: 2,
+		OnCircuitOpen: func() {
+			openCalled = true
+		},
+		OnCircuitClose: func() {
+			closeCalled = true
+		},
+	})
+
+	// Trigger circuit open
+	rl.updateCircuitBreaker(false)
+	rl.updateCircuitBreaker(false)
+
+	if !openCalled {
+		t.Error("Expected OnCircuitOpen callback to be called")
+	}
+
+	// Trigger circuit close
+	rl.updateCircuitBreaker(true)
+
+	if !closeCalled {
+		t.Error("Expected OnCircuitClose callback to be called")
+	}
 }

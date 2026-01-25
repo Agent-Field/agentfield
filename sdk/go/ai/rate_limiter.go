@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -45,15 +46,21 @@ func (s CircuitState) String() string {
 }
 
 // RateLimiter provides exponential backoff retry logic with circuit breaker pattern.
+// It is safe for concurrent use by multiple goroutines.
 type RateLimiter struct {
-	maxRetries            int
-	baseDelay             time.Duration
-	maxDelay              time.Duration
-	jitterFactor          float64
+	maxRetries              int
+	baseDelay               time.Duration
+	maxDelay                time.Duration
+	jitterFactor            float64
 	circuitBreakerThreshold int
 	circuitBreakerTimeout   time.Duration
 
-	// Circuit breaker state (per-instance)
+	// Callbacks for observability
+	onCircuitOpen  func()
+	onCircuitClose func()
+
+	// Circuit breaker state (protected by mu)
+	mu                  sync.Mutex
 	consecutiveFailures int
 	circuitOpenTime     *time.Time
 	containerSeed       int64
@@ -69,6 +76,8 @@ func NewRateLimiter(config RateLimiterConfig) *RateLimiter {
 		jitterFactor:            config.JitterFactor,
 		circuitBreakerThreshold: config.CircuitBreakerThreshold,
 		circuitBreakerTimeout:   config.CircuitBreakerTimeout,
+		onCircuitOpen:           config.OnCircuitOpen,
+		onCircuitClose:          config.OnCircuitClose,
 		containerSeed:           getContainerSeed(),
 	}
 }
@@ -81,6 +90,8 @@ type RateLimiterConfig struct {
 	JitterFactor            float64       // Jitter factor (0.0-1.0) to prevent thundering herd
 	CircuitBreakerThreshold int           // Number of consecutive failures before opening circuit
 	CircuitBreakerTimeout   time.Duration // Time to wait before attempting to close circuit
+	OnCircuitOpen           func()        // Callback when circuit opens (optional)
+	OnCircuitClose          func()        // Callback when circuit closes (optional)
 }
 
 // getContainerSeed generates a container-specific seed for consistent jitter distribution.
@@ -146,8 +157,9 @@ func (rl *RateLimiter) calculateBackoffDelay(attempt int) time.Duration {
 	}
 
 	// Add jitter to distribute load
-	// Use container-specific seed for consistent but distributed jitter
-	rng := rand.New(rand.NewSource(rl.containerSeed + int64(attempt)))
+	// Use time-based randomness combined with container seed for true randomness
+	// while maintaining some distribution across containers
+	rng := rand.New(rand.NewSource(rl.containerSeed + int64(attempt) + time.Now().UnixNano()))
 	jitterRange := float64(backoffDelay) * rl.jitterFactor
 	jitter := (rng.Float64()*2 - 1) * jitterRange // Random value between -jitterRange and +jitterRange
 
@@ -162,6 +174,7 @@ func (rl *RateLimiter) calculateBackoffDelay(attempt int) time.Duration {
 }
 
 // checkCircuitBreaker checks if the circuit breaker is open.
+// Must be called with mu held.
 func (rl *RateLimiter) checkCircuitBreaker() CircuitState {
 	if rl.circuitOpenTime == nil {
 		return CircuitClosed
@@ -178,28 +191,62 @@ func (rl *RateLimiter) checkCircuitBreaker() CircuitState {
 
 // updateCircuitBreaker updates the circuit breaker state based on operation result.
 func (rl *RateLimiter) updateCircuitBreaker(success bool) {
+	rl.mu.Lock()
+	wasOpen := rl.circuitOpenTime != nil
+
 	if success {
 		// Reset on success
 		rl.consecutiveFailures = 0
 		if rl.circuitOpenTime != nil {
 			rl.circuitOpenTime = nil
+			rl.mu.Unlock()
+			// Trigger callback outside the lock
+			if rl.onCircuitClose != nil {
+				rl.onCircuitClose()
+			}
+			return
 		}
 	} else {
 		// Increment failures
 		rl.consecutiveFailures++
 
 		// Open circuit if threshold reached
-		if rl.consecutiveFailures >= rl.circuitBreakerThreshold && rl.circuitOpenTime == nil {
+		if rl.consecutiveFailures >= rl.circuitBreakerThreshold && !wasOpen {
 			now := time.Now()
 			rl.circuitOpenTime = &now
+			rl.mu.Unlock()
+			// Trigger callback outside the lock
+			if rl.onCircuitOpen != nil {
+				rl.onCircuitOpen()
+			}
+			return
 		}
 	}
+
+	rl.mu.Unlock()
+}
+
+// GetCircuitState returns the current state of the circuit breaker.
+func (rl *RateLimiter) GetCircuitState() CircuitState {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	return rl.checkCircuitBreaker()
+}
+
+// GetConsecutiveFailures returns the current count of consecutive failures.
+func (rl *RateLimiter) GetConsecutiveFailures() int {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	return rl.consecutiveFailures
 }
 
 // ExecuteWithRetry executes a function with rate limit retry logic.
 func (rl *RateLimiter) ExecuteWithRetry(ctx context.Context, fn func() (*Response, error)) (*Response, error) {
 	// Check circuit breaker
+	rl.mu.Lock()
 	circuitState := rl.checkCircuitBreaker()
+	rl.mu.Unlock()
+	
 	if circuitState == CircuitOpen {
 		return nil, fmt.Errorf("%w: too many consecutive rate limit failures, will retry after %v",
 			ErrCircuitOpen, rl.circuitBreakerTimeout)
@@ -266,7 +313,10 @@ func (rl *RateLimiter) ExecuteStreamWithRetry(ctx context.Context, fn func() (<-
 		defer close(errCh)
 
 		// Check circuit breaker
+		rl.mu.Lock()
 		circuitState := rl.checkCircuitBreaker()
+		rl.mu.Unlock()
+		
 		if circuitState == CircuitOpen {
 			errCh <- fmt.Errorf("%w: too many consecutive rate limit failures, will retry after %v",
 				ErrCircuitOpen, rl.circuitBreakerTimeout)
