@@ -1,4 +1,4 @@
-package ai
+﻿package ai
 
 import (
 	"context"
@@ -246,7 +246,7 @@ func (rl *RateLimiter) ExecuteWithRetry(ctx context.Context, fn func() (*Respons
 	rl.mu.Lock()
 	circuitState := rl.checkCircuitBreaker()
 	rl.mu.Unlock()
-	
+
 	if circuitState == CircuitOpen {
 		return nil, fmt.Errorf("%w: too many consecutive rate limit failures, will retry after %v",
 			ErrCircuitOpen, rl.circuitBreakerTimeout)
@@ -316,7 +316,7 @@ func (rl *RateLimiter) ExecuteStreamWithRetry(ctx context.Context, fn func() (<-
 		rl.mu.Lock()
 		circuitState := rl.checkCircuitBreaker()
 		rl.mu.Unlock()
-		
+
 		if circuitState == CircuitOpen {
 			errCh <- fmt.Errorf("%w: too many consecutive rate limit failures, will retry after %v",
 				ErrCircuitOpen, rl.circuitBreakerTimeout)
@@ -334,54 +334,57 @@ func (rl *RateLimiter) ExecuteStreamWithRetry(ctx context.Context, fn func() (<-
 			default:
 			}
 
-		// Execute the streaming function
-		resultChunkCh, resultErrCh := fn()
+			// Execute the streaming function
+			resultChunkCh, resultErrCh := fn()
 
-		// Forward chunks - prioritize reading all chunks before checking errors
-		streamErr := error(nil)
-		chunksDone := false
-		
-		for !chunksDone {
-			select {
-			case <-ctx.Done():
-				errCh <- ctx.Err()
-				return
-			case chunk, ok := <-resultChunkCh:
-				if !ok {
-					// Chunk channel closed, now check for any errors
-					chunksDone = true
-					break
-				}
-				chunkCh <- chunk
-			case err, ok := <-resultErrCh:
-				if ok && err != nil {
-					// Store error but continue reading chunks
-					streamErr = err
+			// Forward chunks and capture errors - consume both channels until closed
+			streamErr := error(nil)
+			ch := resultChunkCh
+			ech := resultErrCh
+
+			for ch != nil || ech != nil {
+				select {
+				case <-ctx.Done():
+					errCh <- ctx.Err()
+					return
+				case chunk, ok := <-ch:
+					if !ok {
+						ch = nil
+						continue
+					}
+					chunkCh <- chunk
+				case err, ok := <-ech:
+					if !ok {
+						ech = nil
+						continue
+					}
+					if err != nil {
+						streamErr = err
+					}
 				}
 			}
-		}
 
-		// Now check if there was an error after all chunks are read
-		if streamErr != nil {
-			lastErr = streamErr
+			// Now check if there was an error after both channels are closed
+			if streamErr != nil {
+				lastErr = streamErr
 
-			// Check if this is a rate limit error
-			if !isRateLimitError(streamErr) {
-				// Not a rate limit error - forward and return
-				errCh <- streamErr
-				return
+				// Check if this is a rate limit error
+				if !isRateLimitError(streamErr) {
+					// Not a rate limit error - forward and return
+					errCh <- streamErr
+					return
+				}
+
+				// Update circuit breaker for rate limit failure
+				rl.updateCircuitBreaker(false)
+
+				// Break inner loop to retry
+				goto retry
 			}
 
-			// Update circuit breaker for rate limit failure
-			rl.updateCircuitBreaker(false)
-
-			// Break inner loop to retry
-			goto retry
-		}
-
-		// Stream completed successfully
-		rl.updateCircuitBreaker(true)
-		return
+			// Stream completed successfully
+			rl.updateCircuitBreaker(true)
+			return
 
 		retry:
 			// Check if we've exceeded max retries
