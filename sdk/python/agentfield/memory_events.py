@@ -10,6 +10,10 @@ import websockets
 from agentfield.logger import log_error, log_info
 from .types import MemoryChangeEvent
 
+# websockets v14+ renamed additional_headers to extra_headers
+_WEBSOCKETS_MAJOR = int(getattr(websockets, "__version__", "0").split(".")[0])
+_HEADERS_KWARG = "extra_headers" if _WEBSOCKETS_MAJOR >= 14 else "additional_headers"
+
 
 class PatternMatcher:
     """Utility class for wildcard pattern matching."""
@@ -154,7 +158,7 @@ class MemoryEventClient:
                     ws_url += "?" + "&".join(query_params)
 
                 self.websocket = await websockets.connect(
-                    ws_url, additional_headers=headers
+                    ws_url, **{_HEADERS_KWARG: headers}
                 )
                 self.is_listening = True
                 self._reconnect_attempts = 0
