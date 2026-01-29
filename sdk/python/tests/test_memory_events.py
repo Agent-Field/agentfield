@@ -135,6 +135,92 @@ async def test_memory_event_client_connect_builds_ws_url(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_connect_uses_additional_headers_for_v14_plus(monkeypatch):
+    """websockets v14+ renamed extra_headers to additional_headers."""
+    ctx = SimpleNamespace(to_headers=lambda: {"Authorization": "token"})
+    client = MemoryEventClient("http://agentfield", ctx)
+
+    called_with = {}
+
+    class DummyWebSocket:
+        def __init__(self):
+            self.open = True
+
+    async def fake_connect(url, **kwargs):
+        called_with.update(kwargs)
+        return DummyWebSocket()
+
+    monkeypatch.setattr("agentfield.memory_events.websockets.connect", fake_connect)
+    monkeypatch.setattr(MemoryEventClient, "_listen", lambda self: asyncio.sleep(0))
+    monkeypatch.setattr("agentfield.memory_events._WEBSOCKETS_MAJOR", 14)
+    monkeypatch.setattr("agentfield.memory_events._HEADERS_KWARG", "additional_headers")
+
+    await client.connect()
+    await asyncio.sleep(0)
+
+    assert "additional_headers" in called_with
+    assert "extra_headers" not in called_with
+    assert called_with["additional_headers"] == {"Authorization": "token"}
+
+
+@pytest.mark.asyncio
+async def test_connect_uses_extra_headers_for_pre_v14(monkeypatch):
+    """websockets <v14 uses extra_headers parameter."""
+    ctx = SimpleNamespace(to_headers=lambda: {"Authorization": "token"})
+    client = MemoryEventClient("http://agentfield", ctx)
+
+    called_with = {}
+
+    class DummyWebSocket:
+        def __init__(self):
+            self.open = True
+
+    async def fake_connect(url, **kwargs):
+        called_with.update(kwargs)
+        return DummyWebSocket()
+
+    monkeypatch.setattr("agentfield.memory_events.websockets.connect", fake_connect)
+    monkeypatch.setattr(MemoryEventClient, "_listen", lambda self: asyncio.sleep(0))
+    monkeypatch.setattr("agentfield.memory_events._WEBSOCKETS_MAJOR", 12)
+    monkeypatch.setattr("agentfield.memory_events._HEADERS_KWARG", "extra_headers")
+
+    await client.connect()
+    await asyncio.sleep(0)
+
+    assert "extra_headers" in called_with
+    assert "additional_headers" not in called_with
+    assert called_with["extra_headers"] == {"Authorization": "token"}
+
+
+@pytest.mark.asyncio
+async def test_connect_does_not_block_startup_on_failure(monkeypatch):
+    """When connection fails, reconnect retries run in the background."""
+    ctx = SimpleNamespace(to_headers=lambda: {})
+    client = MemoryEventClient("http://agentfield", ctx)
+
+    async def failing_connect(url, **kwargs):
+        raise ConnectionRefusedError("server unavailable")
+
+    reconnect_started = asyncio.Event()
+    original_handle_reconnect = MemoryEventClient._handle_reconnect
+
+    async def fake_reconnect(self):
+        reconnect_started.set()
+
+    monkeypatch.setattr("agentfield.memory_events.websockets.connect", failing_connect)
+    monkeypatch.setattr(MemoryEventClient, "_handle_reconnect", fake_reconnect)
+
+    # connect() should return immediately, not block on retries
+    await client.connect()
+
+    # Give the background task a chance to start
+    await asyncio.sleep(0.05)
+
+    assert reconnect_started.is_set(), "reconnect should have been started in background"
+    assert not client.is_listening
+
+
+@pytest.mark.asyncio
 async def test_memory_event_client_listen_dispatches(monkeypatch):
     ctx = SimpleNamespace(to_headers=lambda: {})
     client = MemoryEventClient("http://agentfield", ctx)
