@@ -112,7 +112,7 @@ async def test_memory_event_client_connect_builds_ws_url(monkeypatch):
 
     async def fake_connect(url, **kwargs):
         record["url"] = url
-        record["headers"] = kwargs.get("extra_headers") or kwargs.get("additional_headers")
+        record["headers"] = kwargs.get("additional_headers") or kwargs.get("extra_headers")
         return DummyWebSocket()
 
     async def fake_listen(self):

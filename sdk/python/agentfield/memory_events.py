@@ -10,9 +10,9 @@ import websockets
 from agentfield.logger import log_error, log_info
 from .types import MemoryChangeEvent
 
-# websockets v14+ renamed additional_headers to extra_headers
+# websockets v14+ renamed extra_headers to additional_headers
 _WEBSOCKETS_MAJOR = int(getattr(websockets, "__version__", "0").split(".")[0])
-_HEADERS_KWARG = "extra_headers" if _WEBSOCKETS_MAJOR >= 14 else "additional_headers"
+_HEADERS_KWARG = "additional_headers" if _WEBSOCKETS_MAJOR >= 14 else "extra_headers"
 
 
 class PatternMatcher:
@@ -96,6 +96,7 @@ class MemoryEventClient:
         self._reconnect_attempts = 0
         self._max_reconnect_attempts = 5
         self._reconnect_delay = 1.0
+        self._connect_timeout = 5.0  # Timeout for initial connection attempt
 
     def _is_connected(self) -> bool:
         """
@@ -157,8 +158,9 @@ class MemoryEventClient:
                 if query_params:
                     ws_url += "?" + "&".join(query_params)
 
-                self.websocket = await websockets.connect(
-                    ws_url, **{_HEADERS_KWARG: headers}
+                self.websocket = await asyncio.wait_for(
+                    websockets.connect(ws_url, **{_HEADERS_KWARG: headers}),
+                    timeout=self._connect_timeout,
                 )
                 self.is_listening = True
                 self._reconnect_attempts = 0
@@ -166,7 +168,10 @@ class MemoryEventClient:
 
             except Exception as e:
                 log_error(f"Failed to connect to memory events: {e}")
-                await self._handle_reconnect()
+                # Background the retry loop so startup is not blocked by
+                # repeated reconnection attempts when the server is
+                # unreachable.
+                asyncio.create_task(self._handle_reconnect())
 
     async def _listen(self):
         """Listens for incoming messages and dispatches them to subscribers."""
