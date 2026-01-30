@@ -141,6 +141,8 @@ class ConnectionManager:
                     discovery=discovery_payload,
                     suppress_errors=True,  # Suppress verbose error logging for connection attempts
                     vc_metadata=self.agent._build_vc_metadata(),
+                    version=self.agent.version,
+                    agent_metadata=self.agent._build_agent_metadata(),
                 )
             finally:
                 # Restore original logging levels

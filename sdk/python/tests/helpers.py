@@ -28,6 +28,8 @@ class DummyAgentFieldClient:
         base_url: str,
         discovery=None,
         vc_metadata=None,
+        version: str = "1.0.0",
+        agent_metadata=None,
     ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         self.register_calls.append(
             {
@@ -37,6 +39,8 @@ class DummyAgentFieldClient:
                 "base_url": base_url,
                 "discovery": discovery,
                 "vc_metadata": vc_metadata,
+                "version": version,
+                "agent_metadata": agent_metadata,
             }
         )
         return True, {"resolved_base_url": base_url}
@@ -51,6 +55,8 @@ class DummyAgentFieldClient:
         discovery=None,
         suppress_errors: bool = False,
         vc_metadata=None,
+        version: str = "1.0.0",
+        agent_metadata=None,
     ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         return await self.register_agent(
             node_id=node_id,
@@ -59,6 +65,8 @@ class DummyAgentFieldClient:
             base_url=base_url,
             discovery=discovery,
             vc_metadata=vc_metadata,
+            version=version,
+            agent_metadata=agent_metadata,
         )
 
     async def send_enhanced_heartbeat(
@@ -104,6 +112,9 @@ class StubAgent:
 
     def _build_vc_metadata(self):
         return {"agent_default": True}
+
+    def _build_agent_metadata(self):
+        return None
 
     def __post_init__(self):
         self._heartbeat_stop_event = threading.Event()

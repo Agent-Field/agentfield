@@ -392,6 +392,9 @@ class Agent(FastAPI):
         node_id: str,
         agentfield_server: str = "http://localhost:8080",
         version: str = "1.0.0",
+        description: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        author: Optional[Dict[str, str]] = None,
         ai_config: Optional[AIConfig] = None,
         memory_config: Optional[MemoryConfig] = None,
         dev_mode: bool = False,
@@ -479,6 +482,9 @@ class Agent(FastAPI):
         self.node_id = node_id
         self.agentfield_server = agentfield_server
         self.version = version
+        self.description = description
+        self.agent_tags = tags or []
+        self.author = author
 
         # Memory-efficient handler registries (replaces old list-based storage)
         # Using Dict[str, Entry] with __slots__ dataclasses for minimal footprint
@@ -1268,6 +1274,17 @@ class Agent(FastAPI):
         ):
             return False
         return self._effective_component_vc_setting(component_id, overrides)
+
+    def _build_agent_metadata(self) -> Optional[Dict[str, Any]]:
+        """Build agent metadata (description, tags, author) for registration payload."""
+        metadata: Dict[str, Any] = {}
+        if self.description:
+            metadata["description"] = self.description
+        if self.agent_tags:
+            metadata["tags"] = self.agent_tags
+        if self.author:
+            metadata["author"] = self.author
+        return metadata if metadata else None
 
     def _build_vc_metadata(self) -> Dict[str, Any]:
         """Produce a serializable VC policy snapshot for control-plane visibility."""

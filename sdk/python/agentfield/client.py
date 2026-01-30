@@ -525,14 +525,20 @@ class AgentFieldClient:
         base_url: str,
         discovery: Optional[Dict[str, Any]] = None,
         vc_metadata: Optional[Dict[str, Any]] = None,
+        version: str = "1.0.0",
+        agent_metadata: Optional[Dict[str, Any]] = None,
     ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """Register or update agent information with AgentField server."""
         try:
+            custom_metadata: Dict[str, Any] = {}
+            if agent_metadata:
+                custom_metadata.update(agent_metadata)
+
             registration_data = {
                 "id": node_id,
                 "team_id": "default",
                 "base_url": base_url,
-                "version": "1.0.0",
+                "version": version,
                 "reasoners": reasoners,
                 "skills": skills,
                 "communication_config": {
@@ -556,10 +562,10 @@ class AgentFieldClient:
                         "environment": "development",
                         "platform": "python",
                         "region": "local",
-                        "tags": {"sdk_version": "1.0.0", "language": "python"},
+                        "tags": {"sdk_version": importlib.import_module("agentfield").__version__, "language": "python"},
                     },
                     "performance": {"latency_ms": 0, "throughput_ps": 0},
-                    "custom": {},
+                    "custom": custom_metadata,
                 },
             }
 
@@ -1013,14 +1019,20 @@ class AgentFieldClient:
         discovery: Optional[Dict[str, Any]] = None,
         suppress_errors: bool = False,
         vc_metadata: Optional[Dict[str, Any]] = None,
+        version: str = "1.0.0",
+        agent_metadata: Optional[Dict[str, Any]] = None,
     ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """Register agent with immediate status reporting for fast lifecycle."""
         try:
+            custom_metadata: Dict[str, Any] = {}
+            if agent_metadata:
+                custom_metadata.update(agent_metadata)
+
             registration_data = {
                 "id": node_id,
                 "team_id": "default",
                 "base_url": base_url,
-                "version": "1.0.0",
+                "version": version,
                 "reasoners": reasoners,
                 "skills": skills,
                 "lifecycle_status": status.value,
@@ -1045,10 +1057,10 @@ class AgentFieldClient:
                         "environment": "development",
                         "platform": "python",
                         "region": "local",
-                        "tags": {"sdk_version": "1.0.0", "language": "python"},
+                        "tags": {"sdk_version": importlib.import_module("agentfield").__version__, "language": "python"},
                     },
                     "performance": {"latency_ms": 0, "throughput_ps": 0},
-                    "custom": {},
+                    "custom": custom_metadata,
                 },
             }
 

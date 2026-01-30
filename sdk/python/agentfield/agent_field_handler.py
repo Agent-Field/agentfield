@@ -129,6 +129,8 @@ class AgentFieldHandler:
                 base_url=self.agent.base_url,
                 discovery=discovery_payload,
                 vc_metadata=self.agent._build_vc_metadata(),
+                version=self.agent.version,
+                agent_metadata=self.agent._build_agent_metadata(),
             )
             if success:
                 if payload:
@@ -427,6 +429,8 @@ class AgentFieldHandler:
                 status=AgentStatus.STARTING,
                 discovery=discovery_payload,
                 vc_metadata=self.agent._build_vc_metadata(),
+                version=self.agent.version,
+                agent_metadata=self.agent._build_agent_metadata(),
             )
 
             if success:
