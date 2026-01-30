@@ -185,7 +185,6 @@ async def test_connect_does_not_block_startup_on_failure(monkeypatch):
         raise ConnectionRefusedError("server unavailable")
 
     reconnect_started = asyncio.Event()
-    original_handle_reconnect = MemoryEventClient._handle_reconnect
 
     async def fake_reconnect(self):
         reconnect_started.set()
