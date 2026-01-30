@@ -134,9 +134,24 @@ async def test_memory_event_client_connect_builds_ws_url(monkeypatch):
     assert listener_called.get("run") is True
 
 
+def test_websockets_version_detection():
+    """Verify version detection picks the correct header kwarg for the installed websockets."""
+    from agentfield.memory_events import _WEBSOCKETS_MAJOR, _HEADERS_KWARG
+
+    major = int(websockets.__version__.split(".")[0])
+    assert _WEBSOCKETS_MAJOR == major
+
+    if major >= 14:
+        assert _HEADERS_KWARG == "additional_headers"
+    else:
+        assert _HEADERS_KWARG == "extra_headers"
+
+
 @pytest.mark.asyncio
-async def test_connect_uses_additional_headers_for_v14_plus(monkeypatch):
-    """websockets v14+ renamed extra_headers to additional_headers."""
+async def test_connect_passes_correct_headers_kwarg(monkeypatch):
+    """Verify connect() uses the version-appropriate header parameter."""
+    from agentfield.memory_events import _HEADERS_KWARG
+
     ctx = SimpleNamespace(to_headers=lambda: {"Authorization": "token"})
     client = MemoryEventClient("http://agentfield", ctx)
 
@@ -152,44 +167,12 @@ async def test_connect_uses_additional_headers_for_v14_plus(monkeypatch):
 
     monkeypatch.setattr("agentfield.memory_events.websockets.connect", fake_connect)
     monkeypatch.setattr(MemoryEventClient, "_listen", lambda self: asyncio.sleep(0))
-    monkeypatch.setattr("agentfield.memory_events._WEBSOCKETS_MAJOR", 14)
-    monkeypatch.setattr("agentfield.memory_events._HEADERS_KWARG", "additional_headers")
 
     await client.connect()
     await asyncio.sleep(0)
 
-    assert "additional_headers" in called_with
-    assert "extra_headers" not in called_with
-    assert called_with["additional_headers"] == {"Authorization": "token"}
-
-
-@pytest.mark.asyncio
-async def test_connect_uses_extra_headers_for_pre_v14(monkeypatch):
-    """websockets <v14 uses extra_headers parameter."""
-    ctx = SimpleNamespace(to_headers=lambda: {"Authorization": "token"})
-    client = MemoryEventClient("http://agentfield", ctx)
-
-    called_with = {}
-
-    class DummyWebSocket:
-        def __init__(self):
-            self.open = True
-
-    async def fake_connect(url, **kwargs):
-        called_with.update(kwargs)
-        return DummyWebSocket()
-
-    monkeypatch.setattr("agentfield.memory_events.websockets.connect", fake_connect)
-    monkeypatch.setattr(MemoryEventClient, "_listen", lambda self: asyncio.sleep(0))
-    monkeypatch.setattr("agentfield.memory_events._WEBSOCKETS_MAJOR", 12)
-    monkeypatch.setattr("agentfield.memory_events._HEADERS_KWARG", "extra_headers")
-
-    await client.connect()
-    await asyncio.sleep(0)
-
-    assert "extra_headers" in called_with
-    assert "additional_headers" not in called_with
-    assert called_with["extra_headers"] == {"Authorization": "token"}
+    assert _HEADERS_KWARG in called_with
+    assert called_with[_HEADERS_KWARG] == {"Authorization": "token"}
 
 
 @pytest.mark.asyncio

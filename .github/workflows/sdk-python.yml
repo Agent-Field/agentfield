@@ -57,17 +57,51 @@ jobs:
             pytest
           fi
 
+  # Verify websockets version compatibility (v14 renamed extra_headers → additional_headers)
+  websockets-compat:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        websockets-version: ['12.0', '15.0.1']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        working-directory: sdk/python
+        run: |
+          python -m pip install --upgrade pip
+          pip install .[dev]
+          pip install pytest
+          pip install websockets==${{ matrix.websockets-version }}
+
+      - name: Verify websockets version
+        run: python -c "import websockets; print(f'websockets {websockets.__version__}')"
+
+      - name: Run memory events tests
+        working-directory: sdk/python
+        run: pytest tests/test_memory_events.py -v --no-cov
+
   # Summary job that depends on all critical checks
   required-checks:
     name: All Required Checks Passed
     runs-on: ubuntu-latest
-    needs: [lint-and-test]
+    needs: [lint-and-test, websockets-compat]
     if: always()
     steps:
       - name: Check all jobs
         run: |
           if [ "${{ needs.lint-and-test.result }}" != "success" ]; then
-            echo "Required checks failed"
+            echo "lint-and-test failed"
+            exit 1
+          fi
+          if [ "${{ needs.websockets-compat.result }}" != "success" ]; then
+            echo "websockets-compat failed"
             exit 1
           fi
           echo "All required checks passed successfully"
