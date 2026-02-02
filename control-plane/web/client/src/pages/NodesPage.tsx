@@ -456,6 +456,21 @@ export function NodesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Only run once on mount
 
+  // Periodic light refresh to keep timestamps (last_heartbeat) fresh
+  // SSE events don't carry heartbeat timestamps, so we poll every 30s
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const data = await getNodesSummary();
+        setNodes(data.nodes);
+        setLastRefresh(new Date());
+      } catch {
+        // Silent fail on background refresh — don't disrupt the UI
+      }
+    }, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
   // Handle bulk status refresh
   const handleBulkRefresh = (
     status: AgentStatus | Record<string, AgentStatus>

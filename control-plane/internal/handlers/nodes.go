@@ -299,9 +299,10 @@ var (
 	heartbeatCache = &HeartbeatCache{
 		nodes: make(map[string]*CachedNodeData),
 	}
-	// Only write to DB if heartbeat is older than this threshold
-	// Must be less than health monitor grace period (12s) to prevent false inactivity
-	dbUpdateThreshold = 8 * time.Second
+	// Only write to DB if heartbeat is older than this threshold.
+	// Reduced from 8s to 2s to keep DB timestamps fresh and prevent
+	// other systems (reconciliation, health monitor) from seeing stale data.
+	dbUpdateThreshold = 2 * time.Second
 )
 
 // shouldUpdateDatabase determines if a heartbeat should trigger a database update

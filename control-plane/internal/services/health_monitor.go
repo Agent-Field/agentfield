@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -15,15 +16,20 @@ import (
 
 // HealthMonitorConfig holds configuration for the health monitor service
 type HealthMonitorConfig struct {
-	CheckInterval time.Duration // How often to check node health via HTTP
+	CheckInterval       time.Duration // How often to check node health via HTTP
+	CheckTimeout        time.Duration // Timeout for individual HTTP health checks
+	ConsecutiveFailures int           // Number of consecutive failures before marking inactive
+	RecoveryDebounce    time.Duration // Time to wait before allowing inactive->active recovery
 }
 
 // ActiveAgent represents an agent currently being monitored
 type ActiveAgent struct {
-	NodeID      string
-	BaseURL     string
-	LastStatus  types.HealthStatus
-	LastChecked time.Time
+	NodeID              string
+	BaseURL             string
+	LastStatus          types.HealthStatus
+	LastChecked         time.Time
+	ConsecutiveFailures int       // Track consecutive HTTP check failures
+	LastTransition      time.Time // When the health status last changed
 }
 
 // HealthMonitor monitors the health of actively registered agent nodes
@@ -37,6 +43,7 @@ type HealthMonitor struct {
 	statusManager *StatusManager
 	presence      *PresenceManager
 	stopCh        chan struct{}
+	stopOnce      sync.Once
 
 	// Active agents registry - only agents currently running
 	activeAgents map[string]*ActiveAgent
@@ -49,9 +56,18 @@ type HealthMonitor struct {
 
 // NewHealthMonitor creates a new HTTP-first health monitor service
 func NewHealthMonitor(storage storage.StorageProvider, config HealthMonitorConfig, uiService *UIService, agentClient interfaces.AgentClient, statusManager *StatusManager, presence *PresenceManager) *HealthMonitor {
-	// Set default values - using efficient 10s intervals
+	// Set default values
 	if config.CheckInterval == 0 {
-		config.CheckInterval = 10 * time.Second // HTTP health check every 10 seconds
+		config.CheckInterval = 10 * time.Second
+	}
+	if config.CheckTimeout == 0 {
+		config.CheckTimeout = 5 * time.Second
+	}
+	if config.ConsecutiveFailures == 0 {
+		config.ConsecutiveFailures = 3 // Require 3 failures before marking inactive
+	}
+	if config.RecoveryDebounce == 0 {
+		config.RecoveryDebounce = 5 * time.Second // Reduced from 30s for faster recovery
 	}
 
 	return &HealthMonitor{
@@ -201,9 +217,11 @@ func (hm *HealthMonitor) Start() {
 	}
 }
 
-// Stop stops the health monitoring process
+// Stop stops the health monitoring process. Safe to call multiple times.
 func (hm *HealthMonitor) Stop() {
-	close(hm.stopCh)
+	hm.stopOnce.Do(func() {
+		close(hm.stopCh)
+	})
 }
 
 // checkActiveAgents performs HTTP health checks on all actively registered agents
@@ -227,7 +245,8 @@ func (hm *HealthMonitor) checkActiveAgents() {
 	}
 }
 
-// checkAgentHealth performs HTTP health check for a single agent
+// checkAgentHealth performs HTTP health check for a single agent.
+// Uses consecutive failure tracking to prevent flapping from transient network issues.
 func (hm *HealthMonitor) checkAgentHealth(agent *ActiveAgent) {
 	// Early check: ensure agent is still in active registry before making HTTP call
 	hm.agentsMutex.RLock()
@@ -239,143 +258,177 @@ func (hm *HealthMonitor) checkAgentHealth(agent *ActiveAgent) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), hm.config.CheckTimeout)
 	defer cancel()
 
-	// Use HTTP /status endpoint as single source of truth
+	// Perform HTTP health check
 	status, err := hm.agentClient.GetAgentStatus(ctx, agent.NodeID)
 
-	var newStatus types.HealthStatus
+	var checkPassed bool
 	if err != nil {
-		// HTTP request failed - agent is offline
-		newStatus = types.HealthStatusInactive
+		checkPassed = false
 		logger.Logger.Debug().Msgf("🏥 Agent %s HTTP check failed: %v", agent.NodeID, err)
 	} else if status.Status == "running" {
-		// FIXED: More conservative health detection to prevent false positives
-		// Only consider agent active if it's actually running and responsive
-		newStatus = types.HealthStatusActive
+		checkPassed = true
 		logger.Logger.Debug().Msgf("🏥 Agent %s HTTP check successful: %s", agent.NodeID, status.Status)
 	} else {
-		// Agent responded but not running
-		newStatus = types.HealthStatusInactive
+		checkPassed = false
 		logger.Logger.Debug().Msgf("🏥 Agent %s HTTP check shows not running: %s", agent.NodeID, status.Status)
 	}
 
-	// Update agent's last checked time
+	// Update agent state with consecutive failure tracking
 	hm.agentsMutex.Lock()
-	if activeAgent, exists := hm.activeAgents[agent.NodeID]; exists {
-		activeAgent.LastChecked = time.Now()
-		statusChanged := activeAgent.LastStatus != newStatus
-		activeAgent.LastStatus = newStatus
+	activeAgent, exists := hm.activeAgents[agent.NodeID]
+	if !exists {
 		hm.agentsMutex.Unlock()
+		return
+	}
 
-		// Only update database and broadcast events if status actually changed
-		if statusChanged {
-			logger.Logger.Debug().Msgf("🔄 Agent %s status changed to %s via HTTP check", agent.NodeID, newStatus)
+	activeAgent.LastChecked = time.Now()
 
-			// FIXED: Add debouncing to prevent rapid oscillation
-			// If agent just changed to inactive, wait before allowing it to become active again
-			if newStatus == types.HealthStatusInactive {
-				// Mark agent as recently failed to prevent immediate reactivation
-				activeAgent.LastChecked = time.Now()
-			} else if newStatus == types.HealthStatusActive && activeAgent.LastStatus == types.HealthStatusInactive {
-				// If agent was recently inactive, require a longer period of stability
-				if time.Since(activeAgent.LastChecked) < 30*time.Second {
-					logger.Logger.Debug().Msgf("🏥 Agent %s status change to active too soon after inactive, skipping", agent.NodeID)
-					return
-				}
+	if checkPassed {
+		// SUCCESS: Reset failure counter
+		previousFailures := activeAgent.ConsecutiveFailures
+		activeAgent.ConsecutiveFailures = 0
+
+		if previousFailures > 0 {
+			logger.Logger.Debug().Msgf("🏥 Agent %s check passed, reset failure counter from %d", agent.NodeID, previousFailures)
+		}
+
+		if activeAgent.LastStatus == types.HealthStatusInactive {
+			// Recovery from inactive: apply debounce
+			if time.Since(activeAgent.LastTransition) < hm.config.RecoveryDebounce {
+				hm.agentsMutex.Unlock()
+				logger.Logger.Debug().Msgf("🏥 Agent %s recovery debounce active, waiting", agent.NodeID)
+				return
 			}
+			activeAgent.LastStatus = types.HealthStatusActive
+			activeAgent.LastTransition = time.Now()
+			hm.agentsMutex.Unlock()
+			logger.Logger.Info().Msgf("✅ Agent %s recovered to active", agent.NodeID)
+			hm.markAgentActive(agent.NodeID)
+			return
+		} else if activeAgent.LastStatus != types.HealthStatusActive {
+			// First time becoming active (e.g. from unknown)
+			activeAgent.LastStatus = types.HealthStatusActive
+			activeAgent.LastTransition = time.Now()
+			hm.agentsMutex.Unlock()
+			hm.markAgentActive(agent.NodeID)
+			return
+		}
+		// Already active, no change needed
+		hm.agentsMutex.Unlock()
+	} else {
+		// FAILURE: Increment consecutive failure counter
+		activeAgent.ConsecutiveFailures++
 
-			// Update through unified status system if available
-			if hm.statusManager != nil {
-				// Determine the new agent state based on health status
-				var newState types.AgentState
-				var healthScore int
+		logger.Logger.Debug().Msgf("🏥 Agent %s failure %d/%d",
+			agent.NodeID, activeAgent.ConsecutiveFailures, hm.config.ConsecutiveFailures)
 
-				switch newStatus {
-				case types.HealthStatusActive:
-					newState = types.AgentStateActive
-					// FIXED: More conservative health score to prevent oscillation
-					// Only give high score if agent is consistently responsive
-					healthScore = 75 // Moderate health from HTTP check
-				case types.HealthStatusInactive:
-					newState = types.AgentStateInactive
-					healthScore = 0 // No health
-				default:
-					newState = types.AgentStateInactive
-					healthScore = 0
-				}
+		// Only mark inactive after reaching the consecutive failure threshold
+		if activeAgent.ConsecutiveFailures >= hm.config.ConsecutiveFailures {
+			if activeAgent.LastStatus != types.HealthStatusInactive {
+				activeAgent.LastStatus = types.HealthStatusInactive
+				activeAgent.LastTransition = time.Now()
+				failCount := activeAgent.ConsecutiveFailures
+				hm.agentsMutex.Unlock()
+				logger.Logger.Warn().Msgf("Agent %s marked inactive after %d consecutive failures", agent.NodeID, failCount)
+				hm.markAgentInactive(agent.NodeID, failCount)
+				return
+			}
+		}
+		hm.agentsMutex.Unlock()
+	}
+}
 
-				// Create status update
-				update := &types.AgentStatusUpdate{
-					State:       &newState,
-					HealthScore: &healthScore,
-					Source:      types.StatusSourceHealthCheck,
-					Reason:      "HTTP health check result",
-				}
+// markAgentActive marks an agent as active through the unified status system
+func (hm *HealthMonitor) markAgentActive(nodeID string) {
+	ctx := context.Background()
 
-				// Update through unified system
-				ctx := context.Background()
-				if err := hm.statusManager.UpdateAgentStatus(ctx, agent.NodeID, update); err != nil {
-					logger.Logger.Error().Err(err).Msgf("❌ Failed to update unified status for agent %s", agent.NodeID)
-					// Fallback to legacy update
-					if err := hm.storage.UpdateAgentHealth(ctx, agent.NodeID, newStatus); err != nil {
-						logger.Logger.Error().Err(err).Msgf("❌ Failed to update health status for agent %s", agent.NodeID)
-					}
-				} else if hm.presence != nil && newStatus == types.HealthStatusActive {
-					hm.presence.Touch(agent.NodeID, time.Now())
-				}
+	if hm.statusManager != nil {
+		activeState := types.AgentStateActive
+		healthScore := 85
+		update := &types.AgentStatusUpdate{
+			State:       &activeState,
+			HealthScore: &healthScore,
+			Source:      types.StatusSourceHealthCheck,
+			Reason:      "HTTP health check passed",
+		}
 
-				// Check MCP health for active agents
-				if newStatus == types.HealthStatusActive {
-					hm.checkMCPHealthForNode(agent.NodeID)
-				}
-			} else {
-				// Fallback to legacy system for backward compatibility
-				ctx := context.Background()
-				if err := hm.storage.UpdateAgentHealth(ctx, agent.NodeID, newStatus); err != nil {
-					logger.Logger.Error().Err(err).Msgf("❌ Failed to update health status for agent %s", agent.NodeID)
-					return
-				}
+		if err := hm.statusManager.UpdateAgentStatus(ctx, nodeID, update); err != nil {
+			logger.Logger.Error().Err(err).Msgf("❌ Failed to mark agent %s active via status manager", nodeID)
+			// Fallback to direct storage update
+			if err := hm.storage.UpdateAgentHealth(ctx, nodeID, types.HealthStatusActive); err != nil {
+				logger.Logger.Error().Err(err).Msgf("❌ Failed to update health status for agent %s", nodeID)
+			}
+			return
+		}
 
-				// Also update lifecycle status for consistency
-				var lifecycleStatus types.AgentLifecycleStatus
-				if newStatus == types.HealthStatusActive {
-					lifecycleStatus = types.AgentStatusReady
-				} else {
-					lifecycleStatus = types.AgentStatusOffline
-				}
-				if err := hm.storage.UpdateAgentLifecycleStatus(ctx, agent.NodeID, lifecycleStatus); err != nil {
-					logger.Logger.Error().Err(err).Msgf("❌ Failed to update lifecycle status for agent %s", agent.NodeID)
-				}
+		if hm.presence != nil {
+			hm.presence.Touch(nodeID, time.Now())
+		}
 
-				// Broadcast status change events (legacy)
-				if updatedAgent, err := hm.storage.GetAgent(ctx, agent.NodeID); err == nil {
-					// Broadcast health-specific events
-					if newStatus == types.HealthStatusActive {
-						events.PublishNodeOnline(agent.NodeID, updatedAgent)
-						if hm.presence != nil {
-							hm.presence.Touch(agent.NodeID, time.Now())
-						}
-					} else {
-						events.PublishNodeOffline(agent.NodeID, updatedAgent)
-					}
-					events.PublishNodeHealthChanged(agent.NodeID, string(newStatus), updatedAgent)
+		// Check MCP health for active agents
+		hm.checkMCPHealthForNode(nodeID)
+	} else {
+		// Legacy fallback
+		if err := hm.storage.UpdateAgentHealth(ctx, nodeID, types.HealthStatusActive); err != nil {
+			logger.Logger.Error().Err(err).Msgf("❌ Failed to update health status for agent %s", nodeID)
+			return
+		}
+		if err := hm.storage.UpdateAgentLifecycleStatus(ctx, nodeID, types.AgentStatusReady); err != nil {
+			logger.Logger.Error().Err(err).Msgf("❌ Failed to update lifecycle status for agent %s", nodeID)
+		}
+		if updatedAgent, err := hm.storage.GetAgent(ctx, nodeID); err == nil {
+			events.PublishNodeOnline(nodeID, updatedAgent)
+			if hm.presence != nil {
+				hm.presence.Touch(nodeID, time.Now())
+			}
+			events.PublishNodeHealthChanged(nodeID, string(types.HealthStatusActive), updatedAgent)
+			if hm.uiService != nil {
+				hm.uiService.OnNodeStatusChanged(updatedAgent)
+			}
+		}
+		hm.checkMCPHealthForNode(nodeID)
+	}
+}
 
-					// Send to UI service
-					if hm.uiService != nil {
-						hm.uiService.OnNodeStatusChanged(updatedAgent)
-					}
+// markAgentInactive marks an agent as inactive through the unified status system
+func (hm *HealthMonitor) markAgentInactive(nodeID string, failCount int) {
+	ctx := context.Background()
 
-					// Check MCP health for active agents
-					if newStatus == types.HealthStatusActive {
-						hm.checkMCPHealthForNode(agent.NodeID)
-					}
-				}
+	if hm.statusManager != nil {
+		inactiveState := types.AgentStateInactive
+		healthScore := 0
+		update := &types.AgentStatusUpdate{
+			State:       &inactiveState,
+			HealthScore: &healthScore,
+			Source:      types.StatusSourceHealthCheck,
+			Reason:      fmt.Sprintf("%d consecutive health check failures", failCount),
+		}
+
+		if err := hm.statusManager.UpdateAgentStatus(ctx, nodeID, update); err != nil {
+			logger.Logger.Error().Err(err).Msgf("❌ Failed to mark agent %s inactive via status manager", nodeID)
+			if err := hm.storage.UpdateAgentHealth(ctx, nodeID, types.HealthStatusInactive); err != nil {
+				logger.Logger.Error().Err(err).Msgf("❌ Failed to update health status for agent %s", nodeID)
 			}
 		}
 	} else {
-		hm.agentsMutex.Unlock()
+		// Legacy fallback
+		if err := hm.storage.UpdateAgentHealth(ctx, nodeID, types.HealthStatusInactive); err != nil {
+			logger.Logger.Error().Err(err).Msgf("❌ Failed to update health status for agent %s", nodeID)
+			return
+		}
+		if err := hm.storage.UpdateAgentLifecycleStatus(ctx, nodeID, types.AgentStatusOffline); err != nil {
+			logger.Logger.Error().Err(err).Msgf("❌ Failed to update lifecycle status for agent %s", nodeID)
+		}
+		if updatedAgent, err := hm.storage.GetAgent(ctx, nodeID); err == nil {
+			events.PublishNodeOffline(nodeID, updatedAgent)
+			events.PublishNodeHealthChanged(nodeID, string(types.HealthStatusInactive), updatedAgent)
+			if hm.uiService != nil {
+				hm.uiService.OnNodeStatusChanged(updatedAgent)
+			}
+		}
 	}
 }
 

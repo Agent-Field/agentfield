@@ -14,6 +14,7 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -486,4 +487,86 @@ func (h *testStatusEventHandler) OnStatusChanged(nodeID string, oldStatus, newSt
 	if h.onStatusChanged != nil {
 		h.onStatusChanged(nodeID, oldStatus, newStatus)
 	}
+}
+
+// --- Heartbeat priority and reconciliation threshold tests ---
+
+func TestStatusManager_UpdateFromHeartbeat_NeverDropped(t *testing.T) {
+	provider, ctx := setupStatusManagerStorage(t)
+	registerTestAgent(t, provider, ctx, "node-heartbeat-priority")
+
+	sm := NewStatusManager(provider, StatusManagerConfig{
+		ReconcileInterval: 30 * time.Second,
+		StatusCacheTTL:    5 * time.Minute,
+	}, nil, nil)
+
+	// First, mark the agent as inactive via a health check source
+	// (simulating what HealthMonitor would do)
+	inactiveState := types.AgentStateInactive
+	healthScore := 0
+	update := &types.AgentStatusUpdate{
+		State:       &inactiveState,
+		HealthScore: &healthScore,
+		Source:      types.StatusSourceHealthCheck,
+		Reason:      "HTTP health check failed",
+	}
+	err := sm.UpdateAgentStatus(ctx, "node-heartbeat-priority", update)
+	require.NoError(t, err)
+
+	// Verify agent is inactive
+	status, err := sm.GetAgentStatusSnapshot(ctx, "node-heartbeat-priority", nil)
+	require.NoError(t, err)
+	require.Equal(t, types.AgentStateInactive, status.State)
+	require.Equal(t, types.StatusSourceHealthCheck, status.Source)
+
+	// Now send a heartbeat IMMEDIATELY (within what used to be the 10s drop window).
+	// Previously this heartbeat would be silently ignored. Now it MUST be processed.
+	readyStatus := types.AgentStatusReady
+	err = sm.UpdateFromHeartbeat(ctx, "node-heartbeat-priority", &readyStatus, nil)
+	require.NoError(t, err, "Heartbeat should never be dropped")
+
+	// Verify the heartbeat was processed — agent should no longer be inactive
+	status, err = sm.GetAgentStatusSnapshot(ctx, "node-heartbeat-priority", nil)
+	require.NoError(t, err)
+	require.Equal(t, types.StatusSourceHeartbeat, status.Source,
+		"Source should be heartbeat, proving it was processed")
+	require.NotEqual(t, types.AgentStateInactive, status.State,
+		"Agent should not be inactive after receiving a heartbeat")
+}
+
+func TestStatusManager_Reconciliation_UsesConfiguredThreshold(t *testing.T) {
+	provider, _ := setupStatusManagerStorage(t)
+
+	// Create StatusManager with default 60s threshold
+	sm := NewStatusManager(provider, StatusManagerConfig{
+		ReconcileInterval:       30 * time.Second,
+		HeartbeatStaleThreshold: 60 * time.Second,
+	}, nil, nil)
+
+	// Agent with heartbeat 45 seconds ago — should NOT need reconciliation
+	recentAgent := &types.AgentNode{
+		ID:            "node-recent",
+		HealthStatus:  types.HealthStatusActive,
+		LastHeartbeat: time.Now().Add(-45 * time.Second),
+	}
+	assert.False(t, sm.needsReconciliation(recentAgent),
+		"Agent with 45s-old heartbeat should NOT need reconciliation (threshold is 60s)")
+
+	// Agent with heartbeat 65 seconds ago — SHOULD need reconciliation
+	staleAgent := &types.AgentNode{
+		ID:            "node-stale",
+		HealthStatus:  types.HealthStatusActive,
+		LastHeartbeat: time.Now().Add(-65 * time.Second),
+	}
+	assert.True(t, sm.needsReconciliation(staleAgent),
+		"Agent with 65s-old heartbeat should need reconciliation (threshold is 60s)")
+
+	// Agent already inactive — should NOT need reconciliation even if stale
+	inactiveAgent := &types.AgentNode{
+		ID:            "node-inactive",
+		HealthStatus:  types.HealthStatusInactive,
+		LastHeartbeat: time.Now().Add(-120 * time.Second),
+	}
+	assert.False(t, sm.needsReconciliation(inactiveAgent),
+		"Already inactive agent should not need reconciliation")
 }

@@ -344,22 +344,24 @@ func TestHealthMonitor_CheckAgentHealth_Inactive(t *testing.T) {
 	// Set mock to return error (simulating agent offline)
 	mockClient.setStatusError(nodeID, errors.New("connection refused"))
 
-	// Perform health check
+	// Consecutive failures required (default: 3) before marking inactive
 	hm.agentsMutex.RLock()
 	activeAgent := hm.activeAgents[nodeID]
 	hm.agentsMutex.RUnlock()
 
-	hm.checkAgentHealth(activeAgent)
+	for i := 0; i < hm.config.ConsecutiveFailures; i++ {
+		hm.checkAgentHealth(activeAgent)
+	}
 
 	// Wait a bit for async updates
 	time.Sleep(100 * time.Millisecond)
 
-	// Verify status was updated to inactive
+	// Verify status was updated to inactive after consecutive failures
 	hm.agentsMutex.RLock()
 	updatedAgent := hm.activeAgents[nodeID]
 	hm.agentsMutex.RUnlock()
 
-	assert.Equal(t, types.HealthStatusInactive, updatedAgent.LastStatus, "Agent should be marked as inactive")
+	assert.Equal(t, types.HealthStatusInactive, updatedAgent.LastStatus, "Agent should be marked as inactive after consecutive failures")
 }
 
 func TestHealthMonitor_CheckAgentHealth_NotRunning(t *testing.T) {
@@ -383,17 +385,19 @@ func TestHealthMonitor_CheckAgentHealth_NotRunning(t *testing.T) {
 	// Set mock to return non-running status
 	mockClient.setStatusResponse(nodeID, "stopped")
 
-	// Perform health check
+	// Consecutive failures required before marking inactive
 	hm.agentsMutex.RLock()
 	activeAgent := hm.activeAgents[nodeID]
 	hm.agentsMutex.RUnlock()
 
-	hm.checkAgentHealth(activeAgent)
+	for i := 0; i < hm.config.ConsecutiveFailures; i++ {
+		hm.checkAgentHealth(activeAgent)
+	}
 
 	// Wait a bit for async updates
 	time.Sleep(100 * time.Millisecond)
 
-	// Verify status was updated to inactive
+	// Verify status was updated to inactive after consecutive failures
 	hm.agentsMutex.RLock()
 	updatedAgent := hm.activeAgents[nodeID]
 	hm.agentsMutex.RUnlock()
@@ -402,24 +406,35 @@ func TestHealthMonitor_CheckAgentHealth_NotRunning(t *testing.T) {
 }
 
 func TestHealthMonitor_CheckAgentHealth_StatusTransitions(t *testing.T) {
-	hm, provider, mockClient, _, _ := setupHealthMonitorTest(t)
-	ctx := context.Background()
+	// Use short debounce for test speed
+	provider, ctx := setupTestStorage(t)
+	statusManager := NewStatusManager(provider, StatusManagerConfig{ReconcileInterval: 30 * time.Second}, nil, nil)
+	presenceConfig := PresenceManagerConfig{HeartbeatTTL: 5 * time.Second, SweepInterval: 1 * time.Second, HardEvictTTL: 10 * time.Second}
+	presenceManager := NewPresenceManager(statusManager, presenceConfig)
+	mockClient := newMockAgentClient()
+
+	config := HealthMonitorConfig{
+		CheckInterval:       100 * time.Millisecond,
+		ConsecutiveFailures: 2, // Use 2 for faster test
+		RecoveryDebounce:    200 * time.Millisecond,
+	}
+	hm := NewHealthMonitor(provider, config, nil, mockClient, statusManager, presenceManager)
+
+	t.Cleanup(func() {
+		hm.Stop()
+		presenceManager.Stop()
+		_ = provider.Close(ctx)
+	})
 
 	nodeID := "test-agent-transitions"
 	baseURL := "http://localhost:8001"
 
-	// Register agent in storage
-	agent := &types.AgentNode{
-		ID:      nodeID,
-		BaseURL: baseURL,
-	}
+	agent := &types.AgentNode{ID: nodeID, BaseURL: baseURL}
 	err := provider.RegisterAgent(ctx, agent)
 	require.NoError(t, err)
 
-	// Register in health monitor
 	hm.RegisterAgent(nodeID, baseURL)
 
-	// Get active agent
 	hm.agentsMutex.RLock()
 	activeAgent := hm.activeAgents[nodeID]
 	hm.agentsMutex.RUnlock()
@@ -433,21 +448,24 @@ func TestHealthMonitor_CheckAgentHealth_StatusTransitions(t *testing.T) {
 	assert.Equal(t, types.HealthStatusActive, hm.activeAgents[nodeID].LastStatus)
 	hm.agentsMutex.RUnlock()
 
-	// Test transition: Active -> Inactive
+	// Test transition: Active -> Inactive (requires consecutive failures)
 	mockClient.setStatusError(nodeID, errors.New("connection refused"))
-	hm.checkAgentHealth(activeAgent)
+	for i := 0; i < config.ConsecutiveFailures; i++ {
+		hm.checkAgentHealth(activeAgent)
+	}
 	time.Sleep(100 * time.Millisecond)
 
 	hm.agentsMutex.RLock()
 	assert.Equal(t, types.HealthStatusInactive, hm.activeAgents[nodeID].LastStatus)
 	hm.agentsMutex.RUnlock()
 
-	// Test transition: Inactive -> Active (should work after debouncing period)
-	// Wait for debounce period
-	time.Sleep(31 * time.Second)
+	// Test transition: Inactive -> Active (after debounce period)
+	time.Sleep(300 * time.Millisecond) // Wait past 200ms debounce
 
 	mockClient.setStatusResponse(nodeID, "running")
-	mockClient.statusErrors = make(map[string]error) // Clear errors
+	mockClient.mu.Lock()
+	delete(mockClient.statusErrors, nodeID)
+	mockClient.mu.Unlock()
 	hm.checkAgentHealth(activeAgent)
 	time.Sleep(100 * time.Millisecond)
 
@@ -929,13 +947,28 @@ func TestHealthMonitor_RecoverFromDatabase_MarksUnreachableNodesInactive(t *test
 	err = hm.RecoverFromDatabase(ctx)
 	require.NoError(t, err)
 
-	// Verify agent was registered
+	// Wait for async health checks to complete
+	time.Sleep(200 * time.Millisecond)
+
+	// After recovery, agent is registered but a single check won't mark inactive
+	// (consecutive failures required). Run additional checks to reach the threshold.
 	hm.agentsMutex.RLock()
 	activeAgent, exists := hm.activeAgents["unreachable-agent"]
 	hm.agentsMutex.RUnlock()
 
 	assert.True(t, exists, "Agent should be registered")
-	assert.Equal(t, types.HealthStatusInactive, activeAgent.LastStatus, "Agent should be marked inactive after failed health check")
+
+	// Run enough checks to trigger consecutive failure threshold
+	for i := 0; i < hm.config.ConsecutiveFailures; i++ {
+		hm.checkAgentHealth(activeAgent)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	hm.agentsMutex.RLock()
+	activeAgent = hm.activeAgents["unreachable-agent"]
+	hm.agentsMutex.RUnlock()
+
+	assert.Equal(t, types.HealthStatusInactive, activeAgent.LastStatus, "Agent should be marked inactive after consecutive failed health checks")
 }
 
 func TestHealthMonitor_RecoverFromDatabase_MarksReachableNodesActive(t *testing.T) {
@@ -966,4 +999,616 @@ func TestHealthMonitor_RecoverFromDatabase_MarksReachableNodesActive(t *testing.
 
 	assert.True(t, exists, "Agent should be registered")
 	assert.Equal(t, types.HealthStatusActive, activeAgent.LastStatus, "Agent should be marked active after successful health check")
+}
+
+// --- Consecutive failure tests ---
+
+func TestHealthMonitor_ConsecutiveFailures_SingleFailureKeepsActive(t *testing.T) {
+	hm, provider, mockClient, _, _ := setupHealthMonitorTest(t)
+	ctx := context.Background()
+
+	nodeID := "test-single-failure"
+	baseURL := "http://localhost:8001"
+
+	agent := &types.AgentNode{ID: nodeID, BaseURL: baseURL}
+	err := provider.RegisterAgent(ctx, agent)
+	require.NoError(t, err)
+
+	hm.RegisterAgent(nodeID, baseURL)
+
+	// First make agent active
+	mockClient.setStatusResponse(nodeID, "running")
+	hm.agentsMutex.RLock()
+	activeAgent := hm.activeAgents[nodeID]
+	hm.agentsMutex.RUnlock()
+	hm.checkAgentHealth(activeAgent)
+	time.Sleep(100 * time.Millisecond)
+
+	hm.agentsMutex.RLock()
+	assert.Equal(t, types.HealthStatusActive, hm.activeAgents[nodeID].LastStatus, "Agent should be active initially")
+	hm.agentsMutex.RUnlock()
+
+	// Now simulate one failure — should NOT mark inactive
+	mockClient.setStatusError(nodeID, errors.New("connection refused"))
+	hm.checkAgentHealth(activeAgent)
+	time.Sleep(100 * time.Millisecond)
+
+	hm.agentsMutex.RLock()
+	assert.NotEqual(t, types.HealthStatusInactive, hm.activeAgents[nodeID].LastStatus,
+		"Single failure should NOT mark agent inactive (consecutive failures required)")
+	assert.Equal(t, 1, hm.activeAgents[nodeID].ConsecutiveFailures, "Should have 1 consecutive failure")
+	hm.agentsMutex.RUnlock()
+}
+
+func TestHealthMonitor_ConsecutiveFailures_ThreeFailuresMarksInactive(t *testing.T) {
+	hm, provider, mockClient, _, _ := setupHealthMonitorTest(t)
+	ctx := context.Background()
+
+	nodeID := "test-three-failures"
+	baseURL := "http://localhost:8001"
+
+	agent := &types.AgentNode{ID: nodeID, BaseURL: baseURL}
+	err := provider.RegisterAgent(ctx, agent)
+	require.NoError(t, err)
+
+	hm.RegisterAgent(nodeID, baseURL)
+
+	// Make agent active first
+	mockClient.setStatusResponse(nodeID, "running")
+	hm.agentsMutex.RLock()
+	activeAgent := hm.activeAgents[nodeID]
+	hm.agentsMutex.RUnlock()
+	hm.checkAgentHealth(activeAgent)
+	time.Sleep(100 * time.Millisecond)
+
+	// Now fail 3 times (default ConsecutiveFailures threshold)
+	mockClient.setStatusError(nodeID, errors.New("connection refused"))
+
+	for i := 0; i < hm.config.ConsecutiveFailures; i++ {
+		hm.checkAgentHealth(activeAgent)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	hm.agentsMutex.RLock()
+	assert.Equal(t, types.HealthStatusInactive, hm.activeAgents[nodeID].LastStatus,
+		"Agent should be inactive after %d consecutive failures", hm.config.ConsecutiveFailures)
+	hm.agentsMutex.RUnlock()
+}
+
+func TestHealthMonitor_ConsecutiveFailures_SuccessResetsCounter(t *testing.T) {
+	hm, provider, mockClient, _, _ := setupHealthMonitorTest(t)
+	ctx := context.Background()
+
+	nodeID := "test-success-resets"
+	baseURL := "http://localhost:8001"
+
+	agent := &types.AgentNode{ID: nodeID, BaseURL: baseURL}
+	err := provider.RegisterAgent(ctx, agent)
+	require.NoError(t, err)
+
+	hm.RegisterAgent(nodeID, baseURL)
+
+	// Make active first
+	mockClient.setStatusResponse(nodeID, "running")
+	hm.agentsMutex.RLock()
+	activeAgent := hm.activeAgents[nodeID]
+	hm.agentsMutex.RUnlock()
+	hm.checkAgentHealth(activeAgent)
+	time.Sleep(100 * time.Millisecond)
+
+	// Fail twice (2 out of 3)
+	mockClient.setStatusError(nodeID, errors.New("connection refused"))
+	hm.checkAgentHealth(activeAgent)
+	hm.checkAgentHealth(activeAgent)
+
+	hm.agentsMutex.RLock()
+	assert.Equal(t, 2, hm.activeAgents[nodeID].ConsecutiveFailures, "Should have 2 failures")
+	hm.agentsMutex.RUnlock()
+
+	// Success resets the counter
+	mockClient.mu.Lock()
+	delete(mockClient.statusErrors, nodeID)
+	mockClient.mu.Unlock()
+	mockClient.setStatusResponse(nodeID, "running")
+	hm.checkAgentHealth(activeAgent)
+
+	hm.agentsMutex.RLock()
+	assert.Equal(t, 0, hm.activeAgents[nodeID].ConsecutiveFailures, "Success should reset failure counter")
+	assert.Equal(t, types.HealthStatusActive, hm.activeAgents[nodeID].LastStatus, "Agent should still be active")
+	hm.agentsMutex.RUnlock()
+
+	// Fail twice more — should still NOT be inactive (counter was reset)
+	mockClient.setStatusError(nodeID, errors.New("connection refused"))
+	hm.checkAgentHealth(activeAgent)
+	hm.checkAgentHealth(activeAgent)
+
+	hm.agentsMutex.RLock()
+	assert.NotEqual(t, types.HealthStatusInactive, hm.activeAgents[nodeID].LastStatus,
+		"Agent should NOT be inactive — counter was reset by success")
+	hm.agentsMutex.RUnlock()
+}
+
+func TestHealthMonitor_RecoveryDebounce_BlocksTooFastRecovery(t *testing.T) {
+	// Use a short but measurable debounce for testing
+	provider, ctx := setupTestStorage(t)
+	statusManager := NewStatusManager(provider, StatusManagerConfig{ReconcileInterval: 30 * time.Second}, nil, nil)
+	presenceConfig := PresenceManagerConfig{HeartbeatTTL: 5 * time.Second, SweepInterval: 1 * time.Second, HardEvictTTL: 10 * time.Second}
+	presenceManager := NewPresenceManager(statusManager, presenceConfig)
+	mockClient := newMockAgentClient()
+
+	config := HealthMonitorConfig{
+		CheckInterval:       100 * time.Millisecond,
+		ConsecutiveFailures: 2,
+		RecoveryDebounce:    500 * time.Millisecond,
+	}
+	hm := NewHealthMonitor(provider, config, nil, mockClient, statusManager, presenceManager)
+
+	t.Cleanup(func() {
+		hm.Stop()
+		presenceManager.Stop()
+		_ = provider.Close(ctx)
+	})
+
+	nodeID := "test-debounce"
+	baseURL := "http://localhost:8001"
+
+	agent := &types.AgentNode{ID: nodeID, BaseURL: baseURL}
+	err := provider.RegisterAgent(ctx, agent)
+	require.NoError(t, err)
+	hm.RegisterAgent(nodeID, baseURL)
+
+	// Make active, then inactive
+	mockClient.setStatusResponse(nodeID, "running")
+	hm.agentsMutex.RLock()
+	activeAgent := hm.activeAgents[nodeID]
+	hm.agentsMutex.RUnlock()
+	hm.checkAgentHealth(activeAgent)
+	time.Sleep(50 * time.Millisecond)
+
+	mockClient.setStatusError(nodeID, errors.New("connection refused"))
+	for i := 0; i < config.ConsecutiveFailures; i++ {
+		hm.checkAgentHealth(activeAgent)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	hm.agentsMutex.RLock()
+	require.Equal(t, types.HealthStatusInactive, hm.activeAgents[nodeID].LastStatus)
+	hm.agentsMutex.RUnlock()
+
+	// Immediately try to recover — should be blocked by debounce
+	mockClient.mu.Lock()
+	delete(mockClient.statusErrors, nodeID)
+	mockClient.mu.Unlock()
+	mockClient.setStatusResponse(nodeID, "running")
+	hm.checkAgentHealth(activeAgent)
+	time.Sleep(50 * time.Millisecond)
+
+	hm.agentsMutex.RLock()
+	assert.Equal(t, types.HealthStatusInactive, hm.activeAgents[nodeID].LastStatus,
+		"Recovery should be blocked by debounce")
+	hm.agentsMutex.RUnlock()
+
+	// Wait past debounce, then try again
+	time.Sleep(600 * time.Millisecond)
+	hm.checkAgentHealth(activeAgent)
+	time.Sleep(50 * time.Millisecond)
+
+	hm.agentsMutex.RLock()
+	assert.Equal(t, types.HealthStatusActive, hm.activeAgents[nodeID].LastStatus,
+		"Recovery should succeed after debounce period")
+	hm.agentsMutex.RUnlock()
+}
+
+func TestHealthMonitor_Config_ConsecutiveFailuresConfigurable(t *testing.T) {
+	provider, ctx := setupTestStorage(t)
+	statusManager := NewStatusManager(provider, StatusManagerConfig{ReconcileInterval: 30 * time.Second}, nil, nil)
+	presenceConfig := PresenceManagerConfig{HeartbeatTTL: 5 * time.Second, SweepInterval: 1 * time.Second, HardEvictTTL: 10 * time.Second}
+	presenceManager := NewPresenceManager(statusManager, presenceConfig)
+	mockClient := newMockAgentClient()
+
+	// Configure to require 5 consecutive failures
+	config := HealthMonitorConfig{
+		CheckInterval:       100 * time.Millisecond,
+		ConsecutiveFailures: 5,
+		RecoveryDebounce:    100 * time.Millisecond,
+	}
+	hm := NewHealthMonitor(provider, config, nil, mockClient, statusManager, presenceManager)
+
+	t.Cleanup(func() {
+		hm.Stop()
+		presenceManager.Stop()
+		_ = provider.Close(ctx)
+	})
+
+	nodeID := "test-config-failures"
+	baseURL := "http://localhost:8001"
+
+	agent := &types.AgentNode{ID: nodeID, BaseURL: baseURL}
+	err := provider.RegisterAgent(ctx, agent)
+	require.NoError(t, err)
+	hm.RegisterAgent(nodeID, baseURL)
+
+	// Make active first
+	mockClient.setStatusResponse(nodeID, "running")
+	hm.agentsMutex.RLock()
+	activeAgent := hm.activeAgents[nodeID]
+	hm.agentsMutex.RUnlock()
+	hm.checkAgentHealth(activeAgent)
+	time.Sleep(50 * time.Millisecond)
+
+	// Fail 4 times — should NOT be inactive (threshold is 5)
+	mockClient.setStatusError(nodeID, errors.New("connection refused"))
+	for i := 0; i < 4; i++ {
+		hm.checkAgentHealth(activeAgent)
+	}
+
+	hm.agentsMutex.RLock()
+	assert.NotEqual(t, types.HealthStatusInactive, hm.activeAgents[nodeID].LastStatus,
+		"4 failures should not mark inactive when threshold is 5")
+	assert.Equal(t, 4, hm.activeAgents[nodeID].ConsecutiveFailures)
+	hm.agentsMutex.RUnlock()
+
+	// 5th failure — NOW it should be inactive
+	hm.checkAgentHealth(activeAgent)
+	time.Sleep(50 * time.Millisecond)
+
+	hm.agentsMutex.RLock()
+	assert.Equal(t, types.HealthStatusInactive, hm.activeAgents[nodeID].LastStatus,
+		"5th failure should mark inactive when threshold is 5")
+	hm.agentsMutex.RUnlock()
+}
+
+// =============================================================================
+// INTEGRATION TESTS — All 3 services running concurrently with competing signals
+// =============================================================================
+//
+// These tests start HealthMonitor, StatusManager, and PresenceManager running
+// concurrently (as they do in production) and simulate the exact scenario that
+// causes flapping: health check failures happening while heartbeats are flowing.
+
+// TestIntegration_NoFlapping_HeartbeatsDuringTransientFailures is the critical
+// integration test. It runs all 3 services concurrently and verifies that an
+// agent NEVER flaps to inactive while heartbeats are being sent, even when
+// HTTP health checks are intermittently failing.
+func TestIntegration_NoFlapping_HeartbeatsDuringTransientFailures(t *testing.T) {
+	provider, ctx := setupTestStorage(t)
+
+	// --- Wire services exactly as production (server.go) ---
+	mockClient := newMockAgentClient()
+
+	// StatusManager with short reconciliation and the same mock client
+	// (so UpdateFromHeartbeat -> GetAgentStatus uses mock HTTP too)
+	statusConfig := StatusManagerConfig{
+		ReconcileInterval:       200 * time.Millisecond,
+		StatusCacheTTL:          50 * time.Millisecond, // Short cache so state changes propagate fast
+		HeartbeatStaleThreshold: 2 * time.Second,
+		MaxTransitionTime:       1 * time.Second,
+	}
+	statusManager := NewStatusManager(provider, statusConfig, nil, mockClient)
+
+	// PresenceManager with short TTLs
+	presenceConfig := PresenceManagerConfig{
+		HeartbeatTTL:  2 * time.Second,
+		SweepInterval: 200 * time.Millisecond,
+		HardEvictTTL:  5 * time.Second,
+	}
+	presenceManager := NewPresenceManager(statusManager, presenceConfig)
+
+	// HealthMonitor with fast checks but requiring 3 consecutive failures
+	hmConfig := HealthMonitorConfig{
+		CheckInterval:       100 * time.Millisecond,
+		CheckTimeout:        2 * time.Second,
+		ConsecutiveFailures: 3,
+		RecoveryDebounce:    200 * time.Millisecond,
+	}
+	hm := NewHealthMonitor(provider, hmConfig, nil, mockClient, statusManager, presenceManager)
+	presenceManager.SetExpireCallback(hm.UnregisterAgent)
+
+	// Cleanup
+	t.Cleanup(func() {
+		hm.Stop()
+		presenceManager.Stop()
+		statusManager.Stop()
+		_ = provider.Close(ctx)
+	})
+
+	// --- Register agent in storage ---
+	nodeID := "integration-agent-1"
+	node := &types.AgentNode{
+		ID:              nodeID,
+		TeamID:          "team",
+		BaseURL:         "http://localhost:9999",
+		Version:         "1.0.0",
+		HealthStatus:    types.HealthStatusActive,
+		LifecycleStatus: types.AgentStatusReady,
+		LastHeartbeat:   time.Now(),
+		Reasoners:       []types.ReasonerDefinition{},
+		Skills:          []types.SkillDefinition{},
+	}
+	require.NoError(t, provider.RegisterAgent(ctx, node))
+
+	// Agent starts healthy
+	mockClient.setStatusResponse(nodeID, "running")
+
+	// Register with health monitor and presence
+	hm.RegisterAgent(nodeID, "http://localhost:9999")
+	presenceManager.Touch(nodeID, time.Now())
+
+	// --- Start all 3 services concurrently (like production) ---
+	go hm.Start()
+	statusManager.Start()
+	presenceManager.Start()
+
+	// Let services stabilize — agent should be active
+	time.Sleep(300 * time.Millisecond)
+
+	// Verify agent is active before the test
+	snapshot, err := statusManager.GetAgentStatusSnapshot(ctx, nodeID, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.AgentStateActive, snapshot.State,
+		"Agent should be active before flapping test begins")
+
+	// --- THE FLAPPING SCENARIO ---
+	// Health checks start failing (simulating network blip), but agent keeps
+	// sending heartbeats (proving it's alive). The agent should NEVER go inactive.
+
+	// Track all status transitions to detect flapping
+	var statusHistory []types.AgentState
+	var historyMu sync.Mutex
+
+	// Start heartbeat sender goroutine (simulates agent sending heartbeats every 100ms)
+	heartbeatDone := make(chan struct{})
+	go func() {
+		defer close(heartbeatDone)
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for i := 0; i < 30; i++ { // 30 heartbeats over ~3 seconds
+			<-ticker.C
+			readyStatus := types.AgentStatusReady
+			_ = statusManager.UpdateFromHeartbeat(ctx, nodeID, &readyStatus, nil)
+			presenceManager.Touch(nodeID, time.Now())
+
+			// Record current state
+			snap, err := statusManager.GetAgentStatusSnapshot(ctx, nodeID, nil)
+			if err == nil {
+				historyMu.Lock()
+				statusHistory = append(statusHistory, snap.State)
+				historyMu.Unlock()
+			}
+		}
+	}()
+
+	// Introduce intermittent health check failures after 200ms
+	time.Sleep(200 * time.Millisecond)
+	mockClient.setStatusError(nodeID, errors.New("connection timeout"))
+
+	// Let it run with failing health checks + flowing heartbeats for 2 seconds
+	time.Sleep(2 * time.Second)
+
+	// Restore health checks
+	mockClient.mu.Lock()
+	delete(mockClient.statusErrors, nodeID)
+	mockClient.mu.Unlock()
+	mockClient.setStatusResponse(nodeID, "running")
+
+	// Wait for heartbeat goroutine to finish
+	<-heartbeatDone
+
+	// Let services settle
+	time.Sleep(300 * time.Millisecond)
+
+	// --- ASSERTIONS ---
+
+	// 1. Agent should be active now
+	finalSnapshot, err := statusManager.GetAgentStatusSnapshot(ctx, nodeID, nil)
+	require.NoError(t, err)
+	assert.Equal(t, types.AgentStateActive, finalSnapshot.State,
+		"Agent must be active — heartbeats were flowing the entire time")
+
+	// 2. Agent should NEVER have been inactive during the test
+	historyMu.Lock()
+	defer historyMu.Unlock()
+
+	inactiveCount := 0
+	for _, state := range statusHistory {
+		if state == types.AgentStateInactive {
+			inactiveCount++
+		}
+	}
+	assert.Zero(t, inactiveCount,
+		"Agent should NEVER have been inactive while heartbeats were flowing. "+
+			"Got %d inactive readings out of %d samples. This is the flapping bug.",
+		inactiveCount, len(statusHistory))
+
+	// 3. Log the full history for debugging if test fails
+	if t.Failed() {
+		t.Logf("Status history (%d samples):", len(statusHistory))
+		for i, state := range statusHistory {
+			t.Logf("  [%d] %s", i, state)
+		}
+	}
+}
+
+// TestIntegration_ProperInactiveWhenHeartbeatsStop verifies that when an agent
+// genuinely goes down (both heartbeats AND health checks stop), the system
+// correctly marks it inactive after the consecutive failure threshold.
+func TestIntegration_ProperInactiveWhenHeartbeatsStop(t *testing.T) {
+	provider, ctx := setupTestStorage(t)
+
+	mockClient := newMockAgentClient()
+
+	statusConfig := StatusManagerConfig{
+		ReconcileInterval:       200 * time.Millisecond,
+		StatusCacheTTL:          50 * time.Millisecond,
+		HeartbeatStaleThreshold: 1 * time.Second,
+		MaxTransitionTime:       500 * time.Millisecond,
+	}
+	statusManager := NewStatusManager(provider, statusConfig, nil, mockClient)
+
+	presenceConfig := PresenceManagerConfig{
+		HeartbeatTTL:  1 * time.Second,
+		SweepInterval: 200 * time.Millisecond,
+		HardEvictTTL:  3 * time.Second,
+	}
+	presenceManager := NewPresenceManager(statusManager, presenceConfig)
+
+	hmConfig := HealthMonitorConfig{
+		CheckInterval:       100 * time.Millisecond,
+		CheckTimeout:        2 * time.Second,
+		ConsecutiveFailures: 3,
+		RecoveryDebounce:    200 * time.Millisecond,
+	}
+	hm := NewHealthMonitor(provider, hmConfig, nil, mockClient, statusManager, presenceManager)
+	presenceManager.SetExpireCallback(hm.UnregisterAgent)
+
+	t.Cleanup(func() {
+		hm.Stop()
+		presenceManager.Stop()
+		statusManager.Stop()
+		_ = provider.Close(ctx)
+	})
+
+	// Register healthy agent
+	nodeID := "integration-agent-down"
+	node := &types.AgentNode{
+		ID:              nodeID,
+		TeamID:          "team",
+		BaseURL:         "http://localhost:9998",
+		Version:         "1.0.0",
+		HealthStatus:    types.HealthStatusActive,
+		LifecycleStatus: types.AgentStatusReady,
+		LastHeartbeat:   time.Now(),
+		Reasoners:       []types.ReasonerDefinition{},
+		Skills:          []types.SkillDefinition{},
+	}
+	require.NoError(t, provider.RegisterAgent(ctx, node))
+
+	mockClient.setStatusResponse(nodeID, "running")
+	hm.RegisterAgent(nodeID, "http://localhost:9998")
+	presenceManager.Touch(nodeID, time.Now())
+
+	// Start all services
+	go hm.Start()
+	statusManager.Start()
+	presenceManager.Start()
+
+	// Let agent stabilize as active
+	time.Sleep(300 * time.Millisecond)
+
+	snapshot, err := statusManager.GetAgentStatusSnapshot(ctx, nodeID, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.AgentStateActive, snapshot.State)
+
+	// --- Agent goes down: no more heartbeats, health checks fail ---
+	mockClient.setStatusError(nodeID, errors.New("connection refused"))
+
+	// Wait for consecutive failures to trigger inactive marking
+	// 3 failures at 100ms interval = ~300ms + some processing time
+	time.Sleep(800 * time.Millisecond)
+
+	// Agent should now be inactive
+	finalSnapshot, err := statusManager.GetAgentStatusSnapshot(ctx, nodeID, nil)
+	require.NoError(t, err)
+	assert.Equal(t, types.AgentStateInactive, finalSnapshot.State,
+		"Agent should be inactive when both heartbeats and health checks have stopped")
+}
+
+// TestIntegration_RecoveryAfterGenuineOutage verifies the full lifecycle:
+// healthy -> outage (goes inactive) -> comes back (sends heartbeat) -> recovers to active.
+func TestIntegration_RecoveryAfterGenuineOutage(t *testing.T) {
+	provider, ctx := setupTestStorage(t)
+
+	mockClient := newMockAgentClient()
+
+	statusConfig := StatusManagerConfig{
+		ReconcileInterval:       200 * time.Millisecond,
+		StatusCacheTTL:          50 * time.Millisecond,
+		HeartbeatStaleThreshold: 1 * time.Second,
+		MaxTransitionTime:       500 * time.Millisecond,
+	}
+	statusManager := NewStatusManager(provider, statusConfig, nil, mockClient)
+
+	presenceConfig := PresenceManagerConfig{
+		HeartbeatTTL:  1 * time.Second,
+		SweepInterval: 200 * time.Millisecond,
+		HardEvictTTL:  3 * time.Second,
+	}
+	presenceManager := NewPresenceManager(statusManager, presenceConfig)
+
+	hmConfig := HealthMonitorConfig{
+		CheckInterval:       100 * time.Millisecond,
+		CheckTimeout:        2 * time.Second,
+		ConsecutiveFailures: 3,
+		RecoveryDebounce:    200 * time.Millisecond,
+	}
+	hm := NewHealthMonitor(provider, hmConfig, nil, mockClient, statusManager, presenceManager)
+	presenceManager.SetExpireCallback(hm.UnregisterAgent)
+
+	t.Cleanup(func() {
+		hm.Stop()
+		presenceManager.Stop()
+		statusManager.Stop()
+		_ = provider.Close(ctx)
+	})
+
+	// Register healthy agent
+	nodeID := "integration-agent-recovery"
+	node := &types.AgentNode{
+		ID:              nodeID,
+		TeamID:          "team",
+		BaseURL:         "http://localhost:9997",
+		Version:         "1.0.0",
+		HealthStatus:    types.HealthStatusActive,
+		LifecycleStatus: types.AgentStatusReady,
+		LastHeartbeat:   time.Now(),
+		Reasoners:       []types.ReasonerDefinition{},
+		Skills:          []types.SkillDefinition{},
+	}
+	require.NoError(t, provider.RegisterAgent(ctx, node))
+
+	mockClient.setStatusResponse(nodeID, "running")
+	hm.RegisterAgent(nodeID, "http://localhost:9997")
+	presenceManager.Touch(nodeID, time.Now())
+
+	// Start all services
+	go hm.Start()
+	statusManager.Start()
+	presenceManager.Start()
+
+	// Phase 1: Agent is healthy
+	time.Sleep(300 * time.Millisecond)
+	snapshot, err := statusManager.GetAgentStatusSnapshot(ctx, nodeID, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.AgentStateActive, snapshot.State, "Phase 1: should be active")
+
+	// Phase 2: Agent goes down (genuine outage)
+	mockClient.setStatusError(nodeID, errors.New("connection refused"))
+	time.Sleep(800 * time.Millisecond)
+
+	snapshot, err = statusManager.GetAgentStatusSnapshot(ctx, nodeID, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.AgentStateInactive, snapshot.State, "Phase 2: should be inactive after outage")
+
+	// Phase 3: Agent comes back — health checks pass and heartbeat sent
+	mockClient.mu.Lock()
+	delete(mockClient.statusErrors, nodeID)
+	mockClient.mu.Unlock()
+	mockClient.setStatusResponse(nodeID, "running")
+
+	// Re-register with health monitor (agent would re-register on reconnect)
+	hm.RegisterAgent(nodeID, "http://localhost:9997")
+	presenceManager.Touch(nodeID, time.Now())
+
+	// Send a heartbeat to signal recovery
+	readyStatus := types.AgentStatusReady
+	err = statusManager.UpdateFromHeartbeat(ctx, nodeID, &readyStatus, nil)
+	require.NoError(t, err)
+
+	// Wait for health check cycle + debounce
+	time.Sleep(600 * time.Millisecond)
+
+	snapshot, err = statusManager.GetAgentStatusSnapshot(ctx, nodeID, nil)
+	require.NoError(t, err)
+	assert.Equal(t, types.AgentStateActive, snapshot.State,
+		"Phase 3: agent should recover to active after coming back")
 }

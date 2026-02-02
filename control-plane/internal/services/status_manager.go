@@ -15,9 +15,10 @@ import (
 
 // StatusManagerConfig holds configuration for the status manager
 type StatusManagerConfig struct {
-	ReconcileInterval time.Duration // How often to reconcile status
-	StatusCacheTTL    time.Duration // How long to cache status
-	MaxTransitionTime time.Duration // Max time for state transitions
+	ReconcileInterval       time.Duration // How often to reconcile status
+	StatusCacheTTL          time.Duration // How long to cache status
+	MaxTransitionTime       time.Duration // Max time for state transitions
+	HeartbeatStaleThreshold time.Duration // How old a heartbeat must be before marking inactive (default 60s)
 }
 
 // StatusManager provides a single source of truth for agent status
@@ -90,6 +91,9 @@ func NewStatusManager(storage storage.StorageProvider, config StatusManagerConfi
 	}
 	if config.MaxTransitionTime == 0 {
 		config.MaxTransitionTime = 2 * time.Minute
+	}
+	if config.HeartbeatStaleThreshold == 0 {
+		config.HeartbeatStaleThreshold = 60 * time.Second
 	}
 
 	return &StatusManager{
@@ -384,23 +388,12 @@ func (sm *StatusManager) UpdateFromHeartbeat(ctx context.Context, nodeID string,
 		currentStatus = types.NewAgentStatus(types.AgentStateStarting, types.StatusSourceHeartbeat)
 	}
 
-	// INTELLIGENT HEARTBEAT PROCESSING:
-	// If we recently performed a live health check that determined the agent is offline,
-	// don't override that with heartbeat data (which could be stale/delayed)
-	if currentStatus.Source == types.StatusSourceHealthCheck &&
-		currentStatus.State == types.AgentStateInactive &&
-		currentStatus.LastVerified != nil &&
-		time.Since(*currentStatus.LastVerified) < 10*time.Second {
-
-		logger.Logger.Debug().
-			Str("node_id", nodeID).
-			Str("current_source", string(currentStatus.Source)).
-			Str("current_state", string(currentStatus.State)).
-			Msg("🚫 Ignoring heartbeat update - recent health check determined agent is offline")
-
-		// Don't process this heartbeat as it conflicts with recent live health check
-		return nil
-	}
+	// HEARTBEAT PRIORITY: Heartbeats are the primary signal of agent liveness.
+	// If an agent is sending heartbeats, it is alive regardless of what HTTP
+	// health checks report. Health checks may fail due to transient network
+	// issues, but a heartbeat is direct proof of life from the agent itself.
+	// The health monitor requires consecutive failures before marking inactive,
+	// so there is no need to suppress heartbeats here.
 
 	// Update from heartbeat
 	currentStatus.UpdateFromHeartbeat(lifecycleStatus, mcpStatus)
@@ -657,9 +650,9 @@ func (sm *StatusManager) performReconciliation() {
 
 // needsReconciliation checks if an agent needs status reconciliation
 func (sm *StatusManager) needsReconciliation(agent *types.AgentNode) bool {
-	// Check if last heartbeat is too old
+	// Check if last heartbeat is too old (uses configurable threshold, default 60s)
 	timeSinceHeartbeat := time.Since(agent.LastHeartbeat)
-	if timeSinceHeartbeat > 30*time.Second && agent.HealthStatus == types.HealthStatusActive {
+	if timeSinceHeartbeat > sm.config.HeartbeatStaleThreshold && agent.HealthStatus == types.HealthStatusActive {
 		return true
 	}
 
@@ -679,7 +672,7 @@ func (sm *StatusManager) reconcileAgentStatus(ctx context.Context, agent *types.
 	var newHealthStatus types.HealthStatus
 	var newLifecycleStatus types.AgentLifecycleStatus
 
-	if timeSinceHeartbeat > 30*time.Second {
+	if timeSinceHeartbeat > sm.config.HeartbeatStaleThreshold {
 		newHealthStatus = types.HealthStatusInactive
 		newLifecycleStatus = types.AgentStatusOffline
 	} else {

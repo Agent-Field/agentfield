@@ -116,9 +116,10 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 
 	// Initialize StatusManager for unified status management
 	statusManagerConfig := services.StatusManagerConfig{
-		ReconcileInterval: 30 * time.Second,
-		StatusCacheTTL:    5 * time.Minute,
-		MaxTransitionTime: 2 * time.Minute,
+		ReconcileInterval:       30 * time.Second,
+		StatusCacheTTL:          5 * time.Minute,
+		MaxTransitionTime:       2 * time.Minute,
+		HeartbeatStaleThreshold: cfg.AgentField.NodeHealth.HeartbeatStaleThreshold,
 	}
 
 	// Create UIService first (without StatusManager)
@@ -140,8 +141,13 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 
 	executionsUIService := services.NewExecutionsUIService(storageProvider) // Initialize ExecutionsUIService
 
-	// Initialize health monitor with StatusManager integration
-	healthMonitorConfig := services.HealthMonitorConfig{}
+	// Initialize health monitor with configurable settings
+	healthMonitorConfig := services.HealthMonitorConfig{
+		CheckInterval:       cfg.AgentField.NodeHealth.CheckInterval,
+		CheckTimeout:        cfg.AgentField.NodeHealth.CheckTimeout,
+		ConsecutiveFailures: cfg.AgentField.NodeHealth.ConsecutiveFailures,
+		RecoveryDebounce:    cfg.AgentField.NodeHealth.RecoveryDebounce,
+	}
 	healthMonitor := services.NewHealthMonitor(storageProvider, healthMonitorConfig, uiService, agentClient, statusManager, presenceManager)
 	presenceManager.SetExpireCallback(healthMonitor.UnregisterAgent)
 

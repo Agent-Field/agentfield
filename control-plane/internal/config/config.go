@@ -4,6 +4,7 @@ import (
 	"fmt"           // Added for fmt.Errorf
 	"os"            // Added for os.Stat, os.ReadFile
 	"path/filepath" // Added for filepath.Join
+	"strconv"
 	"time"
 
 	"gopkg.in/yaml.v3" // Added for yaml.Unmarshal
@@ -32,8 +33,18 @@ type UIConfig struct {
 // AgentFieldConfig holds the core AgentField server configuration.
 type AgentFieldConfig struct {
 	Port             int                    `yaml:"port"`
+	NodeHealth       NodeHealthConfig       `yaml:"node_health" mapstructure:"node_health"`
 	ExecutionCleanup ExecutionCleanupConfig `yaml:"execution_cleanup" mapstructure:"execution_cleanup"`
 	ExecutionQueue   ExecutionQueueConfig   `yaml:"execution_queue" mapstructure:"execution_queue"`
+}
+
+// NodeHealthConfig holds configuration for agent node health monitoring.
+type NodeHealthConfig struct {
+	CheckInterval          time.Duration `yaml:"check_interval" mapstructure:"check_interval"`                     // How often to HTTP health check nodes (default: 10s)
+	CheckTimeout           time.Duration `yaml:"check_timeout" mapstructure:"check_timeout"`                       // Timeout per HTTP health check (default: 5s)
+	ConsecutiveFailures    int           `yaml:"consecutive_failures" mapstructure:"consecutive_failures"`          // Failures before marking inactive (default: 3)
+	RecoveryDebounce       time.Duration `yaml:"recovery_debounce" mapstructure:"recovery_debounce"`               // Wait before allowing inactive->active (default: 5s)
+	HeartbeatStaleThreshold time.Duration `yaml:"heartbeat_stale_threshold" mapstructure:"heartbeat_stale_threshold"` // Heartbeat age before marking stale (default: 60s)
 }
 
 // ExecutionCleanupConfig holds configuration for execution cleanup and garbage collection
@@ -169,5 +180,32 @@ func applyEnvOverrides(cfg *Config) {
 	// Also support the nested path format for consistency
 	if apiKey := os.Getenv("AGENTFIELD_API_AUTH_API_KEY"); apiKey != "" {
 		cfg.API.Auth.APIKey = apiKey
+	}
+
+	// Node health monitoring overrides
+	if val := os.Getenv("AGENTFIELD_HEALTH_CHECK_INTERVAL"); val != "" {
+		if d, err := time.ParseDuration(val); err == nil {
+			cfg.AgentField.NodeHealth.CheckInterval = d
+		}
+	}
+	if val := os.Getenv("AGENTFIELD_HEALTH_CHECK_TIMEOUT"); val != "" {
+		if d, err := time.ParseDuration(val); err == nil {
+			cfg.AgentField.NodeHealth.CheckTimeout = d
+		}
+	}
+	if val := os.Getenv("AGENTFIELD_HEALTH_CONSECUTIVE_FAILURES"); val != "" {
+		if i, err := strconv.Atoi(val); err == nil {
+			cfg.AgentField.NodeHealth.ConsecutiveFailures = i
+		}
+	}
+	if val := os.Getenv("AGENTFIELD_HEALTH_RECOVERY_DEBOUNCE"); val != "" {
+		if d, err := time.ParseDuration(val); err == nil {
+			cfg.AgentField.NodeHealth.RecoveryDebounce = d
+		}
+	}
+	if val := os.Getenv("AGENTFIELD_HEARTBEAT_STALE_THRESHOLD"); val != "" {
+		if d, err := time.ParseDuration(val); err == nil {
+			cfg.AgentField.NodeHealth.HeartbeatStaleThreshold = d
+		}
 	}
 }
