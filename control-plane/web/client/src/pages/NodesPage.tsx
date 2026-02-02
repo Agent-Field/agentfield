@@ -459,16 +459,22 @@ export function NodesPage() {
   // Periodic light refresh to keep timestamps (last_heartbeat) fresh
   // SSE events don't carry heartbeat timestamps, so we poll every 30s
   useEffect(() => {
+    let active = true;
     const interval = setInterval(async () => {
       try {
         const data = await getNodesSummary();
-        setNodes(data.nodes);
-        setLastRefresh(new Date());
+        if (active) {
+          setNodes(data.nodes);
+          setLastRefresh(new Date());
+        }
       } catch {
         // Silent fail on background refresh — don't disrupt the UI
       }
     }, 30000);
-    return () => clearInterval(interval);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
   }, []);
 
   // Handle bulk status refresh

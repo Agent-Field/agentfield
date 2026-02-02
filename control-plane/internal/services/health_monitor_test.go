@@ -305,11 +305,7 @@ func TestHealthMonitor_CheckAgentHealth_Healthy(t *testing.T) {
 	mockClient.setStatusResponse(nodeID, "running")
 
 	// Perform health check
-	hm.agentsMutex.RLock()
-	activeAgent := hm.activeAgents[nodeID]
-	hm.agentsMutex.RUnlock()
-
-	hm.checkAgentHealth(activeAgent)
+	hm.checkAgentHealth(nodeID)
 
 	// Wait a bit for async updates
 	time.Sleep(100 * time.Millisecond)
@@ -345,12 +341,8 @@ func TestHealthMonitor_CheckAgentHealth_Inactive(t *testing.T) {
 	mockClient.setStatusError(nodeID, errors.New("connection refused"))
 
 	// Consecutive failures required (default: 3) before marking inactive
-	hm.agentsMutex.RLock()
-	activeAgent := hm.activeAgents[nodeID]
-	hm.agentsMutex.RUnlock()
-
 	for i := 0; i < hm.config.ConsecutiveFailures; i++ {
-		hm.checkAgentHealth(activeAgent)
+		hm.checkAgentHealth(nodeID)
 	}
 
 	// Wait a bit for async updates
@@ -386,12 +378,9 @@ func TestHealthMonitor_CheckAgentHealth_NotRunning(t *testing.T) {
 	mockClient.setStatusResponse(nodeID, "stopped")
 
 	// Consecutive failures required before marking inactive
-	hm.agentsMutex.RLock()
-	activeAgent := hm.activeAgents[nodeID]
-	hm.agentsMutex.RUnlock()
 
 	for i := 0; i < hm.config.ConsecutiveFailures; i++ {
-		hm.checkAgentHealth(activeAgent)
+		hm.checkAgentHealth(nodeID)
 	}
 
 	// Wait a bit for async updates
@@ -435,13 +424,10 @@ func TestHealthMonitor_CheckAgentHealth_StatusTransitions(t *testing.T) {
 
 	hm.RegisterAgent(nodeID, baseURL)
 
-	hm.agentsMutex.RLock()
-	activeAgent := hm.activeAgents[nodeID]
-	hm.agentsMutex.RUnlock()
 
 	// Test transition: Unknown -> Active
 	mockClient.setStatusResponse(nodeID, "running")
-	hm.checkAgentHealth(activeAgent)
+	hm.checkAgentHealth(nodeID)
 	time.Sleep(100 * time.Millisecond)
 
 	hm.agentsMutex.RLock()
@@ -451,7 +437,7 @@ func TestHealthMonitor_CheckAgentHealth_StatusTransitions(t *testing.T) {
 	// Test transition: Active -> Inactive (requires consecutive failures)
 	mockClient.setStatusError(nodeID, errors.New("connection refused"))
 	for i := 0; i < config.ConsecutiveFailures; i++ {
-		hm.checkAgentHealth(activeAgent)
+		hm.checkAgentHealth(nodeID)
 	}
 	time.Sleep(100 * time.Millisecond)
 
@@ -466,7 +452,7 @@ func TestHealthMonitor_CheckAgentHealth_StatusTransitions(t *testing.T) {
 	mockClient.mu.Lock()
 	delete(mockClient.statusErrors, nodeID)
 	mockClient.mu.Unlock()
-	hm.checkAgentHealth(activeAgent)
+	hm.checkAgentHealth(nodeID)
 	time.Sleep(100 * time.Millisecond)
 
 	hm.agentsMutex.RLock()
@@ -478,18 +464,11 @@ func TestHealthMonitor_CheckAgentHealth_UnregisteredAgent(t *testing.T) {
 	hm, _, mockClient, _, _ := setupHealthMonitorTest(t)
 
 	nodeID := "test-agent-unregistered"
-	baseURL := "http://localhost:8001"
-
-	// Create agent but don't register it
-	activeAgent := &ActiveAgent{
-		NodeID:  nodeID,
-		BaseURL: baseURL,
-	}
 
 	mockClient.setStatusResponse(nodeID, "running")
 
-	// Should skip check for unregistered agent
-	hm.checkAgentHealth(activeAgent)
+	// Should skip check for unregistered agent (not in active registry)
+	hm.checkAgentHealth(nodeID)
 
 	// Verify no status calls were made (agent was not in registry)
 	assert.Equal(t, 0, mockClient.getStatusCallCountFor(nodeID))
@@ -528,11 +507,8 @@ func TestHealthMonitor_MCP_CheckMCPHealth(t *testing.T) {
 	mockClient.setStatusResponse(nodeID, "running")
 
 	// Perform health check (should trigger MCP check for active agents)
-	hm.agentsMutex.RLock()
-	activeAgent := hm.activeAgents[nodeID]
-	hm.agentsMutex.RUnlock()
 
-	hm.checkAgentHealth(activeAgent)
+	hm.checkAgentHealth(nodeID)
 	time.Sleep(200 * time.Millisecond)
 
 	// Verify MCP health was checked
@@ -580,11 +556,8 @@ func TestHealthMonitor_MCP_HealthChange(t *testing.T) {
 	}
 	mockClient.setMCPHealthResponse(nodeID, mcpResponse1)
 
-	hm.agentsMutex.RLock()
-	activeAgent := hm.activeAgents[nodeID]
-	hm.agentsMutex.RUnlock()
 
-	hm.checkAgentHealth(activeAgent)
+	hm.checkAgentHealth(nodeID)
 	time.Sleep(200 * time.Millisecond)
 
 	// Change MCP health
@@ -599,7 +572,7 @@ func TestHealthMonitor_MCP_HealthChange(t *testing.T) {
 	mockClient.setMCPHealthResponse(nodeID, mcpResponse2)
 
 	// Second health check
-	hm.checkAgentHealth(activeAgent)
+	hm.checkAgentHealth(nodeID)
 	time.Sleep(200 * time.Millisecond)
 
 	// Verify MCP health was updated
@@ -642,12 +615,9 @@ func TestHealthMonitor_MCP_NoChange(t *testing.T) {
 	}
 	mockClient.setMCPHealthResponse(nodeID, mcpResponse)
 
-	hm.agentsMutex.RLock()
-	activeAgent := hm.activeAgents[nodeID]
-	hm.agentsMutex.RUnlock()
 
 	// First check
-	hm.checkAgentHealth(activeAgent)
+	hm.checkAgentHealth(nodeID)
 	time.Sleep(200 * time.Millisecond)
 
 	// Verify hasMCPHealthChanged returns false for same data
@@ -682,11 +652,8 @@ func TestHealthMonitor_MCP_InactiveAgent(t *testing.T) {
 	// Set agent as inactive
 	mockClient.setStatusError(nodeID, errors.New("connection refused"))
 
-	hm.agentsMutex.RLock()
-	activeAgent := hm.activeAgents[nodeID]
-	hm.agentsMutex.RUnlock()
 
-	hm.checkAgentHealth(activeAgent)
+	hm.checkAgentHealth(nodeID)
 	time.Sleep(200 * time.Millisecond)
 
 	// MCP health should NOT be checked for inactive agents
@@ -921,6 +888,9 @@ func TestHealthMonitor_RecoverFromDatabase_WithNodes(t *testing.T) {
 	assert.True(t, agent2Exists, "agent-2 should be registered")
 	assert.False(t, agent3Exists, "agent-3 should not be registered (no BaseURL)")
 
+	// Wait for async health checks to complete (RecoverFromDatabase runs them in a goroutine)
+	time.Sleep(200 * time.Millisecond)
+
 	// Verify health checks were performed
 	assert.GreaterOrEqual(t, mockClient.getStatusCallCountFor("agent-1"), 1, "Should have checked agent-1 health")
 	assert.GreaterOrEqual(t, mockClient.getStatusCallCountFor("agent-2"), 1, "Should have checked agent-2 health")
@@ -960,7 +930,7 @@ func TestHealthMonitor_RecoverFromDatabase_MarksUnreachableNodesInactive(t *test
 
 	// Run enough checks to trigger consecutive failure threshold
 	for i := 0; i < hm.config.ConsecutiveFailures; i++ {
-		hm.checkAgentHealth(activeAgent)
+		hm.checkAgentHealth("unreachable-agent")
 	}
 	time.Sleep(100 * time.Millisecond)
 
@@ -992,6 +962,9 @@ func TestHealthMonitor_RecoverFromDatabase_MarksReachableNodesActive(t *testing.
 	err = hm.RecoverFromDatabase(ctx)
 	require.NoError(t, err)
 
+	// Wait for async health checks to complete (RecoverFromDatabase runs them in a goroutine)
+	time.Sleep(200 * time.Millisecond)
+
 	// Verify agent was registered and marked active
 	hm.agentsMutex.RLock()
 	activeAgent, exists := hm.activeAgents["reachable-agent"]
@@ -1018,10 +991,7 @@ func TestHealthMonitor_ConsecutiveFailures_SingleFailureKeepsActive(t *testing.T
 
 	// First make agent active
 	mockClient.setStatusResponse(nodeID, "running")
-	hm.agentsMutex.RLock()
-	activeAgent := hm.activeAgents[nodeID]
-	hm.agentsMutex.RUnlock()
-	hm.checkAgentHealth(activeAgent)
+	hm.checkAgentHealth(nodeID)
 	time.Sleep(100 * time.Millisecond)
 
 	hm.agentsMutex.RLock()
@@ -1030,7 +1000,7 @@ func TestHealthMonitor_ConsecutiveFailures_SingleFailureKeepsActive(t *testing.T
 
 	// Now simulate one failure — should NOT mark inactive
 	mockClient.setStatusError(nodeID, errors.New("connection refused"))
-	hm.checkAgentHealth(activeAgent)
+	hm.checkAgentHealth(nodeID)
 	time.Sleep(100 * time.Millisecond)
 
 	hm.agentsMutex.RLock()
@@ -1055,17 +1025,14 @@ func TestHealthMonitor_ConsecutiveFailures_ThreeFailuresMarksInactive(t *testing
 
 	// Make agent active first
 	mockClient.setStatusResponse(nodeID, "running")
-	hm.agentsMutex.RLock()
-	activeAgent := hm.activeAgents[nodeID]
-	hm.agentsMutex.RUnlock()
-	hm.checkAgentHealth(activeAgent)
+	hm.checkAgentHealth(nodeID)
 	time.Sleep(100 * time.Millisecond)
 
 	// Now fail 3 times (default ConsecutiveFailures threshold)
 	mockClient.setStatusError(nodeID, errors.New("connection refused"))
 
 	for i := 0; i < hm.config.ConsecutiveFailures; i++ {
-		hm.checkAgentHealth(activeAgent)
+		hm.checkAgentHealth(nodeID)
 	}
 	time.Sleep(100 * time.Millisecond)
 
@@ -1090,16 +1057,13 @@ func TestHealthMonitor_ConsecutiveFailures_SuccessResetsCounter(t *testing.T) {
 
 	// Make active first
 	mockClient.setStatusResponse(nodeID, "running")
-	hm.agentsMutex.RLock()
-	activeAgent := hm.activeAgents[nodeID]
-	hm.agentsMutex.RUnlock()
-	hm.checkAgentHealth(activeAgent)
+	hm.checkAgentHealth(nodeID)
 	time.Sleep(100 * time.Millisecond)
 
 	// Fail twice (2 out of 3)
 	mockClient.setStatusError(nodeID, errors.New("connection refused"))
-	hm.checkAgentHealth(activeAgent)
-	hm.checkAgentHealth(activeAgent)
+	hm.checkAgentHealth(nodeID)
+	hm.checkAgentHealth(nodeID)
 
 	hm.agentsMutex.RLock()
 	assert.Equal(t, 2, hm.activeAgents[nodeID].ConsecutiveFailures, "Should have 2 failures")
@@ -1110,7 +1074,7 @@ func TestHealthMonitor_ConsecutiveFailures_SuccessResetsCounter(t *testing.T) {
 	delete(mockClient.statusErrors, nodeID)
 	mockClient.mu.Unlock()
 	mockClient.setStatusResponse(nodeID, "running")
-	hm.checkAgentHealth(activeAgent)
+	hm.checkAgentHealth(nodeID)
 
 	hm.agentsMutex.RLock()
 	assert.Equal(t, 0, hm.activeAgents[nodeID].ConsecutiveFailures, "Success should reset failure counter")
@@ -1119,8 +1083,8 @@ func TestHealthMonitor_ConsecutiveFailures_SuccessResetsCounter(t *testing.T) {
 
 	// Fail twice more — should still NOT be inactive (counter was reset)
 	mockClient.setStatusError(nodeID, errors.New("connection refused"))
-	hm.checkAgentHealth(activeAgent)
-	hm.checkAgentHealth(activeAgent)
+	hm.checkAgentHealth(nodeID)
+	hm.checkAgentHealth(nodeID)
 
 	hm.agentsMutex.RLock()
 	assert.NotEqual(t, types.HealthStatusInactive, hm.activeAgents[nodeID].LastStatus,
@@ -1159,15 +1123,12 @@ func TestHealthMonitor_RecoveryDebounce_BlocksTooFastRecovery(t *testing.T) {
 
 	// Make active, then inactive
 	mockClient.setStatusResponse(nodeID, "running")
-	hm.agentsMutex.RLock()
-	activeAgent := hm.activeAgents[nodeID]
-	hm.agentsMutex.RUnlock()
-	hm.checkAgentHealth(activeAgent)
+	hm.checkAgentHealth(nodeID)
 	time.Sleep(50 * time.Millisecond)
 
 	mockClient.setStatusError(nodeID, errors.New("connection refused"))
 	for i := 0; i < config.ConsecutiveFailures; i++ {
-		hm.checkAgentHealth(activeAgent)
+		hm.checkAgentHealth(nodeID)
 	}
 	time.Sleep(50 * time.Millisecond)
 
@@ -1180,7 +1141,7 @@ func TestHealthMonitor_RecoveryDebounce_BlocksTooFastRecovery(t *testing.T) {
 	delete(mockClient.statusErrors, nodeID)
 	mockClient.mu.Unlock()
 	mockClient.setStatusResponse(nodeID, "running")
-	hm.checkAgentHealth(activeAgent)
+	hm.checkAgentHealth(nodeID)
 	time.Sleep(50 * time.Millisecond)
 
 	hm.agentsMutex.RLock()
@@ -1190,7 +1151,7 @@ func TestHealthMonitor_RecoveryDebounce_BlocksTooFastRecovery(t *testing.T) {
 
 	// Wait past debounce, then try again
 	time.Sleep(600 * time.Millisecond)
-	hm.checkAgentHealth(activeAgent)
+	hm.checkAgentHealth(nodeID)
 	time.Sleep(50 * time.Millisecond)
 
 	hm.agentsMutex.RLock()
@@ -1230,16 +1191,13 @@ func TestHealthMonitor_Config_ConsecutiveFailuresConfigurable(t *testing.T) {
 
 	// Make active first
 	mockClient.setStatusResponse(nodeID, "running")
-	hm.agentsMutex.RLock()
-	activeAgent := hm.activeAgents[nodeID]
-	hm.agentsMutex.RUnlock()
-	hm.checkAgentHealth(activeAgent)
+	hm.checkAgentHealth(nodeID)
 	time.Sleep(50 * time.Millisecond)
 
 	// Fail 4 times — should NOT be inactive (threshold is 5)
 	mockClient.setStatusError(nodeID, errors.New("connection refused"))
 	for i := 0; i < 4; i++ {
-		hm.checkAgentHealth(activeAgent)
+		hm.checkAgentHealth(nodeID)
 	}
 
 	hm.agentsMutex.RLock()
@@ -1249,7 +1207,7 @@ func TestHealthMonitor_Config_ConsecutiveFailuresConfigurable(t *testing.T) {
 	hm.agentsMutex.RUnlock()
 
 	// 5th failure — NOW it should be inactive
-	hm.checkAgentHealth(activeAgent)
+	hm.checkAgentHealth(nodeID)
 	time.Sleep(50 * time.Millisecond)
 
 	hm.agentsMutex.RLock()
@@ -1611,4 +1569,56 @@ func TestIntegration_RecoveryAfterGenuineOutage(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, types.AgentStateActive, snapshot.State,
 		"Phase 3: agent should recover to active after coming back")
+}
+
+// TestHealthMonitor_Config_ConsecutiveFailuresOne verifies that setting
+// ConsecutiveFailures=1 restores the old "single failure = instant inactive"
+// behavior for operators who want aggressive failure detection.
+func TestHealthMonitor_Config_ConsecutiveFailuresOne(t *testing.T) {
+	provider, ctx := setupTestStorage(t)
+	statusManager := NewStatusManager(provider, StatusManagerConfig{ReconcileInterval: 30 * time.Second}, nil, nil)
+	presenceConfig := PresenceManagerConfig{HeartbeatTTL: 5 * time.Second, SweepInterval: 1 * time.Second, HardEvictTTL: 10 * time.Second}
+	presenceManager := NewPresenceManager(statusManager, presenceConfig)
+	mockClient := newMockAgentClient()
+
+	config := HealthMonitorConfig{
+		CheckInterval:       100 * time.Millisecond,
+		ConsecutiveFailures: 1, // Single failure = instant inactive
+		RecoveryDebounce:    100 * time.Millisecond,
+	}
+	hm := NewHealthMonitor(provider, config, nil, mockClient, statusManager, presenceManager)
+
+	t.Cleanup(func() {
+		hm.Stop()
+		presenceManager.Stop()
+		_ = provider.Close(ctx)
+	})
+
+	nodeID := "test-instant-fail"
+	baseURL := "http://localhost:8001"
+
+	agent := &types.AgentNode{ID: nodeID, BaseURL: baseURL}
+	err := provider.RegisterAgent(ctx, agent)
+	require.NoError(t, err)
+	hm.RegisterAgent(nodeID, baseURL)
+
+	// Make active first
+	mockClient.setStatusResponse(nodeID, "running")
+	hm.checkAgentHealth(nodeID)
+	time.Sleep(50 * time.Millisecond)
+
+	hm.agentsMutex.RLock()
+	require.Equal(t, types.HealthStatusActive, hm.activeAgents[nodeID].LastStatus)
+	hm.agentsMutex.RUnlock()
+
+	// Single failure should immediately mark inactive
+	mockClient.setStatusError(nodeID, errors.New("connection refused"))
+	hm.checkAgentHealth(nodeID)
+	time.Sleep(50 * time.Millisecond)
+
+	hm.agentsMutex.RLock()
+	assert.Equal(t, types.HealthStatusInactive, hm.activeAgents[nodeID].LastStatus,
+		"With ConsecutiveFailures=1, a single failure should mark agent inactive immediately")
+	assert.Equal(t, 1, hm.activeAgents[nodeID].ConsecutiveFailures)
+	hm.agentsMutex.RUnlock()
 }

@@ -14,6 +14,16 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
+// Health score constants for status updates.
+const (
+	// healthScoreActive is the score assigned when an HTTP health check passes.
+	// Below 100 to leave room for "excellent" states (e.g. agent + all MCP servers healthy).
+	healthScoreActive = 85
+
+	// healthScoreInactive is the score when an agent fails consecutive health checks.
+	healthScoreInactive = 0
+)
+
 // HealthMonitorConfig holds configuration for the health monitor service
 type HealthMonitorConfig struct {
 	CheckInterval       time.Duration // How often to check node health via HTTP
@@ -93,10 +103,11 @@ func (hm *HealthMonitor) RegisterAgent(nodeID, baseURL string) {
 	seenAt := time.Now()
 
 	hm.activeAgents[nodeID] = &ActiveAgent{
-		NodeID:      nodeID,
-		BaseURL:     baseURL,
-		LastStatus:  types.HealthStatusUnknown,
-		LastChecked: seenAt,
+		NodeID:         nodeID,
+		BaseURL:        baseURL,
+		LastStatus:     types.HealthStatusUnknown,
+		LastChecked:    seenAt,
+		LastTransition: seenAt, // Initialize so debounce checks have a valid baseline
 	}
 
 	if hm.presence != nil {
@@ -227,34 +238,36 @@ func (hm *HealthMonitor) Stop() {
 // checkActiveAgents performs HTTP health checks on all actively registered agents
 func (hm *HealthMonitor) checkActiveAgents() {
 	hm.agentsMutex.RLock()
-	agents := make([]*ActiveAgent, 0, len(hm.activeAgents))
-	for _, agent := range hm.activeAgents {
-		agents = append(agents, agent)
+	nodeIDs := make([]string, 0, len(hm.activeAgents))
+	for id := range hm.activeAgents {
+		nodeIDs = append(nodeIDs, id)
 	}
 	hm.agentsMutex.RUnlock()
 
-	if len(agents) == 0 {
+	if len(nodeIDs) == 0 {
 		logger.Logger.Debug().Msg("🏥 No active agents to monitor")
 		return
 	}
 
-	logger.Logger.Debug().Msgf("🏥 Checking health of %d active agents via HTTP", len(agents))
+	logger.Logger.Debug().Msgf("🏥 Checking health of %d active agents via HTTP", len(nodeIDs))
 
-	for _, agent := range agents {
-		hm.checkAgentHealth(agent)
+	for _, nodeID := range nodeIDs {
+		hm.checkAgentHealth(nodeID)
 	}
 }
 
-// checkAgentHealth performs HTTP health check for a single agent.
+// checkAgentHealth performs HTTP health check for a single agent identified by nodeID.
 // Uses consecutive failure tracking to prevent flapping from transient network issues.
-func (hm *HealthMonitor) checkAgentHealth(agent *ActiveAgent) {
+// Accepts nodeID rather than *ActiveAgent to avoid holding stale pointers across the
+// HTTP call boundary — the canonical state is always re-read from hm.activeAgents.
+func (hm *HealthMonitor) checkAgentHealth(nodeID string) {
 	// Early check: ensure agent is still in active registry before making HTTP call
 	hm.agentsMutex.RLock()
-	_, exists := hm.activeAgents[agent.NodeID]
+	_, exists := hm.activeAgents[nodeID]
 	hm.agentsMutex.RUnlock()
 
 	if !exists {
-		logger.Logger.Debug().Msgf("🏥 Skipping health check for %s - agent no longer in active registry", agent.NodeID)
+		logger.Logger.Debug().Msgf("🏥 Skipping health check for %s - agent no longer in active registry", nodeID)
 		return
 	}
 
@@ -262,23 +275,25 @@ func (hm *HealthMonitor) checkAgentHealth(agent *ActiveAgent) {
 	defer cancel()
 
 	// Perform HTTP health check
-	status, err := hm.agentClient.GetAgentStatus(ctx, agent.NodeID)
+	status, err := hm.agentClient.GetAgentStatus(ctx, nodeID)
 
 	var checkPassed bool
 	if err != nil {
 		checkPassed = false
-		logger.Logger.Debug().Msgf("🏥 Agent %s HTTP check failed: %v", agent.NodeID, err)
+		logger.Logger.Debug().Msgf("🏥 Agent %s HTTP check failed: %v", nodeID, err)
 	} else if status.Status == "running" {
 		checkPassed = true
-		logger.Logger.Debug().Msgf("🏥 Agent %s HTTP check successful: %s", agent.NodeID, status.Status)
+		logger.Logger.Debug().Msgf("🏥 Agent %s HTTP check successful: %s", nodeID, status.Status)
 	} else {
 		checkPassed = false
-		logger.Logger.Debug().Msgf("🏥 Agent %s HTTP check shows not running: %s", agent.NodeID, status.Status)
+		logger.Logger.Debug().Msgf("🏥 Agent %s HTTP check shows not running: %s", nodeID, status.Status)
 	}
 
-	// Update agent state with consecutive failure tracking
+	// Update agent state with consecutive failure tracking.
+	// Re-fetch from the map since the agent may have been unregistered/re-registered
+	// during the HTTP call above.
 	hm.agentsMutex.Lock()
-	activeAgent, exists := hm.activeAgents[agent.NodeID]
+	activeAgent, exists := hm.activeAgents[nodeID]
 	if !exists {
 		hm.agentsMutex.Unlock()
 		return
@@ -292,38 +307,41 @@ func (hm *HealthMonitor) checkAgentHealth(agent *ActiveAgent) {
 		activeAgent.ConsecutiveFailures = 0
 
 		if previousFailures > 0 {
-			logger.Logger.Debug().Msgf("🏥 Agent %s check passed, reset failure counter from %d", agent.NodeID, previousFailures)
+			logger.Logger.Debug().Msgf("🏥 Agent %s check passed, reset failure counter from %d", nodeID, previousFailures)
 		}
 
 		if activeAgent.LastStatus == types.HealthStatusInactive {
 			// Recovery from inactive: apply debounce
 			if time.Since(activeAgent.LastTransition) < hm.config.RecoveryDebounce {
 				hm.agentsMutex.Unlock()
-				logger.Logger.Debug().Msgf("🏥 Agent %s recovery debounce active, waiting", agent.NodeID)
+				logger.Logger.Debug().Msgf("🏥 Agent %s recovery debounce active, waiting", nodeID)
 				return
 			}
 			activeAgent.LastStatus = types.HealthStatusActive
 			activeAgent.LastTransition = time.Now()
 			hm.agentsMutex.Unlock()
-			logger.Logger.Info().Msgf("✅ Agent %s recovered to active", agent.NodeID)
-			hm.markAgentActive(agent.NodeID)
+			logger.Logger.Info().Msgf("✅ Agent %s recovered to active", nodeID)
+			hm.markAgentActive(nodeID)
 			return
 		} else if activeAgent.LastStatus != types.HealthStatusActive {
 			// First time becoming active (e.g. from unknown)
 			activeAgent.LastStatus = types.HealthStatusActive
 			activeAgent.LastTransition = time.Now()
 			hm.agentsMutex.Unlock()
-			hm.markAgentActive(agent.NodeID)
+			hm.markAgentActive(nodeID)
 			return
 		}
-		// Already active, no change needed
+		// Already active, no status change needed — still refresh MCP health
 		hm.agentsMutex.Unlock()
+		hm.checkMCPHealthForNode(nodeID)
 	} else {
-		// FAILURE: Increment consecutive failure counter
-		activeAgent.ConsecutiveFailures++
+		// FAILURE: Increment consecutive failure counter (capped to prevent unbounded growth)
+		if activeAgent.ConsecutiveFailures < hm.config.ConsecutiveFailures+1 {
+			activeAgent.ConsecutiveFailures++
+		}
 
 		logger.Logger.Debug().Msgf("🏥 Agent %s failure %d/%d",
-			agent.NodeID, activeAgent.ConsecutiveFailures, hm.config.ConsecutiveFailures)
+			nodeID, activeAgent.ConsecutiveFailures, hm.config.ConsecutiveFailures)
 
 		// Only mark inactive after reaching the consecutive failure threshold
 		if activeAgent.ConsecutiveFailures >= hm.config.ConsecutiveFailures {
@@ -332,8 +350,8 @@ func (hm *HealthMonitor) checkAgentHealth(agent *ActiveAgent) {
 				activeAgent.LastTransition = time.Now()
 				failCount := activeAgent.ConsecutiveFailures
 				hm.agentsMutex.Unlock()
-				logger.Logger.Warn().Msgf("Agent %s marked inactive after %d consecutive failures", agent.NodeID, failCount)
-				hm.markAgentInactive(agent.NodeID, failCount)
+				logger.Logger.Warn().Msgf("Agent %s marked inactive after %d consecutive failures", nodeID, failCount)
+				hm.markAgentInactive(nodeID, failCount)
 				return
 			}
 		}
@@ -347,7 +365,7 @@ func (hm *HealthMonitor) markAgentActive(nodeID string) {
 
 	if hm.statusManager != nil {
 		activeState := types.AgentStateActive
-		healthScore := 85
+		healthScore := healthScoreActive
 		update := &types.AgentStatusUpdate{
 			State:       &activeState,
 			HealthScore: &healthScore,
@@ -399,7 +417,7 @@ func (hm *HealthMonitor) markAgentInactive(nodeID string, failCount int) {
 
 	if hm.statusManager != nil {
 		inactiveState := types.AgentStateInactive
-		healthScore := 0
+		healthScore := healthScoreInactive
 		update := &types.AgentStatusUpdate{
 			State:       &inactiveState,
 			HealthScore: &healthScore,

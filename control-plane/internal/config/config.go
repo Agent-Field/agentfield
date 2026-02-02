@@ -39,12 +39,13 @@ type AgentFieldConfig struct {
 }
 
 // NodeHealthConfig holds configuration for agent node health monitoring.
+// Zero values are treated as "use default" — set explicitly to override.
 type NodeHealthConfig struct {
-	CheckInterval          time.Duration `yaml:"check_interval" mapstructure:"check_interval"`                     // How often to HTTP health check nodes (default: 10s)
-	CheckTimeout           time.Duration `yaml:"check_timeout" mapstructure:"check_timeout"`                       // Timeout per HTTP health check (default: 5s)
-	ConsecutiveFailures    int           `yaml:"consecutive_failures" mapstructure:"consecutive_failures"`          // Failures before marking inactive (default: 3)
-	RecoveryDebounce       time.Duration `yaml:"recovery_debounce" mapstructure:"recovery_debounce"`               // Wait before allowing inactive->active (default: 5s)
-	HeartbeatStaleThreshold time.Duration `yaml:"heartbeat_stale_threshold" mapstructure:"heartbeat_stale_threshold"` // Heartbeat age before marking stale (default: 60s)
+	CheckInterval           time.Duration `yaml:"check_interval" mapstructure:"check_interval"`                       // How often to HTTP health check nodes (0 = default 10s)
+	CheckTimeout            time.Duration `yaml:"check_timeout" mapstructure:"check_timeout"`                         // Timeout per HTTP health check (0 = default 5s)
+	ConsecutiveFailures     int           `yaml:"consecutive_failures" mapstructure:"consecutive_failures"`            // Failures before marking inactive (0 = default 3; set 1 for instant)
+	RecoveryDebounce        time.Duration `yaml:"recovery_debounce" mapstructure:"recovery_debounce"`                 // Wait before allowing inactive->active (0 = default 5s)
+	HeartbeatStaleThreshold time.Duration `yaml:"heartbeat_stale_threshold" mapstructure:"heartbeat_stale_threshold"` // Heartbeat age before marking stale (0 = default 60s)
 }
 
 // ExecutionCleanupConfig holds configuration for execution cleanup and garbage collection
