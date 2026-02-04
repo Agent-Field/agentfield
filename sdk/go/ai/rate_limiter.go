@@ -67,6 +67,7 @@ type RateLimiter struct {
 }
 
 // NewRateLimiter creates a new RateLimiter with the given configuration.
+// It initializes the rate limiter with default values if not provided.
 // Configuration values are used as-is without applying defaults.
 func NewRateLimiter(config RateLimiterConfig) *RateLimiter {
 	return &RateLimiter{
