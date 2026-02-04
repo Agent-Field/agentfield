@@ -113,28 +113,71 @@ type Reasoner struct {
 
 // Config drives Agent behaviour.
 type Config struct {
-	NodeID         string
-	Version        string
-	TeamID         string
-	AgentFieldURL  string
-	ListenAddress  string
-	PublicURL      string
-	Token          string
+	// NodeID is the unique identifier for this agent node. Required.
+	// Must be a non-empty identifier suitable for registration (alphanumeric
+	// characters, hyphens are recommended). Example: "my-agent-1".
+	NodeID string
+
+	// Version identifies the agent implementation version. Required.
+	// Typically in semver or short string form (e.g. "v1.2.3" or "1.0.0").
+	Version string
+
+	// TeamID groups related agents together for organization. Optional.
+	// Default: "default" (if empty, New() sets it to "default").
+	TeamID string
+
+	// AgentFieldURL is the base URL of the AgentField control plane server.
+	// Optional for local-only or serverless usage, required when registering
+	// with a control plane or making cross-node calls. Default: empty.
+	// Format: a valid HTTP/HTTPS URL, e.g. "https://agentfield.example.com".
+	AgentFieldURL string
+
+	// ListenAddress is the network address the agent HTTP server binds to.
+	// Optional. Default: ":8001" (if empty, New() sets it to ":8001").
+	// Format: "host:port" or ":port" (e.g. ":8001" or "0.0.0.0:8001").
+	ListenAddress string
+
+	// PublicURL is the public-facing base URL reported to the control plane.
+	// Optional. Default: "http://localhost" + ListenAddress (if empty,
+	// New() constructs a default using ListenAddress).
+	// Format: a valid HTTP/HTTPS URL.
+	PublicURL string
+
+	// Token is the bearer token used for authenticating to the control plane.
+	// Optional. Default: empty (no auth). When set, the token is sent as
+	// an Authorization: Bearer <token> header on control-plane requests.
+	Token string
+
+	// DeploymentType describes how the agent runs (affects execution behavior).
+	// Optional. Default: "long_running". Common values: "long_running",
+	// "serverless". Use a descriptive string for custom modes.
 	DeploymentType string
 
+	// LeaseRefreshInterval controls how frequently the agent refreshes its
+	// lease/heartbeat with the control plane. Optional.
+	// Default: 2m (2 minutes). Valid: any positive time.Duration.
 	LeaseRefreshInterval time.Duration
-	DisableLeaseLoop     bool
-	Logger               *log.Logger
 
-	// AIConfig configures LLM/AI capabilities
-	// If nil, AI features will be disabled
+	// DisableLeaseLoop disables automatic periodic lease refreshes.
+	// Optional. Default: false.
+	DisableLeaseLoop bool
+
+	// Logger is used for agent logging output. Optional.
+	// Default: a standard logger writing to stdout with the "[agent] " prefix
+	// (if nil, New() creates a default logger).
+	Logger *log.Logger
+
+	// AIConfig configures LLM/AI capabilities for the agent.
+	// Optional. If nil, AI features are disabled. Provide a valid
+	// *ai.Config to enable AI-related APIs.
 	AIConfig *ai.Config
 
 	// CLIConfig controls CLI-specific behaviour and help text.
+	// Optional. If nil, CLI behavior uses sensible defaults.
 	CLIConfig *CLIConfig
 
 	// MemoryBackend allows plugging in a custom memory storage backend.
-	// If nil, an in-memory backend is used (data lost on restart).
+	// Optional. If nil, an in-memory backend is used (data lost on restart).
 	MemoryBackend MemoryBackend
 }
 
