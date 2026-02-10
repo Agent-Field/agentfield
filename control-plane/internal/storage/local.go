@@ -2906,6 +2906,7 @@ func (ls *LocalStorage) resolveWorkflowCleanupTargets(ctx context.Context, ident
 	}
 
 	addWorkflow(identifier)
+	addRun(identifier)
 
 	primaryWorkflowID := identifier
 
@@ -2930,6 +2931,48 @@ func (ls *LocalStorage) resolveWorkflowCleanupTargets(ctx context.Context, ident
 		}
 	}
 	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	executionRunRows, err := ls.db.QueryContext(ctx, `SELECT DISTINCT run_id FROM executions WHERE run_id = ?`, identifier)
+	if err != nil {
+		return nil, err
+	}
+	defer executionRunRows.Close()
+	for executionRunRows.Next() {
+		var runID sql.NullString
+		if err := executionRunRows.Scan(&runID); err != nil {
+			return nil, err
+		}
+		if runID.Valid {
+			addRun(runID.String)
+		}
+	}
+	if err := executionRunRows.Err(); err != nil {
+		return nil, err
+	}
+
+	workflowExecutionRunRows, err := ls.db.QueryContext(
+		ctx,
+		`SELECT DISTINCT run_id FROM workflow_executions WHERE run_id IS NOT NULL AND (run_id = ? OR workflow_id = ? OR root_workflow_id = ?)`,
+		identifier,
+		identifier,
+		identifier,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer workflowExecutionRunRows.Close()
+	for workflowExecutionRunRows.Next() {
+		var runID sql.NullString
+		if err := workflowExecutionRunRows.Scan(&runID); err != nil {
+			return nil, err
+		}
+		if runID.Valid {
+			addRun(runID.String)
+		}
+	}
+	if err := workflowExecutionRunRows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -2975,8 +3018,13 @@ func setToSlice(input map[string]struct{}) []string {
 }
 
 func (ls *LocalStorage) populateWorkflowCleanupCounts(ctx context.Context, targets *workflowCleanupTargets, result *types.WorkflowCleanupResult) {
+	primaryWorkflowID := targets.primaryWorkflowID
 	workflowIDs := targets.workflowIDs
 	runIDs := targets.runIDs
+	result.DeletedRecords["workflow_runs"] = ls.countWorkflowRuns(ctx, primaryWorkflowID, workflowIDs, runIDs)
+	result.DeletedRecords["executions"] = ls.countExecutions(ctx, runIDs)
+	result.DeletedRecords["execution_webhooks"] = ls.countExecutionWebhooks(ctx, runIDs)
+	result.DeletedRecords["execution_webhook_events"] = ls.countExecutionWebhookEvents(ctx, runIDs)
 	result.DeletedRecords["execution_vcs"] = ls.countExecutionVCs(ctx, workflowIDs)
 	result.DeletedRecords["workflow_vcs"] = ls.countWorkflowVCs(ctx, workflowIDs)
 	result.DeletedRecords["workflow_executions"] = ls.countWorkflowExecutions(ctx, workflowIDs, runIDs)
@@ -2989,6 +3037,7 @@ func (ls *LocalStorage) performWorkflowCleanup(ctx context.Context, tx DBTX, tar
 		return fmt.Errorf("context cancelled during workflow cleanup: %w", err)
 	}
 
+	primaryWorkflowID := targets.primaryWorkflowID
 	workflowIDs := targets.workflowIDs
 	runIDs := targets.runIDs
 
@@ -2998,8 +3047,20 @@ func (ls *LocalStorage) performWorkflowCleanup(ctx context.Context, tx DBTX, tar
 	if _, err := ls.deleteWorkflowVCs(ctx, tx, workflowIDs); err != nil {
 		return fmt.Errorf("failed to delete workflow VCs: %w", err)
 	}
+	if _, err := ls.deleteExecutionWebhookEvents(ctx, tx, runIDs); err != nil {
+		return fmt.Errorf("failed to delete execution webhook events: %w", err)
+	}
+	if _, err := ls.deleteExecutionWebhooks(ctx, tx, runIDs); err != nil {
+		return fmt.Errorf("failed to delete execution webhooks: %w", err)
+	}
+	if _, err := ls.deleteExecutions(ctx, tx, runIDs); err != nil {
+		return fmt.Errorf("failed to delete executions: %w", err)
+	}
 	if _, err := ls.deleteWorkflowExecutions(ctx, tx, workflowIDs, runIDs); err != nil {
 		return fmt.Errorf("failed to delete workflow executions: %w", err)
+	}
+	if _, err := ls.deleteWorkflowRuns(ctx, tx, primaryWorkflowID, workflowIDs, runIDs); err != nil {
+		return fmt.Errorf("failed to delete workflow runs: %w", err)
 	}
 	if _, err := ls.deleteWorkflows(ctx, tx, workflowIDs); err != nil {
 		return fmt.Errorf("failed to delete workflow definitions: %w", err)
@@ -3021,6 +3082,81 @@ func stringsToInterfaces(values []string) []interface{} {
 		args[i] = v
 	}
 	return args
+}
+
+func (ls *LocalStorage) countWorkflowRuns(ctx context.Context, primaryWorkflowID string, workflowIDs, runIDs []string) int {
+	conditions := []string{}
+	args := []interface{}{}
+
+	if primaryWorkflowID != "" {
+		conditions = append(conditions, "root_workflow_id = ?")
+		args = append(args, primaryWorkflowID)
+		conditions = append(conditions, "run_id = ?")
+		args = append(args, primaryWorkflowID)
+	}
+	if len(workflowIDs) > 0 {
+		placeholders := makePlaceholders(len(workflowIDs))
+		conditions = append(conditions, fmt.Sprintf("root_workflow_id IN (%s)", placeholders))
+		args = append(args, stringsToInterfaces(workflowIDs)...)
+	}
+	if len(runIDs) > 0 {
+		placeholders := makePlaceholders(len(runIDs))
+		conditions = append(conditions, fmt.Sprintf("run_id IN (%s)", placeholders))
+		args = append(args, stringsToInterfaces(runIDs)...)
+	}
+
+	if len(conditions) == 0 {
+		return 0
+	}
+
+	query := "SELECT COUNT(*) FROM workflow_runs WHERE " + strings.Join(conditions, " OR ")
+	var count int
+	if err := ls.db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+		return 0
+	}
+	return count
+}
+
+func (ls *LocalStorage) countExecutions(ctx context.Context, runIDs []string) int {
+	if len(runIDs) == 0 {
+		return 0
+	}
+	query := fmt.Sprintf(`SELECT COUNT(*) FROM executions WHERE run_id IN (%s)`, makePlaceholders(len(runIDs)))
+	var count int
+	if err := ls.db.QueryRowContext(ctx, query, stringsToInterfaces(runIDs)...).Scan(&count); err != nil {
+		return 0
+	}
+	return count
+}
+
+func (ls *LocalStorage) countExecutionWebhooks(ctx context.Context, runIDs []string) int {
+	if len(runIDs) == 0 {
+		return 0
+	}
+	query := fmt.Sprintf(
+		`SELECT COUNT(*) FROM execution_webhooks WHERE execution_id IN (SELECT execution_id FROM executions WHERE run_id IN (%s))`,
+		makePlaceholders(len(runIDs)),
+	)
+	var count int
+	if err := ls.db.QueryRowContext(ctx, query, stringsToInterfaces(runIDs)...).Scan(&count); err != nil {
+		return 0
+	}
+	return count
+}
+
+func (ls *LocalStorage) countExecutionWebhookEvents(ctx context.Context, runIDs []string) int {
+	if len(runIDs) == 0 {
+		return 0
+	}
+	query := fmt.Sprintf(
+		`SELECT COUNT(*) FROM execution_webhook_events WHERE execution_id IN (SELECT execution_id FROM executions WHERE run_id IN (%s))`,
+		makePlaceholders(len(runIDs)),
+	)
+	var count int
+	if err := ls.db.QueryRowContext(ctx, query, stringsToInterfaces(runIDs)...).Scan(&count); err != nil {
+		return 0
+	}
+	return count
 }
 
 func (ls *LocalStorage) countExecutionVCs(ctx context.Context, workflowIDs []string) int {
@@ -3147,6 +3283,60 @@ func (ls *LocalStorage) deleteWorkflowVCs(ctx context.Context, tx DBTX, workflow
 	return int(rows), nil
 }
 
+func (ls *LocalStorage) deleteExecutionWebhookEvents(ctx context.Context, tx DBTX, runIDs []string) (int, error) {
+	if len(runIDs) == 0 {
+		return 0, nil
+	}
+	query := fmt.Sprintf(
+		`DELETE FROM execution_webhook_events WHERE execution_id IN (SELECT execution_id FROM executions WHERE run_id IN (%s))`,
+		makePlaceholders(len(runIDs)),
+	)
+	result, err := tx.ExecContext(ctx, query, stringsToInterfaces(runIDs)...)
+	if err != nil {
+		return 0, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(rows), nil
+}
+
+func (ls *LocalStorage) deleteExecutionWebhooks(ctx context.Context, tx DBTX, runIDs []string) (int, error) {
+	if len(runIDs) == 0 {
+		return 0, nil
+	}
+	query := fmt.Sprintf(
+		`DELETE FROM execution_webhooks WHERE execution_id IN (SELECT execution_id FROM executions WHERE run_id IN (%s))`,
+		makePlaceholders(len(runIDs)),
+	)
+	result, err := tx.ExecContext(ctx, query, stringsToInterfaces(runIDs)...)
+	if err != nil {
+		return 0, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(rows), nil
+}
+
+func (ls *LocalStorage) deleteExecutions(ctx context.Context, tx DBTX, runIDs []string) (int, error) {
+	if len(runIDs) == 0 {
+		return 0, nil
+	}
+	query := fmt.Sprintf(`DELETE FROM executions WHERE run_id IN (%s)`, makePlaceholders(len(runIDs)))
+	result, err := tx.ExecContext(ctx, query, stringsToInterfaces(runIDs)...)
+	if err != nil {
+		return 0, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(rows), nil
+}
+
 func (ls *LocalStorage) deleteWorkflowExecutions(ctx context.Context, tx DBTX, workflowIDs, runIDs []string) (int, error) {
 	conditions := []string{}
 	args := []interface{}{}
@@ -3182,7 +3372,6 @@ func (ls *LocalStorage) deleteWorkflowExecutions(ctx context.Context, tx DBTX, w
 	return int(rows), nil
 }
 
-//nolint:unused // retained for future workflow cleanup optimizations
 func (ls *LocalStorage) deleteWorkflowRuns(ctx context.Context, tx DBTX, primaryWorkflowID string, workflowIDs, runIDs []string) (int, error) {
 	conditions := []string{}
 	args := []interface{}{}

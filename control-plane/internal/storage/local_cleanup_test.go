@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,53 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestLocalStorageCleanupWorkflowDeletesExecutionRecordsWithoutFTS(t *testing.T) {
+	ctx := context.Background()
+
+	db, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	schema := []string{
+		`CREATE TABLE executions (execution_id TEXT PRIMARY KEY, run_id TEXT NOT NULL)`,
+		`CREATE TABLE execution_webhooks (execution_id TEXT PRIMARY KEY)`,
+		`CREATE TABLE execution_webhook_events (id INTEGER PRIMARY KEY AUTOINCREMENT, execution_id TEXT NOT NULL)`,
+		`CREATE TABLE workflow_runs (run_id TEXT PRIMARY KEY, root_workflow_id TEXT)`,
+		`CREATE TABLE workflow_executions (execution_id TEXT PRIMARY KEY, workflow_id TEXT, root_workflow_id TEXT, run_id TEXT)`,
+		`CREATE TABLE workflow_execution_events (event_id INTEGER PRIMARY KEY AUTOINCREMENT, workflow_id TEXT, run_id TEXT)`,
+		`CREATE TABLE execution_vcs (vc_id TEXT PRIMARY KEY, workflow_id TEXT)`,
+		`CREATE TABLE workflow_vcs (workflow_vc_id TEXT PRIMARY KEY, workflow_id TEXT)`,
+		`CREATE TABLE workflows (workflow_id TEXT PRIMARY KEY)`,
+	}
+	for _, stmt := range schema {
+		_, err := db.Exec(stmt)
+		require.NoError(t, err)
+	}
+
+	const runID = "run_cleanup_exec_only"
+	_, err = db.Exec(`INSERT INTO executions (execution_id, run_id) VALUES (?, ?)`, "exec_cleanup_1", runID)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO execution_webhooks (execution_id) VALUES (?)`, "exec_cleanup_1")
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO execution_webhook_events (execution_id) VALUES (?)`, "exec_cleanup_1")
+	require.NoError(t, err)
+
+	ls := &LocalStorage{db: newSQLDatabase(db, "local")}
+
+	result, err := ls.CleanupWorkflow(ctx, runID, false)
+	require.NoError(t, err)
+	require.True(t, result.Success)
+	require.Greater(t, result.DeletedRecords["executions"], 0)
+	require.Greater(t, result.DeletedRecords["execution_webhooks"], 0)
+	require.Greater(t, result.DeletedRecords["execution_webhook_events"], 0)
+
+	var count int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM executions WHERE run_id = ?`, runID).Scan(&count))
+	require.Equal(t, 0, count)
+}
 
 func TestLocalStorageCleanupWorkflowByRunID(t *testing.T) {
 	ctx := context.Background()
@@ -88,6 +136,33 @@ func TestLocalStorageCleanupWorkflowByRunID(t *testing.T) {
 		t.Fatalf("store workflow execution: %v", err)
 	}
 
+	executionRecord := &types.Execution{
+		ExecutionID: "exec_record_cleanup_test",
+		RunID:       runID,
+		AgentNodeID: "agent_cleanup",
+		ReasonerID:  "reasoner.cleanup",
+		NodeID:      "node.cleanup",
+		Status:      string(types.ExecutionStatusRunning),
+		StartedAt:   now,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := ls.CreateExecutionRecord(ctx, executionRecord); err != nil {
+		t.Fatalf("store execution record: %v", err)
+	}
+
+	filterRunID := runID
+	summariesBeforeCleanup, _, err := ls.QueryRunSummaries(ctx, types.ExecutionFilter{
+		RunID: &filterRunID,
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("query run summaries before cleanup: %v", err)
+	}
+	if len(summariesBeforeCleanup) == 0 {
+		t.Fatalf("expected run summaries before cleanup")
+	}
+
 	step := &types.WorkflowStep{
 		StepID:    "step_cleanup",
 		RunID:     runID,
@@ -134,6 +209,9 @@ func TestLocalStorageCleanupWorkflowByRunID(t *testing.T) {
 	if result.DeletedRecords["workflow_executions"] == 0 {
 		t.Fatalf("expected workflow_executions to be deleted, got %#v", result.DeletedRecords)
 	}
+	if result.DeletedRecords["executions"] == 0 {
+		t.Fatalf("expected executions to be deleted, got %#v", result.DeletedRecords)
+	}
 
 	// Run should be gone
 	fetchedRun, err := ls.GetWorkflowRun(ctx, runID)
@@ -147,6 +225,25 @@ func TestLocalStorageCleanupWorkflowByRunID(t *testing.T) {
 	// Workflow definition should also be removed
 	if _, err := ls.GetWorkflow(ctx, workflowID); err == nil {
 		t.Fatalf("expected workflow definition to be deleted")
+	}
+
+	executionAfterCleanup, err := ls.GetExecutionRecord(ctx, executionRecord.ExecutionID)
+	if err != nil {
+		t.Fatalf("get execution record after cleanup: %v", err)
+	}
+	if executionAfterCleanup != nil {
+		t.Fatalf("expected execution record to be deleted")
+	}
+
+	summariesAfterCleanup, _, err := ls.QueryRunSummaries(ctx, types.ExecutionFilter{
+		RunID: &filterRunID,
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("query run summaries after cleanup: %v", err)
+	}
+	if len(summariesAfterCleanup) != 0 {
+		t.Fatalf("expected run summaries to be deleted, got %d", len(summariesAfterCleanup))
 	}
 }
 
