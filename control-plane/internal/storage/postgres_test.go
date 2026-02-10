@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -70,6 +72,89 @@ func TestPostgresStorage_DatabaseCreation(t *testing.T) {
 	// This test would require admin access to create databases
 	// Skipping for now but structure is ready
 	t.Skip("Requires admin database access")
+}
+
+func TestPostgresStorage_CleanupWorkflowRemovesExecutionBackedRunData(t *testing.T) {
+	postgresURL := os.Getenv("POSTGRES_TEST_URL")
+	if postgresURL == "" {
+		t.Skip("POSTGRES_TEST_URL not set, skipping postgres tests")
+	}
+
+	ctx := context.Background()
+	cfg := StorageConfig{
+		Mode: "postgres",
+		Postgres: PostgresStorageConfig{
+			DSN: postgresURL,
+		},
+	}
+
+	ls := NewPostgresStorage(PostgresStorageConfig{})
+	err := ls.Initialize(ctx, cfg)
+	if err != nil {
+		if strings.Contains(err.Error(), "connection refused") || strings.Contains(err.Error(), "does not exist") {
+			t.Skip("PostgreSQL not available, skipping test")
+		}
+		require.NoError(t, err)
+	}
+	defer ls.Close(ctx)
+
+	runID := fmt.Sprintf("run-pg-cleanup-%d", time.Now().UTC().UnixNano())
+	executionID := fmt.Sprintf("exec-pg-cleanup-%d", time.Now().UTC().UnixNano())
+
+	exec := &types.Execution{
+		ExecutionID: executionID,
+		RunID:       runID,
+		AgentNodeID: "agent-cleanup",
+		ReasonerID:  "reasoner-cleanup",
+		NodeID:      "node-cleanup",
+		Status:      string(types.ExecutionStatusSucceeded),
+		StartedAt:   time.Now().UTC(),
+	}
+	require.NoError(t, ls.CreateExecutionRecord(ctx, exec))
+
+	require.NoError(t, ls.RegisterExecutionWebhook(ctx, &types.ExecutionWebhook{
+		ExecutionID: executionID,
+		URL:         "https://example.com/webhook",
+	}))
+
+	require.NoError(t, ls.StoreExecutionWebhookEvent(ctx, &types.ExecutionWebhookEvent{
+		ExecutionID: executionID,
+		EventType:   types.WebhookEventExecutionCompleted,
+		Status:      types.ExecutionWebhookStatusDelivered,
+		Payload:     json.RawMessage(`{"ok":true}`),
+	}))
+
+	filterRunID := runID
+	before, _, err := ls.QueryRunSummaries(ctx, types.ExecutionFilter{
+		RunID: &filterRunID,
+		Limit: 5,
+	})
+	require.NoError(t, err)
+	require.Len(t, before, 1)
+
+	result, err := ls.CleanupWorkflow(ctx, runID, false)
+	require.NoError(t, err)
+	require.True(t, result.Success)
+	require.Greater(t, result.DeletedRecords["executions"], 0)
+
+	after, _, err := ls.QueryRunSummaries(ctx, types.ExecutionFilter{
+		RunID: &filterRunID,
+		Limit: 5,
+	})
+	require.NoError(t, err)
+	require.Len(t, after, 0)
+
+	executionAfter, err := ls.GetExecutionRecord(ctx, executionID)
+	require.NoError(t, err)
+	require.Nil(t, executionAfter)
+
+	webhookAfter, err := ls.GetExecutionWebhook(ctx, executionID)
+	require.NoError(t, err)
+	require.Nil(t, webhookAfter)
+
+	webhookEventsAfter, err := ls.ListExecutionWebhookEvents(ctx, executionID)
+	require.NoError(t, err)
+	require.Len(t, webhookEventsAfter, 0)
 }
 
 // TestPostgresStorage_ConnectionSettings tests connection pool settings
