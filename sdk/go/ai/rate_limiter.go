@@ -325,6 +325,7 @@ func (rl *RateLimiter) ExecuteStreamWithRetry(ctx context.Context, fn func() (<-
 		}
 
 		var lastErr error
+		sentAnyChunks := false
 
 		for attempt := 0; attempt <= rl.maxRetries; attempt++ {
 			// Check context cancellation
@@ -353,6 +354,7 @@ func (rl *RateLimiter) ExecuteStreamWithRetry(ctx context.Context, fn func() (<-
 						ch = nil
 						continue
 					}
+					sentAnyChunks = true
 					chunkCh <- chunk
 				case err, ok := <-ech:
 					if !ok {
@@ -373,6 +375,12 @@ func (rl *RateLimiter) ExecuteStreamWithRetry(ctx context.Context, fn func() (<-
 				if !isRateLimitError(streamErr) {
 					// Not a rate limit error - forward and return
 					errCh <- streamErr
+					return
+				}
+
+				// If we've already sent chunks, we cannot safely retry as it would duplicate content
+				if sentAnyChunks {
+					errCh <- fmt.Errorf("%w: partial content already sent, cannot retry: %v", ErrRateLimitExceeded, streamErr)
 					return
 				}
 

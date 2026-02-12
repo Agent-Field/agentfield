@@ -918,3 +918,64 @@ func TestCircuitBreakerCallbacks(t *testing.T) {
 		t.Error("Expected OnCircuitClose callback to be called")
 	}
 }
+
+func TestExecuteStreamWithRetry_NoRetryIfChunksSent(t *testing.T) {
+	rl := NewRateLimiter(RateLimiterConfig{
+		MaxRetries: 3,
+		BaseDelay:  10 * time.Millisecond,
+	})
+
+	ctx := context.Background()
+	callCount := 0
+
+	chunkCh, errCh := rl.ExecuteStreamWithRetry(ctx, func() (<-chan StreamChunk, <-chan error) {
+		callCount++
+		ch := make(chan StreamChunk)
+		ec := make(chan error, 1)
+
+		go func() {
+			defer close(ch)
+			defer close(ec)
+
+			if callCount == 1 {
+				// First call: send one chunk then a rate limit error
+				ch <- StreamChunk{Choices: []StreamDelta{{Delta: MessageDelta{Content: "Partial"}}}}
+				ec <- errRateLimit
+				return
+			}
+
+			// Second call (should not happen)
+			ch <- StreamChunk{Choices: []StreamDelta{{Delta: MessageDelta{Content: "Should not retry"}}}}
+		}()
+
+		return ch, ec
+	})
+
+	var content strings.Builder
+	for chunk := range chunkCh {
+		if len(chunk.Choices) > 0 {
+			content.WriteString(chunk.Choices[0].Delta.Content)
+		}
+	}
+
+	err := <-errCh
+	if err == nil {
+		t.Error("Expected error after sending chunks then hitting rate limit")
+	}
+
+	if !errors.Is(err, ErrRateLimitExceeded) {
+		t.Errorf("Expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	if !strings.Contains(err.Error(), "partial content already sent") {
+		t.Errorf("Expected error message to mention partial content, got: %v", err)
+	}
+
+	if callCount != 1 {
+		t.Errorf("Expected exactly 1 call, got %d", callCount)
+	}
+
+	if content.String() != "Partial" {
+		t.Errorf("Expected 'Partial', got '%s'", content.String())
+	}
+}
