@@ -1125,7 +1125,9 @@ class AgentFieldClient:
         """
         if self._async_execution_manager is None:
             self._async_execution_manager = AsyncExecutionManager(
-                base_url=self.base_url, config=self.async_config
+                base_url=self.base_url,
+                config=self.async_config,
+                auth_headers=self._get_auth_headers(),
             )
             await self._async_execution_manager.start()
             self._maybe_update_event_stream_headers(None)

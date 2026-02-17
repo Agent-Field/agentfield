@@ -3318,8 +3318,11 @@ class Agent(FastAPI):
         """
         if self._async_execution_manager is None:
             # Create async execution manager with the same base URL as the client
+            auth_headers = {"X-API-Key": self.api_key} if self.api_key else {}
             self._async_execution_manager = AsyncExecutionManager(
-                base_url=self.agentfield_server, config=self.async_config
+                base_url=self.agentfield_server,
+                config=self.async_config,
+                auth_headers=auth_headers,
             )
             # Start the manager
             await self._async_execution_manager.start()

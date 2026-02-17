@@ -178,6 +178,7 @@ class AsyncExecutionManager:
         config: Optional[AsyncConfig] = None,
         connection_manager: Optional[ConnectionManager] = None,
         result_cache: Optional[ResultCache] = None,
+        auth_headers: Optional[Dict[str, str]] = None,
     ):
         """
         Initialize the async execution manager.
@@ -187,9 +188,12 @@ class AsyncExecutionManager:
             config: AsyncConfig instance for configuration parameters
             connection_manager: Optional ConnectionManager instance
             result_cache: Optional ResultCache instance
+            auth_headers: Optional auth headers (e.g. X-API-Key) included in
+                every polling request to the control plane
         """
         self.base_url = base_url.rstrip("/")
         self.config = config or AsyncConfig()
+        self._auth_headers: Dict[str, str] = dict(auth_headers) if auth_headers else {}
 
         # Validate configuration
         self.config.validate()
@@ -964,13 +968,14 @@ class AsyncExecutionManager:
             # Create batch requests
             requests = []
             for execution in batch:
-                requests.append(
-                    {
-                        "method": "GET",
-                        "url": self._execution_status_url(execution.execution_id),
-                        "timeout": self.config.polling_timeout,
-                    }
-                )
+                req: Dict[str, Any] = {
+                    "method": "GET",
+                    "url": self._execution_status_url(execution.execution_id),
+                    "timeout": self.config.polling_timeout,
+                }
+                if self._auth_headers:
+                    req["headers"] = dict(self._auth_headers)
+                requests.append(req)
 
             # Execute batch
             start_time = time.time()
@@ -1011,8 +1016,11 @@ class AsyncExecutionManager:
 
         start_time = time.time()
         try:
+            kwargs: Dict[str, Any] = {"timeout": self.config.polling_timeout}
+            if self._auth_headers:
+                kwargs["headers"] = dict(self._auth_headers)
             response = await self.connection_manager.request(
-                "GET", url, timeout=self.config.polling_timeout
+                "GET", url, **kwargs
             )
             duration = time.time() - start_time
 
