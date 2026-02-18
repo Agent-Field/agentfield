@@ -12,8 +12,15 @@ bin/
 dist/
 **/dist/
 coverage.out
+coverage*.out
+coverage*.txt
+coverage-func.txt
 *.test
 tmp/
+
+# Go compiled binaries (project-specific)
+control-plane/agentfield-server
+examples/go_agent_nodes/go_agent_nodes
 
 # Python
 __pycache__/
