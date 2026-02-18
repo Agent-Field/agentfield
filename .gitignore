@@ -53,3 +53,10 @@ reports/
 # Agent workflow artifacts
 .artifacts/
 .worktrees/
+
+# Go build outputs (compiled binaries)
+control-plane/agentfield-server
+**/agentfield-server
+coverage-func.txt
+coverage_handlers.out
+*.out
