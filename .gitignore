@@ -49,3 +49,7 @@ reports/
 
 # Typescript
 .env
+
+# Agent workflow artifacts
+.artifacts/
+.worktrees/
