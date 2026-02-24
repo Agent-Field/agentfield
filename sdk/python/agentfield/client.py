@@ -497,7 +497,9 @@ class AgentFieldClient:
             )
             response.raise_for_status()
             return response.json()
-        except requests.RequestException as exc:
+        except RegistrationError:
+            raise
+        except Exception as exc:
             raise RegistrationError(f"Failed to register node: {exc}") from exc
 
     def update_health(
@@ -1262,11 +1264,15 @@ class AgentFieldClient:
 
             return status
 
+        except AgentFieldError:
+            raise
         except Exception as e:
             logger.error(
                 f"Failed to poll execution status for {execution_id[:8]}...: {e}"
             )
-            raise
+            raise AgentFieldClientError(
+                f"Failed to poll execution status: {e}"
+            ) from e
 
     async def batch_check_statuses(
         self, execution_ids: List[str]
@@ -1321,9 +1327,13 @@ class AgentFieldClient:
 
             return results
 
+        except AgentFieldError:
+            raise
         except Exception as e:
             logger.error(f"Failed to batch check execution statuses: {e}")
-            raise
+            raise AgentFieldClientError(
+                f"Failed to batch check execution statuses: {e}"
+            ) from e
 
     async def wait_for_execution_result(
         self, execution_id: str, timeout: Optional[float] = None
@@ -1359,11 +1369,15 @@ class AgentFieldClient:
             raise ExecutionTimeoutError(
                 f"Execution {execution_id} exceeded timeout"
             ) from exc
+        except AgentFieldError:
+            raise
         except Exception as e:
             logger.error(
                 f"Failed to wait for execution result {execution_id[:8]}...: {e}"
             )
-            raise
+            raise AgentFieldClientError(
+                f"Failed to wait for execution result: {e}"
+            ) from e
 
     async def cancel_async_execution(
         self, execution_id: str, reason: Optional[str] = None
@@ -1399,9 +1413,13 @@ class AgentFieldClient:
 
             return cancelled
 
+        except AgentFieldError:
+            raise
         except Exception as e:
             logger.error(f"Failed to cancel execution {execution_id[:8]}...: {e}")
-            raise
+            raise AgentFieldClientError(
+                f"Failed to cancel execution: {e}"
+            ) from e
 
     async def list_async_executions(
         self, status_filter: Optional[str] = None, limit: Optional[int] = None
@@ -1439,9 +1457,13 @@ class AgentFieldClient:
 
             return executions
 
+        except AgentFieldError:
+            raise
         except Exception as e:
             logger.error(f"Failed to list async executions: {e}")
-            raise
+            raise AgentFieldClientError(
+                f"Failed to list async executions: {e}"
+            ) from e
 
     async def get_async_execution_metrics(self) -> Dict[str, Any]:
         """
@@ -1468,9 +1490,13 @@ class AgentFieldClient:
 
             return metrics
 
+        except AgentFieldError:
+            raise
         except Exception as e:
             logger.error(f"Failed to get async execution metrics: {e}")
-            raise
+            raise AgentFieldClientError(
+                f"Failed to get async execution metrics: {e}"
+            ) from e
 
     async def cleanup_async_executions(self) -> int:
         """
@@ -1496,9 +1522,13 @@ class AgentFieldClient:
 
             return cleanup_count
 
+        except AgentFieldError:
+            raise
         except Exception as e:
             logger.error(f"Failed to cleanup async executions: {e}")
-            raise
+            raise AgentFieldClientError(
+                f"Failed to cleanup async executions: {e}"
+            ) from e
 
     async def close_async_execution_manager(self) -> None:
         """

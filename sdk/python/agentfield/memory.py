@@ -241,6 +241,8 @@ class MemoryClient:
                 )
             response.raise_for_status()
             log_debug(f"Memory set successful for key: {key}")
+        except MemoryAccessError:
+            raise
         except Exception as e:
             log_debug(f"Memory set failed for key {key}: {type(e).__name__}: {e}")
             raise MemoryAccessError(f"Failed to set memory key '{key}': {e}") from e
@@ -278,6 +280,8 @@ class MemoryClient:
                 timeout=15.0,
             )
             response.raise_for_status()
+        except MemoryAccessError:
+            raise
         except Exception as e:
             raise MemoryAccessError(f"Failed to set vector key '{key}': {e}") from e
 
@@ -336,6 +340,8 @@ class MemoryClient:
                 return data
 
             return result
+        except MemoryAccessError:
+            raise
         except Exception as e:
             raise MemoryAccessError(f"Failed to get memory key '{key}': {e}") from e
 
@@ -387,6 +393,8 @@ class MemoryClient:
                 timeout=10.0,
             )
             response.raise_for_status()
+        except MemoryAccessError:
+            raise
         except Exception as e:
             raise MemoryAccessError(f"Failed to delete memory key '{key}': {e}") from e
 
@@ -412,6 +420,8 @@ class MemoryClient:
                 timeout=10.0,
             )
             response.raise_for_status()
+        except MemoryAccessError:
+            raise
         except Exception as e:
             raise MemoryAccessError(
                 f"Failed to delete vector key '{key}': {e}"
@@ -450,8 +460,12 @@ class MemoryClient:
                 return [item.get("key", "") for item in result if "key" in item]
 
             return []
+        except MemoryAccessError:
+            raise
         except Exception as e:
-            raise MemoryAccessError(f"Failed to list keys for scope '{scope}': {e}") from e
+            raise MemoryAccessError(
+                f"Failed to list keys for scope '{scope}': {e}"
+            ) from e
 
     async def similarity_search(
         self,
@@ -486,6 +500,8 @@ class MemoryClient:
             )
             response.raise_for_status()
             return response.json()
+        except MemoryAccessError:
+            raise
         except Exception as e:
             raise MemoryAccessError("Failed to perform similarity search") from e
 
