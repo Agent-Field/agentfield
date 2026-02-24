@@ -38,6 +38,14 @@ from .media_providers import (
     get_provider,
     register_provider,
 )
+from .exceptions import (
+    AgentFieldError,
+    AgentFieldClientError,
+    ExecutionTimeoutError,
+    MemoryAccessError,
+    RegistrationError,
+    ValidationError,
+)
 
 __all__ = [
     "Agent",
@@ -76,6 +84,13 @@ __all__ = [
     "OpenRouterProvider",
     "get_provider",
     "register_provider",
+    # Exceptions
+    "AgentFieldError",
+    "AgentFieldClientError",
+    "ExecutionTimeoutError",
+    "MemoryAccessError",
+    "RegistrationError",
+    "ValidationError",
 ]
 
 __version__ = "0.1.42-rc.2"
