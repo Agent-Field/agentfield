@@ -105,6 +105,7 @@ from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 from .client import AgentFieldClient
 from .execution_context import ExecutionContext
+from .exceptions import MemoryAccessError
 from .memory_events import MemoryEventClient, ScopedMemoryEventClient
 
 
@@ -192,6 +193,10 @@ class MemoryClient:
             key: The memory key
             data: The data to store (will be JSON serialized)
             scope: Optional explicit scope override
+
+        Raises:
+            TypeError: If data is not JSON serializable.
+            MemoryAccessError: If the memory backend request fails.
         """
         from agentfield.logger import log_debug
 
@@ -236,9 +241,11 @@ class MemoryClient:
                 )
             response.raise_for_status()
             log_debug(f"Memory set successful for key: {key}")
+        except MemoryAccessError:
+            raise
         except Exception as e:
             log_debug(f"Memory set failed for key {key}: {type(e).__name__}: {e}")
-            raise
+            raise MemoryAccessError(f"Failed to set memory key '{key}': {e}") from e
 
     async def set_vector(
         self,
@@ -250,6 +257,9 @@ class MemoryClient:
     ) -> None:
         """
         Store a vector embedding with optional metadata.
+
+        Raises:
+            MemoryAccessError: If the memory backend request fails.
         """
         headers = self._build_headers(scope, scope_id)
         payload: Dict[str, Any] = {
@@ -261,14 +271,19 @@ class MemoryClient:
         if scope:
             payload["scope"] = scope
 
-        response = await self._async_request(
-            "POST",
-            f"{self.agentfield_client.api_base}/memory/vector/set",
-            json=payload,
-            headers=headers,
-            timeout=15.0,
-        )
-        response.raise_for_status()
+        try:
+            response = await self._async_request(
+                "POST",
+                f"{self.agentfield_client.api_base}/memory/vector/set",
+                json=payload,
+                headers=headers,
+                timeout=15.0,
+            )
+            response.raise_for_status()
+        except MemoryAccessError:
+            raise
+        except Exception as e:
+            raise MemoryAccessError(f"Failed to set vector key '{key}': {e}") from e
 
     async def get(
         self,
@@ -287,6 +302,9 @@ class MemoryClient:
 
         Returns:
             The stored value or default if not found
+
+        Raises:
+            MemoryAccessError: If the memory backend request fails.
         """
         headers = self._build_headers(scope, scope_id)
 
@@ -295,32 +313,37 @@ class MemoryClient:
         if scope:
             payload["scope"] = scope
 
-        response = await self._async_request(
-            "POST",
-            f"{self.agentfield_client.api_base}/memory/get",
-            json=payload,
-            headers=headers,
-            timeout=10.0,
-        )
+        try:
+            response = await self._async_request(
+                "POST",
+                f"{self.agentfield_client.api_base}/memory/get",
+                json=payload,
+                headers=headers,
+                timeout=10.0,
+            )
 
-        if response.status_code == 404:
-            return default
+            if response.status_code == 404:
+                return default
 
-        response.raise_for_status()
-        result = response.json()
+            response.raise_for_status()
+            result = response.json()
 
-        # Extract the actual data from the memory response
-        if isinstance(result, dict) and "data" in result:
-            # The server returns JSON-encoded data, so we need to decode it
-            data = result["data"]
-            if isinstance(data, str):
-                try:
-                    return json.loads(data)
-                except json.JSONDecodeError:
-                    return data
-            return data
+            # Extract the actual data from the memory response
+            if isinstance(result, dict) and "data" in result:
+                # The server returns JSON-encoded data, so we need to decode it
+                data = result["data"]
+                if isinstance(data, str):
+                    try:
+                        return json.loads(data)
+                    except json.JSONDecodeError:
+                        return data
+                return data
 
-        return result
+            return result
+        except MemoryAccessError:
+            raise
+        except Exception as e:
+            raise MemoryAccessError(f"Failed to get memory key '{key}': {e}") from e
 
     async def exists(
         self, key: str, scope: Optional[str] = None, scope_id: Optional[str] = None
@@ -350,6 +373,9 @@ class MemoryClient:
         Args:
             key: The memory key
             scope: Optional explicit scope override
+
+        Raises:
+            MemoryAccessError: If the memory backend request fails.
         """
         headers = self._build_headers(scope, scope_id)
 
@@ -358,33 +384,48 @@ class MemoryClient:
         if scope:
             payload["scope"] = scope
 
-        response = await self._async_request(
-            "POST",
-            f"{self.agentfield_client.api_base}/memory/delete",
-            json=payload,
-            headers=headers,
-            timeout=10.0,
-        )
-        response.raise_for_status()
+        try:
+            response = await self._async_request(
+                "POST",
+                f"{self.agentfield_client.api_base}/memory/delete",
+                json=payload,
+                headers=headers,
+                timeout=10.0,
+            )
+            response.raise_for_status()
+        except MemoryAccessError:
+            raise
+        except Exception as e:
+            raise MemoryAccessError(f"Failed to delete memory key '{key}': {e}") from e
 
     async def delete_vector(
         self, key: str, scope: Optional[str] = None, scope_id: Optional[str] = None
     ) -> None:
         """
         Delete a stored vector embedding.
+
+        Raises:
+            MemoryAccessError: If the memory backend request fails.
         """
         headers = self._build_headers(scope, scope_id)
         payload: Dict[str, Any] = {"key": key}
         if scope:
             payload["scope"] = scope
-        response = await self._async_request(
-            "POST",
-            f"{self.agentfield_client.api_base}/memory/vector/delete",
-            json=payload,
-            headers=headers,
-            timeout=10.0,
-        )
-        response.raise_for_status()
+        try:
+            response = await self._async_request(
+                "POST",
+                f"{self.agentfield_client.api_base}/memory/vector/delete",
+                json=payload,
+                headers=headers,
+                timeout=10.0,
+            )
+            response.raise_for_status()
+        except MemoryAccessError:
+            raise
+        except Exception as e:
+            raise MemoryAccessError(
+                f"Failed to delete vector key '{key}': {e}"
+            ) from e
 
     async def list_keys(
         self, scope: str, scope_id: Optional[str] = None
@@ -397,24 +438,34 @@ class MemoryClient:
 
         Returns:
             List of memory keys in the scope
+
+        Raises:
+            MemoryAccessError: If the memory backend request fails.
         """
         headers = self._build_headers(scope, scope_id)
 
-        response = await self._async_request(
-            "GET",
-            f"{self.agentfield_client.api_base}/memory/list",
-            params={"scope": scope},
-            headers=headers,
-            timeout=10.0,
-        )
-        response.raise_for_status()
-        result = response.json()
+        try:
+            response = await self._async_request(
+                "GET",
+                f"{self.agentfield_client.api_base}/memory/list",
+                params={"scope": scope},
+                headers=headers,
+                timeout=10.0,
+            )
+            response.raise_for_status()
+            result = response.json()
 
-        # Extract keys from the memory list response
-        if isinstance(result, list):
-            return [item.get("key", "") for item in result if "key" in item]
+            # Extract keys from the memory list response
+            if isinstance(result, list):
+                return [item.get("key", "") for item in result if "key" in item]
 
-        return []
+            return []
+        except MemoryAccessError:
+            raise
+        except Exception as e:
+            raise MemoryAccessError(
+                f"Failed to list keys for scope '{scope}': {e}"
+            ) from e
 
     async def similarity_search(
         self,
@@ -426,6 +477,9 @@ class MemoryClient:
     ) -> List[Dict[str, Any]]:
         """
         Perform a similarity search against stored vectors.
+
+        Raises:
+            MemoryAccessError: If the memory backend request fails.
         """
         headers = self._build_headers(scope, scope_id)
         payload: Dict[str, Any] = {
@@ -436,15 +490,20 @@ class MemoryClient:
         if scope:
             payload["scope"] = scope
 
-        response = await self._async_request(
-            "POST",
-            f"{self.agentfield_client.api_base}/memory/vector/search",
-            json=payload,
-            headers=headers,
-            timeout=15.0,
-        )
-        response.raise_for_status()
-        return response.json()
+        try:
+            response = await self._async_request(
+                "POST",
+                f"{self.agentfield_client.api_base}/memory/vector/search",
+                json=payload,
+                headers=headers,
+                timeout=15.0,
+            )
+            response.raise_for_status()
+            return response.json()
+        except MemoryAccessError:
+            raise
+        except Exception as e:
+            raise MemoryAccessError("Failed to perform similarity search") from e
 
 
 class ScopedMemoryClient:
@@ -683,6 +742,10 @@ class MemoryInterface:
         Args:
             key: The memory key
             data: The data to store
+
+        Raises:
+            TypeError: If data is not JSON serializable.
+            MemoryAccessError: If the memory backend request fails.
         """
         await self.memory_client.set(key, data)
 
@@ -694,6 +757,9 @@ class MemoryInterface:
     ) -> None:
         """
         Store a vector embedding with automatic scoping.
+
+        Raises:
+            MemoryAccessError: If the memory backend request fails.
         """
         await self.memory_client.set_vector(key, embedding, metadata=metadata)
 
@@ -710,6 +776,9 @@ class MemoryInterface:
 
         Returns:
             The stored value or default if not found
+
+        Raises:
+            MemoryAccessError: If the memory backend request fails.
         """
         return await self.memory_client.get(key, default=default)
 
@@ -731,12 +800,18 @@ class MemoryInterface:
 
         Args:
             key: The memory key
+
+        Raises:
+            MemoryAccessError: If the memory backend request fails.
         """
         await self.memory_client.delete(key)
 
     async def delete_vector(self, key: str) -> None:
         """
         Delete a vector embedding from the current scope.
+
+        Raises:
+            MemoryAccessError: If the memory backend request fails.
         """
         await self.memory_client.delete_vector(key)
 
@@ -748,6 +823,9 @@ class MemoryInterface:
     ) -> List[Dict[str, Any]]:
         """
         Search stored vectors using similarity matching.
+
+        Raises:
+            MemoryAccessError: If the memory backend request fails.
         """
         return await self.memory_client.similarity_search(
             query_embedding, top_k=top_k, filters=filters

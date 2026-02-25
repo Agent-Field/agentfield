@@ -13,7 +13,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Web UI: Add `aria-pressed` attribute to filter toggle buttons for better accessibility (#117)
 - Web UI: Add state tracking for quick time filters in `ExecutionFilters` to correctly reflect active state
 
-
 ## [0.1.42-rc.3] - 2026-02-24
 
 
