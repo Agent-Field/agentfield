@@ -33,6 +33,7 @@ type WorkflowDAGNode struct {
 	AgentNodeID       string                `json:"agent_node_id"`
 	ReasonerID        string                `json:"reasoner_id"`
 	Status            string                `json:"status"`
+	StatusReason      *string               `json:"status_reason,omitempty"`
 	StartedAt         string                `json:"started_at"`
 	CompletedAt       *string               `json:"completed_at,omitempty"`
 	DurationMS        *int64                `json:"duration_ms,omitempty"`
@@ -485,6 +486,7 @@ func executionToDAGNode(exec *types.Execution, depth int) WorkflowDAGNode {
 		AgentNodeID:       exec.AgentNodeID,
 		ReasonerID:        exec.ReasonerID,
 		Status:            types.NormalizeExecutionStatus(exec.Status),
+		StatusReason:      exec.StatusReason,
 		StartedAt:         started,
 		CompletedAt:       completed,
 		DurationMS:        exec.DurationMS,
@@ -501,7 +503,7 @@ func deriveOverallStatus(executions []*types.Execution) string {
 	for _, exec := range executions {
 		status := types.NormalizeExecutionStatus(exec.Status)
 		switch status {
-		case string(types.ExecutionStatusRunning), string(types.ExecutionStatusPending), string(types.ExecutionStatusQueued):
+		case string(types.ExecutionStatusRunning), string(types.ExecutionStatusWaiting), string(types.ExecutionStatusPending), string(types.ExecutionStatusQueued):
 			hasRunning = true
 		case string(types.ExecutionStatusFailed):
 			hasFailed = true

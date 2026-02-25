@@ -691,6 +691,14 @@ type WorkflowExecution struct {
 	ErrorMessage *string `json:"error_message,omitempty" db:"error_message"`
 	RetryCount   int     `json:"retry_count" db:"retry_count"`
 
+	// Approval tracking (populated when status is "waiting" with reason "waiting_for_approval")
+	ApprovalRequestID   *string    `json:"approval_request_id,omitempty" db:"approval_request_id"`
+	ApprovalRequestURL  *string    `json:"approval_request_url,omitempty" db:"approval_request_url"`
+	ApprovalStatus      *string    `json:"approval_status,omitempty" db:"approval_status"`
+	ApprovalResponse    *string    `json:"approval_response,omitempty" db:"approval_response"`
+	ApprovalRequestedAt *time.Time `json:"approval_requested_at,omitempty" db:"approval_requested_at"`
+	ApprovalRespondedAt *time.Time `json:"approval_responded_at,omitempty" db:"approval_responded_at"`
+
 	// Webhook observability (non-persisted)
 	WebhookRegistered bool                     `json:"webhook_registered,omitempty" db:"-"`
 	WebhookEvents     []*ExecutionWebhookEvent `json:"webhook_events,omitempty" db:"-"`
@@ -878,6 +886,7 @@ type WorkflowExecutionFilters struct {
 	ActorID           *string    `json:"actor_id,omitempty"`
 	AgentNodeID       *string    `json:"agent_node_id,omitempty"`
 	Status            *string    `json:"status,omitempty"`
+	ApprovalRequestID *string    `json:"approval_request_id,omitempty"`
 	StartTime         *time.Time `json:"start_time,omitempty"`
 	EndTime           *time.Time `json:"end_time,omitempty"`
 	Search            *string    `json:"search,omitempty"`

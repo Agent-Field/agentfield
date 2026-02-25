@@ -1,6 +1,7 @@
 export type CanonicalStatus =
   | 'pending'
   | 'queued'
+  | 'waiting'
   | 'running'
   | 'succeeded'
   | 'failed'
@@ -11,6 +12,7 @@ export type CanonicalStatus =
 const CANONICAL_STATUS_SET = new Set<CanonicalStatus>([
   'pending',
   'queued',
+  'waiting',
   'running',
   'succeeded',
   'failed',
@@ -22,7 +24,11 @@ const CANONICAL_STATUS_SET = new Set<CanonicalStatus>([
 const STATUS_MAP: Record<string, CanonicalStatus> = {
   pending: 'pending',
   queued: 'queued',
-  waiting: 'queued',
+  wait: 'queued', // legacy: short alias preserved for backward compat
+  waiting: 'waiting',
+  awaiting_approval: 'waiting',
+  awaiting_human: 'waiting',
+  approval_pending: 'waiting',
   running: 'running',
   processing: 'running',
   in_progress: 'running',
@@ -80,6 +86,10 @@ export function isRunningStatus(status?: string | null): boolean {
   return normalizeExecutionStatus(status) === 'running';
 }
 
+export function isWaitingStatus(status?: string | null): boolean {
+  return normalizeExecutionStatus(status) === 'waiting';
+}
+
 export function isQueuedStatus(status?: string | null): boolean {
   const normalized = normalizeExecutionStatus(status);
   return normalized === 'queued' || normalized === 'pending';
@@ -97,6 +107,8 @@ export function getStatusLabel(status?: string | null): string {
       return 'Timed Out';
     case 'running':
       return 'Running';
+    case 'waiting':
+      return 'Waiting';
     case 'queued':
       return 'Queued';
     case 'pending':
@@ -126,6 +138,7 @@ export interface StatusTheme {
 const STATUS_HEX: Record<CanonicalStatus, { base: string; light: string }> = {
   pending: { base: '#f59e0b', light: '#fbbf24' },
   queued: { base: '#f59e0b', light: '#fbbf24' },
+  waiting: { base: '#d97706', light: '#f59e0b' },
   running: { base: '#2563eb', light: '#60a5fa' },
   succeeded: { base: '#16a34a', light: '#22c55e' },
   failed: { base: '#ef4444', light: '#f87171' },
@@ -137,6 +150,7 @@ const STATUS_HEX: Record<CanonicalStatus, { base: string; light: string }> = {
 const STATUS_TONE_MAP: Record<CanonicalStatus, ThemeStatusTone> = {
   pending: 'warning',
   queued: 'warning',
+  waiting: 'warning',
   running: 'info',
   succeeded: 'success',
   failed: 'error',
@@ -148,6 +162,7 @@ const STATUS_TONE_MAP: Record<CanonicalStatus, ThemeStatusTone> = {
 const BADGE_VARIANT: Record<CanonicalStatus, StatusTheme['badgeVariant']> = {
   pending: 'secondary',
   queued: 'secondary',
+  waiting: 'secondary',
   running: 'secondary',
   succeeded: 'default',
   failed: 'destructive',
@@ -180,6 +195,7 @@ function createStatusTheme(status: CanonicalStatus): StatusTheme {
 const STATUS_THEME: Record<CanonicalStatus, StatusTheme> = {
   pending: createStatusTheme('pending'),
   queued: createStatusTheme('queued'),
+  waiting: createStatusTheme('waiting'),
   running: createStatusTheme('running'),
   succeeded: createStatusTheme('succeeded'),
   failed: createStatusTheme('failed'),

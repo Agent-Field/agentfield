@@ -3,6 +3,7 @@ import {
   ExternalLink,
   Clock,
   RotateCcw,
+  PauseCircle,
 } from "@/components/ui/icon-bridge";
 import { ArrowDown, ArrowUp } from "@/components/ui/icon-bridge";
 import { useNavigate } from "react-router-dom";
@@ -103,7 +104,7 @@ export function CompactExecutionHeader({
             </h1>
             <StatusIndicator
               status={normalizedStatus}
-              animated={normalizedStatus === "running"}
+              animated={normalizedStatus === "running" || normalizedStatus === "waiting"}
               className="text-xs flex-shrink-0"
             />
           </div>
@@ -202,6 +203,39 @@ export function CompactExecutionHeader({
             <div className="hidden sm:flex items-center gap-1.5 flex-shrink-0">
               <RotateCcw className="w-3 h-3" />
               <span className="font-medium text-yellow-500">{retryCount}</span>
+            </div>
+          )}
+
+          {/* Status Reason */}
+          {execution.status_reason && normalizedStatus !== "waiting" && (
+            <div className="hidden sm:flex items-center gap-1.5 flex-shrink-0">
+              <span className="text-muted-foreground">{execution.status_reason.replace(/_/g, " ")}</span>
+            </div>
+          )}
+
+          {/* Approval Status */}
+          {normalizedStatus === "waiting" && execution.approval_request_url && (
+            <div className="hidden sm:flex items-center gap-1.5 flex-shrink-0">
+              <PauseCircle className="w-3 h-3 text-amber-500" />
+              <a
+                href={execution.approval_request_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium text-amber-500 hover:text-amber-400 hover:underline flex items-center gap-1"
+              >
+                Awaiting Approval
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
+          )}
+
+          {/* Waiting with status_reason but no approval URL */}
+          {normalizedStatus === "waiting" && !execution.approval_request_url && execution.status_reason && (
+            <div className="hidden sm:flex items-center gap-1.5 flex-shrink-0">
+              <PauseCircle className="w-3 h-3 text-amber-500" />
+              <span className="font-medium text-amber-500">
+                {execution.status_reason.replace(/_/g, " ")}
+              </span>
             </div>
           )}
 

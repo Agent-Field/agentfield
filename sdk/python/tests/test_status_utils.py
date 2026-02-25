@@ -12,7 +12,8 @@ def test_status_normalization_all_values():
         "canceled": "cancelled",
         "cancel": "cancelled",
         "timed_out": "timeout",
-        "WAITING": "queued",
+        "WAITING": "waiting",
+        "awaiting_approval": "waiting",
         "in_progress": "running",
         "": "unknown",
         None: "unknown",
@@ -27,6 +28,6 @@ def test_is_terminal_aligns_with_terminal_set():
     for status in TERMINAL_STATUSES:
         assert is_terminal(status)
 
-    non_terminals = ["pending", "queued", "running", "unknown", "mystery"]
+    non_terminals = ["pending", "queued", "waiting", "running", "unknown", "mystery"]
     for status in non_terminals:
         assert not is_terminal(status)

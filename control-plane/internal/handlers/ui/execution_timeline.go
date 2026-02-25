@@ -193,7 +193,7 @@ func (h *ExecutionTimelineHandler) generateTimelineData(ctx context.Context) ([]
 				dataPoint.Successful++
 			case string(types.ExecutionStatusFailed):
 				dataPoint.Failed++
-			case string(types.ExecutionStatusRunning), string(types.ExecutionStatusPending), string(types.ExecutionStatusQueued):
+			case string(types.ExecutionStatusRunning), string(types.ExecutionStatusWaiting), string(types.ExecutionStatusPending), string(types.ExecutionStatusQueued):
 				dataPoint.Running++
 			}
 

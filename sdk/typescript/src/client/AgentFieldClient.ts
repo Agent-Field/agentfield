@@ -17,6 +17,7 @@ export interface ExecutionStatusUpdate {
   error?: string;
   durationMs?: number;
   progress?: number;
+  statusReason?: string;
 }
 
 export class AgentFieldClient {
@@ -127,9 +128,10 @@ this.http = axios.create({
     workflowId?: string;
     reasonerId: string;
     agentNodeId: string;
-    status: 'running' | 'succeeded' | 'failed';
+    status: 'waiting' | 'running' | 'succeeded' | 'failed';
     parentExecutionId?: string;
     parentWorkflowId?: string;
+    statusReason?: string;
     inputData?: Record<string, any>;
     result?: any;
     error?: string;
@@ -143,6 +145,7 @@ this.http = axios.create({
       type: event.reasonerId,
       agent_node_id: event.agentNodeId,
       status: event.status,
+      status_reason: event.statusReason,
       parent_execution_id: event.parentExecutionId,
       parent_workflow_id: event.parentWorkflowId ?? event.workflowId ?? event.runId,
       input_data: event.inputData ?? {},
@@ -176,7 +179,8 @@ this.http = axios.create({
       result: update.result,
       error: update.error,
       duration_ms: update.durationMs,
-      progress: update.progress !== undefined ? Math.round(update.progress) : undefined
+      progress: update.progress !== undefined ? Math.round(update.progress) : undefined,
+      status_reason: update.statusReason
     };
 
     const bodyStr = JSON.stringify(payload);

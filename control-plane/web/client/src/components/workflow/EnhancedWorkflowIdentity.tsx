@@ -49,6 +49,7 @@ type StatusBadgeStatus = "success" | "failed" | "running" | "pending" | "degrade
 const STATUS_BADGE_VARIANT_MAP: Record<CanonicalStatus, StatusBadgeStatus> = {
   pending: "pending",
   queued: "pending",
+  waiting: "pending",
   running: "running",
   succeeded: "success",
   failed: "failed",
@@ -60,6 +61,7 @@ const STATUS_BADGE_VARIANT_MAP: Record<CanonicalStatus, StatusBadgeStatus> = {
 const STATUS_ICON_COMPONENT: Record<CanonicalStatus, typeof Circle> = {
   pending: Circle,
   queued: Circle,
+  waiting: Circle,
   running: InProgress,
   succeeded: CircleCheck,
   failed: CircleX,
@@ -72,6 +74,7 @@ const EXTRA_ICON_CLASS: Partial<Record<CanonicalStatus, string>> = {
   running: "animate-spin",
   pending: "animate-pulse",
   queued: "animate-pulse",
+  waiting: "animate-pulse",
 };
 
 function getStatusBadgeVariant(status: string): StatusBadgeStatus {

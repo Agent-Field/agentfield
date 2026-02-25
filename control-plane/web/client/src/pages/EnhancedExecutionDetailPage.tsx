@@ -13,18 +13,19 @@ import { ErrorBoundary } from "../components/ErrorBoundary";
 import { getExecutionDetails, retryExecutionWebhook } from "../services/executionsApi";
 import { getExecutionVCStatus } from "../services/vcApi";
 import type { WorkflowExecution } from "../types/executions";
-import { Database, Bug, Shield, Wrench, FileText, RadioTower, Cog } from "../components/ui/icon-bridge";
+import { Database, Bug, Shield, Wrench, FileText, RadioTower, Cog, PauseCircle } from "../components/ui/icon-bridge";
 import { Badge } from "../components/ui/badge";
 import { ExecutionWebhookActivity } from "../components/execution/ExecutionWebhookActivity";
+import { ExecutionApprovalPanel } from "../components/execution/ExecutionApprovalPanel";
 import {
   AnimatedTabs,
   AnimatedTabsList,
   AnimatedTabsTrigger,
 } from "../components/ui/animated-tabs";
 
-type TabType = 'io' | 'webhook' | 'debug' | 'identity' | 'meta' | 'notes';
+type TabType = 'io' | 'webhook' | 'approval' | 'debug' | 'identity' | 'meta' | 'notes';
 
-const EXECUTION_TAB_VALUES = ['io', 'webhook', 'debug', 'identity', 'meta', 'notes'] as const;
+const EXECUTION_TAB_VALUES = ['io', 'webhook', 'approval', 'debug', 'identity', 'meta', 'notes'] as const;
 const DEFAULT_EXECUTION_TAB: TabType = 'io';
 
 function isExecutionTab(value: string | null): value is TabType {
@@ -149,17 +150,21 @@ export function EnhancedExecutionDetailPage() {
             break;
           case '3':
             event.preventDefault();
-            handleTabChange('debug');
+            handleTabChange('approval');
             break;
           case '4':
             event.preventDefault();
-            handleTabChange('identity');
+            handleTabChange('debug');
             break;
           case '5':
             event.preventDefault();
-            handleTabChange('meta');
+            handleTabChange('identity');
             break;
           case '6':
+            event.preventDefault();
+            handleTabChange('meta');
+            break;
+          case '7':
             event.preventDefault();
             handleTabChange('notes');
             break;
@@ -221,12 +226,20 @@ export function EnhancedExecutionDetailPage() {
       shortcut: '2',
       count: (execution.webhook_events?.length || 0) + (execution.webhook_registered ? 1 : 0),
     },
+    ...(execution.approval_request_id ? [{
+      id: 'approval' as TabType,
+      label: 'Approval',
+      icon: PauseCircle,
+      description: 'Human approval workflow status',
+      shortcut: '3',
+      count: execution.approval_status === 'pending' ? 1 : 0,
+    }] : []),
     {
       id: 'debug',
       label: 'Debug',
       icon: Bug,
       description: 'Retry tools and error analysis',
-      shortcut: '3',
+      shortcut: execution.approval_request_id ? '4' : '3',
       count: execution.error_message ? 1 : 0,
     },
     {
@@ -234,7 +247,7 @@ export function EnhancedExecutionDetailPage() {
       label: 'Identity',
       icon: Shield,
       description: 'Trust, credentials, and verification',
-      shortcut: '4',
+      shortcut: execution.approval_request_id ? '5' : '4',
       count: vcStatus?.has_vc ? 1 : 0,
     },
     {
@@ -242,14 +255,14 @@ export function EnhancedExecutionDetailPage() {
       label: 'Technical',
       icon: Wrench,
       description: 'Metadata and system details',
-      shortcut: '5',
+      shortcut: execution.approval_request_id ? '6' : '5',
     },
     {
       id: 'notes',
       label: 'Notes',
       icon: FileText,
       description: 'Live execution notes and workflow context',
-      shortcut: '6',
+      shortcut: execution.approval_request_id ? '7' : '6',
       count: execution.notes?.length || 0,
     },
   ];
@@ -336,6 +349,15 @@ export function EnhancedExecutionDetailPage() {
                 </div>
               )}
 
+              {activeTab === 'approval' && (
+                <div className="flex items-center gap-2">
+                  <PauseCircle className="w-3 h-3" />
+                  <span>
+                    {execution.approval_status === 'pending' ? 'Awaiting human review' : `Approval ${execution.approval_status}`}
+                  </span>
+                </div>
+              )}
+
               {activeTab === 'meta' && (
                 <div className="flex items-center gap-2">
                   <Wrench className="w-3 h-3" />
@@ -384,6 +406,12 @@ export function EnhancedExecutionDetailPage() {
                 isRetrying={retryingWebhook}
                 retryError={retryWebhookError}
               />
+            </div>
+          )}
+
+          {activeTab === 'approval' && (
+            <div className="h-full overflow-y-auto scrollbar-thin scrollbar-track-transparent scrollbar-thumb-border p-6">
+              <ExecutionApprovalPanel execution={execution} />
             </div>
           )}
 

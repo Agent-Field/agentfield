@@ -70,6 +70,18 @@ type NodeStatusUpdate struct {
 	HealthScore *int   `json:"health_score,omitempty"`
 }
 
+// Canonical execution status values used by the control plane.
+const (
+	ExecutionStatusPending   = "pending"
+	ExecutionStatusQueued    = "queued"
+	ExecutionStatusWaiting   = "waiting"
+	ExecutionStatusRunning   = "running"
+	ExecutionStatusSucceeded = "succeeded"
+	ExecutionStatusFailed    = "failed"
+	ExecutionStatusCancelled = "cancelled"
+	ExecutionStatusTimeout   = "timeout"
+)
+
 // LeaseResponse informs the agent how long the lease lasts.
 type LeaseResponse struct {
 	LeaseSeconds     int    `json:"lease_seconds"`
@@ -106,6 +118,7 @@ type WorkflowExecutionEvent struct {
 	Type              string                 `json:"type,omitempty"`
 	AgentNodeID       string                 `json:"agent_node_id,omitempty"`
 	Status            string                 `json:"status"`
+	StatusReason      *string                `json:"status_reason,omitempty"`
 	ParentExecutionID *string                `json:"parent_execution_id,omitempty"`
 	ParentWorkflowID  *string                `json:"parent_workflow_id,omitempty"`
 	InputData         map[string]interface{} `json:"input_data,omitempty"`

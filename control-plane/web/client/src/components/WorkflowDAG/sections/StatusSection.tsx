@@ -49,6 +49,7 @@ const STATUS_TONE_MAP: Record<CanonicalStatus, ToneKey> = {
   succeeded: "success",
   failed: "error",
   running: "info",
+  waiting: "warning",
   pending: "warning",
   queued: "warning",
   timeout: "info",
@@ -85,6 +86,17 @@ export function StatusSection({ node, details }: StatusSectionProps) {
           ),
           label: "Currently Running",
           description: "Execution is in progress",
+        };
+      case "waiting":
+        return {
+          icon: (
+            <PauseFilled
+              size={20}
+              className={cn(tone.accent, "animate-pulse")}
+            />
+          ),
+          label: "Awaiting Input",
+          description: "Execution is paused waiting for human input",
         };
       case "pending":
       case "queued":

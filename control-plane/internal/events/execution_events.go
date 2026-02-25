@@ -13,11 +13,13 @@ import (
 type ExecutionEventType string
 
 const (
-	ExecutionCreated   ExecutionEventType = "execution_created"
-	ExecutionStarted   ExecutionEventType = "execution_started"
-	ExecutionUpdated   ExecutionEventType = "execution_updated"
-	ExecutionCompleted ExecutionEventType = "execution_completed"
-	ExecutionFailed    ExecutionEventType = "execution_failed"
+	ExecutionCreated          ExecutionEventType = "execution_created"
+	ExecutionStarted          ExecutionEventType = "execution_started"
+	ExecutionUpdated          ExecutionEventType = "execution_updated"
+	ExecutionCompleted        ExecutionEventType = "execution_completed"
+	ExecutionFailed           ExecutionEventType = "execution_failed"
+	ExecutionWaiting          ExecutionEventType = "execution_waiting"
+	ExecutionApprovalResolved ExecutionEventType = "execution_approval_resolved"
 )
 
 // ExecutionEvent represents an execution state change event
@@ -172,6 +174,34 @@ func PublishExecutionFailed(executionID, workflowID, agentNodeID string, data in
 		WorkflowID:  workflowID,
 		AgentNodeID: agentNodeID,
 		Status:      "failed",
+		Timestamp:   time.Now(),
+		Data:        data,
+	}
+	GlobalExecutionEventBus.Publish(event)
+}
+
+// PublishExecutionWaiting publishes an event when an execution enters the waiting state.
+func PublishExecutionWaiting(executionID, workflowID, agentNodeID string, data interface{}) {
+	event := ExecutionEvent{
+		Type:        ExecutionWaiting,
+		ExecutionID: executionID,
+		WorkflowID:  workflowID,
+		AgentNodeID: agentNodeID,
+		Status:      types.ExecutionStatusWaiting,
+		Timestamp:   time.Now(),
+		Data:        data,
+	}
+	GlobalExecutionEventBus.Publish(event)
+}
+
+// PublishExecutionApprovalResolved publishes an event when an approval decision is received.
+func PublishExecutionApprovalResolved(executionID, workflowID, agentNodeID, newStatus string, data interface{}) {
+	event := ExecutionEvent{
+		Type:        ExecutionApprovalResolved,
+		ExecutionID: executionID,
+		WorkflowID:  workflowID,
+		AgentNodeID: agentNodeID,
+		Status:      newStatus,
 		Timestamp:   time.Now(),
 		Data:        data,
 	}

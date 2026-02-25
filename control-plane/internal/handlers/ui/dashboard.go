@@ -101,10 +101,10 @@ func (c *DashboardCache) Set(data *DashboardSummaryResponse) {
 type TimeRangePreset string
 
 const (
-	TimeRangePreset1h  TimeRangePreset = "1h"
-	TimeRangePreset24h TimeRangePreset = "24h"
-	TimeRangePreset7d  TimeRangePreset = "7d"
-	TimeRangePreset30d TimeRangePreset = "30d"
+	TimeRangePreset1h     TimeRangePreset = "1h"
+	TimeRangePreset24h    TimeRangePreset = "24h"
+	TimeRangePreset7d     TimeRangePreset = "7d"
+	TimeRangePreset30d    TimeRangePreset = "30d"
 	TimeRangePresetCustom TimeRangePreset = "custom"
 )
 
@@ -117,8 +117,8 @@ type TimeRangeInfo struct {
 
 // ComparisonData contains delta information comparing current to previous period
 type ComparisonData struct {
-	PreviousPeriod TimeRangeInfo           `json:"previous_period"`
-	OverviewDelta  EnhancedOverviewDelta   `json:"overview_delta"`
+	PreviousPeriod TimeRangeInfo         `json:"previous_period"`
+	OverviewDelta  EnhancedOverviewDelta `json:"overview_delta"`
 }
 
 // EnhancedOverviewDelta contains changes compared to the previous period
@@ -137,12 +137,12 @@ type HotspotSummary struct {
 
 // HotspotItem represents a single reasoner's failure statistics
 type HotspotItem struct {
-	ReasonerID        string       `json:"reasoner_id"`
-	TotalExecutions   int          `json:"total_executions"`
-	FailedExecutions  int          `json:"failed_executions"`
-	ErrorRate         float64      `json:"error_rate"`
-	ContributionPct   float64      `json:"contribution_pct"`
-	TopErrors         []ErrorCount `json:"top_errors"`
+	ReasonerID       string       `json:"reasoner_id"`
+	TotalExecutions  int          `json:"total_executions"`
+	FailedExecutions int          `json:"failed_executions"`
+	ErrorRate        float64      `json:"error_rate"`
+	ContributionPct  float64      `json:"contribution_pct"`
+	TopErrors        []ErrorCount `json:"top_errors"`
 }
 
 // ErrorCount tracks error message frequency
@@ -166,16 +166,16 @@ type HeatmapCell struct {
 
 // Enhanced dashboard response structures
 type EnhancedDashboardResponse struct {
-	GeneratedAt      time.Time           `json:"generated_at"`
-	TimeRange        TimeRangeInfo       `json:"time_range"`
-	Overview         EnhancedOverview    `json:"overview"`
-	ExecutionTrends  ExecutionTrends     `json:"execution_trends"`
-	AgentHealth      AgentHealthSummary  `json:"agent_health"`
-	Workflows        WorkflowInsights    `json:"workflows"`
-	Incidents        []IncidentItem      `json:"incidents"`
-	Comparison       *ComparisonData     `json:"comparison,omitempty"`
-	Hotspots         HotspotSummary      `json:"hotspots"`
-	ActivityPatterns ActivityPatterns    `json:"activity_patterns"`
+	GeneratedAt      time.Time          `json:"generated_at"`
+	TimeRange        TimeRangeInfo      `json:"time_range"`
+	Overview         EnhancedOverview   `json:"overview"`
+	ExecutionTrends  ExecutionTrends    `json:"execution_trends"`
+	AgentHealth      AgentHealthSummary `json:"agent_health"`
+	Workflows        WorkflowInsights   `json:"workflows"`
+	Incidents        []IncidentItem     `json:"incidents"`
+	Comparison       *ComparisonData    `json:"comparison,omitempty"`
+	Hotspots         HotspotSummary     `json:"hotspots"`
+	ActivityPatterns ActivityPatterns   `json:"activity_patterns"`
 }
 
 type EnhancedOverview struct {
@@ -290,9 +290,9 @@ type enhancedCacheEntry struct {
 
 // EnhancedDashboardCache provides time-range-aware caching for the enhanced dashboard response
 type EnhancedDashboardCache struct {
-	entries  map[string]*enhancedCacheEntry
-	mutex    sync.RWMutex
-	maxSize  int
+	entries map[string]*enhancedCacheEntry
+	mutex   sync.RWMutex
+	maxSize int
 }
 
 // NewEnhancedDashboardCache creates a new cache instance for enhanced dashboard data
@@ -495,17 +495,17 @@ func parseTimeRangeParams(c *gin.Context, now time.Time) (startTime, endTime tim
 		endStr := c.Query("end_time")
 		if startStr == "" || endStr == "" {
 			logger.Logger.Warn().Msg("start_time and end_time required for custom range, falling back to 24h")
-			return now.Add(-24*time.Hour), now, TimeRangePreset24h, nil
+			return now.Add(-24 * time.Hour), now, TimeRangePreset24h, nil
 		}
 		startTime, err = time.Parse(time.RFC3339, startStr)
 		if err != nil {
 			logger.Logger.Warn().Err(err).Msg("invalid start_time format, falling back to 24h")
-			return now.Add(-24*time.Hour), now, TimeRangePreset24h, nil
+			return now.Add(-24 * time.Hour), now, TimeRangePreset24h, nil
 		}
 		endTime, err = time.Parse(time.RFC3339, endStr)
 		if err != nil {
 			logger.Logger.Warn().Err(err).Msg("invalid end_time format, falling back to 24h")
-			return now.Add(-24*time.Hour), now, TimeRangePreset24h, nil
+			return now.Add(-24 * time.Hour), now, TimeRangePreset24h, nil
 		}
 	default:
 		// Default to 24h
@@ -588,6 +588,27 @@ func (h *DashboardHandler) GetEnhancedDashboardSummaryHandler(c *gin.Context) {
 		return
 	}
 
+	statusWaiting := string(types.ExecutionStatusWaiting)
+	waitingExecutions, err := h.store.QueryExecutionRecords(ctx, types.ExecutionFilter{
+		Status:         &statusWaiting,
+		Limit:          12,
+		SortBy:         "started_at",
+		SortDescending: true,
+	})
+	if err != nil {
+		logger.Logger.Error().Err(err).Msg("failed to query waiting executions for enhanced dashboard")
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to load active workflow data"})
+		return
+	}
+
+	activeExecutions := append(runningExecutions, waitingExecutions...)
+	sort.Slice(activeExecutions, func(i, j int) bool {
+		return activeExecutions[i].StartedAt.After(activeExecutions[j].StartedAt)
+	})
+	if len(activeExecutions) > 12 {
+		activeExecutions = activeExecutions[:12]
+	}
+
 	// Build time range info
 	timeRange := TimeRangeInfo{
 		StartTime: startTime,
@@ -598,7 +619,7 @@ func (h *DashboardHandler) GetEnhancedDashboardSummaryHandler(c *gin.Context) {
 	overview := h.buildEnhancedOverviewForRange(agents, executions, startTime, endTime)
 	trends := buildExecutionTrendsForRange(executions, startTime, endTime, preset)
 	agentHealth := h.buildAgentHealthSummary(ctx, agents)
-	workflows := buildWorkflowInsights(executions, runningExecutions)
+	workflows := buildWorkflowInsights(executions, activeExecutions)
 	incidents := buildIncidentItems(executions, 10)
 	hotspots := buildHotspotSummary(executions)
 	activityPatterns := buildActivityPatterns(executions)
@@ -845,9 +866,9 @@ func buildComparisonData(current, previous EnhancedOverview, prevStart, prevEnd 
 // buildHotspotSummary aggregates failures by reasoner
 func buildHotspotSummary(executions []*types.Execution) HotspotSummary {
 	type reasonerStats struct {
-		total      int
-		failed     int
-		errorMsgs  map[string]int
+		total     int
+		failed    int
+		errorMsgs map[string]int
 	}
 
 	statsMap := make(map[string]*reasonerStats)

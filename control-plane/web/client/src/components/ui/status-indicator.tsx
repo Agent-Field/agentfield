@@ -87,7 +87,7 @@ const StatusIndicator: React.FC<StatusIndicatorProps> = ({
       dotClass: theme.dotClass,
       textColor: theme.textClass,
       label: getStatusLabel(normalized),
-      shouldPulse: normalized === 'running',
+      shouldPulse: normalized === 'running' || normalized === 'waiting',
     };
   };
 
@@ -111,6 +111,7 @@ const StatusIndicator: React.FC<StatusIndicatorProps> = ({
             className={cn(
               "absolute w-3 h-3 rounded-full animate-ping opacity-40",
               normalizeExecutionStatus(status) === 'running' ? "bg-blue-500" :
+              normalizeExecutionStatus(status) === 'waiting' ? "bg-amber-500" :
               status === 'starting' ? "bg-orange-500" :
               "bg-yellow-500"
             )}

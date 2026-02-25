@@ -89,7 +89,7 @@ export interface ExecutionStats {
 }
 
 export interface ExecutionEvent {
-  type: "execution_started" | "execution_completed" | "execution_failed";
+  type: "execution_started" | "execution_completed" | "execution_failed" | "execution_waiting" | "execution_approval_resolved" | "execution_updated";
   execution: ExecutionSummary;
   timestamp: string;
 }
@@ -115,11 +115,18 @@ export interface WorkflowExecution {
   workflow_name?: string;
   workflow_tags: string[];
   status: CanonicalStatus;
+  status_reason?: string;
   started_at: string;
   completed_at?: string;
   duration_ms?: number;
   error_message?: string;
   retry_count: number;
+  approval_request_id?: string;
+  approval_request_url?: string;
+  approval_status?: string;
+  approval_response?: string;
+  approval_requested_at?: string;
+  approval_responded_at?: string;
   created_at: string;
   updated_at: string;
   notes?: ExecutionNote[];

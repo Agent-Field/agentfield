@@ -1229,6 +1229,13 @@ func (s *AgentFieldServer) setupRoutes() {
 		agentAPI.POST("/executions/batch-status", handlers.BatchExecutionStatusHandler(s.storage))
 		agentAPI.POST("/executions/:execution_id/status", handlers.UpdateExecutionStatusHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout))
 
+		// Approval workflow endpoints
+		agentAPI.POST("/executions/:execution_id/request-approval", handlers.RequestApprovalHandler(s.storage, s.config.AgentField.Approval))
+		agentAPI.GET("/executions/:execution_id/approval-status", handlers.GetApprovalStatusHandler(s.storage))
+
+		// Approval webhook callback (called by hax-sdk when human responds)
+		agentAPI.POST("/webhooks/approval-response", handlers.ApprovalWebhookHandler(s.storage, s.config.AgentField.Approval))
+
 		// Execution notes endpoints for app.note() feature
 		agentAPI.POST("/executions/note", handlers.AddExecutionNoteHandler(s.storage))
 		agentAPI.GET("/executions/:execution_id/notes", handlers.GetExecutionNotesHandler(s.storage))

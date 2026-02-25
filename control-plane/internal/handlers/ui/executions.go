@@ -132,6 +132,7 @@ type ExecutionSummary struct {
 	AgentNodeID  string               `json:"agent_node_id"`
 	ReasonerID   string               `json:"reasoner_id"`
 	Status       string               `json:"status"`
+	StatusReason *string              `json:"status_reason,omitempty"`
 	DurationMS   int                  `json:"duration_ms"`
 	InputSize    int                  `json:"input_size"`
 	OutputSize   int                  `json:"output_size"`
@@ -172,11 +173,18 @@ type ExecutionDetailsResponse struct {
 	WorkflowName        *string                        `json:"workflow_name,omitempty"`
 	WorkflowTags        []string                       `json:"workflow_tags"`
 	Status              string                         `json:"status"`
+	StatusReason        *string                        `json:"status_reason,omitempty"`
 	StartedAt           *string                        `json:"started_at,omitempty"`
 	CompletedAt         *string                        `json:"completed_at,omitempty"`
 	DurationMS          *int                           `json:"duration_ms,omitempty"`
 	ErrorMessage        *string                        `json:"error_message,omitempty"`
 	RetryCount          int                            `json:"retry_count"`
+	ApprovalRequestID   *string                        `json:"approval_request_id,omitempty"`
+	ApprovalRequestURL  *string                        `json:"approval_request_url,omitempty"`
+	ApprovalStatus      *string                        `json:"approval_status,omitempty"`
+	ApprovalResponse    *string                        `json:"approval_response,omitempty"`
+	ApprovalRequestedAt *string                        `json:"approval_requested_at,omitempty"`
+	ApprovalRespondedAt *string                        `json:"approval_responded_at,omitempty"`
 	CreatedAt           string                         `json:"created_at"`
 	UpdatedAt           *string                        `json:"updated_at,omitempty"`
 	Notes               []types.ExecutionNote          `json:"notes"`
@@ -429,7 +437,7 @@ func (h *ExecutionHandler) GetExecutionStatsHandler(c *gin.Context) {
 			stats.SuccessfulCount++
 		case string(types.ExecutionStatusFailed):
 			stats.FailedCount++
-		case string(types.ExecutionStatusRunning), string(types.ExecutionStatusPending), string(types.ExecutionStatusQueued):
+		case string(types.ExecutionStatusRunning), string(types.ExecutionStatusWaiting), string(types.ExecutionStatusPending), string(types.ExecutionStatusQueued):
 			stats.RunningCount++
 		}
 
@@ -664,6 +672,7 @@ func (h *ExecutionHandler) toExecutionSummary(exec *types.Execution) ExecutionSu
 		AgentNodeID:  exec.AgentNodeID,
 		ReasonerID:   exec.ReasonerID,
 		Status:       types.NormalizeExecutionStatus(exec.Status),
+		StatusReason: exec.StatusReason,
 		DurationMS:   duration,
 		InputSize:    len(exec.InputPayload),
 		OutputSize:   len(exec.ResultPayload),
@@ -701,7 +710,7 @@ func (h *ExecutionHandler) toExecutionDetails(ctx context.Context, exec *types.E
 	webhookRegistered := exec.WebhookRegistered
 	webhookEvents := exec.WebhookEvents
 
-	return ExecutionDetailsResponse{
+	resp := ExecutionDetailsResponse{
 		ID:                  0,
 		ExecutionID:         exec.ExecutionID,
 		WorkflowID:          exec.RunID,
@@ -720,6 +729,7 @@ func (h *ExecutionHandler) toExecutionDetails(ctx context.Context, exec *types.E
 		WorkflowName:        nil,
 		WorkflowTags:        nil,
 		Status:              types.NormalizeExecutionStatus(exec.Status),
+		StatusReason:        exec.StatusReason,
 		StartedAt:           startedAt,
 		CompletedAt:         completedAt,
 		DurationMS:          durationPtr,
@@ -733,6 +743,26 @@ func (h *ExecutionHandler) toExecutionDetails(ctx context.Context, exec *types.E
 		WebhookRegistered:   webhookRegistered,
 		WebhookEvents:       webhookEvents,
 	}
+
+	// Enrich with approval fields from workflow execution (if available)
+	if h.storage != nil {
+		if wfExec, err := h.storage.GetWorkflowExecution(ctx, exec.ExecutionID); err == nil && wfExec != nil {
+			resp.ApprovalRequestID = wfExec.ApprovalRequestID
+			resp.ApprovalRequestURL = wfExec.ApprovalRequestURL
+			resp.ApprovalStatus = wfExec.ApprovalStatus
+			resp.ApprovalResponse = wfExec.ApprovalResponse
+			if wfExec.ApprovalRequestedAt != nil {
+				formatted := wfExec.ApprovalRequestedAt.Format(time.RFC3339)
+				resp.ApprovalRequestedAt = &formatted
+			}
+			if wfExec.ApprovalRespondedAt != nil {
+				formatted := wfExec.ApprovalRespondedAt.Format(time.RFC3339)
+				resp.ApprovalRespondedAt = &formatted
+			}
+		}
+	}
+
+	return resp
 }
 
 func (h *ExecutionHandler) resolveExecutionData(ctx context.Context, raw []byte, uri *string) (interface{}, int) {

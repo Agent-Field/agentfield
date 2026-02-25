@@ -21,6 +21,16 @@ def test_execution_state_lifecycle_and_properties():
     assert st.is_terminal is True
 
 
+def test_execution_state_waiting_is_active_non_terminal():
+    st = ExecutionState(execution_id="ew1", target="node.skill", input_data={})
+    st.update_status(ExecutionStatus.WAITING)
+    assert st.is_active is True
+    assert st.is_terminal is False
+
+    st.update_status(ExecutionStatus.RUNNING)
+    assert st.metrics.start_time is not None
+
+
 def test_execution_state_failure_and_cancel():
     st = ExecutionState(execution_id="e2", target="t", input_data={})
     st.set_error("boom")

@@ -75,7 +75,10 @@ func (ls *LocalStorage) getWorkflowExecutionByID(ctx context.Context, q DBTX, ex
 		       status, started_at, completed_at, duration_ms,
 		       state_version, last_event_sequence, active_children, pending_children,
 		       pending_terminal_status, status_reason, lease_owner, lease_expires_at,
-		       error_message, retry_count, workflow_name, workflow_tags, notes, created_at, updated_at
+		       error_message, retry_count,
+		       approval_request_id, approval_request_url, approval_status, approval_response,
+		       approval_requested_at, approval_responded_at,
+		       workflow_name, workflow_tags, notes, created_at, updated_at
 		FROM workflow_executions WHERE execution_id = ?`
 
 	row := q.QueryRowContext(ctx, query, executionID)
@@ -88,6 +91,8 @@ func (ls *LocalStorage) getWorkflowExecutionByID(ctx context.Context, q DBTX, ex
 	var statusReason sql.NullString
 	var leaseOwner sql.NullString
 	var leaseExpires sql.NullTime
+	var approvalRequestID, approvalRequestURL, approvalStatus, approvalResponse sql.NullString
+	var approvalRequestedAt, approvalRespondedAt sql.NullTime
 	err := row.Scan(
 		&execution.WorkflowID, &execution.ExecutionID, &execution.AgentFieldRequestID,
 		&runID, &execution.SessionID, &execution.ActorID, &execution.AgentNodeID,
@@ -98,7 +103,10 @@ func (ls *LocalStorage) getWorkflowExecutionByID(ctx context.Context, q DBTX, ex
 		&execution.StateVersion, &execution.LastEventSequence, &execution.ActiveChildren, &execution.PendingChildren,
 		&pendingTerminal, &statusReason,
 		&leaseOwner, &leaseExpires,
-		&execution.ErrorMessage, &execution.RetryCount, &execution.WorkflowName,
+		&execution.ErrorMessage, &execution.RetryCount,
+		&approvalRequestID, &approvalRequestURL, &approvalStatus, &approvalResponse,
+		&approvalRequestedAt, &approvalRespondedAt,
+		&execution.WorkflowName,
 		&workflowTagsJSON, &notesJSON, &execution.CreatedAt, &execution.UpdatedAt,
 	)
 
@@ -138,6 +146,26 @@ func (ls *LocalStorage) getWorkflowExecutionByID(ctx context.Context, q DBTX, ex
 	if leaseExpires.Valid {
 		t := leaseExpires.Time
 		execution.LeaseExpiresAt = &t
+	}
+	if approvalRequestID.Valid {
+		execution.ApprovalRequestID = &approvalRequestID.String
+	}
+	if approvalRequestURL.Valid {
+		execution.ApprovalRequestURL = &approvalRequestURL.String
+	}
+	if approvalStatus.Valid {
+		execution.ApprovalStatus = &approvalStatus.String
+	}
+	if approvalResponse.Valid {
+		execution.ApprovalResponse = &approvalResponse.String
+	}
+	if approvalRequestedAt.Valid {
+		t := approvalRequestedAt.Time
+		execution.ApprovalRequestedAt = &t
+	}
+	if approvalRespondedAt.Valid {
+		t := approvalRespondedAt.Time
+		execution.ApprovalRespondedAt = &t
 	}
 
 	// Unmarshal workflow tags
@@ -2094,10 +2122,15 @@ const sqliteWorkflowExecutionInsertQuery = `INSERT INTO workflow_executions (
 	status, started_at, completed_at, duration_ms,
 	state_version, last_event_sequence, active_children, pending_children,
 	pending_terminal_status, status_reason, lease_owner, lease_expires_at,
-	error_message, retry_count, workflow_name, workflow_tags, notes, created_at, updated_at
+	error_message, retry_count,
+	approval_request_id, approval_request_url, approval_status, approval_response,
+	approval_requested_at, approval_responded_at,
+	workflow_name, workflow_tags, notes, created_at, updated_at
 ) VALUES (
 	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+	?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+	?, ?, ?, ?, ?, ?,
+	?, ?, ?, ?, ?
 )`
 
 // executeWorkflowInsert performs the actual database insert/update operation
@@ -2134,7 +2167,10 @@ func (ls *LocalStorage) executeWorkflowInsert(ctx context.Context, q DBTX, execu
 				status = ?, completed_at = ?, duration_ms = ?,
 				state_version = ?, last_event_sequence = ?, active_children = ?, pending_children = ?,
 				pending_terminal_status = ?, status_reason = ?, lease_owner = ?, lease_expires_at = ?,
-				output_data = ?, output_size = ?, error_message = ?, notes = ?, updated_at = ?
+				output_data = ?, output_size = ?, error_message = ?,
+				approval_request_id = ?, approval_request_url = ?, approval_status = ?,
+				approval_response = ?, approval_requested_at = ?, approval_responded_at = ?,
+				notes = ?, updated_at = ?
 			WHERE execution_id = ?`
 
 		_, err = q.ExecContext(ctx, updateQuery,
@@ -2142,6 +2178,8 @@ func (ls *LocalStorage) executeWorkflowInsert(ctx context.Context, q DBTX, execu
 			execution.StateVersion, execution.LastEventSequence, execution.ActiveChildren, execution.PendingChildren,
 			execution.PendingTerminalStatus, execution.StatusReason, execution.LeaseOwner, execution.LeaseExpiresAt,
 			execution.OutputData, execution.OutputSize, execution.ErrorMessage,
+			execution.ApprovalRequestID, execution.ApprovalRequestURL, execution.ApprovalStatus,
+			execution.ApprovalResponse, execution.ApprovalRequestedAt, execution.ApprovalRespondedAt,
 			notesJSON, time.Now(), execution.ExecutionID)
 
 		if err != nil {
@@ -2184,7 +2222,10 @@ func (ls *LocalStorage) executeWorkflowInsert(ctx context.Context, q DBTX, execu
 		execution.Status, execution.StartedAt, execution.CompletedAt, execution.DurationMS,
 		execution.StateVersion, execution.LastEventSequence, execution.ActiveChildren, execution.PendingChildren,
 		execution.PendingTerminalStatus, execution.StatusReason, execution.LeaseOwner, execution.LeaseExpiresAt,
-		execution.ErrorMessage, execution.RetryCount, execution.WorkflowName,
+		execution.ErrorMessage, execution.RetryCount,
+		execution.ApprovalRequestID, execution.ApprovalRequestURL, execution.ApprovalStatus,
+		execution.ApprovalResponse, execution.ApprovalRequestedAt, execution.ApprovalRespondedAt,
+		execution.WorkflowName,
 		workflowTagsJSON, notesJSON, execution.CreatedAt, execution.UpdatedAt,
 	)
 
@@ -2455,7 +2496,10 @@ func (ls *LocalStorage) QueryWorkflowExecutions(ctx context.Context, filters typ
 		workflow_executions.lease_owner, workflow_executions.lease_expires_at,
 		workflow_executions.error_message,
 			workflow_executions.retry_count, workflow_executions.workflow_name, workflow_executions.workflow_tags,
-			workflow_executions.notes, workflow_executions.created_at, workflow_executions.updated_at
+			workflow_executions.notes, workflow_executions.created_at, workflow_executions.updated_at,
+			workflow_executions.approval_request_id, workflow_executions.approval_request_url,
+			workflow_executions.approval_status, workflow_executions.approval_response,
+			workflow_executions.approval_requested_at, workflow_executions.approval_responded_at
 		FROM workflow_executions`
 
 	var conditions []string
@@ -2501,6 +2545,10 @@ func (ls *LocalStorage) QueryWorkflowExecutions(ctx context.Context, filters typ
 	if filters.Status != nil {
 		conditions = append(conditions, "workflow_executions.status = ?")
 		args = append(args, *filters.Status)
+	}
+	if filters.ApprovalRequestID != nil {
+		conditions = append(conditions, "workflow_executions.approval_request_id = ?")
+		args = append(args, *filters.ApprovalRequestID)
 	}
 	if filters.StartTime != nil {
 		conditions = append(conditions, "workflow_executions.started_at >= ?")
@@ -2567,6 +2615,8 @@ func (ls *LocalStorage) QueryWorkflowExecutions(ctx context.Context, filters typ
 		var runID sql.NullString
 		var leaseOwner sql.NullString
 		var leaseExpires sql.NullTime
+		var approvalRequestID, approvalRequestURL, approvalStatus, approvalResponse sql.NullString
+		var approvalRequestedAt, approvalRespondedAt sql.NullTime
 
 		err := rows.Scan(
 			&execution.ID, &execution.WorkflowID, &execution.ExecutionID,
@@ -2582,6 +2632,9 @@ func (ls *LocalStorage) QueryWorkflowExecutions(ctx context.Context, filters typ
 			&execution.ErrorMessage, &execution.RetryCount,
 			&execution.WorkflowName, &workflowTagsJSON, &notesJSON, &execution.CreatedAt,
 			&execution.UpdatedAt,
+			&approvalRequestID, &approvalRequestURL,
+			&approvalStatus, &approvalResponse,
+			&approvalRequestedAt, &approvalRespondedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan workflow execution row: %w", err)
@@ -2613,6 +2666,26 @@ func (ls *LocalStorage) QueryWorkflowExecutions(ctx context.Context, filters typ
 		if leaseExpires.Valid {
 			t := leaseExpires.Time
 			execution.LeaseExpiresAt = &t
+		}
+		if approvalRequestID.Valid {
+			execution.ApprovalRequestID = &approvalRequestID.String
+		}
+		if approvalRequestURL.Valid {
+			execution.ApprovalRequestURL = &approvalRequestURL.String
+		}
+		if approvalStatus.Valid {
+			execution.ApprovalStatus = &approvalStatus.String
+		}
+		if approvalResponse.Valid {
+			execution.ApprovalResponse = &approvalResponse.String
+		}
+		if approvalRequestedAt.Valid {
+			t := approvalRequestedAt.Time
+			execution.ApprovalRequestedAt = &t
+		}
+		if approvalRespondedAt.Valid {
+			t := approvalRespondedAt.Time
+			execution.ApprovalRespondedAt = &t
 		}
 
 		if len(workflowTagsJSON) > 0 {

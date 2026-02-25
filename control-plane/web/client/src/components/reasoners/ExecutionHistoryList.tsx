@@ -95,6 +95,10 @@ export function ExecutionHistoryList({ history, onLoadMore }: ExecutionHistoryLi
       icon: <Time className="h-4 w-4 text-yellow-500" />,
       variant: 'secondary'
     },
+    waiting: {
+      icon: <Time className="h-4 w-4 text-amber-500 animate-pulse" />,
+      variant: 'secondary'
+    },
     cancelled: {
       icon: <WarningFilled className="h-4 w-4 text-muted-foreground" />,
       variant: 'outline'

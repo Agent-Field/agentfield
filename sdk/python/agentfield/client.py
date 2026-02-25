@@ -36,6 +36,27 @@ from .exceptions import (
 httpx = None  # type: ignore
 
 
+# ---------------------------------------------------------------------------
+# Typed response models for approval helpers
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ApprovalRequestResponse:
+    """Response from requesting approval for an execution."""
+    approval_request_id: str
+    approval_request_url: str
+
+
+@dataclass
+class ApprovalStatusResponse:
+    """Response from polling approval status."""
+    status: str  # pending, approved, rejected, expired
+    response: Optional[Dict[str, Any]] = None
+    request_url: Optional[str] = None
+    requested_at: Optional[str] = None
+    responded_at: Optional[str] = None
+
+
 # Python 3.8 compatibility: asyncio.to_thread was added in Python 3.9
 if sys.version_info >= (3, 9):
     from asyncio import to_thread as _to_thread
@@ -1639,6 +1660,163 @@ class AgentFieldClient:
             raise AgentFieldClientError(
                 f"Failed to cleanup async executions: {e}"
             ) from e
+
+    # ------------------------------------------------------------------ #
+    # Approval helpers                                                     #
+    # ------------------------------------------------------------------ #
+
+    async def request_approval(
+        self,
+        execution_id: str,
+        title: str = "Approval Request",
+        description: str = "",
+        template_type: str = "plan-review-v1",
+        payload: Optional[Dict[str, Any]] = None,
+        project_id: str = "",
+        expires_in_hours: int = 72,
+    ) -> ApprovalRequestResponse:
+        """Request human approval for an execution, transitioning it to ``waiting``.
+
+        Calls ``POST /api/v1/agents/{node}/executions/{id}/request-approval``
+        on the control plane.
+
+        Args:
+            execution_id: The execution to pause for approval.
+            title: Human-readable title shown in the approval UI.
+            description: Description shown in the approval UI.
+            template_type: hax-sdk template type for rendering the request.
+            payload: Template-specific payload data.
+            project_id: hax-sdk project UUID.
+            expires_in_hours: Time before the request expires.
+
+        Returns:
+            ApprovalRequestResponse with ``approval_request_id`` and ``approval_request_url``.
+
+        Raises:
+            AgentFieldClientError: If the request fails.
+        """
+        node_id = self.caller_agent_id or ""
+        body = {
+            "title": title,
+            "description": description,
+            "template_type": template_type,
+            "payload": payload or {},
+            "project_id": project_id,
+            "expires_in_hours": expires_in_hours,
+        }
+        url = f"{self.api_base}/agents/{node_id}/executions/{execution_id}/request-approval"
+
+        try:
+            response = requests.post(
+                url,
+                json=body,
+                headers=self._get_headers_with_context(None),
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise AgentFieldClientError(
+                f"Failed to request approval: {exc}"
+            ) from exc
+
+        if response.status_code >= 400:
+            raise AgentFieldClientError(
+                f"Approval request failed ({response.status_code}): {response.text[:500]}"
+            )
+
+        data = response.json()
+        return ApprovalRequestResponse(
+            approval_request_id=data.get("approval_request_id", ""),
+            approval_request_url=data.get("approval_request_url", ""),
+        )
+
+    async def get_approval_status(
+        self,
+        execution_id: str,
+    ) -> ApprovalStatusResponse:
+        """Get the current approval status for an execution.
+
+        Calls ``GET /api/v1/agents/{node}/executions/{id}/approval-status``.
+
+        Returns:
+            ApprovalStatusResponse with ``status`` (pending/approved/rejected/expired),
+            ``response``, ``request_url``, ``requested_at``, ``responded_at``.
+
+        Raises:
+            AgentFieldClientError: If the request fails.
+        """
+        node_id = self.caller_agent_id or ""
+        url = f"{self.api_base}/agents/{node_id}/executions/{execution_id}/approval-status"
+
+        try:
+            response = requests.get(
+                url,
+                headers=self._get_headers_with_context(None),
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise AgentFieldClientError(
+                f"Failed to get approval status: {exc}"
+            ) from exc
+
+        if response.status_code >= 400:
+            raise AgentFieldClientError(
+                f"Approval status request failed ({response.status_code}): {response.text[:500]}"
+            )
+
+        data = response.json()
+        return ApprovalStatusResponse(
+            status=data.get("status", "unknown"),
+            response=data.get("response"),
+            request_url=data.get("request_url"),
+            requested_at=data.get("requested_at"),
+            responded_at=data.get("responded_at"),
+        )
+
+    async def wait_for_approval(
+        self,
+        execution_id: str,
+        poll_interval: float = 5.0,
+        max_interval: float = 60.0,
+        timeout: Optional[float] = None,
+    ) -> ApprovalStatusResponse:
+        """Poll approval status with exponential backoff until resolved.
+
+        Args:
+            execution_id: Execution ID to wait for.
+            poll_interval: Initial polling interval in seconds.
+            max_interval: Maximum polling interval in seconds.
+            timeout: Total timeout in seconds (None = wait indefinitely).
+
+        Returns:
+            ApprovalStatusResponse with the final approval status (approved/rejected/expired).
+
+        Raises:
+            AgentFieldClientError: If polling encounters a non-retryable error.
+            ExecutionTimeoutError: If timeout is reached.
+        """
+        start_time = time.time()
+        interval = poll_interval
+        backoff_factor = 2.0
+
+        while True:
+            if timeout is not None and (time.time() - start_time) >= timeout:
+                raise ExecutionTimeoutError(
+                    f"Approval for execution {execution_id} timed out after {timeout}s"
+                )
+
+            await asyncio.sleep(interval)
+
+            try:
+                result = await self.get_approval_status(execution_id)
+            except AgentFieldClientError:
+                # Transient failure — back off and retry
+                interval = min(interval * backoff_factor, max_interval)
+                continue
+
+            if result.status != "pending":
+                return result
+
+            interval = min(interval * backoff_factor, max_interval)
 
     async def close_async_execution_manager(self) -> None:
         """

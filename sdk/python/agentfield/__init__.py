@@ -54,6 +54,7 @@ from .exceptions import (
     RegistrationError,
     ValidationError,
 )
+from .client import ApprovalRequestResponse, ApprovalStatusResponse
 
 __all__ = [
     "Agent",
@@ -99,6 +100,9 @@ __all__ = [
     "HEADER_CALLER_DID",
     "HEADER_DID_SIGNATURE",
     "HEADER_DID_TIMESTAMP",
+    # Approval response types
+    "ApprovalRequestResponse",
+    "ApprovalStatusResponse",
     # Exceptions
     "AgentFieldError",
     "AgentFieldClientError",

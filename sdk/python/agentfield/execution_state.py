@@ -32,6 +32,7 @@ class ExecutionStatus(Enum):
 
     PENDING = "pending"
     QUEUED = "queued"
+    WAITING = "waiting"
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
@@ -199,6 +200,7 @@ class ExecutionState:
         return self.status in {
             ExecutionStatus.PENDING,
             ExecutionStatus.QUEUED,
+            ExecutionStatus.WAITING,
             ExecutionStatus.RUNNING,
         }
 
@@ -245,7 +247,7 @@ class ExecutionState:
         # Update metrics based on status change
         current_time = time.time()
 
-        if old_status == ExecutionStatus.QUEUED and status == ExecutionStatus.RUNNING:
+        if old_status in {ExecutionStatus.PENDING, ExecutionStatus.QUEUED, ExecutionStatus.WAITING} and status == ExecutionStatus.RUNNING:
             self.metrics.start_time = current_time
         elif status in {
             ExecutionStatus.SUCCEEDED,

@@ -11,6 +11,7 @@ type ExecutionRecordModel struct {
 	ReasonerID        string     `gorm:"column:reasoner_id;not null;index"`
 	NodeID            string     `gorm:"column:node_id;not null;index"`
 	Status            string     `gorm:"column:status;not null;index"`
+	StatusReason      *string    `gorm:"column:status_reason"`
 	InputPayload      []byte     `gorm:"column:input_payload"`
 	ResultPayload     []byte     `gorm:"column:result_payload"`
 	ErrorMessage      *string    `gorm:"column:error_message"`
@@ -141,6 +142,12 @@ type WorkflowExecutionModel struct {
 	LeaseExpiresAt        *time.Time `gorm:"column:lease_expires_at"`
 	ErrorMessage          *string    `gorm:"column:error_message"`
 	RetryCount            int        `gorm:"column:retry_count;default:0"`
+	ApprovalRequestID     *string    `gorm:"column:approval_request_id;index:idx_workflow_executions_approval_request_id"`
+	ApprovalRequestURL    *string    `gorm:"column:approval_request_url"`
+	ApprovalStatus        *string    `gorm:"column:approval_status"`
+	ApprovalResponse      *string    `gorm:"column:approval_response"`
+	ApprovalRequestedAt   *time.Time `gorm:"column:approval_requested_at"`
+	ApprovalRespondedAt   *time.Time `gorm:"column:approval_responded_at"`
 	Notes                 string     `gorm:"column:notes;default:'[]'"`
 	CreatedAt             time.Time  `gorm:"column:created_at;autoCreateTime"`
 	UpdatedAt             time.Time  `gorm:"column:updated_at;autoUpdateTime"`

@@ -12,6 +12,12 @@ agentfield:
     webhook_max_attempts: 3       # Number of attempts before marking the webhook as failed
     webhook_retry_backoff: 1s     # Initial backoff between webhook retries (exponential)
     webhook_max_retry_backoff: 5s # Upper bound for webhook retry backoff
+  approval:
+    hax_sdk_url: "http://localhost:3000"
+    hax_sdk_api_key: "hax_live_f14f94681d380c999c5f3c49395c5918a55e0df1a2011d13"
+    webhook_secret: ""                 # HMAC-SHA256 secret for verifying approval webhook callbacks
+    default_expiry_hours: 72           # Default approval expiry (hours)
+    request_timeout: 30s               # HTTP timeout for calling hax-sdk API
 
 ui:
   enabled: true

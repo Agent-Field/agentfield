@@ -26,10 +26,11 @@ type Execution struct {
 	ResultURI     *string         `json:"result_uri,omitempty" db:"result_uri"`
 
 	// Lifecycle
-	Status      string     `json:"status" db:"status"`
-	StartedAt   time.Time  `json:"started_at" db:"started_at"`
-	CompletedAt *time.Time `json:"completed_at,omitempty" db:"completed_at"`
-	DurationMS  *int64     `json:"duration_ms,omitempty" db:"duration_ms"`
+	Status       string     `json:"status" db:"status"`
+	StatusReason *string    `json:"status_reason,omitempty" db:"status_reason"`
+	StartedAt    time.Time  `json:"started_at" db:"started_at"`
+	CompletedAt  *time.Time `json:"completed_at,omitempty" db:"completed_at"`
+	DurationMS   *int64     `json:"duration_ms,omitempty" db:"duration_ms"`
 
 	// Optional metadata
 	SessionID *string `json:"session_id,omitempty" db:"session_id"`

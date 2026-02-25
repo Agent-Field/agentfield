@@ -204,6 +204,9 @@ func TestSanitizeFTS5Query(t *testing.T) {
 func TestValidateExecutionStateTransition(t *testing.T) {
 	require.NoError(t, validateExecutionStateTransition(string(types.ExecutionStatusPending), string(types.ExecutionStatusRunning)))
 	require.NoError(t, validateExecutionStateTransition(string(types.ExecutionStatusRunning), string(types.ExecutionStatusRunning)))
+	require.NoError(t, validateExecutionStateTransition(string(types.ExecutionStatusRunning), string(types.ExecutionStatusWaiting)))
+	require.NoError(t, validateExecutionStateTransition(string(types.ExecutionStatusWaiting), string(types.ExecutionStatusRunning)))
+	require.NoError(t, validateExecutionStateTransition(string(types.ExecutionStatusWaiting), string(types.ExecutionStatusCancelled)))
 
 	err := validateExecutionStateTransition(string(types.ExecutionStatusRunning), string(types.ExecutionStatusPending))
 	require.Error(t, err)
@@ -211,4 +214,7 @@ func TestValidateExecutionStateTransition(t *testing.T) {
 	require.ErrorAs(t, err, &transitionErr)
 	require.Equal(t, string(types.ExecutionStatusRunning), transitionErr.CurrentState)
 	require.Equal(t, string(types.ExecutionStatusPending), transitionErr.NewState)
+
+	err = validateExecutionStateTransition(string(types.ExecutionStatusQueued), string(types.ExecutionStatusWaiting))
+	require.Error(t, err)
 }
