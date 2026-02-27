@@ -177,7 +177,7 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add -A
-            git commit -m "chore(release): ${tag}"
+            git commit -m "chore(release): ${tag} [skip ci]"
             git tag -a "${tag}" -m "Release ${tag}"
             git push origin "HEAD:${REF_NAME}"
             git push origin "${tag}"
