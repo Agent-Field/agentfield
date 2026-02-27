@@ -6,8 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
-## [0.1.42-rc.3] - 2026-02-24
+## [Unreleased]
 
+### Testing
+
+- Test(web-ui): set up vitest testing infrastructure (#103)
+
+Add unit testing infrastructure to the Web UI (`control-plane/web/client/`),
+which previously had zero test coverage.
+
+- Install vitest, @testing-library/react, @testing-library/jest-dom,
+  @testing-library/user-event, @vitest/coverage-v8, and jsdom as devDependencies
+- Add `vitest.config.ts` with jsdom environment, `@` path alias, and v8 coverage provider
+- Add `src/test/setup.ts` to extend vitest with jest-dom matchers
+- Add `src/test/components/status/StatusBadge.test.tsx` with comprehensive tests:
+    - All `AgentState`, `HealthStatus`, and `LifecycleStatus` values via `it.each`
+    - Priority ordering between `state`, `healthStatus`, and `lifecycleStatus` props
+    - `showIcon` behaviour and `size` prop smoke tests
+    - `status` prop (AgentStatus object): `status.state`, `showHealthScore` percentage
+      display, `state_transition` arrow label, and `animate-pulse` during transitions
+    - Dedicated `AgentStateBadge`, `HealthStatusBadge`, `LifecycleStatusBadge` exports
+    - `getHealthScoreColor` utility — boundary tests across all four score tiers
+    - `getHealthScoreBadgeVariant` utility — returns correct badge variant per tier
+- Add `test`, `test:watch`, and `test:coverage` scripts to package.json
+- Wire `npm run test` into `scripts/test-all.sh` alongside the existing lint step
+
+## [0.1.42-rc.3] - 2026-02-24
 
 ### Added
 
@@ -30,20 +54,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
 
----------
+---
 
 Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
 Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com> (ebaa4d2)
 
 ## [0.1.42-rc.2] - 2026-02-24
 
-
 ### Documentation
 
 - Docs(python-sdk): document memory scope hierarchy (#184) (fde9ce2)
 
 ## [0.1.42-rc.1] - 2026-02-18
-
 
 ### Added
 
@@ -73,7 +95,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com> (ebaa4d2)
 
 Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
 
----------
+---
 
 Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
 Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com> (ce9ef63)
@@ -82,12 +104,11 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com> (ce9ef63)
 
 ## [0.1.41-rc.4] - 2026-02-17
 
-
 ### Other
 
 - Fix async execution polling missing auth headers (#180)
 
-The _poll_single_execution and _batch_poll_executions methods did not
+The \_poll_single_execution and \_batch_poll_executions methods did not
 include authentication headers when polling execution status, causing
 401 Unauthorized errors when the control plane requires API key auth.
 
@@ -106,7 +127,6 @@ Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com> (56a9ffa)
 
 ## [0.1.41-rc.3] - 2026-02-10
 
-
 ### Other
 
 - Fix workflow cleanup to remove executions-backed run summaries (#177)
@@ -117,19 +137,15 @@ Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com> (56a9ffa)
 
 ## [0.1.41-rc.2] - 2026-02-09
 
-
 ### Other
 
 - Fix UI workflow delete 404 by registering cleanup route (#174) (ee47f56)
 
 ## [0.1.41-rc.1] - 2026-02-04
 
-
 ### Documentation
 
 - Docs: [Go SDK] Add documentation to Config struct fields (#171) (5dc1a59)
-
-
 
 ### Other
 
@@ -146,7 +162,6 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com> (75f0f2f)
 
 ## [0.1.40-rc.1] - 2026-02-03
 
-
 ### Fixed
 
 - Fix(control-plane): resolve agent node health status flapping (#169)
@@ -157,6 +172,7 @@ Three independent health systems (HealthMonitor, StatusManager, PresenceManager)
 were fighting each other, causing nodes to flicker between online/stale/offline.
 
 Root causes fixed:
+
 - Single HTTP failure instantly marked nodes inactive (now requires 3 consecutive failures)
 - Heartbeats silently dropped for 10s after health check marked node inactive (removed)
 - 30s recovery debounce blocked legitimate recovery (reduced to configurable 5s)
@@ -164,6 +180,7 @@ Root causes fixed:
 - 30s reconciliation threshold too aggressive with cache delay (increased to 60s)
 
 Changes:
+
 - health_monitor.go: Add consecutive failure tracking, recovery debounce, sync.Once for Stop()
 - status_manager.go: Remove heartbeat-dropping logic, configurable stale threshold
 - config.go: Add NodeHealthConfig with env var overrides
@@ -176,14 +193,15 @@ Integration tests wire all 3 services concurrently to validate no-flapping behav
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* fix(control-plane): harden health monitor against races, flapping, and stale MCP data
+- fix(control-plane): harden health monitor against races, flapping, and stale MCP data
 
 Code review follow-up for #167. Addresses race conditions, missing MCP
 health refresh, and test reliability issues found during review.
 
 Key fixes:
+
 - Eliminate stale pointer race: checkAgentHealth now takes nodeID string
-  instead of *ActiveAgent, re-fetching canonical state after HTTP call
+  instead of \*ActiveAgent, re-fetching canonical state after HTTP call
 - Fix MCP health going stale: active agents now refresh MCP data on every
   health check, not only on status transitions
 - Initialize LastTransition on registration so debounce has a valid baseline
@@ -198,15 +216,13 @@ Tests: 30/30 health monitor + 3/3 integration tests pass
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* chore: retrigger CI
+- chore: retrigger CI
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
----------
+---
 
 Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (e74ed99)
-
-
 
 ### Performance
 
@@ -225,7 +241,6 @@ Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (02191e1)
 
 ## [0.1.39-rc.1] - 2026-01-30
 
-
 ### Fixed
 
 - Fix(sdk/python): use actual version and metadata in agent registration (#166)
@@ -235,7 +250,7 @@ agent metadata (description, tags, author). This passes the agent's actual
 version and metadata through to the control plane registration endpoint.
 
 Also fixes hardcoded sdk_version in deployment tags to use the real package
-version from agentfield.__version__.
+version from agentfield.**version**.
 
 Fixes #148
 
@@ -244,7 +259,6 @@ Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (35d2685)
 ## [0.1.38] - 2026-01-30
 
 ## [0.1.38-rc.2] - 2026-01-30
-
 
 ### Fixed
 
@@ -256,7 +270,7 @@ websockets v14+ renamed the `additional_headers` parameter to
 `extra_headers`. Since the SDK does not pin a websockets version,
 users installing fresh get v14+ and hit:
 
-  create_connection() got an unexpected keyword argument 'additional_headers'
+create_connection() got an unexpected keyword argument 'additional_headers'
 
 This causes the memory event websocket connection to fail during
 agent startup, and the blocking reconnect retry loop (exponential
@@ -268,7 +282,7 @@ backoff up to 31s) prevents uvicorn from completing initialization.
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 
-* fix(sdk/python): prevent memory event connection from blocking agent startup
+- fix(sdk/python): prevent memory event connection from blocking agent startup
 
 When the control plane websocket is unreachable, the memory event client's
 connect() method would block indefinitely during FastAPI startup due to
@@ -282,15 +296,15 @@ binding to its port.
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* test(sdk/python): add tests for websockets version compat and non-blocking reconnect
+- test(sdk/python): add tests for websockets version compat and non-blocking reconnect
 
-- Test that v14+ uses additional_headers parameter
-- Test that pre-v14 uses extra_headers parameter
-- Test that failed connection backgrounds the retry loop instead of blocking
+* Test that v14+ uses additional_headers parameter
+* Test that pre-v14 uses extra_headers parameter
+* Test that failed connection backgrounds the retry loop instead of blocking
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* test(sdk/python): use CI matrix for websockets version compat testing
+- test(sdk/python): use CI matrix for websockets version compat testing
 
 Replace monkeypatched version tests with real version detection tests
 that validate against the actually installed websockets library. Add a
@@ -300,11 +314,11 @@ parallel.
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* fix(sdk/python): remove unused variable in test
+- fix(sdk/python): remove unused variable in test
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
----------
+---
 
 Co-authored-by: Claude <noreply@anthropic.com> (4a63bec)
 
@@ -315,6 +329,7 @@ GitHub's security restriction that prevents fork PRs from posting
 comments.
 
 Changes:
+
 - memory-metrics.yml: Save benchmark results as artifact instead of
   posting comments directly
 - memory-metrics-report.yml: New workflow triggered by workflow_run
@@ -327,7 +342,6 @@ that occurred when external contributors opened PRs.
 Co-authored-by: Claude <noreply@anthropic.com> (a130f94)
 
 ## [0.1.38-rc.1] - 2026-01-25
-
 
 ### Testing
 
@@ -344,7 +358,6 @@ Co-authored-by: Claude <noreply@anthropic.com> (a130f94)
 ## [0.1.37] - 2026-01-22
 
 ## [0.1.37-rc.1] - 2026-01-22
-
 
 ### Fixed
 
@@ -366,7 +379,6 @@ Co-authored-by: Claude <noreply@anthropic.com> (e3a0991)
 
 ## [0.1.36-rc.1] - 2026-01-22
 
-
 ### Fixed
 
 - Fix(sdk): prevent WebSocket socket leak in MemoryEventClient (#157)
@@ -380,6 +392,7 @@ The MemoryEventClient had several issues causing socket leaks:
 3. No guard against concurrent reconnect scheduling
 
 This fix:
+
 - Adds cleanup() method to properly terminate and remove listeners
 - Adds reconnectPending flag to prevent duplicate reconnect scheduling
 - Cleans up existing WebSocket before creating a new one
@@ -391,41 +404,40 @@ causing EADDRNOTAVAIL errors.
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 
-* Consolidate HTTP agents and fix socket leak cleanup
+- Consolidate HTTP agents and fix socket leak cleanup
 
 This commit addresses additional socket leak issues discovered during
 investigation of the WebSocket memory leak:
 
 1. Consolidated HTTP agents into shared module (utils/httpAgents.ts)
-   - Previously each client file (AgentFieldClient, MemoryClient,
-     DidClient, MCPClient) created its own HTTP agent pair
-   - Now all clients share a single pair of agents
-   - Reduces memory overhead and ensures consistent connection pooling
+    - Previously each client file (AgentFieldClient, MemoryClient,
+      DidClient, MCPClient) created its own HTTP agent pair
+    - Now all clients share a single pair of agents
+    - Reduces memory overhead and ensures consistent connection pooling
 
 2. Fixed setTimeout tracking in MemoryEventClient
-   - Added reconnectTimer property to store timeout ID
-   - Clear timeout in cleanup() to prevent orphaned timers
-   - Prevents potential timer leaks during rapid connect/disconnect
+    - Added reconnectTimer property to store timeout ID
+    - Clear timeout in cleanup() to prevent orphaned timers
+    - Prevents potential timer leaks during rapid connect/disconnect
 
 3. Added clear() method to MCPClientRegistry
-   - Allows proper cleanup of registered MCP clients
+    - Allows proper cleanup of registered MCP clients
 
 4. Increased memory test threshold from 12MB to 25MB
-   - CI environments show higher variance in GC timing
-   - Local tests show ~5MB growth, well within threshold
+    - CI environments show higher variance in GC timing
+    - Local tests show ~5MB growth, well within threshold
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 
----------
+---
 
 Co-authored-by: Claude <noreply@anthropic.com> (4bdc367)
 
 ## [0.1.35] - 2026-01-21
 
 ## [0.1.35-rc.1] - 2026-01-21
-
 
 ### Fixed
 
@@ -439,6 +451,7 @@ Adding maxTotalSockets: 50 limits total connections across ALL hosts,
 properly preventing socket exhaustion in dual-stack environments.
 
 Changes:
+
 - Add maxTotalSockets: 50 to all http.Agent instances
 - Remove deprecated timeout option from http.Agent
 - Bump SDK version to 0.1.35
@@ -450,7 +463,6 @@ Co-authored-by: Claude <noreply@anthropic.com> (d1f4175)
 
 ## [0.1.34-rc.1] - 2026-01-21
 
-
 ### Chores
 
 - Chore(init-example): bump SDK to ^0.1.33 (#154)
@@ -461,8 +473,6 @@ pooling fix that prevents socket exhaustion on long-running deployments.
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
 Co-authored-by: Claude <noreply@anthropic.com> (6b8aa38)
-
-
 
 ### Fixed
 
@@ -484,22 +494,21 @@ Bumps SDK to 0.1.34.
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 
-* fix: increase memory leak test threshold and update init-example SDK version
+- fix: increase memory leak test threshold and update init-example SDK version
 
-- Bump init-example to @agentfield/sdk ^0.1.34 for connection pooling fix
-- Increase memory leak test threshold from 10MB to 12MB to reduce CI flakiness
+* Bump init-example to @agentfield/sdk ^0.1.34 for connection pooling fix
+* Increase memory leak test threshold from 10MB to 12MB to reduce CI flakiness
   (Node 18 on CI hit 10.37MB due to GC timing variance)
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 
----------
+---
 
 Co-authored-by: Claude <noreply@anthropic.com> (3d8b082)
 
 ## [0.1.33] - 2026-01-21
 
 ## [0.1.33-rc.1] - 2026-01-21
-
 
 ### Added
 
@@ -508,6 +517,7 @@ Co-authored-by: Claude <noreply@anthropic.com> (3d8b082)
 * feat(deploy): add Railway template for one-click deployment
 
 Add Railway configuration for easy deployment of the control plane with PostgreSQL:
+
 - railway.toml and railway.json at repo root for Railway auto-detection
 - Dockerfile reference to existing control-plane build
 - Health check configuration (/api/v1/health)
@@ -515,9 +525,9 @@ Add Railway configuration for easy deployment of the control plane with PostgreS
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 
-* fix: use correct CLI installation command
+- fix: use correct CLI installation command
 
-* fix: add cache mount IDs for Railway compatibility
+- fix: add cache mount IDs for Railway compatibility
 
 Railway's Docker builder requires explicit id parameters for cache mounts.
 Added id=npm-cache, id=go-build-cache, and id=go-mod-cache to the
@@ -525,7 +535,7 @@ respective cache mount directives.
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* fix: remove BuildKit cache mounts for Railway compatibility
+- fix: remove BuildKit cache mounts for Railway compatibility
 
 Railway's builder has specific cache mount requirements that differ from
 standard BuildKit. Removing cache mounts entirely - Railway has its own
@@ -533,43 +543,41 @@ layer caching, so builds still benefit from caching.
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* feat: add Railway-deployable init-example agent
+- feat: add Railway-deployable init-example agent
 
-- Add standalone package.json with npm-published @agentfield/sdk
-- Add Dockerfile for Railway deployment
-- Update README with step-by-step agent deployment instructions
-- Include curl examples to test echo and sentiment reasoners
-
-Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
-
-* Add railway.toml for init-example to disable healthcheck
-
-* Revert: remove railway.toml from init-example
-
-* Add railway.toml to init-example to override root config
-
-* forward API key
-
-* Update Railway deployment to use Docker images
-
-- Remove railway.toml files (now using Docker images directly)
-- Add AGENTFIELD_API_KEY and AGENT_CALLBACK_URL support to init-example
-- Rewrite Railway README for Docker-based deployment workflow
-- Document critical AGENT_CALLBACK_URL for agent health checks
+* Add standalone package.json with npm-published @agentfield/sdk
+* Add Dockerfile for Railway deployment
+* Update README with step-by-step agent deployment instructions
+* Include curl examples to test echo and sentiment reasoners
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* chore: bump @agentfield/sdk to 0.1.32
+- Add railway.toml for init-example to disable healthcheck
 
-* debug: add diagnostic logging to init-example
+- Revert: remove railway.toml from init-example
 
-* remove logs
+- Add railway.toml to init-example to override root config
 
----------
+- forward API key
+
+- Update Railway deployment to use Docker images
+
+* Remove railway.toml files (now using Docker images directly)
+* Add AGENTFIELD_API_KEY and AGENT_CALLBACK_URL support to init-example
+* Rewrite Railway README for Docker-based deployment workflow
+* Document critical AGENT_CALLBACK_URL for agent health checks
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+
+- chore: bump @agentfield/sdk to 0.1.32
+
+- debug: add diagnostic logging to init-example
+
+- remove logs
+
+---
 
 Co-authored-by: Claude <noreply@anthropic.com> (86289b8)
-
-
 
 ### Fixed
 
@@ -578,6 +586,7 @@ Co-authored-by: Claude <noreply@anthropic.com> (86289b8)
 * feat(deploy): add Railway template for one-click deployment
 
 Add Railway configuration for easy deployment of the control plane with PostgreSQL:
+
 - railway.toml and railway.json at repo root for Railway auto-detection
 - Dockerfile reference to existing control-plane build
 - Health check configuration (/api/v1/health)
@@ -585,9 +594,9 @@ Add Railway configuration for easy deployment of the control plane with PostgreS
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 
-* fix: use correct CLI installation command
+- fix: use correct CLI installation command
 
-* fix: add cache mount IDs for Railway compatibility
+- fix: add cache mount IDs for Railway compatibility
 
 Railway's Docker builder requires explicit id parameters for cache mounts.
 Added id=npm-cache, id=go-build-cache, and id=go-mod-cache to the
@@ -595,7 +604,7 @@ respective cache mount directives.
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* fix: remove BuildKit cache mounts for Railway compatibility
+- fix: remove BuildKit cache mounts for Railway compatibility
 
 Railway's builder has specific cache mount requirements that differ from
 standard BuildKit. Removing cache mounts entirely - Railway has its own
@@ -603,58 +612,57 @@ layer caching, so builds still benefit from caching.
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* feat: add Railway-deployable init-example agent
+- feat: add Railway-deployable init-example agent
 
-- Add standalone package.json with npm-published @agentfield/sdk
-- Add Dockerfile for Railway deployment
-- Update README with step-by-step agent deployment instructions
-- Include curl examples to test echo and sentiment reasoners
-
-Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
-
-* Add railway.toml for init-example to disable healthcheck
-
-* Revert: remove railway.toml from init-example
-
-* Add railway.toml to init-example to override root config
-
-* forward API key
-
-* Update Railway deployment to use Docker images
-
-- Remove railway.toml files (now using Docker images directly)
-- Add AGENTFIELD_API_KEY and AGENT_CALLBACK_URL support to init-example
-- Rewrite Railway README for Docker-based deployment workflow
-- Document critical AGENT_CALLBACK_URL for agent health checks
+* Add standalone package.json with npm-published @agentfield/sdk
+* Add Dockerfile for Railway deployment
+* Update README with step-by-step agent deployment instructions
+* Include curl examples to test echo and sentiment reasoners
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* chore: bump @agentfield/sdk to 0.1.32
+- Add railway.toml for init-example to disable healthcheck
 
-* debug: add diagnostic logging to init-example
+- Revert: remove railway.toml from init-example
 
-* remove logs
+- Add railway.toml to init-example to override root config
 
-* fix(sdk): prevent socket exhaustion from connection leak
+- forward API key
 
-- Add shared HTTP agents with connection pooling (maxSockets: 10)
-- Enable keepAlive to reuse connections instead of creating new ones
-- Fix sendNote() which created new axios instance on every call
-- Add 30s timeout to all HTTP requests
+- Update Railway deployment to use Docker images
+
+* Remove railway.toml files (now using Docker images directly)
+* Add AGENTFIELD_API_KEY and AGENT_CALLBACK_URL support to init-example
+* Rewrite Railway README for Docker-based deployment workflow
+* Document critical AGENT_CALLBACK_URL for agent health checks
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+
+- chore: bump @agentfield/sdk to 0.1.32
+
+- debug: add diagnostic logging to init-example
+
+- remove logs
+
+- fix(sdk): prevent socket exhaustion from connection leak
+
+* Add shared HTTP agents with connection pooling (maxSockets: 10)
+* Enable keepAlive to reuse connections instead of creating new ones
+* Fix sendNote() which created new axios instance on every call
+* Add 30s timeout to all HTTP requests
 
 Fixes agent going offline after running for extended periods due to
 56K+ leaked TCP connections exhausting available sockets.
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
----------
+---
 
 Co-authored-by: Claude <noreply@anthropic.com> (8a64a48)
 
 ## [0.1.32] - 2026-01-21
 
 ## [0.1.32-rc.4] - 2026-01-21
-
 
 ### Added
 
@@ -663,6 +671,7 @@ Co-authored-by: Claude <noreply@anthropic.com> (8a64a48)
 * feat(deploy): add Railway template for one-click deployment
 
 Add Railway configuration for easy deployment of the control plane with PostgreSQL:
+
 - railway.toml and railway.json at repo root for Railway auto-detection
 - Dockerfile reference to existing control-plane build
 - Health check configuration (/api/v1/health)
@@ -670,13 +679,11 @@ Add Railway configuration for easy deployment of the control plane with PostgreS
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 
-* fix: use correct CLI installation command
+- fix: use correct CLI installation command
 
----------
+---
 
 Co-authored-by: Claude <noreply@anthropic.com> (7375d4f)
-
-
 
 ### Fixed
 
@@ -700,6 +707,7 @@ Co-authored-by: Claude <noreply@anthropic.com> (8aedc5c)
 * feat(deploy): add Railway template for one-click deployment
 
 Add Railway configuration for easy deployment of the control plane with PostgreSQL:
+
 - railway.toml and railway.json at repo root for Railway auto-detection
 - Dockerfile reference to existing control-plane build
 - Health check configuration (/api/v1/health)
@@ -707,9 +715,9 @@ Add Railway configuration for easy deployment of the control plane with PostgreS
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 
-* fix: use correct CLI installation command
+- fix: use correct CLI installation command
 
-* fix: add cache mount IDs for Railway compatibility
+- fix: add cache mount IDs for Railway compatibility
 
 Railway's Docker builder requires explicit id parameters for cache mounts.
 Added id=npm-cache, id=go-build-cache, and id=go-mod-cache to the
@@ -717,7 +725,7 @@ respective cache mount directives.
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* fix: remove BuildKit cache mounts for Railway compatibility
+- fix: remove BuildKit cache mounts for Railway compatibility
 
 Railway's builder has specific cache mount requirements that differ from
 standard BuildKit. Removing cache mounts entirely - Railway has its own
@@ -725,18 +733,18 @@ layer caching, so builds still benefit from caching.
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
----------
+---
 
 Co-authored-by: Claude <noreply@anthropic.com> (8ea9ecb)
 
 ## [0.1.32-rc.3] - 2026-01-20
-
 
 ### Other
 
 - Add skill execution data to observability events (#147)
 
 Include skill metadata in execution events when skills are invoked:
+
 - skill_id: explicit skill identifier
 - skill: skill schema (id, input_schema, tags)
 - agent_skills: all skills on the agent node
@@ -766,15 +774,14 @@ This enhances the visual appeal and branding of the project's main documentation
 
 ## [0.1.32-rc.2] - 2026-01-13
 
-
 ### Other
 
 - Add fal-client dependency (#145)
 
 * Fix: detect_multimodal_response now handles message.images
 
-- Add _extract_image_from_data() helper for various image formats
-- Add _find_images_recursive() for generalized fallback detection
+- Add \_extract_image_from_data() helper for various image formats
+- Add \_find_images_recursive() for generalized fallback detection
 - Extract images from message.images (OpenRouter/Gemini pattern)
 - Handle data URLs with base64 extraction
 - Add recursive fallback search for edge cases
@@ -815,51 +822,51 @@ This enhances the visual appeal and branding of the project's main documentation
 * Add unified multimodal UX with FalProvider integration
 
 - Add fal_api_key and video_model to AIConfig
-- Add _fal_provider lazy property to AgentAI
+- Add \_fal_provider lazy property to AgentAI
 - Route fal-ai/ and fal/ prefixed models to FalProvider in:
-  - ai_with_vision() for image generation
-  - ai_with_audio() for TTS
+    - ai_with_vision() for image generation
+    - ai_with_audio() for TTS
 - Add ai_generate_video() method for video generation
 - Add ai_transcribe_audio() method for speech-to-text
 - Update docstrings with Fal examples
 - Add comprehensive tests for media providers
 
 Unified UX pattern:
-- app.ai_generate_image("...", model="fal-ai/flux/dev")  # Fal
-- app.ai_generate_image("...", model="dall-e-3")        # LiteLLM
+
+- app.ai_generate_image("...", model="fal-ai/flux/dev") # Fal
+- app.ai_generate_image("...", model="dall-e-3") # LiteLLM
 - app.ai_generate_video("...", model="fal-ai/minimax-video/...")
 - app.ai_transcribe_audio(url, model="fal-ai/whisper")
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* Fix lint errors in multimodal UX implementation
+- Fix lint errors in multimodal UX implementation
 
-- Add TYPE_CHECKING import for MultimodalResponse forward reference (F821)
-- Remove unused width/height/content_type variables in FalProvider (F841)
-- Remove unused sys/types imports in tests (F401)
-- Remove unused result variable in test (F841)
+* Add TYPE_CHECKING import for MultimodalResponse forward reference (F821)
+* Remove unused width/height/content_type variables in FalProvider (F841)
+* Remove unused sys/types imports in tests (F401)
+* Remove unused result variable in test (F841)
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* Fix remaining unused variable lint error
+- Fix remaining unused variable lint error
 
 Remove unused result assignment in test_ai_generate_video_uses_default_model.
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* Add fal-client dependency for media generation
+- Add fal-client dependency for media generation
 
 Required for FalProvider to generate images, video, and transcribe audio
 using Fal.ai models (Flux, MiniMax, Whisper, etc.)
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
----------
+---
 
 Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (3bdb701)
 
 ## [0.1.32-rc.1] - 2026-01-12
-
 
 ### Other
 
@@ -867,8 +874,8 @@ Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (3bdb701)
 
 * Fix: detect_multimodal_response now handles message.images
 
-- Add _extract_image_from_data() helper for various image formats
-- Add _find_images_recursive() for generalized fallback detection
+- Add \_extract_image_from_data() helper for various image formats
+- Add \_find_images_recursive() for generalized fallback detection
 - Extract images from message.images (OpenRouter/Gemini pattern)
 - Handle data URLs with base64 extraction
 - Add recursive fallback search for edge cases
@@ -909,39 +916,40 @@ Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (3bdb701)
 * Add unified multimodal UX with FalProvider integration
 
 - Add fal_api_key and video_model to AIConfig
-- Add _fal_provider lazy property to AgentAI
+- Add \_fal_provider lazy property to AgentAI
 - Route fal-ai/ and fal/ prefixed models to FalProvider in:
-  - ai_with_vision() for image generation
-  - ai_with_audio() for TTS
+    - ai_with_vision() for image generation
+    - ai_with_audio() for TTS
 - Add ai_generate_video() method for video generation
 - Add ai_transcribe_audio() method for speech-to-text
 - Update docstrings with Fal examples
 - Add comprehensive tests for media providers
 
 Unified UX pattern:
-- app.ai_generate_image("...", model="fal-ai/flux/dev")  # Fal
-- app.ai_generate_image("...", model="dall-e-3")        # LiteLLM
+
+- app.ai_generate_image("...", model="fal-ai/flux/dev") # Fal
+- app.ai_generate_image("...", model="dall-e-3") # LiteLLM
 - app.ai_generate_video("...", model="fal-ai/minimax-video/...")
 - app.ai_transcribe_audio(url, model="fal-ai/whisper")
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* Fix lint errors in multimodal UX implementation
+- Fix lint errors in multimodal UX implementation
 
-- Add TYPE_CHECKING import for MultimodalResponse forward reference (F821)
-- Remove unused width/height/content_type variables in FalProvider (F841)
-- Remove unused sys/types imports in tests (F401)
-- Remove unused result variable in test (F841)
+* Add TYPE_CHECKING import for MultimodalResponse forward reference (F821)
+* Remove unused width/height/content_type variables in FalProvider (F841)
+* Remove unused sys/types imports in tests (F401)
+* Remove unused result variable in test (F841)
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* Fix remaining unused variable lint error
+- Fix remaining unused variable lint error
 
 Remove unused result assignment in test_ai_generate_video_uses_default_model.
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
----------
+---
 
 Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (5f781b8)
 
@@ -949,12 +957,12 @@ Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (5f781b8)
 
 ## [0.1.31-rc.2] - 2026-01-12
 
-
 ### Testing
 
 - Test(server): add tests for public /health endpoint
 
 Add tests to verify:
+
 - /health bypasses API key authentication
 - /health returns healthy status with proper JSON response
 - /health returns CORS headers for cross-origin requests
@@ -962,7 +970,6 @@ Add tests to verify:
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com> (4d96445)
 
 ## [0.1.31-rc.1] - 2026-01-12
-
 
 ### Fixed
 
@@ -978,7 +985,6 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com> (f90ef0b)
 
 ## [0.1.30-rc.1] - 2026-01-11
 
-
 ### Performance
 
 - Perf: Python SDK memory optimization + benchmark visualization improvements (#138)
@@ -991,6 +997,7 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com> (f90ef0b)
 - Seaborn visualizations for technical documentation
 
 Results demonstrate Go SDK advantages:
+
 - ~3,000x faster registration than LangChain at scale
 - ~32x more memory efficient per handler
 - ~520x higher theoretical throughput
@@ -1002,6 +1009,7 @@ Memory optimizations for Python SDK to significantly reduce memory footprint:
 ## Changes
 
 ### async_config.py
+
 - Reduce result_cache_ttl: 600s -> 120s (2 min)
 - Reduce result_cache_max_size: 20000 -> 5000
 - Reduce cleanup_interval: 30s -> 10s
@@ -1009,12 +1017,14 @@ Memory optimizations for Python SDK to significantly reduce memory footprint:
 - Reduce completed_execution_retention_seconds: 600s -> 60s
 
 ### client.py
-- Add shared HTTP session pool (_shared_sync_session) for connection reuse
+
+- Add shared HTTP session pool (\_shared_sync_session) for connection reuse
 - Replace per-request Session creation with class-level shared session
-- Add _init_shared_sync_session() and _get_sync_session() class methods
+- Add \_init_shared_sync_session() and \_get_sync_session() class methods
 - Reduces connection overhead and memory from session objects
 
 ### execution_state.py
+
 - Clear input_data after execution completion (set_result)
 - Clear input_data after execution failure (set_error)
 - Clear input_data after cancellation (cancel)
@@ -1022,17 +1032,20 @@ Memory optimizations for Python SDK to significantly reduce memory footprint:
 - Prevents large payloads from being retained in memory
 
 ### async_execution_manager.py
+
 - Add 1MB buffer limit for SSE event stream
 - Prevents unbounded buffer growth from malformed events
 
 ## Benchmark Results
 
 Memory comparison (1000 iterations, ~10KB payloads):
+
 - Baseline pattern: 47.76 MB (48.90 KB/iteration)
-- Optimized SDK:     1.30 MB (1.33 KB/iteration)
-- Improvement:      97.3% memory reduction
+- Optimized SDK: 1.30 MB (1.33 KB/iteration)
+- Improvement: 97.3% memory reduction
 
 Added benchmark scripts for validation:
+
 - memory_benchmark.py: Component-level memory testing
 - benchmark_comparison.py: Full comparison with baseline patterns
 
@@ -1041,6 +1054,7 @@ Added benchmark scripts for validation:
 Replace standalone benchmark scripts with proper test suite integration:
 
 ## Python SDK
+
 - Remove benchmark_comparison.py and memory_benchmark.py
 - Add tests/test_memory_performance.py with pytest integration
 - Tests cover AsyncConfig defaults, ExecutionState memory clearing,
@@ -1048,12 +1062,14 @@ Replace standalone benchmark scripts with proper test suite integration:
 - Includes baseline comparison and memory regression tests
 
 ## Go SDK
+
 - Add agent/memory_performance_test.go
 - Benchmarks for InMemoryBackend Set/Get/List operations
 - Memory efficiency tests with performance reporting
 - ClearScope memory release verification (96.9% reduction)
 
 ## TypeScript SDK
+
 - Add tests/memory_performance.test.ts with Vitest
 - Agent creation and registration efficiency tests
 - Large payload handling tests
@@ -1061,12 +1077,13 @@ Replace standalone benchmark scripts with proper test suite integration:
 
 All tests verify memory-optimized defaults and proper cleanup.
 
-* feat(ci): add memory performance metrics workflow
+- feat(ci): add memory performance metrics workflow
 
 Add GitHub Actions workflow that runs memory performance tests
 and posts metrics as PR comments when SDK or control-plane changes.
 
 Features:
+
 - Runs Python, Go, TypeScript SDK memory tests
 - Runs control-plane benchmarks
 - Posts consolidated metrics table as PR comment
@@ -1074,6 +1091,7 @@ Features:
 - Triggered on PRs affecting sdk/ or control-plane/
 
 Metrics tracked:
+
 - Heap allocation and per-iteration memory
 - Memory reduction percentages
 - Memory leak detection results
@@ -1083,10 +1101,12 @@ Metrics tracked:
 Comprehensive performance report for PR reviewers with:
 
 ## Quick Status Section
+
 - Traffic light status for each component (✅/❌)
 - Overall pass/fail summary at a glance
 
 ## Python SDK Metrics
+
 - Lint status (ruff)
 - Test count and duration
 - Memory test status
@@ -1094,6 +1114,7 @@ Comprehensive performance report for PR reviewers with:
 - Cache operation latency (avg/p99)
 
 ## Go SDK Metrics
+
 - Lint status (go vet)
 - Test count and duration
 - Memory test status
@@ -1102,6 +1123,7 @@ Comprehensive performance report for PR reviewers with:
 - Benchmark: Set/Get ns/op, B/op
 
 ## TypeScript SDK Metrics
+
 - Lint status
 - Test count and duration
 - Memory test status
@@ -1110,11 +1132,13 @@ Comprehensive performance report for PR reviewers with:
 - Leak growth after 500 cycles
 
 ## Control Plane Metrics
+
 - Build time and status
 - Lint status
 - Test count and duration
 
 ## Collapsible Details
+
 - Each SDK has expandable details section
 - Metric definitions table for reference
 - Link to workflow logs for debugging
@@ -1127,6 +1151,7 @@ Comprehensive performance report for PR reviewers with:
 - Regenerate all visualizations with seaborn
 
 Results:
+
 - Go: 100K handlers in 17.3ms, 280 bytes/handler, 8.2M req/s
 - TypeScript: 50K handlers in 16.7ms, 276 bytes/handler
 - Python SDK: 5K handlers in 2.97s, 127 MB total
@@ -1135,17 +1160,20 @@ Results:
 * perf(python-sdk): optimize startup with lazy loading and add MCP/DID flags
 
 Improvements:
+
 - Implement lazy LiteLLM import in agent_ai.py (saves 10-20MB if AI not used)
 - Add lazy loading for ai_handler and cli_handler properties
 - Add enable_mcp (default: False) and enable_did (default: True) flags
 - MCP disabled by default since not yet fully supported
 
 Benchmark methodology fixes:
+
 - Separate Agent init time from handler registration time
 - Measure handler memory independently from Agent overhead
 - Increase test scale to 10K handlers (from 5K)
 
 Results:
+
 - Agent Init: 1.07 ms (one-time overhead)
 - Agent Memory: 0.10 MB (one-time overhead)
 - Cold Start: 1.39 ms (Agent + 1 handler)
@@ -1156,26 +1184,27 @@ Results:
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* perf(python-sdk): Reduce per-handler memory from 26.4 KB to 7.4 KB
+- perf(python-sdk): Reduce per-handler memory from 26.4 KB to 7.4 KB
 
 Architectural changes to reduce memory footprint:
 
 1. Consolidated registries: Replace 3 separate data structures (reasoners list,
-   _reasoner_vc_overrides, _reasoner_return_types) with single Dict[str, ReasonerEntry]
-   using __slots__ dataclasses.
+   \_reasoner_vc_overrides, \_reasoner_return_types) with single Dict[str, ReasonerEntry]
+   using **slots** dataclasses.
 
 2. Removed Pydantic create_model(): Each handler was creating a Pydantic model
-   class (~1.5-2 KB overhead). Now use runtime validation via _validate_handler_input()
+   class (~1.5-2 KB overhead). Now use runtime validation via \_validate_handler_input()
    with type coercion support.
 
 3. On-demand schema generation: Schemas are now generated only when the
-   /discover endpoint is called, not stored per-handler. Added _types_to_json_schema()
-   and _type_to_json_schema() helper methods.
+   /discover endpoint is called, not stored per-handler. Added \_types_to_json_schema()
+   and \_type_to_json_schema() helper methods.
 
 4. Weakref closures: Use weakref.ref(self) in tracked_func closure to break
    circular references (Agent → tracked_func → Agent) and enable immediate GC.
 
 Benchmark results (10,000 handlers):
+
 - Memory: 26.4 KB/handler → 7.4 KB/handler (72% reduction)
 - Registration: 5,797 ms → 624 ms
 
@@ -1184,7 +1213,7 @@ without comparative marketing language.
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* ci: Redesign PR performance metrics for clarity and regression detection
+- ci: Redesign PR performance metrics for clarity and regression detection
 
 Simplified the memory-metrics.yml workflow to be scannable and actionable:
 
@@ -1195,59 +1224,59 @@ Simplified the memory-metrics.yml workflow to be scannable and actionable:
 - Added baseline.json with current metrics for comparison
 
 Example output:
-| SDK    | Memory  | Δ    | Latency | Δ | Tests | Status |
+| SDK | Memory | Δ | Latency | Δ | Tests | Status |
 |--------|---------|------|---------|---|-------|--------|
-| Python | 7.4 KB  | -    | 0.21 µs | - | ✓     | ✓      |
+| Python | 7.4 KB | - | 0.21 µs | - | ✓ | ✓ |
 
 ✓ No regressions detected
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* refactor(benchmarks): Consolidate visualization to 2 scientific figures
+- refactor(benchmarks): Consolidate visualization to 2 scientific figures
 
-- Reduce from 6 images to 2 publication-quality figures
-- benchmark_summary.png: 2x2 grid with registration, memory, latency, throughput
-- latency_comparison.png: CDF and box plot with proper legends
-- Fix Python SDK validation error handling (proper HTTP 422 responses)
-- Update tests to use new _reasoner_registry (replaces _reasoner_return_types)
-- Clean up unused benchmark result files
-
-Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
-
-* fix(benchmarks): Re-run Python SDK benchmark with optimized code
-
-- Updated AgentField_Python.json with fresh benchmark results
-- Memory: 7.5 KB/handler (was 26.4 KB) - 30% better than LangChain
-- Registration: 57ms for 1000 handlers (was 5796ms for 10000)
-- Consolidated to single clean 2x2 visualization
-- Removed comparative text, keeping neutral factual presentation
+* Reduce from 6 images to 2 publication-quality figures
+* benchmark_summary.png: 2x2 grid with registration, memory, latency, throughput
+* latency_comparison.png: CDF and box plot with proper legends
+* Fix Python SDK validation error handling (proper HTTP 422 responses)
+* Update tests to use new \_reasoner_registry (replaces \_reasoner_return_types)
+* Clean up unused benchmark result files
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* feat(benchmarks): Add Pydantic AI comparison, improve visualization
+- fix(benchmarks): Re-run Python SDK benchmark with optimized code
 
-- Add Pydantic AI benchmark (3.4 KB/handler, 0.17µs latency, 9M rps)
-- Update color scheme: AgentField SDKs in blue family, others distinct
-- Shows AgentField crushing LangChain on key metrics:
-  - Latency: 0.21µs vs 118µs (560x faster)
-  - Throughput: 6.7M vs 15K (450x higher)
-  - Registration: 57ms vs 483ms (8x faster)
-
-Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
-
-* chore(benchmarks): Remove Pydantic AI and CrewAI, keep only LangChain comparison
-
-- Remove pydantic-ai-bench/ directory
-- Remove crewai-bench/ directory
-- Remove PydanticAI_Python.json results
-- Update analyze.py to only include AgentField SDKs + LangChain
-- Regenerate benchmark visualization
+* Updated AgentField_Python.json with fresh benchmark results
+* Memory: 7.5 KB/handler (was 26.4 KB) - 30% better than LangChain
+* Registration: 57ms for 1000 handlers (was 5796ms for 10000)
+* Consolidated to single clean 2x2 visualization
+* Removed comparative text, keeping neutral factual presentation
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* ci fixes
+- feat(benchmarks): Add Pydantic AI comparison, improve visualization
 
-* fix: Python 3.8/3.9 compatibility for dataclass slots parameter
+* Add Pydantic AI benchmark (3.4 KB/handler, 0.17µs latency, 9M rps)
+* Update color scheme: AgentField SDKs in blue family, others distinct
+* Shows AgentField crushing LangChain on key metrics:
+    - Latency: 0.21µs vs 118µs (560x faster)
+    - Throughput: 6.7M vs 15K (450x higher)
+    - Registration: 57ms vs 483ms (8x faster)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+
+- chore(benchmarks): Remove Pydantic AI and CrewAI, keep only LangChain comparison
+
+* Remove pydantic-ai-bench/ directory
+* Remove crewai-bench/ directory
+* Remove PydanticAI_Python.json results
+* Update analyze.py to only include AgentField SDKs + LangChain
+* Regenerate benchmark visualization
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+
+- ci fixes
+
+- fix: Python 3.8/3.9 compatibility for dataclass slots parameter
 
 The `slots=True` parameter for dataclass was added in Python 3.10.
 This fix conditionally applies slots only on Python 3.10+, maintaining
@@ -1256,20 +1285,20 @@ memory optimization on newer versions.
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* fix(ci): Fix TypeScript benchmark and update baseline for CI environment
+- fix(ci): Fix TypeScript benchmark and update baseline for CI environment
 
-- Fix TypeScript benchmark failing due to top-level await in CJS mode
-  - Changed from npx tsx -e to writing .mjs file and running with node
-  - Now correctly reports memory (~219 B/handler) and latency metrics
+* Fix TypeScript benchmark failing due to top-level await in CJS mode
+    - Changed from npx tsx -e to writing .mjs file and running with node
+    - Now correctly reports memory (~219 B/handler) and latency metrics
 
-- Update baseline.json to match CI environment (Python 3.11, ubuntu-latest)
-  - Python baseline: 7.4 KB → 9.0 KB (reflects actual CI measurements)
-  - Increased warning thresholds to 15% to account for cross-platform variance
-  - The previous baseline was from Python 3.14/macOS which differs from CI
+* Update baseline.json to match CI environment (Python 3.11, ubuntu-latest)
+    - Python baseline: 7.4 KB → 9.0 KB (reflects actual CI measurements)
+    - Increased warning thresholds to 15% to account for cross-platform variance
+    - The previous baseline was from Python 3.14/macOS which differs from CI
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* fix(ci): TypeScript benchmark now tests actual SDK instead of raw Map
+- fix(ci): TypeScript benchmark now tests actual SDK instead of raw Map
 
 The CI benchmark was incorrectly measuring a raw JavaScript Map instead
 of the actual TypeScript SDK. This fix:
@@ -1282,15 +1311,16 @@ of the actual TypeScript SDK. This fix:
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* feat(benchmarks): Add CrewAI and Mastra framework comparisons
+- feat(benchmarks): Add CrewAI and Mastra framework comparisons
 
 Add benchmark comparisons for CrewAI (Python) and Mastra (TypeScript):
+
 - CrewAI: AgentField is 3.5x faster registration, 1.9x less memory
 - Mastra: AgentField is 27x faster registration, 6.5x less memory
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* docs: Add SDK performance benchmarks to README
+- docs: Add SDK performance benchmarks to README
 
 Add benchmark comparison tables for Python (vs LangChain, CrewAI) and
 TypeScript (vs Mastra) frameworks showing registration time, memory
@@ -1298,7 +1328,7 @@ per handler, and throughput metrics.
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
----------
+---
 
 Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com>
 Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (8a7fded)
@@ -1306,7 +1336,6 @@ Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (8a7fded)
 ## [0.1.29] - 2026-01-11
 
 ## [0.1.29-rc.2] - 2026-01-11
-
 
 ### Fixed
 
@@ -1320,7 +1349,6 @@ Co-authored-by: Claude <noreply@anthropic.com> (8b1b1f7)
 
 ## [0.1.29-rc.1] - 2026-01-09
 
-
 ### Added
 
 - Feat(ci): add contributor reminder and assignment tracking workflows (#132)
@@ -1328,22 +1356,20 @@ Co-authored-by: Claude <noreply@anthropic.com> (8b1b1f7)
 Add automated system to remind assigned contributors and free up stale assignments:
 
 - contributor-reminders.yml: Scheduled daily check that:
-  - Sends friendly reminder at 7 days without activity
-  - Sends second reminder at 14 days with unassign warning
-  - Unassigns and re-labels as 'help wanted' at 21 days
-  - Skips issues with linked PRs or blocking labels
-  - Supports dry-run mode for testing
+    - Sends friendly reminder at 7 days without activity
+    - Sends second reminder at 14 days with unassign warning
+    - Unassigns and re-labels as 'help wanted' at 21 days
+    - Skips issues with linked PRs or blocking labels
+    - Supports dry-run mode for testing
 
 - issue-assignment-tracking.yml: Real-time event handling that:
-  - Welcomes new assignees with timeline expectations
-  - Clears reminder labels when assignees comment
-  - Clears labels when assignee opens linked PR
-  - Auto-adds 'help wanted' when last assignee leaves
+    - Welcomes new assignees with timeline expectations
+    - Clears reminder labels when assignees comment
+    - Clears labels when assignee opens linked PR
+    - Auto-adds 'help wanted' when last assignee leaves
 
 This improves contributor experience by setting clear expectations
 while ensuring stale assignments don't block other contributors. (7bbac52)
-
-
 
 ### Documentation
 
@@ -1355,19 +1381,21 @@ Update all references from ghcr.io/agent-field/agentfield-control-plane
 to agentfield/control-plane (Docker Hub).
 
 Files updated:
+
 - deployments/kubernetes/base/control-plane-deployment.yaml
 - deployments/helm/agentfield/values.yaml
 - examples/python_agent_nodes/rag_evaluation/docker-compose.yml
 - README.md
-- docs/RELEASE.md (includes new DOCKERHUB_* secrets documentation)
+- docs/RELEASE.md (includes new DOCKERHUB\_\* secrets documentation)
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* fix: use real version numbers in RELEASE.md examples
+- fix: use real version numbers in RELEASE.md examples
 
 Update example commands to use actual versions that exist:
+
 - Docker: staging-0.1.28-rc.4 (not 0.1.19-rc.1)
 - Install script: v0.1.28 and v0.1.28-rc.4
 
@@ -1375,11 +1403,9 @@ Update example commands to use actual versions that exist:
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
----------
+---
 
 Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (feeaa21)
-
-
 
 ### Other
 
@@ -1388,7 +1414,6 @@ Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (feeaa21)
 ## [0.1.28] - 2026-01-06
 
 ## [0.1.28-rc.4] - 2026-01-06
-
 
 ### Chores
 
@@ -1405,8 +1430,6 @@ DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets to the repository.
 
 Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (e6abe54)
 
-
-
 ### Documentation
 
 - Docs: add Discord community badge to README (#131)
@@ -1421,7 +1444,6 @@ Co-authored-by: Claude <noreply@anthropic.com> (81fb1c5)
 
 ## [0.1.28-rc.3] - 2026-01-05
 
-
 ### Fixed
 
 - Fix(control-plane): enforce lifecycle_status consistency with agent state (#130)
@@ -1432,6 +1454,7 @@ lifecycle_status as "ready" even though health_status correctly showed
 data where offline nodes appeared online based on lifecycle_status.
 
 Changes:
+
 - Add defensive lifecycle_status enforcement in persistStatus()
   to ensure consistency with agent state before writing to storage
 - Update health_monitor.go fallback paths to also update lifecycle_status
@@ -1449,7 +1472,6 @@ Co-authored-by: Claude <noreply@anthropic.com> (67c67c4)
 
 ## [0.1.28-rc.2] - 2026-01-05
 
-
 ### Other
 
 - Switch hot-reload dev setup from Docker to native Air (#129)
@@ -1459,6 +1481,7 @@ host environment. This avoids networking issues between Docker and host
 (especially on WSL2 where host.docker.internal has limitations).
 
 Changes:
+
 - Remove Dockerfile.dev and docker-compose.dev.yml
 - Update dev.sh to run Air natively (auto-installs if missing)
 - Update README.md with simplified instructions
@@ -1471,7 +1494,6 @@ Co-authored-by: Claude <noreply@anthropic.com> (670c0ba)
 
 ## [0.1.28-rc.1] - 2026-01-05
 
-
 ### Other
 
 - Hot reload controlplane local setup (#128) (690d481)
@@ -1479,7 +1501,6 @@ Co-authored-by: Claude <noreply@anthropic.com> (670c0ba)
 ## [0.1.27] - 2026-01-02
 
 ## [0.1.27-rc.1] - 2026-01-01
-
 
 ### CI
 
@@ -1493,8 +1514,6 @@ GitHub App) is implemented.
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com> (6dbc908)
-
-
 
 ### Other
 
@@ -1511,7 +1530,7 @@ so the return type interface must match to avoid TypeScript errors.
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
----------
+---
 
 Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
 Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (f2168e0)
@@ -1519,7 +1538,6 @@ Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (f2168e0)
 ## [0.1.26] - 2025-12-27
 
 ## [0.1.26-rc.3] - 2025-12-27
-
 
 ### Added
 
@@ -1534,12 +1552,14 @@ Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (f2168e0)
 Add comprehensive test coverage for the new vector memory endpoints:
 
 GetVectorHandler tests:
+
 - TestGetVectorHandler_ReturnsVectorWithMetadata: Full happy path with scope/key/metadata
 - TestGetVectorHandler_NotFound: 404 when vector doesn't exist
 - TestGetVectorHandler_StorageError: 500 on database failure
 - TestGetVectorHandler_DefaultScope: Scope resolution from headers
 
 DeleteVectorHandler tests:
+
 - TestDeleteVectorHandler_RESTfulDelete: DELETE with path parameter
 - TestDeleteVectorHandler_BackwardCompatibilityWithBody: POST with JSON body
 - TestDeleteVectorHandler_StorageError: 500 on database failure
@@ -1552,13 +1572,11 @@ for assertion verification.
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
----------
+---
 
 Co-authored-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
 Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
 Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (0dd4e62)
-
-
 
 ### Fixed
 
@@ -1570,6 +1588,7 @@ applied to pull requests. Without this permission, the workflow fails with:
 "GraphQL: Resource not accessible by integration (addLabelsToLabelable)"
 
 Added permissions:
+
 - `issues: write` - Required for adding labels
 - `contents: read` - Explicit permission for checkout
 
@@ -1593,7 +1612,6 @@ Co-authored-by: Claude <noreply@anthropic.com> (1e2225d)
 
 ## [0.1.26-rc.2] - 2025-12-27
 
-
 ### Added
 
 - Feat(tests): add unit tests for vector memory handler functionality (#123) (9df214d)
@@ -1601,7 +1619,6 @@ Co-authored-by: Claude <noreply@anthropic.com> (1e2225d)
 - Feat: Add AI-assisted contribution guidelines, task issue template, AI labeling workflow, security, and support policies. (87c9297)
 
 ## [0.1.26-rc.1] - 2025-12-23
-
 
 ### Added
 
@@ -1622,9 +1639,9 @@ Add observability webhook system for forwarding events to external endpoints:
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* test fixes
+- test fixes
 
-* fix(observability): node offline events now properly forwarded to webhook
+- fix(observability): node offline events now properly forwarded to webhook
 
 Fixed a race condition where node offline events were not being forwarded
 to the observability webhook. The issue was in UpdateAgentStatus which
@@ -1641,7 +1658,7 @@ Also added observability webhook documentation to ARCHITECTURE.md.
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* test(status-manager): add tests for node online/offline event broadcasting
+- test(status-manager): add tests for node online/offline event broadcasting
 
 Add comprehensive tests to verify status change events are properly
 broadcast when nodes transition between active and inactive states:
@@ -1662,7 +1679,7 @@ GetAgentStatusSnapshot, causing oldStatus == newStatus.
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* docs: remove observability webhook documentation
+- docs: remove observability webhook documentation
 
 The observability webhook feature remains functional but will not be publicly
 documented at this time.
@@ -1671,17 +1688,15 @@ documented at this time.
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 
-* bugfix on ts-sdk json schema return
+- bugfix on ts-sdk json schema return
 
-* webhook secret fix
+- webhook secret fix
 
-* refine webhook events
+- refine webhook events
 
----------
+---
 
 Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (27cf1f7)
-
-
 
 ### Other
 
@@ -1695,13 +1710,11 @@ Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (27cf1f7)
 
 ## [0.1.25-rc.2] - 2025-12-21
 
-
 ### Added
 
 - Feat(dashboard): add comprehensive observability enhancements (#101) (d947542)
 
 ## [0.1.25-rc.1] - 2025-12-21
-
 
 ### Other
 
@@ -1718,6 +1731,7 @@ Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (27cf1f7)
 Adds a GitHub Actions workflow to automate the collection and updating of download statistics from GitHub releases, PyPI, and NPM.
 
 This workflow:
+
 - Runs every 6 hours or can be triggered manually.
 - Fetches download counts from GitHub releases and aggregates them.
 - Retrieves total downloads from Pepy.tech for PyPI.
@@ -1733,7 +1747,6 @@ This workflow:
 
 ## [0.1.24-rc.3] - 2025-12-18
 
-
 ### Chores
 
 - Chore(rag-eval): update default model to GPT-4o (#85)
@@ -1746,8 +1759,6 @@ This workflow:
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
 Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (f49959a)
-
-
 
 ### Documentation
 
@@ -1769,8 +1780,6 @@ and Helm deployment options.
 
 Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (59eaf7f)
 
-
-
 ### Other
 
 - Fix parent-child workflow tracking for direct reasoner calls via AgentRouter (#86)
@@ -1787,22 +1796,23 @@ captured in the workflow DAG. This happened because:
 3. Direct calls bypassed the tracked wrapper entirely
 
 This fix implements lazy-binding in AgentRouter.reasoner():
+
 - The decorator now returns a wrapper that looks up the tracked function
-  at call time via router._tracked_functions
+  at call time via router.\_tracked_functions
 - include_router() registers tracked functions in this lookup table
 - Direct reasoner-to-reasoner calls now go through the tracked wrapper,
   enabling proper parent_execution_id propagation
 
 Changes:
+
 - router.py: Add lazy-binding wrapper in reasoner() decorator
-- agent.py: Register tracked functions in router._tracked_functions
+- agent.py: Register tracked functions in router.\_tracked_functions
 - test_router.py: Update tests for new wrapper behavior
 - test_workflow_parent_child.py: Add comprehensive tests for parent-child tracking
 
 * Remove unused imports in test_workflow_parent_child.py (342af92)
 
 ## [0.1.24-rc.2] - 2025-12-17
-
 
 ### Other
 
@@ -1813,6 +1823,7 @@ Changes:
 Refactors the Docker deployment documentation and configuration to improve clarity and flexibility for setting up control planes and agents.
 
 Key changes include:
+
 - Enhancing the README for Docker deployments with more detailed instructions for running agents in Docker, distinguishing between agents on the host and agents within the same Docker Compose network.
 - Adding specific guidance on using `host.docker.internal` for host-based agents and service names for agents within the same network.
 - Introducing new Docker Compose services for a demo Go agent and a demo Python agent, enabling them to be run with Docker Compose profiles.
@@ -1826,6 +1837,7 @@ Key changes include:
 Updates the README files for Docker, Helm, and Kubernetes deployments to improve clarity and provide more streamlined quick-start guides.
 
 The changes include:
+
 - Simplifying the Docker Compose setup instructions.
 - Refining the Helm chart documentation to recommend PostgreSQL and the Python demo agent by default.
 - Streamlining the Kubernetes manifests to suggest the Python demo agent overlay as a recommended starting point.
@@ -1843,13 +1855,12 @@ Adjusts the kustomization file for the postgres demo overlay to use the standard
 
 ## [0.1.24-rc.1] - 2025-12-17
 
-
 ### Added
 
 - Feat(go-sdk): add ControlPlaneMemoryBackend for distributed memory (#80)
 
 Add a new MemoryBackend implementation that delegates storage to the
-control plane's /api/v1/memory/* endpoints. This enables distributed,
+control plane's /api/v1/memory/\* endpoints. This enables distributed,
 scope-aware memory across agents.
 
 - Implements Set, Get, Delete, and List operations
@@ -1866,12 +1877,14 @@ Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (6cd445c)
 * feat: add RAG evaluation example with multi-reasoner architecture
 
 Adds a comprehensive RAG evaluation agent demonstrating:
+
 - Adversarial debate for faithfulness (prosecutor vs defender + judge)
 - Multi-jury consensus for relevance (3 jurors vote on literal/intent/scope)
 - Hybrid ML+LLM chain-of-verification for hallucination detection
 - Configurable constitutional principles evaluation
 
 Features:
+
 - Docker Compose deployment (control plane + agent + UI)
 - Next.js web interface with claim-level breakdown
 - Domain-specific presets (medical, legal, financial)
@@ -1881,7 +1894,7 @@ Features:
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* Remove ARCHITECTURE.md, link to website docs instead
+- Remove ARCHITECTURE.md, link to website docs instead
 
 The detailed architecture documentation is now on the website at
 agentfield.dev/examples/complete-agents/rag-evaluator - no need
@@ -1891,9 +1904,10 @@ to duplicate content in the repo.
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* Add examples README with quick reference table
+- Add examples README with quick reference table
 
 Index of all examples across Python, TypeScript, and Go with:
+
 - Quick reference table by use case and language
 - Detailed per-language tables with key features
 - Use case deep dives (RAG progression, multi-agent, serverless)
@@ -1903,14 +1917,13 @@ Index of all examples across Python, TypeScript, and Go with:
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
----------
+---
 
 Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (862c41e)
 
 ## [0.1.23] - 2025-12-16
 
 ## [0.1.23-rc.1] - 2025-12-16
-
 
 ### Fixed
 
@@ -1924,6 +1937,7 @@ in the executions table. This caused "execution not found" errors when adding
 or retrieving notes via app.note().
 
 Changes:
+
 - Add Notes field to types.Execution struct
 - Add notes column to ExecutionRecordModel (GORM auto-migrates this)
 - Update SQL queries in execution_records.go to include notes column
@@ -1941,7 +1955,7 @@ This fixes both the SDK app.note() functionality and the UI notes panel
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* fix: update execution notes tests to use correct storage methods
+- fix: update execution notes tests to use correct storage methods
 
 Tests were using WorkflowExecution type and StoreWorkflowExecution() to set up
 test data, but the handlers now use Execution type and GetExecutionRecord()/
@@ -1956,14 +1970,13 @@ UpdateExecutionRecord() which query the executionRecords map.
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
----------
+---
 
 Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (5dd327e)
 
 ## [0.1.22] - 2025-12-16
 
 ## [0.1.22-rc.4] - 2025-12-16
-
 
 ### Fixed
 
@@ -1979,7 +1992,6 @@ Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (c6f31cb)
 
 ## [0.1.22-rc.3] - 2025-12-16
 
-
 ### Added
 
 - Feat(go-sdk): add per-request API key override for AI client (#73)
@@ -1989,6 +2001,7 @@ per-request basis. This brings the Go SDK to parity with the Python SDK,
 which supports api_key overrides in individual calls.
 
 Changes:
+
 - Add APIKeyOverride field to Request struct (excluded from JSON)
 - Add WithAPIKey option function
 - Update doRequest and StreamComplete to use override when provided
@@ -2000,7 +2013,6 @@ Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (4dd8a70)
 
 ## [0.1.22-rc.2] - 2025-12-15
 
-
 ### Added
 
 - Feat(go-sdk): add Memory and Note APIs for agent state and progress tracking (#71)
@@ -2008,18 +2020,21 @@ Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (4dd8a70)
 Add two major new capabilities to the Go SDK:
 
 ## Memory System
+
 - Hierarchical scoped storage (workflow, session, user, global)
 - Pluggable MemoryBackend interface for custom storage
 - Default in-memory backend included
 - Automatic scope ID resolution from execution context
 
 ## Note API
+
 - Fire-and-forget progress/status messages to AgentField UI
 - Note(ctx, message, tags...) and Notef(ctx, format, args...) methods
 - Async HTTP delivery with proper execution context headers
 - Silent failure mode to avoid interrupting workflows
 
 These additions enable agents to:
+
 - Persist state across handler invocations within a session
 - Share data between workflows at different scopes
 - Report real-time progress updates visible in the UI
@@ -2029,7 +2044,6 @@ These additions enable agents to:
 Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (1c48c1f)
 
 ## [0.1.22-rc.1] - 2025-12-15
-
 
 ### Added
 
@@ -2042,6 +2056,7 @@ requiring access to OpenRouter API keys. This makes it easier for the community
 to contribute while maintaining full test coverage for maintainers.
 
 Changes:
+
 - Detect forked PRs and automatically skip OpenRouter-dependent tests
 - Only 2 tests require OpenRouter (LLM integration tests)
 - 24 tests validate all core infrastructure without LLM calls
@@ -2059,14 +2074,14 @@ Test coverage for external contributors:
 ✅ Verifiable credentials
 
 Skipped for external contributors (maintainers still run these):
-⏭️  test_hello_world_with_openrouter
-⏭️  test_readme_quick_start_summarize_flow
+⏭️ test_hello_world_with_openrouter
+⏭️ test_readme_quick_start_summarize_flow
 
 This change addresses the challenge of running CI for external contributors
 without exposing repository secrets while maintaining comprehensive test
 coverage for the core AgentField platform functionality.
 
-* fix: handle push events correctly in functional tests workflow
+- fix: handle push events correctly in functional tests workflow
 
 The workflow was failing on push events (to main/testing branches) because
 it relied on github.event.pull_request.head.repo.fork which is null for
@@ -2074,6 +2089,7 @@ push events. This caused the workflow to incorrectly fall into the else
 branch and fail when OPENROUTER_API_KEY wasn't set.
 
 Changes:
+
 - Check github.event_name to differentiate between push, pull_request, and workflow_dispatch
 - Explicitly handle push and workflow_dispatch events to run all tests with API key
 - Preserve fork PR detection to skip OpenRouter tests for external contributors
@@ -2088,7 +2104,7 @@ Now properly handles:
 
 Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
 
-* fix: remove shell quoting from PYTEST_ARGS to prevent argument parsing errors
+- fix: remove shell quoting from PYTEST_ARGS to prevent argument parsing errors
 
 The PYTEST_ARGS variable contained single quotes around '-m "not openrouter" -v'
 which would be included in the environment variable value. When passed to pytest
@@ -2096,7 +2112,7 @@ in the Docker container shell command, this caused the entire string to be treat
 as a single argument instead of being properly split into separate arguments.
 
 Changed from: '-m "not openrouter" -v'
-Changed to:   -m not openrouter -v
+Changed to: -m not openrouter -v
 
 This allows the shell's word splitting to correctly parse the arguments when
 pytest $$PYTEST_ARGS is evaluated in the docker-compose command.
@@ -2105,7 +2121,7 @@ pytest $$PYTEST_ARGS is evaluated in the docker-compose command.
 
 Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
 
-* refactor: separate pytest marker expression from general args for proper quoting
+- refactor: separate pytest marker expression from general args for proper quoting
 
 The previous approach of embedding -m not openrouter inside PYTEST_ARGS was
 fragile because shell word-splitting doesn't guarantee "not openrouter" stays
@@ -2113,15 +2129,17 @@ together as a single argument to the -m flag.
 
 This change introduces PYTEST_MARK_EXPR as a dedicated variable for the marker
 expression, which is then properly quoted when passed to pytest:
-  pytest -m "$PYTEST_MARK_EXPR" $PYTEST_ARGS ...
+pytest -m "$PYTEST_MARK_EXPR" $PYTEST_ARGS ...
 
 Benefits:
+
 - Marker expression is guaranteed to be treated as single argument to -m
 - Clear separation between marker selection and general pytest args
 - More maintainable for future marker additions
 - Eliminates shell quoting ambiguity
 
 Changes:
+
 - workflow: Split PYTEST_ARGS into PYTEST_MARK_EXPR + PYTEST_ARGS
 - docker-compose: Add PYTEST_MARK_EXPR env var and conditional -m flag
 - docker-compose: Only apply -m when PYTEST_MARK_EXPR is non-empty
@@ -2130,9 +2148,10 @@ Changes:
 
 Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
 
-* fix: add proper event type checks before accessing pull_request context
+- fix: add proper event type checks before accessing pull_request context
 
 Prevent errors when workflow runs on push events by:
+
 - Check event_name == 'pull_request' before accessing pull_request.head.repo.fork
 - Check event_name == 'workflow_dispatch' before accessing event.inputs
 - Ensures all conditional expressions only access context properties when they exist
@@ -2144,11 +2163,9 @@ on push events.
 
 Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
 
----------
+---
 
 Co-authored-by: Claude Sonnet 4.5 <noreply@anthropic.com> (01668aa)
-
-
 
 ### Fixed
 
@@ -2161,6 +2178,7 @@ conditional imports, causing an `UnboundLocalError` when trying to use
 `os.getenv()` at line 1140.
 
 Error seen in Docker containers:
+
 ```
 UnboundLocalError: cannot access local variable 'os' where it is not
 associated with a value
@@ -2180,7 +2198,6 @@ Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (a0d0538)
 
 ## [0.1.21-rc.3] - 2025-12-14
 
-
 ### Other
 
 - Test pr 68 init fix (#69)
@@ -2198,40 +2215,37 @@ Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (a0d0538)
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* docs: add changelog entry for CLI init fixes
+- docs: add changelog entry for CLI init fixes
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
-* chore: trigger CI with secrets
+- chore: trigger CI with secrets
 
-* chore: remove manual changelog entry (auto-generated on release)
+- chore: remove manual changelog entry (auto-generated on release)
 
----------
+---
 
 Co-authored-by: fimbulwinter <sanandsankalp@gmail.com>
 Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (55d0c61)
 
 ## [0.1.21-rc.2] - 2025-12-10
 
-
 ### Fixed
 
 - Fix: correct parent execution ID for sub-calls in app.call() (#62)
 
 When a reasoner calls a skill via app.call(), the X-Parent-Execution-ID
-  header was incorrectly set to the inherited parent instead of the current
-  execution. This caused workflow graphs to show incorrect parent-child
-  relationships.
+header was incorrectly set to the inherited parent instead of the current
+execution. This caused workflow graphs to show incorrect parent-child
+relationships.
 
-  The fix overrides X-Parent-Execution-ID to use the current execution's ID
-  after to_headers() is called, ensuring sub-calls are correctly attributed
-  as children of the calling execution.
+The fix overrides X-Parent-Execution-ID to use the current execution's ID
+after to_headers() is called, ensuring sub-calls are correctly attributed
+as children of the calling execution.
 
 Co-authored-by: Ivan Viljoen <8543825+ivanvza@users.noreply.github.com> (762142e)
-
-
 
 ### Other
 
@@ -2246,7 +2260,6 @@ Removed early adopter section from README. (054fc22)
 - Update README.md (39c2da4)
 
 ## [0.1.21-rc.1] - 2025-12-06
-
 
 ### Other
 
@@ -2314,7 +2327,6 @@ Removed early adopter section from README. (054fc22)
 
 ## [0.1.20-rc.3] - 2025-12-04
 
-
 ### Fixed
 
 - Fix(sdk/typescript): add DID registration to enable VC generation (#60)
@@ -2332,7 +2344,7 @@ Examples should always pin to stable versions so they work out of the box.
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 
-* fix(sdk/typescript): add DID registration to enable VC generation
+- fix(sdk/typescript): add DID registration to enable VC generation
 
 The TypeScript SDK was not registering with the DID system, causing VC
 generation to fail with "failed to resolve caller DID: DID not found".
@@ -2345,6 +2357,7 @@ This change adds DID registration to match the Python SDK's behavior:
 - Update getDidInterface() to resolve DIDs from stored identity package
 
 When didEnabled is true, the agent now:
+
 1. Registers with /api/v1/nodes/register (existing)
 2. Registers with /api/v1/did/register (new)
 3. Stores identity package for DID resolution
@@ -2354,9 +2367,10 @@ When didEnabled is true, the agent now:
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 
-* feat(examples): add verifiable credentials TypeScript example
+- feat(examples): add verifiable credentials TypeScript example
 
 Add a complete VC example demonstrating:
+
 - Basic text processing with explicit VC generation
 - AI-powered analysis with VC audit trail
 - Data transformation with integrity proof
@@ -2366,16 +2380,16 @@ Add a complete VC example demonstrating:
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 
-* fix(examples): fix linting errors in VC TypeScript example
+- fix(examples): fix linting errors in VC TypeScript example
 
-- Remove invalid `note` property from workflow.progress calls
-- Simplify AI response handling since schema already returns parsed type
+* Remove invalid `note` property from workflow.progress calls
+* Simplify AI response handling since schema already returns parsed type
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 
----------
+---
 
 Co-authored-by: Claude <noreply@anthropic.com> (bd097e1)
 
@@ -2394,7 +2408,6 @@ Co-authored-by: Claude <noreply@anthropic.com> (1b7d9b8)
 
 ## [0.1.20-rc.2] - 2025-12-04
 
-
 ### Added
 
 - Feat(release): unify PyPI publishing for all releases (#58)
@@ -2408,6 +2421,7 @@ This simplifies the release process and removes the need for the
 TEST_PYPI_API_TOKEN secret.
 
 Changes:
+
 - Merge TestPyPI and PyPI publish steps into single PyPI step
 - Update release notes to show `pip install --pre` for staging
 - Update install.sh staging output
@@ -2417,8 +2431,6 @@ Changes:
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
 Co-authored-by: Claude <noreply@anthropic.com> (ebf7020)
-
-
 
 ### Fixed
 
@@ -2432,7 +2444,7 @@ deployments to fail because pip couldn't find the package.
 
 Revert to the last stable version (0.1.19) which is available on PyPI.
 
-* fix(release): skip example requirements bump for prerelease versions
+- fix(release): skip example requirements bump for prerelease versions
 
 Prerelease versions are published to TestPyPI, not PyPI. If we bump
 example requirements.txt files to require a prerelease version,
@@ -2444,7 +2456,6 @@ on PyPI. (c86bec5)
 
 ## [0.1.20-rc.1] - 2025-12-04
 
-
 ### Added
 
 - Feat(release): add two-tier staging/production release system (#53)
@@ -2453,10 +2464,11 @@ on PyPI. (c86bec5)
 
 Implement automatic staging releases and manual production releases:
 
-- Staging: Automatic on push to main (PyPI prerelease, npm @next, staging-* Docker)
+- Staging: Automatic on push to main (PyPI prerelease, npm @next, staging-\* Docker)
 - Production: Manual workflow dispatch (PyPI, npm @latest, vX.Y.Z + latest Docker)
 
 Changes:
+
 - Add push trigger with path filters for automatic staging
 - Replace release_channel with release_environment input
 - Unified PyPI publishing for both staging (prerelease) and production
@@ -2469,28 +2481,30 @@ Changes:
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 
-* refactor(install): consolidate staging into single install.sh with --staging flag
+- refactor(install): consolidate staging into single install.sh with --staging flag
 
 Instead of separate install.sh and install-staging.sh scripts:
+
 - Single install.sh handles both production and staging
 - Use --staging flag or STAGING=1 env var for prerelease installs
 - Eliminates code drift between scripts
 
 Usage:
-  Production: curl -fsSL .../install.sh | bash
-  Staging:    curl -fsSL .../install.sh | bash -s -- --staging
+Production: curl -fsSL .../install.sh | bash
+Staging: curl -fsSL .../install.sh | bash -s -- --staging
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 
----------
+---
 
 Co-authored-by: Claude <noreply@anthropic.com> (3bd748d)
 
 - Feat(sdk/typescript): expand AI provider support to 10 providers
 
 Add 6 new AI providers to the TypeScript SDK:
+
 - Google (Gemini models)
 - Mistral AI
 - Groq
@@ -2501,6 +2515,7 @@ Add 6 new AI providers to the TypeScript SDK:
 Also add explicit handling for OpenRouter and Ollama with sensible defaults.
 
 Changes:
+
 - Update AIConfig type with new provider options
 - Refactor buildModel() with switch statement for all providers
 - Refactor buildEmbeddingModel() with proper embedding support
@@ -2513,14 +2528,11 @@ Changes:
 
 Co-Authored-By: Claude <noreply@anthropic.com> (b06b5b5)
 
-
-
 ### Other
 
 - Update versions (a7912f5)
 
 ## [0.1.19] - 2025-12-04
-
 
 ### Fixed
 
@@ -2533,16 +2545,16 @@ fetchWrapper functions that properly inject the key. (f0ec542)
 
 ## [0.1.18] - 2025-12-03
 
-
 ### Fixed
 
 - Fix(sdk): inject API key into all HTTP requests
 
 The Python SDK was not including the X-API-Key header in HTTP requests
-made through AgentFieldClient._async_request(), causing 401 errors when
+made through AgentFieldClient.\_async_request(), causing 401 errors when
 the control plane has authentication enabled.
 
 This fix injects the API key into request headers automatically when:
+
 - The client has an api_key configured
 - The header isn't already set (avoids overwriting explicit headers)
 
@@ -2555,7 +2567,6 @@ Co-Authored-By: Claude <noreply@anthropic.com> (97673bc)
 
 ## [0.1.17] - 2025-12-03
 
-
 ### Fixed
 
 - Fix(control-plane): remove redundant WebSocket origin check
@@ -2566,6 +2577,7 @@ header. This caused 403 errors when agents tried to connect to memory
 events WebSocket endpoint with auth enabled.
 
 The origin check was redundant because:
+
 1. Auth middleware already validates API keys before this handler
 2. If auth is enabled, only valid API key holders reach this point
 3. If auth is disabled, all connections are allowed anyway
@@ -2578,7 +2590,6 @@ to just take the storage provider.
 Co-Authored-By: Claude <noreply@anthropic.com> (44f05c4)
 
 ## [0.1.16] - 2025-12-03
-
 
 ### Fixed
 
@@ -2602,6 +2613,7 @@ connecting to the memory events WebSocket endpoint, causing 401 errors
 when the control plane has authentication enabled.
 
 Changes:
+
 - Add optional api_key parameter to MemoryEventClient constructor
 - Include X-API-Key header in WebSocket connect() method
 - Include X-API-Key header in history() method (both httpx and requests)
@@ -2611,8 +2623,6 @@ Changes:
 
 Co-Authored-By: Claude <noreply@anthropic.com> (eda95fc)
 
-
-
 ### Other
 
 - Revert "fix(example): use IPv4 binding for documentation-chatbot"
@@ -2621,14 +2631,14 @@ This reverts commit 2c1b2053e37f4fcc968ad0805b71ef89cf9d6d9d. (576a96c)
 
 ## [0.1.15] - 2025-12-03
 
-
 ### Fixed
 
 - Fix(python-sdk): update test mocks for api_key parameter
 
 Update test helpers and mocks to accept the new api_key parameter:
+
 - Add api_key field to StubAgent dataclass
-- Add api_key parameter to _FakeDIDManager and _FakeVCGenerator
+- Add api_key parameter to \_FakeDIDManager and \_FakeVCGenerator
 - Add headers parameter to VC generator test mocks
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
@@ -2640,14 +2650,16 @@ Co-Authored-By: Claude <noreply@anthropic.com> (301e276)
 Comprehensive fix for API key authentication across all SDK HTTP requests:
 
 DID Manager (did_manager.py):
-- Added api_key parameter to __init__
-- Added _get_auth_headers() helper method
+
+- Added api_key parameter to **init**
+- Added \_get_auth_headers() helper method
 - Fixed register_agent() to include X-API-Key header
 - Fixed resolve_did() to include X-API-Key header
 
 VC Generator (vc_generator.py):
-- Added api_key parameter to __init__
-- Added _get_auth_headers() helper method
+
+- Added api_key parameter to **init**
+- Added \_get_auth_headers() helper method
 - Fixed generate_execution_vc() to include X-API-Key header
 - Fixed verify_vc() to include X-API-Key header
 - Fixed get_workflow_vc_chain() to include X-API-Key header
@@ -2655,11 +2667,13 @@ VC Generator (vc_generator.py):
 - Fixed export_vcs() to include X-API-Key header
 
 Agent Field Handler (agent_field_handler.py):
-- Fixed _send_heartbeat() to include X-API-Key header
+
+- Fixed \_send_heartbeat() to include X-API-Key header
 
 Agent (agent.py):
+
 - Fixed emit_workflow_event() to include X-API-Key header
-- Updated _initialize_did_system() to pass api_key to DIDManager and VCGenerator
+- Updated \_initialize_did_system() to pass api_key to DIDManager and VCGenerator
 
 All HTTP requests to AgentField control plane now properly include authentication headers when API key is configured.
 
@@ -2675,8 +2689,6 @@ get_nodes() methods that were missing X-API-Key headers in requests.
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
 Co-Authored-By: Claude <noreply@anthropic.com> (0c2977d)
-
-
 
 ### Other
 
@@ -2701,7 +2713,6 @@ from environment to the Agent constructor.
 Co-Authored-By: Claude <noreply@anthropic.com> (1e6a095)
 
 ## [0.1.14] - 2025-12-03
-
 
 ### Added
 
@@ -2729,7 +2740,7 @@ with support in all SDKs (Python, Go, TypeScript).
 - Add `api_key` config option in agentfield.yaml
 - Add HTTP auth middleware (X-API-Key header, Bearer token, query param)
 - Add gRPC auth interceptor (x-api-key metadata, Bearer token)
-- Skip auth for /api/v1/health, /metrics, and /ui/* paths
+- Skip auth for /api/v1/health, /metrics, and /ui/\* paths
 - UI prompts for API key when auth is required and stores in localStorage
 
 ## SDK Changes
@@ -2749,8 +2760,6 @@ with support in all SDKs (Python, Go, TypeScript).
 
 Co-Authored-By: Claude <noreply@anthropic.com> (3f8e45c)
 
-
-
 ### Fixed
 
 - Fix: resolve flaky SSE decoder test in Go SDK
@@ -2766,7 +2775,7 @@ Co-Authored-By: Claude <noreply@anthropic.com> (32d6d6d)
 
 - Fix: update test helper to accept api_key parameter
 
-Update _FakeAgentFieldClient and _agentfield_client_factory to accept
+Update \_FakeAgentFieldClient and \_agentfield_client_factory to accept
 the new api_key parameter that was added to AgentFieldClient.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
@@ -2794,13 +2803,9 @@ image push to ghcr.io.
 
 Co-Authored-By: Claude <noreply@anthropic.com> (269ac29)
 
-
-
 ### Other
 
 - Updated favcoin (d1712c2)
-
-
 
 ### Testing
 
@@ -2818,7 +2823,6 @@ Co-Authored-By: Claude <noreply@anthropic.com> (31cd0b1)
 
 ## [0.1.13] - 2025-12-02
 
-
 ### Other
 
 - Release workflow fix (fde0309)
@@ -2827,12 +2831,9 @@ Co-Authored-By: Claude <noreply@anthropic.com> (31cd0b1)
 
 ## [0.1.12] - 2025-12-02
 
-
 ### Chores
 
 - Chore: trigger Railway deployment for PR #39 fix (b4095d2)
-
-
 
 ### Documentation
 
@@ -2848,6 +2849,7 @@ Co-Authored-By: Claude <noreply@anthropic.com> (87a4d90)
 - Docs(chatbot): add TypeScript SDK to supported languages
 
 Update product context to include TypeScript alongside Python and Go:
+
 - CLI commands now mention all three language options
 - Getting started section references TypeScript
 - API Reference includes TypeScript SDK
@@ -2858,8 +2860,6 @@ supported languages.
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
 Co-Authored-By: Claude <noreply@anthropic.com> (9510d74)
-
-
 
 ### Fixed
 
@@ -2905,6 +2905,7 @@ Co-Authored-By: Claude <noreply@anthropic.com> (f8bf14b)
 - Fix(docs-chatbot): use railway.json for Railpack PyPI wait
 
 Railway now uses Railpack instead of Nixpacks. Update config:
+
 - Replace nixpacks.toml with railway.json
 - Force NIXPACKS builder with custom buildCommand
 - Fix install.sh version check using pip --dry-run
@@ -2914,7 +2915,6 @@ Railway now uses Railpack instead of Nixpacks. Update config:
 Co-Authored-By: Claude <noreply@anthropic.com> (8c22356)
 
 ## [0.1.11] - 2025-12-02
-
 
 ### Fixed
 
@@ -2933,7 +2933,6 @@ Co-Authored-By: Claude <noreply@anthropic.com> (e45f41d)
 
 ## [0.1.10] - 2025-12-02
 
-
 ### Added
 
 - Feat: add delete-namespace endpoint for RAG reindexing
@@ -2943,6 +2942,7 @@ clearing all vectors with a given namespace prefix. This enables the
 documentation chatbot to wipe and reindex its RAG data when docs change.
 
 Changes:
+
 - Add DeleteVectorsByPrefix to StorageProvider interface
 - Implement DeleteByPrefix for SQLite and Postgres vector stores
 - Add DeleteNamespaceVectorsHandler endpoint
@@ -2960,12 +2960,12 @@ the current execution context during reasoner/skill execution. This
 enables a more ergonomic API:
 
 Before:
-  from agentfield.execution_context import get_current_context
-  ctx = get_current_context()
-  workflow_id = ctx.workflow_id
+from agentfield.execution_context import get_current_context
+ctx = get_current_context()
+workflow_id = ctx.workflow_id
 
 After:
-  workflow_id = app.ctx.workflow_id
+workflow_id = app.ctx.workflow_id
 
 The property returns None when accessed outside of an active execution
 (e.g., at module level or after a request completes), matching the
@@ -2986,8 +2986,6 @@ Co-Authored-By: Claude <noreply@anthropic.com> (e01dcea)
 
 - Feat(ts-sdk): scaffold typescript sdk core (09dcc62)
 
-
-
 ### Chores
 
 - Chore: ignore env files (3937821)
@@ -3001,8 +2999,6 @@ Co-Authored-By: Claude <noreply@anthropic.com> (e01dcea)
 - Chore(ts-sdk): make simulation example runnable via build (9a87374)
 
 - Chore(ts-sdk): fix typings, add heartbeat config, lock deps (f9af207)
-
-
 
 ### Fixed
 
@@ -3028,8 +3024,6 @@ Co-Authored-By: Claude <noreply@anthropic.com> (5a975fa)
 
 - Fix(ts-sdk): register full reasoner definitions (e5cc44d)
 
-
-
 ### Other
 
 - Ts sdk (ce3b965)
@@ -3043,6 +3037,7 @@ but never actually read or used by the codebase. This creates confusion
 for users who set these values expecting them to have an effect.
 
 Removed from YAML config:
+
 - agentfield: mode, max_concurrent_requests, request_timeout,
   circuit_breaker_threshold (none were wired to any implementation)
 - execution_queue: worker_count, request_timeout, lease_duration,
@@ -3054,6 +3049,7 @@ Removed from YAML config:
 - agents section entirely (discovery/scaling never implemented)
 
 Removed from Go structs:
+
 - AgentsConfig, DiscoveryConfig, ScalingConfig
 - CoreFeatures, EnterpriseFeatures
 - DataDirectoriesConfig
@@ -3061,11 +3057,12 @@ Removed from Go structs:
   LocalStorageConfig, StorageConfig, UIConfig
 
 The remaining config options are all actively used:
-- agentfield.port, execution_cleanup.*, execution_queue webhook settings
+
+- agentfield.port, execution_cleanup.\*, execution_queue webhook settings
 - ui.enabled/mode/dev_port
-- api.cors.*
-- storage.mode/local.database_path/local.kv_store_path/vector.*
-- features.did.* (all DID/VC settings)
+- api.cors.\*
+- storage.mode/local.database_path/local.kv_store_path/vector.\*
+- features.did.\* (all DID/VC settings)
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
@@ -3096,6 +3093,7 @@ It also refines the example API call to use a more descriptive agent endpoint (`
 Updates the README to provide a more detailed explanation of AgentField's purpose and features.
 
 Key changes include:
+
 - Enhanced "What is AgentField?" section to emphasize its role as backend infrastructure for autonomous AI.
 - Improved "Quick Start" section with clearer steps and usage examples.
 - Expanded "Build Agents in Any Language" section to showcase Python, Go, TypeScript, and REST API examples.
@@ -3145,18 +3143,15 @@ This ensures better compatibility and incorporates recent improvements and bug f
 
 - Implement automatic agent method delegation
 
-Improves the AgentRouter by implementing __getattr__ to automatically delegate any unknown attribute or method access to the attached agent. This eliminates the need for explicit delegation methods for agent functionalities like `ai()`, `call()`, `memory`, `note()`, and `discover()`.
+Improves the AgentRouter by implementing **getattr** to automatically delegate any unknown attribute or method access to the attached agent. This eliminates the need for explicit delegation methods for agent functionalities like `ai()`, `call()`, `memory`, `note()`, and `discover()`.
 
 This change simplifies the AgentRouter's interface and makes it more transparently proxy agent methods. Added tests to verify the automatic delegation for various agent methods and property access, as well as error handling when no agent is attached. (26c9288)
-
-
 
 ### Testing
 
 - Tests hanging fix (dd2eb8d)
 
 ## [0.1.9] - 2025-11-25
-
 
 ### Other
 
@@ -3186,6 +3181,7 @@ asyncio.to_thread was added in Python 3.9. This commit adds a
 compatibility shim using loop.run_in_executor for Python 3.8.
 
 Fixes test failures:
+
 - test_execute_async_falls_back_to_requests
 - test_set_posts_payload
 - test_async_request_falls_back_to_requests
@@ -3202,6 +3198,7 @@ interpreter on Python 3.8. pytest-cov causes module reimports during
 coverage collection, triggering this limitation.
 
 Solution:
+
 - Keep --import-mode=importlib for better import handling
 - Disable coverage collection (--no-cov) only for Python 3.8 in CI
 - Coverage still collected for Python 3.9-3.12
@@ -3237,14 +3234,15 @@ Lower the minimum Python version requirement from 3.10 to 3.8 to improve
 compatibility with systems running older Python versions.
 
 Changes:
+
 - Update pyproject.toml to require Python >=3.8
 - Add Python 3.8, 3.9 to package classifiers
 - Fix type hints incompatible with Python 3.8:
-  - Replace list[T] with List[T]
-  - Replace dict[K,V] with Dict[K,V]
-  - Replace tuple[T,...] with Tuple[T,...]
-  - Replace set[T] with Set[T]
-  - Replace str | None with Optional[str]
+    - Replace list[T] with List[T]
+    - Replace dict[K,V] with Dict[K,V]
+    - Replace tuple[T,...] with Tuple[T,...]
+    - Replace set[T] with Set[T]
+    - Replace str | None with Optional[str]
 - Update CI to test on Python 3.8, 3.9, 3.10, 3.11, 3.12
 - Update documentation to reflect Python 3.8+ requirement
 
@@ -3270,7 +3268,6 @@ Removes the documentation section detailing the Model Context Protocol (MCP).
 This section is no longer relevant to the current project structure. (3361f8c)
 
 ## [0.1.8] - 2025-11-23
-
 
 ### Other
 
@@ -3335,30 +3332,37 @@ Improves error handling and test coverage for new CLI logic. (54f483b)
 
 - Update README.md (b4bca5e)
 
-
-
 ### Testing
 
 - Testing runs functional test still not working id errors (6da01e6)
 
 ## [0.1.2] - 2025-11-12
+
 ### Fixed
+
 - Control-plane Docker image now builds with CGO enabled so SQLite works in containers like Railway.
 
 ## [0.1.1] - 2025-11-12
+
 ### Added
+
 - Documentation chatbot + advanced RAG examples showcasing Python agent nodes.
 - Vector memory storage backends and skill test scaffolding for SDK examples.
 
 ### Changed
+
 - Release workflow improvements (selective publishing, prerelease support) and general documentation updates.
 
 ## [0.1.0] - 2024-XX-XX
+
 ### Added
+
 - Initial open-source release with control plane, Go SDK, Python SDK, and deployment assets.
 
 ### Changed
+
 - Cleaned repository layout for public distribution.
 
 ### Removed
+
 - Private experimental artifacts and internal operational scripts.

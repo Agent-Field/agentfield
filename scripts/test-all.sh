@@ -15,8 +15,11 @@ echo "==> Running Python SDK tests"
 if command -v npm >/dev/null 2>&1; then
   echo "==> Linting control plane web UI"
   (cd "$ROOT_DIR/control-plane/web/client" && npm run lint)
+
+  echo "==> Running Web UI tests (vitest)"
+  (cd "$ROOT_DIR/control-plane/web/client" && npm run test)
 else
-  echo "npm not found; skipping web UI lint."
+  echo "npm not found; skipping web UI lint and tests."
 fi
 
 echo "All tests passed."
