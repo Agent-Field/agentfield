@@ -1707,13 +1707,14 @@ class AgentFieldClient:
         url = f"{self.api_base}/agents/{node_id}/executions/{execution_id}/request-approval"
 
         try:
-            response = requests.post(
+            client = await self.get_async_http_client()
+            response = await client.post(
                 url,
                 json=body,
-                headers=self._get_headers_with_context(None),
+                headers=self._sanitize_header_values(self._get_headers_with_context(None)),
                 timeout=30,
             )
-        except requests.RequestException as exc:
+        except Exception as exc:
             raise AgentFieldClientError(
                 f"Failed to request approval: {exc}"
             ) from exc
@@ -1748,12 +1749,13 @@ class AgentFieldClient:
         url = f"{self.api_base}/agents/{node_id}/executions/{execution_id}/approval-status"
 
         try:
-            response = requests.get(
+            client = await self.get_async_http_client()
+            response = await client.get(
                 url,
-                headers=self._get_headers_with_context(None),
+                headers=self._sanitize_header_values(self._get_headers_with_context(None)),
                 timeout=30,
             )
-        except requests.RequestException as exc:
+        except Exception as exc:
             raise AgentFieldClientError(
                 f"Failed to get approval status: {exc}"
             ) from exc

@@ -240,6 +240,49 @@ func TestWaitForApproval_RetriesOnTransientError(t *testing.T) {
 	assert.GreaterOrEqual(t, callCount.Load(), int32(2))
 }
 
+func TestWaitForApproval_ResolvesOnExpired(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":       "expired",
+			"request_url":  "https://hub.example.com/r/req-abc",
+			"requested_at": "2026-02-25T10:00:00Z",
+			"responded_at": "2026-02-28T10:00:00Z",
+		})
+	}))
+	defer server.Close()
+
+	c, err := New(server.URL)
+	require.NoError(t, err)
+
+	resp, err := c.WaitForApproval(context.Background(), "node-1", "exec-1", &WaitForApprovalOptions{
+		PollInterval: 10 * time.Millisecond,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "expired", resp.Status)
+}
+
+func TestGetApprovalStatus_Expired(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":       "expired",
+			"request_url":  "https://hub.example.com/r/req-abc",
+			"requested_at": "2026-02-25T10:00:00Z",
+			"responded_at": "2026-02-28T10:00:00Z",
+		})
+	}))
+	defer server.Close()
+
+	c, err := New(server.URL)
+	require.NoError(t, err)
+
+	resp, err := c.GetApprovalStatus(context.Background(), "node-1", "exec-1")
+	require.NoError(t, err)
+	assert.Equal(t, "expired", resp.Status)
+}
+
 func TestWaitForApproval_DefaultOptions(t *testing.T) {
 	opts := WaitForApprovalOptions{}
 	opts.defaults()

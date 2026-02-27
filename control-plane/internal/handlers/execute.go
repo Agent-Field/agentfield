@@ -1114,10 +1114,20 @@ func (c *executionController) completeExecution(ctx context.Context, plan *prepa
 	resultURI := c.savePayload(ctx, result)
 
 	var lastErr error
+	var alreadyCancelled bool
 	for attempt := 0; attempt < 5; attempt++ {
 		updated, err := c.store.UpdateExecutionRecord(ctx, plan.exec.ExecutionID, func(current *types.Execution) (*types.Execution, error) {
 			if current == nil {
 				return nil, fmt.Errorf("execution %s not found", plan.exec.ExecutionID)
+			}
+			// Guard: don't overwrite if already cancelled (e.g. by approval rejection webhook)
+			if current.Status == types.ExecutionStatusCancelled {
+				logger.Logger.Info().
+					Str("execution_id", plan.exec.ExecutionID).
+					Str("current_status", string(current.Status)).
+					Msg("skipping completion update; execution already cancelled")
+				alreadyCancelled = true
+				return current, nil
 			}
 			now := time.Now().UTC()
 			current.Status = types.ExecutionStatusSucceeded
@@ -1131,6 +1141,9 @@ func (c *executionController) completeExecution(ctx context.Context, plan *prepa
 			return current, nil
 		})
 		if err == nil {
+			if alreadyCancelled {
+				return nil
+			}
 			c.updateWorkflowExecutionFinalState(
 				ctx,
 				plan.exec.ExecutionID,
@@ -1166,10 +1179,20 @@ func (c *executionController) failExecution(ctx context.Context, plan *preparedE
 	errMsg := callErr.Error()
 	resultURI := c.savePayload(ctx, result)
 	var lastErr error
+	var alreadyCancelled bool
 	for attempt := 0; attempt < 5; attempt++ {
 		updated, err := c.store.UpdateExecutionRecord(ctx, plan.exec.ExecutionID, func(current *types.Execution) (*types.Execution, error) {
 			if current == nil {
 				return nil, fmt.Errorf("execution %s not found", plan.exec.ExecutionID)
+			}
+			// Guard: don't overwrite if already cancelled (e.g. by approval rejection webhook)
+			if current.Status == types.ExecutionStatusCancelled {
+				logger.Logger.Info().
+					Str("execution_id", plan.exec.ExecutionID).
+					Str("current_status", string(current.Status)).
+					Msg("skipping failure update; execution already cancelled")
+				alreadyCancelled = true
+				return current, nil
 			}
 			now := time.Now().UTC()
 			current.Status = types.ExecutionStatusFailed
@@ -1185,6 +1208,9 @@ func (c *executionController) failExecution(ctx context.Context, plan *preparedE
 			return current, nil
 		})
 		if err == nil {
+			if alreadyCancelled {
+				return nil
+			}
 			c.updateWorkflowExecutionFinalState(
 				ctx,
 				plan.exec.ExecutionID,

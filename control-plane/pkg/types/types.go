@@ -698,6 +698,7 @@ type WorkflowExecution struct {
 	ApprovalResponse    *string    `json:"approval_response,omitempty" db:"approval_response"`
 	ApprovalRequestedAt *time.Time `json:"approval_requested_at,omitempty" db:"approval_requested_at"`
 	ApprovalRespondedAt *time.Time `json:"approval_responded_at,omitempty" db:"approval_responded_at"`
+	ApprovalCallbackURL *string    `json:"approval_callback_url,omitempty" db:"approval_callback_url"`
 
 	// Webhook observability (non-persisted)
 	WebhookRegistered bool                     `json:"webhook_registered,omitempty" db:"-"`

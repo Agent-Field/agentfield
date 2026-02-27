@@ -242,5 +242,58 @@ describe('ApprovalClient', () => {
 
       expect(result.status).toBe('approved');
     });
+
+    it('resolves on expired status', async () => {
+      server = createMockServer([
+        {
+          status: 200,
+          body: {
+            status: 'expired',
+            request_url: 'https://hub.example.com/r/req-abc',
+            requested_at: '2026-02-25T10:00:00Z',
+            responded_at: '2026-02-28T10:00:00Z',
+          },
+        },
+      ]);
+      await new Promise<void>((resolve) => server.listen(0, resolve));
+
+      const client = new ApprovalClient({
+        baseURL: serverURL(server),
+        nodeId: 'test-node',
+      });
+
+      const result = await client.waitForApproval('exec-1', {
+        pollIntervalMs: 50,
+      });
+
+      expect(result.status).toBe('expired');
+    });
+  });
+
+  describe('getApprovalStatus — expired', () => {
+    it('returns expired status', async () => {
+      server = createMockServer([
+        {
+          status: 200,
+          body: {
+            status: 'expired',
+            request_url: 'https://hub.example.com/r/req-abc',
+            requested_at: '2026-02-25T10:00:00Z',
+            responded_at: '2026-02-28T10:00:00Z',
+          },
+        },
+      ]);
+      await new Promise<void>((resolve) => server.listen(0, resolve));
+
+      const client = new ApprovalClient({
+        baseURL: serverURL(server),
+        nodeId: 'test-node',
+      });
+
+      const result = await client.getApprovalStatus('exec-1');
+
+      expect(result.status).toBe('expired');
+      expect(result.respondedAt).toBe('2026-02-28T10:00:00Z');
+    });
   });
 });

@@ -40,13 +40,12 @@ type AgentFieldConfig struct {
 	Approval         ApprovalConfig         `yaml:"approval" mapstructure:"approval"`
 }
 
-// ApprovalConfig holds configuration for the human approval workflow integration.
+// ApprovalConfig holds configuration for the execution approval workflow.
+// The control plane manages execution state only — agents are responsible for
+// communicating with external approval services (e.g. hax-sdk).
 type ApprovalConfig struct {
-	HaxSDKURL          string        `yaml:"hax_sdk_url" mapstructure:"hax_sdk_url"`
-	HaxSDKAPIKey       string        `yaml:"hax_sdk_api_key" mapstructure:"hax_sdk_api_key"`
-	WebhookSecret      string        `yaml:"webhook_secret" mapstructure:"webhook_secret"`
-	DefaultExpiryHours int           `yaml:"default_expiry_hours" mapstructure:"default_expiry_hours"`
-	RequestTimeout     time.Duration `yaml:"request_timeout" mapstructure:"request_timeout"`
+	WebhookSecret      string `yaml:"webhook_secret" mapstructure:"webhook_secret"`             // Optional HMAC-SHA256 secret for verifying webhook callbacks
+	DefaultExpiryHours int    `yaml:"default_expiry_hours" mapstructure:"default_expiry_hours"` // Default approval expiry (hours); 0 = 72h
 }
 
 // NodeHealthConfig holds configuration for agent node health monitoring.
@@ -314,12 +313,6 @@ func applyEnvOverrides(cfg *Config) {
 	}
 
 	// Approval workflow overrides
-	if val := os.Getenv("AGENTFIELD_APPROVAL_HAX_SDK_URL"); val != "" {
-		cfg.AgentField.Approval.HaxSDKURL = val
-	}
-	if val := os.Getenv("AGENTFIELD_APPROVAL_HAX_SDK_API_KEY"); val != "" {
-		cfg.AgentField.Approval.HaxSDKAPIKey = val
-	}
 	if val := os.Getenv("AGENTFIELD_APPROVAL_WEBHOOK_SECRET"); val != "" {
 		cfg.AgentField.Approval.WebhookSecret = val
 	}
@@ -328,12 +321,6 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.AgentField.Approval.DefaultExpiryHours = i
 		}
 	}
-	if val := os.Getenv("AGENTFIELD_APPROVAL_REQUEST_TIMEOUT"); val != "" {
-		if d, err := time.ParseDuration(val); err == nil {
-			cfg.AgentField.Approval.RequestTimeout = d
-		}
-	}
-
 	// Connector overrides
 	if val := os.Getenv("AGENTFIELD_CONNECTOR_ENABLED"); val != "" {
 		cfg.Features.Connector.Enabled = val == "true" || val == "1"

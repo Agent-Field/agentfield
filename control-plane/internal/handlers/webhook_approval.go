@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,7 +11,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
@@ -21,7 +21,7 @@ import (
 // ApprovalWebhookPayload is the normalized payload for approval processing.
 type ApprovalWebhookPayload struct {
 	RequestID string          `json:"requestId"`
-	Decision  string          `json:"decision"` // "approved", "rejected", "expired"
+	Decision  string          `json:"decision"` // "approved", "rejected", "request_changes", "expired"
 	Response  json.RawMessage `json:"response,omitempty"`
 	Feedback  string          `json:"feedback,omitempty"`
 	Timestamp string          `json:"timestamp,omitempty"`
@@ -88,15 +88,17 @@ func parseWebhookPayload(bodyBytes []byte) (*ApprovalWebhookPayload, error) {
 
 // webhookApprovalController handles the approval webhook callback.
 type webhookApprovalController struct {
-	store       ExecutionStore
-	approvalCfg config.ApprovalConfig
+	store         ExecutionStore
+	webhookSecret string // optional HMAC-SHA256 secret for signature verification
 }
 
-// ApprovalWebhookHandler receives approval responses from hax-sdk via webhook callback.
-func ApprovalWebhookHandler(store ExecutionStore, approvalCfg config.ApprovalConfig) gin.HandlerFunc {
+// ApprovalWebhookHandler receives approval responses via webhook callback.
+// Can be called by external services (e.g. hax-sdk) or by agents directly.
+// The optional webhookSecret enables HMAC-SHA256 signature verification.
+func ApprovalWebhookHandler(store ExecutionStore, webhookSecret string) gin.HandlerFunc {
 	ctrl := &webhookApprovalController{
-		store:       store,
-		approvalCfg: approvalCfg,
+		store:         store,
+		webhookSecret: webhookSecret,
 	}
 	return ctrl.handleApprovalWebhook
 }
@@ -110,7 +112,7 @@ func (c *webhookApprovalController) handleApprovalWebhook(ctx *gin.Context) {
 	}
 
 	// Verify HMAC-SHA256 signature if webhook secret is configured
-	if c.approvalCfg.WebhookSecret != "" {
+	if c.webhookSecret != "" {
 		signature := ctx.GetHeader("X-Hax-Signature")
 		if signature == "" {
 			signature = ctx.GetHeader("X-Webhook-Signature")
@@ -140,11 +142,11 @@ func (c *webhookApprovalController) handleApprovalWebhook(ctx *gin.Context) {
 	// Validate decision
 	decision := payload.Decision
 	switch decision {
-	case "approved", "rejected", "expired":
+	case "approved", "rejected", "request_changes", "expired":
 		// valid
 	default:
 		logger.Logger.Warn().Str("decision", decision).Str("raw_body", string(bodyBytes)).Msg("webhook payload has invalid decision")
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid decision '%s'; must be approved, rejected, or expired", decision)})
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid decision '%s'; must be approved, rejected, request_changes, or expired", decision)})
 		return
 	}
 
@@ -163,17 +165,25 @@ func (c *webhookApprovalController) handleApprovalWebhook(ctx *gin.Context) {
 		return
 	}
 
-	// Check that execution is actually in waiting state
+	// Idempotency: if execution is no longer in waiting state, it was already
+	// processed by a previous webhook delivery.  Return 200 so the sender
+	// (hax-sdk retry queue) considers it delivered and stops retrying.
 	normalized := types.NormalizeExecutionStatus(wfExec.Status)
 	if normalized != types.ExecutionStatusWaiting {
-		logger.Logger.Warn().
+		logger.Logger.Info().
 			Str("execution_id", executionID).
 			Str("current_status", normalized).
 			Str("request_id", payload.RequestID).
-			Msg("approval webhook received but execution is not in waiting state")
-		ctx.JSON(http.StatusConflict, gin.H{
-			"error":   "invalid_state",
-			"message": fmt.Sprintf("execution is in '%s' state, not 'waiting'", normalized),
+			Msg("approval webhook is a duplicate — execution already resolved")
+		approvalStatus := ""
+		if wfExec.ApprovalStatus != nil {
+			approvalStatus = *wfExec.ApprovalStatus
+		}
+		ctx.JSON(http.StatusOK, gin.H{
+			"status":          "already_processed",
+			"execution_id":    executionID,
+			"current_status":  normalized,
+			"approval_status": approvalStatus,
 		})
 		return
 	}
@@ -203,6 +213,13 @@ func (c *webhookApprovalController) handleApprovalWebhook(ctx *gin.Context) {
 			reason = fmt.Sprintf("approval_rejected: %s", payload.Feedback)
 		}
 		newStatusReason = &reason
+	case "request_changes":
+		newStatus = types.ExecutionStatusRunning
+		reason := "approval_changes_requested"
+		if payload.Feedback != "" {
+			reason = fmt.Sprintf("approval_changes_requested: %s", payload.Feedback)
+		}
+		newStatusReason = &reason
 	case "expired":
 		newStatus = types.ExecutionStatusCancelled
 		reason := "approval_expired"
@@ -210,13 +227,14 @@ func (c *webhookApprovalController) handleApprovalWebhook(ctx *gin.Context) {
 	}
 
 	// Update the lightweight execution record
+	var recordSyncFailed bool
 	_, updateErr := c.store.UpdateExecutionRecord(reqCtx, executionID, func(current *types.Execution) (*types.Execution, error) {
 		if current == nil {
 			return nil, fmt.Errorf("execution %s not found", executionID)
 		}
 		current.Status = newStatus
 		current.StatusReason = newStatusReason
-		if decision != "approved" {
+		if decision != "approved" && decision != "request_changes" {
 			current.CompletedAt = &now
 			dur := now.Sub(current.StartedAt).Milliseconds()
 			current.DurationMS = &dur
@@ -224,10 +242,11 @@ func (c *webhookApprovalController) handleApprovalWebhook(ctx *gin.Context) {
 		return current, nil
 	})
 	if updateErr != nil {
-		logger.Logger.Error().Err(updateErr).Str("execution_id", executionID).Msg("failed to update execution record from approval webhook")
+		logger.Logger.Error().Err(updateErr).Str("execution_id", executionID).Msg("failed to update execution record from approval webhook — proceeding with workflow update")
+		recordSyncFailed = true
 	}
 
-	// Update the workflow execution with approval resolution
+	// Update the workflow execution with approval resolution (authoritative — must not lose the decision)
 	err = c.store.UpdateWorkflowExecution(reqCtx, executionID, func(current *types.WorkflowExecution) (*types.WorkflowExecution, error) {
 		if current == nil {
 			return nil, fmt.Errorf("execution %s not found", executionID)
@@ -237,10 +256,16 @@ func (c *webhookApprovalController) handleApprovalWebhook(ctx *gin.Context) {
 		current.ApprovalStatus = &decision
 		current.ApprovalResponse = responseStr
 		current.ApprovalRespondedAt = &now
-		if decision != "approved" {
+		if decision != "approved" && decision != "request_changes" {
 			current.CompletedAt = &now
 			dur := now.Sub(current.StartedAt).Milliseconds()
 			current.DurationMS = &dur
+		}
+		// Clear approval fields so the agent can issue a new approval request
+		if decision == "request_changes" {
+			current.ApprovalRequestID = nil
+			current.ApprovalRequestURL = nil
+			current.ApprovalCallbackURL = nil
 		}
 		return current, nil
 	})
@@ -296,12 +321,21 @@ func (c *webhookApprovalController) handleApprovalWebhook(ctx *gin.Context) {
 		Str("new_status", newStatus).
 		Msg("approval webhook processed, execution state updated")
 
-	ctx.JSON(http.StatusOK, gin.H{
+	response := gin.H{
 		"status":       "processed",
 		"execution_id": executionID,
 		"decision":     decision,
 		"new_status":   newStatus,
-	})
+	}
+	if recordSyncFailed {
+		response["warning"] = "lightweight execution record update failed — workflow execution is authoritative"
+	}
+	ctx.JSON(http.StatusOK, response)
+
+	// Notify the agent's callback URL if one was registered
+	if wfExec.ApprovalCallbackURL != nil && *wfExec.ApprovalCallbackURL != "" {
+		go c.notifyApprovalCallback(*wfExec.ApprovalCallbackURL, executionID, decision, newStatus, payload.Feedback, responseStr)
+	}
 }
 
 // findExecutionByApprovalRequestID looks up a workflow execution by its approval_request_id.
@@ -330,7 +364,7 @@ func (c *webhookApprovalController) findExecutionByApprovalRequestID(ctx *gin.Co
 // - Raw hex: "<hex_signature>" (signs payload directly)
 // - Prefixed: "sha256=<hex_signature>" (signs payload directly)
 func (c *webhookApprovalController) verifySignature(body []byte, signature string) bool {
-	if c.approvalCfg.WebhookSecret == "" {
+	if c.webhookSecret == "" {
 		return true // No secret configured, skip verification
 	}
 	if signature == "" {
@@ -340,7 +374,7 @@ func (c *webhookApprovalController) verifySignature(body []byte, signature strin
 	// Try hax-sdk format: "t=timestamp,v1=signature"
 	if ts, sig, ok := parseHaxSignature(signature); ok {
 		signedPayload := fmt.Sprintf("%s.%s", ts, string(body))
-		mac := hmac.New(sha256.New, []byte(c.approvalCfg.WebhookSecret))
+		mac := hmac.New(sha256.New, []byte(c.webhookSecret))
 		mac.Write([]byte(signedPayload))
 		expectedMAC := hex.EncodeToString(mac.Sum(nil))
 		return hmac.Equal([]byte(sig), []byte(expectedMAC))
@@ -348,7 +382,7 @@ func (c *webhookApprovalController) verifySignature(body []byte, signature strin
 
 	// Fall back to simple signature verification
 	sig := trimSignaturePrefix(signature)
-	mac := hmac.New(sha256.New, []byte(c.approvalCfg.WebhookSecret))
+	mac := hmac.New(sha256.New, []byte(c.webhookSecret))
 	mac.Write(body)
 	expectedMAC := hex.EncodeToString(mac.Sum(nil))
 	return hmac.Equal([]byte(sig), []byte(expectedMAC))
@@ -398,4 +432,38 @@ func trimSignaturePrefix(sig string) string {
 		return sig[7:]
 	}
 	return sig
+}
+
+// notifyApprovalCallback POSTs the approval result to the agent's registered callback URL.
+// Called asynchronously (go routine) — best-effort, does not block the webhook response.
+func (c *webhookApprovalController) notifyApprovalCallback(callbackURL, executionID, decision, newStatus, feedback string, response *string) {
+	callbackPayload := map[string]interface{}{
+		"execution_id": executionID,
+		"decision":     decision,
+		"new_status":   newStatus,
+		"feedback":     feedback,
+	}
+	if response != nil {
+		callbackPayload["response"] = *response
+	}
+
+	body, err := json.Marshal(callbackPayload)
+	if err != nil {
+		logger.Logger.Error().Err(err).Str("callback_url", callbackURL).Msg("failed to marshal approval callback payload")
+		return
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Post(callbackURL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		logger.Logger.Warn().Err(err).Str("callback_url", callbackURL).Str("execution_id", executionID).Msg("approval callback delivery failed")
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		logger.Logger.Warn().Int("status", resp.StatusCode).Str("callback_url", callbackURL).Str("execution_id", executionID).Msg("approval callback returned error")
+	} else {
+		logger.Logger.Info().Str("callback_url", callbackURL).Str("execution_id", executionID).Msg("approval callback delivered")
+	}
 }
