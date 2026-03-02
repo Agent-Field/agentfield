@@ -164,11 +164,8 @@ async def test_full_approval_flow_via_async_execution(make_test_agent, async_htt
     async with run_agent_server(agent):
         # Start an async execution (returns immediately, execution runs in background)
         resp = await async_http_client.post(
-            f"/api/v1/execute/{node_id}.long_running_task",
-            json={
-                "input": {"message": "test approval flow"},
-                "async": True,
-            },
+            f"/api/v1/execute/async/{node_id}.long_running_task",
+            json={"input": {"message": "test approval flow"}},
             timeout=10.0,
         )
         assert resp.status_code == 202, f"Async execute failed: {resp.text}"
@@ -235,8 +232,8 @@ async def test_approval_rejected_cancels_execution(make_test_agent, async_http_c
     async with run_agent_server(agent):
         # Start async execution
         resp = await async_http_client.post(
-            f"/api/v1/execute/{node_id}.pending_task",
-            json={"input": {"message": "test rejection"}, "async": True},
+            f"/api/v1/execute/async/{node_id}.pending_task",
+            json={"input": {"message": "test rejection"}},
             timeout=10.0,
         )
         assert resp.status_code == 202
@@ -279,8 +276,8 @@ async def test_approval_expired_cancels_execution(make_test_agent, async_http_cl
 
     async with run_agent_server(agent):
         resp = await async_http_client.post(
-            f"/api/v1/execute/{node_id}.expiring_task",
-            json={"input": {"message": "test expiry"}, "async": True},
+            f"/api/v1/execute/async/{node_id}.expiring_task",
+            json={"input": {"message": "test expiry"}},
             timeout=10.0,
         )
         assert resp.status_code == 202
@@ -319,8 +316,8 @@ async def test_approval_webhook_idempotent(make_test_agent, async_http_client):
 
     async with run_agent_server(agent):
         resp = await async_http_client.post(
-            f"/api/v1/execute/{node_id}.idem_task",
-            json={"input": {"message": "test idempotency"}, "async": True},
+            f"/api/v1/execute/async/{node_id}.idem_task",
+            json={"input": {"message": "test idempotency"}},
             timeout=10.0,
         )
         assert resp.status_code == 202
@@ -365,8 +362,8 @@ async def test_approval_duplicate_request_rejected(make_test_agent, async_http_c
 
     async with run_agent_server(agent):
         resp = await async_http_client.post(
-            f"/api/v1/execute/{node_id}.dup_task",
-            json={"input": {"message": "test duplicate"}, "async": True},
+            f"/api/v1/execute/async/{node_id}.dup_task",
+            json={"input": {"message": "test duplicate"}},
             timeout=10.0,
         )
         assert resp.status_code == 202
@@ -404,8 +401,8 @@ async def test_hax_sdk_envelope_webhook_format(make_test_agent, async_http_clien
 
     async with run_agent_server(agent):
         resp = await async_http_client.post(
-            f"/api/v1/execute/{node_id}.hax_task",
-            json={"input": {"message": "test hax format"}, "async": True},
+            f"/api/v1/execute/async/{node_id}.hax_task",
+            json={"input": {"message": "test hax format"}},
             timeout=10.0,
         )
         assert resp.status_code == 202
