@@ -95,7 +95,7 @@ async def test_agent_reasoner_custom_name(monkeypatch):
         transport=httpx.ASGITransport(app=agent), base_url="http://test"
     ) as client:
         response = await client.post(
-            "/reasoners/generate_report",
+            "/reasoners/reports_generate",
             json={"report_id": "r-123"},
             headers={
                 "x-workflow-id": "wf-custom",
