@@ -452,3 +452,22 @@ If you are **Backend Engineers** shipping AI into production who want standard A
   <strong>Built by developers who got tired of duct-taping agents together.</strong><br>
   <a href="https://agentfield.ai">agentfield.ai</a>
 </p>
+
+
+## Installation
+
+```bash
+# Installation instructions
+```
+
+
+## Usage
+
+```python
+# Usage examples
+```
+
+
+## Contributing
+
+Contributions are welcome!
