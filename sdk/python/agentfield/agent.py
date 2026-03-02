@@ -2239,7 +2239,7 @@ class Agent(FastAPI):
             # Extract function metadata
             func_name = func.__name__
             skill_id = decorator_name or func_name
-            endpoint_path = decorator_path or f"/skills/{func_name}"
+            endpoint_path = decorator_path or f"/skills/{skill_id}"
             self._set_skill_vc_override(skill_id, vc_enabled)
             if require_realtime_validation:
                 self._realtime_validation_functions.add(skill_id)
