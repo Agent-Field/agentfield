@@ -53,3 +53,41 @@ agent.reasoner('process', async (ctx) => {
 ```
 
 **Use `note()` for AgentField UI tracking, `console.log()` for local debugging.**
+
+## Human-in-the-Loop Approvals
+
+Use the `ApprovalClient` to pause agent execution for human review:
+
+```ts
+import { Agent, ApprovalClient } from '@agentfield/sdk';
+
+const agent = new Agent({ nodeId: 'reviewer', agentFieldUrl: 'http://localhost:8080' });
+const approvalClient = new ApprovalClient({
+  baseURL: 'http://localhost:8080',
+  nodeId: 'reviewer',
+});
+
+agent.reasoner<{ task: string }, { status: string }>('deploy', async (ctx) => {
+  const plan = await ctx.ai(`Create deployment plan for: ${ctx.input.task}`);
+
+  // Request approval — transitions execution to "waiting"
+  await approvalClient.requestApproval(ctx.executionId, {
+    projectId: 'my-project',
+    title: `Deploy: ${ctx.input.task}`,
+    description: String(plan),
+    expiresInHours: 24,
+  });
+
+  // Wait for human decision (polls with exponential backoff)
+  const result = await approvalClient.waitForApproval(ctx.executionId, {
+    pollIntervalMs: 5_000,
+    timeoutMs: 3_600_000,
+  });
+
+  return { status: result.status };
+});
+```
+
+**Methods:** `requestApproval()`, `getApprovalStatus()`, `waitForApproval()`
+
+See `examples/ts-node-examples/waiting-state/` for a complete working example.

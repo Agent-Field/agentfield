@@ -46,6 +46,40 @@ func main() {
 - `types`: Shared data structures and contracts.
 - `ai`: Helpers for interacting with AI providers via the control plane.
 
+## Human-in-the-Loop Approvals
+
+The `client` package provides methods for requesting human approval, checking status, and waiting for decisions:
+
+```go
+import "github.com/Agent-Field/agentfield/sdk/go/client"
+
+approvalClient := client.New("http://localhost:8080", nil)
+
+// Request approval — transitions execution to "waiting"
+_, err := approvalClient.RequestApproval(ctx, nodeID, executionID,
+    client.RequestApprovalRequest{
+        Title:          "Review Deployment",
+        ProjectID:      "my-project",
+        TemplateType:   "plan-review-v1",
+        ExpiresInHours: 24,
+    },
+)
+
+// Wait for human decision (uses context.Context for timeout)
+waitCtx, cancel := context.WithTimeout(ctx, 1*time.Hour)
+defer cancel()
+
+result, err := approvalClient.WaitForApproval(waitCtx, nodeID, executionID,
+    &client.WaitForApprovalOptions{
+        PollInterval: 5 * time.Second,
+        MaxInterval:  30 * time.Second,
+    },
+)
+// result.Status is "approved", "rejected", or "expired"
+```
+
+**Methods:** `RequestApproval()`, `GetApprovalStatus()`, `WaitForApproval()`
+
 ## Testing
 
 ```bash
