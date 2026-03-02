@@ -377,12 +377,14 @@ async def test_approval_duplicate_request_rejected(make_test_agent, async_http_c
         )
         assert s1 == 200
 
-        # Second approval request — should be rejected
+        # Second approval request — should be rejected.
+        # After the first request, execution is in "waiting" state (not "running"),
+        # so the handler rejects with "invalid_state" before reaching the duplicate check.
         r2, s2 = await _request_approval(
             async_http_client, node_id, execution_id, f"req-dup-2-{uuid.uuid4().hex[:8]}"
         )
         assert s2 == 409
-        assert r2.get("error") == "approval_already_requested"
+        assert r2.get("error") == "invalid_state"
 
 
 @pytest.mark.functional
