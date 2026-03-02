@@ -1,6 +1,5 @@
 """Tests for approval workflow helpers on AgentFieldClient."""
 
-import httpx
 import pytest
 
 from agentfield.client import (
