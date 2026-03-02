@@ -1624,7 +1624,7 @@ class Agent(FastAPI):
             if decorator_path:
                 endpoint_path = decorator_path if decorator_path.startswith("/reasoners/") else f"/reasoners/{decorator_path.lstrip('/')}"
             else:
-                endpoint_path = f"/reasoners/{func_name}"
+                endpoint_path = f"/reasoners/{reasoner_id}"
 
             # Get type hints for input/output schemas
             type_hints = get_type_hints(func)
