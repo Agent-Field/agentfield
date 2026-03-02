@@ -321,6 +321,7 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.AgentField.Approval.DefaultExpiryHours = i
 		}
 	}
+
 	// Connector overrides
 	if val := os.Getenv("AGENTFIELD_CONNECTOR_ENABLED"); val != "" {
 		cfg.Features.Connector.Enabled = val == "true" || val == "1"

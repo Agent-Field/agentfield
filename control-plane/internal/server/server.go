@@ -1345,8 +1345,8 @@ func (s *AgentFieldServer) setupRoutes() {
 
 		// Agent Tag VC endpoint (for agents to download their own verified tag credential)
 		if s.tagVCVerifier != nil {
-			agentAPI.GET("/agents/:node_id/tag-vc", func(c *gin.Context) {
-				agentID := c.Param("node_id")
+			agentAPI.GET("/agents/:agentId/tag-vc", func(c *gin.Context) {
+				agentID := c.Param("agentId")
 				if agentID == "" {
 					c.JSON(http.StatusBadRequest, gin.H{"error": "agent_id is required"})
 					return

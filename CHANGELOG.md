@@ -6,6 +6,464 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.43-rc.1] - 2026-03-02
+
+
+### Added
+
+- Feat: VC-based authorization, sidecar management APIs, and multi-version reasoners (#188)
+
+* feat(control-plane): add VC-based authorization foundation
+
+This commit introduces the foundation for the new VC-based authorization
+system that replaces API key distribution with admin-approved permissions.
+
+Key components added:
+- Architecture documentation (docs/VC_AUTHORIZATION_ARCHITECTURE.md)
+- Database migrations for permission approvals, DID documents, and protected agents
+- Core types for permissions and did:web support
+- DIDWebService for did:web generation, storage, and resolution
+- PermissionService for permission requests, approvals, and VC issuance
+
+The system enables:
+- Agents self-assigning tags (identity declaration)
+- Admin approval workflow for protected agent access
+- Real-time revocation via did:web
+- Control plane as source of truth for approvals
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+
+* feat(vc-authorization): complete VC-based authorization system implementation
+
+- Add DID authentication middleware with Ed25519 signature verification
+- Add permission checking middleware for protected agent enforcement
+- Implement admin API handlers for permission management (approve/reject/revoke)
+- Add permission request and check API endpoints
+- Implement storage layer for DID documents, permission approvals, protected agent rules
+- Add comprehensive integration test suite (14 test functions covering all phases)
+- Add Admin UI pages: PendingPermissions, PermissionHistory, ProtectedAgents
+- Add Go SDK DID authentication support
+- Add Python SDK DID authentication support
+- Fix CI to enable FTS5 tests (previously all SQLite-dependent tests were skipped)
+- Add security documentation for DID authentication
+- Add implementation guide documentation
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+* fix(control-plane): fix pre-existing test bugs exposed by FTS5 build tag
+
+TestGetNodeDetailsHandler_Structure expected HTTP 400 for missing route
+param but Gin returns 404. TestGetNodeStatusHandler_Structure was missing
+a mock expectation for GetAgentStatus causing a panic.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* fix(control-plane): fix pre-existing test bugs exposed by FTS5 build tag
+
+The CI workflow change from `go test ./...` to `go test -tags sqlite_fts5 ./...`
+caused previously-skipped tests to execute, revealing 15 pre-existing bugs:
+
+- UI handler tests: Register agents in storage and configure mocks for
+  GetAgentStatus calls; fix assertions to match actual behavior (health
+  check failures mark agents inactive, not error the request)
+- VC service tests: Fix GetWorkflowVC lookups to use workflow_vc_id not
+  workflow_id; fix issuer mismatch test to tamper VCDocument JSON instead
+  of metadata field; fix error message assertion for empty VC documents
+- VC storage tests: Fix GetWorkflowVC key lookups; fix empty result assertions
+- PresenceManager tests: Register agents in storage so markInactive ->
+  UpdateAgentStatus -> GetAgentStatusSnapshot -> GetAgent succeeds; add
+  proper sync.Mutex for callback vars; use require.Eventually instead of
+  time.Sleep; set HardEvictTTL for lease deletion test
+- Webhook storage: Fix hardcoded Pending status to use webhook.Status
+- Execution records test: Fix LatestStarted assertion (CreateExecutionRecord
+  overwrites updated_at with time.Now())
+- Cleanup test: Wire countWorkflowRuns and deleteWorkflowRuns into
+  workflow cleanup path
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* fix(control-plane): fix SSE tests leaking goroutines via incorrect context cancellation
+
+Multiple SSE tests called req.Context().Done() expecting it to cancel the
+context, but Done() only returns a channel — it doesn't cancel anything.
+This caused SSE handler goroutines to block forever, leaking and eventually
+causing a 10-minute test timeout in CI.
+
+Fixed all affected tests to use context.WithCancel + explicit cancel() call,
+matching the pattern already used by the working SSE tests.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* ts sdk and bug fix on did web
+
+* feat(examples): add permission test agents and enable VC authorization config
+
+Add two example agents for manually testing the VC authorization system
+end-to-end: permission-agent-a (caller) and permission-agent-b (protected
+target). Enable authorization in the default config with seeded protection
+rules.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* Fixes
+
+* fix(sdk-python): update test fakes for DID credential wiring in _register_agent_with_did
+
+The previous commit added identity_package access and client credential
+wiring to _register_agent_with_did but didn't update the test fakes.
+_FakeDIDManager now provides a realistic identity_package and
+_FakeAgentFieldClient supports set_did_credentials, so the full
+registration path is exercised in tests.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* more improvements
+
+* 6th iteration of fixes
+
+* end to end tested
+
+* feat(sdk): add Go & TS permission test agents, fix DID auth signing
+
+- Add Go permission test agents (caller + protected target with 3 reasoners)
+- Add TS permission test agents (caller + tag-protected target with VC generation)
+- Fix TS SDK DID auth: pass pre-serialized JSON string to axios to ensure
+  signed bytes match what's sent on the wire
+- Fix Python SDK test for async execution manager payload serialization change
+- Add go-perm-target protection rule to config
+- Gitignore compiled Go agent binaries
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* fix(sdk-ts): update header-forwarding test for pre-serialized JSON body
+
+The execute() method now passes a JSON string instead of an object to
+axios for DID auth signing consistency. Update test assertion to match.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* manual testing updates
+
+* fix(vc-auth): fix re-approval deadlock, empty caller_agent_id, and error propagation
+
+- Fix re-approval deadlock: expand auto-request condition to trigger for
+  revoked/rejected statuses, not just empty (permission.go)
+- Fix empty caller_agent_id: add DID registry fallback in
+  ResolveAgentIDByDID for did:key resolution (did_service.go, did_web_service.go)
+- Fix HTTP 200 for failed executions: return 502 with proper error details
+  when inner agent-to-agent calls fail (execute.go)
+- Fix error propagation across all 3 SDKs:
+  - Go SDK: add ExecuteError type preserving status code and error_details
+  - TS SDK: propagate err.responseData as error_details in all error handlers
+  - Python SDK: add ExecuteError class, extract JSON body from 4xx responses
+    instead of losing it via raise_for_status(), propagate error_details in
+    async callback payloads
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* fix go missing func
+
+* address dx changes
+
+* temp
+
+* more fixes
+
+* finalized
+
+* better error prop
+
+* fix: update TS DID auth tests to match nonce-based signing format
+
+Tests expected the old 3-header format ({timestamp}:{bodyHash}) but the
+implementation correctly uses 4 headers with nonce ({timestamp}:{nonce}:{bodyHash}),
+matching Go and Python SDKs.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* fix: add rate limiting to DID auth middleware on execution endpoints
+
+Addresses code scanning alert about missing rate limiting on the
+authorization route handler. Adds a sliding-window rate limiter
+(30 requests per IP per 60s) to the local verification middleware.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* fix: use express-rate-limit for DID auth middleware to satisfy CodeQL
+
+Replace custom Map-based rate limiter with express-rate-limit package,
+which CodeQL recognizes as a proper rate limiting implementation.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* fix: remove duplicate countWorkflowRuns method from rebase
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* UI cleanup
+
+* pydantic formatting fix
+
+* connector changes
+
+* implemented multi agents with versioning
+
+* feat(ui): polished authorization page with unified tabs and visual standardization
+
+Replace separate TagApprovalPage and AccessPoliciesPage with a single
+tabbed AuthorizationPage. Add polished authorization components:
+- AccessRulesTab: 48px rows, sorted policies, ALLOW/DENY border colors
+- AgentTagsTab: all agents with tag data, sorted, neutral badges
+- ApproveWithContextDialog: tag selection with policy impact preview
+- PolicyFormDialog: chip-input for tags with known-tag suggestions
+- PolicyContextPanel: shows affected policies for selected tags
+- RevokeDialog: neutral styling, optional reason
+- ChipInput, TooltipTagList: reusable tag UI components
+
+Backend additions:
+- GET /api/ui/v1/authorization/agents: returns all agents with tag data
+- GET /api/v1/admin/tags: returns all known tags from agents & policies
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* multi versioning connector setup
+
+* add agent to agent direct checks
+
+* bugfixes on connector
+
+* QA fixes
+
+* package lock
+
+* bug fixes on permissions & versioning flow
+
+* fix: add missing DeleteAgentVersion stub and guard postgres migration for fresh DBs
+
+Two CI failures:
+
+1. linux-tests: stubStorage in server_routes_test.go was missing the
+   DeleteAgentVersion method added to the StorageProvider interface
+   by the multi-version work. Add the stub.
+
+2. Functional Tests (postgres): migrateAgentNodesCompositePKPostgres
+   tried to ALTER TABLE agent_nodes before GORM created it on fresh
+   databases. The information_schema.columns query returns count=0
+   (not an error) when the table doesn't exist, so the function
+   proceeded to run ALTER statements against a nonexistent table.
+   Add an explicit table existence check matching the pattern already
+   used by the SQLite migration path.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* add postgres testing to dev
+
+* docs: add changelog and env vars for connector, versioning, and authorization
+
+Document the feat/connector release including multi-versioning, VC-based
+authorization, and connector subsystem in CHANGELOG.md. Add authorization
+and connector environment variable sections to ENVIRONMENT_VARIABLES.md.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com>
+Co-authored-by: Santosh <santosh@agentfield.ai> (917b49b)
+
+## [Unreleased] - feat/connector
+
+### Added
+
+- **Multi-Versioning**: Deploy multiple versions of the same agent with weighted traffic routing. Agents are now stored with composite primary key `(id, version)`, enabling canary deployments, A/B testing, and blue-green rollouts. Includes `group_id` for logical grouping, `traffic_weight` (0–10000) per version, weighted round-robin selection, and `X-Routed-Version` response header. New storage methods: `GetAgentVersion`, `ListAgentVersions`, `ListAgentGroups`, `ListAgentsByGroup`, `UpdateAgentTrafficWeight`, `DeleteAgentVersion`. (9db17be, 9ae4e62, 3d6a50b)
+
+- **VC-Based Authorization System**: Complete Verifiable Credential authorization with W3C DID identity, Ed25519 request signing, tag-based access policies, and admin approval workflows. Agents get `did:web` identities with keypairs derived from master seed. Request signing uses 4 headers (`X-Caller-DID`, `X-DID-Signature`, `X-DID-Timestamp`, `X-DID-Nonce`). Includes DID auth middleware, permission check middleware with auto-request-on-deny, admin API for approve/reject/revoke, and comprehensive integration test suite (1754+ lines). (0cde0b1, 0106624)
+
+- **Connector Subsystem**: External management API with token-based authentication and capability-based access control. Provides `/connector/*` REST endpoints for managing reasoners, versions, traffic weights, and agent groups. Supports scoped capabilities (`reasoners:read`, `versions:write`, `restart`, etc.) for CI/CD and orchestration platform integration. (3d6a50b, 9ae4e62)
+
+- **Authorization Admin UI**: Unified tabbed authorization page with Access Rules tab (ALLOW/DENY policies with color-coded borders), Agent Tags tab (manage and approve agent tags), approval dialogs with policy impact preview, and revocation support. (4ac437f)
+
+- **Agent-to-Agent Direct Verification**: SDK `LocalVerifier` modules that cache policies, revocation lists, registered DIDs, and admin public key from the control plane. Enables offline signature verification without round-tripping. Added `/api/v1/registered-dids` endpoint. Supports nonce-based signatures and `did:key` public key resolution. (d89eb23)
+
+- **SDK DID Auth Modules**:
+  - Go: `client/did_auth.go` (authenticator), `did/did_client.go` (DID client), `did/did_manager.go` (key manager), `did/vc_generator.go` (VC generation), `agent/verification.go` (LocalVerifier)
+  - Python: `did_auth.py` (Ed25519 signing), `verification.py` (LocalVerifier with async refresh)
+  - TypeScript: Expanded `LocalVerifier.ts` (registered DID caching, nonce-aware verification)
+
+- **SDK Version Propagation**: All three SDKs (Go, Python, TypeScript) now include `version` in heartbeat and shutdown payloads for multi-versioning support.
+
+- **Multi-Version Examples**: New examples for all three SDKs demonstrating versioned agent registration (`examples/ts-node-examples/multi-version/`, `examples/go_agent_nodes/cmd/multi_version/`, `examples/python_agent_nodes/multi_version/`)
+
+- **Permission Test Examples**: Caller + protected target examples for all three SDKs (`examples/python_agent_nodes/permission_agent_a/`, `examples/go_agent_nodes/cmd/permission_caller/`, etc.)
+
+- **Rate Limiting**: Added `express-rate-limit` to DID auth middleware on execution endpoints for TypeScript SDK. (6ffe576, 5cdfdf8)
+
+- **`ExecuteError` Type**: All three SDKs now surface execution errors with status code and `error_details` propagation. (c5e5556)
+
+### Fixed
+
+- **Agent health status flapping** (#169): Three independent health systems (HealthMonitor, StatusManager, PresenceManager) fought each other. Now requires 3 consecutive failures before marking inactive, reduced heartbeat DB cache from 8s to 2s. (e74ed99)
+
+- **Memory websocket blocking startup** (#165): websockets v14+ renamed `additional_headers` to `extra_headers`, and blocking reconnect prevented uvicorn from starting. Added 5s timeout and backgrounded reconnect. (4a63bec)
+
+- **Python SDK hardcoded version** (#166): Registration payload hardcoded version to "1.0.0" and omitted agent metadata. Now passes actual values. (35d2685)
+
+- **Async execution polling missing auth headers** (#180): `_poll_single_execution` and `_batch_poll_executions` did not include auth headers, causing 401 errors. (26692de)
+
+- **Re-approval deadlock**: Re-approval only triggered for empty status, not revoked/rejected. Also fixed empty `caller_agent_id` and error propagation (200 → 502 for agent-to-agent failures). (c5e5556)
+
+- **Permissions/versioning flow**: Removed `DenyAnonymous` (broke backward compat), preserved approved tags during re-registration, cleaned stale empty-version DB rows. (f9d9dcf)
+
+- **UI workflow delete 404** (#174): Cleanup route was not registered. (ee47f56)
+
+- **Workflow cleanup orphaned summaries** (#177): Deletion left behind orphaned run summaries. (ab2ce92)
+
+- **Missing DeleteAgentVersion stub**: CI failure from missing interface method and postgres migration on fresh DBs. (4f7fe7a)
+
+- **Reasoner name mismatch**: Python SDK used `func_name` instead of `reasoner_id` for endpoint path. (f427b9b)
+
+- **Reasoner path normalization**: Added execution status guards for `waiting` state, approval expiration, execution event streaming. (f7a4a4d)
+
+- **Duplicate `countWorkflowRuns`**: Removed duplicate method from rebase. (27455d7)
+
+- **Pydantic formatting**: Fixed AI response formatting in Python SDK. (6a09ce0)
+
+### Changed
+
+- Database schema uses composite primary key `(id, version)` for agent nodes (migration 015)
+- `AgentNode` type includes new fields: `GroupID`, `TrafficWeight`
+- `StorageProvider` interface expanded with version-aware methods
+- Discovery response includes `GroupID` in `AgentCapability`
+
+## [0.1.42] - 2026-02-27
+
+
+### Fixed
+
+- Fix(release): add [skip ci] to version bump commit to prevent infinite loop (#194)
+
+The release workflow pushes a version bump commit to main, which
+triggers another release workflow run, creating an infinite loop.
+Adding [skip ci] to the commit message prevents the pushed commit
+from triggering any workflows.
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com> (ff0a88f)
+
+## [0.1.42-rc.18] - 2026-02-27
+
+## [0.1.42-rc.17] - 2026-02-27
+
+## [0.1.42-rc.16] - 2026-02-27
+
+## [0.1.42-rc.15] - 2026-02-27
+
+## [0.1.42-rc.14] - 2026-02-27
+
+## [0.1.42-rc.13] - 2026-02-27
+
+## [0.1.42-rc.12] - 2026-02-27
+
+## [0.1.42-rc.11] - 2026-02-27
+
+## [0.1.42-rc.10] - 2026-02-27
+
+## [0.1.42-rc.9] - 2026-02-27
+
+## [0.1.42-rc.8] - 2026-02-27
+
+## [0.1.42-rc.7] - 2026-02-27
+
+## [0.1.42-rc.6] - 2026-02-27
+
+## [0.1.42-rc.5] - 2026-02-27
+
+
+### Chores
+
+- Chore: remove redundant CLA assistant workflow (#192)
+
+The contributor-assistant/github-action workflow requires a PAT to
+store signatures in the remote .github repo, which is not configured.
+The hosted cla-assistant.io integration (license/cla) is already
+active and working, making this workflow redundant.
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com> (aedd982)
+
+- Chore: add CLA assistant workflow (abd1d79)
+
+- Chore: add CODEOWNERS with AbirAbbas as default reviewer (0ea7a8c)
+
+
+
+### Fixed
+
+- Fix(release): use deploy key to bypass branch protection on push (#193)
+
+The release workflow pushes version bump commits directly to main,
+which is blocked by the new branch ruleset requiring PRs. Use a
+deploy key (which is in the ruleset bypass list) instead of the
+default GITHUB_TOKEN.
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com> (11d0889)
+
+
+
+### Other
+
+- Set up vitest testing infrastructure, with sample test cases for status badge component (#191)
+
+* Set up vitest testing infrastructure, with sample test cases for status badge component
+
+* Reversed IDE formatting from computer to prevent large diff in changelog.md
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com> (0c5147f)
+
+## [Unreleased]
+
+### Testing
+
+- Test(web-ui): set up vitest testing infrastructure (#103)
+
+Add unit testing infrastructure to the Web UI (`control-plane/web/client/`),
+which previously had zero test coverage.
+
+- Install vitest, @testing-library/react, @testing-library/jest-dom,
+  @testing-library/user-event, @vitest/coverage-v8, and jsdom as devDependencies
+- Add `vitest.config.ts` with jsdom environment, `@` path alias, and v8 coverage provider
+- Add `src/test/setup.ts` to extend vitest with jest-dom matchers
+- Add `src/test/components/status/StatusBadge.test.tsx` with comprehensive tests:
+    - All `AgentState`, `HealthStatus`, and `LifecycleStatus` values via `it.each`
+    - Priority ordering between `state`, `healthStatus`, and `lifecycleStatus` props
+    - `showIcon` behaviour and `size` prop smoke tests
+    - `status` prop (AgentStatus object): `status.state`, `showHealthScore` percentage
+      display, `state_transition` arrow label, and `animate-pulse` during transitions
+    - Dedicated `AgentStateBadge`, `HealthStatusBadge`, `LifecycleStatusBadge` exports
+    - `getHealthScoreColor` utility — boundary tests across all four score tiers
+    - `getHealthScoreBadgeVariant` utility — returns correct badge variant per tier
+- Add `test`, `test:watch`, and `test:coverage` scripts to package.json
+- Wire `npm run test` into `scripts/test-all.sh` alongside the existing lint step
+
+## [0.1.42-rc.4] - 2026-02-27
+
+
+### Chores
+
+- Chore(web-ui): remove dead filter components (#190)
+
+Remove 9 unused files that are not imported anywhere in the app.
+The Executions page uses PageHeader with FilterSelect dropdowns,
+not these legacy toggle-button filter components.
+
+Removed files:
+- ExecutionFilters.tsx, ExecutionsList.tsx, QuickFilters.tsx
+- SearchWithFilters.tsx, SuggestedFilters.tsx, FilterTag.tsx
+- hooks/useFilterState.ts, utils/filterUtils.ts, types/filters.ts
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com> (ef8efe8)
+
 ## [0.1.42-rc.3] - 2026-02-24
 
 

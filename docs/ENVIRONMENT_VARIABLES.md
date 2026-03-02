@@ -60,6 +60,27 @@ These map to `api.cors.*` in config. When set via env, use comma-separated value
 - `AGENTFIELD_API_CORS_EXPOSED_HEADERS` (comma-separated)
 - `AGENTFIELD_API_CORS_ALLOW_CREDENTIALS` (`true`/`false`)
 
+### Authorization (VC-Based Permissions)
+
+When enabled, the control plane issues DID identities to agents and enforces tag-based access policies on agent-to-agent calls.
+
+- `AGENTFIELD_AUTHORIZATION_ENABLED` (default: `false`): Enable VC-based authorization.
+- `AGENTFIELD_AUTHORIZATION_MASTER_SEED` (required when enabled): Master seed for deriving Ed25519 keypairs for agent DIDs. Keep this secret and consistent across restarts — changing it invalidates all existing DID signatures.
+- `AGENTFIELD_AUTHORIZATION_TAG_APPROVAL_MODE` (default: `auto`): `auto` (tags approved immediately) or `admin` (tags require admin approval before the agent becomes ready).
+
+### Connector (External Management API)
+
+The connector API provides token-authenticated management endpoints for external systems (CI/CD, orchestration platforms, dashboards).
+
+- `AGENTFIELD_CONNECTOR_TOKEN` (optional): Bearer token required for all `/connector/*` endpoints.
+- `AGENTFIELD_CONNECTOR_CAPABILITIES` (optional, default: all): Comma-separated list of granted capabilities. Available capabilities: `reasoners:read`, `reasoners:write`, `versions:read`, `versions:write`, `restart`.
+
+Example:
+```
+AGENTFIELD_CONNECTOR_TOKEN=my-secret-token
+AGENTFIELD_CONNECTOR_CAPABILITIES=reasoners:read,versions:read,versions:write,restart
+```
+
 ## Agent Nodes
 
 Agent nodes run as separate processes/pods and register with the control plane. The most important Kubernetes-specific concept is:

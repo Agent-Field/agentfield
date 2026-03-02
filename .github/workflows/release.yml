@@ -76,6 +76,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
 
       - name: Set up Python for tooling
         uses: actions/setup-python@v5
@@ -176,7 +177,7 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add -A
-            git commit -m "chore(release): ${tag}"
+            git commit -m "chore(release): ${tag} [skip ci]"
             git tag -a "${tag}" -m "Release ${tag}"
             git push origin "HEAD:${REF_NAME}"
             git push origin "${tag}"
