@@ -56,6 +56,7 @@ dev = [
     "pytest>=7.4,<9",
     "pytest-asyncio>=0.21,<0.24",
     "pytest-cov>=4.1,<5",
+    "pytest-httpx>=0.30,<1; python_version>='3.10'",
     "responses>=0.23,<0.26",
     "respx>=0.20,<0.22",
     "freezegun>=1.2,<2",
@@ -75,7 +76,8 @@ markers = [
     "contract: API/interface stability tests",
     "unit: isolated unit tests",
     "integration: tests that can touch network/services",
-    "mcp: tests that exercise MCP/network interactions"
+    "mcp: tests that exercise MCP/network interactions",
+    "httpx_mock: pytest-httpx marker for configuring mock behavior"
 ]
 addopts = "-ra -q -m \"not mcp\" --strict-markers --strict-config --cov=agentfield.client --cov=agentfield.agent_field_handler --cov=agentfield.execution_context --cov=agentfield.execution_state --cov=agentfield.memory --cov=agentfield.rate_limiter --cov=agentfield.result_cache --cov-report=term-missing:skip-covered"
 asyncio_mode = "auto"

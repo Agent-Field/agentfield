@@ -2,6 +2,8 @@
 
 import pytest
 
+pytest.importorskip("pytest_httpx", reason="pytest-httpx requires Python >=3.10")
+
 from agentfield.client import (
     AgentFieldClient,
     ApprovalRequestResponse,
@@ -43,8 +45,8 @@ async def test_request_approval_returns_typed_response(client, httpx_mock):
 
     result = await client.request_approval(
         execution_id=EXECUTION_ID,
-        title="Plan Review",
-        project_id="proj-1",
+        approval_request_id="req-abc",
+        approval_request_url="https://hub.example.com/r/req-abc",
     )
 
     assert isinstance(result, ApprovalRequestResponse)
@@ -63,7 +65,10 @@ async def test_request_approval_raises_on_http_error(client, httpx_mock):
     )
 
     with pytest.raises(AgentFieldClientError, match="404"):
-        await client.request_approval(execution_id=EXECUTION_ID, project_id="p")
+        await client.request_approval(
+                execution_id=EXECUTION_ID,
+                approval_request_id="req-fail",
+            )
 
 
 # ---------------------------------------------------------------------------

@@ -27,6 +27,7 @@ describe('ApprovalClient', () => {
   afterEach(() => {
     return new Promise<void>((resolve) => {
       if (server?.listening) {
+        server.closeAllConnections();
         server.close(() => resolve());
       } else {
         resolve();
