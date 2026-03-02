@@ -496,6 +496,27 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 			return nil, fmt.Errorf("execution %s not found", executionID)
 		}
 
+		// Guard: executions in "waiting" state can only transition to
+		// running, cancelled, or failed. The approval webhook handler
+		// manages the waiting→running transition; direct jumps to
+		// succeeded or timeout would desync the executions and
+		// workflow_executions tables.
+		if current.Status == types.ExecutionStatusWaiting {
+			switch normalizedStatus {
+			case string(types.ExecutionStatusRunning),
+				string(types.ExecutionStatusCancelled),
+				string(types.ExecutionStatusFailed):
+				// allowed
+			default:
+				logger.Logger.Warn().
+					Str("execution_id", executionID).
+					Str("current_status", string(current.Status)).
+					Str("requested_status", normalizedStatus).
+					Msg("rejecting status update: execution is waiting for approval")
+				return nil, fmt.Errorf("execution %s is in 'waiting' state; only running, cancelled, or failed transitions are allowed", executionID)
+			}
+		}
+
 		current.Status = normalizedStatus
 		current.StatusReason = req.StatusReason
 		if len(resultBytes) > 0 {
@@ -1121,11 +1142,12 @@ func (c *executionController) completeExecution(ctx context.Context, plan *prepa
 				return nil, fmt.Errorf("execution %s not found", plan.exec.ExecutionID)
 			}
 			// Guard: don't overwrite if already cancelled (e.g. by approval rejection webhook)
-			if current.Status == types.ExecutionStatusCancelled {
+			// or waiting for approval — the approval webhook handler manages the transition.
+			if current.Status == types.ExecutionStatusCancelled || current.Status == types.ExecutionStatusWaiting {
 				logger.Logger.Info().
 					Str("execution_id", plan.exec.ExecutionID).
 					Str("current_status", string(current.Status)).
-					Msg("skipping completion update; execution already cancelled")
+					Msg("skipping completion update; execution already cancelled or waiting for approval")
 				alreadyCancelled = true
 				return current, nil
 			}
@@ -1186,11 +1208,12 @@ func (c *executionController) failExecution(ctx context.Context, plan *preparedE
 				return nil, fmt.Errorf("execution %s not found", plan.exec.ExecutionID)
 			}
 			// Guard: don't overwrite if already cancelled (e.g. by approval rejection webhook)
-			if current.Status == types.ExecutionStatusCancelled {
+			// or waiting for approval — the approval webhook handler manages the transition.
+			if current.Status == types.ExecutionStatusCancelled || current.Status == types.ExecutionStatusWaiting {
 				logger.Logger.Info().
 					Str("execution_id", plan.exec.ExecutionID).
 					Str("current_status", string(current.Status)).
-					Msg("skipping failure update; execution already cancelled")
+					Msg("skipping failure update; execution already cancelled or waiting for approval")
 				alreadyCancelled = true
 				return current, nil
 			}

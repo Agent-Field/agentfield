@@ -26,6 +26,7 @@ type approvalController struct {
 type RequestApprovalRequest struct {
 	ApprovalRequestID  string `json:"approval_request_id" binding:"required"`
 	ApprovalRequestURL string `json:"approval_request_url,omitempty"`
+	CallbackURL        string `json:"callback_url,omitempty"`
 	ExpiresInHours     *int   `json:"expires_in_hours,omitempty"`
 }
 
@@ -43,6 +44,7 @@ type ApprovalStatusResponse struct {
 	RequestURL  string  `json:"request_url,omitempty"`
 	RequestedAt string  `json:"requested_at,omitempty"`
 	RespondedAt *string `json:"responded_at,omitempty"`
+	ExpiresAt   *string `json:"expires_at,omitempty"`
 }
 
 // RequestApprovalHandler transitions an execution to "waiting" and stores
@@ -109,6 +111,13 @@ func (c *approvalController) handleRequestApproval(ctx *gin.Context) {
 	statusReason := "waiting_for_approval"
 	approvalStatus := "pending"
 
+	// Compute expiry timestamp from expires_in_hours (default 72h)
+	expiryHours := 72
+	if req.ExpiresInHours != nil && *req.ExpiresInHours > 0 {
+		expiryHours = *req.ExpiresInHours
+	}
+	expiresAt := now.Add(time.Duration(expiryHours) * time.Hour)
+
 	// Transition the lightweight execution record to waiting
 	_, updateErr := c.store.UpdateExecutionRecord(reqCtx, executionID, func(current *types.Execution) (*types.Execution, error) {
 		if current == nil {
@@ -137,6 +146,10 @@ func (c *approvalController) handleRequestApproval(ctx *gin.Context) {
 		}
 		current.ApprovalStatus = &approvalStatus
 		current.ApprovalRequestedAt = &now
+		if req.CallbackURL != "" {
+			current.ApprovalCallbackURL = &req.CallbackURL
+		}
+		current.ApprovalExpiresAt = &expiresAt
 		return current, nil
 	})
 	if err != nil {
@@ -244,11 +257,92 @@ func (c *approvalController) handleGetApprovalStatus(ctx *gin.Context) {
 		requestURL = *wfExec.ApprovalRequestURL
 	}
 
+	var expiresAtStr *string
+	if wfExec.ApprovalExpiresAt != nil {
+		formatted := wfExec.ApprovalExpiresAt.Format(time.RFC3339)
+		expiresAtStr = &formatted
+	}
+
 	ctx.JSON(http.StatusOK, ApprovalStatusResponse{
 		Status:      status,
 		Response:    wfExec.ApprovalResponse,
 		RequestURL:  requestURL,
 		RequestedAt: requestedAt,
+		ExpiresAt:   expiresAtStr,
 		RespondedAt: respondedAt,
 	})
+}
+
+// AgentScopedRequestApprovalHandler is the agent-scoped version of RequestApprovalHandler.
+// It enforces that the execution belongs to the agent identified by :node_id.
+func AgentScopedRequestApprovalHandler(store ExecutionStore) gin.HandlerFunc {
+	ctrl := &approvalController{store: store}
+	return func(ctx *gin.Context) {
+		nodeID := ctx.Param("node_id")
+		executionID := ctx.Param("execution_id")
+		if nodeID == "" || executionID == "" {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "node_id and execution_id are required"})
+			return
+		}
+
+		// Verify the execution belongs to this agent
+		if !ctrl.verifyExecutionOwnership(ctx, executionID, nodeID) {
+			return // verifyExecutionOwnership writes the response
+		}
+
+		// Delegate to the standard handler
+		ctrl.handleRequestApproval(ctx)
+	}
+}
+
+// AgentScopedGetApprovalStatusHandler is the agent-scoped version of GetApprovalStatusHandler.
+// It enforces that the execution belongs to the agent identified by :node_id.
+func AgentScopedGetApprovalStatusHandler(store ExecutionStore) gin.HandlerFunc {
+	ctrl := &approvalController{store: store}
+	return func(ctx *gin.Context) {
+		nodeID := ctx.Param("node_id")
+		executionID := ctx.Param("execution_id")
+		if nodeID == "" || executionID == "" {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "node_id and execution_id are required"})
+			return
+		}
+
+		// Verify the execution belongs to this agent
+		if !ctrl.verifyExecutionOwnership(ctx, executionID, nodeID) {
+			return
+		}
+
+		// Delegate to the standard handler
+		ctrl.handleGetApprovalStatus(ctx)
+	}
+}
+
+// verifyExecutionOwnership checks that the execution's AgentNodeID matches the
+// node_id from the URL path. Returns false and writes an error response if
+// verification fails; returns true if the caller may proceed.
+func (c *approvalController) verifyExecutionOwnership(ctx *gin.Context, executionID, nodeID string) bool {
+	reqCtx := ctx.Request.Context()
+	wfExec, err := c.store.GetWorkflowExecution(reqCtx, executionID)
+	if err != nil {
+		logger.Logger.Error().Err(err).Str("execution_id", executionID).Msg("failed to get workflow execution for ownership check")
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to look up execution"})
+		return false
+	}
+	if wfExec == nil {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("execution %s not found", executionID)})
+		return false
+	}
+	if wfExec.AgentNodeID != nodeID {
+		logger.Logger.Warn().
+			Str("execution_id", executionID).
+			Str("requested_node", nodeID).
+			Str("actual_node", wfExec.AgentNodeID).
+			Msg("agent-scoped approval request denied: execution belongs to a different agent")
+		ctx.JSON(http.StatusForbidden, gin.H{
+			"error":   "execution_ownership_mismatch",
+			"message": "this execution does not belong to the requesting agent",
+		})
+		return false
+	}
+	return true
 }

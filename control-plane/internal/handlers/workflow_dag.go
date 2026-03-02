@@ -500,6 +500,8 @@ func executionToDAGNode(exec *types.Execution, depth int) WorkflowDAGNode {
 func deriveOverallStatus(executions []*types.Execution) string {
 	hasRunning := false
 	hasFailed := false
+	hasTimeout := false
+	hasCancelled := false
 	for _, exec := range executions {
 		status := types.NormalizeExecutionStatus(exec.Status)
 		switch status {
@@ -507,14 +509,24 @@ func deriveOverallStatus(executions []*types.Execution) string {
 			hasRunning = true
 		case string(types.ExecutionStatusFailed):
 			hasFailed = true
+		case string(types.ExecutionStatusTimeout):
+			hasTimeout = true
+		case string(types.ExecutionStatusCancelled):
+			hasCancelled = true
 		}
 	}
-	// Priority: running > failed > succeeded
+	// Priority: running > failed > timeout > cancelled > succeeded
 	if hasRunning {
 		return string(types.ExecutionStatusRunning)
 	}
 	if hasFailed {
 		return string(types.ExecutionStatusFailed)
+	}
+	if hasTimeout {
+		return string(types.ExecutionStatusTimeout)
+	}
+	if hasCancelled {
+		return string(types.ExecutionStatusCancelled)
 	}
 	return string(types.ExecutionStatusSucceeded)
 }

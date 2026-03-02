@@ -30,7 +30,7 @@ from agentfield.agent_mcp import AgentMCP
 from agentfield.agent_registry import clear_current_agent, set_current_agent
 from agentfield.agent_server import AgentServer
 from agentfield.agent_workflow import AgentWorkflow
-from agentfield.client import AgentFieldClient
+from agentfield.client import AgentFieldClient, ApprovalResult
 from agentfield.dynamic_skills import DynamicMCPSkillManager
 from agentfield.execution_context import (
     ExecutionContext,
@@ -342,6 +342,71 @@ def _resolve_callback_url(callback_url: Optional[str], port: int) -> str:
     return f"http://localhost:{port}"
 
 
+class _PauseManager:
+    """Manages pending execution pause futures resolved via webhook callback.
+
+    Each call to ``Agent.pause()`` registers an ``asyncio.Future`` keyed by
+    ``approval_request_id``.  When the webhook route receives a resolution
+    callback from the control plane it resolves the matching future, unblocking
+    the caller.
+    """
+
+    def __init__(self) -> None:
+        self._pending: Dict[str, asyncio.Future] = {}
+        # Also track execution_id → approval_request_id for fallback resolution
+        self._exec_to_request: Dict[str, str] = {}
+        self._lock = asyncio.Lock()
+
+    async def register(self, approval_request_id: str, execution_id: str = "") -> asyncio.Future:
+        """Register a new pending pause and return the Future to await."""
+        async with self._lock:
+            if approval_request_id in self._pending:
+                return self._pending[approval_request_id]
+            loop = asyncio.get_running_loop()
+            future = loop.create_future()
+            self._pending[approval_request_id] = future
+            if execution_id:
+                self._exec_to_request[execution_id] = approval_request_id
+            return future
+
+    async def resolve(self, approval_request_id: str, result: "ApprovalResult") -> bool:
+        """Resolve a pending pause by approval_request_id.  Returns True if a waiter was found."""
+        async with self._lock:
+            future = self._pending.pop(approval_request_id, None)
+            # Clean up execution mapping
+            exec_id = None
+            for eid, rid in self._exec_to_request.items():
+                if rid == approval_request_id:
+                    exec_id = eid
+                    break
+            if exec_id:
+                self._exec_to_request.pop(exec_id, None)
+            if future and not future.done():
+                future.set_result(result)
+                return True
+            return False
+
+    async def resolve_by_execution_id(self, execution_id: str, result: "ApprovalResult") -> bool:
+        """Fallback: resolve by execution_id when approval_request_id is not in the callback."""
+        async with self._lock:
+            request_id = self._exec_to_request.pop(execution_id, None)
+            if request_id:
+                future = self._pending.pop(request_id, None)
+                if future and not future.done():
+                    future.set_result(result)
+                    return True
+            return False
+
+    async def cancel_all(self) -> None:
+        """Cancel all pending futures (for shutdown)."""
+        async with self._lock:
+            for future in self._pending.values():
+                if not future.done():
+                    future.cancel()
+            self._pending.clear()
+            self._exec_to_request.clear()
+
+
 class Agent(FastAPI):
     """
     AgentField Agent - FastAPI subclass for creating AI agent nodes.
@@ -530,6 +595,9 @@ class Agent(FastAPI):
         )
         self.client.caller_agent_id = self.node_id
         self._current_execution_context: Optional[ExecutionContext] = None
+
+        # Manages pending pause/approval futures resolved via webhook callback
+        self._pause_manager = _PauseManager()
 
         # Initialize async execution manager (will be lazily created when needed)
         self._async_execution_manager: Optional[AsyncExecutionManager] = None
@@ -1553,7 +1621,10 @@ class Agent(FastAPI):
             # Extract function metadata
             func_name = func.__name__
             reasoner_id = decorator_name or func_name
-            endpoint_path = decorator_path or f"/reasoners/{func_name}"
+            if decorator_path:
+                endpoint_path = decorator_path if decorator_path.startswith("/reasoners/") else f"/reasoners/{decorator_path.lstrip('/')}"
+            else:
+                endpoint_path = f"/reasoners/{func_name}"
 
             # Get type hints for input/output schemas
             type_hints = get_type_hints(func)
@@ -3601,6 +3672,159 @@ class Agent(FastAPI):
             thread = threading.Thread(target=lambda: asyncio.run(_send_note()))
             thread.daemon = True
             thread.start()
+
+    async def pause(
+        self,
+        approval_request_id: str,
+        approval_request_url: str = "",
+        expires_in_hours: int = 72,
+        timeout: Optional[float] = None,
+        execution_id: Optional[str] = None,
+    ) -> ApprovalResult:
+        """Pause the current execution for external approval.
+
+        Transitions the execution to "waiting" on the control plane, then
+        blocks until the approval webhook callback resolves it or the timeout
+        is reached.
+
+        The agent is responsible for creating the approval request on an
+        external service (e.g. hax-sdk) *before* calling this method and
+        passing the resulting ``approval_request_id``.
+
+        Args:
+            approval_request_id: ID of the approval request on the external service.
+            approval_request_url: URL where the human can review the request.
+            expires_in_hours: Expiry passed to the control plane.
+            timeout: Max seconds to wait.  ``None`` defaults to ``expires_in_hours``.
+            execution_id: Override the current execution.  Defaults to active context.
+
+        Returns:
+            ApprovalResult with the human's decision and feedback.
+            If the timeout elapses without resolution, returns
+            ``ApprovalResult(decision="expired")``.
+
+        Raises:
+            AgentFieldClientError: If the control plane request fails.
+            RuntimeError: If the agent is not serving (no callback URL).
+        """
+        from agentfield.exceptions import AgentFieldClientError
+
+        # Resolve execution_id from context if not provided
+        if not execution_id:
+            ctx = self._get_current_execution_context()
+            execution_id = ctx.execution_id
+
+        if not execution_id:
+            raise AgentFieldClientError("No execution_id available — cannot pause")
+
+        # Build the callback URL from the agent's base URL
+        if not self.base_url:
+            raise RuntimeError(
+                "Agent is not serving — call app.serve() before app.pause(). "
+                "The callback URL is required for the control plane to notify "
+                "the agent when the approval resolves."
+            )
+        callback_url = f"{self.base_url}/webhooks/approval"
+
+        # Register a future *before* telling the CP, so we don't miss a fast callback
+        future = await self._pause_manager.register(approval_request_id, execution_id)
+
+        # Tell the CP to transition to "waiting"
+        try:
+            await self.client.request_approval(
+                execution_id=execution_id,
+                approval_request_id=approval_request_id,
+                approval_request_url=approval_request_url,
+                callback_url=callback_url,
+                expires_in_hours=expires_in_hours,
+            )
+        except Exception:
+            # Clean up the future if we couldn't even tell the CP
+            await self._pause_manager.resolve(
+                approval_request_id,
+                ApprovalResult(decision="error", feedback="failed to notify control plane",
+                               execution_id=execution_id, approval_request_id=approval_request_id),
+            )
+            raise
+
+        self.note(
+            f"Execution paused — waiting for approval {approval_request_id}",
+            tags=["approval", "waiting"],
+        )
+
+        effective_timeout = timeout if timeout is not None else expires_in_hours * 3600.0
+        try:
+            result = await asyncio.wait_for(future, timeout=effective_timeout)
+        except asyncio.TimeoutError:
+            # Timeout is a normal outcome — return an "expired" result instead of raising.
+            expired_result = ApprovalResult(
+                decision="expired",
+                feedback="timed out waiting for approval",
+                execution_id=execution_id,
+                approval_request_id=approval_request_id,
+            )
+            await self._pause_manager.resolve(approval_request_id, expired_result)
+            return expired_result
+
+        return result
+
+    async def wait_for_resume(
+        self,
+        approval_request_id: str,
+        execution_id: Optional[str] = None,
+        timeout: Optional[float] = None,
+    ) -> ApprovalResult:
+        """Wait for a previously-initiated pause to resolve.
+
+        Use for crash recovery: the approval was already requested (the
+        execution is already ``waiting`` on the CP) and we just need to wait
+        for the callback.  Does *not* call the CP again.
+
+        If the webhook callback does not arrive within *timeout*, falls back to
+        a single status poll via the control plane.
+
+        Args:
+            approval_request_id: The known approval request ID to wait for.
+            execution_id: Execution ID.  Defaults to active context.
+            timeout: Max seconds to wait.
+
+        Returns:
+            ApprovalResult with the resolution.
+        """
+        from agentfield.exceptions import AgentFieldClientError
+
+        if not execution_id:
+            ctx = self._get_current_execution_context()
+            execution_id = ctx.execution_id
+
+        future = await self._pause_manager.register(approval_request_id, execution_id or "")
+
+        effective_timeout = timeout if timeout is not None else 72 * 3600.0
+        try:
+            result = await asyncio.wait_for(future, timeout=effective_timeout)
+            return result
+        except asyncio.TimeoutError:
+            pass
+
+        # Fallback: poll CP once
+        try:
+            status_resp = await self.client.get_approval_status(execution_id or "")
+            if status_resp.status != "pending":
+                return ApprovalResult(
+                    decision=status_resp.status,
+                    execution_id=execution_id or "",
+                    approval_request_id=approval_request_id,
+                    raw_response=status_resp.response,
+                )
+        except AgentFieldClientError:
+            pass
+
+        return ApprovalResult(
+            decision="expired",
+            feedback="approval timed out without response",
+            execution_id=execution_id or "",
+            approval_request_id=approval_request_id,
+        )
 
     def _get_current_execution_context(self) -> ExecutionContext:
         """

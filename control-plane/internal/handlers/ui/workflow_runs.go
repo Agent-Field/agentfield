@@ -205,7 +205,9 @@ func convertAggregationToSummary(agg *storage.RunSummaryAggregation) WorkflowRun
 
 	// Check if terminal
 	summary.Terminal = summary.Status == string(types.ExecutionStatusSucceeded) ||
-		summary.Status == string(types.ExecutionStatusFailed)
+		summary.Status == string(types.ExecutionStatusFailed) ||
+		summary.Status == string(types.ExecutionStatusTimeout) ||
+		summary.Status == string(types.ExecutionStatusCancelled)
 
 	// Calculate duration if completed
 	if summary.Terminal {
@@ -218,30 +220,30 @@ func convertAggregationToSummary(agg *storage.RunSummaryAggregation) WorkflowRun
 	return summary
 }
 
-// deriveStatusFromCounts determines overall workflow status from status counts
+// deriveStatusFromCounts determines overall workflow status from status counts.
+// Priority: active (running/waiting/pending/queued) > failed > timeout > cancelled > succeeded.
 func deriveStatusFromCounts(statusCounts map[string]int, activeExecutions int) string {
+	// If there are active executions (running, waiting, pending, queued), the workflow is running
+	if activeExecutions > 0 {
+		return string(types.ExecutionStatusRunning)
+	}
+
 	// If there are any failed executions, the workflow is failed
 	if statusCounts[string(types.ExecutionStatusFailed)] > 0 {
 		return string(types.ExecutionStatusFailed)
 	}
 
-	// If there are active executions, the workflow is running
-	if activeExecutions > 0 {
-		return string(types.ExecutionStatusRunning)
+	// If there are any timed-out executions, the workflow timed out
+	if statusCounts[string(types.ExecutionStatusTimeout)] > 0 {
+		return string(types.ExecutionStatusTimeout)
 	}
 
-	// If all executions succeeded, the workflow succeeded
-	totalSucceeded := statusCounts[string(types.ExecutionStatusSucceeded)]
-	totalAll := 0
-	for _, count := range statusCounts {
-		totalAll += count
+	// If there are any cancelled executions, the workflow is cancelled
+	if statusCounts[string(types.ExecutionStatusCancelled)] > 0 {
+		return string(types.ExecutionStatusCancelled)
 	}
 
-	if totalSucceeded == totalAll && totalAll > 0 {
-		return string(types.ExecutionStatusSucceeded)
-	}
-
-	// Default to succeeded if no active work
+	// All executions are in terminal non-error states (succeeded) or no executions exist
 	return string(types.ExecutionStatusSucceeded)
 }
 

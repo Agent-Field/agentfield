@@ -1234,6 +1234,11 @@ func (s *AgentFieldServer) setupRoutes() {
 		agentAPI.POST("/executions/:execution_id/request-approval", handlers.RequestApprovalHandler(s.storage))
 		agentAPI.GET("/executions/:execution_id/approval-status", handlers.GetApprovalStatusHandler(s.storage))
 
+		// Agent-scoped approval routes — enforce that the execution belongs to the requesting agent.
+		// Agents should use these instead of the global routes above.
+		agentAPI.POST("/agents/:node_id/executions/:execution_id/request-approval", handlers.AgentScopedRequestApprovalHandler(s.storage))
+		agentAPI.GET("/agents/:node_id/executions/:execution_id/approval-status", handlers.AgentScopedGetApprovalStatusHandler(s.storage))
+
 		// Approval resolution webhook (called by agents or external services when approval resolves)
 		agentAPI.POST("/webhooks/approval-response", handlers.ApprovalWebhookHandler(s.storage, s.config.AgentField.Approval.WebhookSecret))
 
@@ -1340,8 +1345,8 @@ func (s *AgentFieldServer) setupRoutes() {
 
 		// Agent Tag VC endpoint (for agents to download their own verified tag credential)
 		if s.tagVCVerifier != nil {
-			agentAPI.GET("/agents/:agentId/tag-vc", func(c *gin.Context) {
-				agentID := c.Param("agentId")
+			agentAPI.GET("/agents/:node_id/tag-vc", func(c *gin.Context) {
+				agentID := c.Param("node_id")
 				if agentID == "" {
 					c.JSON(http.StatusBadRequest, gin.H{"error": "agent_id is required"})
 					return

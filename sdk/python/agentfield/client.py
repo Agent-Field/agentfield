@@ -57,6 +57,25 @@ class ApprovalStatusResponse:
     responded_at: Optional[str] = None
 
 
+@dataclass
+class ApprovalResult:
+    """Outcome of a human approval request, returned by ``Agent.pause()``."""
+
+    decision: str  # "approved", "rejected", "request_changes", "expired", "error"
+    feedback: str = ""
+    execution_id: str = ""
+    approval_request_id: str = ""
+    raw_response: Optional[Dict[str, Any]] = None
+
+    @property
+    def approved(self) -> bool:
+        return self.decision == "approved"
+
+    @property
+    def changes_requested(self) -> bool:
+        return self.decision == "request_changes"
+
+
 # Python 3.8 compatibility: asyncio.to_thread was added in Python 3.9
 if sys.version_info >= (3, 9):
     from asyncio import to_thread as _to_thread
@@ -1668,25 +1687,23 @@ class AgentFieldClient:
     async def request_approval(
         self,
         execution_id: str,
-        title: str = "Approval Request",
-        description: str = "",
-        template_type: str = "plan-review-v1",
-        payload: Optional[Dict[str, Any]] = None,
-        project_id: str = "",
+        approval_request_id: str,
+        approval_request_url: str = "",
+        callback_url: str = "",
         expires_in_hours: int = 72,
     ) -> ApprovalRequestResponse:
         """Request human approval for an execution, transitioning it to ``waiting``.
 
         Calls ``POST /api/v1/agents/{node}/executions/{id}/request-approval``
-        on the control plane.
+        on the control plane.  The agent is responsible for creating the
+        approval request on an external service (e.g. hax-sdk) first and
+        passing the resulting IDs here so the CP can track it.
 
         Args:
             execution_id: The execution to pause for approval.
-            title: Human-readable title shown in the approval UI.
-            description: Description shown in the approval UI.
-            template_type: hax-sdk template type for rendering the request.
-            payload: Template-specific payload data.
-            project_id: hax-sdk project UUID.
+            approval_request_id: ID of the approval request on the external service.
+            approval_request_url: URL where the human can review the request.
+            callback_url: URL the CP should POST to when the approval resolves.
             expires_in_hours: Time before the request expires.
 
         Returns:
@@ -1696,14 +1713,14 @@ class AgentFieldClient:
             AgentFieldClientError: If the request fails.
         """
         node_id = self.caller_agent_id or ""
-        body = {
-            "title": title,
-            "description": description,
-            "template_type": template_type,
-            "payload": payload or {},
-            "project_id": project_id,
+        body: Dict[str, Any] = {
+            "approval_request_id": approval_request_id,
             "expires_in_hours": expires_in_hours,
         }
+        if approval_request_url:
+            body["approval_request_url"] = approval_request_url
+        if callback_url:
+            body["callback_url"] = callback_url
         url = f"{self.api_base}/agents/{node_id}/executions/{execution_id}/request-approval"
 
         try:

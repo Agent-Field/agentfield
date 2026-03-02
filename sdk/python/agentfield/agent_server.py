@@ -540,6 +540,65 @@ class AgentServer:
                     "tools": [],
                 }
 
+        # -----------------------------------------------------------------
+        # Approval webhook — receives callbacks from the control plane when
+        # an execution's approval state resolves.  Auto-registered so every
+        # agent gets this endpoint at ``POST /webhooks/approval``.
+        # -----------------------------------------------------------------
+        @self.agent.post("/webhooks/approval")
+        async def approval_webhook(request: Request):
+            """Receive approval resolution callback from the control plane."""
+            from agentfield.client import ApprovalResult
+            import json as _json
+
+            try:
+                body = await request.json()
+            except Exception:
+                return {"error": "invalid JSON"}, 400
+
+            execution_id = body.get("execution_id", "")
+            decision = body.get("decision", "")
+            feedback = body.get("feedback", "")
+            approval_request_id = body.get("approval_request_id", "")
+
+            if not execution_id or not decision:
+                return {"error": "execution_id and decision are required", "status": 400}
+
+            # Parse the raw response field (may be a JSON string or dict)
+            raw_response = None
+            resp_field = body.get("response")
+            if resp_field:
+                if isinstance(resp_field, str):
+                    try:
+                        raw_response = _json.loads(resp_field)
+                    except (ValueError, _json.JSONDecodeError):
+                        raw_response = {"raw": resp_field}
+                elif isinstance(resp_field, dict):
+                    raw_response = resp_field
+
+            result = ApprovalResult(
+                decision=decision,
+                feedback=feedback,
+                execution_id=execution_id,
+                approval_request_id=approval_request_id,
+                raw_response=raw_response,
+            )
+
+            # Try to resolve by approval_request_id first, then by execution_id
+            resolved = False
+            if approval_request_id:
+                resolved = await self.agent._pause_manager.resolve(approval_request_id, result)
+            if not resolved and execution_id:
+                resolved = await self.agent._pause_manager.resolve_by_execution_id(execution_id, result)
+
+            if self.agent.dev_mode:
+                log_debug(
+                    f"Approval webhook: execution_id={execution_id} "
+                    f"decision={decision} resolved={resolved}"
+                )
+
+            return {"status": "received", "resolved": resolved}
+
     async def _graceful_shutdown(self, timeout_seconds: int = 30):
         """
         Perform graceful shutdown with cleanup.

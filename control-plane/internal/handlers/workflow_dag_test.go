@@ -497,7 +497,7 @@ func TestBuildExecutionDAG_WithSessionAndActor(t *testing.T) {
 }
 
 func TestDeriveOverallStatus_PriorityOrder(t *testing.T) {
-	// Test status priority: running > failed > succeeded
+	// Test status priority: running > failed > timeout > cancelled > succeeded
 	tests := []struct {
 		name     string
 		statuses []string
@@ -509,9 +509,44 @@ func TestDeriveOverallStatus_PriorityOrder(t *testing.T) {
 			expected: "running",
 		},
 		{
+			name:     "waiting counts as running",
+			statuses: []string{"succeeded", "waiting", "succeeded"},
+			expected: "running",
+		},
+		{
+			name:     "waiting has priority over failed",
+			statuses: []string{"succeeded", "waiting", "failed"},
+			expected: "running",
+		},
+		{
+			name:     "waiting has priority over timeout",
+			statuses: []string{"timeout", "waiting"},
+			expected: "running",
+		},
+		{
 			name:     "failed has priority over succeeded",
 			statuses: []string{"succeeded", "failed", "succeeded"},
 			expected: "failed",
+		},
+		{
+			name:     "failed has priority over timeout",
+			statuses: []string{"succeeded", "failed", "timeout"},
+			expected: "failed",
+		},
+		{
+			name:     "timeout has priority over succeeded",
+			statuses: []string{"succeeded", "timeout", "succeeded"},
+			expected: "timeout",
+		},
+		{
+			name:     "timeout has priority over cancelled",
+			statuses: []string{"cancelled", "timeout"},
+			expected: "timeout",
+		},
+		{
+			name:     "cancelled has priority over succeeded",
+			statuses: []string{"succeeded", "cancelled", "succeeded"},
+			expected: "cancelled",
 		},
 		{
 			name:     "all succeeded",
@@ -527,6 +562,16 @@ func TestDeriveOverallStatus_PriorityOrder(t *testing.T) {
 			name:     "mixed with pending",
 			statuses: []string{"succeeded", "pending", "succeeded"},
 			expected: "running",
+		},
+		{
+			name:     "all timeout returns timeout not succeeded",
+			statuses: []string{"timeout", "timeout"},
+			expected: "timeout",
+		},
+		{
+			name:     "all cancelled returns cancelled not succeeded",
+			statuses: []string{"cancelled", "cancelled"},
+			expected: "cancelled",
 		},
 	}
 

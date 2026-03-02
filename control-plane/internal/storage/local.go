@@ -77,7 +77,7 @@ func (ls *LocalStorage) getWorkflowExecutionByID(ctx context.Context, q DBTX, ex
 		       pending_terminal_status, status_reason, lease_owner, lease_expires_at,
 		       error_message, retry_count,
 		       approval_request_id, approval_request_url, approval_status, approval_response,
-		       approval_requested_at, approval_responded_at, approval_callback_url,
+		       approval_requested_at, approval_responded_at, approval_callback_url, approval_expires_at,
 		       workflow_name, workflow_tags, notes, created_at, updated_at
 		FROM workflow_executions WHERE execution_id = ?`
 
@@ -92,7 +92,7 @@ func (ls *LocalStorage) getWorkflowExecutionByID(ctx context.Context, q DBTX, ex
 	var leaseOwner sql.NullString
 	var leaseExpires sql.NullTime
 	var approvalRequestID, approvalRequestURL, approvalStatus, approvalResponse, approvalCallbackURL sql.NullString
-	var approvalRequestedAt, approvalRespondedAt sql.NullTime
+	var approvalRequestedAt, approvalRespondedAt, approvalExpiresAt sql.NullTime
 	err := row.Scan(
 		&execution.WorkflowID, &execution.ExecutionID, &execution.AgentFieldRequestID,
 		&runID, &execution.SessionID, &execution.ActorID, &execution.AgentNodeID,
@@ -105,7 +105,7 @@ func (ls *LocalStorage) getWorkflowExecutionByID(ctx context.Context, q DBTX, ex
 		&leaseOwner, &leaseExpires,
 		&execution.ErrorMessage, &execution.RetryCount,
 		&approvalRequestID, &approvalRequestURL, &approvalStatus, &approvalResponse,
-		&approvalRequestedAt, &approvalRespondedAt, &approvalCallbackURL,
+		&approvalRequestedAt, &approvalRespondedAt, &approvalCallbackURL, &approvalExpiresAt,
 		&execution.WorkflowName,
 		&workflowTagsJSON, &notesJSON, &execution.CreatedAt, &execution.UpdatedAt,
 	)
@@ -169,6 +169,10 @@ func (ls *LocalStorage) getWorkflowExecutionByID(ctx context.Context, q DBTX, ex
 	}
 	if approvalCallbackURL.Valid {
 		execution.ApprovalCallbackURL = &approvalCallbackURL.String
+	}
+	if approvalExpiresAt.Valid {
+		t := approvalExpiresAt.Time
+		execution.ApprovalExpiresAt = &t
 	}
 
 	// Unmarshal workflow tags
@@ -2127,12 +2131,12 @@ const sqliteWorkflowExecutionInsertQuery = `INSERT INTO workflow_executions (
 	pending_terminal_status, status_reason, lease_owner, lease_expires_at,
 	error_message, retry_count,
 	approval_request_id, approval_request_url, approval_status, approval_response,
-	approval_requested_at, approval_responded_at, approval_callback_url,
+	approval_requested_at, approval_responded_at, approval_callback_url, approval_expires_at,
 	workflow_name, workflow_tags, notes, created_at, updated_at
 ) VALUES (
 	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 	?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-	?, ?, ?, ?, ?, ?, ?,
+	?, ?, ?, ?, ?, ?, ?, ?,
 	?, ?, ?, ?, ?
 )`
 
@@ -2173,7 +2177,7 @@ func (ls *LocalStorage) executeWorkflowInsert(ctx context.Context, q DBTX, execu
 				output_data = ?, output_size = ?, error_message = ?,
 				approval_request_id = ?, approval_request_url = ?, approval_status = ?,
 				approval_response = ?, approval_requested_at = ?, approval_responded_at = ?,
-				approval_callback_url = ?,
+				approval_callback_url = ?, approval_expires_at = ?,
 				notes = ?, updated_at = ?
 			WHERE execution_id = ?`
 
@@ -2184,7 +2188,7 @@ func (ls *LocalStorage) executeWorkflowInsert(ctx context.Context, q DBTX, execu
 			execution.OutputData, execution.OutputSize, execution.ErrorMessage,
 			execution.ApprovalRequestID, execution.ApprovalRequestURL, execution.ApprovalStatus,
 			execution.ApprovalResponse, execution.ApprovalRequestedAt, execution.ApprovalRespondedAt,
-			execution.ApprovalCallbackURL,
+			execution.ApprovalCallbackURL, execution.ApprovalExpiresAt,
 			notesJSON, time.Now(), execution.ExecutionID)
 
 		if err != nil {
@@ -2230,7 +2234,7 @@ func (ls *LocalStorage) executeWorkflowInsert(ctx context.Context, q DBTX, execu
 		execution.ErrorMessage, execution.RetryCount,
 		execution.ApprovalRequestID, execution.ApprovalRequestURL, execution.ApprovalStatus,
 		execution.ApprovalResponse, execution.ApprovalRequestedAt, execution.ApprovalRespondedAt,
-		execution.ApprovalCallbackURL,
+		execution.ApprovalCallbackURL, execution.ApprovalExpiresAt,
 		execution.WorkflowName,
 		workflowTagsJSON, notesJSON, execution.CreatedAt, execution.UpdatedAt,
 	)
@@ -2506,7 +2510,7 @@ func (ls *LocalStorage) QueryWorkflowExecutions(ctx context.Context, filters typ
 			workflow_executions.approval_request_id, workflow_executions.approval_request_url,
 			workflow_executions.approval_status, workflow_executions.approval_response,
 			workflow_executions.approval_requested_at, workflow_executions.approval_responded_at,
-			workflow_executions.approval_callback_url
+			workflow_executions.approval_callback_url, workflow_executions.approval_expires_at
 		FROM workflow_executions`
 
 	var conditions []string
@@ -2623,7 +2627,7 @@ func (ls *LocalStorage) QueryWorkflowExecutions(ctx context.Context, filters typ
 		var leaseOwner sql.NullString
 		var leaseExpires sql.NullTime
 		var approvalRequestID, approvalRequestURL, approvalStatus, approvalResponse, approvalCallbackURL sql.NullString
-		var approvalRequestedAt, approvalRespondedAt sql.NullTime
+		var approvalRequestedAt, approvalRespondedAt, approvalExpiresAt sql.NullTime
 
 		err := rows.Scan(
 			&execution.ID, &execution.WorkflowID, &execution.ExecutionID,
@@ -2642,7 +2646,7 @@ func (ls *LocalStorage) QueryWorkflowExecutions(ctx context.Context, filters typ
 			&approvalRequestID, &approvalRequestURL,
 			&approvalStatus, &approvalResponse,
 			&approvalRequestedAt, &approvalRespondedAt,
-			&approvalCallbackURL,
+			&approvalCallbackURL, &approvalExpiresAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan workflow execution row: %w", err)
@@ -2697,6 +2701,10 @@ func (ls *LocalStorage) QueryWorkflowExecutions(ctx context.Context, filters typ
 		}
 		if approvalCallbackURL.Valid {
 			execution.ApprovalCallbackURL = &approvalCallbackURL.String
+		}
+		if approvalExpiresAt.Valid {
+			t := approvalExpiresAt.Time
+			execution.ApprovalExpiresAt = &t
 		}
 
 		if len(workflowTagsJSON) > 0 {

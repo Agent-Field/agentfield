@@ -334,7 +334,7 @@ func (c *webhookApprovalController) handleApprovalWebhook(ctx *gin.Context) {
 
 	// Notify the agent's callback URL if one was registered
 	if wfExec.ApprovalCallbackURL != nil && *wfExec.ApprovalCallbackURL != "" {
-		go c.notifyApprovalCallback(*wfExec.ApprovalCallbackURL, executionID, decision, newStatus, payload.Feedback, responseStr)
+		go c.notifyApprovalCallback(*wfExec.ApprovalCallbackURL, executionID, decision, newStatus, payload.Feedback, responseStr, payload.RequestID)
 	}
 }
 
@@ -436,12 +436,13 @@ func trimSignaturePrefix(sig string) string {
 
 // notifyApprovalCallback POSTs the approval result to the agent's registered callback URL.
 // Called asynchronously (go routine) — best-effort, does not block the webhook response.
-func (c *webhookApprovalController) notifyApprovalCallback(callbackURL, executionID, decision, newStatus, feedback string, response *string) {
+func (c *webhookApprovalController) notifyApprovalCallback(callbackURL, executionID, decision, newStatus, feedback string, response *string, approvalRequestID string) {
 	callbackPayload := map[string]interface{}{
-		"execution_id": executionID,
-		"decision":     decision,
-		"new_status":   newStatus,
-		"feedback":     feedback,
+		"execution_id":        executionID,
+		"decision":            decision,
+		"new_status":          newStatus,
+		"feedback":            feedback,
+		"approval_request_id": approvalRequestID,
 	}
 	if response != nil {
 		callbackPayload["response"] = *response
