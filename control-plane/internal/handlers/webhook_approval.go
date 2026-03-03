@@ -51,11 +51,18 @@ func parseWebhookPayload(bodyBytes []byte) (*ApprovalWebhookPayload, error) {
 		}
 		payload.Timestamp = envelope.CreatedAt
 
-		// Extract decision from data.response.decision (plan-review template format)
+		// Extract decision from data.response (supports multiple field names across templates)
 		if respRaw, ok := envelope.Data["response"]; ok {
 			if respMap, ok := respRaw.(map[string]interface{}); ok {
+				// Check "decision" first (text-approval, data-table-review, side-by-side, code-changes, terminal-output)
 				if dec, ok := respMap["decision"].(string); ok {
 					payload.Decision = dec
+				}
+				// Fall back to "action" (rich-text-editor, confirm-action)
+				if payload.Decision == "" {
+					if act, ok := respMap["action"].(string); ok {
+						payload.Decision = act
+					}
 				}
 				if fb, ok := respMap["feedback"].(string); ok {
 					payload.Feedback = fb
@@ -72,6 +79,12 @@ func parseWebhookPayload(bodyBytes []byte) (*ApprovalWebhookPayload, error) {
 			payload.Decision = "expired"
 		}
 
+		// If envelope type is "completed" but no decision/action field was found
+		// (e.g. signature-capture, rich-text-editor submit), default to "approved"
+		if payload.Decision == "" && envelope.Type == "completed" {
+			payload.Decision = "approved"
+		}
+
 		if payload.RequestID != "" && payload.Decision != "" {
 			return payload, nil
 		}
@@ -84,6 +97,21 @@ func parseWebhookPayload(bodyBytes []byte) (*ApprovalWebhookPayload, error) {
 		return nil, fmt.Errorf("could not parse webhook payload: %w", err)
 	}
 	return &flat, nil
+}
+
+// normalizeDecision maps the various decision values used by hax-sdk
+// templates into the canonical set the control plane understands.
+func normalizeDecision(raw string) string {
+	switch raw {
+	case "approve", "continue", "confirm":
+		return "approved"
+	case "reject", "deny", "abort", "cancel":
+		return "rejected"
+	case "approved", "rejected", "request_changes", "expired":
+		return raw
+	default:
+		return raw
+	}
 }
 
 // webhookApprovalController handles the approval webhook callback.
@@ -139,14 +167,15 @@ func (c *webhookApprovalController) handleApprovalWebhook(ctx *gin.Context) {
 		return
 	}
 
-	// Validate decision
-	decision := payload.Decision
+	// Normalize decision values from various hax-sdk template formats
+	// into the canonical set the control plane understands.
+	decision := normalizeDecision(payload.Decision)
 	switch decision {
 	case "approved", "rejected", "request_changes", "expired":
 		// valid
 	default:
-		logger.Logger.Warn().Str("decision", decision).Str("raw_body", string(bodyBytes)).Msg("webhook payload has invalid decision")
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid decision '%s'; must be approved, rejected, request_changes, or expired", decision)})
+		logger.Logger.Warn().Str("decision", payload.Decision).Str("raw_body", string(bodyBytes)).Msg("webhook payload has invalid decision")
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid decision '%s'; must be approved, rejected, request_changes, or expired", payload.Decision)})
 		return
 	}
 
@@ -261,8 +290,10 @@ func (c *webhookApprovalController) handleApprovalWebhook(ctx *gin.Context) {
 			dur := now.Sub(current.StartedAt).Milliseconds()
 			current.DurationMS = &dur
 		}
-		// Clear approval fields so the agent can issue a new approval request
-		if decision == "request_changes" {
+		// Clear approval request fields so the agent can issue subsequent
+		// approval requests within the same execution (multi-pause workflows).
+		// The decision/response/respondedAt are preserved for audit.
+		if decision == "approved" || decision == "request_changes" {
 			current.ApprovalRequestID = nil
 			current.ApprovalRequestURL = nil
 			current.ApprovalCallbackURL = nil
