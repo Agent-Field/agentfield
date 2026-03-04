@@ -41,19 +41,11 @@ func SetVectorHandler(storage MemoryStorage) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req SetVectorRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, ErrorResponse{
-				Error:   "invalid_request",
-				Message: err.Error(),
-				Code:    http.StatusBadRequest,
-			})
+			RespondBadRequest(c, "invalid request")
 			return
 		}
 		if len(req.Embedding) == 0 {
-			c.JSON(http.StatusBadRequest, ErrorResponse{
-				Error:   "invalid_request",
-				Message: "embedding cannot be empty",
-				Code:    http.StatusBadRequest,
-			})
+			RespondBadRequest(c, "embedding cannot be empty")
 			return
 		}
 
@@ -68,11 +60,7 @@ func SetVectorHandler(storage MemoryStorage) gin.HandlerFunc {
 
 		if err := storage.SetVector(c.Request.Context(), record); err != nil {
 			logger.Logger.Error().Err(err).Msg("failed to set vector")
-			c.JSON(http.StatusInternalServerError, ErrorResponse{
-				Error:   "storage_error",
-				Message: err.Error(),
-				Code:    http.StatusInternalServerError,
-			})
+			RespondInternalError(c, "failed to store vector")
 			return
 		}
 
@@ -90,11 +78,7 @@ func GetVectorHandler(storage MemoryStorage) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		key := c.Param("key")
 		if key == "" {
-			c.JSON(http.StatusBadRequest, ErrorResponse{
-				Error:   "invalid_request",
-				Message: "key is required",
-				Code:    http.StatusBadRequest,
-			})
+			RespondBadRequest(c, "key is required")
 			return
 		}
 
@@ -108,20 +92,12 @@ func GetVectorHandler(storage MemoryStorage) gin.HandlerFunc {
 		record, err := storage.GetVector(c.Request.Context(), scope, scopeID, key)
 		if err != nil {
 			logger.Logger.Error().Err(err).Msg("failed to get vector")
-			c.JSON(http.StatusInternalServerError, ErrorResponse{
-				Error:   "storage_error",
-				Message: err.Error(),
-				Code:    http.StatusInternalServerError,
-			})
+			RespondInternalError(c, "failed to get vector")
 			return
 		}
 
 		if record == nil {
-			c.JSON(http.StatusNotFound, ErrorResponse{
-				Error:   "not_found",
-				Message: "vector not found",
-				Code:    http.StatusNotFound,
-			})
+			RespondNotFound(c, "vector not found")
 			return
 		}
 
@@ -139,11 +115,7 @@ func DeleteVectorHandler(storage MemoryStorage) gin.HandlerFunc {
 			if err := c.ShouldBindJSON(&req); err == nil {
 				key = req.Key
 			} else {
-				c.JSON(http.StatusBadRequest, ErrorResponse{
-					Error:   "invalid_request",
-					Message: "key is required",
-					Code:    http.StatusBadRequest,
-				})
+				RespondBadRequest(c, "key is required")
 				return
 			}
 		}
@@ -157,11 +129,7 @@ func DeleteVectorHandler(storage MemoryStorage) gin.HandlerFunc {
 		scope, scopeID := resolveScope(c, scopePtr)
 		if err := storage.DeleteVector(c.Request.Context(), scope, scopeID, key); err != nil {
 			logger.Logger.Error().Err(err).Msg("failed to delete vector")
-			c.JSON(http.StatusInternalServerError, ErrorResponse{
-				Error:   "storage_error",
-				Message: err.Error(),
-				Code:    http.StatusInternalServerError,
-			})
+			RespondInternalError(c, "failed to delete vector")
 			return
 		}
 
@@ -174,19 +142,11 @@ func DeleteNamespaceVectorsHandler(storage MemoryStorage) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req DeleteNamespaceRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, ErrorResponse{
-				Error:   "invalid_request",
-				Message: err.Error(),
-				Code:    http.StatusBadRequest,
-			})
+			RespondBadRequest(c, "invalid request")
 			return
 		}
 		if req.Namespace == "" {
-			c.JSON(http.StatusBadRequest, ErrorResponse{
-				Error:   "invalid_request",
-				Message: "namespace is required",
-				Code:    http.StatusBadRequest,
-			})
+			RespondBadRequest(c, "namespace is required")
 			return
 		}
 
@@ -194,11 +154,7 @@ func DeleteNamespaceVectorsHandler(storage MemoryStorage) gin.HandlerFunc {
 		deleted, err := storage.DeleteVectorsByPrefix(c.Request.Context(), scope, scopeID, req.Namespace)
 		if err != nil {
 			logger.Logger.Error().Err(err).Msg("failed to delete namespace vectors")
-			c.JSON(http.StatusInternalServerError, ErrorResponse{
-				Error:   "storage_error",
-				Message: err.Error(),
-				Code:    http.StatusInternalServerError,
-			})
+			RespondInternalError(c, "failed to delete namespace vectors")
 			return
 		}
 
@@ -217,20 +173,12 @@ func SimilaritySearchHandler(storage MemoryStorage) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req VectorSearchRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, ErrorResponse{
-				Error:   "invalid_request",
-				Message: err.Error(),
-				Code:    http.StatusBadRequest,
-			})
+			RespondBadRequest(c, "invalid request")
 			return
 		}
 
 		if len(req.QueryEmbedding) == 0 {
-			c.JSON(http.StatusBadRequest, ErrorResponse{
-				Error:   "invalid_request",
-				Message: "query_embedding cannot be empty",
-				Code:    http.StatusBadRequest,
-			})
+			RespondBadRequest(c, "query_embedding cannot be empty")
 			return
 		}
 
@@ -249,11 +197,7 @@ func SimilaritySearchHandler(storage MemoryStorage) gin.HandlerFunc {
 		)
 		if err != nil {
 			logger.Logger.Error().Err(err).Msg("vector search failed")
-			c.JSON(http.StatusInternalServerError, ErrorResponse{
-				Error:   "storage_error",
-				Message: err.Error(),
-				Code:    http.StatusInternalServerError,
-			})
+			RespondInternalError(c, "vector search failed")
 			return
 		}
 
