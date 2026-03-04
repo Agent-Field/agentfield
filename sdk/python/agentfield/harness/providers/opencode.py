@@ -129,9 +129,11 @@ class OpenCodeProvider:
             return url
 
     async def execute(self, prompt: str, options: dict[str, object]) -> RawResult:
-        server_url = await self._ensure_serve()
-
-        cmd = [self._bin, "run", "--attach", server_url]
+        # Use plain ``opencode run`` (no --attach) so that auto-approve is
+        # enabled for non-interactive sessions.  The serve+attach pattern
+        # loses auto-approve because the serve process treats attached
+        # sessions as interactive (permission prompts hang forever).
+        cmd = [self._bin, "run"]
 
         if options.get("model"):
             cmd.extend(["--model", str(options["model"])])
