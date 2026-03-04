@@ -26,7 +26,10 @@ async def test_opencode_provider_constructs_command_and_maps_result(
 
     monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
 
-    provider = OpenCodeProvider(bin_path="/usr/local/bin/opencode")
+    provider = OpenCodeProvider(
+        bin_path="/usr/local/bin/opencode",
+        server_url="http://127.0.0.1:9999",
+    )
     raw = await provider.execute(
         "hello",
         {
@@ -35,7 +38,13 @@ async def test_opencode_provider_constructs_command_and_maps_result(
         },
     )
 
-    assert captured["cmd"] == ["/usr/local/bin/opencode", "run", "hello"]
+    assert captured["cmd"] == [
+        "/usr/local/bin/opencode",
+        "run",
+        "--attach",
+        "http://127.0.0.1:9999",
+        "hello",
+    ]
     assert captured["env"] == {"A": "1"}
     assert captured["cwd"] == "/tmp/work"
     assert raw.is_error is False
@@ -54,7 +63,10 @@ async def test_opencode_provider_returns_helpful_binary_not_found_error(
 
     monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
 
-    provider = OpenCodeProvider(bin_path="opencode-missing")
+    provider = OpenCodeProvider(
+        bin_path="opencode-missing",
+        server_url="http://127.0.0.1:9999",
+    )
     raw = await provider.execute("hello", {})
 
     assert raw.is_error is True
@@ -72,7 +84,7 @@ async def test_opencode_provider_non_zero_exit_without_result_is_error(
 
     monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
 
-    provider = OpenCodeProvider()
+    provider = OpenCodeProvider(server_url="http://127.0.0.1:9999")
     raw = await provider.execute("hello", {})
 
     assert raw.is_error is True
@@ -82,11 +94,16 @@ async def test_opencode_provider_non_zero_exit_without_result_is_error(
 
 def test_factory_builds_opencode_provider_with_config_bin() -> None:
     provider = build_provider(
-        HarnessConfig(provider="opencode", opencode_bin="/opt/opencode")
+        HarnessConfig(
+            provider="opencode",
+            opencode_bin="/opt/opencode",
+            opencode_server="http://127.0.0.1:4096",
+        )
     )
 
     assert isinstance(provider, OpenCodeProvider)
     assert provider._bin == "/opt/opencode"
+    assert provider._explicit_server == "http://127.0.0.1:4096"
 
 
 @pytest.mark.asyncio
@@ -100,12 +117,14 @@ async def test_opencode_passes_model_flag(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
 
-    provider = OpenCodeProvider()
+    provider = OpenCodeProvider(server_url="http://127.0.0.1:9999")
     raw = await provider.execute("hello", {"model": "openai/gpt-5"})
 
     assert captured["cmd"] == [
         "opencode",
         "run",
+        "--attach",
+        "http://127.0.0.1:9999",
         "--model",
         "openai/gpt-5",
         "hello",
