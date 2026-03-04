@@ -275,6 +275,14 @@ func (c *webhookApprovalController) handleApprovalWebhook(ctx *gin.Context) {
 		recordSyncFailed = true
 	}
 
+	// Capture callback URL before the update closure may clear it.  The
+	// wfExec pointer may alias the same object the store mutates in-place
+	// (e.g. in-memory stores), so read it now for the post-response callback.
+	var savedCallbackURL string
+	if wfExec.ApprovalCallbackURL != nil {
+		savedCallbackURL = *wfExec.ApprovalCallbackURL
+	}
+
 	// Update the workflow execution with approval resolution (authoritative — must not lose the decision)
 	err = c.store.UpdateWorkflowExecution(reqCtx, executionID, func(current *types.WorkflowExecution) (*types.WorkflowExecution, error) {
 		if current == nil {
@@ -293,8 +301,17 @@ func (c *webhookApprovalController) handleApprovalWebhook(ctx *gin.Context) {
 		// Clear approval request fields so the agent can issue subsequent
 		// approval requests within the same execution (multi-pause workflows).
 		// The decision/response/respondedAt are preserved for audit.
-		if decision == "approved" || decision == "request_changes" {
+		//
+		// For "request_changes": clear everything so the agent can start fresh.
+		// For "approved": keep ApprovalRequestID (needed for idempotent webhook
+		// retries and approval-status lookups) but clear the URL fields.  The
+		// request-approval handler allows new requests when ApprovalStatus is
+		// no longer "pending", enabling multi-pause workflows.
+		if decision == "request_changes" {
 			current.ApprovalRequestID = nil
+			current.ApprovalRequestURL = nil
+			current.ApprovalCallbackURL = nil
+		} else if decision == "approved" {
 			current.ApprovalRequestURL = nil
 			current.ApprovalCallbackURL = nil
 		}
@@ -364,8 +381,8 @@ func (c *webhookApprovalController) handleApprovalWebhook(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, response)
 
 	// Notify the agent's callback URL if one was registered
-	if wfExec.ApprovalCallbackURL != nil && *wfExec.ApprovalCallbackURL != "" {
-		go c.notifyApprovalCallback(*wfExec.ApprovalCallbackURL, executionID, decision, newStatus, payload.Feedback, responseStr, payload.RequestID)
+	if savedCallbackURL != "" {
+		go c.notifyApprovalCallback(savedCallbackURL, executionID, decision, newStatus, payload.Feedback, responseStr, payload.RequestID)
 	}
 }
 

@@ -97,8 +97,12 @@ func (c *approvalController) handleRequestApproval(ctx *gin.Context) {
 		return
 	}
 
-	// Prevent duplicate approval requests
-	if wfExec.ApprovalRequestID != nil && *wfExec.ApprovalRequestID != "" {
+	// Prevent duplicate approval requests.  Only block if there is an
+	// active (pending) approval.  If a previous approval was resolved
+	// (approved / request_changes), the agent is allowed to start a new
+	// approval round within the same execution (multi-pause workflows).
+	approvalPending := wfExec.ApprovalStatus == nil || *wfExec.ApprovalStatus == "pending"
+	if wfExec.ApprovalRequestID != nil && *wfExec.ApprovalRequestID != "" && approvalPending {
 		ctx.JSON(http.StatusConflict, gin.H{
 			"error":                "approval_already_requested",
 			"message":              "An approval request already exists for this execution",
