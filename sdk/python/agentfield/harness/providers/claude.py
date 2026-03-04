@@ -57,6 +57,10 @@ class ClaudeCodeProvider:
         if options.get("env") is not None:
             agent_options["env"] = options["env"]
 
+        resume_sid = options.get("resume_session_id")
+        if resume_sid:
+            agent_options["resume"] = str(resume_sid)
+
         messages: List[Dict[str, Any]] = []
         result_text: Optional[str] = None
         total_cost: Optional[float] = None

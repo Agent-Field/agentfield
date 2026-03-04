@@ -218,13 +218,71 @@ def cleanup_temp_files(cwd: str) -> None:
             pass
 
 
+def diagnose_output_failure(file_path: str, schema: Any) -> str:
+    """Diagnose why the output file failed validation.
+
+    Returns a human-readable error string describing the failure mode.
+    """
+    if not os.path.exists(file_path):
+        return "The output file was NOT created."
+
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except OSError as exc:
+        return f"Could not read output file: {exc}"
+
+    if not content.strip():
+        return "The output file exists but is empty."
+
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as exc:
+        snippet = content[:500]
+        return (
+            f"The file contains invalid JSON. Parse error: {exc}\n"
+            f"File content (first 500 chars):\n{snippet}"
+        )
+
+    json_schema = schema_to_json_schema(schema)
+    if isinstance(schema, dict):
+        return "JSON parses but could not be validated (dict schema, no model)."
+
+    try:
+        validate_against_schema(data, schema)
+        return "JSON parses and validates (unexpected — may be a race condition)."
+    except Exception as exc:
+        return (
+            f"JSON parses but fails schema validation: {exc}\n"
+            f"Expected schema top-level keys: "
+            f"{list(json_schema.get('properties', {}).keys())}\n"
+            f"Actual top-level keys: {list(data.keys()) if isinstance(data, dict) else 'NOT A DICT'}"
+        )
+
+
 def build_followup_prompt(error_message: str, cwd: str) -> str:
     """Build a follow-up prompt for the agent to fix invalid JSON.
 
-    Used by the runner for Layer 3 recovery.
+    Used by the runner for Layer 3 recovery (schema validation retry).
     """
     output_path = get_output_path(cwd)
-    return (
-        f"The JSON at {output_path} failed validation: {error_message}\n"
-        "Please rewrite the corrected, valid JSON to the same file."
+    schema_path = get_schema_path(cwd)
+
+    parts = [
+        f"The JSON output at {output_path} failed validation.\n",
+        f"Error: {error_message}\n\n",
+    ]
+
+    if os.path.exists(schema_path):
+        parts.append(
+            f"The required JSON Schema is at: {schema_path}\n"
+            "Re-read the schema file carefully.\n"
+        )
+
+    parts.append(
+        f"Rewrite the COMPLETE, corrected JSON to: {output_path}\n"
+        "The file must contain ONLY valid JSON matching the schema. "
+        "No markdown fences, no extra text, no comments."
     )
+
+    return "".join(parts)
