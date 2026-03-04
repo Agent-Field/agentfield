@@ -65,9 +65,11 @@ def _resolve_options(
             "system_prompt",
             "env",
             "cwd",
+            "project_dir",
             "codex_bin",
             "gemini_bin",
             "opencode_bin",
+            "opencode_server",
             "schema_max_retries",
         ]:
             val = getattr(config, field_name, None)
@@ -143,9 +145,21 @@ class HarnessRunner:
         resolved_cwd = str(options.get("cwd", "."))
         provider_instance = self._build_provider(str(resolved_provider), options)
 
+        # When project_dir is set (opencode provider), place the output file
+        # inside project_dir so the coding agent's Write tool can reach it.
+        # Use a unique subdir to avoid collisions from parallel calls.
+        project_dir = options.get("project_dir")
+        output_dir = resolved_cwd
+        _temp_output_dir: Optional[str] = None
+        if isinstance(project_dir, str) and project_dir:
+            import tempfile as _tempfile
+
+            _temp_output_dir = _tempfile.mkdtemp(prefix=".secaf-out-", dir=project_dir)
+            output_dir = _temp_output_dir
+
         effective_prompt = prompt
         if schema is not None:
-            effective_prompt = prompt + build_prompt_suffix(schema, resolved_cwd)
+            effective_prompt = prompt + build_prompt_suffix(schema, output_dir)
 
         start_time = time.monotonic()
         try:
@@ -157,7 +171,7 @@ class HarnessRunner:
                 return await self._handle_schema_with_retry(
                     raw,
                     schema,
-                    resolved_cwd,
+                    output_dir,
                     start_time,
                     provider_instance,
                     options,
@@ -177,7 +191,11 @@ class HarnessRunner:
             )
         finally:
             if schema is not None:
-                cleanup_temp_files(resolved_cwd)
+                cleanup_temp_files(output_dir)
+            if _temp_output_dir:
+                import shutil as _shutil
+
+                _shutil.rmtree(_temp_output_dir, ignore_errors=True)
 
     def _build_provider(
         self, provider_name: str, options: Dict[str, Any]

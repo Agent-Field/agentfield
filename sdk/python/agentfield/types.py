@@ -312,10 +312,28 @@ class HarnessConfig(BaseModel):
         default_factory=dict, description="Environment variables for the agent."
     )
     cwd: Optional[str] = Field(default=None, description="Default working directory.")
+    project_dir: Optional[str] = Field(
+        default=None,
+        description=(
+            "Project directory for the coding agent to explore (e.g. a target "
+            "repository path). Maps to --dir in opencode. When set, cwd is used "
+            "only for output file placement while project_dir controls the "
+            "agent's working context."
+        ),
+    )
     codex_bin: str = Field(default="codex", description="Path to codex binary.")
     gemini_bin: str = Field(default="gemini", description="Path to gemini binary.")
     opencode_bin: str = Field(
         default="opencode", description="Path to opencode binary."
+    )
+    opencode_server: Optional[str] = Field(
+        default=None,
+        description=(
+            "URL of a running ``opencode serve`` instance "
+            '(e.g. "http://127.0.0.1:4096"). When set, the opencode provider '
+            "uses ``--attach`` mode which avoids the standalone session bug. "
+            "Falls back to OPENCODE_SERVER env var."
+        ),
     )
 
 

@@ -31,5 +31,8 @@ def build_provider(config: "HarnessConfig") -> "HarnessProvider":
     if provider_name == "opencode":
         from agentfield.harness.providers.opencode import OpenCodeProvider
 
-        return OpenCodeProvider(bin_path=getattr(config, "opencode_bin", "opencode"))
+        return OpenCodeProvider(
+            bin_path=getattr(config, "opencode_bin", "opencode"),
+            server_url=getattr(config, "opencode_server", None),
+        )
     raise NotImplementedError(f"Provider {provider_name!r} is not yet implemented.")

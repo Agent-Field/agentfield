@@ -75,7 +75,9 @@ class ClaudeCodeProvider:
                 else agent_options
             )
 
+            msg_count = 0
             async for msg in sdk.query(prompt=prompt, options=opts):
+                msg_count += 1
                 if isinstance(msg, dict):
                     msg_dict = msg
                 elif hasattr(msg, "__dict__"):
@@ -132,6 +134,11 @@ class ClaudeCodeProvider:
                 is_error=False,
             )
         except Exception as exc:
+            import logging as _logging
+
+            _logging.getLogger("agentfield.harness.claude").error(
+                "ClaudeCodeProvider error: %s", exc
+            )
             api_ms = int((time.monotonic() - start_api) * 1000)
             return RawResult(
                 result=None,
