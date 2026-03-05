@@ -1,15 +1,15 @@
 """Tests for tool calling support (discover -> ai -> call loop)."""
 
-import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from agentfield.tool_calling import (
     ToolCallConfig,
     ToolCallRecord,
+    ToolCallResponse,
     ToolCallTrace,
     _build_tool_config,
     capability_to_tool_schema,
@@ -289,7 +289,9 @@ def make_llm_response(content=None, tool_calls=None):
     return resp
 
 
-def make_tool_call(id="tc_1", name="sentiment_agent.analyze", arguments='{"text": "hello"}'):
+def make_tool_call(
+    id="tc_1", name="sentiment_agent.analyze", arguments='{"text": "hello"}'
+):
     tc = SimpleNamespace()
     tc.id = id
     tc.function = SimpleNamespace(name=name, arguments=arguments)
@@ -333,7 +335,9 @@ class TestExecuteToolCallLoop:
 
         tc = make_tool_call()
         tool_resp = make_llm_response(tool_calls=[tc])
-        final_resp = make_llm_response(content="The sentiment is positive with 95% confidence.")
+        final_resp = make_llm_response(
+            content="The sentiment is positive with 95% confidence."
+        )
 
         call_count = 0
 
@@ -372,7 +376,9 @@ class TestExecuteToolCallLoop:
 
         tc = make_tool_call()
         tool_resp = make_llm_response(tool_calls=[tc])
-        final_resp = make_llm_response(content="Sorry, the analysis tool is unavailable.")
+        final_resp = make_llm_response(
+            content="Sorry, the analysis tool is unavailable."
+        )
 
         call_count = 0
 
@@ -508,6 +514,7 @@ class TestExecuteToolCallLoop:
 
         # Should have called discover again for hydration
         agent.discover.assert_called()
+        assert trace.hydration_retries == 1
 
     @pytest.mark.asyncio
     async def test_multiple_tool_calls_in_single_turn(self):
@@ -518,8 +525,12 @@ class TestExecuteToolCallLoop:
         tools = capabilities_to_tool_schemas([make_reasoner(), make_skill()])
         config = ToolCallConfig(max_turns=5)
 
-        tc1 = make_tool_call(id="tc_1", name="sentiment_agent.analyze", arguments='{"text": "hi"}')
-        tc2 = make_tool_call(id="tc_2", name="notif_agent.send_email", arguments='{"to": "a@b.com"}')
+        tc1 = make_tool_call(
+            id="tc_1", name="sentiment_agent.analyze", arguments='{"text": "hi"}'
+        )
+        tc2 = make_tool_call(
+            id="tc_2", name="notif_agent.send_email", arguments='{"to": "a@b.com"}'
+        )
         tool_resp = make_llm_response(tool_calls=[tc1, tc2])
         final_resp = make_llm_response(content="Both tasks done")
 
@@ -553,6 +564,7 @@ class TestToolCallTrace:
         assert t.calls == []
         assert t.total_turns == 0
         assert t.total_tool_calls == 0
+        assert t.hydration_retries == 0
 
     def test_record_fields(self):
         r = ToolCallRecord(
@@ -565,3 +577,38 @@ class TestToolCallTrace:
         assert r.tool_name == "test.fn"
         assert r.error is None
         assert r.latency_ms == 42.5
+
+
+class TestToolCallResponse:
+    def test_wraps_response_with_trace(self):
+        trace = ToolCallTrace(
+            total_turns=2,
+            total_tool_calls=1,
+            final_response="The answer is 42",
+        )
+        inner = SimpleNamespace(
+            choices=[
+                SimpleNamespace(message=SimpleNamespace(content="The answer is 42"))
+            ]
+        )
+        result = ToolCallResponse(inner, trace)
+
+        assert result.trace is trace
+        assert result.text == "The answer is 42"
+        assert result.response is inner
+        assert result.trace.total_turns == 2
+
+    def test_delegates_attribute_access(self):
+        inner = SimpleNamespace(choices=[1, 2], model="gpt-4")
+        trace = ToolCallTrace(final_response="done")
+        result = ToolCallResponse(inner, trace)
+
+        assert result.choices == [1, 2]
+        assert result.model == "gpt-4"
+
+    def test_repr(self):
+        trace = ToolCallTrace(total_turns=3, total_tool_calls=5, final_response="ok")
+        result = ToolCallResponse(SimpleNamespace(), trace)
+        r = repr(result)
+        assert "turns=3" in r
+        assert "tool_calls=5" in r

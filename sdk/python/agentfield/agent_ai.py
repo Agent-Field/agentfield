@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, Unio
 
 if TYPE_CHECKING:
     from agentfield.multimodal_response import MultimodalResponse
+    from agentfield.tool_calling import ToolCallConfig
 
 import requests
 from agentfield.agent_utils import AgentUtils
@@ -27,11 +28,14 @@ def _get_litellm():
     if _litellm is None:
         try:
             import litellm
+
             litellm.suppress_debug_info = True
             _litellm = litellm
         except Exception:  # pragma: no cover
+
             class _LiteLLMStub:
                 pass
+
             _litellm = _LiteLLMStub()
     return _litellm
 
@@ -42,11 +46,14 @@ def _get_openai():
     if _openai is None:
         try:
             import openai
+
             _openai = openai
         except Exception:  # pragma: no cover
+
             class _OpenAIStub:
                 class OpenAI:
                     pass
+
             _openai = _OpenAIStub()
     return _openai
 
@@ -54,6 +61,7 @@ def _get_openai():
 # Backward compatibility: expose as module-level but with lazy loading
 class _LazyModule:
     """Lazy module proxy that defers import until attribute access."""
+
     def __init__(self, loader):
         self._loader = loader
         self._module = None
@@ -159,7 +167,14 @@ class AgentAI:
         response_format: Optional[Union[Literal["auto", "json", "text"], Dict]] = None,
         context: Optional[Dict] = None,
         memory_scope: Optional[List[str]] = None,
-        tools: Optional[Any] = None,
+        tools: Optional[
+            Union[
+                Literal["discover"],
+                ToolCallConfig,
+                Dict[str, Any],
+                List[Any],
+            ]
+        ] = None,
         max_turns: Optional[int] = None,
         max_tool_calls: Optional[int] = None,
         **kwargs,
@@ -323,16 +338,26 @@ class AgentAI:
         await self._ensure_model_limits_cached()
 
         # Apply prompt trimming using LiteLLM's token-aware utility when available.
-        utils_module = getattr(litellm_module, "utils", None) if litellm_module else None
-        token_counter = getattr(utils_module, "token_counter", None) if utils_module else None
-        trim_messages = getattr(utils_module, "trim_messages", None) if utils_module else None
+        utils_module = (
+            getattr(litellm_module, "utils", None) if litellm_module else None
+        )
+        token_counter = (
+            getattr(utils_module, "token_counter", None) if utils_module else None
+        )
+        trim_messages = (
+            getattr(utils_module, "trim_messages", None) if utils_module else None
+        )
 
         if token_counter is None:
+
             def token_counter(model: str, messages: List[dict]) -> int:
                 return len(json.dumps(messages))
 
         if trim_messages is None:
-            def trim_messages(messages: List[dict], model: str, max_tokens: int) -> List[dict]:
+
+            def trim_messages(
+                messages: List[dict], model: str, max_tokens: int
+            ) -> List[dict]:
                 return messages
 
         # Determine model context length using multiple fallback strategies
@@ -408,14 +433,21 @@ class AgentAI:
                 "json_schema": {
                     "schema": schema.model_json_schema(),
                     "name": schema.__name__,
-                    "strict": True
-                }
+                    "strict": True,
+                },
             }
 
         # Tool-calling loop: if tools= is provided, enter the discover->call loop
         if tools is not None:
+            # Streaming is not supported with tool-calling
+            if final_config.stream:
+                raise ValueError(
+                    "Streaming is not supported with tool-calling. "
+                    "Use tools= OR stream=True, not both."
+                )
+
             from agentfield.tool_calling import (
-                ToolCallConfig,
+                ToolCallResponse,
                 _build_tool_config,
                 execute_tool_call_loop,
             )
@@ -431,11 +463,45 @@ class AgentAI:
                 tool_config.max_tool_calls = max_tool_calls
 
             async def _tool_loop_completion(params):
+                """Make an LLM call with rate limiting and model fallbacks."""
                 if litellm_module is None:
                     raise ImportError(
                         "litellm is not installed. Please install it with `pip install litellm`."
                     )
-                return await litellm_module.acompletion(**params)
+
+                async def _make_call():
+                    return await litellm_module.acompletion(**params)
+
+                async def _call_with_fallbacks():
+                    fallback_models = getattr(final_config, "fallback_models", None)
+                    if not fallback_models and getattr(
+                        final_config, "final_fallback_model", None
+                    ):
+                        fallback_models = [final_config.final_fallback_model]
+
+                    if fallback_models:
+                        all_models = [params.get("model", final_config.model)] + list(
+                            fallback_models
+                        )
+                        last_exception = None
+                        for m in all_models:
+                            try:
+                                params["model"] = m
+                                return await _make_call()
+                            except Exception as e:
+                                log_debug(
+                                    f"Tool loop: model {m} failed with {e}, trying next..."
+                                )
+                                last_exception = e
+                                continue
+                        if last_exception:
+                            raise last_exception
+                    return await _make_call()
+
+                if final_config.enable_rate_limit_retry:
+                    rate_limiter = self._get_rate_limiter()
+                    return await rate_limiter.execute_with_retry(_call_with_fallbacks)
+                return await _call_with_fallbacks()
 
             resp, trace = await execute_tool_call_loop(
                 agent=self.agent,
@@ -447,15 +513,6 @@ class AgentAI:
                 make_completion=_tool_loop_completion,
             )
 
-            # Store trace on the response for observability
-            if hasattr(resp, "_tool_call_trace"):
-                resp._tool_call_trace = trace
-            else:
-                try:
-                    resp._tool_call_trace = trace
-                except (AttributeError, TypeError):
-                    pass
-
             if schema:
                 try:
                     content = resp.choices[0].message.content
@@ -464,8 +521,7 @@ class AgentAI:
                 except (json.JSONDecodeError, ValueError):
                     pass
 
-            from .multimodal_response import detect_multimodal_response
-            return detect_multimodal_response(resp)
+            return ToolCallResponse(resp, trace)
 
         # Define the LiteLLM call function for rate limiter
         async def _make_litellm_call():
@@ -552,6 +608,7 @@ class AgentAI:
                 return resp
 
             from .multimodal_response import detect_multimodal_response
+
             multimodal_response = detect_multimodal_response(resp)
 
             if schema:

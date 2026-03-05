@@ -60,6 +60,7 @@ from .client import ApprovalRequestResponse, ApprovalResult, ApprovalStatusRespo
 from .tool_calling import (
     ToolCallConfig,
     ToolCallRecord,
+    ToolCallResponse,
     ToolCallTrace,
     capability_to_tool_schema,
     capabilities_to_tool_schemas,
@@ -118,6 +119,7 @@ __all__ = [
     # Tool calling
     "ToolCallConfig",
     "ToolCallRecord",
+    "ToolCallResponse",
     "ToolCallTrace",
     "capability_to_tool_schema",
     "capabilities_to_tool_schemas",

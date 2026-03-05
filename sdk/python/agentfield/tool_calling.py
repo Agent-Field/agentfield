@@ -79,6 +79,49 @@ class ToolCallTrace:
     total_turns: int = 0
     total_tool_calls: int = 0
     final_response: Optional[str] = None
+    hydration_retries: int = 0
+
+
+class ToolCallResponse:
+    """Typed wrapper for AI responses that went through the tool-calling loop.
+
+    Provides direct access to the trace and delegates attribute access
+    to the underlying LLM response for backward compatibility.
+
+    Example:
+        result = await app.ai("Help the user", tools="discover")
+        print(result.text)              # final response text
+        print(result.trace)             # ToolCallTrace with full observability
+        print(result.trace.total_turns) # how many LLM round-trips
+        print(result.trace.calls)       # list of ToolCallRecord
+        # All original response attributes still accessible:
+        print(result.choices)           # delegates to underlying response
+    """
+
+    def __init__(self, response: Any, trace: ToolCallTrace):
+        self._response = response
+        self.trace = trace
+
+    @property
+    def text(self) -> Optional[str]:
+        """Final text response from the LLM."""
+        return self.trace.final_response
+
+    @property
+    def response(self) -> Any:
+        """The underlying LLM response object."""
+        return self._response
+
+    def __getattr__(self, name: str) -> Any:
+        """Delegate attribute access to the underlying response for backward compat."""
+        return getattr(self._response, name)
+
+    def __repr__(self) -> str:
+        return (
+            f"ToolCallResponse(turns={self.trace.total_turns}, "
+            f"tool_calls={self.trace.total_tool_calls}, "
+            f"text={self.text!r:.80})"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -364,7 +407,9 @@ async def execute_tool_call_loop(
             )
             tools = _hydrate_selected_tools(agent, config, selected_names)
             hydrated = True
-            # Re-run this turn with hydrated schemas (don't count as a tool call)
+            trace.hydration_retries += 1
+            # Re-run this turn with hydrated schemas (don't count as a tool call
+            # but DO consume a turn to prevent infinite loops)
             continue
 
         # Append assistant message with tool calls
@@ -383,7 +428,9 @@ async def execute_tool_call_loop(
                         "role": "tool",
                         "tool_call_id": tc.id,
                         "content": json.dumps(
-                            {"error": "Tool call limit reached. Please provide a final response."}
+                            {
+                                "error": "Tool call limit reached. Please provide a final response."
+                            }
                         ),
                     }
                 )
@@ -404,7 +451,9 @@ async def execute_tool_call_loop(
                 turn=turn,
             )
 
-            log_debug(f"Tool call [{total_calls}]: {func_name}({json.dumps(func_args)})")
+            log_debug(
+                f"Tool call [{total_calls}]: {func_name}({json.dumps(func_args)})"
+            )
 
             start_time = time.monotonic()
             try:
@@ -435,9 +484,7 @@ async def execute_tool_call_loop(
                     {
                         "role": "tool",
                         "tool_call_id": tc.id,
-                        "content": json.dumps(
-                            {"error": str(e), "tool": func_name}
-                        ),
+                        "content": json.dumps({"error": str(e), "tool": func_name}),
                     }
                 )
 
