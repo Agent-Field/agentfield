@@ -41,8 +41,6 @@ async def test_opencode_provider_constructs_command_and_maps_result(
     assert captured["cmd"] == [
         "/usr/local/bin/opencode",
         "run",
-        "--attach",
-        "http://127.0.0.1:9999",
         "hello",
     ]
     assert captured["env"] == {"A": "1"}
@@ -123,8 +121,6 @@ async def test_opencode_passes_model_flag(monkeypatch: pytest.MonkeyPatch):
     assert captured["cmd"] == [
         "opencode",
         "run",
-        "--attach",
-        "http://127.0.0.1:9999",
         "--model",
         "openai/gpt-5",
         "hello",
