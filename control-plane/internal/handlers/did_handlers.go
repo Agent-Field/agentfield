@@ -424,7 +424,20 @@ func (h *DIDHandlers) GetDIDDocument(c *gin.Context) {
 		return
 	}
 
-	// Resolve DID to get identity information
+	// Try did:web resolution first (database-stored documents)
+	if h.didWebService != nil && strings.HasPrefix(did, "did:web:") {
+		result, err := h.didWebService.ResolveDID(c.Request.Context(), did)
+		if err == nil && result.DIDDocument != nil {
+			c.JSON(http.StatusOK, result.DIDDocument)
+			return
+		}
+		if err == nil && result.DIDResolutionMetadata.Error == "deactivated" {
+			c.JSON(http.StatusGone, gin.H{"error": "DID has been revoked"})
+			return
+		}
+	}
+
+	// Fall back to did:key resolution (in-memory registry)
 	identity, err := h.didService.ResolveDID(did)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
