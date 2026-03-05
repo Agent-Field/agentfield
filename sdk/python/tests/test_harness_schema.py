@@ -52,7 +52,7 @@ def test_is_large_schema_threshold_detection():
 def test_build_prompt_suffix_inlines_small_schema(tmp_path):
     suffix = build_prompt_suffix(TestSchema, str(tmp_path))
     assert "OUTPUT REQUIREMENTS" in suffix
-    assert "The JSON must conform to this schema:" in suffix
+    assert "Required JSON Schema:" in suffix
     assert get_output_path(str(tmp_path)) in suffix
     assert get_schema_path(str(tmp_path)) not in suffix
     assert not (tmp_path / ".agentfield_schema.json").exists()
