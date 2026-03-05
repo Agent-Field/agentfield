@@ -1012,7 +1012,7 @@ func (s *AgentFieldServer) setupRoutes() {
 				nodes.GET("/:nodeId/details", uiNodesHandler.GetNodeDetailsHandler)
 
 				// DID and VC management endpoints for nodes
-				didHandler := ui.NewDIDHandler(s.storage, s.didService, s.vcService)
+				didHandler := ui.NewDIDHandler(s.storage, s.didService, s.vcService, s.didWebService)
 				nodes.GET("/:nodeId/did", didHandler.GetNodeDIDHandler)
 				nodes.GET("/:nodeId/vc-status", didHandler.GetNodeVCStatusHandler)
 
@@ -1052,7 +1052,7 @@ func (s *AgentFieldServer) setupRoutes() {
 				executions.GET("/:execution_id/notes", handlers.GetExecutionNotesHandler(s.storage))
 
 				// DID and VC management endpoints for executions
-				didHandler := ui.NewDIDHandler(s.storage, s.didService, s.vcService)
+				didHandler := ui.NewDIDHandler(s.storage, s.didService, s.vcService, s.didWebService)
 				executions.GET("/:execution_id/vc", didHandler.GetExecutionVCHandler)
 				executions.GET("/:execution_id/vc-status", didHandler.GetExecutionVCStatusHandler)
 				executions.POST("/:execution_id/verify-vc", didHandler.VerifyExecutionVCComprehensiveHandler)
@@ -1063,7 +1063,7 @@ func (s *AgentFieldServer) setupRoutes() {
 			{
 				workflows.GET("/:workflowId/dag", handlers.GetWorkflowDAGHandler(s.storage))
 				workflows.DELETE("/:workflowId/cleanup", handlers.CleanupWorkflowHandler(s.storage))
-				didHandler := ui.NewDIDHandler(s.storage, s.didService, s.vcService)
+				didHandler := ui.NewDIDHandler(s.storage, s.didService, s.vcService, s.didWebService)
 				workflows.POST("/vc-status", didHandler.GetWorkflowVCStatusBatchHandler)
 				workflows.GET("/:workflowId/vc-chain", didHandler.GetWorkflowVCChainHandler)
 				workflows.POST("/:workflowId/verify-vc", didHandler.VerifyWorkflowVCComprehensiveHandler)
@@ -1104,7 +1104,7 @@ func (s *AgentFieldServer) setupRoutes() {
 			// DID system-wide endpoints
 			did := uiAPI.Group("/did")
 			{
-				didHandler := ui.NewDIDHandler(s.storage, s.didService, s.vcService)
+				didHandler := ui.NewDIDHandler(s.storage, s.didService, s.vcService, s.didWebService)
 				did.GET("/status", didHandler.GetDIDSystemStatusHandler)
 				did.GET("/export/vcs", didHandler.ExportVCsHandler)
 				did.GET("/:did/resolution-bundle", didHandler.GetDIDResolutionBundleHandler)
@@ -1114,7 +1114,7 @@ func (s *AgentFieldServer) setupRoutes() {
 			// VC system-wide endpoints
 			vc := uiAPI.Group("/vc")
 			{
-				didHandler := ui.NewDIDHandler(s.storage, s.didService, s.vcService)
+				didHandler := ui.NewDIDHandler(s.storage, s.didService, s.vcService, s.didWebService)
 				vc.GET("/:vcId/download", didHandler.DownloadVCHandler)
 				vc.POST("/verify", didHandler.VerifyVCHandler)
 			}

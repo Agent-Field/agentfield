@@ -107,9 +107,19 @@ export function DIDDisplay({
   }
 
   // Full variant - detailed display with metadata
+  const handleCopyWebDID = async () => {
+    if (!didInfo?.did_web) return;
+
+    const success = await copyDIDToClipboard(didInfo.did_web);
+    if (success) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
   return (
     <div className={`bg-card border border-card-border rounded-xl p-6 shadow-sm hover:shadow-md transition-shadow duration-200 ${className}`}>
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-5">
         <div className="flex items-center gap-3">
           <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-accent-primary/10 border border-accent-primary/20">
             <Security size={20} className="text-accent-primary" />
@@ -118,38 +128,67 @@ export function DIDDisplay({
             <h3 className="text-base font-semibold text-foreground">
               Decentralized Identity
             </h3>
-            <span className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-accent-primary/10 text-accent-primary border border-accent-primary/20">
-              <Identification size={12} />
-              DID
-            </span>
           </div>
         </div>
-        <button
-          onClick={handleCopyDID}
-          className="flex items-center gap-2 px-3 py-2 text-body-small hover:text-foreground hover:bg-muted rounded-lg transition-colors duration-150"
-        >
-          {copied ? (
-            <>
-              <CheckmarkFilled size={14} className="text-status-success" />
-              <span className="text-status-success font-medium">Copied!</span>
-            </>
-          ) : (
-            <>
-              <Copy size={14} />
-              <span>Copy</span>
-            </>
-          )}
-        </button>
       </div>
 
       <div className="space-y-4">
-        <div className="p-4 bg-muted rounded-lg border border-border">
-          <div className="font-mono text-sm text-foreground break-all leading-relaxed">
-            {didInfo.did}
+        {/* Cryptographic Identity (did:key) */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <div className="text-sm font-medium text-foreground">Cryptographic Identity</div>
+              <div className="text-xs text-muted-foreground">did:key — signing &amp; authentication</div>
+            </div>
+            <button
+              onClick={handleCopyDID}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors duration-150"
+            >
+              {copied ? (
+                <>
+                  <CheckmarkFilled size={12} className="text-status-success" />
+                  <span className="text-status-success">Copied</span>
+                </>
+              ) : (
+                <>
+                  <Copy size={12} />
+                  <span>Copy</span>
+                </>
+              )}
+            </button>
+          </div>
+          <div className="p-3 bg-muted rounded-lg border border-border">
+            <div className="font-mono text-sm text-foreground break-all leading-relaxed">
+              {didInfo.did}
+            </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-6 text-sm">
+        {/* Web Identity (did:web) */}
+        {didInfo.did_web && (
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <div>
+                <div className="text-sm font-medium text-foreground">Web Identity</div>
+                <div className="text-xs text-muted-foreground">did:web — JWT &amp; external integrations</div>
+              </div>
+              <button
+                onClick={handleCopyWebDID}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors duration-150"
+              >
+                <Copy size={12} />
+                <span>Copy</span>
+              </button>
+            </div>
+            <div className="p-3 bg-muted rounded-lg border border-border">
+              <div className="font-mono text-sm text-foreground break-all leading-relaxed">
+                {didInfo.did_web}
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center gap-6 text-sm pt-1">
           <div className="flex items-center gap-2 text-muted-foreground">
             <div className="flex items-center justify-center w-5 h-5 rounded bg-muted border border-border">
               <Cognitive size={12} className="text-muted-foreground" />

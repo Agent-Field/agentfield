@@ -17,17 +17,19 @@ import (
 
 // DIDHandler provides handlers for UI-related DID operations.
 type DIDHandler struct {
-	storage    storage.StorageProvider
-	didService *services.DIDService
-	vcService  *services.VCService
+	storage       storage.StorageProvider
+	didService    *services.DIDService
+	vcService     *services.VCService
+	didWebService *services.DIDWebService
 }
 
 // NewDIDHandler creates a new DIDHandler.
-func NewDIDHandler(storage storage.StorageProvider, didService *services.DIDService, vcService *services.VCService) *DIDHandler {
+func NewDIDHandler(storage storage.StorageProvider, didService *services.DIDService, vcService *services.VCService, didWebService *services.DIDWebService) *DIDHandler {
 	return &DIDHandler{
-		storage:    storage,
-		didService: didService,
-		vcService:  vcService,
+		storage:       storage,
+		didService:    didService,
+		vcService:     vcService,
+		didWebService: didWebService,
 	}
 }
 
@@ -97,8 +99,18 @@ func (h *DIDHandler) GetNodeDIDHandler(c *gin.Context) {
 		status = "inactive"
 	}
 
+	// Look up the did:web identifier for this agent (if available)
+	var didWeb string
+	if h.didWebService != nil {
+		result, err := h.didWebService.ResolveDIDByAgentID(c.Request.Context(), nodeID)
+		if err == nil && result != nil && result.DIDDocument != nil {
+			didWeb = h.didWebService.GenerateDIDWeb(nodeID)
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"did":                  agentInfo.DID,
+		"did_web":              didWeb,
 		"agent_node_id":        nodeID,
 		"agentfield_server_id": registry.AgentFieldServerID,
 		"public_key_jwk":       agentInfo.PublicKeyJWK,

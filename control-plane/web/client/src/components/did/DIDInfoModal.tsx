@@ -200,50 +200,40 @@ export function DIDInfoModal({ nodeId, isOpen, onClose }: DIDInfoModalProps) {
 
           {/* Overview Tab */}
           <TabsContent value="overview" className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Agent DID Card */}
+            {/* Identity Cards - stacked vertically for clarity */}
+            <div className="space-y-4">
+              {/* Cryptographic Identity (did:key) */}
               <Card className="bg-card border-card-border shadow-sm hover:shadow-md transition-shadow duration-200">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-3 text-foreground">
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-3 text-foreground text-base">
                     <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-muted border border-border">
-                      <Bot size={16} className="text-muted-foreground" />
+                      <Security size={16} className="text-muted-foreground" />
                     </div>
-                    Agent DID
+                    <div className="min-w-0">
+                      <div>Cryptographic Identity</div>
+                      <div className="text-xs font-normal text-muted-foreground mt-0.5">
+                        did:key — Used for signing, authentication, and verifiable credentials
+                      </div>
+                    </div>
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-4">
+                <CardContent className="space-y-3">
                   <DIDIdentityBadge
                     did={didInfo.did}
                     maxLength={50}
-                    onCopy={(did) => handleCopyDID(did, "Agent")}
+                    onCopy={(did) => handleCopyDID(did, "Crypto")}
                   />
-                  <div className="space-y-3 text-sm">
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium text-muted-foreground">
-                        Registered:
-                      </span>
-                      <span className="text-foreground">
-                        {new Date(didInfo.registered_at).toLocaleString()}
-                      </span>
+                  <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+                    <div>
+                      <span className="text-muted-foreground">Registered</span>
+                      <div className="text-foreground">{new Date(didInfo.registered_at).toLocaleString()}</div>
                     </div>
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium text-muted-foreground">
-                        AgentField Server:
-                      </span>
-                      <span className="text-foreground font-mono text-xs">
-                        {didInfo.agentfield_server_id}
-                      </span>
-                    </div>
-                    <div className="flex items-start justify-between">
-                      <span className="font-medium text-muted-foreground">
-                        Derivation Path:
-                      </span>
-                      <span className="text-foreground font-mono text-xs text-right max-w-[60%] break-all">
-                        {didInfo.derivation_path}
-                      </span>
+                    <div>
+                      <span className="text-muted-foreground">Derivation Path</span>
+                      <div className="text-foreground font-mono text-xs">{didInfo.derivation_path}</div>
                     </div>
                   </div>
-                  <div className="flex gap-2 pt-2">
+                  <div className="flex gap-2 pt-1">
                     <Button
                       size="sm"
                       variant="outline"
@@ -252,54 +242,79 @@ export function DIDInfoModal({ nodeId, isOpen, onClose }: DIDInfoModalProps) {
                       className="flex items-center gap-2"
                     >
                       <View size={14} />
-                      {loadingDocument === didInfo.did
-                        ? "Loading..."
-                        : "View Document"}
+                      {loadingDocument === didInfo.did ? "Loading..." : "View Document"}
                     </Button>
                   </div>
                 </CardContent>
               </Card>
 
-              {/* Summary Stats */}
-              <Card className="bg-card border-card-border shadow-sm hover:shadow-md transition-shadow duration-200">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-3 text-foreground">
+              {/* Web Identity (did:web) */}
+              <Card className={`bg-card border-card-border shadow-sm hover:shadow-md transition-shadow duration-200 ${!didInfo.did_web ? 'opacity-60' : ''}`}>
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-3 text-foreground text-base">
                     <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-accent-primary/10 border border-accent-primary/20">
-                      <Analytics size={16} className="text-accent-primary" />
+                      <Bot size={16} className="text-accent-primary" />
                     </div>
-                    Identity Summary
+                    <div className="min-w-0">
+                      <div>Web Identity</div>
+                      <div className="text-xs font-normal text-muted-foreground mt-0.5">
+                        did:web — Publicly resolvable via HTTP, use for JWT and external integrations
+                      </div>
+                    </div>
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="text-center p-4 bg-muted border border-border rounded-xl">
-                      <div className="text-heading-1">
-                        {reasoners.length}
+                <CardContent>
+                  {didInfo.did_web ? (
+                    <div className="space-y-3">
+                      <DIDIdentityBadge
+                        did={didInfo.did_web}
+                        maxLength={50}
+                        onCopy={(did) => handleCopyDID(did, "Web")}
+                      />
+                      <div className="text-sm text-muted-foreground">
+                        Resolvable at <code className="text-xs bg-muted px-1.5 py-0.5 rounded">/.well-known/did.json</code> and <code className="text-xs bg-muted px-1.5 py-0.5 rounded">/agents/{nodeId}/did.json</code>
                       </div>
-                      <div className="text-body-small font-medium">
-                        Reasoners
+                      <div className="flex gap-2 pt-1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleViewDIDDocument(didInfo.did_web!)}
+                          disabled={loadingDocument === didInfo.did_web}
+                          className="flex items-center gap-2"
+                        >
+                          <View size={14} />
+                          {loadingDocument === didInfo.did_web ? "Loading..." : "View Document"}
+                        </Button>
                       </div>
                     </div>
-                    <div className="text-center p-4 bg-muted border border-border rounded-xl">
-                      <div className="text-heading-1">
-                        {skills.length}
-                      </div>
-                      <div className="text-body-small font-medium">
-                        Skills
-                      </div>
+                  ) : (
+                    <div className="text-sm text-muted-foreground py-2">
+                      No did:web identity registered for this agent. The agent may need to re-register with a DID-enabled control plane.
                     </div>
-                  </div>
-                  <div className="text-center p-4 bg-muted border border-border rounded-xl">
-                    <div className="text-heading-3">
-                      Total Components: {reasoners.length + skills.length + 1}
-                    </div>
-                    <div className="text-body-small">
-                      Including agent DID
-                    </div>
-                  </div>
+                  )}
                 </CardContent>
               </Card>
             </div>
+
+            {/* Summary Stats */}
+            <Card className="bg-card border-card-border shadow-sm hover:shadow-md transition-shadow duration-200">
+              <CardContent className="pt-6">
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="text-center p-4 bg-muted border border-border rounded-xl">
+                    <div className="text-heading-1">{reasoners.length}</div>
+                    <div className="text-body-small font-medium">Reasoners</div>
+                  </div>
+                  <div className="text-center p-4 bg-muted border border-border rounded-xl">
+                    <div className="text-heading-1">{skills.length}</div>
+                    <div className="text-body-small font-medium">Skills</div>
+                  </div>
+                  <div className="text-center p-4 bg-muted border border-border rounded-xl">
+                    <div className="text-heading-1">{reasoners.length + skills.length + 1}</div>
+                    <div className="text-body-small font-medium">Total DIDs</div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
           </TabsContent>
 
           {/* Reasoners Tab */}

@@ -137,20 +137,36 @@ export function DIDIdentityCard({
         </div>
       )}
 
-      {/* Agent DID */}
+      {/* Cryptographic Identity (did:key) */}
       <div className="mb-4">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-sm font-medium text-gray-700">Agent DID</span>
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-sm font-medium text-gray-700">Cryptographic Identity</span>
           <span className="text-xs text-gray-500">
             Registered: {new Date(didInfo.registered_at).toLocaleDateString()}
           </span>
         </div>
+        <div className="text-xs text-gray-500 mb-2">did:key — signing &amp; auth</div>
         <DIDIdentityBadge
           did={didInfo.did}
           maxLength={40}
-          onCopy={(did) => handleCopyDID(did, "Agent")}
+          onCopy={(did) => handleCopyDID(did, "Crypto")}
         />
       </div>
+
+      {/* Web Identity (did:web) */}
+      {didInfo.did_web && (
+        <div className="mb-4">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-sm font-medium text-gray-700">Web Identity</span>
+          </div>
+          <div className="text-xs text-gray-500 mb-2">did:web — JWT &amp; external integrations</div>
+          <DIDIdentityBadge
+            did={didInfo.did_web}
+            maxLength={40}
+            onCopy={(did) => handleCopyDID(did, "Web")}
+          />
+        </div>
+      )}
 
       {/* Hierarchy */}
       {showHierarchy && (reasoners.length > 0 || skills.length > 0) && (

@@ -2,6 +2,7 @@
 
 export interface AgentDIDInfo {
   did: string;
+  did_web?: string;
   agent_node_id: string;
   agentfield_server_id: string;
   public_key_jwk: any;

@@ -386,27 +386,51 @@ export function DIDExplorerPage() {
                                         size={20}
                                         className="text-primary"
                                     />
-                                    <div>
+                                    <div className="min-w-0">
                                         <h2 className="text-lg font-semibold">
                                             {selectedAgent.agent_node_id}
                                         </h2>
-                                        <div className="flex items-center gap-2 mt-1">
-                                            <code className="text-xs text-muted-foreground font-mono">
-                                                {selectedAgent.did}
-                                            </code>
-                                            <Button
-                                                variant="ghost"
-                                                size="icon"
-                                                className="h-5 w-5"
-                                                onClick={() =>
-                                                    handleCopyDID(
-                                                        selectedAgent.did,
-                                                    )
-                                                }
-                                                title="Copy DID"
-                                            >
-                                                <Copy className="w-3 h-3" />
-                                            </Button>
+                                        <div className="space-y-1.5 mt-2">
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-xs text-muted-foreground font-medium w-20 flex-shrink-0">did:key</span>
+                                                <code className="text-xs text-muted-foreground font-mono truncate">
+                                                    {selectedAgent.did}
+                                                </code>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    className="h-5 w-5 flex-shrink-0"
+                                                    onClick={() =>
+                                                        handleCopyDID(
+                                                            selectedAgent.did,
+                                                        )
+                                                    }
+                                                    title="Copy Crypto DID"
+                                                >
+                                                    <Copy className="w-3 h-3" />
+                                                </Button>
+                                            </div>
+                                            {selectedAgent.did_web && (
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-xs text-muted-foreground font-medium w-20 flex-shrink-0">did:web</span>
+                                                    <code className="text-xs text-muted-foreground font-mono truncate">
+                                                        {selectedAgent.did_web}
+                                                    </code>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-5 w-5 flex-shrink-0"
+                                                        onClick={() =>
+                                                            handleCopyDID(
+                                                                selectedAgent.did_web!,
+                                                            )
+                                                        }
+                                                        title="Copy Web DID"
+                                                    >
+                                                        <Copy className="w-3 h-3" />
+                                                    </Button>
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 </div>

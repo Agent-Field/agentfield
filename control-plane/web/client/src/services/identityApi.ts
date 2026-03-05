@@ -55,6 +55,7 @@ export interface ComponentDIDInfo {
 
 export interface AgentDIDResponse {
   did: string;
+  did_web?: string;
   agent_node_id: string;
   status: string;
   derivation_path: string;
