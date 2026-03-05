@@ -64,6 +64,22 @@ type ErrorDetail struct {
 	Code    string `json:"code,omitempty"`
 }
 
+// HasToolCalls returns true if the response contains tool calls.
+func (r *Response) HasToolCalls() bool {
+	if len(r.Choices) == 0 {
+		return false
+	}
+	return len(r.Choices[0].Message.ToolCalls) > 0
+}
+
+// ToolCalls returns the tool calls from the first choice, or nil.
+func (r *Response) ToolCalls() []ToolCall {
+	if len(r.Choices) == 0 {
+		return nil
+	}
+	return r.Choices[0].Message.ToolCalls
+}
+
 // Text returns the text content from the first choice.
 func (r *Response) Text() string {
 	if len(r.Choices) == 0 || len(r.Choices[0].Message.Content) == 0 {

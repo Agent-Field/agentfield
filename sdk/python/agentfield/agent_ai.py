@@ -159,6 +159,9 @@ class AgentAI:
         response_format: Optional[Union[Literal["auto", "json", "text"], Dict]] = None,
         context: Optional[Dict] = None,
         memory_scope: Optional[List[str]] = None,
+        tools: Optional[Any] = None,
+        max_turns: Optional[int] = None,
+        max_tool_calls: Optional[int] = None,
         **kwargs,
     ) -> Any:
         """
@@ -185,6 +188,14 @@ class AgentAI:
             response_format (str, optional): Desired response format ('auto', 'json', 'text').
             context (Dict, optional): Additional context data to pass to the LLM.
             memory_scope (List[str], optional): Memory scopes to inject (e.g., ['workflow', 'session', 'reasoner']).
+            tools: Tool definitions for LLM tool calling. Accepts:
+                - "discover": auto-discover all tools from the control plane
+                - DiscoveryResponse: use pre-fetched discovery results
+                - list of capabilities: ReasonerCapability/SkillCapability/AgentCapability
+                - list of dicts: raw OpenAI-format tool schemas
+                - ToolCallConfig or dict: discover with filtering/progressive options
+            max_turns (int, optional): Maximum LLM turns in the tool-call loop (default: 10).
+            max_tool_calls (int, optional): Maximum total tool calls allowed (default: 25).
             **kwargs: Additional provider-specific parameters to pass to the LLM.
 
         Returns:
@@ -400,6 +411,61 @@ class AgentAI:
                     "strict": True
                 }
             }
+
+        # Tool-calling loop: if tools= is provided, enter the discover->call loop
+        if tools is not None:
+            from agentfield.tool_calling import (
+                ToolCallConfig,
+                _build_tool_config,
+                execute_tool_call_loop,
+            )
+
+            tool_schemas, tool_config, needs_lazy = _build_tool_config(
+                tools, self.agent
+            )
+
+            # Apply per-call overrides
+            if max_turns is not None:
+                tool_config.max_turns = max_turns
+            if max_tool_calls is not None:
+                tool_config.max_tool_calls = max_tool_calls
+
+            async def _tool_loop_completion(params):
+                if litellm_module is None:
+                    raise ImportError(
+                        "litellm is not installed. Please install it with `pip install litellm`."
+                    )
+                return await litellm_module.acompletion(**params)
+
+            resp, trace = await execute_tool_call_loop(
+                agent=self.agent,
+                messages=messages,
+                tools=tool_schemas,
+                config=tool_config,
+                needs_lazy_hydration=needs_lazy,
+                litellm_params=litellm_params,
+                make_completion=_tool_loop_completion,
+            )
+
+            # Store trace on the response for observability
+            if hasattr(resp, "_tool_call_trace"):
+                resp._tool_call_trace = trace
+            else:
+                try:
+                    resp._tool_call_trace = trace
+                except (AttributeError, TypeError):
+                    pass
+
+            if schema:
+                try:
+                    content = resp.choices[0].message.content
+                    json_data = json.loads(str(content))
+                    return schema(**json_data)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+            from .multimodal_response import detect_multimodal_response
+            return detect_multimodal_response(resp)
 
         # Define the LiteLLM call function for rate limiter
         async def _make_litellm_call():

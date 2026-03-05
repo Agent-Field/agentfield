@@ -1705,6 +1705,52 @@ func (a *Agent) AI(ctx context.Context, prompt string, opts ...ai.Option) (*ai.R
 	return a.aiClient.Complete(ctx, prompt, opts...)
 }
 
+// AIWithTools makes an AI call with tool-calling support.
+// It discovers available capabilities, converts them to tool schemas,
+// and runs a tool-call loop that dispatches calls via agent.Call().
+//
+// Example:
+//
+//	resp, trace, err := agent.AIWithTools(ctx, "Help the user with their ticket",
+//	    ai.DefaultToolCallConfig(),
+//	    agent.WithDiscoveryInputSchema(true),
+//	)
+func (a *Agent) AIWithTools(ctx context.Context, prompt string, config ai.ToolCallConfig, discoveryOpts ...DiscoveryOption) (*ai.Response, *ai.ToolCallTrace, error) {
+	if a.aiClient == nil {
+		return nil, nil, errors.New("AI not configured for this agent; set AIConfig in agent Config")
+	}
+
+	// Discover available tools
+	discoveryOpts = append(discoveryOpts, WithDiscoveryInputSchema(true))
+	result, err := a.Discover(ctx, discoveryOpts...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("discover tools: %w", err)
+	}
+	if result.JSON == nil {
+		return nil, nil, errors.New("discovery returned no JSON result")
+	}
+
+	tools := ai.CapabilitiesToToolDefinitions(result.JSON.Capabilities)
+	if len(tools) == 0 {
+		// No tools available, fall back to regular AI call
+		resp, err := a.AI(ctx, prompt)
+		return resp, &ai.ToolCallTrace{TotalTurns: 1}, err
+	}
+
+	messages := []ai.Message{
+		{
+			Role:    "user",
+			Content: []ai.ContentPart{{Type: "text", Text: prompt}},
+		},
+	}
+
+	callFn := func(ctx context.Context, target string, input map[string]interface{}) (map[string]interface{}, error) {
+		return a.Call(ctx, target, input)
+	}
+
+	return a.aiClient.ExecuteToolCallLoop(ctx, messages, tools, config, callFn)
+}
+
 // AIStream makes a streaming AI/LLM call.
 // Returns channels for streaming chunks and errors.
 //

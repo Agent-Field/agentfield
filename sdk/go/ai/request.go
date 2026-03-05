@@ -33,11 +33,45 @@ type Request struct {
 
 	// Response format for structured outputs
 	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
+
+	// Tools available for the model to call
+	Tools []ToolDefinition `json:"tools,omitempty"`
+
+	// ToolChoice controls how the model selects tools ("auto", "none", or specific)
+	ToolChoice interface{} `json:"tool_choice,omitempty"`
+}
+
+// ToolDefinition describes a tool available to the model.
+type ToolDefinition struct {
+	Type     string       `json:"type"` // "function"
+	Function ToolFunction `json:"function"`
+}
+
+// ToolFunction describes the function within a tool definition.
+type ToolFunction struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	Parameters  map[string]interface{} `json:"parameters"`
+}
+
+// ToolCall represents a tool call made by the model.
+type ToolCall struct {
+	ID       string           `json:"id"`
+	Type     string           `json:"type"` // "function"
+	Function ToolCallFunction `json:"function"`
+}
+
+// ToolCallFunction contains the function name and arguments from a tool call.
+type ToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 type Message struct {
-	Role    string        `json:"role"`
-	Content []ContentPart `json:"content"`
+	Role       string        `json:"role"`
+	Content    []ContentPart `json:"content"`
+	ToolCalls  []ToolCall    `json:"tool_calls,omitempty"`
+	ToolCallID string        `json:"tool_call_id,omitempty"`
 }
 
 type ContentPart struct {
@@ -55,6 +89,30 @@ type ImageURLData struct {
 // MarshalJSON serializes a Message. If the content is a single text part,
 // it serializes content as a plain string for maximum API compatibility.
 func (m Message) MarshalJSON() ([]byte, error) {
+	// Tool result messages have a simple string content + tool_call_id
+	if m.Role == "tool" && m.ToolCallID != "" {
+		content := ""
+		if len(m.Content) == 1 && m.Content[0].Type == "text" {
+			content = m.Content[0].Text
+		}
+		return json.Marshal(struct {
+			Role       string `json:"role"`
+			Content    string `json:"content"`
+			ToolCallID string `json:"tool_call_id"`
+		}{Role: m.Role, Content: content, ToolCallID: m.ToolCallID})
+	}
+	// Assistant messages with tool calls
+	if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+		content := ""
+		if len(m.Content) == 1 && m.Content[0].Type == "text" {
+			content = m.Content[0].Text
+		}
+		return json.Marshal(struct {
+			Role      string     `json:"role"`
+			Content   *string    `json:"content"`
+			ToolCalls []ToolCall `json:"tool_calls"`
+		}{Role: m.Role, Content: &content, ToolCalls: m.ToolCalls})
+	}
 	if len(m.Content) == 1 && m.Content[0].Type == "text" && m.Content[0].ImageURL == nil {
 		return json.Marshal(struct {
 			Role    string `json:"role"`
@@ -66,16 +124,25 @@ func (m Message) MarshalJSON() ([]byte, error) {
 }
 
 func (m *Message) UnmarshalJSON(data []byte) error {
-	type Alias Message
+	// First, extract non-content fields
 	aux := &struct {
-		Content json.RawMessage `json:"content"`
-		*Alias
-	}{
-		Alias: (*Alias)(m),
+		Role       string          `json:"role"`
+		Content    json.RawMessage `json:"content"`
+		ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
+		ToolCallID string          `json:"tool_call_id,omitempty"`
+	}{}
+
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
 	}
 
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
+	m.Role = aux.Role
+	m.ToolCalls = aux.ToolCalls
+	m.ToolCallID = aux.ToolCallID
+
+	// Handle null content (common in tool-call assistant messages)
+	if len(aux.Content) == 0 || string(aux.Content) == "null" {
+		return nil
 	}
 
 	var s string
@@ -211,6 +278,15 @@ func WithSchema(schema interface{}) Option {
 				Schema: schemaBytes,
 			},
 		}
+		return nil
+	}
+}
+
+// WithTools sets tool definitions for the request.
+func WithTools(tools []ToolDefinition) Option {
+	return func(r *Request) error {
+		r.Tools = tools
+		r.ToolChoice = "auto"
 		return nil
 	}
 }
