@@ -6,12 +6,42 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
+
+// normalizeDIDWeb re-encodes port separators that Gin URL-decoded in did:web identifiers.
+// Gin decodes %3A → : in path params, but the database stores the canonical form with %3A.
+// e.g. did:web:localhost:8080:agents:foo → did:web:localhost%3A8080:agents:foo
+func normalizeDIDWeb(did string) string {
+	if !strings.HasPrefix(did, "did:web:") {
+		return did
+	}
+	parts := strings.Split(did, ":")
+	// Canonical: ["did", "web", "domain%3Aport", "agents", "id"] → 5 parts
+	// Decoded:   ["did", "web", "domain", "port", "agents", "id"] → 6+ parts
+	if len(parts) >= 6 && isAllDigits(parts[3]) {
+		parts[2] = parts[2] + "%3A" + parts[3]
+		parts = append(parts[:3], parts[4:]...)
+	}
+	return strings.Join(parts, ":")
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if !unicode.IsDigit(r) {
+			return false
+		}
+	}
+	return true
+}
 
 // DIDService defines the DID operations required by handlers.
 type DIDService interface {
@@ -85,7 +115,7 @@ func (h *DIDHandlers) RegisterAgent(c *gin.Context) {
 // ResolveDID handles DID resolution requests.
 // GET /api/v1/did/resolve/:did
 func (h *DIDHandlers) ResolveDID(c *gin.Context) {
-	did := c.Param("did")
+	did := normalizeDIDWeb(c.Param("did"))
 	if did == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "DID parameter is required"})
 		return
@@ -416,7 +446,7 @@ func (h *DIDHandlers) ExportVCs(c *gin.Context) {
 // GetDIDDocument handles DID document requests (W3C DID standard).
 // GET /api/v1/did/document/:did
 func (h *DIDHandlers) GetDIDDocument(c *gin.Context) {
-	did := c.Param("did")
+	did := normalizeDIDWeb(c.Param("did"))
 	if did == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "DID parameter is required",
