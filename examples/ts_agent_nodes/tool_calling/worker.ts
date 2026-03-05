@@ -25,7 +25,8 @@ const app = new Agent({
 
 // ============= SKILLS (DETERMINISTIC) =============
 
-app.skill('get_weather', async (_ctx, input: { city: string }) => {
+app.skill('get_weather', async (ctx) => {
+  const input = ctx.input as { city: string };
   const weatherData: Record<string, { temp_f: number; conditions: string; humidity: number }> = {
     'new york': { temp_f: 72, conditions: 'Partly cloudy', humidity: 65 },
     'london': { temp_f: 58, conditions: 'Overcast', humidity: 80 },
@@ -49,7 +50,8 @@ app.skill('get_weather', async (_ctx, input: { city: string }) => {
   },
 });
 
-app.skill('calculate', async (_ctx, input: { operation: string; a: number; b: number }) => {
+app.skill('calculate', async (ctx) => {
+  const input = ctx.input as { operation: string; a: number; b: number };
   const ops: Record<string, number> = {
     add: input.a + input.b,
     subtract: input.a - input.b,
@@ -104,4 +106,4 @@ console.log('  Node: utility-worker-ts');
 console.log('  Skills: get_weather, calculate');
 console.log('  Reasoners: summarize');
 
-app.run();
+app.serve();
