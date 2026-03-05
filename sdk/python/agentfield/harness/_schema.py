@@ -81,19 +81,21 @@ def build_prompt_suffix(schema: Any, cwd: str) -> str:
         write_schema_file(schema_json, cwd)
         return (
             "\n\n---\n"
-            "OUTPUT REQUIREMENTS:\n"
+            "CRITICAL OUTPUT REQUIREMENTS:\n"
             f"Read the JSON Schema at: {schema_path}\n"
-            f"Write your final answer as valid JSON conforming to that schema to: {output_path}\n"
-            "Do not include any text outside the JSON in that file. Do not wrap in markdown fences."
+            f"You MUST use your Write tool to create this file: {output_path}\n"
+            "The file MUST contain ONLY valid JSON conforming to that schema.\n"
+            "Do NOT output the JSON in your response text — write it to the file."
         )
 
     return (
         "\n\n---\n"
-        "OUTPUT REQUIREMENTS:\n"
-        f"Write your final answer as valid JSON to the file: {output_path}\n"
-        "The JSON must conform to this schema:\n"
-        f"{schema_json}\n"
-        "Do not include any text outside the JSON in that file. Do not wrap in markdown fences."
+        "CRITICAL OUTPUT REQUIREMENTS:\n"
+        f"You MUST use your Write tool to create this file: {output_path}\n"
+        "The file MUST contain ONLY valid JSON matching the schema below.\n"
+        "Do NOT output the JSON in your response text — write it to the file.\n\n"
+        f"Required JSON Schema:\n{schema_json}\n\n"
+        "Write ONLY valid JSON to the file. No markdown fences, no comments, no extra text."
     )
 
 
@@ -200,6 +202,61 @@ def parse_and_validate(file_path: str, schema: Any) -> Optional[Any]:
             return validate_against_schema(data, schema)
         except Exception:
             pass
+
+    return None
+
+
+def try_parse_from_text(text: str, schema: Any) -> Optional[Any]:
+    """Best-effort: extract JSON from LLM conversation text and validate.
+
+    Used as a fallback when the LLM outputs JSON in its response instead
+    of writing it to the output file.
+
+    Strategies tried in order:
+    1. JSON fenced code blocks (```json ... ```)
+    2. Largest top-level { ... } block
+    3. Cosmetic repair of entire text
+    """
+    if not text or not text.strip():
+        return None
+
+    # Strategy 1: fenced code blocks
+    for match in re.finditer(r"```(?:json)?\s*\n(.*?)```", text, re.DOTALL):
+        try:
+            data = json.loads(match.group(1).strip())
+            return validate_against_schema(data, schema)
+        except Exception:
+            continue
+
+    # Strategy 2: largest top-level { ... } block
+    candidates: list[str] = []
+    depth = 0
+    start = -1
+    for i, ch in enumerate(text):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start >= 0:
+                candidates.append(text[start : i + 1])
+                start = -1
+
+    for candidate in sorted(candidates, key=len, reverse=True):
+        try:
+            data = json.loads(candidate)
+            return validate_against_schema(data, schema)
+        except Exception:
+            continue
+
+    # Strategy 3: cosmetic repair on entire text
+    try:
+        repaired = cosmetic_repair(text)
+        data = json.loads(repaired)
+        return validate_against_schema(data, schema)
+    except Exception:
+        pass
 
     return None
 

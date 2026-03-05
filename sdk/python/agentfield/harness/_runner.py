@@ -15,6 +15,7 @@ from agentfield.harness._schema import (
     diagnose_output_failure,
     get_output_path,
     parse_and_validate,
+    try_parse_from_text,
 )
 from agentfield.harness.providers._base import HarnessProvider
 from agentfield.harness.providers._factory import build_provider
@@ -266,6 +267,16 @@ class HarnessRunner:
         all_raws: List[RawResult] = [initial_raw]
 
         validated = parse_and_validate(output_path, schema)
+
+        if validated is None and initial_raw.result:
+            logger.info(
+                "Output file missing/invalid at %s — trying stdout fallback",
+                output_path,
+            )
+            validated = try_parse_from_text(initial_raw.result, schema)
+            if validated is not None:
+                logger.info("Stdout fallback succeeded")
+
         if validated is not None:
             elapsed = int((time.monotonic() - start_time) * 1000)
             cost, turns, sid, msgs = _accumulate_metrics(all_raws)
@@ -360,6 +371,15 @@ class HarnessRunner:
                 continue
 
             validated = parse_and_validate(output_path, schema)
+
+            if validated is None and retry_raw.result:
+                validated = try_parse_from_text(retry_raw.result, schema)
+                if validated is not None:
+                    logger.info(
+                        "Schema retry %d succeeded via stdout fallback",
+                        retry_num + 1,
+                    )
+
             if validated is not None:
                 elapsed = int((time.monotonic() - start_time) * 1000)
                 cost, turns, sid, msgs = _accumulate_metrics(all_raws)

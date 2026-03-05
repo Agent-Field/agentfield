@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.46-rc.1] - 2026-03-05
+
+
+### Fixed
+
+- Fix(harness): add concurrency limiter, stdout fallback, and stronger prompts (#230)
+
+Root cause: unbounded concurrent opencode subprocess calls (20+) overwhelm
+the LLM API, causing transient failures where output files are never created.
+
+Changes:
+- opencode.py: add global asyncio.Semaphore (default 3, configurable via
+  OPENCODE_MAX_CONCURRENT) to throttle concurrent opencode run processes;
+  add 600s timeout; add structured logging for finish/error states
+- _schema.py: strengthen output prompt to emphasize Write tool usage;
+  add try_parse_from_text() fallback that extracts JSON from LLM stdout
+  when the output file is missing (fenced blocks, brace matching, cosmetic repair)
+- _runner.py: wire stdout fallback after parse_and_validate in both initial
+  and retry paths
+
+Validated: full SEC-AF pipeline (11 hunt strategies, 30 verified findings)
+completes end-to-end with 0 enricher failures, vs repeated failures before. (2947d5b)
+
 ## [0.1.45] - 2026-03-05
 
 ## [0.1.45-rc.8] - 2026-03-05
