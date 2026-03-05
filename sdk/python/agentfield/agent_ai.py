@@ -450,53 +450,51 @@ class AgentAI:
                     )
                 return await _make_litellm_call()
 
-        if final_config.enable_rate_limit_retry:
-            rate_limiter = self._get_rate_limiter()
-            try:
-                response = await rate_limiter.execute_with_retry(
-                    _execute_with_fallbacks
-                )
-            except Exception as e:
-                log_debug(f"LiteLLM call failed after retries: {e}")
-                raise
-        else:
-            try:
-                response = await _execute_with_fallbacks()
-            except HTTPStatusError as e:
-                log_debug(
-                    f"LiteLLM HTTP call failed: {e.response.status_code} - {e.response.text}"
-                )
-                raise
-            except requests.exceptions.RequestException as e:
-                log_debug(f"LiteLLM network call failed: {e}")
-                if e.response is not None:
-                    log_debug(f"Response status: {e.response.status_code}")
-                    log_debug(f"Response text: {e.response.text}")
-                raise
-            except Exception as e:
-                log_debug(f"LiteLLM call failed: {e}")
-                raise
+        # Maximum retries for transient parse failures (malformed JSON from LLM)
+        max_parse_retries = 2
 
-        # Process the response
-        if final_config.stream:
-            # For streaming, return the generator
-            return response
-        else:
-            # Import multimodal response detection
+        async def _execute_and_parse():
+            """Execute LLM call and parse response. Raised ValueError triggers parse retry."""
+            if final_config.enable_rate_limit_retry:
+                rate_limiter = self._get_rate_limiter()
+                try:
+                    resp = await rate_limiter.execute_with_retry(
+                        _execute_with_fallbacks
+                    )
+                except Exception as e:
+                    log_debug(f"LiteLLM call failed after retries: {e}")
+                    raise
+            else:
+                try:
+                    resp = await _execute_with_fallbacks()
+                except HTTPStatusError as e:
+                    log_debug(
+                        f"LiteLLM HTTP call failed: {e.response.status_code} - {e.response.text}"
+                    )
+                    raise
+                except requests.exceptions.RequestException as e:
+                    log_debug(f"LiteLLM network call failed: {e}")
+                    if e.response is not None:
+                        log_debug(f"Response status: {e.response.status_code}")
+                        log_debug(f"Response text: {e.response.text}")
+                    raise
+                except Exception as e:
+                    log_debug(f"LiteLLM call failed: {e}")
+                    raise
+
+            if final_config.stream:
+                return resp
+
             from .multimodal_response import detect_multimodal_response
-
-            # Detect and wrap multimodal content
-            multimodal_response = detect_multimodal_response(response)
+            multimodal_response = detect_multimodal_response(resp)
 
             if schema:
-                # For schema responses, try to parse from text content
                 try:
                     json_data = json.loads(str(multimodal_response.text))
                     return schema(**json_data)
                 except (json.JSONDecodeError, ValueError) as parse_error:
                     log_error(f"Failed to parse JSON response: {parse_error}")
                     log_debug(f"Raw response: {multimodal_response.text}")
-                    # Fallback: try to extract JSON from the response
                     json_match = re.search(
                         r"\{.*\}", str(multimodal_response.text), re.DOTALL
                     )
@@ -510,8 +508,23 @@ class AgentAI:
                         f"Could not parse structured response: {multimodal_response.text}"
                     )
 
-            # Return MultimodalResponse for backward compatibility and enhanced features
             return multimodal_response
+
+        # Retry on parse failures (malformed LLM JSON output)
+        last_parse_error = None
+        for attempt in range(max_parse_retries + 1):
+            try:
+                return await _execute_and_parse()
+            except ValueError as e:
+                if schema and "Could not parse structured response" in str(e):
+                    last_parse_error = e
+                    if attempt < max_parse_retries:
+                        log_debug(
+                            f"Parse retry {attempt + 1}/{max_parse_retries}: LLM returned malformed JSON, retrying..."
+                        )
+                        continue
+                raise
+        raise last_parse_error
 
     def _process_multimodal_args(self, args: tuple) -> List[Dict[str, Any]]:
         """Process multimodal arguments into LiteLLM-compatible message format"""
