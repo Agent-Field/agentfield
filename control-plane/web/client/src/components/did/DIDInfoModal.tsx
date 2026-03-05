@@ -1,5 +1,4 @@
 import {
-  Analytics,
   Bot,
   CheckmarkFilled,
   Function,

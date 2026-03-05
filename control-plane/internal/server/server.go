@@ -1120,7 +1120,7 @@ func (s *AgentFieldServer) setupRoutes() {
 			}
 
 			// Identity & Trust endpoints (DID Explorer and Credentials)
-			identityHandler := ui.NewIdentityHandlers(s.storage)
+			identityHandler := ui.NewIdentityHandlers(s.storage, s.didWebService)
 			identityHandler.RegisterRoutes(uiAPI)
 
 			// Authorization UI endpoints

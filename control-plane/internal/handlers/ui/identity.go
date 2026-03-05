@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 	"github.com/gin-gonic/gin"
@@ -14,13 +15,15 @@ import (
 
 // IdentityHandlers handles identity and credential UI endpoints
 type IdentityHandlers struct {
-	storage storage.StorageProvider
+	storage       storage.StorageProvider
+	didWebService *services.DIDWebService
 }
 
 // NewIdentityHandlers creates a new identity handlers instance
-func NewIdentityHandlers(storage storage.StorageProvider) *IdentityHandlers {
+func NewIdentityHandlers(storage storage.StorageProvider, didWebService *services.DIDWebService) *IdentityHandlers {
 	return &IdentityHandlers{
-		storage: storage,
+		storage:       storage,
+		didWebService: didWebService,
 	}
 }
 
@@ -47,6 +50,7 @@ type DIDStatsResponse struct {
 // AgentDIDResponse represents an agent with its DIDs
 type AgentDIDResponse struct {
 	DID            string             `json:"did"`
+	DIDWeb         string             `json:"did_web,omitempty"`
 	AgentNodeID    string             `json:"agent_node_id"`
 	Status         string             `json:"status"`
 	DerivationPath string             `json:"derivation_path"`
@@ -256,6 +260,7 @@ func (h *IdentityHandlers) ListAgents(c *gin.Context) {
 
 		agents = append(agents, AgentDIDResponse{
 			DID:            agent.DID,
+			DIDWeb:         h.resolveAgentDIDWeb(c, agent.AgentNodeID),
 			AgentNodeID:    agent.AgentNodeID,
 			Status:         string(agent.Status),
 			DerivationPath: agent.DerivationPath,
@@ -366,6 +371,7 @@ func (h *IdentityHandlers) GetAgentDetails(c *gin.Context) {
 
 	response := AgentDIDResponse{
 		DID:            agentDID.DID,
+		DIDWeb:         h.resolveAgentDIDWeb(c, agentDID.AgentNodeID),
 		AgentNodeID:    agentDID.AgentNodeID,
 		Status:         string(agentDID.Status),
 		DerivationPath: agentDID.DerivationPath,
@@ -540,6 +546,18 @@ func (h *IdentityHandlers) SearchCredentials(c *gin.Context) {
 		"offset":      filters.Offset,
 		"has_more":    filters.Offset+len(results) < totalCount,
 	})
+}
+
+// resolveAgentDIDWeb returns the did:web identifier for an agent, or empty string if unavailable.
+func (h *IdentityHandlers) resolveAgentDIDWeb(c *gin.Context, agentID string) string {
+	if h.didWebService == nil {
+		return ""
+	}
+	result, err := h.didWebService.ResolveDIDByAgentID(c.Request.Context(), agentID)
+	if err == nil && result != nil && result.DIDDocument != nil {
+		return h.didWebService.GenerateDIDWeb(agentID)
+	}
+	return ""
 }
 
 // RegisterRoutes registers all identity UI routes
