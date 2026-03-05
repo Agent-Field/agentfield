@@ -39,6 +39,50 @@ if __name__ == "__main__":
     agent.serve(port=8001)
 ```
 
+## AI Tool Calling
+
+Let LLMs automatically discover and invoke agent capabilities across your system:
+
+```python
+from agentfield import Agent, AIConfig, ToolCallConfig
+
+app = Agent(
+    node_id="orchestrator",
+    agentfield_server="http://localhost:8080",
+    ai_config=AIConfig(model="openai/gpt-4o-mini"),
+)
+
+@app.reasoner()
+async def ask_with_tools(question: str) -> dict:
+    # Auto-discover all tools and let the LLM use them
+    result = await app.ai(
+        system="You are a helpful assistant.",
+        user=question,
+        tools="discover",
+    )
+    return {"answer": str(result), "trace": result.trace}
+
+# Filter by tags, limit turns, use lazy hydration
+result = await app.ai(
+    user="Get weather for Tokyo",
+    tools=ToolCallConfig(
+        tags=["weather"],
+        schema_hydration="lazy",  # Reduces token usage for large catalogs
+        max_turns=5,
+        max_tool_calls=10,
+    ),
+)
+```
+
+**Key features:**
+- `tools="discover"` — Auto-discover all capabilities from the control plane
+- `ToolCallConfig` — Filter by tags, agent IDs, health status
+- **Lazy hydration** — Send only tool names/descriptions first, hydrate schemas on demand
+- **Guardrails** — `max_turns` and `max_tool_calls` prevent runaway loops
+- **Observability** — `result.trace` tracks every tool call with latency
+
+See `examples/python_agent_nodes/tool_calling/` for a complete orchestrator + worker example.
+
 ## Human-in-the-Loop Approvals
 
 The Python SDK provides a first-class waiting state for pausing agent execution mid-reasoner and waiting for human approval:

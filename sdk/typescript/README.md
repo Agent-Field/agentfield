@@ -39,6 +39,50 @@ const limiter = new StatelessRateLimiter({ maxRetries: 3, baseDelay: 0.5 });
 const result = await limiter.executeWithRetry(() => makeAiCall());
 ```
 
+## AI Tool Calling
+
+Let LLMs automatically discover and invoke agent capabilities:
+
+```ts
+import { Agent } from '@agentfield/sdk';
+import type { ToolCallConfig } from '@agentfield/sdk';
+
+const agent = new Agent({
+  nodeId: 'orchestrator',
+  agentFieldUrl: 'http://localhost:8080',
+  aiConfig: { provider: 'openrouter', model: 'openai/gpt-4o-mini' },
+});
+
+agent.reasoner('ask', async (ctx) => {
+  // Auto-discover all tools and let the LLM use them
+  const { text, trace } = await ctx.aiWithTools(ctx.input.question, {
+    tools: 'discover',
+    system: 'You are a helpful assistant.',
+  });
+
+  console.log(`Tool calls: ${trace.totalToolCalls}, Turns: ${trace.totalTurns}`);
+  return { answer: text };
+});
+
+// Filter by tags, set guardrails
+agent.reasoner('weather', async (ctx) => {
+  const { text } = await ctx.aiWithTools(ctx.input.cities, {
+    tools: { tags: ['weather'] } satisfies ToolCallConfig,
+    maxTurns: 3,
+    maxToolCalls: 5,
+  });
+  return { report: text };
+});
+```
+
+**Key features:**
+- `tools: 'discover'` — Auto-discover all capabilities from the control plane
+- `ToolCallConfig` — Filter by tags, agent IDs; lazy/eager schema hydration
+- **Guardrails** — `maxTurns` and `maxToolCalls` prevent runaway loops
+- **Observability** — `trace` tracks every tool call with latency
+
+See `examples/ts_agent_nodes/tool_calling/` for a complete orchestrator + worker example.
+
 ## Execution Notes
 
 Log execution progress with `ctx.note(message: string, tags?: string[])` for fire-and-forget debugging in the AgentField UI.

@@ -310,6 +310,20 @@ analysis = await app.call("analyst.evaluate", input={"data": dataset})
 report = await app.call("writer.summarize", input={"analysis": analysis})
 ```
 
+### AI Tool Calling
+LLMs automatically discover and invoke agent capabilities. No manual tool registration—`tools="discover"` queries the control plane, converts capabilities to LLM tool schemas, dispatches calls, and feeds results back in a loop.
+
+```python
+# LLM discovers and calls tools from other agents automatically
+result = await app.ai(
+    system="You are a helpful assistant.",
+    user="What's the weather in Tokyo and calculate 42 * 17",
+    tools="discover",  # Auto-discover all available capabilities
+)
+print(result)       # Final answer from LLM
+print(result.trace) # Full observability: tool calls, latency, turns
+```
+
 ### Developer Experience
 Standard REST APIs. No magic abstractions. Build agents the way you build microservices.
 
@@ -373,6 +387,7 @@ AgentField isn't a framework you extend. It's infrastructure you deploy on.
 ### Multi-Agent Native
 - **Discovery**: Agents register capabilities. Others find them via API.
 - **Cross-Agent Calls**: `app.call("other.reasoner", input={...})` routed through control plane
+- **AI Tool Calling**: `app.ai(tools="discover")` — LLMs automatically discover and call agent capabilities
 - **Workflow DAGs**: Every execution path visualized automatically
 - **Shared Memory**: Scoped to global, agent, session, or run—with vector search
 

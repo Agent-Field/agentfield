@@ -46,6 +46,39 @@ func main() {
 - `types`: Shared data structures and contracts.
 - `ai`: Helpers for interacting with AI providers via the control plane.
 
+## AI Tool Calling
+
+Execute LLM tool-call loops with automatic capability discovery:
+
+```go
+import (
+    "github.com/Agent-Field/agentfield/sdk/go/ai"
+    "github.com/Agent-Field/agentfield/sdk/go/agent"
+)
+
+// Convert discovered capabilities to LLM tool definitions
+tools := ai.CapabilitiesToToolDefinitions(discoveryResult.Capabilities)
+
+// Execute tool-call loop with guardrails
+response, trace, err := aiClient.ExecuteToolCallLoop(
+    ctx,
+    messages,
+    tools,
+    ai.ToolCallConfig{MaxTurns: 10, MaxToolCalls: 25},
+    func(ctx context.Context, target string, input map[string]interface{}) (map[string]interface{}, error) {
+        return agent.Call(ctx, target, input)
+    },
+)
+
+fmt.Printf("Final: %s\n", response.Text())
+fmt.Printf("Tool calls: %d, Turns: %d\n", trace.TotalToolCalls, trace.TotalTurns)
+```
+
+**Key features:**
+- `CapabilitiesToToolDefinitions` — Convert discovery results to OpenAI tool schemas
+- `ExecuteToolCallLoop` — Automatic LLM tool-call loop with turn/call limits
+- `ToolCallTrace` — Per-call latency tracking and observability
+
 ## Human-in-the-Loop Approvals
 
 The `client` package provides methods for requesting human approval, checking status, and waiting for decisions:
