@@ -16,14 +16,16 @@ from __future__ import annotations
 import asyncio
 import atexit
 import os
+import shutil
 import signal
 import socket
 import subprocess
+import tempfile
 import time
 from typing import ClassVar, Dict, Optional
 
-from agentfield.harness._cli import run_cli
-from agentfield.harness._result import Metrics, RawResult
+from agentfield.harness._cli import run_cli, strip_ansi
+from agentfield.harness._result import FailureType, Metrics, RawResult
 
 
 def _find_free_port() -> int:
@@ -170,29 +172,58 @@ class OpenCodeProvider:
                 if isinstance(key, str) and isinstance(value, str)
             }
 
+        temp_data_dir = tempfile.mkdtemp(prefix=".secaf-opencode-data-")
+        env["XDG_DATA_HOME"] = temp_data_dir
+
         start_api = time.monotonic()
 
         try:
-            stdout, stderr, returncode = await run_cli(cmd, env=env, cwd=cwd)
-        except FileNotFoundError:
-            return RawResult(
-                is_error=True,
-                error_message=(
-                    f"OpenCode binary not found at '{self._bin}'. "
-                    "Install OpenCode: https://opencode.ai"
-                ),
-                metrics=Metrics(),
-            )
-        except TimeoutError as exc:
-            return RawResult(
-                is_error=True,
-                error_message=str(exc),
-                metrics=Metrics(),
-            )
+            try:
+                stdout, stderr, returncode = await run_cli(cmd, env=env, cwd=cwd)
+            except FileNotFoundError:
+                return RawResult(
+                    is_error=True,
+                    error_message=(
+                        f"OpenCode binary not found at '{self._bin}'. "
+                        "Install OpenCode: https://opencode.ai"
+                    ),
+                    failure_type=FailureType.CRASH,
+                    metrics=Metrics(),
+                )
+            except TimeoutError as exc:
+                return RawResult(
+                    is_error=True,
+                    error_message=str(exc),
+                    failure_type=FailureType.TIMEOUT,
+                    metrics=Metrics(),
+                )
+        finally:
+            shutil.rmtree(temp_data_dir, ignore_errors=True)
 
         api_ms = int((time.monotonic() - start_api) * 1000)
         result_text = stdout.strip() if stdout.strip() else None
-        is_error = returncode != 0 and result_text is None
+        clean_stderr = strip_ansi(stderr.strip()) if stderr else ""
+
+        if returncode < 0:
+            failure_type = FailureType.CRASH
+            is_error = True
+            error_message: str | None = (
+                f"Process killed by signal {-returncode}. stderr: {clean_stderr[:500]}"
+                if clean_stderr
+                else f"Process killed by signal {-returncode}."
+            )
+        elif returncode != 0 and result_text is None:
+            failure_type = FailureType.CRASH
+            is_error = True
+            error_message = (
+                clean_stderr[:1000]
+                if clean_stderr
+                else (f"Process exited with code {returncode} and produced no output.")
+            )
+        else:
+            failure_type = FailureType.NONE
+            is_error = False
+            error_message = None
 
         return RawResult(
             result=result_text,
@@ -203,5 +234,7 @@ class OpenCodeProvider:
                 session_id="",
             ),
             is_error=is_error,
-            error_message=stderr.strip() if is_error else None,
+            error_message=error_message,
+            failure_type=failure_type,
+            returncode=returncode,
         )

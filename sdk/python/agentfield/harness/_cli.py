@@ -5,7 +5,14 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from typing import Any, Dict, List, Optional, Tuple
+
+_ANSI_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+
+
+def strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
 
 
 async def run_cli(
@@ -40,7 +47,7 @@ async def run_cli(
     return (
         stdout_bytes.decode("utf-8", errors="replace"),
         stderr_bytes.decode("utf-8", errors="replace"),
-        proc.returncode or 0,
+        proc.returncode if proc.returncode is not None else -1,
     )
 
 

@@ -7,7 +7,7 @@ import random
 import time
 from typing import Any, Dict, List, Optional
 
-from agentfield.harness._result import HarnessResult, RawResult
+from agentfield.harness._result import FailureType, HarnessResult, RawResult
 from agentfield.harness._schema import (
     build_followup_prompt,
     build_prompt_suffix,
@@ -160,6 +160,7 @@ class HarnessRunner:
         effective_prompt = prompt
         if schema is not None:
             effective_prompt = prompt + build_prompt_suffix(schema, output_dir)
+        options["_original_prompt"] = effective_prompt
 
         start_time = time.monotonic()
         try:
@@ -183,6 +184,7 @@ class HarnessRunner:
                 parsed=None,
                 is_error=raw.is_error,
                 error_message=raw.error_message,
+                failure_type=raw.failure_type,
                 cost_usd=raw.metrics.total_cost_usd,
                 num_turns=raw.metrics.num_turns,
                 duration_ms=elapsed,
@@ -278,7 +280,16 @@ class HarnessRunner:
                 messages=msgs,
             )
 
-        if initial_raw.is_error and not os.path.exists(output_path):
+        _retryable = {FailureType.CRASH, FailureType.NO_OUTPUT, FailureType.NONE}
+        if (
+            initial_raw.is_error
+            and not os.path.exists(output_path)
+            and initial_raw.failure_type not in _retryable
+        ) or (
+            schema_max_retries == 0
+            and initial_raw.is_error
+            and not os.path.exists(output_path)
+        ):
             elapsed = int((time.monotonic() - start_time) * 1000)
             cost, turns, sid, msgs = _accumulate_metrics(all_raws)
             provider_error = initial_raw.error_message or "Provider execution failed."
@@ -289,6 +300,7 @@ class HarnessRunner:
                 error_message=(
                     f"{provider_error} Output file was not created at {output_path}."
                 ),
+                failure_type=initial_raw.failure_type,
                 cost_usd=cost,
                 num_turns=turns,
                 duration_ms=elapsed,
@@ -299,22 +311,40 @@ class HarnessRunner:
         last_session_id = initial_raw.metrics.session_id
 
         for retry_num in range(schema_max_retries):
-            error_detail = diagnose_output_failure(output_path, schema)
-            followup = build_followup_prompt(error_detail, cwd)
+            if retry_num > 0:
+                await asyncio.sleep(min(0.5 * (2 ** (retry_num - 1)), 5.0))
+
+            is_crash = all_raws[
+                -1
+            ].failure_type == FailureType.CRASH and not os.path.exists(output_path)
+            if is_crash:
+                original_prompt = options.get("_original_prompt", "")
+                retry_prompt = (
+                    original_prompt
+                    if original_prompt
+                    else build_followup_prompt(
+                        diagnose_output_failure(output_path, schema), cwd, schema
+                    )
+                )
+            else:
+                error_detail = diagnose_output_failure(output_path, schema)
+                retry_prompt = build_followup_prompt(error_detail, cwd, schema)
+
+            detail_for_log = diagnose_output_failure(output_path, schema)
 
             logger.info(
                 "Schema validation retry %d/%d: %s",
                 retry_num + 1,
                 schema_max_retries,
-                error_detail[:200],
+                detail_for_log[:200],
             )
 
             retry_options = dict(options)
-            if last_session_id:
+            if last_session_id and not is_crash:
                 retry_options["resume_session_id"] = last_session_id
 
             retry_raw = await self._execute_with_retry(
-                provider, followup, retry_options
+                provider, retry_prompt, retry_options
             )
             all_raws.append(retry_raw)
 
@@ -356,6 +386,7 @@ class HarnessRunner:
                 f"Schema validation failed after {schema_max_retries} "
                 f"retry attempt(s). Last error: {final_diagnosis}"
             ),
+            failure_type=FailureType.SCHEMA,
             cost_usd=cost,
             num_turns=turns,
             duration_ms=elapsed,

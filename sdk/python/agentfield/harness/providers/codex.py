@@ -5,8 +5,8 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, List, Optional
 
-from agentfield.harness._cli import extract_final_text, parse_jsonl, run_cli
-from agentfield.harness._result import Metrics, RawResult
+from agentfield.harness._cli import extract_final_text, parse_jsonl, run_cli, strip_ansi
+from agentfield.harness._result import FailureType, Metrics, RawResult
 
 
 class CodexProvider:
@@ -49,12 +49,14 @@ class CodexProvider:
                     f"Codex binary not found at '{self._bin}'. "
                     "Install Codex CLI: https://github.com/openai/codex"
                 ),
+                failure_type=FailureType.CRASH,
                 metrics=Metrics(),
             )
         except TimeoutError as exc:
             return RawResult(
                 is_error=True,
                 error_message=str(exc),
+                failure_type=FailureType.TIMEOUT,
                 metrics=Metrics(),
             )
 
@@ -73,7 +75,28 @@ class CodexProvider:
             elif event.get("type") == "thread.started":
                 session_id = str(event.get("thread_id", ""))
 
-        is_error = returncode != 0 and result_text is None
+        clean_stderr = strip_ansi(stderr.strip()) if stderr else ""
+
+        if returncode < 0:
+            failure_type = FailureType.CRASH
+            is_error = True
+            error_message: str | None = (
+                f"Process killed by signal {-returncode}. stderr: {clean_stderr[:500]}"
+                if clean_stderr
+                else f"Process killed by signal {-returncode}."
+            )
+        elif returncode != 0 and result_text is None:
+            failure_type = FailureType.CRASH
+            is_error = True
+            error_message = (
+                clean_stderr[:1000]
+                if clean_stderr
+                else (f"Process exited with code {returncode} and produced no output.")
+            )
+        else:
+            failure_type = FailureType.NONE
+            is_error = False
+            error_message = None
 
         return RawResult(
             result=result_text,
@@ -85,5 +108,7 @@ class CodexProvider:
                 session_id=session_id,
             ),
             is_error=is_error,
-            error_message=stderr.strip() if is_error else None,
+            error_message=error_message,
+            failure_type=failure_type,
+            returncode=returncode,
         )

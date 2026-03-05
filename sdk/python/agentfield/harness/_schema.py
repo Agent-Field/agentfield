@@ -260,29 +260,43 @@ def diagnose_output_failure(file_path: str, schema: Any) -> str:
         )
 
 
-def build_followup_prompt(error_message: str, cwd: str) -> str:
-    """Build a follow-up prompt for the agent to fix invalid JSON.
-
-    Used by the runner for Layer 3 recovery (schema validation retry).
-    """
+def build_followup_prompt(error_message: str, cwd: str, schema: Any = None) -> str:
     output_path = get_output_path(cwd)
     schema_path = get_schema_path(cwd)
 
     parts = [
-        f"The JSON output at {output_path} failed validation.\n",
+        f"PREVIOUS ATTEMPT FAILED. The JSON output at {output_path} failed validation.\n",
         f"Error: {error_message}\n\n",
     ]
 
-    if os.path.exists(schema_path):
+    if schema is not None:
+        json_schema = schema_to_json_schema(schema)
+        schema_json = json.dumps(json_schema, indent=2)
+        if is_large_schema(schema_json):
+            if os.path.exists(schema_path):
+                parts.append(
+                    f"The required JSON Schema is at: {schema_path}\n"
+                    "Re-read the schema file carefully.\n"
+                )
+            else:
+                write_schema_file(schema_json, cwd)
+                parts.append(
+                    f"The required JSON Schema has been written to: {schema_path}\n"
+                    "Read that file for the exact expected structure.\n"
+                )
+        else:
+            parts.append(f"The JSON MUST conform to this schema:\n{schema_json}\n\n")
+    elif os.path.exists(schema_path):
         parts.append(
             f"The required JSON Schema is at: {schema_path}\n"
             "Re-read the schema file carefully.\n"
         )
 
     parts.append(
-        f"Rewrite the COMPLETE, corrected JSON to: {output_path}\n"
+        f"Use your Write tool to create or overwrite the file: {output_path}\n"
         "The file must contain ONLY valid JSON matching the schema. "
-        "No markdown fences, no extra text, no comments."
+        "No markdown fences, no extra text, no comments.\n"
+        "Each field defined in the schema must be present as a top-level key in your JSON object."
     )
 
     return "".join(parts)

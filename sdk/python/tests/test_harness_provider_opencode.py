@@ -43,7 +43,8 @@ async def test_opencode_provider_constructs_command_and_maps_result(
         "run",
         "hello",
     ]
-    assert captured["env"] == {"A": "1"}
+    assert captured["env"]["A"] == "1"
+    assert "XDG_DATA_HOME" in captured["env"]
     assert captured["cwd"] == "/tmp/work"
     assert raw.is_error is False
     assert raw.result == "final text"
