@@ -10,6 +10,8 @@ import { VerifiableCredentialBadge } from "./vc/VerifiableCredentialBadge";
 import { CompactTable } from "./ui/CompactTable";
 import { FastTableSearch, createSearchMatcher } from "./ui/FastTableSearch";
 import { useIsMobile } from "../hooks/use-mobile";
+import { formatDurationHumanReadable, LiveElapsedDuration } from "@/components/ui/data-formatters";
+import { normalizeExecutionStatus } from "../utils/status";
 
 // Compact grid layout - reduced from 7 columns to 6 for better spacing
 const GRID_TEMPLATE_DESKTOP = "72px minmax(200px,1fr) 120px 80px 64px 120px";
@@ -61,13 +63,16 @@ export function CompactExecutionsTable({
   const isMobile = useIsMobile();
 
   // Define search fields for executions
-  const searchFields = [
-    "task_name", // Reasoner name
-    "agent_name", // Agent name
-    "execution_id", // Execution ID
-    "status", // Status
-    "duration_display", // Duration
-  ];
+  const searchFields = useMemo(
+    () => [
+      "task_name", // Reasoner name
+      "agent_name", // Agent name
+      "execution_id", // Execution ID
+      "status", // Status
+      "duration_display", // Duration
+    ],
+    []
+  );
 
   // Filter executions based on search query
   const filteredExecutions = useMemo(() => {
@@ -81,7 +86,7 @@ export function CompactExecutionsTable({
     setSearchQuery(query);
   };
 
-  const allColumns = [
+  const allColumns = useMemo(() => [
     {
       key: "status",
       header: isMobile ? "" : "Status",
@@ -90,7 +95,7 @@ export function CompactExecutionsTable({
       render: (execution: EnhancedExecution) => (
         <div className="flex items-center justify-start">
           <StatusIndicator
-            status={execution.status as any}
+            status={normalizeExecutionStatus(execution.status)}
             showLabel={false}
             animated={execution.status === "running"}
           />
@@ -139,7 +144,11 @@ export function CompactExecutionsTable({
       align: "right" as const,
       render: (execution: EnhancedExecution) => (
         <div className="text-tertiary-foundation execution-id-foundation">
-          {execution.duration_display}
+          {execution.duration_ms
+            ? formatDurationHumanReadable(execution.duration_ms)
+            : execution.status === "running" && execution.started_at
+              ? <LiveElapsedDuration startedAt={execution.started_at} className="text-blue-400" />
+              : execution.duration_display || "—"}
         </div>
       ),
     },
@@ -170,7 +179,7 @@ export function CompactExecutionsTable({
         </div>
       ),
     },
-  ];
+  ], [isMobile]);
 
   const columns = useMemo(() => {
     if (isMobile) {
@@ -179,7 +188,7 @@ export function CompactExecutionsTable({
       );
     }
     return allColumns;
-  }, [isMobile]);
+  }, [allColumns, isMobile]);
 
   return (
     <div className="space-y-4">
@@ -238,4 +247,3 @@ export function CompactExecutionsTable({
     </div>
   );
 }
-

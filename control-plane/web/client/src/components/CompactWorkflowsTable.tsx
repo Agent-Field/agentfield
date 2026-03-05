@@ -26,6 +26,7 @@ import { CompactTable } from "./ui/CompactTable";
 import { FastTableSearch, createSearchMatcher } from "./ui/FastTableSearch";
 import { normalizeExecutionStatus } from "../utils/status";
 import { formatNumber } from "../utils/numberFormat";
+import { formatDurationHumanReadable, LiveElapsedDuration } from "@/components/ui/data-formatters";
 
 // Compact grid layout for workflows including selection checkbox
 const GRID_TEMPLATE = "40px 140px minmax(200px,1fr) 160px 70px 80px 64px 110px 60px";
@@ -506,8 +507,10 @@ export function CompactWorkflowsTable({
       render: (workflow: WorkflowSummary) => (
         <span className="text-tertiary-foundation execution-id-foundation">
           {workflow.duration_ms
-            ? `${(workflow.duration_ms / 1000).toFixed(1)}s`
-            : "-"}
+            ? formatDurationHumanReadable(workflow.duration_ms)
+            : workflow.status === "running" && workflow.started_at
+              ? <LiveElapsedDuration startedAt={workflow.started_at} className="text-blue-400" />
+              : "—"}
         </span>
       ),
     },

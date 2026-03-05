@@ -20,6 +20,7 @@ import type { WorkflowSummary } from "../types/workflows";
 import { Button } from "./ui/button";
 import { Card, CardContent } from "./ui/card";
 import { Checkbox } from "./ui/checkbox";
+import { formatDurationHumanReadable, LiveElapsedDuration } from "@/components/ui/data-formatters";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui/hover-card";
 import { Skeleton } from "./ui/skeleton";
 import { StatusPill } from "./ui/status-pill";
@@ -663,8 +664,10 @@ export function WorkflowsTable({
                       <div className="flex items-center justify-end">
                         <span className="font-mono text-body-small">
                           {workflow.duration_ms
-                            ? `${(workflow.duration_ms / 1000).toFixed(1)}s`
-                            : "-"}
+                            ? formatDurationHumanReadable(workflow.duration_ms)
+                            : workflow.status === "running" && workflow.started_at
+                              ? <LiveElapsedDuration startedAt={workflow.started_at} className="text-blue-400" />
+                              : "—"}
                         </span>
                       </div>
 

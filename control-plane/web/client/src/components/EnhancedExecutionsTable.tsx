@@ -14,6 +14,7 @@ import { useExecutionVCStatus } from "../hooks/useVCVerification";
 import { cn } from "../lib/utils";
 import type { EnhancedExecution } from "../types/workflows";
 import { Card, CardContent } from "./ui/card";
+import { formatDurationHumanReadable, LiveElapsedDuration } from "@/components/ui/data-formatters";
 import { Skeleton } from "./ui/skeleton";
 import { StatusPill } from "./ui/status-pill";
 import { VerifiableCredentialBadge } from "./vc/VerifiableCredentialBadge";
@@ -342,7 +343,11 @@ export function EnhancedExecutionsTable({
 
                       <div className="flex items-center justify-end">
                         <span className="font-mono text-xs text-foreground">
-                          {execution.duration_display}
+                          {execution.duration_ms
+                            ? formatDurationHumanReadable(execution.duration_ms)
+                            : execution.status === "running" && execution.started_at
+                              ? <LiveElapsedDuration startedAt={execution.started_at} className="text-blue-400" />
+                              : execution.duration_display || "—"}
                         </span>
                       </div>
 
