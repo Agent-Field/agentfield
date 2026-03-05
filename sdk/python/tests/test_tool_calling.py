@@ -12,6 +12,7 @@ from agentfield.tool_calling import (
     ToolCallResponse,
     ToolCallTrace,
     _build_tool_config,
+    _invocation_target_to_call_target,
     capability_to_tool_schema,
     capabilities_to_tool_schemas,
     capabilities_to_metadata_only,
@@ -556,6 +557,20 @@ class TestExecuteToolCallLoop:
         assert trace.total_tool_calls == 2
         assert len(trace.calls) == 2
         assert agent.call.call_count == 2
+
+
+class TestInvocationTargetConversion:
+    def test_skill_format(self):
+        assert _invocation_target_to_call_target("utility-worker:skill:get_weather") == "utility-worker.get_weather"
+
+    def test_reasoner_format(self):
+        assert _invocation_target_to_call_target("utility-worker:summarize") == "utility-worker.summarize"
+
+    def test_dot_format_passthrough(self):
+        assert _invocation_target_to_call_target("utility-worker.summarize") == "utility-worker.summarize"
+
+    def test_no_separator(self):
+        assert _invocation_target_to_call_target("standalone") == "standalone"
 
 
 class TestToolCallTrace:

@@ -30,10 +30,12 @@ const {
   const makeMockProvider = (name: string) => {
     const embeddingFn = vi.fn((modelId: string) => ({ id: `${name}-embed-${modelId}` }));
     const textEmbeddingFn = vi.fn((modelId: string) => ({ id: `${name}-text-embed-${modelId}` }));
+    const chatFn = vi.fn((modelId: string) => ({ id: `${name}-chat-${modelId}` }));
     const modelFn = vi.fn((modelId: string) => ({ id: `${name}-${modelId}` })) as any;
     modelFn.embedding = embeddingFn;
     modelFn.textEmbeddingModel = textEmbeddingFn;
-    return { factory: vi.fn(() => modelFn), modelFn, embeddingFn, textEmbeddingFn };
+    modelFn.chat = chatFn;
+    return { factory: vi.fn(() => modelFn), modelFn, embeddingFn, textEmbeddingFn, chatFn };
   };
 
   return {

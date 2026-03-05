@@ -165,6 +165,14 @@ export class AIClient {
     return (result).embeddings as number[][];
   }
 
+  /**
+   * Build and return the AI model instance for a given set of options.
+   * Exposed for use by the tool-calling loop.
+   */
+  getModel(options: AIRequestOptions = {}) {
+    return this.buildModel(options);
+  }
+
   private buildModel(options: AIRequestOptions) {
     const provider = options.provider ?? this.config.provider ?? 'openai';
     const modelName = options.model ?? this.config.model ?? 'gpt-4o';
@@ -227,21 +235,21 @@ export class AIClient {
       }
 
       case 'openrouter': {
-        // OpenRouter is OpenAI-compatible
+        // OpenRouter is OpenAI-compatible but doesn't support Responses API
         const openrouter = createOpenAI({
           apiKey: this.config.apiKey,
           baseURL: this.config.baseUrl ?? 'https://openrouter.ai/api/v1'
         });
-        return openrouter(modelName);
+        return openrouter.chat(modelName);
       }
 
       case 'ollama': {
-        // Ollama is OpenAI-compatible
+        // Ollama is OpenAI-compatible but doesn't support Responses API
         const ollama = createOpenAI({
           apiKey: this.config.apiKey ?? 'ollama', // Ollama doesn't need real key
           baseURL: this.config.baseUrl ?? 'http://localhost:11434/v1'
         });
-        return ollama(modelName);
+        return ollama.chat(modelName);
       }
 
       case 'openai':

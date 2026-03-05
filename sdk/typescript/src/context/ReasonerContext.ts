@@ -6,6 +6,8 @@ import type { Agent } from '../agent/Agent.js';
 import type { WorkflowReporter } from '../workflow/WorkflowReporter.js';
 import type { DiscoveryOptions } from '../types/agent.js';
 import type { DidInterface } from '../did/DidInterface.js';
+import type { AIToolRequestOptions, ToolCallTrace } from '../ai/ToolCalling.js';
+import { buildToolConfig, executeToolCallLoop } from '../ai/ToolCalling.js';
 
 export class ReasonerContext<TInput = any> {
   readonly input: TInput;
@@ -65,9 +67,44 @@ export class ReasonerContext<TInput = any> {
   }
 
   ai<T>(prompt: string, options: AIRequestOptions & { schema: ZodSchema<T> }): Promise<T>;
-  ai(prompt: string, options?: AIRequestOptions): Promise<string>;
-  ai(prompt: string, options?: AIRequestOptions): Promise<unknown> {
+  ai(prompt: string, options?: AIToolRequestOptions): Promise<string>;
+  ai(prompt: string, options?: AIToolRequestOptions): Promise<unknown> {
+    if (options?.tools) {
+      return this.aiWithTools(prompt, options);
+    }
     return this.aiClient.generate(prompt, options);
+  }
+
+  /**
+   * AI call with automatic tool calling via discover -> ai -> call loop.
+   *
+   * Discovers available capabilities, presents them as tools to the LLM,
+   * dispatches tool calls via agent.call(), and iterates until a final response.
+   *
+   * @returns Object with `text` (final response) and `trace` (observability data).
+   */
+  async aiWithTools(
+    prompt: string,
+    options: AIToolRequestOptions = {}
+  ): Promise<{ text: string; trace: ToolCallTrace }> {
+    const toolsParam = options.tools ?? 'discover';
+    const { tools, config, needsLazyHydration } = await buildToolConfig(toolsParam, this.agent);
+
+    const mergedConfig = {
+      ...config,
+      maxTurns: options.maxTurns ?? config.maxTurns ?? 10,
+      maxToolCalls: options.maxToolCalls ?? config.maxToolCalls ?? 25
+    };
+
+    return executeToolCallLoop(
+      this.agent,
+      prompt,
+      tools,
+      mergedConfig,
+      needsLazyHydration,
+      () => this.aiClient.getModel(options),
+      options
+    );
   }
 
   aiStream(prompt: string, options?: AIRequestOptions): Promise<AIStream> {

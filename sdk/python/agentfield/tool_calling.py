@@ -51,7 +51,7 @@ class ToolCallConfig:
     fallback_broadening: bool = False
     tags: Optional[List[str]] = None
     agent_ids: Optional[List[str]] = None
-    health_status: Optional[str] = "healthy"
+    health_status: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +125,50 @@ class ToolCallResponse:
 
 
 # ---------------------------------------------------------------------------
+# Target format conversion
+# ---------------------------------------------------------------------------
+
+
+def _invocation_target_to_call_target(invocation_target: str) -> str:
+    """Convert discovery invocation_target format to agent.call() target format.
+
+    Discovery returns colon-separated targets:
+      - "node_id:skill:function_name" for skills
+      - "node_id:function_name" for reasoners
+
+    agent.call() expects dot-separated:
+      - "node_id.function_name" for both
+    """
+    # Handle skill format: "node_id:skill:function_name" -> "node_id.function_name"
+    if ":skill:" in invocation_target:
+        parts = invocation_target.split(":skill:")
+        return f"{parts[0]}.{parts[1]}"
+    # Handle reasoner format: "node_id:function_name" -> "node_id.function_name"
+    if ":" in invocation_target:
+        parts = invocation_target.split(":", 1)
+        return f"{parts[0]}.{parts[1]}"
+    return invocation_target
+
+
+def _sanitize_tool_name(invocation_target: str) -> str:
+    """Convert an invocation_target to an LLM-safe function name.
+
+    Many LLM providers (e.g., Google) only allow alphanumeric, underscores,
+    dashes, and dots in function names. Colons are not allowed.
+
+    We replace colons with double-underscores for a reversible mapping:
+      "utility-worker:skill:get_weather" -> "utility-worker__skill__get_weather"
+      "utility-worker:summarize"         -> "utility-worker__summarize"
+    """
+    return invocation_target.replace(":", "__")
+
+
+def _unsanitize_tool_name(sanitized_name: str) -> str:
+    """Reverse _sanitize_tool_name: double-underscores back to colons."""
+    return sanitized_name.replace("__", ":")
+
+
+# ---------------------------------------------------------------------------
 # Capability -> Tool Schema Conversion
 # ---------------------------------------------------------------------------
 
@@ -145,7 +189,7 @@ def capability_to_tool_schema(
     return {
         "type": "function",
         "function": {
-            "name": cap.invocation_target,
+            "name": _sanitize_tool_name(cap.invocation_target),
             "description": cap.description or f"Call {cap.invocation_target}",
             "parameters": parameters,
         },
@@ -186,7 +230,7 @@ def capabilities_to_metadata_only(
         return {
             "type": "function",
             "function": {
-                "name": cap.invocation_target,
+                "name": _sanitize_tool_name(cap.invocation_target),
                 "description": cap.description or f"Call {cap.invocation_target}",
                 "parameters": {"type": "object", "properties": {}},
             },
@@ -263,7 +307,8 @@ def _hydrate_selected_tools(
     if discovery_result.json is None:
         return []
 
-    selected_set = set(selected_names)
+    # selected_names are sanitized (from LLM), so unsanitize for matching
+    selected_set = set(_unsanitize_tool_name(n) for n in selected_names)
     tools: List[Dict[str, Any]] = []
     for cap in discovery_result.json.capabilities:
         for r in cap.reasoners:
@@ -440,6 +485,8 @@ async def execute_tool_call_loop(
             trace.total_tool_calls = total_calls
 
             func_name = tc.function.name
+            # Unsanitize the LLM-safe name back to the original invocation_target
+            invocation_target = _unsanitize_tool_name(func_name)
             try:
                 func_args = json.loads(tc.function.arguments)
             except json.JSONDecodeError:
@@ -451,13 +498,13 @@ async def execute_tool_call_loop(
                 turn=turn,
             )
 
-            log_debug(
-                f"Tool call [{total_calls}]: {func_name}({json.dumps(func_args)})"
-            )
+            # Convert invocation_target format to agent.call() format
+            call_target = _invocation_target_to_call_target(invocation_target)
+            log_debug(f"Tool call [{total_calls}]: {func_name} -> {call_target}({json.dumps(func_args)})")
 
             start_time = time.monotonic()
             try:
-                result = await agent.call(func_name, **func_args)
+                result = await agent.call(call_target, **func_args)
                 record.result = result
                 record.latency_ms = (time.monotonic() - start_time) * 1000
 
