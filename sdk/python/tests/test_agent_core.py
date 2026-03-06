@@ -23,7 +23,10 @@ def make_agent_stub():
     )
     agent._async_execution_manager = None
     agent._current_execution_context = None
-    agent.client = SimpleNamespace(api_base="http://agentfield/api/v1")
+    agent.client = SimpleNamespace(
+        api_base="http://agentfield/api/v1",
+        _get_auth_headers=lambda: {},
+    )
     return agent
 
 
