@@ -1229,6 +1229,8 @@ func (s *AgentFieldServer) setupRoutes() {
 		agentAPI.POST("/executions/batch-status", handlers.BatchExecutionStatusHandler(s.storage))
 		agentAPI.POST("/executions/:execution_id/status", handlers.UpdateExecutionStatusHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout))
 		agentAPI.POST("/executions/:execution_id/cancel", handlers.CancelExecutionHandler(s.storage))
+		agentAPI.POST("/executions/:execution_id/pause", handlers.PauseExecutionHandler(s.storage))
+		agentAPI.POST("/executions/:execution_id/resume", handlers.ResumeExecutionHandler(s.storage))
 
 		// Approval workflow endpoints — CP manages execution state only;
 		// agents handle external approval service communication directly.
