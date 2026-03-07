@@ -115,6 +115,7 @@ export function EnhancedWorkflowHeader({
     workflow.root_execution_id ??
     (workflow as WorkflowSummary & { execution_id?: string }).execution_id ??
     dagData?.timeline?.[0]?.execution_id;
+  const rootAgentNodeId = dagData?.timeline?.[0]?.agent_node_id as string | undefined;
   const isMutating = isCancelling || isPausing || isResuming;
   const statusTheme = getStatusTheme(normalizedStatus);
   const statusCounts = workflow.status_counts ?? {};
@@ -367,16 +368,21 @@ export function EnhancedWorkflowHeader({
 
             {!isMobile && <div className="w-px h-4 bg-border" />}
 
-            <div className="min-w-0 flex-1 flex items-baseline gap-2">
+            <div className="min-w-0 flex-1 flex items-center gap-2">
               <h1 className={cn(
                 "text-foreground truncate flex-shrink-0",
                 isMobile ? "text-sm font-semibold" : "text-base font-semibold"
               )}>
                 {workflow.display_name || "Unnamed Workflow"}
               </h1>
+              {!isMobile && rootAgentNodeId && rootAgentNodeId !== workflow.display_name && (
+                <code className="text-xs font-mono bg-muted text-muted-foreground px-1.5 py-0.5 rounded flex-shrink-0 max-w-[180px] truncate">
+                  {rootAgentNodeId}
+                </code>
+              )}
               {!isMobile && (
                 <span className="text-xs text-muted-foreground truncate">
-                  {workflow.total_executions} steps · depth {workflow.max_depth} · {formatDuration(displayDuration)}
+                  {formatDuration(displayDuration)}
                   {isRunning && liveElapsed != null && (
                     <span className="text-emerald-500 ml-1">{"\u25B2"}</span>
                   )}
@@ -539,14 +545,15 @@ export function EnhancedWorkflowHeader({
       {/* Mobile: Second Row - Steps info and badges */}
       {isMobile && (
         <div className="flex items-center gap-2 w-full text-body-small text-muted-foreground flex-wrap">
-          <span>{workflow.total_executions} steps</span>
-          <span>•</span>
-          <span>depth {workflow.max_depth}</span>
-          <span>•</span>
+          {rootAgentNodeId && (
+            <code className="text-xs font-mono bg-muted px-1.5 py-0.5 rounded">
+              {rootAgentNodeId}
+            </code>
+          )}
           <span>{formatDuration(displayDuration)}</span>
           {(activeExecutions > 0 || failedExecutions > 0) && (
             <>
-              <span>•</span>
+              <span>{"\u00B7"}</span>
               {activeExecutions > 0 && (
                 <Badge variant="secondary" className="h-5 px-2 text-body-small">
                   {activeExecutions} active
@@ -557,14 +564,6 @@ export function EnhancedWorkflowHeader({
                   {failedExecutions} issues
                 </Badge>
               )}
-            </>
-          )}
-          {selectedNodeCount > 0 && (
-            <>
-              <span>•</span>
-              <Badge variant="secondary" className="text-xs">
-                {selectedNodeCount} selected
-              </Badge>
             </>
           )}
         </div>
