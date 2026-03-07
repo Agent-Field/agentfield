@@ -23,9 +23,11 @@ export const TIME_FILTER_OPTIONS = [
 
 export const STATUS_FILTER_OPTIONS = [
   { label: "All", value: "all" },
+  { label: "Running", value: "running" },
+  { label: "Paused", value: "paused" },
   { label: "Completed", value: "completed" },
   { label: "Failed", value: "failed" },
-  { label: "Running", value: "running" },
+  { label: "Cancelled", value: "cancelled" },
   { label: "Pending", value: "pending" },
 ] as const;
 

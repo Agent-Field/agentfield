@@ -10,6 +10,7 @@ import { ExecutionIdentityPanel } from "../components/execution/ExecutionIdentit
 import { ExecutionDataColumns } from "../components/execution/ExecutionDataColumns";
 import { CollapsibleSection } from "../components/execution/CollapsibleSection";
 import { ErrorBoundary } from "../components/ErrorBoundary";
+import { NotificationProvider } from "../components/ui/notification";
 import { getExecutionDetails, retryExecutionWebhook } from "../services/executionsApi";
 import { getExecutionVCStatus } from "../services/vcApi";
 import type { WorkflowExecution } from "../types/executions";
@@ -56,6 +57,7 @@ export function EnhancedExecutionDetailPage() {
   const [loading, setLoading] = useState(true);
   const [vcLoading, setVcLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [retryingWebhook, setRetryingWebhook] = useState(false);
   const [retryWebhookError, setRetryWebhookError] = useState<string | null>(null);
 
@@ -66,10 +68,13 @@ export function EnhancedExecutionDetailPage() {
     if (!executionId) return;
 
     try {
+      setIsRefreshing(true);
       const data = await getExecutionDetails(executionId);
       setExecution(data);
     } catch (err) {
       console.error("Failed to refresh execution details:", err);
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
@@ -269,13 +274,15 @@ export function EnhancedExecutionDetailPage() {
 
   return (
     <ErrorBoundary>
+      <NotificationProvider>
       <div className="bg-background flex flex-col min-h-0 min-w-0 flex-1 overflow-hidden">
-        {/* Compact Header */}
         <CompactExecutionHeader
           execution={execution}
           vcStatus={vcStatus}
           vcLoading={vcLoading}
           onClose={() => navigate("/executions")}
+          onRefresh={refreshExecution}
+          isRefreshing={isRefreshing}
         />
 
         {/* Tab Navigation */}
@@ -553,6 +560,7 @@ export function EnhancedExecutionDetailPage() {
           )}
         </div>
       </div>
+      </NotificationProvider>
     </ErrorBoundary>
   );
 }

@@ -414,6 +414,7 @@ export function CompactWorkflowsTable({
           // For other states, show status name
           const statusLabels: Record<string, string> = {
             "running": "Running",
+            "paused": "Paused",
             "queued": "Queued",
             "pending": "Pending",
             "cancelled": "Cancelled",

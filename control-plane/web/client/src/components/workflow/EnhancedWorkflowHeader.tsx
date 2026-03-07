@@ -1,16 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
   ArrowLeft,
   RotateCcw,
   Maximize,
   Minimize,
-  Focus,
-  Eye,
-  EyeOff,
   Activity,
-  Zap,
-  Bug,
   Copy,
   Check,
   RadioTower,
@@ -36,8 +31,6 @@ import {
   HoverCardContent,
   HoverCardTrigger,
 } from "../ui/hover-card";
-import { SegmentedControl } from "../ui/segmented-control";
-import type { SegmentedControlOption } from "../ui/segmented-control";
 import { cn } from "../../lib/utils";
 import {
   getStatusLabel,
@@ -57,12 +50,6 @@ import {
   useSuccessNotification,
 } from "../ui/notification";
 
-const VIEW_MODE_OPTIONS: ReadonlyArray<SegmentedControlOption> = [
-  { value: "standard", label: "Standard", icon: Eye },
-  { value: "performance", label: "Performance", icon: Zap },
-  { value: "debug", label: "Debug", icon: Bug },
-] as const;
-
 interface EnhancedWorkflowHeaderProps {
   workflow: WorkflowSummary;
   dagData?: any;
@@ -72,10 +59,6 @@ interface EnhancedWorkflowHeaderProps {
   isRefreshing?: boolean;
   onRefresh?: () => void;
   onClose?: () => void;
-  viewMode: 'standard' | 'performance' | 'debug';
-  onViewModeChange: (mode: 'standard' | 'performance' | 'debug') => void;
-  focusMode: boolean;
-  onFocusModeChange: (enabled: boolean) => void;
   isFullscreen: boolean;
   onFullscreenChange: (enabled: boolean) => void;
   selectedNodeCount: number;
@@ -90,10 +73,6 @@ export function EnhancedWorkflowHeader({
   isRefreshing,
   onRefresh,
   onClose,
-  viewMode,
-  onViewModeChange,
-  focusMode,
-  onFocusModeChange,
   isFullscreen,
   onFullscreenChange,
   selectedNodeCount
@@ -110,6 +89,27 @@ export function EnhancedWorkflowHeader({
   const normalizedStatus = normalizeExecutionStatus(workflow.status);
   const isRunning = normalizedStatus === "running";
   const isPaused = isPausedStatus(normalizedStatus);
+
+  const [liveElapsed, setLiveElapsed] = useState<number | null>(null);
+  useEffect(() => {
+    if (isRunning && workflow.started_at) {
+      const update = () =>
+        setLiveElapsed(
+          Math.max(0, Date.now() - new Date(workflow.started_at).getTime()),
+        );
+      update();
+      const id = setInterval(update, 1000);
+      return () => clearInterval(id);
+    }
+    if (isPaused && workflow.started_at) {
+      setLiveElapsed(
+        Math.max(0, Date.now() - new Date(workflow.started_at).getTime()),
+      );
+      return;
+    }
+    setLiveElapsed(null);
+  }, [isRunning, isPaused, workflow.started_at]);
+  const displayDuration = liveElapsed ?? workflow.duration_ms;
   const executionId =
     workflow.root_execution_id ??
     (workflow as WorkflowSummary & { execution_id?: string }).execution_id ??
@@ -269,6 +269,35 @@ export function EnhancedWorkflowHeader({
               <span className={cn("text-sm font-medium whitespace-nowrap", statusTheme.textClass)}>
                 {getStatusLabel(normalizedStatus)}
               </span>
+
+              {/* Compact LIVE badge — inline with status */}
+              {isLiveUpdating && !isMobile && (
+                <HoverCard>
+                  <HoverCardTrigger asChild>
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        "h-5 px-1.5 text-[10px] font-semibold tracking-wider cursor-pointer border-transparent",
+                        hasRunningWorkflows
+                          ? "bg-emerald-500/10 text-emerald-500"
+                          : "bg-muted text-muted-foreground"
+                      )}
+                    >
+                      {hasRunningWorkflows ? "LIVE" : "IDLE"}
+                    </Badge>
+                  </HoverCardTrigger>
+                  <HoverCardContent className="w-auto">
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium">Auto-refresh</p>
+                      <div className="text-body-small space-y-1">
+                        <div>Status: {hasRunningWorkflows ? "Active polling" : "Monitoring"}</div>
+                        <div>Interval: {pollingInterval ? Math.round(pollingInterval / 1000) : 3}s</div>
+                      </div>
+                    </div>
+                  </HoverCardContent>
+                </HoverCard>
+              )}
+
               {(activeExecutions > 0 || failedExecutions > 0) && !isMobile && (
                 <div className="flex items-center gap-2">
                   {activeExecutions > 0 && (
@@ -383,7 +412,10 @@ export function EnhancedWorkflowHeader({
                   <span>•</span>
                   <span>depth {workflow.max_depth}</span>
                   <span>•</span>
-                  <span>{formatDuration(workflow.duration_ms)}</span>
+                  <span>{formatDuration(displayDuration)}</span>
+                  {isRunning && liveElapsed != null && (
+                    <span className="text-emerald-500 text-[10px]">&blacktriangle;</span>
+                  )}
                 </div>
               )}
             </div>
@@ -429,52 +461,10 @@ export function EnhancedWorkflowHeader({
           )}
         </div>
 
-        {/* Center: Live Status - Simplified on mobile */}
-        {isLiveUpdating && (
-          <HoverCard>
-            <HoverCardTrigger asChild>
-              <div className={cn(
-                "flex items-center text-sm cursor-pointer flex-shrink-0",
-                isMobile ? "gap-1.5" : "gap-3"
-              )}>
-                <div className="flex items-center gap-1.5">
-                  <div className={cn(
-                    "w-1.5 h-1.5 rounded-full",
-                    hasRunningWorkflows ? "bg-green-500 animate-pulse" : "bg-gray-400"
-                  )} />
-                  {!isMobile && (
-                    <span className="text-muted-foreground">
-                      {hasRunningWorkflows ? "Live" : "Monitoring"}
-                    </span>
-                  )}
-                  {isRefreshing && (
-                    <Activity className="w-3 h-3 animate-spin text-muted-foreground" />
-                  )}
-                </div>
-
-                {pollingInterval && !isMobile && (
-                  <span className="text-body-small">
-                    {Math.round(pollingInterval / 1000)}s
-                  </span>
-                )}
-              </div>
-            </HoverCardTrigger>
-            <HoverCardContent className="w-auto">
-              <div className="space-y-2">
-                <p className="text-sm font-medium">Live Updates</p>
-                <div className="text-body-small space-y-1">
-                  <div>Status: {hasRunningWorkflows ? "Active" : "Monitoring"}</div>
-                  <div>Interval: {pollingInterval ? Math.round(pollingInterval / 1000) : 3}s</div>
-                </div>
-              </div>
-            </HoverCardContent>
-          </HoverCard>
-        )}
-
-        {/* Right: Controls */}
+        {/* Right: Controls — compact, icon-only */}
         <div className={cn(
           "flex items-center flex-shrink-0",
-          isMobile ? "gap-1" : "gap-1.5"
+          isMobile ? "gap-1" : "gap-1"
         )}>
           {/* Execution Controls */}
           {(isRunning || isPaused) && executionId && (
@@ -545,30 +535,9 @@ export function EnhancedWorkflowHeader({
                 </AlertDialogContent>
               </AlertDialog>
 
-              {/* Separator between execution and view controls */}
               <div className="w-px h-4 bg-border mx-0.5" />
             </>
           )}
-
-          <SegmentedControl
-            value={viewMode}
-            onValueChange={(mode) => onViewModeChange(mode as typeof viewMode)}
-            options={VIEW_MODE_OPTIONS}
-            size="sm"
-            hideLabel={isMobile}
-            optionClassName={cn(isMobile ? "min-w-[36px] px-0" : "min-w-[104px]")}
-          />
-
-          {/* Focus Mode */}
-          <Button
-            variant={focusMode ? "secondary" : "ghost"}
-            size="sm"
-            onClick={() => onFocusModeChange(!focusMode)}
-            className="h-8 w-8 p-0"
-            title={focusMode ? "Exit focus mode (Cmd/Ctrl + F)" : "Enter focus mode (Cmd/Ctrl + F)"}
-          >
-            {focusMode ? <EyeOff className="w-4 h-4" /> : <Focus className="w-4 h-4" />}
-          </Button>
 
           {/* Refresh */}
           {onRefresh && (
@@ -608,7 +577,7 @@ export function EnhancedWorkflowHeader({
           <span>•</span>
           <span>depth {workflow.max_depth}</span>
           <span>•</span>
-          <span>{formatDuration(workflow.duration_ms)}</span>
+          <span>{formatDuration(displayDuration)}</span>
           {(activeExecutions > 0 || failedExecutions > 0) && (
             <>
               <span>•</span>
