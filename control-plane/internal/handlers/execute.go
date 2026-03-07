@@ -869,6 +869,65 @@ func (c *executionController) waitForExecutionCompletion(ctx context.Context, ex
 	}
 }
 
+// waitForResume waits for a paused execution to be resumed or cancelled.
+// It returns nil when resumed and an error when cancelled or context is cancelled.
+func (c *executionController) waitForResume(ctx context.Context, executionID string) error {
+	if c.eventBus == nil {
+		return fmt.Errorf("event bus not available")
+	}
+
+	// Create unique subscriber ID for this wait operation.
+	subscriberID := fmt.Sprintf("pause-wait-%s", executionID)
+
+	// Subscribe to events.
+	eventChan := c.eventBus.Subscribe(subscriberID)
+	defer c.eventBus.Unsubscribe(subscriberID)
+
+	logger.Logger.Debug().
+		Str("execution_id", executionID).
+		Msg("waiting for execution resume via event bus")
+
+	// Check if execution already resumed/cancelled before we subscribed (race condition:
+	// fast status transitions may happen before we subscribe to the event bus).
+	if existing, err := c.store.GetExecutionRecord(ctx, executionID); err == nil && existing != nil {
+		if existing.Status == types.ExecutionStatusCancelled {
+			return fmt.Errorf("execution cancelled")
+		}
+		if existing.Status != types.ExecutionStatusPaused {
+			logger.Logger.Debug().
+				Str("execution_id", executionID).
+				Str("status", existing.Status).
+				Msg("execution already resumed before event subscription")
+			return nil
+		}
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+
+		case event := <-eventChan:
+			// Only process events for this specific execution.
+			if event.ExecutionID != executionID {
+				continue
+			}
+
+			switch event.Type {
+			case events.ExecutionResumed:
+				logger.Logger.Debug().
+					Str("execution_id", executionID).
+					Msg("received execution resumed event")
+				return nil
+			case events.ExecutionCancelledEvent:
+				return fmt.Errorf("execution cancelled")
+			}
+
+			// Continue waiting for other event types (ExecutionUpdated, etc.)
+		}
+	}
+}
+
 type preparedExecution struct {
 	exec              *types.Execution
 	requestBody       []byte
@@ -1062,6 +1121,20 @@ func (c *executionController) prepareExecution(ctx context.Context, ginCtx *gin.
 
 func (c *executionController) callAgent(ctx context.Context, plan *preparedExecution) ([]byte, time.Duration, bool, error) {
 	start := time.Now()
+
+	// Check execution state before calling agent.
+	currentExec, err := c.store.GetExecutionRecord(ctx, plan.exec.ExecutionID)
+	if err == nil && currentExec != nil {
+		if currentExec.Status == types.ExecutionStatusCancelled {
+			return nil, 0, false, fmt.Errorf("execution cancelled")
+		}
+		if currentExec.Status == types.ExecutionStatusPaused {
+			if err := c.waitForResume(ctx, plan.exec.ExecutionID); err != nil {
+				return nil, 0, false, fmt.Errorf("execution paused and then cancelled or timed out: %w", err)
+			}
+		}
+	}
+
 	url := buildAgentURL(plan.agent, plan.target)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(plan.requestBody))
@@ -1828,6 +1901,26 @@ func (c *executionController) savePayload(ctx context.Context, data []byte) *str
 
 func (j asyncExecutionJob) process() {
 	bgCtx := context.Background()
+
+	currentExec, err := j.controller.store.GetExecutionRecord(bgCtx, j.plan.exec.ExecutionID)
+	if err == nil && currentExec != nil {
+		if currentExec.Status == types.ExecutionStatusCancelled {
+			logger.Logger.Info().
+				Str("execution_id", j.plan.exec.ExecutionID).
+				Msg("skipping async agent call; execution cancelled")
+			return
+		}
+		if currentExec.Status == types.ExecutionStatusPaused {
+			if waitErr := j.controller.waitForResume(bgCtx, j.plan.exec.ExecutionID); waitErr != nil {
+				logger.Logger.Info().
+					Str("execution_id", j.plan.exec.ExecutionID).
+					Err(waitErr).
+					Msg("aborting async agent call while paused")
+				return
+			}
+		}
+	}
+
 	resultBody, elapsed, asyncAccepted, callErr := j.controller.callAgent(bgCtx, &j.plan)
 	if callErr == nil && asyncAccepted {
 		logger.Logger.Info().
