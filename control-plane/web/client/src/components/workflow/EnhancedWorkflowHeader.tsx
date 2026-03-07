@@ -474,77 +474,80 @@ export function EnhancedWorkflowHeader({
         {/* Right: Controls */}
         <div className={cn(
           "flex items-center flex-shrink-0",
-          isMobile ? "gap-1" : "gap-2"
+          isMobile ? "gap-1" : "gap-1.5"
         )}>
-          {(isRunning || isPaused) && (
-            <AlertDialog open={cancelDialogOpen} onOpenChange={setCancelDialogOpen}>
-              <AlertDialogTrigger asChild>
+          {/* Execution Controls */}
+          {(isRunning || isPaused) && executionId && (
+            <>
+              {isRunning && (
                 <Button
-                  variant="destructive"
+                  variant="ghost"
                   size="sm"
-                  disabled={isMutating || !executionId}
-                  className="h-8 gap-1.5 px-2"
-                  title="Cancel execution"
+                  disabled={isMutating}
+                  onClick={handlePause}
+                  className="h-8 w-8 p-0 hover:bg-amber-500/10 hover:text-amber-600"
+                  title="Pause execution"
                 >
-                  {isCancelling ? (
+                  {isPausing ? (
                     <Activity className="w-4 h-4 animate-spin" />
                   ) : (
-                    <XCircle className="w-4 h-4" />
+                    <PauseCircle className="w-4 h-4" />
                   )}
-                  {!isMobile && <span>Cancel</span>}
                 </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Cancel execution?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    This stops the active workflow execution immediately. This action cannot be undone.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel disabled={isCancelling}>Keep running</AlertDialogCancel>
-                  <AlertDialogAction disabled={isCancelling} onClick={handleCancel}>
-                    {isCancelling ? "Cancelling..." : "Cancel execution"}
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          )}
-
-          {isRunning && (
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={isMutating || !executionId}
-              onClick={handlePause}
-              className="h-8 gap-1.5 px-2 hover:bg-amber-500/10 hover:text-amber-600"
-              title="Pause execution"
-            >
-              {isPausing ? (
-                <Activity className="w-4 h-4 animate-spin" />
-              ) : (
-                <PauseCircle className="w-4 h-4" />
               )}
-              {!isMobile && <span>Pause</span>}
-            </Button>
-          )}
 
-          {isPaused && (
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={isMutating || !executionId}
-              onClick={handleResume}
-              className="h-8 gap-1.5 px-2 hover:bg-emerald-500/10 hover:text-emerald-600"
-              title="Resume execution"
-            >
-              {isResuming ? (
-                <Activity className="w-4 h-4 animate-spin" />
-              ) : (
-                <Play className="w-4 h-4" />
+              {isPaused && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={isMutating}
+                  onClick={handleResume}
+                  className="h-8 w-8 p-0 hover:bg-emerald-500/10 hover:text-emerald-600"
+                  title="Resume execution"
+                >
+                  {isResuming ? (
+                    <Activity className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Play className="w-4 h-4" />
+                  )}
+                </Button>
               )}
-              {!isMobile && <span>Resume</span>}
-            </Button>
+
+              <AlertDialog open={cancelDialogOpen} onOpenChange={setCancelDialogOpen}>
+                <AlertDialogTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={isMutating}
+                    className="h-8 w-8 p-0 hover:bg-destructive/10 hover:text-destructive"
+                    title="Cancel execution"
+                  >
+                    {isCancelling ? (
+                      <Activity className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <XCircle className="w-4 h-4" />
+                    )}
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Cancel execution?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This will stop the active workflow execution immediately. This action cannot be undone.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel disabled={isCancelling}>Keep running</AlertDialogCancel>
+                    <AlertDialogAction disabled={isCancelling} onClick={handleCancel}>
+                      {isCancelling ? "Cancelling…" : "Cancel execution"}
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+
+              {/* Separator between execution and view controls */}
+              <div className="w-px h-4 bg-border mx-0.5" />
+            </>
           )}
 
           <SegmentedControl
