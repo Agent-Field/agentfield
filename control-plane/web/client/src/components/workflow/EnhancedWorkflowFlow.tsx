@@ -1,11 +1,20 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import { GitBranch, Search, X, Scan, LocateFixed, Loader2 } from "@/components/ui/icon-bridge";
+import { GitBranch, Search, X, Scan, LocateFixed, Loader2, Eye, Zap, Bug, Focus, EyeOff } from "@/components/ui/icon-bridge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { WorkflowDAGViewer } from "../WorkflowDAGViewer";
 import type { WorkflowDAGControls, WorkflowDAGResponse } from "../WorkflowDAG";
 import { Badge } from "../ui/badge";
+import { cn } from "@/lib/utils";
 import type { WorkflowSummary, WorkflowTimelineNode } from "../../types/workflows";
+
+type ViewMode = 'standard' | 'performance' | 'debug';
+
+const VIEW_MODE_CONFIG: ReadonlyArray<{ value: ViewMode; icon: typeof Eye; label: string }> = [
+  { value: "standard", icon: Eye, label: "Standard view" },
+  { value: "performance", icon: Zap, label: "Performance view" },
+  { value: "debug", icon: Bug, label: "Debug view" },
+];
 
 interface EnhancedWorkflowFlowProps {
   workflow: WorkflowSummary;
@@ -15,7 +24,8 @@ interface EnhancedWorkflowFlowProps {
   error?: string | null;
   selectedNodeIds: string[];
   onNodeSelection: (nodeIds: string[], replace?: boolean) => void;
-  viewMode: 'standard' | 'performance' | 'debug';
+  viewMode: ViewMode;
+  onViewModeChange: (mode: ViewMode) => void;
   focusMode: boolean;
   isFullscreen: boolean;
   onFocusModeChange?: (enabled: boolean) => void;
@@ -30,7 +40,9 @@ export function EnhancedWorkflowFlow({
   selectedNodeIds,
   onNodeSelection,
   viewMode,
+  onViewModeChange,
   focusMode,
+  onFocusModeChange,
 }: EnhancedWorkflowFlowProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [showSearch, setShowSearch] = useState(false);
@@ -137,7 +149,6 @@ export function EnhancedWorkflowFlow({
 
   return (
     <div className="flex h-full min-h-0 flex-col relative">
-      {/* Floating Search Bar */}
       {showSearch && (
         <div className="absolute top-4 left-4 z-10 flex items-center gap-2 bg-background/95 backdrop-blur-sm border border-border rounded-lg shadow-lg p-2">
           <Input
@@ -166,7 +177,7 @@ export function EnhancedWorkflowFlow({
         </div>
       )}
 
-      {/* Floating Action Buttons - Bottom Right */}
+      {/* Floating navigation — bottom right */}
       <div className="absolute bottom-6 right-6 z-10 flex flex-col gap-2">
         <Button
           variant="secondary"
@@ -199,7 +210,45 @@ export function EnhancedWorkflowFlow({
         </Button>
       </div>
 
-      {/* Status Indicators - Top Left (below search if present) */}
+      {/* View controls — bottom left */}
+      <div className="absolute bottom-6 left-6 z-10 flex items-center gap-1 bg-background/95 backdrop-blur-sm border border-border rounded-lg shadow-lg p-1">
+        {VIEW_MODE_CONFIG.map((mode) => {
+          const Icon = mode.icon;
+          const isActive = viewMode === mode.value;
+          return (
+            <Button
+              key={mode.value}
+              variant={isActive ? "default" : "ghost"}
+              size="sm"
+              onClick={() => onViewModeChange(mode.value)}
+              className={cn(
+                "h-8 w-8 p-0",
+                isActive && "shadow-sm"
+              )}
+              title={mode.label}
+            >
+              <Icon className="w-3.5 h-3.5" />
+            </Button>
+          );
+        })}
+
+        <div className="w-px h-5 bg-border mx-0.5" />
+
+        <Button
+          variant={focusMode ? "default" : "ghost"}
+          size="sm"
+          onClick={() => onFocusModeChange?.(!focusMode)}
+          className={cn(
+            "h-8 w-8 p-0",
+            focusMode && "shadow-sm"
+          )}
+          title={focusMode ? "Exit focus mode (Cmd/Ctrl + F)" : "Focus mode (Cmd/Ctrl + F)"}
+        >
+          {focusMode ? <EyeOff className="w-3.5 h-3.5" /> : <Focus className="w-3.5 h-3.5" />}
+        </Button>
+      </div>
+
+      {/* Status overlay — top left */}
       {(isRefreshing || selectedNodeIds.length > 0 || focusMode || viewMode !== 'standard') && (
         <div className="absolute top-4 left-4 z-10 flex items-center gap-2 bg-background/95 backdrop-blur-sm border border-border rounded-lg shadow-sm px-3 py-2" style={{ marginTop: showSearch ? '60px' : '0' }}>
           {isRefreshing && hasDagContent && (
@@ -226,7 +275,6 @@ export function EnhancedWorkflowFlow({
         </div>
       )}
 
-      {/* Main Flow Area */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         <WorkflowDAGViewer
           workflowId={workflow.workflow_id}

@@ -518,11 +518,11 @@ func deriveOverallStatus(executions []*types.Execution) string {
 			hasCancelled = true
 		}
 	}
-	if hasRunning {
-		return string(types.ExecutionStatusRunning)
-	}
 	if hasPaused {
 		return string(types.ExecutionStatusPaused)
+	}
+	if hasRunning {
+		return string(types.ExecutionStatusRunning)
 	}
 	if hasFailed {
 		return string(types.ExecutionStatusFailed)

@@ -127,9 +127,9 @@ func TestBuildExecutionDAG_DeepHierarchy(t *testing.T) {
 	executions := []*types.Execution{
 		{
 			ExecutionID:       rootID,
-			RunID:            "run-1",
-			Status:           "succeeded",
-			StartedAt:        time.Now(),
+			RunID:             "run-1",
+			Status:            "succeeded",
+			StartedAt:         time.Now(),
 			ParentExecutionID: nil,
 		},
 		{
@@ -417,8 +417,8 @@ func TestBuildExecutionDAG_MixedStatuses(t *testing.T) {
 
 	_, _, status, _, _, _, _ := buildExecutionDAG(executions)
 
-	// deriveOverallStatus priority: running > failed > succeeded
-	// Running has highest priority as it indicates active workflow
+	// deriveOverallStatus priority: paused > running > failed > succeeded
+	// Running has high priority as it indicates active workflow
 	require.Equal(t, "running", status)
 }
 
@@ -497,14 +497,23 @@ func TestBuildExecutionDAG_WithSessionAndActor(t *testing.T) {
 }
 
 func TestDeriveOverallStatus_PriorityOrder(t *testing.T) {
-	// Test status priority: running > failed > timeout > cancelled > succeeded
 	tests := []struct {
 		name     string
 		statuses []string
 		expected string
 	}{
 		{
-			name:     "running has highest priority",
+			name:     "paused has highest priority",
+			statuses: []string{"succeeded", "paused", "running"},
+			expected: "paused",
+		},
+		{
+			name:     "paused beats running and failed",
+			statuses: []string{"paused", "running", "failed"},
+			expected: "paused",
+		},
+		{
+			name:     "running beats failed when no paused",
 			statuses: []string{"succeeded", "running", "failed"},
 			expected: "running",
 		},
@@ -514,12 +523,12 @@ func TestDeriveOverallStatus_PriorityOrder(t *testing.T) {
 			expected: "running",
 		},
 		{
-			name:     "waiting has priority over failed",
+			name:     "waiting counts as running over failed",
 			statuses: []string{"succeeded", "waiting", "failed"},
 			expected: "running",
 		},
 		{
-			name:     "waiting has priority over timeout",
+			name:     "waiting counts as running over timeout",
 			statuses: []string{"timeout", "waiting"},
 			expected: "running",
 		},

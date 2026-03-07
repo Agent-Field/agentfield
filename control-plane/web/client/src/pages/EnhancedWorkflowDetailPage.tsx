@@ -332,10 +332,6 @@ function EnhancedWorkflowDetailPageContent() {
           isRefreshing={dagRefreshing}
           onRefresh={refreshDAG}
           onClose={() => navigate("/workflows")}
-          viewMode={viewMode}
-          onViewModeChange={setViewMode}
-          focusMode={focusMode}
-          onFocusModeChange={setFocusMode}
           isFullscreen={isFullscreen}
           onFullscreenChange={setIsFullscreen}
           selectedNodeCount={selectedNodeIds.length}
@@ -363,6 +359,7 @@ function EnhancedWorkflowDetailPageContent() {
               selectedNodeIds={selectedNodeIds}
               onNodeSelection={handleNodeSelection}
               viewMode={viewMode}
+              onViewModeChange={setViewMode}
               focusMode={focusMode}
               isFullscreen={isFullscreen}
               onFocusModeChange={setFocusMode}
