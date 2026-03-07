@@ -21,7 +21,6 @@ const LAYOUT_LABELS: Record<AllLayoutType, string> = {
   box: 'Box',
   rectpacking: 'Rectangle',
   layered: 'Layered',
-  mrtree: 'Tree',
 };
 
 export function LayoutControls({
