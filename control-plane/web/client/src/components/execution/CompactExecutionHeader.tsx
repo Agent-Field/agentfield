@@ -2,7 +2,6 @@ import { useState, useEffect } from "react";
 import {
   ArrowLeft,
   ExternalLink,
-  Clock,
   RotateCcw,
   PauseCircle,
   Activity,
@@ -303,44 +302,32 @@ export function CompactExecutionHeader({
 
         <div className="hidden sm:block w-px h-4 bg-border flex-shrink-0" />
 
-        {/* Name + subtitle (desktop) */}
-        <div className="min-w-0 flex-1 hidden sm:block">
-          <h1 className="text-heading-3 text-foreground truncate">
+        {/* Name + metadata (single-line, desktop) */}
+        <div className="min-w-0 flex-1 hidden sm:flex items-baseline gap-2">
+          <h1 className="text-base font-semibold text-foreground truncate flex-shrink-0">
             {execution.reasoner_id}
           </h1>
-          <div className="flex items-center gap-2 text-body-small">
-            <span className="truncate max-w-[140px]">
-              {execution.agent_node_id}
-            </span>
-            <span>&bull;</span>
-            <Clock className="w-3 h-3 flex-shrink-0" />
+          <span className="text-xs text-muted-foreground truncate">
+            {execution.agent_node_id}
+            {" \u00B7 "}
             <span className={cn("font-medium", getPerformanceColor())}>
               {formatDuration(displayDuration)}
             </span>
             {isRunning && displayDuration != null && (
-              <span className="text-emerald-500 text-[10px]">&blacktriangle;</span>
+              <span className="text-emerald-500 ml-1">{"\u25B2"}</span>
             )}
             {retryCount > 0 && (
-              <>
-                <span>&bull;</span>
-                <span className="text-yellow-500">
-                  {retryCount} {retryCount === 1 ? "retry" : "retries"}
-                </span>
-              </>
+              <span className="text-yellow-500">
+                {" \u00B7 "}{retryCount} {retryCount === 1 ? "retry" : "retries"}
+              </span>
             )}
             {execution.status_reason &&
-              !(
-                normalizedStatus === "waiting" &&
-                execution.approval_request_url
-              ) && (
-                <>
-                  <span>&bull;</span>
-                  <span className="text-muted-foreground truncate max-w-[120px]">
-                    {execution.status_reason.replace(/_/g, " ")}
-                  </span>
-                </>
-              )}
-          </div>
+              !(normalizedStatus === "waiting" && execution.approval_request_url) && (
+              <span className="text-muted-foreground">
+                {" \u00B7 "}{execution.status_reason.replace(/_/g, " ")}
+              </span>
+            )}
+          </span>
         </div>
 
         {/* Name only (mobile) */}

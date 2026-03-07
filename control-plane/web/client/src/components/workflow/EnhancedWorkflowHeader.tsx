@@ -399,24 +399,20 @@ export function EnhancedWorkflowHeader({
 
             {!isMobile && <div className="w-px h-4 bg-border" />}
 
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0 flex-1 flex items-baseline gap-2">
               <h1 className={cn(
-                "text-foreground truncate",
-                isMobile ? "text-sm font-semibold" : "text-heading-3"
+                "text-foreground truncate flex-shrink-0",
+                isMobile ? "text-sm font-semibold" : "text-base font-semibold"
               )}>
                 {workflow.display_name || "Unnamed Workflow"}
               </h1>
               {!isMobile && (
-                <div className="flex items-center gap-2 text-body-small">
-                  <span>{workflow.total_executions} steps</span>
-                  <span>•</span>
-                  <span>depth {workflow.max_depth}</span>
-                  <span>•</span>
-                  <span>{formatDuration(displayDuration)}</span>
+                <span className="text-xs text-muted-foreground truncate">
+                  {workflow.total_executions} steps · depth {workflow.max_depth} · {formatDuration(displayDuration)}
                   {isRunning && liveElapsed != null && (
-                    <span className="text-emerald-500 text-[10px]">&blacktriangle;</span>
+                    <span className="text-emerald-500 ml-1">{"\u25B2"}</span>
                   )}
-                </div>
+                </span>
               )}
             </div>
           </div>
