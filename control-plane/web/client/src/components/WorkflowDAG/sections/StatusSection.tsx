@@ -49,6 +49,7 @@ const STATUS_TONE_MAP: Record<CanonicalStatus, ToneKey> = {
   succeeded: "success",
   failed: "error",
   running: "info",
+  paused: "warning",
   waiting: "warning",
   pending: "warning",
   queued: "warning",

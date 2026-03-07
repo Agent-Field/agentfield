@@ -13,6 +13,7 @@ import {
   Hash,
   InProgress,
   Link,
+  PauseCircle,
   ShieldCheck,
   Timer,
   User,
@@ -50,6 +51,7 @@ const STATUS_BADGE_VARIANT_MAP: Record<CanonicalStatus, StatusBadgeStatus> = {
   pending: "pending",
   queued: "pending",
   waiting: "pending",
+  paused: "degraded",
   running: "running",
   succeeded: "success",
   failed: "failed",
@@ -62,6 +64,7 @@ const STATUS_ICON_COMPONENT: Record<CanonicalStatus, typeof Circle> = {
   pending: Circle,
   queued: Circle,
   waiting: Circle,
+  paused: PauseCircle,
   running: InProgress,
   succeeded: CircleCheck,
   failed: CircleX,
@@ -72,6 +75,7 @@ const STATUS_ICON_COMPONENT: Record<CanonicalStatus, typeof Circle> = {
 
 const EXTRA_ICON_CLASS: Partial<Record<CanonicalStatus, string>> = {
   running: "animate-spin",
+  paused: "animate-pulse",
   pending: "animate-pulse",
   queued: "animate-pulse",
   waiting: "animate-pulse",
