@@ -17,13 +17,13 @@ import (
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
-	"github.com/Agent-Field/agentfield/control-plane/internal/encryption"
 	coreservices "github.com/Agent-Field/agentfield/control-plane/internal/core/services" // Core services
-	"github.com/Agent-Field/agentfield/control-plane/internal/events"                     // Event system
-	"github.com/Agent-Field/agentfield/control-plane/internal/handlers"                   // Agent handlers
-	"github.com/Agent-Field/agentfield/control-plane/internal/handlers/admin"             // Admin handlers
+	"github.com/Agent-Field/agentfield/control-plane/internal/encryption"
+	"github.com/Agent-Field/agentfield/control-plane/internal/events"                          // Event system
+	"github.com/Agent-Field/agentfield/control-plane/internal/handlers"                        // Agent handlers
+	"github.com/Agent-Field/agentfield/control-plane/internal/handlers/admin"                  // Admin handlers
 	connectorpkg "github.com/Agent-Field/agentfield/control-plane/internal/handlers/connector" // Connector handlers
-	"github.com/Agent-Field/agentfield/control-plane/internal/handlers/ui"                // UI handlers
+	"github.com/Agent-Field/agentfield/control-plane/internal/handlers/ui"                     // UI handlers
 	"github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/communication"
 	"github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/process"
 	infrastorage "github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/storage"
@@ -61,15 +61,15 @@ type AgentFieldServer struct {
 	storageHealthOverride func(context.Context) gin.H
 	cacheHealthOverride   func(context.Context) gin.H
 	// DID Services
-	keystoreService   *services.KeystoreService
-	didService        *services.DIDService
-	vcService         *services.VCService
-	didRegistry       *services.DIDRegistry
-	didWebService     *services.DIDWebService
+	keystoreService     *services.KeystoreService
+	didService          *services.DIDService
+	vcService           *services.VCService
+	didRegistry         *services.DIDRegistry
+	didWebService       *services.DIDWebService
 	accessPolicyService *services.AccessPolicyService
 	tagApprovalService  *services.TagApprovalService
 	tagVCVerifier       *services.TagVCVerifier
-	agentfieldHome     string
+	agentfieldHome      string
 	// Cleanup service
 	cleanupService         *handlers.ExecutionCleanupService
 	payloadStore           services.PayloadStore
@@ -1228,6 +1228,7 @@ func (s *AgentFieldServer) setupRoutes() {
 		agentAPI.GET("/executions/:execution_id", handlers.GetExecutionStatusHandler(s.storage))
 		agentAPI.POST("/executions/batch-status", handlers.BatchExecutionStatusHandler(s.storage))
 		agentAPI.POST("/executions/:execution_id/status", handlers.UpdateExecutionStatusHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout))
+		agentAPI.POST("/executions/:execution_id/cancel", handlers.CancelExecutionHandler(s.storage))
 
 		// Approval workflow endpoints — CP manages execution state only;
 		// agents handle external approval service communication directly.
