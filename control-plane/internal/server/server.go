@@ -1046,6 +1046,9 @@ func (s *AgentFieldServer) setupRoutes() {
 				// Individual execution operations
 				executions.GET("/:execution_id/details", uiExecutionsHandler.GetExecutionDetailsGlobalHandler)
 				executions.POST("/:execution_id/webhook/retry", uiExecutionsHandler.RetryExecutionWebhookHandler)
+				executions.POST("/:execution_id/cancel", handlers.CancelExecutionHandler(s.storage))
+				executions.POST("/:execution_id/pause", handlers.PauseExecutionHandler(s.storage))
+				executions.POST("/:execution_id/resume", handlers.ResumeExecutionHandler(s.storage))
 
 				// Execution notes endpoints for UI
 				executions.POST("/note", handlers.AddExecutionNoteHandler(s.storage))
