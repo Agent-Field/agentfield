@@ -12,6 +12,7 @@ import { EnhancedWorkflowOverview } from "../components/workflow/EnhancedWorkflo
 import { EnhancedWorkflowIdentity } from "../components/workflow/EnhancedWorkflowIdentity";
 import { EnhancedWorkflowWebhooks } from "../components/workflow/EnhancedWorkflowWebhooks";
 import { ErrorBoundary } from "../components/ErrorBoundary";
+import { NotificationProvider } from "../components/ui/notification";
 import { getWorkflowRunSummary } from "../services/workflowsApi";
 import { getWorkflowVCChain } from "../services/vcApi";
 import { useWorkflowDAGSmart } from "../hooks/useWorkflowDAG";
@@ -32,7 +33,7 @@ function resolveWorkflowTab(value: string | null): TabType {
   return isWorkflowTab(value) ? value : DEFAULT_WORKFLOW_TAB;
 }
 
-export function EnhancedWorkflowDetailPage() {
+function EnhancedWorkflowDetailPageContent() {
   const { workflowId: runId } = useParams<{ workflowId: string }>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -426,6 +427,14 @@ export function EnhancedWorkflowDetailPage() {
         </div>
       </div>
     </ErrorBoundary>
+  );
+}
+
+export function EnhancedWorkflowDetailPage() {
+  return (
+    <NotificationProvider>
+      <EnhancedWorkflowDetailPageContent />
+    </NotificationProvider>
   );
 }
 

@@ -13,10 +13,24 @@ import {
   Bug,
   Copy,
   Check,
-  RadioTower
+  RadioTower,
+  XCircle,
+  PauseCircle,
+  Play,
 } from "@/components/ui/icon-bridge";
 import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "../ui/alert-dialog";
 import {
   HoverCard,
   HoverCardContent,
@@ -25,9 +39,23 @@ import {
 import { SegmentedControl } from "../ui/segmented-control";
 import type { SegmentedControlOption } from "../ui/segmented-control";
 import { cn } from "../../lib/utils";
-import { getStatusLabel, getStatusTheme, normalizeExecutionStatus } from "../../utils/status";
+import {
+  getStatusLabel,
+  getStatusTheme,
+  isPausedStatus,
+  normalizeExecutionStatus,
+} from "../../utils/status";
 import { summarizeWorkflowWebhook, formatWebhookStatusLabel } from "../../utils/webhook";
 import type { WorkflowSummary } from "../../types/workflows";
+import {
+  cancelExecution,
+  pauseExecution,
+  resumeExecution,
+} from "../../services/executionsApi";
+import {
+  useErrorNotification,
+  useSuccessNotification,
+} from "../ui/notification";
 
 const VIEW_MODE_OPTIONS: ReadonlyArray<SegmentedControlOption> = [
   { value: "standard", label: "Standard", icon: Eye },
@@ -71,9 +99,22 @@ export function EnhancedWorkflowHeader({
   selectedNodeCount
 }: EnhancedWorkflowHeaderProps) {
   const [copied, setCopied] = useState(false);
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
+  const [isPausing, setIsPausing] = useState(false);
+  const [isResuming, setIsResuming] = useState(false);
   const isMobile = useIsMobile();
+  const showSuccess = useSuccessNotification();
+  const showError = useErrorNotification();
 
   const normalizedStatus = normalizeExecutionStatus(workflow.status);
+  const isRunning = normalizedStatus === "running";
+  const isPaused = isPausedStatus(normalizedStatus);
+  const executionId =
+    workflow.root_execution_id ??
+    (workflow as WorkflowSummary & { execution_id?: string }).execution_id ??
+    dagData?.timeline?.[0]?.execution_id;
+  const isMutating = isCancelling || isPausing || isResuming;
   const statusTheme = getStatusTheme(normalizedStatus);
   const statusCounts = workflow.status_counts ?? {};
   const activeExecutions = workflow.active_executions ?? 0;
@@ -124,6 +165,64 @@ export function EnhancedWorkflowHeader({
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
       console.error('Failed to copy workflow ID:', err);
+    }
+  };
+
+  const handlePause = async () => {
+    if (!executionId || isMutating) {
+      return;
+    }
+    try {
+      setIsPausing(true);
+      await pauseExecution(executionId);
+      showSuccess("Execution paused", `Execution ${executionId.slice(0, 8)} has been paused.`);
+      onRefresh?.();
+    } catch (error) {
+      showError(
+        "Pause failed",
+        error instanceof Error ? error.message : "Unable to pause execution.",
+      );
+    } finally {
+      setIsPausing(false);
+    }
+  };
+
+  const handleResume = async () => {
+    if (!executionId || isMutating) {
+      return;
+    }
+    try {
+      setIsResuming(true);
+      await resumeExecution(executionId);
+      showSuccess("Execution resumed", `Execution ${executionId.slice(0, 8)} is running again.`);
+      onRefresh?.();
+    } catch (error) {
+      showError(
+        "Resume failed",
+        error instanceof Error ? error.message : "Unable to resume execution.",
+      );
+    } finally {
+      setIsResuming(false);
+    }
+  };
+
+  const handleCancel = async () => {
+    if (!executionId || isMutating) {
+      return;
+    }
+    try {
+      setIsCancelling(true);
+      await cancelExecution(executionId);
+      showSuccess("Execution cancelled", `Execution ${executionId.slice(0, 8)} has been cancelled.`);
+      setCancelDialogOpen(false);
+      onRefresh?.();
+    } catch (error) {
+      showError(
+        "Cancel failed",
+        error instanceof Error ? error.message : "Unable to cancel execution.",
+      );
+    } finally {
+      setIsCancelling(false);
     }
   };
 
@@ -377,6 +476,77 @@ export function EnhancedWorkflowHeader({
           "flex items-center flex-shrink-0",
           isMobile ? "gap-1" : "gap-2"
         )}>
+          {(isRunning || isPaused) && (
+            <AlertDialog open={cancelDialogOpen} onOpenChange={setCancelDialogOpen}>
+              <AlertDialogTrigger asChild>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  disabled={isMutating || !executionId}
+                  className="h-8 gap-1.5 px-2"
+                  title="Cancel execution"
+                >
+                  {isCancelling ? (
+                    <Activity className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <XCircle className="w-4 h-4" />
+                  )}
+                  {!isMobile && <span>Cancel</span>}
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Cancel execution?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This stops the active workflow execution immediately. This action cannot be undone.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel disabled={isCancelling}>Keep running</AlertDialogCancel>
+                  <AlertDialogAction disabled={isCancelling} onClick={handleCancel}>
+                    {isCancelling ? "Cancelling..." : "Cancel execution"}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
+
+          {isRunning && (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={isMutating || !executionId}
+              onClick={handlePause}
+              className="h-8 gap-1.5 px-2 hover:bg-amber-500/10 hover:text-amber-600"
+              title="Pause execution"
+            >
+              {isPausing ? (
+                <Activity className="w-4 h-4 animate-spin" />
+              ) : (
+                <PauseCircle className="w-4 h-4" />
+              )}
+              {!isMobile && <span>Pause</span>}
+            </Button>
+          )}
+
+          {isPaused && (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={isMutating || !executionId}
+              onClick={handleResume}
+              className="h-8 gap-1.5 px-2 hover:bg-emerald-500/10 hover:text-emerald-600"
+              title="Resume execution"
+            >
+              {isResuming ? (
+                <Activity className="w-4 h-4 animate-spin" />
+              ) : (
+                <Play className="w-4 h-4" />
+              )}
+              {!isMobile && <span>Resume</span>}
+            </Button>
+          )}
+
           <SegmentedControl
             value={viewMode}
             onValueChange={(mode) => onViewModeChange(mode as typeof viewMode)}

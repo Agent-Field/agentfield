@@ -41,6 +41,29 @@ async function fetchWrapper<T>(url: string, options?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+export interface CancelExecutionResponse {
+  execution_id: string;
+  previous_status: string;
+  status: string;
+  reason?: string;
+  cancelled_at: string;
+}
+
+export interface PauseExecutionResponse {
+  execution_id: string;
+  previous_status: string;
+  status: string;
+  reason?: string;
+  paused_at: string;
+}
+
+export interface ResumeExecutionResponse {
+  execution_id: string;
+  previous_status: string;
+  status: string;
+  resumed_at: string;
+}
+
 // Transform backend ExecutionSummary to frontend format
 function transformExecutionSummary(backendExecution: any): ExecutionSummary {
   return {
@@ -259,6 +282,44 @@ export async function retryExecutionWebhook(
   await fetchWrapper<unknown>(`/executions/${executionId}/webhook/retry`, {
     method: "POST",
   });
+}
+
+export async function cancelExecution(
+  executionId: string,
+  reason?: string,
+): Promise<CancelExecutionResponse> {
+  return fetchWrapper<CancelExecutionResponse>(
+    `/executions/${executionId}/cancel`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: reason || "" }),
+    },
+  );
+}
+
+export async function pauseExecution(
+  executionId: string,
+  reason?: string,
+): Promise<PauseExecutionResponse> {
+  return fetchWrapper<PauseExecutionResponse>(`/executions/${executionId}/pause`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason: reason || "" }),
+  });
+}
+
+export async function resumeExecution(
+  executionId: string,
+): Promise<ResumeExecutionResponse> {
+  return fetchWrapper<ResumeExecutionResponse>(
+    `/executions/${executionId}/resume`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    },
+  );
 }
 
 // Get execution statistics
