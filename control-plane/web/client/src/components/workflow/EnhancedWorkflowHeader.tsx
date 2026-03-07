@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { formatDurationHumanReadable } from "@/components/ui/data-formatters";
 import {
   ArrowLeft,
   RotateCcw,
@@ -67,9 +68,9 @@ interface EnhancedWorkflowHeaderProps {
 export function EnhancedWorkflowHeader({
   workflow,
   dagData,
-  isLiveUpdating,
-  hasRunningWorkflows,
-  pollingInterval,
+  isLiveUpdating: _isLiveUpdating,
+  hasRunningWorkflows: _hasRunningWorkflows,
+  pollingInterval: _pollingInterval,
   isRefreshing,
   onRefresh,
   onClose,
@@ -151,12 +152,7 @@ export function EnhancedWorkflowHeader({
     />
   );
 
-  const formatDuration = (durationMs?: number) => {
-    if (!durationMs) return "N/A";
-    if (durationMs < 1000) return `${durationMs}ms`;
-    if (durationMs < 60000) return `${(durationMs / 1000).toFixed(1)}s`;
-    return `${(durationMs / 60000).toFixed(1)}m`;
-  };
+  const formatDuration = formatDurationHumanReadable;
 
   const handleCopyId = async () => {
     try {
@@ -269,34 +265,6 @@ export function EnhancedWorkflowHeader({
               <span className={cn("text-sm font-medium whitespace-nowrap", statusTheme.textClass)}>
                 {getStatusLabel(normalizedStatus)}
               </span>
-
-              {/* Compact LIVE badge — inline with status */}
-              {isLiveUpdating && !isMobile && (
-                <HoverCard>
-                  <HoverCardTrigger asChild>
-                    <Badge
-                      variant="outline"
-                      className={cn(
-                        "h-5 px-1.5 text-[10px] font-semibold tracking-wider cursor-pointer border-transparent",
-                        hasRunningWorkflows
-                          ? "bg-emerald-500/10 text-emerald-500"
-                          : "bg-muted text-muted-foreground"
-                      )}
-                    >
-                      {hasRunningWorkflows ? "LIVE" : "IDLE"}
-                    </Badge>
-                  </HoverCardTrigger>
-                  <HoverCardContent className="w-auto">
-                    <div className="space-y-2">
-                      <p className="text-sm font-medium">Auto-refresh</p>
-                      <div className="text-body-small space-y-1">
-                        <div>Status: {hasRunningWorkflows ? "Active polling" : "Monitoring"}</div>
-                        <div>Interval: {pollingInterval ? Math.round(pollingInterval / 1000) : 3}s</div>
-                      </div>
-                    </div>
-                  </HoverCardContent>
-                </HoverCard>
-              )}
 
               {(activeExecutions > 0 || failedExecutions > 0) && !isMobile && (
                 <div className="flex items-center gap-2">
@@ -535,17 +503,19 @@ export function EnhancedWorkflowHeader({
             </>
           )}
 
-          {/* Refresh */}
           {onRefresh && (
             <Button
               variant="ghost"
               size="sm"
               onClick={onRefresh}
               disabled={isRefreshing}
-              className="h-8 w-8 p-0"
-              title="Refresh workflow (Cmd/Ctrl + R)"
+              className="h-8 w-8 p-0 relative"
+              title={isRunning ? "Live · Refresh workflow" : "Refresh workflow"}
             >
               <RotateCcw className={cn("w-4 h-4", isRefreshing && "animate-spin")} />
+              {isRunning && (
+                <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              )}
             </Button>
           )}
 

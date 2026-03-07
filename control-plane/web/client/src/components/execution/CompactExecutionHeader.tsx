@@ -8,6 +8,7 @@ import {
   XCircle,
   Play,
 } from "@/components/ui/icon-bridge";
+import { formatDurationHumanReadable } from "@/components/ui/data-formatters";
 import { useNavigate } from "react-router-dom";
 import type { WorkflowExecution } from "../../types/executions";
 import { DIDDisplay } from "../did/DIDDisplay";
@@ -64,17 +65,7 @@ interface CompactExecutionHeaderProps {
   isRefreshing?: boolean;
 }
 
-function formatDuration(durationMs?: number | null): string {
-  if (!durationMs) return "\u2014";
-  if (durationMs < 1000) return `${durationMs}ms`;
-  if (durationMs < 60000) return `${(durationMs / 1000).toFixed(1)}s`;
-  const minutes = Math.floor(durationMs / 60000);
-  const seconds = Math.floor((durationMs % 60000) / 1000);
-  if (durationMs < 3600000) return `${minutes}m ${seconds}s`;
-  const hours = Math.floor(durationMs / 3600000);
-  const remainingMinutes = Math.floor((durationMs % 3600000) / 60000);
-  return `${hours}h ${remainingMinutes}m`;
-}
+const formatDuration = formatDurationHumanReadable;
 
 function formatBytes(bytes?: number): string {
   if (!bytes) return "0 B";
@@ -270,16 +261,6 @@ export function CompactExecutionHeader({
             {getStatusLabel(normalizedStatus)}
           </span>
 
-          {/* LIVE badge for running executions */}
-          {isRunning && (
-            <Badge
-              variant="outline"
-              className="h-5 px-1.5 text-[10px] font-semibold tracking-wider border-transparent bg-emerald-500/10 text-emerald-500"
-            >
-              LIVE
-            </Badge>
-          )}
-
           {/* Approval required badge for waiting executions */}
           {normalizedStatus === "waiting" &&
             execution.approval_request_url && (
@@ -303,13 +284,16 @@ export function CompactExecutionHeader({
         <div className="hidden sm:block w-px h-4 bg-border flex-shrink-0" />
 
         {/* Name + metadata (single-line, desktop) */}
-        <div className="min-w-0 flex-1 hidden sm:flex items-baseline gap-2">
+        <div className="min-w-0 flex-1 hidden sm:flex items-center gap-2">
           <h1 className="text-base font-semibold text-foreground truncate flex-shrink-0">
             {execution.reasoner_id}
           </h1>
+          {execution.agent_node_id && execution.agent_node_id !== execution.reasoner_id && (
+            <code className="text-xs font-mono bg-muted text-muted-foreground px-1.5 py-0.5 rounded flex-shrink-0 max-w-[180px] truncate">
+              {execution.agent_node_id}
+            </code>
+          )}
           <span className="text-xs text-muted-foreground truncate">
-            {execution.agent_node_id}
-            {" \u00B7 "}
             <span className={cn("font-medium", getPerformanceColor())}>
               {formatDuration(displayDuration)}
             </span>
@@ -533,19 +517,22 @@ export function CompactExecutionHeader({
           </>
         )}
 
-        {/* Refresh */}
+        {/* Refresh (green dot = live polling) */}
         {onRefresh && (
           <Button
             variant="ghost"
             size="sm"
             onClick={onRefresh}
             disabled={isRefreshing}
-            className="h-8 w-8 p-0"
-            title="Refresh execution (Cmd/Ctrl + R)"
+            className="h-8 w-8 p-0 relative"
+            title={isRunning ? "Live · Refresh execution" : "Refresh execution"}
           >
             <RotateCcw
               className={cn("w-4 h-4", isRefreshing && "animate-spin")}
             />
+            {isRunning && (
+              <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            )}
           </Button>
         )}
       </div>
