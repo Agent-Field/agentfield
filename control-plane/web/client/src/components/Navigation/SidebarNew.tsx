@@ -46,8 +46,9 @@ export function SidebarNew({ sections }: SidebarNewProps) {
         </SidebarMenu>
       </SidebarHeader>
 
-      {/* Content - Add spacing between groups */}
-      <SidebarContent className="space-y-4 px-2">
+      {/* Content — groups provide their own p-2; no extra px here so
+           collapsed icons (32 px) centre inside the 48 px rail. */}
+      <SidebarContent className="space-y-4">
         {sections.map((section) => (
           <SidebarGroup key={section.id} className="space-y-0.5">
             {/* Apply caption styling for clear header differentiation */}
