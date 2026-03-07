@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, type ComponentType } from "react";
 import {
   ArrowLeft,
   ExternalLink,
@@ -7,15 +7,17 @@ import {
   Activity,
   XCircle,
   Play,
+  MoreHorizontal,
+  Clock,
+  Copy,
+  GitBranch,
 } from "@/components/ui/icon-bridge";
 import { formatDurationHumanReadable } from "@/components/ui/data-formatters";
 import { useNavigate } from "react-router-dom";
 import type { WorkflowExecution } from "../../types/executions";
-import { DIDDisplay } from "../did/DIDDisplay";
 import { Button } from "../ui/button";
 import { CopyButton } from "../ui/copy-button";
 import { Badge } from "../ui/badge";
-import { VerifiableCredentialBadge } from "../vc";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -25,13 +27,24 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from "../ui/alert-dialog";
 import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "../ui/hover-card";
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "../ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "../ui/dropdown-menu";
+import {
+  AnimatedTabs,
+  AnimatedTabsList,
+  AnimatedTabsTrigger,
+} from "../ui/animated-tabs";
 import { cn } from "../../lib/utils";
 import {
   normalizeExecutionStatus,
@@ -50,33 +63,37 @@ import {
   useSuccessNotification,
 } from "../ui/notification";
 
+/* ═══════════════════════════════════════════════════════════════
+   Types
+   ═══════════════════════════════════════════════════════════════ */
+
+export interface NavigationTab {
+  id: string;
+  label: string;
+  icon: ComponentType<{ className?: string }>;
+  description: string;
+  shortcut: string;
+  count?: number;
+}
+
 interface CompactExecutionHeaderProps {
   execution: WorkflowExecution;
-  vcStatus?: {
-    has_vc: boolean;
-    vc_id?: string;
-    status: string;
-    created_at?: string;
-    vc_document?: any;
-  } | null;
-  vcLoading?: boolean;
   onClose?: () => void;
   onRefresh?: () => void;
   isRefreshing?: boolean;
+  /** Currently active section tab id */
+  activeTab: string;
+  /** Callback when user switches section tab */
+  onTabChange: (tab: string) => void;
+  /** Section navigation tabs to render in Row 2 */
+  navigationTabs: NavigationTab[];
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   Hooks & Helpers
+   ═══════════════════════════════════════════════════════════════ */
 
 const formatDuration = formatDurationHumanReadable;
-
-function formatBytes(bytes?: number): string {
-  if (!bytes) return "0 B";
-  const sizes = ["B", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${sizes[i]}`;
-}
-
-function truncateId(id: string): string {
-  return `${id.slice(0, 8)}...${id.slice(-4)}`;
-}
 
 /** Live elapsed-time counter for non-terminal executions. */
 function useLiveElapsed(startedAt?: string, status?: string): number | null {
@@ -112,21 +129,37 @@ function useLiveElapsed(startedAt?: string, status?: string): number | null {
   return elapsed;
 }
 
+function truncateId(id: string, maxLen = 20): string {
+  if (id.length <= maxLen) return id;
+  const keep = Math.floor((maxLen - 1) / 2);
+  return `${id.slice(0, keep + 2)}\u2026${id.slice(-keep)}`;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   CompactExecutionHeader
+   ═══════════════════════════════════════════════════════════════ */
+
 export function CompactExecutionHeader({
   execution,
-  vcStatus,
-  vcLoading,
   onClose,
   onRefresh,
   isRefreshing,
+  activeTab,
+  onTabChange,
+  navigationTabs,
 }: CompactExecutionHeaderProps) {
   const navigate = useNavigate();
+
+  /* ── Status ── */
   const normalizedStatus = normalizeExecutionStatus(execution.status);
   const statusTheme = getStatusTheme(normalizedStatus);
   const isRunning = normalizedStatus === "running";
   const isPaused = isPausedStatus(normalizedStatus);
-  const showControls = isRunning || isPaused;
+  const isTerminal = isTerminalStatus(execution.status);
+  const showLifecycleControls = isRunning || isPaused;
+  const hasError = !!execution.error_message;
 
+  /* ── Mutation state ── */
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [isPausing, setIsPausing] = useState(false);
@@ -136,33 +169,20 @@ export function CompactExecutionHeader({
   const showSuccess = useSuccessNotification();
   const showError = useErrorNotification();
 
+  /* ── Duration ── */
   const liveElapsed = useLiveElapsed(execution.started_at, execution.status);
-  const displayDuration = isTerminalStatus(execution.status)
-    ? execution.duration_ms
-    : liveElapsed;
+  const displayDuration = isTerminal ? execution.duration_ms : liveElapsed;
 
-  const retryCount = execution.retry_count || 0;
-  const inputSize = execution.input_size || 0;
-  const outputSize = execution.output_size || 0;
+  /* ── Identity ── */
+  const showAgentNodeId =
+    execution.agent_node_id &&
+    execution.agent_node_id !== execution.reasoner_id;
 
-  const getPerformanceColor = () => {
-    if (normalizedStatus === "failed") return "text-red-500";
-    if (retryCount > 0) return "text-yellow-500";
-    if (displayDuration && displayDuration > 30000) return "text-yellow-500";
-    if (normalizedStatus === "succeeded") return "text-green-500";
-    return "text-foreground";
-  };
-
+  /* ── Handlers ── */
   const handleClose = () => {
-    if (onClose) {
-      onClose();
-    } else {
-      navigate("/executions");
-    }
+    if (onClose) onClose();
+    else navigate("/executions");
   };
-
-  const handleNavigateWorkflow = () =>
-    navigate(`/workflows/${execution.workflow_id}`);
 
   const handlePause = async () => {
     if (isMutating) return;
@@ -212,330 +232,505 @@ export function CompactExecutionHeader({
       setIsCancelling(true);
       await cancelExecution(execution.execution_id);
       showSuccess(
-        "Execution cancelled",
-        `Execution ${execution.execution_id.slice(0, 8)} has been cancelled.`,
+        "Execution stopped",
+        `Execution ${execution.execution_id.slice(0, 8)} has been stopped.`,
       );
       setCancelDialogOpen(false);
       onRefresh?.();
     } catch (error) {
       showError(
-        "Cancel failed",
+        "Stop failed",
         error instanceof Error
           ? error.message
-          : "Unable to cancel execution.",
+          : "Unable to stop execution.",
       );
     } finally {
       setIsCancelling(false);
     }
   };
 
+  const handleCopyRunId = async () => {
+    try {
+      await navigator.clipboard.writeText(execution.execution_id);
+    } catch {
+      /* non-critical */
+    }
+  };
+
   return (
-    <div className="bg-background border-b border-border px-4 h-12 flex items-center justify-between">
-      {/* Left: Back + Status + Name */}
-      <div className="flex items-center gap-3 min-w-0 flex-1">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={handleClose}
-          className="h-8 w-8 p-0 flex-shrink-0"
-          title="Back to Executions"
-        >
-          <ArrowLeft className="w-4 h-4" />
-        </Button>
-
-        {/* Status indicator + label + badges */}
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <div
-            className={cn(
-              "w-2 h-2 rounded-full",
-              statusTheme.indicatorClass,
-              isRunning && "animate-pulse",
-            )}
-          />
-          <span
-            className={cn(
-              "text-sm font-medium whitespace-nowrap",
-              statusTheme.textClass,
-            )}
-          >
-            {getStatusLabel(normalizedStatus)}
-          </span>
-
-          {/* Approval required badge for waiting executions */}
-          {normalizedStatus === "waiting" &&
-            execution.approval_request_url && (
-              <a
-                href={execution.approval_request_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center"
-              >
-                <Badge
-                  variant="outline"
-                  className="h-5 px-1.5 text-[10px] font-semibold tracking-wider border-amber-500/40 text-amber-500 hover:bg-amber-500/10 cursor-pointer"
+    <>
+      <div className="flex flex-col">
+        {/* ═══════════════════════════════════════════════════════
+            ROW 1 — PRIMARY EXECUTION BAR
+            ═══════════════════════════════════════════════════════ */}
+        <div className="bg-background border-b border-border h-12">
+          {/* ── Desktop / Tablet (md+) ───────────────────────── */}
+          <div className="hidden md:flex items-center w-full h-full px-4">
+            {/* Back button */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={handleClose}
+                  className="flex-shrink-0 mr-3"
+                  aria-label="Back to executions"
                 >
-                  Approval Required
-                  <ExternalLink className="w-3 h-3 ml-1" />
-                </Badge>
-              </a>
-            )}
+                  <ArrowLeft className="w-4 h-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Back to executions</TooltipContent>
+            </Tooltip>
+
+            {/* ── Status cluster ── */}
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <div
+                className={cn(
+                  "w-2 h-2 rounded-full flex-shrink-0",
+                  statusTheme.indicatorClass,
+                  isRunning && "animate-pulse",
+                )}
+              />
+              <span
+                className={cn(
+                  "text-sm font-medium whitespace-nowrap",
+                  statusTheme.textClass,
+                )}
+              >
+                {getStatusLabel(normalizedStatus)}
+              </span>
+
+              {/* Approval required badge */}
+              {normalizedStatus === "waiting" &&
+                execution.approval_request_url && (
+                  <a
+                    href={execution.approval_request_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex"
+                  >
+                    <Badge
+                      variant="outline"
+                      size="sm"
+                      className="border-amber-500/40 text-amber-500 hover:bg-amber-500/10 cursor-pointer"
+                      showIcon={false}
+                    >
+                      Approval Required
+                      <ExternalLink className="w-3 h-3 ml-0.5" />
+                    </Badge>
+                  </a>
+                )}
+
+              {/* Issue pill */}
+              {hasError && (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-destructive/10 text-destructive border border-destructive/20">
+                  1 issue
+                </span>
+              )}
+
+              {/* Retry indicator */}
+              {(execution.retry_count ?? 0) > 0 && (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+                  {execution.retry_count}{" "}
+                  {execution.retry_count === 1 ? "retry" : "retries"}
+                </span>
+              )}
+            </div>
+
+            {/* Cluster divider */}
+            <div className="w-px h-5 bg-border flex-shrink-0 mx-3" />
+
+            {/* ── Identity cluster ── */}
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              {/* Reasoner name — highest emphasis */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="text-sm font-semibold text-foreground truncate flex-shrink-0 max-w-[200px] cursor-default">
+                    {execution.reasoner_id}
+                  </span>
+                </TooltipTrigger>
+                {execution.reasoner_id.length > 20 && (
+                  <TooltipContent>{execution.reasoner_id}</TooltipContent>
+                )}
+              </Tooltip>
+
+              {/* Agent node ID — secondary mono chip */}
+              {showAgentNodeId && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <code className="text-xs font-mono bg-muted text-muted-foreground px-1.5 py-0.5 rounded flex-shrink-0 max-w-[140px] truncate cursor-default">
+                      {execution.agent_node_id}
+                    </code>
+                  </TooltipTrigger>
+                  {execution.agent_node_id.length > 16 && (
+                    <TooltipContent>{execution.agent_node_id}</TooltipContent>
+                  )}
+                </Tooltip>
+              )}
+
+              {/* Duration with clock icon */}
+              {displayDuration != null && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="flex items-center gap-1 text-xs text-muted-foreground flex-shrink-0 cursor-default">
+                      <Clock className="w-3 h-3 flex-shrink-0" />
+                      <span className="font-medium tabular-nums">
+                        {formatDuration(displayDuration)}
+                      </span>
+                      {isRunning && (
+                        <span className="text-emerald-500">{"\u25B2"}</span>
+                      )}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    Started{" "}
+                    {new Date(execution.started_at).toLocaleString()}
+                  </TooltipContent>
+                </Tooltip>
+              )}
+
+              {/* Execution ID + Copy (lg+ only) */}
+              <div className="hidden lg:flex items-center gap-1 flex-shrink-0 ml-1">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <code className="text-[11px] font-mono text-muted-foreground/70 px-1.5 py-0.5 rounded bg-muted/40 cursor-default">
+                      {truncateId(execution.execution_id)}
+                    </code>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    <code className="text-xs font-mono">
+                      {execution.execution_id}
+                    </code>
+                  </TooltipContent>
+                </Tooltip>
+                <CopyButton
+                  value={execution.execution_id}
+                  tooltip="Copy run ID"
+                  copiedTooltip="Run ID copied"
+                  className="h-6 w-6 [&_svg]:!h-3 [&_svg]:!w-3"
+                />
+              </div>
+            </div>
+
+            {/* ── Execution controls (far right) ── */}
+            <div className="flex items-center gap-1 flex-shrink-0 ml-2">
+              {showLifecycleControls && (
+                <>
+                  {/* Pause (when running) */}
+                  {isRunning && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          disabled={isMutating}
+                          onClick={handlePause}
+                          className="hover:bg-amber-500/10 hover:text-amber-600"
+                          aria-label="Pause execution"
+                        >
+                          {isPausing ? (
+                            <Activity className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <PauseCircle className="w-4 h-4" />
+                          )}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Pause execution</TooltipContent>
+                    </Tooltip>
+                  )}
+
+                  {/* Resume (when paused) */}
+                  {isPaused && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          disabled={isMutating}
+                          onClick={handleResume}
+                          className="hover:bg-emerald-500/10 hover:text-emerald-600"
+                          aria-label="Resume execution"
+                        >
+                          {isResuming ? (
+                            <Activity className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Play className="w-4 h-4" />
+                          )}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Resume execution</TooltipContent>
+                    </Tooltip>
+                  )}
+
+                  {/* Stop (destructive) */}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        disabled={isMutating}
+                        onClick={() => setCancelDialogOpen(true)}
+                        className="hover:bg-destructive/10 hover:text-destructive"
+                        aria-label="Stop execution"
+                      >
+                        {isCancelling ? (
+                          <Activity className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <XCircle className="w-4 h-4" />
+                        )}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Stop execution</TooltipContent>
+                  </Tooltip>
+
+                  <div className="w-px h-4 bg-border mx-0.5" />
+                </>
+              )}
+
+              {/* Refresh with live indicator */}
+              {onRefresh && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={onRefresh}
+                      disabled={isRefreshing}
+                      className="relative"
+                      aria-label={
+                        isRunning ? "Live \u00B7 Refresh" : "Refresh"
+                      }
+                    >
+                      <RotateCcw
+                        className={cn(
+                          "w-4 h-4",
+                          isRefreshing && "animate-spin",
+                        )}
+                      />
+                      {isRunning && (
+                        <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      )}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {isRunning ? "Live \u00B7 Refresh" : "Refresh"}
+                  </TooltipContent>
+                </Tooltip>
+              )}
+            </div>
+          </div>
+
+          {/* ── Mobile (<md) ─────────────────────────────────── */}
+          <div className="flex md:hidden items-center w-full h-full px-3">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={handleClose}
+              aria-label="Back to executions"
+              className="flex-shrink-0"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </Button>
+
+            <div className="flex items-center gap-2 ml-2 flex-1 min-w-0">
+              <div
+                className={cn(
+                  "w-2 h-2 rounded-full flex-shrink-0",
+                  statusTheme.indicatorClass,
+                  isRunning && "animate-pulse",
+                )}
+              />
+              <span
+                className={cn(
+                  "text-sm font-medium truncate",
+                  statusTheme.textClass,
+                )}
+              >
+                {getStatusLabel(normalizedStatus)}
+              </span>
+            </div>
+
+            {/* Overflow menu */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="relative flex-shrink-0"
+                  aria-label="Execution actions"
+                >
+                  <MoreHorizontal className="w-4 h-4" />
+                  {isRunning && (
+                    <span className="absolute top-0 right-0 w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  )}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                {isRunning && (
+                  <DropdownMenuItem
+                    onClick={handlePause}
+                    disabled={isMutating}
+                  >
+                    <PauseCircle className="w-4 h-4" />
+                    Pause execution
+                  </DropdownMenuItem>
+                )}
+                {isPaused && (
+                  <DropdownMenuItem
+                    onClick={handleResume}
+                    disabled={isMutating}
+                  >
+                    <Play className="w-4 h-4" />
+                    Resume execution
+                  </DropdownMenuItem>
+                )}
+                {showLifecycleControls && (
+                  <DropdownMenuItem
+                    onClick={() => setCancelDialogOpen(true)}
+                    disabled={isMutating}
+                    className="text-destructive focus:text-destructive"
+                  >
+                    <XCircle className="w-4 h-4" />
+                    Stop execution
+                  </DropdownMenuItem>
+                )}
+                {showLifecycleControls && <DropdownMenuSeparator />}
+                {onRefresh && (
+                  <DropdownMenuItem
+                    onClick={onRefresh}
+                    disabled={isRefreshing}
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                    Refresh
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem onClick={handleCopyRunId}>
+                  <Copy className="w-4 h-4" />
+                  Copy run ID
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
 
-        <div className="hidden sm:block w-px h-4 bg-border flex-shrink-0" />
-
-        {/* Name + metadata (single-line, desktop) */}
-        <div className="min-w-0 flex-1 hidden sm:flex items-center gap-2">
-          <h1 className="text-base font-semibold text-foreground truncate flex-shrink-0">
+        {/* ═══════════════════════════════════════════════════════
+            MOBILE ROW 2 — IDENTITY (<md only)
+            ═══════════════════════════════════════════════════════ */}
+        <div className="flex md:hidden items-center gap-2 border-b border-border px-3 py-1.5 overflow-x-auto scrollbar-none">
+          <span className="text-sm font-semibold text-foreground truncate flex-shrink-0">
             {execution.reasoner_id}
-          </h1>
-          {execution.agent_node_id && execution.agent_node_id !== execution.reasoner_id && (
-            <code className="text-xs font-mono bg-muted text-muted-foreground px-1.5 py-0.5 rounded flex-shrink-0 max-w-[180px] truncate">
+          </span>
+          {showAgentNodeId && (
+            <code className="text-[11px] font-mono bg-muted text-muted-foreground px-1 py-0.5 rounded flex-shrink-0">
               {execution.agent_node_id}
             </code>
           )}
-          <span className="text-xs text-muted-foreground truncate">
-            <span className={cn("font-medium", getPerformanceColor())}>
-              {formatDuration(displayDuration)}
+          {displayDuration != null && (
+            <span className="flex items-center gap-1 text-xs text-muted-foreground flex-shrink-0">
+              <Clock className="w-3 h-3" />
+              <span className="tabular-nums">
+                {formatDuration(displayDuration)}
+              </span>
+              {isRunning && (
+                <span className="text-emerald-500">{"\u25B2"}</span>
+              )}
             </span>
-            {isRunning && displayDuration != null && (
-              <span className="text-emerald-500 ml-1">{"\u25B2"}</span>
-            )}
-            {retryCount > 0 && (
-              <span className="text-yellow-500">
-                {" \u00B7 "}{retryCount} {retryCount === 1 ? "retry" : "retries"}
-              </span>
-            )}
-            {execution.status_reason &&
-              !(normalizedStatus === "waiting" && execution.approval_request_url) && (
-              <span className="text-muted-foreground">
-                {" \u00B7 "}{execution.status_reason.replace(/_/g, " ")}
-              </span>
-            )}
-          </span>
+          )}
+          {hasError && (
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium bg-destructive/10 text-destructive flex-shrink-0">
+              1 issue
+            </span>
+          )}
         </div>
 
-        {/* Name only (mobile) */}
-        <div className="min-w-0 flex-1 sm:hidden">
-          <h1 className="text-sm font-semibold text-foreground truncate">
-            {execution.reasoner_id}
-          </h1>
-        </div>
-
-        {/* Execution ID hover card with full details */}
-        <div className="hidden md:block flex-shrink-0">
-          <HoverCard>
-            <HoverCardTrigger asChild>
-              <div className="flex items-center gap-1.5 cursor-pointer">
-                <code className="text-xs font-mono bg-muted px-2 py-1 rounded">
-                  {execution.execution_id.slice(0, 8)}...
-                </code>
-                <CopyButton
-                  value={execution.execution_id}
-                  tooltip="Copy execution ID"
-                  className="h-6 w-6 rounded-md [&_svg]:!h-3 [&_svg]:!w-3"
-                />
-              </div>
-            </HoverCardTrigger>
-            <HoverCardContent className="w-80">
-              <div className="space-y-3">
-                <div>
-                  <p className="text-sm font-semibold text-foreground">
-                    Execution Details
-                  </p>
-                  <code className="text-xs font-mono text-muted-foreground break-all">
-                    {execution.execution_id}
-                  </code>
-                </div>
-
-                <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
-                  <div>
-                    <span className="text-muted-foreground block">Agent</span>
-                    <span className="font-mono text-foreground truncate block">
-                      {execution.agent_node_id}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground block">
-                      Workflow
-                    </span>
-                    <button
-                      type="button"
-                      onClick={handleNavigateWorkflow}
-                      className="font-medium text-foreground hover:underline flex items-center gap-1"
-                    >
-                      <span className="truncate">
-                        {execution.workflow_name ??
-                          truncateId(execution.workflow_id)}
-                      </span>
-                      <ExternalLink className="w-3 h-3 flex-shrink-0" />
-                    </button>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground block">Input</span>
-                    <span className="text-foreground">
-                      {formatBytes(inputSize)}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground block">Output</span>
-                    <span className="text-foreground">
-                      {formatBytes(outputSize)}
-                    </span>
-                  </div>
-                  {execution.workflow_depth > 0 && (
-                    <div>
-                      <span className="text-muted-foreground block">
-                        Depth
-                      </span>
-                      <span className="text-foreground">
-                        {execution.workflow_depth}
-                      </span>
-                    </div>
-                  )}
-                  {retryCount > 0 && (
-                    <div>
-                      <span className="text-muted-foreground block">
-                        Retries
-                      </span>
-                      <span className="text-yellow-500 font-medium">
-                        {retryCount}
-                      </span>
-                    </div>
-                  )}
-                </div>
-
-                <div className="border-t border-border pt-2">
-                  <span className="text-xs text-muted-foreground block mb-1">
-                    DID
-                  </span>
-                  <DIDDisplay
-                    nodeId={execution.agent_node_id}
-                    variant="inline"
-                    className="text-xs"
-                  />
-                </div>
-
-                {!vcLoading && vcStatus?.has_vc && (
-                  <div className="border-t border-border pt-2">
-                    <VerifiableCredentialBadge
-                      hasVC={vcStatus.has_vc}
-                      status={vcStatus.status}
-                      vcData={vcStatus as any}
-                      executionId={execution.execution_id}
-                      showCopyButton={false}
-                      showVerifyButton={false}
-                    />
-                  </div>
-                )}
-              </div>
-            </HoverCardContent>
-          </HoverCard>
-        </div>
-      </div>
-
-      {/* Right: Controls */}
-      <div className="flex items-center gap-1 flex-shrink-0">
-        {/* Execution lifecycle controls */}
-        {showControls && (
-          <>
-            {isRunning && (
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={isMutating}
-                onClick={handlePause}
-                className="h-8 w-8 p-0 hover:bg-amber-500/10 hover:text-amber-600"
-                title="Pause execution"
-              >
-                {isPausing ? (
-                  <Activity className="w-4 h-4 animate-spin" />
-                ) : (
-                  <PauseCircle className="w-4 h-4" />
-                )}
-              </Button>
-            )}
-
-            {isPaused && (
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={isMutating}
-                onClick={handleResume}
-                className="h-8 w-8 p-0 hover:bg-emerald-500/10 hover:text-emerald-600"
-                title="Resume execution"
-              >
-                {isResuming ? (
-                  <Activity className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Play className="w-4 h-4" />
-                )}
-              </Button>
-            )}
-
-            <AlertDialog
-              open={cancelDialogOpen}
-              onOpenChange={setCancelDialogOpen}
+        {/* ═══════════════════════════════════════════════════════
+            ROW 2 — SECTION NAVIGATION + SUMMARY METRICS
+            ═══════════════════════════════════════════════════════ */}
+        <div className="h-12 border-b border-border bg-background flex items-center px-4 md:px-6 overflow-x-auto scrollbar-none">
+          <div className="flex flex-1 items-center gap-4 min-w-0">
+            <AnimatedTabs
+              value={activeTab}
+              onValueChange={onTabChange}
+              className="flex h-full min-w-0 flex-1 flex-col justify-center"
             >
-              <AlertDialogTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={isMutating}
-                  className="h-8 w-8 p-0 hover:bg-destructive/10 hover:text-destructive"
-                  title="Cancel execution"
-                >
-                  {isCancelling ? (
-                    <Activity className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <XCircle className="w-4 h-4" />
-                  )}
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Cancel execution?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    This will stop the execution immediately. This action
-                    cannot be undone.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel disabled={isCancelling}>
-                    Keep running
-                  </AlertDialogCancel>
-                  <AlertDialogAction
-                    disabled={isCancelling}
-                    onClick={handleCancel}
-                  >
-                    {isCancelling ? "Cancelling\u2026" : "Cancel execution"}
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
+              <AnimatedTabsList className="h-full gap-1 flex-nowrap">
+                {navigationTabs.map((tab) => {
+                  const Icon = tab.icon;
+                  const hasTabError =
+                    tab.id === "debug" && !!execution.error_message;
 
-            <div className="w-px h-4 bg-border mx-0.5" />
-          </>
-        )}
+                  return (
+                    <AnimatedTabsTrigger
+                      key={tab.id}
+                      value={tab.id}
+                      className="gap-2 px-3 py-2 flex-shrink-0 relative"
+                      title={`${tab.description} (Cmd/Ctrl + ${tab.shortcut})`}
+                    >
+                      <Icon className="w-4 h-4" />
+                      <span className="whitespace-nowrap hidden sm:inline">
+                        {tab.label}
+                      </span>
 
-        {/* Refresh (green dot = live polling) */}
-        {onRefresh && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onRefresh}
-            disabled={isRefreshing}
-            className="h-8 w-8 p-0 relative"
-            title={isRunning ? "Live · Refresh execution" : "Refresh execution"}
-          >
-            <RotateCcw
-              className={cn("w-4 h-4", isRefreshing && "animate-spin")}
-            />
-            {isRunning && (
-              <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            )}
-          </Button>
-        )}
+                      {hasTabError && (
+                        <div className="w-2 h-2 bg-destructive rounded-full flex-shrink-0" />
+                      )}
+
+                      {tab.count !== undefined &&
+                        tab.count > 0 &&
+                        !hasTabError && (
+                          <Badge
+                            variant="count"
+                            size="sm"
+                            className="min-w-[20px]"
+                            showIcon={false}
+                          >
+                            {tab.count > 999 ? "999+" : tab.count}
+                          </Badge>
+                        )}
+                    </AnimatedTabsTrigger>
+                  );
+                })}
+              </AnimatedTabsList>
+            </AnimatedTabs>
+          </div>
+
+          {/* Summary metrics (far right, lg+ only) */}
+          {execution.workflow_depth > 0 && (
+            <div className="hidden lg:flex items-center gap-3 flex-shrink-0 text-xs text-muted-foreground ml-4 pl-4 border-l border-border">
+              <span className="flex items-center gap-1">
+                <GitBranch className="w-3.5 h-3.5" />
+                <span>depth {execution.workflow_depth}</span>
+              </span>
+            </div>
+          )}
+        </div>
       </div>
-    </div>
+
+      {/* ═══════════════════════════════════════════════════════
+          CANCEL CONFIRMATION DIALOG (shared by desktop + mobile)
+          ═══════════════════════════════════════════════════════ */}
+      <AlertDialog open={cancelDialogOpen} onOpenChange={setCancelDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Stop execution?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will cancel the execution immediately. This action cannot be
+              undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isCancelling}>
+              Keep running
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={isCancelling}
+              onClick={handleCancel}
+            >
+              {isCancelling ? "Stopping\u2026" : "Stop execution"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }

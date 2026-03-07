@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState, type ComponentType } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
-import { CompactExecutionHeader } from "../components/execution/CompactExecutionHeader";
+import { CompactExecutionHeader, type NavigationTab } from "../components/execution/CompactExecutionHeader";
 import { RedesignedErrorPanel } from "../components/execution/RedesignedErrorPanel";
 import { EnhancedNotesSection } from "../components/execution/EnhancedNotesSection";
 import { ExecutionRetryPanel } from "../components/execution/ExecutionRetryPanel";
@@ -15,14 +15,8 @@ import { getExecutionDetails, retryExecutionWebhook } from "../services/executio
 import { getExecutionVCStatus } from "../services/vcApi";
 import type { WorkflowExecution } from "../types/executions";
 import { Database, Bug, Shield, Wrench, FileText, RadioTower, Cog, PauseCircle } from "../components/ui/icon-bridge";
-import { Badge } from "../components/ui/badge";
 import { ExecutionWebhookActivity } from "../components/execution/ExecutionWebhookActivity";
 import { ExecutionApprovalPanel } from "../components/execution/ExecutionApprovalPanel";
-import {
-  AnimatedTabs,
-  AnimatedTabsList,
-  AnimatedTabsTrigger,
-} from "../components/ui/animated-tabs";
 
 type TabType = 'io' | 'webhook' | 'approval' | 'debug' | 'identity' | 'meta' | 'notes';
 
@@ -207,14 +201,7 @@ export function EnhancedExecutionDetailPage() {
     );
   }
 
-  const navigationTabs: Array<{
-    id: TabType;
-    label: string;
-    icon: ComponentType<{ className?: string }>;
-    description: string;
-    shortcut: string;
-    count?: number;
-  }> = [
+  const navigationTabs: (NavigationTab & { id: TabType })[] = [
     {
       id: 'io',
       label: 'Inputs & Outputs',
@@ -278,111 +265,13 @@ export function EnhancedExecutionDetailPage() {
       <div className="bg-background flex flex-col min-h-0 min-w-0 flex-1 overflow-hidden">
         <CompactExecutionHeader
           execution={execution}
-          vcStatus={vcStatus}
-          vcLoading={vcLoading}
           onClose={() => navigate("/executions")}
           onRefresh={refreshExecution}
           isRefreshing={isRefreshing}
+          activeTab={activeTab}
+          onTabChange={(tab) => handleTabChange(tab as TabType)}
+          navigationTabs={navigationTabs}
         />
-
-        {/* Tab Navigation */}
-        <div className="h-12 border-b border-border bg-background flex items-center px-6 overflow-x-auto">
-          <div className="flex flex-1 items-center gap-4 min-w-0">
-            <AnimatedTabs
-              value={activeTab}
-              onValueChange={(value) => handleTabChange(value as TabType)}
-              className="flex h-full min-w-0 flex-1 flex-col justify-center"
-            >
-              <AnimatedTabsList className="h-full gap-1 flex-nowrap">
-                {navigationTabs.map((tab) => {
-                  const Icon = tab.icon;
-                  const hasError = tab.id === 'debug' && execution.error_message;
-
-                  return (
-                    <AnimatedTabsTrigger
-                      key={tab.id}
-                      value={tab.id}
-                      className="gap-2 px-3 py-2 flex-shrink-0 relative"
-                      title={`${tab.description} (Cmd/Ctrl + ${tab.shortcut})`}
-                    >
-                      <Icon className="w-4 h-4" />
-                      <span className="whitespace-nowrap">{tab.label}</span>
-
-                      {hasError && (
-                        <div className="w-2 h-2 bg-destructive rounded-full flex-shrink-0" />
-                      )}
-
-                      {tab.count !== undefined && tab.count > 0 && !hasError && (
-                        <Badge variant="count" size="sm" className="min-w-[20px]">
-                          {tab.count > 999 ? '999+' : tab.count}
-                        </Badge>
-                      )}
-                    </AnimatedTabsTrigger>
-                  );
-                })}
-              </AnimatedTabsList>
-            </AnimatedTabs>
-
-            <div className="hidden lg:flex flex-1 min-w-0 items-center justify-end gap-4 text-body-small">
-              {activeTab === 'io' && (
-                <div className="flex items-center gap-2">
-                  <Database className="w-3 h-3" />
-                  <span>
-                    {(execution.input_data ? 1 : 0) + (execution.output_data ? 1 : 0)} data sets available
-                  </span>
-                </div>
-              )}
-
-              {activeTab === 'debug' && execution.error_message && (
-                <div className="flex items-center gap-2">
-                  <Bug className="w-3 h-3" />
-                  <span>Error analysis available</span>
-                </div>
-              )}
-
-              {activeTab === 'webhook' && (
-                <div className="flex items-center gap-2">
-                  <RadioTower className="w-3 h-3" />
-                  <span>Webhook delivery audit trail</span>
-                </div>
-              )}
-
-              {activeTab === 'identity' && (
-                <div className="flex items-center gap-2">
-                  <Shield className="w-3 h-3" />
-                  <span>
-                    {vcStatus?.has_vc ? 'Credential verified' : 'No credentials issued yet'}
-                  </span>
-                </div>
-              )}
-
-              {activeTab === 'approval' && (
-                <div className="flex items-center gap-2">
-                  <PauseCircle className="w-3 h-3" />
-                  <span>
-                    {execution.approval_status === 'pending' ? 'Awaiting human review' : `Approval ${execution.approval_status}`}
-                  </span>
-                </div>
-              )}
-
-              {activeTab === 'meta' && (
-                <div className="flex items-center gap-2">
-                  <Wrench className="w-3 h-3" />
-                  <span>System metadata and technical details</span>
-                </div>
-              )}
-
-              {activeTab === 'notes' && (
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
-                  <span>
-                    {execution.notes?.length || 0} execution events • Live updates
-                  </span>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
 
         {/* Dynamic Content Area */}
         <div className="flex-1 min-h-0 min-w-0 overflow-hidden">

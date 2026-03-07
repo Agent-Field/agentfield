@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
-import { EnhancedWorkflowHeader } from "../components/workflow/EnhancedWorkflowHeader";
-import { EnhancedWorkflowTabs } from "../components/workflow/EnhancedWorkflowTabs";
+import { EnhancedWorkflowHeader, type WorkflowNavigationTab } from "../components/workflow/EnhancedWorkflowHeader";
 import { EnhancedWorkflowFlow } from "../components/workflow/EnhancedWorkflowFlow";
 import { EnhancedWorkflowData } from "../components/workflow/EnhancedWorkflowData";
 import { EnhancedWorkflowEvents } from "../components/workflow/EnhancedWorkflowEvents";
@@ -13,9 +12,18 @@ import { EnhancedWorkflowIdentity } from "../components/workflow/EnhancedWorkflo
 import { EnhancedWorkflowWebhooks } from "../components/workflow/EnhancedWorkflowWebhooks";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { NotificationProvider } from "../components/ui/notification";
+import {
+  GitBranch,
+  Database,
+  BarChart3,
+  ShieldCheck,
+  RadioTower,
+  FileText,
+} from "@/components/ui/icon-bridge";
 import { getWorkflowRunSummary } from "../services/workflowsApi";
 import { getWorkflowVCChain } from "../services/vcApi";
 import { useWorkflowDAGSmart } from "../hooks/useWorkflowDAG";
+import { summarizeWorkflowWebhook } from "../utils/webhook";
 import type { WorkflowSummary } from "../types/workflows";
 import type { WorkflowVCChainResponse } from "../types/did";
 import { normalizeExecutionStatus } from "../utils/status";
@@ -59,9 +67,7 @@ function EnhancedWorkflowDetailPageContent() {
     loading: dagLoading,
     error: dagError,
     isRefreshing: dagRefreshing,
-    hasRunningWorkflows,
-    currentPollingInterval,
-    refresh: refreshDAG
+    refresh: refreshDAG,
   } = useWorkflowDAGSmart(runId || null);
 
   const timelineForStatus = dagData?.timeline ?? [];
@@ -319,32 +325,52 @@ function EnhancedWorkflowDetailPageContent() {
   const contentAreaClasses = "flex flex-1 min-h-0 flex-col overflow-hidden relative z-0";
   const showGraphLoading = dagLoading && !dagData;
 
+  const timeline = dagData?.timeline ?? [];
+  const webhookSummary = summarizeWorkflowWebhook(timeline);
+
+  const getTabCount = (tabType: string): number | undefined => {
+    switch (tabType) {
+      case 'graph':
+        return timeline.length || displayWorkflow.total_executions;
+      case 'io':
+        return timeline.filter((node: any) => node.input_data || node.output_data)?.length || 0;
+      case 'webhooks':
+        return webhookSummary.nodesWithWebhook;
+      case 'notes':
+        return timeline.reduce((count: number, node: any) => count + (node.notes?.length || 0), 0) || 0;
+      case 'identity':
+        return vcChain?.component_vcs?.length || 0;
+      case 'insights':
+        return timeline.filter((node: any) => node.duration_ms)?.length || 0;
+      default:
+        return undefined;
+    }
+  };
+
+  const navigationTabs: WorkflowNavigationTab[] = [
+    { id: 'graph', label: 'Graph', icon: GitBranch, description: 'Live workflow topology', shortcut: '1', count: getTabCount('graph') },
+    { id: 'io', label: 'Inputs & Outputs', icon: Database, description: 'Inspect node inputs and outputs', shortcut: '2', count: getTabCount('io') },
+    { id: 'webhooks', label: 'Webhooks', icon: RadioTower, description: 'Callback deliveries and status', shortcut: '3', count: getTabCount('webhooks') },
+    { id: 'notes', label: 'Notes', icon: FileText, description: 'Operator notes, annotations, and context', shortcut: '4', count: getTabCount('notes') },
+    { id: 'identity', label: 'Identity', icon: ShieldCheck, description: 'Trust, credentials, and verification chain', shortcut: '5', count: getTabCount('identity') },
+    { id: 'insights', label: 'Insights', icon: BarChart3, description: 'Performance and health analytics', shortcut: '6', count: getTabCount('insights') },
+  ];
+
   return (
     <ErrorBoundary>
       <div className={containerClasses}>
-        {/* Enhanced Header */}
         <EnhancedWorkflowHeader
           workflow={displayWorkflow}
           dagData={dagData}
-          isLiveUpdating={!!dagData}
-          hasRunningWorkflows={hasRunningWorkflows}
-          pollingInterval={currentPollingInterval}
           isRefreshing={dagRefreshing}
           onRefresh={refreshDAG}
           onClose={() => navigate("/workflows")}
           isFullscreen={isFullscreen}
           onFullscreenChange={setIsFullscreen}
           selectedNodeCount={selectedNodeIds.length}
-        />
-
-        {/* Tab Navigation */}
-        <EnhancedWorkflowTabs
           activeTab={activeTab}
-          onTabChange={handleTabChange}
-          workflow={displayWorkflow}
-          dagData={dagData}
-          className={isFullscreen ? '' : 'border-b border-border'}
-          vcChain={vcChain}
+          onTabChange={(tab) => handleTabChange(tab as TabType)}
+          navigationTabs={navigationTabs}
         />
 
         {/* Dynamic Content Area */}
