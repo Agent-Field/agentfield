@@ -105,6 +105,7 @@ func NewRootCommand(runServerFunc func(cmd *cobra.Command, args []string), versi
 	RootCmd.AddCommand(NewMCPCommand())
 	RootCmd.AddCommand(NewVCCommand())
 	RootCmd.AddCommand(NewNodesCommand())
+	RootCmd.AddCommand(NewExecutionCommand())
 
 	// Add version command
 	RootCmd.AddCommand(NewVersionCommand(versionInfo))
