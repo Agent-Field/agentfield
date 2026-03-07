@@ -11,6 +11,7 @@ const (
 	ExecutionStatusQueued    ExecutionStatus = "queued"
 	ExecutionStatusWaiting   ExecutionStatus = "waiting"
 	ExecutionStatusRunning   ExecutionStatus = "running"
+	ExecutionStatusPaused    ExecutionStatus = "paused"
 	ExecutionStatusSucceeded ExecutionStatus = "succeeded"
 	ExecutionStatusFailed    ExecutionStatus = "failed"
 	ExecutionStatusCancelled ExecutionStatus = "cancelled"
@@ -23,6 +24,7 @@ var canonicalExecutionStatuses = map[ExecutionStatus]struct{}{
 	ExecutionStatusQueued:    {},
 	ExecutionStatusWaiting:   {},
 	ExecutionStatusRunning:   {},
+	ExecutionStatusPaused:    {},
 	ExecutionStatusSucceeded: {},
 	ExecutionStatusFailed:    {},
 	ExecutionStatusCancelled: {},
@@ -41,6 +43,10 @@ var executionStatusAliases = map[string]ExecutionStatus{
 	"errored":           ExecutionStatusFailed,
 	"canceled":          ExecutionStatusCancelled,
 	"cancel":            ExecutionStatusCancelled,
+	"pause":             ExecutionStatusPaused,
+	"hold":              ExecutionStatusPaused,
+	"on_hold":           ExecutionStatusPaused,
+	"suspended":         ExecutionStatusPaused,
 	"timed_out":         ExecutionStatusTimeout,
 	"wait":              ExecutionStatusQueued,
 	"awaiting_approval": ExecutionStatusWaiting,

@@ -19,6 +19,9 @@ const (
 	ExecutionCompleted        ExecutionEventType = "execution_completed"
 	ExecutionFailed           ExecutionEventType = "execution_failed"
 	ExecutionWaiting          ExecutionEventType = "execution_waiting"
+	ExecutionPaused           ExecutionEventType = "execution_paused"
+	ExecutionResumed          ExecutionEventType = "execution_resumed"
+	ExecutionCancelledEvent   ExecutionEventType = "execution_cancelled"
 	ExecutionApprovalResolved ExecutionEventType = "execution_approval_resolved"
 )
 
@@ -188,6 +191,48 @@ func PublishExecutionWaiting(executionID, workflowID, agentNodeID string, data i
 		WorkflowID:  workflowID,
 		AgentNodeID: agentNodeID,
 		Status:      types.ExecutionStatusWaiting,
+		Timestamp:   time.Now(),
+		Data:        data,
+	}
+	GlobalExecutionEventBus.Publish(event)
+}
+
+// PublishExecutionPaused publishes an event when an execution is externally paused.
+func PublishExecutionPaused(executionID, workflowID, agentNodeID string, data interface{}) {
+	event := ExecutionEvent{
+		Type:        ExecutionPaused,
+		ExecutionID: executionID,
+		WorkflowID:  workflowID,
+		AgentNodeID: agentNodeID,
+		Status:      types.ExecutionStatusPaused,
+		Timestamp:   time.Now(),
+		Data:        data,
+	}
+	GlobalExecutionEventBus.Publish(event)
+}
+
+// PublishExecutionResumed publishes an event when a paused execution is resumed.
+func PublishExecutionResumed(executionID, workflowID, agentNodeID string, data interface{}) {
+	event := ExecutionEvent{
+		Type:        ExecutionResumed,
+		ExecutionID: executionID,
+		WorkflowID:  workflowID,
+		AgentNodeID: agentNodeID,
+		Status:      types.ExecutionStatusRunning,
+		Timestamp:   time.Now(),
+		Data:        data,
+	}
+	GlobalExecutionEventBus.Publish(event)
+}
+
+// PublishExecutionCancelled publishes an event when an execution is externally cancelled.
+func PublishExecutionCancelled(executionID, workflowID, agentNodeID string, data interface{}) {
+	event := ExecutionEvent{
+		Type:        ExecutionCancelledEvent,
+		ExecutionID: executionID,
+		WorkflowID:  workflowID,
+		AgentNodeID: agentNodeID,
+		Status:      types.ExecutionStatusCancelled,
 		Timestamp:   time.Now(),
 		Data:        data,
 	}

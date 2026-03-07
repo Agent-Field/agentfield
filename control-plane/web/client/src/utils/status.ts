@@ -3,6 +3,7 @@ export type CanonicalStatus =
   | 'queued'
   | 'waiting'
   | 'running'
+  | 'paused'
   | 'succeeded'
   | 'failed'
   | 'cancelled'
@@ -14,6 +15,7 @@ const CANONICAL_STATUS_SET = new Set<CanonicalStatus>([
   'queued',
   'waiting',
   'running',
+  'paused',
   'succeeded',
   'failed',
   'cancelled',
@@ -40,6 +42,11 @@ const STATUS_MAP: Record<string, CanonicalStatus> = {
   failed: 'failed',
   failure: 'failed',
   error: 'failed',
+  paused: 'paused',
+  pause: 'paused',
+  hold: 'paused',
+  on_hold: 'paused',
+  suspended: 'paused',
   cancelled: 'cancelled',
   canceled: 'cancelled',
   timeout: 'timeout',
@@ -86,6 +93,10 @@ export function isRunningStatus(status?: string | null): boolean {
   return normalizeExecutionStatus(status) === 'running';
 }
 
+export function isPausedStatus(status?: string | null): boolean {
+  return normalizeExecutionStatus(status) === 'paused';
+}
+
 export function isWaitingStatus(status?: string | null): boolean {
   return normalizeExecutionStatus(status) === 'waiting';
 }
@@ -107,6 +118,8 @@ export function getStatusLabel(status?: string | null): string {
       return 'Timed Out';
     case 'running':
       return 'Running';
+    case 'paused':
+      return 'Paused';
     case 'waiting':
       return 'Waiting';
     case 'queued':
@@ -140,6 +153,7 @@ const STATUS_HEX: Record<CanonicalStatus, { base: string; light: string }> = {
   queued: { base: '#f59e0b', light: '#fbbf24' },
   waiting: { base: '#d97706', light: '#f59e0b' },
   running: { base: '#2563eb', light: '#60a5fa' },
+  paused: { base: '#d97706', light: '#fbbf24' },
   succeeded: { base: '#16a34a', light: '#22c55e' },
   failed: { base: '#ef4444', light: '#f87171' },
   cancelled: { base: '#6b7280', light: '#9ca3af' },
@@ -152,6 +166,7 @@ const STATUS_TONE_MAP: Record<CanonicalStatus, ThemeStatusTone> = {
   queued: 'warning',
   waiting: 'warning',
   running: 'info',
+  paused: 'warning',
   succeeded: 'success',
   failed: 'error',
   cancelled: 'neutral',
@@ -164,6 +179,7 @@ const BADGE_VARIANT: Record<CanonicalStatus, StatusTheme['badgeVariant']> = {
   queued: 'secondary',
   waiting: 'secondary',
   running: 'secondary',
+  paused: 'secondary',
   succeeded: 'default',
   failed: 'destructive',
   cancelled: 'outline',
@@ -197,6 +213,7 @@ const STATUS_THEME: Record<CanonicalStatus, StatusTheme> = {
   queued: createStatusTheme('queued'),
   waiting: createStatusTheme('waiting'),
   running: createStatusTheme('running'),
+  paused: createStatusTheme('paused'),
   succeeded: createStatusTheme('succeeded'),
   failed: createStatusTheme('failed'),
   cancelled: createStatusTheme('cancelled'),

@@ -1359,7 +1359,7 @@ func buildExecutionVCTableSQL(tableName string, includeIfNotExists bool) string 
 		document_size_bytes INTEGER DEFAULT 0,
 		input_hash TEXT NOT NULL,
 		output_hash TEXT NOT NULL,
-		status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('unknown', 'pending', 'queued', 'running', 'succeeded', 'failed', 'cancelled', 'timeout', 'revoked')),
+		status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('unknown', 'pending', 'queued', 'running', 'paused', 'succeeded', 'failed', 'cancelled', 'timeout', 'revoked')),
 		parent_vc_id TEXT,
 		child_vc_ids TEXT DEFAULT '[]',
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1380,7 +1380,7 @@ func buildWorkflowVCTableSQL(tableName string, includeIfNotExists bool) string {
 		workflow_id TEXT NOT NULL,
 		session_id TEXT NOT NULL,
 		component_vc_ids TEXT DEFAULT '[]',
-		status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('unknown', 'pending', 'in_progress', 'running', 'succeeded', 'failed', 'cancelled', 'timeout')),
+		status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('unknown', 'pending', 'in_progress', 'running', 'paused', 'succeeded', 'failed', 'cancelled', 'timeout')),
 		start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		end_time TIMESTAMP,
 		total_steps INTEGER DEFAULT 0,
@@ -4508,7 +4508,7 @@ func (ls *LocalStorage) executeRegisterAgent(ctx context.Context, q DBTX, agent 
 }
 
 // GetAgent retrieves the default (unversioned) agent node record by ID.
-// It filters for version = '' to return only the default agent.
+// It filters for version = ” to return only the default agent.
 // Use GetAgentVersion for a specific version, or ListAgentVersions for all versions.
 func (ls *LocalStorage) GetAgent(ctx context.Context, id string) (*types.AgentNode, error) {
 	// Check context cancellation early
@@ -4653,7 +4653,7 @@ func (ls *LocalStorage) DeleteAgentVersion(ctx context.Context, id string, versi
 	return nil
 }
 
-// ListAgentVersions returns all versioned agents with the given ID (version != '').
+// ListAgentVersions returns all versioned agents with the given ID (version != ”).
 func (ls *LocalStorage) ListAgentVersions(ctx context.Context, id string) ([]*types.AgentNode, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("context cancelled during list agent versions: %w", err)
