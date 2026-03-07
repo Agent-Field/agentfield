@@ -21,11 +21,11 @@ type executionPauseResumeRequest struct {
 }
 
 type executionPauseResponse struct {
-	ExecutionID    string `json:"execution_id"`
-	PreviousStatus string `json:"previous_status"`
-	Status         string `json:"status"`
-	Reason         string `json:"reason,omitempty"`
-	PausedAt       string `json:"paused_at"`
+	ExecutionID    string  `json:"execution_id"`
+	PreviousStatus string  `json:"previous_status"`
+	Status         string  `json:"status"`
+	Reason         *string `json:"reason,omitempty"`
+	PausedAt       string  `json:"paused_at"`
 }
 
 type executionResumeResponse struct {
@@ -165,7 +165,7 @@ func handlePauseResume(c *gin.Context, store ExecutionStore, expectedFromStatus,
 			ExecutionID:    executionID,
 			PreviousStatus: expectedFromStatus,
 			Status:         nextStatus,
-			Reason:         reason,
+			Reason:         statusReason,
 			PausedAt:       now.Format(time.RFC3339),
 		}
 		c.JSON(http.StatusOK, response)

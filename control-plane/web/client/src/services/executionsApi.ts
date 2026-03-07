@@ -142,18 +142,6 @@ function transformExecutionDetailsResponse(raw: any): WorkflowExecution {
     } as ExecutionWebhookEvent;
   });
 
-  // Debug logging to understand what the API is returning
-  console.log('Raw API response for execution:', raw.execution_id, {
-    input_data: raw.input_data,
-    output_data: raw.output_data,
-    input_uri: raw.input_uri,
-    result_uri: raw.result_uri,
-    input_size: raw.input_size,
-    output_size: raw.output_size,
-    // Log all keys to see what's available
-    keys: Object.keys(raw)
-  });
-
   // Handle input_data more carefully - check for different possible field names
   let inputData = raw.input_data;
   if (!inputData && raw.input) {

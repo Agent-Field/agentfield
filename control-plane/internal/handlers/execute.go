@@ -876,8 +876,10 @@ func (c *executionController) waitForResume(ctx context.Context, executionID str
 		return fmt.Errorf("event bus not available")
 	}
 
-	// Create unique subscriber ID for this wait operation.
-	subscriberID := fmt.Sprintf("pause-wait-%s", executionID)
+	// Create unique subscriber ID for this wait operation. Include a monotonic
+	// counter so that multiple goroutines waiting on the same execution (e.g.
+	// parallel DAG branches) each get their own event channel.
+	subscriberID := fmt.Sprintf("pause-wait-%s-%d", executionID, time.Now().UnixNano())
 
 	// Subscribe to events.
 	eventChan := c.eventBus.Subscribe(subscriberID)
@@ -1900,7 +1902,11 @@ func (c *executionController) savePayload(ctx context.Context, data []byte) *str
 }
 
 func (j asyncExecutionJob) process() {
-	bgCtx := context.Background()
+	// Use a bounded context so that paused executions do not block goroutines
+	// indefinitely if the resume/cancel event is never delivered (e.g. event bus
+	// crash, server restart). 24 hours is generous but prevents permanent leaks.
+	bgCtx, cancel := context.WithTimeout(context.Background(), 24*time.Hour)
+	defer cancel()
 
 	currentExec, err := j.controller.store.GetExecutionRecord(bgCtx, j.plan.exec.ExecutionID)
 	if err == nil && currentExec != nil {

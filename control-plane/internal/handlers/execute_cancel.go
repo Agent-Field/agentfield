@@ -11,7 +11,6 @@ import (
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
-	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
@@ -29,7 +28,7 @@ type cancelExecutionResponse struct {
 	CancelledAt    string  `json:"cancelled_at"`
 }
 
-func CancelExecutionHandler(store storage.StorageProvider) gin.HandlerFunc {
+func CancelExecutionHandler(store ExecutionStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		executionID := strings.TrimSpace(c.Param("execution_id"))
 		if executionID == "" {
