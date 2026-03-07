@@ -98,18 +98,35 @@ func (m *cleanupStoreMock) getMarkStaleCalls() []markStaleCall {
 	return out
 }
 
-func setupExecutionCleanupTestLogger(t *testing.T) *bytes.Buffer {
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (sb *syncBuffer) Write(p []byte) (n int, err error) {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	return sb.buf.Write(p)
+}
+
+func (sb *syncBuffer) String() string {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	return sb.buf.String()
+}
+
+func setupExecutionCleanupTestLogger(t *testing.T) *syncBuffer {
 	t.Helper()
 
-	var logBuffer bytes.Buffer
+	sb := &syncBuffer{}
 	previousLogger := logger.Logger
 
-	logger.Logger = zerolog.New(&logBuffer).Level(zerolog.DebugLevel).With().Timestamp().Logger()
+	logger.Logger = zerolog.New(sb).Level(zerolog.DebugLevel).With().Timestamp().Logger()
 	t.Cleanup(func() {
 		logger.Logger = previousLogger
 	})
 
-	return &logBuffer
+	return sb
 }
 
 func testExecutionCleanupConfig(batchSize int) config.ExecutionCleanupConfig {
@@ -436,6 +453,9 @@ func TestExecutionCleanupService_CleanupLoop_StopsOnContextCancellation(t *testi
 	if err := service.Start(ctx); err != nil {
 		t.Fatalf("expected start to succeed, got error: %v", err)
 	}
+
+	// Yield so the cleanup goroutine enters its select loop before cancellation
+	time.Sleep(10 * time.Millisecond)
 
 	cancel()
 
