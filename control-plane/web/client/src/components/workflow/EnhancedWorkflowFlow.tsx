@@ -21,7 +21,6 @@ interface EnhancedWorkflowFlowProps {
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
   focusMode: boolean;
-  isFullscreen: boolean;
   onFocusModeChange?: (enabled: boolean) => void;
 }
 

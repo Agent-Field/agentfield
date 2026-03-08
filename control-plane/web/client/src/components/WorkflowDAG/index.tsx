@@ -1369,8 +1369,6 @@ function decorateEdgesWithStatus(
                     nodes={nodes}
                   />
                 </Panel>
-
-
               </ReactFlow>
             )}
           </div>

@@ -92,7 +92,6 @@ const LAYOUT_META: Record<
     label: "Layered",
     shortDesc: "Hierarchical layers",
   },
-
 };
 
 const VIEW_MODE_META: Record<
