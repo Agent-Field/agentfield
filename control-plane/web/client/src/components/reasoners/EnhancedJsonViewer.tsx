@@ -14,7 +14,7 @@ import { SmartStringRenderer } from './SmartStringRenderer';
 import { JsonModal } from './JsonModal';
 
 interface EnhancedJsonViewerProps {
-  data: any;
+  data: unknown;
   title?: string;
   className?: string;
   maxInlineHeight?: number;
@@ -22,7 +22,7 @@ interface EnhancedJsonViewerProps {
 
 interface JsonItem {
   key: string;
-  value: any;
+  value: unknown;
   type: 'string' | 'number' | 'boolean' | 'array' | 'object' | 'null';
   path: string[];
   isExpandable: boolean;
@@ -36,7 +36,7 @@ export function EnhancedJsonViewer({
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
   const [modalState, setModalState] = useState<{
     isOpen: boolean;
-    content: any;
+    content: unknown | null;
     path: string[];
     title: string;
   }>({
@@ -56,7 +56,7 @@ export function EnhancedJsonViewer({
     setExpandedItems(newExpanded);
   };
 
-  const openModal = (content: any, path: string[], itemTitle: string) => {
+  const openModal = (content: unknown, path: string[], itemTitle: string) => {
     setModalState({
       isOpen: true,
       content,
@@ -74,12 +74,12 @@ export function EnhancedJsonViewer({
     });
   };
 
-  const copyToClipboard = (content: any) => {
+  const copyToClipboard = (content: unknown) => {
     const text = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
     navigator.clipboard.writeText(text);
   };
 
-  const processJsonData = (obj: any, parentPath: string[] = []): JsonItem[] => {
+  const processJsonData = (obj: unknown, parentPath: string[] = []): JsonItem[] => {
     if (obj === null || obj === undefined) {
       return [];
     }
@@ -88,7 +88,7 @@ export function EnhancedJsonViewer({
       return [{
         key: 'value',
         value: obj,
-        type: typeof obj as any,
+        type: typeof obj as JsonItem["type"],
         path: parentPath,
         isExpandable: false
       }];
@@ -113,7 +113,7 @@ export function EnhancedJsonViewer({
       return {
         key,
         value,
-        type: type as any,
+        type: type as JsonItem["type"],
         path,
         isExpandable: type === 'object' || type === 'array'
       };
@@ -133,50 +133,56 @@ export function EnhancedJsonViewer({
     const isExpanded = expandedItems.has(itemKey);
 
     switch (item.type) {
-      case 'string':
+      case 'string': {
+        const stringValue = typeof item.value === 'string' ? item.value : String(item.value);
         return (
           <SmartStringRenderer
-            content={item.value}
+            content={stringValue}
             label={item.key}
             path={item.path}
-            onOpenModal={() => openModal(item.value, item.path, formatLabel(item.key))}
+            onOpenModal={() => openModal(stringValue, item.path, formatLabel(item.key))}
             maxInlineHeight={maxInlineHeight}
           />
         );
+      }
 
-      case 'number':
+      case 'number': {
+        const numberValue = typeof item.value === 'number' ? item.value : Number(item.value ?? 0);
         return (
           <div className="flex items-center gap-2">
             <span className="text-sm font-mono text-foreground">
-              {item.value.toLocaleString()}
+              {numberValue.toLocaleString()}
             </span>
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => copyToClipboard(item.value)}
+              onClick={() => copyToClipboard(numberValue)}
               className="h-6 w-6 p-0"
             >
               <Copy className="h-3 w-3" />
             </Button>
           </div>
         );
+      }
 
-      case 'boolean':
+      case 'boolean': {
+        const boolValue = Boolean(item.value);
         return (
           <div className="flex items-center gap-2">
-            <Badge variant={item.value ? "default" : "secondary"} className="text-xs">
-              {item.value ? 'true' : 'false'}
+            <Badge variant={boolValue ? "default" : "secondary"} className="text-xs">
+              {boolValue ? 'true' : 'false'}
             </Badge>
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => copyToClipboard(item.value)}
+              onClick={() => copyToClipboard(boolValue)}
               className="h-6 w-6 p-0"
             >
               <Copy className="h-3 w-3" />
             </Button>
           </div>
         );
+      }
 
       case 'null':
         return (
@@ -193,7 +199,8 @@ export function EnhancedJsonViewer({
           </div>
         );
 
-      case 'array':
+      case 'array': {
+        const arrayValue = Array.isArray(item.value) ? item.value : [];
         return (
           <div className="space-y-2">
             <Collapsible open={isExpanded} onOpenChange={() => toggleExpanded(itemKey)}>
@@ -218,7 +225,7 @@ export function EnhancedJsonViewer({
                     Array
                   </span>
                   <Badge variant="secondary" className="text-xs">
-                    {item.value.length} items
+                    {arrayValue.length} items
                   </Badge>
                 </div>
 
@@ -244,7 +251,7 @@ export function EnhancedJsonViewer({
 
               <CollapsibleContent>
                 <div className="ml-6 mt-2 space-y-2">
-                  {item.value.slice(0, 10).map((arrayItem: any, index: number) => (
+                  {arrayValue.slice(0, 10).map((arrayItem: unknown, index: number) => (
                     <div key={index} className="flex items-start gap-2 p-2 bg-muted/30 rounded text-sm">
                       <span className="text-muted-foreground font-mono text-xs mt-0.5 flex-shrink-0">
                         [{index}]
@@ -272,9 +279,9 @@ export function EnhancedJsonViewer({
                       </div>
                     </div>
                   ))}
-                  {item.value.length > 10 && (
+                  {arrayValue.length > 10 && (
                     <div className="text-body-small text-center py-2">
-                      ... and {item.value.length - 10} more items
+                      ... and {arrayValue.length - 10} more items
                     </div>
                   )}
                 </div>
@@ -282,8 +289,12 @@ export function EnhancedJsonViewer({
             </Collapsible>
           </div>
         );
+      }
 
-      case 'object':
+      case 'object': {
+        const objectValue = item.value && typeof item.value === 'object' && !Array.isArray(item.value)
+          ? (item.value as Record<string, unknown>)
+          : {};
         return (
           <div className="space-y-2">
             <Collapsible open={isExpanded} onOpenChange={() => toggleExpanded(itemKey)}>
@@ -308,7 +319,7 @@ export function EnhancedJsonViewer({
                     Object
                   </span>
                   <Badge variant="secondary" className="text-xs">
-                    {Object.keys(item.value).length} keys
+                    {Object.keys(objectValue).length} keys
                   </Badge>
                 </div>
 
@@ -335,7 +346,7 @@ export function EnhancedJsonViewer({
               <CollapsibleContent>
                 <div className="ml-6 mt-2">
                   <EnhancedJsonViewer
-                    data={item.value}
+                    data={objectValue}
                     maxInlineHeight={maxInlineHeight}
                   />
                 </div>
@@ -343,6 +354,7 @@ export function EnhancedJsonViewer({
             </Collapsible>
           </div>
         );
+      }
 
       default:
         return (

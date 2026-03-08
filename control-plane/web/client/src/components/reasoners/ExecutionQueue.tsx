@@ -1,4 +1,4 @@
-import { useState, forwardRef, useImperativeHandle } from 'react';
+import { useState, forwardRef, useImperativeHandle, type KeyboardEvent, type MouseEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
@@ -362,7 +362,7 @@ export const ExecutionQueue = forwardRef<ExecutionQueueRef, ExecutionQueueProps>
     }
   };
 
-  const handleExecutionCardClick = (execution: QueuedExecution, event: React.MouseEvent) => {
+  const handleExecutionCardClick = (execution: QueuedExecution, event: MouseEvent<HTMLElement>) => {
     // Prevent navigation if clicking on action buttons
     if ((event.target as HTMLElement).closest('button')) {
       return;
@@ -383,7 +383,7 @@ export const ExecutionQueue = forwardRef<ExecutionQueueRef, ExecutionQueueProps>
     }
   };
 
-  const handleViewDetailsClick = (event: React.MouseEvent, execution: QueuedExecution) => {
+  const handleViewDetailsClick = (event: MouseEvent<HTMLElement>, execution: QueuedExecution) => {
     event.stopPropagation();
     if (execution.execution_id && execution.page_available) {
       handleNavigateToExecution(execution);
@@ -449,10 +449,17 @@ export const ExecutionQueue = forwardRef<ExecutionQueueRef, ExecutionQueueProps>
                 role={execution.execution_id ? "button" : undefined}
                 tabIndex={execution.execution_id ? 0 : undefined}
                 aria-label={execution.execution_id ? `Navigate to execution ${execution.execution_id}` : undefined}
-                onKeyDown={execution.execution_id ? (e) => {
+                onKeyDown={execution.execution_id ? (e: KeyboardEvent<HTMLDivElement>) => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
-                    handleExecutionCardClick(execution, e as any);
+                    if (execution.execution_id && execution.page_available) {
+                      handleNavigateToExecution(execution);
+                    } else {
+                      const isCurrentlySelected = selectedExecution === execution.id;
+                      const newSelection = isCurrentlySelected ? null : execution.id;
+                      setSelectedExecution(newSelection);
+                      onExecutionSelect?.(isCurrentlySelected ? null : execution);
+                    }
                   }
                 } : undefined}
               >
@@ -562,10 +569,17 @@ export const ExecutionQueue = forwardRef<ExecutionQueueRef, ExecutionQueueProps>
                         ? `Execution ${execution.execution_id} page not ready yet`
                         : `View execution details`
                 }
-                onKeyDown={(e) => {
+                onKeyDown={(e: KeyboardEvent<HTMLDivElement>) => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
-                    handleExecutionCardClick(execution, e as any);
+                    if (execution.execution_id && execution.page_available) {
+                      handleNavigateToExecution(execution);
+                    } else {
+                      const isCurrentlySelected = selectedExecution === execution.id;
+                      const newSelection = isCurrentlySelected ? null : execution.id;
+                      setSelectedExecution(newSelection);
+                      onExecutionSelect?.(isCurrentlySelected ? null : execution);
+                    }
                   }
                 }}
               >

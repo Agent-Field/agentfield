@@ -142,8 +142,8 @@ export const HoverDetailPanel = memo(({ node, position, visible }: HoverDetailPa
   const tone = statusTone[toneKey];
 
   // Handle optional fields that may not exist on WorkflowDAGLightweightNode
-  const agentNameField = (node as any).agent_name;
-  const taskNameField = (node as any).task_name;
+  const agentNameField = node.agent_name;
+  const taskNameField = node.task_name;
 
   const agentColor = agentColorManager.getAgentColor(
     agentNameField || node.agent_node_id,

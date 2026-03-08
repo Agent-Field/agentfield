@@ -17,6 +17,7 @@ import { Card, CardContent } from "../components/ui/card";
 import { getExecutionDetails } from "../services/executionsApi";
 import { getExecutionVCStatus } from "../services/vcApi";
 import type { WorkflowExecution } from "../types/executions";
+import type { VCStatusData } from "../types/vc";
 
 function InlineCopyButton({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
@@ -75,13 +76,7 @@ export function ExecutionDetailPage() {
   const { executionId } = useParams<{ executionId: string }>();
   const navigate = useNavigate();
   const [execution, setExecution] = useState<WorkflowExecution | null>(null);
-  const [vcStatus, setVcStatus] = useState<{
-    has_vc: boolean;
-    vc_id?: string;
-    status: string;
-    created_at?: string;
-    vc_document?: any;
-  } | null>(null);
+  const [vcStatus, setVcStatus] = useState<VCStatusData | null>(null);
   const [loading, setLoading] = useState(true);
   const [vcLoading, setVcLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

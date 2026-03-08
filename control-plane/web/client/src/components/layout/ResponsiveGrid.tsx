@@ -1,4 +1,4 @@
-import { forwardRef, type ElementType, type HTMLAttributes } from "react";
+import { forwardRef, type ElementType, type HTMLAttributes, type Ref } from "react";
 import { cn } from "@/lib/utils";
 
 type Breakpoint = "base" | "sm" | "md" | "lg" | "xl" | "2xl";
@@ -330,7 +330,7 @@ const ResponsiveGridItem = forwardRef<HTMLDivElement, ResponsiveGridItemProps>(
 
     return (
       <Component
-        ref={ref as any}
+        ref={ref as Ref<HTMLDivElement>}
         className={cn(spanClasses, className)}
         {...props}
       >

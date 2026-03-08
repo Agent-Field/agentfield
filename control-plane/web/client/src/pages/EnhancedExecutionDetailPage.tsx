@@ -13,6 +13,7 @@ import { ErrorBoundary } from "../components/ErrorBoundary";
 import { getExecutionDetails, retryExecutionWebhook } from "../services/executionsApi";
 import { getExecutionVCStatus } from "../services/vcApi";
 import type { WorkflowExecution } from "../types/executions";
+import type { VCStatusData } from "../types/vc";
 import { Database, Bug, Shield, Wrench, FileText, RadioTower, Cog, PauseCircle } from "../components/ui/icon-bridge";
 import { Badge } from "../components/ui/badge";
 import { ExecutionWebhookActivity } from "../components/execution/ExecutionWebhookActivity";
@@ -43,16 +44,7 @@ export function EnhancedExecutionDetailPage() {
 
   // Core data state
   const [execution, setExecution] = useState<WorkflowExecution | null>(null);
-  const [vcStatus, setVcStatus] = useState<{
-    has_vc: boolean;
-    vc_id?: string;
-    status: string;
-    created_at?: string;
-    vc_document?: any;
-    storage_uri?: string;
-    document_size_bytes?: number;
-    original_status?: string;
-  } | null>(null);
+  const [vcStatus, setVcStatus] = useState<VCStatusData | null>(null);
   const [loading, setLoading] = useState(true);
   const [vcLoading, setVcLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

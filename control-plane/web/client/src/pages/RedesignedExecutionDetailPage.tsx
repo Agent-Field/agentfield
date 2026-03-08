@@ -10,18 +10,13 @@ import { CollapsibleSection } from "../components/execution/CollapsibleSection";
 import { getExecutionDetails } from "../services/executionsApi";
 import { getExecutionVCStatus } from "../services/vcApi";
 import type { WorkflowExecution } from "../types/executions";
+import type { VCStatusData } from "../types/vc";
 import { Settings } from "@/components/ui/icon-bridge";
 
 export function RedesignedExecutionDetailPage() {
   const { executionId } = useParams<{ executionId: string }>();
   const [execution, setExecution] = useState<WorkflowExecution | null>(null);
-  const [vcStatus, setVcStatus] = useState<{
-    has_vc: boolean;
-    vc_id?: string;
-    status: string;
-    created_at?: string;
-    vc_document?: any;
-  } | null>(null);
+  const [vcStatus, setVcStatus] = useState<VCStatusData | null>(null);
   const [loading, setLoading] = useState(true);
   const [vcLoading, setVcLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

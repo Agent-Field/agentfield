@@ -126,6 +126,8 @@ export interface WorkflowDAGLightweightNode {
   completed_at?: string;
   duration_ms?: number;
   workflow_depth: number;
+  agent_name?: string;
+  task_name?: string;
 }
 
 export interface WorkflowDAGLightweightResponse {

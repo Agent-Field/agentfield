@@ -8,6 +8,7 @@ import {
 import { ArrowDown, ArrowUp } from "@/components/ui/icon-bridge";
 import { useNavigate } from "react-router-dom";
 import type { WorkflowExecution } from "../../types/executions";
+import type { VCStatusData } from "../../types/vc";
 import { DIDDisplay } from "../did/DIDDisplay";
 import { Button } from "../ui/button";
 import { CopyButton } from "../ui/copy-button";
@@ -18,13 +19,7 @@ import { normalizeExecutionStatus } from "../../utils/status";
 
 interface CompactExecutionHeaderProps {
   execution: WorkflowExecution;
-  vcStatus?: {
-    has_vc: boolean;
-    vc_id?: string;
-    status: string;
-    created_at?: string;
-    vc_document?: any;
-  } | null;
+  vcStatus?: VCStatusData | null;
   vcLoading?: boolean;
   onClose?: () => void;
 }
@@ -245,7 +240,7 @@ export function CompactExecutionHeader({
               <VerifiableCredentialBadge
                 hasVC={vcStatus.has_vc}
                 status={vcStatus.status}
-                vcData={vcStatus as any}
+                vcData={vcStatus}
                 executionId={execution.execution_id}
                 showCopyButton={false}
                 showVerifyButton={false}

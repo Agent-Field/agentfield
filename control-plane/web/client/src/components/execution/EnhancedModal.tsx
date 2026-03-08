@@ -100,6 +100,10 @@ function EnhancedModal({
 export function DataModal({ isOpen, onClose, title, icon, data }: DataModalProps) {
   const [viewMode, setViewMode] = React.useState<"formatted" | "raw" | "markdown">("formatted");
 
+  const isViewMode = (value: string): value is "formatted" | "raw" | "markdown" => {
+    return value === "formatted" || value === "raw" || value === "markdown";
+  };
+
   const jsonString = React.useMemo(() => {
     try {
       return JSON.stringify(data, null, 2);
@@ -149,7 +153,11 @@ export function DataModal({ isOpen, onClose, title, icon, data }: DataModalProps
         <div className="flex-shrink-0 border-b border-border bg-background/95">
           <Tabs
             value={viewMode}
-            onValueChange={(value) => setViewMode(value as any)}
+            onValueChange={(value) => {
+              if (isViewMode(value)) {
+                setViewMode(value);
+              }
+            }}
             className="w-full"
           >
             <TabsList variant="underline" className="grid w-full grid-cols-3 h-12">

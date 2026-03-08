@@ -13,6 +13,7 @@ import {
   getExecutionVCStatus,
   getWorkflowVCStatuses
 } from '../services/vcApi';
+import type { VCStatusData } from '../types/vc';
 
 /**
  * Hook for managing VC verification operations
@@ -169,13 +170,7 @@ export function useAuditTrail(workflowId: string) {
  * Hook for managing execution VC status
  */
 export function useExecutionVCStatus(executionId: string) {
-  const [vcStatus, setVCStatus] = useState<{
-    has_vc: boolean;
-    vc_id?: string;
-    status: string;
-    created_at?: string;
-    vc_document?: any; // Include vc_document for download functionality
-  } | null>(null);
+  const [vcStatus, setVCStatus] = useState<VCStatusData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 

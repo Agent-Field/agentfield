@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Shield, ExternalLink, AlertCircle, CheckCircle, Eye, Download, Loader2 } from "@/components/ui/icon-bridge";
 import { ResponsiveGrid } from "@/components/layout/ResponsiveGrid";
 import type { WorkflowExecution } from "../../types/executions";
+import type { VCStatusData } from "../../types/vc";
 import { DIDDisplay } from "../did/DIDDisplay";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
@@ -13,13 +14,7 @@ import { CopyButton } from "../ui/copy-button";
 
 interface ExecutionIdentityPanelProps {
   execution: WorkflowExecution;
-  vcStatus?: {
-    has_vc: boolean;
-    vc_id?: string;
-    status: string;
-    created_at?: string;
-    vc_document?: any;
-  } | null;
+  vcStatus?: VCStatusData | null;
   vcLoading?: boolean;
 }
 
@@ -166,7 +161,7 @@ export function ExecutionIdentityPanel({
                     <VerifiableCredentialBadge
                       hasVC={vcStatus.has_vc}
                       status={vcStatus.status}
-                      vcData={vcStatus as any}
+                      vcData={vcStatus}
                       executionId={execution.execution_id}
                       showCopyButton={false}
                       showVerifyButton={false}
