@@ -14,9 +14,7 @@ import {
 import React, { useCallback, useMemo, useRef } from "react";
 
 import { AgentLegend } from "./AgentLegend";
-import { LayoutControls } from "./LayoutControls";
 import FloatingConnectionLine from "./FloatingConnectionLine";
-import type { AllLayoutType } from "./layouts/LayoutManager";
 
 interface VirtualizedDAGProps {
   nodes: Node[];
@@ -25,23 +23,12 @@ interface VirtualizedDAGProps {
   nodeTypes: Record<string, React.ComponentType<any>>;
   edgeTypes?: Record<string, React.ComponentType<any>>;
   className?: string;
-  threshold?: number; // Number of nodes above which to use virtualization
-  workflowId: string; // used to persist viewport per workflow
-  // Layout-related props
-  currentLayout: AllLayoutType;
-  onLayoutChange: (layout: AllLayoutType) => Promise<void>;
-  availableLayouts: AllLayoutType[];
-  isSlowLayout: (layout: AllLayoutType) => boolean;
-  getLayoutDescription: (layout: AllLayoutType) => string;
-  isLargeGraph: boolean;
-  isApplyingLayout: boolean;
-  layoutProgress: number;
-  // Agent filtering props
+  threshold?: number;
+  workflowId: string;
   onAgentFilter: (agentName: string | null) => void;
   selectedAgent: string | null;
 }
 
-// Performance-optimized DAG component
 export function VirtualizedDAG({
   nodes,
   edges,
@@ -50,14 +37,6 @@ export function VirtualizedDAG({
   edgeTypes,
   className,
   workflowId,
-  currentLayout,
-  onLayoutChange,
-  availableLayouts,
-  isSlowLayout,
-  getLayoutDescription,
-  isLargeGraph,
-  isApplyingLayout,
-  layoutProgress,
   onAgentFilter,
   selectedAgent,
 }: VirtualizedDAGProps) {
@@ -76,7 +55,6 @@ export function VirtualizedDAG({
     [workflowId]
   );
 
-  // Memoized fitViewOptions to prevent unnecessary re-renders
   const fitViewOptions = React.useMemo(
     () => ({
       padding: 0.2,
@@ -87,7 +65,6 @@ export function VirtualizedDAG({
     []
   );
 
-  // Optimized node click handler with stable reference
   const handleNodeClick = useCallback(
     (event: React.MouseEvent, node: Node) => {
       onNodeClick?.(event, node);
@@ -95,17 +72,14 @@ export function VirtualizedDAG({
     [onNodeClick]
   );
 
-  // Update nodes when props change
   React.useEffect(() => {
     setFlowNodes(nodes);
   }, [nodes, setFlowNodes]);
 
-  // Update edges when props change
   React.useEffect(() => {
     setFlowEdges(edges);
   }, [edges, setFlowEdges]);
 
-  // Initialize/restore viewport once; preserve on subsequent updates
   React.useEffect(() => {
     if (!hasInitializedViewportRef.current) {
       const saved = localStorage.getItem(viewportStorageKey);
@@ -127,7 +101,6 @@ export function VirtualizedDAG({
     }
   }, [flowNodes.length, flowEdges.length, viewportStorageKey, fitView, setViewport]);
 
-  // Always use ReactFlow but with performance optimizations for large graphs
   return (
     <ReactFlow
       nodes={flowNodes}
@@ -148,7 +121,6 @@ export function VirtualizedDAG({
       edgeTypes={edgeTypes}
       connectionLineComponent={FloatingConnectionLine}
       connectionMode={ConnectionMode.Strict}
-      // Allow node dragging but disable edge creation
       nodesDraggable={true}
       nodesConnectable={false}
       elementsSelectable={true}
@@ -166,7 +138,6 @@ export function VirtualizedDAG({
         color="var(--border)"
       />
 
-      {/* Agent Legend */}
       <Panel position="top-left" className="z-10">
         <AgentLegend
           onAgentFilter={onAgentFilter}
@@ -175,25 +146,10 @@ export function VirtualizedDAG({
           nodes={flowNodes}
         />
       </Panel>
-
-      {/* Enhanced Layout Controls */}
-      <Panel position="top-right" className="flex gap-2">
-        <LayoutControls
-          availableLayouts={availableLayouts}
-          currentLayout={currentLayout}
-          onLayoutChange={onLayoutChange}
-          isSlowLayout={isSlowLayout}
-          getLayoutDescription={getLayoutDescription}
-          isLargeGraph={isLargeGraph}
-          isApplyingLayout={isApplyingLayout}
-          layoutProgress={layoutProgress}
-        />
-      </Panel>
     </ReactFlow>
   );
 }
 
-// Wrapper with ReactFlowProvider for standalone use
 export function VirtualizedDAGWithProvider(props: VirtualizedDAGProps) {
   return (
     <ReactFlowProvider>

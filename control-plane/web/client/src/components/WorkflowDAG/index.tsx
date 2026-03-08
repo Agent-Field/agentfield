@@ -20,7 +20,6 @@ import type { CSSProperties } from "react";
 import { AgentLegend } from "./AgentLegend";
 import FloatingConnectionLine from "./FloatingConnectionLine";
 import FloatingEdge from "./FloatingEdge";
-import { LayoutControls } from "./LayoutControls";
 import { NodeDetailSidebar } from "./NodeDetailSidebar";
 import { VirtualizedDAG } from "./VirtualizedDAG";
 import { WorkflowNode } from "./WorkflowNode";
@@ -72,9 +71,18 @@ export interface WorkflowDAGResponse {
   status_counts?: Record<string, number>;
 }
 
+export interface LayoutInfo {
+  currentLayout: AllLayoutType;
+  availableLayouts: AllLayoutType[];
+  isSlowLayout: (layout: AllLayoutType) => boolean;
+  isLargeGraph: boolean;
+  isApplyingLayout: boolean;
+}
+
 export interface WorkflowDAGControls {
   fitToView: (options?: FitViewOptions) => void;
   focusOnNodes: (nodeIds: string[], options?: { padding?: number }) => void;
+  changeLayout: (layout: AllLayoutType) => void;
 }
 
 function isLightweightDAGResponse(
@@ -146,6 +154,7 @@ interface WorkflowDAGViewerProps {
     firstMatchId?: string;
   }) => void;
   viewMode?: "standard" | "performance" | "debug";
+  onLayoutInfoChange?: (info: LayoutInfo) => void;
 }
 
 function WorkflowDAGViewerInner({
@@ -161,6 +170,7 @@ function WorkflowDAGViewerInner({
   onReady,
   onSearchResultsChange,
   viewMode = "standard",
+  onLayoutInfoChange,
 }: WorkflowDAGViewerProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState([] as Node[]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([] as Edge[]);
@@ -171,7 +181,7 @@ function WorkflowDAGViewerInner({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [isApplyingLayout, setIsApplyingLayout] = useState(false);
-  const [layoutProgress, setLayoutProgress] = useState(0);
+  const [_layoutProgress, setLayoutProgress] = useState(0);
   const [visualEpoch, setVisualEpoch] = useState(0);
   const hasInitialLayoutRef = useRef(false);
   const nodesRef = useRef<Node[]>([]);
@@ -181,6 +191,7 @@ function WorkflowDAGViewerInner({
     useState<WorkflowDAGResponse | null>(null);
   const largeGraphRef = useRef(false);
   const [deckGraphData, setDeckGraphData] = useState<DeckGraphData | null>(null);
+  const handleLayoutChangeRef = useRef<(layout: AllLayoutType) => void>(() => {});
 
   const externalDagData = useMemo<WorkflowDAGResponse | null>(() => {
     if (dagData === undefined || dagData === null) {
@@ -479,6 +490,9 @@ function decorateEdgesWithStatus(
         };
 
         fitBounds(rect, { padding: options?.padding ?? 0.2 });
+      },
+      changeLayout: (layout: AllLayoutType) => {
+        handleLayoutChangeRef.current(layout);
       },
     };
 
@@ -884,6 +898,21 @@ function decorateEdgesWithStatus(
     ]
   );
 
+  // Keep the ref in sync so controls.changeLayout() always uses latest
+  handleLayoutChangeRef.current = handleLayoutChange;
+
+  // Notify parent of layout state changes
+  useEffect(() => {
+    if (!onLayoutInfoChange) return;
+    onLayoutInfoChange({
+      currentLayout,
+      availableLayouts: layoutManager.getAvailableLayouts(nodes.length),
+      isSlowLayout: (layout: AllLayoutType) => layoutManager.isSlowLayout(layout),
+      isLargeGraph: layoutManager.isLargeGraph(nodes.length),
+      isApplyingLayout,
+    });
+  }, [currentLayout, isApplyingLayout, nodes.length, layoutManager, onLayoutInfoChange]);
+
   // Utility: merge new DAG data incrementally without resetting positions
   const mergeIncrementalUpdate = useCallback(
     async (data: WorkflowDAGResponse) => {
@@ -1181,7 +1210,6 @@ function decorateEdgesWithStatus(
     );
   }
 
-  const isLargeGraph = nodes.length > LARGE_GRAPH_LAYOUT_THRESHOLD;
   const shouldUseDeckGL = nodes.length >= LARGE_GRAPH_LAYOUT_THRESHOLD;
 
   // Handler for DeckGL node clicks - convert DeckGL node type to local type
@@ -1286,26 +1314,6 @@ function decorateEdgesWithStatus(
                 className="h-full w-full"
                 threshold={PERFORMANCE_THRESHOLD}
                 workflowId={workflowId}
-                // Layout-related props
-                currentLayout={currentLayout}
-                onLayoutChange={handleLayoutChange}
-                availableLayouts={
-                  isLargeGraph
-                    ? []
-                    : layoutManager.getAvailableLayouts(nodes.length)
-                }
-                isSlowLayout={(layout) =>
-                  isLargeGraph ? false : layoutManager.isSlowLayout(layout)
-                }
-                getLayoutDescription={(layout) =>
-                  layoutManager.getLayoutDescription(layout)
-                }
-                isLargeGraph={
-                  isLargeGraph || layoutManager.isLargeGraph(nodes.length)
-                }
-                isApplyingLayout={isApplyingLayout}
-                layoutProgress={layoutProgress}
-                // Agent filtering props
                 onAgentFilter={handleAgentFilter}
                 selectedAgent={selectedAgent}
               />
@@ -1359,26 +1367,6 @@ function decorateEdgesWithStatus(
                     selectedAgent={selectedAgent}
                     compact={nodes.length <= 20}
                     nodes={nodes}
-                  />
-                </Panel>
-
-                {/* Enhanced Layout Controls */}
-                <Panel position="top-right" className="z-30 flex gap-2">
-                  <LayoutControls
-                    availableLayouts={layoutManager.getAvailableLayouts(
-                      nodes.length
-                    )}
-                    currentLayout={currentLayout}
-                    onLayoutChange={handleLayoutChange}
-                    isSlowLayout={(layout) =>
-                      layoutManager.isSlowLayout(layout)
-                    }
-                    getLayoutDescription={(layout) =>
-                      layoutManager.getLayoutDescription(layout)
-                    }
-                    isLargeGraph={layoutManager.isLargeGraph(nodes.length)}
-                    isApplyingLayout={isApplyingLayout}
-                    layoutProgress={layoutProgress}
                   />
                 </Panel>
               </ReactFlow>

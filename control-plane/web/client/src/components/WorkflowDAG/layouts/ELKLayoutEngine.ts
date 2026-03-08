@@ -1,7 +1,7 @@
 import ELK, { type ElkNode, type LayoutOptions, type ElkExtendedEdge } from 'elkjs/lib/elk.bundled.js';
 import type { Node, Edge } from '@xyflow/react';
 
-export type ELKLayoutType = 'box' | 'rectpacking' | 'layered' | 'mrtree';
+export type ELKLayoutType = 'box' | 'rectpacking' | 'layered';
 
 export interface ELKLayoutConfig {
   algorithm: string;
@@ -52,18 +52,6 @@ export const ELK_LAYOUTS: Record<ELKLayoutType, ELKLayoutConfig> = {
     isSlowForLargeGraphs: true,
     description: 'Layered layout - Hierarchical, slower for large graphs'
   },
-  mrtree: {
-    algorithm: 'org.eclipse.elk.mrtree',
-    options: {
-      'elk.algorithm': 'org.eclipse.elk.mrtree',
-      'elk.spacing.nodeNode': '80',
-      'elk.spacing.edgeNode': '40',
-      'elk.padding': '[top=50,left=50,bottom=50,right=50]',
-      'elk.mrtree.searchOrder': 'DFS',
-    },
-    isSlowForLargeGraphs: true,
-    description: 'Mr. Tree layout - Tree structure, slower for large graphs'
-  }
 };
 
 export class ELKLayoutEngine {

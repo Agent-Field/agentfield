@@ -387,7 +387,6 @@ function EnhancedWorkflowDetailPageContent() {
               viewMode={viewMode}
               onViewModeChange={setViewMode}
               focusMode={focusMode}
-              isFullscreen={isFullscreen}
               onFocusModeChange={setFocusMode}
             />
           )}

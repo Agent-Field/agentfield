@@ -1,20 +1,14 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import { GitBranch, Search, X, Scan, LocateFixed, Loader2, Eye, Zap, Bug, Focus, EyeOff } from "@/components/ui/icon-bridge";
+import { GitBranch, X, Loader2 } from "@/components/ui/icon-bridge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { WorkflowDAGViewer } from "../WorkflowDAGViewer";
-import type { WorkflowDAGControls, WorkflowDAGResponse } from "../WorkflowDAG";
+import type { WorkflowDAGControls, WorkflowDAGResponse, LayoutInfo } from "../WorkflowDAG";
 import { Badge } from "../ui/badge";
-import { cn } from "@/lib/utils";
 import type { WorkflowSummary, WorkflowTimelineNode } from "../../types/workflows";
+import { GraphToolbar } from "../WorkflowDAG/GraphToolbar";
 
 type ViewMode = 'standard' | 'performance' | 'debug';
-
-const VIEW_MODE_CONFIG: ReadonlyArray<{ value: ViewMode; icon: typeof Eye; label: string }> = [
-  { value: "standard", icon: Eye, label: "Standard view" },
-  { value: "performance", icon: Zap, label: "Performance view" },
-  { value: "debug", icon: Bug, label: "Debug view" },
-];
 
 interface EnhancedWorkflowFlowProps {
   workflow: WorkflowSummary;
@@ -27,7 +21,6 @@ interface EnhancedWorkflowFlowProps {
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
   focusMode: boolean;
-  isFullscreen: boolean;
   onFocusModeChange?: (enabled: boolean) => void;
 }
 
@@ -47,6 +40,7 @@ export function EnhancedWorkflowFlow({
   const [searchQuery, setSearchQuery] = useState("");
   const [showSearch, setShowSearch] = useState(false);
   const [searchSummary, setSearchSummary] = useState<{ total: number; firstMatchId?: string }>({ total: 0 });
+  const [layoutInfo, setLayoutInfo] = useState<LayoutInfo | null>(null);
   const dagControlsRef = useRef<WorkflowDAGControls | null>(null);
   const pendingSearchFocusRef = useRef(false);
 
@@ -83,17 +77,21 @@ export function EnhancedWorkflowFlow({
     pendingSearchFocusRef.current = false;
   }, []);
 
-  const handleFitView = useCallback(() => {
-    dagControlsRef.current?.fitToView({ padding: 0.2 });
+  const handleSmartCenter = useCallback(() => {
+    if (safeSelectedNodeIds.length > 0) {
+      dagControlsRef.current?.focusOnNodes(safeSelectedNodeIds, { padding: 0.3 });
+    } else {
+      dagControlsRef.current?.fitToView({ padding: 0.2 });
+    }
+  }, [safeSelectedNodeIds]);
+
+  const handleLayoutChange = useCallback((layout: Parameters<WorkflowDAGControls['changeLayout']>[0]) => {
+    dagControlsRef.current?.changeLayout(layout);
   }, []);
 
-  const handleCenterSelection = useCallback(() => {
-    if (!safeSelectedNodeIds.length) {
-      handleFitView();
-      return;
-    }
-    dagControlsRef.current?.focusOnNodes(safeSelectedNodeIds, { padding: 0.3 });
-  }, [handleFitView, safeSelectedNodeIds]);
+  const handleLayoutInfoChange = useCallback((info: LayoutInfo) => {
+    setLayoutInfo(info);
+  }, []);
 
   useEffect(() => {
     if (focusMode && safeSelectedNodeIds.length > 0) {
@@ -177,101 +175,36 @@ export function EnhancedWorkflowFlow({
         </div>
       )}
 
-      {/* Floating navigation — bottom right */}
-      <div className="absolute bottom-6 right-6 z-10 flex flex-col gap-2">
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={handleSearchToggle}
-          className="h-10 w-10 p-0 shadow-lg"
-          title="Search nodes"
-        >
-          <Search className="w-4 h-4" />
-        </Button>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={handleCenterSelection}
-          disabled={!dagControlsRef.current}
-          className="h-10 w-10 p-0 shadow-lg"
-          title="Center selection"
-        >
-          <LocateFixed className="w-4 h-4" />
-        </Button>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={handleFitView}
-          disabled={!dagControlsRef.current}
-          className="h-10 w-10 p-0 shadow-lg"
-          title="Fit view"
-        >
-          <Scan className="w-4 h-4" />
-        </Button>
-      </div>
+      {/* Status Indicators - Top Right */}
+      {isRefreshing && hasDagContent && (
+        <div className="absolute top-4 right-4 z-10 flex items-center gap-2 bg-background/95 backdrop-blur-sm border border-border rounded-lg shadow-sm px-3 py-2">
+          <span className="flex items-center gap-2 text-body-small">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Updating
+          </span>
+        </div>
+      )}
 
-      {/* View controls — bottom left */}
-      <div className="absolute bottom-6 left-6 z-10 flex items-center gap-1 bg-background/95 backdrop-blur-sm border border-border rounded-lg shadow-lg p-1">
-        {VIEW_MODE_CONFIG.map((mode) => {
-          const Icon = mode.icon;
-          const isActive = viewMode === mode.value;
-          return (
-            <Button
-              key={mode.value}
-              variant={isActive ? "default" : "ghost"}
-              size="sm"
-              onClick={() => onViewModeChange(mode.value)}
-              className={cn(
-                "h-8 w-8 p-0",
-                isActive && "shadow-sm"
-              )}
-              title={mode.label}
-            >
-              <Icon className="w-3.5 h-3.5" />
-            </Button>
-          );
-        })}
-
-        <div className="w-px h-5 bg-border mx-0.5" />
-
-        <Button
-          variant={focusMode ? "default" : "ghost"}
-          size="sm"
-          onClick={() => onFocusModeChange?.(!focusMode)}
-          className={cn(
-            "h-8 w-8 p-0",
-            focusMode && "shadow-sm"
-          )}
-          title={focusMode ? "Exit focus mode (Cmd/Ctrl + F)" : "Focus mode (Cmd/Ctrl + F)"}
-        >
-          {focusMode ? <EyeOff className="w-3.5 h-3.5" /> : <Focus className="w-3.5 h-3.5" />}
-        </Button>
-      </div>
-
-      {/* Status overlay — top left */}
-      {(isRefreshing || selectedNodeIds.length > 0 || focusMode || viewMode !== 'standard') && (
-        <div className="absolute top-4 left-4 z-10 flex items-center gap-2 bg-background/95 backdrop-blur-sm border border-border rounded-lg shadow-sm px-3 py-2" style={{ marginTop: showSearch ? '60px' : '0' }}>
-          {isRefreshing && hasDagContent && (
-            <span className="flex items-center gap-2 text-body-small">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Updating
-            </span>
-          )}
-          {viewMode !== 'standard' && (
-            <Badge variant="secondary" className="bg-primary/10 text-primary border-primary/30 text-xs">
-              {viewMode === 'performance' ? 'Performance' : 'Debug'}
-            </Badge>
-          )}
-          {focusMode && (
-            <Badge variant="secondary" className="text-xs">
-              Focus {safeSelectedNodeIds.length > 0 ? `(${safeSelectedNodeIds.length})` : ''}
-            </Badge>
-          )}
-          {selectedNodeIds.length > 0 && !focusMode && (
-            <span className="text-body-small">
-              {selectedNodeIds.length} selected
-            </span>
-          )}
+      {/* Unified Toolbar - Bottom Right */}
+      {layoutInfo && (
+        <div className="absolute bottom-6 right-6 z-10">
+          <GraphToolbar
+            availableLayouts={layoutInfo.availableLayouts}
+            currentLayout={layoutInfo.currentLayout}
+            onLayoutChange={handleLayoutChange}
+            isSlowLayout={layoutInfo.isSlowLayout}
+            isLargeGraph={layoutInfo.isLargeGraph}
+            isApplyingLayout={layoutInfo.isApplyingLayout}
+            viewMode={viewMode}
+            onViewModeChange={onViewModeChange}
+            focusMode={focusMode}
+            onFocusModeChange={onFocusModeChange}
+            onSearchToggle={handleSearchToggle}
+            showSearch={showSearch}
+            onSmartCenter={handleSmartCenter}
+            hasSelection={safeSelectedNodeIds.length > 0}
+            controlsReady={!!dagControlsRef.current}
+          />
         </div>
       )}
 
@@ -290,6 +223,7 @@ export function EnhancedWorkflowFlow({
           onReady={handleRegisterControls}
           onSearchResultsChange={handleSearchSummaryUpdate}
           viewMode={viewMode}
+          onLayoutInfoChange={handleLayoutInfoChange}
         />
       </div>
     </div>
