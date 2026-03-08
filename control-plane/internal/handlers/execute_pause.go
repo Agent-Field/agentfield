@@ -79,33 +79,38 @@ func handlePauseResume(c *gin.Context, store ExecutionStore, expectedFromStatus,
 		return
 	}
 
-	currentStatus := types.NormalizeExecutionStatus(exec.Status)
-	if currentStatus != expectedFromStatus {
-		c.JSON(http.StatusConflict, gin.H{
-			"error":   "invalid_state",
-			"message": fmt.Sprintf("execution is in '%s' state; must be '%s'", currentStatus, expectedFromStatus),
-		})
-		return
-	}
-
 	now := time.Now().UTC()
 	var statusReason *string
 	if reason != "" {
 		statusReason = &reason
 	}
 
+	var previousStatus string
 	updatedExec, err := store.UpdateExecutionRecord(reqCtx, executionID, func(current *types.Execution) (*types.Execution, error) {
 		if current == nil {
 			return nil, fmt.Errorf("execution %s not found", executionID)
 		}
+		currentStatus := types.NormalizeExecutionStatus(current.Status)
+		if currentStatus != expectedFromStatus {
+			return nil, fmt.Errorf("execution is in '%s' state; must be '%s'", currentStatus, expectedFromStatus)
+		}
+		previousStatus = currentStatus
 		current.Status = nextStatus
 		current.StatusReason = statusReason
 		current.UpdatedAt = now
 		return current, nil
 	})
 	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+		errMsg := err.Error()
+		if strings.Contains(strings.ToLower(errMsg), "not found") {
 			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("execution %s not found", executionID)})
+			return
+		}
+		if strings.Contains(errMsg, "must be '") || strings.Contains(errMsg, "invalid execution state transition") {
+			c.JSON(http.StatusConflict, gin.H{
+				"error":   "invalid_state",
+				"message": errMsg,
+			})
 			return
 		}
 		logger.Logger.Error().Err(err).Str("execution_id", executionID).Msg("failed to update execution record")
@@ -163,7 +168,7 @@ func handlePauseResume(c *gin.Context, store ExecutionStore, expectedFromStatus,
 	if nextStatus == types.ExecutionStatusPaused {
 		response := executionPauseResponse{
 			ExecutionID:    executionID,
-			PreviousStatus: expectedFromStatus,
+			PreviousStatus: previousStatus,
 			Status:         nextStatus,
 			Reason:         statusReason,
 			PausedAt:       now.Format(time.RFC3339),
@@ -174,7 +179,7 @@ func handlePauseResume(c *gin.Context, store ExecutionStore, expectedFromStatus,
 
 	response := executionResumeResponse{
 		ExecutionID:    executionID,
-		PreviousStatus: expectedFromStatus,
+		PreviousStatus: previousStatus,
 		Status:         nextStatus,
 		ResumedAt:      now.Format(time.RFC3339),
 	}

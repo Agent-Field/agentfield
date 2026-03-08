@@ -71,21 +71,17 @@ func CancelExecutionHandler(store ExecutionStore) gin.HandlerFunc {
 			return
 		}
 
-		if types.IsTerminalExecutionStatus(exec.Status) || types.IsTerminalExecutionStatus(wfExec.Status) {
-			c.JSON(http.StatusConflict, gin.H{
-				"error":   "invalid_state",
-				"message": fmt.Sprintf("execution is in terminal state '%s'", exec.Status),
-			})
-			return
-		}
-
-		previousStatus := exec.Status
 		now := time.Now().UTC()
 
+		var previousStatus string
 		exec, err = store.UpdateExecutionRecord(reqCtx, executionID, func(current *types.Execution) (*types.Execution, error) {
 			if current == nil {
 				return nil, fmt.Errorf("execution %s not found", executionID)
 			}
+			if types.IsTerminalExecutionStatus(current.Status) {
+				return nil, fmt.Errorf("execution is in terminal state '%s'", current.Status)
+			}
+			previousStatus = current.Status
 			current.Status = types.ExecutionStatusCancelled
 			if reasonPtr != nil {
 				current.StatusReason = reasonPtr
@@ -93,6 +89,14 @@ func CancelExecutionHandler(store ExecutionStore) gin.HandlerFunc {
 			return current, nil
 		})
 		if err != nil {
+			errMsg := err.Error()
+			if strings.Contains(errMsg, "terminal state") || strings.Contains(errMsg, "invalid execution state transition") {
+				c.JSON(http.StatusConflict, gin.H{
+					"error":   "invalid_state",
+					"message": errMsg,
+				})
+				return
+			}
 			logger.Logger.Error().Err(err).Str("execution_id", executionID).Msg("failed to update execution record for cancellation")
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to cancel execution"})
 			return
