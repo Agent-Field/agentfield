@@ -3,7 +3,7 @@
 # Usage:
 #   Production:  curl -fsSL https://agentfield.ai/install.sh | bash
 #   Staging:     curl -fsSL https://agentfield.ai/install.sh | bash -s -- --staging
-#   Version pin: VERSION=v1.0.0 curl -fsSL https://agentfield.ai/install.sh | bash
+#   Version pin: curl -fsSL https://agentfield.ai/install.sh | VERSION=v1.0.0 bash
 
 set -e
 
@@ -226,19 +226,20 @@ get_latest_prerelease_version() {
 
   if command -v curl >/dev/null 2>&1; then
     # Get all releases and find the first prerelease
+    # Note: Use [[:space:]]* instead of \s* for macOS BSD sed compatibility
     version=$(curl -fsSL "$releases_url" 2>/dev/null | \
       grep -E '"tag_name"|"prerelease"' | \
       paste - - | \
       grep '"prerelease": true' | \
       head -1 | \
-      sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/')
+      sed -E 's/.*"tag_name":[[:space:]]*"([^"]+)".*/\1/')
   elif command -v wget >/dev/null 2>&1; then
     version=$(wget -qO- "$releases_url" 2>/dev/null | \
       grep -E '"tag_name"|"prerelease"' | \
       paste - - | \
       grep '"prerelease": true' | \
       head -1 | \
-      sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/')
+      sed -E 's/.*"tag_name":[[:space:]]*"([^"]+)".*/\1/')
   else
     print_error "Neither curl nor wget found. Please install one of them."
     exit 1
