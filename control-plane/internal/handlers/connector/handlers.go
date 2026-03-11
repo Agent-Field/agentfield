@@ -73,6 +73,14 @@ func (h *Handlers) RegisterRoutes(group *gin.RouterGroup) {
 		reasonerGroup.POST("/reasoners/:id/versions/:version/restart", h.RestartReasonerVersion)
 	}
 
+	// Status routes (read-only node information)
+	statusGroup := group.Group("")
+	statusGroup.Use(middleware.ConnectorCapabilityCheck("status_read", caps))
+	{
+		statusGroup.GET("/nodes", h.ListNodes)
+		statusGroup.GET("/nodes/:id/status", h.GetNodeStatus)
+	}
+
 	// Policy management routes (proxied admin endpoints)
 	if h.accessPolicyService != nil {
 		policyGroup := group.Group("")
@@ -88,6 +96,41 @@ func (h *Handlers) RegisterRoutes(group *gin.RouterGroup) {
 		tagHandlers := admin.NewTagApprovalHandlers(h.tagApprovalService, h.storage)
 		tagHandlers.RegisterRoutes(tagGroup)
 	}
+}
+
+// ListNodes returns all registered agent nodes for the connector.
+func (h *Handlers) ListNodes(c *gin.Context) {
+	ctx := c.Request.Context()
+	agents, err := h.storage.ListAgents(ctx, types.AgentFilters{})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"agents": agents, "total": len(agents)})
+}
+
+// GetNodeStatus returns status info for a specific agent node.
+func (h *Handlers) GetNodeStatus(c *gin.Context) {
+	ctx := c.Request.Context()
+	id := c.Param("id")
+
+	agent, err := h.storage.GetAgent(ctx, id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if agent == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "agent node not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id":               agent.ID,
+		"group_id":         agent.GroupID,
+		"health_status":    agent.HealthStatus,
+		"lifecycle_status": agent.LifecycleStatus,
+		"version":          agent.Version,
+	})
 }
 
 // GetManifest returns the server-side capability manifest showing what
