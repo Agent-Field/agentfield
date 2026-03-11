@@ -284,6 +284,13 @@ func loadConfig(configFile string) (*config.Config, error) {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
+	// Apply environment variable overrides using shorter env var names
+	// (e.g. AGENTFIELD_CONNECTOR_ENABLED instead of AGENTFIELD_FEATURES_CONNECTOR_ENABLED).
+	// Viper's AutomaticEnv only works for keys it already knows about from config files,
+	// so when no config file is present (e.g. Railway deployments), these overrides are
+	// the only way to set connector config, capabilities, etc. from environment variables.
+	config.ApplyEnvOverrides(&cfg)
+
 	// Apply defaults if not set
 	if cfg.AgentField.Port == 0 {
 		cfg.AgentField.Port = 8080 // Default port

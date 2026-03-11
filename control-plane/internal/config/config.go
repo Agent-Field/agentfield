@@ -251,14 +251,16 @@ func LoadConfig(configPath string) (*Config, error) {
 	}
 
 	// Apply environment variable overrides
-	applyEnvOverrides(&cfg)
+	ApplyEnvOverrides(&cfg)
 
 	return &cfg, nil
 }
 
-// applyEnvOverrides applies environment variable overrides to the config.
+// ApplyEnvOverrides applies environment variable overrides to the config.
 // Environment variables take precedence over YAML config values.
-func applyEnvOverrides(cfg *Config) {
+// Exported so the main server startup (which uses Viper for file loading)
+// can call it after Viper unmarshal to apply the shorter env var names.
+func ApplyEnvOverrides(cfg *Config) {
 	// API Authentication
 	if apiKey := os.Getenv("AGENTFIELD_API_KEY"); apiKey != "" {
 		cfg.API.Auth.APIKey = apiKey
