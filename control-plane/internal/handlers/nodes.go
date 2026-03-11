@@ -1151,7 +1151,10 @@ func UpdateLifecycleStatusHandler(storageProvider storage.StorageProvider, uiSer
 	}
 }
 
-// GetNodeStatusHandler handles getting the unified status for a specific node
+// GetNodeStatusHandler handles getting the unified status for a specific node.
+// Uses the snapshot (no live probe) so that status is controlled by the
+// background HealthMonitor which has proper consecutive-failure debouncing.
+// For a live health check, use the POST .../status/refresh endpoint instead.
 func GetNodeStatusHandler(statusManager *services.StatusManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
@@ -1172,7 +1175,7 @@ func GetNodeStatusHandler(statusManager *services.StatusManager) gin.HandlerFunc
 			return
 		}
 
-		status, err := statusManager.GetAgentStatus(ctx, nodeID)
+		status, err := statusManager.GetAgentStatusSnapshot(ctx, nodeID, nil)
 		if err != nil {
 			logger.Logger.Error().Err(err).Str("node_id", nodeID).Msg("❌ Failed to get node status")
 			c.JSON(http.StatusNotFound, gin.H{
@@ -1287,7 +1290,7 @@ func BulkNodeStatusHandler(statusManager *services.StatusManager, storageProvide
 		var errors []string
 
 		for _, nodeID := range request.NodeIDs {
-			status, err := statusManager.GetAgentStatus(ctx, nodeID)
+			status, err := statusManager.GetAgentStatusSnapshot(ctx, nodeID, nil)
 			if err != nil {
 				logger.Logger.Warn().Err(err).Str("node_id", nodeID).Msg("⚠️ Failed to get status for node in bulk request")
 				results[nodeID] = gin.H{
