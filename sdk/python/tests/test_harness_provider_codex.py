@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -191,6 +192,47 @@ async def test_codex_provider_non_zero_exit_without_result_is_error(
     assert raw.is_error is True
     assert raw.result is None
     assert raw.error_message == "boom"
+
+
+@pytest.mark.asyncio
+async def test_codex_cost_flows_through_metrics(monkeypatch: pytest.MonkeyPatch):
+    """When model is provided, estimated cost populates metrics.total_cost_usd."""
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+        _ = (env, cwd, timeout)
+        stdout = (
+            '{"type":"thread.started","thread_id":"t1"}\n'
+            '{"type":"turn.completed","text":"result"}\n'
+        )
+        return stdout, "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.codex.run_cli", fake_run_cli)
+
+    with patch(
+        "agentfield.harness.providers.codex.estimate_cli_cost", return_value=0.0050
+    ):
+        provider = CodexProvider()
+        raw = await provider.execute("hello", {"model": "openai/gpt-4o"})
+
+    assert raw.metrics.total_cost_usd == 0.0050
+    assert raw.is_error is False
+
+
+@pytest.mark.asyncio
+async def test_codex_cost_none_without_model(monkeypatch: pytest.MonkeyPatch):
+    """Without a model, cost estimation returns None."""
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+        _ = (env, cwd, timeout)
+        stdout = '{"type":"turn.completed","text":"result"}\n'
+        return stdout, "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.codex.run_cli", fake_run_cli)
+
+    provider = CodexProvider()
+    raw = await provider.execute("hello", {})
+
+    assert raw.metrics.total_cost_usd is None
 
 
 def test_factory_builds_codex_provider_with_config_bin() -> None:

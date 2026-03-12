@@ -8,7 +8,12 @@ from pydantic import BaseModel
 from unittest.mock import patch
 
 from agentfield.harness._result import Metrics, RawResult
-from agentfield.harness._runner import HarnessRunner, _is_transient, _resolve_options
+from agentfield.harness._runner import (
+    HarnessRunner,
+    _accumulate_metrics,
+    _is_transient,
+    _resolve_options,
+)
 from agentfield.harness._schema import get_output_path
 
 
@@ -292,3 +297,90 @@ async def test_run_resolves_harness_config_defaults_with_per_call_overrides(tmp_
     assert provider.last_options["permission_mode"] == "auto"
     assert provider.last_options["system_prompt"] == "base system"
     assert provider.last_options["env"] == {"OVERRIDE": "1"}
+
+
+def test_accumulate_metrics_sums_costs_across_retries():
+    """Cost is summed across multiple RawResults (e.g. schema retries)."""
+    raws = [
+        RawResult(result="a", metrics=Metrics(num_turns=1, total_cost_usd=0.01)),
+        RawResult(result="b", metrics=Metrics(num_turns=2, total_cost_usd=0.02)),
+        RawResult(result="c", metrics=Metrics(num_turns=1, total_cost_usd=0.005)),
+    ]
+    cost, turns, sid, msgs = _accumulate_metrics(raws)
+    assert cost == pytest.approx(0.035)
+    assert turns == 4
+
+
+def test_accumulate_metrics_none_cost_skipped():
+    """None costs are skipped; only non-None costs are summed."""
+    raws = [
+        RawResult(result="a", metrics=Metrics(num_turns=1, total_cost_usd=None)),
+        RawResult(result="b", metrics=Metrics(num_turns=2, total_cost_usd=0.05)),
+    ]
+    cost, turns, sid, msgs = _accumulate_metrics(raws)
+    assert cost == pytest.approx(0.05)
+    assert turns == 3
+
+
+def test_accumulate_metrics_all_none_returns_none():
+    """If all costs are None, total is None (unknown), not 0."""
+    raws = [
+        RawResult(result="a", metrics=Metrics(num_turns=1, total_cost_usd=None)),
+        RawResult(result="b", metrics=Metrics(num_turns=2, total_cost_usd=None)),
+    ]
+    cost, turns, sid, msgs = _accumulate_metrics(raws)
+    assert cost is None
+    assert turns == 3
+
+
+@pytest.mark.asyncio
+async def test_schema_retry_accumulates_cost(tmp_path, monkeypatch):
+    """Cost is accumulated across initial attempt + schema retries."""
+
+    async def fake_sleep(delay: float) -> None:
+        pass
+
+    monkeypatch.setattr("agentfield.harness._runner.asyncio.sleep", fake_sleep)
+
+    call_count = 0
+
+    class RetryProvider:
+        async def execute(self, prompt: str, options: dict) -> RawResult:
+            nonlocal call_count
+            call_count += 1
+            output_path = get_output_path(str(options.get("cwd", ".")))
+            if call_count == 1:
+                # First attempt: write invalid JSON (missing 'count')
+                with open(output_path, "w") as f:
+                    f.write('{"name": "partial"}')
+                return RawResult(
+                    result="partial",
+                    metrics=Metrics(num_turns=1, total_cost_usd=0.01),
+                )
+            else:
+                # Retry: write valid JSON
+                with open(output_path, "w") as f:
+                    f.write('{"name": "ok", "count": 42}')
+                return RawResult(
+                    result="ok",
+                    metrics=Metrics(num_turns=1, total_cost_usd=0.02),
+                )
+
+    runner = HarnessRunner()
+
+    with patch(
+        "agentfield.harness._runner.build_provider", return_value=RetryProvider()
+    ):
+        result = await runner.run(
+            "produce json",
+            provider="codex",
+            schema=DemoSchema,
+            cwd=str(tmp_path),
+            schema_max_retries=2,
+        )
+
+    assert result.is_error is False
+    assert isinstance(result.parsed, DemoSchema)
+    assert result.parsed.name == "ok"
+    assert result.cost_usd == pytest.approx(0.03)  # 0.01 + 0.02
+    assert result.num_turns == 2

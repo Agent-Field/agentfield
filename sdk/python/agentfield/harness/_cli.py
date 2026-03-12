@@ -96,3 +96,34 @@ def extract_final_text(events: List[Dict[str, Any]]) -> Optional[str]:
                 result_text = content
 
     return result_text
+
+
+def estimate_cli_cost(
+    model: str,
+    prompt: str,
+    result_text: str | None,
+) -> float | None:
+    """Estimate LLM cost from prompt/completion token counts using litellm.
+
+    Returns None if the model isn't in litellm's pricing DB or litellm
+    is not available — callers should treat None as "unknown", not "free".
+    """
+    if not model:
+        return None
+    try:
+        import litellm
+
+        prompt_tokens = litellm.token_counter(model=model, text=prompt)
+        completion_tokens = (
+            litellm.token_counter(model=model, text=result_text)
+            if result_text
+            else 0
+        )
+        cost = litellm.completion_cost(
+            model=model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+        return cost if cost and cost > 0 else None
+    except Exception:
+        return None

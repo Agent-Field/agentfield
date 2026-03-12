@@ -5,7 +5,13 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, List, Optional
 
-from agentfield.harness._cli import extract_final_text, parse_jsonl, run_cli, strip_ansi
+from agentfield.harness._cli import (
+    estimate_cli_cost,
+    extract_final_text,
+    parse_jsonl,
+    run_cli,
+    strip_ansi,
+)
 from agentfield.harness._result import FailureType, Metrics, RawResult
 
 
@@ -65,7 +71,11 @@ class CodexProvider:
         result_text = extract_final_text(events)
 
         num_turns = 0
-        total_cost: Optional[float] = None
+        total_cost: Optional[float] = estimate_cli_cost(
+            model=str(options.get("model", "")),
+            prompt=prompt,
+            result_text=result_text,
+        )
         session_id = ""
         messages: List[Dict[str, Any]] = events
 

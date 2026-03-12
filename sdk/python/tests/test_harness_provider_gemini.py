@@ -3,6 +3,7 @@ from __future__ import annotations
 # pyright: reportMissingImports=false
 
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -111,3 +112,39 @@ async def test_gemini_passes_model_flag(monkeypatch: pytest.MonkeyPatch):
 
     assert captured["cmd"] == ["gemini", "-m", "gemini-2.5-pro", "-p", "hello"]
     assert raw.is_error is False
+
+
+@pytest.mark.asyncio
+async def test_gemini_cost_flows_through_metrics(monkeypatch: pytest.MonkeyPatch):
+    """When model is provided, estimated cost populates metrics.total_cost_usd."""
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+        _ = (env, cwd, timeout)
+        return "result text\n", "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.gemini.run_cli", fake_run_cli)
+
+    with patch(
+        "agentfield.harness.providers.gemini.estimate_cli_cost", return_value=0.0021
+    ):
+        provider = GeminiProvider()
+        raw = await provider.execute("hello", {"model": "gemini-2.5-pro"})
+
+    assert raw.metrics.total_cost_usd == 0.0021
+    assert raw.is_error is False
+
+
+@pytest.mark.asyncio
+async def test_gemini_cost_none_without_model(monkeypatch: pytest.MonkeyPatch):
+    """Without a model, cost estimation returns None."""
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+        _ = (env, cwd, timeout)
+        return "result text\n", "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.gemini.run_cli", fake_run_cli)
+
+    provider = GeminiProvider()
+    raw = await provider.execute("hello", {})
+
+    assert raw.metrics.total_cost_usd is None

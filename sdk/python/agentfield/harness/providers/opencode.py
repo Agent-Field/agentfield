@@ -10,7 +10,7 @@ import tempfile
 import time
 from typing import ClassVar, Dict, Optional
 
-from agentfield.harness._cli import run_cli, strip_ansi
+from agentfield.harness._cli import estimate_cli_cost, run_cli, strip_ansi
 from agentfield.harness._result import FailureType, Metrics, RawResult
 
 logger = logging.getLogger("agentfield.harness.opencode")
@@ -152,12 +152,19 @@ class OpenCodeProvider:
             is_error = False
             error_message = None
 
+        estimated_cost = estimate_cli_cost(
+            model=str(options.get("model", "")),
+            prompt=effective_prompt,
+            result_text=result_text,
+        )
+
         return RawResult(
             result=result_text,
             messages=[],
             metrics=Metrics(
                 duration_api_ms=api_ms,
                 num_turns=1 if result_text else 0,
+                total_cost_usd=estimated_cost,
                 session_id="",
             ),
             is_error=is_error,

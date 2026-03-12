@@ -3,6 +3,7 @@ from __future__ import annotations
 # pyright: reportMissingImports=false
 
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -127,3 +128,40 @@ async def test_opencode_passes_model_flag(monkeypatch: pytest.MonkeyPatch):
         "hello",
     ]
     assert raw.is_error is False
+
+
+@pytest.mark.asyncio
+async def test_opencode_cost_flows_through_metrics(monkeypatch: pytest.MonkeyPatch):
+    """When model is provided, estimated cost populates metrics.total_cost_usd."""
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+        _ = (env, cwd, timeout)
+        return "result text\n", "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
+
+    with patch(
+        "agentfield.harness.providers.opencode.estimate_cli_cost", return_value=0.0035
+    ):
+        provider = OpenCodeProvider(server_url="http://127.0.0.1:9999")
+        raw = await provider.execute("hello", {"model": "openai/gpt-4o"})
+
+    assert raw.metrics.total_cost_usd == 0.0035
+    assert raw.is_error is False
+
+
+@pytest.mark.asyncio
+async def test_opencode_cost_none_without_model(monkeypatch: pytest.MonkeyPatch):
+    """Without a model, cost estimation returns None (not 0)."""
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+        _ = (env, cwd, timeout)
+        return "result text\n", "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
+
+    provider = OpenCodeProvider(server_url="http://127.0.0.1:9999")
+    raw = await provider.execute("hello", {})
+
+    # No model → estimate_cli_cost gets empty string → returns None
+    assert raw.metrics.total_cost_usd is None
