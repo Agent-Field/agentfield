@@ -66,7 +66,6 @@ def test_estimate_cost_handles_litellm_import_error():
 def test_estimate_cost_with_mocked_litellm():
     """Verify the function calls litellm correctly and returns the cost."""
     mock_litellm = MagicMock()
-    mock_litellm.token_counter.side_effect = [100, 50]  # prompt, completion
     mock_litellm.completion_cost.return_value = 0.0042
 
     with patch.dict("sys.modules", {"litellm": mock_litellm}):
@@ -77,9 +76,9 @@ def test_estimate_cost_with_mocked_litellm():
         )
 
     assert cost == 0.0042
-    assert mock_litellm.token_counter.call_count == 2
+    mock_litellm.token_counter.assert_not_called()
     mock_litellm.completion_cost.assert_called_once_with(
         model="openai/gpt-4o",
-        prompt_tokens=100,
-        completion_tokens=50,
+        prompt="hello world",
+        completion="response",
     )
