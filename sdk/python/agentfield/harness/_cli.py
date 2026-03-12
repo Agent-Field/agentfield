@@ -103,7 +103,7 @@ def estimate_cli_cost(
     prompt: str,
     result_text: str | None,
 ) -> float | None:
-    """Estimate LLM cost from prompt/completion token counts using litellm.
+    """Estimate LLM cost from prompt/completion text using litellm.
 
     Returns None if the model isn't in litellm's pricing DB or litellm
     is not available — callers should treat None as "unknown", not "free".
@@ -113,16 +113,10 @@ def estimate_cli_cost(
     try:
         import litellm
 
-        prompt_tokens = litellm.token_counter(model=model, text=prompt)
-        completion_tokens = (
-            litellm.token_counter(model=model, text=result_text)
-            if result_text
-            else 0
-        )
         cost = litellm.completion_cost(
             model=model,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
+            prompt=prompt,
+            completion=result_text or "",
         )
         return cost if cost and cost > 0 else None
     except Exception:
