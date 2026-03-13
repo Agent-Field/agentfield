@@ -2,8 +2,6 @@
 import types
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from agentfield.multimodal_response import MultimodalResponse, detect_multimodal_response
 
 
