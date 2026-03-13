@@ -608,6 +608,9 @@ class Agent(FastAPI):
         # Manages pending pause/approval futures resolved via webhook callback
         self._pause_manager = _PauseManager()
 
+        # prevent GC of fire-and-forget async execution tasks
+        self._background_tasks: set[asyncio.Task] = set()
+
         # Initialize async execution manager (will be lazily created when needed)
         self._async_execution_manager: Optional[AsyncExecutionManager] = None
 
@@ -1741,13 +1744,16 @@ class Agent(FastAPI):
 
                 execution_id_header = request.headers.get("X-Execution-ID")
                 if execution_id_header and self.agentfield_server:
-                    asyncio.create_task(
+                    task = asyncio.create_task(
                         self._execute_async_with_callback(
                             reasoner_coro=run_reasoner,
                             execution_id=execution_id_header,
                             reasoner_name=reasoner_id,
                         )
                     )
+                    # prevent GC of fire-and-forget tasks
+                    self._background_tasks.add(task)
+                    task.add_done_callback(self._background_tasks.discard)
                     return JSONResponse(
                         status_code=202,
                         content={
@@ -2081,6 +2087,7 @@ class Agent(FastAPI):
                     callback_url,
                     json=safe_payload,
                     headers={"Content-Type": "application/json"},
+                    timeout=30.0,  # longer timeout for critical status callbacks
                 )
                 if 200 <= response.status_code < 300:
                     if self.dev_mode:

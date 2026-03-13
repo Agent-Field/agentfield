@@ -3,9 +3,10 @@ agentfield:
   execution_cleanup:
     enabled: true
     retention_period: 72h
-    cleanup_interval: 1h
+    cleanup_interval: 5m
     batch_size: 200
     preserve_recent_duration: 1h
+    stale_execution_timeout: 10m
   execution_queue:
     agent_call_timeout: 1800s  # Timeout for agent HTTP calls (0s or -1s to disable)
     webhook_timeout: 10s          # Per-attempt timeout for webhook deliveries
