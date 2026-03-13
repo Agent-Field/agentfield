@@ -25,12 +25,12 @@ class StatelessRateLimiter:
 
     def __init__(
         self,
-        max_retries: int = 20,
-        base_delay: float = 1.0,
-        max_delay: float = 300.0,
+        max_retries: int = 5,
+        base_delay: float = 0.5,
+        max_delay: float = 30.0,
         jitter_factor: float = 0.25,
-        circuit_breaker_threshold: int = 10,
-        circuit_breaker_timeout: int = 300,
+        circuit_breaker_threshold: int = 5,
+        circuit_breaker_timeout: int = 30,
     ):
         self.max_retries = max_retries
         self.base_delay = base_delay

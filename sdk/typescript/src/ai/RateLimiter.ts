@@ -39,12 +39,12 @@ export class StatelessRateLimiter {
   protected _circuitOpenTime?: number;
 
   constructor(options: RateLimiterOptions = {}) {
-    this.maxRetries = options.maxRetries ?? 20;
-    this.baseDelay = options.baseDelay ?? 1.0;
-    this.maxDelay = options.maxDelay ?? 300.0;
+    this.maxRetries = options.maxRetries ?? 5;
+    this.baseDelay = options.baseDelay ?? 0.5;
+    this.maxDelay = options.maxDelay ?? 30.0;
     this.jitterFactor = options.jitterFactor ?? 0.25;
-    this.circuitBreakerThreshold = options.circuitBreakerThreshold ?? 10;
-    this.circuitBreakerTimeout = options.circuitBreakerTimeout ?? 300;
+    this.circuitBreakerThreshold = options.circuitBreakerThreshold ?? 5;
+    this.circuitBreakerTimeout = options.circuitBreakerTimeout ?? 30;
 
     this._containerSeed = this._getContainerSeed();
   }

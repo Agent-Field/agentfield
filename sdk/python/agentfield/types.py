@@ -434,27 +434,27 @@ class AIConfig(BaseModel):
 
     # Rate limiting configuration
     rate_limit_max_retries: int = Field(
-        default=20,
-        description="Maximum number of retries for rate limit errors (allows up to ~20 minutes of retries).",
+        default=5,
+        description="Maximum number of retries for rate limit errors.",
     )
     rate_limit_base_delay: float = Field(
-        default=1.0,
+        default=0.5,
         description="Base delay for rate limit exponential backoff in seconds.",
     )
     rate_limit_max_delay: float = Field(
-        default=300.0,
-        description="Maximum delay for rate limit backoff in seconds (5 minutes).",
+        default=30.0,
+        description="Maximum delay for rate limit backoff in seconds.",
     )
     rate_limit_jitter_factor: float = Field(
         default=0.25,
         description="Jitter factor for rate limit backoff (±25% randomization).",
     )
     rate_limit_circuit_breaker_threshold: int = Field(
-        default=10,
+        default=5,
         description="Number of consecutive rate limit failures before opening circuit breaker.",
     )
     rate_limit_circuit_breaker_timeout: int = Field(
-        default=300, description="Circuit breaker timeout in seconds (5 minutes)."
+        default=30, description="Circuit breaker timeout in seconds."
     )
     enable_rate_limit_retry: bool = Field(
         default=True, description="Enable automatic retry for rate limit errors."

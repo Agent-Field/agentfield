@@ -1,4 +1,34 @@
+from agentfield.rate_limiter import StatelessRateLimiter
 from agentfield.types import AIConfig
+
+
+def test_rate_limiter_fail_fast_defaults():
+    """Verify rate limiter defaults are tuned for fail-fast behavior."""
+    limiter = StatelessRateLimiter()
+    assert limiter.max_retries == 5
+    assert limiter.base_delay == 0.5
+    assert limiter.max_delay == 30.0
+    assert limiter.jitter_factor == 0.25
+    assert limiter.circuit_breaker_threshold == 5
+    assert limiter.circuit_breaker_timeout == 30
+
+
+def test_ai_config_rate_limit_defaults_match_limiter():
+    """AIConfig defaults must stay in sync with StatelessRateLimiter defaults."""
+    cfg = AIConfig()
+    assert cfg.rate_limit_max_retries == 5
+    assert cfg.rate_limit_base_delay == 0.5
+    assert cfg.rate_limit_max_delay == 30.0
+    assert cfg.rate_limit_jitter_factor == 0.25
+    assert cfg.rate_limit_circuit_breaker_threshold == 5
+    assert cfg.rate_limit_circuit_breaker_timeout == 30
+
+
+def test_rate_limiter_max_theoretical_wait():
+    """Max theoretical wait with new defaults should be under 3 minutes."""
+    limiter = StatelessRateLimiter()
+    max_wait = limiter.max_retries * limiter.max_delay
+    assert max_wait <= 180, f"Max theoretical wait {max_wait}s exceeds 3 minutes"
 
 
 def test_ai_config_defaults_and_to_dict():
