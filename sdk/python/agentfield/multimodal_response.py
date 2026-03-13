@@ -211,12 +211,16 @@ class MultimodalResponse:
         images: Optional[List[ImageOutput]] = None,
         files: Optional[List[FileOutput]] = None,
         raw_response: Optional[Any] = None,
+        cost_usd: Optional[float] = None,
+        usage: Optional[Dict[str, int]] = None,
     ):
         self._text = text
         self._audio = audio
         self._images = images or []
         self._files = files or []
         self._raw_response = raw_response
+        self._cost_usd = cost_usd
+        self._usage = usage or {}
 
     def __str__(self) -> str:
         """Backward compatibility: return text content when used as string."""
@@ -277,6 +281,16 @@ class MultimodalResponse:
     def raw_response(self) -> Optional[Any]:
         """Get the raw LiteLLM response object."""
         return self._raw_response
+
+    @property
+    def cost_usd(self) -> Optional[float]:
+        """Estimated cost of this LLM call in USD, if available."""
+        return self._cost_usd
+
+    @property
+    def usage(self) -> Dict[str, int]:
+        """Token usage breakdown (prompt_tokens, completion_tokens, total_tokens)."""
+        return self._usage
 
     def save_all(
         self, directory: Union[str, Path], prefix: str = "output"
@@ -516,6 +530,25 @@ def detect_multimodal_response(response: Any) -> MultimodalResponse:
     if not images:
         images = _find_images_recursive(response, max_depth=5)
 
+    # Extract usage and estimate cost from response
+    usage_dict: Dict[str, int] = {}
+    cost_usd: Optional[float] = None
+    if hasattr(response, "usage") and response.usage:
+        u = response.usage
+        usage_dict = {
+            "prompt_tokens": getattr(u, "prompt_tokens", 0) or 0,
+            "completion_tokens": getattr(u, "completion_tokens", 0) or 0,
+            "total_tokens": getattr(u, "total_tokens", 0) or 0,
+        }
+    if usage_dict and hasattr(response, "model") and response.model:
+        try:
+            import litellm as _litellm
+
+            cost_usd = _litellm.completion_cost(completion_response=response)
+        except Exception:
+            pass
+
     return MultimodalResponse(
-        text=text, audio=audio, images=images, files=files, raw_response=response
+        text=text, audio=audio, images=images, files=files, raw_response=response,
+        cost_usd=cost_usd, usage=usage_dict,
     )
