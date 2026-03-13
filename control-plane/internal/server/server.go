@@ -1073,6 +1073,7 @@ func (s *AgentFieldServer) setupRoutes() {
 				executions.POST("/:execution_id/cancel", handlers.CancelExecutionHandler(s.storage))
 				executions.POST("/:execution_id/pause", handlers.PauseExecutionHandler(s.storage))
 				executions.POST("/:execution_id/resume", handlers.ResumeExecutionHandler(s.storage))
+				executions.GET("/:execution_id/checkpoint", handlers.GetCheckpointHandler(s.storage))
 
 				// Execution notes endpoints for UI
 				executions.POST("/note", handlers.AddExecutionNoteHandler(s.storage))
@@ -1258,6 +1259,7 @@ func (s *AgentFieldServer) setupRoutes() {
 		agentAPI.POST("/executions/:execution_id/cancel", handlers.CancelExecutionHandler(s.storage))
 		agentAPI.POST("/executions/:execution_id/pause", handlers.PauseExecutionHandler(s.storage))
 		agentAPI.POST("/executions/:execution_id/resume", handlers.ResumeExecutionHandler(s.storage))
+		agentAPI.GET("/executions/:execution_id/checkpoint", handlers.GetCheckpointHandler(s.storage))
 
 		// Approval workflow endpoints — CP manages execution state only;
 		// agents handle external approval service communication directly.

@@ -234,6 +234,7 @@ func (ls *LocalStorage) autoMigrateSchema(ctx context.Context) error {
 		&AccessPolicyModel{},
 		&AgentTagVCModel{},
 		&ConfigStorageModel{},
+		&CheckpointModel{},
 	}
 
 	if err := gormDB.WithContext(ctx).AutoMigrate(models...); err != nil {

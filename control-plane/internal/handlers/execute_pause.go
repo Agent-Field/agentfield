@@ -17,7 +17,8 @@ import (
 )
 
 type executionPauseResumeRequest struct {
-	Reason string `json:"reason"`
+	Reason          string          `json:"reason"`
+	CheckpointState json.RawMessage `json:"checkpoint_state,omitempty"`
 }
 
 type executionPauseResponse struct {
@@ -77,6 +78,20 @@ func handlePauseResume(c *gin.Context, store ExecutionStore, expectedFromStatus,
 	if wfExec == nil || exec == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("execution %s not found", executionID)})
 		return
+	}
+
+	// Save checkpoint if provided and we are pausing
+	if nextStatus == types.ExecutionStatusPaused && len(req.CheckpointState) > 0 {
+		checkpoint := &types.Checkpoint{
+			ExecutionID: executionID,
+			WorkflowID:  wfExec.WorkflowID,
+			State:       req.CheckpointState,
+		}
+		if cpErr := store.SaveCheckpoint(reqCtx, checkpoint); cpErr != nil {
+			logger.Logger.Error().Err(cpErr).Str("execution_id", executionID).Msg("failed to save checkpoint")
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save execution state"})
+			return
+		}
 	}
 
 	now := time.Now().UTC()

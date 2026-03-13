@@ -41,6 +41,8 @@ type ExecutionStore interface {
 	GetWorkflowExecution(ctx context.Context, executionID string) (*types.WorkflowExecution, error)
 	QueryWorkflowExecutions(ctx context.Context, filters types.WorkflowExecutionFilters) ([]*types.WorkflowExecution, error)
 	StoreWorkflowExecutionEvent(ctx context.Context, event *types.WorkflowExecutionEvent) error
+	SaveCheckpoint(ctx context.Context, checkpoint *types.Checkpoint) error
+	GetCheckpoint(ctx context.Context, executionID string) (*types.Checkpoint, error)
 	GetExecutionEventBus() *events.ExecutionEventBus
 }
 

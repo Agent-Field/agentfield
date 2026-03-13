@@ -30,6 +30,15 @@ type AgentExecution struct {
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 }
 
+// Checkpoint represents a saved execution state for durable execution.
+type Checkpoint struct {
+	ExecutionID string          `json:"execution_id" db:"execution_id"`
+	WorkflowID  string          `json:"workflow_id" db:"workflow_id"`
+	State       json.RawMessage `json:"state" db:"state"`
+	CreatedAt   time.Time       `json:"created_at" db:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at" db:"updated_at"`
+}
+
 // ExecutionMetadata holds extensible metadata for an agent execution.
 type ExecutionMetadata struct {
 	Cost        *CostMetadata          `json:"cost,omitempty"`

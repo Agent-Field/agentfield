@@ -447,6 +447,62 @@ func (ls *LocalStorage) StoreWorkflowStep(ctx context.Context, step *types.Workf
 	return err
 }
 
+// SaveCheckpoint stores a durable execution checkpoint.
+func (ls *LocalStorage) SaveCheckpoint(ctx context.Context, checkpoint *types.Checkpoint) error {
+	if checkpoint == nil {
+		return fmt.Errorf("checkpoint cannot be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	return ls.retryDatabaseOperation(ctx, checkpoint.ExecutionID, func() error {
+		db := ls.requireSQLDB()
+		query := `
+			INSERT INTO checkpoints (execution_id, workflow_id, state, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(execution_id) DO UPDATE SET
+				state=excluded.state,
+				updated_at=excluded.updated_at
+		`
+		now := time.Now().UTC()
+		if checkpoint.CreatedAt.IsZero() {
+			checkpoint.CreatedAt = now
+		}
+		checkpoint.UpdatedAt = now
+
+		_, err := db.ExecContext(ctx, query,
+			checkpoint.ExecutionID,
+			checkpoint.WorkflowID,
+			string(checkpoint.State),
+			checkpoint.CreatedAt,
+			checkpoint.UpdatedAt,
+		)
+		return err
+	})
+}
+
+// GetCheckpoint retrieves a durable execution checkpoint.
+func (ls *LocalStorage) GetCheckpoint(ctx context.Context, executionID string) (*types.Checkpoint, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	db := ls.requireSQLDB()
+	query := `SELECT execution_id, workflow_id, state, created_at, updated_at FROM checkpoints WHERE execution_id = ?`
+	row := db.QueryRowContext(ctx, query, executionID)
+
+	var cp types.Checkpoint
+	var stateStr string
+	if err := row.Scan(&cp.ExecutionID, &cp.WorkflowID, &stateStr, &cp.CreatedAt, &cp.UpdatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	cp.State = json.RawMessage(stateStr)
+	return &cp, nil
+}
+
 // DBTX interface for operations that can run on a db or tx
 type DBTX interface {
 	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)

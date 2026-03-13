@@ -3792,6 +3792,7 @@ class Agent(FastAPI):
         expires_in_hours: int = 72,
         timeout: Optional[float] = None,
         execution_id: Optional[str] = None,
+        state: Optional[Dict[str, Any]] = None,
     ) -> ApprovalResult:
         """Pause the current execution for external approval.
 
@@ -3843,6 +3844,14 @@ class Agent(FastAPI):
 
         # Tell the CP to transition to "waiting"
         try:
+            # If state is provided, save it as a checkpoint first
+            if state is not None:
+                await self.client.pause_execution(
+                    execution_id=execution_id,
+                    reason=f"Pausing for approval {approval_request_id}",
+                    state=state
+                )
+
             await self.client.request_approval(
                 execution_id=execution_id,
                 approval_request_id=approval_request_id,
@@ -3879,6 +3888,41 @@ class Agent(FastAPI):
             return expired_result
 
         return result
+
+    async def checkpoint(
+        self, 
+        state: Dict[str, Any], 
+        reason: str = "manual checkpoint"
+    ) -> None:
+        """Save the current execution state to the control plane.
+        
+        This enables durable execution by persisting state that can be
+        retrieved upon agent restart via ``app.resume_from_checkpoint()``.
+        
+        Args:
+            state: Dictionary containing the agent's current state (e.g., variables, step counter).
+            reason: Optional description for the checkpoint.
+        """
+        ctx = self._get_current_execution_context()
+        execution_id = ctx.execution_id
+        if not execution_id:
+            return
+
+        # Save state by pausing with state and immediately resuming
+        await self.client.pause_execution(
+            execution_id=execution_id,
+            reason=reason,
+            state=state
+        )
+        await self.client.resume_execution(execution_id=execution_id)
+
+    async def resume_from_checkpoint(self, execution_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch saved state for an execution to allow resumption.
+        
+        Returns:
+            The saved state dictionary if found, else None.
+        """
+        return await self.client.get_checkpoint(execution_id)
 
     async def wait_for_resume(
         self,

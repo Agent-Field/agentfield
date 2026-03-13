@@ -50,6 +50,16 @@ type AgentExecutionModel struct {
 
 func (AgentExecutionModel) TableName() string { return "agent_executions" }
 
+type CheckpointModel struct {
+	ExecutionID string    `gorm:"column:execution_id;primaryKey"`
+	WorkflowID  string    `gorm:"column:workflow_id;not null;index"`
+	State       []byte    `gorm:"column:state;not null"`
+	CreatedAt   time.Time `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt   time.Time `gorm:"column:updated_at;autoUpdateTime"`
+}
+
+func (CheckpointModel) TableName() string { return "checkpoints" }
+
 type AgentNodeModel struct {
 	ID                  string     `gorm:"column:id;primaryKey"`
 	Version             string     `gorm:"column:version;primaryKey;not null;default:''"`

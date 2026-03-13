@@ -1747,6 +1747,80 @@ class AgentFieldClient:
             approval_request_url=data.get("approval_request_url", ""),
         )
 
+    async def pause_execution(
+        self,
+        execution_id: str,
+        reason: str = "",
+        state: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Pause an execution and optionally save its state.
+
+        Calls ``POST /api/v1/executions/{execution_id}/pause``
+        """
+        url = f"{self.api_base}/executions/{execution_id}/pause"
+        body = {"reason": reason}
+        if state:
+            body["checkpoint_state"] = state
+
+        try:
+            client = await self.get_async_http_client()
+            response = await client.post(
+                url,
+                json=body,
+                headers=self._sanitize_header_values(self._get_headers_with_context(None)),
+                timeout=30,
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as exc:
+            raise AgentFieldClientError(f"Failed to pause execution: {exc}") from exc
+
+    async def resume_execution(
+        self,
+        execution_id: str,
+        reason: str = "",
+    ) -> Dict[str, Any]:
+        """Resume a paused execution.
+
+        Calls ``POST /api/v1/executions/{execution_id}/resume``
+        """
+        url = f"{self.api_base}/executions/{execution_id}/resume"
+        body = {"reason": reason}
+
+        try:
+            client = await self.get_async_http_client()
+            response = await client.post(
+                url,
+                json=body,
+                headers=self._sanitize_header_values(self._get_headers_with_context(None)),
+                timeout=30,
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as exc:
+            raise AgentFieldClientError(f"Failed to resume execution: {exc}") from exc
+
+    async def get_checkpoint(self, execution_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve the last checkpoint state for an execution.
+
+        Calls ``GET /api/v1/executions/{execution_id}/checkpoint``
+        """
+        url = f"{self.api_base}/executions/{execution_id}/checkpoint"
+        try:
+            client = await self.get_async_http_client()
+            response = await client.get(
+                url,
+                headers=self._sanitize_header_values(self._get_headers_with_context(None)),
+                timeout=30,
+            )
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            data = response.json()
+            return data.get("state")
+        except Exception as exc:
+            raise AgentFieldClientError(f"Failed to get checkpoint: {exc}") from exc
+
     async def get_approval_status(
         self,
         execution_id: str,
