@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import shutil
@@ -78,7 +77,6 @@ class OpenCodeProvider:
                 f"---\n\nUSER REQUEST:\n{prompt}"
             )
 
-        cmd.extend(["-f", "json"])
         cmd.append(effective_prompt)
 
         env: Dict[str, str] = {}
@@ -121,26 +119,7 @@ class OpenCodeProvider:
             shutil.rmtree(temp_data_dir, ignore_errors=True)
 
         api_ms = int((time.monotonic() - start_api) * 1000)
-
-        parsed_cost: float | None = None
-        parsed_prompt_tokens: int | None = None
-        parsed_completion_tokens: int | None = None
-
-        try:
-            json_output = json.loads(stdout.strip())
-            result_text = json_output.get("response", "").strip() or None
-            raw_cost = json_output.get("cost")
-            if raw_cost is not None and float(raw_cost) > 0:
-                parsed_cost = float(raw_cost)
-            raw_pt = json_output.get("prompt_tokens")
-            if raw_pt is not None:
-                parsed_prompt_tokens = int(raw_pt)
-            raw_ct = json_output.get("completion_tokens")
-            if raw_ct is not None:
-                parsed_completion_tokens = int(raw_ct)
-        except (json.JSONDecodeError, ValueError, TypeError):
-            result_text = stdout.strip() if stdout.strip() else None
-
+        result_text = stdout.strip() if stdout.strip() else None
         clean_stderr = strip_ansi(stderr.strip()) if stderr else ""
 
         logger.info(
@@ -173,21 +152,11 @@ class OpenCodeProvider:
             is_error = False
             error_message = None
 
-        if parsed_cost is not None:
-            final_cost = parsed_cost
-        else:
-            final_cost = estimate_cli_cost(
-                model=str(options.get("model", "")),
-                prompt=effective_prompt,
-                result_text=result_text,
-            )
-
-        usage_data = None
-        if parsed_prompt_tokens is not None or parsed_completion_tokens is not None:
-            usage_data = {
-                "prompt_tokens": parsed_prompt_tokens or 0,
-                "completion_tokens": parsed_completion_tokens or 0,
-            }
+        estimated_cost = estimate_cli_cost(
+            model=str(options.get("model", "")),
+            prompt=effective_prompt,
+            result_text=result_text,
+        )
 
         return RawResult(
             result=result_text,
@@ -195,8 +164,7 @@ class OpenCodeProvider:
             metrics=Metrics(
                 duration_api_ms=api_ms,
                 num_turns=1 if result_text else 0,
-                total_cost_usd=final_cost,
-                usage=usage_data,
+                total_cost_usd=estimated_cost,
                 session_id="",
             ),
             is_error=is_error,
