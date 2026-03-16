@@ -748,7 +748,7 @@ func (ls *LocalStorage) applyPostgresConnectionSettings(db *sqlDatabase, cfg Pos
 		maxOpen = 25
 	}
 	maxIdle := cfg.MaxIdleConns
-	if maxIdle < 0 {
+	if maxIdle <= 0 {
 		maxIdle = 5
 	}
 
