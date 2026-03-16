@@ -256,10 +256,11 @@ func (h *WorkflowRunHandler) GetWorkflowRunDetailHandler(c *gin.Context) {
 	}
 
 	filter := types.ExecutionFilter{
-		RunID:          &runID,
-		SortBy:         "started_at",
-		SortDescending: false,
-		Limit:          10000,
+		RunID:           &runID,
+		SortBy:          "started_at",
+		SortDescending:  false,
+		Limit:           10000,
+		ExcludePayloads: true,
 	}
 
 	executions, err := h.storage.QueryExecutionRecords(ctx, filter)

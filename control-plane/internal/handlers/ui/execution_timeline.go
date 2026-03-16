@@ -141,11 +141,12 @@ func (h *ExecutionTimelineHandler) generateTimelineData(ctx context.Context) ([]
 
 	// Get all executions for the last 24 hours
 	filters := types.ExecutionFilter{
-		StartTime:      &startTime,
-		EndTime:        &endTime,
-		Limit:          50000,
-		SortBy:         "started_at",
-		SortDescending: false,
+		StartTime:       &startTime,
+		EndTime:         &endTime,
+		Limit:           50000,
+		SortBy:          "started_at",
+		SortDescending:  false,
+		ExcludePayloads: true,
 	}
 
 	executions, err := h.store.QueryExecutionRecords(ctx, filters)

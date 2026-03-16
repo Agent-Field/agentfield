@@ -238,11 +238,12 @@ func (h *ExecutionHandler) ListExecutionsHandler(c *gin.Context) {
 	sortDesc := strings.ToLower(c.DefaultQuery("sortOrder", "desc")) != "asc"
 
 	filter := types.ExecutionFilter{
-		AgentNodeID:    &agentID,
-		Limit:          pageSize,
-		Offset:         (page - 1) * pageSize,
-		SortBy:         sortField,
-		SortDescending: sortDesc,
+		AgentNodeID:     &agentID,
+		Limit:           pageSize,
+		Offset:          (page - 1) * pageSize,
+		SortBy:          sortField,
+		SortDescending:  sortDesc,
+		ExcludePayloads: true,
 	}
 	if status != "" {
 		filter.Status = &status
@@ -330,12 +331,13 @@ func (h *ExecutionHandler) GetExecutionsSummaryHandler(c *gin.Context) {
 	}
 
 	filter := types.ExecutionFilter{
-		Limit:          pageSize,
-		Offset:         (page - 1) * pageSize,
-		SortBy:         "started_at",
-		SortDescending: true,
-		StartTime:      startTime,
-		EndTime:        endTime,
+		Limit:           pageSize,
+		Offset:          (page - 1) * pageSize,
+		SortBy:          "started_at",
+		SortDescending:  true,
+		StartTime:       startTime,
+		EndTime:         endTime,
+		ExcludePayloads: true,
 	}
 	if status != "" {
 		filter.Status = &status
@@ -400,9 +402,10 @@ func (h *ExecutionHandler) GetExecutionStatsHandler(c *gin.Context) {
 	runID := strings.TrimSpace(c.Query("workflow_id"))
 
 	filter := types.ExecutionFilter{
-		Limit:          1000,
-		SortBy:         "started_at",
-		SortDescending: true,
+		Limit:           1000,
+		SortBy:          "started_at",
+		SortDescending:  true,
+		ExcludePayloads: true,
 	}
 	if agentID != "" {
 		filter.AgentNodeID = &agentID
@@ -463,10 +466,11 @@ func (h *ExecutionHandler) GetEnhancedExecutionsHandler(c *gin.Context) {
 	offset := (page - 1) * limit
 
 	filter := types.ExecutionFilter{
-		Limit:          limit,
-		Offset:         offset,
-		SortBy:         sanitizeExecutionSortField(c.DefaultQuery("sort_by", "started_at")),
-		SortDescending: strings.ToLower(c.DefaultQuery("sort_order", "desc")) != "asc",
+		Limit:           limit,
+		Offset:          offset,
+		SortBy:          sanitizeExecutionSortField(c.DefaultQuery("sort_by", "started_at")),
+		SortDescending:  strings.ToLower(c.DefaultQuery("sort_order", "desc")) != "asc",
+		ExcludePayloads: true,
 	}
 
 	if status := strings.TrimSpace(c.Query("status")); status != "" {

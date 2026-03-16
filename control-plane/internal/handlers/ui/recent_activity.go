@@ -122,10 +122,11 @@ func (h *RecentActivityHandler) GetRecentActivityHandler(c *gin.Context) {
 func (h *RecentActivityHandler) getRecentExecutions(ctx context.Context) ([]ActivityExecution, error) {
 	// Query for the last 20 executions to support dashboard display
 	filters := types.ExecutionFilter{
-		Limit:          20,
-		Offset:         0,
-		SortBy:         "started_at",
-		SortDescending: true,
+		Limit:           20,
+		Offset:          0,
+		SortBy:          "started_at",
+		SortDescending:  true,
+		ExcludePayloads: true,
 	}
 
 	executions, err := h.store.QueryExecutionRecords(ctx, filters)
