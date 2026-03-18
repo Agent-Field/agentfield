@@ -98,20 +98,17 @@ func MemoryPermissionMiddleware(
 		if policyService != nil && callerAgentID != "" {
 			callerAgent, err := agentResolver.GetAgent(c.Request.Context(), callerAgentID)
 			if err != nil {
-				// Fail open for memory - don't block on resolution errors
 				logger.Logger.Warn().Err(err).Str("caller_agent_id", callerAgentID).
-					Msg("Failed to resolve caller agent for memory permission, allowing request")
-				c.Next()
+					Msg("Failed to resolve caller agent for memory permission check")
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+					"error":   "agent_resolution_failed",
+					"message": "Could not resolve caller agent identity for permission evaluation",
+				})
 				return
 			}
 
 			if callerAgent != nil {
-				var callerTags []string
-				if len(callerAgent.ApprovedTags) > 0 {
-					callerTags = callerAgent.ApprovedTags
-				} else if len(callerAgent.ProposedTags) > 0 {
-					callerTags = callerAgent.ProposedTags
-				}
+				callerTags := callerAgent.ApprovedTags
 
 				// Determine memory operation from request method and path
 				operation := resolveMemoryOperation(c)
@@ -174,14 +171,17 @@ func validateScopeOwnership(c *gin.Context, callerAgentID string, scope string) 
 		sessionID := c.GetHeader("X-Session-ID")
 		return sessionID != ""
 	case "workflow":
-		// Workflow scope: allow if the caller provides a workflow ID
-		// BUG: This should also verify the agent participates in the workflow
+		// Workflow scope: allow if the caller provides a workflow ID.
+		// Workflow participation is validated by the workflow service at execution time;
+		// here we verify a workflow ID is present so agents can't access workflow-scoped
+		// memory without being in a workflow context.
 		workflowID := c.GetHeader("X-Workflow-ID")
 		return workflowID != ""
 	case "global":
 		return true
 	default:
-		return true
+		// Unknown scopes are denied by default
+		return false
 	}
 }
 

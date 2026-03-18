@@ -1316,7 +1316,7 @@ func (s *AgentFieldServer) setupRoutes() {
 					s.didWebService,
 					memPermConfig,
 				))
-				logger.Logger.Info().Msg("🔒 Memory permission middleware enabled on memory endpoints")
+				logger.Logger.Info().Msg("Memory permission middleware enabled on memory endpoints")
 			}
 
 			// Key-value memory endpoints

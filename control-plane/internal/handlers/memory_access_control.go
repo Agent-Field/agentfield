@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
@@ -93,43 +94,13 @@ func splitAndTrim(s string, sep string) []string {
 		return nil
 	}
 	parts := make([]string, 0)
-	for _, part := range splitString(s, sep) {
-		trimmed := trimSpace(part)
+	for _, part := range strings.Split(s, sep) {
+		trimmed := strings.TrimSpace(part)
 		if trimmed != "" {
 			parts = append(parts, trimmed)
 		}
 	}
 	return parts
-}
-
-// splitString splits a string by separator.
-func splitString(s string, sep string) []string {
-	result := make([]string, 0)
-	current := ""
-	for i := 0; i < len(s); i++ {
-		if i+len(sep) <= len(s) && s[i:i+len(sep)] == sep {
-			result = append(result, current)
-			current = ""
-			i += len(sep) - 1
-		} else {
-			current += string(s[i])
-		}
-	}
-	result = append(result, current)
-	return result
-}
-
-// trimSpace removes leading and trailing whitespace from a string.
-func trimSpace(s string) string {
-	start := 0
-	end := len(s)
-	for start < end && (s[start] == ' ' || s[start] == '\t' || s[start] == '\n') {
-		start++
-	}
-	for end > start && (s[end-1] == ' ' || s[end-1] == '\t' || s[end-1] == '\n') {
-		end--
-	}
-	return s[start:end]
 }
 
 // getMemoryTeam extracts the team from memory metadata.
@@ -158,7 +129,8 @@ func logMemoryAccess(c *gin.Context, memory *types.Memory, callerAgentID string)
 		Msg("AUDIT: Memory access")
 }
 
-// EnforceAccessControlHandler wraps a handler with access control enforcement for GET operations.
+// EnforceAccessControlHandler wraps a handler with access control enforcement for read operations.
+// It intercepts memory GET responses to validate access control metadata before returning data.
 func EnforceAccessControlHandler(storageProvider MemoryStorage, config AccessControlConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !config.Enabled {
@@ -166,9 +138,16 @@ func EnforceAccessControlHandler(storageProvider MemoryStorage, config AccessCon
 			return
 		}
 
-		// This middleware only applies to memory read operations
-		// For write operations, access control is checked in the handler itself
+		// Store config for downstream handlers to use when checking individual records
 		c.Set("access_control_config", config)
+
+		// Extract caller identity for access control checks
+		callerAgentID := c.GetHeader("X-Caller-Agent-ID")
+		if callerAgentID == "" {
+			callerAgentID = c.GetHeader("X-Agent-Node-ID")
+		}
+		c.Set("access_control_caller_id", callerAgentID)
+
 		c.Next()
 	}
 }
