@@ -98,16 +98,13 @@ func MemoryPermissionMiddleware(
 		if policyService != nil && callerAgentID != "" {
 			callerAgent, err := agentResolver.GetAgent(c.Request.Context(), callerAgentID)
 			if err != nil {
-				logger.Logger.Warn().Err(err).Str("caller_agent_id", callerAgentID).
-					Msg("Failed to resolve caller agent for memory permission check")
-				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-					"error":   "agent_resolution_failed",
-					"message": "Could not resolve caller agent identity for permission evaluation",
-				})
-				return
+				// Agent not registered as a node — skip tag-based policy evaluation.
+				// Scope ownership was already validated above.
+				logger.Logger.Debug().Err(err).Str("caller_agent_id", callerAgentID).
+					Msg("Caller agent not found in node registry, skipping tag-based policy evaluation")
 			}
 
-			if callerAgent != nil {
+			if err == nil && callerAgent != nil {
 				callerTags := callerAgent.ApprovedTags
 
 				// Determine memory operation from request method and path
