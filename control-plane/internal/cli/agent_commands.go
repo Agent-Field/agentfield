@@ -43,7 +43,7 @@ func NewAgentCommand() *cobra.Command {
 		},
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 0 {
+			if len(args) == 0 || args[0] == "help" {
 				agentOutput(agentHelpData())
 				return nil
 			}
