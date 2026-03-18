@@ -84,8 +84,6 @@ AI Agent? Run "af agent help" for structured JSON output optimized for programma
 	RootCmd.PersistentFlags().StringVar(&postgresURLFlag, "postgres-url", "", "PostgreSQL connection URL or DSN (implies --storage-mode=postgres)")
 	RootCmd.PersistentFlags().StringVarP(&serverURL, "server", "s", "", "Control plane URL (env: AGENTFIELD_SERVER, default: http://localhost:8080)")
 	RootCmd.PersistentFlags().StringVarP(&apiKey, "api-key", "k", "", "API key for authenticated endpoints (env: AGENTFIELD_API_KEY)")
-	RootCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "json", "Output format: json, compact")
-	RootCmd.PersistentFlags().IntVarP(&requestTimeout, "timeout", "t", 30, "Request timeout in seconds")
 
 	cobra.OnInitialize(initConfig)
 

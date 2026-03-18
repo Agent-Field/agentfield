@@ -39,9 +39,7 @@ func NewAgentCommand() *cobra.Command {
 		Use:   "agent",
 		Short: "Agent-mode JSON interface for agentic APIs",
 		Long:  "Machine-friendly CLI wrapper around /api/v1/agentic endpoints.",
-		PersistentPreRun: func(cmd *cobra.Command, args []string) {
-		},
-		Args: cobra.ArbitraryArgs,
+		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 || args[0] == "help" {
 				agentOutput(agentHelpData())
@@ -63,6 +61,9 @@ func NewAgentCommand() *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 	}
+
+	cmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "json", "Output format: json, compact")
+	cmd.PersistentFlags().IntVarP(&requestTimeout, "timeout", "t", 30, "Request timeout in seconds")
 
 	cmd.AddCommand(newAgentStatusCmd())
 	cmd.AddCommand(newAgentDiscoverCmd())
@@ -454,9 +455,6 @@ func outputAgentJSON(v interface{}) error {
 
 func agentHTTP(method, path string, body interface{}) ([]byte, int, error) {
 	server := strings.TrimRight(GetServerURL(), "/")
-	if server == "" {
-		server = "http://localhost:8080"
-	}
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}

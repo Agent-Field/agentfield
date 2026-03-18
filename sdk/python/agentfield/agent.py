@@ -491,21 +491,6 @@ class Agent(FastAPI):
         """
         Initialize a new AgentField Agent instance.
 
-        Sets log level to DEBUG if dev_mode is True, else INFO.
-        """
-        # Set logging level based on dev_mode
-        from agentfield.logger import set_log_level
-
-        set_log_level("DEBUG" if dev_mode else "INFO")
-
-        # Resolve control plane URL: explicit param > env vars > default
-        if agentfield_server is None:
-            agentfield_server = os.environ.get(
-                "AGENTFIELD_SERVER",
-                os.environ.get("AGENTFIELD_SERVER_URL", "http://localhost:8080"),
-            )
-
-        """
         Creates a new agent node that can host reasoners (AI-powered functions) and skills
         (deterministic functions) while integrating with the AgentField ecosystem for distributed
         AI workflows and cross-agent communication.
@@ -567,6 +552,18 @@ class Agent(FastAPI):
             memory management, workflow tracking, and server functionality. MCP servers
             are discovered and started automatically if present in the agent directory.
         """
+        # Set logging level based on dev_mode
+        from agentfield.logger import set_log_level
+
+        set_log_level("DEBUG" if dev_mode else "INFO")
+
+        # Resolve control plane URL: explicit param > env vars > default
+        if agentfield_server is None:
+            agentfield_server = os.environ.get(
+                "AGENTFIELD_SERVER",
+                os.environ.get("AGENTFIELD_SERVER_URL", "http://localhost:8080"),
+            )
+
         super().__init__(**kwargs)
 
         self.node_id = node_id

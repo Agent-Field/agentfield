@@ -2,6 +2,7 @@ package packages
 
 import "os"
 
+// resolveServerURL returns the control plane URL from env vars or default.
 func resolveServerURL() string {
 	if v := os.Getenv("AGENTFIELD_SERVER"); v != "" {
 		return v
