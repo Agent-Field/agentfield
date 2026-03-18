@@ -98,7 +98,8 @@ class ClaudeCodeProvider:
                 messages.append(msg_dict)
 
                 msg_type = str(msg_dict.get("type", ""))
-                if msg_type == "result":
+                msg_subtype = str(msg_dict.get("subtype", ""))
+                if msg_type == "result" or msg_subtype == "success":
                     raw_result = msg_dict.get("result", msg_dict.get("text", ""))
                     result_text = (
                         raw_result if isinstance(raw_result, str) else str(raw_result)

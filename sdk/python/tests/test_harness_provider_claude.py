@@ -88,6 +88,51 @@ async def test_execute_maps_options_and_extracts_result(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_execute_extracts_result_from_subtype_success(monkeypatch):
+    """Claude Agent SDK sends subtype='success' instead of type='result'."""
+    from agentfield.harness.providers.claude import ClaudeCodeProvider
+
+    class FakeClaudeAgentOptions:
+        def __init__(self, **kwargs: Any) -> None:
+            self.kwargs = kwargs
+
+    def fake_query(*, prompt: str, options: FakeClaudeAgentOptions):
+        _ = (prompt, options)
+        return _AsyncStream(
+            [
+                {"subtype": "init", "data": {"session_id": "abc"}},
+                {
+                    "content": [{"type": "text", "text": "Hello world"}],
+                    "model": "claude-sonnet-4-6",
+                },
+                {
+                    "subtype": "success",
+                    "duration_ms": 2807,
+                    "is_error": False,
+                    "num_turns": 1,
+                    "session_id": "sess-2",
+                    "total_cost_usd": 0.008,
+                    "result": "Hello world",
+                },
+            ]
+        )
+
+    fake_sdk = ModuleType("claude_agent_sdk")
+    setattr(fake_sdk, "ClaudeAgentOptions", FakeClaudeAgentOptions)
+    setattr(fake_sdk, "query", fake_query)
+    monkeypatch.setitem(__import__("sys").modules, "claude_agent_sdk", fake_sdk)
+
+    provider = ClaudeCodeProvider()
+    raw = await provider.execute("hi", {})
+
+    assert raw.is_error is False
+    assert raw.result == "Hello world"
+    assert raw.metrics.session_id == "sess-2"
+    assert raw.metrics.total_cost_usd == 0.008
+    assert raw.metrics.num_turns == 1
+
+
+@pytest.mark.asyncio
 async def test_execute_returns_error_result_on_query_failure(monkeypatch):
     from agentfield.harness.providers.claude import ClaudeCodeProvider
 
