@@ -351,9 +351,9 @@ The control plane is a stateless Go service. Agents connect from anywhere - your
 
 ## Is AgentField for you?
 
-**Yes if** you're building agents that make decisions inside backend processes - not chatbots. If your agents approve refunds, process claims, coordinate research, or run code, and you need routing, async execution, tracing, and audit trails.
+**Yes if** you’re building beyond chatbots or small multi-agent workflows. If your agents are making decisions inside backend systems like approving refunds, processing claims, coordinating research, or running code, and you need routing, async execution, tracing, and audit trails.
 
-**Not yet if** you're building a single chatbot or prototyping without production concerns. Frameworks like LangChain and CrewAI are great for that. When you're ready to ship agents to production, we'll be here.
+**Not yet if** you’re still in the chatbot or early workflow stage, tools like LangChain or CrewAI are a great fit to explore and iterate. When you start pushing toward larger, production-grade agent systems, that’s where we come in.
 
 ## Learn More
 
