@@ -35,6 +35,8 @@ dist/
 
 # Node / Frontend
 node_modules/
+package-lock.json
+pnpm-lock.yaml
 .pnpm-store/
 .yarn/
 .parcel-cache/
@@ -57,3 +59,6 @@ reports/
 
 # Typescript
 .env
+.worktrees/
+.artifacts/
+
