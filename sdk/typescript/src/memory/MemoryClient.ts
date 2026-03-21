@@ -35,8 +35,8 @@ export interface VectorSearchResult {
   metadata?: Record<string, any>;
 }
 
-export class MemoryClient {
-  private readonly http: AxiosInstance;
+export class MemoryClientBase {
+  protected readonly http: AxiosInstance;
   private readonly defaultHeaders: Record<string, string>;
 
   constructor(baseUrl: string, defaultHeaders?: Record<string, string | number | boolean | undefined>) {
@@ -47,6 +47,77 @@ export class MemoryClient {
       httpsAgent
     });
     this.defaultHeaders = this.sanitizeHeaders(defaultHeaders ?? {});
+  }
+
+  protected buildHeaders(options: MemoryRequestOptions = {}) {
+    const { scope, scopeId, metadata } = options;
+    const headers: Record<string, string> = { ...this.defaultHeaders };
+
+    const workflowId = metadata?.workflowId ?? metadata?.runId;
+    if (workflowId) headers['X-Workflow-ID'] = workflowId;
+    if (metadata?.sessionId) headers['X-Session-ID'] = metadata.sessionId;
+    if (metadata?.actorId) headers['X-Actor-ID'] = metadata.actorId;
+    if (metadata?.runId) headers['X-Run-ID'] = metadata.runId;
+    if (metadata?.executionId) headers['X-Execution-ID'] = metadata.executionId;
+    if (metadata?.parentExecutionId) headers['X-Parent-Execution-ID'] = metadata.parentExecutionId;
+    if (metadata?.callerDid) headers['X-Caller-DID'] = metadata.callerDid;
+    if (metadata?.targetDid) headers['X-Target-DID'] = metadata.targetDid;
+    if (metadata?.agentNodeDid) headers['X-Agent-Node-DID'] = metadata.agentNodeDid;
+    if (metadata?.agentNodeId) headers['X-Agent-Node-ID'] = metadata.agentNodeId;
+
+    const headerName = this.scopeToHeader(scope);
+    const resolvedScopeId = this.resolveScopeId(scope, scopeId, metadata);
+    if (headerName && resolvedScopeId) {
+      headers[headerName] = resolvedScopeId;
+    }
+
+    return { ...headers, ...this.sanitizeHeaders(options.headers ?? {}) };
+  }
+
+  private scopeToHeader(scope?: MemoryScope) {
+    switch (scope) {
+      case 'workflow':
+        return 'X-Workflow-ID';
+      case 'session':
+        return 'X-Session-ID';
+      case 'actor':
+        return 'X-Actor-ID';
+      default:
+        return undefined;
+    }
+  }
+
+  private resolveScopeId(scope?: MemoryScope, scopeId?: string, metadata?: MemoryRequestMetadata) {
+    if (scopeId) return scopeId;
+    switch (scope) {
+      case 'workflow':
+        return metadata?.workflowId ?? metadata?.runId;
+      case 'session':
+        return metadata?.sessionId;
+      case 'actor':
+        return metadata?.actorId;
+      case 'global':
+        return 'global';
+      default:
+        return undefined;
+    }
+  }
+
+  private sanitizeHeaders(headers: Record<string, any>): Record<string, string> {
+    const sanitized: Record<string, string> = {};
+    Object.entries(headers).forEach(([key, value]) => {
+      if (value === undefined || value === null) return;
+      sanitized[key] = typeof value === 'string' ? value : String(value);
+    });
+    return sanitized;
+  }
+
+}
+
+export class MemoryClient extends MemoryClientBase {
+
+  constructor(baseUrl: string, defaultHeaders?: Record<string, string | number | boolean | undefined>) {
+    super(baseUrl, defaultHeaders);
   }
 
   async set(key: string, data: any, options: MemoryRequestOptions = {}) {
@@ -131,68 +202,5 @@ export class MemoryClient {
       headers: this.buildHeaders(options)
     });
     return res.data ?? [];
-  }
-
-  private buildHeaders(options: MemoryRequestOptions = {}) {
-    const { scope, scopeId, metadata } = options;
-    const headers: Record<string, string> = { ...this.defaultHeaders };
-
-    const workflowId = metadata?.workflowId ?? metadata?.runId;
-    if (workflowId) headers['X-Workflow-ID'] = workflowId;
-    if (metadata?.sessionId) headers['X-Session-ID'] = metadata.sessionId;
-    if (metadata?.actorId) headers['X-Actor-ID'] = metadata.actorId;
-    if (metadata?.runId) headers['X-Run-ID'] = metadata.runId;
-    if (metadata?.executionId) headers['X-Execution-ID'] = metadata.executionId;
-    if (metadata?.parentExecutionId) headers['X-Parent-Execution-ID'] = metadata.parentExecutionId;
-    if (metadata?.callerDid) headers['X-Caller-DID'] = metadata.callerDid;
-    if (metadata?.targetDid) headers['X-Target-DID'] = metadata.targetDid;
-    if (metadata?.agentNodeDid) headers['X-Agent-Node-DID'] = metadata.agentNodeDid;
-    if (metadata?.agentNodeId) headers['X-Agent-Node-ID'] = metadata.agentNodeId;
-
-    const headerName = this.scopeToHeader(scope);
-    const resolvedScopeId = this.resolveScopeId(scope, scopeId, metadata);
-    if (headerName && resolvedScopeId) {
-      headers[headerName] = resolvedScopeId;
-    }
-
-    return { ...headers, ...this.sanitizeHeaders(options.headers ?? {}) };
-  }
-
-  private scopeToHeader(scope?: MemoryScope) {
-    switch (scope) {
-      case 'workflow':
-        return 'X-Workflow-ID';
-      case 'session':
-        return 'X-Session-ID';
-      case 'actor':
-        return 'X-Actor-ID';
-      default:
-        return undefined;
-    }
-  }
-
-  private resolveScopeId(scope?: MemoryScope, scopeId?: string, metadata?: MemoryRequestMetadata) {
-    if (scopeId) return scopeId;
-    switch (scope) {
-      case 'workflow':
-        return metadata?.workflowId ?? metadata?.runId;
-      case 'session':
-        return metadata?.sessionId;
-      case 'actor':
-        return metadata?.actorId;
-      case 'global':
-        return 'global';
-      default:
-        return undefined;
-    }
-  }
-
-  private sanitizeHeaders(headers: Record<string, any>): Record<string, string> {
-    const sanitized: Record<string, string> = {};
-    Object.entries(headers).forEach(([key, value]) => {
-      if (value === undefined || value === null) return;
-      sanitized[key] = typeof value === 'string' ? value : String(value);
-    });
-    return sanitized;
   }
 }
