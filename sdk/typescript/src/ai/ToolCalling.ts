@@ -97,6 +97,12 @@ export interface AIToolRequestOptions extends AIRequestOptions {
   maxToolCalls?: number;
 }
 
+type ToolConfig = {
+  description:  string
+  inputSchema:  any;
+  execute?: (args: Record<string, unknown>) => Promise<any>;
+}
+
 // ---------------------------------------------------------------------------
 // Capability -> Tool Definition Conversion
 // ---------------------------------------------------------------------------
