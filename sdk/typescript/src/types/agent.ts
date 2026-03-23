@@ -197,8 +197,8 @@ export interface ServerlessEvent {
   type?: 'reasoner' | 'skill';
   body?: any;
   input?: any;
-  executionContext?: Partial<ExecutionMetadata>;
-  execution_context?: Partial<ExecutionMetadata>;
+  executionContext?: RawExecutionContext;
+  execution_context?: RawExecutionContext;
 }
 
 export interface ServerlessResponse {
@@ -215,3 +215,26 @@ export type AgentHandler = (
 ) => Promise<ServerlessResponse | void> | ServerlessResponse | void;
 
 export type Awaitable<T> = T | Promise<T>;
+
+export interface RawExecutionContext {
+  executionId?: string;
+  runId?: string;
+  workflowId?: string;
+  parentExecutionId?: string;
+  sessionId?: string;
+  actorId?: string;
+  callerDid?: string;
+  targetDid?: string;
+  agentNodeDid?: string;
+
+  // snake_case variants
+  execution_id?: string;
+  run_id?: string;
+  workflow_id?: string;
+  parent_execution_id?: string;
+  session_id?: string;
+  actor_id?: string;
+  caller_did?: string;
+  target_did?: string;
+  agent_node_did?: string;
+}
