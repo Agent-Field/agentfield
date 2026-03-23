@@ -116,8 +116,10 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 			return
 		}
 
-		// Check if the agent node is healthy and reachable
-		if targetNode.HealthStatus != types.HealthStatusActive {
+		// Block agents that are known to be unreachable.
+		// "unknown" (no heartbeat yet) and "active" are allowed through;
+		// only "inactive" is definitively unreachable.
+		if targetNode.HealthStatus == types.HealthStatusInactive {
 			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"error": fmt.Sprintf("agent node '%s' is not healthy (status: %s)", nodeID, targetNode.HealthStatus),
 			})
@@ -483,8 +485,8 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 			return
 		}
 
-		// Check if the agent node is healthy and reachable
-		if targetNode.HealthStatus != types.HealthStatusActive {
+		// Block agents that are known to be unreachable.
+		if targetNode.HealthStatus == types.HealthStatusInactive {
 			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"error": fmt.Sprintf("agent node '%s' is not healthy (status: %s)", nodeID, targetNode.HealthStatus),
 			})
