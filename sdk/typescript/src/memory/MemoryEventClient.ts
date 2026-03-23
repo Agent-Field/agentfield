@@ -153,7 +153,7 @@ export class MemoryEventClient extends MemoryClientBase {
         headers: headers
       });
 
-      return res.data as MemoryChangeEvent[];
+      return (res.data ?? []) as MemoryChangeEvent[];
     } catch (e) {
       console.error(`Failed to get event history: ${e}`);
       return [];
