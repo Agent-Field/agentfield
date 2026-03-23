@@ -12,6 +12,12 @@
 export function formatRelativeTime(date: Date | string): string {
   const now = new Date();
   const then = typeof date === 'string' ? new Date(date) : date;
+
+  // Handle invalid or zero-value dates (e.g., Go's time.Time zero value "0001-01-01")
+  if (isNaN(then.getTime()) || then.getFullYear() < 1970) {
+    return '—';
+  }
+
   const diffMs = now.getTime() - then.getTime();
   const diffMins = Math.floor(diffMs / 60000);
   const diffHours = Math.floor(diffMs / 3600000);

@@ -222,9 +222,11 @@ func TestExecuteReasonerHandler_EmptyAndNilInput(t *testing.T) {
 			defer agentServer.Close()
 
 			store := &reasonerTestStorage{agent: &types.AgentNode{
-				ID:        "node-1",
-				BaseURL:   agentServer.URL,
-				Reasoners: []types.ReasonerDefinition{{ID: "ping"}},
+				ID:              "node-1",
+				BaseURL:         agentServer.URL,
+				HealthStatus:    types.HealthStatusActive,
+				LifecycleStatus: types.AgentStatusReady,
+				Reasoners:       []types.ReasonerDefinition{{ID: "ping"}},
 			}}
 
 			router := gin.New()
@@ -267,9 +269,11 @@ func TestExecuteSkillHandler_EmptyAndNilInput(t *testing.T) {
 			defer agentServer.Close()
 
 			store := &reasonerTestStorage{agent: &types.AgentNode{
-				ID:      "node-1",
-				BaseURL: agentServer.URL,
-				Skills:  []types.SkillDefinition{{ID: "list_items"}},
+				ID:              "node-1",
+				BaseURL:         agentServer.URL,
+				HealthStatus:    types.HealthStatusActive,
+				LifecycleStatus: types.AgentStatusReady,
+				Skills:          []types.SkillDefinition{{ID: "list_items"}},
 			}}
 
 			router := gin.New()

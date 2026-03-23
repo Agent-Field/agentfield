@@ -349,6 +349,11 @@ func (s *TagApprovalService) RevokeAgentTags(ctx context.Context, agentID string
 		return err
 	}
 
+	// Check if agent tags are already revoked (no approved tags and already pending)
+	if agent.LifecycleStatus == types.AgentStatusPendingApproval && len(agent.ApprovedTags) == 0 {
+		return fmt.Errorf("already_revoked: agent tags are already revoked")
+	}
+
 	// Revoke the agent tag VC (non-fatal if no VC exists)
 	if err := s.storage.RevokeAgentTagVC(ctx, agentID); err != nil {
 		logger.Logger.Warn().Err(err).Str("agent_id", agentID).Msg("Failed to revoke agent tag VC (may not exist)")

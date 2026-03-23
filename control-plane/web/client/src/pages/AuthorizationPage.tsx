@@ -19,6 +19,7 @@ function AuthorizationPageContent() {
   const [policies, setPolicies] = useState<AccessPolicy[]>([]);
   const [policiesLoading, setPoliciesLoading] = useState(true);
   const [pendingCount, setPendingCount] = useState(0);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const fetchPolicies = useCallback(async () => {
     try {
@@ -38,6 +39,7 @@ function AuthorizationPageContent() {
 
   const handleRefreshAll = () => {
     fetchPolicies();
+    setRefreshKey((k) => k + 1);
   };
 
   return (
@@ -94,6 +96,7 @@ function AuthorizationPageContent() {
           <AgentTagsTab
             policies={policies}
             onPendingCountChange={setPendingCount}
+            refreshKey={refreshKey}
           />
         </AnimatedTabsContent>
       </AnimatedTabs>

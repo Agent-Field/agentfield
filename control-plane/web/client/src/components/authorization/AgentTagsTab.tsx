@@ -98,11 +98,13 @@ function getTagStatus(agent: AgentTagSummary): TagStatus {
 interface AgentTagsTabProps {
   policies: AccessPolicy[];
   onPendingCountChange: (count: number) => void;
+  refreshKey?: number;
 }
 
 export function AgentTagsTab({
   policies,
   onPendingCountChange,
+  refreshKey,
 }: AgentTagsTabProps) {
   const [agents, setAgents] = useState<AgentTagSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -149,6 +151,13 @@ export function AgentTagsTab({
   useEffect(() => {
     fetchAgents();
   }, [fetchAgents]);
+
+  // Re-fetch when parent triggers a refresh
+  useEffect(() => {
+    if (refreshKey !== undefined && refreshKey > 0) {
+      fetchAgents();
+    }
+  }, [refreshKey, fetchAgents]);
 
   // Update pending count
   useEffect(() => {
