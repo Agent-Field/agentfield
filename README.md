@@ -8,11 +8,11 @@
 
 *AI has outgrown chatbots and prompt orchestrators. Backend agents need backend infrastructure.*
 
-[![Stars](https://img.shields.io/github/stars/Agent-Field/agentfield?style=flat&logo=github&logoColor=white&color=7c3aed&labelColor=1e1e2e)](https://github.com/Agent-Field/agentfield/stargazers)
-[![License](https://img.shields.io/badge/license-Apache%202.0-7c3aed.svg?style=flat&labelColor=1e1e2e)](LICENSE)
-[![Downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fgist.githubusercontent.com%2Fsantoshkumarradha%2Fd98e2ad73502b4075f6a5f0ae4f5cae5%2Fraw%2Fbadge.json&style=flat&logo=download&logoColor=white&labelColor=1e1e2e&cacheSeconds=3600)](https://github.com/Agent-Field/agentfield)
-[![Last Commit](https://img.shields.io/github/last-commit/Agent-Field/agentfield?style=flat&logo=git&logoColor=white&color=7c3aed&labelColor=1e1e2e)](https://github.com/Agent-Field/agentfield/commits/main)
-[![Discord](https://img.shields.io/badge/discord-join%20us-5865F2.svg?style=flat&labelColor=1e1e2e&logo=discord&logoColor=white)](https://discord.gg/aBHaXMkpqh)
+[![Stars](https://img.shields.io/github/stars/Agent-Field/agentfield?style=flat&logo=github&logoColor=white&color=d4a24a&labelColor=0c0b09)](https://github.com/Agent-Field/agentfield/stargazers)
+[![License](https://img.shields.io/badge/license-Apache%202.0-d4a24a.svg?style=flat&labelColor=0c0b09)](LICENSE)
+[![Downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fgist.githubusercontent.com%2Fsantoshkumarradha%2Fd98e2ad73502b4075f6a5f0ae4f5cae5%2Fraw%2Fbadge.json&style=flat&logo=download&logoColor=white&labelColor=0c0b09&cacheSeconds=3600)](https://github.com/Agent-Field/agentfield)
+[![Last Commit](https://img.shields.io/github/last-commit/Agent-Field/agentfield?style=flat&logo=git&logoColor=white&color=d4a24a&labelColor=0c0b09)](https://github.com/Agent-Field/agentfield/commits/main)
+[![Discord](https://img.shields.io/badge/discord-join%20us-d4a24a.svg?style=flat&labelColor=0c0b09&logo=discord&logoColor=white)](https://discord.gg/aBHaXMkpqh)
 
 **[Docs](https://agentfield.ai/docs?utm_source=github-readme&utm_medium=referral)** · **[Quick Start](https://agentfield.ai/docs/quick-start?utm_source=github-readme&utm_medium=referral)** · **[Python SDK](https://agentfield.ai/api/python-sdk/overview?utm_source=github-readme&utm_medium=referral)** · **[Go SDK](https://agentfield.ai/api/go-sdk/overview?utm_source=github-readme&utm_medium=referral)** · **[TypeScript SDK](https://agentfield.ai/api/typescript-sdk/overview?utm_source=github-readme&utm_medium=referral)** · **[REST API](https://agentfield.ai/api/rest-api/overview?utm_source=github-readme&utm_medium=referral)** · **[Examples](#built-with-agentfield)** · **[Discord](https://discord.gg/aBHaXMkpqh)**
 
@@ -366,8 +366,8 @@ The control plane is a stateless Go service. Agents connect from anywhere - your
 
 <div align="center">
 
-[![Discord](https://img.shields.io/badge/Join%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/aBHaXMkpqh)
-[![Twitter](https://img.shields.io/badge/Follow%20on%20X-000000?style=for-the-badge&logo=x&logoColor=white)](https://x.com/agentfield_ai)
+[![Discord](https://img.shields.io/badge/Join%20Discord-d4a24a?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/aBHaXMkpqh)
+[![Twitter](https://img.shields.io/badge/Follow%20on%20X-0c0b09?style=for-the-badge&logo=x&logoColor=white)](https://x.com/agentfield_ai)
 
 **[GitHub Issues](https://github.com/Agent-Field/agentfield/issues)** · **[Documentation](https://agentfield.ai/docs?utm_source=github-readme&utm_medium=referral)** · **[Examples](https://agentfield.ai/examples?utm_source=github-readme&utm_medium=referral)**
 
