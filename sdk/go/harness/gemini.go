@@ -62,7 +62,7 @@ func (p *GeminiProvider) Execute(ctx context.Context, prompt string, options Opt
 			return &RawResult{
 				IsError: true,
 				ErrorMessage: fmt.Sprintf(
-					"Gemini binary not found at '%s'. Install: npm install -g @anthropic-ai/gemini-cli",
+					"Gemini binary not found at '%s'. Install: https://github.com/google-gemini/gemini-cli",
 					p.BinPath,
 				),
 				FailureType: FailureCrash,

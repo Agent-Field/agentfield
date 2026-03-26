@@ -59,7 +59,7 @@ func (p *CodexProvider) Execute(ctx context.Context, prompt string, options Opti
 			return &RawResult{
 				IsError: true,
 				ErrorMessage: fmt.Sprintf(
-					"Codex binary not found at '%s'. Install: npm install -g @openai/codex",
+					"Codex binary not found at '%s'. Install: https://github.com/openai/codex",
 					p.BinPath,
 				),
 				FailureType: FailureCrash,
