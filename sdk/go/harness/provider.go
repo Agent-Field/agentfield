@@ -7,6 +7,10 @@ const (
 	ProviderOpenCode = "opencode"
 	// ProviderClaudeCode is the provider name for Claude Code CLI.
 	ProviderClaudeCode = "claude-code"
+	// ProviderCodex is the provider name for Codex CLI.
+	ProviderCodex = "codex"
+	// ProviderGemini is the provider name for Gemini CLI.
+	ProviderGemini = "gemini"
 )
 
 // Provider is the interface that CLI-based harness providers implement.
