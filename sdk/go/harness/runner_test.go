@@ -415,9 +415,10 @@ func TestCodexProvider_SuccessfulExecution(t *testing.T) {
 	dir := t.TempDir()
 	script := writeTestScript(t, dir, "codex",
 		`#!/bin/sh
-echo '{"type":"thread.started","session_id":"codex-s1"}'
-echo '{"type":"turn.completed"}'
-echo '{"type":"item.completed","item":{"type":"agent_message","content":"codex result"}}'
+echo '{"type":"thread.started","thread_id":"019d-abc"}'
+echo '{"type":"turn.started"}'
+echo '{"type":"item.completed","item":{"type":"agent_message","text":"codex result"}}'
+echo '{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":10}}'
 `)
 
 	p := NewCodexProvider(script)
@@ -425,7 +426,7 @@ echo '{"type":"item.completed","item":{"type":"agent_message","content":"codex r
 	assert.NoError(t, err)
 	assert.False(t, raw.IsError)
 	assert.Equal(t, "codex result", raw.Result)
-	assert.Equal(t, "codex-s1", raw.Metrics.SessionID)
+	assert.Equal(t, "019d-abc", raw.Metrics.SessionID)
 	assert.Equal(t, 1, raw.Metrics.NumTurns)
 }
 

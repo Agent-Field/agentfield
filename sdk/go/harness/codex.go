@@ -132,6 +132,10 @@ func (p *CodexProvider) parseJSONLOutput(stdout string, raw *RawResult) {
 		case "turn.completed":
 			numTurns++
 		case "thread.started":
+			// Codex uses "thread_id" in thread.started events.
+			if sid, ok := event["thread_id"].(string); ok {
+				sessionID = sid
+			}
 			if sid, ok := event["session_id"].(string); ok {
 				sessionID = sid
 			}
@@ -139,6 +143,10 @@ func (p *CodexProvider) parseJSONLOutput(stdout string, raw *RawResult) {
 			// Extract agent message content from completed items.
 			if item, ok := event["item"].(map[string]any); ok {
 				if itemType, _ := item["type"].(string); itemType == "agent_message" {
+					// Codex uses "text" for agent message content.
+					if text, ok := item["text"].(string); ok && text != "" {
+						resultText = text
+					}
 					if content, ok := item["content"].(string); ok && content != "" {
 						resultText = content
 					}
