@@ -45,6 +45,7 @@ node_modules/
 .idea/
 .vscode/
 *.code-workspace
+.opencode/
 
 # Generated assets
 coverage/
