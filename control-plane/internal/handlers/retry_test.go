@@ -6,6 +6,9 @@ import (
 	"time"
 )
 
+// TestIsRetryableDBError verifies that isRetryableDBError correctly identifies
+// transient database errors (e.g. SQLite lock contention, deadlocks) as retryable
+// while rejecting nil and unrelated errors.
 func TestIsRetryableDBError(t *testing.T) {
 	t.Parallel()
 
@@ -52,6 +55,8 @@ func TestIsRetryableDBError(t *testing.T) {
 	})
 }
 
+// TestBackoffDelay_AttemptZeroOrNegativeUsesOne verifies that attempt values <= 0
+// are clamped to 1, producing delays in the [50ms, 75ms) range.
 func TestBackoffDelay_AttemptZeroOrNegativeUsesOne(t *testing.T) {
 	t.Parallel()
 
@@ -65,6 +70,9 @@ func TestBackoffDelay_AttemptZeroOrNegativeUsesOne(t *testing.T) {
 	}
 }
 
+// TestBackoffDelay_RangeByAttempt verifies that the delay scales linearly with
+// the attempt number: base = 50*attempt ms, plus up to 25ms of random jitter,
+// giving an expected range of [50*attempt, 50*attempt+25) ms.
 func TestBackoffDelay_RangeByAttempt(t *testing.T) {
 	t.Parallel()
 
@@ -78,6 +86,9 @@ func TestBackoffDelay_RangeByAttempt(t *testing.T) {
 	}
 }
 
+// TestBackoffDelay_AttemptTwoAlwaysGreaterThanAttemptOne confirms that delays
+// increase monotonically. Because the ranges [50,75) and [100,125) don't
+// overlap, attempt 2 is always strictly greater than attempt 1.
 func TestBackoffDelay_AttemptTwoAlwaysGreaterThanAttemptOne(t *testing.T) {
 	t.Parallel()
 
