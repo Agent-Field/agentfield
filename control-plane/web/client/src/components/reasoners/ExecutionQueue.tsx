@@ -1,4 +1,4 @@
-import { useState, forwardRef, useImperativeHandle } from 'react';
+import { useRef, useState, forwardRef, useImperativeHandle, type KeyboardEvent, type MouseEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
@@ -21,12 +21,12 @@ export interface QueuedExecution {
   execution_id?: string; // Backend execution ID for navigation
   run_id?: string;
   workflow_id?: string;
-  input: any;
+  input: unknown;
   status: 'queued' | 'running' | 'completed' | 'failed';
   startTime: Date;
   endTime?: Date;
   duration?: number;
-  result?: any;
+  result?: unknown;
   error?: string;
   inputSummary: string;
   page_available?: boolean; // Whether the execution details page is available
@@ -41,7 +41,7 @@ interface ExecutionQueueProps {
 }
 
 export interface ExecutionQueueRef {
-  addExecution: (input: any) => string;
+  addExecution: (input: unknown) => string;
 }
 
 export const ExecutionQueue = forwardRef<ExecutionQueueRef, ExecutionQueueProps>(({
@@ -53,6 +53,7 @@ export const ExecutionQueue = forwardRef<ExecutionQueueRef, ExecutionQueueProps>
   const [executions, setExecutions] = useState<QueuedExecution[]>([]);
   const [selectedExecution, setSelectedExecution] = useState<string | null>(null);
   const navigate = useNavigate();
+  const addExecutionRef = useRef<(input: unknown) => string>(() => "");
 
   // Get active executions (queued or running)
   const activeExecutions = executions.filter(e =>
@@ -64,30 +65,6 @@ export const ExecutionQueue = forwardRef<ExecutionQueueRef, ExecutionQueueProps>
     .filter(e => e.status === 'completed' || e.status === 'failed')
     .sort((a, b) => (b.endTime?.getTime() || 0) - (a.endTime?.getTime() || 0))
     .slice(0, 5);
-
-  const addExecution = (input: any): string => {
-    const executionId = `exec_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-
-    // Create input summary for display
-    const inputSummary = createInputSummary(input);
-
-    const newExecution: QueuedExecution = {
-      id: executionId,
-      input,
-      status: activeExecutions.length >= maxConcurrent ? 'queued' : 'running',
-      startTime: new Date(),
-      inputSummary,
-    };
-
-    setExecutions(prev => [newExecution, ...prev]);
-
-    // Start execution if not queued
-    if (newExecution.status === 'running') {
-      executeReasoner(executionId, input);
-    }
-
-    return executionId;
-  };
 
   const cancelExecution = (executionId: string) => {
     setExecutions(prev =>
@@ -102,7 +79,7 @@ export const ExecutionQueue = forwardRef<ExecutionQueueRef, ExecutionQueueProps>
     processQueue();
   };
 
-  const executeReasoner = async (executionId: string, input: any) => {
+  const executeReasoner = async (executionId: string, input: unknown) => {
     try {
       // Update status to running
       setExecutions(prev =>
@@ -303,7 +280,7 @@ export const ExecutionQueue = forwardRef<ExecutionQueueRef, ExecutionQueueProps>
             : exec
         )
       );
-    } catch (error) {
+    } catch {
       // If we can't fetch the status yet, the page might not be available
       if (retryCount < maxRetries) {
         // Wait a bit and try again
@@ -328,7 +305,7 @@ export const ExecutionQueue = forwardRef<ExecutionQueueRef, ExecutionQueueProps>
     }
   };
 
-  const createInputSummary = (input: any): string => {
+  const createInputSummary = (input: unknown): string => {
     if (!input || typeof input !== 'object') {
       return String(input || 'Empty');
     }
@@ -362,7 +339,10 @@ export const ExecutionQueue = forwardRef<ExecutionQueueRef, ExecutionQueueProps>
     }
   };
 
-  const handleExecutionCardClick = (execution: QueuedExecution, event: React.MouseEvent) => {
+  const handleExecutionCardClick = (
+    execution: QueuedExecution,
+    event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>
+  ) => {
     // Prevent navigation if clicking on action buttons
     if ((event.target as HTMLElement).closest('button')) {
       return;
@@ -383,7 +363,7 @@ export const ExecutionQueue = forwardRef<ExecutionQueueRef, ExecutionQueueProps>
     }
   };
 
-  const handleViewDetailsClick = (event: React.MouseEvent, execution: QueuedExecution) => {
+  const handleViewDetailsClick = (event: MouseEvent<HTMLElement>, execution: QueuedExecution) => {
     event.stopPropagation();
     if (execution.execution_id && execution.page_available) {
       handleNavigateToExecution(execution);
@@ -416,10 +396,32 @@ export const ExecutionQueue = forwardRef<ExecutionQueueRef, ExecutionQueueProps>
     }
   };
 
-  // Expose addExecution method to parent via ref
+  addExecutionRef.current = (input: unknown) => {
+    const executionId = `exec_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const inputSummary = createInputSummary(input);
+    const nextStatus = activeExecutions.length >= maxConcurrent ? 'queued' : 'running';
+    const newExecution: QueuedExecution = {
+      id: executionId,
+      input,
+      status: nextStatus,
+      startTime: new Date(),
+      inputSummary,
+    };
+
+    setExecutions(prev => [newExecution, ...prev]);
+
+    if (nextStatus === 'running') {
+      executeReasoner(executionId, input);
+    }
+
+    return executionId;
+  };
+
   useImperativeHandle(ref, () => ({
-    addExecution
-  }), [addExecution]);
+    addExecution(input: unknown) {
+      return addExecutionRef.current(input);
+    }
+  }), []);
 
   if (activeExecutions.length === 0 && recentExecutions.length === 0) {
     return null;
@@ -452,7 +454,7 @@ export const ExecutionQueue = forwardRef<ExecutionQueueRef, ExecutionQueueProps>
                 onKeyDown={execution.execution_id ? (e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
-                    handleExecutionCardClick(execution, e as any);
+                    handleExecutionCardClick(execution, e);
                   }
                 } : undefined}
               >
@@ -565,7 +567,7 @@ export const ExecutionQueue = forwardRef<ExecutionQueueRef, ExecutionQueueProps>
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
-                    handleExecutionCardClick(execution, e as any);
+                    handleExecutionCardClick(execution, e);
                   }
                 }}
               >

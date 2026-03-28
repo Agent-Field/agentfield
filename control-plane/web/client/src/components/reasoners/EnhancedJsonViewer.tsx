@@ -14,16 +14,25 @@ import { SmartStringRenderer } from './SmartStringRenderer';
 import { JsonModal } from './JsonModal';
 
 interface EnhancedJsonViewerProps {
-  data: any;
+  data: unknown;
   title?: string;
   className?: string;
   maxInlineHeight?: number;
 }
 
+type JsonValueType =
+  | 'string'
+  | 'number'
+  | 'boolean'
+  | 'array'
+  | 'object'
+  | 'null'
+  | 'undefined';
+
 interface JsonItem {
   key: string;
-  value: any;
-  type: 'string' | 'number' | 'boolean' | 'array' | 'object' | 'null';
+  value: unknown;
+  type: JsonValueType;
   path: string[];
   isExpandable: boolean;
 }
@@ -36,7 +45,7 @@ export function EnhancedJsonViewer({
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
   const [modalState, setModalState] = useState<{
     isOpen: boolean;
-    content: any;
+    content: unknown;
     path: string[];
     title: string;
   }>({
@@ -56,7 +65,7 @@ export function EnhancedJsonViewer({
     setExpandedItems(newExpanded);
   };
 
-  const openModal = (content: any, path: string[], itemTitle: string) => {
+  const openModal = (content: unknown, path: string[], itemTitle: string) => {
     setModalState({
       isOpen: true,
       content,
@@ -74,12 +83,22 @@ export function EnhancedJsonViewer({
     });
   };
 
-  const copyToClipboard = (content: any) => {
+  const copyToClipboard = (content: unknown) => {
     const text = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
     navigator.clipboard.writeText(text);
   };
 
-  const processJsonData = (obj: any, parentPath: string[] = []): JsonItem[] => {
+  const getJsonValueType = (value: unknown): JsonValueType => {
+    if (value === null) return 'null';
+    if (value === undefined) return 'undefined';
+    if (Array.isArray(value)) return 'array';
+    if (typeof value === 'string') return 'string';
+    if (typeof value === 'number') return 'number';
+    if (typeof value === 'boolean') return 'boolean';
+    return 'object';
+  };
+
+  const processJsonData = (obj: unknown, parentPath: string[] = []): JsonItem[] => {
     if (obj === null || obj === undefined) {
       return [];
     }
@@ -88,7 +107,7 @@ export function EnhancedJsonViewer({
       return [{
         key: 'value',
         value: obj,
-        type: typeof obj as any,
+        type: getJsonValueType(obj),
         path: parentPath,
         isExpandable: false
       }];
@@ -106,14 +125,12 @@ export function EnhancedJsonViewer({
 
     return Object.entries(obj).map(([key, value]) => {
       const path = [...parentPath, key];
-      const type = value === null ? 'null' :
-                  Array.isArray(value) ? 'array' :
-                  typeof value;
+      const type = getJsonValueType(value);
 
       return {
         key,
         value,
-        type: type as any,
+        type,
         path,
         isExpandable: type === 'object' || type === 'array'
       };
@@ -134,21 +151,26 @@ export function EnhancedJsonViewer({
 
     switch (item.type) {
       case 'string':
+        {
+          const stringValue = typeof item.value === 'string' ? item.value : String(item.value);
         return (
           <SmartStringRenderer
-            content={item.value}
+            content={stringValue}
             label={item.key}
             path={item.path}
-            onOpenModal={() => openModal(item.value, item.path, formatLabel(item.key))}
+            onOpenModal={() => openModal(stringValue, item.path, formatLabel(item.key))}
             maxInlineHeight={maxInlineHeight}
           />
         );
+        }
 
       case 'number':
+        {
+          const numberValue = typeof item.value === 'number' ? item.value : Number(item.value);
         return (
           <div className="flex items-center gap-2">
             <span className="text-sm font-mono text-foreground">
-              {item.value.toLocaleString()}
+              {numberValue.toLocaleString()}
             </span>
             <Button
               variant="ghost"
@@ -160,12 +182,15 @@ export function EnhancedJsonViewer({
             </Button>
           </div>
         );
+        }
 
       case 'boolean':
+        {
+          const booleanValue = Boolean(item.value);
         return (
           <div className="flex items-center gap-2">
-            <Badge variant={item.value ? "default" : "secondary"} className="text-xs">
-              {item.value ? 'true' : 'false'}
+            <Badge variant={booleanValue ? "default" : "secondary"} className="text-xs">
+              {booleanValue ? 'true' : 'false'}
             </Badge>
             <Button
               variant="ghost"
@@ -177,6 +202,7 @@ export function EnhancedJsonViewer({
             </Button>
           </div>
         );
+        }
 
       case 'null':
         return (
@@ -194,96 +220,119 @@ export function EnhancedJsonViewer({
         );
 
       case 'array':
-        return (
-          <div className="space-y-2">
-            <Collapsible open={isExpanded} onOpenChange={() => toggleExpanded(itemKey)}>
-              <div className="flex items-center gap-2">
-                <CollapsibleTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-6 w-6 p-0"
-                  >
-                    {isExpanded ? (
-                      <ChevronDown className="h-3 w-3" />
-                    ) : (
-                      <ChevronRight className="h-3 w-3" />
-                    )}
-                  </Button>
-                </CollapsibleTrigger>
+        {
+          const arrayValue = Array.isArray(item.value) ? item.value : [];
+          return (
+            <div className="space-y-2">
+              <Collapsible open={isExpanded} onOpenChange={() => toggleExpanded(itemKey)}>
+                <div className="flex items-center gap-2">
+                  <CollapsibleTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 w-6 p-0"
+                    >
+                      {isExpanded ? (
+                        <ChevronDown className="h-3 w-3" />
+                      ) : (
+                        <ChevronRight className="h-3 w-3" />
+                      )}
+                    </Button>
+                  </CollapsibleTrigger>
 
-                <div className="flex items-center gap-2 flex-1">
-                  <List className="h-4 w-4 text-muted-foreground" />
-                  <span className="text-sm text-foreground">
-                    Array
-                  </span>
-                  <Badge variant="secondary" className="text-xs">
-                    {item.value.length} items
-                  </Badge>
+                  <div className="flex items-center gap-2 flex-1">
+                    <List className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-sm text-foreground">
+                      Array
+                    </span>
+                    <Badge variant="secondary" className="text-xs">
+                      {arrayValue.length} items
+                    </Badge>
+                  </div>
+
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => copyToClipboard(arrayValue)}
+                      className="h-6 w-6 p-0"
+                    >
+                      <Copy className="h-3 w-3" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => openModal(arrayValue, item.path, formatLabel(item.key))}
+                      className="h-6 w-6 p-0"
+                    >
+                      <Maximize className="h-3 w-3" />
+                    </Button>
+                  </div>
                 </div>
 
-                <div className="flex items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => copyToClipboard(item.value)}
-                    className="h-6 w-6 p-0"
-                  >
-                    <Copy className="h-3 w-3" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => openModal(item.value, item.path, formatLabel(item.key))}
-                    className="h-6 w-6 p-0"
-                  >
-                    <Maximize className="h-3 w-3" />
-                  </Button>
-                </div>
-              </div>
-
-              <CollapsibleContent>
-                <div className="ml-6 mt-2 space-y-2">
-                  {item.value.slice(0, 10).map((arrayItem: any, index: number) => (
-                    <div key={index} className="flex items-start gap-2 p-2 bg-muted/30 rounded text-sm">
-                      <span className="text-muted-foreground font-mono text-xs mt-0.5 flex-shrink-0">
-                        [{index}]
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        {typeof arrayItem === 'string' ? (
-                          <SmartStringRenderer
-                            content={arrayItem}
-                            label={`${item.key}[${index}]`}
-                            path={[...item.path, index.toString()]}
-                            onOpenModal={() => openModal(arrayItem, [...item.path, index.toString()], `${formatLabel(item.key)}[${index}]`)}
-                            maxInlineHeight={100}
-                          />
-                        ) : typeof arrayItem === 'object' && arrayItem !== null ? (
-                          <div className="text-xs">
-                            <pre className="text-foreground whitespace-pre-wrap break-words overflow-hidden">
-                              {JSON.stringify(arrayItem, null, 2)}
-                            </pre>
-                          </div>
-                        ) : (
-                          <span className="text-foreground">
-                            {String(arrayItem)}
-                          </span>
-                        )}
+                <CollapsibleContent>
+                  <div className="ml-6 mt-2 space-y-2">
+                    {arrayValue.slice(0, 10).map((arrayItem: unknown, index: number) => (
+                      <div key={index} className="flex items-start gap-2 p-2 bg-muted/30 rounded text-sm">
+                        <span className="text-muted-foreground font-mono text-xs mt-0.5 flex-shrink-0">
+                          [{index}]
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          {typeof arrayItem === 'string' ? (
+                            <SmartStringRenderer
+                              content={arrayItem}
+                              label={`${item.key}[${index}]`}
+                              path={[...item.path, index.toString()]}
+                              onOpenModal={() => openModal(arrayItem, [...item.path, index.toString()], `${formatLabel(item.key)}[${index}]`)}
+                              maxInlineHeight={100}
+                            />
+                          ) : typeof arrayItem === 'object' && arrayItem !== null ? (
+                            <div className="text-xs">
+                              <pre className="text-foreground whitespace-pre-wrap break-words overflow-hidden">
+                                {JSON.stringify(arrayItem, null, 2)}
+                              </pre>
+                            </div>
+                          ) : (
+                            <span className="text-foreground">
+                              {String(arrayItem)}
+                            </span>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                  {item.value.length > 10 && (
-                    <div className="text-body-small text-center py-2">
-                      ... and {item.value.length - 10} more items
-                    </div>
-                  )}
-                </div>
-              </CollapsibleContent>
-            </Collapsible>
+                    ))}
+                    {arrayValue.length > 10 && (
+                      <div className="text-body-small text-center py-2">
+                        ... and {arrayValue.length - 10} more items
+                      </div>
+                    )}
+                  </div>
+                </CollapsibleContent>
+              </Collapsible>
+            </div>
+          );
+        }
+
+      case 'undefined':
+        return (
+          <div className="flex items-center gap-2">
+            <span className="text-body-small italic">undefined</span>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => copyToClipboard(undefined)}
+              className="h-6 w-6 p-0"
+            >
+              <Copy className="h-3 w-3" />
+            </Button>
           </div>
         );
 
       case 'object':
+        {
+          const objectValue =
+            item.value && typeof item.value === 'object' && !Array.isArray(item.value)
+              ? item.value
+              : {};
         return (
           <div className="space-y-2">
             <Collapsible open={isExpanded} onOpenChange={() => toggleExpanded(itemKey)}>
@@ -308,7 +357,7 @@ export function EnhancedJsonViewer({
                     Object
                   </span>
                   <Badge variant="secondary" className="text-xs">
-                    {Object.keys(item.value).length} keys
+                    {Object.keys(objectValue).length} keys
                   </Badge>
                 </div>
 
@@ -316,7 +365,7 @@ export function EnhancedJsonViewer({
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => copyToClipboard(item.value)}
+                    onClick={() => copyToClipboard(objectValue)}
                     className="h-6 w-6 p-0"
                   >
                     <Copy className="h-3 w-3" />
@@ -324,7 +373,7 @@ export function EnhancedJsonViewer({
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => openModal(item.value, item.path, formatLabel(item.key))}
+                    onClick={() => openModal(objectValue, item.path, formatLabel(item.key))}
                     className="h-6 w-6 p-0"
                   >
                     <Maximize className="h-3 w-3" />
@@ -335,7 +384,7 @@ export function EnhancedJsonViewer({
               <CollapsibleContent>
                 <div className="ml-6 mt-2">
                   <EnhancedJsonViewer
-                    data={item.value}
+                    data={objectValue}
                     maxInlineHeight={maxInlineHeight}
                   />
                 </div>
@@ -343,6 +392,7 @@ export function EnhancedJsonViewer({
             </Collapsible>
           </div>
         );
+        }
 
       default:
         return (
@@ -386,7 +436,7 @@ export function EnhancedJsonViewer({
                 <span className="text-sm font-medium text-foreground truncate block min-w-0" title={formatLabel(item.key)}>
                   {formatLabel(item.key)}
                 </span>
-                {item.type !== 'string' && item.type !== 'number' && item.type !== 'boolean' && item.type !== 'null' && (
+                {item.type !== 'string' && item.type !== 'number' && item.type !== 'boolean' && item.type !== 'null' && item.type !== 'undefined' && (
                   <Badge variant="outline" className="text-xs flex-shrink-0">
                     {item.type}
                   </Badge>

@@ -21,7 +21,7 @@ interface DataModalProps {
   onClose: () => void;
   title: string;
   icon?: React.ComponentType<{ className?: string }>;
-  data: any;
+  data: unknown;
 }
 
 function EnhancedModal({
@@ -99,6 +99,11 @@ function EnhancedModal({
 
 export function DataModal({ isOpen, onClose, title, icon, data }: DataModalProps) {
   const [viewMode, setViewMode] = React.useState<"formatted" | "raw" | "markdown">("formatted");
+  const handleViewModeChange = (value: string) => {
+    if (value === "formatted" || value === "raw" || value === "markdown") {
+      setViewMode(value);
+    }
+  };
 
   const jsonString = React.useMemo(() => {
     try {
@@ -149,7 +154,7 @@ export function DataModal({ isOpen, onClose, title, icon, data }: DataModalProps
         <div className="flex-shrink-0 border-b border-border bg-background/95">
           <Tabs
             value={viewMode}
-            onValueChange={(value) => setViewMode(value as any)}
+            onValueChange={handleViewModeChange}
             className="w-full"
           >
             <TabsList variant="underline" className="grid w-full grid-cols-3 h-12">
