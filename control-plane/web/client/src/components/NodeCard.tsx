@@ -295,6 +295,9 @@ const NodeCard = memo(
         ? statusPresentation.theme.textClass
         : "text-muted-foreground"
     );
+    const heartbeatText = lastHeartbeat
+      ? formatTimeAgo(lastHeartbeat)
+      : "No heartbeat";
 
     return (
       <div
@@ -314,12 +317,14 @@ const NodeCard = memo(
         <div className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 flex-col gap-2">
             <div className="flex flex-wrap items-center gap-2 text-sm">
-              <span className={statusDotClass} />
+              <span className={statusDotClass} aria-hidden="true" />
               <span
                 className={cn(
                   "text-xs font-medium uppercase tracking-wide",
                   statusPresentation.theme.textClass
                 )}
+                role="status"
+                aria-label={`Node status: ${statusPresentation.label}`}
               >
                 {statusPresentation.label}
               </span>
@@ -332,37 +337,57 @@ const NodeCard = memo(
               >
                 {highlightText(nodeSummary.id)}
               </h3>
-              <Badge variant="outline" className="h-6 rounded-full px-2 text-body-small">
+              <Badge
+                variant="outline"
+                className="h-6 rounded-full px-2 text-body-small"
+                aria-label={`Node version ${nodeSummary.version}`}
+              >
                 v{nodeSummary.version}
               </Badge>
               {deploymentType === "serverless" && (
                 <Badge
                   variant="outline"
                   className="h-6 rounded-full px-2 text-body-small flex items-center gap-1"
+                  aria-label="Deployment type: serverless"
                 >
-                  <Flash className="h-3.5 w-3.5" />
+                  <Flash className="h-3.5 w-3.5" aria-hidden="true" />
                   Serverless
                 </Badge>
               )}
               {isHighImportance && (
-                <Badge variant="outline" className="h-6 rounded-full px-2 text-body-small">
+                <Badge
+                  variant="outline"
+                  className="h-6 rounded-full px-2 text-body-small"
+                  aria-label="Node is high capability"
+                >
                   High capability
                 </Badge>
               )}
               {hasMcpIssues && (
-                <Badge variant="destructive" className="h-6 rounded-full px-2 text-body-small">
+                <Badge
+                  variant="destructive"
+                  className="h-6 rounded-full px-2 text-body-small"
+                  aria-label="Node has MCP issues detected"
+                >
                   Issues detected
                 </Badge>
               )}
             </div>
             <div className="flex flex-wrap items-center gap-3">
-              <span className={heartbeatClass}>
-                <Clock className="h-3.5 w-3.5" />
-                {lastHeartbeat ? formatTimeAgo(lastHeartbeat) : "No heartbeat"}
+              <span
+                className={heartbeatClass}
+                aria-label={
+                  lastHeartbeat
+                    ? `Last heartbeat ${heartbeatText}`
+                    : "No heartbeat recorded"
+                }
+              >
+                <Clock className="h-3.5 w-3.5" aria-hidden="true" />
+                {heartbeatText}
               </span>
               {didStatus && didStatus.has_did && (
                 <div className="flex items-center gap-1 text-body-small">
-                  <Identification className="h-3.5 w-3.5" />
+                  <Identification className="h-3.5 w-3.5" aria-hidden="true" />
                   <CompositeDIDStatus
                     status={didStatus.did_status}
                     reasonerCount={didStatus.reasoner_count}
@@ -412,25 +437,26 @@ const NodeCard = memo(
                 "h-4 w-4 text-muted-foreground transition-transform duration-200",
                 isHovered && "translate-x-1 text-foreground"
               )}
+              aria-hidden="true"
             />
           </div>
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-2 text-body-small">
           <div className="flex items-center gap-1.5">
-            <Code className="h-4 w-4" />
+            <Code className="h-4 w-4" aria-hidden="true" />
             <span>
               {reasonerCount} reasoner{reasonerCount === 1 ? "" : "s"}
             </span>
           </div>
           <div className="flex items-center gap-1.5">
-            <Tools className="h-4 w-4" />
+            <Tools className="h-4 w-4" aria-hidden="true" />
             <span>
               {skillCount} skill{skillCount === 1 ? "" : "s"}
             </span>
           </div>
           <div className="flex items-center gap-1.5">
-            <Layers className="h-4 w-4" />
+            <Layers className="h-4 w-4" aria-hidden="true" />
             <span>Team {highlightText(teamId)}</span>
           </div>
           {mcpSummary && (
