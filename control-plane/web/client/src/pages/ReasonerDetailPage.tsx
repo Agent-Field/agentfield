@@ -9,11 +9,11 @@ import {
   Time,
   View,
 } from "../components/ui/icon-bridge";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { DIDIdentityBadge } from "../components/did/DIDDisplay";
 import { Badge } from "../components/ui/badge";
-import { ExecutionForm } from "../components/reasoners/ExecutionForm";
+import { ExecutionForm, type ExecutionFormData } from "../components/reasoners/ExecutionForm";
 import { ExecutionHistoryList } from "../components/reasoners/ExecutionHistoryList";
 import {
   ExecutionQueue,
@@ -72,17 +72,11 @@ export function ReasonerDetailPage() {
   const [metrics, setMetrics] = useState<PerformanceMetrics | null>(null);
 
   // Form state
-  const [formData, setFormData] = useState<any>({});
+  const [formData, setFormData] = useState<ExecutionFormData>({});
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [isExecuting, setIsExecuting] = useState(false);
 
-  useEffect(() => {
-    loadReasonerDetails();
-    loadMetrics();
-    loadHistory();
-  }, [fullReasonerId]);
-
-  const loadReasonerDetails = async () => {
+  const loadReasonerDetails = useCallback(async () => {
     if (!fullReasonerId) return;
 
     try {
@@ -102,9 +96,9 @@ export function ReasonerDetailPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [fullReasonerId]);
 
-  const loadMetrics = async () => {
+  const loadMetrics = useCallback(async () => {
     if (!fullReasonerId) return;
     try {
       const data = await reasonersApi.getPerformanceMetrics(fullReasonerId);
@@ -112,9 +106,9 @@ export function ReasonerDetailPage() {
     } catch (err) {
       console.error("Failed to load metrics:", err);
     }
-  };
+  }, [fullReasonerId]);
 
-  const loadHistory = async () => {
+  const loadHistory = useCallback(async () => {
     if (!fullReasonerId) return;
     try {
       const data = await reasonersApi.getExecutionHistory(
@@ -126,7 +120,13 @@ export function ReasonerDetailPage() {
     } catch (err) {
       console.error("Failed to load history:", err);
     }
-  };
+  }, [fullReasonerId]);
+
+  useEffect(() => {
+    loadReasonerDetails();
+    loadMetrics();
+    loadHistory();
+  }, [loadHistory, loadMetrics, loadReasonerDetails]);
 
   const handleExecute = () => {
     if (!reasoner || !fullReasonerId || !executionQueueRef.current) return;

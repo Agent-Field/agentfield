@@ -19,8 +19,39 @@ import { WarningFilled } from "@/components/ui/icon-bridge";
 import { jsonSchemaToZodObject } from "@/utils/jsonSchemaToZod";
 
 type FieldComponentProps = AutoFormFieldProps;
+type JsonPrimitive = string | number | boolean | null;
+type ExecutionFormValues = Record<string, unknown>;
+type ExecutionFormWatchSubscription = ReturnType<UseFormReturn<ExecutionFormValues>["watch"]>;
+type FormInputChangeEvent = React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>;
+type SyntheticFieldValue = Exclude<JsonPrimitive, null>;
+type SyntheticChangeEvent = {
+  target: {
+    name?: string;
+    value: SyntheticFieldValue | "";
+    checked?: SyntheticFieldValue | "";
+  };
+  type: "change";
+};
+type FormInputProps<TElement extends HTMLElement> = Record<string, unknown> & {
+  ref?: React.Ref<TElement>;
+  onChange?: (event: FormInputChangeEvent | SyntheticChangeEvent) => void;
+  onBlur?: (event: React.FocusEvent<TElement>) => void;
+  name?: string;
+};
 
-function assignRef<T>(ref: any, value: T) {
+export interface ExecutionFormData extends Record<string, unknown> {
+  input?: unknown;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function toExecutionFormValues(value: unknown): ExecutionFormValues {
+  return isRecord(value) ? value : {};
+}
+
+function assignRef<T>(ref: React.Ref<T> | undefined, value: T | null) {
   if (!ref) {
     return;
   }
@@ -31,12 +62,15 @@ function assignRef<T>(ref: any, value: T) {
   ref.current = value;
 }
 
-function normalizeInputProps(inputProps: any = {}) {
-  const { ref, onChange, onBlur, name, ...rest } = inputProps;
+function normalizeInputProps<TElement extends HTMLElement>(inputProps?: FormInputProps<TElement>) {
+  const { ref, onChange, onBlur, name, ...rest } = inputProps ?? {};
   return { ref, onChange, onBlur, name, rest };
 }
 
-function emitSyntheticChange(inputProps: { onChange?: (value: any) => void; name?: string }, value: any) {
+function emitSyntheticChange(
+  inputProps: Pick<FormInputProps<HTMLElement>, "onChange" | "name">,
+  value: SyntheticFieldValue
+) {
   if (!inputProps?.onChange) {
     return;
   }
@@ -105,7 +139,7 @@ const uiComponents: AutoFormUIComponents = {
 };
 
 const StringField: React.FC<FieldComponentProps> = ({ id, value, inputProps }) => {
-  const { ref, onChange, onBlur, name, rest } = normalizeInputProps(inputProps);
+  const { ref, onChange, onBlur, name, rest } = normalizeInputProps<HTMLTextAreaElement>(inputProps);
   return (
     <AutoExpandingTextarea
       id={id}
@@ -121,7 +155,7 @@ const StringField: React.FC<FieldComponentProps> = ({ id, value, inputProps }) =
 };
 
 const NumberField: React.FC<FieldComponentProps> = ({ id, value, inputProps }) => {
-  const { ref, onChange, onBlur, name, rest } = normalizeInputProps(inputProps);
+  const { ref, onChange, onBlur, name, rest } = normalizeInputProps<HTMLInputElement>(inputProps);
   const initialValue = value === undefined || value === null ? "" : String(value);
   return (
     <Input
@@ -155,7 +189,7 @@ const NumberField: React.FC<FieldComponentProps> = ({ id, value, inputProps }) =
 };
 
 const BooleanField: React.FC<FieldComponentProps> = ({ id, value, inputProps }) => {
-  const { ref, onChange, onBlur, name, rest } = normalizeInputProps(inputProps);
+  const { ref, onChange, onBlur, name, rest } = normalizeInputProps<HTMLButtonElement>(inputProps);
   const [checked, setChecked] = useState(Boolean(value));
 
   useEffect(() => {
@@ -182,7 +216,7 @@ const BooleanField: React.FC<FieldComponentProps> = ({ id, value, inputProps }) 
 };
 
 const DateField: React.FC<FieldComponentProps> = ({ id, value, inputProps }) => {
-  const { ref, onChange, onBlur, name, rest } = normalizeInputProps(inputProps);
+  const { ref, onChange, onBlur, name, rest } = normalizeInputProps<HTMLInputElement>(inputProps);
   const normalised =
     value instanceof Date
       ? value.toISOString().slice(0, 10)
@@ -204,7 +238,7 @@ const DateField: React.FC<FieldComponentProps> = ({ id, value, inputProps }) => 
 };
 
 const SelectField: React.FC<FieldComponentProps> = ({ id, value, field, inputProps }) => {
-  const { onChange, name, rest } = normalizeInputProps(inputProps);
+  const { onChange, name, rest } = normalizeInputProps<HTMLButtonElement>(inputProps);
   const options = field.options ?? [];
   const serialisedValue = value === undefined || value === null ? "" : String(value);
   const [selectedValue, setSelectedValue] = useState(serialisedValue);
@@ -250,12 +284,12 @@ const fieldComponents: AutoFormFieldComponents = {
 
 interface ExecutionFormProps {
   schema?: JsonSchema;
-  formData: any;
-  onChange: Dispatch<SetStateAction<any>>;
+  formData: ExecutionFormData;
+  onChange: Dispatch<SetStateAction<ExecutionFormData>>;
   validationErrors: string[];
 }
 
-function formatJson(value: any): string {
+function formatJson(value: unknown): string {
   if (typeof value === "string") {
     return value;
   }
@@ -266,7 +300,7 @@ function formatJson(value: any): string {
   }
 }
 
-function isDeepEqual(a: any, b: any): boolean {
+function isDeepEqual(a: unknown, b: unknown): boolean {
   try {
     return JSON.stringify(a) === JSON.stringify(b);
   } catch {
@@ -275,13 +309,14 @@ function isDeepEqual(a: any, b: any): boolean {
 }
 
 export function ExecutionForm({ schema, formData, onChange, validationErrors }: ExecutionFormProps) {
-  const initialValues = useMemo(() => (formData?.input ?? {}) as Record<string, any>, [formData]);
-  const [rawJsonDraft, setRawJsonDraft] = useState<string>(() => formatJson(initialValues));
+  const currentInput = formData?.input;
+  const initialValues = useMemo(() => toExecutionFormValues(currentInput), [currentInput]);
+  const [rawJsonDraft, setRawJsonDraft] = useState<string>(() => formatJson(currentInput));
   const [rawJsonError, setRawJsonError] = useState<string | null>(null);
-  const formRef = useRef<UseFormReturn<any> | null>(null);
+  const formRef = useRef<UseFormReturn<ExecutionFormValues> | null>(null);
   const skipNextInitialSyncRef = useRef(false);
   const isSyncingFromPropsRef = useRef(false);
-  const subscriptionRef = useRef<ReturnType<UseFormReturn<any>["watch"]> | null>(null);
+  const subscriptionRef = useRef<ExecutionFormWatchSubscription | null>(null);
 
   const provider = useMemo(() => {
     if (!schema) {
@@ -302,7 +337,7 @@ export function ExecutionForm({ schema, formData, onChange, validationErrors }: 
       return;
     }
 
-    setRawJsonDraft(formatJson(initialValues));
+    setRawJsonDraft(formatJson(currentInput));
     setRawJsonError(null);
 
     const form = formRef.current;
@@ -316,10 +351,10 @@ export function ExecutionForm({ schema, formData, onChange, validationErrors }: 
       form.reset(initialValues);
       isSyncingFromPropsRef.current = false;
     }
-  }, [initialValues]);
+  }, [currentInput, initialValues]);
 
   const attachWatcher = useCallback(
-    (form: UseFormReturn<any>) => {
+    (form: UseFormReturn<ExecutionFormValues>) => {
       subscriptionRef.current?.unsubscribe?.();
       subscriptionRef.current = form.watch((values) => {
         setRawJsonDraft(formatJson(values));
@@ -330,7 +365,7 @@ export function ExecutionForm({ schema, formData, onChange, validationErrors }: 
         }
 
         skipNextInitialSyncRef.current = true;
-        onChange((previous: any) => {
+        onChange((previous) => {
           if (isDeepEqual(previous?.input, values)) {
             return previous;
           }
@@ -345,7 +380,7 @@ export function ExecutionForm({ schema, formData, onChange, validationErrors }: 
   );
 
   const handleFormInit = useCallback(
-    (form: UseFormReturn<any>) => {
+    (form: UseFormReturn<ExecutionFormValues>) => {
       formRef.current = form;
       attachWatcher(form);
       isSyncingFromPropsRef.current = true;
@@ -368,14 +403,14 @@ export function ExecutionForm({ schema, formData, onChange, validationErrors }: 
       return;
     }
     try {
-      const parsed = JSON.parse(value);
-      if (formRef.current) {
+      const parsed: unknown = JSON.parse(value);
+      if (formRef.current && isRecord(parsed)) {
         isSyncingFromPropsRef.current = true;
         formRef.current.reset(parsed);
         isSyncingFromPropsRef.current = false;
       }
       skipNextInitialSyncRef.current = true;
-      onChange((previous: any) => ({
+      onChange((previous) => ({
         ...previous,
         input: parsed,
       }));
