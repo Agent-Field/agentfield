@@ -486,8 +486,8 @@ class Agent(FastAPI):
         enable_did: bool = True,
         local_verification: bool = False,
         verification_refresh_interval: int = 300,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         """
         Initialize a new AgentField Agent instance.
 
