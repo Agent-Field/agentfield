@@ -6,6 +6,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.63-rc.6] - 2026-03-29
+
+
+### Testing
+
+- Test(web-ui): add node card coverage (#314)
+
+Co-authored-by: nanqinhu <139929317+nanqinhu@users.noreply.github.com> (527c78c)
+
+## [0.1.63-rc.5] - 2026-03-29
+
+
+### Fixed
+
+- Fix(web-ui): add accessible labels to node card (#313)
+
+Co-authored-by: nanqinhu <139929317+nanqinhu@users.noreply.github.com> (cccbe71)
+
+## [0.1.63-rc.4] - 2026-03-29
+
+
+### Chores
+
+- Chore: compress README images for faster loading (753591a)
+
+
+
+### Fixed
+
+- Fix(web-ui): replace unsafe vcStatus casts across execution components (#308)
+
+Co-authored-by: nanqinhu <139929317+nanqinhu@users.noreply.github.com> (6bbad4a)
+
+- Fix(ci): retry transient OpenRouter timeouts in functional tests
+
+OpenRouter API intermittently times out (60s), causing CI flakes.
+- Add pytest-rerunfailures to retry only Timeout/ConnectionError failures (up to 2x with 5s delay)
+- Increase OpenRouter timeout from 60s to 120s and retry_attempts from 2 to 3
+- Mark test_readme_quick_start_summarize_flow as flaky for documentation (158f09c)
+
+## [0.1.63-rc.3] - 2026-03-28
+
+
+### Other
+
+- Add unit test for retry handler (#307)
+
+* Add unit tests for retry helpers (isRetryableDBError, backoffDelay)
+
+* added better documentation (1dec612)
+
 ## [0.1.63-rc.2] - 2026-03-26
 
 

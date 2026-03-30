@@ -5,7 +5,7 @@ export interface AgentDIDInfo {
   did_web?: string;
   agent_node_id: string;
   agentfield_server_id: string;
-  public_key_jwk: any;
+  public_key_jwk: unknown;
   derivation_path: string;
   reasoners: Record<string, ReasonerDIDInfo>;
   skills: Record<string, SkillDIDInfo>;
@@ -16,7 +16,7 @@ export interface AgentDIDInfo {
 export interface ReasonerDIDInfo {
   did: string;
   function_name: string;
-  public_key_jwk: any;
+  public_key_jwk: unknown;
   derivation_path: string;
   capabilities: string[];
   exposure_level: string;
@@ -26,7 +26,7 @@ export interface ReasonerDIDInfo {
 export interface SkillDIDInfo {
   did: string;
   function_name: string;
-  public_key_jwk: any;
+  public_key_jwk: unknown;
   derivation_path: string;
   tags: string[];
   exposure_level: string;
@@ -43,7 +43,7 @@ export interface ExecutionVC {
   issuer_did: string;
   target_did: string;
   caller_did: string;
-  vc_document: any;
+  vc_document: unknown;
   signature: string;
   storage_uri?: string;
   document_size_bytes?: number;
@@ -65,7 +65,7 @@ export interface WorkflowVC {
   end_time?: string;
   total_steps: number;
   completed_steps: number;
-  vc_document?: any;
+  vc_document?: unknown;
   signature?: string;
   issuer_did?: string;
   snapshot_time?: string;
@@ -143,7 +143,7 @@ export interface VCExecution {
 export interface VCAudit {
   inputDataHash: string;
   outputDataHash: string;
-  metadata: Record<string, any>;
+  metadata: Record<string, unknown>;
 }
 
 export interface VCProof {
@@ -181,7 +181,7 @@ export interface DIDRegistrationResponse {
 }
 
 export interface VCVerificationRequest {
-  vc_document: any;
+  vc_document: unknown;
 }
 
 export interface VCVerificationResponse {
@@ -259,7 +259,7 @@ export interface DIDResolutionBundle {
 
 export interface DIDResolutionEntry {
   method: string;
-  public_key_jwk: any;
+  public_key_jwk: unknown;
   resolved_from: string;
   resolved_at: string;
   error?: string;
@@ -329,6 +329,14 @@ export interface VCStatusSummary {
   failed_count: number;
   last_vc_created: string;
   verification_status: 'verified' | 'pending' | 'failed' | 'none';
+}
+
+export interface VCStatusData {
+  has_vc: boolean;
+  vc_id?: string;
+  status: string;
+  created_at?: string;
+  vc_document?: unknown;
 }
 
 export interface WorkflowVCStatusSummaryResponse extends VCStatusSummary {

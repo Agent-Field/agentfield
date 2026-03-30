@@ -440,7 +440,8 @@ export function ReasonerDetailPage() {
                     </CardDescription>
                   </div>
                   {normalizeExecutionStatus(selectedExecution.status) === "succeeded" &&
-                    selectedExecution.result && (
+                    selectedExecution.result !== undefined &&
+                    selectedExecution.result !== null && (
                       <SegmentedControl
                         value={resultViewMode}
                         onValueChange={(mode) =>
@@ -455,7 +456,8 @@ export function ReasonerDetailPage() {
               </CardHeader>
               <CardContent>
                 {normalizeExecutionStatus(selectedExecution.status) === "succeeded" &&
-                selectedExecution.result ? (
+                selectedExecution.result !== undefined &&
+                selectedExecution.result !== null ? (
                   <FormattedOutput
                     data={selectedExecution.result}
                     showRaw={resultViewMode === "json"}

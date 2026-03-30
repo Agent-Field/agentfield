@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/icon-bridge";
 import { useNavigate } from "react-router-dom";
 import type { WorkflowExecution } from "../../types/executions";
+import type { VCStatusData } from "../../types/did";
 import type { CanonicalStatus } from "../../utils/status";
 import { DIDDisplay } from "../did/DIDDisplay";
 import StatusIndicator from "../ui/status-indicator";
@@ -25,13 +26,7 @@ import {
 
 interface ExecutionHeaderProps {
   execution: WorkflowExecution;
-  vcStatus?: {
-    has_vc: boolean;
-    vc_id?: string;
-    status: string;
-    created_at?: string;
-    vc_document?: any;
-  } | null;
+  vcStatus?: VCStatusData | null;
   vcLoading?: boolean;
   onNavigateBack?: () => void;
 }
@@ -271,7 +266,7 @@ export function ExecutionHeader({
                 <VerifiableCredentialBadge
                   hasVC={vcStatus.has_vc}
                   status={vcStatus.status}
-                  vcData={vcStatus as any}
+                  vcData={vcStatus}
                   executionId={execution.execution_id}
                   showCopyButton={false}
                   showVerifyButton={false}

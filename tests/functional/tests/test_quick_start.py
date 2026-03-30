@@ -120,6 +120,7 @@ async def test_docs_quick_start_demo_echo_flow(async_http_client):
 
 @pytest.mark.functional
 @pytest.mark.openrouter
+@pytest.mark.flaky(reruns=2, reruns_delay=5, condition=True, reason="OpenRouter API can intermittently timeout")
 @pytest.mark.asyncio
 async def test_readme_quick_start_summarize_flow(
     openrouter_config,

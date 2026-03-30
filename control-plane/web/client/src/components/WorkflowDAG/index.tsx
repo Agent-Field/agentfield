@@ -24,11 +24,8 @@ import { NodeDetailSidebar } from "./NodeDetailSidebar";
 import { VirtualizedDAG } from "./VirtualizedDAG";
 import { WorkflowNode } from "./WorkflowNode";
 import { LayoutManager, type AllLayoutType } from "./layouts/LayoutManager";
-import {
-  WorkflowDeckGLView,
-  buildDeckGraph,
-  type DeckGraphData,
-} from "./DeckGLView";
+import { WorkflowDeckGLView } from "./DeckGLView";
+import { buildDeckGraph, type DeckGraphData } from "./DeckGLGraph";
 
 import { getWorkflowDAG } from "../../services/workflowsApi";
 import type {

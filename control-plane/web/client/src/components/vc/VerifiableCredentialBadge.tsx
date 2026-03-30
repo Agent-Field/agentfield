@@ -19,13 +19,14 @@ import {
 import type {
   ExecutionVC,
   WorkflowVC,
-  ComprehensiveVCVerificationResult
+  ComprehensiveVCVerificationResult,
+  VCStatusData
 } from "../../types/did";
 
 interface VerifiableCredentialBadgeProps {
   hasVC: boolean;
   status: string;
-  vcData?: ExecutionVC | WorkflowVC;
+  vcData?: ExecutionVC | WorkflowVC | VCStatusData;
   workflowId?: string; // For workflow-level VCs
   executionId?: string; // For execution-level VCs
   showCopyButton?: boolean; // Show copy button for detail pages

@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getWorkflowDAGLightweight } from "../services/workflowsApi";
 import type { WorkflowDAGLightweightResponse } from "../types/workflows";
+import { WorkflowDeckGLView } from "../components/WorkflowDAG/DeckGLView";
 import {
-  WorkflowDeckGLView,
   buildDeckGraph,
   type DeckGraphData,
   type WorkflowDAGNode,
-} from "../components/WorkflowDAG/DeckGLView";
+} from "../components/WorkflowDAG/DeckGLGraph";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Card, CardContent, CardHeader } from "../components/ui/card";

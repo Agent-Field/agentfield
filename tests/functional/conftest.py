@@ -223,8 +223,8 @@ def openrouter_config(openrouter_api_key: str, openrouter_model: str) -> AIConfi
         api_key=openrouter_api_key,
         temperature=0.7,
         max_tokens=500,
-        timeout=60.0,
-        retry_attempts=2,
+        timeout=120.0,
+        retry_attempts=3,
     )
 
 
