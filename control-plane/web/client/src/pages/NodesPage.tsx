@@ -63,12 +63,6 @@ export function NodesPage() {
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [showServerlessModal, setShowServerlessModal] = useState(false);
 
-  // Console log to verify we're using the updated build
-  console.log(
-    "🚀 NodesPage: Component loaded with SSE fixes - Build timestamp:",
-    new Date().toISOString()
-  );
-
   // Use the new SSE hook for real-time updates
   const sseHook = useNodeEventsSSE();
   const { connected, reconnecting, latestEvent, reconnect } = sseHook;
@@ -139,12 +133,6 @@ export function NodesPage() {
   useEffect(() => {
     if (!latestEvent) return;
 
-    console.log(
-      "🔄 Frontend: Received node SSE event:",
-      latestEvent.type,
-      latestEvent
-    );
-
     // The new dedicated node event system sends events directly with node data in the 'data' field
     // latestEvent.data contains the NodeEvent structure: { type, node_id, status, timestamp, data }
     const eventData = latestEvent.data;
@@ -155,25 +143,13 @@ export function NodesPage() {
       return;
     }
 
-    const nodeData = eventData?.data || eventData; // Extract node data from the nested structure
-
-    console.log("🔍 Frontend: Event data:", eventData);
-    console.log("🔍 Frontend: Event type:", latestEvent.type);
-    console.log("🔍 Frontend: Node data:", nodeData);
-    console.log("🔍 Frontend: Event structure check:", {
-      hasEventData: !!eventData,
-      hasNestedData: !!eventData?.data,
-      eventDataType: eventData?.type,
-      nodeId: eventData?.node_id,
-    });
+    const nodeData = eventData?.data || eventData;
 
     switch (latestEvent.type) {
       case "node_registered":
-        console.log("🆕 Frontend: Processing node_registered event");
         if (nodeData) {
           setNodes((prevNodes) => {
             const newNode = nodeData as AgentNodeSummary;
-            console.log("🆕 Frontend: New node data:", newNode);
             const existingIndex = prevNodes.findIndex(
               (node) => node.id === newNode.id
             );
@@ -181,11 +157,8 @@ export function NodesPage() {
               // Update existing node
               const updatedNodes = [...prevNodes];
               updatedNodes[existingIndex] = newNode;
-              console.log("🔄 Frontend: Updated existing node:", newNode.id);
               return updatedNodes;
             }
-            // Add new node
-            console.log("➕ Frontend: Added new node:", newNode.id);
             return [...prevNodes, newNode];
           });
         }
@@ -196,20 +169,12 @@ export function NodesPage() {
       case "node_status_updated":
       case "node_status_changed":
       case "node_health_changed":
-        console.log(`🔄 Frontend: Processing ${latestEvent.type} event`);
         if (nodeData) {
           setNodes((prevNodes) => {
             const updatedNode = nodeData as AgentNodeSummary;
-            console.log("🔄 Frontend: Updated node data:", {
-              id: updatedNode.id,
-              health_status: updatedNode.health_status,
-              lifecycle_status: updatedNode.lifecycle_status,
-              last_heartbeat: updatedNode.last_heartbeat,
-            });
             const newNodes = prevNodes.map((node) =>
               node.id === updatedNode.id ? updatedNode : node
             );
-            console.log("🔄 Frontend: Node state updated for:", updatedNode.id);
             return newNodes;
           });
         }
@@ -244,9 +209,6 @@ export function NodesPage() {
 
       // New unified status events
       case "node_unified_status_changed":
-        console.log(
-          "🔄 Frontend: Processing node_unified_status_changed event"
-        );
         if (
           eventData &&
           typeof eventData === "object" &&
@@ -281,7 +243,6 @@ export function NodesPage() {
         break;
 
       case "node_state_transition":
-        console.log("🔄 Frontend: Processing node_state_transition event");
         if (
           eventData &&
           typeof eventData === "object" &&
@@ -310,7 +271,6 @@ export function NodesPage() {
         break;
 
       case "node_status_refreshed":
-        console.log("🔄 Frontend: Processing node_status_refreshed event");
         if (
           eventData &&
           typeof eventData === "object" &&
@@ -344,7 +304,6 @@ export function NodesPage() {
         break;
 
       case "bulk_status_update":
-        console.log("🔄 Frontend: Processing bulk_status_update event");
         // Trigger a full refresh after bulk updates
         fetchNodes();
         break;
@@ -352,27 +311,15 @@ export function NodesPage() {
       case "connected":
       case "heartbeat":
       case "node_heartbeat":
-        // Handle connection and heartbeat events - no action needed
-        console.log(
-          "🔗 Frontend: Connection event received:",
-          latestEvent.type
-        );
         break;
 
       default:
-        console.log("Unhandled event type:", latestEvent.type);
     }
   }, [latestEvent, normalizeHealthStatus, normalizeLifecycleStatus]);
 
   // Handle unified status events
   useEffect(() => {
     if (!unifiedStatusEvent) return;
-
-    console.log(
-      "🔄 Frontend: Received unified status event:",
-      unifiedStatusEvent.type,
-      unifiedStatusEvent
-    );
 
     const eventData = unifiedStatusEvent.data;
 
@@ -443,10 +390,6 @@ export function NodesPage() {
         break;
 
       default:
-        console.log(
-          "Unhandled unified status event type:",
-          unifiedStatusEvent.type
-        );
     }
   }, [unifiedStatusEvent, normalizeHealthStatus, normalizeLifecycleStatus]);
 
@@ -691,8 +634,7 @@ export function NodesPage() {
       <ServerlessRegistrationModal
         isOpen={showServerlessModal}
         onClose={() => setShowServerlessModal(false)}
-        onSuccess={(nodeId) => {
-          console.log("✅ Serverless agent registered:", nodeId);
+        onSuccess={() => {
           fetchNodes();
         }}
       />

@@ -368,10 +368,6 @@ export function AdvancedJsonViewer({
 }: AdvancedJsonViewerProps) {
   const [searchTerm, setSearchTerm] = useState("");
 
-  const handleCopy = (value: string, path: string[]) => {
-    console.log(`Copied ${path.join(".")}:`, value);
-  };
-
   return (
     <div
       className={`border border-border rounded-lg bg-background ${className}`}
@@ -399,7 +395,6 @@ export function AdvancedJsonViewer({
           level={0}
           path={[]}
           searchTerm={searchTerm}
-          onCopy={handleCopy}
         />
       </div>
     </div>

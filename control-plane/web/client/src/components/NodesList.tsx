@@ -41,7 +41,6 @@ const NodesList: React.FC = () => {
 
     eventSource.onopen = () => {
       setConnectionStatus('connected');
-      console.log('SSE connection opened.');
     };
 
     eventSource.onerror = (err) => {
@@ -52,7 +51,6 @@ const NodesList: React.FC = () => {
 
     eventSource.addEventListener('node_registered', (event) => {
       const data: NodeEvent = JSON.parse(event.data);
-      console.log('Node registered event:', data);
       setNodes(prevNodes => {
         const newNode = data.node as AgentNodeSummary;
         // Check if node already exists (for updates)
@@ -69,7 +67,6 @@ const NodesList: React.FC = () => {
 
     eventSource.addEventListener('node_health_changed', (event) => {
       const data: NodeEvent = JSON.parse(event.data);
-      console.log('Node health changed event:', data);
       setNodes(prevNodes => {
         const updatedNode = data.node as AgentNodeSummary;
         return prevNodes.map(node =>
@@ -80,20 +77,16 @@ const NodesList: React.FC = () => {
 
     eventSource.addEventListener('node_removed', (event) => {
       const data: NodeEvent = JSON.parse(event.data);
-      console.log('Node removed event:', data);
       setNodes(prevNodes => {
         setTotalCount(prevCount => Math.max(0, prevCount - 1));
         return prevNodes.filter(node => node.id !== (data.node as { id: string }).id);
       });
     });
 
-    eventSource.addEventListener('heartbeat', (event) => {
-      console.log('SSE Heartbeat:', event.data);
-    });
+    eventSource.addEventListener('heartbeat', () => {});
 
     return () => {
       eventSource.close();
-      console.log('SSE connection closed.');
     };
   }, [fetchNodes]);
 

@@ -118,11 +118,6 @@ function NodeDetailPageContent() {
   // Handle SSE events for real-time updates
   useEffect(() => {
     if (latestEvent && latestEvent.data) {
-      console.log(
-        "🔄 SSE: Received event:",
-        latestEvent.type,
-        latestEvent.data
-      );
 
       // Update MCP health data based on event
       if (
@@ -156,12 +151,6 @@ function NodeDetailPageContent() {
   // Handle unified status events for real-time status updates
   useEffect(() => {
     if (!unifiedStatusEvent) return;
-
-    console.log(
-      "🔄 NodeDetailPage: Received unified status event:",
-      unifiedStatusEvent.type,
-      unifiedStatusEvent
-    );
 
     const eventData = unifiedStatusEvent.data;
 
@@ -221,10 +210,6 @@ function NodeDetailPageContent() {
         break;
 
       default:
-        console.log(
-          "Unhandled unified status event type:",
-          unifiedStatusEvent.type
-        );
     }
   }, [unifiedStatusEvent, nodeId]);
 
@@ -294,12 +279,7 @@ function NodeDetailPageContent() {
               console.warn("Failed to fetch MCP health:", mcpData.reason);
             }
 
-            if (metricsData.status === "fulfilled") {
-              // MCP metrics dashboard components have been removed
-              console.log(
-                "MCP metrics data available but dashboard components removed"
-              );
-            } else {
+            if (metricsData.status !== "fulfilled") {
               console.warn("Failed to fetch MCP metrics:", metricsData.reason);
             }
 
@@ -407,9 +387,8 @@ function NodeDetailPageContent() {
     showInfo(`🔄 Reconciling agent ${nodeId} state...`);
 
     try {
-      const result = await reconcileAgent(nodeId);
+      await reconcileAgent(nodeId);
       showSuccess(`✅ Agent ${nodeId} state reconciled successfully!`);
-      console.log("Reconciliation result:", result);
       // Refresh data to get updated status
       fetchData(false);
     } catch (error: any) {
@@ -688,7 +667,6 @@ function NodeDetailPageContent() {
     <StatusRefreshButton
       nodeId={nodeId}
       onRefresh={(status) => {
-        console.log("Node status refreshed:", status);
         if (
           status &&
           typeof status === "object" &&
@@ -733,7 +711,6 @@ function NodeDetailPageContent() {
     <StatusRefreshButton
       nodeId={nodeId}
       onRefresh={(status) => {
-        console.log("Node status refreshed:", status);
         if (
           status &&
           typeof status === "object" &&

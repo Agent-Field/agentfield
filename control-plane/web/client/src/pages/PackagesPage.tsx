@@ -107,8 +107,6 @@ const PackagesPageContent: React.FC = () => {
         {
           label: "View Logs",
           onClick: () => {
-            // TODO: Navigate to logs or node detail page
-            console.log(`Navigate to logs for ${pkg.id}`);
           }
         }
       );

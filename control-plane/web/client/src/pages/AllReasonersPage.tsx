@@ -60,14 +60,11 @@ export function AllReasonersPage() {
   const fetchReasoners = useCallback(
     async (currentFilters: ReasonerFilters) => {
       try {
-        console.log("🔄 fetchReasoners called with filters:", currentFilters);
-        console.trace("🔍 fetchReasoners call stack:");
         setLoading(true);
         setError(null);
         const response = await reasonersApi.getAllReasoners(currentFilters);
         setData(response);
         setLastRefresh(new Date());
-        console.log("✅ fetchReasoners completed successfully");
       } catch (err) {
         console.error("❌ fetchReasoners failed:", err);
         if (err instanceof ReasonersApiError) {
@@ -101,8 +98,6 @@ export function AllReasonersPage() {
 
   // Handle filter changes - this will trigger data fetch
   useEffect(() => {
-    console.log("🔄 useEffect triggered for filters change:", filters);
-    console.trace("🔍 useEffect call stack:");
     fetchReasoners(filters);
   }, [
     filters.status,
@@ -115,20 +110,16 @@ export function AllReasonersPage() {
   useEffect(() => {
     const setupSSE = () => {
       try {
-        console.log("🔄 Setting up SSE connection for reasoners...");
         setSseError(null);
 
         const eventSource = reasonersApi.createEventStream(
           (event) => {
-            console.log("📡 SSE Event received:", event);
             // Handle different event types
             switch (event.type) {
               case "connected":
                 setSseConnected(true);
-                console.log("✅ Reasoner SSE connected successfully");
                 break;
               case "heartbeat":
-                console.log("💓 SSE Heartbeat received - connection alive");
                 // Keep connection alive, no action needed
                 break;
               case "reasoner_online":
@@ -137,39 +128,25 @@ export function AllReasonersPage() {
               case "reasoner_status_changed":
               case "node_status_changed":
               case "reasoners_refresh":
-                // Log events but don't auto-refresh to prevent scroll jumping
-                console.log("📡 Received reasoner update event:", event);
-                console.log("ℹ️ Auto-refresh disabled - use refresh button for latest data");
                 break;
               default:
-                console.log(
-                  "📡 Received unknown event type:",
-                  event.type,
-                  event
-                );
             }
           },
           (error) => {
             console.error("❌ SSE Error occurred:", error);
             setSseConnected(false);
             setSseError(error.message);
-            console.log(
-              "⚠️ SSE connection failed, will rely on manual refresh"
-            );
           },
           () => {
-            console.log("✅ SSE connection established successfully");
             setSseConnected(true);
             setSseError(null);
           }
         );
 
         eventSourceRef.current = eventSource;
-        console.log("📡 SSE EventSource created:", eventSource);
       } catch (error) {
         console.error("❌ Failed to setup SSE:", error);
         setSseError("Failed to establish real-time connection");
-        console.log("⚠️ SSE setup failed, will rely on manual refresh only");
       }
     };
 
@@ -178,7 +155,6 @@ export function AllReasonersPage() {
 
     // Cleanup on unmount
     return () => {
-      console.log("🧹 Cleaning up SSE connection...");
       if (eventSourceRef.current) {
         reasonersApi.closeEventStream(eventSourceRef.current);
         eventSourceRef.current = null;
@@ -194,8 +170,6 @@ export function AllReasonersPage() {
     const event = unifiedStatusEvent || nodeEvent;
     if (!event) return;
 
-    console.log('🔄 AllReasonersPage: Received status event:', event.type, event);
-
     // Handle events that might affect reasoner status (since reasoners depend on nodes)
     switch (event.type) {
       case 'node_unified_status_changed':
@@ -204,13 +178,11 @@ export function AllReasonersPage() {
       case 'node_health_changed':
       case 'node_online':
       case 'node_offline':
-        console.log('📡 Node status changed, reasoners may be affected');
         // Note: We don't auto-refresh to prevent scroll jumping
         // Users can manually refresh to see updated reasoner status
         break;
 
       case 'bulk_status_update':
-        console.log('📡 Bulk status update received');
         // Could trigger a refresh if many nodes are affected
         break;
 

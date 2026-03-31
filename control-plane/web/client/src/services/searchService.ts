@@ -44,7 +44,6 @@ class SearchService {
       return flattenedResults.sort((a, b) => a.title.localeCompare(b.title));
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
-        console.log('Search aborted');
         return [];
       }
       console.error('Search failed:', error);

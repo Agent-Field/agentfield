@@ -36,8 +36,6 @@ export function ExecutionIdentityPanel({
   const [downloadingBundle, setDownloadingBundle] = useState(false);
 
   const handleVerifyVC = () => {
-    // This would typically open a verification modal or navigate to verification page
-    console.log("Verify VC:", vcStatus?.vc_id);
     // For now, just toggle details
     setShowVCDetails(!showVCDetails);
   };

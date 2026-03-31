@@ -44,20 +44,17 @@ export function AgentLegend({
 
   // Extract unique agents from current workflow nodes
   const workflowAgents = useMemo(() => {
-    console.log('AgentLegend: Processing nodes:', nodes.length, nodes);
     const agentSet = new Set<string>();
 
     nodes.forEach((node) => {
       const nodeData = node.data as unknown as WorkflowDAGNode;
       const agentName = nodeData.agent_name || nodeData.agent_node_id;
-      console.log('AgentLegend: Node agent:', agentName, nodeData);
       if (agentName) {
         agentSet.add(agentName);
       }
     });
 
     const agents = Array.from(agentSet);
-    console.log('AgentLegend: Extracted agents:', agents);
     return agents;
   }, [nodes]);
 

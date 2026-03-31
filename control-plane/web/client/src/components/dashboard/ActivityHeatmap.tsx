@@ -41,14 +41,6 @@ export function ActivityHeatmap({
           length: heatmapData?.length,
           sample: heatmapData?.[0]?.slice(0, 3),
         });
-      } else {
-        const totalActivity = heatmapData.reduce(
-          (sum, day) => sum + day.reduce((daySum, cell) => daySum + cell.total, 0),
-          0
-        );
-        if (totalActivity > 0) {
-          console.log('[ActivityHeatmap] Heatmap data loaded:', { totalActivity });
-        }
       }
     }
   }, [heatmapData]);

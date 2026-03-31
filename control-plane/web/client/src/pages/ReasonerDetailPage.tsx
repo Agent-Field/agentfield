@@ -147,10 +147,7 @@ export function ReasonerDetailPage() {
     setIsExecuting(true);
 
     // Add execution to queue
-    const executionId = executionQueueRef.current.addExecution(
-      formData.input || {}
-    );
-    console.log("Added execution to queue:", executionId);
+    executionQueueRef.current.addExecution(formData.input || {});
 
     // Reset executing state after a brief delay
     setTimeout(() => setIsExecuting(false), 500);

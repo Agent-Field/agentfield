@@ -200,9 +200,6 @@ export function WorkflowDeckGLTestPage() {
             <WorkflowDeckGLView
               nodes={deckData.nodes}
               edges={deckData.edges}
-              onNodeClick={(node) =>
-                console.log("Node selected:", node.execution_id)
-              }
               onNodeHover={(node) => setHoveredNode(node)}
             />
             {hoveredNode && (

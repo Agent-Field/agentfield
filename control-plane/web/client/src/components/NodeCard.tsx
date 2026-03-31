@@ -45,9 +45,6 @@ const NodeCard = memo(
     const [isHovered, setIsHovered] = useState(false);
     const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-    // Console log to verify we're using the updated build and check node data
-    console.log('🎯 NodeCard: Rendering node with defensive checks - Node ID:', nodeSummary?.id, 'MCP Summary:', nodeSummary?.mcp_summary);
-
     // Get DID status for this node
     const { status: didStatus } = useDIDStatus(nodeSummary.id);
 
@@ -175,7 +172,6 @@ const NodeCard = memo(
       setActionLoading('start');
       try {
         await startAgent(nodeSummary.id);
-        console.log(`Agent ${nodeSummary.id} started successfully`);
       } catch (error) {
         console.error(`Failed to start agent ${nodeSummary.id}:`, error);
       } finally {
@@ -187,7 +183,6 @@ const NodeCard = memo(
       setActionLoading('stop');
       try {
         await stopAgent(nodeSummary.id);
-        console.log(`Agent ${nodeSummary.id} stopped successfully`);
       } catch (error) {
         console.error(`Failed to stop agent ${nodeSummary.id}:`, error);
       } finally {
@@ -199,7 +194,6 @@ const NodeCard = memo(
       setActionLoading('reconcile');
       try {
         await reconcileAgent(nodeSummary.id);
-        console.log(`Agent ${nodeSummary.id} reconciled successfully`);
       } catch (error) {
         console.error(`Failed to reconcile agent ${nodeSummary.id}:`, error);
       } finally {

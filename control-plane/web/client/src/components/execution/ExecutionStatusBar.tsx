@@ -63,8 +63,6 @@ export function ExecutionStatusBar({
   const theme = getStatusTheme(status);
 
   const handleRetry = () => {
-    // TODO: Implement retry functionality
-    console.log("Retry execution");
   };
 
   const handleShare = () => {
