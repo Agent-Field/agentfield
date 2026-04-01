@@ -26,13 +26,8 @@ class OpenCodeProvider:
     _MAX_CONCURRENT: ClassVar[int] = int(os.environ.get("OPENCODE_MAX_CONCURRENT", "3"))
     _concurrency_sem: ClassVar[Optional[asyncio.Semaphore]] = None
 
-    def __init__(
-        self,
-        bin_path: str = "opencode",
-        server_url: Optional[str] = None,
-    ):
+    def __init__(self, bin_path: str = "opencode"):
         self._bin = bin_path
-        self._explicit_server = server_url or os.environ.get("OPENCODE_SERVER")
 
     @classmethod
     def _get_semaphore(cls) -> asyncio.Semaphore:
