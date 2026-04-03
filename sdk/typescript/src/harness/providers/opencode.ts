@@ -26,8 +26,15 @@ export class OpenCodeProvider implements HarnessProvider {
       env['MODEL'] = String(options.model);
     }
 
+    // Handle system prompt - prepend to user prompt since OpenCode
+    // has no native --system-prompt flag
+    let effectivePrompt = prompt;
+    if (options.system_prompt && typeof options.system_prompt === 'string' && options.system_prompt.trim()) {
+      effectivePrompt = `SYSTEM INSTRUCTIONS:\n${options.system_prompt.trim()}\n\n---\n\nUSER REQUEST:\n${prompt}`;
+    }
+
     // Use -p for single prompt mode (non-interactive)
-    cmd.push('-p', prompt);
+    cmd.push('-p', effectivePrompt);
 
     const startApi = Date.now();
     try {

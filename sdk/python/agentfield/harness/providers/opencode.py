@@ -59,8 +59,18 @@ class OpenCodeProvider:
         # Model is set via environment, not CLI flag
         # (opencode picks up MODEL env var automatically)
 
+        # Handle system prompt - prepend to user prompt since OpenCode
+        # has no native --system-prompt flag
+        effective_prompt = prompt
+        system_prompt = options.get("system_prompt")
+        if isinstance(system_prompt, str) and system_prompt.strip():
+            effective_prompt = (
+                f"SYSTEM INSTRUCTIONS:\n{system_prompt.strip()}\n\n"
+                f"---\n\nUSER REQUEST:\n{prompt}"
+            )
+
         # Use -p for single prompt mode (non-interactive)
-        cmd.extend(["-p", prompt])
+        cmd.extend(["-p", effective_prompt])
 
         env: Dict[str, str] = {}
         env_value = options.get("env")
@@ -143,7 +153,7 @@ class OpenCodeProvider:
 
         estimated_cost = estimate_cli_cost(
             model=str(options.get("model", "")),
-            prompt=prompt,
+            prompt=effective_prompt,
             result_text=result_text,
         )
 
