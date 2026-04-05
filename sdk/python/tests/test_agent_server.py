@@ -4,7 +4,6 @@ Tests for agentfield.agent_server — AgentServer route registration and utility
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -202,7 +201,7 @@ async def test_info_endpoint():
 @pytest.mark.asyncio
 async def test_shutdown_graceful():
     app = make_agent_app(dev_mode=True)
-    server = _setup_server(app)
+    _setup_server(app)
     # Patch _graceful_shutdown to avoid os._exit
     with patch.object(AgentServer, "_graceful_shutdown", new_callable=AsyncMock):
         resp = await _post(
@@ -221,7 +220,7 @@ async def test_shutdown_graceful():
 @pytest.mark.asyncio
 async def test_shutdown_immediate():
     app = make_agent_app()
-    server = _setup_server(app)
+    _setup_server(app)
     triggered = {}
 
     async def fake_immediate(self):
@@ -244,7 +243,7 @@ async def test_shutdown_notification_failure():
     app.client = SimpleNamespace(
         notify_graceful_shutdown_sync=MagicMock(side_effect=RuntimeError("oops"))
     )
-    server = _setup_server(app)
+    _setup_server(app)
     with patch.object(AgentServer, "_graceful_shutdown", new_callable=AsyncMock):
         resp = await _post(
             app,
@@ -263,7 +262,7 @@ async def test_shutdown_notification_failure():
 @pytest.mark.asyncio
 async def test_status_endpoint_with_psutil(monkeypatch):
     app = make_agent_app()
-    server = _setup_server(app)
+    _setup_server(app)
 
     class DummyProcess:
         def memory_info(self):
@@ -289,7 +288,7 @@ async def test_status_endpoint_with_psutil(monkeypatch):
 async def test_status_endpoint_without_psutil(monkeypatch):
     """When psutil is not installed, fallback info is returned."""
     app = make_agent_app()
-    server = _setup_server(app)
+    _setup_server(app)
 
     # Force ImportError for psutil
     monkeypatch.setitem(sys.modules, "psutil", None)
@@ -304,7 +303,7 @@ async def test_status_endpoint_without_psutil(monkeypatch):
 async def test_status_endpoint_shutdown_requested():
     app = make_agent_app()
     app._shutdown_requested = True
-    server = _setup_server(app)
+    _setup_server(app)
 
     class DummyProcess:
         def memory_info(self):

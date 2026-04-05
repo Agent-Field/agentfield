@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   setGlobalApiKey,
   getGlobalApiKey,
@@ -6,20 +6,6 @@ import {
   getGlobalAdminToken,
   parseNodeLogsNDJSON,
 } from '@/services/api';
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function makeFetchMock(status: number, body: unknown) {
-  return vi.fn().mockResolvedValue({
-    ok: status >= 200 && status < 300,
-    status,
-    json: vi.fn().mockResolvedValue(body),
-    text: vi.fn().mockResolvedValue(JSON.stringify(body)),
-    body: null,
-  });
-}
 
 // ---------------------------------------------------------------------------
 // API key management
