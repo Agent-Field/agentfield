@@ -5,16 +5,12 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 
-import pytest
 
 from agentfield.node_logs import (
     LogEntry,
     ProcessLogRing,
     iter_tail_ndjson,
-    register_follow_queue,
-    unregister_follow_queue,
     verify_internal_bearer,
     get_ring,
 )

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -163,7 +163,7 @@ class TestSendRequest:
 
         mock_writer.drain.side_effect = resolve_future
 
-        result = await bridge._send_stdio_request("tools/list", {})
+        await bridge._send_stdio_request("tools/list", {})
 
         assert len(written_data) == 1
         payload = json.loads(written_data[0].decode("utf-8").strip())

@@ -8,10 +8,7 @@ the execution lifecycle contract.
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone, timedelta
-from unittest.mock import MagicMock
 
-import pytest
 
 
 # ---------------------------------------------------------------------------
@@ -21,7 +18,7 @@ import pytest
 def _make_state(execution_id: str = "exec-001", target: str = "node.reasoner",
                 status=None):
     """Create a minimal ExecutionState with optional initial status."""
-    from agentfield.execution_state import ExecutionState, ExecutionStatus
+    from agentfield.execution_state import ExecutionState
 
     state = ExecutionState(
         execution_id=execution_id,
@@ -307,7 +304,6 @@ class TestTimestampOrdering:
         from agentfield.execution_state import ExecutionStatus
 
         state = _make_state()
-        created_at = state.created_at
 
         time.sleep(0.001)
         state.update_status(ExecutionStatus.RUNNING)

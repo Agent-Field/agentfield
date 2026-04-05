@@ -15,9 +15,6 @@ Categories:
 from __future__ import annotations
 
 import json
-import time
-from typing import Any, Dict
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -140,7 +137,7 @@ class TestMemoryScopeInvariant:
         from agentfield.agent import Agent
 
         # Two different workflows should never share memory
-        agent = Agent(node_id="test-isolation")
+        Agent(node_id="test-isolation")
         # The scope is determined by headers, not by the agent
         # This is a design invariant: scopes are namespaced by (scope, scopeID)
 

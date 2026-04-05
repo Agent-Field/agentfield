@@ -12,7 +12,6 @@ import hashlib
 import json
 import time
 from typing import Tuple
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -143,7 +142,7 @@ class TestSignatureDeterminism:
         same signature out (Ed25519 determinism property).
         """
         try:
-            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: F401
         except ImportError:
             pytest.skip("cryptography library not available")
 

@@ -3,14 +3,11 @@ Tests for agentfield.mcp_manager — MCPManager lifecycle.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import tempfile
-from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 
 from agentfield.mcp_manager import MCPManager, MCPServerConfig, MCPServerProcess
 

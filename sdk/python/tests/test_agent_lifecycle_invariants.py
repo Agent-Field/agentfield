@@ -10,7 +10,6 @@ Confirmed behavioral facts:
 - Each reasoner dict in discovery list has 'id' = function.__name__
 """
 from __future__ import annotations
-import pytest
 
 
 def _make_agent(node_id: str = "test-lifecycle-node"):
@@ -188,7 +187,7 @@ class TestNodeIdImmutability:
 
         agent.handle_serverless({"reasoner": "probe", "input": {}})
         assert agent.node_id == original_id, (
-            f"INVARIANT VIOLATION: node_id changed after handle_serverless."
+            "INVARIANT VIOLATION: node_id changed after handle_serverless."
         )
 
 
@@ -245,7 +244,7 @@ class TestDiscoveryResponseStability:
         result2 = agent.handle_serverless({"path": "/discover"})
 
         assert result1.get("node_id") == result2.get("node_id"), (
-            f"INVARIANT VIOLATION: Discovery node_id changed between calls."
+            "INVARIANT VIOLATION: Discovery node_id changed between calls."
         )
         ids1 = {r.get("id") for r in result1.get("reasoners", []) if isinstance(r, dict)}
         ids2 = {r.get("id") for r in result2.get("reasoners", []) if isinstance(r, dict)}

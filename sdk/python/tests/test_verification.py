@@ -4,8 +4,7 @@ Tests for agentfield.verification — LocalVerifier (security-critical).
 from __future__ import annotations
 
 import time
-from typing import Any, Dict
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 

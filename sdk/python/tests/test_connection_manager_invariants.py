@@ -82,7 +82,6 @@ class TestStateMachineValidTransitions:
         agent.client = MagicMock()
         agent.client.register_agent_with_status = AsyncMock(return_value=(False, None))
 
-        states_seen = []
 
         original_attempt = manager._attempt_connection
 
@@ -142,8 +141,8 @@ class TestStateMachineValidTransitions:
         manager._on_connection_failure()
 
         assert manager.state != ConnectionState.CONNECTED, (
-            f"INVARIANT VIOLATION: After _on_connection_failure(), state remained CONNECTED. "
-            f"Must transition to DEGRADED."
+            "INVARIANT VIOLATION: After _on_connection_failure(), state remained CONNECTED. "
+            "Must transition to DEGRADED."
         )
 
 
@@ -298,7 +297,6 @@ class TestReconnectAfterDisconnect:
     @pytest.mark.asyncio
     async def test_invariant_is_connected_false_when_degraded(self):
         """is_connected() must return False when state is DEGRADED."""
-        from agentfield.connection_manager import ConnectionState
 
         manager = _make_connection_manager()
         manager._on_connection_failure()
@@ -311,7 +309,6 @@ class TestReconnectAfterDisconnect:
     @pytest.mark.asyncio
     async def test_invariant_is_connected_true_when_connected(self):
         """is_connected() must return True exactly when state is CONNECTED."""
-        from agentfield.connection_manager import ConnectionState
 
         manager = _make_connection_manager()
         manager._on_connection_success()

@@ -3,12 +3,8 @@ Tests for Agent.handle_serverless — serverless invocation path.
 """
 from __future__ import annotations
 
-import asyncio
-from types import SimpleNamespace
-from typing import Any, Dict, Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
 from agentfield.agent import Agent
 

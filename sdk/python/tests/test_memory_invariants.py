@@ -8,10 +8,9 @@ client from HTTP and verify behavioral contracts at the API boundary.
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-import pytest_asyncio
 
 
 # ---------------------------------------------------------------------------
@@ -314,7 +313,7 @@ class TestNullSafety:
         client.agentfield_client._async_request.return_value = _not_found_response()
 
         try:
-            result = await client.get("no-such-key")
+            await client.get("no-such-key")
             # Should reach here without raising
         except Exception as exc:
             pytest.fail(
