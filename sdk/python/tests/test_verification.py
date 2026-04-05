@@ -429,6 +429,7 @@ class TestEvaluatePolicy:
 
 
 class TestRefreshNetworkErrors:
+    @pytest.mark.asyncio
     async def test_refresh_returns_false_on_connection_error(self):
         v = _make_verifier()
         mock_session = AsyncMock()
@@ -443,12 +444,14 @@ class TestRefreshNetworkErrors:
 
         assert result is False
 
+    @pytest.mark.asyncio
     async def test_refresh_returns_false_when_aiohttp_missing(self):
         v = _make_verifier()
         with patch.dict("sys.modules", {"aiohttp": None}):
             result = await v.refresh()
         assert result is False
 
+    @pytest.mark.asyncio
     async def test_refresh_preserves_stale_cache_on_failure(self):
         v = _make_verifier()
         v.policies = [{"action": "allow"}]

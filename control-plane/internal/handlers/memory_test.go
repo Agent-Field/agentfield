@@ -161,7 +161,7 @@ func TestSetMemoryHandler(t *testing.T) {
 			},
 		},
 		{
-			name: "event storage failure does not fail request",
+			name: "event storage failure does not fail request and skips publish",
 			body: SetMemoryRequest{Key: "event-fail-key", Data: "value"},
 			setupMock: func(m *MockMemoryStorage) {
 				m.On("GetMemory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
@@ -170,8 +170,17 @@ func TestSetMemoryHandler(t *testing.T) {
 					Return(nil)
 				m.On("StoreEvent", mock.Anything, mock.AnythingOfType("*types.MemoryChangeEvent")).
 					Return(errors.New("event store down"))
+				// PublishMemoryChange should NOT be called when StoreEvent fails
+				// (the source uses else-if: only publishes if StoreEvent succeeds)
 			},
 			expectedStatus: http.StatusOK,
+			checkBody: func(t *testing.T, body []byte) {
+				// Verify response is still valid memory object
+				var mem map[string]interface{}
+				err := json.Unmarshal(body, &mem)
+				assert.NoError(t, err)
+				assert.Equal(t, "event-fail-key", mem["key"])
+			},
 		},
 	}
 
@@ -642,6 +651,73 @@ func TestSetMemoryHandler_EventMetadata(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
+	mockStorage.AssertExpectations(t)
+}
+
+// TestSetMemoryHandler_StoreEventFailure_SkipsPublish verifies that when
+// StoreEvent fails, PublishMemoryChange is NOT called. This tests the else-if
+// branching in the source (lines 147-149 of memory.go). A regression that
+// changed "else if" to two separate "if" blocks would be caught here.
+func TestSetMemoryHandler_StoreEventFailure_SkipsPublish(t *testing.T) {
+	mockStorage := new(MockMemoryStorage)
+
+	mockStorage.On("GetMemory", mock.Anything, "global", "global", "skip-publish-key").
+		Return(nil, errors.New("not found"))
+	mockStorage.On("SetMemory", mock.Anything, mock.AnythingOfType("*types.Memory")).
+		Return(nil)
+	mockStorage.On("StoreEvent", mock.Anything, mock.AnythingOfType("*types.MemoryChangeEvent")).
+		Return(errors.New("event store unavailable"))
+	// Do NOT register PublishMemoryChange — it should never be called
+
+	router := setupGinRouter()
+	router.POST("/memory/set", SetMemoryHandler(mockStorage))
+
+	body, _ := json.Marshal(SetMemoryRequest{Key: "skip-publish-key", Data: "value"})
+	req, _ := http.NewRequest("POST", "/memory/set", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	mockStorage.AssertExpectations(t)
+	// This is the critical assertion: PublishMemoryChange must NOT have been called
+	mockStorage.AssertNotCalled(t, "PublishMemoryChange", mock.Anything, mock.Anything)
+}
+
+// TestDeleteMemoryHandler_PublishesEvent verifies delete handler calls both
+// StoreEvent and PublishMemoryChange, not just DeleteMemory.
+func TestDeleteMemoryHandler_PublishesEvent(t *testing.T) {
+	mockStorage := new(MockMemoryStorage)
+
+	mockStorage.On("GetMemory", mock.Anything, "global", "global", "del-with-event").
+		Return(&types.Memory{
+			Key:  "del-with-event",
+			Data: json.RawMessage(`"old-data"`),
+		}, nil)
+	mockStorage.On("DeleteMemory", mock.Anything, "global", "global", "del-with-event").
+		Return(nil)
+	mockStorage.On("StoreEvent", mock.Anything, mock.MatchedBy(func(event *types.MemoryChangeEvent) bool {
+		return event.Action == "delete" &&
+			event.Key == "del-with-event" &&
+			event.Data == nil &&
+			string(event.PreviousData) == `"old-data"`
+	})).Return(nil)
+	mockStorage.On("PublishMemoryChange", mock.Anything, mock.MatchedBy(func(event types.MemoryChangeEvent) bool {
+		return event.Action == "delete" && event.Key == "del-with-event"
+	})).Return(nil)
+
+	router := setupGinRouter()
+	router.POST("/memory/delete", DeleteMemoryHandler(mockStorage))
+
+	body, _ := json.Marshal(GetMemoryRequest{Key: "del-with-event"})
+	req, _ := http.NewRequest("POST", "/memory/delete", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNoContent, w.Code)
 	mockStorage.AssertExpectations(t)
 }
 

@@ -264,3 +264,57 @@ class TestHandleServerlessContextCleanup:
             agent.handle_serverless({"reasoner": "noop", "input": {}})
 
         assert agent.async_config.enable_async_execution is False
+
+    def test_async_mode_was_previously_true(self):
+        """Verify async mode is actively CHANGED, not just coincidentally False."""
+        agent = _make_agent()
+        # Explicitly enable before calling serverless
+        agent.async_config.enable_async_execution = True
+        assert agent.async_config.enable_async_execution is True  # precondition
+
+        def noop() -> dict:
+            return {}
+
+        with patch.object(agent, "noop", noop, create=True):
+            agent.handle_serverless({"reasoner": "noop", "input": {}})
+
+        # Must have been flipped from True to False
+        assert agent.async_config.enable_async_execution is False
+
+
+class TestServerlessRealRegistration:
+    """Tests that exercise the REAL reasoner registration mechanism,
+    not just patch.object. This catches regressions if the dispatch
+    path changes from getattr to a registry dict."""
+
+    def test_registered_reasoner_invoked_via_serverless(self):
+        """Register a function the real way and invoke through handle_serverless."""
+        agent = _make_agent()
+
+        # Use the actual Agent.reasoner decorator to register
+        @agent.reasoner("real_greet")
+        def real_greet(name: str = "world") -> dict:
+            return {"hello": name}
+
+        result = agent.handle_serverless({
+            "reasoner": "real_greet",
+            "input": {"name": "test"},
+        })
+
+        assert result["statusCode"] == 200
+        assert result["body"]["hello"] == "test"
+
+    def test_registered_reasoner_not_found_returns_404(self):
+        """Verify unregistered name returns 404 even when other reasoners exist."""
+        agent = _make_agent()
+
+        @agent.reasoner("exists")
+        def exists() -> dict:
+            return {}
+
+        result = agent.handle_serverless({
+            "reasoner": "does_not_exist",
+            "input": {},
+        })
+
+        assert result["statusCode"] == 404

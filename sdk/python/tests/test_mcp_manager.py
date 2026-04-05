@@ -333,5 +333,7 @@ class TestShutdownAll:
 
         await mgr.shutdown_all()
 
-        assert mgr.servers.get("http-srv") is None or True  # may be cleaned up
+        # After shutdown_all, the process MUST have been terminated
         mock_process.terminate.assert_called()
+        # Server entry should be cleaned up (removed from dict)
+        assert "http-srv" not in mgr.servers or mgr.servers["http-srv"].status != "running"

@@ -231,11 +231,44 @@ func TestClaimActionsHandler_ValidationErrors(t *testing.T) {
 	})
 }
 
-func TestNodeShutdownHandler_ValidationErrors(t *testing.T) {
-	gin.SetMode(gin.TestMode)
+// TestNodeShutdownHandler — requires non-nil StorageProvider (see execute_test.go
+// integration pattern). Shutdown handler uses best-effort JSON parse then
+// immediately calls storage.GetAgent(), so nil-storage tests always panic.
 
-	t.Run("handler creation doesn't panic with nil services", func(t *testing.T) {
-		handler := NodeShutdownHandler(nil, nil, nil)
-		assert.NotNil(t, handler)
-	})
+// TestNormalizePhase_AllPhases_ProduceDistinctStates verifies that each
+// recognized phase maps to a distinct (state, lifecycle) pair, catching
+// copy-paste errors in the switch statement.
+func TestNormalizePhase_AllPhases_ProduceDistinctStates(t *testing.T) {
+	phases := []string{"starting", "ready", "degraded", "offline"}
+	type pair struct {
+		state     string
+		lifecycle string
+	}
+	seen := make(map[pair]string)
+
+	for _, phase := range phases {
+		state, lifecycle, err := normalizePhase(phase)
+		require.NoError(t, err)
+		require.NotNil(t, state)
+		require.NotNil(t, lifecycle)
+
+		p := pair{string(*state), string(*lifecycle)}
+		if prev, exists := seen[p]; exists {
+			t.Errorf("phases %q and %q produce identical (state=%s, lifecycle=%s)",
+				prev, phase, p.state, p.lifecycle)
+		}
+		seen[p] = phase
+	}
 }
+
+// NOTE: Full behavioral tests for NodeStatusLeaseHandler, ClaimActionsHandler,
+// and NodeShutdownHandler require a mock StorageProvider implementation (the
+// interface has 50+ methods). These handlers call storage.GetAgent() before any
+// business logic validation, so nil-storage tests can only cover input parsing.
+// Full behavioral tests should be added as integration tests (see execute_test.go
+// with //go:build integration for the mock pattern).
+//
+// What IS tested here:
+// - normalizePhase: all phase values, case insensitivity, distinctness
+// - Input validation: bad JSON, missing required fields
+// - DefaultLeaseTTL constant
