@@ -1,0 +1,4 @@
+# file: /Users/santoshkumarradha/Documents/agentfield/code/platform/agentfield/sdk/python/agentfield/harness/_runner.py
+# hypothesis_version: 6.151.9
+
+[0.0, 0.25, 0.5, 1.0, 2.0, 5.0, 30.0, 200, 1000, '.', '.secaf-out-', '500', '502', '503', '504', 'Max retries exceeded', '_original_prompt', 'backoff_factor', 'codex_bin', 'connection refused', 'connection reset', 'cwd', 'env', 'gemini_bin', 'initial_delay', 'max_budget_usd', 'max_delay', 'max_retries', 'max_turns', 'model', 'opencode_bin', 'opencode_server', 'overloaded', 'permission_mode', 'project_dir', 'provider', 'rate limit', 'rate_limit', 'resume_session_id', 'schema_max_retries', 'service unavailable', 'system_prompt', 'timed out', 'timeout', 'tools']

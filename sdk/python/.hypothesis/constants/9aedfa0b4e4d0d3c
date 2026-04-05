@@ -1,0 +1,4 @@
+# file: /Users/santoshkumarradha/Documents/agentfield/code/platform/agentfield/sdk/python/agentfield/multimodal.py
+# hypothesis_version: 6.151.9
+
+['.', '.bmp', '.gif', '.jpeg', '.jpg', '.png', '.webp', 'Audio', 'File', 'Image', 'The text content.', 'data', 'detail', 'file', 'flac', 'format', 'high', 'image/bmp', 'image/gif', 'image/jpeg', 'image/png', 'image/webp', 'image_url', 'input_audio', 'mime_type', 'mp3', 'ogg', 'rb', 'text', 'url', 'wav']

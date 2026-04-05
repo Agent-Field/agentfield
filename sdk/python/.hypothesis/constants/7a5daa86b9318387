@@ -1,0 +1,4 @@
+# file: /Users/santoshkumarradha/Documents/agentfield/code/platform/agentfield/sdk/python/agentfield/mcp_manager.py
+# hypothesis_version: 6.151.9
+
+[1000, 8100, 'alias', 'config', 'config.json', 'environment', 'failed', 'health_check', 'http', 'initialized', 'localhost', 'mcp', 'packages', 'port', 'r', 'run', 'running', 'starting', 'status', 'stdio', 'stopped', 'transport', 'working_dir', '{{port}}']

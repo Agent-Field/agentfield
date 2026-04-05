@@ -1,0 +1,4 @@
+# file: /Users/santoshkumarradha/Documents/agentfield/code/platform/agentfield/sdk/python/agentfield/agent_workflow.py
+# hypothesis_version: 6.151.9
+
+[1000, '/', 'AgentWorkflow', 'POST', '__name__', '_async_request', 'agent', 'agent_node_did', 'agent_node_id', 'agentfield_server', 'caller_did', 'client', 'dev_mode', 'duration_ms', 'error', 'execution_context', 'execution_id', 'failed', 'input_data', 'json', 'node_id', 'parent_execution_id', 'parent_workflow_id', 'reasoner', 'reasoner_id', 'reasoner_name', 'result', 'run_id', 'running', 'self', 'session_id', 'status', 'succeeded', 'target_did', 'type', 'workflow_id']

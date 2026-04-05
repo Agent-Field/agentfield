@@ -1,0 +1,4 @@
+# file: /Users/santoshkumarradha/Documents/agentfield/code/platform/agentfield/sdk/python/agentfield/memory_events.py
+# hypothesis_version: 6.151.9
+
+[1.0, 5.0, 10.0, 100, '&', '*', ',', '.', '.*', '0', '?', 'X-API-Key', '__version__', '_memory_event_scope', 'additional_headers', 'closed', 'extra_headers', 'http', 'limit', 'open', 'patterns', 'scope', 'scope_id', 'since', 'ws']

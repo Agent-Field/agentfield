@@ -1,0 +1,4 @@
+# file: /Users/santoshkumarradha/Documents/agentfield/code/platform/agentfield/sdk/python/agentfield/logger.py
+# hypothesis_version: 6.151.9
+
+['%(message)s', '...', '200', 'AGENTFIELD_LOG_FIRE', 'AGENTFIELD_LOG_LEVEL', 'DEBUG', 'ERROR', 'INFO', 'SILENT', 'WARN', 'WARNING', 'agentfield', 'false', 'true']

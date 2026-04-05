@@ -1,0 +1,4 @@
+# file: /Users/santoshkumarradha/Documents/agentfield/code/platform/agentfield/sdk/python/agentfield/did_auth.py
+# hypothesis_version: 6.151.9
+
+['=', 'Ed25519', 'OKP', 'X-Caller-DID', 'X-DID-Nonce', 'X-DID-Signature', 'X-DID-Timestamp', 'ascii', 'configured', 'crv', 'd', 'did', 'kty', 'utf-8']

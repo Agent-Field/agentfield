@@ -1,0 +1,4 @@
+# file: /Users/santoshkumarradha/Documents/agentfield/code/platform/agentfield/sdk/python/agentfield/media_providers.py
+# hypothesis_version: 6.151.9
+
+[1.0, '1024x1024', 'FAL_KEY', 'alloy', 'audio', 'audio_url', 'content', 'dall-e-3', 'duration', 'fal', 'fal-ai/flux/dev', 'fal-ai/whisper', 'gen_text', 'generated_video.mp4', 'guidance_scale', 'height', 'http', 'image', 'image_size', 'image_url', 'images', 'landscape_16_9', 'landscape_4_3', 'language', 'litellm', 'num_images', 'num_inference_steps', 'openrouter', 'openrouter/', 'portrait_16_9', 'portrait_4_3', 'prompt', 'ref_audio_url', 'seed', 'square', 'square_hd', 'standard', 'text', 'transcription', 'tts-1', 'url', 'utf-8', 'video', 'video/mp4', 'video_url', 'wav', 'width', 'x']

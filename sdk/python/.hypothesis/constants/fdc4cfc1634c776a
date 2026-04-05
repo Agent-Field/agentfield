@@ -1,0 +1,4 @@
+# file: /Users/santoshkumarradha/Documents/agentfield/code/platform/agentfield/sdk/python/agentfield/connection_manager.py
+# hypothesis_version: 6.151.9
+
+[10.0, 30.0, 'connected', 'connecting', 'degraded', 'disconnected', 'httpcore', 'httpx', 'pending_approval', 'pending_tags', 'reconnecting', 'status']

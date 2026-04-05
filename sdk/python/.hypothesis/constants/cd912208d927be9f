@@ -1,0 +1,4 @@
+# file: /Users/santoshkumarradha/Documents/agentfield/code/platform/agentfield/sdk/python/agentfield/mcp_client.py
+# hypothesis_version: 6.151.9
+
+[200, '/mcp/tools/list', '2.0', '_is_stdio_bridge', 'arguments', 'direct HTTP', 'error', 'id', 'jsonrpc', 'method', 'name', 'params', 'result', 'stdio bridge', 'tool_name', 'tools', 'tools/call', 'tools/list']
