@@ -233,11 +233,11 @@ class TestKeyNamespacing:
 
         await client.set("key-A", "value-1")
         call_a = client.agentfield_client._async_request.call_args
-        payload_a = call_a.kwargs.get("json", call_a[1].get("json", {}))
+        payload_a = call_a.kwargs.get("json", {})
 
         await client.set("key-B", "value-2")
         call_b = client.agentfield_client._async_request.call_args
-        payload_b = call_b.kwargs.get("json", call_b[1].get("json", {}))
+        payload_b = call_b.kwargs.get("json", {})
 
         assert payload_a["key"] == "key-A", (
             f"INVARIANT VIOLATION: set('key-A') sent key='{payload_a['key']}'"
@@ -261,7 +261,7 @@ class TestKeyNamespacing:
         await client.get("specific-key")
 
         call_kwargs = client.agentfield_client._async_request.call_args
-        payload = call_kwargs.kwargs.get("json", call_kwargs[1].get("json", {}))
+        payload = call_kwargs.kwargs.get("json", {})
 
         assert payload.get("key") == "specific-key", (
             f"INVARIANT VIOLATION: get('specific-key') sent key='{payload.get('key')}' "

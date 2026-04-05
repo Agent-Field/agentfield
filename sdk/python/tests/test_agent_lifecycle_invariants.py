@@ -42,11 +42,12 @@ class TestReasonerRegistrationPersistence:
         def my_reasoner(x: int = 1) -> dict:
             return {"result": x}
 
-        # Must be discoverable
+        # Must be discoverable — agent.reasoners is a List[Dict] with "name" keys
         reasoners = agent.reasoners
-        assert "my-reasoner" in reasoners, (
+        names = [r.get("name") for r in reasoners]
+        assert "my-reasoner" in names, (
             f"INVARIANT VIOLATION: Registered reasoner 'my-reasoner' not found in "
-            f"agent.reasoners. Keys present: {list(reasoners.keys())}"
+            f"agent.reasoners. Names present: {names}"
         )
 
     def test_invariant_registered_reasoner_is_callable_via_handle_serverless(self):
