@@ -2,59 +2,52 @@
 Behavioral invariant tests for Agent lifecycle: registration, reasoner persistence,
 node_id immutability, and discovery response stability.
 
-These tests verify structural properties of the Agent that must always hold
-regardless of implementation changes.
+Confirmed behavioral facts:
+- agent._reasoner_registry: Dict[str, ReasonerEntry] keyed by function __name__
+- agent.reasoners: List[Dict] where each dict has 'id' = function __name__
+- handle_serverless({'reasoner': name}) uses function __name__ for lookup
+- Discovery via {'path': '/discover'} returns flat dict: node_id, version, reasoners, skills
+- Each reasoner dict in discovery list has 'id' = function.__name__
 """
 from __future__ import annotations
-
-from typing import Any
-from unittest.mock import MagicMock, patch
-
 import pytest
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _make_agent(node_id: str = "test-lifecycle-node") -> "Agent":
-    """Build a minimal Agent without network side-effects."""
+def _make_agent(node_id: str = "test-lifecycle-node"):
     from agentfield.agent import Agent
-
     return Agent(node_id=node_id, agentfield_server="http://localhost:8080")
 
 
-# ---------------------------------------------------------------------------
-# 1. Reasoner registration is persistent
-# ---------------------------------------------------------------------------
+def _registry_ids(agent) -> set:
+    return set(agent._reasoner_registry.keys())
+
+
+def _discovery_reasoner_ids(agent) -> set:
+    result = agent.handle_serverless({"path": "/discover"})
+    reasoners = result.get("reasoners", [])
+    if isinstance(reasoners, list):
+        return {r.get("id") for r in reasoners if isinstance(r, dict) and "id" in r}
+    if isinstance(reasoners, dict):
+        return set(reasoners.keys())
+    return set()
+
 
 class TestReasonerRegistrationPersistence:
-    """After @agent.reasoner("name"), the reasoner must be callable and remain registered."""
+    """After @agent.reasoner(...), the reasoner must remain registered and callable."""
 
-    def test_invariant_registered_reasoner_is_accessible(self):
-        """
-        A reasoner registered via @agent.reasoner("foo") must appear in
-        agent.reasoners (the discovery dict) with key "foo".
-        """
+    def test_invariant_registered_reasoner_appears_in_internal_registry(self):
         agent = _make_agent("persist-test")
 
-        @agent.reasoner("my-reasoner")
-        def my_reasoner(x: int = 1) -> dict:
+        @agent.reasoner("any-label")
+        def my_registered_fn(x: int = 1) -> dict:
             return {"result": x}
 
-        # Must be discoverable — agent.reasoners is a List[Dict] with "name" keys
-        reasoners = agent.reasoners
-        names = [r.get("name") for r in reasoners]
-        assert "my-reasoner" in names, (
-            f"INVARIANT VIOLATION: Registered reasoner 'my-reasoner' not found in "
-            f"agent.reasoners. Names present: {names}"
+        assert "my_registered_fn" in _registry_ids(agent), (
+            f"INVARIANT VIOLATION: 'my_registered_fn' not in registry. "
+            f"Keys: {_registry_ids(agent)}"
         )
 
-    def test_invariant_registered_reasoner_is_callable_via_handle_serverless(self):
-        """
-        A registered reasoner must be callable through handle_serverless
-        and return a 200 response.
-        """
+    def test_invariant_registered_reasoner_callable_via_handle_serverless(self):
         agent = _make_agent("callable-test")
 
         @agent.reasoner("greet")
@@ -63,277 +56,199 @@ class TestReasonerRegistrationPersistence:
 
         result = agent.handle_serverless({"reasoner": "greet", "input": {}})
         assert result["statusCode"] == 200, (
-            f"INVARIANT VIOLATION: Registered reasoner 'greet' returned "
-            f"statusCode={result['statusCode']} instead of 200. "
+            f"INVARIANT VIOLATION: 'greet' returned {result['statusCode']} not 200. "
             f"Body: {result.get('body')}"
         )
 
-    def test_invariant_multiple_reasoners_all_accessible(self):
-        """All registered reasoners must be accessible simultaneously."""
+    def test_invariant_multiple_reasoners_all_in_registry(self):
         agent = _make_agent("multi-reasoner-test")
 
-        @agent.reasoner("r-alpha")
+        @agent.reasoner("a")
         def r_alpha() -> dict:
-            return {"id": "alpha"}
+            return {}
 
-        @agent.reasoner("r-beta")
+        @agent.reasoner("b")
         def r_beta() -> dict:
-            return {"id": "beta"}
+            return {}
 
-        @agent.reasoner("r-gamma")
+        @agent.reasoner("c")
         def r_gamma() -> dict:
-            return {"id": "gamma"}
+            return {}
 
-        reasoners = agent.reasoners
-        for name in ["r-alpha", "r-beta", "r-gamma"]:
-            assert name in reasoners, (
-                f"INVARIANT VIOLATION: Reasoner '{name}' not found after registration. "
-                f"Present: {list(reasoners.keys())}"
+        registered = _registry_ids(agent)
+        for name in ["r_alpha", "r_beta", "r_gamma"]:
+            assert name in registered, (
+                f"INVARIANT VIOLATION: '{name}' not in registry. Present: {registered}"
             )
 
 
-# ---------------------------------------------------------------------------
-# 2. Double registration replaces
-# ---------------------------------------------------------------------------
-
 class TestDoubleRegistrationReplaces:
-    """Registering the same name twice must replace the first registration."""
+    """Registering a function with the same __name__ twice replaces the first."""
 
     def test_invariant_second_registration_wins(self):
-        """
-        Registering reasoner "foo" twice — the second definition must win.
-        The agent must call the second function, not the first.
-        """
         agent = _make_agent("replace-test")
 
-        @agent.reasoner("foo")
-        def foo_v1() -> dict:
+        @agent.reasoner("first")
+        def foo() -> dict:
             return {"version": 1}
 
-        @agent.reasoner("foo")
-        def foo_v2() -> dict:
+        @agent.reasoner("second")
+        def foo() -> dict:  # noqa: F811
             return {"version": 2}
 
         result = agent.handle_serverless({"reasoner": "foo", "input": {}})
         assert result["statusCode"] == 200, (
-            f"INVARIANT VIOLATION: Double-registered 'foo' returned status {result['statusCode']}."
+            f"INVARIANT VIOLATION: Double-registered 'foo' returned {result['statusCode']}."
         )
-
         body = result.get("body", {})
-        version = body.get("version") if isinstance(body, dict) else None
-        assert version == 2, (
-            f"INVARIANT VIOLATION: After double-registration, second definition did not win. "
-            f"Got version={version!r} instead of 2. Response body: {body}"
+        assert body.get("version") == 2, (
+            f"INVARIANT VIOLATION: Second registration did not win. Got: {body}"
         )
 
-    def test_invariant_only_one_entry_per_name_after_double_registration(self):
-        """
-        After registering the same name twice, agent.reasoners must still
-        contain exactly one entry for that name (no duplicates).
-        """
+    def test_invariant_only_one_entry_per_name_in_registry(self):
         agent = _make_agent("dedup-test")
 
-        @agent.reasoner("deduplicated")
-        def v1() -> dict:
+        @agent.reasoner("v1")
+        def deduplicated() -> dict:
             return {}
 
-        @agent.reasoner("deduplicated")
-        def v2() -> dict:
+        @agent.reasoner("v2")
+        def deduplicated() -> dict:  # noqa: F811
             return {}
 
-        # Reasoners must contain "deduplicated" exactly once
-        keys = list(agent.reasoners.keys())
-        count = keys.count("deduplicated")
+        count = sum(1 for k in agent._reasoner_registry if k == "deduplicated")
         assert count == 1, (
-            f"INVARIANT VIOLATION: After double-registration, 'deduplicated' appears "
-            f"{count} times in agent.reasoners. Must appear exactly once."
+            f"INVARIANT VIOLATION: 'deduplicated' appears {count} times in registry."
         )
 
-
-# ---------------------------------------------------------------------------
-# 3. Unregistered reasoner returns 404
-# ---------------------------------------------------------------------------
 
 class TestUnregisteredReasonerReturns404:
     """Calling a non-existent reasoner through handle_serverless must return 404."""
 
     def test_invariant_unknown_reasoner_returns_404(self):
-        """handle_serverless with an unknown reasoner name must return 404."""
         agent = _make_agent("404-test")
-
-        result = agent.handle_serverless({"reasoner": "does-not-exist", "input": {}})
-
+        result = agent.handle_serverless({"reasoner": "does_not_exist", "input": {}})
         assert result["statusCode"] == 404, (
-            f"INVARIANT VIOLATION: Unknown reasoner returned statusCode={result['statusCode']} "
-            "instead of 404. Clients depend on this to know the reasoner doesn't exist."
+            f"INVARIANT VIOLATION: Unknown reasoner returned {result['statusCode']} not 404."
         )
 
     def test_invariant_unknown_reasoner_body_contains_error(self):
-        """404 response body must contain an 'error' key with a meaningful message."""
         agent = _make_agent("404-body-test")
-
-        result = agent.handle_serverless({"reasoner": "ghost-reasoner", "input": {}})
-
+        result = agent.handle_serverless({"reasoner": "ghost_reasoner", "input": {}})
         body = result.get("body", {})
         assert "error" in body, (
-            f"INVARIANT VIOLATION: 404 response body missing 'error' key. "
-            f"Body: {body}"
+            f"INVARIANT VIOLATION: 404 body missing 'error' key. Body: {body}"
         )
 
-    def test_invariant_deregistering_all_reasoners_then_calling_returns_404(self):
-        """
-        If no reasoners are registered and handle_serverless is called with
-        a reasoner name, it must return 404 (not 500 or 200).
-        """
+    def test_invariant_empty_registry_returns_404(self):
         agent = _make_agent("empty-registry-test")
-        # No reasoners registered
-
         result = agent.handle_serverless({"reasoner": "anything", "input": {}})
         assert result["statusCode"] == 404, (
-            f"INVARIANT VIOLATION: Empty registry + reasoner call returned "
-            f"statusCode={result['statusCode']} instead of 404."
+            f"INVARIANT VIOLATION: Empty registry call returned {result['statusCode']} not 404."
         )
 
-
-# ---------------------------------------------------------------------------
-# 4. Agent node_id is immutable
-# ---------------------------------------------------------------------------
 
 class TestNodeIdImmutability:
     """After creation, node_id must always return the same value."""
 
-    def test_invariant_node_id_returns_same_value_on_repeated_access(self):
-        """Accessing agent.node_id multiple times must always return the same value."""
+    def test_invariant_node_id_stable_on_repeated_access(self):
         agent = _make_agent("my-immutable-node")
-
         ids = [agent.node_id for _ in range(10)]
         assert len(set(ids)) == 1, (
             f"INVARIANT VIOLATION: node_id changed across accesses: {ids}"
         )
-        assert ids[0] == "my-immutable-node", (
-            f"INVARIANT VIOLATION: node_id returned '{ids[0]}' instead of 'my-immutable-node'."
-        )
+        assert ids[0] == "my-immutable-node"
 
-    def test_invariant_node_id_is_the_value_passed_at_construction(self):
-        """node_id must equal the value passed to Agent(node_id=...)."""
+    def test_invariant_node_id_equals_constructor_argument(self):
         test_id = "constructed-id-xyz"
         agent = _make_agent(test_id)
-
         assert agent.node_id == test_id, (
-            f"INVARIANT VIOLATION: agent.node_id='{agent.node_id}' "
-            f"does not match constructor input '{test_id}'."
+            f"INVARIANT VIOLATION: node_id='{agent.node_id}' != '{test_id}'"
         )
 
-    def test_invariant_node_id_is_accessible_after_reasoner_registration(self):
-        """node_id must remain unchanged after registering reasoners."""
+    def test_invariant_node_id_stable_after_reasoner_registration(self):
         agent = _make_agent("stable-node")
         original_id = agent.node_id
 
-        @agent.reasoner("some-reasoner")
+        @agent.reasoner("some")
         def some_reasoner() -> dict:
             return {}
 
         assert agent.node_id == original_id, (
-            f"INVARIANT VIOLATION: node_id changed after reasoner registration. "
-            f"Before: '{original_id}', After: '{agent.node_id}'"
+            f"INVARIANT VIOLATION: node_id changed from '{original_id}' to '{agent.node_id}'"
         )
 
-
-# ---------------------------------------------------------------------------
-# 5. Discovery response stability
-# ---------------------------------------------------------------------------
-
-class TestDiscoveryResponseStability:
-    """Discovery response must always contain 'node_id' and 'reasoners' keys."""
-
-    def _get_discovery_body(self, agent) -> dict:
-        """Call /discover and extract the response body."""
-        result = agent.handle_serverless({"path": "/discover"})
-        body = result.get("body", result)
-        # handle double-wrapping
-        if isinstance(body, dict) and "body" in body:
-            body = body["body"]
-        return body
-
-    def test_invariant_discovery_response_contains_node_id(self):
-        """Discovery response must always contain 'node_id'."""
-        agent = _make_agent("discovery-node")
-
-        body = self._get_discovery_body(agent)
-
-        assert "node_id" in body, (
-            f"INVARIANT VIOLATION: Discovery response missing 'node_id'. "
-            f"Present keys: {list(body.keys()) if isinstance(body, dict) else body}"
-        )
-
-    def test_invariant_discovery_response_node_id_matches_agent(self):
-        """Discovery response node_id must match the agent's node_id."""
-        agent = _make_agent("exact-match-node")
-
-        body = self._get_discovery_body(agent)
-
-        assert body.get("node_id") == "exact-match-node", (
-            f"INVARIANT VIOLATION: Discovery response node_id='{body.get('node_id')}' "
-            "does not match agent node_id='exact-match-node'."
-        )
-
-    def test_invariant_discovery_response_contains_reasoners(self):
-        """Discovery response must always contain 'reasoners'."""
-        agent = _make_agent("discovery-reasoners-node")
+    def test_invariant_node_id_stable_after_handle_serverless(self):
+        agent = _make_agent("stable-exec")
+        original_id = agent.node_id
 
         @agent.reasoner("probe")
         def probe() -> dict:
             return {}
 
-        body = self._get_discovery_body(agent)
-
-        assert "reasoners" in body, (
-            f"INVARIANT VIOLATION: Discovery response missing 'reasoners'. "
-            f"Present keys: {list(body.keys()) if isinstance(body, dict) else body}"
+        agent.handle_serverless({"reasoner": "probe", "input": {}})
+        assert agent.node_id == original_id, (
+            f"INVARIANT VIOLATION: node_id changed after handle_serverless."
         )
 
-    def test_invariant_discovery_response_reasoners_includes_registered_name(self):
-        """Discovery response reasoners must include all registered reasoner names."""
-        agent = _make_agent("discovery-list-node")
 
-        @agent.reasoner("visible-reasoner")
-        def visible_reasoner() -> dict:
+class TestDiscoveryResponseStability:
+    """Discovery response must always contain 'node_id' and 'reasoners'."""
+
+    def test_invariant_discovery_contains_node_id(self):
+        agent = _make_agent("discovery-node")
+        result = agent.handle_serverless({"path": "/discover"})
+        assert "node_id" in result, (
+            f"INVARIANT VIOLATION: Discovery missing 'node_id'. Keys: {list(result.keys())}"
+        )
+
+    def test_invariant_discovery_node_id_matches_agent(self):
+        agent = _make_agent("exact-match-node")
+        result = agent.handle_serverless({"path": "/discover"})
+        assert result.get("node_id") == "exact-match-node", (
+            f"INVARIANT VIOLATION: Discovery node_id='{result.get('node_id')}' != 'exact-match-node'"
+        )
+
+    def test_invariant_discovery_contains_reasoners(self):
+        agent = _make_agent("discovery-reasoners-node")
+
+        @agent.reasoner("probe")
+        def probe_fn() -> dict:
             return {}
 
-        body = self._get_discovery_body(agent)
-        reasoners = body.get("reasoners", [])
-
-        # Reasoners can be a list of dicts or a dict; normalize to set of IDs
-        if isinstance(reasoners, dict):
-            reasoner_ids = set(reasoners.keys())
-        elif isinstance(reasoners, list):
-            reasoner_ids = {
-                r.get("id", r.get("name", r)) if isinstance(r, dict) else str(r)
-                for r in reasoners
-            }
-        else:
-            reasoner_ids = set()
-
-        assert "visible-reasoner" in reasoner_ids, (
-            f"INVARIANT VIOLATION: Registered reasoner 'visible-reasoner' not found "
-            f"in discovery response. Reasoner IDs found: {reasoner_ids}"
+        result = agent.handle_serverless({"path": "/discover"})
+        assert "reasoners" in result, (
+            f"INVARIANT VIOLATION: Discovery missing 'reasoners'. Keys: {list(result.keys())}"
         )
 
-    def test_invariant_discovery_response_is_stable_across_calls(self):
-        """
-        Calling /discover twice must return responses with the same node_id
-        and the same set of registered reasoners (no random variation).
-        """
+    def test_invariant_discovery_reasoners_includes_registered_function_name(self):
+        agent = _make_agent("discovery-list-node")
+
+        @agent.reasoner("some-label")
+        def visible_reasoner_fn() -> dict:
+            return {}
+
+        reasoner_ids = _discovery_reasoner_ids(agent)
+        assert "visible_reasoner_fn" in reasoner_ids, (
+            f"INVARIANT VIOLATION: 'visible_reasoner_fn' not in discovery. "
+            f"Found: {reasoner_ids}"
+        )
+
+    def test_invariant_discovery_stable_across_calls(self):
         agent = _make_agent("stable-discovery-node")
 
-        @agent.reasoner("stable-fn")
+        @agent.reasoner("stable")
         def stable_fn() -> dict:
             return {}
 
-        body1 = self._get_discovery_body(agent)
-        body2 = self._get_discovery_body(agent)
+        result1 = agent.handle_serverless({"path": "/discover"})
+        result2 = agent.handle_serverless({"path": "/discover"})
 
-        assert body1.get("node_id") == body2.get("node_id"), (
-            f"INVARIANT VIOLATION: Discovery response node_id changed between calls. "
-            f"Call 1: '{body1.get('node_id')}', Call 2: '{body2.get('node_id')}'"
+        assert result1.get("node_id") == result2.get("node_id"), (
+            f"INVARIANT VIOLATION: Discovery node_id changed between calls."
+        )
+        ids1 = {r.get("id") for r in result1.get("reasoners", []) if isinstance(r, dict)}
+        ids2 = {r.get("id") for r in result2.get("reasoners", []) if isinstance(r, dict)}
+        assert ids1 == ids2, (
+            f"INVARIANT VIOLATION: Discovery reasoner IDs changed: {ids1} vs {ids2}"
         )
