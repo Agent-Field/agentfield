@@ -474,6 +474,7 @@ type LocalStorage struct {
 	subscribers               map[string][]chan types.MemoryChangeEvent // Local pub/sub
 	mu                        sync.RWMutex
 	mode                      string
+	hasFTS5                   bool // true when SQLite FTS5 module is available
 	config                    LocalStorageConfig
 	postgresConfig            PostgresStorageConfig
 	vectorConfig              VectorStoreConfig
@@ -915,6 +916,8 @@ func (ls *LocalStorage) createSchema(ctx context.Context) error {
 		} else {
 			return err
 		}
+	} else {
+		ls.hasFTS5 = true
 	}
 
 	if err := ls.ensureSQLiteIndexes(); err != nil {
@@ -2516,16 +2519,22 @@ func (ls *LocalStorage) QueryWorkflowExecutions(ctx context.Context, filters typ
 	var conditions []string
 	var args []interface{}
 
-	// Check if we need FTS5 search
+	// Check if we need search
 	var ftsJoin string
 	if filters.Search != nil && *filters.Search != "" {
-		// Sanitize search input to prevent FTS5 syntax errors
 		sanitizedSearch := sanitizeFTS5Query(*filters.Search)
 		if sanitizedSearch != "" {
-			// Use FTS5 MATCH for efficient full-text search
-			ftsJoin = " INNER JOIN workflow_executions_fts ON workflow_executions.id = workflow_executions_fts.rowid"
-			conditions = append(conditions, "workflow_executions_fts MATCH ?")
-			args = append(args, sanitizedSearch)
+			if ls.hasFTS5 {
+				// Use FTS5 MATCH for efficient full-text search
+				ftsJoin = " INNER JOIN workflow_executions_fts ON workflow_executions.id = workflow_executions_fts.rowid"
+				conditions = append(conditions, "workflow_executions_fts MATCH ?")
+				args = append(args, sanitizedSearch)
+			} else {
+				// Fallback: LIKE-based search across key columns
+				likeTerm := "%" + strings.ReplaceAll(sanitizedSearch, "\"", "") + "%"
+				conditions = append(conditions, "(workflow_executions.execution_id LIKE ? OR workflow_executions.workflow_id LIKE ? OR workflow_executions.agent_node_id LIKE ? OR workflow_executions.workflow_name LIKE ?)")
+				args = append(args, likeTerm, likeTerm, likeTerm, likeTerm)
+			}
 		}
 	}
 
