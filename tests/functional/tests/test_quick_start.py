@@ -8,7 +8,9 @@ These tests make sure both public entry points stay accurate by:
 """
 
 import os
+import queue
 import threading
+import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional, Tuple
 
@@ -23,6 +25,8 @@ from utils import run_agent_server
 
 
 QUICK_START_URL = os.environ.get("TEST_QUICK_START_URL")
+TEST_BIND_HOST = os.environ.get("TEST_AGENT_BIND_HOST", "127.0.0.1")
+TEST_CALLBACK_HOST = os.environ.get("TEST_AGENT_CALLBACK_HOST", "127.0.0.1")
 README_NODE_ID = "researcher"
 DOCS_NODE_ID = "my-agent"
 DEMO_MESSAGE = "Hello, Agentfield!"
@@ -68,6 +72,35 @@ def _start_example_domain_server() -> Tuple[ThreadingHTTPServer, threading.Threa
     thread.start()
     host, port = server.server_address
     return server, thread, f"http://{host}:{port}"
+
+
+def _start_webhook_capture_server() -> Tuple[ThreadingHTTPServer, threading.Thread, str, "queue.Queue[dict]"]:
+    """
+    Spin up a lightweight HTTP server that captures execution webhooks.
+    """
+
+    deliveries: "queue.Queue[dict]" = queue.Queue()
+
+    class WebhookCaptureHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            content_length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(content_length)
+
+            payload = json.loads(body.decode("utf-8"))
+            deliveries.put(payload)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok":true}')
+
+        def log_message(self, *_):
+            return
+
+    server = ThreadingHTTPServer((TEST_BIND_HOST, 0), WebhookCaptureHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    _, port = server.server_address
+    return server, thread, f"http://{TEST_CALLBACK_HOST}:{port}/webhook", deliveries
 
 
 @pytest.mark.functional
@@ -116,6 +149,64 @@ async def test_docs_quick_start_demo_echo_flow(async_http_client):
         assert result["length"] == len(DEMO_MESSAGE)
 
         print("✓ Docs Quick Start demo_echo flow succeeded")
+
+
+@pytest.mark.functional
+@pytest.mark.asyncio
+async def test_docs_quick_start_execution_webhook_contract(async_http_client):
+    """
+    Validate execution webhook delivery for the quick-start demo_echo flow.
+    """
+    node_id = DOCS_NODE_ID
+    agent = create_docs_quick_start_agent(node_id=node_id)
+    webhook_server = None
+    webhook_thread = None
+
+    try:
+        async with run_agent_server(agent):
+            webhook_server, webhook_thread, webhook_url, deliveries = _start_webhook_capture_server()
+
+            execution_response = await async_http_client.post(
+                f"/api/v1/execute/{node_id}.demo_echo",
+                json={
+                    "input": {"message": DEMO_MESSAGE},
+                    "context": {"analysis_group": "demo.short_form"},
+                    "webhook": {"url": webhook_url},
+                },
+                timeout=30.0,
+            )
+
+            assert execution_response.status_code == 200, execution_response.text
+            response_payload = execution_response.json()
+            assert response_payload["status"] == "succeeded"
+            assert response_payload["webhook_registered"] is True
+
+            webhook_payload = deliveries.get(timeout=10)
+            assert webhook_payload["event"] == "execution.completed"
+            assert webhook_payload["execution_id"] == response_payload["execution_id"]
+            assert webhook_payload["workflow_id"] == response_payload["run_id"]
+            assert webhook_payload["agent_node_id"] == node_id
+            assert webhook_payload["reasoner_id"] == "demo_echo"
+            assert webhook_payload["status"] == "succeeded"
+            assert webhook_payload["target"] == f"{node_id}.demo_echo"
+            assert webhook_payload["type"] == "reasoner"
+            assert webhook_payload["started_at"]
+            assert webhook_payload["completed_at"]
+            assert webhook_payload["timestamp"]
+            assert webhook_payload["duration_ms"] >= 0
+            assert webhook_payload["retry_count"] == 0
+            assert webhook_payload["context"] == {"analysis_group": "demo.short_form"}
+            assert webhook_payload["result"]["original"] == DEMO_MESSAGE
+            assert webhook_payload["result"]["echoed"] == DEMO_MESSAGE
+            assert webhook_payload.get("error_category") in (None, "")
+            assert webhook_payload.get("status_reason") in (None, "")
+
+            print("✓ Docs Quick Start execution webhook contract succeeded")
+    finally:
+        if webhook_server:
+            webhook_server.shutdown()
+        if webhook_thread:
+            webhook_thread.join(timeout=5)
 
 
 @pytest.mark.functional
