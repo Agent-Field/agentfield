@@ -125,8 +125,8 @@ func TestInvariant_Runner_SchemaRepairIdempotency(t *testing.T) {
 		{"leading text", `some text before {"key": "value"}`},
 		{"nested object", `{"a": {"b": "c"}}`},
 		{"deeply nested", `{"a": {"b": {"c": {"d": "e"}}}}`},
-		// NOTE: multiple trailing commas `{"a": 1, "b": 2,,}` is known non-idempotent
-		// (first pass → one comma, second → zero). This is a known limitation, not a regression.
+		// NOTE: multiple trailing commas `{"a": 1, "b": 2,,}` is known non-idempotent.
+		// Fix: change cosmeticRepair regex from `,\s*` to `,+\s*`. Tracked separately.
 		{"whitespace only", "   \t\n   "},
 		{"just brace", "{"},
 		{"just bracket", "["},

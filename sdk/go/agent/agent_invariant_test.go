@@ -65,9 +65,10 @@ func TestInvariant_Agent_RegistrationIdempotency(t *testing.T) {
 // registering different skills simultaneously produces no data race and all
 // skills are registered. Must be run with -race.
 func TestInvariant_Agent_ConcurrentRegistrationSafety(t *testing.T) {
-	// KNOWN RACE: RegisterReasoner() at agent.go:546 has unsynchronized map write.
-	// This test correctly detects it. Skip until fixed with sync.Mutex.
-	t.Skip("KNOWN RACE: RegisterReasoner has unsynchronized concurrent map access")
+	// KNOWN RACE: RegisterReasoner() has unsynchronized map write (agent.go:546).
+	// Fix: add sync.RWMutex to Agent struct and protect all reasoners map access.
+	// Tracked as a separate PR to keep test-only changes separate from production fixes.
+	t.Skip("KNOWN RACE: RegisterReasoner needs sync.RWMutex — fix tracked separately")
 	a := makeMinimalAgent(t)
 
 	const goroutines = 20
