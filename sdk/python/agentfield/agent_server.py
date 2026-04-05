@@ -1137,6 +1137,7 @@ class AgentServer:
             and workers is None,  # Only enable reload in dev mode with single worker
             "access_log": access_log,
             "log_level": log_level,
+            "ws": "websockets-sansio",
             "timeout_graceful_shutdown": 30,  # Allow 30 seconds for graceful shutdown
             **kwargs,
         }

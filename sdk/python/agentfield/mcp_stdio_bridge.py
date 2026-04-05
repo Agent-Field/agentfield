@@ -97,6 +97,7 @@ class StdioMCPBridge:
                 port=self.port,
                 log_level="error" if not self.dev_mode else "info",
                 access_log=self.dev_mode,
+                ws="websockets-sansio",
             )
 
             server = uvicorn.Server(config)

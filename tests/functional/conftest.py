@@ -317,6 +317,7 @@ async def registered_agent(
         port=port,
         log_level="error",
         access_log=False,
+        ws="websockets-sansio",
     )
     server = uvicorn.Server(config)
     loop = asyncio.new_event_loop()
