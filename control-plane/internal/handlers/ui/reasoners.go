@@ -475,8 +475,6 @@ func (h *ReasonersHandler) StreamReasonerEventsHandler(c *gin.Context) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
-	c.Header("Access-Control-Allow-Origin", "*")
-	c.Header("Access-Control-Allow-Headers", "Cache-Control")
 
 	// Generate unique subscriber ID
 	subscriberID := fmt.Sprintf("reasoner_sse_%d_%s", time.Now().UnixNano(), c.ClientIP())

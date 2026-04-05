@@ -57,8 +57,6 @@ func (h *ExecutionHandler) StreamWorkflowNodeNotesHandler(c *gin.Context) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
-	c.Header("Access-Control-Allow-Origin", "*")
-	c.Header("Access-Control-Allow-Headers", "Cache-Control")
 
 	workflowID := c.Param("workflowId")
 	if workflowID == "" {
@@ -622,7 +620,6 @@ func (h *ExecutionHandler) StreamExecutionEventsHandler(c *gin.Context) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
-	c.Header("Access-Control-Allow-Origin", "*")
 
 	subscriberID := fmt.Sprintf("ui_exec_events_%d", time.Now().UnixNano())
 	eventBus := h.storage.GetExecutionEventBus()
