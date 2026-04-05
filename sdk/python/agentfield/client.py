@@ -36,6 +36,15 @@ from .exceptions import (
 httpx = None  # type: ignore
 
 
+def _utc_now_iso() -> str:
+    """Return current UTC time as an ISO 8601 string with Z suffix.
+
+    Use this for all outbound timestamps to ensure consistent UTC-aware
+    formatting across the client rather than naive local datetimes.
+    """
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
 # ---------------------------------------------------------------------------
 # Typed response models for approval helpers
 # ---------------------------------------------------------------------------
@@ -651,8 +660,8 @@ class AgentFieldClient:
                     "heartbeat_interval": "5s",
                 },
                 "health_status": "healthy",
-                "last_heartbeat": datetime.datetime.now().isoformat() + "Z",
-                "registered_at": datetime.datetime.now().isoformat() + "Z",
+                "last_heartbeat": _utc_now_iso(),
+                "registered_at": _utc_now_iso(),
                 "features": {
                     "ab_testing": False,
                     "advanced_metrics": False,
@@ -1209,8 +1218,8 @@ class AgentFieldClient:
                     "heartbeat_interval": "2s",
                 },
                 "health_status": "healthy",
-                "last_heartbeat": datetime.datetime.now().isoformat() + "Z",
-                "registered_at": datetime.datetime.now().isoformat() + "Z",
+                "last_heartbeat": _utc_now_iso(),
+                "registered_at": _utc_now_iso(),
                 "features": {
                     "ab_testing": False,
                     "advanced_metrics": False,

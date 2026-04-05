@@ -369,3 +369,46 @@ async def test_register_agent(monkeypatch):
         body["metadata"]["custom"]["vc_generation"]["reasoner_overrides"]["foo"]
         is False
     )
+
+
+# ---------------------------------------------------------------------------
+# UTC timestamp helper tests (added per code review feedback)
+# ---------------------------------------------------------------------------
+
+class TestUtcNowIso:
+    """Tests for the _utc_now_iso helper used in registration payloads."""
+
+    def test_returns_string(self):
+        from agentfield.client import _utc_now_iso
+        assert isinstance(_utc_now_iso(), str)
+
+    def test_ends_with_z(self):
+        from agentfield.client import _utc_now_iso
+        assert _utc_now_iso().endswith("Z")
+
+    def test_is_valid_iso_format(self):
+        """Timestamp must parse back as UTC-aware datetime without error."""
+        import datetime
+        from agentfield.client import _utc_now_iso
+        ts = _utc_now_iso()
+        # Remove trailing Z and parse
+        parsed = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        assert parsed.tzinfo is not None
+        assert parsed.tzinfo == datetime.timezone.utc
+
+    def test_no_double_offset(self):
+        """Must not produce invalid strings like 2026-01-01T00:00:00+00:00Z."""
+        from agentfield.client import _utc_now_iso
+        ts = _utc_now_iso()
+        assert "+00:00Z" not in ts
+        assert ts.count("Z") == 1
+
+    def test_millisecond_precision(self):
+        """Timestamp should have millisecond precision (3 decimal digits)."""
+        from agentfield.client import _utc_now_iso
+        ts = _utc_now_iso()
+        # Format: 2026-04-05T01:23:45.678Z
+        body = ts[:-1]  # strip Z
+        assert "." in body
+        fractional = body.split(".")[-1]
+        assert len(fractional) == 3
