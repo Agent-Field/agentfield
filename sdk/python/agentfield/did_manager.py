@@ -8,7 +8,7 @@ for agent nodes, reasoners, and skills.
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .logger import get_logger
 
@@ -192,7 +192,7 @@ class DIDManager:
                 caller_did=caller_did,
                 target_did=target_did,
                 agent_node_did=self.identity_package.agent_did.did,
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(timezone.utc),
             )
 
         except Exception as e:

@@ -1513,7 +1513,7 @@ class Agent(FastAPI):
             "preferred": self.base_url,
             "callback_candidates": self.callback_candidates,
             "container": _is_running_in_container(),
-            "submitted_at": datetime.utcnow().isoformat() + "Z",
+            "submitted_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
         }
 
         return payload

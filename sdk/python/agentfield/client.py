@@ -166,7 +166,7 @@ class AgentFieldClient:
             AgentFieldClient._init_shared_sync_session()
 
     def _generate_id(self, prefix: str) -> str:
-        timestamp = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
         random_suffix = f"{random.getrandbits(32):08x}"
         return f"{prefix}_{timestamp}_{random_suffix}"
 
@@ -1017,7 +1017,7 @@ class AgentFieldClient:
         elif metadata.get("started_at"):
             metadata["timestamp"] = metadata["started_at"]
         else:
-            metadata["timestamp"] = datetime.datetime.utcnow().isoformat()
+            metadata["timestamp"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
         # Cache successful results for reuse
         if normalized_status in SUCCESS_STATUSES:
@@ -1058,7 +1058,7 @@ class AgentFieldClient:
             "status": normalized_status,
             "duration_ms": metadata.get("duration_ms"),
             "timestamp": metadata.get("timestamp")
-            or datetime.datetime.utcnow().isoformat(),
+            or datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "result": response_result,
             "error_message": error_message,
             "error_details": error_details,
