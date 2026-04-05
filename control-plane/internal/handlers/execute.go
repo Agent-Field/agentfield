@@ -706,6 +706,33 @@ func (c *executionController) publishExecutionEventWithReasonerInfo(exec *types.
 	if exec.NodeID != "" {
 		data["node_id"] = exec.NodeID
 	}
+	if exec.AgentNodeID != "" {
+		data["agent_node_id"] = exec.AgentNodeID
+	}
+	if exec.StatusReason != nil && *exec.StatusReason != "" {
+		data["status_reason"] = *exec.StatusReason
+		data["error_category"] = *exec.StatusReason
+	}
+	data["started_at"] = exec.StartedAt.UTC().Format(time.RFC3339)
+	if exec.CompletedAt != nil {
+		data["completed_at"] = exec.CompletedAt.UTC().Format(time.RFC3339)
+	}
+	if exec.DurationMS != nil {
+		data["duration_ms"] = *exec.DurationMS
+	}
+	if exec.SessionID != nil && *exec.SessionID != "" {
+		data["session_id"] = *exec.SessionID
+	}
+	if exec.ActorID != nil && *exec.ActorID != "" {
+		data["actor_id"] = *exec.ActorID
+	}
+	storedPayload := types.DecodeStoredExecutionPayload(exec.InputPayload)
+	if storedPayload.Context != nil {
+		data["context"] = storedPayload.Context
+	}
+	if workflowExec, err := c.store.GetWorkflowExecution(context.Background(), exec.ExecutionID); err == nil && workflowExec != nil {
+		data["retry_count"] = workflowExec.RetryCount
+	}
 
 	// Add reasoner definitions if agent info is available
 	if agent != nil {

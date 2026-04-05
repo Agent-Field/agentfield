@@ -530,12 +530,12 @@ func (f *observabilityForwarder) publishSnapshot() {
 	}
 
 	snapshotData := map[string]interface{}{
-		"agents":          agentSnapshots,
-		"total_agents":    len(agents),
-		"healthy_agents":  healthyCount,
+		"agents":           agentSnapshots,
+		"total_agents":     len(agents),
+		"healthy_agents":   healthyCount,
 		"unhealthy_agents": unhealthyCount,
-		"active_agents":   activeCount,
-		"inactive_agents": inactiveCount,
+		"active_agents":    activeCount,
+		"inactive_agents":  inactiveCount,
 	}
 
 	// Create and enqueue the observability event directly
@@ -758,7 +758,11 @@ func (f *observabilityForwarder) transformExecutionEvent(e events.ExecutionEvent
 		"agent_node_id": e.AgentNodeID,
 		"status":        e.Status,
 	}
-	if e.Data != nil {
+	if payload, ok := e.Data.(map[string]interface{}); ok {
+		for key, value := range payload {
+			data[key] = value
+		}
+	} else if e.Data != nil {
 		data["payload"] = e.Data
 	}
 

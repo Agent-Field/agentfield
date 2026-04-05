@@ -6018,13 +6018,17 @@ func (ls *LocalStorage) executeReasonerHistoryQuery(tx DBTX, nodeID, localReason
 	combinedQuery := `
 		WITH execution_data AS (
 			SELECT
-				execution_id, status, input_data, output_data, error_message, duration_ms, started_at,
+				execution_id, agent_node_id, reasoner_id, status, status_reason,
+				input_data, output_data, error_message, duration_ms, retry_count,
+				session_id, actor_id, started_at, completed_at,
 				COUNT(*) OVER() as total_count,
 				ROW_NUMBER() OVER(ORDER BY started_at DESC) as row_num
 			FROM workflow_executions
 			WHERE agent_node_id = ? AND reasoner_id = ?
 		)
-		SELECT execution_id, status, input_data, output_data, error_message, duration_ms, started_at, total_count
+		SELECT execution_id, agent_node_id, reasoner_id, status, status_reason,
+		       input_data, output_data, error_message, duration_ms, retry_count,
+		       session_id, actor_id, started_at, completed_at, total_count
 		FROM execution_data
 		WHERE row_num > ? AND row_num <= ?
 		ORDER BY started_at DESC`
@@ -6043,18 +6047,41 @@ func (ls *LocalStorage) executeReasonerHistoryQuery(tx DBTX, nodeID, localReason
 		var inputData, outputData sql.NullString
 		var errorMessage sql.NullString
 		var durationMs sql.NullInt64
+		var statusReason sql.NullString
+		var sessionID sql.NullString
+		var actorID sql.NullString
+		var completedAt sql.NullTime
 
 		err := rows.Scan(
-			&record.ExecutionID, &record.Status, &inputData, &outputData,
-			&errorMessage, &durationMs, &record.Timestamp, &total,
+			&record.ExecutionID, &record.AgentNodeID, &record.ReasonerID,
+			&record.Status, &statusReason, &inputData, &outputData,
+			&errorMessage, &durationMs, &record.RetryCount, &sessionID,
+			&actorID, &record.StartedAt, &completedAt, &total,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan execution record: %w", err)
 		}
 
-		// Parse input data
+		record.Timestamp = record.StartedAt
+		if statusReason.Valid {
+			record.StatusReason = &statusReason.String
+			record.ErrorCategory = &statusReason.String
+		}
+		if completedAt.Valid {
+			record.CompletedAt = &completedAt.Time
+		}
+		if sessionID.Valid {
+			record.SessionID = &sessionID.String
+		}
+		if actorID.Valid {
+			record.ActorID = &actorID.String
+		}
+
 		if inputData.Valid && inputData.String != "" {
-			if err := json.Unmarshal([]byte(inputData.String), &record.Input); err != nil {
+			payload := types.DecodeStoredExecutionPayload(json.RawMessage(inputData.String))
+			record.Input = payload.Input
+			record.Context = payload.Context
+			if record.Input == nil {
 				record.Input = map[string]interface{}{"raw": inputData.String}
 			}
 		}
@@ -6103,13 +6130,17 @@ func (ls *LocalStorage) executeReasonerHistoryQueryDirect(ctx context.Context, n
 	combinedQuery := `
 		WITH execution_data AS (
 			SELECT
-				execution_id, status, input_data, output_data, error_message, duration_ms, started_at,
+				execution_id, agent_node_id, reasoner_id, status, status_reason,
+				input_data, output_data, error_message, duration_ms, retry_count,
+				session_id, actor_id, started_at, completed_at,
 				COUNT(*) OVER() as total_count,
 				ROW_NUMBER() OVER(ORDER BY started_at DESC) as row_num
 			FROM workflow_executions
 			WHERE agent_node_id = ? AND reasoner_id = ?
 		)
-		SELECT execution_id, status, input_data, output_data, error_message, duration_ms, started_at, total_count
+		SELECT execution_id, agent_node_id, reasoner_id, status, status_reason,
+		       input_data, output_data, error_message, duration_ms, retry_count,
+		       session_id, actor_id, started_at, completed_at, total_count
 		FROM execution_data
 		WHERE row_num > ? AND row_num <= ?
 		ORDER BY started_at DESC`
@@ -6133,18 +6164,41 @@ func (ls *LocalStorage) executeReasonerHistoryQueryDirect(ctx context.Context, n
 		var inputData, outputData sql.NullString
 		var errorMessage sql.NullString
 		var durationMs sql.NullInt64
+		var statusReason sql.NullString
+		var sessionID sql.NullString
+		var actorID sql.NullString
+		var completedAt sql.NullTime
 
 		err := rows.Scan(
-			&record.ExecutionID, &record.Status, &inputData, &outputData,
-			&errorMessage, &durationMs, &record.Timestamp, &total,
+			&record.ExecutionID, &record.AgentNodeID, &record.ReasonerID,
+			&record.Status, &statusReason, &inputData, &outputData,
+			&errorMessage, &durationMs, &record.RetryCount, &sessionID,
+			&actorID, &record.StartedAt, &completedAt, &total,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan execution record: %w", err)
 		}
 
-		// Parse input data
+		record.Timestamp = record.StartedAt
+		if statusReason.Valid {
+			record.StatusReason = &statusReason.String
+			record.ErrorCategory = &statusReason.String
+		}
+		if completedAt.Valid {
+			record.CompletedAt = &completedAt.Time
+		}
+		if sessionID.Valid {
+			record.SessionID = &sessionID.String
+		}
+		if actorID.Valid {
+			record.ActorID = &actorID.String
+		}
+
 		if inputData.Valid && inputData.String != "" {
-			if err := json.Unmarshal([]byte(inputData.String), &record.Input); err != nil {
+			payload := types.DecodeStoredExecutionPayload(json.RawMessage(inputData.String))
+			record.Input = payload.Input
+			record.Context = payload.Context
+			if record.Input == nil {
 				record.Input = map[string]interface{}{"raw": inputData.String}
 			}
 		}

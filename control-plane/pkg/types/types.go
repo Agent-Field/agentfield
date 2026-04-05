@@ -156,12 +156,12 @@ type AccessControlMetadata struct {
 
 // AgentNode represents a registered agent service.
 type AgentNode struct {
-	ID             string `json:"id" db:"id"`
-	GroupID        string `json:"group_id" db:"group_id"`
-	TeamID         string `json:"team_id" db:"team_id"`
-	BaseURL        string `json:"base_url" db:"base_url"`
-	Version        string `json:"version" db:"version"`
-	TrafficWeight  int    `json:"traffic_weight" db:"traffic_weight"` // Weight for A/B traffic distribution (default 100)
+	ID            string `json:"id" db:"id"`
+	GroupID       string `json:"group_id" db:"group_id"`
+	TeamID        string `json:"team_id" db:"team_id"`
+	BaseURL       string `json:"base_url" db:"base_url"`
+	Version       string `json:"version" db:"version"`
+	TrafficWeight int    `json:"traffic_weight" db:"traffic_weight"` // Weight for A/B traffic distribution (default 100)
 
 	// Serverless support
 	DeploymentType string  `json:"deployment_type" db:"deployment_type"`         // "long_running" or "serverless"
@@ -966,13 +966,23 @@ type ReasonerExecutionHistory struct {
 
 // ReasonerExecutionRecord represents a single execution record for reasoner history
 type ReasonerExecutionRecord struct {
-	ExecutionID string                 `json:"execution_id"`
-	Status      string                 `json:"status"`
-	Input       map[string]interface{} `json:"input"`
-	Output      map[string]interface{} `json:"output,omitempty"`
-	Error       string                 `json:"error,omitempty"`
-	DurationMs  int64                  `json:"duration_ms"`
-	Timestamp   time.Time              `json:"timestamp"`
+	ExecutionID   string                 `json:"execution_id"`
+	AgentNodeID   string                 `json:"agent_node_id"`
+	ReasonerID    string                 `json:"reasoner_id"`
+	Status        string                 `json:"status"`
+	StatusReason  *string                `json:"status_reason,omitempty"`
+	Input         map[string]interface{} `json:"input,omitempty"`
+	Context       map[string]interface{} `json:"context,omitempty"`
+	Output        map[string]interface{} `json:"output,omitempty"`
+	Error         string                 `json:"error,omitempty"`
+	ErrorCategory *string                `json:"error_category,omitempty"`
+	DurationMs    int64                  `json:"duration_ms"`
+	RetryCount    int                    `json:"retry_count"`
+	SessionID     *string                `json:"session_id,omitempty"`
+	ActorID       *string                `json:"actor_id,omitempty"`
+	StartedAt     time.Time              `json:"started_at"`
+	CompletedAt   *time.Time             `json:"completed_at,omitempty"`
+	Timestamp     time.Time              `json:"timestamp"`
 }
 
 // WorkflowSummaryData represents pre-aggregated workflow summary data from database

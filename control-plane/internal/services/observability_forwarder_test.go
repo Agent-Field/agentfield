@@ -288,7 +288,12 @@ func TestObservabilityForwarder_TransformExecutionEvent(t *testing.T) {
 		AgentNodeID: "agent-789",
 		Status:      "succeeded",
 		Timestamp:   time.Now(),
-		Data:        map[string]interface{}{"key": "value"},
+		Data: map[string]interface{}{
+			"reasoner_id":    "summarizer",
+			"context":        map[string]interface{}{"analysis_group": "summary.short_form"},
+			"retry_count":    2,
+			"error_category": "provider_timeout",
+		},
 	}
 
 	obsEvent := forwarder.transformExecutionEvent(execEvent)
@@ -303,7 +308,10 @@ func TestObservabilityForwarder_TransformExecutionEvent(t *testing.T) {
 	require.Equal(t, "wf-456", data["workflow_id"])
 	require.Equal(t, "agent-789", data["agent_node_id"])
 	require.Equal(t, "succeeded", data["status"])
-	require.Equal(t, execEvent.Data, data["payload"])
+	require.Equal(t, "summarizer", data["reasoner_id"])
+	require.Equal(t, 2, data["retry_count"])
+	require.Equal(t, "provider_timeout", data["error_category"])
+	require.Equal(t, map[string]interface{}{"analysis_group": "summary.short_form"}, data["context"])
 }
 
 // Test event transformation - node events
@@ -568,8 +576,8 @@ func TestObservabilityForwarder_WebhookWithSignature(t *testing.T) {
 // Test webhook delivery with custom headers
 func TestObservabilityForwarder_WebhookWithCustomHeaders(t *testing.T) {
 	var (
-		mu                 sync.Mutex
-		customHeader       string
+		mu                  sync.Mutex
+		customHeader        string
 		authorizationHeader string
 	)
 
@@ -991,8 +999,8 @@ func TestObservabilityForwarder_BatchingBySize(t *testing.T) {
 	})
 
 	cfg := ObservabilityForwarderConfig{
-		BatchSize:    3,                     // Send every 3 events
-		BatchTimeout: 10 * time.Second,      // Long timeout to ensure size-based batching
+		BatchSize:    3,                // Send every 3 events
+		BatchTimeout: 10 * time.Second, // Long timeout to ensure size-based batching
 		WorkerCount:  1,
 	}
 
