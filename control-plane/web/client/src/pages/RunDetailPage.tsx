@@ -664,7 +664,9 @@ export function RunDetailPage() {
                 agentNodeId && reasonerId
                   ? `${agentNodeId}.${reasonerId}`
                   : agentNodeId ?? reasonerId ?? "";
-              navigate(`/playground${target ? `/${target}` : ""}`);
+              navigate(`/playground${target ? `/${target}` : ""}`, {
+                state: { replayInput: rootNode?.input_data ?? selectedExecution.input_data },
+              });
             }}
           >
             <RotateCcw className="size-3.5 mr-1" />

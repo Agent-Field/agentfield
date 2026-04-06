@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useLocation } from "react-router-dom";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import {
@@ -107,6 +107,8 @@ function buildAsyncCurlCommand(
 export function PlaygroundPage() {
   const { reasonerId: paramReasonerId } = useParams<{ reasonerId?: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  const replayInput = (location.state as { replayInput?: unknown } | null)?.replayInput;
 
   // ── reasoner list ─────────────────────────────────────────────────────────
   const [reasonersData, setReasoners] = useState<ReasonersResponse | null>(null);
@@ -121,7 +123,18 @@ export function PlaygroundPage() {
   const [loadingReasonerDetails, setLoadingReasonerDetails] = useState(false);
 
   // ── playground state ──────────────────────────────────────────────────────
-  const [input, setInput] = useState("{}");
+  const [input, setInput] = useState(() => {
+    if (replayInput != null) {
+      try {
+        return typeof replayInput === "string"
+          ? replayInput
+          : JSON.stringify(replayInput, null, 2);
+      } catch {
+        return "{}";
+      }
+    }
+    return "{}";
+  });
   const [inputError, setInputError] = useState<string | null>(null);
   const [result, setResult] = useState<unknown>(null);
   const [resultError, setResultError] = useState<string | null>(null);
