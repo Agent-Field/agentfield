@@ -32,7 +32,7 @@ func validateExecutionStateTransition(currentStatus, newStatus string) error {
 		string(types.ExecutionStatusSucceeded): {},
 		string(types.ExecutionStatusFailed):    {},
 		string(types.ExecutionStatusCancelled): {},
-		string(types.ExecutionStatusTimeout):   {},
+		string(types.ExecutionStatusTimeout):   {string(types.ExecutionStatusRunning), string(types.ExecutionStatusCancelled)},
 	}
 
 	allowedStates, exists := validTransitions[currentStatus]

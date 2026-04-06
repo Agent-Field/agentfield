@@ -72,8 +72,8 @@ function useSSEQuerySyncCore(): SSESyncContextValue {
       "execution_cancelled",
     ],
     autoReconnect: true,
-    maxReconnectAttempts: 10,
-    reconnectDelayMs: 2000,
+    maxReconnectAttempts: 3,
+    reconnectDelayMs: 3000,
     exponentialBackoff: true,
   });
 
@@ -104,7 +104,12 @@ function useSSEQuerySyncCore(): SSESyncContextValue {
     latestEvent: nodeEvent,
     connected: nodeConnected,
     reconnecting: nodeReconnecting,
-  } = useSSE("/api/ui/v1/nodes/events", {
+  // Node and reasoner SSE streams are disabled to stay within the browser's
+  // HTTP/1.1 per-origin connection limit (6).  Three always-on EventSource
+  // connections leave too few slots for API data fetches, causing the UI to
+  // hang.  The queries already include adaptive polling fallback when SSE is
+  // unavailable, so agent/reasoner updates arrive within a few seconds.
+  } = useSSE(null, {
     eventTypes: [
       "node_online",
       "node_offline",
@@ -114,8 +119,8 @@ function useSSEQuerySyncCore(): SSESyncContextValue {
       "node_removed",
     ],
     autoReconnect: true,
-    maxReconnectAttempts: 10,
-    reconnectDelayMs: 2000,
+    maxReconnectAttempts: 3,
+    reconnectDelayMs: 3000,
     exponentialBackoff: true,
   });
 
@@ -132,10 +137,10 @@ function useSSEQuerySyncCore(): SSESyncContextValue {
     latestEvent: reasonerEvent,
     connected: reasonerConnected,
     reconnecting: reasonerReconnecting,
-  } = useSSE("/api/ui/v1/reasoners/events", {
+  } = useSSE(null, {
     autoReconnect: true,
-    maxReconnectAttempts: 10,
-    reconnectDelayMs: 2000,
+    maxReconnectAttempts: 3,
+    reconnectDelayMs: 3000,
     exponentialBackoff: true,
   });
 

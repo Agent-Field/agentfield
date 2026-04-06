@@ -211,6 +211,17 @@ func (h *ExecutionLogsHandler) StreamExecutionLogsHandler(c *gin.Context) {
 	idleTimer := time.NewTimer(cfg.StreamIdleTimeout)
 	defer idleTimer.Stop()
 
+	// Check if execution is already in a terminal state before streaming.
+	if exec, err := h.storage.GetWorkflowExecution(c.Request.Context(), executionID); err == nil && exec != nil {
+		if types.IsTerminalExecutionStatus(exec.Status) {
+			closeEvt, _ := json.Marshal(map[string]interface{}{
+				"type": "stream_end", "reason": "terminal_status", "status": exec.Status,
+			})
+			writeSSE(c, closeEvt)
+			return
+		}
+	}
+
 	for {
 		select {
 		case entry, ok := <-eventChan:
@@ -235,6 +246,16 @@ func (h *ExecutionLogsHandler) StreamExecutionLogsHandler(c *gin.Context) {
 			sinceSeq = &next
 			resetTimer(idleTimer, cfg.StreamIdleTimeout)
 		case <-heartbeatTicker.C:
+			// Check if execution reached terminal state; close stream if so.
+			if exec, err := h.storage.GetWorkflowExecution(streamCtx, executionID); err == nil && exec != nil {
+				if types.IsTerminalExecutionStatus(exec.Status) {
+					closeEvt, _ := json.Marshal(map[string]interface{}{
+						"type": "stream_end", "reason": "terminal_status", "status": exec.Status,
+					})
+					writeSSE(c, closeEvt)
+					return
+				}
+			}
 			heartbeat := map[string]interface{}{
 				"type":      "heartbeat",
 				"timestamp": time.Now().Format(time.RFC3339),
@@ -244,7 +265,7 @@ func (h *ExecutionLogsHandler) StreamExecutionLogsHandler(c *gin.Context) {
 					return
 				}
 			}
-			resetTimer(idleTimer, cfg.StreamIdleTimeout)
+			// Don't reset idle timer on heartbeats — only real log entries should.
 		case <-idleTimer.C:
 			return
 		case <-streamCtx.Done():

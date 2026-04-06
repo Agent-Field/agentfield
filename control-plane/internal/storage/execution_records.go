@@ -1065,6 +1065,7 @@ func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAf
 		FROM workflow_executions
 		WHERE status IN ('running', 'pending', 'queued', 'waiting')
 		  AND COALESCE(updated_at, created_at, started_at) <= ?
+		  AND COALESCE(approval_status, '') != 'pending'
 		ORDER BY COALESCE(updated_at, created_at, started_at) ASC
 		LIMIT ?`, cutoff, limit)
 	if err != nil {
@@ -1108,6 +1109,16 @@ func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAf
 	}
 	defer updateStmt.Close()
 
+	// Also sync the executions table so both tables stay consistent.
+	syncExecStmt, err := tx.PrepareContext(ctx, `
+		UPDATE executions
+		SET status = ?, error_message = ?, completed_at = ?, duration_ms = ?, updated_at = ?
+		WHERE execution_id = ? AND status IN ('running', 'pending', 'queued', 'waiting')`)
+	if err != nil {
+		return 0, fmt.Errorf("prepare stale execution sync update: %w", err)
+	}
+	defer syncExecStmt.Close()
+
 	now := time.Now().UTC()
 	timeoutMessage := "execution timed out (no activity)"
 
@@ -1140,6 +1151,16 @@ func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAf
 			return 0, fmt.Errorf("rows affected for workflow execution %s: %w", rec.id, err)
 		}
 		if rowsAffected > 0 {
+			// Keep executions table in sync.
+			_, _ = syncExecStmt.ExecContext(
+				ctx,
+				types.ExecutionStatusTimeout,
+				timeoutMessage,
+				now,
+				durationMS,
+				now,
+				rec.id,
+			)
 			updated++
 		}
 	}

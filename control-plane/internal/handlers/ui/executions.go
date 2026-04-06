@@ -631,6 +631,18 @@ func (h *ExecutionHandler) StreamExecutionEventsHandler(c *gin.Context) {
 	eventChan := eventBus.Subscribe(subscriberID)
 	defer eventBus.Unsubscribe(subscriberID)
 
+	// Send an initial connected event so the browser EventSource detects the open.
+	connectedEvt := map[string]interface{}{
+		"type":      "connected",
+		"message":   "Execution events stream connected",
+		"timestamp": time.Now().Format(time.RFC3339),
+	}
+	if payload, err := json.Marshal(connectedEvt); err == nil {
+		if !writeSSE(c, payload) {
+			return
+		}
+	}
+
 	ctx := c.Request.Context()
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()

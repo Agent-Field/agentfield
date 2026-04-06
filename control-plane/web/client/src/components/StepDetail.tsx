@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useStepDetail } from "@/hooks/queries";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
@@ -175,6 +176,38 @@ function CopyJsonHeaderButton({
 
 export function StepDetail({ executionId }: { executionId: string }) {
   const { data: execution, isLoading } = useStepDetail(executionId);
+  const queryClient = useQueryClient();
+  const [approvalBusy, setApprovalBusy] = useState(false);
+
+  const handleApproval = useCallback(
+    async (decision: "approved" | "rejected") => {
+      if (!execution?.approval_request_id || approvalBusy) return;
+      setApprovalBusy(true);
+      try {
+        const res = await fetch("/api/v1/webhooks/approval-response", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-API-Key": localStorage.getItem("agentfield_api_key") ?? "",
+          },
+          body: JSON.stringify({
+            requestId: execution.approval_request_id,
+            decision,
+          }),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          console.error("Approval failed:", body);
+        }
+        void queryClient.invalidateQueries({ queryKey: ["step-detail", executionId] });
+        void queryClient.invalidateQueries({ queryKey: ["run-dag"] });
+        void queryClient.invalidateQueries({ queryKey: ["executions"] });
+      } finally {
+        setApprovalBusy(false);
+      }
+    },
+    [execution?.approval_request_id, executionId, queryClient, approvalBusy],
+  );
 
   if (isLoading) {
     return (
@@ -553,43 +586,19 @@ export function StepDetail({ executionId }: { executionId: string }) {
                     <Button
                       size="sm"
                       className="h-7 text-xs"
-                      onClick={async () => {
-                        await fetch("/api/v1/webhooks/approval-response", {
-                          method: "POST",
-                          headers: {
-                            "Content-Type": "application/json",
-                            "X-API-Key":
-                              localStorage.getItem("agentfield_api_key") ?? "",
-                          },
-                          body: JSON.stringify({
-                            requestId: execution.approval_request_id,
-                            decision: "approved",
-                          }),
-                        });
-                      }}
+                      disabled={approvalBusy}
+                      onClick={() => handleApproval("approved")}
                     >
-                      Approve
+                      {approvalBusy ? "Sending…" : "Approve"}
                     </Button>
                     <Button
                       variant="destructive"
                       size="sm"
                       className="h-7 text-xs"
-                      onClick={async () => {
-                        await fetch("/api/v1/webhooks/approval-response", {
-                          method: "POST",
-                          headers: {
-                            "Content-Type": "application/json",
-                            "X-API-Key":
-                              localStorage.getItem("agentfield_api_key") ?? "",
-                          },
-                          body: JSON.stringify({
-                            requestId: execution.approval_request_id,
-                            decision: "rejected",
-                          }),
-                        });
-                      }}
+                      disabled={approvalBusy}
+                      onClick={() => handleApproval("rejected")}
                     >
-                      Reject
+                      {approvalBusy ? "Sending…" : "Reject"}
                     </Button>
                   </div>
                 )}

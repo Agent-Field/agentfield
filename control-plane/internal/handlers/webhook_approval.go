@@ -197,8 +197,14 @@ func (c *webhookApprovalController) handleApprovalWebhook(ctx *gin.Context) {
 	// Idempotency: if execution is no longer in waiting state, it was already
 	// processed by a previous webhook delivery.  Return 200 so the sender
 	// (hax-sdk retry queue) considers it delivered and stops retrying.
+	// Exception: if the stale reaper marked it as "timeout" but the approval
+	// is still pending, allow the approval to proceed (the user is explicitly
+	// resolving the approval via the UI or webhook).
 	normalized := types.NormalizeExecutionStatus(wfExec.Status)
-	if normalized != types.ExecutionStatusWaiting {
+	approvalStillPending := wfExec.ApprovalStatus != nil && *wfExec.ApprovalStatus == "pending"
+	reaperTimeout := normalized == string(types.ExecutionStatusTimeout) && approvalStillPending
+
+	if normalized != types.ExecutionStatusWaiting && !reaperTimeout {
 		logger.Logger.Info().
 			Str("execution_id", executionID).
 			Str("current_status", normalized).
