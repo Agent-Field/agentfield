@@ -49,7 +49,7 @@ import type {
   WorkflowDAGLightweightResponse,
 } from "@/types/workflows";
 import type { WorkflowExecution } from "@/types/executions";
-import { retryExecutionWebhook } from "@/services/executionsApi";
+import { retryExecutionWebhook, getExecutionDetails } from "@/services/executionsApi";
 import {
   downloadWorkflowVCAuditFile,
   getWorkflowVCChain,
@@ -657,15 +657,23 @@ export function RunDetailPage() {
             variant="outline"
             size="sm"
             className="h-8 text-xs"
-            onClick={() => {
+            onClick={async () => {
               const agentNodeId = rootNode?.agent_node_id;
               const reasonerId = rootNode?.reasoner_id;
+              const execId = rootNode?.execution_id ?? selectedExecution.execution_id;
               const target =
                 agentNodeId && reasonerId
                   ? `${agentNodeId}.${reasonerId}`
                   : agentNodeId ?? reasonerId ?? "";
+              let replayInput: unknown = null;
+              if (execId) {
+                try {
+                  const details = await getExecutionDetails(execId);
+                  replayInput = details.input_data;
+                } catch { /* best effort */ }
+              }
               navigate(`/playground${target ? `/${target}` : ""}`, {
-                state: { replayInput: rootNode?.input_data ?? selectedExecution.input_data },
+                state: { replayInput },
               });
             }}
           >

@@ -109,6 +109,7 @@ export function PlaygroundPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const replayInput = (location.state as { replayInput?: unknown } | null)?.replayInput;
+  const hasReplayInput = replayInput != null && replayInput !== "" && JSON.stringify(replayInput) !== "{}" && JSON.stringify(replayInput) !== "null";
 
   // ── reasoner list ─────────────────────────────────────────────────────────
   const [reasonersData, setReasoners] = useState<ReasonersResponse | null>(null);
@@ -185,15 +186,17 @@ export function PlaygroundPage() {
       .then((data) => {
         if (!cancelled) {
           setSelectedReasoner(data);
-          // Seed input textarea with schema example
-          if (data.input_schema?.properties) {
-            const example: Record<string, string> = {};
-            for (const key of Object.keys(data.input_schema.properties)) {
-              example[key] = "";
+          // Seed input textarea with schema example, unless replay data was provided
+          if (!hasReplayInput) {
+            if (data.input_schema?.properties) {
+              const example: Record<string, string> = {};
+              for (const key of Object.keys(data.input_schema.properties)) {
+                example[key] = "";
+              }
+              setInput(JSON.stringify(example, null, 2));
+            } else {
+              setInput("{}");
             }
-            setInput(JSON.stringify(example, null, 2));
-          } else {
-            setInput("{}");
           }
           setResult(null);
           setResultError(null);
