@@ -31,6 +31,8 @@ export function ApproveWithContextDialog({
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
 
+  const hasTags = (agent?.proposed_tags?.length ?? 0) > 0;
+
   useEffect(() => {
     if (agent) {
       setSelectedTags([...(agent.proposed_tags || [])]);
@@ -44,7 +46,10 @@ export function ApproveWithContextDialog({
   };
 
   const handleApprove = async () => {
-    if (!agent || selectedTags.length === 0) return;
+    if (!agent) return;
+    // When there are proposed tags, require at least one selected.
+    // When there are none, approve the agent registration directly.
+    if (hasTags && selectedTags.length === 0) return;
     try {
       setLoading(true);
       await onApprove(agent.agent_id, selectedTags);
@@ -58,57 +63,66 @@ export function ApproveWithContextDialog({
     <Dialog open={!!agent} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Approve Tags</DialogTitle>
+          <DialogTitle>{hasTags ? "Approve Tags" : "Approve Agent"}</DialogTitle>
           <DialogDescription>
-            Approve tags for agent{" "}
+            {hasTags ? "Approve tags for agent" : "Approve registration for agent"}{" "}
             <span className="font-mono font-medium">{agent?.agent_id}</span>
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
-          <div>
-            <Label className="mb-2 block">Select tags to approve</Label>
-            <div className="flex flex-wrap gap-2">
-              {(agent?.proposed_tags || []).map((tag) => {
-                const isSelected = selectedTags.includes(tag);
-                return (
-                  <button
-                    key={tag}
-                    type="button"
-                    onClick={() => toggleTag(tag)}
-                    className="cursor-pointer"
-                  >
-                    <Badge
-                      variant={isSelected ? "outline" : "secondary"}
-                      size="sm"
-                      showIcon={false}
-                      className={
-                        isSelected
-                          ? "border-status-success-border text-status-success-light"
-                          : "opacity-50"
-                      }
+          {hasTags ? (
+            <div>
+              <Label className="mb-2 block">Select tags to approve</Label>
+              <div className="flex flex-wrap gap-2">
+                {(agent?.proposed_tags || []).map((tag) => {
+                  const isSelected = selectedTags.includes(tag);
+                  return (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => toggleTag(tag)}
+                      className="cursor-pointer"
                     >
-                      {isSelected && (
-                        <CheckCircle className="w-3 h-3 mr-0.5" />
-                      )}
-                      {tag}
-                    </Badge>
-                  </button>
-                );
-              })}
+                      <Badge
+                        variant={isSelected ? "outline" : "secondary"}
+                        size="sm"
+                        showIcon={false}
+                        className={
+                          isSelected
+                            ? "border-status-success-border text-status-success-light"
+                            : "opacity-50"
+                        }
+                      >
+                        {isSelected && (
+                          <CheckCircle className="w-3 h-3 mr-0.5" />
+                        )}
+                        {tag}
+                      </Badge>
+                    </button>
+                  );
+                })}
+              </div>
+              {selectedTags.length === 0 && (
+                <p className="text-sm text-muted-foreground mt-2">
+                  Select at least one tag to approve.
+                </p>
+              )}
             </div>
-            {selectedTags.length === 0 && (
-              <p className="text-sm text-muted-foreground mt-2">
-                Select at least one tag to approve.
-              </p>
-            )}
-          </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              This agent registered without requesting any tags. Approving will
+              activate it on the control plane with no tags granted.
+            </p>
+          )}
 
-          <div className="border-t pt-3">
-            <Label className="mb-2 block">
-              Policy Impact
-            </Label>
-            <PolicyContextPanel tags={selectedTags} policies={policies} />
-          </div>
+          {hasTags && (
+            <div className="border-t pt-3">
+              <Label className="mb-2 block">
+                Policy Impact
+              </Label>
+              <PolicyContextPanel tags={selectedTags} policies={policies} />
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
@@ -116,9 +130,13 @@ export function ApproveWithContextDialog({
           </Button>
           <Button
             onClick={handleApprove}
-            disabled={loading || selectedTags.length === 0}
+            disabled={loading || (hasTags && selectedTags.length === 0)}
           >
-            {loading ? "Approving..." : `Approve ${selectedTags.length} tag(s)`}
+            {loading
+              ? "Approving..."
+              : hasTags
+                ? `Approve ${selectedTags.length} tag(s)`
+                : "Approve Agent"}
           </Button>
         </DialogFooter>
       </DialogContent>
