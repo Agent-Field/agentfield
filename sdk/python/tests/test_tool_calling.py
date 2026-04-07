@@ -409,6 +409,52 @@ class TestExecuteToolCallLoop:
         assert "error" in error_content
 
     @pytest.mark.asyncio
+    async def test_missing_arguments_reported_and_loop_continues(self):
+        agent = make_mock_agent()
+
+        messages = [{"role": "user", "content": "test"}]
+        tools = capabilities_to_tool_schemas([make_reasoner()])
+        config = ToolCallConfig(max_turns=5)
+
+        # tool call with arguments=None (LLM omitted arguments)
+        tc = SimpleNamespace(
+            id="tc_missing",
+            function=SimpleNamespace(name="sentiment_agent.analyze", arguments=None),
+        )
+        tool_resp = make_llm_response(tool_calls=[tc])
+        final_resp = make_llm_response(content="Recovered after missing args")
+
+        call_count = 0
+
+        async def mock_completion(params):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return tool_resp
+            return final_resp
+
+        resp, trace = await execute_tool_call_loop(
+            agent=agent,
+            messages=messages,
+            tools=tools,
+            config=config,
+            needs_lazy_hydration=False,
+            litellm_params={"model": "openai/gpt-4"},
+            make_completion=mock_completion,
+        )
+
+        assert trace.final_response == "Recovered after missing args"
+        assert len(trace.calls) == 1
+        assert trace.calls[0].error == "missing function.arguments"
+        # error should be fed back to LLM as a tool message
+        tool_msgs = [m for m in messages if m.get("role") == "tool"]
+        assert len(tool_msgs) == 1
+        err = json.loads(tool_msgs[0]["content"])
+        assert "missing" in err["error"].lower()
+        # agent.call should NOT have been invoked
+        agent.call.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_max_tool_calls_limit(self):
         agent = make_mock_agent()
         agent.call = AsyncMock(return_value={"result": "ok"})
