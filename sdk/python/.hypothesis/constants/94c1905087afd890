@@ -1,4 +1,0 @@
-# file: /home/abir/agentfield/sdk/python/agentfield/vision.py
-# hypothesis_version: 6.148.2
-
-['choices', 'content', 'dall-e-3', 'image', 'image_url', 'images', 'messages', 'modalities', 'model', 'prompt', 'quality', 'response_format', 'role', 'size', 'style', 'text', 'url', 'user']

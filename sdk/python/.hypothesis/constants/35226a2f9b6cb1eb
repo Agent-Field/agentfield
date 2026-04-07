@@ -1,4 +1,0 @@
-# file: /Users/santoshkumarradha/Documents/agentfield/code/platform/agentfield/sdk/python/agentfield/did_manager.py
-# hypothesis_version: 6.151.9
-
-[200, '/', 'Content-Type', 'Unknown error', 'X-API-Key', 'agent_did', 'agent_node_id', 'agentfield_server_id', 'application/json', 'component_type', 'derivation_path', 'did', 'enabled', 'error', 'function_name', 'identity_package', 'message', 'private_key_jwk', 'public_key_jwk', 'reasoner_count', 'reasoner_dids', 'reasoners', 'skill_count', 'skill_dids', 'skills', 'success']

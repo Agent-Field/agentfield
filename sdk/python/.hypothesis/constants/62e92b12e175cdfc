@@ -1,4 +1,0 @@
-# file: /Users/santoshkumarradha/Documents/agentfield/code/platform/agentfield/sdk/python/agentfield/mcp_stdio_bridge.py
-# hypothesis_version: 6.151.9
-
-[0.1, 1.0, 5.0, 30.0, -32603, 400, 500, 503, 1024, '.', '/health', '/mcp/tools/call', '/mcp/tools/list', '/mcp/v1', '1.0.0', '2.0', '2024-11-05', 'Bridge shutting down', 'MCP Stdio Bridge', 'Request expired', 'Stdio reader stopped', 'arguments', 'bridge', 'capabilities', 'clientInfo', 'code', 'environment', 'error', 'healthy', 'id', 'ignore', 'info', 'initialize', 'jsonrpc', 'listChanged', 'localhost', 'message', 'method', 'name', 'params', 'process', 'protocolVersion', 'result', 'roots', 'run', 'running', 'status', 'tools', 'tools/call', 'tools/list', 'utf-8', 'version', 'working_dir']

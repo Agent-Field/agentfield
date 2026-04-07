@@ -1,4 +1,0 @@
-# file: /home/abir/agentfield/sdk/python/agentfield/node_logs.py
-# hypothesis_version: 6.148.2
-
-[0.5, 200, 256, 1024, 16384, 4194304, '%Y-%m-%dT%H:%M:%S.%f', '0', '16384', '4194304', 'Bearer ', 'Z', 'encoding', 'error', 'false', 'info', 'level', 'line', 'log', 'no', 'off', 'process', 'queue.Queue[None]', 'replace', 'seq', 'source', 'stderr', 'stdout', 'stream', 'true', 'truncated', 'ts', 'utf-8', 'v']

@@ -1,4 +1,0 @@
-# file: /Users/santoshkumarradha/Documents/agentfield/code/platform/agentfield/sdk/python/agentfield/dynamic_skills.py
-# hypothesis_version: 6.151.9
-
-['args', 'default', 'description', 'dict', 'error', 'id', 'inputSchema', 'input_data', 'input_schema', 'mcp', 'name', 'properties', 'request', 'required', 'result', 'return', 'server', 'server_alias', 'status', 'string', 'success', 'tags', 'tool', 'tool_name', 'type']

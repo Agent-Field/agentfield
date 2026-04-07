@@ -1,4 +1,0 @@
-# file: /Users/santoshkumarradha/Documents/agentfield/code/platform/agentfield/sdk/python/agentfield/harness/_schema.py
-# hypothesis_version: 6.151.9
-
-[384, 500, 4000, ',\\s*([}\\]])', '[', '\\1', ']', 'model_json_schema', 'model_validate', 'parse_obj', 'r', 'schema', 'utf-8', 'w', '{', '{[', '}']

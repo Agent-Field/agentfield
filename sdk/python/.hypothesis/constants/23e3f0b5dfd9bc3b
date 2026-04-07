@@ -1,4 +1,0 @@
-# file: /Users/santoshkumarradha/Documents/agentfield/code/platform/agentfield/sdk/python/agentfield/agent_cli.py
-# hypothesis_version: 6.151.9
-
-['\nExample:', '=', 'Arguments:', 'Available commands', 'Call a function', 'Function name', 'Interactive shell', 'Invalid arguments', 'List all functions', 'No description', '_original_func', 'agent', 'asyncio', 'call', 'command', 'execution_context', 'function', 'help', 'id', 'list', 'optional', 'reasoner', 'required', 'self', 'shell', 'skill', 'store_true', 'type']

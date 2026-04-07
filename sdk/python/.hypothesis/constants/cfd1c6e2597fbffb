@@ -1,4 +1,0 @@
-# file: /home/abir/agentfield/sdk/python/agentfield/harness/providers/claude.py
-# hypothesis_version: 6.148.2
-
-[1000, '(no stderr captured)', 'ClaudeAgentOptions', '__dict__', 'allowed_tools', 'assistant', 'auto', 'bypassPermissions', 'content', 'cost_usd', 'cwd', 'env', 'max_budget_usd', 'max_turns', 'message', 'model', 'num_turns', 'permission_mode', 'plan', 'raw', 'result', 'resume', 'resume_session_id', 'session_id', 'stderr', 'subtype', 'success', 'system_prompt', 'text', 'tools', 'total_cost_usd', 'type']

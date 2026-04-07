@@ -1,4 +1,0 @@
-# file: /home/abir/agentfield/sdk/python/agentfield/harness/providers/_factory.py
-# hypothesis_version: 6.148.2
-
-['HarnessConfig', 'HarnessProvider', 'claude-code', 'codex', 'codex_bin', 'gemini', 'gemini_bin', 'opencode', 'opencode_bin']

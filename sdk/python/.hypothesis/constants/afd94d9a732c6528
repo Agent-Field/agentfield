@@ -1,4 +1,0 @@
-# file: /Users/santoshkumarradha/Documents/agentfield/code/platform/agentfield/sdk/python/agentfield/rate_limiter.py
-# hypothesis_version: 6.151.9
-
-[0.1, 0.25, 0.5, 30.0, 429, 503, 'RateLimitError', 'Retry-After', '__class__', 'headers', 'quota exceeded', 'rate limit', 'rate limited', 'rate-limit', 'rate_limit', 'requests per', 'response', 'retry_after', 'rpm exceeded', 'status_code', 'throttled', 'throttling', 'too many requests', 'tpm exceeded', 'usage limit']

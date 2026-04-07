@@ -1,4 +1,0 @@
-# file: /Users/santoshkumarradha/Documents/agentfield/code/platform/agentfield/sdk/python/agentfield/status.py
-# hypothesis_version: 6.151.9
-
-['CANONICAL_STATUSES', 'CANONICAL_STATUS_SET', 'TERMINAL_STATUSES', 'approval_pending', 'awaiting_approval', 'awaiting_human', 'cancel', 'canceled', 'cancelled', 'complete', 'completed', 'done', 'error', 'errored', 'failed', 'failure', 'in_progress', 'is_terminal', 'normalize_status', 'ok', 'pending', 'processing', 'queued', 'running', 'succeeded', 'success', 'successful', 'timed_out', 'timeout', 'unknown', 'wait', 'waiting']

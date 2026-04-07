@@ -1,4 +1,0 @@
-# file: /Users/santoshkumarradha/Documents/agentfield/code/platform/agentfield/sdk/python/agentfield/agent_field_handler.py
-# hypothesis_version: 6.151.9
-
-[10.0, 200, 300, 'Content-Type', 'GET', 'Registration failed', 'SIGINT', 'SIGTERM', 'X-API-Key', 'application/json', 'failed', 'internal', 'lifecycle_status', 'pending_approval', 'pending_tags', 'railway.internal', 'sent', 'status', 'version']

@@ -1,4 +1,0 @@
-# file: /Users/santoshkumarradha/Documents/agentfield/code/platform/agentfield/sdk/python/agentfield/multimodal_response.py
-# hypothesis_version: 6.151.9
-
-[',', '.', 'MIME type of file', 'Suggested filename', 'URL to file', 'URL to image', '_', '__dict__', 'audio', 'audio_data', 'b64_json', 'choices', 'completion_tokens', 'content', 'data', 'data:image', 'dict', 'format', 'image_url', 'images', 'model', 'model_dump', 'output', 'png', 'prompt_tokens', 'revised_prompt', 'text', 'total_tokens', 'url', 'usage', 'utf-8', 'w', 'wav', 'wb']

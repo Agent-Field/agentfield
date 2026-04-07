@@ -1,4 +1,0 @@
-# file: /Users/santoshkumarradha/Documents/agentfield/code/platform/agentfield/sdk/python/agentfield/result_cache.py
-# hypothesis_version: 6.151.9
-
-[0.0, 100, 'Cache cleared', 'ResultCache stopped', 'average_access_count', 'average_age', 'enabled', 'evictions', 'expirations', 'expired_entries', 'hit_rate', 'hits', 'max_size', 'misses', 'size', 'uptime']

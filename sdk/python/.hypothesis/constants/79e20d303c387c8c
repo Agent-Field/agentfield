@@ -1,4 +1,0 @@
-# file: /home/abir/agentfield/sdk/python/agentfield/harness/providers/opencode.py
-# hypothesis_version: 6.148.2
-
-[600, 800, 1000, '-c', '-p', '3', 'MODEL', 'XDG_DATA_HOME', 'cwd', 'env', 'model', 'opencode', 'project_dir', 'system_prompt']

@@ -1,4 +1,0 @@
-# file: /Users/santoshkumarradha/Documents/agentfield/code/platform/agentfield/sdk/python/agentfield/execution_state.py
-# hypothesis_version: 6.151.9
-
-[0.0, 0.05, 'actor_id', 'age', 'cancelled', 'created_at', 'error_details', 'error_message', 'execution_duration', 'execution_id', 'failed', 'high', 'is_active', 'is_cancelled', 'is_successful', 'is_terminal', 'low', 'metrics', 'network_errors', 'network_requests', 'normal', 'parent_execution_id', 'pending', 'poll_count', 'priority', 'queue_duration', 'queued', 'result', 'result_size_bytes', 'retry_count', 'running', 'session_id', 'status', 'succeeded', 'target', 'timeout', 'total_duration', 'unknown', 'updated_at', 'urgent', 'waiting', 'workflow_id']
