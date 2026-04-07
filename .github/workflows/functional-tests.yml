@@ -90,9 +90,11 @@ jobs:
             echo "✓ OPENROUTER_MODEL: $OPENROUTER_MODEL"
           else
             if [ -z "$OPENROUTER_API_KEY" ]; then
-              echo "::error::OPENROUTER_API_KEY secret is not set"
-              echo "Please add your OpenRouter API key as a repository secret"
-              exit 1
+              echo "ℹ️  Pull request without OpenRouter secret detected"
+              echo "✓ Running 24/26 functional tests (skipping 2 OpenRouter-dependent tests)"
+              echo "✓ Tests requiring OpenRouter will be skipped: -m \"not openrouter\""
+              echo "PYTEST_MARK_EXPR=not openrouter" >> "$GITHUB_ENV"
+              exit 0
             fi
             echo "ℹ️  Internal PR detected"
             echo "✓ Running all 26 functional tests (including OpenRouter tests)"

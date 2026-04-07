@@ -10,15 +10,18 @@ import type { Agent } from '../src/agent/Agent.js';
 
 vi.mock('../src/mcp/MCPClient.js', () => {
   return {
-    MCPClient: vi.fn().mockImplementation((config: any, devMode?: boolean) => ({
-      alias: config.alias,
-      baseUrl: config.url ?? `http://localhost:${config.port}`,
-      transport: config.transport ?? 'http',
-      healthCheck: vi.fn().mockResolvedValue(true),
-      listTools: vi.fn().mockResolvedValue([]),
-      callTool: vi.fn().mockResolvedValue({}),
-      lastHealthStatus: false
-    }))
+    MCPClient: vi.fn().mockImplementation(function MockMCPClient(config: any, devMode?: boolean) {
+      void devMode;
+      return {
+        alias: config.alias,
+        baseUrl: config.url ?? `http://localhost:${config.port}`,
+        transport: config.transport ?? 'http',
+        healthCheck: vi.fn().mockResolvedValue(true),
+        listTools: vi.fn().mockResolvedValue([]),
+        callTool: vi.fn().mockResolvedValue({}),
+        lastHealthStatus: false
+      };
+    })
   };
 });
 
