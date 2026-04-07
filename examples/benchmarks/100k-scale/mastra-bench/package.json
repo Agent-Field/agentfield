@@ -7,7 +7,7 @@
     "benchmark:json": "tsx benchmark.ts --json"
   },
   "dependencies": {
-    "@mastra/core": "^0.10.0",
+    "@mastra/core": "^1.23.0",
     "zod": "^3.22.0"
   },
   "devDependencies": {
