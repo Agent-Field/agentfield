@@ -1,7 +1,6 @@
 import type {
   AgentNode,
   AgentNodeSummary,
-  AgentNodeDetailsForUI,
   AgentNodeDetailsForUIWithPackage,
   AppMode,
   EnvResponse,

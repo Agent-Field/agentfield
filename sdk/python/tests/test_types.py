@@ -6,8 +6,6 @@ from __future__ import annotations
 import asyncio
 import sys
 import types as stdlib_types
-from dataclasses import asdict
-
 import pytest
 
 from agentfield.types import (
