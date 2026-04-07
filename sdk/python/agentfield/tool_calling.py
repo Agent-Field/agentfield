@@ -491,6 +491,18 @@ async def execute_tool_call_loop(
                 func_args = json.loads(tc.function.arguments)
             except json.JSONDecodeError:
                 func_args = {}
+            except AttributeError:
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": json.dumps(
+                            {
+                                "error": "No arguments provided for the function."
+                            }
+                        )
+                    }
+                )
 
             record = ToolCallRecord(
                 tool_name=func_name,
