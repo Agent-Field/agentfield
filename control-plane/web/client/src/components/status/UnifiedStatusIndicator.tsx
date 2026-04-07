@@ -149,12 +149,6 @@ export function UnifiedStatusIndicator({
               Health: {typeof status.health_score === 'number' ? `${status.health_score}%` : 'N/A'}
             </div>
             <div>Last seen: {formatTimestamp(status.last_seen)}</div>
-            {status.mcp_status && (
-              <div>
-                MCP: {status.mcp_status.running_servers}/
-                {status.mcp_status.total_servers} servers
-              </div>
-            )}
             {getTransitionInfo()}
           </div>
         )}

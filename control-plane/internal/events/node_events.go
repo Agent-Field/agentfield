@@ -19,8 +19,7 @@ const (
 	NodeStatusUpdated    NodeEventType = "node_status_changed"
 	NodeRemoved          NodeEventType = "node_removed"
 	NodeHealthChanged    NodeEventType = "node_health_changed"
-	NodeMCPHealthChanged NodeEventType = "mcp_health_changed"
-	NodesRefresh         NodeEventType = "nodes_refresh"
+	NodesRefresh NodeEventType = "nodes_refresh"
 	NodeHeartbeat        NodeEventType = "node_heartbeat"
 
 	// New unified status events
@@ -195,20 +194,6 @@ func PublishNodeHealthChanged(nodeID, healthStatus string, data interface{}) {
 		Timestamp: time.Now(),
 		Data:      data,
 	}
-
-	GlobalNodeEventBus.Publish(event)
-}
-
-// PublishNodeMCPHealthChanged publishes an MCP health change event
-func PublishNodeMCPHealthChanged(nodeID string, data interface{}) {
-	event := NodeEvent{
-		Type:      NodeMCPHealthChanged,
-		NodeID:    nodeID,
-		Timestamp: time.Now(),
-		Data:      data,
-	}
-
-	logger.Logger.Debug().Msgf("🔍 NODE_EVENT_DEBUG: Publishing NodeMCPHealthChanged event - NodeID: %s", nodeID)
 
 	GlobalNodeEventBus.Publish(event)
 }

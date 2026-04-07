@@ -315,21 +315,6 @@ export function useSSE<T = any>(
 }
 
 /**
- * Specialized hook for MCP health events
- */
-export function useMCPHealthSSE(nodeId: string | null) {
-  const url = nodeId ? `/api/ui/v1/nodes/${nodeId}/mcp/events` : null;
-
-  return useSSE(url, {
-    eventTypes: ['server_status_change', 'tool_execution', 'health_update', 'error'],
-    autoReconnect: true,
-    maxReconnectAttempts: 3,
-    reconnectDelayMs: 2000,
-    exponentialBackoff: true
-  });
-}
-
-/**
  * Specialized hook for agent node events including status changes
  */
 export function useNodeEventsSSE() {
@@ -343,8 +328,6 @@ export function useNodeEventsSSE() {
       'node_status_updated',
       'node_health_changed',
       'node_removed',
-      'mcp_health_changed',
-      // New unified status events
       'node_unified_status_changed',
       'node_state_transition',
       'node_status_refreshed',

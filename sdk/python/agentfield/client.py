@@ -1084,11 +1084,11 @@ class AgentFieldClient:
         self, node_id: str, heartbeat_data: HeartbeatData
     ) -> bool:
         """
-        Send enhanced heartbeat with status and MCP information to AgentField server.
+        Send enhanced heartbeat with status information to AgentField server.
 
         Args:
             node_id: The agent node ID
-            heartbeat_data: Enhanced heartbeat data with status and MCP info
+            heartbeat_data: Enhanced heartbeat data with status info
 
         Returns:
             True if heartbeat was successful, False otherwise
@@ -1116,7 +1116,7 @@ class AgentFieldClient:
 
         Args:
             node_id: The agent node ID
-            heartbeat_data: Enhanced heartbeat data with status and MCP info
+            heartbeat_data: Enhanced heartbeat data with status info
 
         Returns:
             True if heartbeat was successful, False otherwise

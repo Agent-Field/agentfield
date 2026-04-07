@@ -69,9 +69,8 @@ type PackageConfiguration struct {
 
 // PackageCapabilities represents package capabilities
 type PackageCapabilities struct {
-	Reasoners  []ReasonerDefinition  `json:"reasoners"`
-	Skills     []SkillDefinition     `json:"skills"`
-	MCPServers []MCPServerDefinition `json:"mcp_servers"`
+	Reasoners []ReasonerDefinition `json:"reasoners"`
+	Skills    []SkillDefinition    `json:"skills"`
 }
 
 // ReasonerDefinition represents a reasoner definition
@@ -91,14 +90,6 @@ type SkillDefinition struct {
 	Description string                 `json:"description"`
 	InputSchema map[string]interface{} `json:"input_schema"`
 	Tags        []string               `json:"tags"`
-}
-
-// MCPServerDefinition represents an MCP server definition
-type MCPServerDefinition struct {
-	Alias       string   `json:"alias"`
-	Command     []string `json:"command"`
-	Description string   `json:"description"`
-	Tools       []string `json:"tools"`
 }
 
 // PackageRuntime represents runtime information
@@ -245,7 +236,7 @@ func (h *PackageHandler) GetPackageDetailsHandler(c *gin.Context) {
 	}
 
 	// TODO: Add capabilities parsing when agent introspection is implemented
-	// This would parse reasoners, skills, and MCP servers from the package
+	// This would parse reasoners and skills from the package
 
 	// TODO: Add runtime information when agent lifecycle management is implemented
 	// This would include process information, logs, etc.

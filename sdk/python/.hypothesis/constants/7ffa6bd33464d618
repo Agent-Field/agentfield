@@ -1,0 +1,4 @@
+# file: /home/abir/agentfield/sdk/python/agentfield/agent_workflow.py
+# hypothesis_version: 6.148.2
+
+[1000, '/', 'AgentWorkflow', 'ERROR', 'INFO', 'POST', '__name__', '_async_request', 'agent', 'agent_node_did', 'agent_node_id', 'agentfield_server', 'caller_did', 'client', 'dev_mode', 'duration_ms', 'error', 'execution.registered', 'execution_context', 'execution_id', 'failed', 'input_data', 'json', 'node_id', 'parent_execution_id', 'parent_workflow_id', 'reasoner', 'reasoner.completed', 'reasoner.failed', 'reasoner.started', 'reasoner_id', 'reasoner_name', 'registered', 'registration_failed', 'registration_payload', 'result', 'run_id', 'running', 'self', 'session_id', 'status', 'succeeded', 'target_did', 'type', 'workflow_id']

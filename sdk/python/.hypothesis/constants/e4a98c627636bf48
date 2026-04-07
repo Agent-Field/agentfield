@@ -1,0 +1,4 @@
+# file: /home/abir/agentfield/sdk/python/agentfield/logger.py
+# hypothesis_version: 6.148.2
+
+['%(message)s', '+00:00', ',', '...', '200', ':', 'AGENTFIELD_LOG_FIRE', 'AGENTFIELD_LOG_LEVEL', 'AgentFieldClient', 'CRITICAL', 'DEBUG', 'ERROR', 'INFO', 'WARN', 'WARNING', 'Z', 'agent_node_id', 'agentfield', 'attributes', 'event_type', 'execution_id', 'false', 'level', 'log.critical', 'log.debug', 'log.error', 'log.info', 'log.warning', 'message', 'milliseconds', 'parent_execution_id', 'payload', 'reasoner_id', 'root_workflow_id', 'run_id', 'runtime.heartbeat', 'runtime.mcp', 'runtime.network', 'runtime.security', 'runtime.setup', 'runtime.success', 'runtime.track', 'sdk.python.execution', 'sdk.python.logger', 'sdk.python.runtime', 'sdk.python.workflow', 'source', 'system_generated', 'true', 'ts', 'workflow.fire', 'workflow_id', 'ℹ️', '⚠️', '✅', '❌', '🌐', '💓', '🔌', '🔍 DEBUG:', '🔍 TRACK:', '🔐', '🔥 FIRE:', '🔧', '🚨']

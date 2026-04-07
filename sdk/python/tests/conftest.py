@@ -51,7 +51,7 @@ except Exception:  # pragma: no cover
 
 def _network_allowed(node: "pytest.Node") -> bool:
     return bool(
-        node.get_closest_marker("integration") or node.get_closest_marker("mcp")
+        node.get_closest_marker("integration")
     )
 
 

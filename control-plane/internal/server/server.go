@@ -60,7 +60,7 @@ type AgentFieldServer struct {
 	presenceManager       *services.PresenceManager
 	statusManager         *services.StatusManager // Add StatusManager for unified status management
 	agentService          interfaces.AgentService // Add AgentService for lifecycle management
-	agentClient           interfaces.AgentClient  // Add AgentClient for MCP communication
+	agentClient           interfaces.AgentClient  // Add AgentClient for agent communication
 	config                *config.Config
 	storageHealthOverride func(context.Context) gin.H
 	cacheHealthOverride   func(context.Context) gin.H
@@ -1113,13 +1113,7 @@ func (s *AgentFieldServer) setupRoutes() {
 				nodes.GET("/:nodeId/did", didHandler.GetNodeDIDHandler)
 				nodes.GET("/:nodeId/vc-status", didHandler.GetNodeVCStatusHandler)
 
-				// MCP management endpoints for nodes
-				mcpHandler := ui.NewMCPHandler(s.uiService, s.agentClient)
-				nodes.GET("/:nodeId/mcp/health", mcpHandler.GetMCPHealthHandler)
-				nodes.GET("/:nodeId/mcp/events", mcpHandler.GetMCPEventsHandler)
-				nodes.GET("/:nodeId/mcp/metrics", mcpHandler.GetMCPMetricsHandler)
-				nodes.POST("/:nodeId/mcp/servers/:alias/restart", mcpHandler.RestartMCPServerHandler)
-				nodes.GET("/:nodeId/mcp/servers/:alias/tools", mcpHandler.GetMCPToolsHandler)
+	
 			}
 
 			// Executions management group
@@ -1198,13 +1192,6 @@ func (s *AgentFieldServer) setupRoutes() {
 				reasoners.GET("/:reasonerId/executions", reasonersHandler.GetExecutionHistoryHandler)
 				reasoners.GET("/:reasonerId/templates", reasonersHandler.GetExecutionTemplatesHandler)
 				reasoners.POST("/:reasonerId/templates", reasonersHandler.SaveExecutionTemplateHandler)
-			}
-
-			// MCP system-wide endpoints
-			mcp := uiAPI.Group("/mcp")
-			{
-				mcpHandler := ui.NewMCPHandler(s.uiService, s.agentClient)
-				mcp.GET("/status", mcpHandler.GetMCPStatusHandler)
 			}
 
 			// Dashboard endpoints

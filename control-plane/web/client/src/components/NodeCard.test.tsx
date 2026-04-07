@@ -72,11 +72,6 @@ vi.mock("./did/DIDDisplay", () => ({
   DIDIdentityBadge: ({ nodeId }: { nodeId: string }) => <span>{`did:${nodeId}`}</span>,
 }));
 
-vi.mock("./mcp/MCPHealthIndicator", () => ({
-  MCPHealthDot: ({ status }: { status: string }) => <span>{`dot:${status}`}</span>,
-  MCPHealthIndicator: ({ status }: { status: string }) => <span>{`mcp:${status}`}</span>,
-}));
-
 vi.mock("@/components/ui/AgentControlButton", () => ({
   AgentControlButton: ({
     agentId,
@@ -119,15 +114,6 @@ const createNodeSummary = (
   deployment_type: "serverless",
   reasoner_count: 5,
   skill_count: 4,
-  mcp_summary: {
-    service_status: "ready",
-    running_servers: 2,
-    total_servers: 3,
-    total_tools: 8,
-    overall_health: 92,
-    has_issues: true,
-    capabilities_available: true,
-  },
   ...overrides,
 });
 
@@ -166,15 +152,12 @@ describe("NodeCard", () => {
     expect(screen.getByText("v1.2.3")).toBeInTheDocument();
     expect(screen.getByText("Serverless")).toBeInTheDocument();
     expect(screen.getByText("High capability")).toBeInTheDocument();
-    expect(screen.getByText("Issues detected")).toBeInTheDocument();
     expect(screen.getByText("1m ago")).toBeInTheDocument();
     expect(screen.getByText("5 reasoners")).toBeInTheDocument();
     expect(screen.getByText("4 skills")).toBeInTheDocument();
     expect(screen.getByText("Team team-alpha")).toBeInTheDocument();
     expect(screen.getByText("active:5")).toBeInTheDocument();
     expect(screen.getByText("did:node-1")).toBeInTheDocument();
-    expect(screen.getByText("dot:running")).toBeInTheDocument();
-    expect(screen.getByText("mcp:running")).toBeInTheDocument();
   });
 
   it("navigates to the node detail page on click and keyboard activation", () => {
@@ -199,7 +182,6 @@ describe("NodeCard", () => {
       healthStatus: "ready" as HealthStatus,
       expectedLabel: "Ready",
       expectedAction: mocks.stopAgent,
-      mcpSummary: createNodeSummary().mcp_summary,
     },
     {
       name: "offline node",
@@ -207,7 +189,6 @@ describe("NodeCard", () => {
       healthStatus: "inactive" as HealthStatus,
       expectedLabel: "Offline",
       expectedAction: mocks.startAgent,
-      mcpSummary: undefined,
     },
     {
       name: "degraded node",
@@ -215,25 +196,15 @@ describe("NodeCard", () => {
       healthStatus: "ready" as HealthStatus,
       expectedLabel: "Degraded",
       expectedAction: mocks.reconcileAgent,
-      mcpSummary: {
-        service_status: "degraded",
-        running_servers: 1,
-        total_servers: 3,
-        total_tools: 8,
-        overall_health: 40,
-        has_issues: true,
-        capabilities_available: false,
-      },
     },
   ])(
     "renders the correct status and handles the action button for a $name",
-    ({ lifecycleStatus, healthStatus, expectedLabel, expectedAction, mcpSummary }) => {
+    ({ lifecycleStatus, healthStatus, expectedLabel, expectedAction }) => {
       render(
         <NodeCard
           nodeSummary={createNodeSummary({
             lifecycle_status: lifecycleStatus,
             health_status: healthStatus,
-            mcp_summary: mcpSummary,
           })}
         />
       );
@@ -252,7 +223,6 @@ describe("NodeCard", () => {
       <NodeCard
         nodeSummary={createNodeSummary({
           last_heartbeat: undefined,
-          mcp_summary: undefined,
           deployment_type: undefined,
           reasoner_count: 1,
           skill_count: 0,

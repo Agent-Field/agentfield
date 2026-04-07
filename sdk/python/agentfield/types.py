@@ -14,34 +14,16 @@ class AgentStatus(str, Enum):
 
 
 @dataclass
-class MCPServerHealth:
-    """MCP server health information for heartbeat reporting"""
-
-    alias: str
-    status: str
-    tool_count: int = 0
-    port: Optional[int] = None
-    process_id: Optional[int] = None
-    started_at: Optional[str] = None
-    last_health_check: Optional[str] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass
 class HeartbeatData:
-    """Enhanced heartbeat data with status and MCP information"""
+    """Enhanced heartbeat data with status information"""
 
     status: AgentStatus
-    mcp_servers: List[MCPServerHealth]
     timestamp: str
     version: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "status": self.status.value,
-            "mcp_servers": [server.to_dict() for server in self.mcp_servers],
             "timestamp": self.timestamp,
             "version": self.version,
         }

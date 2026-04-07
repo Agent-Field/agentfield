@@ -71,42 +71,6 @@ func TestConfigCommand(t *testing.T) {
 	_ = err
 }
 
-// TestAddCommand tests the add command
-func TestAddCommand(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	resetCLIStateForTest()
-
-	cmd := NewAddCommand()
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
-
-	// Test missing argument
-	cmd.SetArgs([]string{})
-	err := cmd.Execute()
-	require.Error(t, err)
-
-	// Test with argument
-	cmd.SetArgs([]string{"test-package"})
-	err = cmd.Execute()
-	// May error if package doesn't exist, but validates command structure
-	_ = err
-}
-
-// TestMCPCommand tests the MCP command
-func TestMCPCommand(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	resetCLIStateForTest()
-
-	cmd := NewMCPCommand()
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
-	cmd.SetArgs([]string{})
-
-	// Should display help
-	err := cmd.Execute()
-	require.NoError(t, err)
-}
-
 // TestVCCommand tests the VC command
 func TestVCCommand(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())

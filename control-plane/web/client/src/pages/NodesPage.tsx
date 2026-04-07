@@ -175,25 +175,7 @@ export function NodesPage() {
         }
         break;
 
-      case "mcp_health_changed":
-        // Handle MCP health changes
-        if (
-          eventData &&
-          typeof eventData === "object" &&
-          "node_id" in eventData
-        ) {
-          const mcpData = eventData as { node_id: string; mcp_summary: any };
-          setNodes((prevNodes) =>
-            prevNodes.map((node) =>
-              node.id === mcpData.node_id
-                ? { ...node, mcp_summary: mcpData.mcp_summary }
-                : node
-            )
-          );
-        }
-        break;
-
-      // New unified status events
+      // Unified status events
       case "node_unified_status_changed":
         if (
           eventData &&

@@ -1,12 +1,8 @@
 """Extended tests for AgentServer routes.
 
 Covers paths not exercised by test_agent_server.py:
-- Health endpoint without MCP manager (no mcp_manager attribute)
-- Health endpoint when MCP manager raises an exception
-- Health endpoint shows degraded status when failed servers present
+- Health endpoint
 - /info endpoint returns correct schema
-- /mcp/status endpoint with and without mcp_manager
-- MCP start/stop/restart when mcp_manager is None (guard paths)
 - /status endpoint fallback when psutil is unavailable
 - /reasoners and /skills discovery endpoints
 - Malformed JSON body to /shutdown falls back gracefully
@@ -30,7 +26,7 @@ from agentfield.agent_server import AgentServer
 # ---------------------------------------------------------------------------
 
 
-def _make_app(*, mcp_manager=None, dev_mode=False, base_url="http://agent.local:8000"):
+def _make_app(*, dev_mode=False, base_url="http://agent.local:8000"):
     """Minimal FastAPI application wired like a real Agent."""
     app = FastAPI()
     app.node_id = "test-node"
@@ -38,42 +34,11 @@ def _make_app(*, mcp_manager=None, dev_mode=False, base_url="http://agent.local:
     app.base_url = base_url
     app.reasoners = [{"id": "do_something", "description": "Does something"}]
     app.skills = [{"id": "skill_a"}]
-    app.mcp_manager = mcp_manager
     app.dev_mode = dev_mode
     app.agentfield_server = "http://agentfield"
     app.client = SimpleNamespace(notify_graceful_shutdown_sync=lambda node_id: True)
     app._shutdown_requested = False
     return app
-
-
-def _make_mcp_manager(*, status="running", fail=False):
-    """Return a stub MCP manager."""
-
-    class _Manager:
-        def get_all_status(self):
-            if fail:
-                raise RuntimeError("MCP gone wrong")
-            return {
-                "server-a": {
-                    "status": status,
-                    "port": 5001,
-                    "process": SimpleNamespace(pid=1234),
-                }
-            }
-
-        def get_server_status(self, alias):
-            return {"status": status}
-
-        async def start_server_by_alias(self, alias):
-            return True
-
-        def stop_server(self, alias):
-            return True
-
-        async def restart_server(self, alias):
-            return True
-
-    return _Manager()
 
 
 async def _get(app, path):
@@ -91,13 +56,13 @@ async def _post(app, path, **kwargs):
 
 
 # ---------------------------------------------------------------------------
-# /health — no mcp_manager
+# /health
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_health_without_mcp_manager():
-    app = _make_app(mcp_manager=None)
+async def test_health_endpoint():
+    app = _make_app()
     AgentServer(app).setup_agentfield_routes()
 
     resp = await _get(app, "/health")
@@ -106,61 +71,6 @@ async def test_health_without_mcp_manager():
     data = resp.json()
     assert data["status"] == "healthy"
     assert data["node_id"] == "test-node"
-    assert "mcp_servers" not in data
-
-
-# ---------------------------------------------------------------------------
-# /health — mcp_manager present, healthy
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_health_with_running_mcp_manager():
-    app = _make_app(mcp_manager=_make_mcp_manager(status="running"))
-    AgentServer(app).setup_agentfield_routes()
-
-    resp = await _get(app, "/health")
-
-    data = resp.json()
-    assert data["status"] == "healthy"
-    assert data["mcp_servers"]["running"] == 1
-    assert data["mcp_servers"]["failed"] == 0
-
-
-# ---------------------------------------------------------------------------
-# /health — mcp_manager reports failed servers → degraded
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_health_degraded_when_mcp_server_failed():
-    app = _make_app(mcp_manager=_make_mcp_manager(status="failed"))
-    AgentServer(app).setup_agentfield_routes()
-
-    resp = await _get(app, "/health")
-
-    data = resp.json()
-    assert data["status"] == "degraded"
-    assert data["mcp_servers"]["failed"] == 1
-
-
-# ---------------------------------------------------------------------------
-# /health — mcp_manager raises → error dict in mcp_servers
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_health_mcp_manager_exception_returns_error_dict():
-    app = _make_app(mcp_manager=_make_mcp_manager(fail=True), dev_mode=True)
-    AgentServer(app).setup_agentfield_routes()
-
-    resp = await _get(app, "/health")
-
-    data = resp.json()
-    # Should still return 200 with partial health info
-    assert resp.status_code == 200
-    assert "mcp_servers" in data
-    assert "error" in data["mcp_servers"] or data["mcp_servers"]["total"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -225,76 +135,6 @@ async def test_info_endpoint_returns_node_metadata():
     assert "reasoners" in data
     assert "skills" in data
     assert "registered_at" in data
-
-
-# ---------------------------------------------------------------------------
-# /mcp/status
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_mcp_status_without_manager():
-    app = _make_app(mcp_manager=None)
-    AgentServer(app).setup_agentfield_routes()
-
-    resp = await _get(app, "/mcp/status")
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert "error" in data
-    assert data["total"] == 0
-
-
-@pytest.mark.asyncio
-async def test_mcp_status_with_manager_returns_disabled_message():
-    """The route returns disabled message even when mcp_manager is present."""
-    app = _make_app(mcp_manager=_make_mcp_manager())
-    AgentServer(app).setup_agentfield_routes()
-
-    resp = await _get(app, "/mcp/status")
-
-    data = resp.json()
-    assert resp.status_code == 200
-    assert data["total"] == 0
-
-
-# ---------------------------------------------------------------------------
-# /mcp/{alias}/start — no manager guard
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_mcp_start_without_manager_returns_error():
-    app = _make_app(mcp_manager=None)
-    AgentServer(app).setup_agentfield_routes()
-
-    resp = await _post(app, "/mcp/server-x/start")
-
-    data = resp.json()
-    assert data["success"] is False
-    assert "not available" in data["error"].lower() or "mcp" in data["error"].lower()
-
-
-@pytest.mark.asyncio
-async def test_mcp_stop_without_manager_returns_error():
-    app = _make_app(mcp_manager=None)
-    AgentServer(app).setup_agentfield_routes()
-
-    resp = await _post(app, "/mcp/server-x/stop")
-
-    data = resp.json()
-    assert data["success"] is False
-
-
-@pytest.mark.asyncio
-async def test_mcp_restart_without_manager_returns_error():
-    app = _make_app(mcp_manager=None)
-    AgentServer(app).setup_agentfield_routes()
-
-    resp = await _post(app, "/mcp/server-x/restart")
-
-    data = resp.json()
-    assert data["success"] is False
 
 
 # ---------------------------------------------------------------------------

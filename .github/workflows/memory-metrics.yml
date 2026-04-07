@@ -80,7 +80,7 @@ jobs:
           gc.collect()
           tracemalloc.start()
 
-          agent = Agent('bench', agentfield_server='http://localhost:8080', auto_register=False, enable_mcp=False)
+          agent = Agent('bench', agentfield_server='http://localhost:8080', auto_register=False)
 
           for i in range(1000):
               idx = i

@@ -146,36 +146,6 @@ export function LoadingSkeleton({
 }
 
 /**
- * MCP-specific loading skeletons
- */
-export function MCPServerListSkeleton({ count = 3 }: { count?: number }) {
-  return <LoadingSkeleton variant="list" count={count} />;
-}
-
-export function MCPMetricsSkeleton() {
-  return <LoadingSkeleton variant="metrics" />;
-}
-
-export function MCPOverviewSkeleton() {
-  return (
-    <div className="space-y-6">
-      <LoadingSkeleton variant="card" />
-      <LoadingSkeleton variant="metrics" />
-      <LoadingSkeleton variant="list" count={2} />
-    </div>
-  );
-}
-
-export function MCPToolsSkeleton() {
-  return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <LoadingSkeleton variant="card" />
-      <LoadingSkeleton variant="card" />
-    </div>
-  );
-}
-
-/**
  * Conditional loading wrapper that shows skeleton while loading
  */
 export function LoadingWrapper({

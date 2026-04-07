@@ -837,27 +837,6 @@ result = await app.harness(
 `,
 	})
 
-	kb.Add(Article{
-		ID: "sdk/mcp-integration", Topic: "sdk", Title: "Model Context Protocol (MCP) Integration",
-		Summary:    "Using MCP servers to extend agent capabilities",
-		Difficulty: "intermediate",
-		Tags:       []string{"mcp", "integration", "tools", "model-context-protocol"},
-		Content: `# MCP Integration
-
-AgentField supports Model Context Protocol servers for extending agent tool sets.
-
-## Management
-- af mcp add <alias> <command> — Add MCP server
-- af mcp remove <alias> — Remove MCP server
-- af mcp list — List MCP servers
-
-## API
-- GET /api/ui/v1/mcp/status — System-wide MCP status
-- GET /api/ui/v1/nodes/:nodeId/mcp/health — Node MCP health
-- GET /api/ui/v1/nodes/:nodeId/mcp/servers/:alias/tools — List MCP tools
-`,
-	})
-
 	// --- Examples ---
 	kb.Add(Article{
 		ID: "examples/sec-af", Topic: "examples", Title: "sec-af — Security Auditor Agent",

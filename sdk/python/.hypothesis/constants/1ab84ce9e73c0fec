@@ -1,0 +1,4 @@
+# file: /home/abir/agentfield/sdk/python/agentfield/harness/providers/gemini.py
+# hypothesis_version: 6.148.2
+
+[1000, '--sandbox', '-C', '-m', '-p', 'auto', 'cwd', 'env', 'gemini', 'model', 'permission_mode']

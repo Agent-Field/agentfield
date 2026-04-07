@@ -312,19 +312,6 @@ export function ErrorAnnouncer({
   );
 }
 
-/**
- * MCP-specific accessibility enhancements
- */
-export function MCPAccessibilityProvider({ children }: { children: React.ReactNode }) {
-  return (
-    <div>
-      <SkipLink href="#main-content">Skip to main content</SkipLink>
-      <SkipLink href="#mcp-servers">Skip to MCP servers</SkipLink>
-      <SkipLink href="#mcp-tools">Skip to MCP tools</SkipLink>
-      {children}
-    </div>
-  );
-}
 
 /**
  * Hook for managing focus and announcements

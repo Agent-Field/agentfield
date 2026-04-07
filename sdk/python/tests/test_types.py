@@ -22,7 +22,7 @@ from agentfield.types import (
     ExecutionHeaders,
     HarnessConfig,
     HeartbeatData,
-    MCPServerHealth,
+
     MemoryChangeEvent,
     MemoryConfig,
     MemoryValue,
@@ -61,48 +61,6 @@ class TestAgentStatus:
 
 
 # ---------------------------------------------------------------------------
-# MCPServerHealth
-# ---------------------------------------------------------------------------
-
-
-class TestMCPServerHealth:
-    def test_minimal_construction(self):
-        h = MCPServerHealth(alias="s1", status="running")
-        assert h.alias == "s1"
-        assert h.status == "running"
-        assert h.tool_count == 0
-        assert h.port is None
-        assert h.process_id is None
-        assert h.started_at is None
-        assert h.last_health_check is None
-
-    def test_full_construction(self):
-        h = MCPServerHealth(
-            alias="s1",
-            status="running",
-            tool_count=5,
-            port=3000,
-            process_id=1234,
-            started_at="2024-01-01T00:00:00Z",
-            last_health_check="2024-01-01T00:01:00Z",
-        )
-        assert h.tool_count == 5
-        assert h.port == 3000
-        assert h.process_id == 1234
-
-    def test_to_dict(self):
-        h = MCPServerHealth(alias="s1", status="running", tool_count=3)
-        d = h.to_dict()
-        assert d["alias"] == "s1"
-        assert d["tool_count"] == 3
-        assert d["port"] is None
-
-    def test_to_dict_matches_asdict(self):
-        h = MCPServerHealth(alias="s1", status="running")
-        assert h.to_dict() == asdict(h)
-
-
-# ---------------------------------------------------------------------------
 # HeartbeatData
 # ---------------------------------------------------------------------------
 
@@ -111,44 +69,27 @@ class TestHeartbeatData:
     def test_construction_and_defaults(self):
         hb = HeartbeatData(
             status=AgentStatus.READY,
-            mcp_servers=[],
             timestamp="2024-01-01T00:00:00Z",
         )
         assert hb.version == ""
 
     def test_to_dict_serializes_status_value(self):
-        server = MCPServerHealth(alias="s1", status="running", tool_count=2)
         hb = HeartbeatData(
             status=AgentStatus.READY,
-            mcp_servers=[server],
             timestamp="2024-01-01T00:00:00Z",
             version="1.0",
         )
         d = hb.to_dict()
         assert d["status"] == "ready"
-        assert len(d["mcp_servers"]) == 1
-        assert d["mcp_servers"][0]["alias"] == "s1"
         assert d["version"] == "1.0"
         assert d["timestamp"] == "2024-01-01T00:00:00Z"
 
-    def test_to_dict_empty_servers(self):
+    def test_to_dict_offline(self):
         hb = HeartbeatData(
-            status=AgentStatus.OFFLINE, mcp_servers=[], timestamp="t"
+            status=AgentStatus.OFFLINE, timestamp="t"
         )
         d = hb.to_dict()
         assert d["status"] == "offline"
-        assert d["mcp_servers"] == []
-
-    def test_to_dict_multiple_servers(self):
-        servers = [
-            MCPServerHealth(alias="a", status="running"),
-            MCPServerHealth(alias="b", status="failed"),
-        ]
-        hb = HeartbeatData(
-            status=AgentStatus.DEGRADED, mcp_servers=servers, timestamp="t"
-        )
-        d = hb.to_dict()
-        assert len(d["mcp_servers"]) == 2
 
 
 # ---------------------------------------------------------------------------

@@ -7,9 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
-	"github.com/Agent-Field/agentfield/control-plane/internal/events"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
@@ -69,8 +67,6 @@ type AgentNodeSummaryForUI struct {
 	SkillCount      int                        `json:"skill_count"`
 	LastHeartbeat   time.Time                  `json:"last_heartbeat"`
 
-	// New MCP fields
-	MCPSummary *domain.MCPSummaryForUI `json:"mcp_summary,omitempty"`
 }
 
 // GetNodesSummary retrieves a list of node summaries with robust status checking.
@@ -104,8 +100,6 @@ func (s *UIService) GetNodesSummary(ctx context.Context) ([]AgentNodeSummaryForU
 			LastHeartbeat:   node.LastHeartbeat,
 		}
 
-		// Enhance with MCP health data
-		s.enhanceNodeSummaryWithMCP(&summaries[i])
 	}
 	return summaries, len(summaries), nil
 }
@@ -401,141 +395,6 @@ func (s *UIService) OnAgentRemoved(nodeID string) {
 	s.BroadcastEvent("node_removed", map[string]string{"id": nodeID})
 }
 
-// fetchMCPHealthForNode retrieves MCP health data for a specific node
-func (s *UIService) fetchMCPHealthForNode(ctx context.Context, nodeID string, mode domain.MCPHealthMode) (*domain.MCPSummaryForUI, []domain.MCPServerHealthForUI, error) {
-	if s.agentClient == nil {
-		// Agent client not available, return empty data
-		return nil, nil, nil
-	}
-
-	// Fetch MCP health from agent
-	healthResponse, err := s.agentClient.GetMCPHealth(ctx, nodeID)
-	if err != nil {
-		// Log error but don't fail - agent might not support MCP
-		logger.Logger.Warn().Err(err).Msgf("Failed to fetch MCP health for node %s", nodeID)
-		return nil, nil, nil
-	}
-
-	// Transform to domain models
-	healthData := &domain.MCPHealthResponseData{
-		Servers: make([]domain.MCPServerHealthData, len(healthResponse.Servers)),
-		Summary: domain.MCPSummaryData{
-			TotalServers:   healthResponse.Summary.TotalServers,
-			RunningServers: healthResponse.Summary.RunningServers,
-			TotalTools:     healthResponse.Summary.TotalTools,
-			OverallHealth:  healthResponse.Summary.OverallHealth,
-		},
-	}
-
-	for i, server := range healthResponse.Servers {
-		var startedAt, lastHealthCheck *time.Time
-
-		// Convert FlexibleTime to *time.Time
-		if server.StartedAt != nil {
-			t := server.StartedAt.Time
-			startedAt = &t
-		}
-		if server.LastHealthCheck != nil {
-			t := server.LastHealthCheck.Time
-			lastHealthCheck = &t
-		}
-
-		healthData.Servers[i] = domain.MCPServerHealthData{
-			Alias:           server.Alias,
-			Status:          server.Status,
-			ToolCount:       server.ToolCount,
-			StartedAt:       startedAt,
-			LastHealthCheck: lastHealthCheck,
-			ErrorMessage:    server.ErrorMessage,
-			Port:            server.Port,
-			ProcessID:       server.ProcessID,
-			SuccessRate:     server.SuccessRate,
-			AvgResponseTime: server.AvgResponseTime,
-		}
-	}
-
-	// Transform based on mode
-	summary, servers := domain.TransformMCPHealthForMode(healthData, mode)
-	return summary, servers, nil
-}
-
-// GetNodeDetailsWithMCP retrieves full details for a specific node including MCP data
-func (s *UIService) GetNodeDetailsWithMCP(ctx context.Context, nodeID string, mode domain.MCPHealthMode) (*domain.AgentNodeDetailsForUI, error) {
-	// Get base node details
-	node, err := s.storage.GetAgent(ctx, nodeID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Create base details
-	details := &domain.AgentNodeDetailsForUI{
-		ID:            node.ID,
-		TeamID:        node.TeamID,
-		BaseURL:       node.BaseURL,
-		Version:       node.Version,
-		HealthStatus:  string(node.HealthStatus),
-		LastHeartbeat: node.LastHeartbeat,
-		RegisteredAt:  node.RegisteredAt,
-	}
-
-	// Fetch MCP health data
-	mcpCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	mcpSummary, mcpServers, err := s.fetchMCPHealthForNode(mcpCtx, nodeID, mode)
-	if err != nil {
-		// Log error but continue without MCP data
-		logger.Logger.Warn().Err(err).Msgf("Failed to fetch MCP health for node details %s", nodeID)
-	} else {
-		details.MCPSummary = mcpSummary
-		if mode == domain.MCPHealthModeDeveloper {
-			details.MCPServers = mcpServers
-		}
-	}
-
-	return details, nil
-}
-
-// enhanceNodeSummaryWithMCP adds MCP health data to a node summary
-func (s *UIService) enhanceNodeSummaryWithMCP(summary *AgentNodeSummaryForUI) {
-	if s.agentClient == nil {
-		return
-	}
-
-	// Skip slow MCP lookups for nodes that are not currently active
-	if summary.HealthStatus != types.HealthStatusActive {
-		return
-	}
-
-	// Use a short timeout so the nodes summary endpoint stays fast
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	// Fetch MCP health in user mode for summary
-	mcpSummary, _, err := s.fetchMCPHealthForNode(ctx, summary.ID, domain.MCPHealthModeUser)
-	if err != nil {
-		// Silently continue without MCP data
-		return
-	}
-
-	summary.MCPSummary = mcpSummary
-}
-
-// OnMCPHealthChanged is a callback for when MCP health status changes
-func (s *UIService) OnMCPHealthChanged(nodeID string, mcpSummary *domain.MCPSummaryForUI) {
-	mcpData := map[string]interface{}{
-		"node_id":     nodeID,
-		"mcp_summary": mcpSummary,
-		"timestamp":   time.Now(),
-	}
-
-	// Publish to dedicated node event bus for immediate updates
-	events.PublishNodeMCPHealthChanged(nodeID, mcpData)
-
-	// Keep legacy broadcast for backward compatibility
-	s.BroadcastEvent("mcp_health_changed", mcpData)
-}
-
 // startHeartbeat starts the SSE heartbeat mechanism to keep connections alive
 func (s *UIService) startHeartbeat() {
 	s.heartbeatTicker = time.NewTicker(30 * time.Second) // Send heartbeat every 30 seconds
@@ -633,12 +492,6 @@ func (s *UIService) getEventCacheKey(event NodeEvent) string {
 	case "node_status_changed", "node_health_changed", "node_registered":
 		if summary, ok := event.Node.(AgentNodeSummaryForUI); ok {
 			return fmt.Sprintf("%s:%s", event.Type, summary.ID)
-		}
-	case "mcp_health_changed":
-		if data, ok := event.Node.(map[string]interface{}); ok {
-			if nodeID, exists := data["node_id"]; exists {
-				return fmt.Sprintf("%s:%v", event.Type, nodeID)
-			}
 		}
 	case "node_removed":
 		if data, ok := event.Node.(map[string]string); ok {

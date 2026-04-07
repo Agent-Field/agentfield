@@ -272,7 +272,7 @@ async def test_async_heartbeat(monkeypatch):
     )
 
     client = AgentFieldClient(base_url="http://example.com")
-    heartbeat = HeartbeatData(status=AgentStatus.READY, mcp_servers=[], timestamp="now")
+    heartbeat = HeartbeatData(status=AgentStatus.READY, timestamp="now")
 
     assert await client.send_enhanced_heartbeat("node", heartbeat) is True
     assert calls and calls[0][1].endswith("/nodes/node/heartbeat")
@@ -295,7 +295,7 @@ def test_sync_heartbeat(monkeypatch):
     monkeypatch.setattr(client_mod.requests, "post", fake_post)
 
     client = AgentFieldClient(base_url="http://example.com")
-    heartbeat = HeartbeatData(status=AgentStatus.READY, mcp_servers=[], timestamp="now")
+    heartbeat = HeartbeatData(status=AgentStatus.READY, timestamp="now")
 
     assert client.send_enhanced_heartbeat_sync("node", heartbeat) is True
     assert client.notify_graceful_shutdown_sync("node") is True

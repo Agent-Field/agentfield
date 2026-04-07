@@ -1,0 +1,4 @@
+# file: /home/abir/agentfield/sdk/python/agentfield/verification.py
+# hypothesis_version: 6.148.2
+
+[200, 237, 300, '/', '<', '<=', '=', '==', '>', '>=', 'X-API-Key', 'X-Caller-DID', 'X-DID-Signature', 'X-DID-Timestamp', 'action', 'allow', 'allow_functions', 'caller_tags', 'constraints', 'deny_functions', 'did:key:z', 'enabled', 'issuer_did', 'operator', 'policies', 'priority', 'public_key_jwk', 'registered_dids', 'revoked_dids', 'target_tags', 'utf-8', 'value', 'x']

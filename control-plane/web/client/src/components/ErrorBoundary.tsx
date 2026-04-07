@@ -22,7 +22,7 @@ interface State {
 }
 
 /**
- * Error Boundary component for graceful error handling in MCP UI components
+ * Error Boundary component for graceful error handling in UI components
  * Provides fallback UI and error reporting capabilities
  */
 export class ErrorBoundary extends Component<Props, State> {
@@ -203,59 +203,3 @@ export function useErrorHandler() {
   };
 }
 
-/**
- * MCP-specific error boundary with specialized error handling
- */
-export function MCPErrorBoundary({
-  children,
-  nodeId,
-  componentName
-}: {
-  children: ReactNode;
-  nodeId?: string;
-  componentName?: string;
-}) {
-  const handleError = (error: Error, errorInfo: ErrorInfo) => {
-    // Log MCP-specific error context
-    console.error(`MCP Error in ${componentName || 'Unknown Component'}:`, {
-      nodeId,
-      error: error.message,
-      stack: error.stack,
-      componentStack: errorInfo.componentStack,
-      timestamp: new Date().toISOString()
-    });
-  };
-
-  const fallback = (
-    <Alert variant="destructive" className="m-4">
-      <WarningFilled className="h-4 w-4" />
-      <div>
-        <h4 className="font-medium">MCP Component Error</h4>
-        <p className="text-sm mt-1">
-          {componentName ? `The ${componentName} component` : 'This MCP component'}
-          {' '}encountered an error and couldn't be displayed.
-          {nodeId && ` (Node: ${nodeId})`}
-        </p>
-        <Button
-          variant="outline"
-          size="sm"
-          className="mt-2"
-          onClick={() => window.location.reload()}
-        >
-          Refresh Page
-        </Button>
-      </div>
-    </Alert>
-  );
-
-  return (
-    <ErrorBoundary
-      onError={handleError}
-      fallback={fallback}
-      resetOnPropsChange={true}
-      resetKeys={[nodeId, componentName].filter(Boolean) as string[]}
-    >
-      {children}
-    </ErrorBoundary>
-  );
-}

@@ -27,12 +27,10 @@ from typing import (
 from agentfield.agent_ai import AgentAI
 from agentfield.agent_cli import AgentCLI
 from agentfield.agent_field_handler import AgentFieldHandler
-from agentfield.agent_mcp import AgentMCP
 from agentfield.agent_registry import clear_current_agent, set_current_agent
 from agentfield.agent_server import AgentServer
 from agentfield.agent_workflow import AgentWorkflow
 from agentfield.client import AgentFieldClient, ApprovalResult
-from agentfield.dynamic_skills import DynamicMCPSkillManager
 from agentfield.execution_context import (
     ExecutionContext,
     get_current_context,
@@ -42,8 +40,6 @@ from agentfield.execution_context import (
 from agentfield.execution_state import ExecuteError
 from agentfield.did_manager import DIDManager
 from agentfield.vc_generator import VCGenerator
-from agentfield.mcp_client import MCPClientRegistry
-from agentfield.mcp_manager import MCPManager
 from agentfield.memory import MemoryClient, MemoryInterface
 from agentfield.memory_events import MemoryEventClient
 from agentfield.logger import log_debug, log_error, log_info, log_warn, set_cp_client
@@ -432,7 +428,6 @@ class Agent(FastAPI):
     - Decorator-based reasoner and skill registration
     - Cross-agent communication via the AgentField execution gateway
     - Memory interface for persistent and session-based storage
-    - MCP (Model Context Protocol) server integration
     - Automatic workflow tracking and DAG building
     - FastAPI-based HTTP API with automatic schema generation
 
@@ -483,7 +478,6 @@ class Agent(FastAPI):
         auto_register: bool = True,
         vc_enabled: Optional[bool] = True,
         api_key: Optional[str] = None,
-        enable_mcp: bool = False,
         enable_did: bool = True,
         local_verification: bool = False,
         verification_refresh_interval: int = 300,
@@ -549,9 +543,8 @@ class Agent(FastAPI):
             ```
 
         Note:
-            The agent automatically initializes all necessary handlers for MCP integration,
-            memory management, workflow tracking, and server functionality. MCP servers
-            are discovered and started automatically if present in the agent directory.
+            The agent automatically initializes all necessary handlers for
+            memory management, workflow tracking, and server functionality.
         """
         # Set logging level based on dev_mode
         from agentfield.logger import set_log_level
@@ -629,7 +622,6 @@ class Agent(FastAPI):
         # Fast lifecycle management
         self._current_status: AgentStatus = AgentStatus.STARTING
         self._shutdown_requested = False
-        self._mcp_initialization_complete = False
         self._start_time = time.time()  # Track start time for uptime calculation
 
         # Initialize AI and Memory configurations
@@ -644,10 +636,6 @@ class Agent(FastAPI):
             )
         )
 
-        # Add MCP management
-        self.mcp_manager: Optional[MCPManager] = None
-        self.mcp_client_registry: Optional[MCPClientRegistry] = None
-        self.dynamic_skill_manager: Optional[DynamicMCPSkillManager] = None
         self.memory_event_client: Optional[MemoryEventClient] = None
 
         # Add DID management
@@ -655,8 +643,7 @@ class Agent(FastAPI):
         self.vc_generator: Optional[VCGenerator] = None
         self.did_enabled = False
 
-        # Store MCP/DID feature flags for conditional initialization
-        self._enable_mcp = enable_mcp
+        # Store DID feature flags for conditional initialization
         self._enable_did = enable_did
 
         # Add connection management for resilient AgentField server connectivity
@@ -668,38 +655,12 @@ class Agent(FastAPI):
         self._harness_runner: Optional["HarnessRunner"] = None
         self._cli_handler: Optional[AgentCLI] = None
         # Eager handlers - required for core agent functionality
-        self.mcp_handler = AgentMCP(self)
         self.agentfield_handler = AgentFieldHandler(self)
         self.workflow_handler = AgentWorkflow(self)
         self.server_handler = AgentServer(self)
 
         # Register this agent instance for enhanced decorator system
         set_current_agent(self)
-
-        # Initialize MCP components through the handler (if enabled)
-        if self._enable_mcp:
-            try:
-                agent_dir = self.mcp_handler._detect_agent_directory()
-                self.mcp_manager = MCPManager(agent_dir, self.dev_mode)
-                self.mcp_client_registry = MCPClientRegistry(self.dev_mode)
-
-                if self.dev_mode:
-                    log_debug(f"Initialized MCP Manager in {agent_dir}")
-
-                # Initialize Dynamic Skill Manager when both MCP components are available
-                if self.mcp_manager and self.mcp_client_registry:
-                    self.dynamic_skill_manager = DynamicMCPSkillManager(
-                        self, self.dev_mode
-                    )
-                    if self.dev_mode:
-                        log_debug("Dynamic MCP skill manager initialized")
-
-            except Exception as e:
-                if self.dev_mode:
-                    log_error(f"Failed to initialize MCP Manager: {e}")
-                self.mcp_manager = None
-                self.mcp_client_registry = None
-                self.dynamic_skill_manager = None
 
         # Initialize DID components (if enabled)
         if self._enable_did:
@@ -1643,13 +1604,6 @@ class Agent(FastAPI):
             if self.dev_mode:
                 log_error(f"Error registering agent with DID system: {e}")
             return False
-
-    def _register_mcp_servers_with_registry(self) -> None:
-        """
-        Placeholder for MCP server registration - functionality removed.
-        """
-        if self.dev_mode:
-            log_debug("MCP server registration disabled - old modules removed")
 
     def _setup_agentfield_routes(self):
         """Delegate to server handler for route setup"""
@@ -4072,9 +4026,8 @@ class Agent(FastAPI):
         """
         Get the current agent instance.
 
-        This method is used by auto-generated MCP skills to access the current
-        agent's execution context. It uses a thread-local storage pattern to
-        track the current agent instance.
+        This method is used to access the current agent's execution context.
+        It uses a thread-local storage pattern to track the current agent instance.
 
         Returns:
             Current Agent instance or None if no agent is active
@@ -4189,9 +4142,6 @@ class Agent(FastAPI):
                     # Ignore async cleanup errors in destructor
                     pass
 
-            # Only attempt cleanup if we have an MCP handler
-            if hasattr(self, "mcp_handler") and self.mcp_handler:
-                self.mcp_handler._cleanup_mcp_servers()
             # Clear agent from thread-local storage as final cleanup
             clear_current_agent()
         except Exception:
@@ -4448,7 +4398,6 @@ class Agent(FastAPI):
         The server provides:
         - RESTful endpoints for all registered reasoners and skills
         - Health check endpoints for monitoring
-        - MCP server status and management endpoints
         - Automatic AgentField server registration and heartbeat
         - Graceful shutdown with proper cleanup
 
@@ -4462,7 +4411,7 @@ class Agent(FastAPI):
                        - Enhanced logging and debug output
                        - Auto-reload on code changes (if supported)
                        - Detailed error messages
-                       - MCP server debugging information
+                       - Additional debugging information
             heartbeat_interval (int): The interval in seconds for sending heartbeats to the AgentField server.
                                     Defaults to 2 seconds. Lower values provide faster failure detection
                                     but increase network overhead.
@@ -4520,7 +4469,6 @@ class Agent(FastAPI):
             - `POST /reasoners/{reasoner_name}`: Execute reasoner functions
             - `POST /skills/{skill_name}`: Execute skill functions
             - `GET /health`: Health check endpoint
-            - `GET /mcp/status`: MCP server status and management
             - `GET /docs`: Interactive API documentation (Swagger UI)
             - `GET /redoc`: Alternative API documentation
 
@@ -4533,19 +4481,16 @@ class Agent(FastAPI):
 
         Lifecycle:
             1. Server initialization and route setup
-            2. MCP server startup (if configured)
-            3. AgentField server registration
+            2. AgentField server registration
             4. Heartbeat loop starts
             5. Ready to receive requests
             6. Graceful shutdown on SIGINT/SIGTERM
-            7. MCP server cleanup
-            8. AgentField server deregistration
+            7. AgentField server deregistration
 
         Note:
             - The server runs indefinitely until interrupted (Ctrl+C)
             - All registered reasoners and skills become available as REST endpoints
             - Memory and execution context are automatically managed
-            - MCP servers are started and managed automatically
             - Use `dev=True` for development, `dev=False` for production
         """
         return self.server_handler.serve(

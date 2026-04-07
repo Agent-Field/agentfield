@@ -474,18 +474,6 @@ func (m *MockAgentClientForUI) GetAgentStatus(ctx context.Context, nodeID string
 	return args.Get(0).(*interfaces.AgentStatusResponse), args.Error(1)
 }
 
-func (m *MockAgentClientForUI) GetMCPHealth(ctx context.Context, nodeID string) (*interfaces.MCPHealthResponse, error) {
-	return nil, nil
-}
-
-func (m *MockAgentClientForUI) RestartMCPServer(ctx context.Context, nodeID, alias string) error {
-	return nil
-}
-
-func (m *MockAgentClientForUI) GetMCPTools(ctx context.Context, nodeID, alias string) (*interfaces.MCPToolsResponse, error) {
-	return nil, nil
-}
-
 func (m *MockAgentClientForUI) ShutdownAgent(ctx context.Context, nodeID string, graceful bool, timeoutSeconds int) (*interfaces.AgentShutdownResponse, error) {
 	return nil, nil
 }

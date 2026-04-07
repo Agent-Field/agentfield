@@ -19,8 +19,6 @@ import type { AgentNodeSummary } from "../types/agentfield";
 import type { DensityMode } from "./DensityToggle";
 import { CompositeDIDStatus } from "./did/DIDStatusBadge";
 import { DIDIdentityBadge } from "./did/DIDDisplay";
-import type { MCPHealthStatus } from "./mcp/MCPHealthIndicator";
-import { MCPHealthDot, MCPHealthIndicator } from "./mcp/MCPHealthIndicator";
 import { getNodeStatusPresentation } from "@/utils/node-status";
 
 interface NodeCardProps {
@@ -30,8 +28,8 @@ interface NodeCardProps {
 }
 
 /**
- * Enhanced NodeCard component for direct navigation to NodeDetailPage with MCP integration.
- * Displays agent node summary with health status, capabilities, and MCP server information.
+ * Enhanced NodeCard component for direct navigation to NodeDetailPage.
+ * Displays agent node summary with health status and capabilities.
  * Optimized for navigation-focused interaction with comprehensive accessibility support.
  *
  * @param {NodeCardProps} props - The props for the NodeCard component.
@@ -89,36 +87,8 @@ const NodeCard = memo(
     // Calculate importance score for visual weight
     const reasonerCount = nodeSummary.reasoner_count ?? 0;
     const skillCount = nodeSummary.skill_count ?? 0;
-    const mcpSummary = nodeSummary.mcp_summary;
     const importanceScore = reasonerCount + skillCount;
     const isHighImportance = importanceScore >= 8;
-
-    // Convert MCP service status to MCPHealthStatus with defensive checks
-    const getMCPHealthStatus = (): MCPHealthStatus => {
-      // Comprehensive null/undefined checks to prevent Object.entries() errors
-      if (!nodeSummary?.mcp_summary ||
-          typeof nodeSummary.mcp_summary !== 'object' ||
-          nodeSummary.mcp_summary === null) {
-        return "unknown";
-      }
-
-      // Additional safety check for service_status property
-      const serviceStatus = nodeSummary.mcp_summary.service_status;
-      if (!serviceStatus || typeof serviceStatus !== 'string') {
-        return "unknown";
-      }
-
-      switch (serviceStatus) {
-        case "ready":
-          return "running";
-        case "degraded":
-          return "error";
-        case "unavailable":
-          return "stopped";
-        default:
-          return "unknown";
-      }
-    };
 
     // Format time ago with enhanced precision
     const formatTimeAgo = (date: Date | null) => {
@@ -208,16 +178,12 @@ const NodeCard = memo(
       if (actionLoading === 'stop') return 'stopping';
       if (actionLoading === 'reconcile') return 'reconciling';
 
-      // Check multiple sources for running state (more robust detection)
       const isRunning =
         lifecycleStatus === 'ready' ||
-        lifecycleStatus === 'degraded' ||
-        mcpSummary?.service_status === 'ready' ||
-        (mcpSummary?.total_servers ?? 0) > 0;
+        lifecycleStatus === 'degraded';
 
       if (isRunning) {
-        // Check for error/degraded states
-        if (lifecycleStatus === 'degraded' || mcpSummary?.service_status === 'degraded') {
+        if (lifecycleStatus === 'degraded') {
           return 'error';
         }
         return 'running';
@@ -254,11 +220,6 @@ const NodeCard = memo(
 
     const teamId = nodeSummary.team_id || "unknown";
     const deploymentType = nodeSummary.deployment_type || null;
-    const totalMcpServers = mcpSummary?.total_servers ?? 0;
-    const runningMcpServers = mcpSummary?.running_servers ?? 0;
-    const totalMcpTools = mcpSummary?.total_tools ?? 0;
-    const hasMcpIssues = Boolean(mcpSummary?.has_issues);
-    const capabilitiesAvailable = Boolean(mcpSummary?.capabilities_available);
 
     const containerPadding =
       density === "compact"
@@ -364,15 +325,6 @@ const NodeCard = memo(
                   High capability
                 </Badge>
               )}
-              {hasMcpIssues && (
-                <Badge
-                  variant="destructive"
-                  className="h-6 rounded-full px-2 text-sm text-muted-foreground"
-                  aria-label="Node has MCP issues detected"
-                >
-                  Issues detected
-                </Badge>
-              )}
             </div>
             <div className="flex flex-wrap items-center gap-3">
               <span
@@ -396,28 +348,6 @@ const NodeCard = memo(
                     compact={true}
                     className="text-xs"
                   />
-                </div>
-              )}
-              {mcpSummary && (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <MCPHealthDot
-                    status={getMCPHealthStatus()}
-                    size="sm"
-                    className="flex-shrink-0"
-                  />
-                  <span>
-                    {runningMcpServers}/{totalMcpServers} MCP servers
-                  </span>
-                  {totalMcpTools > 0 && (
-                    <span className="text-muted-foreground/80">
-                      ({totalMcpTools} tools)
-                    </span>
-                  )}
-                  {capabilitiesAvailable && (
-                    <span className="rounded-full bg-status-success/10 px-2 py-0.5 text-micro font-medium text-status-success">
-                      Capabilities ready
-                    </span>
-                  )}
                 </div>
               )}
             </div>
@@ -460,14 +390,6 @@ const NodeCard = memo(
             <Layers className="h-4 w-4" aria-hidden="true" />
             <span>Team {highlightText(teamId)}</span>
           </div>
-          {mcpSummary && (
-            <MCPHealthIndicator
-              status={getMCPHealthStatus()}
-              size="sm"
-              showText={true}
-              className="flex-shrink-0"
-            />
-          )}
           {didStatus && didStatus.has_did && (
             <DIDIdentityBadge
               nodeId={nodeSummary.id}

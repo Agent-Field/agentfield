@@ -69,15 +69,7 @@ func (ds *DefaultDevService) GetDevStatus(path string) (*domain.DevStatus, error
 func (ds *DefaultDevService) runDev(packagePath string, options domain.DevOptions) error {
 	fmt.Printf("🔧 Development Mode: %s\n", packagePath)
 
-	// Temporarily disable MCP server startup - let Python SDK manage them
-	// Config loading removed since MCP manager is disabled
 	var agentCmd *exec.Cmd // Declare agentCmd here to be accessible in defer and signal handler
-
-	// Defer StopAll to ensure it's called on any exit path from runDev
-	defer func() {
-		// MCP server management disabled - Python SDK handles MCP servers
-		fmt.Println("\n✅ MCP server management delegated to Python SDK.")
-	}()
 
 	// Setup signal handling to gracefully shut down
 	sigs := make(chan os.Signal, 1)
@@ -97,11 +89,6 @@ func (ds *DefaultDevService) runDev(packagePath string, options domain.DevOption
 			}
 		}
 	}()
-
-	// MCP server startup disabled - Python SDK manages MCP servers
-	if options.Verbose {
-		fmt.Println("ℹ️ MCP server management delegated to Python SDK.")
-	}
 
 	// 1. Start agent process (let Python SDK choose its own port)
 	fmt.Printf("📡 Starting agent process...\n")

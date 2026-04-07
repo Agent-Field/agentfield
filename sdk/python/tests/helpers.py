@@ -101,11 +101,6 @@ class StubAgent:
     async_config: Any = None
     client: DummyAgentFieldClient = field(default_factory=DummyAgentFieldClient)
     did_manager: Any = None
-    mcp_handler: Any = field(
-        default_factory=lambda: type(
-            "MCP", (), {"_get_mcp_server_health": lambda self: []}
-        )()
-    )
     reasoners: List[Dict[str, Any]] = field(default_factory=list)
     skills: List[Dict[str, Any]] = field(default_factory=list)
     agent_tags: List[str] = field(default_factory=list)
@@ -380,31 +375,6 @@ def create_test_agent(
 
             return decorator
 
-    class _FakeAgentMCP:
-        def __init__(self, agent_instance: Any):
-            self.agent = agent_instance
-
-        def _detect_agent_directory(self) -> str:
-            return "."
-
-        def _get_mcp_server_health(self) -> Dict[str, Any]:
-            return {}
-
-    class _FakeMCPManager:
-        def __init__(self, *args, **kwargs):
-            self._status: Dict[str, Any] = {}
-
-        def get_all_status(self) -> Dict[str, Any]:
-            return self._status
-
-    class _FakeMCPClientRegistry:
-        def __init__(self, *args, **kwargs):
-            pass
-
-    class _FakeDynamicSkillManager:
-        def __init__(self, *args, **kwargs):
-            pass
-
     class _FakeDIDManager:
         def __init__(self, agentfield_server: str, node: str, api_key: Optional[str] = None):
             self.agentfield_server = agentfield_server
@@ -524,12 +494,6 @@ def create_test_agent(
     monkeypatch.setattr("agentfield.agent.AgentFieldClient", _agentfield_client_factory)
     monkeypatch.setattr("agentfield.agent.MemoryClient", _FakeMemoryClient)
     monkeypatch.setattr("agentfield.agent.MemoryEventClient", _FakeMemoryEventClient)
-    monkeypatch.setattr("agentfield.agent.AgentMCP", _FakeAgentMCP)
-    monkeypatch.setattr("agentfield.agent.MCPManager", _FakeMCPManager)
-    monkeypatch.setattr("agentfield.agent.MCPClientRegistry", _FakeMCPClientRegistry)
-    monkeypatch.setattr(
-        "agentfield.agent.DynamicMCPSkillManager", _FakeDynamicSkillManager
-    )
     monkeypatch.setattr("agentfield.agent.DIDManager", _FakeDIDManager)
     monkeypatch.setattr("agentfield.agent.VCGenerator", _FakeVCGenerator)
     monkeypatch.setattr(

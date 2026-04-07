@@ -82,21 +82,15 @@ markers = [
     "contract: API/interface stability tests",
     "unit: isolated unit tests",
     "integration: tests that can touch network/services",
-    "mcp: tests that exercise MCP/network interactions",
     "harness_live: live tests that invoke real coding agents (claude, codex, opencode) — costs real money",
     "httpx_mock: pytest-httpx marker for configuring mock behavior"
 ]
-addopts = "-ra -q -m \"not mcp and not harness_live\" --strict-markers --strict-config --cov=agentfield.client --cov=agentfield.agent_field_handler --cov=agentfield.execution_context --cov=agentfield.execution_state --cov=agentfield.memory --cov=agentfield.rate_limiter --cov=agentfield.result_cache --cov-report=term-missing:skip-covered"
+addopts = "-ra -q -m \"not harness_live\" --strict-markers --strict-config --cov=agentfield.client --cov=agentfield.agent_field_handler --cov=agentfield.execution_context --cov=agentfield.execution_state --cov=agentfield.memory --cov=agentfield.rate_limiter --cov=agentfield.result_cache --cov-report=term-missing:skip-covered"
 asyncio_mode = "auto"
 
 [tool.coverage.run]
 source = ["agentfield"]
 omit = [
-    "agentfield/agent_mcp.py",
-    "agentfield/dynamic_skills.py",
-    "agentfield/mcp_client.py",
-    "agentfield/mcp_manager.py",
-    "agentfield/mcp_stdio_bridge.py",
     "agentfield/logger.py",
     "agentfield/types.py",
 ]

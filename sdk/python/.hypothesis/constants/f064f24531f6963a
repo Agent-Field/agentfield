@@ -1,0 +1,4 @@
+# file: /home/abir/agentfield/sdk/python/agentfield/harness/providers/codex.py
+# hypothesis_version: 6.148.2
+
+[1000, '--full-auto', '--json', '-C', 'auto', 'codex', 'cwd', 'env', 'exec', 'model', 'permission_mode', 'thread.started', 'thread_id', 'turn.completed', 'type']

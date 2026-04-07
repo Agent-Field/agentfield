@@ -273,9 +273,6 @@ type AgentStatus struct {
 	LifecycleStatus AgentLifecycleStatus `json:"lifecycle_status"` // Backward compatibility
 	HealthStatus    HealthStatus         `json:"health_status"`    // Backward compatibility
 
-	// MCP status (optional)
-	MCPStatus *MCPStatusInfo `json:"mcp_status,omitempty"` // MCP server status if available
-
 	// Transition tracking
 	StateTransition *StateTransition `json:"state_transition,omitempty"` // Current transition if any
 
@@ -294,16 +291,6 @@ const (
 	AgentStateStarting AgentState = "starting" // Agent is initializing
 	AgentStateStopping AgentState = "stopping" // Agent is shutting down
 )
-
-// MCPStatusInfo represents MCP server status information
-type MCPStatusInfo struct {
-	TotalServers   int       `json:"total_servers"`
-	RunningServers int       `json:"running_servers"`
-	TotalTools     int       `json:"total_tools"`
-	OverallHealth  float64   `json:"overall_health"`
-	ServiceStatus  string    `json:"service_status"` // "ready", "degraded", "unavailable"
-	LastChecked    time.Time `json:"last_checked"`
-}
 
 // StateTransition represents an ongoing state transition
 type StateTransition struct {
@@ -329,8 +316,7 @@ type AgentStatusUpdate struct {
 	State           *AgentState           `json:"state,omitempty"`
 	HealthScore     *int                  `json:"health_score,omitempty"`
 	LifecycleStatus *AgentLifecycleStatus `json:"lifecycle_status,omitempty"`
-	MCPStatus       *MCPStatusInfo        `json:"mcp_status,omitempty"`
-	Source          StatusSource          `json:"source"`
+	Source StatusSource `json:"source"`
 	Reason          string                `json:"reason,omitempty"`
 	Version         string                `json:"version,omitempty"`
 }
@@ -452,7 +438,7 @@ func FromLegacyStatus(healthStatus HealthStatus, lifecycleStatus AgentLifecycleS
 }
 
 // UpdateFromHeartbeat updates the status based on heartbeat data
-func (as *AgentStatus) UpdateFromHeartbeat(lifecycleStatus *AgentLifecycleStatus, mcpStatus *MCPStatusInfo) {
+func (as *AgentStatus) UpdateFromHeartbeat(lifecycleStatus *AgentLifecycleStatus) {
 	now := time.Now()
 	as.LastSeen = now
 	as.LastUpdated = now
@@ -478,17 +464,6 @@ func (as *AgentStatus) UpdateFromHeartbeat(lifecycleStatus *AgentLifecycleStatus
 		case AgentStatusOffline:
 			as.State = AgentStateInactive
 			as.HealthScore = 0
-		}
-	}
-
-	// Update MCP status if provided
-	if mcpStatus != nil {
-		as.MCPStatus = mcpStatus
-
-		// Adjust health score based on MCP health
-		if mcpStatus.OverallHealth > 0 {
-			mcpHealthContribution := int(mcpStatus.OverallHealth * 20) // Up to 20 points from MCP
-			as.HealthScore = min(100, as.HealthScore+mcpHealthContribution)
 		}
 	}
 

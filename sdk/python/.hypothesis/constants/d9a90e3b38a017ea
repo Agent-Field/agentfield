@@ -1,0 +1,4 @@
+# file: /home/abir/agentfield/sdk/python/agentfield/litellm_adapters.py
+# hypothesis_version: 6.148.2
+
+['/', 'max_tokens', 'openai', 'unknown']

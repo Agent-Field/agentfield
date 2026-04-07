@@ -414,19 +414,6 @@ class AgentFieldLogger:
             extra=kwargs or None,
         )
 
-    def mcp(self, message: str, **kwargs):
-        """Log MCP-related messages"""
-
-        self._emit_optional_structured(
-            "INFO",
-            message,
-            prefix="🔌",
-            event_type="runtime.mcp",
-            source="sdk.python.runtime",
-            force_structured=False,
-            extra=kwargs or None,
-        )
-
     def security(self, message: str, **kwargs):
         """Log security/DID-related messages"""
 
@@ -550,12 +537,6 @@ def log_network(message: str, **kwargs):
     """Log network message"""
 
     get_logger().network(message, **kwargs)
-
-
-def log_mcp(message: str, **kwargs):
-    """Log MCP message"""
-
-    get_logger().mcp(message, **kwargs)
 
 
 def log_security(message: str, **kwargs):

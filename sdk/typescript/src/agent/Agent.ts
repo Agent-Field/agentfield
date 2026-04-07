@@ -37,14 +37,11 @@ import { matchesPattern } from '../utils/pattern.js';
 import { toJsonSchema } from '../utils/schema.js';
 import { WorkflowReporter } from '../workflow/WorkflowReporter.js';
 import type { DiscoveryOptions } from '../types/agent.js';
-import type { MCPToolRegistration } from '../types/mcp.js';
 import {
   createExecutionLogger,
   type ExecutionLogContext,
   type ExecutionLogger
 } from '../observability/ExecutionLogger.js';
-import { MCPClientRegistry } from '../mcp/MCPClientRegistry.js';
-import { MCPToolRegistrar } from '../mcp/MCPToolRegistrar.js';
 import { LocalVerifier } from '../verification/LocalVerifier.js';
 import {
   installStdioLogCapture,
@@ -70,29 +67,19 @@ export class Agent {
   private readonly didClient: DidClient;
   private readonly didManager: DidManager;
   private readonly memoryWatchers: Array<{ pattern: string; handler: MemoryWatchHandler; scope?: string; scopeId?: string }> = [];
-  private readonly mcpClientRegistry?: MCPClientRegistry;
-  private readonly mcpToolRegistrar?: MCPToolRegistrar;
   private readonly localVerifier?: LocalVerifier;
   private readonly realtimeValidationFunctions = new Set<string>();
   private readonly processLogRing = new ProcessLogRing();
   private readonly executionLogger: ExecutionLogger;
 
   constructor(config: AgentConfig) {
-    const mcp = config.mcp
-      ? {
-          autoRegisterTools: config.mcp.autoRegisterTools ?? true,
-          ...config.mcp
-        }
-      : undefined;
-
     this.config = {
       port: 8001,
       agentFieldUrl: 'http://localhost:8080',
       host: '0.0.0.0',
       ...config,
       didEnabled: config.didEnabled ?? true,
-      deploymentType: config.deploymentType ?? 'long_running',
-      mcp
+      deploymentType: config.deploymentType ?? 'long_running'
     };
 
     this.app = express();
@@ -112,15 +99,6 @@ export class Agent {
     });
     this.memoryEventClient.onEvent((event) => this.dispatchMemoryEvent(event));
 
-    if (this.config.mcp?.servers?.length) {
-      this.mcpClientRegistry = new MCPClientRegistry(this.config.devMode);
-      this.mcpToolRegistrar = new MCPToolRegistrar(this, this.mcpClientRegistry, {
-        namespace: this.config.mcp.namespace,
-        tags: this.config.mcp.tags,
-        devMode: this.config.devMode
-      });
-      this.mcpToolRegistrar.registerServers(this.config.mcp.servers);
-    }
 
     // Initialize local verifier for decentralized verification
     if (this.config.localVerification && this.config.agentFieldUrl) {
@@ -189,11 +167,6 @@ export class Agent {
 
   discover(options?: DiscoveryOptions) {
     return this.agentFieldClient.discoverCapabilities(options);
-  }
-
-  async registerMcpTools(): Promise<{ registered: MCPToolRegistration[] }> {
-    if (!this.mcpToolRegistrar) return { registered: [] };
-    return this.mcpToolRegistrar.registerAll();
   }
 
   getAIClient() {
@@ -319,16 +292,6 @@ export class Agent {
   }
 
   async serve(): Promise<void> {
-    if (this.config.mcp?.autoRegisterTools !== false) {
-      try {
-        await this.registerMcpTools();
-      } catch (err) {
-        if (this.config.devMode) {
-          console.warn('MCP tool registration failed', err);
-        }
-      }
-    }
-
     await this.registerWithControlPlane();
 
     // Perform a blocking initial refresh for local verification before accepting requests
@@ -615,25 +578,6 @@ export class Agent {
     // Discovery endpoint used for serverless registration (mirrors Python behaviour)
     this.app.get('/discover', (_req, res) => {
       res.json(this.discoveryPayload(this.config.deploymentType ?? 'long_running'));
-    });
-
-    // MCP health probe expected by control-plane UI
-    this.app.get('/health/mcp', async (_req, res) => {
-      if (!this.mcpClientRegistry) {
-        res.json({ status: 'disabled', totalServers: 0, healthyServers: 0, servers: [] });
-        return;
-      }
-
-      try {
-        const summary = await this.mcpClientRegistry.healthSummary();
-        res.json(summary);
-      } catch (err: any) {
-        res.status(500).json({ status: 'error', error: err?.message ?? 'MCP health check failed' });
-      }
-    });
-
-    this.app.get('/mcp/status', (_req, res) => {
-      res.json(this.mcpStatus());
     });
 
     this.app.get('/status', (_req, res) => {
@@ -1579,27 +1523,6 @@ export class Agent {
       status: 'running',
       node_id: this.config.nodeId,
       version: this.config.version
-    };
-  }
-
-  private mcpStatus() {
-    const servers = this.mcpClientRegistry
-      ? this.mcpClientRegistry.list().map((client) => ({
-          alias: client.alias,
-          baseUrl: client.baseUrl,
-          transport: client.transport
-        }))
-      : [];
-
-    const skills = this.skills
-      .all()
-      .filter((skill) => skill.options?.tags?.includes('mcp'))
-      .map((skill) => skill.name);
-
-    return {
-      status: servers.length ? 'configured' : 'disabled',
-      servers,
-      skills
     };
   }
 

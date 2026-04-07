@@ -174,18 +174,6 @@ func newMockAgentClient() *mockAgentClient {
 	return &mockAgentClient{}
 }
 
-func (m *mockAgentClient) GetMCPHealth(ctx context.Context, nodeID string) (*interfaces.MCPHealthResponse, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (m *mockAgentClient) RestartMCPServer(ctx context.Context, nodeID, alias string) error {
-	return errors.New("not implemented")
-}
-
-func (m *mockAgentClient) GetMCPTools(ctx context.Context, nodeID, alias string) (*interfaces.MCPToolsResponse, error) {
-	return nil, errors.New("not implemented")
-}
-
 func (m *mockAgentClient) ShutdownAgent(ctx context.Context, nodeID string, graceful bool, timeoutSeconds int) (*interfaces.AgentShutdownResponse, error) {
 	if m.shutdownFunc != nil {
 		return m.shutdownFunc(ctx, nodeID, graceful, timeoutSeconds)

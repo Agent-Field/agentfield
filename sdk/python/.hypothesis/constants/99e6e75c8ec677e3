@@ -1,0 +1,4 @@
+# file: /home/abir/agentfield/sdk/python/agentfield/cost_tracker.py
+# hypothesis_version: 6.148.2
+
+[0.0, 'by_model', 'calls', 'cost_usd', 'tokens', 'total_calls', 'total_cost_usd', 'total_tokens']

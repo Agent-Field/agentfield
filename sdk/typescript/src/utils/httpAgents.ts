@@ -5,7 +5,7 @@ import https from 'node:https';
  * Shared HTTP agents with connection pooling to prevent socket exhaustion.
  *
  * These agents are shared across all SDK HTTP clients (AgentFieldClient,
- * MemoryClient, DidClient, MCPClient) to ensure consistent connection
+ * MemoryClient, DidClient) to ensure consistent connection
  * pooling behavior and prevent socket leaks.
  *
  * Configuration:

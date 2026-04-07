@@ -27,7 +27,7 @@ func TestNormalizeCandidateAddsDefaults(t *testing.T) {
 
 func TestResolveCallbackCandidatesSuccess(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health/mcp" || r.URL.Path == "/health" {
+		if r.URL.Path == "/health" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}

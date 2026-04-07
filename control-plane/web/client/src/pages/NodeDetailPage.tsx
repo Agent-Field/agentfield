@@ -1,17 +1,10 @@
 import {
   ErrorAnnouncer,
-  MCPAccessibilityProvider,
   StatusAnnouncer,
   useAccessibility,
 } from "@/components/AccessibilityEnhancements";
 import { DIDInfoModal } from "@/components/did/DIDInfoModal";
 import { EnvironmentVariableForm } from "@/components/forms/EnvironmentVariableForm";
-import {
-  MCPServerControls,
-  MCPServerList,
-  MCPToolExplorer,
-  MCPToolTester,
-} from "@/components/mcp";
 import { ReasonersSkillsTable } from "@/components/ReasonersSkillsTable";
 import { StatusRefreshButton } from "@/components/status";
 import {
@@ -40,10 +33,8 @@ import {
 import { ResponsiveGrid } from "@/components/layout/ResponsiveGrid";
 import { useMode } from "@/contexts/ModeContext";
 import { useDIDInfo } from "@/hooks/useDIDInfo";
-import { useMCPHealthSSE, useNodeUnifiedStatusSSE } from "@/hooks/useSSE";
+import { useNodeUnifiedStatusSSE } from "@/hooks/useSSE";
 import {
-  getMCPHealthModeAware,
-  getMCPServerMetrics,
   getNodeDetailsWithPackageInfo,
   getNodeStatus,
 } from "@/services/api";
@@ -63,9 +54,6 @@ import { cn } from "@/lib/utils";
 import type {
   AgentNodeDetailsForUIWithPackage,
   AgentStatus,
-  MCPHealthResponseModeAware,
-  MCPServerHealthForUI,
-  MCPSummaryForUI,
 } from "@/types/agentfield";
 import { useCallback, useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
@@ -73,7 +61,7 @@ import { EnhancedNodeDetailHeader, NodeProcessLogsPanel } from "@/components/nod
 import { getNodeStatusPresentation } from "@/utils/node-status";
 
 /**
- * Comprehensive NodeDetailPage component with MCP management interface.
+ * Comprehensive NodeDetailPage component with agent management interface.
  * Features tabbed navigation, real-time updates, and mode-aware rendering.
  */
 function NodeDetailPageContent() {
@@ -92,9 +80,6 @@ function NodeDetailPageContent() {
   const [node, setNode] = useState<AgentNodeDetailsForUIWithPackage | null>(
     null
   );
-  const [mcpHealth, setMcpHealth] = useState<MCPHealthResponseModeAware | null>(
-    null
-  );
   const [liveStatus, setLiveStatus] = useState<AgentStatus | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -109,44 +94,10 @@ function NodeDetailPageContent() {
   const [showDIDModal, setShowDIDModal] = useState(false);
 
   // Real-time updates using optimized SSE hook
-  const { latestEvent } = useMCPHealthSSE(nodeId || null);
   const { latestEvent: unifiedStatusEvent } = useNodeUnifiedStatusSSE(
     nodeId || null
   );
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
-
-  // Handle SSE events for real-time updates
-  useEffect(() => {
-    if (latestEvent && latestEvent.data) {
-
-      // Update MCP health data based on event
-      if (
-        latestEvent.type === "server_status_change" &&
-        latestEvent.data.server_alias
-      ) {
-        setMcpHealth((prev) => {
-          if (!prev) return prev;
-
-          const updatedServers = prev.mcp_servers?.map((server) =>
-            server.alias === latestEvent.data.server_alias
-              ? {
-                  ...server,
-                  status: latestEvent.data.status || server.status,
-                }
-              : server
-          );
-
-          return {
-            ...prev,
-            mcp_servers: updatedServers,
-            timestamp: latestEvent.timestamp.toISOString(),
-          };
-        });
-      }
-
-      setLastUpdate(new Date());
-    }
-  }, [latestEvent]);
 
   // Handle unified status events for real-time status updates
   useEffect(() => {
@@ -220,9 +171,6 @@ function NodeDetailPageContent() {
       hash &&
       [
         "overview",
-        "mcp-servers",
-        "tools",
-        "performance",
         "configuration",
         "logs",
       ].includes(hash)
@@ -240,7 +188,7 @@ function NodeDetailPageContent() {
     [navigate, location.pathname]
   );
 
-  // Fetch node details and MCP data with progressive loading
+  // Fetch node details with progressive loading
   const fetchData = useCallback(
     async (showSpinner = true) => {
       if (!nodeId) {
@@ -267,37 +215,14 @@ function NodeDetailPageContent() {
           setLoading(false);
         }
 
-        // Phase 2: Load MCP data and unified status in background (non-blocking) with shorter timeouts
-        Promise.allSettled([
-          getMCPHealthModeAware(nodeId, mode),
-          getMCPServerMetrics(nodeId),
-          getNodeStatus(nodeId),
-        ])
-          .then(([mcpData, metricsData, statusData]) => {
-            if (mcpData.status === "fulfilled") {
-              setMcpHealth(mcpData.value);
-            } else {
-              console.warn("Failed to fetch MCP health:", mcpData.reason);
-            }
-
-            if (metricsData.status !== "fulfilled") {
-              console.warn("Failed to fetch MCP metrics:", metricsData.reason);
-            }
-
-            if (statusData.status === "fulfilled") {
-              // Store the live status data for accurate status display
-              setLiveStatus(statusData.value);
-            } else {
-              console.warn(
-                "Failed to fetch unified status:",
-                statusData.reason
-              );
-            }
-
+        // Phase 2: Load unified status in background (non-blocking)
+        getNodeStatus(nodeId)
+          .then((statusData) => {
+            setLiveStatus(statusData);
             setLastUpdate(new Date());
           })
           .catch((err) => {
-            console.warn("Failed to load secondary MCP data:", err);
+            console.warn("Failed to fetch unified status:", err);
           });
       } catch (err: any) {
         const errorMessage = err.message || "Failed to load node details.";
@@ -450,13 +375,8 @@ function NodeDetailPageContent() {
 
     // PRIORITY 1: Use live status data from the unified status system (live health checks)
     if (liveStatus) {
-      // Map unified status lifecycle_status to AgentState
       switch (liveStatus.lifecycle_status) {
         case "ready":
-          // Check if MCP is degraded while lifecycle is ready
-          if (liveStatus.mcp_status?.service_status === "degraded") {
-            return "error";
-          }
           return "running";
         case "degraded":
           return "error";
@@ -465,24 +385,17 @@ function NodeDetailPageContent() {
         case "offline":
           return "stopped";
         default:
-          // Fall through to legacy logic if status is unknown
           break;
       }
     }
 
     // FALLBACK: Legacy logic using cached data (for backward compatibility)
     const isRunning =
-      mcpSummary?.service_status === "ready" ||
       node?.lifecycle_status === "ready" ||
-      node?.lifecycle_status === "degraded" ||
-      (mcpSummary?.total_servers && mcpSummary.total_servers > 0);
+      node?.lifecycle_status === "degraded";
 
     if (isRunning) {
-      // Check for error/degraded states
-      if (
-        mcpSummary?.service_status === "degraded" ||
-        node?.lifecycle_status === "degraded"
-      ) {
+      if (node?.lifecycle_status === "degraded") {
         return "error";
       }
       return "running";
@@ -519,78 +432,74 @@ function NodeDetailPageContent() {
   // Loading state with enhanced skeleton
   if (loading) {
     return (
-      <MCPAccessibilityProvider>
-        <div className="p-6 max-w-7xl mx-auto space-y-6">
-          <StatusAnnouncer status="Loading node details" />
+      <div className="p-6 max-w-7xl mx-auto space-y-6">
+        <StatusAnnouncer status="Loading node details" />
 
-          {/* Header skeleton */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              <Skeleton className="h-10 w-20" />
-              <div className="space-y-2">
-                <Skeleton className="h-8 w-48" />
-                <div className="flex space-x-2">
-                  <Skeleton className="h-6 w-16" />
-                  <Skeleton className="h-6 w-20" />
-                  <Skeleton className="h-6 w-24" />
-                </div>
+        {/* Header skeleton */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-4">
+            <Skeleton className="h-10 w-20" />
+            <div className="space-y-2">
+              <Skeleton className="h-8 w-48" />
+              <div className="flex space-x-2">
+                <Skeleton className="h-6 w-16" />
+                <Skeleton className="h-6 w-20" />
+                <Skeleton className="h-6 w-24" />
               </div>
             </div>
-            <div className="flex space-x-2">
-              <Skeleton className="h-10 w-20" />
-              <Skeleton className="h-4 w-32" />
-            </div>
           </div>
-
-          {/* Tabs skeleton */}
-          <div className="space-y-4">
-            <div className="flex space-x-2">
-              {["Overview", "MCP Servers", "Tools", "Performance"].map(
-                (_, i) => (
-                  <Skeleton key={i} className="h-10 w-24" />
-                )
-              )}
-            </div>
-            <div className="space-y-4">
-              <Skeleton className="h-32 w-full" />
-              <ResponsiveGrid columns={{ base: 1, md: 3 }} gap="sm">
-                <Skeleton className="h-24 w-full" />
-                <Skeleton className="h-24 w-full" />
-                <Skeleton className="h-24 w-full" />
-              </ResponsiveGrid>
-            </div>
+          <div className="flex space-x-2">
+            <Skeleton className="h-10 w-20" />
+            <Skeleton className="h-4 w-32" />
           </div>
         </div>
-      </MCPAccessibilityProvider>
+
+        {/* Tabs skeleton */}
+        <div className="space-y-4">
+          <div className="flex space-x-2">
+            {["Overview", "Configuration", "Logs"].map(
+              (_, i) => (
+                <Skeleton key={i} className="h-10 w-24" />
+              )
+            )}
+          </div>
+          <div className="space-y-4">
+            <Skeleton className="h-32 w-full" />
+            <ResponsiveGrid columns={{ base: 1, md: 3 }} gap="sm">
+              <Skeleton className="h-24 w-full" />
+              <Skeleton className="h-24 w-full" />
+              <Skeleton className="h-24 w-full" />
+            </ResponsiveGrid>
+          </div>
+        </div>
+      </div>
     );
   }
 
   // Error state with accessibility
   if (error) {
     return (
-      <MCPAccessibilityProvider>
-        <div className="p-4">
-          <ErrorAnnouncer error={error} />
-          <Alert variant="destructive" title="Error" role="alert">
-            {error}
-          </Alert>
-          <div className="mt-4 flex space-x-2">
-            <Button
-              onClick={() => fetchData()}
-              aria-label="Retry loading node details"
-            >
-              Retry
-            </Button>
-            <Button
-              variant="secondary"
-              onClick={handleBack}
-              aria-label="Go back to previous page"
-            >
-              Back
-            </Button>
-          </div>
+      <div className="p-4">
+        <ErrorAnnouncer error={error} />
+        <Alert variant="destructive" title="Error" role="alert">
+          {error}
+        </Alert>
+        <div className="mt-4 flex space-x-2">
+          <Button
+            onClick={() => fetchData()}
+            aria-label="Retry loading node details"
+          >
+            Retry
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={handleBack}
+            aria-label="Go back to previous page"
+          >
+            Back
+          </Button>
         </div>
-      </MCPAccessibilityProvider>
+      </div>
     );
   }
 
@@ -609,19 +518,6 @@ function NodeDetailPageContent() {
   }
 
   const isDeveloperMode = mode === "developer";
-  const mcpSummary: MCPSummaryForUI = mcpHealth?.mcp_summary ||
-    node.mcp_summary || {
-      total_servers: 0,
-      running_servers: 0,
-      total_tools: 0,
-      overall_health: 0,
-      has_issues: false,
-      capabilities_available: false,
-      service_status: "unavailable",
-    };
-
-  const mcpServers: MCPServerHealthForUI[] =
-    mcpHealth?.mcp_servers || node.mcp_servers || [];
 
   const reasonerCount = node.reasoners?.length ?? 0;
   const skillCount = node.skills?.length ?? 0;
@@ -646,10 +542,6 @@ function NodeDetailPageContent() {
   const headerMetadata: Array<{ label: string; value: string }> = [
     { label: "Reasoners", value: String(reasonerCount) },
     { label: "Skills", value: String(skillCount) },
-    {
-      label: "MCP",
-      value: `${mcpSummary.running_servers}/${mcpSummary.total_servers} up`,
-    },
     { label: "Mode", value: isDeveloperMode ? "Developer" : "User" },
   ];
 
@@ -803,15 +695,6 @@ function NodeDetailPageContent() {
               <AnimatedTabsTrigger value="overview" className="gap-2 px-4">
               Overview
             </AnimatedTabsTrigger>
-            <AnimatedTabsTrigger value="mcp-servers" className="gap-2 px-4">
-              MCP Servers
-            </AnimatedTabsTrigger>
-            <AnimatedTabsTrigger value="tools" className="gap-2 px-4">
-              Tools
-            </AnimatedTabsTrigger>
-            <AnimatedTabsTrigger value="performance" className="gap-2 px-4">
-              Performance
-            </AnimatedTabsTrigger>
             <AnimatedTabsTrigger value="configuration" className="gap-2 px-4">
               Configuration
             </AnimatedTabsTrigger>
@@ -930,96 +813,6 @@ function NodeDetailPageContent() {
           </AnimatedTabsContent>
 
           <AnimatedTabsContent
-            value="mcp-servers"
-            className="flex-1 overflow-y-auto"
-          >
-            <div className="flex flex-col gap-6 px-6 pb-6">
-              <ResponsiveGrid columns={{ base: 1, xl: 12 }} gap="md" align="start">
-                <div className="xl:col-span-8">
-                  <MCPServerList
-                    servers={mcpServers}
-                    nodeId={node.id}
-                    onServerAction={async (_action: string, _serverAlias: string) => {
-                      setTimeout(() => fetchData(false), 1000);
-                    }}
-                  />
-                </div>
-                <div className="xl:col-span-4">
-                  <MCPServerControls
-                    servers={mcpServers}
-                    nodeId={node.id}
-                    onBulkAction={async (_action: string, _serverAliases: string[]) => {
-                      setTimeout(() => fetchData(false), 1000);
-                    }}
-                  />
-                </div>
-              </ResponsiveGrid>
-            </div>
-          </AnimatedTabsContent>
-
-          <AnimatedTabsContent
-            value="tools"
-            className="flex-1 overflow-y-auto"
-          >
-            <div className="flex flex-col gap-6 px-6 pb-6">
-              {mcpServers.length > 0 ? (
-                mcpServers.map((server) => (
-                  <ResponsiveGrid
-                    key={server.alias}
-                    columns={{ base: 1, xl: 12 }}
-                    gap="md"
-                    align="start"
-                  >
-                    <MCPToolExplorer
-                      tools={[]}
-                      serverAlias={server.alias}
-                      nodeId={node.id}
-                    />
-                    <MCPToolTester
-                      tool={{
-                        name: "",
-                        description: "",
-                        input_schema: { type: "object", properties: {} },
-                      }}
-                      serverAlias={server.alias}
-                      nodeId={node.id}
-                    />
-                  </ResponsiveGrid>
-                ))
-              ) : (
-                <div className="py-8 text-center">
-                  <p className="text-muted-foreground">
-                    No MCP servers available for tool exploration.
-                  </p>
-                </div>
-              )}
-            </div>
-          </AnimatedTabsContent>
-
-          <AnimatedTabsContent
-            value="performance"
-            className="flex-1 overflow-y-auto"
-          >
-            <div className="flex flex-col gap-6 px-6 pb-6">
-              <div className="py-8 text-center">
-                <p className="text-muted-foreground">
-                  Performance metrics dashboard has been removed.
-                </p>
-                <p className="mt-2 text-body-small">
-                  Detailed MCP server metrics are available in the MCP Servers tab.
-                </p>
-                <Button
-                  variant="outline"
-                  onClick={() => fetchData(false)}
-                  className="mt-4"
-                >
-                  Refresh Data
-                </Button>
-              </div>
-            </div>
-          </AnimatedTabsContent>
-
-          <AnimatedTabsContent
             value="configuration"
             className="flex-1 overflow-y-auto"
           >
@@ -1089,9 +882,7 @@ function NodeDetailPageContent() {
 export function NodeDetailPage() {
   return (
     <NotificationProvider>
-      <MCPAccessibilityProvider>
-        <NodeDetailPageContent />
-      </MCPAccessibilityProvider>
+      <NodeDetailPageContent />
     </NotificationProvider>
   );
 }

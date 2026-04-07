@@ -208,7 +208,7 @@ func normalizeCandidate(raw string, defaultPort string) (string, error) {
 func probeCandidate(ctx context.Context, client *http.Client, baseURL string) types.CallbackTestResult {
 	result := types.CallbackTestResult{URL: baseURL}
 	trimmedBase := strings.TrimSuffix(baseURL, "/")
-	endpoints := []string{"/health/mcp", "/health"}
+	endpoints := []string{"/health"}
 
 	for _, endpoint := range endpoints {
 		start := time.Now()
@@ -282,11 +282,6 @@ type CachedNodeData struct {
 	LastDBUpdate    time.Time
 	LastCacheUpdate time.Time
 	Status          string
-	MCPServers      []struct {
-		Alias     string `json:"alias"`
-		Status    string `json:"status"`
-		ToolCount int    `json:"tool_count"`
-	}
 }
 
 // HeartbeatCache manages cached heartbeat data to reduce database writes
@@ -306,11 +301,7 @@ var (
 )
 
 // shouldUpdateDatabase determines if a heartbeat should trigger a database update
-func (hc *HeartbeatCache) shouldUpdateDatabase(nodeID string, now time.Time, status string, mcpServers []struct {
-	Alias     string `json:"alias"`
-	Status    string `json:"status"`
-	ToolCount int    `json:"tool_count"`
-}) (bool, *CachedNodeData) {
+func (hc *HeartbeatCache) shouldUpdateDatabase(nodeID string, now time.Time, status string) (bool, *CachedNodeData) {
 	hc.mutex.Lock()
 	defer hc.mutex.Unlock()
 
@@ -321,7 +312,6 @@ func (hc *HeartbeatCache) shouldUpdateDatabase(nodeID string, now time.Time, sta
 			LastDBUpdate:    now,
 			LastCacheUpdate: now,
 			Status:          status,
-			MCPServers:      mcpServers,
 		}
 		hc.nodes[nodeID] = cached
 		return true, cached
@@ -330,7 +320,6 @@ func (hc *HeartbeatCache) shouldUpdateDatabase(nodeID string, now time.Time, sta
 	// Update cache timestamp
 	cached.LastCacheUpdate = now
 	cached.Status = status
-	cached.MCPServers = mcpServers
 
 	// Check if enough time has passed since last DB update
 	timeSinceDBUpdate := now.Sub(cached.LastDBUpdate)
@@ -818,13 +807,8 @@ func HeartbeatHandler(storageProvider storage.StorageProvider, uiService *servic
 
 		// Try to parse enhanced heartbeat data (optional)
 		var enhancedHeartbeat struct {
-			Version    string `json:"version,omitempty"`
-			Status     string `json:"status,omitempty"`
-			MCPServers []struct {
-				Alias     string `json:"alias"`
-				Status    string `json:"status"`
-				ToolCount int    `json:"tool_count"`
-			} `json:"mcp_servers,omitempty"`
+			Version     string `json:"version,omitempty"`
+			Status      string `json:"status,omitempty"`
 			Timestamp   string `json:"timestamp,omitempty"`
 			HealthScore *int   `json:"health_score,omitempty"`
 		}
@@ -844,7 +828,7 @@ func HeartbeatHandler(storageProvider storage.StorageProvider, uiService *servic
 		if presenceManager != nil && presenceManager.HasLease(nodeID) {
 			presenceManager.Touch(nodeID, enhancedHeartbeat.Version, now)
 		}
-		needsDBUpdate, cached := heartbeatCache.shouldUpdateDatabase(nodeID, now, enhancedHeartbeat.Status, enhancedHeartbeat.MCPServers)
+		needsDBUpdate, cached := heartbeatCache.shouldUpdateDatabase(nodeID, now, enhancedHeartbeat.Status)
 
 		if needsDBUpdate {
 			// Verify node exists only when we need to update DB.
@@ -888,7 +872,7 @@ func HeartbeatHandler(storageProvider storage.StorageProvider, uiService *servic
 		}
 
 		// Process enhanced heartbeat data through unified status system
-		if statusManager != nil && (enhancedHeartbeat.Status != "" || len(enhancedHeartbeat.MCPServers) > 0 || enhancedHeartbeat.HealthScore != nil) {
+		if statusManager != nil && (enhancedHeartbeat.Status != "" || enhancedHeartbeat.HealthScore != nil) {
 			// Prepare lifecycle status
 			var lifecycleStatus *types.AgentLifecycleStatus
 			if enhancedHeartbeat.Status != "" {
@@ -922,44 +906,6 @@ func HeartbeatHandler(storageProvider storage.StorageProvider, uiService *servic
 				}
 			}
 
-			// Prepare MCP status
-			var mcpStatus *types.MCPStatusInfo
-			if len(enhancedHeartbeat.MCPServers) > 0 {
-				totalServers := len(enhancedHeartbeat.MCPServers)
-				runningServers := 0
-				totalTools := 0
-
-				for _, server := range enhancedHeartbeat.MCPServers {
-					if server.Status == "running" {
-						runningServers++
-					}
-					totalTools += server.ToolCount
-				}
-
-				// Calculate overall health based on running servers
-				overallHealth := 0.0
-				if totalServers > 0 {
-					overallHealth = float64(runningServers) / float64(totalServers)
-				}
-
-				// Determine service status
-				serviceStatus := "unavailable"
-				if overallHealth >= 0.9 {
-					serviceStatus = "ready"
-				} else if overallHealth >= 0.5 {
-					serviceStatus = "degraded"
-				}
-
-				mcpStatus = &types.MCPStatusInfo{
-					TotalServers:   totalServers,
-					RunningServers: runningServers,
-					TotalTools:     totalTools,
-					OverallHealth:  overallHealth,
-					ServiceStatus:  serviceStatus,
-					LastChecked:    now,
-				}
-			}
-
 			// Resolve version from DB record when available, fall back to heartbeat payload
 			resolvedVersion := enhancedHeartbeat.Version
 			if existingNode != nil {
@@ -967,7 +913,7 @@ func HeartbeatHandler(storageProvider storage.StorageProvider, uiService *servic
 			}
 
 			// Update status through unified system
-			if err := statusManager.UpdateFromHeartbeat(ctx, nodeID, lifecycleStatus, mcpStatus, resolvedVersion); err != nil {
+			if err := statusManager.UpdateFromHeartbeat(ctx, nodeID, lifecycleStatus, resolvedVersion); err != nil {
 				logger.Logger.Error().Err(err).Msgf("❌ Failed to update unified status for node %s", nodeID)
 				// Continue processing - don't fail the heartbeat
 			}
@@ -1054,10 +1000,6 @@ func UpdateLifecycleStatusHandler(storageProvider storage.StorageProvider, uiSer
 
 		var statusUpdate struct {
 			LifecycleStatus string `json:"lifecycle_status" binding:"required"`
-			MCPServers      *struct {
-				Total   int `json:"total"`
-				Running int `json:"running"`
-			} `json:"mcp_servers,omitempty"`
 		}
 
 		if err := c.ShouldBindJSON(&statusUpdate); err != nil {
@@ -1096,34 +1038,9 @@ func UpdateLifecycleStatusHandler(storageProvider storage.StorageProvider, uiSer
 			return
 		}
 
-		// Prepare MCP status if provided
-		var mcpStatus *types.MCPStatusInfo
-		if statusUpdate.MCPServers != nil {
-			overallHealth := 0.0
-			serviceStatus := "unavailable"
-
-			if statusUpdate.MCPServers.Total > 0 {
-				overallHealth = float64(statusUpdate.MCPServers.Running) / float64(statusUpdate.MCPServers.Total)
-				if overallHealth >= 0.9 {
-					serviceStatus = "ready"
-				} else if overallHealth >= 0.5 {
-					serviceStatus = "degraded"
-				}
-			}
-
-			mcpStatus = &types.MCPStatusInfo{
-				TotalServers:   statusUpdate.MCPServers.Total,
-				RunningServers: statusUpdate.MCPServers.Running,
-				TotalTools:     0, // Not provided in this endpoint
-				OverallHealth:  overallHealth,
-				ServiceStatus:  serviceStatus,
-				LastChecked:    time.Now(),
-			}
-		}
-
 		// Update through unified status system if available
 		if statusManager != nil {
-			if err := statusManager.UpdateFromHeartbeat(ctx, nodeID, &newLifecycleStatus, mcpStatus, ""); err != nil {
+			if err := statusManager.UpdateFromHeartbeat(ctx, nodeID, &newLifecycleStatus, ""); err != nil {
 				logger.Logger.Error().Err(err).Msgf("❌ Failed to update unified status for node %s", nodeID)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update status"})
 				return

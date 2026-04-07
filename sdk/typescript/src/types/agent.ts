@@ -25,7 +25,6 @@ export interface AgentConfig {
   apiKey?: string;
   did?: string;
   privateKeyJwk?: string;
-  mcp?: MCPConfig;
   deploymentType?: DeploymentType;
   /** Enable decentralized local verification of incoming DID signatures. */
   localVerification?: boolean;
@@ -68,21 +67,6 @@ export interface MemoryConfig {
 }
 
 export type MemoryScope = 'workflow' | 'session' | 'actor' | 'global';
-
-export interface MCPServerConfig {
-  alias: string;
-  url?: string;
-  port?: number;
-  transport?: 'http' | 'bridge';
-  headers?: Record<string, string>;
-}
-
-export interface MCPConfig {
-  servers?: MCPServerConfig[];
-  autoRegisterTools?: boolean;
-  namespace?: string;
-  tags?: string[];
-}
 
 export interface AgentCapability {
   agentId: string;
