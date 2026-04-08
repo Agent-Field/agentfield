@@ -490,8 +490,6 @@ async def execute_tool_call_loop(
             raw_args = getattr(tc.function, "arguments", None)
             if raw_args is None:
                 # LLM omitted arguments entirely — report back so it can retry
-                total_calls += 1
-                trace.total_tool_calls = total_calls
                 err_msg = f"Tool call '{func_name}' (id={tc.id}) is missing function arguments. Provide arguments as a JSON object."
                 log_warn(err_msg)
                 messages.append({
