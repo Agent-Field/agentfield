@@ -1428,6 +1428,13 @@ func RegisterServerlessAgentHandler(storageProvider storage.StorageProvider, uiS
 			},
 		}
 
+		// Validate the constructed node before persisting
+		if err := validate.Struct(newNode); err != nil {
+			logger.Logger.Error().Err(err).Msg("❌ Serverless agent validation error")
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Validation failed: " + err.Error()})
+			return
+		}
+
 		// Check if node already exists
 		existingNode, err := storageProvider.GetAgent(ctx, newNode.ID)
 		if err == nil && existingNode != nil {
