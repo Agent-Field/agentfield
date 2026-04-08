@@ -423,7 +423,7 @@ function AgentRow({ node, tagSummary }: AgentRowProps) {
         </span>
 
         <span className="font-mono text-sm font-medium truncate min-w-0 flex-1">
-          {node.id}
+          {node.id || '(unknown)'}
         </span>
 
         {/* Status dot + label */}

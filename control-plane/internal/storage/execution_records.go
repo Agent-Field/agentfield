@@ -381,6 +381,11 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 		where = append(where, "started_at <= ?")
 		args = append(args, filter.EndTime.UTC())
 	}
+	if filter.Search != nil {
+		searchTerm := "%" + *filter.Search + "%"
+		where = append(where, "(run_id LIKE ? OR agent_node_id LIKE ? OR reasoner_id LIKE ?)")
+		args = append(args, searchTerm, searchTerm, searchTerm)
+	}
 
 	whereClause := ""
 	if len(where) > 0 {

@@ -132,6 +132,9 @@ func (h *WorkflowRunHandler) ListWorkflowRunsHandler(c *gin.Context) {
 			filter.StartTime = &ts
 		}
 	}
+	if search := strings.TrimSpace(c.Query("search")); search != "" {
+		filter.Search = &search
+	}
 
 	// Use the efficient aggregation method that scales to millions of nodes
 	runAggregations, totalRuns, err := h.storage.QueryRunSummaries(ctx, filter)

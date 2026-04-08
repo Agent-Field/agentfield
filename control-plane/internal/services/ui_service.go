@@ -84,12 +84,16 @@ func (s *UIService) GetNodesSummary(ctx context.Context) ([]AgentNodeSummaryForU
 			i+1, node.ID, node.TeamID, node.Version, node.HealthStatus, node.LastHeartbeat.Format(time.RFC3339))
 	}
 
-	summaries := make([]AgentNodeSummaryForUI, len(nodes))
-	for i, node := range nodes {
+	summaries := make([]AgentNodeSummaryForUI, 0, len(nodes))
+	for _, node := range nodes {
+		if node.ID == "" {
+			logger.Logger.Warn().Msg("skipping agent node with empty ID")
+			continue
+		}
 		// Use the robust status reconciliation from AgentService as single source of truth
 		lifecycleStatus, healthStatus := s.getReconciledNodeStatus(node.ID, node)
 
-		summaries[i] = AgentNodeSummaryForUI{
+		summaries = append(summaries, AgentNodeSummaryForUI{
 			ID:              node.ID,
 			TeamID:          node.TeamID,
 			Version:         node.Version,
@@ -98,8 +102,7 @@ func (s *UIService) GetNodesSummary(ctx context.Context) ([]AgentNodeSummaryForU
 			ReasonerCount:   len(node.Reasoners),
 			SkillCount:      len(node.Skills),
 			LastHeartbeat:   node.LastHeartbeat,
-		}
-
+		})
 	}
 	return summaries, len(summaries), nil
 }
