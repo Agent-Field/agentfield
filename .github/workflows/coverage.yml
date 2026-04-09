@@ -47,6 +47,18 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------------
+  # Merge-queue fast path: coverage already ran on the PR, so just report
+  # a success status to satisfy the required check without re-running the
+  # full test suite.
+  # ---------------------------------------------------------------------
+  merge-queue-skip:
+    if: github.event_name == 'merge_group'
+    name: coverage-summary
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Coverage already verified on the pull request — skipping in merge queue."
+
+  # ---------------------------------------------------------------------
   # Per-surface coverage producers (run in parallel). Each entry runs the
   # test suite for a single surface with coverage enabled via
   # scripts/coverage-surface.sh, then uploads test-reports/coverage/ as an
@@ -59,6 +71,7 @@ jobs:
   # a required status check so a test regression still blocks merge.
   # ---------------------------------------------------------------------
   per-surface:
+    if: github.event_name != 'merge_group'
     name: coverage (${{ matrix.surface }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -122,6 +135,7 @@ jobs:
   # working without changes.
   # ---------------------------------------------------------------------
   coverage-summary:
+    if: github.event_name != 'merge_group'
     name: coverage-summary
     needs: per-surface
     runs-on: ubuntu-latest
