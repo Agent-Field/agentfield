@@ -226,6 +226,35 @@ func TestExecuteAsyncHandler_InvalidJSON(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, resp.Code)
 }
 
+func TestExecuteHandler_PendingApprovalAgent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	agent := &types.AgentNode{
+		ID:              "node-1",
+		BaseURL:         "http://agent.example",
+		Reasoners:       []types.ReasonerDefinition{{ID: "reasoner-a"}},
+		LifecycleStatus: types.AgentStatusPendingApproval,
+	}
+
+	store := newTestExecutionStorage(agent)
+	payloads := services.NewFilePayloadStore(t.TempDir())
+
+	router := gin.New()
+	router.POST("/api/v1/execute/:target", ExecuteHandler(store, payloads, nil, 90*time.Second, ""))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/node-1.reasoner-a", strings.NewReader(`{"input":{"foo":"bar"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusServiceUnavailable, resp.Code)
+
+	var payload map[string]string
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &payload))
+	require.Contains(t, payload["error"], "awaiting tag approval")
+}
+
 func TestGetExecutionStatusHandler_ReturnsResult(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
