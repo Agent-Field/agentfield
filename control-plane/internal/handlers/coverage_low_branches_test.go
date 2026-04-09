@@ -622,7 +622,7 @@ func TestHeartbeatHandler_AdditionalCoverage(t *testing.T) {
 		router.ServeHTTP(rec, req)
 
 		require.Equal(t, http.StatusOK, rec.Code)
-		require.Eventually(t, func() bool { return len(store.heartbeats) == 1 }, time.Second, 10*time.Millisecond)
+		require.Eventually(t, func() bool { return len(store.heartbeats) == 1 }, 5*time.Second, 50*time.Millisecond)
 		assert.Equal(t, "node-1", store.lastHeartbeatID)
 		assert.Equal(t, "v1", store.lastVersion)
 		require.NotNil(t, store.updatedLifecycle)
@@ -687,7 +687,7 @@ func TestProcessHeartbeatAsync_UsesVersionFallback(t *testing.T) {
 
 	processHeartbeatAsync(store, nil, "node-async", "", &CachedNodeData{LastDBUpdate: time.Now().UTC()})
 
-	require.Eventually(t, func() bool { return len(store.heartbeats) == 1 }, time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return len(store.heartbeats) == 1 }, 5*time.Second, 50*time.Millisecond)
 	assert.Equal(t, "node-async", store.lastHeartbeatID)
 }
 

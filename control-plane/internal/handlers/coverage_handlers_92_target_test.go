@@ -754,11 +754,12 @@ func TestCheckLLMEndpointHealthAdditionalBranches(t *testing.T) {
 		}, nil)
 		go monitor.Start()
 		defer monitor.Stop()
-		time.Sleep(40 * time.Millisecond)
 
-		err := checkLLMEndpointHealth(monitor, "unknown-endpoint")
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), `LLM backend "solo" unavailable`)
+		// Poll until the monitor detects the unhealthy endpoint.
+		require.Eventually(t, func() bool {
+			err := checkLLMEndpointHealth(monitor, "unknown-endpoint")
+			return err != nil && strings.Contains(err.Error(), `LLM backend "solo" unavailable`)
+		}, 5*time.Second, 50*time.Millisecond)
 	})
 }
 

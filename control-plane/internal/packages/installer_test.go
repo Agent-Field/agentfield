@@ -37,33 +37,22 @@ func readRegistryFile(t *testing.T, path string) InstallationRegistry {
 }
 
 func TestResolveServerURL(t *testing.T) {
-	origServer, hasServer := os.LookupEnv("AGENTFIELD_SERVER")
-	origURL, hasURL := os.LookupEnv("AGENTFIELD_SERVER_URL")
-	t.Cleanup(func() {
-		if hasServer {
-			_ = os.Setenv("AGENTFIELD_SERVER", origServer)
-		} else {
-			_ = os.Unsetenv("AGENTFIELD_SERVER")
-		}
-		if hasURL {
-			_ = os.Setenv("AGENTFIELD_SERVER_URL", origURL)
-		} else {
-			_ = os.Unsetenv("AGENTFIELD_SERVER_URL")
-		}
-	})
-
-	_ = os.Unsetenv("AGENTFIELD_SERVER")
-	_ = os.Unsetenv("AGENTFIELD_SERVER_URL")
+	// t.Setenv registers cleanup to restore original values when test ends.
+	// Initial call registers the restore; os.Unsetenv clears for the default case.
+	t.Setenv("AGENTFIELD_SERVER", "")
+	t.Setenv("AGENTFIELD_SERVER_URL", "")
+	os.Unsetenv("AGENTFIELD_SERVER")
+	os.Unsetenv("AGENTFIELD_SERVER_URL")
 	if got := resolveServerURL(); got != "http://localhost:8080" {
 		t.Fatalf("default URL = %q", got)
 	}
 
-	_ = os.Setenv("AGENTFIELD_SERVER_URL", "http://from-url")
+	t.Setenv("AGENTFIELD_SERVER_URL", "http://from-url")
 	if got := resolveServerURL(); got != "http://from-url" {
 		t.Fatalf("server URL env = %q", got)
 	}
 
-	_ = os.Setenv("AGENTFIELD_SERVER", "http://preferred")
+	t.Setenv("AGENTFIELD_SERVER", "http://preferred")
 	if got := resolveServerURL(); got != "http://preferred" {
 		t.Fatalf("preferred env = %q", got)
 	}

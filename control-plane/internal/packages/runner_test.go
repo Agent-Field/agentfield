@@ -108,7 +108,8 @@ func TestAgentNodeRunnerPortEnvAndRegistry(t *testing.T) {
 }
 
 func TestAgentNodeRunnerWaitDisplayAndStartProcess(t *testing.T) {
-	t.Parallel()
+	// Cannot use t.Parallel() — this test modifies PATH via t.Setenv,
+	// which is process-global and unsafe to share with parallel tests.
 
 	runner := &AgentNodeRunner{}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -164,20 +165,8 @@ func TestAgentNodeRunnerWaitDisplayAndStartProcess(t *testing.T) {
 	}
 
 	origPath := os.Getenv("PATH")
-	t.Cleanup(func() { _ = os.Setenv("PATH", origPath) })
-	if err := os.Setenv("PATH", fakeBin+string(os.PathListSeparator)+origPath); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-
-	origServer, hadServer := os.LookupEnv("AGENTFIELD_SERVER")
-	t.Cleanup(func() {
-		if hadServer {
-			_ = os.Setenv("AGENTFIELD_SERVER", origServer)
-		} else {
-			_ = os.Unsetenv("AGENTFIELD_SERVER")
-		}
-	})
-	_ = os.Setenv("AGENTFIELD_SERVER", "http://control-plane.test")
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+origPath)
+	t.Setenv("AGENTFIELD_SERVER", "http://control-plane.test")
 
 	pkgPath := filepath.Join(tempDir, "package")
 	if err := os.MkdirAll(pkgPath, 0755); err != nil {
@@ -238,10 +227,7 @@ func TestAgentNodeRunnerRunAgentNode(t *testing.T) {
 		t.Fatalf("write python wrapper: %v", err)
 	}
 	origPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", fakeBin+string(os.PathListSeparator)+origPath); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Setenv("PATH", origPath) })
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+origPath)
 
 	pkgPath := filepath.Join(home, "package")
 	if err := os.MkdirAll(pkgPath, 0755); err != nil {

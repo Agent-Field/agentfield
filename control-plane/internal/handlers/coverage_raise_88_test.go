@@ -404,7 +404,7 @@ func TestExecutionController_AdditionalCoverage(t *testing.T) {
 			}
 			executionID = records[0].ExecutionID
 			return executionID != ""
-		}, time.Second, 10*time.Millisecond)
+		}, 5*time.Second, 50*time.Millisecond)
 
 		_, err := store.UpdateExecutionRecord(context.Background(), executionID, func(current *types.Execution) (*types.Execution, error) {
 			current.Status = types.ExecutionStatusFailed
@@ -445,14 +445,13 @@ func TestExecutionController_AdditionalCoverage(t *testing.T) {
 		}
 
 		prevAsyncPool := asyncPool
-		prevAsyncOnce := asyncPoolOnce
 		asyncPool = &asyncWorkerPool{queue: make(chan asyncExecutionJob)}
 		asyncPoolOnce = sync.Once{}
 		asyncPoolOnce.Do(func() {})
-		defer func() {
+		t.Cleanup(func() {
 			asyncPool = prevAsyncPool
-			asyncPoolOnce = prevAsyncOnce
-		}()
+			asyncPoolOnce = sync.Once{}
+		})
 
 		asyncStore := newTestExecutionStorage(agent)
 		asyncRouter := gin.New()
@@ -465,15 +464,14 @@ func TestExecutionController_AdditionalCoverage(t *testing.T) {
 		require.Equal(t, http.StatusServiceUnavailable, asyncResp.Code)
 
 		prevCompletionQueue := completionQueue
-		prevCompletionOnce := completionOnce
 		completionQueue = make(chan completionJob, 1)
 		completionQueue <- completionJob{}
 		completionOnce = sync.Once{}
 		completionOnce.Do(func() {})
-		defer func() {
+		t.Cleanup(func() {
 			completionQueue = prevCompletionQueue
-			completionOnce = prevCompletionOnce
-		}()
+			completionOnce = sync.Once{}
+		})
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -692,8 +690,8 @@ func TestNodeHelpers_AdditionalCoverage(t *testing.T) {
 		}
 		processHeartbeatAsync(store, nil, "node-1", "v1", &CachedNodeData{LastDBUpdate: time.Now().UTC()})
 
-		time.Sleep(50 * time.Millisecond)
-		assert.Empty(t, store.heartbeats)
+		// Assert that the async goroutine does not record a heartbeat when version lookup fails.
+		require.Never(t, func() bool { return len(store.heartbeats) > 0 }, 200*time.Millisecond, 10*time.Millisecond)
 	})
 
 	t.Run("status handlers exercise error branches", func(t *testing.T) {

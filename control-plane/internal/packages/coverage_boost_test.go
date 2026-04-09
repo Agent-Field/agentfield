@@ -273,7 +273,6 @@ func TestGitHubInstallerAdditionalErrorCoverage(t *testing.T) {
 
 	t.Run("install from github invalid metadata", func(t *testing.T) {
 		home := t.TempDir()
-		gi := &GitHubInstaller{AgentFieldHome: home}
 
 		sourceZip := filepath.Join(t.TempDir(), "bad.zip")
 		createZipFile(t, sourceZip, map[string]string{
@@ -285,15 +284,18 @@ func TestGitHubInstallerAdditionalErrorCoverage(t *testing.T) {
 			t.Fatalf("read zip: %v", err)
 		}
 
-		origTransport := http.DefaultTransport
-		http.DefaultTransport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
-			return &http.Response{
-				StatusCode: 200,
-				Header:     make(http.Header),
-				Body:       io.NopCloser(bytes.NewReader(zipBytes)),
-			}, nil
-		})
-		defer func() { http.DefaultTransport = origTransport }()
+		gi := &GitHubInstaller{
+			AgentFieldHome: home,
+			HTTPClient: &http.Client{
+				Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: 200,
+						Header:     make(http.Header),
+						Body:       io.NopCloser(bytes.NewReader(zipBytes)),
+					}, nil
+				}),
+			},
+		}
 
 		err = gi.InstallFromGitHub("acme/repo@main", true)
 		if err == nil || !strings.Contains(err.Error(), "failed to parse package metadata") {
@@ -391,18 +393,16 @@ func TestPackageInstallerInstallPackageAdditionalCoverage(t *testing.T) {
 }
 
 func TestGitHubInstallerInstallFromGitHubAdditionalCoverage(t *testing.T) {
-	withTransport := func(t *testing.T, zipBytes []byte, fn func()) {
-		t.Helper()
-		origTransport := http.DefaultTransport
-		http.DefaultTransport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Header:     make(http.Header),
-				Body:       io.NopCloser(bytes.NewReader(zipBytes)),
-			}, nil
-		})
-		defer func() { http.DefaultTransport = origTransport }()
-		fn()
+	testClient := func(zipBytes []byte) *http.Client {
+		return &http.Client{
+			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(bytes.NewReader(zipBytes)),
+				}, nil
+			}),
+		}
 	}
 
 	t.Run("duplicate install without force", func(t *testing.T) {
@@ -426,9 +426,7 @@ func TestGitHubInstallerInstallFromGitHubAdditionalCoverage(t *testing.T) {
 			t.Fatalf("read zip: %v", err)
 		}
 
-		withTransport(t, zipBytes, func() {
-			err = (&GitHubInstaller{AgentFieldHome: home}).InstallFromGitHub("acme/repo@main", false)
-		})
+		err = (&GitHubInstaller{AgentFieldHome: home, HTTPClient: testClient(zipBytes)}).InstallFromGitHub("acme/repo@main", false)
 		if err == nil || !strings.Contains(err.Error(), "already installed") {
 			t.Fatalf("InstallFromGitHub error = %v", err)
 		}
@@ -450,9 +448,7 @@ func TestGitHubInstallerInstallFromGitHubAdditionalCoverage(t *testing.T) {
 			t.Fatalf("read zip: %v", err)
 		}
 
-		withTransport(t, zipBytes, func() {
-			err = (&GitHubInstaller{AgentFieldHome: home}).InstallFromGitHub("acme/repo@main", true)
-		})
+		err = (&GitHubInstaller{AgentFieldHome: home, HTTPClient: testClient(zipBytes)}).InstallFromGitHub("acme/repo@main", true)
 		if err == nil || !strings.Contains(err.Error(), "failed to update registry") {
 			t.Fatalf("InstallFromGitHub error = %v", err)
 		}
@@ -468,20 +464,14 @@ func TestGitHubInstallerInstallFromGitHubAdditionalCoverage(t *testing.T) {
 			t.Fatalf("read zip: %v", err)
 		}
 
-		withTransport(t, zipBytes, func() {
-			err = (&GitHubInstaller{AgentFieldHome: t.TempDir()}).InstallFromGitHub("acme/repo@main", true)
-		})
+		err = (&GitHubInstaller{AgentFieldHome: t.TempDir(), HTTPClient: testClient(zipBytes)}).InstallFromGitHub("acme/repo@main", true)
 		if err == nil || !strings.Contains(err.Error(), "invalid package structure") {
 			t.Fatalf("InstallFromGitHub error = %v", err)
 		}
 	})
 
 	t.Run("install dependencies failure", func(t *testing.T) {
-		origPath := os.Getenv("PATH")
-		t.Cleanup(func() { _ = os.Setenv("PATH", origPath) })
-		if err := os.Setenv("PATH", ""); err != nil {
-			t.Fatalf("set PATH: %v", err)
-		}
+		t.Setenv("PATH", "")
 
 		sourceZip := filepath.Join(t.TempDir(), "deps.zip")
 		createZipFile(t, sourceZip, map[string]string{
@@ -493,9 +483,7 @@ func TestGitHubInstallerInstallFromGitHubAdditionalCoverage(t *testing.T) {
 			t.Fatalf("read zip: %v", err)
 		}
 
-		withTransport(t, zipBytes, func() {
-			err = (&GitHubInstaller{AgentFieldHome: t.TempDir()}).InstallFromGitHub("acme/repo@main", true)
-		})
+		err = (&GitHubInstaller{AgentFieldHome: t.TempDir(), HTTPClient: testClient(zipBytes)}).InstallFromGitHub("acme/repo@main", true)
 		if err == nil || !strings.Contains(err.Error(), "failed to install dependencies") {
 			t.Fatalf("InstallFromGitHub error = %v", err)
 		}
@@ -538,12 +526,8 @@ func TestGitInstallerInstallFromGitMoreCoverage(t *testing.T) {
 		writeTestPackage(t, repo, "name: git-deps\nversion: 1.0.0\ndependencies:\n  python:\n    - missing-package\n")
 		setupFakeGit(t, "copy", repo, false)
 
-		origPath := os.Getenv("PATH")
-		t.Cleanup(func() { _ = os.Setenv("PATH", origPath) })
 		gitDir := filepath.Dir(mustLookPath(t, "git"))
-		if err := os.Setenv("PATH", strings.Join([]string{gitDir, "/usr/bin", "/bin"}, string(os.PathListSeparator))); err != nil {
-			t.Fatalf("set PATH: %v", err)
-		}
+		t.Setenv("PATH", strings.Join([]string{gitDir, "/usr/bin", "/bin"}, string(os.PathListSeparator)))
 
 		err := (&GitInstaller{AgentFieldHome: home}).InstallFromGit("https://gitlab.com/acme/repo", true)
 		if err == nil || !strings.Contains(err.Error(), "failed to install dependencies") {

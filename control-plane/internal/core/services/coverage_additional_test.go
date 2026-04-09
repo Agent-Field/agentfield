@@ -115,10 +115,8 @@ func TestAgentServiceBuildProcessConfig(t *testing.T) {
 }
 
 func TestAgentServiceWaitForAgentNode(t *testing.T) {
-	port := findFreePortInRange(t)
-
 	t.Run("ready", func(t *testing.T) {
-		server := startLocalServer(t, port, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server, port := startLocalServerOnFreePort(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/health" {
 				http.NotFound(w, r)
 				return
@@ -132,6 +130,7 @@ func TestAgentServiceWaitForAgentNode(t *testing.T) {
 	})
 
 	t.Run("timeout", func(t *testing.T) {
+		port := findFreePortInRange(t)
 		service := &DefaultAgentService{}
 		err := service.waitForAgentNode(port, 750*time.Millisecond)
 		require.Error(t, err)
@@ -361,7 +360,8 @@ exit 0
 	t.Run("spinner error", func(t *testing.T) {
 		spinner := service.newSpinner("working")
 		spinner.Start()
-		time.Sleep(20 * time.Millisecond)
+		// Sleep is inherent to the test: let the spinner goroutine animate briefly before stopping.
+		time.Sleep(50 * time.Millisecond)
 		spinner.Error("failed")
 	})
 }
@@ -452,8 +452,7 @@ func TestAgentServiceRunStopAndStatusWithLiveProcess(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(filepath.Join(home, "installed.yaml"), data, 0o644))
 
-		port := findFreePortInRange(t)
-		server := startLocalServer(t, port, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server, port := startLocalServerOnFreePort(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
 			case "/health":
 				w.WriteHeader(http.StatusOK)
@@ -596,17 +595,39 @@ func assertEnvWithPrefix(t *testing.T, env []string, prefix, contains string) {
 	t.Fatalf("expected environment entry with prefix %q containing %q", prefix, contains)
 }
 
+// findFreePortInRange returns an ephemeral port that is free at call time.
+// Uses :0 to let the OS assign a port, avoiding hardcoded range conflicts.
+// Note: there is an inherent TOCTOU race between closing the listener and
+// the caller re-binding. For tests that start an HTTP server, prefer
+// startLocalServerOnFreePort which keeps the listener open.
 func findFreePortInRange(t *testing.T) int {
 	t.Helper()
-	for port := 8001; port <= 8999; port++ {
-		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-		if err == nil {
-			_ = ln.Close()
-			return port
-		}
-	}
-	t.Fatal("no free port found in range 8001-8999")
-	return 0
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+	return port
+}
+
+// startLocalServerOnFreePort starts an HTTP server on an OS-assigned port,
+// avoiding the TOCTOU race of find-port-then-bind. Returns the server and
+// the port it is listening on.
+func startLocalServerOnFreePort(t *testing.T, handler http.Handler) (*http.Server, int) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	server := &http.Server{Handler: handler}
+	go func() {
+		_ = server.Serve(ln)
+	}()
+
+	t.Cleanup(func() {
+		_ = server.Close()
+	})
+
+	return server, port
 }
 
 func startLocalServer(t *testing.T, port int, handler http.Handler) *http.Server {
@@ -624,4 +645,20 @@ func startLocalServer(t *testing.T, port int, handler http.Handler) *http.Server
 	})
 
 	return server
+}
+
+// findPortInAgentRange finds a free port in the 8001-8999 range that
+// discoverAgentPort and the production runner scan. Has an inherent TOCTOU
+// race but is required for tests that exercise the hardcoded port range.
+func findPortInAgentRange(t *testing.T) int {
+	t.Helper()
+	for port := 8001; port <= 8999; port++ {
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err == nil {
+			_ = ln.Close()
+			return port
+		}
+	}
+	t.Fatal("no free port found in range 8001-8999")
+	return 0
 }

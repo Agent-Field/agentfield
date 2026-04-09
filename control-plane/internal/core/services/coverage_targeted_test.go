@@ -52,6 +52,8 @@ func TestRunDevHelperProcess(t *testing.T) {
 		_ = server.Serve(ln)
 	}()
 
+	// Sleep is inherent to the test: this helper process must stay alive long enough
+	// for the parent test to exercise health checks and shutdown against it.
 	time.Sleep(1200 * time.Millisecond)
 	_ = server.Shutdown(context.Background())
 
@@ -61,12 +63,24 @@ func TestRunDevHelperProcess(t *testing.T) {
 }
 
 func TestDevServiceRunDev(t *testing.T) {
+	// These subtests spawn a real python3 subprocess that serves HTTP on a
+	// port in the 8001-8999 range. discoverAgentPort scans that range with a
+	// 120s internal timeout, so if the subprocess fails to start (e.g., python3
+	// heredoc issues, port already taken), the test hangs for minutes.
+	// Guard with a per-test deadline to prevent that from killing the suite.
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not available, skipping dev service subprocess tests")
+	}
+	if testing.Short() {
+		t.Skip("skipping slow dev service subprocess tests in short mode")
+	}
+
 	t.Run("successful run", func(t *testing.T) {
 		dir := t.TempDir()
 		venvBin := filepath.Join(dir, "venv", "bin")
 		require.NoError(t, os.MkdirAll(venvBin, 0o755))
 
-		port := findFreePortInRange(t)
+		port := findPortInAgentRange(t)
 		t.Setenv("AF_TEST_HELPER_MODE", "serve-success")
 		script := "#!/bin/sh\npython3 - <<'PY'\nimport os, sys, threading, time\nfrom http.server import BaseHTTPRequestHandler, HTTPServer\nport = int(os.environ['PORT'])\nmode = os.environ.get('AF_TEST_HELPER_MODE', 'serve-success')\nclass Handler(BaseHTTPRequestHandler):\n    def log_message(self, fmt, *args):\n        pass\n    def do_GET(self):\n        if self.path == '/health':\n            self.send_response(200)\n            self.end_headers()\n        elif self.path == '/reasoners':\n            self.send_response(200)\n            self.end_headers()\n            if mode == 'serve-capabilities-error':\n                self.wfile.write(b'{\"reasoners\":[')\n            else:\n                self.wfile.write(b'{\"reasoners\":[{\"id\":\"helper-reasoner\"}]}')\n        elif self.path == '/skills':\n            self.send_response(200)\n            self.end_headers()\n            self.wfile.write(b'{\"skills\":[{\"id\":\"helper-skill\"}]}')\n        else:\n            self.send_response(404)\n            self.end_headers()\nserver = HTTPServer(('127.0.0.1', port), Handler)\nthread = threading.Thread(target=server.serve_forever)\nthread.daemon = True\nthread.start()\ntime.sleep(1.2)\nserver.shutdown()\nserver.server_close()\nsys.exit(3 if mode == 'serve-exit-error' else 0)\nPY\n"
 		require.NoError(t, os.WriteFile(filepath.Join(venvBin, "python"), []byte(script), 0o755))
@@ -81,7 +95,7 @@ func TestDevServiceRunDev(t *testing.T) {
 		venvBin := filepath.Join(dir, "venv", "bin")
 		require.NoError(t, os.MkdirAll(venvBin, 0o755))
 
-		port := findFreePortInRange(t)
+		port := findPortInAgentRange(t)
 		t.Setenv("AF_TEST_HELPER_MODE", "serve-exit-error")
 		script := "#!/bin/sh\npython3 - <<'PY'\nimport os, sys, threading, time\nfrom http.server import BaseHTTPRequestHandler, HTTPServer\nport = int(os.environ['PORT'])\nmode = os.environ.get('AF_TEST_HELPER_MODE', 'serve-success')\nclass Handler(BaseHTTPRequestHandler):\n    def log_message(self, fmt, *args):\n        pass\n    def do_GET(self):\n        if self.path == '/health':\n            self.send_response(200)\n            self.end_headers()\n        elif self.path == '/reasoners':\n            self.send_response(200)\n            self.end_headers()\n            if mode == 'serve-capabilities-error':\n                self.wfile.write(b'{\"reasoners\":[')\n            else:\n                self.wfile.write(b'{\"reasoners\":[{\"id\":\"helper-reasoner\"}]}')\n        elif self.path == '/skills':\n            self.send_response(200)\n            self.end_headers()\n            self.wfile.write(b'{\"skills\":[{\"id\":\"helper-skill\"}]}')\n        else:\n            self.send_response(404)\n            self.end_headers()\nserver = HTTPServer(('127.0.0.1', port), Handler)\nthread = threading.Thread(target=server.serve_forever)\nthread.daemon = True\nthread.start()\ntime.sleep(1.2)\nserver.shutdown()\nserver.server_close()\nsys.exit(3 if mode == 'serve-exit-error' else 0)\nPY\n"
 		require.NoError(t, os.WriteFile(filepath.Join(venvBin, "python"), []byte(script), 0o755))
@@ -98,7 +112,7 @@ func TestDevServiceRunDev(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(venvBin, "python"), []byte("#!/bin/sh\nexit 0\n"), 0o644))
 
 		service := &DefaultDevService{}
-		err := service.runDev(dir, domain.DevOptions{Port: findFreePortInRange(t)})
+		err := service.runDev(dir, domain.DevOptions{Port: findPortInAgentRange(t)})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to start agent")
 	})
@@ -108,7 +122,7 @@ func TestDevServiceRunDev(t *testing.T) {
 		venvBin := filepath.Join(dir, "venv", "bin")
 		require.NoError(t, os.MkdirAll(venvBin, 0o755))
 
-		port := findFreePortInRange(t)
+		port := findPortInAgentRange(t)
 		t.Setenv("AF_TEST_HELPER_MODE", "serve-capabilities-error")
 		script := "#!/bin/sh\npython3 - <<'PY'\nimport os, sys, threading, time\nfrom http.server import BaseHTTPRequestHandler, HTTPServer\nport = int(os.environ['PORT'])\nmode = os.environ.get('AF_TEST_HELPER_MODE', 'serve-success')\nclass Handler(BaseHTTPRequestHandler):\n    def log_message(self, fmt, *args):\n        pass\n    def do_GET(self):\n        if self.path == '/health':\n            self.send_response(200)\n            self.end_headers()\n        elif self.path == '/reasoners':\n            self.send_response(200)\n            self.end_headers()\n            if mode == 'serve-capabilities-error':\n                self.wfile.write(b'{\"reasoners\":[')\n            else:\n                self.wfile.write(b'{\"reasoners\":[{\"id\":\"helper-reasoner\"}]}')\n        elif self.path == '/skills':\n            self.send_response(200)\n            self.end_headers()\n            self.wfile.write(b'{\"skills\":[{\"id\":\"helper-skill\"}]}')\n        else:\n            self.send_response(404)\n            self.end_headers()\nserver = HTTPServer(('127.0.0.1', port), Handler)\nthread = threading.Thread(target=server.serve_forever)\nthread.daemon = True\nthread.start()\ntime.sleep(1.2)\nserver.shutdown()\nserver.server_close()\nsys.exit(3 if mode == 'serve-exit-error' else 0)\nPY\n"
 		require.NoError(t, os.WriteFile(filepath.Join(venvBin, "python"), []byte(script), 0o755))
@@ -274,6 +288,7 @@ func TestAgentServiceStopAgentAdditionalCoverage(t *testing.T) {
 
 		agentClient := newMockAgentClient()
 		agentClient.shutdownFunc = func(ctx context.Context, nodeID string, graceful bool, timeoutSeconds int) (*interfaces.AgentShutdownResponse, error) {
+			// Sleep is inherent to the test: simulates a slow shutdown response.
 			time.Sleep(300 * time.Millisecond)
 			return nil, fmt.Errorf("shutdown unavailable")
 		}
@@ -632,8 +647,7 @@ func TestAgentServiceRunAgentAdditionalCoverage(t *testing.T) {
 		registryPath := filepath.Join(home, "installed.yaml")
 		require.NoError(t, os.WriteFile(registryPath, data, 0o444))
 
-		port := findFreePortInRange(t)
-		server := startLocalServer(t, port, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server, port := startLocalServerOnFreePort(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
 			case "/health":
 				w.WriteHeader(http.StatusOK)

@@ -52,21 +52,7 @@ func (f *fakeTarget) Status() (bool, string, error) {
 
 func withEnv(t *testing.T, key, value string) {
 	t.Helper()
-	old, ok := os.LookupEnv(key)
-	if err := os.Setenv(key, value); err != nil {
-		t.Fatalf("setenv %s: %v", key, err)
-	}
-	t.Cleanup(func() {
-		var err error
-		if ok {
-			err = os.Setenv(key, old)
-		} else {
-			err = os.Unsetenv(key)
-		}
-		if err != nil {
-			t.Fatalf("restore env %s: %v", key, err)
-		}
-	})
+	t.Setenv(key, value)
 }
 
 func withTempHome(t *testing.T) string {

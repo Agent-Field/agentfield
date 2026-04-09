@@ -307,13 +307,15 @@ func TestSpinnerAndPrintHelpers(t *testing.T) {
 		spinner := NewSpinner("working")
 		require.Equal(t, "working", spinner.message)
 		spinner.Start()
-		time.Sleep(120 * time.Millisecond)
+		// Sleep is inherent to the test: let the spinner goroutine animate briefly before stopping.
+		time.Sleep(50 * time.Millisecond)
 		spinner.UpdateMessage("updated")
 		spinner.Success("done")
 
 		spinner = NewSpinner("working")
 		spinner.Start()
-		time.Sleep(120 * time.Millisecond)
+		// Sleep is inherent to the test: let the spinner goroutine animate briefly before stopping.
+		time.Sleep(50 * time.Millisecond)
 		spinner.Error("failed")
 
 		PrintSuccess("ok")

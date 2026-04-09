@@ -4,6 +4,7 @@ package services
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"sync/atomic"
 	"testing"
@@ -15,7 +16,9 @@ import (
 )
 
 func TestDevServiceDiscoverAgentPort(t *testing.T) {
-	port := findFreePortInRange(t)
+	// discoverAgentPort scans the hardcoded 8001-8999 range, so we must bind
+	// within that range. Find and hold a port atomically via startLocalServer.
+	port := findPortInAgentRange(t)
 	server := startLocalServer(t, port, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/health" {
 			http.NotFound(w, r)
@@ -40,9 +43,8 @@ func TestDevServiceDiscoverAgentPortTimeout(t *testing.T) {
 }
 
 func TestDevServiceWaitForAgent(t *testing.T) {
-	port := findFreePortInRange(t)
 	var requestCount int32
-	server := startLocalServer(t, port, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server, port := startLocalServerOnFreePort(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/health" {
 			http.NotFound(w, r)
 			return
@@ -61,15 +63,21 @@ func TestDevServiceWaitForAgent(t *testing.T) {
 
 func TestDevServiceWaitForAgentTimeout(t *testing.T) {
 	service := &DefaultDevService{}
-	port := findFreePortInRange(t)
-	err := service.waitForAgent(port, 750*time.Millisecond)
+	// Bind a listener so the port is deterministically occupied, then close it
+	// right before calling waitForAgent. Using port 0 gives us an ephemeral port
+	// that no test server is listening on.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	// Now nothing is listening on this port, so waitForAgent must time out.
+	err = service.waitForAgent(port, 750*time.Millisecond)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "agent did not become ready")
 }
 
 func TestDevServiceDisplayDevCapabilities(t *testing.T) {
-	port := findFreePortInRange(t)
-	server := startLocalServer(t, port, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server, port := startLocalServerOnFreePort(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/reasoners":
 			_, _ = fmt.Fprint(w, `{"reasoners":[{"id":"reasoner-a"}]}`)
@@ -86,8 +94,7 @@ func TestDevServiceDisplayDevCapabilities(t *testing.T) {
 }
 
 func TestDevServiceDisplayDevCapabilitiesDecodeError(t *testing.T) {
-	port := findFreePortInRange(t)
-	server := startLocalServer(t, port, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server, port := startLocalServerOnFreePort(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/reasoners":
 			_, _ = fmt.Fprint(w, `{"reasoners":[`)
@@ -105,8 +112,7 @@ func TestDevServiceDisplayDevCapabilitiesDecodeError(t *testing.T) {
 }
 
 func TestAgentServiceDisplayCapabilities(t *testing.T) {
-	port := findFreePortInRange(t)
-	server := startLocalServer(t, port, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server, port := startLocalServerOnFreePort(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/reasoners":
 			_, _ = fmt.Fprint(w, `{"reasoners":[{"id":"reasoner-a"}]}`)
@@ -123,8 +129,7 @@ func TestAgentServiceDisplayCapabilities(t *testing.T) {
 }
 
 func TestAgentServiceDisplayCapabilitiesDecodeError(t *testing.T) {
-	port := findFreePortInRange(t)
-	server := startLocalServer(t, port, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server, port := startLocalServerOnFreePort(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/reasoners":
 			_, _ = fmt.Fprint(w, `{"reasoners":[{"id":"reasoner-a"}]}`)

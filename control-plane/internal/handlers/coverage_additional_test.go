@@ -292,11 +292,14 @@ func TestConcurrencyLimiterInitializationAndPreconditions(t *testing.T) {
 	llmHealthMonitorMu.Lock()
 	llmHealthMonitor = nil
 	llmHealthMonitorMu.Unlock()
+	prevLimiter := concurrencyLimiter
 	concurrencyLimiterOnce = sync.Once{}
 	concurrencyLimiter = nil
 	t.Cleanup(func() {
+		// Restore the guarded value and reset the Once so the next
+		// InitConcurrencyLimiter call can re-initialise if needed.
+		concurrencyLimiter = prevLimiter
 		concurrencyLimiterOnce = sync.Once{}
-		concurrencyLimiter = nil
 	})
 
 	InitConcurrencyLimiter(1)

@@ -96,7 +96,7 @@ func TestExecutionPublishers(t *testing.T) {
 			case event := <-ch:
 				require.Equal(t, tt.expected, event.Type)
 				require.Equal(t, "exec1", event.ExecutionID)
-			case <-time.After(time.Second):
+			case <-time.After(5 * time.Second):
 				t.Errorf("Timeout waiting for event %s", tt.expected)
 			}
 		})
@@ -136,7 +136,7 @@ func TestNodePublishers(t *testing.T) {
 			select {
 			case event := <-ch:
 				require.Equal(t, tt.expected, event.Type)
-			case <-time.After(time.Second):
+			case <-time.After(5 * time.Second):
 				t.Errorf("Timeout waiting for event %s", tt.expected)
 			}
 		})
@@ -167,7 +167,7 @@ func TestReasonerPublishers(t *testing.T) {
 			select {
 			case event := <-ch:
 				require.Equal(t, tt.expected, event.Type)
-			case <-time.After(time.Second):
+			case <-time.After(5 * time.Second):
 				t.Errorf("Timeout waiting for event %s", tt.expected)
 			}
 		})

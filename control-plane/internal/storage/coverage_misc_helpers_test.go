@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -133,8 +132,7 @@ func TestStorageHelperCoverage(t *testing.T) {
 		require.NotNil(t, cache)
 		t.Cleanup(func() { _ = store.Close(context.Background()) })
 
-		require.NoError(t, os.Setenv("AGENTFIELD_STORAGE_MODE", "bogus"))
-		defer os.Unsetenv("AGENTFIELD_STORAGE_MODE")
+		t.Setenv("AGENTFIELD_STORAGE_MODE", "bogus")
 		_, _, err = factory.CreateStorage(cfg)
 		require.EqualError(t, err, "unsupported storage mode: bogus (supported modes: local, postgres)")
 	})

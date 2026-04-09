@@ -203,7 +203,6 @@ func TestGitHubInstallerInvalidURL(t *testing.T) {
 
 func TestGitHubInstallerInstallFromGitHubSuccess(t *testing.T) {
 	home := t.TempDir()
-	gi := &GitHubInstaller{AgentFieldHome: home}
 
 	sourceZip := filepath.Join(t.TempDir(), "install.zip")
 	createZipFile(t, sourceZip, map[string]string{
@@ -215,18 +214,21 @@ func TestGitHubInstallerInstallFromGitHubSuccess(t *testing.T) {
 		t.Fatalf("read zip: %v", err)
 	}
 
-	origTransport := http.DefaultTransport
-	http.DefaultTransport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		if !strings.Contains(r.URL.Host, "github.com") {
-			return nil, fmt.Errorf("unexpected host: %s", r.URL.Host)
-		}
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     make(http.Header),
-			Body:       io.NopCloser(bytes.NewReader(zipBytes)),
-		}, nil
-	})
-	defer func() { http.DefaultTransport = origTransport }()
+	gi := &GitHubInstaller{
+		AgentFieldHome: home,
+		HTTPClient: &http.Client{
+			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if !strings.Contains(r.URL.Host, "github.com") {
+					return nil, fmt.Errorf("unexpected host: %s", r.URL.Host)
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(bytes.NewReader(zipBytes)),
+				}, nil
+			}),
+		},
+	}
 
 	if err := gi.InstallFromGitHub("acme/repo@main", true); err != nil {
 		t.Fatalf("InstallFromGitHub: %v", err)

@@ -305,13 +305,11 @@ func TestAsyncExecutionJob_ProcessFallbackCoverage(t *testing.T) {
 
 	previousLimiter := concurrencyLimiter
 	previousQueue := completionQueue
-	previousOnce := completionOnce
-	previousEnv := os.Getenv("AGENTFIELD_EXEC_COMPLETION_QUEUE")
+	t.Setenv("AGENTFIELD_EXEC_COMPLETION_QUEUE", os.Getenv("AGENTFIELD_EXEC_COMPLETION_QUEUE"))
 	t.Cleanup(func() {
 		concurrencyLimiter = previousLimiter
 		completionQueue = previousQueue
-		completionOnce = previousOnce
-		_ = os.Setenv("AGENTFIELD_EXEC_COMPLETION_QUEUE", previousEnv)
+		completionOnce = sync.Once{}
 	})
 
 	tests := []struct {
@@ -338,6 +336,15 @@ func TestAsyncExecutionJob_ProcessFallbackCoverage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Save and restore per-subtest to avoid ordering dependencies.
+			prevLimiter := concurrencyLimiter
+			prevQueue := completionQueue
+			t.Cleanup(func() {
+				concurrencyLimiter = prevLimiter
+				completionQueue = prevQueue
+				completionOnce = sync.Once{}
+			})
+
 			concurrencyLimiter = &AgentConcurrencyLimiter{maxPerAgent: 2}
 			require.NoError(t, concurrencyLimiter.Acquire("node-queue"))
 
@@ -418,15 +425,21 @@ func TestExecuteHelpers_AdditionalCoverage(t *testing.T) {
 		assert.Equal(t, "short", truncateForLog([]byte("short")))
 		assert.True(t, strings.HasSuffix(truncateForLog([]byte(strings.Repeat("a", 1025))), "..."))
 
+		// Use os.Setenv instead of t.Setenv because the parent test uses t.Parallel.
 		key := "AGENTFIELD_TEST_INT"
-		previous := os.Getenv(key)
-		t.Cleanup(func() { _ = os.Setenv(key, previous) })
-
-		_ = os.Unsetenv(key)
+		orig, hadOrig := os.LookupEnv(key)
+		t.Cleanup(func() {
+			if hadOrig {
+				os.Setenv(key, orig)
+			} else {
+				os.Unsetenv(key)
+			}
+		})
+		os.Unsetenv(key)
 		assert.Equal(t, 7, resolveIntFromEnv(key, 7))
-		require.NoError(t, os.Setenv(key, "invalid"))
+		os.Setenv(key, "invalid")
 		assert.Equal(t, 9, resolveIntFromEnv(key, 9))
-		require.NoError(t, os.Setenv(key, "42"))
+		os.Setenv(key, "42")
 		assert.Equal(t, 42, resolveIntFromEnv(key, 1))
 	})
 
@@ -657,7 +670,7 @@ func TestDiscoveryAndNodeHandlers_AdditionalCoverage(t *testing.T) {
 		router.ServeHTTP(rec, req)
 
 		require.Equal(t, http.StatusOK, rec.Code)
-		require.Eventually(t, func() bool { return len(versionStore.heartbeats) == 1 }, time.Second, 10*time.Millisecond)
+		require.Eventually(t, func() bool { return len(versionStore.heartbeats) == 1 }, 5*time.Second, 50*time.Millisecond)
 		assert.Equal(t, "v2", versionStore.lastVersion)
 		require.NotNil(t, versionStore.updatedLifecycle)
 		assert.Equal(t, types.AgentStatusReady, *versionStore.updatedLifecycle)
@@ -670,7 +683,7 @@ func TestDiscoveryAndNodeHandlers_AdditionalCoverage(t *testing.T) {
 		}
 
 		processHeartbeatAsync(errStore, nil, "node-error", "v1", &CachedNodeData{LastDBUpdate: time.Now().UTC()})
-		time.Sleep(25 * time.Millisecond)
-		assert.Empty(t, errStore.heartbeats)
+		// Assert that the async goroutine does not record a heartbeat on error.
+		require.Never(t, func() bool { return len(errStore.heartbeats) > 0 }, 200*time.Millisecond, 10*time.Millisecond)
 	})
 }

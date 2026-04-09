@@ -484,12 +484,14 @@ func TestExecutionHandlerLowCoveragePaths(t *testing.T) {
 		require.Equal(t, 2, response.Page)
 	})
 
+	// NOTE: This test must NOT run in parallel — it resets the package-level
+	// concurrencyLimiter via go:linkname because InitConcurrencyLimiter is
+	// guarded by sync.Once and cannot be re-invoked otherwise.
 	t.Run("queue status handler reports active slots", func(t *testing.T) {
 		savedLimiter := linkedConcurrencyLimiter
-		savedOnce := linkedConcurrencyLimiterOnce
 		t.Cleanup(func() {
 			linkedConcurrencyLimiter = savedLimiter
-			linkedConcurrencyLimiterOnce = savedOnce
+			linkedConcurrencyLimiterOnce = sync.Once{}
 		})
 
 		linkedConcurrencyLimiter = nil

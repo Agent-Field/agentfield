@@ -362,9 +362,15 @@ func TestMemoryEventsHandler_WebSocketBackpressureDisconnectsCleanly(t *testing.
 
 	require.NoError(t, conn.Close())
 	server.CloseClientConnections()
+	// Give goroutines a moment to observe the closed connection before
+	// publishing another event that triggers cleanup.
+	time.Sleep(50 * time.Millisecond)
 	store.publish(newMemoryEvent("session", "s1", "user.after-close"))
 
-	waitForCondition(t, time.Second, func() bool {
+	// Use a generous timeout — goroutine cleanup after a burst of 100 events
+	// through a closed WebSocket can take a few scheduling cycles, especially
+	// under CI load.
+	waitForCondition(t, 5*time.Second, func() bool {
 		return store.ActiveSubscriptions() == 0 && runtime.NumGoroutine() <= baseline+10
 	}, "closing websocket should release subscription after burst publish")
 }

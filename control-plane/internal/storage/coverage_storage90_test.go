@@ -282,14 +282,9 @@ func TestStorage90SQLiteAndWorkflowVCBranches(t *testing.T) {
 		require.NoError(t, os.Chdir(tempDir))
 		t.Cleanup(func() { _ = os.Chdir(wd) })
 
-		require.NoError(t, os.Setenv("AGENTFIELD_SQLITE_BUSY_TIMEOUT_MS", "bad"))
-		require.NoError(t, os.Setenv("AGENTFIELD_SQLITE_MAX_OPEN_CONNS", "0"))
-		require.NoError(t, os.Setenv("AGENTFIELD_SQLITE_MAX_IDLE_CONNS", "-1"))
-		t.Cleanup(func() {
-			os.Unsetenv("AGENTFIELD_SQLITE_BUSY_TIMEOUT_MS")
-			os.Unsetenv("AGENTFIELD_SQLITE_MAX_OPEN_CONNS")
-			os.Unsetenv("AGENTFIELD_SQLITE_MAX_IDLE_CONNS")
-		})
+		t.Setenv("AGENTFIELD_SQLITE_BUSY_TIMEOUT_MS", "bad")
+		t.Setenv("AGENTFIELD_SQLITE_MAX_OPEN_CONNS", "0")
+		t.Setenv("AGENTFIELD_SQLITE_MAX_IDLE_CONNS", "-1")
 
 		ls = NewLocalStorage(LocalStorageConfig{
 			DatabasePath: filepath.Join("relative", "agentfield.db"),

@@ -56,9 +56,7 @@ func TestInstallerCoverage(t *testing.T) {
 		}
 
 		// Make python not found
-		origPath := os.Getenv("PATH")
-		os.Setenv("PATH", "")
-		defer os.Setenv("PATH", origPath)
+		t.Setenv("PATH", "")
 
 		err := pi.installDependencies(pkgPath, metadata)
 		if err == nil || !strings.Contains(err.Error(), "failed to create virtual environment") {
@@ -81,9 +79,7 @@ func TestInstallerCoverage(t *testing.T) {
 		if err := os.WriteFile(pythonPath, []byte("#!/bin/sh\nexit 0"), 0755); err != nil {
 			t.Fatal(err)
 		}
-		origPath := os.Getenv("PATH")
-		os.Setenv("PATH", fakebin)
-		defer os.Setenv("PATH", origPath)
+		t.Setenv("PATH", fakebin)
 
 		err := pi.installDependencies(pkgPath, metadata)
 		if err == nil || !strings.Contains(err.Error(), "failed to install dependency") {
@@ -102,9 +98,7 @@ dependencies:
     - hopefully-non-existent-package
 `)
 		// Make python not found
-		origPath := os.Getenv("PATH")
-		os.Setenv("PATH", "")
-		defer os.Setenv("PATH", origPath)
+		t.Setenv("PATH", "")
 
 		err := pi.InstallPackage(sourcePath, true)
 		if err == nil || !strings.Contains(err.Error(), "failed to install dependencies") {
