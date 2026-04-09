@@ -276,7 +276,7 @@ def make_llm_response(content=None, tool_calls=None):
                     "type": "function",
                     "function": {
                         "name": tc.function.name,
-                        "arguments": tc.function.arguments,
+                        "arguments": getattr(tc.function, "arguments", None),
                     },
                 }
                 for tc in tool_calls
@@ -295,7 +295,9 @@ def make_tool_call(
 ):
     tc = SimpleNamespace()
     tc.id = id
-    tc.function = SimpleNamespace(name=name, arguments=arguments)
+    tc.function = SimpleNamespace(name=name)
+    if arguments is not None:
+        tc.function.arguments = arguments
     return tc
 
 
@@ -407,6 +409,52 @@ class TestExecuteToolCallLoop:
         assert len(tool_messages) == 1
         error_content = json.loads(tool_messages[0]["content"])
         assert "error" in error_content
+
+    @pytest.mark.asyncio
+    async def test_missing_tool_call_arguments_reported_to_llm(self):
+        agent = make_mock_agent()
+
+        messages = [{"role": "user", "content": "test"}]
+        tools = capabilities_to_tool_schemas([make_reasoner()])
+        config = ToolCallConfig(max_turns=5)
+
+        tc = make_tool_call(arguments=None)
+        tool_resp = make_llm_response(tool_calls=[tc])
+        final_resp = make_llm_response(
+            content="Please retry with valid JSON arguments."
+        )
+
+        call_count = 0
+
+        async def mock_completion(params):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return tool_resp
+            return final_resp
+
+        resp, trace = await execute_tool_call_loop(
+            agent=agent,
+            messages=messages,
+            tools=tools,
+            config=config,
+            needs_lazy_hydration=False,
+            litellm_params={"model": "openai/gpt-4"},
+            make_completion=mock_completion,
+        )
+
+        assert trace.final_response == "Please retry with valid JSON arguments."
+        assert trace.total_tool_calls == 1
+        assert trace.calls == []
+        agent.call.assert_not_called()
+
+        tool_messages = [m for m in messages if m.get("role") == "tool"]
+        assert len(tool_messages) == 1
+        error_content = json.loads(tool_messages[0]["content"])
+        assert (
+            error_content["error"]
+            == "Tool call to 'sentiment_agent.analyze' is missing the 'arguments' field. Please retry with valid JSON arguments."
+        )
 
     @pytest.mark.asyncio
     async def test_max_tool_calls_limit(self):

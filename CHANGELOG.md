@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.65-rc.19] - 2026-04-09
+
+
+### Fixed
+
+- Fix: handle missing function.arguments in execute_tool_call_loop (#372)
+
+When an LLM returns a tool call without the arguments field,
+json.loads(None) raises TypeError which wasn't caught. Now checks
+for None first and reports the error back to the LLM so it can
+retry, instead of crashing the loop.
+
+Closes #353 (f21289a)
+
 ## [0.1.65-rc.18] - 2026-04-09
 
 

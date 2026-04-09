@@ -487,9 +487,23 @@ async def execute_tool_call_loop(
             func_name = tc.function.name
             # Unsanitize the LLM-safe name back to the original invocation_target
             invocation_target = _unsanitize_tool_name(func_name)
+            raw_args = getattr(tc.function, "arguments", None)
+            if raw_args is None:
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": json.dumps(
+                            {
+                                "error": f"Tool call to '{func_name}' is missing the 'arguments' field. Please retry with valid JSON arguments."
+                            }
+                        ),
+                    }
+                )
+                continue
             try:
-                func_args = json.loads(tc.function.arguments)
-            except json.JSONDecodeError:
+                func_args = json.loads(raw_args)
+            except (json.JSONDecodeError, TypeError):
                 func_args = {}
 
             record = ToolCallRecord(
