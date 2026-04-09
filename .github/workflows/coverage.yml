@@ -45,6 +45,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Full history + the PR base so `diff-cover` can compute patch
+          # coverage against origin/main.
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -66,6 +70,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install .[dev]
+
+      - name: Install diff-cover (for per-PR patch coverage)
+        run: python -m pip install "diff-cover>=9.0.0"
 
       - name: Install TypeScript SDK dependencies
         working-directory: sdk/typescript
@@ -97,6 +104,19 @@ jobs:
             --config   .coverage-gate.toml
         continue-on-error: true
 
+      - name: Run patch coverage gate (diff-cover)
+        id: patch_gate
+        # Enforces .coverage-gate.toml:thresholds.min_patch on lines the PR
+        # actually touches, against origin/main. This is the single most
+        # effective regression signal — aggregates drift slowly, but new
+        # untested code shows up here immediately. Output is posted as a
+        # second sticky PR comment so reviewers see exactly which files
+        # regressed patch coverage.
+        if: github.event_name == 'pull_request'
+        run: |
+          ./scripts/patch-coverage-gate.sh
+        continue-on-error: true
+
       - name: Upload coverage artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -111,10 +131,17 @@ jobs:
           header: coverage-gate
           path: test-reports/coverage/gate-report.md
 
-      - name: Fail the job if the gate failed
-        if: steps.gate.outcome == 'failure'
+      - name: Comment patch coverage report on PR
+        if: github.event_name == 'pull_request' && hashFiles('test-reports/coverage/patch-gate-report.md') != ''
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: patch-coverage-gate
+          path: test-reports/coverage/patch-gate-report.md
+
+      - name: Fail the job if any gate failed
+        if: steps.gate.outcome == 'failure' || steps.patch_gate.outcome == 'failure'
         run: |
-          echo "::error::Coverage gate failed. See the coverage report comment on the PR for details and remediation steps."
+          echo "::error::Coverage gate failed. See the coverage report comment(s) on the PR for details and remediation steps."
           exit 1
 
       - name: Update coverage badge gist

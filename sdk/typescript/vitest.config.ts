@@ -20,7 +20,7 @@ export default defineConfig({
         "src/**/*.d.ts",
         "src/**/__tests__/**",
       ],
-      reporter: ["text-summary", "json-summary"],
+      reporter: ["text-summary", "json-summary", "cobertura"],
       reportsDirectory: "coverage",
     },
   },

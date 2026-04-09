@@ -47,19 +47,41 @@ numbers to a baseline checked into the repo:
 - Config:   [`.coverage-gate.toml`](../.coverage-gate.toml)
 - Baseline: [`coverage-baseline.json`](../coverage-baseline.json)
 
-The gate enforces four rules, all loaded from `.coverage-gate.toml`:
+The gate enforces five rules, all loaded from `.coverage-gate.toml`:
 
-| Rule | Default |
-| --- | --- |
-| `min_surface` — absolute floor for every single surface | **80.00%** |
-| `min_aggregate` — absolute floor for the weighted aggregate | **85.00%** |
-| `max_surface_drop` — biggest per-surface regression allowed vs baseline | **1.0 pp** |
-| `max_aggregate_drop` — biggest aggregate regression allowed vs baseline | **0.5 pp** |
+| Rule | Current value | Enforced by |
+| --- | --- | --- |
+| `min_surface` — absolute floor for every single surface | **86.0%** | `scripts/coverage-gate.py` |
+| `min_aggregate` — absolute floor for the weighted aggregate | **88.5%** | `scripts/coverage-gate.py` |
+| `max_surface_drop` — biggest per-surface regression allowed vs baseline | **1.0 pp** | `scripts/coverage-gate.py` |
+| `max_aggregate_drop` — biggest aggregate regression allowed vs baseline | **0.5 pp** | `scripts/coverage-gate.py` |
+| `min_patch` — coverage required on lines the PR actually touches, per surface | **80.0%** | `scripts/patch-coverage-gate.sh` (diff-cover vs `origin/main`) |
 
-If any rule fails, the `Coverage Summary` job fails, a sticky PR comment
-titled **"📊 Coverage gate"** is posted with the table and the exact
-reproduce commands, and the gate's JSON verdict is written to
-`test-reports/coverage/gate-status.json` for programmatic consumers.
+The aggregate rules protect the repo from slow drift; the **patch** rule is
+the single most effective regression signal and matches the default used by
+codecov, vitest, rust-lang, and grafana — aggregates move slowly, but
+untested *new* code shows up immediately.
+
+If any rule fails, the `Coverage Summary` job fails, two sticky PR comments
+titled **"📊 Coverage gate"** and **"📐 Patch coverage gate"** are posted
+with the tables and exact reproduce commands, and both JSON verdicts are
+written to `test-reports/coverage/` (`gate-status.json` and
+`patch-gate-status.json`) for programmatic consumers.
+
+## Branch protection
+
+The required-check configuration for `main` is version-controlled in
+[`.github/rulesets/main.json`](../.github/rulesets/main.json) and pushed to
+GitHub by the [Sync Rulesets](../.github/workflows/sync-rulesets.yml)
+workflow. The ruleset requires:
+
+- `Coverage Summary / coverage-summary` must pass before merge
+- The branch must be up to date with `main` (strict mode)
+- 1 approving review, stale reviews dismissed on push
+- No force-pushes, no deletions
+
+Any change to branch protection happens in a PR that edits
+`.github/rulesets/main.json`, reviewed like any other code change.
 
 ## For AI coding agents
 
