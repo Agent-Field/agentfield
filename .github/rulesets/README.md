@@ -34,10 +34,16 @@ for `gh auth login`).
 
 1. **No branch deletion** — nobody can `git push --delete main`.
 2. **No force-push** — `git push --force-with-lease` to `main` is rejected.
-3. **Pull request required** — 1 approving review, stale reviews dismissed on
-   push, review threads must be resolved, squash/merge only (no rebase).
-4. **Required status check** — `Coverage Summary / coverage-summary` must
-   pass before merge, and the branch must be up to date with `main`.
+3. **Merge queue** — squash-only, ALLGREEN grouping, 1–5 entries per batch,
+   5-minute wait, 60-minute check timeout.
+4. **Pull request required** — 1 approving review, **CODEOWNERS review
+   required**, stale reviews dismissed on push, review threads must be
+   resolved, squash-only merges.
+5. **Required status check** — `Coverage Summary / coverage-summary` must
+   pass before merge, and the branch must be up to date with `main`
+   (strict mode).
+6. **Bypass actors** — org admins, deploy keys, and the Maintain repo role
+   can bypass. Everyone else is bound by the rules above.
 
 ## Adding a new required check
 
