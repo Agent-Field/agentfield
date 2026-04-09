@@ -54,8 +54,16 @@ install_gocover_cobertura() {
 }
 
 extract_go_total() {
-  local coverprofile="$1"
-  go tool cover -func="$coverprofile" | awk '/^total:/ {print $3}' | tr -d '%'
+  # Must cd into the module directory because `go tool cover -func` resolves
+  # package paths in the coverprofile against the nearest go.mod. Running it
+  # from the repo root (no go.mod) fails with:
+  #   cover: no required module provides package <pkg>: go.mod file not found
+  local module_dir="$1"
+  local coverprofile="$2"
+  (
+    cd "$module_dir"
+    go tool cover -func="$coverprofile" | awk '/^total:/ {print $3}' | tr -d '%'
+  )
 }
 
 case "$SURFACE" in
@@ -80,7 +88,7 @@ case "$SURFACE" in
       gocover-cobertura < "$REPORT_DIR/control-plane.coverprofile" \
         > "$REPORT_DIR/control-plane-cobertura.xml"
     )
-    extract_go_total "$REPORT_DIR/control-plane.coverprofile" \
+    extract_go_total "$ROOT_DIR/control-plane" "$REPORT_DIR/control-plane.coverprofile" \
       > "$REPORT_DIR/control-plane.total.txt"
     ;;
 
@@ -95,7 +103,7 @@ case "$SURFACE" in
       gocover-cobertura < "$REPORT_DIR/sdk-go.coverprofile" \
         > "$REPORT_DIR/sdk-go-cobertura.xml"
     )
-    extract_go_total "$REPORT_DIR/sdk-go.coverprofile" \
+    extract_go_total "$ROOT_DIR/sdk/go" "$REPORT_DIR/sdk-go.coverprofile" \
       > "$REPORT_DIR/sdk-go.total.txt"
     ;;
 
