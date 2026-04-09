@@ -38,6 +38,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   fetchNodeLogsText,
+  NodeLogsError,
   parseNodeLogsNDJSON,
   streamNodeLogsEntries,
   type NodeLogEntry,
@@ -210,12 +211,27 @@ export function NodeProcessLogsPanel({
       const parsed = parseNodeLogsNDJSON(text);
       setEntries(parsed.slice(-MAX_BUFFER));
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Failed to load logs";
-      // Treat "no base_url" and 404 as normal empty-log states, not errors
-      if (/no base_url|404/i.test(msg)) {
+      // Treat "no base_url" (agent never ran, no upstream URL yet) and 404
+      // (node has no logs endpoint) as expected empty states — not errors.
+      // Branch on the structured fields of NodeLogsError rather than
+      // string-matching the human message, which is brittle to backend
+      // phrasing changes.
+      if (
+        e instanceof NodeLogsError &&
+        (e.status === 404 || e.code === "agent_unreachable")
+      ) {
+        // Surface to devtools so developers debugging the panel can still
+        // see the swallowed error; do not raise a destructive UI alert.
+        if (import.meta.env?.DEV) {
+          console.debug(
+            `[NodeProcessLogsPanel] expected empty state for node ${nodeId}:`,
+            e.status,
+            e.code ?? e.message,
+          );
+        }
         setEntries([]);
       } else {
-        setStreamError(msg);
+        setStreamError(e instanceof Error ? e.message : "Failed to load logs");
       }
     } finally {
       setLoadingTail(false);

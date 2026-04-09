@@ -1041,12 +1041,15 @@ func (c *executionController) prepareExecution(ctx context.Context, ginCtx *gin.
 		}
 	}
 
-	// Block calls to agents that are pending approval (e.g. tags revoked)
+	// Block calls to agents that are pending approval (e.g. tags revoked).
+	// Matches the contract used by reasoners.go / skills.go / permission
+	// middleware: stable machine code in `error`, friendly text in `message`.
 	if agent.LifecycleStatus == types.AgentStatusPendingApproval {
 		return nil, &executionPreconditionError{
-			code:     http.StatusServiceUnavailable,
-			message:  fmt.Sprintf("agent node '%s' is awaiting tag approval and cannot execute", target.NodeID),
-			category: ErrorCategoryAgentError,
+			code:      http.StatusServiceUnavailable,
+			message:   fmt.Sprintf("agent node '%s' is awaiting tag approval and cannot execute", target.NodeID),
+			category:  ErrorCategoryAgentError,
+			errorCode: "agent_pending_approval",
 		}
 	}
 
@@ -1965,10 +1968,18 @@ func writeExecutionError(ctx *gin.Context, err error) {
 
 	var pe *executionPreconditionError
 	if errors.As(err, &pe) {
-		ctx.JSON(pe.HTTPStatusCode(), gin.H{
+		body := gin.H{
 			"error":          pe.Error(),
 			"error_category": string(pe.Category()),
-		})
+		}
+		// When a stable machine code is set, promote it to `error` and move
+		// the human-readable text to `message` — matching the contract used
+		// by reasoners.go / skills.go / permission middleware.
+		if code := pe.ErrorCode(); code != "" {
+			body["error"] = code
+			body["message"] = pe.Error()
+		}
+		ctx.JSON(pe.HTTPStatusCode(), body)
 		return
 	}
 

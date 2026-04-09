@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -270,6 +271,53 @@ func TestPrepareExecution_AdditionalCoverage(t *testing.T) {
 		assert.Contains(t, string(plan.requestBody), `"parent_execution_id":"parent-1"`)
 		assert.Contains(t, string(plan.requestBody), `"session_id":"session-1"`)
 		assert.Contains(t, string(plan.requestBody), `"actor_id":"actor-1"`)
+	})
+
+	t.Run("blocks calls to pending_approval agent with 503 (TC-034)", func(t *testing.T) {
+		pendingAgent := &types.AgentNode{
+			ID:              "node-revoked",
+			BaseURL:         "https://agent.example.com",
+			Version:         "v1",
+			HealthStatus:    types.HealthStatusActive,
+			LifecycleStatus: types.AgentStatusPendingApproval,
+			Reasoners:       []types.ReasonerDefinition{{ID: "reasoner-a"}},
+		}
+		store := newTestExecutionStorage(pendingAgent)
+		controller := newExecutionController(store, nil, nil, time.Second, "")
+
+		rec := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(rec)
+		ctx.Params = gin.Params{{Key: "target", Value: "node-revoked.reasoner-a"}}
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/execute/node-revoked.reasoner-a", strings.NewReader(`{"input":{}}`))
+		ctx.Request.Header.Set("Content-Type", "application/json")
+
+		_, err := controller.prepareExecution(context.Background(), ctx)
+		require.Error(t, err)
+
+		var pe *executionPreconditionError
+		require.ErrorAs(t, err, &pe)
+		assert.Equal(t, http.StatusServiceUnavailable, pe.HTTPStatusCode())
+		assert.Equal(t, ErrorCategoryAgentError, pe.Category())
+		assert.Equal(t, "agent_pending_approval", pe.ErrorCode())
+		assert.Contains(t, pe.Error(), "node-revoked")
+		assert.Contains(t, pe.Error(), "awaiting tag approval")
+
+		// Verify the wire-level response contract matches the sibling handlers
+		// (reasoners/skills/permission middleware): stable code in `error`,
+		// human text in `message`, 503 Service Unavailable.
+		writeExecutionError(ctx, err)
+		assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+		var body map[string]interface{}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+		assert.Equal(t, "agent_pending_approval", body["error"])
+		assert.Equal(t, "agent_error", body["error_category"])
+		require.Contains(t, body, "message")
+		assert.Contains(t, body["message"], "awaiting tag approval")
+
+		// No execution record should have been persisted before the guard fired.
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		assert.Empty(t, store.executionRecords, "no execution record should be created for a blocked call")
 	})
 
 	t.Run("returns error for invalid target and invalid body", func(t *testing.T) {

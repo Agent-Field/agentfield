@@ -363,13 +363,34 @@ function nodeLogsAuthHeaders(): HeadersInit {
   return h;
 }
 
-async function nodeLogsHttpError(response: Response): Promise<Error> {
+/**
+ * Typed error thrown by node-logs fetch/stream helpers.
+ *
+ * Carries the HTTP status code and (when available) the stable machine code
+ * from the response body so callers can branch on structured fields instead
+ * of string-matching the human message.
+ */
+export class NodeLogsError extends Error {
+  readonly status: number;
+  readonly code?: string;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = "NodeLogsError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+async function nodeLogsHttpError(response: Response): Promise<NodeLogsError> {
   let msg = `HTTP ${response.status}`;
+  let code: string | undefined;
   try {
     const j = (await response.json()) as {
       message?: string;
       error?: string;
     };
+    if (j.error) code = String(j.error);
     if (j.message) msg = j.message;
     else if (j.error) msg = String(j.error);
   } catch {
@@ -380,9 +401,7 @@ async function nodeLogsHttpError(response: Response): Promise<Error> {
       /* ignore */
     }
   }
-  const err = new Error(msg);
-  err.name = "NodeLogsError";
-  return err;
+  return new NodeLogsError(msg, response.status, code);
 }
 
 export function parseNodeLogsNDJSON(text: string): NodeLogEntry[] {

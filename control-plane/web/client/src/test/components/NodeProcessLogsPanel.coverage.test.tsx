@@ -6,16 +6,30 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NodeProcessLogsPanel } from "@/components/nodes/NodeProcessLogsPanel";
 
-const state = vi.hoisted(() => ({
-  fetchNodeLogsText: vi.fn(),
-  parseNodeLogsNDJSON: vi.fn(),
-  streamNodeLogsEntries: vi.fn(),
-}));
+const state = vi.hoisted(() => {
+  class MockNodeLogsError extends Error {
+    readonly status: number;
+    readonly code?: string;
+    constructor(message: string, status: number, code?: string) {
+      super(message);
+      this.name = "NodeLogsError";
+      this.status = status;
+      this.code = code;
+    }
+  }
+  return {
+    fetchNodeLogsText: vi.fn(),
+    parseNodeLogsNDJSON: vi.fn(),
+    streamNodeLogsEntries: vi.fn(),
+    NodeLogsError: MockNodeLogsError,
+  };
+});
 
 vi.mock("@/services/api", () => ({
   fetchNodeLogsText: (...args: unknown[]) => state.fetchNodeLogsText(...args),
   parseNodeLogsNDJSON: (...args: unknown[]) => state.parseNodeLogsNDJSON(...args),
   streamNodeLogsEntries: (...args: unknown[]) => state.streamNodeLogsEntries(...args),
+  NodeLogsError: state.NodeLogsError,
 }));
 
 vi.mock("@/components/ui/alert", () => ({
@@ -247,5 +261,32 @@ describe("NodeProcessLogsPanel coverage paths", () => {
 
     await user.click(screen.getAllByRole("button", { name: "Live" })[0]);
     expect(await screen.findByText("stream interrupted")).toBeInTheDocument();
+  });
+
+  it("treats 404 NodeLogsError as empty state, not an error (TC-035)", async () => {
+    state.fetchNodeLogsText.mockRejectedValueOnce(
+      new state.NodeLogsError("HTTP 404", 404),
+    );
+    state.parseNodeLogsNDJSON.mockReturnValue([]);
+
+    render(<NodeProcessLogsPanel nodeId="node-404" />);
+
+    // Friendly empty state, not the destructive "Logs unavailable" alert.
+    expect(await screen.findByText(/No log lines yet/i)).toBeInTheDocument();
+    expect(screen.queryByText("Logs unavailable")).not.toBeInTheDocument();
+  });
+
+  it("treats agent_unreachable (no base_url) as empty state (TC-035)", async () => {
+    state.fetchNodeLogsText.mockRejectedValueOnce(
+      new state.NodeLogsError("node has no base_url", 502, "agent_unreachable"),
+    );
+    state.parseNodeLogsNDJSON.mockReturnValue([]);
+
+    render(<NodeProcessLogsPanel nodeId="node-no-baseurl" />);
+
+    expect(await screen.findByText(/No log lines yet/i)).toBeInTheDocument();
+    expect(screen.queryByText("Logs unavailable")).not.toBeInTheDocument();
+    // The raw backend message must not leak into the UI.
+    expect(screen.queryByText("node has no base_url")).not.toBeInTheDocument();
   });
 });

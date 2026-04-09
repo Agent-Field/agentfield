@@ -133,10 +133,17 @@ const (
 )
 
 // executionPreconditionError carries both an HTTP status code and message.
+//
+// When errorCode is non-empty, the JSON renderer will emit the stable machine
+// code in the top-level "error" field and move the human-readable message to
+// "message" — matching the contract already used by sibling handlers
+// (reasoners, skills, permission middleware) for conditions like
+// agent_pending_approval.
 type executionPreconditionError struct {
-	code     int
-	message  string
-	category ErrorCategory
+	code      int
+	message   string
+	category  ErrorCategory
+	errorCode string
 }
 
 func (e *executionPreconditionError) Error() string {
@@ -151,6 +158,12 @@ func (e *executionPreconditionError) HTTPStatusCode() int {
 // Category returns the error classification.
 func (e *executionPreconditionError) Category() ErrorCategory {
 	return e.category
+}
+
+// ErrorCode returns the stable machine-readable error code (if set).
+// Clients should key on this rather than the human-readable message.
+func (e *executionPreconditionError) ErrorCode() string {
+	return e.errorCode
 }
 
 // PublishExecutionLog publishes a structured log event for an execution.
