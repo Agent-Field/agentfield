@@ -1041,6 +1041,15 @@ func (c *executionController) prepareExecution(ctx context.Context, ginCtx *gin.
 		}
 	}
 
+	// Block calls to agents that are pending approval (e.g. tags revoked)
+	if agent.LifecycleStatus == types.AgentStatusPendingApproval {
+		return nil, &executionPreconditionError{
+			code:     http.StatusServiceUnavailable,
+			message:  fmt.Sprintf("agent node '%s' is awaiting tag approval and cannot execute", target.NodeID),
+			category: ErrorCategoryAgentError,
+		}
+	}
+
 	if agent.DeploymentType == "" && agent.Metadata.Custom != nil {
 		if v, ok := agent.Metadata.Custom["serverless"]; ok && fmt.Sprint(v) == "true" {
 			agent.DeploymentType = "serverless"

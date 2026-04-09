@@ -210,7 +210,13 @@ export function NodeProcessLogsPanel({
       const parsed = parseNodeLogsNDJSON(text);
       setEntries(parsed.slice(-MAX_BUFFER));
     } catch (e) {
-      setStreamError(e instanceof Error ? e.message : "Failed to load logs");
+      const msg = e instanceof Error ? e.message : "Failed to load logs";
+      // Treat "no base_url" and 404 as normal empty-log states, not errors
+      if (/no base_url|404/i.test(msg)) {
+        setEntries([]);
+      } else {
+        setStreamError(msg);
+      }
     } finally {
       setLoadingTail(false);
     }
