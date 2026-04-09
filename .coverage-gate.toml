@@ -18,15 +18,15 @@
 
 [thresholds]
 # Any single surface below this number hard-fails the gate.
-# Chosen to give every tracked surface ~2 pp of headroom above its
-# current baseline (see coverage-baseline.json). Raise this value in
-# its own PR as surfaces improve.
-min_surface      = 85.0
+# Current baseline (see coverage-baseline.json) has every surface at
+# or above 89%; this floor gives ~2 pp of headroom. Raise this value
+# in its own PR as surfaces improve.
+min_surface      = 87.0
 
 # The weighted aggregate across all tracked surfaces must stay at or above
 # this number. This is the value that backs the README coverage badge.
-# The current aggregate is ~89.10% so 88 gives ~1 pp of headroom.
-min_aggregate    = 88.0
+# Current aggregate is 90.03%, so 89.5 gives ~0.5 pp of headroom.
+min_aggregate    = 89.5
 
 # A PR may not regress any surface by more than this many percentage points
 # against the baseline without explicitly updating coverage-baseline.json.

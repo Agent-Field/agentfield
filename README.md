@@ -406,17 +406,17 @@ AgentField is covered by automated tests across **five independent surfaces** �
 
 | Surface | Lines / Statements | Coverage |
 |---|---:|---:|
-| `control-plane` (Go, `control-plane/internal/...`)       | 21,254 / 24,326 | **87.4%** 🟡 |
-| `sdk-go` (Go, `sdk/go/...`)                              | 3,106 / 3,527 | **88.1%** 🟡 |
-| `sdk-python` (Python, `sdk/python/agentfield/...`)       | 1,655 / 1,884 | **87.9%** 🟡 |
+| `control-plane` (Go, `control-plane/internal/...`)       | 21,743 / 24,345 | **89.3%** 🟡 |
+| `sdk-go` (Go, `sdk/go/...`)                              | 3,199 / 3,527 | **90.7%** 🟢 |
+| `sdk-python` (Python, `sdk/python/agentfield/...`)       | 1,710 / 1,884 | **90.8%** 🟢 |
 | `sdk-typescript` (TypeScript, `sdk/typescript/src/...`)  | 5,128 / 5,540 | **92.6%** 🟢 |
-| `web-ui` (TypeScript, `control-plane/web/client/src/...`)| 37,435 / 41,693 | **89.8%** 🟡 |
-| **Aggregate (weighted by source size)** | **68,578 / 76,970** | **89.10%** |
+| `web-ui` (TypeScript, `control-plane/web/client/src/...`)| 37,532 / 41,693 | **90.0%** 🟢 |
+| **Aggregate (weighted by source size)** | **69,312 / 76,989** | **90.03%** 🟢 |
 
 Thresholds enforced on every PR (see [`.coverage-gate.toml`](.coverage-gate.toml) and [`docs/COVERAGE.md`](docs/COVERAGE.md)):
 
-- Every surface must stay at or above **85.0%**
-- The weighted aggregate must stay at or above **88.0%**
+- Every surface must stay at or above **87.0%**
+- The weighted aggregate must stay at or above **89.5%**
 - No surface may regress more than **1.0 pp** against [`coverage-baseline.json`](coverage-baseline.json)
 - The aggregate may not regress more than **0.5 pp** against the same baseline
 
