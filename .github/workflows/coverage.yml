@@ -34,6 +34,10 @@ permissions:
   contents: read
   pull-requests: write
 
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   coverage-summary:
     runs-on: ubuntu-latest
@@ -114,10 +118,14 @@ jobs:
           exit 1
 
       - name: Update coverage badge gist
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.COVERAGE_GIST_ID != '' && secrets.GIST_TOKEN != ''
+        # NOTE: GitHub Actions does not allow `secrets.*` inside `if:` expressions
+        # (they evaluate to empty). We surface them through `env` and gate on that
+        # so the step silently skips on forks / PRs without the secret configured.
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.COVERAGE_GIST_ID != '' && env.GIST_TOKEN != ''
         uses: actions/github-script@v7
         env:
           COVERAGE_GIST_ID: ${{ secrets.COVERAGE_GIST_ID }}
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
         with:
           github-token: ${{ secrets.GIST_TOKEN }}
           script: |
