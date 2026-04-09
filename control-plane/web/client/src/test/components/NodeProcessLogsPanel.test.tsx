@@ -6,16 +6,36 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { NodeProcessLogsPanel } from "@/components/nodes/NodeProcessLogsPanel";
 import type { NodeLogEntry } from "@/services/api";
 
-const state = vi.hoisted(() => ({
-  fetchNodeLogsText: vi.fn(),
-  parseNodeLogsNDJSON: vi.fn(),
-  streamNodeLogsEntries: vi.fn(),
-}));
+const state = vi.hoisted(() => {
+  // NodeProcessLogsPanel does `e instanceof NodeLogsError` in its error
+  // branch. Without exporting a NodeLogsError constructor from the mock,
+  // the reference is undefined at runtime and `instanceof` throws a
+  // TypeError — which swallows the destructive-alert render and fails
+  // unrelated assertions in this suite. Provide a minimal shape-compatible
+  // mock class.
+  class MockNodeLogsError extends Error {
+    readonly status: number;
+    readonly code?: string;
+    constructor(message: string, status: number, code?: string) {
+      super(message);
+      this.name = "NodeLogsError";
+      this.status = status;
+      this.code = code;
+    }
+  }
+  return {
+    fetchNodeLogsText: vi.fn(),
+    parseNodeLogsNDJSON: vi.fn(),
+    streamNodeLogsEntries: vi.fn(),
+    NodeLogsError: MockNodeLogsError,
+  };
+});
 
 vi.mock("@/services/api", () => ({
   fetchNodeLogsText: (...args: unknown[]) => state.fetchNodeLogsText(...args),
   parseNodeLogsNDJSON: (...args: unknown[]) => state.parseNodeLogsNDJSON(...args),
   streamNodeLogsEntries: (...args: unknown[]) => state.streamNodeLogsEntries(...args),
+  NodeLogsError: state.NodeLogsError,
 }));
 
 vi.mock("@/components/ui/alert", () => ({
