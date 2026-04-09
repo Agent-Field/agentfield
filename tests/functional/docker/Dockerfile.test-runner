@@ -16,7 +16,7 @@ RUN npm run build
 # Package the SDK so it can be installed in the final test image
 RUN PACK_FILE=$(npm pack | tail -n 1) && mv "$PACK_FILE" /tmp/ts-sdk.tgz
 
-FROM golang:1.24-bookworm AS af-cli-builder
+FROM golang:1.25-bookworm AS af-cli-builder
 WORKDIR /build
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
