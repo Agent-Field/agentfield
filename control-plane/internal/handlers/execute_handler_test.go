@@ -250,9 +250,12 @@ func TestExecuteHandler_PendingApprovalAgent(t *testing.T) {
 
 	require.Equal(t, http.StatusServiceUnavailable, resp.Code)
 
+	// Response contract (matches reasoners.go / skills.go / permission middleware):
+	//   { "error": "agent_pending_approval", "message": "<human text>", "error_category": "agent_error" }
 	var payload map[string]string
 	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &payload))
-	require.Contains(t, payload["error"], "awaiting tag approval")
+	require.Equal(t, "agent_pending_approval", payload["error"])
+	require.Contains(t, payload["message"], "awaiting tag approval")
 }
 
 func TestGetExecutionStatusHandler_ReturnsResult(t *testing.T) {
