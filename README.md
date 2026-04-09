@@ -400,38 +400,6 @@ The control plane is a stateless Go service. Agents connect from anywhere - your
 
 </div>
 
-## Test Coverage
-
-AgentField is covered by automated tests across **five independent surfaces** — the Go control plane, the Go/Python/TypeScript SDKs, and the embedded React Web UI. Every PR runs a [coverage gate](docs/COVERAGE.md) that compares per-surface and weighted-aggregate coverage against a baseline checked into the repo and hard-fails if any surface regresses.
-
-| Surface | Lines / Statements | Coverage |
-|---|---:|---:|
-| `control-plane` (Go, `control-plane/internal/...`)       | 21,743 / 24,345 | **89.3%** 🟡 |
-| `sdk-go` (Go, `sdk/go/...`)                              | 3,199 / 3,527 | **90.7%** 🟢 |
-| `sdk-python` (Python, `sdk/python/agentfield/...`)       | 1,710 / 1,884 | **90.8%** 🟢 |
-| `sdk-typescript` (TypeScript, `sdk/typescript/src/...`)  | 5,128 / 5,540 | **92.6%** 🟢 |
-| `web-ui` (TypeScript, `control-plane/web/client/src/...`)| 37,532 / 41,693 | **90.0%** 🟢 |
-| **Aggregate (weighted by source size)** | **69,312 / 76,989** | **90.03%** 🟢 |
-
-Thresholds enforced on every PR (see [`.coverage-gate.toml`](.coverage-gate.toml) and [`docs/COVERAGE.md`](docs/COVERAGE.md)):
-
-- Every surface must stay at or above **87.0%**
-- The weighted aggregate must stay at or above **89.5%**
-- No surface may regress more than **1.0 pp** against [`coverage-baseline.json`](coverage-baseline.json)
-- The aggregate may not regress more than **0.5 pp** against the same baseline
-
-Reproduce locally:
-
-```bash
-./scripts/coverage-summary.sh    # writes test-reports/coverage/{summary.json,summary.md}
-./scripts/coverage-gate.py \
-    --summary  test-reports/coverage/summary.json \
-    --baseline coverage-baseline.json \
-    --config   .coverage-gate.toml
-```
-
-If the gate fails on your PR, read the sticky PR comment titled **"📊 Coverage gate"** — it lists the surface that regressed, the exact drop, and the one-line reproduce command for that surface. AI coding agents should download the `gate-status.json` artifact from the `Coverage Summary` job for the canonical machine-readable verdict and follow the loop in [`docs/COVERAGE.md#for-ai-coding-agents`](docs/COVERAGE.md#for-ai-coding-agents).
-
 ## License
 
 [Apache 2.0](LICENSE)
