@@ -54,9 +54,11 @@ jobs:
         working-directory: control-plane
         run: GOFLAGS=-buildvcs=false go build ./...
 
-      - name: Run tests
-        working-directory: control-plane
-        run: go test -tags sqlite_fts5 ./...
+      # NOTE: `go test` lives in .github/workflows/coverage.yml so we only
+      # run the control-plane suite once per PR. The coverage workflow is a
+      # required status check on main, so a test regression still blocks
+      # merge. This job continues to validate that the code *builds*, which
+      # is the contract the downstream compile-matrix job depends on.
 
       - name: Lint
         working-directory: control-plane

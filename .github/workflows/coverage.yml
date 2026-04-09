@@ -7,6 +7,8 @@ on:
       - "sdk/**"
       - "scripts/test-all.sh"
       - "scripts/coverage-summary.sh"
+      - "scripts/coverage-surface.sh"
+      - "scripts/coverage-aggregate.py"
       - "scripts/coverage-gate.py"
       - "scripts/patch-coverage-gate.sh"
       - ".coverage-gate.toml"
@@ -22,6 +24,8 @@ on:
       - "sdk/**"
       - "scripts/test-all.sh"
       - "scripts/coverage-summary.sh"
+      - "scripts/coverage-surface.sh"
+      - "scripts/coverage-aggregate.py"
       - "scripts/coverage-gate.py"
       - "scripts/patch-coverage-gate.sh"
       - ".coverage-gate.toml"
@@ -41,55 +45,121 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  coverage-summary:
+  # ---------------------------------------------------------------------
+  # Per-surface coverage producers (run in parallel). Each entry runs the
+  # test suite for a single surface with coverage enabled via
+  # scripts/coverage-surface.sh, then uploads test-reports/coverage/ as an
+  # artifact named coverage-<surface>. The aggregator job downloads all
+  # five and computes the final summary + gate.
+  #
+  # This is the "Option B" pattern: coverage runs live here and nowhere
+  # else. control-plane.yml and sdk-go.yml deliberately no longer run
+  # `go test` — they keep build + lint only, and the coverage workflow is
+  # a required status check so a test regression still blocks merge.
+  # ---------------------------------------------------------------------
+  per-surface:
+    name: coverage (${{ matrix.surface }})
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        surface:
+          - control-plane
+          - sdk-go
+          - sdk-python
+          - sdk-typescript
+          - web-ui
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        if: matrix.surface == 'control-plane' || matrix.surface == 'sdk-go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+
+      - name: Set up Python
+        if: matrix.surface == 'sdk-python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: sdk/python/pyproject.toml
+
+      - name: Set up Node.js
+        if: matrix.surface == 'control-plane' || matrix.surface == 'sdk-typescript' || matrix.surface == 'web-ui'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: |
+            control-plane/web/client/package-lock.json
+            sdk/typescript/package-lock.json
+
+      - name: Run ${{ matrix.surface }} coverage
+        run: ./scripts/coverage-surface.sh ${{ matrix.surface }}
+
+      - name: Upload ${{ matrix.surface }} coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.surface }}
+          path: test-reports/coverage/
+          retention-days: 1
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------
+  # Aggregator. Waits for all per-surface jobs, downloads their artifacts,
+  # flattens them into test-reports/coverage/, then runs the aggregation
+  # + coverage gate + patch-coverage gate + sticky PR comments + badge
+  # gist update.
+  #
+  # IMPORTANT: The GitHub check produced by this job is named
+  # `coverage-summary` — matching the old single-job workflow — so any
+  # existing branch protection rule targeting that check name keeps
+  # working without changes.
+  # ---------------------------------------------------------------------
+  coverage-summary:
+    name: coverage-summary
+    needs: per-surface
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Full history + the PR base so `diff-cover` can compute patch
-          # coverage against origin/main.
+          # Full history so diff-cover can compute patch coverage against
+          # origin/main.
           fetch-depth: 0
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.25.x"
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Install Python SDK test dependencies
-        working-directory: sdk/python
-        run: |
-          python -m pip install --upgrade pip
-          pip install .[dev]
-
       - name: Install diff-cover (for per-PR patch coverage)
         run: python -m pip install "diff-cover>=9.0.0"
 
-      - name: Install TypeScript SDK dependencies
-        working-directory: sdk/typescript
-        run: npm ci
-        env:
-          CI: true
+      - name: Download all per-surface artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/coverage-artifacts
+          pattern: coverage-*
 
-      - name: Install control plane web UI dependencies
-        working-directory: control-plane/web/client
-        run: npm ci
-        env:
-          CI: true
+      - name: Stage artifacts into test-reports/coverage/
+        run: |
+          mkdir -p test-reports/coverage
+          # Each per-surface artifact lands in its own subdirectory under
+          # /tmp/coverage-artifacts/ (coverage-control-plane/,
+          # coverage-sdk-go/, ...). Flatten them all into the single
+          # expected location.
+          find /tmp/coverage-artifacts -type f -exec cp -v {} test-reports/coverage/ \;
+          echo "--- staged files ---"
+          ls -la test-reports/coverage/
 
-      - name: Generate coverage summary
-        run: ./scripts/coverage-summary.sh
+      - name: Aggregate per-surface coverage
+        run: python3 scripts/coverage-aggregate.py --report-dir test-reports/coverage
 
       - name: Publish coverage summary
         run: cat test-reports/coverage/summary.md >> "$GITHUB_STEP_SUMMARY"
@@ -119,7 +189,7 @@ jobs:
           ./scripts/patch-coverage-gate.sh
         continue-on-error: true
 
-      - name: Upload coverage artifacts
+      - name: Upload aggregated coverage artifact
         uses: actions/upload-artifact@v4
         with:
           name: coverage-summary
