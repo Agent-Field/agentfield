@@ -1,6 +1,7 @@
 name: Coverage Summary
 
 on:
+  merge_group:
   pull_request:
     paths:
       - "control-plane/**"
