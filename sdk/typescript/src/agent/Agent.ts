@@ -61,7 +61,9 @@ const harnessRunners = new WeakMap<object, HarnessRunner>();
 
 
 
-function normalizeExecutionContext(ctx: RawExecutionContext): Partial<ExecutionMetadata> {
+function normalizeExecutionContext(
+  ctx: RawExecutionContext
+): Partial<ExecutionMetadata> {
   return {
     executionId: ctx.executionId ?? ctx.execution_id,
     runId: ctx.runId ?? ctx.run_id,
@@ -71,7 +73,11 @@ function normalizeExecutionContext(ctx: RawExecutionContext): Partial<ExecutionM
     actorId: ctx.actorId ?? ctx.actor_id,
     callerDid: ctx.callerDid ?? ctx.caller_did,
     targetDid: ctx.targetDid ?? ctx.target_did,
-    agentNodeDid: ctx.agentNodeDid ?? ctx.agent_node_did
+    agentNodeDid: ctx.agentNodeDid ?? ctx.agent_node_did,
+
+    // ✅ ADD THESE
+    rootWorkflowId: (ctx as any).rootWorkflowId ?? (ctx as any).root_workflow_id,
+    reasonerId: (ctx as any).reasonerId ?? (ctx as any).reasoner_id
   };
 }
 
@@ -977,37 +983,6 @@ export class Agent {
   private mergeExecutionContext(event: ServerlessEvent): Partial<ExecutionMetadata> {
     const rawCtx = event?.executionContext ?? event?.execution_context;
     return rawCtx ? normalizeExecutionContext(rawCtx) : {};
-    const ctx = (event?.executionContext ?? (event as any)?.execution_context) as Partial<
-      ExecutionMetadata & {
-        execution_id?: string;
-        run_id?: string;
-        workflow_id?: string;
-        root_workflow_id?: string;
-        parent_execution_id?: string;
-        reasoner_id?: string;
-        session_id?: string;
-        actor_id?: string;
-        caller_did?: string;
-        target_did?: string;
-        agent_node_did?: string;
-      }
-    >;
-
-    if (!ctx) return {};
-
-    return {
-      executionId: (ctx as any).executionId ?? ctx.execution_id ?? ctx.executionId,
-      runId: ctx.runId ?? (ctx as any).run_id,
-      workflowId: ctx.workflowId ?? (ctx as any).workflow_id,
-      rootWorkflowId: ctx.rootWorkflowId ?? (ctx as any).root_workflow_id,
-      parentExecutionId: ctx.parentExecutionId ?? (ctx as any).parent_execution_id,
-      reasonerId: ctx.reasonerId ?? (ctx as any).reasoner_id,
-      sessionId: ctx.sessionId ?? (ctx as any).session_id,
-      actorId: ctx.actorId ?? (ctx as any).actor_id,
-      callerDid: (ctx as any).callerDid ?? (ctx as any).caller_did,
-      targetDid: (ctx as any).targetDid ?? (ctx as any).target_did,
-      agentNodeDid: (ctx as any).agentNodeDid ?? (ctx as any).agent_node_did
-    };
   }
 
   private extractInvocationDetails(params: {
