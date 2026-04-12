@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"path/filepath"
@@ -9,23 +10,28 @@ import (
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
-	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
 
+// MemoryEventsStorage captures the storage operations required by MemoryEventsHandler.
+type MemoryEventsStorage interface {
+	SubscribeToMemoryChanges(ctx context.Context, scope, scopeID string) (<-chan types.MemoryChangeEvent, error)
+	GetEventHistory(ctx context.Context, filter types.EventFilter) ([]*types.MemoryChangeEvent, error)
+}
+
 // MemoryEventsHandler handles real-time memory event subscriptions.
 type MemoryEventsHandler struct {
-	storage  storage.StorageProvider
+	storage  MemoryEventsStorage
 	upgrader websocket.Upgrader
 }
 
 // NewMemoryEventsHandler creates a new MemoryEventsHandler.
 // Origin checking is not needed because auth middleware already validates API keys
 // before requests reach this handler.
-func NewMemoryEventsHandler(storage storage.StorageProvider) *MemoryEventsHandler {
+func NewMemoryEventsHandler(storage MemoryEventsStorage) *MemoryEventsHandler {
 	return &MemoryEventsHandler{
 		storage: storage,
 		upgrader: websocket.Upgrader{
@@ -113,32 +119,35 @@ func (h *MemoryEventsHandler) WebSocketHandler(c *gin.Context) {
 // SSEHandler handles Server-Sent Events connections for memory events.
 func (h *MemoryEventsHandler) SSEHandler(c *gin.Context) {
 	ctx := c.Request.Context()
-	// Set headers for SSE
-	c.Writer.Header().Set("Content-Type", "text/event-stream")
-	c.Writer.Header().Set("Cache-Control", "no-cache")
-	c.Writer.Header().Set("Connection", "keep-alive")
 
 	// Parse query parameters for filtering
 	scope := c.Query("scope")
 	scopeID := c.Query("scope_id")
 	patterns := normalizePatterns(c.Query("patterns"))
 
-	// Subscribe to memory changes
+	// Subscribe before writing headers so errors can still return a JSON response.
 	eventChan, err := h.storage.SubscribeToMemoryChanges(ctx, scope, scopeID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to subscribe to events"})
 		return
 	}
 
-	// Create a channel to notify when the client disconnects
-	clientClosed := c.Writer.CloseNotify()
+	// Flush headers immediately so the client unblocks before the first event.
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.WriteHeader(http.StatusOK)
+	_, _ = c.Writer.Write([]byte(": connected\n\n"))
+	c.Writer.Flush()
 
 	for {
 		select {
-		case <-clientClosed:
-			// Client disconnected
+		case <-ctx.Done():
 			return
-		case event := <-eventChan:
+		case event, ok := <-eventChan:
+			if !ok {
+				return
+			}
 			// Apply pattern matching
 			if len(patterns) > 0 {
 				match := false
@@ -153,13 +162,11 @@ func (h *MemoryEventsHandler) SSEHandler(c *gin.Context) {
 				}
 			}
 
-			// Marshal event to JSON
 			eventJSON, err := json.Marshal(event)
 			if err != nil {
-				continue // Skip events that can't be marshaled
+				continue
 			}
 
-			// Send event to client
 			c.SSEvent("message", string(eventJSON))
 			c.Writer.Flush()
 		}
@@ -167,7 +174,7 @@ func (h *MemoryEventsHandler) SSEHandler(c *gin.Context) {
 }
 
 // GetEventHistoryHandler handles requests for historical memory events.
-func GetEventHistoryHandler(storage storage.StorageProvider) gin.HandlerFunc {
+func GetEventHistoryHandler(storage MemoryEventsStorage) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 		var filter types.EventFilter
