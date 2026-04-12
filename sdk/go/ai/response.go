@@ -64,6 +64,37 @@ type ErrorDetail struct {
 	Code    string `json:"code,omitempty"`
 }
 
+// APIError represents a structured API error with full context for retry/fallback decisions.
+// Formerly all non-2xx responses were flattened into fmt.Errorf, losing HTTP status code,
+// provider error type, and structured error code — preventing callers from distinguishing
+// auth (401) vs rate-limit (429) vs content filter (400) vs server error (5xx).
+type APIError struct {
+	HTTPStatus int
+	Type       string // e.g. "invalid_request_error", "authentication_error", "rate_limit_error"
+	Code       string // provider-specific error code
+	Message    string // human-readable message
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("API error (%d): [%s] %s", e.HTTPStatus, e.Type, e.Message)
+}
+
+// IsRetryable returns true if the error represents a transient condition worth retrying.
+// 429 Rate Limited and 5xx Server Errors are retryable; 400, 401, 403, 404 are not.
+func (e *APIError) IsRetryable() bool {
+	return e.HTTPStatus == 429 || e.HTTPStatus >= 500
+}
+
+// IsAuthError returns true if this is an authentication error (401).
+func (e *APIError) IsAuthError() bool {
+	return e.HTTPStatus == 401
+}
+
+// IsRateLimited returns true if this is a rate limit error (429).
+func (e *APIError) IsRateLimited() bool {
+	return e.HTTPStatus == 429
+}
+
 // HasToolCalls returns true if the response contains tool calls.
 func (r *Response) HasToolCalls() bool {
 	if len(r.Choices) == 0 {
