@@ -8,7 +8,9 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -345,6 +347,114 @@ func TestHandleReasoner_NotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
+func TestHandleExecute_AndServerlessHelpers(t *testing.T) {
+	t.Run("success and structured errors", func(t *testing.T) {
+		cfg := Config{NodeID: "node-1", Version: "1.0.0", AgentFieldURL: "https://api.example.com", Logger: log.New(io.Discard, "", 0)}
+		agent, err := New(cfg)
+		require.NoError(t, err)
+
+		agent.RegisterReasoner("echo", func(ctx context.Context, input map[string]any) (any, error) {
+			execCtx := executionContextFrom(ctx)
+			assert.Equal(t, "exec-1", execCtx.ExecutionID)
+			assert.Equal(t, "run-1", execCtx.RunID)
+			assert.Equal(t, "wf-1", execCtx.WorkflowID)
+			return map[string]any{"echo": input["message"]}, nil
+		})
+		agent.RegisterReasoner("forbidden", func(context.Context, map[string]any) (any, error) {
+			return nil, &ExecuteError{StatusCode: http.StatusForbidden, Message: "forbidden", ErrorDetails: map[string]any{"code": "policy_denied"}}
+		})
+
+		req := httptest.NewRequest(http.MethodPost, "/execute/echo", bytes.NewBufferString(`{"input":{"message":"hello"},"execution_context":{"execution_id":"exec-1","run_id":"run-1","workflow_id":"wf-1"}}`))
+		resp := httptest.NewRecorder()
+		agent.handleExecute(resp, req)
+		assert.Equal(t, http.StatusOK, resp.Code)
+		assert.JSONEq(t, `{"echo":"hello"}`, resp.Body.String())
+
+		forbiddenReq := httptest.NewRequest(http.MethodPost, "/execute/forbidden", bytes.NewBufferString(`{"message":"hello"}`))
+		forbiddenResp := httptest.NewRecorder()
+		agent.handleExecute(forbiddenResp, forbiddenReq)
+		assert.Equal(t, http.StatusForbidden, forbiddenResp.Code)
+		assert.JSONEq(t, `{"error":"forbidden","error_details":{"code":"policy_denied"}}`, forbiddenResp.Body.String())
+	})
+
+	t.Run("helper functions and HandleServerlessEvent", func(t *testing.T) {
+		assert.Equal(t, map[string]any{}, extractInputFromServerless(nil))
+		assert.Equal(t, map[string]any{"value": "x"}, extractInputFromServerless(map[string]any{"input": "x"}))
+		assert.Equal(t, map[string]any{"keep": 1}, extractInputFromServerless(map[string]any{"target": "echo", "path": "/execute/echo", "keep": 1}))
+
+		cfg := Config{NodeID: "node-1", Version: "1.0.0", AgentFieldURL: "https://api.example.com", Logger: log.New(io.Discard, "", 0)}
+		agent, err := New(cfg)
+		require.NoError(t, err)
+		agent.RegisterReasoner("echo", func(ctx context.Context, input map[string]any) (any, error) {
+			assert.Equal(t, "serverless-run", executionContextFrom(ctx).RunID)
+			return map[string]any{"echo": input["value"]}, nil
+		})
+		agent.RegisterReasoner("explode", func(context.Context, map[string]any) (any, error) {
+			return nil, assert.AnError
+		})
+
+		req := httptest.NewRequest(http.MethodPost, "/unused", nil)
+		req.Header.Set("X-Run-ID", "header-run")
+		req.Header.Set("X-Actor-ID", "actor-1")
+		execCtx := agent.buildExecutionContextFromServerless(req, map[string]any{
+			"execution_context": map[string]any{"execution_id": "exec-2", "workflow_id": "wf-2"},
+		}, "echo")
+		assert.Equal(t, "header-run", execCtx.RunID)
+		assert.Equal(t, "exec-2", execCtx.ExecutionID)
+		assert.Equal(t, "wf-2", execCtx.WorkflowID)
+		assert.Equal(t, "actor-1", execCtx.ActorID)
+		assert.Equal(t, "node-1", execCtx.AgentNodeID)
+
+		result, status, err := agent.HandleServerlessEvent(context.Background(), map[string]any{}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusBadRequest, status)
+		assert.Equal(t, map[string]any{"error": "missing target or reasoner"}, result)
+
+		result, status, err = agent.HandleServerlessEvent(context.Background(), map[string]any{"target": "missing"}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusNotFound, status)
+		assert.Equal(t, map[string]any{"error": "reasoner not found"}, result)
+
+		result, status, err = agent.HandleServerlessEvent(context.Background(), map[string]any{"rawPath": "/execute/echo", "input": map[string]any{"value": "hello"}, "execution_context": map[string]any{"run_id": "serverless-run"}}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, status)
+		assert.Equal(t, map[string]any{"echo": "hello"}, result)
+
+		result, status, err = agent.HandleServerlessEvent(context.Background(), map[string]any{"target": "explode"}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusInternalServerError, status)
+		assert.Equal(t, map[string]any{"error": assert.AnError.Error()}, result)
+	})
+
+	t.Run("reasoner options and ServeHTTP forwarding", func(t *testing.T) {
+		cfg := Config{NodeID: "node-1", Version: "1.0.0", AgentFieldURL: "https://api.example.com", Logger: log.New(io.Discard, "", 0)}
+		agent, err := New(cfg)
+		require.NoError(t, err)
+
+		formatterCalled := false
+		agent.RegisterReasoner("cli", func(context.Context, map[string]any) (any, error) { return "ok", nil }, WithCLIFormatter(func(context.Context, any, error) {
+			formatterCalled = true
+		}), WithVCEnabled(true), WithReasonerTags("ops", "debug"), WithRequireRealtimeValidation())
+
+		r := agent.reasoners["cli"]
+		if assert.NotNil(t, r.VCEnabled) {
+			assert.True(t, *r.VCEnabled)
+		}
+		assert.Equal(t, []string{"ops", "debug"}, r.Tags)
+		assert.True(t, r.RequireRealtimeValidation)
+		r.CLIFormatter(context.Background(), nil, nil)
+		assert.True(t, formatterCalled)
+
+		execErr := &ExecuteError{Message: "boom"}
+		assert.Equal(t, "boom", execErr.Error())
+
+		resp := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/health", nil)
+		agent.ServeHTTP(resp, req)
+		assert.Equal(t, http.StatusOK, resp.Code)
+	})
+}
+
 func TestHandleReasoner_WrongMethod(t *testing.T) {
 	cfg := Config{
 		NodeID:        "node-1",
@@ -654,6 +764,132 @@ func TestAIStream_NotConfigured(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestAIWithTools(t *testing.T) {
+	t.Run("not configured", func(t *testing.T) {
+		agent, err := New(Config{NodeID: "node-1", Version: "1.0.0", AgentFieldURL: "https://api.example.com", Logger: log.New(io.Discard, "", 0)})
+		require.NoError(t, err)
+
+		resp, trace, err := agent.AIWithTools(context.Background(), "hello", ai.DefaultToolCallConfig())
+		assert.Error(t, err)
+		assert.Nil(t, resp)
+		assert.Nil(t, trace)
+	})
+
+	t.Run("fallback without discovered tools", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/v1/discovery/capabilities":
+				_, _ = w.Write([]byte(`{"discovered_at":"2025-01-01T00:00:00Z","total_agents":0,"total_reasoners":0,"total_skills":0,"pagination":{"limit":50,"offset":0,"has_more":false},"capabilities":[]}`))
+			case "/chat/completions":
+				_ = json.NewEncoder(w).Encode(ai.Response{Choices: []ai.Choice{{Message: ai.Message{Content: []ai.ContentPart{{Type: "text", Text: "fallback"}}}}}})
+			default:
+				t.Fatalf("unexpected path %s", r.URL.Path)
+			}
+		}))
+		defer server.Close()
+
+		agent, err := New(Config{
+			NodeID:        "node-1",
+			Version:       "1.0.0",
+			AgentFieldURL: server.URL,
+			Logger:        log.New(io.Discard, "", 0),
+			AIConfig:      &ai.Config{APIKey: "test-key", BaseURL: server.URL, Model: "gpt-4o"},
+		})
+		require.NoError(t, err)
+
+		resp, trace, err := agent.AIWithTools(context.Background(), "hello", ai.DefaultToolCallConfig())
+		require.NoError(t, err)
+		assert.Equal(t, "fallback", resp.Text())
+		assert.Equal(t, 1, trace.TotalTurns)
+	})
+
+		t.Run("discovers tools and dispatches local calls", func(t *testing.T) {
+			var chatRequests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/v1/discovery/capabilities":
+					_, _ = w.Write([]byte(`{"discovered_at":"2025-01-01T00:00:00Z","total_agents":1,"total_reasoners":1,"total_skills":0,"pagination":{"limit":50,"offset":0,"has_more":false},"capabilities":[{"agent_id":"agent-1","reasoners":[{"id":"lookup","invocation_target":"agent-1.lookup","input_schema":{"type":"object"}}],"skills":[]}]}`))
+				case "/api/v1/execute/agent-1.lookup":
+					_, _ = w.Write([]byte(`{"status":"open"}`))
+				case "/chat/completions":
+					count := chatRequests.Add(1)
+				if count == 1 {
+					_ = json.NewEncoder(w).Encode(ai.Response{Choices: []ai.Choice{{Message: ai.Message{ToolCalls: []ai.ToolCall{{ID: "call-1", Type: "function", Function: ai.ToolCallFunction{Name: "agent-1.lookup", Arguments: `{"query":"status"}`}}}}}}})
+					return
+				}
+				_ = json.NewEncoder(w).Encode(ai.Response{Choices: []ai.Choice{{Message: ai.Message{Content: []ai.ContentPart{{Type: "text", Text: "tool answer"}}}}}})
+			default:
+				t.Fatalf("unexpected path %s", r.URL.Path)
+			}
+		}))
+		defer server.Close()
+
+		agent, err := New(Config{
+			NodeID:        "agent-1",
+			Version:       "1.0.0",
+			AgentFieldURL: server.URL,
+			Logger:        log.New(io.Discard, "", 0),
+			AIConfig:      &ai.Config{APIKey: "test-key", BaseURL: server.URL, Model: "gpt-4o"},
+		})
+		require.NoError(t, err)
+			resp, trace, err := agent.AIWithTools(context.Background(), "hello", ai.DefaultToolCallConfig())
+		require.NoError(t, err)
+		assert.Equal(t, "tool answer", resp.Text())
+		require.Len(t, trace.Calls, 1)
+		assert.Equal(t, "agent-1.lookup", trace.Calls[0].ToolName)
+	})
+}
+
+func TestRunAndServe_ShutdownOnContextCancel(t *testing.T) {
+	var shutdownCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/nodes":
+			_, _ = w.Write([]byte(`{"lease_seconds":120}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/nodes/node-1/shutdown":
+			shutdownCalls.Add(1)
+			_, _ = w.Write([]byte(`{"lease_seconds":120}`))
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	newServingAgent := func() *Agent {
+		a, err := New(Config{
+			NodeID:        "node-1",
+			Version:       "1.0.0",
+			AgentFieldURL: server.URL,
+			ListenAddress: "127.0.0.1:0",
+			Logger:        log.New(io.Discard, "", 0),
+		})
+		require.NoError(t, err)
+		a.RegisterReasoner("echo", func(context.Context, map[string]any) (any, error) { return map[string]any{"ok": true}, nil })
+		return a
+	}
+
+	serveAgent := newServingAgent()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- serveAgent.Serve(ctx) }()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	require.NoError(t, <-done)
+	assert.NotNil(t, serveAgent.server)
+
+	runAgent := newServingAgent()
+	origArgs := os.Args
+	os.Args = []string{"agentfield"}
+	defer func() { os.Args = origArgs }()
+	runCtx, runCancel := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() { runDone <- runAgent.Run(runCtx) }()
+	time.Sleep(50 * time.Millisecond)
+	runCancel()
+	require.NoError(t, <-runDone)
+	assert.GreaterOrEqual(t, shutdownCalls.Load(), int32(2))
+}
+
 func TestExecutionContext(t *testing.T) {
 	ctx := context.Background()
 	execCtx := ExecutionContext{
@@ -676,10 +912,126 @@ func TestExecutionContext_Empty(t *testing.T) {
 	assert.Equal(t, ExecutionContext{}, execCtx)
 }
 
+func TestExecutionLogger_EmitsAndPostsStructuredLog(t *testing.T) {
+	logCh := make(chan ExecutionLogEntry, 1)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/executions/exec-1/logs" {
+			assert.Equal(t, http.MethodPost, r.Method)
+			assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+
+			var entry ExecutionLogEntry
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&entry))
+			logCh <- entry
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	cfg := Config{
+		NodeID:        "node-1",
+		Version:       "1.0.0",
+		AgentFieldURL: server.URL,
+		Logger:        log.New(io.Discard, "", 0),
+	}
+
+	agent, err := New(cfg)
+	require.NoError(t, err)
+
+	ctx := contextWithExecution(context.Background(), ExecutionContext{
+		RunID:          "run-1",
+		ExecutionID:    "exec-1",
+		WorkflowID:     "wf-1",
+		RootWorkflowID: "root-wf-1",
+		ReasonerName:   "demo",
+		SessionID:      "session-1",
+		ActorID:        "actor-1",
+	})
+
+	stdout, _, err := captureOutput(t, func() error {
+		agent.ExecutionLogger(ctx).WithSource("sdk.user").Info("reasoner.custom", "custom log message", map[string]any{
+			"foo": "bar",
+		})
+		time.Sleep(50 * time.Millisecond)
+		return nil
+	})
+	require.NoError(t, err)
+
+	var entry ExecutionLogEntry
+	require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(stdout)), &entry))
+	assert.Equal(t, "exec-1", entry.ExecutionID)
+	assert.Equal(t, "wf-1", entry.WorkflowID)
+	assert.Equal(t, "run-1", entry.RunID)
+	assert.Equal(t, "root-wf-1", entry.RootWorkflowID)
+	assert.Equal(t, "node-1", entry.AgentNodeID)
+	assert.Equal(t, "demo", entry.ReasonerID)
+	assert.Equal(t, "info", entry.Level)
+	assert.Equal(t, "sdk.user", entry.Source)
+	assert.Equal(t, "reasoner.custom", entry.EventType)
+	assert.Equal(t, "custom log message", entry.Message)
+	assert.False(t, entry.SystemGenerated)
+	assert.Equal(t, "bar", entry.Attributes["foo"])
+
+	select {
+	case posted := <-logCh:
+		assert.Equal(t, "exec-1", posted.ExecutionID)
+		assert.Equal(t, "reasoner.custom", posted.EventType)
+		assert.Equal(t, "sdk.user", posted.Source)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for execution log post")
+	}
+}
+
+func TestExecutionLogger_HelperMethods(t *testing.T) {
+	agent, err := New(Config{NodeID: "node-1", Version: "1.0.0", AgentFieldURL: "https://api.example.com", Logger: log.New(io.Discard, "", 0)})
+	require.NoError(t, err)
+
+	ctx := contextWithExecution(context.Background(), ExecutionContext{RunID: "run-1"})
+	stdout, _, err := captureOutput(t, func() error {
+		logger := agent.ExecutionLogger(ctx)
+		logger.Debug("debug.event", "", nil)
+		logger.Warn("warn.event", "warn message", nil)
+		logger.Error("error.event", "error message", nil)
+		logger.System("system.event", "system message", map[string]any{"kind": "system"})
+		return nil
+	})
+	require.NoError(t, err)
+
+	lines := strings.Split(strings.TrimSpace(stdout), "\n")
+	require.Len(t, lines, 4)
+
+	var entries []ExecutionLogEntry
+	for _, line := range lines {
+		var entry ExecutionLogEntry
+		require.NoError(t, json.Unmarshal([]byte(line), &entry))
+		entries = append(entries, entry)
+	}
+
+	assert.Equal(t, "debug", entries[0].Level)
+	assert.Equal(t, "debug.event", entries[0].EventType)
+	assert.Equal(t, "debug.event", entries[0].Message)
+	assert.Equal(t, "run-1", entries[0].RootWorkflowID)
+	assert.Equal(t, "node-1", entries[0].AgentNodeID)
+	assert.Equal(t, "warn", entries[1].Level)
+	assert.Equal(t, "error", entries[2].Level)
+	assert.True(t, entries[3].SystemGenerated)
+	assert.Equal(t, "system", entries[3].Attributes["kind"])
+}
+
 func TestHandleReasonerAsyncPostsStatus(t *testing.T) {
 	callbackCh := make(chan map[string]any, 1)
 	callbackServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
+		if strings.Contains(r.URL.Path, "/logs") {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if !strings.Contains(r.URL.Path, "/status") {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		dec := json.NewDecoder(r.Body)
 		var payload map[string]any
 		if err := dec.Decode(&payload); err == nil {
@@ -828,6 +1180,14 @@ func TestCallLocalEmitsEvents(t *testing.T) {
 	eventCh := make(chan types.WorkflowExecutionEvent, 4)
 	eventServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
+		if strings.Contains(r.URL.Path, "/logs") {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if !strings.Contains(r.URL.Path, "/workflow/executions/events") {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		body, _ := io.ReadAll(r.Body)
 		var event types.WorkflowExecutionEvent
 		if err := json.Unmarshal(body, &event); err == nil {
@@ -894,6 +1254,83 @@ func TestCallLocalEmitsEvents(t *testing.T) {
 
 	assert.True(t, statuses["running"])
 	assert.True(t, statuses["succeeded"])
+}
+
+func TestCallLocalEmitsStructuredExecutionLogs(t *testing.T) {
+	logCh := make(chan ExecutionLogEntry, 4)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/logs"):
+			var entry ExecutionLogEntry
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&entry))
+			logCh <- entry
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	cfg := Config{
+		NodeID:        "node-1",
+		Version:       "1.0.0",
+		AgentFieldURL: server.URL,
+		Logger:        log.New(io.Discard, "", 0),
+	}
+
+	ag, err := New(cfg)
+	require.NoError(t, err)
+
+	ag.RegisterReasoner("child", func(ctx context.Context, input map[string]any) (any, error) {
+		return map[string]any{"echo": input["msg"]}, nil
+	})
+
+	parentCtx := contextWithExecution(context.Background(), ExecutionContext{
+		RunID:          "run-1",
+		ExecutionID:    "exec-parent",
+		WorkflowID:     "wf-1",
+		RootWorkflowID: "wf-1",
+		ReasonerName:   "parent",
+		AgentNodeID:    "node-1",
+	})
+
+	stdout, _, err := captureOutput(t, func() error {
+		_, err := ag.CallLocal(parentCtx, "child", map[string]any{"msg": "hi"})
+		time.Sleep(50 * time.Millisecond)
+		return err
+	})
+	require.NoError(t, err)
+
+	lines := strings.Split(strings.TrimSpace(stdout), "\n")
+	require.GreaterOrEqual(t, len(lines), 2)
+
+	var seenStart, seenComplete bool
+	for _, line := range lines {
+		var entry ExecutionLogEntry
+		require.NoError(t, json.Unmarshal([]byte(line), &entry))
+		if entry.ReasonerID != "child" {
+			continue
+		}
+		assert.Equal(t, "sdk.runtime", entry.Source)
+		if entry.EventType == "call.local.start" {
+			seenStart = true
+		}
+		if entry.EventType == "call.local.complete" {
+			seenComplete = true
+		}
+	}
+
+	assert.True(t, seenStart)
+	assert.True(t, seenComplete)
+
+	select {
+	case first := <-logCh:
+		assert.Equal(t, "child", first.ReasonerID)
+		assert.NotEmpty(t, first.ExecutionID)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for structured execution logs")
+	}
 }
 
 func TestCallLocalUnknownReasoner(t *testing.T) {

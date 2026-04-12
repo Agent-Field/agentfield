@@ -59,14 +59,12 @@ func TestUpdateFromHeartbeat(t *testing.T) {
 	status := FromLegacyStatus(HealthStatusInactive, AgentStatusOffline, lastBeat)
 
 	lifecycle := AgentStatusReady
-	mcp := &MCPStatusInfo{OverallHealth: 0.75}
-	status.UpdateFromHeartbeat(&lifecycle, mcp)
+	status.UpdateFromHeartbeat(&lifecycle)
 
 	require.Equal(t, AgentStateActive, status.State)
 	require.Equal(t, lifecycle, status.LifecycleStatus)
 	require.Equal(t, HealthStatusActive, status.HealthStatus)
 	require.Equal(t, StatusSourceHeartbeat, status.Source)
-	require.Equal(t, mcp, status.MCPStatus)
 	require.GreaterOrEqual(t, status.HealthScore, 80)
 }
 

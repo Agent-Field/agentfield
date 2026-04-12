@@ -521,6 +521,31 @@ func TestDIDClientDID(t *testing.T) {
 	})
 }
 
+func TestDIDClientSignBody(t *testing.T) {
+	testDID := "did:web:example.com:agents:test"
+	_, _, jwkStr := testKeyPair(t)
+
+	t.Run("returns nil without DID auth", func(t *testing.T) {
+		c, err := New("http://localhost:8080")
+		require.NoError(t, err)
+		assert.Nil(t, c.SignBody([]byte(`{"ok":true}`)))
+	})
+
+	t.Run("signs request body when configured", func(t *testing.T) {
+		c, err := New("http://localhost:8080")
+		require.NoError(t, err)
+		auth, err := NewDIDAuthenticator(testDID, jwkStr)
+		require.NoError(t, err)
+		c.didAuthenticator = auth
+
+		headers := c.SignBody([]byte(`{"ok":true}`))
+		assert.Equal(t, testDID, headers[HeaderCallerDID])
+		assert.NotEmpty(t, headers[HeaderDIDSignature])
+		assert.NotEmpty(t, headers[HeaderDIDTimestamp])
+		assert.NotEmpty(t, headers[HeaderDIDNonce])
+	})
+}
+
 // =====================================================
 // WithDIDAuth Option Tests
 // =====================================================

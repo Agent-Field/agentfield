@@ -45,9 +45,9 @@ jobs:
         working-directory: sdk/go
         run: go build ./...
 
-      - name: Test
-        working-directory: sdk/go
-        run: go test ./...
+      # NOTE: `go test` lives in .github/workflows/coverage.yml so the sdk/go
+      # suite runs only once per PR. The coverage workflow is a required
+      # status check on main, so regressions still block merge.
 
   # Summary job that depends on all critical checks
   required-checks:

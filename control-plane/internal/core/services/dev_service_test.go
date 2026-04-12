@@ -3,10 +3,12 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
 	"github.com/stretchr/testify/assert"
@@ -117,6 +119,14 @@ func TestRunInDevMode_NoAgentfieldYaml(t *testing.T) {
 }
 
 func TestRunInDevMode_AgentfieldYamlExists(t *testing.T) {
+	// This test verifies that RunInDevMode gets past the agentfield.yaml check.
+	// It will fail at startDevProcess or discoverAgentPort since we can't easily mock exec.Cmd.
+	// Use a short timeout to avoid hanging for 10+ minutes when discoverAgentPort
+	// scans ports endlessly after the subprocess fails to start.
+	if testing.Short() {
+		t.Skip("skipping slow dev mode test in short mode")
+	}
+
 	tmpDir := t.TempDir()
 	packagePath := filepath.Join(tmpDir, "test-package")
 	require.NoError(t, os.MkdirAll(packagePath, 0755))
@@ -143,12 +153,23 @@ func TestRunInDevMode_AgentfieldYamlExists(t *testing.T) {
 		WatchFiles: false,
 	}
 
-	// This will fail at startDevProcess or discoverAgentPort since we can't easily mock exec.Cmd
-	// But we verify it gets past the agentfield.yaml check
-	err := service.RunInDevMode(packagePath, options)
-	// The error should be about process startup or port discovery, not about agentfield.yaml
-	if err != nil {
-		assert.NotContains(t, err.Error(), "no agentfield.yaml found")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- service.RunInDevMode(packagePath, options)
+	}()
+
+	select {
+	case err := <-done:
+		// The error should be about process startup or port discovery, not about agentfield.yaml
+		if err != nil {
+			assert.NotContains(t, err.Error(), "no agentfield.yaml found")
+		}
+	case <-ctx.Done():
+		// Expected: discoverAgentPort hangs because no real agent is running.
+		// The test already proved agentfield.yaml was accepted (we got past that check).
 	}
 }
 

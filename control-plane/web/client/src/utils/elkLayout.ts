@@ -204,19 +204,11 @@ export const applyElkLayout = async (
       edges: elkEdges,
     };
 
-    console.log('🔍 ELK DEBUG: Input graph:', elkGraph);
-    console.log('🔍 ELK DEBUG: Using algorithm:', algorithm);
-    console.log('🔍 ELK DEBUG: Layout options:', layoutOptions);
-
     // Apply layout
     const layoutedGraph = await elk.layout(elkGraph);
 
-    console.log('🔍 ELK DEBUG: Layouted graph:', layoutedGraph);
-
     // Convert back to ReactFlow format
     const result = convertElkToReactFlow(layoutedGraph, nodes, edges);
-
-    console.log('🔍 ELK DEBUG: Final nodes:', result.nodes.length, result.nodes);
 
     return result;
   } catch (error) {

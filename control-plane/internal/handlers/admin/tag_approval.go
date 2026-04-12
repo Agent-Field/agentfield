@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"sort"
+	"strings"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services"
@@ -213,6 +214,13 @@ func (h *TagApprovalHandlers) RevokeAgentTags(c *gin.Context) {
 	_ = c.ShouldBindJSON(&req) // reason is optional
 
 	if err := h.tagApprovalService.RevokeAgentTags(c.Request.Context(), agentID, "admin", req.Reason); err != nil {
+		if strings.HasPrefix(err.Error(), "already_revoked:") {
+			c.JSON(http.StatusConflict, gin.H{
+				"error":   "already_revoked",
+				"message": "Agent tags are already revoked",
+			})
+			return
+		}
 		logger.Logger.Error().Err(err).Str("agent_id", agentID).Msg("Failed to revoke agent tags")
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "revocation_failed",

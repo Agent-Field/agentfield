@@ -41,14 +41,14 @@ export const TextInput = React.forwardRef<HTMLInputElement, TextInputProps>(
         {label && !hideLabel && (
           <label
             htmlFor={inputId}
-            className="text-body-small font-medium text-text-secondary"
+            className="text-sm text-muted-foreground font-medium text-muted-foreground"
           >
             {label}
           </label>
         )}
 
         {description && (
-          <p id={descriptionId} className="text-body-small text-text-tertiary">
+          <p id={descriptionId} className="text-sm text-muted-foreground text-muted-foreground">
             {description}
           </p>
         )}
@@ -58,7 +58,7 @@ export const TextInput = React.forwardRef<HTMLInputElement, TextInputProps>(
           ref={forwardedRef}
           aria-describedby={describedBy}
           className={cn(
-            "h-9 rounded-md border border-border bg-bg-secondary px-3 text-body text-text-primary shadow-sm transition-colors",
+            "h-9 rounded-md border border-border bg-muted px-3 text-sm text-foreground shadow-sm transition-colors",
             "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0",
             "disabled:cursor-not-allowed disabled:opacity-60",
             errorText && "border-status-error focus-visible:ring-status-error",
@@ -68,13 +68,13 @@ export const TextInput = React.forwardRef<HTMLInputElement, TextInputProps>(
         />
 
         {helperText && (
-          <p id={helperId} className="text-body-small text-text-tertiary">
+          <p id={helperId} className="text-sm text-muted-foreground text-muted-foreground">
             {helperText}
           </p>
         )}
 
         {errorText && (
-          <p id={errorId} className="text-body-small text-status-error">
+          <p id={errorId} className="text-sm text-muted-foreground text-status-error">
             {errorText}
           </p>
         )}

@@ -1,0 +1,14 @@
+# TypeScript SDK + small NDJSON log emitter for UI log-demo compose.
+FROM node:20-bookworm AS builder
+WORKDIR /build
+COPY sdk/typescript/package*.json ./
+COPY sdk/typescript ./
+RUN npm ci && npm run build && npm prune --omit=dev
+
+FROM node:20-bookworm
+WORKDIR /app
+COPY --from=builder /build/dist ./node_modules/@agentfield/sdk/dist
+COPY --from=builder /build/package.json ./node_modules/@agentfield/sdk/package.json
+COPY --from=builder /build/node_modules ./node_modules
+COPY tests/functional/docker/log-demo-node/log-demo.mjs ./
+CMD ["node", "/app/log-demo.mjs"]

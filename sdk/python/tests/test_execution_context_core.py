@@ -61,6 +61,36 @@ def test_child_context_derives_from_parent():
 
 
 @pytest.mark.unit
+def test_execution_context_log_fields_default_root_workflow():
+    ctx = ExecutionContext(
+        workflow_id="wf-1",
+        execution_id="exec-1",
+        agent_instance=None,
+        reasoner_name="reasoner",
+        parent_execution_id="parent-1",
+        agent_node_id="node-1",
+        run_id="run-1",
+        parent_workflow_id="wf-parent",
+    )
+
+    identity = ctx.to_log_identity()
+    attributes = ctx.to_log_attributes()
+
+    assert ctx.root_workflow_id == "wf-1"
+    assert identity == {
+        "execution_id": "exec-1",
+        "workflow_id": "wf-1",
+        "run_id": "run-1",
+        "root_workflow_id": "wf-1",
+        "parent_execution_id": "parent-1",
+        "agent_node_id": "node-1",
+        "reasoner_id": "reasoner",
+    }
+    assert attributes["depth"] == 0
+    assert attributes["parent_workflow_id"] == "wf-parent"
+
+
+@pytest.mark.unit
 def test_generate_execution_id_has_unique_prefix():
     first = generate_execution_id()
     second = generate_execution_id()

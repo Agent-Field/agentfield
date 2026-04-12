@@ -381,6 +381,11 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 		where = append(where, "started_at <= ?")
 		args = append(args, filter.EndTime.UTC())
 	}
+	if filter.Search != nil {
+		searchTerm := "%" + *filter.Search + "%"
+		where = append(where, "(run_id LIKE ? OR agent_node_id LIKE ? OR reasoner_id LIKE ?)")
+		args = append(args, searchTerm, searchTerm, searchTerm)
+	}
 
 	whereClause := ""
 	if len(where) > 0 {
@@ -425,11 +430,13 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 			SUM(CASE WHEN LOWER(status) = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_count,
 			SUM(CASE WHEN LOWER(status) = 'timeout' THEN 1 ELSE 0 END) AS timeout_count,
 			SUM(CASE WHEN LOWER(status) = 'running' THEN 1 ELSE 0 END) AS running_count,
+			SUM(CASE WHEN LOWER(status) = 'paused' THEN 1 ELSE 0 END) AS paused_count,
 			SUM(CASE WHEN LOWER(status) = 'pending' THEN 1 ELSE 0 END) AS pending_count,
 			SUM(CASE WHEN LOWER(status) = 'queued' THEN 1 ELSE 0 END) AS queued_count,
 			SUM(CASE WHEN LOWER(status) = 'waiting' THEN 1 ELSE 0 END) AS waiting_count,
 			SUM(CASE WHEN LOWER(status) IN ('running','pending','queued','waiting') THEN 1 ELSE 0 END) AS active_executions,
 			MAX(CASE WHEN parent_execution_id IS NULL OR parent_execution_id = '' THEN execution_id END) AS root_execution_id,
+			MAX(CASE WHEN parent_execution_id IS NULL OR parent_execution_id = '' THEN status END) AS root_status,
 			MAX(CASE WHEN parent_execution_id IS NULL OR parent_execution_id = '' THEN agent_node_id END) AS root_agent_node_id,
 			MAX(CASE WHEN parent_execution_id IS NULL OR parent_execution_id = '' THEN reasoner_id END) AS root_reasoner_id,
 			MAX(session_id) AS session_id,
@@ -473,11 +480,13 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 			cancelledCount     int
 			timeoutCount       int
 			runningCount       int
+			pausedCount        int
 			pendingCount       int
 			queuedCount        int
 			waitingCount       int
 			activeExecutions   int
 			rootExecutionID    sql.NullString
+			rootStatus         sql.NullString
 			rootAgentNodeID    sql.NullString
 			rootReasonerID     sql.NullString
 			sessionID          sql.NullString
@@ -495,11 +504,13 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 			&cancelledCount,
 			&timeoutCount,
 			&runningCount,
+			&pausedCount,
 			&pendingCount,
 			&queuedCount,
 			&waitingCount,
 			&activeExecutions,
 			&rootExecutionID,
+			&rootStatus,
 			&rootAgentNodeID,
 			&rootReasonerID,
 			&sessionID,
@@ -519,6 +530,7 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 				string(types.ExecutionStatusCancelled): cancelledCount,
 				string(types.ExecutionStatusTimeout):   timeoutCount,
 				string(types.ExecutionStatusRunning):   runningCount,
+				string(types.ExecutionStatusPaused):    pausedCount,
 				string(types.ExecutionStatusWaiting):   waitingCount,
 				string(types.ExecutionStatusPending):   pendingCount,
 				string(types.ExecutionStatusQueued):    queuedCount,
@@ -548,6 +560,10 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 
 		if rootExecutionID.Valid && rootExecutionID.String != "" {
 			summary.RootExecutionID = &rootExecutionID.String
+		}
+		if rootStatus.Valid && rootStatus.String != "" {
+			normalized := types.NormalizeExecutionStatus(rootStatus.String)
+			summary.RootStatus = &normalized
 		}
 		if rootAgentNodeID.Valid && rootAgentNodeID.String != "" {
 			summary.RootAgentNodeID = &rootAgentNodeID.String
@@ -728,16 +744,17 @@ func (ls *LocalStorage) getRunAggregation(ctx context.Context, runID string) (*R
 
 	// Query 3: Get root execution info (execution with no parent)
 	rootQuery := `
-		SELECT execution_id, agent_node_id, reasoner_id, session_id, actor_id
+		SELECT execution_id, status, agent_node_id, reasoner_id, session_id, actor_id
 		FROM executions
 		WHERE run_id = ? AND (parent_execution_id IS NULL OR parent_execution_id = '')
 		ORDER BY started_at ASC
 		LIMIT 1`
 
-	var rootExecID, rootAgentNodeID, rootReasonerID sql.NullString
+	var rootExecID, rootStatus, rootAgentNodeID, rootReasonerID sql.NullString
 	var sessionID, actorID sql.NullString
 	err = db.QueryRowContext(ctx, rootQuery, runID).Scan(
 		&rootExecID,
+		&rootStatus,
 		&rootAgentNodeID,
 		&rootReasonerID,
 		&sessionID,
@@ -749,6 +766,10 @@ func (ls *LocalStorage) getRunAggregation(ctx context.Context, runID string) (*R
 
 	if rootExecID.Valid {
 		summary.RootExecutionID = &rootExecID.String
+	}
+	if rootStatus.Valid && rootStatus.String != "" {
+		normalized := types.NormalizeExecutionStatus(rootStatus.String)
+		summary.RootStatus = &normalized
 	}
 	if rootAgentNodeID.Valid {
 		summary.RootAgentNodeID = &rootAgentNodeID.String
@@ -1065,6 +1086,7 @@ func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAf
 		FROM workflow_executions
 		WHERE status IN ('running', 'pending', 'queued', 'waiting')
 		  AND COALESCE(updated_at, created_at, started_at) <= ?
+		  AND COALESCE(approval_status, '') != 'pending'
 		ORDER BY COALESCE(updated_at, created_at, started_at) ASC
 		LIMIT ?`, cutoff, limit)
 	if err != nil {
@@ -1108,6 +1130,16 @@ func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAf
 	}
 	defer updateStmt.Close()
 
+	// Also sync the executions table so both tables stay consistent.
+	syncExecStmt, err := tx.PrepareContext(ctx, `
+		UPDATE executions
+		SET status = ?, error_message = ?, completed_at = ?, duration_ms = ?, updated_at = ?
+		WHERE execution_id = ? AND status IN ('running', 'pending', 'queued', 'waiting')`)
+	if err != nil {
+		return 0, fmt.Errorf("prepare stale execution sync update: %w", err)
+	}
+	defer syncExecStmt.Close()
+
 	now := time.Now().UTC()
 	timeoutMessage := "execution timed out (no activity)"
 
@@ -1140,6 +1172,16 @@ func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAf
 			return 0, fmt.Errorf("rows affected for workflow execution %s: %w", rec.id, err)
 		}
 		if rowsAffected > 0 {
+			// Keep executions table in sync.
+			_, _ = syncExecStmt.ExecContext(
+				ctx,
+				types.ExecutionStatusTimeout,
+				timeoutMessage,
+				now,
+				durationMS,
+				now,
+				rec.id,
+			)
 			updated++
 		}
 	}
@@ -1149,6 +1191,111 @@ func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAf
 	}
 
 	return updated, nil
+}
+
+// RetryStaleWorkflowExecutions finds stale workflow executions that haven't exceeded
+// maxRetries and resets both workflow_executions and executions back to "pending"
+// so the paired records stay in sync for the retry path.
+func (ls *LocalStorage) RetryStaleWorkflowExecutions(ctx context.Context, staleAfter time.Duration, maxRetries int, limit int) ([]string, error) {
+	if limit <= 0 || maxRetries <= 0 {
+		return nil, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled: %w", err)
+	}
+
+	cutoff := time.Now().UTC().Add(-staleAfter)
+	db := ls.requireSQLDB()
+
+	rows, err := db.QueryContext(ctx, `
+		SELECT execution_id
+		FROM workflow_executions
+		WHERE status IN ('running', 'pending', 'queued')
+		  AND retry_count < ?
+		  AND COALESCE(updated_at, created_at, started_at) <= ?
+		ORDER BY COALESCE(updated_at, created_at, started_at) ASC
+		LIMIT ?`, maxRetries, cutoff, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query retriable workflow executions: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan retriable workflow execution: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate retriable workflow executions: %w", err)
+	}
+
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin retry transaction: %w", err)
+	}
+	defer rollbackTx(tx, "RetryStaleWorkflowExecutions")
+
+	now := time.Now().UTC()
+	retryReason := "auto-retry after stale timeout"
+
+	workflowStmt, err := tx.PrepareContext(ctx, `
+		UPDATE workflow_executions
+		SET status = 'pending',
+		    retry_count = retry_count + 1,
+		    error_message = ?,
+		    completed_at = NULL,
+		    updated_at = ?
+		WHERE execution_id = ? AND status IN ('running', 'pending', 'queued')`)
+	if err != nil {
+		return nil, fmt.Errorf("prepare retry statement: %w", err)
+	}
+	defer workflowStmt.Close()
+
+	executionStmt, err := tx.PrepareContext(ctx, `
+		UPDATE executions
+		SET status = 'pending',
+		    error_message = ?,
+		    completed_at = NULL,
+		    duration_ms = NULL,
+		    updated_at = ?
+		WHERE execution_id = ? AND status IN ('running', 'pending', 'queued')`)
+	if err != nil {
+		return nil, fmt.Errorf("prepare execution retry statement: %w", err)
+	}
+	defer executionStmt.Close()
+
+	var retried []string
+	for _, id := range ids {
+		result, err := workflowStmt.ExecContext(ctx, retryReason, now, id)
+		if err != nil {
+			return retried, fmt.Errorf("retry workflow execution %s: %w", id, err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return retried, fmt.Errorf("rows affected for workflow execution %s: %w", id, err)
+		}
+		if affected == 0 {
+			continue
+		}
+
+		if _, err := executionStmt.ExecContext(ctx, retryReason, now, id); err != nil {
+			return retried, fmt.Errorf("retry execution %s: %w", id, err)
+		}
+		retried = append(retried, id)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit retry transaction: %w", err)
+	}
+
+	return retried, nil
 }
 
 func scanExecution(scanner interface {

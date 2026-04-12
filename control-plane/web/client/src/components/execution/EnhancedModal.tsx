@@ -3,7 +3,8 @@ import { ArrowsOutSimple, CornersIn, X } from "@/components/ui/icon-bridge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
 import { Button } from "../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
-import { AdvancedJsonViewer } from "./AdvancedJsonViewer";
+import { UnifiedJsonViewer } from "@/components/ui/UnifiedJsonViewer";
+import { JsonHighlightedPre } from "@/components/ui/json-syntax-highlight";
 
 interface EnhancedModalProps {
   isOpen: boolean;
@@ -21,7 +22,7 @@ interface DataModalProps {
   onClose: () => void;
   title: string;
   icon?: React.ComponentType<{ className?: string }>;
-  data: any;
+  data: unknown;
 }
 
 function EnhancedModal({
@@ -53,7 +54,7 @@ function EnhancedModal({
         {/* Header - Fixed */}
         <DialogHeader className="flex-shrink-0 border-b border-border bg-background/95 backdrop-blur-sm">
           <div className="flex items-center justify-between p-4">
-            <DialogTitle className="flex items-center gap-3 text-heading-3">
+            <DialogTitle className="flex items-center gap-3 text-base font-semibold">
               {Icon && <Icon className="w-5 h-5" />}
               {title}
             </DialogTitle>
@@ -99,6 +100,11 @@ function EnhancedModal({
 
 export function DataModal({ isOpen, onClose, title, icon, data }: DataModalProps) {
   const [viewMode, setViewMode] = React.useState<"formatted" | "raw" | "markdown">("formatted");
+  const handleViewModeChange = (value: string) => {
+    if (value === "formatted" || value === "raw" || value === "markdown") {
+      setViewMode(value);
+    }
+  };
 
   const jsonString = React.useMemo(() => {
     try {
@@ -149,7 +155,7 @@ export function DataModal({ isOpen, onClose, title, icon, data }: DataModalProps
         <div className="flex-shrink-0 border-b border-border bg-background/95">
           <Tabs
             value={viewMode}
-            onValueChange={(value) => setViewMode(value as any)}
+            onValueChange={handleViewModeChange}
             className="w-full"
           >
             <TabsList variant="underline" className="grid w-full grid-cols-3 h-12">
@@ -185,10 +191,8 @@ export function DataModal({ isOpen, onClose, title, icon, data }: DataModalProps
           <Tabs value={viewMode} className="h-full">
             <TabsContent value="formatted" className="h-full m-0 p-4 overflow-auto scrollbar-thin scrollbar-track-transparent scrollbar-thumb-border">
               <div className="h-full overflow-auto scrollbar-thin scrollbar-track-transparent scrollbar-thumb-border">
-                <AdvancedJsonViewer
+                <UnifiedJsonViewer
                   data={data}
-                  maxHeight="100%"
-                  searchable={true}
                   className="h-full border-0"
                 />
               </div>
@@ -197,9 +201,10 @@ export function DataModal({ isOpen, onClose, title, icon, data }: DataModalProps
             <TabsContent value="raw" className="h-full m-0 p-4 overflow-auto scrollbar-thin scrollbar-track-transparent scrollbar-thumb-border">
               <div className="border border-border rounded-lg h-full overflow-auto bg-background scrollbar-thin scrollbar-track-transparent scrollbar-thumb-border">
                 <div className="p-4 h-full overflow-auto scrollbar-thin scrollbar-track-transparent scrollbar-thumb-border hover:scrollbar-thumb-muted-foreground">
-                  <pre className="text-sm font-mono whitespace-pre-wrap text-foreground leading-relaxed">
-                    {jsonString}
-                  </pre>
+                  <JsonHighlightedPre
+                    text={jsonString}
+                    className="text-sm font-mono leading-relaxed"
+                  />
                 </div>
               </div>
             </TabsContent>

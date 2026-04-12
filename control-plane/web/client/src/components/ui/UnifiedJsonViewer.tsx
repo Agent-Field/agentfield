@@ -114,23 +114,23 @@ function getTypeIcon(type: string) {
   const iconClass = "w-3 h-3";
   switch (type) {
     case "markdown":
-      return <FileText className={cn(iconClass, "text-blue-500")} />;
+      return <FileText className={cn(iconClass, "json-hl-key")} />;
     case "json":
-      return <Braces className={cn(iconClass, "text-purple-500")} />;
+      return <Braces className={cn(iconClass, "json-hl-key")} />;
     case "args":
-      return <List className={cn(iconClass, "text-green-500")} />;
+      return <List className={cn(iconClass, "json-hl-punct")} />;
     case "kwargs":
-      return <Hash className={cn(iconClass, "text-orange-500")} />;
+      return <Hash className={cn(iconClass, "json-hl-number")} />;
     case "string":
-      return <Quote className={cn(iconClass, "text-green-600")} />;
+      return <Quote className={cn(iconClass, "json-hl-string")} />;
     case "number":
-      return <Type className={cn(iconClass, "text-blue-600")} />;
+      return <Type className={cn(iconClass, "json-hl-number")} />;
     case "code":
-      return <FileText className={cn(iconClass, "text-red-500")} />;
+      return <FileText className={cn(iconClass, "json-hl-null")} />;
     case "url":
-      return <FileText className={cn(iconClass, "text-blue-500")} />;
+      return <FileText className={cn(iconClass, "json-hl-key")} />;
     case "email":
-      return <Type className={cn(iconClass, "text-purple-500")} />;
+      return <Type className={cn(iconClass, "json-hl-string")} />;
     default:
       return null;
   }
@@ -190,25 +190,17 @@ function JsonNode({
 
   const renderValue = () => {
     if (data === null) {
-      return (
-        <span className="text-slate-500 dark:text-slate-400 italic">null</span>
-      );
+      return <span className="json-hl-null italic">null</span>;
     }
 
     if (typeof data === "boolean") {
       return (
-        <span className="text-blue-600 dark:text-blue-400 font-medium">
-          {String(data)}
-        </span>
+        <span className="json-hl-boolean font-medium">{String(data)}</span>
       );
     }
 
     if (typeof data === "number") {
-      return (
-        <span className="text-purple-600 dark:text-purple-400 font-medium">
-          {data}
-        </span>
-      );
+      return <span className="json-hl-number font-medium">{data}</span>;
     }
 
     if (typeof data === "string") {
@@ -221,9 +213,7 @@ function JsonNode({
         <div className="space-y-2">
           <div className="flex items-center gap-2 flex-wrap">
             {typeIcon}
-            <span className="text-green-600 dark:text-green-400 break-all">
-              "{displayValue}"
-            </span>
+            <span className="json-hl-string break-all">"{displayValue}"</span>
             {isLongString && (
               <Button
                 variant="ghost"
@@ -263,7 +253,7 @@ function JsonNode({
           )}
 
           {showPreview && contentType === "code" && (
-            <pre className="bg-muted p-3 rounded-md text-sm font-mono overflow-x-auto mt-2 border">
+            <pre className="json-hl-root bg-muted p-3 rounded-md text-sm font-mono overflow-x-auto mt-2 border border-border">
               <code>{data}</code>
             </pre>
           )}
@@ -305,9 +295,7 @@ function JsonNode({
       >
         <div className="w-4" /> {/* Spacer for alignment */}
         {keyName && (
-          <span className="text-blue-700 dark:text-blue-300 font-medium shrink-0">
-            "{keyName}":
-          </span>
+          <span className="json-hl-key font-medium shrink-0">"{keyName}":</span>
         )}
         <div className="flex-1 min-w-0">{renderValue()}</div>
         <CopyButton
@@ -342,23 +330,21 @@ function JsonNode({
         </button>
 
         {keyName && (
-          <span className="text-blue-700 dark:text-blue-300 font-medium">
-            "{keyName}":
-          </span>
+          <span className="json-hl-key font-medium">"{keyName}":</span>
         )}
 
         <div className="flex items-center gap-2">
           {getTypeIcon(contentType)}
-          <span className="text-muted-foreground">
+          <span className="json-hl-punct">
             {Array.isArray(data) ? "[" : "{"}
           </span>
 
           {!isExpanded && (
             <>
-              <span className="text-body-small italic">
+              <span className="text-sm text-muted-foreground italic">
                 {getCollectionInfo()}
               </span>
-              <span className="text-muted-foreground">
+              <span className="json-hl-punct">
                 {Array.isArray(data) ? "]" : "}"}
               </span>
             </>
@@ -394,7 +380,7 @@ function JsonNode({
             style={{ paddingLeft: `${(level + 1) * 16}px` }}
           >
             <div className="w-4" />
-            <span className="text-muted-foreground">
+            <span className="json-hl-punct">
               {Array.isArray(data) ? "]" : "}"}
             </span>
           </div>
@@ -422,10 +408,6 @@ export function UnifiedJsonViewer({
     !data || (typeof data === "object" && Object.keys(data).length === 0);
 
   const isFlexibleHeight = maxHeight === "none";
-
-  const handleCopy = (value: string, path: string[]) => {
-    console.log(`Copied ${path.join(".")}:`, value);
-  };
 
   return (
     <div
@@ -515,7 +497,6 @@ export function UnifiedJsonViewer({
               level={0}
               path={[]}
               searchTerm={searchTerm}
-              onCopy={handleCopy}
             />
           </div>
         )}

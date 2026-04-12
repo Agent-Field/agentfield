@@ -2,7 +2,7 @@ import { AlertTriangle } from "@/components/ui/icon-bridge";
 import type { WorkflowExecution } from "../../types/executions";
 import { CollapsibleSection } from "./CollapsibleSection";
 import { CopyButton } from "../ui/copy-button";
-
+import { JsonHighlightedPre } from "../ui/json-syntax-highlight";
 
 interface RedesignedErrorPanelProps {
   execution: WorkflowExecution;
@@ -105,9 +105,10 @@ export function RedesignedErrorPanel({ execution }: RedesignedErrorPanelProps) {
                 <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                   Context
                 </span>
-                <pre className="text-xs font-mono text-foreground mt-2 p-3 bg-muted/50 rounded-md overflow-x-auto">
-                  {JSON.stringify(errorData.context, null, 2)}
-                </pre>
+                <JsonHighlightedPre
+                  data={errorData.context}
+                  className="mt-2 overflow-x-auto rounded-md bg-muted/50 p-3 text-xs"
+                />
               </div>
             )}
           </div>
@@ -130,7 +131,7 @@ export function RedesignedErrorPanel({ execution }: RedesignedErrorPanelProps) {
           <h5 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
             Debugging Tips
           </h5>
-          <ul className="text-body-small space-y-1">
+          <ul className="text-sm text-muted-foreground space-y-1">
             <li>• Check the input data format and validation</li>
             <li>• Review the reasoner implementation for this error type</li>
             <li>• Verify agent node connectivity and dependencies</li>

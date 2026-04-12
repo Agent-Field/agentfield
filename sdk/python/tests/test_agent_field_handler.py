@@ -282,9 +282,6 @@ def test_start_and_stop_heartbeat(monkeypatch):
 async def test_enhanced_heartbeat_and_shutdown(monkeypatch):
     agent = StubAgent()
     agent.client = DummyAgentFieldClient()
-    agent.mcp_handler = type(
-        "MCP", (), {"_get_mcp_server_health": lambda self: ["mcp"]}
-    )()
     agent.dev_mode = True
     agentfield = AgentFieldHandler(agent)
 

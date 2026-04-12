@@ -61,6 +61,7 @@ type ExecutionFilter struct {
 	Offset            int
 	StartTime         *time.Time
 	EndTime           *time.Time
+	Search            *string
 	SortBy            string
 	SortDescending    bool
 	// ExcludePayloads omits input_payload and result_payload from the query result.

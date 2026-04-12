@@ -66,8 +66,8 @@ export function PageHeader({
       {/* Main Header Row */}
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0 flex-1">
-          <h1 className="text-heading-1 truncate">{title}</h1>
-          {description && <p className="mt-1 text-body">{description}</p>}
+          <h1 className="text-2xl font-semibold tracking-tight truncate">{title}</h1>
+          {description && <p className="mt-1 text-sm">{description}</p>}
         </div>
 
         {(aside || actions.length > 0) && (

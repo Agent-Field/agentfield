@@ -17,7 +17,7 @@ logger = logging.getLogger("agentfield.harness.opencode")
 
 
 class OpenCodeProvider:
-    """OpenCode CLI provider. Invokes ``opencode run`` subprocess."""
+    """OpenCode CLI provider. Invokes ``opencode -p <prompt>`` subprocess."""
 
     # Global concurrency limiter: prevents too many simultaneous opencode
     # processes from overwhelming the LLM API with concurrent requests.
@@ -26,13 +26,8 @@ class OpenCodeProvider:
     _MAX_CONCURRENT: ClassVar[int] = int(os.environ.get("OPENCODE_MAX_CONCURRENT", "3"))
     _concurrency_sem: ClassVar[Optional[asyncio.Semaphore]] = None
 
-    def __init__(
-        self,
-        bin_path: str = "opencode",
-        server_url: Optional[str] = None,
-    ):
+    def __init__(self, bin_path: str = "opencode"):
         self._bin = bin_path
-        self._explicit_server = server_url or os.environ.get("OPENCODE_SERVER")
 
     @classmethod
     def _get_semaphore(cls) -> asyncio.Semaphore:
@@ -51,33 +46,31 @@ class OpenCodeProvider:
             return await self._execute_impl(prompt, options)
 
     async def _execute_impl(self, prompt: str, options: dict[str, object]) -> RawResult:
-        cmd = [self._bin, "run"]
+        cmd = [self._bin]
 
-        if options.get("model"):
-            cmd.extend(["--model", str(options["model"])])
-
-        # --dir sets the project root the coding agent explores.
-        # Use project_dir (the actual target repo) if available, otherwise
-        # fall back to cwd (which may be a temp dir for output).
-        project_dir = options.get("project_dir")
-        if isinstance(project_dir, str) and project_dir:
-            cmd.extend(["--dir", project_dir])
-
-        cwd: Optional[str] = None
+        # Use -c for cwd (project directory)
         cwd_value = options.get("cwd")
         if isinstance(cwd_value, str):
-            cwd = cwd_value
+            cmd.extend(["-c", cwd_value])
+        elif isinstance(options.get("project_dir"), str):
+            # Fall back to project_dir if no cwd
+            cmd.extend(["-c", str(options["project_dir"])])
 
-        # Prepend system prompt to the user prompt if provided.
-        system_prompt = options.get("system_prompt")
+        # Model is set via environment, not CLI flag
+        # (opencode picks up MODEL env var automatically)
+
+        # Handle system prompt - prepend to user prompt since OpenCode
+        # has no native --system-prompt flag
         effective_prompt = prompt
+        system_prompt = options.get("system_prompt")
         if isinstance(system_prompt, str) and system_prompt.strip():
             effective_prompt = (
                 f"SYSTEM INSTRUCTIONS:\n{system_prompt.strip()}\n\n"
                 f"---\n\nUSER REQUEST:\n{prompt}"
             )
 
-        cmd.append(effective_prompt)
+        # Use -p for single prompt mode (non-interactive)
+        cmd.extend(["-p", effective_prompt])
 
         env: Dict[str, str] = {}
         env_value = options.get("env")
@@ -87,6 +80,12 @@ class OpenCodeProvider:
                 for key, value in env_value.items()
                 if isinstance(key, str) and isinstance(value, str)
             }
+
+        # Set model via environment variable (opencode reads MODEL env var)
+        if options.get("model"):
+            env["MODEL"] = str(options["model"])
+
+        cwd: Optional[str] = None
 
         temp_data_dir = tempfile.mkdtemp(prefix=".secaf-opencode-data-")
         env["XDG_DATA_HOME"] = temp_data_dir

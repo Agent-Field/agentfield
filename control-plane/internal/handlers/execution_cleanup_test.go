@@ -45,6 +45,10 @@ type cleanupStoreMock struct {
 
 	markStaleWfCalls     []markStaleCall
 	markStaleWfResponses []cleanupResponse
+
+	retryStaleCalls []markStaleCall
+	retryStaleIDs   [][]string
+	retryStaleErrs  []error
 }
 
 func (m *cleanupStoreMock) CleanupOldExecutions(ctx context.Context, retentionPeriod time.Duration, batchSize int) (int, error) {
@@ -125,6 +129,37 @@ func (m *cleanupStoreMock) getMarkStaleWfCalls() []markStaleCall {
 
 	out := make([]markStaleCall, len(m.markStaleWfCalls))
 	copy(out, m.markStaleWfCalls)
+	return out
+}
+
+func (m *cleanupStoreMock) RetryStaleWorkflowExecutions(ctx context.Context, staleAfter time.Duration, _ int, limit int) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	callIndex := len(m.retryStaleCalls)
+	m.retryStaleCalls = append(m.retryStaleCalls, markStaleCall{
+		ctx:        ctx,
+		staleAfter: staleAfter,
+		limit:      limit,
+	})
+
+	var ids []string
+	if callIndex < len(m.retryStaleIDs) {
+		ids = m.retryStaleIDs[callIndex]
+	}
+	var err error
+	if callIndex < len(m.retryStaleErrs) {
+		err = m.retryStaleErrs[callIndex]
+	}
+	return ids, err
+}
+
+func (m *cleanupStoreMock) getRetryStaleCalls() []markStaleCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	out := make([]markStaleCall, len(m.retryStaleCalls))
+	copy(out, m.retryStaleCalls)
 	return out
 }
 
@@ -530,6 +565,35 @@ func TestExecutionCleanupService_PerformCleanup_ContinuesWhenMarkStaleWorkflowFa
 	logs := logBuffer.String()
 	if !strings.Contains(logs, "failed to mark stale workflow executions as timed out") {
 		t.Fatalf("expected workflow stale-mark failure log, got logs: %s", logs)
+	}
+}
+
+func TestExecutionCleanupService_PerformCleanup_RetriesStaleWorkflowExecutionsBeforeTimingOut(t *testing.T) {
+	logBuffer := setupExecutionCleanupTestLogger(t)
+	store := &cleanupStoreMock{
+		retryStaleIDs:        [][]string{{"exec-1"}},
+		markStaleResponses:   []cleanupResponse{{count: 0}},
+		markStaleWfResponses: []cleanupResponse{{count: 0}},
+		cleanupResponses:     []cleanupResponse{{count: 0}},
+	}
+
+	cfg := testExecutionCleanupConfig(5)
+	cfg.MaxRetries = 2
+
+	service := NewExecutionCleanupService(store, cfg)
+	service.performCleanup(context.Background())
+
+	if len(store.getRetryStaleCalls()) != 1 {
+		t.Fatalf("expected 1 retry stale call, got %d", len(store.getRetryStaleCalls()))
+	}
+	if len(store.getMarkStaleCalls()) != 1 {
+		t.Fatalf("expected 1 stale execution mark call, got %d", len(store.getMarkStaleCalls()))
+	}
+	if len(store.getMarkStaleWfCalls()) != 1 {
+		t.Fatalf("expected 1 stale workflow mark call, got %d", len(store.getMarkStaleWfCalls()))
+	}
+	if !strings.Contains(logBuffer.String(), "retried stale workflow executions") {
+		t.Fatalf("expected retry log, got logs: %s", logBuffer.String())
 	}
 }
 

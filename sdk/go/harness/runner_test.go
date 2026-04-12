@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -389,4 +390,170 @@ func TestOpenCodeProvider_WithOptions(t *testing.T) {
 	assert.False(t, raw.IsError)
 	// The script should have received --model and --dir flags
 	assert.Contains(t, raw.Result, "args:")
+}
+
+// --- Codex provider tests ---
+
+func TestNewCodexProvider(t *testing.T) {
+	p := NewCodexProvider("")
+	assert.Equal(t, "codex", p.BinPath)
+
+	p2 := NewCodexProvider("/usr/bin/codex")
+	assert.Equal(t, "/usr/bin/codex", p2.BinPath)
+}
+
+func TestCodexProvider_BinaryNotFound(t *testing.T) {
+	p := NewCodexProvider("/nonexistent/binary/codex-fake")
+	raw, err := p.Execute(context.Background(), "test", Options{})
+	assert.NoError(t, err)
+	assert.True(t, raw.IsError)
+	assert.Equal(t, FailureCrash, raw.FailureType)
+	assert.Contains(t, raw.ErrorMessage, "not found")
+}
+
+func TestCodexProvider_SuccessfulExecution(t *testing.T) {
+	dir := t.TempDir()
+	script := writeTestScript(t, dir, "codex",
+		`#!/bin/sh
+echo '{"type":"thread.started","thread_id":"019d-abc"}'
+echo '{"type":"turn.started"}'
+echo '{"type":"item.completed","item":{"type":"agent_message","text":"codex result"}}'
+echo '{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":10}}'
+`)
+
+	p := NewCodexProvider(script)
+	raw, err := p.Execute(context.Background(), "test prompt", Options{})
+	assert.NoError(t, err)
+	assert.False(t, raw.IsError)
+	assert.Equal(t, "codex result", raw.Result)
+	assert.Equal(t, "019d-abc", raw.Metrics.SessionID)
+	assert.Equal(t, 1, raw.Metrics.NumTurns)
+}
+
+func TestCodexProvider_NonZeroExit(t *testing.T) {
+	dir := t.TempDir()
+	script := writeTestScript(t, dir, "codex", "#!/bin/sh\necho 'error' >&2\nexit 1\n")
+
+	p := NewCodexProvider(script)
+	raw, err := p.Execute(context.Background(), "test", Options{})
+	assert.NoError(t, err)
+	assert.True(t, raw.IsError)
+	assert.Equal(t, FailureCrash, raw.FailureType)
+}
+
+func TestCodexProvider_WithFullAuto(t *testing.T) {
+	dir := t.TempDir()
+	// Script that echoes its arguments so we can verify --full-auto is passed
+	script := writeTestScript(t, dir, "codex", "#!/bin/sh\necho \"args: $@\"\n")
+
+	p := NewCodexProvider(script)
+	raw, err := p.Execute(context.Background(), "test prompt", Options{
+		PermissionMode: "auto",
+	})
+	assert.NoError(t, err)
+	assert.False(t, raw.IsError)
+	assert.Contains(t, raw.Result, "--full-auto")
+}
+
+// --- Gemini provider tests ---
+
+func TestNewGeminiProvider(t *testing.T) {
+	p := NewGeminiProvider("")
+	assert.Equal(t, "gemini", p.BinPath)
+
+	p2 := NewGeminiProvider("/usr/bin/gemini")
+	assert.Equal(t, "/usr/bin/gemini", p2.BinPath)
+}
+
+func TestGeminiProvider_BinaryNotFound(t *testing.T) {
+	p := NewGeminiProvider("/nonexistent/binary/gemini-fake")
+	raw, err := p.Execute(context.Background(), "test", Options{})
+	assert.NoError(t, err)
+	assert.True(t, raw.IsError)
+	assert.Equal(t, FailureCrash, raw.FailureType)
+	assert.Contains(t, raw.ErrorMessage, "not found")
+}
+
+func TestGeminiProvider_SuccessfulExecution(t *testing.T) {
+	dir := t.TempDir()
+	script := writeTestScript(t, dir, "gemini", "#!/bin/sh\necho 'Hello from gemini'\n")
+
+	p := NewGeminiProvider(script)
+	raw, err := p.Execute(context.Background(), "test prompt", Options{})
+	assert.NoError(t, err)
+	assert.False(t, raw.IsError)
+	assert.Contains(t, raw.Result, "Hello from gemini")
+	assert.Equal(t, 1, raw.Metrics.NumTurns)
+}
+
+func TestGeminiProvider_NonZeroExit(t *testing.T) {
+	dir := t.TempDir()
+	script := writeTestScript(t, dir, "gemini", "#!/bin/sh\necho 'error' >&2\nexit 1\n")
+
+	p := NewGeminiProvider(script)
+	raw, err := p.Execute(context.Background(), "test", Options{})
+	assert.NoError(t, err)
+	assert.True(t, raw.IsError)
+	assert.Equal(t, FailureCrash, raw.FailureType)
+}
+
+func TestGeminiProvider_WithModel(t *testing.T) {
+	dir := t.TempDir()
+	script := writeTestScript(t, dir, "gemini", "#!/bin/sh\necho \"args: $@\"\n")
+
+	p := NewGeminiProvider(script)
+	raw, err := p.Execute(context.Background(), "test prompt", Options{
+		Model:          "gemini-2.5-pro",
+		PermissionMode: "auto",
+	})
+	assert.NoError(t, err)
+	assert.False(t, raw.IsError)
+	assert.Contains(t, raw.Result, "-m")
+	assert.Contains(t, raw.Result, "gemini-2.5-pro")
+	assert.Contains(t, raw.Result, "--sandbox")
+}
+
+// --- BuildProvider factory tests ---
+
+func TestBuildProvider(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		wantType string
+		wantErr  bool
+	}{
+		{"claude-code", "claude-code", "*harness.ClaudeCodeProvider", false},
+		{"codex", "codex", "*harness.CodexProvider", false},
+		{"gemini", "gemini", "*harness.GeminiProvider", false},
+		{"opencode", "opencode", "*harness.OpenCodeProvider", false},
+		{"unknown", "unknown-agent", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := BuildProvider(tt.provider, "")
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), "unknown harness provider")
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.wantType, fmt.Sprintf("%T", p))
+			}
+		})
+	}
+}
+
+func TestRunner_BuildProvider_UsesFactory(t *testing.T) {
+	// Verify the runner can now build all 4 providers
+	for _, name := range []string{"claude-code", "codex", "gemini", "opencode"} {
+		t.Run(name, func(t *testing.T) {
+			runner := NewRunner(Options{Provider: name})
+			_, err := runner.Run(context.Background(), "test", nil, nil, Options{})
+			// Should fail at execution (binary not found), not at provider creation
+			// The error should NOT be "unknown harness provider"
+			if err != nil {
+				assert.NotContains(t, err.Error(), "unknown harness provider")
+			}
+		})
+	}
 }

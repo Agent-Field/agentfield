@@ -1,29 +1,33 @@
 """
-Agent registry for tracking the current agent instance in thread-local storage.
-This allows reasoners to automatically find their parent agent for workflow tracking.
+Agent registry for tracking the current agent instance.
+
+Uses contextvars.ContextVar so the agent instance is correctly inherited
+by asyncio tasks (unlike threading.local which is thread-bound and can
+return None when coroutines resume on a different thread).
 """
 
-import threading
+import contextvars
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .agent import Agent
 
-# Thread-local storage for agent instances
-_thread_local = threading.local()
+# Context variable for agent instances — works correctly with asyncio
+_current_agent: contextvars.ContextVar[Optional["Agent"]] = contextvars.ContextVar(
+    "current_agent", default=None
+)
 
 
 def set_current_agent(agent_instance: "Agent"):
-    """Register the current agent instance for this thread."""
-    _thread_local.current_agent = agent_instance
+    """Register the current agent instance for this context."""
+    _current_agent.set(agent_instance)
 
 
 def get_current_agent_instance() -> Optional["Agent"]:
-    """Get the current agent instance for this thread."""
-    return getattr(_thread_local, "current_agent", None)
+    """Get the current agent instance for this context."""
+    return _current_agent.get()
 
 
 def clear_current_agent():
     """Clear the current agent instance."""
-    if hasattr(_thread_local, "current_agent"):
-        delattr(_thread_local, "current_agent")
+    _current_agent.set(None)

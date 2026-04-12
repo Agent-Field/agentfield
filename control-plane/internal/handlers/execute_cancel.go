@@ -60,15 +60,11 @@ func CancelExecutionHandler(store ExecutionStore) gin.HandlerFunc {
 			return
 		}
 
+		// workflow_executions may not exist for simple async executions;
+		// treat a nil result as non-fatal.
 		wfExec, err := store.GetWorkflowExecution(reqCtx, executionID)
 		if err != nil {
-			logger.Logger.Error().Err(err).Str("execution_id", executionID).Msg("failed to get workflow execution for cancellation")
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to look up execution"})
-			return
-		}
-		if wfExec == nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("execution %s not found", executionID)})
-			return
+			logger.Logger.Warn().Err(err).Str("execution_id", executionID).Msg("workflow execution lookup failed (non-fatal)")
 		}
 
 		now := time.Now().UTC()
@@ -102,20 +98,21 @@ func CancelExecutionHandler(store ExecutionStore) gin.HandlerFunc {
 			return
 		}
 
-		err = store.UpdateWorkflowExecution(reqCtx, executionID, func(current *types.WorkflowExecution) (*types.WorkflowExecution, error) {
-			if current == nil {
-				return nil, fmt.Errorf("execution %s not found", executionID)
+		// Keep workflow_executions in sync when the row exists.
+		if wfExec != nil {
+			err = store.UpdateWorkflowExecution(reqCtx, executionID, func(current *types.WorkflowExecution) (*types.WorkflowExecution, error) {
+				if current == nil {
+					return nil, fmt.Errorf("execution %s not found", executionID)
+				}
+				current.Status = types.ExecutionStatusCancelled
+				if reasonPtr != nil {
+					current.StatusReason = reasonPtr
+				}
+				return current, nil
+			})
+			if err != nil {
+				logger.Logger.Warn().Err(err).Str("execution_id", executionID).Msg("failed to update workflow execution for cancellation (non-fatal)")
 			}
-			current.Status = types.ExecutionStatusCancelled
-			if reasonPtr != nil {
-				current.StatusReason = reasonPtr
-			}
-			return current, nil
-		})
-		if err != nil {
-			logger.Logger.Error().Err(err).Str("execution_id", executionID).Msg("failed to update workflow execution for cancellation")
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to cancel execution"})
-			return
 		}
 
 		events.PublishExecutionCancelled(executionID, exec.RunID, exec.AgentNodeID, map[string]interface{}{"reason": reason})
@@ -127,11 +124,20 @@ func CancelExecutionHandler(store ExecutionStore) gin.HandlerFunc {
 			payload = json.RawMessage(`{"reason":""}`)
 		}
 
+		// Derive event metadata from workflow_executions when available,
+		// otherwise fall back to the execution record.
+		workflowID := exec.RunID
+		runID := &exec.RunID
+		if wfExec != nil {
+			workflowID = wfExec.WorkflowID
+			runID = wfExec.RunID
+		}
+
 		cancelledStatus := types.ExecutionStatusCancelled
 		workflowEvent := &types.WorkflowExecutionEvent{
 			ExecutionID:  executionID,
-			WorkflowID:   wfExec.WorkflowID,
-			RunID:        wfExec.RunID,
+			WorkflowID:   workflowID,
+			RunID:        runID,
 			EventType:    "execution.cancelled",
 			Status:       &cancelledStatus,
 			StatusReason: reasonPtr,

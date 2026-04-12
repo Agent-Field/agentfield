@@ -94,15 +94,15 @@ export function DataSection({ details }: DataSectionProps) {
           maxHeight="200px"
         />
         {(inputSize || outputSize) && (
-          <div className="grid grid-cols-2 gap-4 rounded-lg border border-dashed border-border/70 bg-muted/40 p-3 text-body-small text-muted-foreground">
+          <div className="grid grid-cols-2 gap-4 rounded-lg border border-dashed border-border/70 bg-muted/40 p-3 text-sm text-muted-foreground text-muted-foreground">
             <div>
-              <span className="block text-body-small font-medium text-foreground/80">
+              <span className="block text-sm text-muted-foreground font-medium text-foreground/80">
                 Input Size
               </span>
               <span className="font-mono text-xs">{formatBytes(inputSize)}</span>
             </div>
             <div>
-              <span className="block text-body-small font-medium text-foreground/80">
+              <span className="block text-sm text-muted-foreground font-medium text-foreground/80">
                 Output Size
               </span>
               <span className="font-mono text-xs">

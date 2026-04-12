@@ -11,19 +11,34 @@ export class OpenCodeProvider implements HarnessProvider {
   }
 
   async execute(prompt: string, options: Record<string, unknown>): Promise<RawResult> {
-    const cmd = [this.bin, 'run'];
+    const cmd = [this.bin];
 
-    if (options.model) {
-      cmd.push('--model', String(options.model));
+    // Use -c for cwd (project directory)
+    if (options.cwd && typeof options.cwd === 'string') {
+      cmd.push('-c', options.cwd);
+    } else if (options.project_dir && typeof options.project_dir === 'string') {
+      cmd.push('-c', options.project_dir);
     }
-    cmd.push(prompt);
+
+    // Model is set via environment variable, not CLI flag
+    const env: Record<string, string> = { ...(options.env as Record<string, string>) };
+    if (options.model) {
+      env['MODEL'] = String(options.model);
+    }
+
+    // Handle system prompt - prepend to user prompt since OpenCode
+    // has no native --system-prompt flag
+    let effectivePrompt = prompt;
+    if (options.system_prompt && typeof options.system_prompt === 'string' && options.system_prompt.trim()) {
+      effectivePrompt = `SYSTEM INSTRUCTIONS:\n${options.system_prompt.trim()}\n\n---\n\nUSER REQUEST:\n${prompt}`;
+    }
+
+    // Use -p for single prompt mode (non-interactive)
+    cmd.push('-p', effectivePrompt);
 
     const startApi = Date.now();
     try {
-      const { stdout, stderr, exitCode } = await runCli(cmd, {
-        env: options.env as Record<string, string> | undefined,
-        cwd: options.cwd as string | undefined,
-      });
+      const { stdout, stderr, exitCode } = await runCli(cmd, { env });
 
       const resultText = stdout.trim() || undefined;
       const isError = exitCode !== 0 && !resultText;

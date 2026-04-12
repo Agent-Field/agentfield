@@ -3,7 +3,8 @@ import { useState } from "react";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Card, CardContent } from "../ui/card";
-import { EnhancedJsonViewer } from "./EnhancedJsonViewer";
+import { UnifiedJsonViewer } from "@/components/ui/UnifiedJsonViewer";
+import { JsonHighlightedPre } from "@/components/ui/json-syntax-highlight";
 import type { CanonicalStatus } from "../../utils/status";
 import { getStatusLabel } from "../../utils/status";
 
@@ -76,14 +77,15 @@ export function FormattedOutput({
 
         {/* Raw JSON Display */}
         <div className="relative">
-          <pre className="bg-muted p-4 rounded-lg text-sm overflow-auto max-h-96 border">
-            {JSON.stringify(data, null, 2)}
-          </pre>
+          <JsonHighlightedPre
+            data={data}
+            className="max-h-96 overflow-auto rounded-lg border bg-muted p-4 text-sm"
+          />
         </div>
 
         {/* Execution Info */}
         {(executionId || duration) && (
-          <div className="text-body-small flex items-center gap-4">
+          <div className="text-sm text-muted-foreground flex items-center gap-4">
             {duration && (
               <span className="flex items-center gap-1">
                 <Time className="h-3 w-3" />
@@ -159,22 +161,23 @@ export function FormattedOutput({
       {viewMode === "json" ? (
         <Card>
           <CardContent className="p-4">
-            <pre className="bg-muted p-4 rounded-lg text-sm overflow-auto max-h-96 border">
-              {JSON.stringify(data, null, 2)}
-            </pre>
+            <JsonHighlightedPre
+              data={data}
+              className="max-h-96 overflow-auto rounded-lg border bg-muted p-4 text-sm"
+            />
           </CardContent>
         </Card>
       ) : (
         <Card>
           <CardContent className="p-4">
-            <EnhancedJsonViewer data={data} maxInlineHeight={400} />
+            <UnifiedJsonViewer data={data} />
           </CardContent>
         </Card>
       )}
 
       {/* Execution Info */}
       {(executionId || duration) && (
-        <div className="text-body-small flex items-center gap-4 pt-2 border-t">
+        <div className="text-sm text-muted-foreground flex items-center gap-4 pt-2 border-t">
           {duration && (
             <span className="flex items-center gap-1">
               <Time className="h-3 w-3" />

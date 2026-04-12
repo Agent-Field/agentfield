@@ -36,6 +36,15 @@ from .exceptions import (
 httpx = None  # type: ignore
 
 
+def _utc_now_iso() -> str:
+    """Return current UTC time as an ISO 8601 string with Z suffix.
+
+    Use this for all outbound timestamps to ensure consistent UTC-aware
+    formatting across the client rather than naive local datetimes.
+    """
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
 # ---------------------------------------------------------------------------
 # Typed response models for approval helpers
 # ---------------------------------------------------------------------------
@@ -166,7 +175,7 @@ class AgentFieldClient:
             AgentFieldClient._init_shared_sync_session()
 
     def _generate_id(self, prefix: str) -> str:
-        timestamp = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
         random_suffix = f"{random.getrandbits(32):08x}"
         return f"{prefix}_{timestamp}_{random_suffix}"
 
@@ -651,8 +660,8 @@ class AgentFieldClient:
                     "heartbeat_interval": "5s",
                 },
                 "health_status": "healthy",
-                "last_heartbeat": datetime.datetime.now().isoformat() + "Z",
-                "registered_at": datetime.datetime.now().isoformat() + "Z",
+                "last_heartbeat": _utc_now_iso(),
+                "registered_at": _utc_now_iso(),
                 "features": {
                     "ab_testing": False,
                     "advanced_metrics": False,
@@ -1017,7 +1026,7 @@ class AgentFieldClient:
         elif metadata.get("started_at"):
             metadata["timestamp"] = metadata["started_at"]
         else:
-            metadata["timestamp"] = datetime.datetime.utcnow().isoformat()
+            metadata["timestamp"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
         # Cache successful results for reuse
         if normalized_status in SUCCESS_STATUSES:
@@ -1058,7 +1067,7 @@ class AgentFieldClient:
             "status": normalized_status,
             "duration_ms": metadata.get("duration_ms"),
             "timestamp": metadata.get("timestamp")
-            or datetime.datetime.utcnow().isoformat(),
+            or datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "result": response_result,
             "error_message": error_message,
             "error_details": error_details,
@@ -1075,11 +1084,11 @@ class AgentFieldClient:
         self, node_id: str, heartbeat_data: HeartbeatData
     ) -> bool:
         """
-        Send enhanced heartbeat with status and MCP information to AgentField server.
+        Send enhanced heartbeat with status information to AgentField server.
 
         Args:
             node_id: The agent node ID
-            heartbeat_data: Enhanced heartbeat data with status and MCP info
+            heartbeat_data: Enhanced heartbeat data with status info
 
         Returns:
             True if heartbeat was successful, False otherwise
@@ -1107,7 +1116,7 @@ class AgentFieldClient:
 
         Args:
             node_id: The agent node ID
-            heartbeat_data: Enhanced heartbeat data with status and MCP info
+            heartbeat_data: Enhanced heartbeat data with status info
 
         Returns:
             True if heartbeat was successful, False otherwise
@@ -1209,8 +1218,8 @@ class AgentFieldClient:
                     "heartbeat_interval": "2s",
                 },
                 "health_status": "healthy",
-                "last_heartbeat": datetime.datetime.now().isoformat() + "Z",
-                "registered_at": datetime.datetime.now().isoformat() + "Z",
+                "last_heartbeat": _utc_now_iso(),
+                "registered_at": _utc_now_iso(),
                 "features": {
                     "ab_testing": False,
                     "advanced_metrics": False,
@@ -1836,6 +1845,37 @@ class AgentFieldClient:
                 return result
 
             interval = min(interval * backoff_factor, max_interval)
+
+    async def post_execution_logs(
+        self,
+        execution_id: str,
+        entries: Any,
+    ) -> None:
+        """POST structured execution log entries to the control plane.
+
+        Args:
+            execution_id: The execution these logs belong to.
+            entries: A single log entry dict or a list of entry dicts.
+        """
+        if not execution_id:
+            return
+        url = f"{self.api_base}/executions/{execution_id}/logs"
+        body: Dict[str, Any]
+        if isinstance(entries, list):
+            body = {"entries": entries}
+        else:
+            body = {"entries": [entries]}
+        try:
+            client = await self.get_async_http_client()
+            await client.post(
+                url,
+                json=body,
+                headers=self._get_auth_headers(),
+                timeout=5.0,
+            )
+        except Exception:
+            # Best-effort: don't break execution if log dispatch fails
+            pass
 
     async def close_async_execution_manager(self) -> None:
         """

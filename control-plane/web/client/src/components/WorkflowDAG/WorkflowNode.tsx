@@ -3,17 +3,15 @@ import { Handle, Position, useStore } from "@xyflow/react";
 import {
   Calendar,
   CheckmarkFilled,
-  ErrorFilled,
-  InProgress,
-  PauseFilled,
   Time,
   User,
 } from "@/components/ui/icon-bridge";
 import { cn } from "../../lib/utils";
-import { statusTone, type StatusTone as StatusToneKey } from "../../lib/theme";
+import { type StatusTone as StatusToneKey } from "../../lib/theme";
 import { agentColorManager } from "../../utils/agentColorManager";
 import {
   getStatusLabel,
+  getStatusTheme,
   normalizeExecutionStatus,
   type CanonicalStatus,
 } from "../../utils/status";
@@ -49,19 +47,6 @@ interface WorkflowNodeProps {
   selected?: boolean;
 }
 
-const STATUS_TONE_TOKEN_MAP: Record<CanonicalStatus, StatusToneKey> = {
-  succeeded: "success",
-  failed: "error",
-  running: "info",
-  paused: "warning",
-  waiting: "warning",
-  queued: "warning",
-  pending: "warning",
-  timeout: "neutral",
-  cancelled: "neutral",
-  unknown: "neutral",
-};
-
 // Zoom selector to determine when to show simplified view
 const zoomSelector = (s: any) => s.transform[2] >= 0.4; // Show full content when zoom >= 0.4
 
@@ -76,9 +61,9 @@ const StatusPlaceholder = memo(
     agentColor: ReturnType<typeof agentColorManager.getAgentColor>;
     data: WorkflowNodeData;
   }) => {
-    const toneKey = STATUS_TONE_TOKEN_MAP[status] ?? "neutral";
-    const statusColorVar = `var(--status-${toneKey})`;
-    const glowColor = `color-mix(in srgb, var(--status-${toneKey}) 55%, transparent)`;
+    const theme = getStatusTheme(status);
+    const statusColorVar = theme.hexColor;
+    const glowColor = `color-mix(in srgb, ${theme.hexColor} 55%, transparent)`;
 
     return (
       <div
@@ -126,33 +111,19 @@ export const WorkflowNode = memo(({ data, selected }: WorkflowNodeProps) => {
     });
   };
 
+  // Icon reflects this node's OWN canonical status only. A running child
+  // under a cancelled parent must still spin/pulse — do not propagate parent
+  // state into child node visuals.
   const getStatusIcon = (status: CanonicalStatus) => {
-    const toneKeyForStatus = STATUS_TONE_TOKEN_MAP[status] ?? "neutral";
-    const iconClass = cn("h-4 w-4", statusTone[toneKeyForStatus].accent);
-    const iconProps = {
-      size: 12,
-      className: iconClass,
-    } as const;
-
-    switch (status) {
-      case "succeeded":
-        return <CheckmarkFilled {...iconProps} />;
-      case "failed":
-        return <ErrorFilled {...iconProps} />;
-      case "running":
-        return <InProgress {...iconProps} className={cn(iconClass, "animate-spin")} />;
-      case "pending":
-      case "queued":
-        return <PauseFilled {...iconProps} />;
-      case "timeout":
-        return <Time {...iconProps} />;
-      case "cancelled":
-        return <PauseFilled {...iconProps} />;
-      default:
-        return (
-          <span className="inline-flex h-3 w-3 rounded-full bg-muted-foreground/60" />
-        );
-    }
+    const theme = getStatusTheme(status);
+    const Icon = theme.icon;
+    const iconClass = cn("h-4 w-4", theme.iconClass);
+    return (
+      <Icon
+        size={12}
+        className={cn(iconClass, theme.motion === "live" && "animate-spin")}
+      />
+    );
   };
 
   const getStatusText = (status: string) => {
@@ -259,11 +230,10 @@ export const WorkflowNode = memo(({ data, selected }: WorkflowNodeProps) => {
     return { line1, line2, isSingleLine: false };
   };
 
-  const toneKey = STATUS_TONE_TOKEN_MAP[normalizedStatus] ?? "neutral";
-  const tone = statusTone[toneKey];
-  const statusColorVar = `var(--status-${toneKey})`;
-  const statusBorderVar = `var(--status-${toneKey}-border)`;
-  const statusGlowVar = `color-mix(in srgb, var(--status-${toneKey}) 38%, transparent)`;
+  const statusTheme = getStatusTheme(normalizedStatus);
+  const statusColorVar = statusTheme.hexColor;
+  const statusBorderVar = `color-mix(in srgb, ${statusTheme.hexColor} 60%, transparent)`;
+  const statusGlowVar = `color-mix(in srgb, ${statusTheme.hexColor} 38%, transparent)`;
 
   const agentColor = agentColorManager.getAgentColor(
     data.agent_name || data.agent_node_id,
@@ -309,12 +279,12 @@ export const WorkflowNode = memo(({ data, selected }: WorkflowNodeProps) => {
   }
 
   const baseShadow =
-    "0 4px 12px -2px color-mix(in srgb, var(--foreground) 10%, transparent), 0 2px 6px -1px color-mix(in srgb, var(--foreground) 6%, transparent)";
+    "0 1px 2px color-mix(in srgb, var(--foreground) 6%, transparent), 0 1px 3px color-mix(in srgb, var(--foreground) 4%, transparent)";
   const accentShadow = `0 0 0 1px ${borderColor}`;
   const glowShadow = isDimmed ? "" : `0 0 12px -2px ${glowColor}`;
   const compositeShadow = [accentShadow, baseShadow, glowShadow].filter(Boolean).join(", ");
 
-  const baseBackground = `linear-gradient(145deg, color-mix(in srgb, ${statusColorVar} 8%, transparent), var(--card))`;
+  const baseBackground = `linear-gradient(145deg, color-mix(in srgb, ${statusColorVar} 6%, var(--card)), var(--card))`;
   let background = baseBackground;
 
   if (!hasHighlight) {
@@ -359,9 +329,8 @@ export const WorkflowNode = memo(({ data, selected }: WorkflowNodeProps) => {
   return (
     <div
       className={cn(
-        "relative h-[100px] rounded-xl border bg-card/90 backdrop-blur-md transition-all duration-300 animate-fade-in",
-        "cursor-pointer group overflow-hidden",
-        !isDimmed && "hover:scale-[1.01] hover:shadow-xl"
+        "group relative h-[100px] cursor-pointer overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-sm backdrop-blur-sm transition-all duration-300 animate-fade-in",
+        !isDimmed && "hover:scale-[1.01] hover:shadow-md",
       )}
       style={{
         width: `${nodeWidth}px`,
@@ -403,22 +372,20 @@ export const WorkflowNode = memo(({ data, selected }: WorkflowNodeProps) => {
         id="source-right"
       />
 
-      {/* Node Content - Redesigned layout with proper spacing */}
-      <div className="flex flex-col h-full p-3 relative">
-        {/* Status Indicator - Positioned in top-right corner */}
-        <div className="absolute top-2 right-2">
+      <div className="relative flex h-full flex-col p-3">
+        <div className="absolute right-2 top-2">
           {getStatusIcon(normalizedStatus)}
         </div>
 
-        {/* Header Section - Task Name with smart line detection */}
-        <div className="flex-1 flex flex-col justify-start pl-8 pr-6 pt-1">
+        <div className="flex flex-1 flex-col justify-start pl-8 pr-6 pt-1">
           {(() => {
             const taskFormatted = formatTextForDisplay(taskText, nodeWidth, false);
             return (
               <div
                 className={cn(
                   "flex flex-col justify-start text-sm font-semibold leading-[1.15] text-foreground",
-                  taskFormatted.isSingleLine ? "min-h-[16px]" : "min-h-[32px]"
+                  taskFormatted.isSingleLine ? "min-h-[16px]" : "min-h-[32px]",
+                  normalizedStatus === "cancelled" && "line-through opacity-60",
                 )}
               >
                 <div
@@ -441,8 +408,7 @@ export const WorkflowNode = memo(({ data, selected }: WorkflowNodeProps) => {
           })()}
         </div>
 
-        {/* Agent Section - Optimized for single line with full width utilization */}
-        <div className="mb-2 flex min-h-[16px] items-center gap-1.5">
+        <div className="mb-2 flex min-h-[16px] items-center gap-1.5 border-t border-border/40 pt-2">
           <User size={12} className="flex-shrink-0 text-muted-foreground" />
           {(() => {
             const agentFormatted = formatTextForDisplay(agentText, nodeWidth, true);
@@ -475,7 +441,6 @@ export const WorkflowNode = memo(({ data, selected }: WorkflowNodeProps) => {
           })()}
         </div>
 
-        {/* Metrics Section - Duration and Timestamp with icons, properly spaced */}
         <div className="flex min-h-[16px] items-center justify-between text-xs">
           {/* Duration with Time icon */}
           <div className="flex flex-shrink-0 items-center gap-1">
@@ -492,7 +457,7 @@ export const WorkflowNode = memo(({ data, selected }: WorkflowNodeProps) => {
           <div className="flex flex-shrink-0 items-center gap-1">
             <Calendar size={11} className="flex-shrink-0 text-muted-foreground" />
             <span
-              className="font-mono text-body-small"
+              className="font-mono text-sm text-muted-foreground"
               title={`Started: ${formatTimestamp(data.started_at)}`}
             >
               {formatTimestamp(data.started_at)}
@@ -508,7 +473,7 @@ export const WorkflowNode = memo(({ data, selected }: WorkflowNodeProps) => {
                 style={{ width: `${Math.max(6, performanceIntensity * 100)}%` }}
               />
             </div>
-            <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+            <div className="flex items-center justify-between text-micro text-muted-foreground">
               <span>Load {(performanceIntensity * 100).toFixed(0)}%</span>
               {data.duration_ms ? <span>{formatDuration(data.duration_ms)}</span> : null}
             </div>
@@ -516,12 +481,12 @@ export const WorkflowNode = memo(({ data, selected }: WorkflowNodeProps) => {
         )}
 
         {viewMode === 'debug' && (
-          <div className="mt-2 space-y-1 text-[10px] font-mono text-muted-foreground">
+          <div className="mt-2 space-y-1 text-micro font-mono text-muted-foreground">
             <div>ID: {data.execution_id}</div>
             {data.parent_execution_id && <div>Parent: {data.parent_execution_id.slice(0, 8)}…</div>}
             <div>
               Status:{" "}
-              <span className={cn("font-semibold", tone.accent)}>
+              <span className={cn("font-semibold", statusTheme.iconClass)}>
                 {getStatusText(normalizedStatus)}
               </span>
             </div>
@@ -554,7 +519,7 @@ export const WorkflowNode = memo(({ data, selected }: WorkflowNodeProps) => {
                 {getStatusIcon(normalizedStatus)}
                 Status:
               </span>
-              <span className={cn("font-medium", tone.accent)}>
+              <span className={cn("font-medium", statusTheme.iconClass)}>
                 {getStatusText(normalizedStatus)}
               </span>
             </div>
@@ -594,13 +559,13 @@ export const WorkflowNode = memo(({ data, selected }: WorkflowNodeProps) => {
 
           {/* Technical Details */}
           <div className="space-y-1 border-t border-border/60 pt-2">
-            <div className="flex justify-between gap-4 text-[10px] text-muted-foreground">
+            <div className="flex justify-between gap-4 text-micro text-muted-foreground">
               <span>Execution ID:</span>
               <span className="font-mono text-foreground">
                 {data.execution_id.slice(0, 8)}...
               </span>
             </div>
-            <div className="flex justify-between gap-4 text-[10px] text-muted-foreground">
+            <div className="flex justify-between gap-4 text-micro text-muted-foreground">
               <span>Workflow ID:</span>
               <span className="font-mono text-foreground">
                 {data.workflow_id.slice(0, 8)}...

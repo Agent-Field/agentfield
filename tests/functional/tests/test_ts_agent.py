@@ -18,7 +18,7 @@ import pytest
 from utils import unique_node_id
 
 
-def _get_free_port(host: str = "0.0.0.0") -> int:
+def _get_free_port(host: str = "127.0.0.1") -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind((host, 0))
         return s.getsockname()[1]

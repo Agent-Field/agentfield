@@ -28,6 +28,12 @@ type WorkflowRunSummary struct {
 	WorkflowID       string         `json:"workflow_id"`
 	RunID            string         `json:"run_id"`
 	RootExecutionID  string         `json:"root_execution_id"`
+	// RootExecutionStatus is the status of the root execution row, which is
+	// the unit the user actually controls via Pause/Resume/Cancel. The
+	// aggregate Status field above can drift from this when in-flight
+	// children are still running after the user pauses or cancels the
+	// root — see execute.go's dispatch-time guard for the full story.
+	RootExecutionStatus string     `json:"root_execution_status,omitempty"`
 	Status           string         `json:"status"`
 	DisplayName      string         `json:"display_name"`
 	CurrentTask      string         `json:"current_task"`
@@ -126,6 +132,9 @@ func (h *WorkflowRunHandler) ListWorkflowRunsHandler(c *gin.Context) {
 			filter.StartTime = &ts
 		}
 	}
+	if search := strings.TrimSpace(c.Query("search")); search != "" {
+		filter.Search = &search
+	}
 
 	// Use the efficient aggregation method that scales to millions of nodes
 	runAggregations, totalRuns, err := h.storage.QueryRunSummaries(ctx, filter)
@@ -175,9 +184,14 @@ func convertAggregationToSummary(agg *storage.RunSummaryAggregation) WorkflowRun
 		LatestActivity:   agg.LatestStarted,
 	}
 
-	// Set root execution ID
+	// Set root execution ID + status. The root status is what the lifecycle
+	// controls in the UI key off so they can reflect what the user actually
+	// controls, not the children-aggregated value.
 	if agg.RootExecutionID != nil {
 		summary.RootExecutionID = *agg.RootExecutionID
+	}
+	if agg.RootStatus != nil {
+		summary.RootExecutionStatus = *agg.RootStatus
 	}
 
 	// Set display name from root reasoner or run ID
@@ -241,6 +255,11 @@ func deriveStatusFromCounts(statusCounts map[string]int, activeExecutions int) s
 	// If there are any cancelled executions, the workflow is cancelled
 	if statusCounts[string(types.ExecutionStatusCancelled)] > 0 {
 		return string(types.ExecutionStatusCancelled)
+	}
+
+	// If there are any paused executions (and no active ones), the workflow is paused
+	if statusCounts[string(types.ExecutionStatusPaused)] > 0 {
+		return string(types.ExecutionStatusPaused)
 	}
 
 	// All executions are in terminal non-error states (succeeded) or no executions exist

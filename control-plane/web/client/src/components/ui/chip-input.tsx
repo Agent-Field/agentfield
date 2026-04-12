@@ -109,7 +109,7 @@ export function ChipInput({
         className={cn(
           "flex flex-wrap items-center gap-1.5 rounded-md border border-input bg-transparent px-2.5 py-1.5 text-sm",
           "ring-offset-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2",
-          "min-h-[36px] cursor-text"
+          "min-h-9 cursor-text"
         )}
         onClick={() => inputRef.current?.focus()}
       >
@@ -142,7 +142,7 @@ export function ChipInput({
           onKeyDown={handleKeyDown}
           onFocus={() => setShowDropdown(true)}
           placeholder={value.length === 0 ? placeholder : ""}
-          className="flex-1 min-w-[80px] bg-transparent outline-none text-sm placeholder:text-muted-foreground"
+          className="flex-1 min-w-20 bg-transparent outline-none text-sm placeholder:text-muted-foreground"
         />
       </div>
 

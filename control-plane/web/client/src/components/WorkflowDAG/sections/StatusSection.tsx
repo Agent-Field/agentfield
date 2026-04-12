@@ -136,7 +136,7 @@ export function StatusSection({ node, details }: StatusSectionProps) {
               <h4 className={cn("mb-1 text-sm font-medium", tone.fg)}>
                 {label}
               </h4>
-              <p className="text-body-small leading-relaxed">
+              <p className="text-sm text-muted-foreground leading-relaxed">
                 {description}
               </p>
             </div>
@@ -160,7 +160,7 @@ export function StatusSection({ node, details }: StatusSectionProps) {
             >
               Error Details
             </h5>
-            <pre className="text-body-small whitespace-pre-wrap font-mono leading-relaxed">
+            <pre className="text-sm text-muted-foreground whitespace-pre-wrap font-mono leading-relaxed">
               {details.error_message}
             </pre>
           </div>
@@ -169,7 +169,7 @@ export function StatusSection({ node, details }: StatusSectionProps) {
         {/* Progress Indicator for Running Status */}
         {node.status === "running" && (
           <div className="mt-4">
-            <div className="flex items-center justify-between text-body-small mb-2">
+            <div className="flex items-center justify-between text-sm text-muted-foreground mb-2">
               <span>Execution in progress...</span>
               <span>
                 {node.started_at &&
@@ -200,7 +200,7 @@ export function StatusSection({ node, details }: StatusSectionProps) {
                 .map((update: any, index: number) => (
                   <div
                     key={index}
-                    className="flex items-center gap-2 text-body-small"
+                    className="flex items-center gap-2 text-sm text-muted-foreground"
                   >
                     <div
                       className={cn(
@@ -214,7 +214,7 @@ export function StatusSection({ node, details }: StatusSectionProps) {
                   </div>
                 ))}
               {details.memory_updates.length > 3 && (
-                <div className="text-body-small/70 pl-3.5">
+                <div className="text-sm text-muted-foreground/70 pl-3.5">
                   +{details.memory_updates.length - 3} more updates
                 </div>
               )}

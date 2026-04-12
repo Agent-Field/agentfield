@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/events"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
@@ -86,6 +87,15 @@ func (m *MockStorageProvider) StoreWorkflowExecutionEvent(ctx context.Context, e
 func (m *MockStorageProvider) ListWorkflowExecutionEvents(ctx context.Context, executionID string, afterSeq *int64, limit int) ([]*types.WorkflowExecutionEvent, error) {
 	return nil, nil
 }
+func (m *MockStorageProvider) StoreExecutionLogEntry(ctx context.Context, entry *types.ExecutionLogEntry) error {
+	return nil
+}
+func (m *MockStorageProvider) ListExecutionLogEntries(ctx context.Context, executionID string, afterSeq *int64, limit int, levels []string, nodeIDs []string, sources []string, query string) ([]*types.ExecutionLogEntry, error) {
+	return nil, nil
+}
+func (m *MockStorageProvider) PruneExecutionLogEntries(ctx context.Context, executionID string, maxEntries int, olderThan time.Time) error {
+	return nil
+}
 func (m *MockStorageProvider) StoreWorkflowRunEvent(ctx context.Context, event *types.WorkflowRunEvent) error {
 	return nil
 }
@@ -118,6 +128,18 @@ func (m *MockStorageProvider) QueryWorkflows(ctx context.Context, filters types.
 }
 func (m *MockStorageProvider) CreateOrUpdateSession(ctx context.Context, session *types.Session) error {
 	return nil
+}
+func (m *MockStorageProvider) GetExecutionEventBus() *events.ExecutionEventBus {
+	return events.NewExecutionEventBus()
+}
+func (m *MockStorageProvider) GetWorkflowExecutionEventBus() *events.EventBus[*types.WorkflowExecutionEvent] {
+	return events.NewEventBus[*types.WorkflowExecutionEvent]()
+}
+func (m *MockStorageProvider) GetExecutionLogEventBus() *events.EventBus[*types.ExecutionLogEntry] {
+	return events.NewEventBus[*types.ExecutionLogEntry]()
+}
+func (m *MockStorageProvider) GetWorkflowRunEventBus() *events.EventBus[*types.WorkflowRunEvent] {
+	return events.NewEventBus[*types.WorkflowRunEvent]()
 }
 func (m *MockStorageProvider) GetSession(ctx context.Context, sessionID string) (*types.Session, error) {
 	return nil, nil

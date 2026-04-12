@@ -102,7 +102,7 @@ export function NodeDetailSidebar({
       <div
         className={cn(
           "fixed top-0 right-0 z-[80] flex h-full w-full max-w-full flex-col transition-transform duration-300 ease-out",
-          "border-l border-border-secondary bg-card/95 backdrop-blur-xl",
+          "border-l border-border bg-card/95 backdrop-blur-xl",
           "shadow-[0px_24px_60px_-28px_color-mix(in_srgb,_var(--foreground)_18%,_transparent)]",
           isOpen ? "translate-x-0" : "translate-x-full"
         )}
@@ -112,15 +112,15 @@ export function NodeDetailSidebar({
         style={{ width: "min(560px, 100vw)" }}
       >
         {/* Header - Fixed */}
-        <div className="flex flex-shrink-0 items-center justify-between border-b border-border-tertiary px-5 py-4 md:px-6">
+        <div className="flex flex-shrink-0 items-center justify-between border-b border-border/50 px-5 py-4 md:px-6">
           <div className="flex-1 min-w-0">
             <h2
               id="sidebar-title"
-              className="truncate text-heading-3 text-foreground"
+              className="truncate text-base font-semibold text-foreground"
             >
               Execution Details
             </h2>
-            <p className="mt-1 text-body-small">
+            <p className="mt-1 text-sm text-muted-foreground">
               {node.task_name || node.reasoner_id}
             </p>
           </div>
@@ -172,8 +172,8 @@ export function NodeDetailSidebar({
         </div>
 
         {/* Footer - Fixed */}
-        <div className="flex-shrink-0 border-t border-border-tertiary px-5 py-4 md:px-6">
-          <div className="flex items-center justify-between text-body-small/70">
+        <div className="flex-shrink-0 border-t border-border/50 px-5 py-4 md:px-6">
+          <div className="flex items-center justify-between text-sm text-muted-foreground/70">
             <span>Last updated: {new Date().toLocaleTimeString()}</span>
             {node.status === "running" && (
               <div className="flex items-center gap-2">
@@ -227,13 +227,13 @@ function ErrorState({
   return (
     <Card className={cn(errorTone.bg, errorTone.border)}>
       <CardContent className="py-8 text-center">
-        <div className={cn("mb-4 text-heading-1", errorTone.accent)}>
+        <div className={cn("mb-4 text-2xl font-semibold tracking-tight", errorTone.accent)}>
           <Close size={24} className="mx-auto" />
         </div>
-        <h3 className="mb-2 text-heading-3">
+        <h3 className="mb-2 text-base font-semibold">
           Failed to load execution details
         </h3>
-        <p className="mb-4 text-body-small">{error}</p>
+        <p className="mb-4 text-sm text-muted-foreground">{error}</p>
         <Button
           variant="outline"
           size="sm"

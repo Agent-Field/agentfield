@@ -9,8 +9,17 @@ export default defineConfig({
         setupFiles: ["./src/test/setup.ts"],
         globals: true,
         coverage: {
+            all: true,
             provider: "v8",
-            exclude: ["node_modules/**", "src/test/setup.ts", "dist/**"],
+            include: ["src/**/*.{ts,tsx}"],
+            exclude: [
+                "dist/**",
+                "node_modules/**",
+                "src/test/**",
+                "src/**/*.d.ts",
+            ],
+            reporter: ["text-summary", "json-summary", "cobertura"],
+            reportsDirectory: "coverage",
         },
     },
     resolve: {

@@ -25,13 +25,14 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/internal/handlers/admin"                  // Admin handlers
 	"github.com/Agent-Field/agentfield/control-plane/internal/handlers/agentic"                // Agentic API handlers
 	connectorpkg "github.com/Agent-Field/agentfield/control-plane/internal/handlers/connector" // Connector handlers
-	"github.com/Agent-Field/agentfield/control-plane/internal/server/apicatalog"               // API catalog
-	"github.com/Agent-Field/agentfield/control-plane/internal/server/knowledgebase"            // Knowledge base
 	"github.com/Agent-Field/agentfield/control-plane/internal/handlers/ui"                     // UI handlers
 	"github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/communication"
 	"github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/process"
 	infrastorage "github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/storage"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/observability"
+	"github.com/Agent-Field/agentfield/control-plane/internal/server/apicatalog"    // API catalog
+	"github.com/Agent-Field/agentfield/control-plane/internal/server/knowledgebase" // Knowledge base
 	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services" // Services
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
@@ -60,7 +61,7 @@ type AgentFieldServer struct {
 	presenceManager       *services.PresenceManager
 	statusManager         *services.StatusManager // Add StatusManager for unified status management
 	agentService          interfaces.AgentService // Add AgentService for lifecycle management
-	agentClient           interfaces.AgentClient  // Add AgentClient for MCP communication
+	agentClient           interfaces.AgentClient  // Add AgentClient for agent communication
 	config                *config.Config
 	storageHealthOverride func(context.Context) gin.H
 	cacheHealthOverride   func(context.Context) gin.H
@@ -74,6 +75,8 @@ type AgentFieldServer struct {
 	tagApprovalService  *services.TagApprovalService
 	tagVCVerifier       *services.TagVCVerifier
 	agentfieldHome      string
+	// LLM health monitoring
+	llmHealthMonitor *services.LLMHealthMonitor
 	// Cleanup service
 	cleanupService         *handlers.ExecutionCleanupService
 	payloadStore           services.PayloadStore
@@ -83,6 +86,8 @@ type AgentFieldServer struct {
 	adminGRPCPort          int
 	webhookDispatcher      services.WebhookDispatcher
 	observabilityForwarder services.ObservabilityForwarder
+	executionTracer        *observability.ExecutionTracer
+	tracerShutdown         func(context.Context) error
 	configMu               sync.RWMutex
 	// Agentic API
 	apiCatalog *apicatalog.Catalog
@@ -396,6 +401,42 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		logger.Logger.Warn().Err(err).Msg("failed to start observability forwarder")
 	}
 
+	// Initialize OpenTelemetry distributed tracing
+	var executionTracer *observability.ExecutionTracer
+	var tracerShutdown func(context.Context) error
+	if cfg.Features.Tracing.Enabled {
+		tracer, shutdown, err := observability.InitTracer(context.Background(), observability.TracerConfig{
+			Enabled:     cfg.Features.Tracing.Enabled,
+			Exporter:    cfg.Features.Tracing.Exporter,
+			Endpoint:    cfg.Features.Tracing.Endpoint,
+			ServiceName: cfg.Features.Tracing.ServiceName,
+			Insecure:    cfg.Features.Tracing.Insecure,
+		})
+		if err != nil {
+			logger.Logger.Warn().Err(err).Msg("failed to initialize OTel tracer")
+		} else if tracer != nil {
+			executionTracer = observability.NewExecutionTracer(tracer)
+			tracerShutdown = shutdown
+			logger.Logger.Info().
+				Str("endpoint", cfg.Features.Tracing.Endpoint).
+				Str("service_name", cfg.Features.Tracing.ServiceName).
+				Msg("OpenTelemetry tracing enabled")
+		}
+	}
+
+	// Initialize LLM health monitor
+	var llmHealthMonitor *services.LLMHealthMonitor
+	if cfg.AgentField.LLMHealth.Enabled && len(cfg.AgentField.LLMHealth.Endpoints) > 0 {
+		llmHealthMonitor = services.NewLLMHealthMonitor(cfg.AgentField.LLMHealth, uiService)
+		handlers.SetLLMHealthMonitor(llmHealthMonitor)
+		logger.Logger.Info().
+			Int("endpoints", len(cfg.AgentField.LLMHealth.Endpoints)).
+			Msg("LLM health monitor configured")
+	}
+
+	// Initialize per-agent concurrency limiter
+	handlers.InitConcurrencyLimiter(cfg.AgentField.ExecutionQueue.MaxConcurrentPerAgent)
+
 	// Initialize execution cleanup service
 	cleanupService := handlers.NewExecutionCleanupService(storageProvider, cfg.AgentField.ExecutionCleanup)
 
@@ -429,10 +470,13 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		tagApprovalService:     tagApprovalService,
 		tagVCVerifier:          tagVCVerifier,
 		agentfieldHome:         agentfieldHome,
+		llmHealthMonitor:       llmHealthMonitor,
 		cleanupService:         cleanupService,
 		payloadStore:           payloadStore,
 		webhookDispatcher:      webhookDispatcher,
 		observabilityForwarder: observabilityForwarder,
+		executionTracer:        executionTracer,
+		tracerShutdown:         tracerShutdown,
 		registryWatcherCancel:  nil,
 		adminGRPCPort:          adminPort,
 		apiCatalog:             initAPICatalog(),
@@ -499,11 +543,21 @@ func (s *AgentFieldServer) Start() error {
 		}
 	}()
 
+	// Start LLM health monitor in background
+	if s.llmHealthMonitor != nil {
+		go s.llmHealthMonitor.Start()
+	}
+
 	// Start execution cleanup service in background
 	ctx := context.Background()
 	if err := s.cleanupService.Start(ctx); err != nil {
 		logger.Logger.Error().Err(err).Msg("Failed to start execution cleanup service")
 		// Don't fail server startup if cleanup service fails to start
+	}
+
+	// Start OpenTelemetry execution tracer in background
+	if s.executionTracer != nil {
+		s.executionTracer.Start(ctx)
 	}
 
 	// Start reasoner event heartbeat (30 second intervals)
@@ -632,6 +686,18 @@ func (s *AgentFieldServer) Stop() error {
 		defer cancel()
 		if err := s.observabilityForwarder.Stop(ctx); err != nil {
 			logger.Logger.Error().Err(err).Msg("Failed to stop observability forwarder")
+		}
+	}
+
+	// Stop OpenTelemetry execution tracer and flush remaining spans
+	if s.executionTracer != nil {
+		s.executionTracer.Stop()
+	}
+	if s.tracerShutdown != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.tracerShutdown(ctx); err != nil {
+			logger.Logger.Error().Err(err).Msg("Failed to shutdown OTel tracer provider")
 		}
 	}
 
@@ -1057,18 +1123,42 @@ func (s *AgentFieldServer) setupRoutes() {
 				// Individual node operations
 				nodes.GET("/:nodeId/details", uiNodesHandler.GetNodeDetailsHandler)
 
+				nodeLogsHandler := &ui.NodeLogsProxyHandler{
+					Storage: s.storage,
+					Snapshot: func() (config.NodeLogProxyConfig, string) {
+						s.configMu.RLock()
+						defer s.configMu.RUnlock()
+						return config.EffectiveNodeLogProxy(s.config.AgentField.NodeLogProxy),
+							s.config.Features.DID.Authorization.InternalToken
+					},
+				}
+				nodes.GET("/:nodeId/logs", nodeLogsHandler.ProxyNodeLogsHandler)
+
+				nodeLogSettingsHandler := &ui.NodeLogSettingsHandler{
+					Storage: s.storage,
+					ReadConfig: func(fn func(*config.Config)) {
+						s.configMu.RLock()
+						defer s.configMu.RUnlock()
+						fn(s.config)
+					},
+					WriteConfig: func(fn func(*config.Config)) {
+						s.configMu.Lock()
+						defer s.configMu.Unlock()
+						fn(s.config)
+					},
+				}
+				settings := uiAPI.Group("/settings")
+				{
+					settings.GET("/node-log-proxy", nodeLogSettingsHandler.GetNodeLogProxySettingsHandler)
+					settings.PUT("/node-log-proxy", nodeLogSettingsHandler.PutNodeLogProxySettingsHandler)
+				}
+
 				// DID and VC management endpoints for nodes
 				didHandler := ui.NewDIDHandler(s.storage, s.didService, s.vcService, s.didWebService)
 				nodes.GET("/:nodeId/did", didHandler.GetNodeDIDHandler)
 				nodes.GET("/:nodeId/vc-status", didHandler.GetNodeVCStatusHandler)
 
-				// MCP management endpoints for nodes
-				mcpHandler := ui.NewMCPHandler(s.uiService, s.agentClient)
-				nodes.GET("/:nodeId/mcp/health", mcpHandler.GetMCPHealthHandler)
-				nodes.GET("/:nodeId/mcp/events", mcpHandler.GetMCPEventsHandler)
-				nodes.GET("/:nodeId/mcp/metrics", mcpHandler.GetMCPMetricsHandler)
-				nodes.POST("/:nodeId/mcp/servers/:alias/restart", mcpHandler.RestartMCPServerHandler)
-				nodes.GET("/:nodeId/mcp/servers/:alias/tools", mcpHandler.GetMCPToolsHandler)
+	
 			}
 
 			// Executions management group
@@ -1100,12 +1190,26 @@ func (s *AgentFieldServer) setupRoutes() {
 				executions.POST("/note", handlers.AddExecutionNoteHandler(s.storage))
 				executions.GET("/:execution_id/notes", handlers.GetExecutionNotesHandler(s.storage))
 
+				// Structured execution logs for the execution detail page
+				execLogsHandler := ui.NewExecutionLogsHandler(s.storage, s.llmHealthMonitor, func() config.ExecutionLogsConfig {
+					return s.config.AgentField.ExecutionLogs
+				})
+				executions.GET("/:execution_id/logs", execLogsHandler.GetExecutionLogsHandler)
+				executions.GET("/:execution_id/logs/stream", execLogsHandler.StreamExecutionLogsHandler)
+
 				// DID and VC management endpoints for executions
 				didHandler := ui.NewDIDHandler(s.storage, s.didService, s.vcService, s.didWebService)
 				executions.GET("/:execution_id/vc", didHandler.GetExecutionVCHandler)
 				executions.GET("/:execution_id/vc-status", didHandler.GetExecutionVCStatusHandler)
 				executions.POST("/:execution_id/verify-vc", didHandler.VerifyExecutionVCComprehensiveHandler)
 			}
+
+			// LLM health status endpoint and execution queue status
+			llmHandler := ui.NewExecutionLogsHandler(s.storage, s.llmHealthMonitor, func() config.ExecutionLogsConfig {
+				return s.config.AgentField.ExecutionLogs
+			})
+			uiAPI.GET("/llm/health", llmHandler.GetLLMHealthHandler)
+			uiAPI.GET("/queue/status", llmHandler.GetExecutionQueueStatusHandler)
 
 			// Workflows management group
 			workflows := uiAPI.Group("/workflows")
@@ -1135,13 +1239,6 @@ func (s *AgentFieldServer) setupRoutes() {
 				reasoners.POST("/:reasonerId/templates", reasonersHandler.SaveExecutionTemplateHandler)
 			}
 
-			// MCP system-wide endpoints
-			mcp := uiAPI.Group("/mcp")
-			{
-				mcpHandler := ui.NewMCPHandler(s.uiService, s.agentClient)
-				mcp.GET("/status", mcpHandler.GetMCPStatusHandler)
-			}
-
 			// Dashboard endpoints
 			dashboard := uiAPI.Group("/dashboard")
 			{
@@ -1156,6 +1253,8 @@ func (s *AgentFieldServer) setupRoutes() {
 				didHandler := ui.NewDIDHandler(s.storage, s.didService, s.vcService, s.didWebService)
 				did.GET("/status", didHandler.GetDIDSystemStatusHandler)
 				did.GET("/export/vcs", didHandler.ExportVCsHandler)
+				did.POST("/verify", didHandler.VerifyVCHandler)
+				did.POST("/verify-audit", didHandler.VerifyAuditBundleHandler)
 				did.GET("/:did/resolution-bundle", didHandler.GetDIDResolutionBundleHandler)
 				did.GET("/:did/resolution-bundle/download", didHandler.DownloadDIDResolutionBundleHandler)
 			}
@@ -1203,7 +1302,7 @@ func (s *AgentFieldServer) setupRoutes() {
 		// Node management endpoints
 		agentAPI.POST("/nodes/register", handlers.RegisterNodeHandler(s.storage, s.uiService, s.didService, s.presenceManager, s.didWebService, s.tagApprovalService))
 		agentAPI.POST("/nodes", handlers.RegisterNodeHandler(s.storage, s.uiService, s.didService, s.presenceManager, s.didWebService, s.tagApprovalService))
-		agentAPI.POST("/nodes/register-serverless", handlers.RegisterServerlessAgentHandler(s.storage, s.uiService, s.didService, s.presenceManager, s.didWebService))
+		agentAPI.POST("/nodes/register-serverless", handlers.RegisterServerlessAgentHandler(s.storage, s.uiService, s.didService, s.presenceManager, s.didWebService, s.config.AgentField.Registration.ServerlessDiscoveryAllowedHosts))
 		agentAPI.GET("/nodes", handlers.ListNodesHandler(s.storage))
 		agentAPI.GET("/nodes/:node_id", handlers.GetNodeHandler(s.storage))
 		agentAPI.POST("/nodes/:node_id/heartbeat", handlers.HeartbeatHandler(s.storage, s.uiService, s.healthMonitor, s.statusManager, s.presenceManager))
@@ -1277,6 +1376,9 @@ func (s *AgentFieldServer) setupRoutes() {
 		agentAPI.GET("/executions/:execution_id", handlers.GetExecutionStatusHandler(s.storage))
 		agentAPI.POST("/executions/batch-status", handlers.BatchExecutionStatusHandler(s.storage))
 		agentAPI.POST("/executions/:execution_id/status", handlers.UpdateExecutionStatusHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout))
+		agentAPI.POST("/executions/:execution_id/logs", handlers.StructuredExecutionLogsHandler(s.storage, func() config.ExecutionLogsConfig {
+			return s.config.AgentField.ExecutionLogs
+		}))
 		agentAPI.POST("/executions/:execution_id/cancel", handlers.CancelExecutionHandler(s.storage))
 		agentAPI.POST("/executions/:execution_id/pause", handlers.PauseExecutionHandler(s.storage))
 		agentAPI.POST("/executions/:execution_id/resume", handlers.ResumeExecutionHandler(s.storage))

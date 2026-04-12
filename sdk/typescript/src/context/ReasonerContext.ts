@@ -8,6 +8,7 @@ import type { DiscoveryOptions } from '../types/agent.js';
 import type { DidInterface } from '../did/DidInterface.js';
 import type { AIToolRequestOptions, ToolCallTrace } from '../ai/ToolCalling.js';
 import { buildToolConfig, executeToolCallLoop } from '../ai/ToolCalling.js';
+import type { ExecutionLogger } from '../observability/ExecutionLogger.js';
 
 export class ReasonerContext<TInput = any> {
   readonly input: TInput;
@@ -16,13 +17,16 @@ export class ReasonerContext<TInput = any> {
   readonly sessionId?: string;
   readonly actorId?: string;
   readonly workflowId?: string;
+  readonly rootWorkflowId?: string;
   readonly parentExecutionId?: string;
+  readonly reasonerId?: string;
   readonly callerDid?: string;
   readonly targetDid?: string;
   readonly agentNodeDid?: string;
   readonly req: express.Request;
   readonly res: express.Response;
   readonly agent: Agent;
+  readonly logger: ExecutionLogger;
   readonly aiClient: AIClient;
   readonly memory: MemoryInterface;
   readonly workflow: WorkflowReporter;
@@ -35,13 +39,16 @@ export class ReasonerContext<TInput = any> {
     sessionId?: string;
     actorId?: string;
     workflowId?: string;
+    rootWorkflowId?: string;
     parentExecutionId?: string;
+    reasonerId?: string;
     callerDid?: string;
     targetDid?: string;
     agentNodeDid?: string;
     req: express.Request;
     res: express.Response;
     agent: Agent;
+    logger: ExecutionLogger;
     aiClient: AIClient;
     memory: MemoryInterface;
     workflow: WorkflowReporter;
@@ -53,13 +60,16 @@ export class ReasonerContext<TInput = any> {
     this.sessionId = params.sessionId;
     this.actorId = params.actorId;
     this.workflowId = params.workflowId;
+    this.rootWorkflowId = params.rootWorkflowId;
     this.parentExecutionId = params.parentExecutionId;
+    this.reasonerId = params.reasonerId;
     this.callerDid = params.callerDid;
     this.targetDid = params.targetDid;
     this.agentNodeDid = params.agentNodeDid;
     this.req = params.req;
     this.res = params.res;
     this.agent = params.agent;
+    this.logger = params.logger;
     this.aiClient = params.aiClient;
     this.memory = params.memory;
     this.workflow = params.workflow;
@@ -126,7 +136,9 @@ export class ReasonerContext<TInput = any> {
       sessionId: this.sessionId,
       actorId: this.actorId,
       workflowId: this.workflowId,
+      rootWorkflowId: this.rootWorkflowId,
       parentExecutionId: this.parentExecutionId,
+      reasonerId: this.reasonerId,
       callerDid: this.callerDid,
       targetDid: this.targetDid,
       agentNodeDid: this.agentNodeDid
@@ -145,13 +157,16 @@ export function getCurrentContext<TInput = any>(): ReasonerContext<TInput> | und
     sessionId: metadata.sessionId,
     actorId: metadata.actorId,
     workflowId: metadata.workflowId,
+    rootWorkflowId: metadata.rootWorkflowId,
     parentExecutionId: metadata.parentExecutionId,
+    reasonerId: metadata.reasonerId,
     callerDid: metadata.callerDid,
     targetDid: metadata.targetDid,
     agentNodeDid: metadata.agentNodeDid,
     req,
     res,
     agent,
+    logger: agent.getExecutionLogger(),
     aiClient: agent.getAIClient(),
     memory: agent.getMemoryInterface(metadata),
     workflow: agent.getWorkflowReporter(metadata),

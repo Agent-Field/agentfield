@@ -38,18 +38,6 @@ func (f *fakeAgentClient) GetAgentStatus(ctx context.Context, nodeID string) (*i
 	return f.statusResponse, nil
 }
 
-func (f *fakeAgentClient) GetMCPHealth(ctx context.Context, nodeID string) (*interfaces.MCPHealthResponse, error) {
-	return nil, nil
-}
-
-func (f *fakeAgentClient) RestartMCPServer(ctx context.Context, nodeID, alias string) error {
-	return nil
-}
-
-func (f *fakeAgentClient) GetMCPTools(ctx context.Context, nodeID, alias string) (*interfaces.MCPToolsResponse, error) {
-	return nil, nil
-}
-
 func (f *fakeAgentClient) ShutdownAgent(ctx context.Context, nodeID string, graceful bool, timeoutSeconds int) (*interfaces.AgentShutdownResponse, error) {
 	return nil, nil
 }
@@ -522,7 +510,7 @@ func TestStatusManager_UpdateFromHeartbeat_NeverDropped(t *testing.T) {
 	// Now send a heartbeat IMMEDIATELY (within what used to be the 10s drop window).
 	// Previously this heartbeat would be silently ignored. Now it MUST be processed.
 	readyStatus := types.AgentStatusReady
-	err = sm.UpdateFromHeartbeat(ctx, "node-heartbeat-priority", &readyStatus, nil, "")
+	err = sm.UpdateFromHeartbeat(ctx, "node-heartbeat-priority", &readyStatus, "")
 	require.NoError(t, err, "Heartbeat should never be dropped")
 
 	// Verify the heartbeat was processed — agent should no longer be inactive

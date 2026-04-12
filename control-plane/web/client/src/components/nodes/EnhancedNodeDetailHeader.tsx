@@ -95,7 +95,7 @@ export function EnhancedNodeDetailHeader({
             </span>
           </div>
           {(heartbeatDisplay || statusBadges) && (
-            <div className="hidden items-center gap-3 text-body-small md:flex">
+            <div className="hidden items-center gap-3 text-sm text-muted-foreground md:flex">
               {heartbeatDisplay && <span>Last heartbeat {heartbeatDisplay}</span>}
               {statusBadges}
             </div>

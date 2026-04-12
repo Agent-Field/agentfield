@@ -162,7 +162,7 @@ func SetMemoryWithAccessControl(storageProvider MemoryStorage, config AccessCont
 			// Fall back to standard set memory handler
 			c.JSON(http.StatusBadRequest, ErrorResponse{
 				Error:   "invalid_request",
-				Message: err.Error(),
+				Details: err.Error(),
 				Code:    http.StatusBadRequest,
 			})
 			return
@@ -174,7 +174,7 @@ func SetMemoryWithAccessControl(storageProvider MemoryStorage, config AccessCont
 		if err != nil {
 			c.JSON(http.StatusBadRequest, ErrorResponse{
 				Error:   "marshal_error",
-				Message: err.Error(),
+				Details: err.Error(),
 				Code:    http.StatusBadRequest,
 			})
 			return
@@ -203,7 +203,7 @@ func SetMemoryWithAccessControl(storageProvider MemoryStorage, config AccessCont
 		if err := storageProvider.SetMemory(ctx, memory); err != nil {
 			c.JSON(http.StatusInternalServerError, ErrorResponse{
 				Error:   "storage_error",
-				Message: err.Error(),
+				Details: err.Error(),
 				Code:    http.StatusInternalServerError,
 			})
 			return

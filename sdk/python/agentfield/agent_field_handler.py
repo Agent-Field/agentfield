@@ -285,7 +285,7 @@ class AgentFieldHandler:
 
     async def send_enhanced_heartbeat(self) -> bool:
         """
-        Send enhanced heartbeat with current status and MCP information.
+        Send enhanced heartbeat with current status information.
 
         Returns:
             True if heartbeat was successful, False otherwise
@@ -294,13 +294,9 @@ class AgentFieldHandler:
             return False
 
         try:
-            # Get MCP server health information
-            mcp_servers = self.agent.mcp_handler._get_mcp_server_health()
-
             # Create heartbeat data
             heartbeat_data = HeartbeatData(
                 status=self.agent._current_status,
-                mcp_servers=mcp_servers,
                 timestamp=datetime.now().isoformat(),
                 version=getattr(self.agent, 'version', '') or '',
             )
@@ -521,7 +517,7 @@ class AgentFieldHandler:
 
     async def enhanced_heartbeat_loop(self, interval: int) -> None:
         """
-        Background loop for sending enhanced heartbeats with status and MCP information.
+        Background loop for sending enhanced heartbeats with status information.
 
         Args:
             interval: Heartbeat interval in seconds

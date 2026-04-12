@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -32,7 +33,7 @@ func (rc *readCloser) Close() error {
 
 var validate = validator.New()
 
-// validateCallbackURL validates that a callback URL is properly formatted and reachable
+// validateCallbackURL validates that a callback URL is properly formatted.
 func validateCallbackURL(baseURL string) error {
 	if baseURL == "" {
 		return fmt.Errorf("base_url cannot be empty")
@@ -49,39 +50,16 @@ func validateCallbackURL(baseURL string) error {
 		return fmt.Errorf("URL must use http or https scheme, got: %s", parsedURL.Scheme)
 	}
 
+	if parsedURL.User != nil {
+		return fmt.Errorf("URL must not include user info")
+	}
+
 	// Ensure host is present
 	if parsedURL.Host == "" {
 		return fmt.Errorf("URL must include a host")
 	}
 
-	// Basic reachability test with timeout
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-	}
-
-	healthURL := strings.TrimSuffix(baseURL, "/") + "/health"
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "GET", healthURL, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create health check request: %w", err)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		// Log the error but don't fail registration - agent might not be fully started yet
-		logger.Logger.Warn().Err(err).Msgf("⚠️ Callback URL health check failed for %s (agent may still be starting)", healthURL)
-		return nil
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		logger.Logger.Warn().Msgf("⚠️ Callback URL health check returned status %d for %s", resp.StatusCode, healthURL)
-	} else {
-		logger.Logger.Debug().Msgf("✅ Callback URL validated successfully: %s", baseURL)
-	}
-
+	logger.Logger.Debug().Msgf("✅ Callback URL validated successfully: %s", baseURL)
 	return nil
 }
 
@@ -205,50 +183,12 @@ func normalizeCandidate(raw string, defaultPort string) (string, error) {
 	return fmt.Sprintf("%s://%s", scheme, netloc), nil
 }
 
-func probeCandidate(ctx context.Context, client *http.Client, baseURL string) types.CallbackTestResult {
-	result := types.CallbackTestResult{URL: baseURL}
-	trimmedBase := strings.TrimSuffix(baseURL, "/")
-	endpoints := []string{"/health/mcp", "/health"}
-
-	for _, endpoint := range endpoints {
-		start := time.Now()
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, trimmedBase+endpoint, nil)
-		if err != nil {
-			result.Error = err.Error()
-			continue
-		}
-
-		resp, err := client.Do(req)
-		latency := time.Since(start).Milliseconds()
-		if err != nil {
-			result.Error = err.Error()
-			continue
-		}
-
-		result.Status = resp.StatusCode
-		result.Endpoint = endpoint
-		result.LatencyMS = latency
-		_, _ = io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-
-		if resp.StatusCode >= 200 && resp.StatusCode < 400 {
-			result.Success = true
-			result.Error = ""
-			return result
-		}
-	}
-
-	return result
-}
-
-func resolveCallbackCandidates(ctx context.Context, rawCandidates []string, defaultPort string) (string, []string, []types.CallbackTestResult) {
+func resolveCallbackCandidates(rawCandidates []string, defaultPort string) (string, []string, []types.CallbackTestResult) {
 	if len(rawCandidates) == 0 {
 		return "", nil, nil
 	}
 
-	client := &http.Client{Timeout: 2 * time.Second}
 	normalized := make([]string, 0, len(rawCandidates))
-	results := make([]types.CallbackTestResult, 0, len(rawCandidates))
 	seen := make(map[string]struct{})
 
 	for _, candidate := range rawCandidates {
@@ -263,18 +203,99 @@ func resolveCallbackCandidates(ctx context.Context, rawCandidates []string, defa
 		}
 		seen[normalizedURL] = struct{}{}
 		normalized = append(normalized, normalizedURL)
+	}
 
-		probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		result := probeCandidate(probeCtx, client, normalizedURL)
-		cancel()
+	if len(normalized) == 0 {
+		return "", nil, nil
+	}
 
-		results = append(results, result)
-		if result.Success {
-			return normalizedURL, normalized, results
+	return normalized[0], normalized, nil
+}
+
+func normalizeServerlessDiscoveryURL(rawURL string, allowedHosts []string) (string, error) {
+	parsedURL, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "", fmt.Errorf("invalid invocation_url format: %w", err)
+	}
+
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return "", fmt.Errorf("invocation_url must use http or https")
+	}
+
+	if parsedURL.User != nil {
+		return "", fmt.Errorf("invocation_url must not include user info")
+	}
+
+	if parsedURL.Host == "" {
+		return "", fmt.Errorf("invocation_url must include a host")
+	}
+
+	if parsedURL.RawQuery != "" || parsedURL.Fragment != "" {
+		return "", fmt.Errorf("invocation_url must not include query parameters or fragments")
+	}
+
+	hostname := parsedURL.Hostname()
+	if hostname == "" {
+		return "", fmt.Errorf("invocation_url must include a host")
+	}
+
+	if hostname == "0.0.0.0" || hostname == "::" {
+		hostname = "localhost"
+		if port := parsedURL.Port(); port != "" {
+			parsedURL.Host = net.JoinHostPort(hostname, port)
+		} else {
+			parsedURL.Host = hostname
 		}
 	}
 
-	return "", normalized, results
+	if !isServerlessDiscoveryHostAllowed(hostname, allowedHosts) {
+		return "", fmt.Errorf("invocation_url host %q is not allowlisted for server-side discovery; configure agentfield.registration.serverless_discovery_allowed_hosts or AGENTFIELD_REGISTRATION_SERVERLESS_DISCOVERY_ALLOWED_HOSTS", hostname)
+	}
+
+	return strings.TrimSuffix(parsedURL.String(), "/"), nil
+}
+
+func isServerlessDiscoveryHostAllowed(host string, allowedHosts []string) bool {
+	if host == "" {
+		return false
+	}
+
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return true
+	}
+
+	hostLower := strings.ToLower(host)
+	for _, entry := range allowedHosts {
+		candidate := strings.ToLower(strings.TrimSpace(entry))
+		if candidate == "" {
+			continue
+		}
+
+		if _, network, err := net.ParseCIDR(candidate); err == nil {
+			if ip := net.ParseIP(host); ip != nil && network.Contains(ip) {
+				return true
+			}
+			continue
+		}
+
+		if strings.HasPrefix(candidate, "*.") {
+			suffix := strings.TrimPrefix(candidate, "*")
+			if strings.HasSuffix(hostLower, suffix) && hostLower != strings.TrimPrefix(suffix, ".") {
+				return true
+			}
+			continue
+		}
+
+		if hostLower == candidate {
+			return true
+		}
+	}
+
+	return false
 }
 
 // CachedNodeData holds cached heartbeat data for a node
@@ -282,11 +303,6 @@ type CachedNodeData struct {
 	LastDBUpdate    time.Time
 	LastCacheUpdate time.Time
 	Status          string
-	MCPServers      []struct {
-		Alias     string `json:"alias"`
-		Status    string `json:"status"`
-		ToolCount int    `json:"tool_count"`
-	}
 }
 
 // HeartbeatCache manages cached heartbeat data to reduce database writes
@@ -306,11 +322,7 @@ var (
 )
 
 // shouldUpdateDatabase determines if a heartbeat should trigger a database update
-func (hc *HeartbeatCache) shouldUpdateDatabase(nodeID string, now time.Time, status string, mcpServers []struct {
-	Alias     string `json:"alias"`
-	Status    string `json:"status"`
-	ToolCount int    `json:"tool_count"`
-}) (bool, *CachedNodeData) {
+func (hc *HeartbeatCache) shouldUpdateDatabase(nodeID string, now time.Time, status string) (bool, *CachedNodeData) {
 	hc.mutex.Lock()
 	defer hc.mutex.Unlock()
 
@@ -321,7 +333,6 @@ func (hc *HeartbeatCache) shouldUpdateDatabase(nodeID string, now time.Time, sta
 			LastDBUpdate:    now,
 			LastCacheUpdate: now,
 			Status:          status,
-			MCPServers:      mcpServers,
 		}
 		hc.nodes[nodeID] = cached
 		return true, cached
@@ -330,7 +341,6 @@ func (hc *HeartbeatCache) shouldUpdateDatabase(nodeID string, now time.Time, sta
 	// Update cache timestamp
 	cached.LastCacheUpdate = now
 	cached.Status = status
-	cached.MCPServers = mcpServers
 
 	// Check if enough time has passed since last DB update
 	timeSinceDBUpdate := now.Sub(cached.LastDBUpdate)
@@ -453,13 +463,11 @@ func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *ser
 			}
 		}
 
-		if len(candidateList) > 0 && !skipAutoDiscovery {
-			logger.Logger.Debug().Msgf("🔍 Auto-discovering callback URL for %s from %d candidates", newNode.ID, len(candidateList))
-			probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			resolvedBaseURL, normalizedCandidates, probeResults = resolveCallbackCandidates(probeCtx, candidateList, defaultPort)
-			cancel()
+			if len(candidateList) > 0 && !skipAutoDiscovery {
+				logger.Logger.Debug().Msgf("🔍 Auto-discovering callback URL for %s from %d candidates", newNode.ID, len(candidateList))
+				resolvedBaseURL, normalizedCandidates, probeResults = resolveCallbackCandidates(candidateList, defaultPort)
 
-			if resolvedBaseURL != "" && resolvedBaseURL != newNode.BaseURL {
+				if resolvedBaseURL != "" && resolvedBaseURL != newNode.BaseURL {
 				logger.Logger.Info().Msgf("🔗 Auto-discovered callback URL for %s: %s (was %s)", newNode.ID, resolvedBaseURL, newNode.BaseURL)
 				newNode.BaseURL = resolvedBaseURL
 			}
@@ -544,8 +552,17 @@ func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *ser
 				// The SDK never sends approved_tags (only proposed_tags), so without
 				// this the UPSERT would overwrite approved_tags with an empty array,
 				// forcing re-approval after every CP restart or re-registration.
+				//
+				// IMPORTANT: We deliberately do NOT preserve existingNode.LifecycleStatus
+				// here. The lifecycle state machine owns that field — a stale terminal
+				// status (stopping/offline) from a previous shutdown would otherwise
+				// leak into the fresh registration, causing the re-registered agent to
+				// appear mid-shutdown, which breaks downstream status inference
+				// (e.g. webhook event type determination, health monitoring, and the
+				// docs-quick-start execution webhook contract test). The fallback
+				// below resets empty/offline to AgentStatusStarting, and the state
+				// machine takes it from there.
 				newNode.ApprovedTags = existingNode.ApprovedTags
-				newNode.LifecycleStatus = existingNode.LifecycleStatus
 
 				// Carry over per-reasoner and per-skill approved tags.
 				if len(existingNode.ApprovedTags) > 0 {
@@ -818,13 +835,8 @@ func HeartbeatHandler(storageProvider storage.StorageProvider, uiService *servic
 
 		// Try to parse enhanced heartbeat data (optional)
 		var enhancedHeartbeat struct {
-			Version    string `json:"version,omitempty"`
-			Status     string `json:"status,omitempty"`
-			MCPServers []struct {
-				Alias     string `json:"alias"`
-				Status    string `json:"status"`
-				ToolCount int    `json:"tool_count"`
-			} `json:"mcp_servers,omitempty"`
+			Version     string `json:"version,omitempty"`
+			Status      string `json:"status,omitempty"`
 			Timestamp   string `json:"timestamp,omitempty"`
 			HealthScore *int   `json:"health_score,omitempty"`
 		}
@@ -844,7 +856,7 @@ func HeartbeatHandler(storageProvider storage.StorageProvider, uiService *servic
 		if presenceManager != nil && presenceManager.HasLease(nodeID) {
 			presenceManager.Touch(nodeID, enhancedHeartbeat.Version, now)
 		}
-		needsDBUpdate, cached := heartbeatCache.shouldUpdateDatabase(nodeID, now, enhancedHeartbeat.Status, enhancedHeartbeat.MCPServers)
+		needsDBUpdate, cached := heartbeatCache.shouldUpdateDatabase(nodeID, now, enhancedHeartbeat.Status)
 
 		if needsDBUpdate {
 			// Verify node exists only when we need to update DB.
@@ -888,7 +900,7 @@ func HeartbeatHandler(storageProvider storage.StorageProvider, uiService *servic
 		}
 
 		// Process enhanced heartbeat data through unified status system
-		if statusManager != nil && (enhancedHeartbeat.Status != "" || len(enhancedHeartbeat.MCPServers) > 0 || enhancedHeartbeat.HealthScore != nil) {
+		if statusManager != nil && (enhancedHeartbeat.Status != "" || enhancedHeartbeat.HealthScore != nil) {
 			// Prepare lifecycle status
 			var lifecycleStatus *types.AgentLifecycleStatus
 			if enhancedHeartbeat.Status != "" {
@@ -922,44 +934,6 @@ func HeartbeatHandler(storageProvider storage.StorageProvider, uiService *servic
 				}
 			}
 
-			// Prepare MCP status
-			var mcpStatus *types.MCPStatusInfo
-			if len(enhancedHeartbeat.MCPServers) > 0 {
-				totalServers := len(enhancedHeartbeat.MCPServers)
-				runningServers := 0
-				totalTools := 0
-
-				for _, server := range enhancedHeartbeat.MCPServers {
-					if server.Status == "running" {
-						runningServers++
-					}
-					totalTools += server.ToolCount
-				}
-
-				// Calculate overall health based on running servers
-				overallHealth := 0.0
-				if totalServers > 0 {
-					overallHealth = float64(runningServers) / float64(totalServers)
-				}
-
-				// Determine service status
-				serviceStatus := "unavailable"
-				if overallHealth >= 0.9 {
-					serviceStatus = "ready"
-				} else if overallHealth >= 0.5 {
-					serviceStatus = "degraded"
-				}
-
-				mcpStatus = &types.MCPStatusInfo{
-					TotalServers:   totalServers,
-					RunningServers: runningServers,
-					TotalTools:     totalTools,
-					OverallHealth:  overallHealth,
-					ServiceStatus:  serviceStatus,
-					LastChecked:    now,
-				}
-			}
-
 			// Resolve version from DB record when available, fall back to heartbeat payload
 			resolvedVersion := enhancedHeartbeat.Version
 			if existingNode != nil {
@@ -967,7 +941,7 @@ func HeartbeatHandler(storageProvider storage.StorageProvider, uiService *servic
 			}
 
 			// Update status through unified system
-			if err := statusManager.UpdateFromHeartbeat(ctx, nodeID, lifecycleStatus, mcpStatus, resolvedVersion); err != nil {
+			if err := statusManager.UpdateFromHeartbeat(ctx, nodeID, lifecycleStatus, resolvedVersion); err != nil {
 				logger.Logger.Error().Err(err).Msgf("❌ Failed to update unified status for node %s", nodeID)
 				// Continue processing - don't fail the heartbeat
 			}
@@ -1054,10 +1028,6 @@ func UpdateLifecycleStatusHandler(storageProvider storage.StorageProvider, uiSer
 
 		var statusUpdate struct {
 			LifecycleStatus string `json:"lifecycle_status" binding:"required"`
-			MCPServers      *struct {
-				Total   int `json:"total"`
-				Running int `json:"running"`
-			} `json:"mcp_servers,omitempty"`
 		}
 
 		if err := c.ShouldBindJSON(&statusUpdate); err != nil {
@@ -1096,34 +1066,9 @@ func UpdateLifecycleStatusHandler(storageProvider storage.StorageProvider, uiSer
 			return
 		}
 
-		// Prepare MCP status if provided
-		var mcpStatus *types.MCPStatusInfo
-		if statusUpdate.MCPServers != nil {
-			overallHealth := 0.0
-			serviceStatus := "unavailable"
-
-			if statusUpdate.MCPServers.Total > 0 {
-				overallHealth = float64(statusUpdate.MCPServers.Running) / float64(statusUpdate.MCPServers.Total)
-				if overallHealth >= 0.9 {
-					serviceStatus = "ready"
-				} else if overallHealth >= 0.5 {
-					serviceStatus = "degraded"
-				}
-			}
-
-			mcpStatus = &types.MCPStatusInfo{
-				TotalServers:   statusUpdate.MCPServers.Total,
-				RunningServers: statusUpdate.MCPServers.Running,
-				TotalTools:     0, // Not provided in this endpoint
-				OverallHealth:  overallHealth,
-				ServiceStatus:  serviceStatus,
-				LastChecked:    time.Now(),
-			}
-		}
-
 		// Update through unified status system if available
 		if statusManager != nil {
-			if err := statusManager.UpdateFromHeartbeat(ctx, nodeID, &newLifecycleStatus, mcpStatus, ""); err != nil {
+			if err := statusManager.UpdateFromHeartbeat(ctx, nodeID, &newLifecycleStatus, ""); err != nil {
 				logger.Logger.Error().Err(err).Msgf("❌ Failed to update unified status for node %s", nodeID)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update status"})
 				return
@@ -1329,7 +1274,7 @@ func BulkNodeStatusHandler(statusManager *services.StatusManager, storageProvide
 
 // RegisterServerlessAgentHandler handles the registration of a serverless agent node
 // by discovering its capabilities via the /discover endpoint
-func RegisterServerlessAgentHandler(storageProvider storage.StorageProvider, uiService *services.UIService, didService *services.DIDService, presenceManager *services.PresenceManager, didWebService *services.DIDWebService) gin.HandlerFunc {
+func RegisterServerlessAgentHandler(storageProvider storage.StorageProvider, uiService *services.UIService, didService *services.DIDService, presenceManager *services.PresenceManager, didWebService *services.DIDWebService, allowedDiscoveryHosts []string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 
@@ -1349,21 +1294,26 @@ func RegisterServerlessAgentHandler(storageProvider storage.StorageProvider, uiS
 			return
 		}
 
-		logger.Logger.Info().Msgf("🔍 Discovering serverless agent at: %s", req.InvocationURL)
-
-		// Normalize 0.0.0.0 to localhost for discovery
-		// 0.0.0.0 is not a valid address for making HTTP requests
-		normalizedURL := req.InvocationURL
-		if strings.Contains(normalizedURL, "://0.0.0.0") {
-			normalizedURL = strings.Replace(normalizedURL, "://0.0.0.0", "://localhost", 1)
-			logger.Logger.Info().Msgf("🔄 Normalized invocation URL from %s to %s for discovery", req.InvocationURL, normalizedURL)
+		normalizedURL, err := normalizeServerlessDiscoveryURL(req.InvocationURL, allowedDiscoveryHosts)
+		if err != nil {
+			logger.Logger.Warn().Err(err).Msgf("❌ Rejected serverless discovery URL: %s", req.InvocationURL)
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "Invalid invocation_url",
+				"details": err.Error(),
+			})
+			return
 		}
+
+		logger.Logger.Info().Msgf("🔍 Discovering serverless agent at: %s", normalizedURL)
 
 		// Call the discovery endpoint using normalized URL
 		discoveryURL := strings.TrimSuffix(normalizedURL, "/") + "/discover"
 
 		client := &http.Client{
 			Timeout: 10 * time.Second,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 		}
 
 		discoveryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -1417,6 +1367,7 @@ func RegisterServerlessAgentHandler(storageProvider storage.StorageProvider, uiS
 				Description  string                 `json:"description"`
 				InputSchema  map[string]interface{} `json:"input_schema"`
 				OutputSchema map[string]interface{} `json:"output_schema"`
+				Tags         []string               `json:"tags"`
 			} `json:"skills"`
 		}
 
@@ -1453,13 +1404,18 @@ func RegisterServerlessAgentHandler(storageProvider storage.StorageProvider, uiS
 			}
 		}
 
-		// Convert discovered skills to AgentNode format
+		// Convert discovered skills to AgentNode format. Tags must be copied
+		// here so the re-registration preservation path below (which filters
+		// Skills[].Tags against existingNode.ApprovedTags) can actually do
+		// its job; without this, skills carried no tags in production and
+		// the preservation loop was silently a no-op for the Skills slice.
 		skills := make([]types.SkillDefinition, len(discoveryData.Skills))
 		for i, s := range discoveryData.Skills {
 			inputSchemaBytes, _ := json.Marshal(s.InputSchema)
 			skills[i] = types.SkillDefinition{
 				ID:          s.ID,
 				InputSchema: json.RawMessage(inputSchemaBytes),
+				Tags:        s.Tags,
 			}
 		}
 
@@ -1487,10 +1443,64 @@ func RegisterServerlessAgentHandler(storageProvider storage.StorageProvider, uiS
 			},
 		}
 
+		// Validate the constructed node before persisting
+		if err := validate.Struct(newNode); err != nil {
+			logger.Logger.Error().Err(err).Msg("❌ Serverless agent validation error")
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Validation failed: " + err.Error()})
+			return
+		}
+
 		// Check if node already exists
 		existingNode, err := storageProvider.GetAgent(ctx, newNode.ID)
 		if err == nil && existingNode != nil {
 			logger.Logger.Warn().Msgf("⚠️ Serverless agent %s already registered, updating...", newNode.ID)
+
+			adminRevoked := existingNode.LifecycleStatus == types.AgentStatusPendingApproval &&
+				len(existingNode.ApprovedTags) == 0
+			if adminRevoked {
+				logger.Logger.Warn().Msgf("⏸️ Rejecting serverless re-registration for node %s: agent is pending_approval (admin action required)", newNode.ID)
+				c.JSON(http.StatusServiceUnavailable, gin.H{
+					"error":   "agent_pending_approval",
+					"message": fmt.Sprintf("agent node '%s' is awaiting tag approval and cannot re-register", existingNode.ID),
+				})
+				return
+			}
+
+			// Preserve existing approval state so re-registration does not clear
+			// approved tags during the UPSERT.
+			//
+			// IMPORTANT: We deliberately do NOT preserve existingNode.LifecycleStatus
+			// here. The serverless node is constructed above with
+			// LifecycleStatus = AgentStatusReady, which is the correct state for a
+			// serverless agent that just completed discovery. Overwriting with a
+			// stale terminal status from a previous row would break downstream
+			// status inference (webhook event type, health monitoring, etc.).
+			newNode.ApprovedTags = existingNode.ApprovedTags
+
+			if len(existingNode.ApprovedTags) > 0 {
+				approvedSet := make(map[string]struct{})
+				for _, t := range existingNode.ApprovedTags {
+					approvedSet[strings.ToLower(strings.TrimSpace(t))] = struct{}{}
+				}
+				for i := range newNode.Reasoners {
+					var approved []string
+					for _, t := range newNode.Reasoners[i].Tags {
+						if _, ok := approvedSet[strings.ToLower(strings.TrimSpace(t))]; ok {
+							approved = append(approved, t)
+						}
+					}
+					newNode.Reasoners[i].ApprovedTags = approved
+				}
+				for i := range newNode.Skills {
+					var approved []string
+					for _, t := range newNode.Skills[i].Tags {
+						if _, ok := approvedSet[strings.ToLower(strings.TrimSpace(t))]; ok {
+							approved = append(approved, t)
+						}
+					}
+					newNode.Skills[i].ApprovedTags = approved
+				}
+			}
 		}
 
 		// Register the node

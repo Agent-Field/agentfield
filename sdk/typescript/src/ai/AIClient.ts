@@ -97,15 +97,11 @@ export class AIClient {
 
     if (options.schema) {
       const schema = options.schema;
-      // Default to 'json' mode for better compatibility across providers
-      // 'auto' mode uses tool calling which some models/providers don't support well
-      const mode = options.mode ?? 'json';
       const call = async () =>
         generateObject({
           model: model,
           prompt,
           output: 'object',
-          mode,
           system: options.system,
           temperature: options.temperature ?? this.config.temperature,
           maxOutputTokens: options.maxTokens ?? this.config.maxTokens,

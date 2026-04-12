@@ -20,7 +20,7 @@ export function ErrorPanel({ execution, onRetry, onViewLogs }: ErrorPanelProps) 
       <CardHeader>
         <div className="flex items-center gap-3">
           <AlertTriangle className="w-5 h-5 text-red-500" />
-          <CardTitle className="text-heading-3 text-red-700 dark:text-red-400">
+          <CardTitle className="text-base font-semibold text-red-700 dark:text-red-400">
             Execution Failed
           </CardTitle>
           {execution.retry_count > 0 && (

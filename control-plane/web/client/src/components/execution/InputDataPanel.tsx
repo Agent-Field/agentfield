@@ -1,15 +1,8 @@
-import { Download, Eye, Code } from "@/components/ui/icon-bridge";
-import { useState } from "react";
+
+import { ArrowDown, Database } from "@/components/ui/icon-bridge";
 import type { WorkflowExecution } from "../../types/executions";
-import { Badge } from "../ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
-import { CopyButton } from "../ui/copy-button";
-import {
-  SegmentedControl,
-  type SegmentedControlOption,
-} from "../ui/segmented-control";
-import { JsonViewer } from "./JsonViewer";
-import { EnhancedJsonViewer } from "../reasoners/EnhancedJsonViewer";
+import { CollapsibleSection } from "./CollapsibleSection";
+import { UnifiedJsonViewer } from "@/components/ui/UnifiedJsonViewer";
 
 interface InputDataPanelProps {
   execution: WorkflowExecution;
@@ -23,63 +16,44 @@ function formatBytes(bytes?: number): string {
   return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${sizes[i]}`;
 }
 
-const DATA_VIEW_OPTIONS: ReadonlyArray<SegmentedControlOption> = [
-  { value: "formatted", label: "Formatted", icon: Eye },
-  { value: "json", label: "JSON", icon: Code },
-] as const;
-
 export function InputDataPanel({ execution }: InputDataPanelProps) {
-  const [viewMode, setViewMode] = useState<"formatted" | "json">("formatted");
-  const jsonString = JSON.stringify(execution.input_data, null, 2);
+  const inputData = execution.input_data;
+  const hasInputData = (() => {
+    if (inputData === null || inputData === undefined) return false;
+    if (typeof inputData === "string") return inputData.trim().length > 0;
+    if (Array.isArray(inputData)) return inputData.length > 0;
+    if (typeof inputData === "object") return Object.keys(inputData).length > 0;
+    return Boolean(inputData);
+  })();
+
+  const badge = (
+    <span className="text-sm text-muted-foreground bg-muted/50 px-2 py-0.5 rounded">
+      {formatBytes(execution.input_size)}
+    </span>
+  );
 
   return (
-    <Card className="h-fit">
-      <CardHeader className="pb-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Download className="w-4 h-4" />
-            <CardTitle className="text-base font-medium">Input Data</CardTitle>
-          </div>
-          <div className="flex items-center gap-2">
-            {/* View Mode Toggle */}
-            <SegmentedControl
-              value={viewMode}
-              onValueChange={(mode) => setViewMode(mode as "formatted" | "json")}
-              options={DATA_VIEW_OPTIONS}
-              size="sm"
-              optionClassName="min-w-[110px]"
-            />
-            <Badge variant="secondary" className="text-xs font-mono">
-              {formatBytes(execution.input_size)}
-            </Badge>
-            <CopyButton
-              value={jsonString}
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6 p-0 hover:bg-muted/80 [&_svg]:h-3 [&_svg]:w-3"
-              tooltip="Copy input JSON"
-            />
-          </div>
+    <CollapsibleSection
+      title="Input Data"
+      icon={ArrowDown}
+      badge={badge}
+      defaultOpen={true}
+      contentClassName="p-0"
+    >
+      {hasInputData ? (
+        <UnifiedJsonViewer
+          data={inputData}
+        />
+      ) : (
+        <div className="p-6 text-center text-muted-foreground">
+          <Database className="w-8 h-8 mx-auto mb-2 opacity-50" />
+          <p className="text-sm">No input data</p>
+          <p className="text-xs mt-1">This execution was started without input parameters</p>
         </div>
-      </CardHeader>
-
-      <CardContent className="pt-0">
-        <div className="border border-border rounded-md">
-          {viewMode === "formatted" ? (
-            <EnhancedJsonViewer
-              data={execution.input_data}
-              className="max-h-96 overflow-auto p-3"
-              maxInlineHeight={300}
-            />
-          ) : (
-            <JsonViewer
-              data={execution.input_data}
-              collapsed={2}
-              className="max-h-96 overflow-auto p-3"
-            />
-          )}
-        </div>
-      </CardContent>
-    </Card>
+      )}
+    </CollapsibleSection>
   );
 }
+
+// Alias for backwards compatibility
+export { InputDataPanel as RedesignedInputDataPanel };

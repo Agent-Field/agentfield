@@ -80,7 +80,7 @@ export function VelocityChart({ timedNodes, className }: VelocityChartProps) {
           <div className="text-primary font-semibold">
             Duration: {data.formattedDuration}
           </div>
-          <div className="text-body-small mt-1">
+          <div className="text-sm text-muted-foreground mt-1">
             ID: {data.executionId.slice(0, 8)}...
           </div>
         </div>
@@ -94,7 +94,7 @@ export function VelocityChart({ timedNodes, className }: VelocityChartProps) {
       <div
         className={`h-32 rounded-lg border border-border/60 bg-gradient-to-b from-muted/40 to-muted/5 flex items-center justify-center ${className}`}
       >
-        <div className="text-body-small">
+        <div className="text-sm text-muted-foreground">
           Not enough temporal data to plot
         </div>
       </div>
@@ -164,10 +164,10 @@ export function VelocityChart({ timedNodes, className }: VelocityChartProps) {
 
       {/* Custom labels positioned outside the chart */}
       <div className="flex justify-between items-center mt-2 px-2">
-        <div className="text-body-small">
+        <div className="text-sm text-muted-foreground">
           Min: {formatDuration(minDuration)}
         </div>
-        <div className="text-body-small">
+        <div className="text-sm text-muted-foreground">
           Max: {formatDuration(maxDuration)}
         </div>
       </div>

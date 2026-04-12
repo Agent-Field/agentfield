@@ -29,6 +29,7 @@ __pycache__/
 .venv/
 .mypy_cache/
 .pytest_cache/
+.hypothesis/
 *.egg-info/
 build/
 dist/
@@ -44,7 +45,11 @@ node_modules/
 # IDE / Tooling
 .idea/
 .vscode/
+.cursor/
 *.code-workspace
+.opencode/
+.agit/
+.claude/worktrees/
 
 # Generated assets
 coverage/
@@ -57,3 +62,4 @@ reports/
 
 # Typescript
 .env
+.plandb.db

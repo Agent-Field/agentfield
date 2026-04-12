@@ -1,4 +1,4 @@
-import { getBezierPath, useInternalNode, EdgeLabelRenderer } from "@xyflow/react";
+import { getBezierPath, useInternalNode, EdgeLabelRenderer, Position } from "@xyflow/react";
 import { normalizeExecutionStatus } from "../../utils/status";
 import { getEdgeParams } from "./EdgeUtils";
 
@@ -8,6 +8,12 @@ interface FloatingEdgeProps {
   target: string;
   markerEnd?: string;
   style?: React.CSSProperties;
+  // React Flow always injects these default handle coords — use them as fallback
+  // when the internal node isn't measured yet.
+  sourceX?: number;
+  sourceY?: number;
+  targetX?: number;
+  targetY?: number;
   data?: {
     status?: string;
     duration?: number;
@@ -16,18 +22,25 @@ interface FloatingEdgeProps {
   };
 }
 
-function FloatingEdge({ id, source, target, style = {}, data }: FloatingEdgeProps) {
+function FloatingEdge({ id, source, target, style = {}, data, sourceX = 0, sourceY = 0, targetX = 0, targetY = 0 }: FloatingEdgeProps) {
   const sourceNode = useInternalNode(source);
   const targetNode = useInternalNode(target);
 
-  if (!sourceNode || !targetNode) {
-    return null;
-  }
+  // Derive path coordinates: prefer floating intersection math when both
+  // internal nodes are available (gives cleaner edge routing), otherwise fall
+  // back to the default handle positions React Flow injects so edges are
+  // visible even before the first layout/measure cycle completes.
+  let sx: number, sy: number, tx: number, ty: number;
+  let sourcePos: Position, targetPos: Position;
 
-  const { sx, sy, tx, ty, sourcePos, targetPos } = getEdgeParams(
-    sourceNode,
-    targetNode,
-  );
+  if (sourceNode && targetNode) {
+    const params = getEdgeParams(sourceNode, targetNode);
+    sx = params.sx; sy = params.sy; tx = params.tx; ty = params.ty;
+    sourcePos = params.sourcePos; targetPos = params.targetPos;
+  } else {
+    sx = sourceX; sy = sourceY; tx = targetX; ty = targetY;
+    sourcePos = Position.Bottom; targetPos = Position.Top;
+  }
 
   const [edgePath, labelX, labelY] = getBezierPath({
     sourceX: sx,
@@ -47,25 +60,33 @@ function FloatingEdge({ id, source, target, style = {}, data }: FloatingEdgeProp
   const getStatusStyle = () => {
     const baseStyle = {
       stroke: (() => {
+        // CSS vars store raw HSL components (e.g. "142 76% 36%"), so we must
+        // wrap them in hsl() for SVG stroke attributes. The status here is the
+        // edge's OWN canonical status — never propagated from a parent run, so
+        // a child can be running blue even when the root is cancelled.
         switch (canonicalStatus) {
           case "succeeded":
-            return "var(--status-success)";
+            return "hsl(var(--status-success))";
           case "failed":
-            return "var(--status-error)";
+            return "hsl(var(--status-error))";
           case "running":
-            return "var(--status-info)";
+            return "hsl(var(--status-info))";
+          case "paused":
+          case "waiting":
           case "pending":
           case "queued":
-            return "var(--status-warning)";
+            return "hsl(var(--status-warning))";
+          case "cancelled":
+            return "hsl(var(--muted-foreground))";
           default:
-            return "color-mix(in srgb, var(--muted-foreground) 65%, transparent)";
+            return "hsl(var(--muted-foreground))";
         }
       })(),
       strokeWidth: 2,
       strokeLinecap: "round" as const,
       strokeLinejoin: "round" as const,
       filter:
-        "drop-shadow(0 1px 2px color-mix(in srgb, var(--foreground) 12%, transparent))",
+        "drop-shadow(0 1px 2px rgba(255,255,255,0.08))",
     };
 
     switch (canonicalStatus) {
@@ -87,12 +108,21 @@ function FloatingEdge({ id, source, target, style = {}, data }: FloatingEdgeProp
           strokeDasharray: "12,8",
           animation: "dash 2s linear infinite",
         };
+      case "paused":
+      case "waiting":
       case "pending":
       case "queued":
         return {
           ...baseStyle,
           strokeWidth: 2,
           opacity: 0.7,
+        };
+      case "cancelled":
+        return {
+          ...baseStyle,
+          strokeWidth: 2,
+          strokeDasharray: "4,4",
+          opacity: 0.55,
         };
       default:
         return {
@@ -116,17 +146,17 @@ function FloatingEdge({ id, source, target, style = {}, data }: FloatingEdgeProp
   } else if (emphasis === 'focus') {
     edgeStyle.opacity = 1;
     edgeStyle.strokeWidth = Math.max(Number(edgeStyle.strokeWidth ?? 2.5), 3.6);
-    edgeStyle.filter = `${edgeStyle.filter || ''} drop-shadow(0 0 6px color-mix(in srgb, var(--status-success) 45%, transparent))`.trim();
+    edgeStyle.filter = `${edgeStyle.filter || ''} drop-shadow(0 0 6px rgba(34,197,94,0.4))`.trim();
   } else if (emphasis === 'search') {
     edgeStyle.opacity = Math.max(Number(edgeStyle.opacity ?? 0.85), 0.9);
     edgeStyle.strokeWidth = Math.max(Number(edgeStyle.strokeWidth ?? 2.4), 3);
-    edgeStyle.filter = `${edgeStyle.filter || ''} drop-shadow(0 0 6px color-mix(in srgb, var(--status-info) 40%, transparent))`.trim();
+    edgeStyle.filter = `${edgeStyle.filter || ''} drop-shadow(0 0 6px rgba(59,130,246,0.4))`.trim();
   }
 
-  // Enhanced marker end
-  const markerKey = canonicalStatus;
+  // Use edge id in marker id to avoid duplicate-id conflicts across edges
+  const markerKey = `${id}-${canonicalStatus}`;
   const enhancedMarkerEnd = `url(#arrowclosed-${markerKey})`;
-  const strokeColor = (edgeStyle.stroke as string) || "var(--muted-foreground)";
+  const strokeColor = (edgeStyle.stroke as string) || "hsl(var(--muted-foreground))";
 
   return (
     <>
@@ -168,7 +198,7 @@ function FloatingEdge({ id, source, target, style = {}, data }: FloatingEdgeProp
             }}
             className="nodrag nopan"
           >
-            <div className="rounded border border-border bg-card px-1.5 py-0.5 font-mono text-body-small shadow-sm backdrop-blur-sm">
+            <div className="rounded border border-border bg-card px-1.5 py-0.5 font-mono text-sm text-muted-foreground shadow-sm backdrop-blur-sm">
               {duration < 1000
                 ? `${duration}ms`
                 : `${(duration / 1000).toFixed(1)}s`}

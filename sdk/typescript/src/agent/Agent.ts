@@ -38,12 +38,19 @@ import { matchesPattern } from '../utils/pattern.js';
 import { toJsonSchema } from '../utils/schema.js';
 import { WorkflowReporter } from '../workflow/WorkflowReporter.js';
 import type { DiscoveryOptions } from '../types/agent.js';
-import type { MCPToolRegistration } from '../types/mcp.js';
-import { MCPClientRegistry } from '../mcp/MCPClientRegistry.js';
-import { MCPToolRegistrar } from '../mcp/MCPToolRegistrar.js';
+import {
+  createExecutionLogger,
+  type ExecutionLogContext,
+  type ExecutionLogger
+} from '../observability/ExecutionLogger.js';
 import { LocalVerifier } from '../verification/LocalVerifier.js';
 import type { Request, Response } from 'express';
 import type { ParamsDictionary } from 'express-serve-static-core';
+import {
+  installStdioLogCapture,
+  ProcessLogRing,
+  registerAgentfieldLogsRoute
+} from './processLogs.js';
 
 interface WildcardParams extends ParamsDictionary {
   0: string;
@@ -82,27 +89,19 @@ export class Agent {
   private readonly didClient: DidClient;
   private readonly didManager: DidManager;
   private readonly memoryWatchers: Array<{ pattern: string; handler: MemoryWatchHandler; scope?: string; scopeId?: string }> = [];
-  private readonly mcpClientRegistry?: MCPClientRegistry;
-  private readonly mcpToolRegistrar?: MCPToolRegistrar;
   private readonly localVerifier?: LocalVerifier;
   private readonly realtimeValidationFunctions = new Set<string>();
+  private readonly processLogRing = new ProcessLogRing();
+  private readonly executionLogger: ExecutionLogger;
 
   constructor(config: AgentConfig) {
-    const mcp = config.mcp
-      ? {
-          autoRegisterTools: config.mcp.autoRegisterTools ?? true,
-          ...config.mcp
-        }
-      : undefined;
-
     this.config = {
       port: 8001,
       agentFieldUrl: 'http://localhost:8080',
       host: '0.0.0.0',
       ...config,
       didEnabled: config.didEnabled ?? true,
-      deploymentType: config.deploymentType ?? 'long_running',
-      mcp
+      deploymentType: config.deploymentType ?? 'long_running'
     };
 
     this.app = express();
@@ -114,17 +113,14 @@ export class Agent {
     this.memoryEventClient = new MemoryEventClient(this.config.agentFieldUrl!, this.config.defaultHeaders);
     this.didClient = new DidClient(this.config.agentFieldUrl!, this.config.defaultHeaders);
     this.didManager = new DidManager(this.didClient, this.config.nodeId);
+    this.executionLogger = createExecutionLogger({
+      contextProvider: () => this.buildExecutionLogContext(),
+      transport: {
+        emit: (payload) => this.agentFieldClient.publishExecutionLogs(payload)
+      }
+    });
     this.memoryEventClient.onEvent((event) => this.dispatchMemoryEvent(event));
 
-    if (this.config.mcp?.servers?.length) {
-      this.mcpClientRegistry = new MCPClientRegistry(this.config.devMode);
-      this.mcpToolRegistrar = new MCPToolRegistrar(this, this.mcpClientRegistry, {
-        namespace: this.config.mcp.namespace,
-        tags: this.config.mcp.tags,
-        devMode: this.config.devMode
-      });
-      this.mcpToolRegistrar.registerServers(this.config.mcp.servers);
-    }
 
     // Initialize local verifier for decentralized verification
     if (this.config.localVerification && this.config.agentFieldUrl) {
@@ -137,6 +133,8 @@ export class Agent {
     }
 
     this.registerDefaultRoutes();
+    installStdioLogCapture(this.processLogRing);
+    registerAgentfieldLogsRoute(this.app, this.processLogRing);
   }
 
   reasoner<TInput = any, TOutput = any>(
@@ -193,13 +191,12 @@ export class Agent {
     return this.agentFieldClient.discoverCapabilities(options);
   }
 
-  async registerMcpTools(): Promise<{ registered: MCPToolRegistration[] }> {
-    if (!this.mcpToolRegistrar) return { registered: [] };
-    return this.mcpToolRegistrar.registerAll();
-  }
-
   getAIClient() {
     return this.aiClient;
+  }
+
+  getExecutionLogger() {
+    return this.executionLogger;
   }
 
   async getHarnessRunner(): Promise<HarnessRunner> {
@@ -250,7 +247,8 @@ export class Agent {
       executionId: metadata.executionId,
       runId: metadata.runId,
       workflowId: metadata.workflowId,
-      agentNodeId: this.config.nodeId
+      agentNodeId: this.config.nodeId,
+      reasonerId: metadata.reasonerId
     });
   }
 
@@ -295,17 +293,27 @@ export class Agent {
     this.agentFieldClient.sendNote(message, tags, this.config.nodeId, execMetadata, uiApiUrl, this.config.devMode);
   }
 
-  async serve(): Promise<void> {
-    if (this.config.mcp?.autoRegisterTools !== false) {
-      try {
-        await this.registerMcpTools();
-      } catch (err) {
-        if (this.config.devMode) {
-          console.warn('MCP tool registration failed', err);
-        }
-      }
-    }
+  private buildExecutionLogContext(metadata?: ExecutionMetadata): ExecutionLogContext | undefined {
+    const current = metadata ?? ExecutionContext.getCurrent()?.metadata;
+    if (!current) return undefined;
 
+    return {
+      executionId: current.executionId,
+      runId: current.runId,
+      workflowId: current.workflowId,
+      rootWorkflowId: current.rootWorkflowId ?? current.workflowId ?? current.runId ?? current.executionId,
+      parentExecutionId: current.parentExecutionId,
+      sessionId: current.sessionId,
+      actorId: current.actorId,
+      agentNodeId: this.config.nodeId,
+      reasonerId: current.reasonerId,
+      callerDid: current.callerDid,
+      targetDid: current.targetDid,
+      agentNodeDid: current.agentNodeDid
+    };
+  }
+
+  async serve(): Promise<void> {
     await this.registerWithControlPlane();
 
     // Perform a blocking initial refresh for local verification before accepting requests
@@ -348,17 +356,20 @@ export class Agent {
 
   async call(target: string, input: any) {
     const { agentId, name } = this.parseTarget(target);
+    const parentMetadata = ExecutionContext.getCurrent()?.metadata;
     if (!agentId || agentId === this.config.nodeId) {
       const local = this.reasoners.get(name);
       if (!local) throw new Error(`Reasoner not found: ${name}`);
-      const parentMetadata = ExecutionContext.getCurrent()?.metadata;
       const runId = parentMetadata?.runId ?? parentMetadata?.executionId ?? randomUUID();
+      const rootWorkflowId = parentMetadata?.rootWorkflowId ?? parentMetadata?.workflowId ?? runId;
       const metadata = {
         ...parentMetadata,
         executionId: randomUUID(),
         parentExecutionId: parentMetadata?.executionId,
         runId,
-        workflowId: parentMetadata?.workflowId ?? runId
+        workflowId: parentMetadata?.workflowId ?? runId,
+        rootWorkflowId,
+        reasonerId: name
       };
       const dummyReq = {} as express.Request;
       const dummyRes = {} as express.Response;
@@ -373,12 +384,22 @@ export class Agent {
         agent: this
       });
       const startTime = Date.now();
+      this.executionLogger.system('agent.call.started', 'Local agent call started', {
+        target,
+        reasonerId: name,
+        executionId: metadata.executionId,
+        parentExecutionId: metadata.parentExecutionId,
+        runId: metadata.runId,
+        workflowId: metadata.workflowId,
+        rootWorkflowId: metadata.rootWorkflowId
+      });
 
       const emitEvent = async (status: 'running' | 'succeeded' | 'failed', payload: any) => {
         await this.agentFieldClient.publishWorkflowEvent({
           executionId: execCtx.metadata.executionId,
           runId: execCtx.metadata.runId ?? execCtx.metadata.executionId,
           workflowId: execCtx.metadata.workflowId,
+          rootWorkflowId: execCtx.metadata.rootWorkflowId,
           reasonerId: name,
           agentNodeId: this.config.nodeId,
           status,
@@ -394,6 +415,22 @@ export class Agent {
       await emitEvent('running', null);
 
       return ExecutionContext.run(execCtx, async () => {
+        this.executionLogger.system('execution.started', 'Execution started', {
+          target,
+          reasonerId: name,
+          executionId: execCtx.metadata.executionId,
+          parentExecutionId: execCtx.metadata.parentExecutionId,
+          runId: execCtx.metadata.runId,
+          workflowId: execCtx.metadata.workflowId,
+          rootWorkflowId: execCtx.metadata.rootWorkflowId
+        });
+        this.executionLogger.system('reasoner.started', 'Reasoner execution started', {
+          target: name,
+          executionId: execCtx.metadata.executionId,
+          runId: execCtx.metadata.runId,
+          workflowId: execCtx.metadata.workflowId,
+          rootWorkflowId: execCtx.metadata.rootWorkflowId
+        });
         try {
           const result = await local.handler(
             new ReasonerContext({
@@ -403,40 +440,156 @@ export class Agent {
               sessionId: execCtx.metadata.sessionId,
               actorId: execCtx.metadata.actorId,
               workflowId: execCtx.metadata.workflowId,
+              rootWorkflowId: execCtx.metadata.rootWorkflowId,
               parentExecutionId: execCtx.metadata.parentExecutionId,
+              reasonerId: name,
               callerDid: execCtx.metadata.callerDid,
               targetDid: execCtx.metadata.targetDid,
               agentNodeDid: execCtx.metadata.agentNodeDid,
               req: dummyReq,
               res: dummyRes,
               agent: this,
+              logger: this.executionLogger,
               aiClient: this.aiClient,
               memory: this.getMemoryInterface(execCtx.metadata),
               workflow: this.getWorkflowReporter(execCtx.metadata),
               did: this.getDidInterface(execCtx.metadata, input, name)
             })
           );
+          this.executionLogger.system('reasoner.completed', 'Reasoner execution completed', {
+            target: name,
+            executionId: execCtx.metadata.executionId,
+            runId: execCtx.metadata.runId,
+            workflowId: execCtx.metadata.workflowId,
+            rootWorkflowId: execCtx.metadata.rootWorkflowId,
+            durationMs: Date.now() - startTime
+          });
+          this.executionLogger.system('execution.completed', 'Execution completed', {
+            target,
+            reasonerId: name,
+            executionId: execCtx.metadata.executionId,
+            runId: execCtx.metadata.runId,
+            workflowId: execCtx.metadata.workflowId,
+            rootWorkflowId: execCtx.metadata.rootWorkflowId,
+            durationMs: Date.now() - startTime
+          });
+          this.executionLogger.system('agent.call.completed', 'Local agent call completed', {
+            target,
+            reasonerId: name,
+            executionId: execCtx.metadata.executionId,
+            runId: execCtx.metadata.runId,
+            workflowId: execCtx.metadata.workflowId,
+            rootWorkflowId: execCtx.metadata.rootWorkflowId,
+            durationMs: Date.now() - startTime
+          });
           await emitEvent('succeeded', result);
           return result;
         } catch (err) {
+          this.executionLogger.error('Reasoner execution failed', {
+            target: name,
+            executionId: execCtx.metadata.executionId,
+            runId: execCtx.metadata.runId,
+            workflowId: execCtx.metadata.workflowId,
+            rootWorkflowId: execCtx.metadata.rootWorkflowId,
+            durationMs: Date.now() - startTime,
+            error: err instanceof Error ? err.message : String(err)
+          }, {
+            eventType: 'reasoner.failed',
+            source: 'sdk.runtime',
+            systemGenerated: true
+          });
+          this.executionLogger.error('Execution failed', {
+            target,
+            reasonerId: name,
+            executionId: execCtx.metadata.executionId,
+            runId: execCtx.metadata.runId,
+            workflowId: execCtx.metadata.workflowId,
+            rootWorkflowId: execCtx.metadata.rootWorkflowId,
+            durationMs: Date.now() - startTime,
+            error: err instanceof Error ? err.message : String(err)
+          }, {
+            eventType: 'execution.failed',
+            source: 'sdk.runtime',
+            systemGenerated: true
+          });
+          this.executionLogger.error('Local agent call failed', {
+            target,
+            reasonerId: name,
+            executionId: execCtx.metadata.executionId,
+            runId: execCtx.metadata.runId,
+            workflowId: execCtx.metadata.workflowId,
+            rootWorkflowId: execCtx.metadata.rootWorkflowId,
+            durationMs: Date.now() - startTime,
+            error: err instanceof Error ? err.message : String(err)
+          }, {
+            eventType: 'agent.call.failed',
+            source: 'sdk.runtime',
+            systemGenerated: true
+          });
           await emitEvent('failed', err);
           throw err;
         }
       });
     }
 
-    const metadata = ExecutionContext.getCurrent()?.metadata;
-    return this.agentFieldClient.execute(target, input, {
-      runId: metadata?.runId ?? metadata?.executionId,
-      workflowId: metadata?.workflowId ?? metadata?.runId,
-      parentExecutionId: metadata?.executionId,
-      sessionId: metadata?.sessionId,
-      actorId: metadata?.actorId,
-      callerDid: metadata?.callerDid,
-      targetDid: metadata?.targetDid,
-      agentNodeDid: metadata?.agentNodeDid,
-      agentNodeId: this.config.nodeId
+    const executionId = parentMetadata?.executionId ?? randomUUID();
+    const runId = parentMetadata?.runId ?? parentMetadata?.executionId ?? executionId;
+    const workflowId = parentMetadata?.workflowId ?? runId;
+    const rootWorkflowId = parentMetadata?.rootWorkflowId ?? workflowId;
+    this.executionLogger.system('agent.call.started', 'Remote agent call started', {
+      target,
+      agentNodeId: agentId,
+      executionId,
+      parentExecutionId: parentMetadata?.executionId,
+      runId,
+      workflowId,
+      rootWorkflowId,
+      reasonerId: name
     });
+
+    try {
+      const result = await this.agentFieldClient.execute(target, input, {
+        runId,
+        workflowId,
+        rootWorkflowId,
+        parentExecutionId: parentMetadata?.executionId,
+        reasonerId: name,
+        sessionId: parentMetadata?.sessionId,
+        actorId: parentMetadata?.actorId,
+        callerDid: parentMetadata?.callerDid,
+        targetDid: parentMetadata?.targetDid,
+        agentNodeDid: parentMetadata?.agentNodeDid,
+        agentNodeId: this.config.nodeId
+      });
+      this.executionLogger.system('agent.call.completed', 'Remote agent call completed', {
+        target,
+        agentNodeId: agentId,
+        executionId,
+        parentExecutionId: parentMetadata?.executionId,
+        runId,
+        workflowId,
+        rootWorkflowId,
+        reasonerId: name
+      });
+      return result;
+    } catch (err) {
+      this.executionLogger.error('Remote agent call failed', {
+        target,
+        agentNodeId: agentId,
+        executionId,
+        parentExecutionId: parentMetadata?.executionId,
+        runId,
+        workflowId,
+        rootWorkflowId,
+        reasonerId: name,
+        error: err instanceof Error ? err.message : String(err)
+      }, {
+        eventType: 'agent.call.failed',
+        source: 'sdk.runtime',
+        systemGenerated: true
+      });
+      throw err;
+    }
   }
 
   private registerDefaultRoutes() {
@@ -447,25 +600,6 @@ export class Agent {
     // Discovery endpoint used for serverless registration (mirrors Python behaviour)
     this.app.get('/discover', (_req, res) => {
       res.json(this.discoveryPayload(this.config.deploymentType ?? 'long_running'));
-    });
-
-    // MCP health probe expected by control-plane UI
-    this.app.get('/health/mcp', async (_req, res) => {
-      if (!this.mcpClientRegistry) {
-        res.json({ status: 'disabled', totalServers: 0, healthyServers: 0, servers: [] });
-        return;
-      }
-
-      try {
-        const summary = await this.mcpClientRegistry.healthSummary();
-        res.json(summary);
-      } catch (err: any) {
-        res.status(500).json({ status: 'error', error: err?.message ?? 'MCP health check failed' });
-      }
-    });
-
-    this.app.get('/mcp/status', (_req, res) => {
-      res.json(this.mcpStatus());
     });
 
     this.app.get('/status', (_req, res) => {
@@ -742,14 +876,18 @@ export class Agent {
     const executionId = overrides?.executionId ?? normalized['x-execution-id'] ?? randomUUID();
     const runId = overrides?.runId ?? normalized['x-run-id'] ?? executionId;
     const workflowId = overrides?.workflowId ?? normalized['x-workflow-id'] ?? runId;
+    const rootWorkflowId =
+      overrides?.rootWorkflowId ?? normalized['x-root-workflow-id'] ?? workflowId;
 
     return {
       executionId,
       runId,
       workflowId,
+      rootWorkflowId,
       sessionId: overrides?.sessionId ?? normalized['x-session-id'],
       actorId: overrides?.actorId ?? normalized['x-actor-id'],
       parentExecutionId: overrides?.parentExecutionId ?? normalized['x-parent-execution-id'],
+      reasonerId: overrides?.reasonerId ?? normalized['x-reasoner-id'],
       callerDid: overrides?.callerDid ?? normalized['x-caller-did'],
       targetDid: overrides?.targetDid ?? normalized['x-target-did'],
       agentNodeDid:
@@ -839,6 +977,37 @@ export class Agent {
   private mergeExecutionContext(event: ServerlessEvent): Partial<ExecutionMetadata> {
     const rawCtx = event?.executionContext ?? event?.execution_context;
     return rawCtx ? normalizeExecutionContext(rawCtx) : {};
+    const ctx = (event?.executionContext ?? (event as any)?.execution_context) as Partial<
+      ExecutionMetadata & {
+        execution_id?: string;
+        run_id?: string;
+        workflow_id?: string;
+        root_workflow_id?: string;
+        parent_execution_id?: string;
+        reasoner_id?: string;
+        session_id?: string;
+        actor_id?: string;
+        caller_did?: string;
+        target_did?: string;
+        agent_node_did?: string;
+      }
+    >;
+
+    if (!ctx) return {};
+
+    return {
+      executionId: (ctx as any).executionId ?? ctx.execution_id ?? ctx.executionId,
+      runId: ctx.runId ?? (ctx as any).run_id,
+      workflowId: ctx.workflowId ?? (ctx as any).workflow_id,
+      rootWorkflowId: ctx.rootWorkflowId ?? (ctx as any).root_workflow_id,
+      parentExecutionId: ctx.parentExecutionId ?? (ctx as any).parent_execution_id,
+      reasonerId: ctx.reasonerId ?? (ctx as any).reasoner_id,
+      sessionId: ctx.sessionId ?? (ctx as any).session_id,
+      actorId: ctx.actorId ?? (ctx as any).actor_id,
+      callerDid: (ctx as any).callerDid ?? (ctx as any).caller_did,
+      targetDid: (ctx as any).targetDid ?? (ctx as any).target_did,
+      agentNodeDid: (ctx as any).agentNodeDid ?? (ctx as any).agent_node_did
+    };
   }
 
   private extractInvocationDetails(params: {
@@ -1035,43 +1204,110 @@ export class Agent {
   ) {
     const req = params.req ?? ({} as express.Request);
     const res = params.res ?? ({} as express.Response);
+    const executionMetadata: ExecutionMetadata = {
+      ...params.metadata,
+      rootWorkflowId:
+        params.metadata.rootWorkflowId ?? params.metadata.workflowId ?? params.metadata.runId ?? params.metadata.executionId,
+      reasonerId: params.metadata.reasonerId ?? params.targetName
+    };
     const execCtx = new ExecutionContext({
       input: params.input,
-      metadata: params.metadata,
+      metadata: executionMetadata,
       req,
       res,
       agent: this
     });
 
     return ExecutionContext.run(execCtx, async () => {
+      this.executionLogger.system('execution.started', 'Execution started', {
+        target: params.targetName,
+        reasonerId: executionMetadata.reasonerId,
+        executionId: executionMetadata.executionId,
+        parentExecutionId: executionMetadata.parentExecutionId,
+        runId: executionMetadata.runId,
+        workflowId: executionMetadata.workflowId,
+        rootWorkflowId: executionMetadata.rootWorkflowId
+      });
+      this.executionLogger.system('reasoner.started', 'Reasoner execution started', {
+        target: params.targetName,
+        executionId: executionMetadata.executionId,
+        runId: executionMetadata.runId,
+        workflowId: executionMetadata.workflowId,
+        rootWorkflowId: executionMetadata.rootWorkflowId
+      });
       try {
         const ctx = new ReasonerContext({
           input: params.input,
-          executionId: params.metadata.executionId,
-          runId: params.metadata.runId,
-          sessionId: params.metadata.sessionId,
-          actorId: params.metadata.actorId,
-          workflowId: params.metadata.workflowId,
-          parentExecutionId: params.metadata.parentExecutionId,
-          callerDid: params.metadata.callerDid,
-          targetDid: params.metadata.targetDid,
-          agentNodeDid: params.metadata.agentNodeDid,
+          executionId: executionMetadata.executionId,
+          runId: executionMetadata.runId,
+          sessionId: executionMetadata.sessionId,
+          actorId: executionMetadata.actorId,
+          workflowId: executionMetadata.workflowId,
+          rootWorkflowId: executionMetadata.rootWorkflowId,
+          parentExecutionId: executionMetadata.parentExecutionId,
+          reasonerId: executionMetadata.reasonerId,
+          callerDid: executionMetadata.callerDid,
+          targetDid: executionMetadata.targetDid,
+          agentNodeDid: executionMetadata.agentNodeDid,
           req,
           res,
           agent: this,
+          logger: this.executionLogger,
           aiClient: this.aiClient,
-          memory: this.getMemoryInterface(params.metadata),
-          workflow: this.getWorkflowReporter(params.metadata),
-          did: this.getDidInterface(params.metadata, params.input, params.targetName)
+          memory: this.getMemoryInterface(executionMetadata),
+          workflow: this.getWorkflowReporter(executionMetadata),
+          did: this.getDidInterface(executionMetadata, params.input, params.targetName)
         });
 
         const result = await reasoner.handler(ctx);
+        this.executionLogger.system('reasoner.completed', 'Reasoner execution completed', {
+          target: params.targetName,
+          executionId: executionMetadata.executionId,
+          runId: executionMetadata.runId,
+          workflowId: executionMetadata.workflowId,
+          rootWorkflowId: executionMetadata.rootWorkflowId
+        });
+        this.executionLogger.system('execution.completed', 'Execution completed', {
+          target: params.targetName,
+          reasonerId: executionMetadata.reasonerId,
+          executionId: executionMetadata.executionId,
+          runId: executionMetadata.runId,
+          workflowId: executionMetadata.workflowId,
+          rootWorkflowId: executionMetadata.rootWorkflowId
+        });
         if (params.respond && params.res) {
           params.res.json(result);
           return;
         }
         return result;
       } catch (err: any) {
+        this.executionLogger.error('Reasoner execution failed', {
+          target: params.targetName,
+          executionId: executionMetadata.executionId,
+          parentExecutionId: executionMetadata.parentExecutionId,
+          runId: executionMetadata.runId,
+          workflowId: executionMetadata.workflowId,
+          rootWorkflowId: executionMetadata.rootWorkflowId,
+          error: err?.message ?? 'Execution failed'
+        }, {
+          eventType: 'reasoner.failed',
+          source: 'sdk.runtime',
+          systemGenerated: true
+        });
+        this.executionLogger.error('Execution failed', {
+          target: params.targetName,
+          reasonerId: executionMetadata.reasonerId,
+          executionId: executionMetadata.executionId,
+          parentExecutionId: executionMetadata.parentExecutionId,
+          runId: executionMetadata.runId,
+          workflowId: executionMetadata.workflowId,
+          rootWorkflowId: executionMetadata.rootWorkflowId,
+          error: err?.message ?? 'Execution failed'
+        }, {
+          eventType: 'execution.failed',
+          source: 'sdk.runtime',
+          systemGenerated: true
+        });
         if (params.respond && params.res) {
           const body: Record<string, any> = { error: err?.message ?? 'Execution failed' };
           if (err?.responseData) body.error_details = err.responseData;
@@ -1099,36 +1335,103 @@ export class Agent {
   ) {
     const req = params.req ?? ({} as express.Request);
     const res = params.res ?? ({} as express.Response);
+    const executionMetadata: ExecutionMetadata = {
+      ...params.metadata,
+      rootWorkflowId:
+        params.metadata.rootWorkflowId ?? params.metadata.workflowId ?? params.metadata.runId ?? params.metadata.executionId,
+      reasonerId: params.metadata.reasonerId ?? params.targetName
+    };
     const execCtx = new ExecutionContext({
       input: params.input,
-      metadata: params.metadata,
+      metadata: executionMetadata,
       req,
       res,
       agent: this
     });
 
     return ExecutionContext.run(execCtx, async () => {
+      this.executionLogger.system('execution.started', 'Execution started', {
+        target: params.targetName,
+        reasonerId: executionMetadata.reasonerId,
+        executionId: executionMetadata.executionId,
+        parentExecutionId: executionMetadata.parentExecutionId,
+        runId: executionMetadata.runId,
+        workflowId: executionMetadata.workflowId,
+        rootWorkflowId: executionMetadata.rootWorkflowId
+      });
+      this.executionLogger.system('skill.started', 'Skill execution started', {
+        target: params.targetName,
+        executionId: executionMetadata.executionId,
+        runId: executionMetadata.runId,
+        workflowId: executionMetadata.workflowId,
+        rootWorkflowId: executionMetadata.rootWorkflowId
+      });
       try {
         const ctx = new SkillContext({
           input: params.input,
-          executionId: params.metadata.executionId,
-          sessionId: params.metadata.sessionId,
-          workflowId: params.metadata.workflowId,
+          executionId: executionMetadata.executionId,
+          sessionId: executionMetadata.sessionId,
+          workflowId: executionMetadata.workflowId,
+          rootWorkflowId: executionMetadata.rootWorkflowId,
+          reasonerId: executionMetadata.reasonerId,
           req,
           res,
           agent: this,
-          memory: this.getMemoryInterface(params.metadata),
-          workflow: this.getWorkflowReporter(params.metadata),
-          did: this.getDidInterface(params.metadata, params.input, params.targetName)
+          logger: this.executionLogger,
+          memory: this.getMemoryInterface(executionMetadata),
+          workflow: this.getWorkflowReporter(executionMetadata),
+          did: this.getDidInterface(executionMetadata, params.input, params.targetName)
         });
 
         const result = await skill.handler(ctx);
+        this.executionLogger.system('skill.completed', 'Skill execution completed', {
+          target: params.targetName,
+          executionId: executionMetadata.executionId,
+          runId: executionMetadata.runId,
+          workflowId: executionMetadata.workflowId,
+          rootWorkflowId: executionMetadata.rootWorkflowId
+        });
+        this.executionLogger.system('execution.completed', 'Execution completed', {
+          target: params.targetName,
+          reasonerId: executionMetadata.reasonerId,
+          executionId: executionMetadata.executionId,
+          runId: executionMetadata.runId,
+          workflowId: executionMetadata.workflowId,
+          rootWorkflowId: executionMetadata.rootWorkflowId
+        });
         if (params.respond && params.res) {
           params.res.json(result);
           return;
         }
         return result;
       } catch (err: any) {
+        this.executionLogger.error('Skill execution failed', {
+          target: params.targetName,
+          executionId: executionMetadata.executionId,
+          parentExecutionId: executionMetadata.parentExecutionId,
+          runId: executionMetadata.runId,
+          workflowId: executionMetadata.workflowId,
+          rootWorkflowId: executionMetadata.rootWorkflowId,
+          error: err?.message ?? 'Execution failed'
+        }, {
+          eventType: 'skill.failed',
+          source: 'sdk.runtime',
+          systemGenerated: true
+        });
+        this.executionLogger.error('Execution failed', {
+          target: params.targetName,
+          reasonerId: executionMetadata.reasonerId,
+          executionId: executionMetadata.executionId,
+          parentExecutionId: executionMetadata.parentExecutionId,
+          runId: executionMetadata.runId,
+          workflowId: executionMetadata.workflowId,
+          rootWorkflowId: executionMetadata.rootWorkflowId,
+          error: err?.message ?? 'Execution failed'
+        }, {
+          eventType: 'execution.failed',
+          source: 'sdk.runtime',
+          systemGenerated: true
+        });
         if (params.respond && params.res) {
           const body: Record<string, any> = { error: err?.message ?? 'Execution failed' };
           if (err?.responseData) body.error_details = err.responseData;
@@ -1251,27 +1554,6 @@ export class Agent {
       status: 'running',
       node_id: this.config.nodeId,
       version: this.config.version
-    };
-  }
-
-  private mcpStatus() {
-    const servers = this.mcpClientRegistry
-      ? this.mcpClientRegistry.list().map((client) => ({
-          alias: client.alias,
-          baseUrl: client.baseUrl,
-          transport: client.transport
-        }))
-      : [];
-
-    const skills = this.skills
-      .all()
-      .filter((skill) => skill.options?.tags?.includes('mcp'))
-      .map((skill) => skill.name);
-
-    return {
-      status: servers.length ? 'configured' : 'disabled',
-      servers,
-      skills
     };
   }
 

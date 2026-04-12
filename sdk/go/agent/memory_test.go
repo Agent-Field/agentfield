@@ -377,6 +377,68 @@ func TestMemory_NilBackend(t *testing.T) {
 	assert.Equal(t, "value", val)
 }
 
+func TestMemory_VectorAndScopedHelpers(t *testing.T) {
+	backend := NewInMemoryBackend()
+	memory := NewMemory(backend)
+	ctx := contextWithExecution(context.Background(), ExecutionContext{
+		RunID:      "run-1",
+		SessionID:  "session-1",
+		WorkflowID: "workflow-1",
+		ActorID:    "actor-1",
+	})
+
+	require.NoError(t, memory.SetVector(ctx, "session-vec", []float64{0.1, 0.2}, map[string]any{"kind": "session"}))
+	embedding, metadata, err := memory.GetVector(ctx, "session-vec")
+	require.NoError(t, err)
+	assert.Equal(t, []float64{0.1, 0.2}, embedding)
+	assert.Equal(t, map[string]any{"kind": "session"}, metadata)
+
+	results, err := memory.SearchVector(ctx, []float64{0.1, 0.2}, SearchOptions{Limit: 3})
+	require.NoError(t, err)
+	assert.Empty(t, results)
+	require.NoError(t, memory.DeleteVector(ctx, "session-vec"))
+	embedding, metadata, err = memory.GetVector(ctx, "session-vec")
+	require.NoError(t, err)
+	assert.Nil(t, embedding)
+	assert.Nil(t, metadata)
+
+	custom := memory.Scoped(ScopeGlobal, "tenant-1")
+	require.NoError(t, custom.Set(ctx, "answer", 42))
+	value, err := custom.Get(ctx, "answer")
+	require.NoError(t, err)
+	assert.Equal(t, 42, value)
+	value, err = custom.GetWithDefault(ctx, "missing", "fallback")
+	require.NoError(t, err)
+	assert.Equal(t, "fallback", value)
+	keys, err := custom.List(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"answer"}, keys)
+	require.NoError(t, custom.Delete(ctx, "answer"))
+
+	require.NoError(t, custom.SetVector(ctx, "global-vec", []float64{1, 2}, map[string]any{"kind": "global"}))
+	embedding, metadata, err = custom.GetVector(ctx, "global-vec")
+	require.NoError(t, err)
+	assert.Equal(t, []float64{1, 2}, embedding)
+	assert.Equal(t, map[string]any{"kind": "global"}, metadata)
+	results, err = custom.SearchVector(ctx, []float64{1, 2}, SearchOptions{Limit: 1})
+	require.NoError(t, err)
+	assert.Empty(t, results)
+	require.NoError(t, custom.DeleteVector(ctx, "global-vec"))
+
+	userScoped := memory.UserScope()
+	require.NoError(t, userScoped.Set(ctx, "pref", "dark"))
+	value, err = userScoped.GetWithDefault(ctx, "pref", "light")
+	require.NoError(t, err)
+	assert.Equal(t, "dark", value)
+	keys, err = userScoped.List(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"pref"}, keys)
+	require.NoError(t, userScoped.Delete(ctx, "pref"))
+	keys, err = userScoped.List(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, keys)
+}
+
 func TestAgentMemory(t *testing.T) {
 	cfg := Config{
 		NodeID:  "test-node",

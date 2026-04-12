@@ -23,6 +23,8 @@ const (
 	ExecutionResumed          ExecutionEventType = "execution_resumed"
 	ExecutionCancelledEvent   ExecutionEventType = "execution_cancelled"
 	ExecutionApprovalResolved ExecutionEventType = "execution_approval_resolved"
+	ExecutionLogEntry         ExecutionEventType = "execution_log"
+	ExecutionRetried          ExecutionEventType = "execution_retried"
 )
 
 // ExecutionEvent represents an execution state change event

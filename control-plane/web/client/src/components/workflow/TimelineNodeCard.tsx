@@ -162,8 +162,8 @@ export function TimelineNodeCard({
     <div
       className={`
         group transition-all duration-200 ease-out
-        border border-border-secondary rounded-lg
-        ${hasNotes ? 'bg-card hover:bg-card-hover cursor-pointer' : 'bg-bg-secondary hover:bg-bg-tertiary'}
+        border border-border rounded-lg
+        ${hasNotes ? 'bg-card hover:hover:bg-accent cursor-pointer' : 'bg-muted hover:bg-muted'}
         ${className}
       `}
       onClick={handleCardClick}
@@ -178,21 +178,21 @@ export function TimelineNodeCard({
           </div>
 
           {/* Reasoner Name */}
-          <span className={`font-medium truncate ${hasNotes ? 'text-text-primary' : 'text-text-secondary'}`}>
+          <span className={`font-medium truncate ${hasNotes ? 'text-foreground' : 'text-muted-foreground'}`}>
             {reasonerName}
           </span>
 
-          <span className="text-text-tertiary">•</span>
+          <span className="text-muted-foreground">•</span>
 
           {/* Agent Name */}
-          <span className="text-text-tertiary truncate text-xs">
+          <span className="text-muted-foreground truncate text-xs">
             {agentName}
           </span>
         </div>
 
         {/* Right: Time + Expand Button */}
         <div className="flex items-center gap-2 flex-shrink-0">
-          <span className="text-xs text-text-tertiary">
+          <span className="text-xs text-muted-foreground">
             {formatTimestamp(node.started_at)}
           </span>
 
@@ -222,7 +222,7 @@ export function TimelineNodeCard({
             <div className="w-3 flex-shrink-0"></div>
 
             {/* Compact preview text */}
-            <span className="text-text-quaternary truncate flex-1 leading-relaxed">
+            <span className="text-muted-foreground truncate flex-1 leading-relaxed">
               {compactPreview}
             </span>
 
@@ -232,7 +232,7 @@ export function TimelineNodeCard({
                 {compactTags.map((tag, index) => {
                   const tagColor = getTagColor(tag);
                   const textColorMatch = tagColor.match(/text-([^\s]+)/);
-                  const textColorClass = textColorMatch ? textColorMatch[0] : 'text-text-secondary';
+                  const textColorClass = textColorMatch ? textColorMatch[0] : 'text-muted-foreground';
 
                   return (
                     <button
@@ -249,7 +249,7 @@ export function TimelineNodeCard({
                   );
                 })}
                 {notes.flatMap(n => n.tags).length > 2 && (
-                  <span className="text-xs text-text-quaternary opacity-50">
+                  <span className="text-xs text-muted-foreground opacity-50">
                     +{notes.flatMap(n => n.tags).length - 2}
                   </span>
                 )}
@@ -261,11 +261,11 @@ export function TimelineNodeCard({
 
       {/* Expandable Notes Section */}
       {hasNotes && notesExpanded && (
-        <div className="px-3 pb-3 border-t border-border-secondary bg-bg-secondary/50">
+        <div className="px-3 pb-3 border-t border-border bg-muted/50">
           <div className="pt-3 space-y-2.5">
             {notes.map((note, index) => (
               <div key={`${note.timestamp}-${index}`} className="space-y-1.5">
-                <div className="text-xs text-text-primary leading-relaxed prose prose-xs max-w-none prose-headings:text-xs prose-headings:font-semibold prose-headings:text-text-primary prose-headings:mt-2 prose-headings:mb-1 prose-h1:text-sm prose-h1:font-semibold prose-h2:text-xs prose-h2:font-semibold prose-h3:text-xs prose-h3:font-medium prose-p:text-xs prose-p:text-text-primary prose-p:leading-relaxed prose-p:my-1 prose-ul:text-xs prose-ul:text-text-primary prose-ul:my-1 prose-ol:text-xs prose-ol:text-text-primary prose-ol:my-1 prose-li:text-xs prose-li:text-text-primary prose-code:text-xs prose-code:bg-bg-tertiary prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-pre:text-xs prose-pre:bg-bg-tertiary prose-pre:p-2 prose-pre:rounded prose-pre:my-2 prose-blockquote:text-xs prose-blockquote:text-text-secondary prose-blockquote:border-l-border-secondary prose-blockquote:my-2 prose-strong:text-text-primary prose-strong:font-medium prose-em:text-text-primary">
+                <div className="text-xs text-foreground leading-relaxed prose prose-xs max-w-none prose-headings:text-xs prose-headings:font-semibold prose-headings:text-foreground prose-headings:mt-2 prose-headings:mb-1 prose-h1:text-sm prose-h1:font-semibold prose-h2:text-xs prose-h2:font-semibold prose-h3:text-xs prose-h3:font-medium prose-p:text-xs prose-p:text-foreground prose-p:leading-relaxed prose-p:my-1 prose-ul:text-xs prose-ul:text-foreground prose-ul:my-1 prose-ol:text-xs prose-ol:text-foreground prose-ol:my-1 prose-li:text-xs prose-li:text-foreground prose-code:text-xs prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-pre:text-xs prose-pre:bg-muted prose-pre:p-2 prose-pre:rounded prose-pre:my-2 prose-blockquote:text-xs prose-blockquote:text-muted-foreground prose-blockquote:border-l-border-secondary prose-blockquote:my-2 prose-strong:text-foreground prose-strong:font-medium prose-em:text-foreground">
                   {note.message.length > 200 && !currentExpandedNotes.has(index) ? (
                     <>
                       <ReactMarkdown>
@@ -323,7 +323,7 @@ export function TimelineNodeCard({
                       const tagColor = getTagColor(tag);
                       // Extract text color from the tag color classes
                       const textColorMatch = tagColor.match(/text-([^\s]+)/);
-                      const textColorClass = textColorMatch ? textColorMatch[0] : 'text-text-secondary';
+                      const textColorClass = textColorMatch ? textColorMatch[0] : 'text-muted-foreground';
 
                       return (
                         <button
@@ -342,7 +342,7 @@ export function TimelineNodeCard({
                   </div>
                 )}
 
-                <div className="text-xs text-text-quaternary">
+                <div className="text-xs text-muted-foreground">
                   {formatTimestamp(note.timestamp)}
                 </div>
               </div>
@@ -361,7 +361,7 @@ export function TimelineNodeCardSkeleton({
   className?: string;
 }) {
   return (
-    <div className={`border border-border-secondary rounded-lg bg-card ${className}`}>
+    <div className={`border border-border rounded-lg bg-card ${className}`}>
       <div className="px-3 py-2 flex items-center justify-between gap-3">
         {/* Left: Status + Names skeleton */}
         <div className="flex items-center gap-3 min-w-0 flex-1">

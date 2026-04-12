@@ -8,6 +8,10 @@ import type {
   CompactDiscoveryResponse,
   HealthStatus
 } from '../types/agent.js';
+import {
+  isExecutionLogBatchPayload,
+  type ExecutionLogTransportPayload
+} from '../observability/ExecutionLogger.js';
 import { httpAgent, httpsAgent } from '../utils/httpAgents.js';
 import { DIDAuthenticator } from './DIDAuthenticator.js';
 
@@ -139,7 +143,9 @@ this.http = axios.create({
     metadata?: {
       runId?: string;
       workflowId?: string;
+      rootWorkflowId?: string;
       parentExecutionId?: string;
+      reasonerId?: string;
       sessionId?: string;
       actorId?: string;
       callerDid?: string;
@@ -151,7 +157,9 @@ this.http = axios.create({
     const headers: Record<string, string> = {};
     if (metadata?.runId) headers['X-Run-ID'] = metadata.runId;
     if (metadata?.workflowId) headers['X-Workflow-ID'] = metadata.workflowId;
+    if (metadata?.rootWorkflowId) headers['X-Root-Workflow-ID'] = metadata.rootWorkflowId;
     if (metadata?.parentExecutionId) headers['X-Parent-Execution-ID'] = metadata.parentExecutionId;
+    if (metadata?.reasonerId) headers['X-Reasoner-ID'] = metadata.reasonerId;
     if (metadata?.sessionId) headers['X-Session-ID'] = metadata.sessionId;
     if (metadata?.actorId) headers['X-Actor-ID'] = metadata.actorId;
     if (metadata?.callerDid) headers['X-Caller-DID'] = metadata.callerDid;
@@ -191,6 +199,7 @@ this.http = axios.create({
     executionId: string;
     runId: string;
     workflowId?: string;
+    rootWorkflowId?: string;
     reasonerId: string;
     agentNodeId: string;
     status: 'waiting' | 'running' | 'succeeded' | 'failed';
@@ -206,6 +215,7 @@ this.http = axios.create({
       execution_id: event.executionId,
       workflow_id: event.workflowId ?? event.runId,
       run_id: event.runId,
+      root_workflow_id: event.rootWorkflowId ?? event.workflowId ?? event.runId,
       reasoner_id: event.reasonerId,
       type: event.reasonerId,
       agent_node_id: event.agentNodeId,
@@ -231,6 +241,29 @@ this.http = axios.create({
       });
 
     // Fire and forget to avoid blocking local executions in tests/dev mode.
+    void request;
+  }
+
+  publishExecutionLogs(payload: ExecutionLogTransportPayload): void {
+    const executionId = isExecutionLogBatchPayload(payload)
+      ? payload.entries[0]?.execution_id
+      : payload.execution_id;
+
+    if (!executionId) {
+      return;
+    }
+
+    const bodyStr = JSON.stringify(payload);
+    const authHeaders = this.didAuthenticator.signRequest(Buffer.from(bodyStr));
+    const request = this.http
+      .post(`/api/v1/executions/${encodeURIComponent(executionId)}/logs`, bodyStr, {
+        headers: this.mergeHeaders({ 'Content-Type': 'application/json', ...authHeaders }),
+        timeout: this.config.devMode ? 1000 : 5000
+      })
+      .catch(() => {
+        // Best-effort; execution logs must never break the agent runtime.
+      });
+
     void request;
   }
 
@@ -400,7 +433,9 @@ this.http = axios.create({
     sessionId?: string;
     actorId?: string;
     workflowId?: string;
+    rootWorkflowId?: string;
     parentExecutionId?: string;
+    reasonerId?: string;
     callerDid?: string;
     targetDid?: string;
     agentNodeDid?: string;
@@ -412,7 +447,9 @@ this.http = axios.create({
     if (metadata.sessionId) headers['x-session-id'] = metadata.sessionId;
     if (metadata.actorId) headers['x-actor-id'] = metadata.actorId;
     if (metadata.workflowId) headers['x-workflow-id'] = metadata.workflowId;
+    if (metadata.rootWorkflowId) headers['x-root-workflow-id'] = metadata.rootWorkflowId;
     if (metadata.parentExecutionId) headers['x-parent-execution-id'] = metadata.parentExecutionId;
+    if (metadata.reasonerId) headers['x-reasoner-id'] = metadata.reasonerId;
     if (metadata.callerDid) headers['x-caller-did'] = metadata.callerDid;
     if (metadata.targetDid) headers['x-target-did'] = metadata.targetDid;
     if (metadata.agentNodeDid) headers['x-agent-node-did'] = metadata.agentNodeDid;
@@ -438,7 +475,9 @@ this.http = axios.create({
     sessionId?: string;
     actorId?: string;
     workflowId?: string;
+    rootWorkflowId?: string;
     parentExecutionId?: string;
+    reasonerId?: string;
     callerDid?: string;
     targetDid?: string;
     agentNodeDid?: string;

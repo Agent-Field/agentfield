@@ -20,6 +20,7 @@ import (
 
 type WebhookStore interface {
 	GetExecutionRecord(ctx context.Context, executionID string) (*types.Execution, error)
+	GetWorkflowExecution(ctx context.Context, executionID string) (*types.WorkflowExecution, error)
 	GetExecutionWebhook(ctx context.Context, executionID string) (*types.ExecutionWebhook, error)
 	TryMarkExecutionWebhookInFlight(ctx context.Context, executionID string, now time.Time) (bool, error)
 	UpdateExecutionWebhookState(ctx context.Context, executionID string, update types.ExecutionWebhookStateUpdate) error
@@ -393,14 +394,32 @@ func (d *webhookDispatcher) process(job webhookJob) {
 
 func (d *webhookDispatcher) buildPayload(ctx context.Context, exec *types.Execution, eventType string) types.ExecutionWebhookPayload {
 	targetType := d.resolveTargetType(ctx, exec)
+	storedPayload := types.DecodeStoredExecutionPayload(exec.InputPayload)
 	payload := types.ExecutionWebhookPayload{
-		Event:       eventType,
-		ExecutionID: exec.ExecutionID,
-		RunID:       exec.RunID,
-		Status:      exec.Status,
-		Target:      fmt.Sprintf("%s.%s", exec.NodeID, exec.ReasonerID),
-		TargetType:  targetType,
-		DurationMS:  exec.DurationMS,
+		Event:        eventType,
+		ExecutionID:  exec.ExecutionID,
+		RunID:        exec.RunID,
+		AgentNodeID:  exec.AgentNodeID,
+		ReasonerID:   exec.ReasonerID,
+		Status:       exec.Status,
+		StatusReason: exec.StatusReason,
+		Target:       fmt.Sprintf("%s.%s", exec.NodeID, exec.ReasonerID),
+		TargetType:   targetType,
+		StartedAt:    exec.StartedAt.UTC().Format(time.RFC3339),
+		DurationMS:   exec.DurationMS,
+		SessionID:    exec.SessionID,
+		ActorID:      exec.ActorID,
+		Context:      storedPayload.Context,
+	}
+	if exec.CompletedAt != nil {
+		completedAt := exec.CompletedAt.UTC().Format(time.RFC3339)
+		payload.CompletedAt = &completedAt
+	}
+	if workflowExec, err := d.store.GetWorkflowExecution(ctx, exec.ExecutionID); err == nil && workflowExec != nil {
+		payload.RetryCount = workflowExec.RetryCount
+	}
+	if exec.StatusReason != nil && *exec.StatusReason != "" {
+		payload.ErrorCategory = exec.StatusReason
 	}
 
 	if exec.CompletedAt != nil {

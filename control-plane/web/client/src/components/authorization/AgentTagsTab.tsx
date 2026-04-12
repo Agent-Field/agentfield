@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
+import { ArrowDown, ArrowUp } from "lucide-react";
+import { HintIcon } from "@/components/authorization/HintIcon";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -10,10 +12,17 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { CompactTable } from "@/components/ui/CompactTable";
 import { Badge } from "@/components/ui/badge";
-import { FastTableSearch } from "@/components/ui/FastTableSearch";
-import { SegmentedStatusFilter } from "@/components/ui/segmented-status-filter";
+import { SearchBar } from "@/components/ui/SearchBar";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Tooltip,
   TooltipContent,
@@ -24,36 +33,27 @@ import {
   useSuccessNotification,
   useErrorNotification,
 } from "@/components/ui/notification";
-import * as tagApprovalApi from "../../services/tagApprovalApi";
-import type { AgentTagSummary } from "../../services/tagApprovalApi";
-import type { AccessPolicy } from "../../services/accessPoliciesApi";
+import * as tagApprovalApi from "@/services/tagApprovalApi";
+import type { AgentTagSummary } from "@/services/tagApprovalApi";
+import type { AccessPolicy } from "@/services/accessPoliciesApi";
 import { TooltipTagList } from "@/components/ui/tooltip-tag-list";
 import { ApproveWithContextDialog } from "./ApproveWithContextDialog";
 import { RevokeDialog } from "./RevokeDialog";
-import { formatRelativeTime } from "../../utils/dateFormat";
-
-const GRID_TEMPLATE =
-  "minmax(120px,1fr) minmax(100px,1fr) minmax(100px,1fr) 86px 120px 200px";
+import { formatRelativeTime } from "@/utils/dateFormat";
+import { getAgentTagRowStatus } from "@/lib/governanceUtils";
 
 const MAX_VISIBLE_TAGS = 2;
 
 function renderTagCell(tags: string[]) {
-  if (!tags.length)
-    return (
-      <span className="text-xs text-muted-foreground italic">&mdash;</span>
-    );
+  if (!tags.length) {
+    return <span className="text-xs italic text-muted-foreground">—</span>;
+  }
   const visible = tags.slice(0, MAX_VISIBLE_TAGS);
   const overflow = tags.length - MAX_VISIBLE_TAGS;
   const content = (
-    <div className="flex items-center gap-1 overflow-hidden">
+    <div className="flex flex-wrap items-center gap-1">
       {visible.map((tag) => (
-        <Badge
-          key={tag}
-          variant="secondary"
-          size="sm"
-          showIcon={false}
-          className="truncate max-w-[96px]"
-        >
+        <Badge key={tag} variant="secondary" size="sm" showIcon={false} className="max-w-[96px] truncate">
           {tag}
         </Badge>
       ))}
@@ -79,135 +79,70 @@ function renderTagCell(tags: string[]) {
   return content;
 }
 
-type TagStatus = "pending_approval" | "active" | "other";
-
-function getTagStatus(agent: AgentTagSummary): TagStatus {
-  if (agent.lifecycle_status === "pending_approval") return "pending_approval";
-  if (
-    agent.lifecycle_status === "active" ||
-    agent.lifecycle_status === "online" ||
-    agent.lifecycle_status === "ready" ||
-    agent.lifecycle_status === "offline" ||
-    agent.lifecycle_status === "degraded" ||
-    agent.lifecycle_status === "starting"
-  )
-    return "active";
-  return "other";
+function SortableHead({
+  label,
+  column,
+  sortBy,
+  sortOrder,
+  onSort,
+}: {
+  label: string;
+  column: string;
+  sortBy: string;
+  sortOrder: "asc" | "desc";
+  onSort: (field: string) => void;
+}) {
+  const active = sortBy === column;
+  return (
+    <TableHead className="h-9 px-3 text-micro-plus font-medium text-muted-foreground">
+      <button
+        type="button"
+        onClick={() => onSort(column)}
+        className="inline-flex items-center gap-1 hover:text-foreground"
+      >
+        {label}
+        {active ? (
+          sortOrder === "asc" ? (
+            <ArrowUp className="size-3 opacity-70" />
+          ) : (
+            <ArrowDown className="size-3 opacity-70" />
+          )
+        ) : null}
+      </button>
+    </TableHead>
+  );
 }
 
-interface AgentTagsTabProps {
+export interface AgentTagsTabProps {
   policies: AccessPolicy[];
-  onPendingCountChange: (count: number) => void;
+  agents: AgentTagSummary[];
+  agentsLoading: boolean;
+  agentsError?: Error | null;
+  canMutate: boolean;
+  onRefresh: () => void;
 }
 
 export function AgentTagsTab({
   policies,
-  onPendingCountChange,
+  agents,
+  agentsLoading,
+  agentsError,
+  canMutate,
+  onRefresh,
 }: AgentTagsTabProps) {
-  const [agents, setAgents] = useState<AgentTagSummary[]>([]);
-  const [loading, setLoading] = useState(true);
-
   const showSuccess = useSuccessNotification();
   const showError = useErrorNotification();
 
-  // Stable ref for showError to avoid infinite re-render loop in useCallback
-  const showErrorRef = useRef(showError);
-  showErrorRef.current = showError;
-
-  // Search & filter
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
-
-  // Sort
   const [sortBy, setSortBy] = useState("registered_at");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
-  // Dialogs
-  const [approveAgent, setApproveAgent] = useState<AgentTagSummary | null>(
-    null
-  );
+  const [approveAgent, setApproveAgent] = useState<AgentTagSummary | null>(null);
   const [rejectAgent, setRejectAgent] = useState<AgentTagSummary | null>(null);
   const [revokeAgent, setRevokeAgent] = useState<AgentTagSummary | null>(null);
   const [rejectReason, setRejectReason] = useState("");
   const [rejectLoading, setRejectLoading] = useState(false);
-
-  const fetchAgents = useCallback(async () => {
-    try {
-      setLoading(true);
-      const data = await tagApprovalApi.listAllAgentsWithTags();
-      setAgents(data.agents || []);
-    } catch (err: unknown) {
-      showErrorRef.current(
-        "Failed to fetch agents",
-        err instanceof Error ? err.message : undefined
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchAgents();
-  }, [fetchAgents]);
-
-  // Update pending count
-  useEffect(() => {
-    const pending = agents.filter(
-      (a) => getTagStatus(a) === "pending_approval"
-    ).length;
-    onPendingCountChange(pending);
-  }, [agents, onPendingCountChange]);
-
-  const handleApprove = async (agentId: string, selectedTags: string[]) => {
-    try {
-      await tagApprovalApi.approveAgentTags(agentId, {
-        approved_tags: selectedTags,
-      });
-      showSuccess(`Tags approved for agent ${agentId}`);
-      fetchAgents();
-    } catch (err: unknown) {
-      showError(
-        "Failed to approve tags",
-        err instanceof Error ? err.message : undefined
-      );
-      throw err;
-    }
-  };
-
-  const handleReject = async () => {
-    if (!rejectAgent) return;
-    try {
-      setRejectLoading(true);
-      await tagApprovalApi.rejectAgentTags(rejectAgent.agent_id, {
-        reason: rejectReason || undefined,
-      });
-      showSuccess(`Tags rejected for agent ${rejectAgent.agent_id}`);
-      setRejectAgent(null);
-      setRejectReason("");
-      fetchAgents();
-    } catch (err: unknown) {
-      showError(
-        "Failed to reject tags",
-        err instanceof Error ? err.message : undefined
-      );
-    } finally {
-      setRejectLoading(false);
-    }
-  };
-
-  const handleRevoke = async (agentId: string, reason?: string) => {
-    try {
-      await tagApprovalApi.revokeAgentTags(agentId, reason);
-      showSuccess(`Tags revoked for agent ${agentId}`);
-      fetchAgents();
-    } catch (err: unknown) {
-      showError(
-        "Failed to revoke tags",
-        err instanceof Error ? err.message : undefined
-      );
-      throw err;
-    }
-  };
 
   const handleSortChange = (field: string) => {
     if (sortBy === field) {
@@ -218,45 +153,33 @@ export function AgentTagsTab({
     }
   };
 
-  // Status counts
   const statusCounts = useMemo(() => {
-    const pending = agents.filter(
-      (a) => getTagStatus(a) === "pending_approval"
-    ).length;
-    const approved = agents.filter(
-      (a) => getTagStatus(a) === "active"
-    ).length;
+    const pending = agents.filter((a) => getAgentTagRowStatus(a) === "pending_approval").length;
+    const approved = agents.filter((a) => getAgentTagRowStatus(a) === "active").length;
     const other = agents.length - pending - approved;
     return { pending, approved, other };
   }, [agents]);
 
-  // Filtered + sorted data
   const filteredAgents = useMemo(() => {
     let result = agents;
-
-    // Status filter
     if (statusFilter !== "all") {
       result = result.filter((a) => {
-        const s = getTagStatus(a);
+        const s = getAgentTagRowStatus(a);
         if (statusFilter === "pending") return s === "pending_approval";
         if (statusFilter === "approved") return s === "active";
         if (statusFilter === "other") return s === "other";
         return true;
       });
     }
-
-    // Search
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       result = result.filter(
         (a) =>
           a.agent_id.toLowerCase().includes(q) ||
           (a.proposed_tags || []).some((t) => t.toLowerCase().includes(q)) ||
-          (a.approved_tags || []).some((t) => t.toLowerCase().includes(q))
+          (a.approved_tags || []).some((t) => t.toLowerCase().includes(q)),
       );
     }
-
-    // Sort
     const sorted = [...result].sort((a, b) => {
       let cmp = 0;
       switch (sortBy) {
@@ -271,181 +194,258 @@ export function AgentTagsTab({
       }
       return sortOrder === "asc" ? cmp : -cmp;
     });
-
     return sorted;
   }, [agents, statusFilter, searchQuery, sortBy, sortOrder]);
 
-  const statusOptions = useMemo(
-    () => [
-      { value: "all", label: "All", count: agents.length },
-      { value: "pending", label: "Pending", count: statusCounts.pending },
-      { value: "approved", label: "Approved", count: statusCounts.approved },
-      { value: "other", label: "Other", count: statusCounts.other },
-    ],
-    [agents.length, statusCounts]
-  );
+  const handleApprove = async (agentId: string, selectedTags: string[]) => {
+    try {
+      await tagApprovalApi.approveAgentTags(agentId, {
+        approved_tags: selectedTags,
+      });
+      showSuccess(`Tags approved for ${agentId}`);
+      onRefresh();
+    } catch (err: unknown) {
+      showError("Failed to approve tags", err instanceof Error ? err.message : undefined);
+      throw err;
+    }
+  };
 
-  const columns = [
-    {
-      key: "agent_id",
-      header: "Agent ID",
-      sortable: true,
-      align: "left" as const,
-      render: (item: AgentTagSummary) => (
-        <span className="font-mono text-sm font-medium truncate block">
-          {item.agent_id}
-        </span>
-      ),
-    },
-    {
-      key: "proposed_tags",
-      header: "Requested",
-      sortable: false,
-      align: "left" as const,
-      render: (item: AgentTagSummary) =>
-        renderTagCell(item.proposed_tags || []),
-    },
-    {
-      key: "approved_tags",
-      header: "Granted",
-      sortable: false,
-      align: "left" as const,
-      render: (item: AgentTagSummary) =>
-        renderTagCell(item.approved_tags || []),
-    },
-    {
-      key: "status",
-      header: "Status",
-      sortable: false,
-      align: "center" as const,
-      render: (item: AgentTagSummary) => {
-        const status = getTagStatus(item);
-        switch (status) {
-          case "pending_approval":
-            return <Badge variant="secondary" size="sm" showIcon={false}>Pending</Badge>;
-          case "active":
-            return <Badge variant="secondary" size="sm" showIcon={false}>Approved</Badge>;
-          default:
-            return <Badge variant="secondary" size="sm" showIcon={false}>{status}</Badge>;
-        }
-      },
-    },
-    {
-      key: "registered_at",
-      header: "Registered",
-      sortable: true,
-      align: "left" as const,
-      render: (item: AgentTagSummary) => (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="text-xs text-muted-foreground cursor-default whitespace-nowrap">
-              {formatRelativeTime(item.registered_at)}
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="top">
-            {new Date(item.registered_at).toLocaleString()}
-          </TooltipContent>
-        </Tooltip>
-      ),
-    },
-    {
-      key: "actions",
-      header: "Actions",
-      sortable: false,
-      align: "right" as const,
-      render: (item: AgentTagSummary) => {
-        const status = getTagStatus(item);
-        if (status === "pending_approval") {
-          return (
-            <div className="flex items-center gap-1 whitespace-nowrap">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 text-xs"
-                onClick={(e: React.MouseEvent) => {
-                  e.stopPropagation();
-                  setApproveAgent(item);
-                }}
-              >
-                Approve
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 text-xs"
-                onClick={(e: React.MouseEvent) => {
-                  e.stopPropagation();
-                  setRejectAgent(item);
-                }}
-              >
-                Reject
-              </Button>
-            </div>
-          );
-        }
-        if (status === "active") {
-          return (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 text-xs"
-              onClick={(e: React.MouseEvent) => {
-                e.stopPropagation();
-                setRevokeAgent(item);
-              }}
-            >
-              Revoke
-            </Button>
-          );
-        }
-        return null;
-      },
-    },
-  ];
+  const handleReject = async () => {
+    if (!rejectAgent) return;
+    try {
+      setRejectLoading(true);
+      await tagApprovalApi.rejectAgentTags(rejectAgent.agent_id, {
+        reason: rejectReason || undefined,
+      });
+      showSuccess(`Tags rejected for ${rejectAgent.agent_id}`);
+      setRejectAgent(null);
+      setRejectReason("");
+      onRefresh();
+    } catch (err: unknown) {
+      showError("Failed to reject tags", err instanceof Error ? err.message : undefined);
+    } finally {
+      setRejectLoading(false);
+    }
+  };
+
+  const handleRevoke = async (agentId: string, reason?: string) => {
+    try {
+      await tagApprovalApi.revokeAgentTags(agentId, reason);
+      showSuccess(`Tags revoked for ${agentId}`);
+      onRefresh();
+    } catch (err: unknown) {
+      showError("Failed to revoke tags", err instanceof Error ? err.message : undefined);
+      throw err;
+    }
+  };
+
+  if (agentsError) {
+    return (
+      <div className="rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+        {agentsError instanceof Error ? agentsError.message : "Failed to load agents"}
+      </div>
+    );
+  }
+
+  const readOnly = !canMutate;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
-      {/* Toolbar */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <div className="flex-1 min-w-[200px] max-w-sm">
-          <FastTableSearch
-            onSearch={setSearchQuery}
-            placeholder="Search agents or tags..."
-            resultCount={filteredAgents.length}
-            totalCount={agents.length}
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0 flex-1 lg:max-w-md">
+          <SearchBar
+            value={searchQuery}
+            onChange={setSearchQuery}
+            placeholder="Search agent id or tags…"
+            size="sm"
+            wrapperClassName="w-full"
+            inputClassName="border-border/80 bg-background shadow-sm"
           />
         </div>
-        <SegmentedStatusFilter
-          value={statusFilter}
-          onChange={setStatusFilter}
-          options={statusOptions}
-        />
+        <div className="flex flex-wrap items-center gap-3 lg:justify-end">
+          {readOnly && (
+            <div className="flex items-center gap-1 text-xs text-muted-foreground">
+              <span>View only</span>
+              <HintIcon label="Why view only">
+                Approvals need admin APIs enabled on the server. Browsing tags still works.
+              </HintIcon>
+            </div>
+          )}
+        <Tabs value={statusFilter} onValueChange={setStatusFilter} className="w-full lg:w-auto">
+          <TabsList variant="segmented" density="cosy" className="h-9 flex-wrap">
+            <TabsTrigger variant="segmented" size="sm" value="all" className="gap-1">
+              All
+              <span className="tabular-nums text-micro text-muted-foreground">
+                {agents.length}
+              </span>
+            </TabsTrigger>
+            <TabsTrigger variant="segmented" size="sm" value="pending" className="gap-1">
+              Pending
+              <span className="tabular-nums text-micro text-muted-foreground">
+                {statusCounts.pending}
+              </span>
+            </TabsTrigger>
+            <TabsTrigger variant="segmented" size="sm" value="approved" className="gap-1">
+              Approved
+              <span className="tabular-nums text-micro text-muted-foreground">
+                {statusCounts.approved}
+              </span>
+            </TabsTrigger>
+            <TabsTrigger variant="segmented" size="sm" value="other" className="gap-1">
+              Other
+              <span className="tabular-nums text-micro text-muted-foreground">
+                {statusCounts.other}
+              </span>
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+        </div>
       </div>
 
-      {/* Table */}
-      <div className="flex-1 min-h-0">
-        <TooltipProvider>
-          <CompactTable
-            data={filteredAgents}
-            columns={columns}
-            loading={loading}
-            hasMore={false}
-            isFetchingMore={false}
-            sortBy={sortBy}
-            sortOrder={sortOrder}
-            onSortChange={handleSortChange}
-            gridTemplate={GRID_TEMPLATE}
-            getRowKey={(item) => item.agent_id}
-            emptyState={{
-              title: "No agents",
-              description:
-                "Agents with tags will appear here once they register with the control plane.",
-            }}
-          />
-        </TooltipProvider>
-      </div>
+      <TooltipProvider delayDuration={300}>
+        <div className="rounded-lg border border-border bg-card">
+          <Table className="text-xs">
+            <TableHeader>
+              <TableRow>
+                <SortableHead
+                  label="Agent"
+                  column="agent_id"
+                  sortBy={sortBy}
+                  sortOrder={sortOrder}
+                  onSort={handleSortChange}
+                />
+                <TableHead className="h-9 px-3 text-micro-plus font-medium text-muted-foreground">
+                  Requested
+                </TableHead>
+                <TableHead className="h-9 px-3 text-micro-plus font-medium text-muted-foreground">
+                  Granted
+                </TableHead>
+                <TableHead className="h-9 w-28 px-3 text-center text-micro-plus font-medium text-muted-foreground">
+                  Status
+                </TableHead>
+                <SortableHead
+                  label="Registered"
+                  column="registered_at"
+                  sortBy={sortBy}
+                  sortOrder={sortOrder}
+                  onSort={handleSortChange}
+                />
+                {!readOnly && (
+                  <TableHead className="h-9 w-36 px-3 text-right text-micro-plus font-medium text-muted-foreground">
+                    Actions
+                  </TableHead>
+                )}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {agentsLoading ? (
+                <TableRow>
+                  <TableCell
+                    colSpan={readOnly ? 5 : 6}
+                    className="p-8 text-center text-muted-foreground"
+                  >
+                    Loading agents…
+                  </TableCell>
+                </TableRow>
+              ) : filteredAgents.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={readOnly ? 5 : 6} className="p-8">
+                    <div className="flex flex-col items-center justify-center py-6 text-center">
+                      <p className="text-sm font-medium text-muted-foreground">No agents</p>
+                      <p className="mt-1 max-w-sm text-xs text-muted-foreground">
+                        {agents.length === 0
+                          ? "Registered agents with tag metadata will appear here."
+                          : "No rows match the current filters."}
+                      </p>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : (
+                filteredAgents.map((item) => {
+                  const status = getAgentTagRowStatus(item);
+                  return (
+                    <TableRow key={item.agent_id}>
+                      <TableCell className="px-3 py-2 font-mono text-xs font-medium align-top">
+                        {item.agent_id}
+                      </TableCell>
+                      <TableCell className="min-w-0 px-3 py-2 align-top">
+                        {renderTagCell(item.proposed_tags || [])}
+                      </TableCell>
+                      <TableCell className="min-w-0 px-3 py-2 align-top">
+                        {renderTagCell(item.approved_tags || [])}
+                      </TableCell>
+                      <TableCell className="px-3 py-2 text-center align-top">
+                        {status === "pending_approval" && (
+                          <Badge variant="pending" size="sm" showIcon={false}>
+                            Pending
+                          </Badge>
+                        )}
+                        {status === "active" && (
+                          <Badge variant="success" size="sm" showIcon={false}>
+                            Approved
+                          </Badge>
+                        )}
+                        {status === "other" && (
+                          <Badge variant="secondary" size="sm" showIcon={false}>
+                            Other
+                          </Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="px-3 py-2 align-top">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className="cursor-default whitespace-nowrap text-muted-foreground">
+                              {formatRelativeTime(item.registered_at)}
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent side="top">
+                            {new Date(item.registered_at).toLocaleString()}
+                          </TooltipContent>
+                        </Tooltip>
+                      </TableCell>
+                      {!readOnly && (
+                        <TableCell className="px-3 py-2 text-right align-top">
+                          {status === "pending_approval" && (
+                            <div className="flex justify-end gap-0.5">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-xs"
+                                onClick={() => setApproveAgent(item)}
+                              >
+                                Approve
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-xs"
+                                onClick={() => setRejectAgent(item)}
+                              >
+                                Reject
+                              </Button>
+                            </div>
+                          )}
+                          {status === "active" && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 text-xs"
+                              onClick={() => setRevokeAgent(item)}
+                            >
+                              Revoke
+                            </Button>
+                          )}
+                        </TableCell>
+                      )}
+                    </TableRow>
+                  );
+                })
+              )}
+            </TableBody>
+          </Table>
+        </div>
+      </TooltipProvider>
 
-      {/* Approve With Context Dialog */}
       <ApproveWithContextDialog
         agent={approveAgent}
         policies={policies}
@@ -453,27 +453,21 @@ export function AgentTagsTab({
         onOpenChange={(open) => !open && setApproveAgent(null)}
       />
 
-      {/* Reject Dialog */}
-      <Dialog
-        open={!!rejectAgent}
-        onOpenChange={(open) => !open && setRejectAgent(null)}
-      >
+      <Dialog open={!!rejectAgent} onOpenChange={(open) => !open && setRejectAgent(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Reject Tags</DialogTitle>
+            <DialogTitle>Reject tags</DialogTitle>
             <DialogDescription>
-              Reject the proposed tags for agent{" "}
-              <span className="font-mono font-medium">
-                {rejectAgent?.agent_id}
-              </span>
-              . The agent will be set to offline status.
+              Reject proposed tags for{" "}
+              <span className="font-mono font-medium">{rejectAgent?.agent_id}</span>. The
+              agent may be set offline depending on server rules.
             </DialogDescription>
           </DialogHeader>
-          <div className="py-4">
+          <div className="py-2">
             <Label htmlFor="reject-reason">Reason (optional)</Label>
             <Input
               id="reject-reason"
-              placeholder="Enter reason for rejection"
+              placeholder="Reason for rejection"
               value={rejectReason}
               onChange={(e) => setRejectReason(e.target.value)}
               className="mt-1.5"
@@ -483,18 +477,13 @@ export function AgentTagsTab({
             <Button variant="outline" onClick={() => setRejectAgent(null)}>
               Cancel
             </Button>
-            <Button
-              variant="destructive"
-              onClick={handleReject}
-              disabled={rejectLoading}
-            >
-              {rejectLoading ? "Rejecting..." : "Reject Tags"}
+            <Button variant="destructive" onClick={handleReject} disabled={rejectLoading}>
+              {rejectLoading ? "Rejecting…" : "Reject"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Revoke Dialog */}
       <RevokeDialog
         agent={revokeAgent}
         onRevoke={handleRevoke}

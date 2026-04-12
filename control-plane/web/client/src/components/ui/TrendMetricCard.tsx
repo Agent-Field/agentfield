@@ -80,9 +80,9 @@ export function TrendMetricCard({
     >
       <CardContent className="flex flex-col justify-between h-28 p-4">
         {/* Header with label and icon */}
-        <div className="flex items-center justify-between text-text-tertiary">
-          <span className="text-caption tracking-wider">{label}</span>
-          {Icon && <Icon className="h-3.5 w-3.5 text-text-tertiary" />}
+        <div className="flex items-center justify-between text-muted-foreground">
+          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider tracking-wider">{label}</span>
+          {Icon && <Icon className="h-3.5 w-3.5 text-muted-foreground" />}
         </div>
 
         {loading ? (
@@ -94,7 +94,7 @@ export function TrendMetricCard({
           <div className="flex items-end justify-between gap-2">
             {/* Value and trend */}
             <div className="min-w-0 flex-1">
-              <p className="text-heading-2 leading-none text-foreground">
+              <p className="text-xl font-semibold leading-none text-foreground">
                 {value}
               </p>
               {trend && (

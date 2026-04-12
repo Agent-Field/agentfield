@@ -1,5 +1,7 @@
 agentfield:
   port: 8080
+  registration:
+    serverless_discovery_allowed_hosts: [] # Optional extra hosts allowed for server-side /discover fetches; localhost/loopback are always allowed.
   execution_cleanup:
     enabled: true
     retention_period: 72h
@@ -128,6 +130,12 @@ features:
               value: 10000
           action: "allow"
           priority: 90
+  tracing:
+    enabled: false           # Enable OpenTelemetry distributed tracing export
+    exporter: "otlp-http"    # "otlp-http" or "otlp-grpc"
+    endpoint: "localhost:4318"
+    service_name: "agentfield"
+    insecure: false          # WARNING: Set true only for local dev; production must use TLS
   connector:
     enabled: true
     token: "test-connector-token-123"

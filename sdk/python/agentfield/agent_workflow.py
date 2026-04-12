@@ -2,7 +2,7 @@ import inspect
 import time
 from typing import Any, Callable, Dict, Optional
 
-from agentfield.logger import log_debug, log_warn
+from agentfield.logger import log_debug, log_execution, log_warn
 
 from .execution_context import (
     ExecutionContext,
@@ -121,6 +121,16 @@ class AgentWorkflow:
         *,
         parent_execution_id: Optional[str] = None,
     ) -> None:
+        await self._emit_execution_transition_log(
+            context,
+            reasoner_name,
+            event_type="reasoner.started",
+            level="INFO",
+            message=f"Reasoner {reasoner_name} started",
+            status="running",
+            input_data=input_data,
+            parent_execution_id=parent_execution_id,
+        )
         payload = self._build_event_payload(
             context,
             reasoner_name,
@@ -141,6 +151,18 @@ class AgentWorkflow:
         input_data: Optional[Dict[str, Any]] = None,
         parent_execution_id: Optional[str] = None,
     ) -> None:
+        await self._emit_execution_transition_log(
+            context,
+            context.reasoner_name,
+            event_type="reasoner.completed",
+            level="INFO",
+            message=f"Reasoner {context.reasoner_name} completed",
+            status="succeeded",
+            duration_ms=duration_ms,
+            result=result,
+            input_data=input_data,
+            parent_execution_id=parent_execution_id,
+        )
         payload = self._build_event_payload(
             context,
             context.reasoner_name,
@@ -163,6 +185,18 @@ class AgentWorkflow:
         input_data: Optional[Dict[str, Any]] = None,
         parent_execution_id: Optional[str] = None,
     ) -> None:
+        await self._emit_execution_transition_log(
+            context,
+            context.reasoner_name,
+            event_type="reasoner.failed",
+            level="ERROR",
+            message=f"Reasoner {context.reasoner_name} failed",
+            status="failed",
+            duration_ms=duration_ms,
+            error=error,
+            input_data=input_data,
+            parent_execution_id=parent_execution_id,
+        )
         payload = self._build_event_payload(
             context,
             context.reasoner_name,
@@ -257,9 +291,27 @@ class AgentWorkflow:
                 context.execution_id = body.get("execution_id", context.execution_id)
                 context.workflow_id = body.get("workflow_id", context.workflow_id)
                 context.run_id = body.get("run_id", context.run_id)
+            await self._emit_execution_transition_log(
+                context,
+                reasoner_name,
+                event_type="execution.registered",
+                level="INFO",
+                message=f"Execution {context.execution_id} registered",
+                status="registered",
+                registration_payload=payload,
+            )
         except Exception as exc:  # pragma: no cover - network failure path
             if getattr(self.agent, "dev_mode", False):
                 log_warn(f"Workflow registration failed: {exc}")
+            await self._emit_execution_transition_log(
+                context,
+                reasoner_name,
+                event_type="execution.registration.failed",
+                level="ERROR",
+                message=f"Execution registration failed for {context.execution_id}",
+                status="registration_failed",
+                error=str(exc),
+            )
         finally:
             context.registered = True
 
@@ -295,6 +347,50 @@ class AgentWorkflow:
         if input_data is not None:
             payload["input_data"] = input_data
         return payload
+
+    async def _emit_execution_transition_log(
+        self,
+        context: ExecutionContext,
+        reasoner_name: str,
+        *,
+        event_type: str,
+        level: str,
+        message: str,
+        status: str,
+        input_data: Optional[Dict[str, Any]] = None,
+        result: Optional[Any] = None,
+        error: Optional[str] = None,
+        duration_ms: Optional[int] = None,
+        parent_execution_id: Optional[str] = None,
+        registration_payload: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        attributes: Dict[str, Any] = {
+            "status": status,
+            "reasoner_name": reasoner_name,
+            "parent_execution_id": parent_execution_id,
+            "parent_workflow_id": context.parent_workflow_id,
+            "workflow_id": context.workflow_id,
+        }
+        if input_data is not None:
+            attributes["input_data"] = input_data
+        if result is not None:
+            attributes["result"] = result
+        if error is not None:
+            attributes["error"] = error
+        if duration_ms is not None:
+            attributes["duration_ms"] = duration_ms
+        if registration_payload is not None:
+            attributes["registration_payload"] = registration_payload
+
+        log_execution(
+            message,
+            event_type=event_type,
+            level=level,
+            attributes=attributes,
+            execution_context=context,
+            system_generated=True,
+            source="sdk.python.agent_workflow",
+        )
 
     @staticmethod
     def _build_input_payload(

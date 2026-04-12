@@ -1,304 +1,465 @@
-import { forwardRef } from "react";
-import type { Icon, IconProps, IconWeight as PhosphorIconWeight } from "@phosphor-icons/react";
+import type { LucideIcon, LucideProps } from "lucide-react";
+import {
+  Activity,
+  AlertCircle,
+  AlertTriangle,
+  ArrowDown,
+  ArrowDownNarrowWide,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
+  ArrowUpDown,
+  ArrowUpRight,
+  BarChart3,
+  Bot,
+  Braces,
+  Bug,
+  Calendar,
+  CheckCircle2,
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  Circle,
+  CircleDashed,
+  Clock,
+  Cloud,
+  CloudOff,
+  Copy,
+  Cpu,
+  Crosshair,
+  Database,
+  Download,
+  Eye,
+  EyeOff,
+  FileCode,
+  FileText,
+  Filter,
+  Funnel,
+  FunctionSquare,
+  Gauge,
+  Settings,
+  Cog,
+  GitBranch,
+  GitCommit,
+  Github,
+  Hash,
+  HelpCircle,
+  IdCard,
+  Info,
+  Layers,
+  LineChart,
+  Link,
+  ListChecks,
+  List,
+  Loader2,
+  Lock,
+  LogOut,
+  Maximize,
+  Maximize2,
+  MessageSquare,
+  Minimize,
+  Minimize2,
+  Minus,
+  Monitor,
+  Moon,
+  MoreHorizontal,
+  MoreVertical,
+  Network,
+  Package,
+  PanelLeft,
+  PauseCircle,
+  Play,
+  Plus,
+  Quote,
+  Radio,
+  Rocket,
+  RotateCcw,
+  RefreshCw,
+  Save,
+  Scan,
+  Search,
+  Share2,
+  Shield,
+  ShieldCheck,
+  SortAsc,
+  SortDesc,
+  Square,
+  Star,
+  Sun,
+  Table,
+  Tag,
+  Target,
+  Terminal,
+  Timer,
+  Trash2,
+  TrendingDown,
+  TrendingUp,
+  Upload,
+  User,
+  UserCircle,
+  Users,
+  Wifi,
+  WifiOff,
+  Workflow,
+  Wrench,
+  X,
+  XCircle,
+  Zap,
+  ArrowUpNarrowWide,
+  LayoutGrid,
+  HardDrive,
+  Lightbulb,
+  Server,
+} from "lucide-react";
 
-import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
-import { ArrowLeftIcon } from "@phosphor-icons/react/dist/csr/ArrowLeft";
-import { ArrowDownIcon } from "@phosphor-icons/react/dist/csr/ArrowDown";
-import { ArrowUpIcon } from "@phosphor-icons/react/dist/csr/ArrowUp";
-import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
-import { ArrowUpRightIcon } from "@phosphor-icons/react/dist/csr/ArrowUpRight";
-import { ArrowsDownUpIcon } from "@phosphor-icons/react/dist/csr/ArrowsDownUp";
-import { ArrowsOutSimpleIcon } from "@phosphor-icons/react/dist/csr/ArrowsOutSimple";
-import { ArrowsInSimpleIcon } from "@phosphor-icons/react/dist/csr/ArrowsInSimple";
-import { CrosshairSimpleIcon } from "@phosphor-icons/react/dist/csr/CrosshairSimple";
-import { BrainIcon as CognitivePhosphorIcon } from "@phosphor-icons/react/dist/csr/Brain";
-import { BracketsCurlyIcon } from "@phosphor-icons/react/dist/csr/BracketsCurly";
-import { CornersInIcon } from "@phosphor-icons/react/dist/csr/CornersIn";
-import { BroadcastIcon } from "@phosphor-icons/react/dist/csr/Broadcast";
-import { CalendarIcon } from "@phosphor-icons/react/dist/csr/Calendar";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
-import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { CaretUpIcon } from "@phosphor-icons/react/dist/csr/CaretUp";
-import { ChartLineUpIcon } from "@phosphor-icons/react/dist/csr/ChartLineUp";
-import { ChartBarIcon } from "@phosphor-icons/react/dist/csr/ChartBar";
-import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
-import { ChatCircleDotsIcon } from "@phosphor-icons/react/dist/csr/ChatCircleDots";
-import { ClockIcon } from "@phosphor-icons/react/dist/csr/Clock";
-import { ClockClockwiseIcon } from "@phosphor-icons/react/dist/csr/ClockClockwise";
-import { ClockCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ClockCounterClockwise";
-import { CopySimpleIcon } from "@phosphor-icons/react/dist/csr/CopySimple";
-import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
-import { CircleDashedIcon } from "@phosphor-icons/react/dist/csr/CircleDashed";
-import { CircleIcon } from "@phosphor-icons/react/dist/csr/Circle";
-import { CloudIcon } from "@phosphor-icons/react/dist/csr/Cloud";
-import { CloudSlashIcon } from "@phosphor-icons/react/dist/csr/CloudSlash";
-import { DatabaseIcon } from "@phosphor-icons/react/dist/csr/Database";
-import { DownloadSimpleIcon } from "@phosphor-icons/react/dist/csr/DownloadSimple";
-import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
-import { EyeSlashIcon } from "@phosphor-icons/react/dist/csr/EyeSlash";
-import { FunnelIcon } from "@phosphor-icons/react/dist/csr/Funnel";
-import { FunnelSimpleIcon } from "@phosphor-icons/react/dist/csr/FunnelSimple";
-import { FunctionIcon } from "@phosphor-icons/react/dist/csr/Function";
-import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
-import { GlobeHemisphereWestIcon } from "@phosphor-icons/react/dist/csr/GlobeHemisphereWest";
-import { IdentificationBadgeIcon } from "@phosphor-icons/react/dist/csr/IdentificationBadge";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
-import { LinkSimpleIcon } from "@phosphor-icons/react/dist/csr/LinkSimple";
-import { ListChecksIcon } from "@phosphor-icons/react/dist/csr/ListChecks";
-import { ListBulletsIcon } from "@phosphor-icons/react/dist/csr/ListBullets";
-import { PauseCircleIcon } from "@phosphor-icons/react/dist/csr/PauseCircle";
-import { PackageIcon as PackagePhosphorIcon } from "@phosphor-icons/react/dist/csr/Package";
-import { PlayIcon } from "@phosphor-icons/react/dist/csr/Play";
-import { QuotesIcon } from "@phosphor-icons/react/dist/csr/Quotes";
-import { FlowArrowIcon } from "@phosphor-icons/react/dist/csr/FlowArrow";
-import { PulseIcon } from "@phosphor-icons/react/dist/csr/Pulse";
-import { QuestionIcon } from "@phosphor-icons/react/dist/csr/Question";
-import { RocketLaunchIcon } from "@phosphor-icons/react/dist/csr/RocketLaunch";
-import { RobotIcon } from "@phosphor-icons/react/dist/csr/Robot";
-import { BugIcon } from "@phosphor-icons/react/dist/csr/Bug";
-import { ShieldCheckIcon } from "@phosphor-icons/react/dist/csr/ShieldCheck";
-import { ShieldIcon } from "@phosphor-icons/react/dist/csr/Shield";
-import { SpinnerGapIcon } from "@phosphor-icons/react/dist/csr/SpinnerGap";
-import { ShareNetworkIcon } from "@phosphor-icons/react/dist/csr/ShareNetwork";
-import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
-import { StackIcon } from "@phosphor-icons/react/dist/csr/Stack";
-import { SquaresFourIcon } from "@phosphor-icons/react/dist/csr/SquaresFour";
-import { GridFourIcon } from "@phosphor-icons/react/dist/csr/GridFour";
-import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
-import { TimerIcon } from "@phosphor-icons/react/dist/csr/Timer";
-import { ToolboxIcon } from "@phosphor-icons/react/dist/csr/Toolbox";
-import { UserIcon } from "@phosphor-icons/react/dist/csr/User";
-import { UserCircleIcon } from "@phosphor-icons/react/dist/csr/UserCircle";
-import { UsersThreeIcon } from "@phosphor-icons/react/dist/csr/UsersThree";
-import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
-import { WarningDiamondIcon } from "@phosphor-icons/react/dist/csr/WarningDiamond";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
-import { WarningOctagonIcon } from "@phosphor-icons/react/dist/csr/WarningOctagon";
-import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
-import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
-import { GithubLogoIcon } from "@phosphor-icons/react/dist/csr/GithubLogo";
-import { WrenchIcon } from "@phosphor-icons/react/dist/csr/Wrench";
-import { FileCodeIcon } from "@phosphor-icons/react/dist/csr/FileCode";
-import { FileTextIcon } from "@phosphor-icons/react/dist/csr/FileText";
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { WifiHighIcon } from "@phosphor-icons/react/dist/csr/WifiHigh";
-import { WifiSlashIcon } from "@phosphor-icons/react/dist/csr/WifiSlash";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { ArrowsClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowsClockwise";
-import { ArrowsInLineVerticalIcon } from "@phosphor-icons/react/dist/csr/ArrowsInLineVertical";
-import { ArrowsOutLineVerticalIcon } from "@phosphor-icons/react/dist/csr/ArrowsOutLineVertical";
-import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
-import { StopIcon } from "@phosphor-icons/react/dist/csr/Stop";
-import { InfoIcon } from "@phosphor-icons/react/dist/csr/Info";
-import { HashIcon } from "@phosphor-icons/react/dist/csr/Hash";
-import { TargetIcon } from "@phosphor-icons/react/dist/csr/Target";
-import { GaugeIcon } from "@phosphor-icons/react/dist/csr/Gauge";
-import { GitCommitIcon } from "@phosphor-icons/react/dist/csr/GitCommit";
-import { UploadSimpleIcon } from "@phosphor-icons/react/dist/csr/UploadSimple";
-import { FloppyDiskIcon } from "@phosphor-icons/react/dist/csr/FloppyDisk";
-import { TrendUpIcon } from "@phosphor-icons/react/dist/csr/TrendUp";
-import { TrendDownIcon } from "@phosphor-icons/react/dist/csr/TrendDown";
-import { MinusIcon } from "@phosphor-icons/react/dist/csr/Minus";
-import { ScanIcon } from "@phosphor-icons/react/dist/csr/Scan";
-import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
-import { TextTIcon } from "@phosphor-icons/react/dist/csr/TextT";
-import { SortAscendingIcon } from "@phosphor-icons/react/dist/csr/SortAscending";
-import { SortDescendingIcon } from "@phosphor-icons/react/dist/csr/SortDescending";
-import { TableIcon } from "@phosphor-icons/react/dist/csr/Table";
-import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
-import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
-import { MoonIcon } from "@phosphor-icons/react/dist/csr/Moon";
-import { MonitorIcon } from "@phosphor-icons/react/dist/csr/Monitor";
+export type IconComponent = LucideIcon;
+export type IconComponentProps = LucideProps;
+export type IconWeight = "thin" | "light" | "regular" | "bold" | "fill" | "duotone";
+export type { LucideIcon as Icon };
 
-const withDefaults = (Component: Icon, defaults?: Partial<IconProps>, displayName?: string) => {
-  const Wrapped = forwardRef<SVGSVGElement, IconProps>((props, ref) => (
-    <Component ref={ref} {...defaults} {...props} />
-  )) as Icon;
-  Wrapped.displayName = displayName ?? Component.displayName ?? Component.name;
-  return Wrapped;
-};
+// Activity / Pulse / Heartbeat
+export { Activity };
+export { Activity as Pulse };
+export { Activity as Heartbeat };
 
-export const Activity = PulseIcon;
-export const Pulse = PulseIcon;
-export const AlertTriangle = WarningIcon;
-export const Analytics = ChartLineUpIcon;
-export const TrendingUp = TrendUpIcon;
-export const TrendingDown = TrendDownIcon;
-export const Bot = RobotIcon;
-export const ArrowLeft = ArrowLeftIcon;
-export const ArrowDown = ArrowDownIcon;
-export const ArrowUp = ArrowUpIcon;
-export const ArrowUpDown = ArrowsDownUpIcon;
-export const ArrowRight = ArrowRightIcon;
-export const ArrowUpRight = ArrowUpRightIcon;
-export const ArrowCounterClockwise = ArrowCounterClockwiseIcon;
-export const ArrowSquareOut = ArrowSquareOutIcon;
-export const ArrowsOutSimple = ArrowsOutSimpleIcon;
-export const Calendar = CalendarIcon;
-export const Chat = ChatCircleDotsIcon;
-export const MessageSquare = ChatCircleDotsIcon;
-export const Checkmark = CheckIcon;
-export const CheckmarkFilled = withDefaults(CheckCircleIcon, { weight: "fill" }, "CheckmarkFilled");
-export const CheckCircle = CheckCircleIcon;
-export const ChevronDown = CaretDownIcon;
-export const ChevronLeft = CaretLeftIcon;
-export const ChevronRight = CaretRightIcon;
-export const ChevronUp = CaretUpIcon;
-export const CaretDown = CaretDownIcon;
-export const CaretRight = CaretRightIcon;
-export const CaretUp = CaretUpIcon;
-export const Chip = CpuIcon;
-export const Cpu = CpuIcon;
-export const Close = XIcon;
-export const CloseFilled = withDefaults(XCircleIcon, { weight: "fill" }, "CloseFilled");
-export const Code = BracketsCurlyIcon;
-export const Braces = BracketsCurlyIcon;
-export const BracketsCurly = BracketsCurlyIcon;
-export const CornersIn = CornersInIcon;
-export const Copy = CopySimpleIcon;
-export const CopySimple = CopySimpleIcon;
-// Phosphor does not expose a dedicated AgentField glyph; reuse the Brain icon asset.
-export const Cognitive = CognitivePhosphorIcon;
-export const DataBase = DatabaseIcon;
-export const Database = DatabaseIcon;
-export const ErrorFilled = withDefaults(XCircleIcon, { weight: "fill" }, "ErrorFilled");
-export const Filter = FunnelIcon;
-export const FunnelSimple = FunnelSimpleIcon;
-export const Flash = LightningIcon;
-export const Function = FunctionIcon;
-export const Identification = IdentificationBadgeIcon;
-export const InProgress = SpinnerGapIcon;
-export const Loader = SpinnerGapIcon;
-export const Loader2 = SpinnerGapIcon;
-export const SpinnerGap = SpinnerGapIcon;
-export const Layers = StackIcon;
-export const Stack = StackIcon;
-export const Launch = RocketLaunchIcon;
-export const PauseFilled = withDefaults(PauseCircleIcon, { weight: "fill" }, "PauseFilled");
-export const PauseCircle = PauseCircleIcon;
-export const Reset = ArrowCounterClockwiseIcon;
-export const RotateCcw = ArrowCounterClockwiseIcon;
-export const Maximize = ArrowsOutSimpleIcon;
-export const Maximize2 = ArrowsOutSimpleIcon;
-export const Minimize = ArrowsInSimpleIcon;
-export const Minimize2 = ArrowsInSimpleIcon;
-export const Focus = CrosshairSimpleIcon;
-export const FlowArrow = FlowArrowIcon;
-export const LocateFixed = TargetIcon;
-export const RefreshCw = ArrowsClockwiseIcon;
-export const CircleDash = CircleDashedIcon;
-export const Circle = CircleIcon;
-export const CircleFilled = withDefaults(CircleIcon, { weight: "fill" }, "CircleFilled");
-export const CloudOffline = CloudSlashIcon;
-export const Search = MagnifyingGlassIcon;
-export const Scan = ScanIcon;
-export const Security = ShieldCheckIcon;
-export const ShieldCheck = ShieldCheckIcon;
-export const Shield = ShieldIcon;
-export const Settings = GearSixIcon;
-export const Info = InfoIcon;
-export const Tag = TagIcon;
-export const Time = ClockIcon;
-export const Clock = ClockIcon;
-export const ClockClockwise = ClockClockwiseIcon;
-export const Timer = TimerIcon;
-export const Tools = ToolboxIcon;
-export const Unknown = QuestionIcon;
-export const Question = QuestionIcon;
-export const User = UserIcon;
-export const Users = UsersThreeIcon;
-export const UserCircle = UserCircleIcon;
-export const View = EyeIcon;
-export const Eye = EyeIcon;
-export const EyeOff = EyeSlashIcon;
-export const Play = PlayIcon;
-export const Zap = LightningIcon;
-export const Check = CheckIcon;
-export const CircleCheck = CheckCircleIcon;
-export const CheckCircle2 = CheckCircleIcon;
-export const CircleX = XCircleIcon;
-export const X = XIcon;
-export const WarningAltFilled = withDefaults(WarningCircleIcon, { weight: "fill" }, "WarningAltFilled");
-export const WarningFilled = withDefaults(WarningOctagonIcon, { weight: "fill" }, "WarningFilled");
-export const GithubLogo = GithubLogoIcon;
-export const GitBranch = GitBranchIcon;
-export const GitCommit = GitCommitIcon;
-export const BarChart3 = ChartBarIcon;
-export const Gauge = GaugeIcon;
-export const GaugeCircle = GaugeIcon;
-export const RadioTower = BroadcastIcon;
-export const Bug = BugIcon;
-export const Wrench = WrenchIcon;
-export const FileText = FileTextIcon;
-export const ExternalLink = ArrowSquareOutIcon;
-export const AlertCircle = WarningCircleIcon;
-export const XCircle = XCircleIcon;
-export const Cog = GearSixIcon;
-export const Terminal = TerminalWindowIcon;
-export const WifiHigh = WifiHighIcon;
-export const WifiSlash = WifiSlashIcon;
-export const Plus = PlusIcon;
-export const Minus = MinusIcon;
-export const Checklist = ListChecksIcon;
-export const ArrowClockwise = ArrowsClockwiseIcon;
-export const CollapseAll = ArrowsInLineVerticalIcon;
-export const ExpandAll = ArrowsOutLineVerticalIcon;
-export const Dashboard = SquaresFourIcon;
-export const Grid = SquaresFourIcon;
-export const SquaresFour = SquaresFourIcon;
-export const GridFour = GridFourIcon;
-export const Document = FileTextIcon;
-export const Quote = QuotesIcon;
-export const FileJson = FileCodeIcon;
-export const Download = DownloadSimpleIcon;
-export const Upload = UploadSimpleIcon;
-export const DownloadSimple = DownloadSimpleIcon;
-export const UploadSimple = UploadSimpleIcon;
-export const Save = FloppyDiskIcon;
-export const Hash = HashIcon;
-export const Earth = GlobeHemisphereWestIcon;
-export const Events = CalendarIcon;
-export const Information = InfoIcon;
-export const MoreHorizontal = DotsThreeIcon;
-export const Link = LinkSimpleIcon;
-export const List = ListBulletsIcon;
-export const Type = TextTIcon;
-export const Network_3 = ShareNetworkIcon;
-export const ShareNetwork = ShareNetworkIcon;
-export const Share2 = ShareNetworkIcon;
-export const PanelLeft = SidebarSimpleIcon;
-export const Package = PackagePhosphorIcon;
-export const PackageIcon = PackagePhosphorIcon;
-export const RecentlyViewed = ClockCounterClockwiseIcon;
-export const Renew = ArrowsClockwiseIcon;
-export const Restart = ArrowsClockwiseIcon;
-export const ServerProxy = CloudIcon;
-export const Server = StackIcon;
-export const SortAscending = SortAscendingIcon;
-export const SortDescending = SortDescendingIcon;
-export const Table = TableIcon;
-export const TreeStructure = TreeStructureIcon;
-export const Stop = StopIcon;
-export const TrashCan = TrashIcon;
-export const Trash = TrashIcon;
-export const Warning = WarningIcon;
-export const WarningAlt = WarningCircleIcon;
-export const WarningCircle = WarningCircleIcon;
-export const WarningDiamond = WarningDiamondIcon;
-export const WarningOctagon = WarningOctagonIcon;
-export const WatsonxAi = CognitivePhosphorIcon;
-export const Wifi = WifiHighIcon;
-export const WifiOff = WifiSlashIcon;
-export const Target = TargetIcon;
-export const Sun = SunIcon;
-export const Moon = MoonIcon;
-export const Monitor = MonitorIcon;
-export type IconComponent = Icon;
-export type IconComponentProps = IconProps;
-export type IconWeight = PhosphorIconWeight;
-export type { Icon };
+// Alerts / Warnings
+export { AlertTriangle };
+export { AlertCircle };
+export { AlertTriangle as Warning };
+export { AlertCircle as WarningCircle };
+export { AlertCircle as WarningAlt };
+export { AlertTriangle as WarningDiamond };
+export { AlertTriangle as WarningOctagon };
+export { AlertCircle as WarningAltFilled };
+export { AlertTriangle as WarningFilled };
+
+// Arrows
+export { ArrowLeft };
+export { ArrowDown };
+export { ArrowUp };
+export { ArrowUpDown };
+export { ArrowRight };
+export { ArrowUpRight };
+export { RotateCcw as ArrowCounterClockwise };
+export { RotateCcw as ArrowSquareOut };
+export { Maximize as ArrowsOutSimple };
+export { RefreshCw };
+export { RefreshCw as ArrowsClockwise };
+export { RefreshCw as ArrowClockwise };
+export { RefreshCw as Renew };
+export { RefreshCw as Restart };
+export { RefreshCw as Reset };
+export { RotateCcw as RotateCcw };
+export { ArrowDown as CollapseAll };
+export { ArrowUp as ExpandAll };
+
+// Bot / Robot
+export { Bot };
+
+/**
+ * Agent nodes — deployable agent processes (treat like microservices).
+ * Use for fleet / node rows, nav, combobox node column — not for reasoners or skills.
+ */
+export { Server as AgentNodeIcon };
+
+// Reasoners — LLM-capable / “thinking” API endpoints (non-deterministic).
+export { Lightbulb };
+export { Lightbulb as ReasonerIcon };
+
+// Skills — deterministic callable APIs (ƒ); pair visually with ReasonerIcon in lists.
+
+// Calendar / Time
+export { Calendar };
+export { Calendar as Events };
+export { Clock };
+export { Clock as Time };
+export { Clock as RecentlyViewed };
+export { Timer };
+export { Timer as ClockClockwise };
+export { RotateCcw as ClockCounterClockwise };
+
+// Charts / Analytics
+export { LineChart as Analytics };
+export { BarChart3 };
+export { TrendingUp };
+export { TrendingDown };
+export { TrendingUp as TrendingUp2 };
+export { Gauge };
+export { Gauge as GaugeCircle };
+
+// Check / Checkmarks
+export { Check };
+export { Check as Checkmark };
+export { CheckCircle2 as CheckmarkFilled };
+export { CheckCircle2 as CheckCircle };
+export { CheckCircle2 };
+export { CheckCircle2 as CircleCheck };
+export { ListChecks as Checklist };
+
+// Chevrons / Carets
+export { ChevronDown };
+export { ChevronLeft };
+export { ChevronRight };
+export { ChevronUp };
+export { ChevronDown as CaretDown };
+export { ChevronRight as CaretRight };
+export { ChevronUp as CaretUp };
+export { ChevronLeft as CaretLeft };
+
+// Circle variants
+export { Circle };
+export { CircleDashed as CircleDash };
+export { CircleDashed };
+export { Circle as CircleFilled };
+
+// Code / Braces
+export { Braces as Code };
+export { Braces as BracketsCurly };
+export { Braces };
+export { FileCode as FileJson };
+
+// Cloud
+export { Cloud };
+export { CloudOff as CloudOffline };
+
+// Copy
+export { Copy };
+export { Copy as CopySimple };
+
+// Cpu / Chip
+export { Cpu };
+export { Cpu as Chip };
+
+// Close / X
+export { X as Close };
+export { XCircle as CloseFilled };
+export { X };
+export { XCircle };
+export { XCircle as CircleX };
+export { XCircle as ErrorFilled };
+
+// Database
+export { Database };
+export { Database as DataBase };
+
+// Dots / More
+export { MoreHorizontal as DotsThree };
+export { MoreVertical as DotsThreeVertical };
+export { MoreHorizontal };
+
+// Download / Upload
+export { Download };
+export { Download as DownloadSimple };
+export { Upload };
+export { Upload as UploadSimple };
+
+// Eye / View
+export { Eye };
+export { Eye as View };
+export { EyeOff };
+
+// File / Document
+export { FileText };
+export { FileText as Document };
+export { FileText as Article };
+export { FileText as Note };
+
+// Filter / Funnel / Sort
+export { Filter };
+export { Funnel as FunnelSimple };
+export { SortAsc as SortAscending };
+export { SortDesc as SortDescending };
+export { ArrowUpNarrowWide as SortAscendingIcon };
+export { ArrowDownNarrowWide as SortDescendingIcon };
+
+// Flash / Zap / Lightning
+export { Zap as Flash };
+export { Zap };
+
+// Focus / Crosshair
+export { Crosshair as Focus };
+export { Target as LocateFixed };
+export { Target };
+export { Scan };
+
+export { FunctionSquare as Function };
+export { FunctionSquare as SkillIcon };
+
+// Git
+export { GitBranch };
+export { GitBranch as GitBranch2 };
+export { GitBranch as TreeStructure };
+export { GitCommit };
+export { Github as GithubLogo };
+
+// Globe / Earth
+export { Network as Earth };
+export { Network };
+export { Network as Network_3 };
+export { Share2 };
+export { Share2 as ShareNetwork };
+
+// Hash
+export { Hash };
+
+// ID / Identification
+export { IdCard as Identification };
+
+// Help / Question
+export { HelpCircle };
+export { HelpCircle as Question };
+export { HelpCircle as QuestionMark };
+
+// Info
+export { Info };
+export { Info as Information };
+
+// Layers / Stack
+export { Layers };
+export { Layers as Stack };
+
+// Launch / Rocket
+export { Rocket as Launch };
+export { Rocket };
+
+// Link / External
+export { Link };
+export { ArrowUpRight as ExternalLink };
+
+// List
+export { List };
+export { List as ListBullets };
+
+// Loader / Spinner
+export { Loader2 };
+export { Loader2 as InProgress };
+export { Loader2 as Loader };
+export { Loader2 as SpinnerGap };
+
+// Lock
+export { Lock };
+
+// Log Out / Sign Out
+export { LogOut as SignOut };
+
+// Maximize / Minimize / Corners
+export { Maximize };
+export { Maximize2 };
+export { Minimize };
+export { Minimize2 };
+export { Minimize as CornersIn };
+
+// MessageSquare / Chat
+export { MessageSquare };
+export { MessageSquare as Chat };
+
+// Minus
+export { Minus };
+
+// Monitor / Desktop
+export { Monitor };
+
+// Moon / Sun
+export { Moon };
+export { Sun };
+
+// Package
+export { Package };
+export { Package as PackageIcon };
+
+// Panel / Sidebar
+export { PanelLeft };
+
+// Pause
+export { PauseCircle };
+export { PauseCircle as PauseFilled };
+
+// Play
+export { Play };
+
+// Plus
+export { Plus };
+
+// Quote
+export { Quote };
+
+// Radio / Broadcast / RadioTower
+export { Radio as RadioTower };
+export { Radio as Broadcast };
+
+// Save / Floppy
+export { Save };
+export { Save as FloppyDisk };
+
+// Search / MagnifyingGlass
+export { Search };
+
+// Settings / Gear / Cog
+export { Settings };
+export { Cog };
+
+// Shield / Security
+export { Shield };
+export { ShieldCheck };
+export { ShieldCheck as Security };
+
+// Sort
+export { SortAsc };
+export { SortDesc };
+export { ArrowUpNarrowWide };
+export { ArrowDownNarrowWide };
+
+// Star
+export { Star };
+
+// Stop / Square
+export { Square as Stop };
+
+// Table
+export { Table };
+
+// Tag
+export { Tag };
+
+// Terminal
+export { Terminal };
+
+// Trash
+export { Trash2 as Trash };
+export { Trash2 as TrashCan };
+
+// Type / Text
+export { Hash as Type };
+
+// User / Users
+export { User };
+export { Users };
+export { UserCircle };
+
+// Wifi
+export { Wifi };
+export { Wifi as WifiHigh };
+export { WifiOff };
+export { WifiOff as WifiSlash };
+
+// Workflow / FlowArrow
+export { Workflow as FlowArrow };
+
+// Wrench / Bug / Tools
+export { Wrench };
+export { Bug };
+export { Wrench as Tools };
+
+// Layout / Grid / Dashboard
+export { LayoutGrid as Dashboard };
+export { LayoutGrid as Grid };
+export { LayoutGrid as SquaresFour };
+export { LayoutGrid as GridFour };
+
+// Hard Drive / Cloud Server
+export { HardDrive as ServerProxy };
+
+// ListChecks
+export { ListChecks };

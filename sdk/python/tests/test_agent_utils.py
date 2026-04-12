@@ -43,7 +43,7 @@ def test_generate_skill_name_and_schema():
             "required": ["q"],
         }
     }
-    Model = AgentUtils.create_input_schema_from_mcp_tool("skill", tool)
+    Model = AgentUtils.create_input_schema_from_tool("skill", tool)
     inst = Model(q="text")
     assert inst.q == "text"
 
@@ -118,7 +118,7 @@ def test_detect_input_type_additional_branches(tmp_path):
 
 
 def test_create_input_schema_handles_empty_properties():
-    Model = AgentUtils.create_input_schema_from_mcp_tool("skill", {"input_schema": {}})
+    Model = AgentUtils.create_input_schema_from_tool("skill", {"input_schema": {}})
     instance = Model()
     assert hasattr(instance, "data")
     assert instance.data is None

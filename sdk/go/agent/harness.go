@@ -10,7 +10,7 @@ import (
 // providing lazy initialization and a convenience Harness() method.
 // HarnessConfig configures the default harness runner for the agent.
 type HarnessConfig struct {
-	// Provider is the default provider: "opencode" or "claude-code".
+	// Provider is the default provider: "claude-code", "codex", "gemini", or "opencode".
 	Provider string
 
 	// Model is the default model identifier.

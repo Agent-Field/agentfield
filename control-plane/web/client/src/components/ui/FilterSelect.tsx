@@ -55,7 +55,7 @@ export const FilterSelect = React.forwardRef<HTMLSelectElement, FilterSelectProp
           <label
             htmlFor={selectId}
             className={cn(
-              "text-body-small font-medium text-text-secondary",
+              "text-sm text-muted-foreground font-medium text-muted-foreground",
               orientation === "inline" ? "whitespace-nowrap" : undefined
             )}
           >
@@ -72,7 +72,7 @@ export const FilterSelect = React.forwardRef<HTMLSelectElement, FilterSelectProp
             onChange={handleChange}
             aria-describedby={descriptionId}
             className={cn(
-              "flex h-9 min-w-[9.5rem] items-center rounded-md border border-border bg-bg-secondary px-3 text-body text-text-primary shadow-sm transition-colors",
+              "flex h-9 min-w-[9.5rem] items-center rounded-md border border-border bg-muted px-3 text-sm text-foreground shadow-sm transition-colors",
               "focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-0 focus:border-ring",
               "disabled:cursor-not-allowed disabled:opacity-60",
               className
@@ -89,7 +89,7 @@ export const FilterSelect = React.forwardRef<HTMLSelectElement, FilterSelectProp
           {helperText && (
             <span
               id={descriptionId}
-              className="text-body-small text-text-tertiary"
+              className="text-sm text-muted-foreground text-muted-foreground"
             >
               {helperText}
             </span>

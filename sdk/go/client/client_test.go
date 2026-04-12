@@ -219,6 +219,24 @@ func TestRegisterNode(t *testing.T) {
 	}
 }
 
+func TestGetNode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "/api/v1/nodes/node-1", r.URL.Path)
+		assert.Equal(t, "application/json", r.Header.Get("Accept"))
+		_, _ = w.Write([]byte(`{"id":"node-1","status":"ready"}`))
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL)
+	require.NoError(t, err)
+
+	resp, err := client.GetNode(context.Background(), "node-1")
+	require.NoError(t, err)
+	assert.Equal(t, "node-1", resp["id"])
+	assert.Equal(t, "ready", resp["status"])
+}
+
 func TestUpdateStatus(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -905,6 +923,42 @@ func TestShutdownWithAPIKey(t *testing.T) {
 	resp, err := client.Shutdown(context.Background(), "node-1", payload)
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
+}
+
+func TestPostExecutionLogs(t *testing.T) {
+	var receivedBody map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/api/v1/executions/exec-1/logs", r.URL.Path)
+		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&receivedBody))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, WithBearerToken("tok"))
+	require.NoError(t, err)
+
+	payload := map[string]any{
+		"execution_id":     "exec-1",
+		"workflow_id":      "wf-1",
+		"run_id":           "run-1",
+		"root_workflow_id": "root-1",
+		"level":            "info",
+		"source":           "sdk.runtime",
+		"event_type":       "reasoner.invoke.start",
+		"message":          "starting",
+		"attributes":       map[string]any{"foo": "bar"},
+	}
+
+	err = client.PostExecutionLogs(context.Background(), "exec-1", payload)
+	require.NoError(t, err)
+
+	assert.Equal(t, "exec-1", receivedBody["execution_id"])
+	assert.Equal(t, "reasoner.invoke.start", receivedBody["event_type"])
+	assert.Equal(t, "starting", receivedBody["message"])
 }
 
 func TestUnauthorizedResponse(t *testing.T) {

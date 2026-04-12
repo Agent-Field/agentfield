@@ -20,8 +20,8 @@ export function AgentBadge({
   const initials = agentColorManager.getAgentInitials(agentName);
 
   const sizeClasses = {
-    sm: "w-5 h-5 text-[9px] font-bold",
-    md: "w-6 h-6 text-[10px] font-bold",
+    sm: "w-5 h-5 text-nano font-bold",
+    md: "w-6 h-6 text-micro font-bold",
     lg: "w-8 h-8 text-xs font-bold",
   };
 

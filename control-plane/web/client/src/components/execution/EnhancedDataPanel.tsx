@@ -12,7 +12,7 @@ import { normalizeExecutionStatus } from "../../utils/status";
 import { CollapsibleSection } from "./CollapsibleSection";
 import { Button } from "../ui/button";
 import { CopyButton } from "../ui/copy-button";
-import { AdvancedJsonViewer } from "./AdvancedJsonViewer";
+import { UnifiedJsonViewer } from "@/components/ui/UnifiedJsonViewer";
 import { DataModal } from "./EnhancedModal";
 
 interface EnhancedDataPanelProps {
@@ -81,7 +81,7 @@ export function EnhancedDataPanel({ execution, type }: EnhancedDataPanelProps) {
 
   const badge = (
     <div className="flex items-center gap-2">
-      <span className="text-body-small bg-muted/50 px-2 py-0.5 rounded">
+      <span className="text-sm text-muted-foreground bg-muted/50 px-2 py-0.5 rounded">
         {formatBytes(size)}
       </span>
       {hasData && (
@@ -116,7 +116,7 @@ export function EnhancedDataPanel({ execution, type }: EnhancedDataPanelProps) {
                     Data Preview
                   </span>
                   {isLargeContent && (
-                    <span className="text-body-small">
+                    <span className="text-sm text-muted-foreground">
                       (Showing preview)
                     </span>
                   )}
@@ -141,10 +141,8 @@ export function EnhancedDataPanel({ execution, type }: EnhancedDataPanelProps) {
                 </div>
               </div>
               <div className="p-4 bg-background max-h-[300px] overflow-auto scrollbar-thin scrollbar-track-transparent scrollbar-thumb-border">
-                <AdvancedJsonViewer
+                <UnifiedJsonViewer
                   data={data}
-                  maxHeight="100%"
-                  searchable={false}
                 />
               </div>
             </div>

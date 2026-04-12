@@ -14,13 +14,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type executionRecordProvider interface {
-	QueryExecutionRecords(ctx context.Context, filter types.ExecutionFilter) ([]*types.Execution, error)
-	GetExecutionRecord(ctx context.Context, executionID string) (*types.Execution, error)
-}
-
 type executionGraphService struct {
-	store executionRecordProvider
+	store storage.StorageProvider
 }
 
 func newExecutionGraphService(storageProvider storage.StorageProvider) *executionGraphService {
@@ -77,6 +72,23 @@ type WorkflowDAGLightweightNode struct {
 	WorkflowDepth     int     `json:"workflow_depth"`
 }
 
+// WebhookRunSummary aggregates callback delivery attempts for a workflow run (UI strip).
+type WebhookRunSummary struct {
+	StepsWithWebhook int `json:"steps_with_webhook"`
+	TotalDeliveries  int `json:"total_deliveries"`
+	FailedDeliveries int `json:"failed_deliveries"`
+}
+
+// WebhookFailurePreview is one execution whose latest failed webhook attempt is shown for run-level retry UX.
+type WebhookFailurePreview struct {
+	ExecutionID string `json:"execution_id"`
+	AgentNodeID string `json:"agent_node_id,omitempty"`
+	ReasonerID  string `json:"reasoner_id,omitempty"`
+	EventType   string `json:"event_type,omitempty"`
+	HTTPStatus  *int   `json:"http_status,omitempty"`
+	CreatedAt   string `json:"created_at,omitempty"`
+}
+
 type WorkflowDAGLightweightResponse struct {
 	RootWorkflowID string                       `json:"root_workflow_id"`
 	WorkflowStatus string                       `json:"workflow_status"`
@@ -87,6 +99,13 @@ type WorkflowDAGLightweightResponse struct {
 	MaxDepth       int                          `json:"max_depth"`
 	Timeline       []WorkflowDAGLightweightNode `json:"timeline"`
 	Mode           string                       `json:"mode"`
+	// UniqueAgentNodeIDs lists distinct agent node IDs participating in this run (nodes strip).
+	UniqueAgentNodeIDs []string `json:"unique_agent_node_ids,omitempty"`
+	// WorkflowIssuerDID is the issuer DID from the newest execution VC for this workflow, when VC data exists.
+	WorkflowIssuerDID *string `json:"workflow_issuer_did,omitempty"`
+	WebhookSummary    *WebhookRunSummary `json:"webhook_summary,omitempty"`
+	// WebhookFailures lists executions with a failed delivery (latest failure per execution), capped for the run strip.
+	WebhookFailures []WebhookFailurePreview `json:"webhook_failures,omitempty"`
 }
 
 func GetWorkflowDAGHandler(storageProvider storage.StorageProvider) gin.HandlerFunc {
@@ -118,16 +137,21 @@ func (s *executionGraphService) handleGetWorkflowDAG(c *gin.Context) {
 	if isLightweightRequest(c) {
 		timeline, workflowStatus, workflowName, sessionID, actorID, maxDepth := buildLightweightExecutionDAG(executions)
 
+		wh := aggregateWebhookRunData(ctx, s.store, executions)
 		response := WorkflowDAGLightweightResponse{
-			RootWorkflowID: runID,
-			WorkflowStatus: workflowStatus,
-			WorkflowName:   workflowName,
-			SessionID:      sessionID,
-			ActorID:        actorID,
-			TotalNodes:     len(executions),
-			MaxDepth:       maxDepth,
-			Timeline:       timeline,
-			Mode:           "lightweight",
+			RootWorkflowID:     runID,
+			WorkflowStatus:     workflowStatus,
+			WorkflowName:       workflowName,
+			SessionID:          sessionID,
+			ActorID:            actorID,
+			TotalNodes:         len(executions),
+			MaxDepth:           maxDepth,
+			Timeline:           timeline,
+			Mode:               "lightweight",
+			UniqueAgentNodeIDs: collectUniqueAgentNodeIDs(executions),
+			WorkflowIssuerDID: lookupWorkflowIssuerDID(ctx, s.store, runID),
+			WebhookSummary:     wh.summary,
+			WebhookFailures:    wh.failures,
 		}
 
 		c.JSON(http.StatusOK, response)
@@ -264,6 +288,148 @@ func (s *executionGraphService) loadRunExecutions(ctx context.Context, runID str
 		SortDescending: false,
 	}
 	return s.store.QueryExecutionRecords(ctx, filter)
+}
+
+func collectUniqueAgentNodeIDs(executions []*types.Execution) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0)
+	for _, e := range executions {
+		if e == nil {
+			continue
+		}
+		id := strings.TrimSpace(e.AgentNodeID)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+const maxWebhookFailurePreviews = 20
+
+type webhookRunAggregates struct {
+	summary  *WebhookRunSummary
+	failures []WebhookFailurePreview
+}
+
+// aggregateWebhookRunData always returns a non-nil summary so UIs can show an explicit
+// “no webhooks” state. Failures are optional (latest failed attempt per execution).
+func aggregateWebhookRunData(ctx context.Context, store storage.StorageProvider, executions []*types.Execution) webhookRunAggregates {
+	empty := &WebhookRunSummary{}
+	if len(executions) == 0 {
+		return webhookRunAggregates{summary: empty, failures: nil}
+	}
+	ids := make([]string, 0, len(executions))
+	execByID := make(map[string]*types.Execution, len(executions))
+	for _, e := range executions {
+		if e == nil {
+			continue
+		}
+		ids = append(ids, e.ExecutionID)
+		execByID[e.ExecutionID] = e
+	}
+	reg, err := store.ListExecutionWebhooksRegistered(ctx, ids)
+	if err != nil {
+		return webhookRunAggregates{summary: empty, failures: nil}
+	}
+	evMap, err := store.ListExecutionWebhookEventsBatch(ctx, ids)
+	if err != nil {
+		evMap = nil
+	}
+	steps := 0
+	for _, ok := range reg {
+		if ok {
+			steps++
+		}
+	}
+	total := 0
+	failed := 0
+	for _, evs := range evMap {
+		total += len(evs)
+		for _, ev := range evs {
+			if ev == nil {
+				continue
+			}
+			st := strings.ToLower(strings.TrimSpace(ev.Status))
+			if st == "failed" {
+				failed++
+			}
+		}
+	}
+	failures := buildWebhookFailurePreviews(execByID, evMap)
+	return webhookRunAggregates{
+		summary: &WebhookRunSummary{
+			StepsWithWebhook: steps,
+			TotalDeliveries:  total,
+			FailedDeliveries: failed,
+		},
+		failures: failures,
+	}
+}
+
+func buildWebhookFailurePreviews(
+	execByID map[string]*types.Execution,
+	evMap map[string][]*types.ExecutionWebhookEvent,
+) []WebhookFailurePreview {
+	if len(evMap) == 0 {
+		return nil
+	}
+	previews := make([]WebhookFailurePreview, 0)
+	for execID, evs := range evMap {
+		var latestFail *types.ExecutionWebhookEvent
+		for _, ev := range evs {
+			if ev == nil {
+				continue
+			}
+			if strings.ToLower(strings.TrimSpace(ev.Status)) != "failed" {
+				continue
+			}
+			if latestFail == nil || ev.CreatedAt.After(latestFail.CreatedAt) {
+				latestFail = ev
+			}
+		}
+		if latestFail == nil {
+			continue
+		}
+		var agent, reasoner string
+		if ex := execByID[execID]; ex != nil {
+			agent = strings.TrimSpace(ex.AgentNodeID)
+			reasoner = strings.TrimSpace(ex.ReasonerID)
+		}
+		previews = append(previews, WebhookFailurePreview{
+			ExecutionID: execID,
+			AgentNodeID: agent,
+			ReasonerID:  reasoner,
+			EventType:   latestFail.EventType,
+			HTTPStatus:  latestFail.HTTPStatus,
+			CreatedAt:   latestFail.CreatedAt.UTC().Format(time.RFC3339),
+		})
+	}
+	sort.Slice(previews, func(i, j int) bool {
+		return previews[i].CreatedAt > previews[j].CreatedAt
+	})
+	if len(previews) > maxWebhookFailurePreviews {
+		previews = previews[:maxWebhookFailurePreviews]
+	}
+	return previews
+}
+
+func lookupWorkflowIssuerDID(ctx context.Context, store storage.StorageProvider, workflowID string) *string {
+	wf := workflowID
+	vcs, err := store.ListExecutionVCs(ctx, types.VCFilters{WorkflowID: &wf, Limit: 1})
+	if err != nil || len(vcs) == 0 || vcs[0] == nil {
+		return nil
+	}
+	iss := strings.TrimSpace(vcs[0].IssuerDID)
+	if iss == "" {
+		return nil
+	}
+	return &iss
 }
 
 func buildExecutionDAG(executions []*types.Execution) (WorkflowDAGNode, []WorkflowDAGNode, string, string, *string, *string, int) {

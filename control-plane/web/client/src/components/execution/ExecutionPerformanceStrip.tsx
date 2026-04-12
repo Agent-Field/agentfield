@@ -93,7 +93,7 @@ export function ExecutionPerformanceStrip({ execution }: ExecutionPerformanceStr
           </div>
 
           {/* Data Flow Indicator */}
-          <div className="flex items-center gap-2 text-body-small">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <span>Data Flow:</span>
             <div className="flex items-center gap-1">
               <div className={`w-2 h-2 rounded-full ${inputSize > 0 ? 'bg-blue-500' : 'bg-muted'}`} />

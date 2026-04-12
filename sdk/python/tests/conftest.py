@@ -51,8 +51,22 @@ except Exception:  # pragma: no cover
 
 def _network_allowed(node: "pytest.Node") -> bool:
     return bool(
-        node.get_closest_marker("integration") or node.get_closest_marker("mcp")
+        node.get_closest_marker("integration")
     )
+
+
+@pytest.fixture(autouse=True)
+def _ensure_event_loop():
+    """Ensure an event loop exists for Python 3.8/3.9 where asyncio.get_event_loop()
+    raises RuntimeError in non-async contexts. Agent() constructor and
+    handle_serverless() depend on asyncio internally."""
+    import asyncio
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    yield
 
 
 @pytest.fixture(autouse=True)

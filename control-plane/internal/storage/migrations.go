@@ -214,6 +214,7 @@ func (ls *LocalStorage) autoMigrateSchema(ctx context.Context) error {
 		&AgentPackageModel{},
 		&WorkflowExecutionModel{},
 		&WorkflowExecutionEventModel{},
+		&ExecutionLogEntryModel{},
 		&WorkflowRunEventModel{},
 		&WorkflowRunModel{},
 		&WorkflowStepModel{},

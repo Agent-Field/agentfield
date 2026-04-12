@@ -151,7 +151,7 @@ export function ExecutionHistoryList({ history, onLoadMore }: ExecutionHistoryLi
     <div className="space-y-4">
       {/* Summary */}
       <div className="flex items-center justify-between">
-        <p className="text-body-small">
+        <p className="text-sm text-muted-foreground">
           Showing {executions.length} of {history.total} executions
         </p>
       </div>
@@ -214,7 +214,7 @@ export function ExecutionHistoryList({ history, onLoadMore }: ExecutionHistoryLi
                     {execution.cost ? (
                       <span className="text-sm">${execution.cost.toFixed(4)}</span>
                     ) : (
-                      <span className="text-body-small">-</span>
+                      <span className="text-sm text-muted-foreground">-</span>
                     )}
                   </TableCell>
                   <TableCell>
@@ -337,7 +337,7 @@ export function ExecutionHistoryList({ history, onLoadMore }: ExecutionHistoryLi
       )}
 
       {/* Pagination Info */}
-      <div className="text-center text-body-small">
+      <div className="text-center text-sm text-muted-foreground">
         Page {history.page} • {executions.length} of {history.total} executions
       </div>
     </div>

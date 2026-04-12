@@ -93,7 +93,7 @@ export function TagFilter({
               variant="ghost"
               size="sm"
               onClick={handleClearAll}
-              className="h-6 px-2 text-xs text-text-tertiary hover:text-text-secondary"
+              className="h-6 px-2 text-xs text-muted-foreground hover:text-muted-foreground"
             >
               Clear all
             </Button>
@@ -109,8 +109,8 @@ export function TagFilter({
         disabled={availableTags.length === 0}
       >
         <div className="flex items-center gap-2">
-          <Filter size={16} className="text-text-tertiary" />
-          <span className="text-text-secondary">
+          <Filter size={16} className="text-muted-foreground" />
+          <span className="text-muted-foreground">
             {selectedTags.length > 0
               ? `${selectedTags.length} tag${selectedTags.length > 1 ? 's' : ''} selected`
               : placeholder
@@ -133,7 +133,7 @@ export function TagFilter({
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 onKeyDown={handleKeyDown}
-                className="w-full px-3 py-2 text-sm bg-bg-secondary border border-border-secondary rounded-md focus:outline-none focus:ring-2 focus:ring-accent-primary focus:border-transparent text-text-primary"
+                className="w-full px-3 py-2 text-sm bg-muted border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-accent-primary focus:border-transparent text-foreground"
               />
             </div>
 
@@ -145,7 +145,7 @@ export function TagFilter({
                     <button
                       key={tag}
                       onClick={() => handleTagSelect(tag)}
-                      className="w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-bg-hover rounded-md transition-colors text-text-primary"
+                      className="w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-accent rounded-md transition-colors text-foreground"
                     >
                       <span>{tag}</span>
                       <Checkmark size={16} className="opacity-0" />
@@ -153,7 +153,7 @@ export function TagFilter({
                   ))}
                 </div>
               ) : (
-                <div className="p-4 text-center text-sm text-text-tertiary">
+                <div className="p-4 text-center text-sm text-muted-foreground">
                   {searchTerm ? "No tags found" : "All tags selected"}
                 </div>
               )}
@@ -161,8 +161,8 @@ export function TagFilter({
 
             {/* Footer */}
             {availableTags.length > 0 && (
-              <div className="p-3 border-t bg-bg-secondary/30">
-                <div className="text-xs text-text-tertiary">
+              <div className="p-3 border-t bg-muted/30">
+                <div className="text-xs text-muted-foreground">
                   {availableTags.length} total tag{availableTags.length > 1 ? 's' : ''} available
                 </div>
               </div>

@@ -18,6 +18,8 @@ make test-functional-postgres   # Production-like (PostgreSQL)
 make test-functional            # Both modes
 ```
 
+**Execution observability prep:** `make log-demo-up` — control plane + Python/Go/TS agents emitting process logs today; see `docker/LOG_DEMO.md` and `docker/execution-observability-sample.ndjson` for the execution-log demo scaffold.
+
 > **⚠️ CRITICAL:** Tests MUST use the `openrouter_config` fixture and NEVER hardcode model names.
 > This ensures cost control and consistent behavior across all environments.
 

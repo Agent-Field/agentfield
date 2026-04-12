@@ -7,6 +7,7 @@ an automatic tool-call execution loop that dispatches calls via app.call().
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from dataclasses import dataclass, field
@@ -420,6 +421,7 @@ async def execute_tool_call_loop(
     trace = ToolCallTrace()
     total_calls = 0
     hydrated = not needs_lazy_hydration
+    _timeout_break = False
 
     for turn in range(config.max_turns):
         trace.total_turns = turn + 1
@@ -461,6 +463,7 @@ async def execute_tool_call_loop(
         messages.append(response_message.model_dump())
 
         # Execute each tool call
+        _timeout_break = False
         for tc in tool_calls:
             if total_calls >= config.max_tool_calls:
                 log_warn(
@@ -487,9 +490,23 @@ async def execute_tool_call_loop(
             func_name = tc.function.name
             # Unsanitize the LLM-safe name back to the original invocation_target
             invocation_target = _unsanitize_tool_name(func_name)
+            raw_args = getattr(tc.function, "arguments", None)
+            if raw_args is None:
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": json.dumps(
+                            {
+                                "error": f"Tool call to '{func_name}' is missing the 'arguments' field. Please retry with valid JSON arguments."
+                            }
+                        ),
+                    }
+                )
+                continue
             try:
-                func_args = json.loads(tc.function.arguments)
-            except json.JSONDecodeError:
+                func_args = json.loads(raw_args)
+            except (json.JSONDecodeError, TypeError):
                 func_args = {}
 
             record = ToolCallRecord(
@@ -521,6 +538,29 @@ async def execute_tool_call_loop(
                     f"completed in {record.latency_ms:.0f}ms"
                 )
 
+            except asyncio.TimeoutError as e:
+                record.error = f"TimeoutError: {e}"
+                record.latency_ms = (time.monotonic() - start_time) * 1000
+
+                log_error(f"Tool call timed out: {func_name} - {e}")
+
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": json.dumps(
+                            {
+                                "error": f"Tool execution timed out: {e}",
+                                "tool": func_name,
+                            }
+                        ),
+                    }
+                )
+
+                trace.calls.append(record)
+                _timeout_break = True
+                break
+
             except Exception as e:
                 record.error = str(e)
                 record.latency_ms = (time.monotonic() - start_time) * 1000
@@ -537,6 +577,9 @@ async def execute_tool_call_loop(
 
             trace.calls.append(record)
 
+        if _timeout_break:
+            break
+
         # Check if we've hit the tool call limit
         if total_calls >= config.max_tool_calls:
             # Make one final call without tools to get a response
@@ -546,6 +589,9 @@ async def execute_tool_call_loop(
             resp = await make_completion(final_params)
             trace.final_response = getattr(resp.choices[0].message, "content", None)
             return resp, trace
+
+    if _timeout_break:
+        return resp, trace
 
     # Max turns reached - make a final call without tools
     log_warn(f"Max turns reached ({config.max_turns}), requesting final response")

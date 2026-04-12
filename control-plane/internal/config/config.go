@@ -34,10 +34,75 @@ type UIConfig struct {
 // AgentFieldConfig holds the core AgentField server configuration.
 type AgentFieldConfig struct {
 	Port             int                    `yaml:"port"`
+	Registration     RegistrationConfig     `yaml:"registration" mapstructure:"registration"`
 	NodeHealth       NodeHealthConfig       `yaml:"node_health" mapstructure:"node_health"`
+	LLMHealth        LLMHealthConfig        `yaml:"llm_health" mapstructure:"llm_health"`
 	ExecutionCleanup ExecutionCleanupConfig `yaml:"execution_cleanup" mapstructure:"execution_cleanup"`
 	ExecutionQueue   ExecutionQueueConfig   `yaml:"execution_queue" mapstructure:"execution_queue"`
 	Approval         ApprovalConfig         `yaml:"approval" mapstructure:"approval"`
+	NodeLogProxy     NodeLogProxyConfig     `yaml:"node_log_proxy" mapstructure:"node_log_proxy"`
+	ExecutionLogs    ExecutionLogsConfig    `yaml:"execution_logs" mapstructure:"execution_logs"`
+}
+
+// RegistrationConfig governs validation of agent-supplied registration endpoints.
+type RegistrationConfig struct {
+	ServerlessDiscoveryAllowedHosts []string `yaml:"serverless_discovery_allowed_hosts" mapstructure:"serverless_discovery_allowed_hosts"`
+}
+
+// NodeLogProxyConfig limits the control plane proxy to agent process logs (NDJSON).
+type NodeLogProxyConfig struct {
+	ConnectTimeout      time.Duration `yaml:"connect_timeout" mapstructure:"connect_timeout"`
+	StreamIdleTimeout   time.Duration `yaml:"stream_idle_timeout" mapstructure:"stream_idle_timeout"`
+	MaxStreamDuration   time.Duration `yaml:"max_stream_duration" mapstructure:"max_stream_duration"`
+	MaxTailLines        int           `yaml:"max_tail_lines" mapstructure:"max_tail_lines"`
+}
+
+// EffectiveNodeLogProxy returns proxy settings with defaults for zero values.
+func EffectiveNodeLogProxy(c NodeLogProxyConfig) NodeLogProxyConfig {
+	out := c
+	if out.ConnectTimeout <= 0 {
+		out.ConnectTimeout = 5 * time.Second
+	}
+	if out.StreamIdleTimeout <= 0 {
+		out.StreamIdleTimeout = 60 * time.Second
+	}
+	if out.MaxStreamDuration <= 0 {
+		out.MaxStreamDuration = 15 * time.Minute
+	}
+	if out.MaxTailLines <= 0 {
+		out.MaxTailLines = 10000
+	}
+	return out
+}
+
+// ExecutionLogsConfig governs structured execution-correlated logs stored by the control plane.
+type ExecutionLogsConfig struct {
+	RetentionPeriod      time.Duration `yaml:"retention_period" mapstructure:"retention_period"`
+	MaxEntriesPerExecution int         `yaml:"max_entries_per_execution" mapstructure:"max_entries_per_execution"`
+	MaxTailEntries       int           `yaml:"max_tail_entries" mapstructure:"max_tail_entries"`
+	StreamIdleTimeout    time.Duration `yaml:"stream_idle_timeout" mapstructure:"stream_idle_timeout"`
+	MaxStreamDuration    time.Duration `yaml:"max_stream_duration" mapstructure:"max_stream_duration"`
+}
+
+// EffectiveExecutionLogs returns execution-log settings with defaults for zero values.
+func EffectiveExecutionLogs(c ExecutionLogsConfig) ExecutionLogsConfig {
+	out := c
+	if out.RetentionPeriod <= 0 {
+		out.RetentionPeriod = 24 * time.Hour
+	}
+	if out.MaxEntriesPerExecution <= 0 {
+		out.MaxEntriesPerExecution = 5000
+	}
+	if out.MaxTailEntries <= 0 {
+		out.MaxTailEntries = 1000
+	}
+	if out.StreamIdleTimeout <= 0 {
+		out.StreamIdleTimeout = 60 * time.Second
+	}
+	if out.MaxStreamDuration <= 0 {
+		out.MaxStreamDuration = 15 * time.Minute
+	}
+	return out
 }
 
 // ApprovalConfig holds configuration for the execution approval workflow.
@@ -66,21 +131,53 @@ type ExecutionCleanupConfig struct {
 	BatchSize              int           `yaml:"batch_size" mapstructure:"batch_size" default:"100"`
 	PreserveRecentDuration time.Duration `yaml:"preserve_recent_duration" mapstructure:"preserve_recent_duration" default:"1h"`
 	StaleExecutionTimeout  time.Duration `yaml:"stale_execution_timeout" mapstructure:"stale_execution_timeout" default:"30m"`
+	MaxRetries             int           `yaml:"max_retries" mapstructure:"max_retries" default:"0"`
+	RetryBackoff           time.Duration `yaml:"retry_backoff" mapstructure:"retry_backoff" default:"30s"`
 }
 
 // ExecutionQueueConfig configures execution and webhook settings.
 type ExecutionQueueConfig struct {
 	AgentCallTimeout       time.Duration `yaml:"agent_call_timeout" mapstructure:"agent_call_timeout"`
+	MaxConcurrentPerAgent  int           `yaml:"max_concurrent_per_agent" mapstructure:"max_concurrent_per_agent"` // 0 = unlimited
 	WebhookTimeout         time.Duration `yaml:"webhook_timeout" mapstructure:"webhook_timeout"`
 	WebhookMaxAttempts     int           `yaml:"webhook_max_attempts" mapstructure:"webhook_max_attempts"`
 	WebhookRetryBackoff    time.Duration `yaml:"webhook_retry_backoff" mapstructure:"webhook_retry_backoff"`
 	WebhookMaxRetryBackoff time.Duration `yaml:"webhook_max_retry_backoff" mapstructure:"webhook_max_retry_backoff"`
 }
 
+// LLMHealthConfig configures LLM backend health monitoring with circuit breaker.
+type LLMHealthConfig struct {
+	Enabled            bool          `yaml:"enabled" mapstructure:"enabled"`
+	Endpoints          []LLMEndpoint `yaml:"endpoints" mapstructure:"endpoints"`
+	CheckInterval      time.Duration `yaml:"check_interval" mapstructure:"check_interval"`       // How often to probe (default 15s)
+	CheckTimeout       time.Duration `yaml:"check_timeout" mapstructure:"check_timeout"`         // Timeout per probe (default 5s)
+	FailureThreshold   int           `yaml:"failure_threshold" mapstructure:"failure_threshold"`  // Failures before opening circuit (default 3)
+	RecoveryTimeout    time.Duration `yaml:"recovery_timeout" mapstructure:"recovery_timeout"`    // How long circuit stays open before half-open (default 30s)
+	HalfOpenMaxProbes  int           `yaml:"half_open_max_probes" mapstructure:"half_open_max_probes"` // Probes in half-open before closing (default 2)
+}
+
+// LLMEndpoint defines a single LLM backend to monitor.
+type LLMEndpoint struct {
+	Name     string `yaml:"name" mapstructure:"name"`         // Display name (e.g. "litellm")
+	URL      string `yaml:"url" mapstructure:"url"`           // Health check URL (e.g. "http://localhost:4000/health")
+	Method   string `yaml:"method" mapstructure:"method"`     // HTTP method (default GET)
+	Header   string `yaml:"header" mapstructure:"header"`     // Optional auth header value
+}
+
 // FeatureConfig holds configuration for enabling/disabling features.
 type FeatureConfig struct {
 	DID       DIDConfig       `yaml:"did" mapstructure:"did"`
 	Connector ConnectorConfig `yaml:"connector" mapstructure:"connector"`
+	Tracing   TracingConfig   `yaml:"tracing" mapstructure:"tracing"`
+}
+
+// TracingConfig holds configuration for OpenTelemetry distributed tracing.
+type TracingConfig struct {
+	Enabled     bool   `yaml:"enabled" mapstructure:"enabled"`           // Enable OTel trace export (default: false)
+	Exporter    string `yaml:"exporter" mapstructure:"exporter"`         // "otlp-http" (default) or "otlp-grpc"
+	Endpoint    string `yaml:"endpoint" mapstructure:"endpoint"`         // OTLP endpoint (default: "localhost:4318")
+	ServiceName string `yaml:"service_name" mapstructure:"service_name"` // Service name for traces (default: "agentfield")
+	Insecure    bool   `yaml:"insecure" mapstructure:"insecure"`         // Skip TLS verification
 }
 
 // ConnectorConfig holds configuration for the connector service integration.
@@ -270,6 +367,17 @@ func ApplyEnvOverrides(cfg *Config) {
 		cfg.API.Auth.APIKey = apiKey
 	}
 
+	if val := os.Getenv("AGENTFIELD_REGISTRATION_SERVERLESS_DISCOVERY_ALLOWED_HOSTS"); val != "" {
+		parts := strings.Split(val, ",")
+		cfg.AgentField.Registration.ServerlessDiscoveryAllowedHosts = cfg.AgentField.Registration.ServerlessDiscoveryAllowedHosts[:0]
+		for _, part := range parts {
+			trimmed := strings.TrimSpace(part)
+			if trimmed != "" {
+				cfg.AgentField.Registration.ServerlessDiscoveryAllowedHosts = append(cfg.AgentField.Registration.ServerlessDiscoveryAllowedHosts, trimmed)
+			}
+		}
+	}
+
 	// Node health monitoring overrides
 	if val := os.Getenv("AGENTFIELD_HEALTH_CHECK_INTERVAL"); val != "" {
 		if d, err := time.ParseDuration(val); err == nil {
@@ -297,6 +405,61 @@ func ApplyEnvOverrides(cfg *Config) {
 		}
 	}
 
+	// LLM health monitoring overrides
+	if val := os.Getenv("AGENTFIELD_LLM_HEALTH_ENABLED"); val != "" {
+		cfg.AgentField.LLMHealth.Enabled = val == "true" || val == "1"
+	}
+	if val := os.Getenv("AGENTFIELD_LLM_HEALTH_CHECK_INTERVAL"); val != "" {
+		if d, err := time.ParseDuration(val); err == nil {
+			cfg.AgentField.LLMHealth.CheckInterval = d
+		}
+	}
+	if val := os.Getenv("AGENTFIELD_LLM_HEALTH_CHECK_TIMEOUT"); val != "" {
+		if d, err := time.ParseDuration(val); err == nil {
+			cfg.AgentField.LLMHealth.CheckTimeout = d
+		}
+	}
+	if val := os.Getenv("AGENTFIELD_LLM_HEALTH_FAILURE_THRESHOLD"); val != "" {
+		if i, err := strconv.Atoi(val); err == nil {
+			cfg.AgentField.LLMHealth.FailureThreshold = i
+		}
+	}
+	if val := os.Getenv("AGENTFIELD_LLM_HEALTH_RECOVERY_TIMEOUT"); val != "" {
+		if d, err := time.ParseDuration(val); err == nil {
+			cfg.AgentField.LLMHealth.RecoveryTimeout = d
+		}
+	}
+	// Single LLM endpoint via env var (convenience for simple setups)
+	if val := os.Getenv("AGENTFIELD_LLM_HEALTH_ENDPOINT"); val != "" {
+		name := os.Getenv("AGENTFIELD_LLM_HEALTH_ENDPOINT_NAME")
+		if name == "" {
+			name = "default"
+		}
+		cfg.AgentField.LLMHealth.Endpoints = append(cfg.AgentField.LLMHealth.Endpoints, LLMEndpoint{
+			Name: name,
+			URL:  val,
+		})
+	}
+
+	// Execution queue overrides
+	if val := os.Getenv("AGENTFIELD_MAX_CONCURRENT_PER_AGENT"); val != "" {
+		if i, err := strconv.Atoi(val); err == nil {
+			cfg.AgentField.ExecutionQueue.MaxConcurrentPerAgent = i
+		}
+	}
+
+	// Execution retry overrides
+	if val := os.Getenv("AGENTFIELD_EXECUTION_MAX_RETRIES"); val != "" {
+		if i, err := strconv.Atoi(val); err == nil {
+			cfg.AgentField.ExecutionCleanup.MaxRetries = i
+		}
+	}
+	if val := os.Getenv("AGENTFIELD_EXECUTION_RETRY_BACKOFF"); val != "" {
+		if d, err := time.ParseDuration(val); err == nil {
+			cfg.AgentField.ExecutionCleanup.RetryBackoff = d
+		}
+	}
+
 	// Authorization overrides
 	if val := os.Getenv("AGENTFIELD_AUTHORIZATION_ENABLED"); val != "" {
 		cfg.Features.DID.Authorization.Enabled = val == "true" || val == "1"
@@ -314,6 +477,55 @@ func ApplyEnvOverrides(cfg *Config) {
 		cfg.Features.DID.Authorization.InternalToken = val
 	}
 
+	// Node log proxy (UI → agent NDJSON)
+	if val := os.Getenv("AGENTFIELD_NODE_LOG_PROXY_CONNECT_TIMEOUT"); val != "" {
+		if d, err := time.ParseDuration(val); err == nil {
+			cfg.AgentField.NodeLogProxy.ConnectTimeout = d
+		}
+	}
+	if val := os.Getenv("AGENTFIELD_NODE_LOG_PROXY_STREAM_IDLE_TIMEOUT"); val != "" {
+		if d, err := time.ParseDuration(val); err == nil {
+			cfg.AgentField.NodeLogProxy.StreamIdleTimeout = d
+		}
+	}
+	if val := os.Getenv("AGENTFIELD_NODE_LOG_PROXY_MAX_DURATION"); val != "" {
+		if d, err := time.ParseDuration(val); err == nil {
+			cfg.AgentField.NodeLogProxy.MaxStreamDuration = d
+		}
+	}
+	if val := os.Getenv("AGENTFIELD_NODE_LOG_MAX_TAIL_LINES"); val != "" {
+		if i, err := strconv.Atoi(val); err == nil {
+			cfg.AgentField.NodeLogProxy.MaxTailLines = i
+		}
+	}
+
+	// Structured execution log storage and streaming
+	if val := os.Getenv("AGENTFIELD_EXECUTION_LOG_RETENTION_PERIOD"); val != "" {
+		if d, err := time.ParseDuration(val); err == nil {
+			cfg.AgentField.ExecutionLogs.RetentionPeriod = d
+		}
+	}
+	if val := os.Getenv("AGENTFIELD_EXECUTION_LOG_MAX_ENTRIES_PER_EXECUTION"); val != "" {
+		if i, err := strconv.Atoi(val); err == nil {
+			cfg.AgentField.ExecutionLogs.MaxEntriesPerExecution = i
+		}
+	}
+	if val := os.Getenv("AGENTFIELD_EXECUTION_LOG_MAX_TAIL_ENTRIES"); val != "" {
+		if i, err := strconv.Atoi(val); err == nil {
+			cfg.AgentField.ExecutionLogs.MaxTailEntries = i
+		}
+	}
+	if val := os.Getenv("AGENTFIELD_EXECUTION_LOG_STREAM_IDLE_TIMEOUT"); val != "" {
+		if d, err := time.ParseDuration(val); err == nil {
+			cfg.AgentField.ExecutionLogs.StreamIdleTimeout = d
+		}
+	}
+	if val := os.Getenv("AGENTFIELD_EXECUTION_LOG_MAX_DURATION"); val != "" {
+		if d, err := time.ParseDuration(val); err == nil {
+			cfg.AgentField.ExecutionLogs.MaxStreamDuration = d
+		}
+	}
+
 	// Approval workflow overrides
 	if val := os.Getenv("AGENTFIELD_APPROVAL_WEBHOOK_SECRET"); val != "" {
 		cfg.AgentField.Approval.WebhookSecret = val
@@ -322,6 +534,21 @@ func ApplyEnvOverrides(cfg *Config) {
 		if i, err := strconv.Atoi(val); err == nil {
 			cfg.AgentField.Approval.DefaultExpiryHours = i
 		}
+	}
+
+	// OpenTelemetry tracing overrides (also supports standard OTEL_* env vars)
+	if val := os.Getenv("AGENTFIELD_TRACING_ENABLED"); val != "" {
+		cfg.Features.Tracing.Enabled = val == "true" || val == "1"
+	}
+	if val := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); val != "" {
+		cfg.Features.Tracing.Endpoint = val
+		cfg.Features.Tracing.Enabled = true
+	}
+	if val := os.Getenv("OTEL_SERVICE_NAME"); val != "" {
+		cfg.Features.Tracing.ServiceName = val
+	}
+	if val := os.Getenv("AGENTFIELD_TRACING_INSECURE"); val != "" {
+		cfg.Features.Tracing.Insecure = val == "true" || val == "1"
 	}
 
 	// Connector overrides

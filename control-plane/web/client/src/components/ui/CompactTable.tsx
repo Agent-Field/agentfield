@@ -160,7 +160,7 @@ function LoadingRow({ gridTemplate, rowHeight }: { gridTemplate: string; rowHeig
       >
         <div className="flex items-center justify-center col-span-full">
           <SpinnerGap className="h-3 w-3 animate-spin text-muted-foreground" />
-          <span className="ml-2 text-body-small">
+          <span className="ml-2 text-sm text-muted-foreground">
             Loading more…
           </span>
         </div>
@@ -410,7 +410,7 @@ export function CompactTable<T>({
                       "grid h-full items-center content-center px-4 transition-colors duration-150 border-l-2 border-transparent foundation-transition",
                       "hover:bg-[var(--row-hover-bg)] dark:hover:bg-[var(--dark-row-hover-bg)] hover:border-l-muted-foreground/30",
                       hasRowClick &&
-                        "cursor-pointer active:bg-[var(--bg-active)] dark:active:bg-[var(--dark-row-hover-bg)]"
+                        "cursor-pointer active:bg-[hsl(var(--accent))] dark:active:bg-[var(--dark-row-hover-bg)]"
                     )}
                     style={{ gridTemplateColumns: resolvedGridTemplate }}
                     onMouseEnter={() => setHoveredRow(rowKey)}
@@ -455,7 +455,7 @@ export function CompactTable<T>({
         {isFetchingMore && (
           <div className="flex items-center justify-center gap-2 border-t border-border/50 bg-muted/20 py-2">
             <SpinnerGap className="h-3 w-3 animate-spin" />
-            <span className="text-body-small">
+            <span className="text-sm text-muted-foreground">
               Loading more…
             </span>
           </div>

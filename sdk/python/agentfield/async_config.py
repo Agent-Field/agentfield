@@ -33,6 +33,7 @@ class AsyncConfig:
     max_execution_timeout: float = 21600.0  # 6 hours maximum execution time
     default_execution_timeout: float = 7200.0  # 2 hours default timeout
     polling_timeout: float = 20.0  # 20s timeout for individual poll requests
+    llm_call_timeout: float = 120.0  # Per-LLM-call timeout (prevents silent hangs)
 
     # Resource Limits
     max_concurrent_executions: int = 4096  # Maximum concurrent executions to track
@@ -141,6 +142,9 @@ class AsyncConfig:
         )
         config.polling_timeout = get_env_var(
             "polling_timeout", config.polling_timeout, float
+        )
+        config.llm_call_timeout = get_env_var(
+            "llm_call_timeout", config.llm_call_timeout, float
         )
 
         # Resource Limits

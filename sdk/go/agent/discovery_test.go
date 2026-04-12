@@ -120,3 +120,50 @@ func TestDedupeHelper(t *testing.T) {
 	values := []string{"a", "b", "a", "", "c"}
 	assert.Equal(t, []string{"a", "b", "c"}, dedupe(values))
 }
+
+func TestDiscoverSupportsExtendedFilters(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		assert.Equal(t, "agent-1,agent-2", query.Get("agent_ids"))
+		assert.Equal(t, "agent-*", query.Get("reasoner"))
+		assert.Equal(t, "skill-*", query.Get("skill"))
+		assert.Equal(t, "tag-a,tag-b", query.Get("tags"))
+		assert.Equal(t, "true", query.Get("include_output_schema"))
+		assert.Equal(t, "true", query.Get("include_descriptions"))
+		assert.Equal(t, "true", query.Get("include_examples"))
+		assert.Equal(t, "active", query.Get("health_status"))
+		assert.Equal(t, "10", query.Get("limit"))
+		assert.Equal(t, "20", query.Get("offset"))
+		assert.Equal(t, "Bearer token-123", r.Header.Get("Authorization"))
+		assert.Equal(t, "application/json", r.Header.Get("Accept"))
+		fmt.Fprint(w, `{"discovered_at":"2025-01-01T00:00:00Z","total_agents":0,"total_reasoners":0,"total_skills":0,"pagination":{"limit":10,"offset":20,"has_more":false},"capabilities":[]}`)
+	}))
+	defer server.Close()
+
+	a, err := New(Config{
+		NodeID:        "node-1",
+		Version:       "1.0.0",
+		AgentFieldURL: server.URL,
+		Token:         "token-123",
+	})
+	require.NoError(t, err)
+
+	result, err := a.Discover(
+		context.Background(),
+		WithNodeID(""),
+		WithAgentIDs([]string{"agent-1", "agent-2", "agent-1"}),
+		WithNodeIDs(nil),
+		WithReasonerPattern("agent-*"),
+		WithSkillPattern("skill-*"),
+		WithTags([]string{"tag-a", "tag-b", "tag-a"}),
+		WithDiscoveryOutputSchema(true),
+		WithDiscoveryDescriptions(true),
+		WithDiscoveryExamples(true),
+		WithHealthStatus("ACTIVE"),
+		WithLimit(10),
+		WithOffset(20),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "json", result.Format)
+	assert.NotNil(t, result.JSON)
+}

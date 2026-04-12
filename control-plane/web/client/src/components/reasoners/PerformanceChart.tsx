@@ -52,7 +52,7 @@ export function PerformanceChart({ metrics }: PerformanceChartProps) {
       <div className="grid grid-cols-2 gap-4">
         <div className="p-4 border rounded-lg">
           <div className="flex items-center justify-between">
-            <h4 className="text-heading-3">Avg Response Time</h4>
+            <h4 className="text-base font-semibold">Avg Response Time</h4>
             {responseTimes.length > 1 && (
               getTrendIcon(
                 responseTimes[responseTimes.length - 1],
@@ -60,13 +60,13 @@ export function PerformanceChart({ metrics }: PerformanceChartProps) {
               )
             )}
           </div>
-          <p className="text-heading-1">{metrics.avg_response_time_ms}ms</p>
-          <p className="text-body-small">Last 24 hours</p>
+          <p className="text-2xl font-semibold tracking-tight">{metrics.avg_response_time_ms}ms</p>
+          <p className="text-sm text-muted-foreground">Last 24 hours</p>
         </div>
 
         <div className="p-4 border rounded-lg">
           <div className="flex items-center justify-between">
-            <h4 className="text-heading-3">Success Rate</h4>
+            <h4 className="text-base font-semibold">Success Rate</h4>
             {successRates.length > 1 && (
               getTrendIcon(
                 successRates[successRates.length - 1],
@@ -74,19 +74,19 @@ export function PerformanceChart({ metrics }: PerformanceChartProps) {
               )
             )}
           </div>
-          <p className="text-heading-1">{formatPercentage(metrics.success_rate)}</p>
-          <p className="text-body-small">Last 24 hours</p>
+          <p className="text-2xl font-semibold tracking-tight">{formatPercentage(metrics.success_rate)}</p>
+          <p className="text-sm text-muted-foreground">Last 24 hours</p>
         </div>
       </div>
 
       {/* Response Time Chart */}
       {responseTimes.length > 0 && (
         <div className="space-y-3">
-          <h4 className="text-heading-3">Response Time Trend</h4>
+          <h4 className="text-base font-semibold">Response Time Trend</h4>
           <div className="space-y-2">
             {responseTimes.map((time, index) => (
               <div key={index} className="flex items-center gap-3">
-                <span className="text-body-small w-8">
+                <span className="text-sm text-muted-foreground w-8">
                   -{responseTimes.length - index}h
                 </span>
                 <div className="flex-1 bg-muted rounded-full h-2 relative">
@@ -97,7 +97,7 @@ export function PerformanceChart({ metrics }: PerformanceChartProps) {
                     }}
                   />
                 </div>
-                <span className="text-body-small font-mono w-12 text-right">{time}ms</span>
+                <span className="text-sm text-muted-foreground font-mono w-12 text-right">{time}ms</span>
               </div>
             ))}
           </div>
@@ -107,11 +107,11 @@ export function PerformanceChart({ metrics }: PerformanceChartProps) {
       {/* Execution Count Chart */}
       {executionCounts.length > 0 && (
         <div className="space-y-3">
-          <h4 className="text-heading-3">Execution Volume</h4>
+          <h4 className="text-base font-semibold">Execution Volume</h4>
           <div className="space-y-2">
             {executionCounts.map((count, index) => (
               <div key={index} className="flex items-center gap-3">
-                <span className="text-body-small w-8">
+                <span className="text-sm text-muted-foreground w-8">
                   -{executionCounts.length - index}h
                 </span>
                 <div className="flex-1 bg-muted rounded-full h-2 relative">
@@ -136,7 +136,7 @@ export function PerformanceChart({ metrics }: PerformanceChartProps) {
           <div className="space-y-2">
             {successRates.map((rate, index) => (
               <div key={index} className="flex items-center gap-3">
-                <span className="text-body-small w-8">
+                <span className="text-sm text-muted-foreground w-8">
                   -{successRates.length - index}h
                 </span>
                 <div className="flex-1 bg-muted rounded-full h-2 relative">
@@ -161,16 +161,16 @@ export function PerformanceChart({ metrics }: PerformanceChartProps) {
       {/* Performance Summary */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t">
         <div className="text-center">
-          <p className="text-body-small">Total Executions</p>
-          <p className="text-heading-3">{metrics.total_executions}</p>
+          <p className="text-sm text-muted-foreground">Total Executions</p>
+          <p className="text-base font-semibold">{metrics.total_executions}</p>
         </div>
         <div className="text-center">
-          <p className="text-body-small">Last 24h</p>
-          <p className="text-heading-3">{metrics.executions_last_24h}</p>
+          <p className="text-sm text-muted-foreground">Last 24h</p>
+          <p className="text-base font-semibold">{metrics.executions_last_24h}</p>
         </div>
         <div className="text-center">
-          <p className="text-body-small">Cost (24h)</p>
-          <p className="text-heading-3">
+          <p className="text-sm text-muted-foreground">Cost (24h)</p>
+          <p className="text-base font-semibold">
             {metrics.cost_last_24h ? `$${metrics.cost_last_24h.toFixed(4)}` : 'N/A'}
           </p>
         </div>

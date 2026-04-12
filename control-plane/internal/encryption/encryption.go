@@ -1,6 +1,7 @@
 package encryption
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -8,102 +9,46 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"strings"
+
+	"golang.org/x/crypto/pbkdf2"
+)
+
+const (
+	encryptionStringVersion = "v2"
+	encryptionBinaryMagic   = "AFENC2"
+	encryptionSaltSize      = 16
+	encryptionKeySize       = 32
+	encryptionPBKDF2Rounds  = 600000
 )
 
 // EncryptionService provides encryption and decryption for sensitive configuration values
 type EncryptionService struct {
-	key []byte
+	passphrase []byte
 }
 
-// NewEncryptionService creates a new encryption service with a derived key
+// NewEncryptionService creates a new encryption service with a PBKDF2-hardened passphrase.
 func NewEncryptionService(passphrase string) *EncryptionService {
-	// Derive a 32-byte key from the passphrase using SHA-256
-	hash := sha256.Sum256([]byte(passphrase))
 	return &EncryptionService{
-		key: hash[:],
+		passphrase: []byte(passphrase),
 	}
 }
 
-// Encrypt encrypts a plaintext string and returns a base64-encoded ciphertext
-func (es *EncryptionService) Encrypt(plaintext string) (string, error) {
-	if plaintext == "" {
-		return "", nil
-	}
-
-	// Create AES cipher
-	block, err := aes.NewCipher(es.key)
-	if err != nil {
-		return "", fmt.Errorf("failed to create AES cipher: %w", err)
-	}
-
-	// Create GCM mode
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", fmt.Errorf("failed to create GCM: %w", err)
-	}
-
-	// Generate a random nonce
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return "", fmt.Errorf("failed to generate nonce: %w", err)
-	}
-
-	// Encrypt the plaintext
-	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
-
-	// Return base64-encoded ciphertext
-	return base64.StdEncoding.EncodeToString(ciphertext), nil
+func (es *EncryptionService) deriveKey(salt []byte) []byte {
+	return pbkdf2.Key(es.passphrase, salt, encryptionPBKDF2Rounds, encryptionKeySize, sha256.New)
 }
 
-// Decrypt decrypts a base64-encoded ciphertext and returns the plaintext
-func (es *EncryptionService) Decrypt(ciphertext string) (string, error) {
-	if ciphertext == "" {
-		return "", nil
-	}
-
-	// Decode base64
-	data, err := base64.StdEncoding.DecodeString(ciphertext)
-	if err != nil {
-		return "", fmt.Errorf("failed to decode base64: %w", err)
-	}
-
-	// Create AES cipher
-	block, err := aes.NewCipher(es.key)
-	if err != nil {
-		return "", fmt.Errorf("failed to create AES cipher: %w", err)
-	}
-
-	// Create GCM mode
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", fmt.Errorf("failed to create GCM: %w", err)
-	}
-
-	// Check minimum length
-	nonceSize := gcm.NonceSize()
-	if len(data) < nonceSize {
-		return "", fmt.Errorf("ciphertext too short")
-	}
-
-	// Extract nonce and encrypted data
-	nonce, encryptedData := data[:nonceSize], data[nonceSize:]
-
-	// Decrypt
-	plaintext, err := gcm.Open(nil, nonce, encryptedData, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to decrypt: %w", err)
-	}
-
-	return string(plaintext), nil
-}
-
-// EncryptBytes encrypts raw bytes and returns the ciphertext as bytes (nonce prepended).
-func (es *EncryptionService) EncryptBytes(plaintext []byte) ([]byte, error) {
+func (es *EncryptionService) encryptRaw(plaintext []byte) ([]byte, error) {
 	if len(plaintext) == 0 {
 		return nil, nil
 	}
 
-	block, err := aes.NewCipher(es.key)
+	salt := make([]byte, encryptionSaltSize)
+	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
+		return nil, fmt.Errorf("failed to generate salt: %w", err)
+	}
+
+	block, err := aes.NewCipher(es.deriveKey(salt))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create AES cipher: %w", err)
 	}
@@ -118,16 +63,32 @@ func (es *EncryptionService) EncryptBytes(plaintext []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to generate nonce: %w", err)
 	}
 
-	return gcm.Seal(nonce, nonce, plaintext, nil), nil
+	ciphertext := gcm.Seal(nil, nonce, plaintext, nil)
+	encoded := make([]byte, 0, len(encryptionBinaryMagic)+len(salt)+len(nonce)+len(ciphertext))
+	encoded = append(encoded, encryptionBinaryMagic...)
+	encoded = append(encoded, salt...)
+	encoded = append(encoded, nonce...)
+	encoded = append(encoded, ciphertext...)
+	return encoded, nil
 }
 
-// DecryptBytes decrypts ciphertext bytes (nonce prepended) and returns the plaintext bytes.
-func (es *EncryptionService) DecryptBytes(ciphertext []byte) ([]byte, error) {
+func (es *EncryptionService) decryptRaw(ciphertext []byte) ([]byte, error) {
 	if len(ciphertext) == 0 {
 		return nil, nil
 	}
 
-	block, err := aes.NewCipher(es.key)
+	if !bytes.HasPrefix(ciphertext, []byte(encryptionBinaryMagic)) {
+		return nil, fmt.Errorf("unsupported legacy ciphertext format")
+	}
+
+	data := ciphertext[len(encryptionBinaryMagic):]
+	if len(data) < encryptionSaltSize {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
+
+	salt, encryptedData := data[:encryptionSaltSize], data[encryptionSaltSize:]
+
+	block, err := aes.NewCipher(es.deriveKey(salt))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create AES cipher: %w", err)
 	}
@@ -138,17 +99,65 @@ func (es *EncryptionService) DecryptBytes(ciphertext []byte) ([]byte, error) {
 	}
 
 	nonceSize := gcm.NonceSize()
-	if len(ciphertext) < nonceSize {
+	if len(encryptedData) < nonceSize {
 		return nil, fmt.Errorf("ciphertext too short")
 	}
 
-	nonce, encryptedData := ciphertext[:nonceSize], ciphertext[nonceSize:]
-	plaintext, err := gcm.Open(nil, nonce, encryptedData, nil)
+	nonce, sealed := encryptedData[:nonceSize], encryptedData[nonceSize:]
+	plaintext, err := gcm.Open(nil, nonce, sealed, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decrypt: %w", err)
 	}
 
 	return plaintext, nil
+}
+
+// Encrypt encrypts a plaintext string and returns a versioned, base64-encoded ciphertext.
+func (es *EncryptionService) Encrypt(plaintext string) (string, error) {
+	if plaintext == "" {
+		return "", nil
+	}
+
+	encoded, err := es.encryptRaw([]byte(plaintext))
+	if err != nil {
+		return "", err
+	}
+
+	return encryptionStringVersion + ":" + base64.StdEncoding.EncodeToString(encoded), nil
+}
+
+// Decrypt decrypts a base64-encoded ciphertext and returns the plaintext
+func (es *EncryptionService) Decrypt(ciphertext string) (string, error) {
+	if ciphertext == "" {
+		return "", nil
+	}
+
+	encoded := ciphertext
+	if strings.HasPrefix(ciphertext, encryptionStringVersion+":") {
+		encoded = strings.TrimPrefix(ciphertext, encryptionStringVersion+":")
+	}
+
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode base64: %w", err)
+	}
+
+	plaintext, err := es.decryptRaw(data)
+	if err != nil {
+		return "", err
+	}
+
+	return string(plaintext), nil
+}
+
+// EncryptBytes encrypts raw bytes and returns the versioned ciphertext bytes.
+func (es *EncryptionService) EncryptBytes(plaintext []byte) ([]byte, error) {
+	return es.encryptRaw(plaintext)
+}
+
+// DecryptBytes decrypts versioned ciphertext bytes and returns the plaintext bytes.
+func (es *EncryptionService) DecryptBytes(ciphertext []byte) ([]byte, error) {
+	return es.decryptRaw(ciphertext)
 }
 
 // EncryptConfigurationValues encrypts sensitive values in a configuration map

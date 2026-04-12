@@ -72,10 +72,11 @@ services:
       sh -c "
       echo 'Waiting for control plane to be fully ready...' &&
       wait-for-services.sh &&
+      RERUN_OPTS='--reruns 2 --reruns-delay 5 --only-rerun Timeout --only-rerun ConnectionError' &&
       if [ -n \"$$PYTEST_MARK_EXPR\" ]; then
-        pytest -n auto -m \"$$PYTEST_MARK_EXPR\" $$PYTEST_ARGS --junit-xml=/reports/junit-postgres.xml --tb=short;
+        pytest -n auto -m \"$$PYTEST_MARK_EXPR\" $$PYTEST_ARGS $$RERUN_OPTS --junit-xml=/reports/junit-postgres.xml --tb=short;
       else
-        pytest -n auto $$PYTEST_ARGS --junit-xml=/reports/junit-postgres.xml --tb=short;
+        pytest -n auto $$PYTEST_ARGS $$RERUN_OPTS --junit-xml=/reports/junit-postgres.xml --tb=short;
       fi
       "
 

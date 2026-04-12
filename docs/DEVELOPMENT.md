@@ -37,6 +37,7 @@ The install script performs:
 | --------------------- | ------------------------------------------------------------ |
 | Build everything      | `./scripts/build-all.sh`                                     |
 | Run tests             | `./scripts/test-all.sh`                                      |
+| Generate coverage     | `./scripts/coverage-summary.sh`                              |
 | Format Go code        | `make fmt`                                                   |
 | Tidy Go modules       | `make tidy`                                                  |
 | Run the control plane | `cd control-plane && go run cmd/server/main.go`              |
@@ -83,8 +84,20 @@ go test ./...
 
 # Python SDK
 cd ../python
-pytest
+python3 -m pytest
 ```
+
+For repository-wide coverage artifacts and badge inputs, run:
+
+```bash
+./scripts/coverage-summary.sh
+```
+
+The script writes per-surface reports to `test-reports/coverage/`. See `docs/COVERAGE.md` for the exact scope and badge publication flow.
+
+`./scripts/test-all.sh` uses the TypeScript SDK core suite rather than the live harness functional tests, which require external provider CLIs and network-backed runs.
+
+Web UI lint is opt-in for this broad regression pass. Set `AGENTFIELD_RUN_UI_LINT=1` when you explicitly want the UI lint gate as part of the run.
 
 ## Troubleshooting
 

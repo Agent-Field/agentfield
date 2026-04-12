@@ -333,7 +333,7 @@ class TestAPIKeyAuthentication:
         from agentfield.types import AgentStatus, HeartbeatData
 
         client = AgentFieldClient(base_url="http://example.com", api_key="heartbeat-key")
-        heartbeat = HeartbeatData(status=AgentStatus.READY, mcp_servers=[], timestamp="now")
+        heartbeat = HeartbeatData(status=AgentStatus.READY, timestamp="now")
 
         result = await client.send_enhanced_heartbeat("node-1", heartbeat)
 
@@ -360,7 +360,7 @@ class TestAPIKeyAuthentication:
         from agentfield.types import AgentStatus, HeartbeatData
 
         client = AgentFieldClient(base_url="http://example.com", api_key="heartbeat-key")
-        heartbeat = HeartbeatData(status=AgentStatus.READY, mcp_servers=[], timestamp="now")
+        heartbeat = HeartbeatData(status=AgentStatus.READY, timestamp="now")
 
         result = client.send_enhanced_heartbeat_sync("node-1", heartbeat)
 

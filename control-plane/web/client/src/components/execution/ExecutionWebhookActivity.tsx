@@ -53,7 +53,7 @@ export function ExecutionWebhookActivity({ execution, onRetry, isRetrying, retry
           </div>
           <div className="space-y-1">
             <p className="text-sm font-semibold text-foreground">Webhook Activity</p>
-            <p className="text-body-small">
+            <p className="text-sm text-muted-foreground">
               Monitor callback deliveries and diagnose errors at a glance.
             </p>
           </div>
@@ -76,7 +76,7 @@ export function ExecutionWebhookActivity({ execution, onRetry, isRetrying, retry
               )}
             </Button>
             {retryError && (
-              <span className="text-destructive text-body-small">{retryError}</span>
+              <span className="text-destructive text-sm text-muted-foreground">{retryError}</span>
             )}
           </div>
         )}
@@ -115,7 +115,7 @@ export function ExecutionWebhookActivity({ execution, onRetry, isRetrying, retry
                     <Badge
                       variant="outline"
                       className={cn(
-                        "text-body-small uppercase tracking-wide",
+                        "text-sm text-muted-foreground uppercase tracking-wide",
                         tone === "success" && "border-emerald-500/40 text-emerald-500",
                         tone === "danger" && "border-destructive/40 text-destructive",
                       )}
@@ -123,12 +123,12 @@ export function ExecutionWebhookActivity({ execution, onRetry, isRetrying, retry
                       {formatWebhookStatusLabel(event.status)}
                     </Badge>
                     {event.http_status && (
-                      <span className="text-body-small text-muted-foreground">
+                      <span className="text-sm text-muted-foreground text-muted-foreground">
                         HTTP {event.http_status}
                       </span>
                     )}
                   </div>
-                  <div className="flex-1 text-body-small sm:text-right">
+                  <div className="flex-1 text-sm text-muted-foreground sm:text-right">
                     {new Date(event.created_at).toLocaleString()}
                   </div>
                   {event.error_message && (
@@ -141,7 +141,7 @@ export function ExecutionWebhookActivity({ execution, onRetry, isRetrying, retry
             })}
           </div>
         ) : (
-          <div className="p-4 text-body-small">
+          <div className="p-4 text-sm text-muted-foreground">
             {pending && "Webhook registered – waiting for the first delivery."}
             {!pending && !registered && "No webhook was registered for this execution."}
             {!pending && registered && !events.length &&

@@ -61,7 +61,7 @@ func (h *LifecycleHandler) StartAgentHandler(c *gin.Context) {
 	ctx := c.Request.Context()
 	agentID := c.Param("agentId")
 	if agentID == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "agentId is required"})
+		RespondBadRequest(c, "agentId is required")
 		return
 	}
 
@@ -95,10 +95,10 @@ func (h *LifecycleHandler) StartAgentHandler(c *gin.Context) {
 	if err != nil {
 		// Check if it's a "not found" error and return appropriate status
 		if strings.Contains(err.Error(), "not installed") || strings.Contains(err.Error(), "not found") {
-			c.JSON(http.StatusNotFound, ErrorResponse{Error: err.Error()})
+			RespondNotFound(c, err.Error())
 			return
 		}
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to start agent: " + err.Error()})
+		RespondInternalError(c, "failed to start agent: "+err.Error())
 		return
 	}
 
@@ -122,14 +122,14 @@ func (h *LifecycleHandler) StartAgentHandler(c *gin.Context) {
 func (h *LifecycleHandler) StopAgentHandler(c *gin.Context) {
 	agentID := c.Param("agentId")
 	if agentID == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "agentId is required"})
+		RespondBadRequest(c, "agentId is required")
 		return
 	}
 
 	// Get current agent status
 	agentStatus, err := h.agentService.GetAgentStatus(agentID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, ErrorResponse{Error: "agent not found or not installed"})
+		RespondNotFound(c, "agent not found or not installed")
 		return
 	}
 
@@ -144,7 +144,7 @@ func (h *LifecycleHandler) StopAgentHandler(c *gin.Context) {
 
 	// Stop the agent using the agent service
 	if err := h.agentService.StopAgent(agentID); err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to stop agent: " + err.Error()})
+		RespondInternalError(c, "failed to stop agent: "+err.Error())
 		return
 	}
 
@@ -164,14 +164,14 @@ func (h *LifecycleHandler) GetAgentStatusHandler(c *gin.Context) {
 	ctx := c.Request.Context()
 	agentID := c.Param("agentId")
 	if agentID == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "agentId is required"})
+		RespondBadRequest(c, "agentId is required")
 		return
 	}
 
 	// Check if agent package exists
 	agentPackage, err := h.storage.GetAgentPackage(ctx, agentID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, ErrorResponse{Error: "agent package not found"})
+		RespondNotFound(c, "agent package not found")
 		return
 	}
 
@@ -234,7 +234,7 @@ func (h *LifecycleHandler) ListRunningAgentsHandler(c *gin.Context) {
 	// Get all running agents from service
 	runningAgents, err := h.agentService.ListRunningAgents()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to list running agents: " + err.Error()})
+		RespondInternalError(c, "failed to list running agents: "+err.Error())
 		return
 	}
 
@@ -301,7 +301,7 @@ func getConfigurationStatus(config *types.AgentConfiguration) string {
 func (h *LifecycleHandler) ReconcileAgentHandler(c *gin.Context) {
 	agentID := c.Param("agentId")
 	if agentID == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "agentId is required"})
+		RespondBadRequest(c, "agentId is required")
 		return
 	}
 
@@ -309,10 +309,10 @@ func (h *LifecycleHandler) ReconcileAgentHandler(c *gin.Context) {
 	status, err := h.agentService.GetAgentStatus(agentID)
 	if err != nil {
 		if strings.Contains(err.Error(), "not installed") || strings.Contains(err.Error(), "not found") {
-			c.JSON(http.StatusNotFound, ErrorResponse{Error: err.Error()})
+			RespondNotFound(c, err.Error())
 			return
 		}
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to reconcile agent state: " + err.Error()})
+		RespondInternalError(c, "failed to reconcile agent state: "+err.Error())
 		return
 	}
 

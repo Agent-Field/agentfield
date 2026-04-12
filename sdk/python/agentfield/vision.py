@@ -9,6 +9,8 @@ Supported Providers:
 - OpenRouter: Gemini image generation, etc.
 """
 
+import asyncio
+import os
 from typing import Any, Optional
 from agentfield.logger import log_error
 
@@ -146,7 +148,12 @@ async def generate_image_openrouter(
 
     try:
         # Use LiteLLM's completion function (OpenRouter uses chat API)
-        response = await litellm.acompletion(**completion_params)
+        # Wrap with timeout to prevent silent hangs
+        timeout = float(os.getenv("AGENTFIELD_LLM_CALL_TIMEOUT", "120.0"))
+        response = await asyncio.wait_for(
+            litellm.acompletion(**completion_params),
+            timeout=timeout,
+        )
 
         # Extract images from OpenRouter response
         # OpenRouter returns images in choices[0].message.images

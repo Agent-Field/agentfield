@@ -6,6 +6,13 @@ export interface WorkflowSummary {
   run_id: string;
   workflow_id: string;
   root_execution_id?: string;
+  /**
+   * Status of the root execution row, which is the unit the user actually
+   * controls via Pause/Resume/Cancel. The aggregate `status` field can
+   * drift from this when in-flight children are still running after the
+   * user pauses or cancels the root.
+   */
+  root_execution_status?: CanonicalStatus;
   status: CanonicalStatus;
   root_reasoner: string;
   current_task: string;
@@ -128,6 +135,23 @@ export interface WorkflowDAGLightweightNode {
   workflow_depth: number;
 }
 
+/** Aggregated webhook deliveries for a run (from lightweight DAG). */
+export interface WebhookRunSummary {
+  steps_with_webhook: number;
+  total_deliveries: number;
+  failed_deliveries: number;
+}
+
+/** Latest failed webhook attempt for an execution (run strip + retry). */
+export interface WebhookFailurePreview {
+  execution_id: string;
+  agent_node_id?: string;
+  reasoner_id?: string;
+  event_type?: string;
+  http_status?: number | null;
+  created_at?: string;
+}
+
 export interface WorkflowDAGLightweightResponse {
   root_workflow_id: string;
   workflow_status: string;
@@ -138,4 +162,10 @@ export interface WorkflowDAGLightweightResponse {
   max_depth: number;
   timeline: WorkflowDAGLightweightNode[];
   mode: 'lightweight';
+  unique_agent_node_ids?: string[];
+  /** Issuer DID from stored execution VCs for this workflow (server-issued), when present. */
+  workflow_issuer_did?: string;
+  webhook_summary?: WebhookRunSummary;
+  /** Executions with a failed delivery (capped); for run-level retry / focus step. */
+  webhook_failures?: WebhookFailurePreview[];
 }

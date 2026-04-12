@@ -1,0 +1,13 @@
+{
+  "updated_at": "2026-04-09",
+  "method": "captured from scripts/coverage-summary.sh on branch dev/test-coverage (PR #368); bootstrapped when the coverage gate was introduced, see docs/COVERAGE.md for methodology",
+  "note": "This baseline is the contract the coverage gate in .github/workflows/coverage.yml enforces on every PR. Update it in the same PR as any deliberate regression (e.g. dead code removal that shrinks a surface) and explain why in the PR description. See .coverage-gate.toml for thresholds and docs/COVERAGE.md#for-ai-coding-agents for the remediation loop.",
+  "surfaces": {
+    "control-plane":  87.30,
+    "sdk-go":         90.70,
+    "sdk-python":     93.63,
+    "sdk-typescript": 92.56,
+    "web-ui":         90.01
+  },
+  "aggregate": 89.01
+}

@@ -165,6 +165,16 @@ func (c *Client) Shutdown(ctx context.Context, nodeID string, payload types.Shut
 	return &resp, nil
 }
 
+// PostExecutionLogs sends one structured execution log entry or a batch payload
+// to the control plane execution-log ingestion API.
+func (c *Client) PostExecutionLogs(ctx context.Context, executionID string, payload any) error {
+	if strings.TrimSpace(executionID) == "" {
+		return fmt.Errorf("executionID is required")
+	}
+	route := fmt.Sprintf("/api/v1/executions/%s/logs", url.PathEscape(executionID))
+	return c.do(ctx, http.MethodPost, route, payload, nil)
+}
+
 func (c *Client) do(ctx context.Context, method string, endpoint string, body any, out any) error {
 	u := *c.baseURL
 	rel := strings.TrimPrefix(endpoint, "/")

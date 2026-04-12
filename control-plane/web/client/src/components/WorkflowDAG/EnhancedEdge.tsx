@@ -43,6 +43,9 @@ export function EnhancedEdge({
   const getStatusStyle = () => {
     const baseStyle = {
       stroke: (() => {
+        // Edge color reflects this edge's OWN canonical status — never
+        // propagated from a parent run. A running child under a cancelled
+        // parent must still render blue.
         switch (status) {
           case "succeeded":
             return "var(--status-success)";
@@ -50,9 +53,13 @@ export function EnhancedEdge({
             return "var(--status-error)";
           case "running":
             return "var(--status-info)";
+          case "paused":
+          case "waiting":
           case "pending":
           case "queued":
             return "var(--status-warning)";
+          case "cancelled":
+            return "color-mix(in srgb, var(--muted-foreground) 65%, transparent)";
           default:
             return "color-mix(in srgb, var(--muted-foreground) 65%, transparent)";
         }
@@ -83,12 +90,21 @@ export function EnhancedEdge({
           strokeDasharray: "12,8",
           animation: "dash 2s linear infinite",
         };
+      case "paused":
+      case "waiting":
       case "pending":
       case "queued":
         return {
           ...baseStyle,
           strokeWidth: 2,
           opacity: 0.7,
+        };
+      case "cancelled":
+        return {
+          ...baseStyle,
+          strokeWidth: 2,
+          strokeDasharray: "4,4",
+          opacity: 0.55,
         };
       default:
         return {

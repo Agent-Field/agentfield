@@ -451,7 +451,7 @@ func (h *DashboardHandler) GetDashboardSummaryHandler(c *gin.Context) {
 	// Check for errors
 	if len(errors) > 0 {
 		logger.Logger.Error().Errs("errors", errors).Msg("Errors occurred while collecting dashboard data")
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to collect dashboard data"})
+		RespondInternalError(c, "failed to collect dashboard data")
 		return
 	}
 
@@ -537,7 +537,7 @@ func (h *DashboardHandler) GetEnhancedDashboardSummaryHandler(c *gin.Context) {
 	// Parse time range from query params
 	startTime, endTime, preset, err := parseTimeRangeParams(c, now)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid time range parameters"})
+		RespondBadRequest(c, "invalid time range parameters")
 		return
 	}
 
@@ -565,14 +565,14 @@ func (h *DashboardHandler) GetEnhancedDashboardSummaryHandler(c *gin.Context) {
 	executions, err := h.store.QueryExecutionRecords(ctx, filters)
 	if err != nil {
 		logger.Logger.Error().Err(err).Msg("failed to query workflow executions for enhanced dashboard")
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to load workflow execution data"})
+		RespondInternalError(c, "failed to load workflow execution data")
 		return
 	}
 
 	agents, err := h.storage.ListAgents(ctx, types.AgentFilters{})
 	if err != nil {
 		logger.Logger.Error().Err(err).Msg("failed to list agents for enhanced dashboard")
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to load agent data"})
+		RespondInternalError(c, "failed to load agent data")
 		return
 	}
 
@@ -586,7 +586,7 @@ func (h *DashboardHandler) GetEnhancedDashboardSummaryHandler(c *gin.Context) {
 	})
 	if err != nil {
 		logger.Logger.Error().Err(err).Msg("failed to query running executions for enhanced dashboard")
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to load active workflow data"})
+		RespondInternalError(c, "failed to load active workflow data")
 		return
 	}
 
@@ -600,7 +600,7 @@ func (h *DashboardHandler) GetEnhancedDashboardSummaryHandler(c *gin.Context) {
 	})
 	if err != nil {
 		logger.Logger.Error().Err(err).Msg("failed to query waiting executions for enhanced dashboard")
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to load active workflow data"})
+		RespondInternalError(c, "failed to load active workflow data")
 		return
 	}
 

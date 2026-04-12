@@ -32,7 +32,7 @@ func TestNewClient(t *testing.T) {
 		{
 			name:    "nil config uses default",
 			config:  nil,
-			wantErr: true, // DefaultConfig may not have API key set
+			wantErr: false,
 		},
 		{
 			name: "invalid config",
@@ -47,6 +47,12 @@ func TestNewClient(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.config == nil {
+				t.Setenv("OPENAI_API_KEY", "default-test-key")
+				t.Setenv("OPENROUTER_API_KEY", "")
+				t.Setenv("AI_BASE_URL", "")
+				t.Setenv("AI_MODEL", "")
+			}
 			client, err := NewClient(tt.config)
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -54,7 +60,11 @@ func TestNewClient(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 				assert.NotNil(t, client)
-				assert.Equal(t, tt.config, client.config)
+				if tt.config == nil {
+					assert.NotNil(t, client.config)
+				} else {
+					assert.Equal(t, tt.config, client.config)
+				}
 			}
 		})
 	}

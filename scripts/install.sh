@@ -16,6 +16,23 @@ SKIP_PATH_CONFIG="${SKIP_PATH_CONFIG:-0}"
 # Can be set via --staging flag or STAGING=1 environment variable
 STAGING="${STAGING:-0}"
 
+# Skill install mode (all | all-targets | interactive | none)
+#
+# Defaults to "all" — installs the agentfield-multi-reasoner-builder skill
+# into every coding agent the binary detects on the user's machine, without
+# any prompts. This is the right default for `curl … | bash` because there
+# is no TTY for an interactive picker to read from, and the whole point of
+# the one-line install is to just work.
+#
+# Override with:
+#   --no-skill            → SKILL_MODE=none           (skip the skill install)
+#   --interactive-skill   → SKILL_MODE=interactive    (run the picker)
+#   --all-skill-targets   → SKILL_MODE=all-targets    (install into every
+#                                                      registered target,
+#                                                      even ones we did not detect)
+#   SKILL_MODE=<mode>     → env var override
+SKILL_MODE="${SKILL_MODE:-all}"
+
 # Color codes
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -42,24 +59,54 @@ parse_args() {
         VERBOSE=1
         shift
         ;;
+      --no-skill)
+        SKILL_MODE="none"
+        shift
+        ;;
+      --all-skills)
+        # Backwards-compat alias — "all" is now the default, but the flag
+        # stays so existing scripts and READMEs keep working.
+        SKILL_MODE="all"
+        shift
+        ;;
+      --all-skill-targets)
+        SKILL_MODE="all-targets"
+        shift
+        ;;
+      --interactive-skill)
+        SKILL_MODE="interactive"
+        shift
+        ;;
       --help|-h)
         echo "AgentField CLI Installer"
         echo ""
         echo "Usage:"
-        echo "  curl -fsSL https://agentfield.ai/install.sh | bash"
-        echo "  curl -fsSL https://agentfield.ai/install.sh | bash -s -- --staging"
+        echo "  curl -fsSL https://agentfield.ai/install.sh | bash                  # binary + skill into all detected agents (no prompts)"
+        echo "  curl -fsSL https://agentfield.ai/install.sh | bash -s -- --no-skill # binary only, skip the skill install"
+        echo "  curl -fsSL https://agentfield.ai/install.sh | bash -s -- --staging  # latest prerelease"
         echo ""
         echo "Options:"
-        echo "  --staging    Install latest prerelease/staging version"
-        echo "  --verbose    Enable verbose output"
-        echo "  --help       Show this help message"
+        echo "  --staging              Install latest prerelease/staging version"
+        echo "  --verbose              Enable verbose output"
+        echo "  --no-skill             Skip the agentfield-multi-reasoner-builder"
+        echo "                         skill install step (binary only)"
+        echo "  --all-skills           Install the skill into every detected coding"
+        echo "                         agent (default behaviour — flag kept for"
+        echo "                         backwards compatibility with older docs)"
+        echo "  --all-skill-targets    Install the skill into every registered"
+        echo "                         coding agent target, even if not detected"
+        echo "  --interactive-skill    Run the interactive skill picker (only useful"
+        echo "                         when you run install.sh from a real terminal,"
+        echo "                         not from 'curl … | bash')"
+        echo "  --help                 Show this help message"
         echo ""
         echo "Environment variables:"
-        echo "  VERSION              Specific version to install (e.g., v0.1.19)"
-        echo "  STAGING=1            Same as --staging flag"
-        echo "  VERBOSE=1            Same as --verbose flag"
-        echo "  SKIP_PATH_CONFIG=1   Skip PATH configuration"
+        echo "  VERSION                 Specific version to install (e.g., v0.1.19)"
+        echo "  STAGING=1               Same as --staging flag"
+        echo "  VERBOSE=1               Same as --verbose flag"
+        echo "  SKIP_PATH_CONFIG=1      Skip PATH configuration"
         echo "  AGENTFIELD_INSTALL_DIR  Custom install directory"
+        echo "  SKILL_MODE              all (default) | all-targets | interactive | none"
         exit 0
         ;;
       *)
@@ -482,6 +529,44 @@ verify_installation() {
   fi
 }
 
+# Install the agentfield-multi-reasoner-builder skill into coding-agent
+# integrations (Claude Code, Codex, Gemini, OpenCode, Aider, Windsurf, Cursor).
+# Delegated to the freshly-installed `af` binary so the install logic stays
+# in one place. Honors $SKILL_MODE: all (default) | all-targets | interactive | none.
+install_skill() {
+  local install_dir="$1"
+  local af_bin="$install_dir/agentfield"
+
+  if [[ ! -x "$af_bin" ]]; then
+    print_warning "af binary not executable, skipping skill install"
+    return 0
+  fi
+
+  case "$SKILL_MODE" in
+    none|skip)
+      printf "\n"
+      print_info "Skipping skill install (SKILL_MODE=none)"
+      printf "       ${DIM}Run later: ${CYAN}af skill install${NC}\n" 2>/dev/null || \
+      printf "       Run later: af skill install\n"
+      return 0
+      ;;
+    all)
+      printf "\n"
+      print_info "Installing skill into all detected coding agents..."
+      "$af_bin" skill install --all || print_warning "Skill install reported errors"
+      ;;
+    all-targets)
+      printf "\n"
+      print_info "Installing skill into all registered coding agents (even undetected)..."
+      "$af_bin" skill install --all-targets || print_warning "Skill install reported errors"
+      ;;
+    interactive|*)
+      printf "\n"
+      "$af_bin" skill install || print_warning "Skill install reported errors"
+      ;;
+  esac
+}
+
 # Print success message
 print_success_message() {
   printf "\n"
@@ -621,6 +706,12 @@ main() {
 
   # Verify installation
   verify_installation "$INSTALL_DIR"
+
+  # Install the agentfield-multi-reasoner-builder skill into coding agents.
+  # Default mode is `all` — installs into every detected coding agent without
+  # any prompts (the right behaviour for `curl … | bash`). Override via
+  # --no-skill / --all-skill-targets / --interactive-skill or SKILL_MODE.
+  install_skill "$INSTALL_DIR"
 
   # Print success message
   print_success_message

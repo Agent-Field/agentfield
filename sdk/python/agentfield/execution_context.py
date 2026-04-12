@@ -47,6 +47,8 @@ class ExecutionContext:
             self.started_at = time.time()
         if not self.workflow_id:
             self.workflow_id = self.run_id
+        if not self.root_workflow_id:
+            self.root_workflow_id = self.workflow_id
 
     # ------------------------------------------------------------------
     # Header helpers
@@ -93,6 +95,43 @@ class ExecutionContext:
             headers["X-Agent-Node-ID"] = agent_node_id
 
         return headers
+
+    def to_log_identity(self) -> Dict[str, Optional[str]]:
+        """Return the core execution correlation fields for structured logs."""
+
+        agent_node_id = self.agent_node_id or getattr(self.agent_instance, "node_id", None)
+
+        return {
+            "execution_id": self.execution_id,
+            "workflow_id": self.workflow_id or self.run_id,
+            "run_id": self.run_id,
+            "root_workflow_id": self.root_workflow_id or self.workflow_id or self.run_id,
+            "parent_execution_id": self.parent_execution_id,
+            "agent_node_id": agent_node_id,
+            "reasoner_id": self.reasoner_name,
+        }
+
+    def to_log_attributes(self) -> Dict[str, Any]:
+        """Return supplemental execution metadata for structured log attributes."""
+
+        attributes: Dict[str, Any] = {
+            "depth": self.depth,
+        }
+        if self.parent_workflow_id:
+            attributes["parent_workflow_id"] = self.parent_workflow_id
+        if self.session_id:
+            attributes["session_id"] = self.session_id
+        if self.actor_id:
+            attributes["actor_id"] = self.actor_id
+        if self.caller_did:
+            attributes["caller_did"] = self.caller_did
+        if self.target_did:
+            attributes["target_did"] = self.target_did
+        if self.agent_node_did:
+            attributes["agent_node_did"] = self.agent_node_did
+        if self.started_at:
+            attributes["started_at"] = self.started_at
+        return attributes
 
     def child_context(self) -> "ExecutionContext":
         """

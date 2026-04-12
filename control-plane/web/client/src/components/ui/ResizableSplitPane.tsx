@@ -157,8 +157,8 @@ export function ResizableSplitPane({
           <button
             onClick={toggleCollapse}
             className={cn(
-              'absolute z-20 flex h-5 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border-secondary bg-background text-muted-foreground transition-all duration-150',
-              'opacity-0 shadow-none hover:border-border-secondary/80 hover:text-foreground hover:shadow-sm group-hover:opacity-100',
+              'absolute z-20 flex h-5 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition-all duration-150',
+              'opacity-0 shadow-none hover:border-border/80 hover:text-foreground hover:shadow-sm group-hover:opacity-100',
               isHorizontal ? 'left-1/2 top-1/2' : 'left-1/2 top-1/2'
             )}
             title={isCollapsed ? 'Expand panel' : 'Collapse panel'}

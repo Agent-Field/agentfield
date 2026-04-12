@@ -30,7 +30,7 @@ const stateConfig = {
     label: 'Start',
     description: 'Start agent',
     variant: 'ghost' as const,
-    iconColor: 'text-text-secondary hover:text-status-success'
+    iconColor: 'text-muted-foreground hover:text-status-success'
   },
   starting: {
     icon: InProgress,
@@ -38,7 +38,7 @@ const stateConfig = {
     label: 'Starting...',
     description: 'Agent is starting',
     variant: 'ghost' as const,
-    iconColor: 'text-status-running'
+    iconColor: 'text-status-info'
   },
   running: {
     icon: Stop,
@@ -46,7 +46,7 @@ const stateConfig = {
     label: 'Stop',
     description: 'Stop agent',
     variant: 'ghost' as const,
-    iconColor: 'text-text-secondary hover:text-status-failed'
+    iconColor: 'text-muted-foreground hover:text-status-error'
   },
   stopping: {
     icon: InProgress,
@@ -54,7 +54,7 @@ const stateConfig = {
     label: 'Stopping...',
     description: 'Agent is stopping',
     variant: 'ghost' as const,
-    iconColor: 'text-status-pending'
+    iconColor: 'text-status-warning'
   },
   error: {
     icon: WarningFilled,
@@ -62,7 +62,7 @@ const stateConfig = {
     label: 'Reconcile',
     description: 'Reconcile agent state',
     variant: 'ghost' as const,
-    iconColor: 'text-status-pending hover:text-text-primary'
+    iconColor: 'text-status-warning hover:text-foreground'
   },
   reconciling: {
     icon: Restart,
@@ -70,7 +70,7 @@ const stateConfig = {
     label: 'Reconciling...',
     description: 'Reconciling agent state',
     variant: 'ghost' as const,
-    iconColor: 'text-text-secondary'
+    iconColor: 'text-muted-foreground'
   }
 };
 
@@ -128,7 +128,11 @@ export function AgentControlButton({
       await onToggle(config.action);
       setShowSuccess(true);
     } catch (error) {
-      console.error(`Failed to ${config.action} agent ${agentId}:`, error);
+      console.error("Failed to toggle agent action", {
+        action: config.action,
+        agentId,
+        error,
+      });
     } finally {
       setIsProcessing(false);
     }
@@ -197,7 +201,7 @@ export function AgentControlButton({
         {/* Label text */}
         <span className={cn(
           sizeStyles.text,
-          'text-text-secondary font-medium',
+          'text-muted-foreground font-medium',
           isProcessing && 'animate-pulse'
         )}>
           {config.label}
@@ -233,7 +237,7 @@ export function AgentControlButton({
 
       {/* Processing indicator */}
       {isProcessing && (
-        <div className="absolute inset-0 rounded-lg animate-pulse bg-bg-hover/20" />
+        <div className="absolute inset-0 rounded-lg animate-pulse bg-accent/20" />
       )}
     </Button>
   );

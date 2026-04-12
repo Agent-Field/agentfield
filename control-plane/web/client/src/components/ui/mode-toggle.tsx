@@ -2,8 +2,13 @@ import { useTheme } from "next-themes"
 
 import { Button } from "@/components/ui/button"
 import { Icon } from "@/components/ui/icon"
+import { cn } from "@/lib/utils"
 
-export function ModeToggle() {
+export type ModeToggleProps = {
+  className?: string
+}
+
+export function ModeToggle({ className }: ModeToggleProps) {
   const { theme, setTheme } = useTheme()
 
   const toggleTheme = () => {
@@ -14,7 +19,7 @@ export function ModeToggle() {
     <Button
       variant="ghost"
       size="icon"
-      className="h-9 w-9"
+      className={cn("relative h-9 w-9", className)}
       onClick={toggleTheme}
       title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
     >

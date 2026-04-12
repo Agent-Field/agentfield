@@ -172,6 +172,13 @@ func (h *DIDHandlers) VerifyVC(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+// VerifyAuditBundle verifies exported provenance JSON (same logic as `af vc verify`).
+// POST /api/v1/did/verify-audit
+// Query: resolve_web=true, did_resolver=<url>, verbose=true
+func (h *DIDHandlers) VerifyAuditBundle(c *gin.Context) {
+	HandleVerifyAuditBundle(c)
+}
+
 // GetWorkflowVCChain handles workflow VC chain requests.
 // GET /api/v1/did/workflow/:workflow_id/vc-chain
 func (h *DIDHandlers) GetWorkflowVCChain(c *gin.Context) {
@@ -528,6 +535,7 @@ func (h *DIDHandlers) RegisterRoutes(router *gin.RouterGroup) {
 		didGroup.POST("/register", h.RegisterAgent)
 		didGroup.GET("/resolve/:did", h.ResolveDID)
 		didGroup.POST("/verify", h.VerifyVC)
+		didGroup.POST("/verify-audit", h.VerifyAuditBundle)
 		didGroup.GET("/workflow/:workflow_id/vc-chain", h.GetWorkflowVCChain)
 		didGroup.POST("/workflow/:workflow_id/vc", h.CreateWorkflowVC)
 		didGroup.GET("/status", h.GetDIDStatus)

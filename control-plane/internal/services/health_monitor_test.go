@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
@@ -19,22 +18,16 @@ import (
 // Mock AgentClient for testing
 type mockAgentClient struct {
 	mu                   sync.RWMutex
-	statusResponses      map[string]*interfaces.AgentStatusResponse
-	statusErrors         map[string]error
-	mcpHealthResponses   map[string]*interfaces.MCPHealthResponse
-	mcpHealthErrors      map[string]error
-	getStatusCallCount   map[string]int
-	getMCPHealthCallCount map[string]int
+	statusResponses    map[string]*interfaces.AgentStatusResponse
+	statusErrors       map[string]error
+	getStatusCallCount map[string]int
 }
 
 func newMockAgentClient() *mockAgentClient {
 	return &mockAgentClient{
-		statusResponses:      make(map[string]*interfaces.AgentStatusResponse),
-		statusErrors:         make(map[string]error),
-		mcpHealthResponses:   make(map[string]*interfaces.MCPHealthResponse),
-		mcpHealthErrors:      make(map[string]error),
-		getStatusCallCount:   make(map[string]int),
-		getMCPHealthCallCount: make(map[string]int),
+		statusResponses:    make(map[string]*interfaces.AgentStatusResponse),
+		statusErrors:       make(map[string]error),
+		getStatusCallCount: make(map[string]int),
 	}
 }
 
@@ -55,31 +48,6 @@ func (m *mockAgentClient) GetAgentStatus(ctx context.Context, nodeID string) (*i
 	return nil, errors.New("agent not found")
 }
 
-func (m *mockAgentClient) GetMCPHealth(ctx context.Context, nodeID string) (*interfaces.MCPHealthResponse, error) {
-	m.mu.Lock()
-	m.getMCPHealthCallCount[nodeID]++
-	m.mu.Unlock()
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	if err, ok := m.mcpHealthErrors[nodeID]; ok {
-		return nil, err
-	}
-	if resp, ok := m.mcpHealthResponses[nodeID]; ok {
-		return resp, nil
-	}
-	return nil, errors.New("MCP not available")
-}
-
-func (m *mockAgentClient) RestartMCPServer(ctx context.Context, nodeID, alias string) error {
-	return nil
-}
-
-func (m *mockAgentClient) GetMCPTools(ctx context.Context, nodeID, alias string) (*interfaces.MCPToolsResponse, error) {
-	return nil, nil
-}
-
 func (m *mockAgentClient) ShutdownAgent(ctx context.Context, nodeID string, graceful bool, timeoutSeconds int) (*interfaces.AgentShutdownResponse, error) {
 	return nil, nil
 }
@@ -98,23 +66,10 @@ func (m *mockAgentClient) setStatusError(nodeID string, err error) {
 	m.statusErrors[nodeID] = err
 }
 
-func (m *mockAgentClient) setMCPHealthResponse(nodeID string, response *interfaces.MCPHealthResponse) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.mcpHealthResponses[nodeID] = response
-}
-
-
 func (m *mockAgentClient) getStatusCallCountFor(nodeID string) int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.getStatusCallCount[nodeID]
-}
-
-func (m *mockAgentClient) getMCPHealthCallCountFor(nodeID string) int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.getMCPHealthCallCount[nodeID]
 }
 
 func setupHealthMonitorTest(t *testing.T) (*HealthMonitor, storage.StorageProvider, *mockAgentClient, *StatusManager, *PresenceManager) {
@@ -171,7 +126,6 @@ func TestHealthMonitor_NewHealthMonitor(t *testing.T) {
 	require.NotNil(t, hm)
 	assert.Equal(t, 10*time.Second, hm.config.CheckInterval)
 	assert.NotNil(t, hm.activeAgents)
-	assert.NotNil(t, hm.mcpHealthCache)
 	assert.NotNil(t, hm.stopCh)
 }
 
@@ -474,222 +428,6 @@ func TestHealthMonitor_CheckAgentHealth_UnregisteredAgent(t *testing.T) {
 	assert.Equal(t, 0, mockClient.getStatusCallCountFor(nodeID))
 }
 
-func TestHealthMonitor_MCP_CheckMCPHealth(t *testing.T) {
-	hm, provider, mockClient, _, _ := setupHealthMonitorTest(t)
-	ctx := context.Background()
-
-	nodeID := "test-agent-mcp"
-	baseURL := "http://localhost:8001"
-
-	// Register agent in storage
-	agent := &types.AgentNode{
-		ID:      nodeID,
-		BaseURL: baseURL,
-	}
-	err := provider.RegisterAgent(ctx, agent)
-	require.NoError(t, err)
-
-	// Register in health monitor
-	hm.RegisterAgent(nodeID, baseURL)
-
-	// Set mock MCP health response
-	mcpResponse := &interfaces.MCPHealthResponse{
-		Summary: interfaces.MCPSummary{
-			TotalServers:   3,
-			RunningServers: 3,
-			TotalTools:     15,
-			OverallHealth:  0.95,
-		},
-	}
-	mockClient.setMCPHealthResponse(nodeID, mcpResponse)
-
-	// Set agent as healthy first
-	mockClient.setStatusResponse(nodeID, "running")
-
-	// Perform health check (should trigger MCP check for active agents)
-
-	hm.checkAgentHealth(nodeID)
-	time.Sleep(200 * time.Millisecond)
-
-	// Verify MCP health was checked
-	assert.Greater(t, mockClient.getMCPHealthCallCountFor(nodeID), 0, "MCP health should be checked for active agent")
-
-	// Verify MCP health is cached
-	cache := hm.GetMCPHealthCache()
-	mcpData, exists := cache[nodeID]
-	require.True(t, exists, "MCP health should be cached")
-	assert.Equal(t, 3, mcpData.TotalServers)
-	assert.Equal(t, 3, mcpData.RunningServers)
-	assert.Equal(t, 15, mcpData.TotalTools)
-	assert.Equal(t, 0.95, mcpData.OverallHealth)
-}
-
-func TestHealthMonitor_MCP_HealthChange(t *testing.T) {
-	hm, provider, mockClient, _, _ := setupHealthMonitorTest(t)
-	ctx := context.Background()
-
-	nodeID := "test-agent-mcp-change"
-	baseURL := "http://localhost:8001"
-
-	// Register agent in storage
-	agent := &types.AgentNode{
-		ID:      nodeID,
-		BaseURL: baseURL,
-	}
-	err := provider.RegisterAgent(ctx, agent)
-	require.NoError(t, err)
-
-	// Register in health monitor
-	hm.RegisterAgent(nodeID, baseURL)
-
-	// Set agent as healthy
-	mockClient.setStatusResponse(nodeID, "running")
-
-	// First MCP health check
-	mcpResponse1 := &interfaces.MCPHealthResponse{
-		Summary: interfaces.MCPSummary{
-			TotalServers:   3,
-			RunningServers: 3,
-			TotalTools:     15,
-			OverallHealth:  0.95,
-		},
-	}
-	mockClient.setMCPHealthResponse(nodeID, mcpResponse1)
-
-
-	hm.checkAgentHealth(nodeID)
-	time.Sleep(200 * time.Millisecond)
-
-	// Change MCP health
-	mcpResponse2 := &interfaces.MCPHealthResponse{
-		Summary: interfaces.MCPSummary{
-			TotalServers:   3,
-			RunningServers: 2, // One server failed
-			TotalTools:     10,
-			OverallHealth:  0.67,
-		},
-	}
-	mockClient.setMCPHealthResponse(nodeID, mcpResponse2)
-
-	// Second health check
-	hm.checkAgentHealth(nodeID)
-	time.Sleep(200 * time.Millisecond)
-
-	// Verify MCP health was updated
-	cache := hm.GetMCPHealthCache()
-	mcpData, exists := cache[nodeID]
-	require.True(t, exists)
-	assert.Equal(t, 2, mcpData.RunningServers, "MCP health should be updated")
-	assert.Equal(t, 0.67, mcpData.OverallHealth)
-}
-
-func TestHealthMonitor_MCP_NoChange(t *testing.T) {
-	hm, provider, mockClient, _, _ := setupHealthMonitorTest(t)
-	ctx := context.Background()
-
-	nodeID := "test-agent-mcp-no-change"
-	baseURL := "http://localhost:8001"
-
-	// Register agent in storage
-	agent := &types.AgentNode{
-		ID:      nodeID,
-		BaseURL: baseURL,
-	}
-	err := provider.RegisterAgent(ctx, agent)
-	require.NoError(t, err)
-
-	// Register in health monitor
-	hm.RegisterAgent(nodeID, baseURL)
-
-	// Set agent as healthy
-	mockClient.setStatusResponse(nodeID, "running")
-
-	// Set MCP health response
-	mcpResponse := &interfaces.MCPHealthResponse{
-		Summary: interfaces.MCPSummary{
-			TotalServers:   3,
-			RunningServers: 3,
-			TotalTools:     15,
-			OverallHealth:  0.95,
-		},
-	}
-	mockClient.setMCPHealthResponse(nodeID, mcpResponse)
-
-
-	// First check
-	hm.checkAgentHealth(nodeID)
-	time.Sleep(200 * time.Millisecond)
-
-	// Verify hasMCPHealthChanged returns false for same data
-	newSummary := &domain.MCPSummaryData{
-		TotalServers:   3,
-		RunningServers: 3,
-		TotalTools:     15,
-		OverallHealth:  0.95,
-	}
-	hasChanged := hm.hasMCPHealthChanged(nodeID, newSummary)
-	assert.False(t, hasChanged, "Should detect no change in MCP health")
-}
-
-func TestHealthMonitor_MCP_InactiveAgent(t *testing.T) {
-	hm, provider, mockClient, _, _ := setupHealthMonitorTest(t)
-	ctx := context.Background()
-
-	nodeID := "test-agent-mcp-inactive"
-	baseURL := "http://localhost:8001"
-
-	// Register agent in storage
-	agent := &types.AgentNode{
-		ID:      nodeID,
-		BaseURL: baseURL,
-	}
-	err := provider.RegisterAgent(ctx, agent)
-	require.NoError(t, err)
-
-	// Register in health monitor
-	hm.RegisterAgent(nodeID, baseURL)
-
-	// Set agent as inactive
-	mockClient.setStatusError(nodeID, errors.New("connection refused"))
-
-
-	hm.checkAgentHealth(nodeID)
-	time.Sleep(200 * time.Millisecond)
-
-	// MCP health should NOT be checked for inactive agents
-	assert.Equal(t, 0, mockClient.getMCPHealthCallCountFor(nodeID), "MCP health should not be checked for inactive agent")
-}
-
-func TestHealthMonitor_GetMCPHealthCache(t *testing.T) {
-	hm, _, _, _, _ := setupHealthMonitorTest(t)
-
-	// Add some test data to cache
-	hm.mcpCacheMutex.Lock()
-	hm.mcpHealthCache["agent-1"] = &domain.MCPSummaryData{
-		TotalServers:   3,
-		RunningServers: 3,
-		TotalTools:     15,
-		OverallHealth:  0.95,
-	}
-	hm.mcpHealthCache["agent-2"] = &domain.MCPSummaryData{
-		TotalServers:   2,
-		RunningServers: 1,
-		TotalTools:     8,
-		OverallHealth:  0.50,
-	}
-	hm.mcpCacheMutex.Unlock()
-
-	// Get cache
-	cache := hm.GetMCPHealthCache()
-
-	// Verify cache contents
-	assert.Equal(t, 2, len(cache))
-	assert.Contains(t, cache, "agent-1")
-	assert.Contains(t, cache, "agent-2")
-	assert.Equal(t, 3, cache["agent-1"].TotalServers)
-	assert.Equal(t, 1, cache["agent-2"].RunningServers)
-}
-
 func TestHealthMonitor_ConcurrentAccess(t *testing.T) {
 	hm, provider, mockClient, _, _ := setupHealthMonitorTest(t)
 	ctx := context.Background()
@@ -729,15 +467,6 @@ func TestHealthMonitor_ConcurrentAccess(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 			hm.UnregisterAgent(nodeID)
 		}(i)
-	}
-
-	// Concurrent MCP cache access
-	for i := 0; i < 5; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_ = hm.GetMCPHealthCache()
-		}()
 	}
 
 	wg.Wait()
@@ -1323,7 +1052,7 @@ func TestIntegration_NoFlapping_HeartbeatsDuringTransientFailures(t *testing.T) 
 		for i := 0; i < 30; i++ { // 30 heartbeats over ~3 seconds
 			<-ticker.C
 			readyStatus := types.AgentStatusReady
-			_ = statusManager.UpdateFromHeartbeat(ctx, nodeID, &readyStatus, nil, "")
+			_ = statusManager.UpdateFromHeartbeat(ctx, nodeID, &readyStatus, "")
 			presenceManager.Touch(nodeID, "", time.Now())
 
 			// Record current state
@@ -1559,7 +1288,7 @@ func TestIntegration_RecoveryAfterGenuineOutage(t *testing.T) {
 
 	// Send a heartbeat to signal recovery
 	readyStatus := types.AgentStatusReady
-	err = statusManager.UpdateFromHeartbeat(ctx, nodeID, &readyStatus, nil, "")
+	err = statusManager.UpdateFromHeartbeat(ctx, nodeID, &readyStatus, "")
 	require.NoError(t, err)
 
 	// Wait for health check cycle + debounce

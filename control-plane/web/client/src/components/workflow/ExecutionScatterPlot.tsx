@@ -234,7 +234,7 @@ export function ExecutionScatterPlot({
         </ResponsiveContainer>
       </div>
 
-      <div className="flex justify-between text-[10px] text-muted-foreground px-2">
+      <div className="flex justify-between text-micro text-muted-foreground px-2">
         <span>Scatter plot shows distribution of {data.length} executions.</span>
         <div className="flex gap-3">
              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500 opacity-60"></span> Success</span>

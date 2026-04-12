@@ -155,11 +155,11 @@ class AgentUtils:
     @staticmethod
     def generate_skill_name(server_alias: str, tool_name: str) -> str:
         """
-        Generate a valid Python function name for the MCP skill.
+        Generate a valid Python function name for a skill.
 
         Args:
-            server_alias: MCP server alias
-            tool_name: MCP tool name
+            server_alias: Server alias
+            tool_name: Tool name
 
         Returns:
             Valid Python function name
@@ -178,20 +178,20 @@ class AgentUtils:
 
         # Ensure it's not empty
         if not name:
-            name = f"mcp_tool_{int(time.time())}"
+            name = f"tool_{int(time.time())}"
 
         return name
 
     @staticmethod
-    def create_input_schema_from_mcp_tool(
+    def create_input_schema_from_tool(
         skill_name: str, tool: Dict[str, Any]
     ) -> Type[BaseModel]:
         """
-        Create a Pydantic input schema from MCP tool definition.
+        Create a Pydantic input schema from a tool definition.
 
         Args:
             skill_name: Name of the skill function
-            tool: MCP tool definition
+            tool: Tool definition
 
         Returns:
             Pydantic model class for input validation

@@ -46,6 +46,18 @@ func DefaultEntries() []EndpointEntry {
 		{Method: "POST", Path: "/api/v1/nodes/:node_id/shutdown", Group: "nodes", Summary: "Graceful node shutdown", AuthLevel: "api_key", Tags: []string{"nodes", "lifecycle", "shutdown"}},
 		{Method: "POST", Path: "/api/v1/actions/claim", Group: "nodes", Summary: "Claim pending actions", AuthLevel: "api_key", Tags: []string{"nodes", "actions", "claim"}},
 
+		// --- UI: node logs (proxy to agent NDJSON) ---
+		{Method: "GET", Path: "/api/ui/v1/nodes/:nodeId/logs", Group: "ui-nodes", Summary: "Proxy agent process logs (NDJSON tail or follow)", AuthLevel: "api_key", Tags: []string{"ui", "nodes", "logs", "observability"},
+			Parameters: []ParamEntry{
+				{Name: "nodeId", In: "path", Required: true, Type: "string", Desc: "Agent node ID"},
+				{Name: "tail_lines", In: "query", Type: "int", Desc: "Last N log lines"},
+				{Name: "since_seq", In: "query", Type: "int", Desc: "Return lines with seq greater than this"},
+				{Name: "follow", In: "query", Type: "string", Desc: "1 or true for chunked stream"},
+			},
+		},
+		{Method: "GET", Path: "/api/ui/v1/settings/node-log-proxy", Group: "ui-settings", Summary: "Effective node log proxy limits and env lock flags", AuthLevel: "api_key", Tags: []string{"ui", "settings", "logs"}},
+		{Method: "PUT", Path: "/api/ui/v1/settings/node-log-proxy", Group: "ui-settings", Summary: "Update node log proxy limits (persisted to DB config blob)", AuthLevel: "api_key", Tags: []string{"ui", "settings", "logs"}},
+
 		// --- Execute ---
 		{Method: "POST", Path: "/api/v1/execute/:target", Group: "execute", Summary: "Execute a reasoner or skill synchronously", AuthLevel: "api_key", Tags: []string{"execute", "reasoner", "skill", "sync"},
 			Parameters: []ParamEntry{{Name: "target", In: "path", Required: true, Type: "string", Desc: "Target in format agent_id.reasoner_id or agent_id.skill_id"}},
@@ -98,6 +110,7 @@ func DefaultEntries() []EndpointEntry {
 		{Method: "GET", Path: "/api/v1/did/resolve/:did", Group: "did", Summary: "Resolve a DID to its document", AuthLevel: "public", Tags: []string{"did", "identity", "resolve"}},
 		{Method: "GET", Path: "/api/v1/did/issuer-public-keys", Group: "did", Summary: "Get issuer public keys", AuthLevel: "public", Tags: []string{"did", "identity", "keys"}},
 		{Method: "GET", Path: "/api/v1/did/workflow/:workflow_id/vc-chain", Group: "did", Summary: "Get VC chain for workflow", AuthLevel: "api_key", Tags: []string{"did", "vc", "workflow", "audit"}},
+		{Method: "POST", Path: "/api/v1/did/verify-audit", Group: "did", Summary: "Verify exported provenance JSON (VC chain or bare VC)", AuthLevel: "api_key", Tags: []string{"did", "vc", "verify", "audit"}},
 
 		// --- Agentic API ---
 		{Method: "GET", Path: "/api/v1/agentic/discover", Group: "agentic", Summary: "Search API endpoints by keyword, group, or method", AuthLevel: "api_key", Tags: []string{"agentic", "discover", "api", "search"}},

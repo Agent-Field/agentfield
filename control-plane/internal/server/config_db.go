@@ -82,6 +82,33 @@ func mergeDBConfig(target, dbCfg *config.Config) {
 	if dbCfg.AgentField.Approval.WebhookSecret != "" || dbCfg.AgentField.Approval.DefaultExpiryHours != 0 {
 		target.AgentField.Approval = dbCfg.AgentField.Approval
 	}
+	if dbCfg.AgentField.NodeLogProxy.ConnectTimeout != 0 {
+		target.AgentField.NodeLogProxy.ConnectTimeout = dbCfg.AgentField.NodeLogProxy.ConnectTimeout
+	}
+	if dbCfg.AgentField.NodeLogProxy.StreamIdleTimeout != 0 {
+		target.AgentField.NodeLogProxy.StreamIdleTimeout = dbCfg.AgentField.NodeLogProxy.StreamIdleTimeout
+	}
+	if dbCfg.AgentField.NodeLogProxy.MaxStreamDuration != 0 {
+		target.AgentField.NodeLogProxy.MaxStreamDuration = dbCfg.AgentField.NodeLogProxy.MaxStreamDuration
+	}
+	if dbCfg.AgentField.NodeLogProxy.MaxTailLines != 0 {
+		target.AgentField.NodeLogProxy.MaxTailLines = dbCfg.AgentField.NodeLogProxy.MaxTailLines
+	}
+	if dbCfg.AgentField.ExecutionLogs.RetentionPeriod != 0 {
+		target.AgentField.ExecutionLogs.RetentionPeriod = dbCfg.AgentField.ExecutionLogs.RetentionPeriod
+	}
+	if dbCfg.AgentField.ExecutionLogs.MaxEntriesPerExecution != 0 {
+		target.AgentField.ExecutionLogs.MaxEntriesPerExecution = dbCfg.AgentField.ExecutionLogs.MaxEntriesPerExecution
+	}
+	if dbCfg.AgentField.ExecutionLogs.MaxTailEntries != 0 {
+		target.AgentField.ExecutionLogs.MaxTailEntries = dbCfg.AgentField.ExecutionLogs.MaxTailEntries
+	}
+	if dbCfg.AgentField.ExecutionLogs.StreamIdleTimeout != 0 {
+		target.AgentField.ExecutionLogs.StreamIdleTimeout = dbCfg.AgentField.ExecutionLogs.StreamIdleTimeout
+	}
+	if dbCfg.AgentField.ExecutionLogs.MaxStreamDuration != 0 {
+		target.AgentField.ExecutionLogs.MaxStreamDuration = dbCfg.AgentField.ExecutionLogs.MaxStreamDuration
+	}
 
 	// Features
 	if dbCfg.Features.DID.Method != "" {

@@ -100,12 +100,12 @@ export function UnifiedDataPanel({
                 <InProgress className="w-3 h-3 animate-spin text-muted-foreground" />
               )}
             </h3>
-            <div className="flex items-center gap-2 text-body-small">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
               {size && <span>{formatBytes(size)}</span>}
               {hasData && (
                 <>
                   {size && <span>•</span>}
-                  <Badge variant="secondary" className="text-[10px] h-4 px-1.5">
+                  <Badge variant="secondary" className="text-micro h-4 px-1.5">
                     {typeof data === "object" && !Array.isArray(data)
                       ? `${Object.keys(data).length} keys`
                       : Array.isArray(data)
@@ -120,7 +120,7 @@ export function UnifiedDataPanel({
 
         <div className="flex items-center gap-2">
           {error && (
-            <Badge variant="destructive" className="text-[10px] h-5 px-2">
+            <Badge variant="destructive" className="text-micro h-5 px-2">
               Error
             </Badge>
           )}
@@ -166,7 +166,7 @@ export function UnifiedDataPanel({
               <Database className="w-8 h-8 text-destructive/50" />
               <div>
                 <p className="text-sm font-medium">Failed to load data</p>
-                <p className="text-body-small mt-1">{error}</p>
+                <p className="text-sm text-muted-foreground mt-1">{error}</p>
               </div>
             </div>
           </div>

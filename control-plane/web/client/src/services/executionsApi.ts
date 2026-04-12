@@ -7,6 +7,7 @@ import type {
   ExecutionSummary,
   WorkflowExecution,
   ExecutionWebhookEvent,
+  ExecutionLogsResponse,
 } from "../types/executions";
 import type { EnhancedExecutionsResponse } from "../types/workflows";
 import type {
@@ -191,18 +192,29 @@ function transformExecutionDetailsResponse(raw: any): WorkflowExecution {
     workflow_name: raw.workflow_name ?? undefined,
     workflow_tags: workflowTags,
     status: normalizeExecutionStatus(raw.status),
+    status_reason: raw.status_reason ?? undefined,
     started_at: raw.started_at ?? raw.created_at,
     completed_at: raw.completed_at ?? undefined,
     duration_ms:
       typeof raw.duration_ms === "number" ? raw.duration_ms : undefined,
     error_message: raw.error_message ?? undefined,
     retry_count: typeof raw.retry_count === "number" ? raw.retry_count : 0,
+    approval_request_id: raw.approval_request_id ?? undefined,
+    approval_request_url: raw.approval_request_url ?? undefined,
+    approval_status: raw.approval_status ?? undefined,
+    approval_response: raw.approval_response ?? undefined,
+    approval_requested_at: raw.approval_requested_at ?? undefined,
+    approval_responded_at: raw.approval_responded_at ?? undefined,
     created_at: raw.created_at,
     updated_at: raw.updated_at ?? raw.created_at,
     notes,
     webhook_registered:
       Boolean(raw.webhook_registered) || normalisedWebhookEvents.length > 0,
     webhook_events: normalisedWebhookEvents,
+    caller_did: raw.caller_did ?? undefined,
+    target_did: raw.target_did ?? undefined,
+    input_hash: raw.input_hash ?? undefined,
+    output_hash: raw.output_hash ?? undefined,
   };
 }
 
@@ -262,6 +274,91 @@ export async function getExecutionDetails(
     `/executions/${executionId}/details`,
   );
   return transformExecutionDetailsResponse(response);
+}
+
+export interface ExecutionLogFilters {
+  tail?: number;
+  afterSeq?: number;
+  levels?: string[];
+  nodeIds?: string[];
+  sources?: string[];
+  q?: string;
+}
+
+function buildExecutionLogsQuery(filters: ExecutionLogFilters = {}): string {
+  const params = new URLSearchParams();
+
+  if (typeof filters.tail === "number") {
+    params.set("tail", String(filters.tail));
+  }
+  if (typeof filters.afterSeq === "number") {
+    params.set("after_seq", String(filters.afterSeq));
+  }
+  for (const level of filters.levels ?? []) {
+    if (level) params.append("levels", level);
+  }
+  for (const nodeId of filters.nodeIds ?? []) {
+    if (nodeId) params.append("node_ids", nodeId);
+  }
+  for (const source of filters.sources ?? []) {
+    if (source) params.append("sources", source);
+  }
+  if (filters.q?.trim()) {
+    params.set("q", filters.q.trim());
+  }
+
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+export async function getExecutionLogs(
+  executionId: string,
+  filters: ExecutionLogFilters = {},
+): Promise<ExecutionLogsResponse> {
+  return fetchWrapper<ExecutionLogsResponse>(
+    `/executions/${executionId}/logs${buildExecutionLogsQuery(filters)}`,
+  );
+}
+
+function buildExecutionLogsStreamUrl(
+  executionId: string,
+  filters: ExecutionLogFilters = {},
+): string {
+  const params = new URLSearchParams();
+
+  if (typeof filters.tail === "number") {
+    params.set("tail", String(filters.tail));
+  }
+  if (typeof filters.afterSeq === "number") {
+    params.set("since_seq", String(filters.afterSeq));
+  }
+  for (const level of filters.levels ?? []) {
+    if (level) params.append("levels", level);
+  }
+  for (const nodeId of filters.nodeIds ?? []) {
+    if (nodeId) params.append("node_ids", nodeId);
+  }
+  for (const source of filters.sources ?? []) {
+    if (source) params.append("sources", source);
+  }
+  if (filters.q?.trim()) {
+    params.set("q", filters.q.trim());
+  }
+
+  const apiKey = getGlobalApiKey();
+  if (apiKey) {
+    params.set("api_key", apiKey);
+  }
+
+  const query = params.toString();
+  return `${API_BASE_URL}/executions/${encodeURIComponent(executionId)}/logs/stream${query ? `?${query}` : ""}`;
+}
+
+export function streamExecutionLogs(
+  executionId: string,
+  filters: ExecutionLogFilters = {},
+): EventSource {
+  return new EventSource(buildExecutionLogsStreamUrl(executionId, filters));
 }
 
 export async function retryExecutionWebhook(

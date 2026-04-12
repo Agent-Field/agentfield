@@ -142,7 +142,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   if (loading) {
-    return <div className="flex items-center justify-center min-h-screen">Loading...</div>;
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-3 text-muted-foreground">
+          <div className="size-5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+          <span className="text-sm">Connecting…</span>
+        </div>
+      </div>
+    );
   }
 
   return (

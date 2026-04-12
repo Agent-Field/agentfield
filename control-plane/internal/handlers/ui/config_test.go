@@ -448,6 +448,32 @@ func (m *MockStorageProvider) GetExecutionEventBus() *events.ExecutionEventBus {
 	return args.Get(0).(*events.ExecutionEventBus)
 }
 
+func (m *MockStorageProvider) StoreExecutionLogEntry(ctx context.Context, entry *types.ExecutionLogEntry) error {
+	args := m.Called(ctx, entry)
+	return args.Error(0)
+}
+
+func (m *MockStorageProvider) ListExecutionLogEntries(ctx context.Context, executionID string, afterSeq *int64, limit int, levels []string, nodeIDs []string, sources []string, query string) ([]*types.ExecutionLogEntry, error) {
+	args := m.Called(ctx, executionID, afterSeq, limit, levels, nodeIDs, sources, query)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*types.ExecutionLogEntry), args.Error(1)
+}
+
+func (m *MockStorageProvider) PruneExecutionLogEntries(ctx context.Context, executionID string, maxEntries int, olderThan time.Time) error {
+	args := m.Called(ctx, executionID, maxEntries, olderThan)
+	return args.Error(0)
+}
+
+func (m *MockStorageProvider) GetExecutionLogEventBus() *events.EventBus[*types.ExecutionLogEntry] {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil
+	}
+	return args.Get(0).(*events.EventBus[*types.ExecutionLogEntry])
+}
+
 // DID Registry operations
 func (m *MockStorageProvider) StoreDID(ctx context.Context, did string, didDocument, publicKey, privateKeyRef, derivationPath string) error {
 	args := m.Called(ctx, did, didDocument, publicKey, privateKeyRef, derivationPath)

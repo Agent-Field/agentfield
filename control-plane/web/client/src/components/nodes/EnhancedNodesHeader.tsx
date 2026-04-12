@@ -35,7 +35,7 @@ const summaryItem = (
   return (
     <span
       key={label}
-      className="flex items-center gap-1 text-body-small text-text-secondary"
+      className="flex items-center gap-1 text-sm text-muted-foreground text-muted-foreground"
     >
       <span
         className={cn(
@@ -88,12 +88,12 @@ export function EnhancedNodesHeader({
       <div className="flex items-center gap-4 min-w-0 flex-1">
         <div className="flex flex-col">
           <div className="flex items-center gap-2">
-            <h1 className="text-heading-2 leading-tight">Agent Nodes</h1>
+            <h1 className="text-xl font-semibold leading-tight">Agent Nodes</h1>
             <Badge variant="count" size="sm">
               {totalNodes} total
             </Badge>
           </div>
-          <p className="hidden text-body md:block text-text-secondary">
+          <p className="hidden text-sm md:block text-muted-foreground">
             {subtitle}
           </p>
         </div>

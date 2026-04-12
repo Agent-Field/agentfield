@@ -116,6 +116,29 @@ func ExecuteReasonerHandler(storageProvider storage.StorageProvider) gin.Handler
 			return
 		}
 
+		// Block agents that are known to be unreachable.
+		// "unknown" (no heartbeat yet) and "active" are allowed through;
+		// only "inactive" is definitively unreachable.
+		if targetNode.HealthStatus == types.HealthStatusInactive {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error": fmt.Sprintf("agent node '%s' is not healthy (status: %s)", nodeID, targetNode.HealthStatus),
+			})
+			return
+		}
+		if targetNode.LifecycleStatus == types.AgentStatusOffline {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error": fmt.Sprintf("agent node '%s' is offline", nodeID),
+			})
+			return
+		}
+		if targetNode.LifecycleStatus == types.AgentStatusPendingApproval {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error":   "agent_pending_approval",
+				"message": fmt.Sprintf("agent node '%s' is awaiting tag approval and cannot execute", nodeID),
+			})
+			return
+		}
+
 		// Check if reasoner exists on the node
 		reasonerExists := false
 		for _, reasoner := range targetNode.Reasoners {
@@ -465,6 +488,27 @@ func ExecuteSkillHandler(storageProvider storage.StorageProvider) gin.HandlerFun
 		if err != nil {
 			c.JSON(http.StatusNotFound, gin.H{
 				"error": fmt.Sprintf("node '%s' not found", nodeID),
+			})
+			return
+		}
+
+		// Block agents that are known to be unreachable.
+		if targetNode.HealthStatus == types.HealthStatusInactive {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error": fmt.Sprintf("agent node '%s' is not healthy (status: %s)", nodeID, targetNode.HealthStatus),
+			})
+			return
+		}
+		if targetNode.LifecycleStatus == types.AgentStatusOffline {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error": fmt.Sprintf("agent node '%s' is offline", nodeID),
+			})
+			return
+		}
+		if targetNode.LifecycleStatus == types.AgentStatusPendingApproval {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error":   "agent_pending_approval",
+				"message": fmt.Sprintf("agent node '%s' is awaiting tag approval and cannot execute", nodeID),
 			})
 			return
 		}

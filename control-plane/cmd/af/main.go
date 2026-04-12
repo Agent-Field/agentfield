@@ -252,6 +252,8 @@ func loadConfig(configFile string) (*config.Config, error) {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
+	config.ApplyEnvOverrides(&cfg)
+
 	// Apply sensible defaults for user experience
 	if cfg.AgentField.Port == 0 {
 		cfg.AgentField.Port = 8080

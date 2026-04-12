@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -137,6 +138,66 @@ func TestQueryWorkflowExecutionsFiltersAndSearch(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, paggined, 1)
 	require.Equal(t, "exec-alpha", paggined[0].ExecutionID)
+}
+
+func TestGetReasonerExecutionHistory_EnrichesExecutionFacts(t *testing.T) {
+	ls, ctx := setupLocalStorage(t)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	completedAt := now.Add(2 * time.Second)
+	statusReason := "provider_timeout"
+	sessionID := "session-123"
+	actorID := "actor-123"
+	errorMessage := "upstream timed out"
+
+	inputData := json.RawMessage(`{"input":{"ticker":"NVDA"},"context":{"analysis_group":"summary.short_form"}}`)
+	outputData := json.RawMessage(`{"summary":"done"}`)
+	duration := int64(2000)
+
+	exec := &types.WorkflowExecution{
+		WorkflowID:          "wf-1",
+		ExecutionID:         "exec-1",
+		AgentFieldRequestID: "req-1",
+		AgentNodeID:         "node-1",
+		ReasonerID:          "summarizer",
+		InputData:           inputData,
+		OutputData:          outputData,
+		Status:              string(types.ExecutionStatusFailed),
+		StatusReason:        &statusReason,
+		ErrorMessage:        &errorMessage,
+		RetryCount:          2,
+		SessionID:           &sessionID,
+		ActorID:             &actorID,
+		StartedAt:           now,
+		CompletedAt:         &completedAt,
+		DurationMS:          &duration,
+		CreatedAt:           now,
+		UpdatedAt:           completedAt,
+	}
+	require.NoError(t, ls.StoreWorkflowExecution(ctx, exec))
+
+	history, err := ls.GetReasonerExecutionHistory(ctx, "node-1.summarizer", 1, 10)
+	require.NoError(t, err)
+	require.Len(t, history.Executions, 1)
+
+	record := history.Executions[0]
+	require.Equal(t, "exec-1", record.ExecutionID)
+	require.Equal(t, "node-1", record.AgentNodeID)
+	require.Equal(t, "summarizer", record.ReasonerID)
+	require.Equal(t, string(types.ExecutionStatusFailed), record.Status)
+	require.Equal(t, &statusReason, record.StatusReason)
+	require.Equal(t, &statusReason, record.ErrorCategory)
+	require.Equal(t, 2, record.RetryCount)
+	require.Equal(t, &sessionID, record.SessionID)
+	require.Equal(t, &actorID, record.ActorID)
+	require.Equal(t, now, record.StartedAt)
+	require.Equal(t, &completedAt, record.CompletedAt)
+	require.Equal(t, now, record.Timestamp)
+	require.Equal(t, map[string]interface{}{"ticker": "NVDA"}, record.Input)
+	require.Equal(t, map[string]interface{}{"analysis_group": "summary.short_form"}, record.Context)
+	require.Equal(t, map[string]interface{}{"summary": "done"}, record.Output)
+	require.Equal(t, errorMessage, record.Error)
+	require.Equal(t, duration, record.DurationMs)
 }
 
 func TestQueryWorkflowDAGReturnsHierarchy(t *testing.T) {

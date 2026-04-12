@@ -60,19 +60,6 @@ type InstalledPackage struct {
 type AgentFieldConfig struct {
 	HomeDir     string            `json:"home_dir"`
 	Environment map[string]string `json:"environment"`
-	MCP         MCPConfig         `json:"mcp"`
-}
-
-// MCPConfig contains MCP server configuration
-type MCPConfig struct {
-	Servers []MCPServer `json:"servers"`
-}
-
-// MCPServer represents an MCP server configuration
-type MCPServer struct {
-	Name    string `json:"name"`
-	URL     string `json:"url"`
-	Enabled bool   `json:"enabled"`
 }
 
 // InstallOptions represents options for package installation

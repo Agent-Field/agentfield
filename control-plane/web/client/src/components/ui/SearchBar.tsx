@@ -35,7 +35,7 @@ const SIZE_STYLES: Record<
     icon: "left-2.5 h-3.5 w-3.5",
     clearButton: "right-1.5 top-1/2 -translate-y-1/2",
     clearButtonSize: "h-6 w-6",
-    shortcut: "right-2.5 top-1/2 -translate-y-1/2 text-[10px] px-2 py-0.5",
+    shortcut: "right-2.5 top-1/2 -translate-y-1/2 text-micro px-2 py-0.5",
   },
   md: {
     input: "h-10 pl-9 pr-10 text-sm",

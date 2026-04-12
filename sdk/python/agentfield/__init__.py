@@ -1,4 +1,5 @@
 from .agent import Agent
+from .cost_tracker import CostTracker
 from .router import AgentRouter
 from .types import (
     AIConfig,
@@ -68,6 +69,7 @@ from .tool_calling import (
 
 __all__ = [
     "Agent",
+    "CostTracker",
     "AIConfig",
     "HarnessConfig",
     "HarnessResult",
@@ -132,4 +134,4 @@ __all__ = [
     "ValidationError",
 ]
 
-__version__ = "0.1.61"
+__version__ = "0.1.67-rc.2"

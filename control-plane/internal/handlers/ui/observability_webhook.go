@@ -33,7 +33,7 @@ func (h *ObservabilityWebhookHandler) GetWebhookHandler(c *gin.Context) {
 
 	config, err := h.storage.GetObservabilityWebhook(ctx)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to get observability webhook config"})
+		RespondInternalError(c, "failed to get observability webhook config")
 		return
 	}
 
@@ -65,19 +65,19 @@ func (h *ObservabilityWebhookHandler) SetWebhookHandler(c *gin.Context) {
 
 	var req types.ObservabilityWebhookConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid request body: " + err.Error()})
+		RespondBadRequest(c, "invalid request body: "+err.Error())
 		return
 	}
 
 	// Validate URL
 	if req.URL == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "url is required"})
+		RespondBadRequest(c, "url is required")
 		return
 	}
 
 	parsedURL, err := url.Parse(req.URL)
 	if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid url: must be http or https"})
+		RespondBadRequest(c, "invalid url: must be http or https")
 		return
 	}
 
@@ -114,7 +114,7 @@ func (h *ObservabilityWebhookHandler) SetWebhookHandler(c *gin.Context) {
 
 	// Store config
 	if err := h.storage.SetObservabilityWebhook(ctx, config); err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to save observability webhook config"})
+		RespondInternalError(c, "failed to save observability webhook config")
 		return
 	}
 
@@ -158,7 +158,7 @@ func (h *ObservabilityWebhookHandler) DeleteWebhookHandler(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	if err := h.storage.DeleteObservabilityWebhook(ctx); err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to delete observability webhook config"})
+		RespondInternalError(c, "failed to delete observability webhook config")
 		return
 	}
 
@@ -229,13 +229,13 @@ func (h *ObservabilityWebhookHandler) GetDeadLetterQueueHandler(c *gin.Context) 
 
 	entries, err := h.storage.GetDeadLetterQueue(ctx, limit, offset)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to get dead letter queue"})
+		RespondInternalError(c, "failed to get dead letter queue")
 		return
 	}
 
 	count, err := h.storage.GetDeadLetterQueueCount(ctx)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to get dead letter queue count"})
+		RespondInternalError(c, "failed to get dead letter queue count")
 		return
 	}
 
@@ -251,7 +251,7 @@ func (h *ObservabilityWebhookHandler) ClearDeadLetterQueueHandler(c *gin.Context
 	ctx := c.Request.Context()
 
 	if err := h.storage.ClearDeadLetterQueue(ctx); err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to clear dead letter queue"})
+		RespondInternalError(c, "failed to clear dead letter queue")
 		return
 	}
 

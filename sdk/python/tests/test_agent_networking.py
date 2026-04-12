@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from urllib.parse import urlparse
 
 from agentfield import agent as agent_mod
 from agentfield.agent import (
@@ -27,11 +28,12 @@ def test_detect_container_ip_prefers_metadata(monkeypatch):
 
     def fake_get(url, headers=None, timeout=None):
         calls.append(url)
-        if "latest/meta-data" in url:
+        parsed = urlparse(url)
+        if parsed.netloc == "169.254.169.254" and parsed.path == "/latest/meta-data/public-ipv4":
             return DummyResponse(200, "198.51.100.5")
-        if "metadata.google.internal" in url:
+        if parsed.netloc == "metadata.google.internal" and parsed.path == "/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip":
             return DummyResponse(200, "203.0.113.7")
-        if "api.ipify.org" in url:
+        if parsed.scheme == "https" and parsed.netloc == "api.ipify.org" and parsed.path in {"", "/"}:
             return DummyResponse(200, "192.0.2.9")
         return DummyResponse(404, "")
 

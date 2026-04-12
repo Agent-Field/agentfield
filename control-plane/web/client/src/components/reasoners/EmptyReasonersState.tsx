@@ -172,13 +172,13 @@ function Tip({
 }) {
   return (
     <div className="mt-4 w-full max-w-md rounded-lg border border-border/40 bg-muted/15 p-4 text-left">
-      <div className="flex items-start gap-3 text-body">
+      <div className="flex items-start gap-3 text-sm">
         <span className="mt-1 flex h-9 w-9 items-center justify-center rounded-full bg-muted/40 text-muted-foreground">
           {icon}
         </span>
         <div className="space-y-1">
-          <p className="text-body font-medium text-text-primary">{title}</p>
-          <p className="text-body-small text-muted-foreground leading-relaxed">
+          <p className="text-sm font-medium text-foreground">{title}</p>
+          <p className="text-sm text-muted-foreground text-muted-foreground leading-relaxed">
             {body}
           </p>
         </div>

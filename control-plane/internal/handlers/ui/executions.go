@@ -57,12 +57,10 @@ func (h *ExecutionHandler) StreamWorkflowNodeNotesHandler(c *gin.Context) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
-	c.Header("Access-Control-Allow-Origin", "*")
-	c.Header("Access-Control-Allow-Headers", "Cache-Control")
 
 	workflowID := c.Param("workflowId")
 	if workflowID == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "workflowId is required"})
+		RespondBadRequest(c, "workflowId is required")
 		return
 	}
 
@@ -192,6 +190,11 @@ type ExecutionDetailsResponse struct {
 	LatestNote          *types.ExecutionNote           `json:"latest_note,omitempty"`
 	WebhookRegistered   bool                           `json:"webhook_registered"`
 	WebhookEvents       []*types.ExecutionWebhookEvent `json:"webhook_events,omitempty"`
+	// Provenance (from execution_vcs when DID/VC is enabled for this execution)
+	CallerDID *string `json:"caller_did,omitempty"`
+	TargetDID *string `json:"target_did,omitempty"`
+	InputHash *string `json:"input_hash,omitempty"`
+	OutputHash *string `json:"output_hash,omitempty"`
 }
 
 type EnhancedExecution struct {
@@ -226,7 +229,7 @@ func (h *ExecutionHandler) ListExecutionsHandler(c *gin.Context) {
 	ctx := c.Request.Context()
 	agentID := strings.TrimSpace(c.Param("agentId"))
 	if agentID == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "agentId is required"})
+		RespondBadRequest(c, "agentId is required")
 		return
 	}
 
@@ -254,7 +257,7 @@ func (h *ExecutionHandler) ListExecutionsHandler(c *gin.Context) {
 
 	execs, err := h.store.QueryExecutionRecords(ctx, filter)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to query executions: " + err.Error()})
+		RespondInternalError(c, "failed to query executions: "+err.Error())
 		return
 	}
 
@@ -285,23 +288,23 @@ func (h *ExecutionHandler) GetExecutionDetailsHandler(c *gin.Context) {
 	ctx := c.Request.Context()
 	agentID := strings.TrimSpace(c.Param("agentId"))
 	if agentID == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "agentId is required"})
+		RespondBadRequest(c, "agentId is required")
 		return
 	}
 
 	executionID := strings.TrimSpace(c.Param("executionId"))
 	if executionID == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "executionId is required"})
+		RespondBadRequest(c, "executionId is required")
 		return
 	}
 
 	exec, err := h.store.GetExecutionRecord(ctx, executionID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to load execution: " + err.Error()})
+		RespondInternalError(c, "failed to load execution: "+err.Error())
 		return
 	}
 	if exec == nil || exec.AgentNodeID != agentID {
-		c.JSON(http.StatusNotFound, ErrorResponse{Error: "execution not found for this agent"})
+		RespondNotFound(c, "execution not found for this agent")
 		return
 	}
 
@@ -321,12 +324,12 @@ func (h *ExecutionHandler) GetExecutionsSummaryHandler(c *gin.Context) {
 	groupBy := strings.TrimSpace(c.Query("group_by"))
 	startTime, err := parseTimePtrValue(c.Query("start_time"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid start_time format, expected RFC3339"})
+		RespondBadRequest(c, "invalid start_time format, expected RFC3339")
 		return
 	}
 	endTime, err := parseTimePtrValue(c.Query("end_time"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid end_time format, expected RFC3339"})
+		RespondBadRequest(c, "invalid end_time format, expected RFC3339")
 		return
 	}
 
@@ -354,7 +357,7 @@ func (h *ExecutionHandler) GetExecutionsSummaryHandler(c *gin.Context) {
 
 	execs, queryErr := h.store.QueryExecutionRecords(ctx, filter)
 	if queryErr != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to query executions: " + queryErr.Error()})
+		RespondInternalError(c, "failed to query executions: "+queryErr.Error())
 		return
 	}
 
@@ -419,7 +422,7 @@ func (h *ExecutionHandler) GetExecutionStatsHandler(c *gin.Context) {
 
 	execs, err := h.store.QueryExecutionRecords(ctx, filter)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to query executions: " + err.Error()})
+		RespondInternalError(c, "failed to query executions: "+err.Error())
 		return
 	}
 
@@ -497,7 +500,7 @@ func (h *ExecutionHandler) GetEnhancedExecutionsHandler(c *gin.Context) {
 
 	executions, err := h.store.QueryExecutionRecords(ctx, filter)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to query executions: " + err.Error()})
+		RespondInternalError(c, "failed to query executions: "+err.Error())
 		return
 	}
 
@@ -554,17 +557,17 @@ func (h *ExecutionHandler) GetExecutionDetailsGlobalHandler(c *gin.Context) {
 	ctx := c.Request.Context()
 	executionID := strings.TrimSpace(c.Param("execution_id"))
 	if executionID == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "execution_id is required"})
+		RespondBadRequest(c, "execution_id is required")
 		return
 	}
 
 	exec, err := h.store.GetExecutionRecord(ctx, executionID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to load execution: " + err.Error()})
+		RespondInternalError(c, "failed to load execution: "+err.Error())
 		return
 	}
 	if exec == nil {
-		c.JSON(http.StatusNotFound, ErrorResponse{Error: "execution not found"})
+		RespondNotFound(c, "execution not found")
 		return
 	}
 
@@ -580,7 +583,7 @@ func (h *ExecutionHandler) RetryExecutionWebhookHandler(c *gin.Context) {
 
 	executionID := strings.TrimSpace(c.Param("execution_id"))
 	if executionID == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "execution_id is required"})
+		RespondBadRequest(c, "execution_id is required")
 		return
 	}
 
@@ -588,28 +591,28 @@ func (h *ExecutionHandler) RetryExecutionWebhookHandler(c *gin.Context) {
 	exec, err := h.store.GetExecutionRecord(ctx, executionID)
 	if err != nil {
 		logger.Logger.Error().Err(err).Str("execution_id", executionID).Msg("failed to load execution for webhook retry")
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to load execution: " + err.Error()})
+		RespondInternalError(c, "failed to load execution: "+err.Error())
 		return
 	}
 	if exec == nil {
-		c.JSON(http.StatusNotFound, ErrorResponse{Error: "execution not found"})
+		RespondNotFound(c, "execution not found")
 		return
 	}
 
 	hasWebhook, err := h.storage.HasExecutionWebhook(ctx, executionID)
 	if err != nil {
 		logger.Logger.Error().Err(err).Str("execution_id", executionID).Msg("failed to check webhook registration")
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to check webhook registration"})
+		RespondInternalError(c, "failed to check webhook registration")
 		return
 	}
 	if !hasWebhook {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "no webhook registered for this execution"})
+		RespondBadRequest(c, "no webhook registered for this execution")
 		return
 	}
 
 	if err := h.webhooks.Notify(ctx, executionID); err != nil {
 		logger.Logger.Warn().Err(err).Str("execution_id", executionID).Msg("failed to enqueue webhook retry")
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to enqueue webhook retry"})
+		RespondInternalError(c, "failed to enqueue webhook retry")
 		return
 	}
 
@@ -622,12 +625,23 @@ func (h *ExecutionHandler) StreamExecutionEventsHandler(c *gin.Context) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
-	c.Header("Access-Control-Allow-Origin", "*")
 
 	subscriberID := fmt.Sprintf("ui_exec_events_%d", time.Now().UnixNano())
 	eventBus := h.storage.GetExecutionEventBus()
 	eventChan := eventBus.Subscribe(subscriberID)
 	defer eventBus.Unsubscribe(subscriberID)
+
+	// Send an initial connected event so the browser EventSource detects the open.
+	connectedEvt := map[string]interface{}{
+		"type":      "connected",
+		"message":   "Execution events stream connected",
+		"timestamp": time.Now().Format(time.RFC3339),
+	}
+	if payload, err := json.Marshal(connectedEvt); err == nil {
+		if !writeSSE(c, payload) {
+			return
+		}
+	}
 
 	ctx := c.Request.Context()
 	ticker := time.NewTicker(30 * time.Second)
@@ -714,6 +728,15 @@ func (h *ExecutionHandler) toExecutionDetails(ctx context.Context, exec *types.E
 	webhookRegistered := exec.WebhookRegistered
 	webhookEvents := exec.WebhookEvents
 
+	notes := exec.Notes
+	if notes == nil {
+		notes = []types.ExecutionNote{}
+	}
+	var latestNote *types.ExecutionNote
+	if n := len(notes); n > 0 {
+		latestNote = &notes[n-1]
+	}
+
 	resp := ExecutionDetailsResponse{
 		ID:                  0,
 		ExecutionID:         exec.ExecutionID,
@@ -741,9 +764,9 @@ func (h *ExecutionHandler) toExecutionDetails(ctx context.Context, exec *types.E
 		RetryCount:          0,
 		CreatedAt:           exec.StartedAt.Format(time.RFC3339),
 		UpdatedAt:           &updated,
-		Notes:               nil,
-		NotesCount:          0,
-		LatestNote:          nil,
+		Notes:               notes,
+		NotesCount:          len(notes),
+		LatestNote:          latestNote,
 		WebhookRegistered:   webhookRegistered,
 		WebhookEvents:       webhookEvents,
 	}
@@ -762,6 +785,27 @@ func (h *ExecutionHandler) toExecutionDetails(ctx context.Context, exec *types.E
 			if wfExec.ApprovalRespondedAt != nil {
 				formatted := wfExec.ApprovalRespondedAt.Format(time.RFC3339)
 				resp.ApprovalRespondedAt = &formatted
+			}
+		}
+
+		execID := exec.ExecutionID
+		if vcs, err := h.storage.ListExecutionVCs(ctx, types.VCFilters{ExecutionID: &execID, Limit: 1}); err == nil && len(vcs) > 0 && vcs[0] != nil {
+			vc := vcs[0]
+			if t := strings.TrimSpace(vc.CallerDID); t != "" {
+				v := t
+				resp.CallerDID = &v
+			}
+			if t := strings.TrimSpace(vc.TargetDID); t != "" {
+				v := t
+				resp.TargetDID = &v
+			}
+			if t := strings.TrimSpace(vc.InputHash); t != "" {
+				v := t
+				resp.InputHash = &v
+			}
+			if t := strings.TrimSpace(vc.OutputHash); t != "" {
+				v := t
+				resp.OutputHash = &v
 			}
 		}
 	}

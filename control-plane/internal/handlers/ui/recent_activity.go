@@ -102,7 +102,7 @@ func (h *RecentActivityHandler) GetRecentActivityHandler(c *gin.Context) {
 	recentExecutions, err := h.getRecentExecutions(ctx)
 	if err != nil {
 		logger.Logger.Error().Err(err).Msg("Failed to get recent executions")
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to get recent executions"})
+		RespondInternalError(c, "failed to get recent executions")
 		return
 	}
 

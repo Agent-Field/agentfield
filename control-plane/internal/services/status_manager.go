@@ -57,11 +57,6 @@ func cloneAgentStatus(status *types.AgentStatus) *types.AgentStatus {
 
 	clone := *status
 
-	if status.MCPStatus != nil {
-		mcpCopy := *status.MCPStatus
-		clone.MCPStatus = &mcpCopy
-	}
-
 	if status.StateTransition != nil {
 		transitionCopy := *status.StateTransition
 		clone.StateTransition = &transitionCopy
@@ -380,10 +375,6 @@ func (sm *StatusManager) UpdateAgentStatus(ctx context.Context, nodeID string, u
 		newStatus.LifecycleStatus = *update.LifecycleStatus
 	}
 
-	if update.MCPStatus != nil {
-		newStatus.MCPStatus = update.MCPStatus
-	}
-
 	// Update metadata
 	newStatus.LastUpdated = time.Now()
 	newStatus.Source = update.Source
@@ -439,7 +430,7 @@ func (sm *StatusManager) UpdateAgentStatus(ctx context.Context, nodeID string, u
 // Uses snapshot (not live health check) to avoid overriding admin-controlled states
 // and to prevent the heartbeat handler from contaminating the cache with HTTP check
 // results — the heartbeat itself is the proof of life.
-func (sm *StatusManager) UpdateFromHeartbeat(ctx context.Context, nodeID string, lifecycleStatus *types.AgentLifecycleStatus, mcpStatus *types.MCPStatusInfo, version string) error {
+func (sm *StatusManager) UpdateFromHeartbeat(ctx context.Context, nodeID string, lifecycleStatus *types.AgentLifecycleStatus, version string) error {
 	currentStatus, err := sm.GetAgentStatusSnapshot(ctx, nodeID, nil)
 	if err != nil {
 		// If agent doesn't exist, create new status
@@ -454,12 +445,11 @@ func (sm *StatusManager) UpdateFromHeartbeat(ctx context.Context, nodeID string,
 	// so there is no need to suppress heartbeats here.
 
 	// Update from heartbeat
-	currentStatus.UpdateFromHeartbeat(lifecycleStatus, mcpStatus)
+	currentStatus.UpdateFromHeartbeat(lifecycleStatus)
 
 	// Persist changes — derive State from lifecycle so UpdateAgentStatus keeps them in sync.
 	update := &types.AgentStatusUpdate{
 		LifecycleStatus: lifecycleStatus,
-		MCPStatus:       mcpStatus,
 		Source:          types.StatusSourceHeartbeat,
 		Reason:          "heartbeat update",
 		Version:         version,

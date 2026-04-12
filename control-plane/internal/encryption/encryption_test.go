@@ -22,6 +22,7 @@ func TestEncryptionService_EncryptDecrypt_Roundtrip(t *testing.T) {
 	decrypted, err := service.Decrypt(ciphertext)
 	require.NoError(t, err)
 	require.Equal(t, plaintext, decrypted)
+	require.Contains(t, ciphertext, "v2:")
 }
 
 func TestEncryptionService_EncryptDecrypt_EmptyString(t *testing.T) {
@@ -121,7 +122,7 @@ func TestEncryptionService_EncryptDecrypt_TooShort(t *testing.T) {
 
 	_, err := service.Decrypt(shortCiphertext)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "ciphertext too short")
+	require.Contains(t, err.Error(), "unsupported legacy ciphertext format")
 }
 
 func TestEncryptionService_EncryptConfigurationValues(t *testing.T) {
@@ -281,6 +282,20 @@ func TestEncryptionService_LongPlaintext(t *testing.T) {
 	decrypted, err := service.Decrypt(ciphertext)
 	require.NoError(t, err)
 	require.Equal(t, string(longPlaintext), decrypted)
+}
+
+func TestEncryptionService_EncryptBytesDecryptBytes_Roundtrip(t *testing.T) {
+	service := NewEncryptionService("test-passphrase")
+
+	plaintext := []byte("sensitive-bytes")
+	ciphertext, err := service.EncryptBytes(plaintext)
+	require.NoError(t, err)
+	require.NotEmpty(t, ciphertext)
+	require.NotEqual(t, plaintext, ciphertext)
+
+	decrypted, err := service.DecryptBytes(ciphertext)
+	require.NoError(t, err)
+	require.Equal(t, plaintext, decrypted)
 }
 
 func TestEncryptionService_SpecialCharacters(t *testing.T) {

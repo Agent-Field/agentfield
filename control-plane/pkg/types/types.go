@@ -156,12 +156,12 @@ type AccessControlMetadata struct {
 
 // AgentNode represents a registered agent service.
 type AgentNode struct {
-	ID             string `json:"id" db:"id"`
-	GroupID        string `json:"group_id" db:"group_id"`
-	TeamID         string `json:"team_id" db:"team_id"`
-	BaseURL        string `json:"base_url" db:"base_url"`
-	Version        string `json:"version" db:"version"`
-	TrafficWeight  int    `json:"traffic_weight" db:"traffic_weight"` // Weight for A/B traffic distribution (default 100)
+	ID            string `json:"id" db:"id" validate:"required,min=1"`
+	GroupID       string `json:"group_id" db:"group_id"`
+	TeamID        string `json:"team_id" db:"team_id"`
+	BaseURL       string `json:"base_url" db:"base_url"`
+	Version       string `json:"version" db:"version"`
+	TrafficWeight int    `json:"traffic_weight" db:"traffic_weight"` // Weight for A/B traffic distribution (default 100)
 
 	// Serverless support
 	DeploymentType string  `json:"deployment_type" db:"deployment_type"`         // "long_running" or "serverless"
@@ -273,9 +273,6 @@ type AgentStatus struct {
 	LifecycleStatus AgentLifecycleStatus `json:"lifecycle_status"` // Backward compatibility
 	HealthStatus    HealthStatus         `json:"health_status"`    // Backward compatibility
 
-	// MCP status (optional)
-	MCPStatus *MCPStatusInfo `json:"mcp_status,omitempty"` // MCP server status if available
-
 	// Transition tracking
 	StateTransition *StateTransition `json:"state_transition,omitempty"` // Current transition if any
 
@@ -294,16 +291,6 @@ const (
 	AgentStateStarting AgentState = "starting" // Agent is initializing
 	AgentStateStopping AgentState = "stopping" // Agent is shutting down
 )
-
-// MCPStatusInfo represents MCP server status information
-type MCPStatusInfo struct {
-	TotalServers   int       `json:"total_servers"`
-	RunningServers int       `json:"running_servers"`
-	TotalTools     int       `json:"total_tools"`
-	OverallHealth  float64   `json:"overall_health"`
-	ServiceStatus  string    `json:"service_status"` // "ready", "degraded", "unavailable"
-	LastChecked    time.Time `json:"last_checked"`
-}
 
 // StateTransition represents an ongoing state transition
 type StateTransition struct {
@@ -329,8 +316,7 @@ type AgentStatusUpdate struct {
 	State           *AgentState           `json:"state,omitempty"`
 	HealthScore     *int                  `json:"health_score,omitempty"`
 	LifecycleStatus *AgentLifecycleStatus `json:"lifecycle_status,omitempty"`
-	MCPStatus       *MCPStatusInfo        `json:"mcp_status,omitempty"`
-	Source          StatusSource          `json:"source"`
+	Source StatusSource `json:"source"`
 	Reason          string                `json:"reason,omitempty"`
 	Version         string                `json:"version,omitempty"`
 }
@@ -452,7 +438,7 @@ func FromLegacyStatus(healthStatus HealthStatus, lifecycleStatus AgentLifecycleS
 }
 
 // UpdateFromHeartbeat updates the status based on heartbeat data
-func (as *AgentStatus) UpdateFromHeartbeat(lifecycleStatus *AgentLifecycleStatus, mcpStatus *MCPStatusInfo) {
+func (as *AgentStatus) UpdateFromHeartbeat(lifecycleStatus *AgentLifecycleStatus) {
 	now := time.Now()
 	as.LastSeen = now
 	as.LastUpdated = now
@@ -478,17 +464,6 @@ func (as *AgentStatus) UpdateFromHeartbeat(lifecycleStatus *AgentLifecycleStatus
 		case AgentStatusOffline:
 			as.State = AgentStateInactive
 			as.HealthScore = 0
-		}
-	}
-
-	// Update MCP status if provided
-	if mcpStatus != nil {
-		as.MCPStatus = mcpStatus
-
-		// Adjust health score based on MCP health
-		if mcpStatus.OverallHealth > 0 {
-			mcpHealthContribution := int(mcpStatus.OverallHealth * 20) // Up to 20 points from MCP
-			as.HealthScore = min(100, as.HealthScore+mcpHealthContribution)
 		}
 	}
 
@@ -730,6 +705,32 @@ type WorkflowExecutionEvent struct {
 	RecordedAt        time.Time       `json:"recorded_at" db:"recorded_at"`
 }
 
+// ExecutionLogEntry captures structured execution-correlated logs emitted by SDK runtimes.
+type ExecutionLogEntry struct {
+	EventID             int64           `json:"event_id" db:"event_id"`
+	ExecutionID         string          `json:"execution_id" db:"execution_id"`
+	WorkflowID          string          `json:"workflow_id" db:"workflow_id"`
+	RunID               *string         `json:"run_id,omitempty" db:"run_id"`
+	RootWorkflowID      *string         `json:"root_workflow_id,omitempty" db:"root_workflow_id"`
+	ParentExecutionID   *string         `json:"parent_execution_id,omitempty" db:"parent_execution_id"`
+	Sequence            int64           `json:"seq" db:"sequence"`
+	AgentNodeID         string          `json:"agent_node_id" db:"agent_node_id"`
+	ReasonerID          *string         `json:"reasoner_id,omitempty" db:"reasoner_id"`
+	Level               string          `json:"level" db:"level"`
+	Source              string          `json:"source" db:"source"`
+	EventType           *string         `json:"event_type,omitempty" db:"event_type"`
+	Message             string          `json:"message" db:"message"`
+	Attributes          json.RawMessage `json:"attributes,omitempty" db:"attributes"`
+	SystemGenerated     bool            `json:"system_generated,omitempty" db:"system_generated"`
+	SDKLanguage         *string         `json:"sdk_language,omitempty" db:"sdk_language"`
+	Attempt             *int            `json:"attempt,omitempty" db:"attempt"`
+	SpanID              *string         `json:"span_id,omitempty" db:"span_id"`
+	StepID              *string         `json:"step_id,omitempty" db:"step_id"`
+	ErrorCategory       *string         `json:"error_category,omitempty" db:"error_category"`
+	EmittedAt           time.Time       `json:"ts" db:"emitted_at"`
+	RecordedAt          time.Time       `json:"recorded_at" db:"recorded_at"`
+}
+
 // WorkflowRunEvent mirrors execution events at the workflow-run level.
 type WorkflowRunEvent struct {
 	EventID          int64           `json:"event_id" db:"event_id"`
@@ -966,13 +967,23 @@ type ReasonerExecutionHistory struct {
 
 // ReasonerExecutionRecord represents a single execution record for reasoner history
 type ReasonerExecutionRecord struct {
-	ExecutionID string                 `json:"execution_id"`
-	Status      string                 `json:"status"`
-	Input       map[string]interface{} `json:"input"`
-	Output      map[string]interface{} `json:"output,omitempty"`
-	Error       string                 `json:"error,omitempty"`
-	DurationMs  int64                  `json:"duration_ms"`
-	Timestamp   time.Time              `json:"timestamp"`
+	ExecutionID   string                 `json:"execution_id"`
+	AgentNodeID   string                 `json:"agent_node_id"`
+	ReasonerID    string                 `json:"reasoner_id"`
+	Status        string                 `json:"status"`
+	StatusReason  *string                `json:"status_reason,omitempty"`
+	Input         map[string]interface{} `json:"input,omitempty"`
+	Context       map[string]interface{} `json:"context,omitempty"`
+	Output        map[string]interface{} `json:"output,omitempty"`
+	Error         string                 `json:"error,omitempty"`
+	ErrorCategory *string                `json:"error_category,omitempty"`
+	DurationMs    int64                  `json:"duration_ms"`
+	RetryCount    int                    `json:"retry_count"`
+	SessionID     *string                `json:"session_id,omitempty"`
+	ActorID       *string                `json:"actor_id,omitempty"`
+	StartedAt     time.Time              `json:"started_at"`
+	CompletedAt   *time.Time             `json:"completed_at,omitempty"`
+	Timestamp     time.Time              `json:"timestamp"`
 }
 
 // WorkflowSummaryData represents pre-aggregated workflow summary data from database

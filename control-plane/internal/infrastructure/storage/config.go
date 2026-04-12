@@ -23,9 +23,6 @@ func (s *LocalConfigStorage) LoadAgentFieldConfig(path string) (*domain.AgentFie
 		return &domain.AgentFieldConfig{
 			HomeDir:     filepath.Dir(path),
 			Environment: make(map[string]string),
-			MCP: domain.MCPConfig{
-				Servers: []domain.MCPServer{},
-			},
 		}, nil
 	}
 

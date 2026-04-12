@@ -16,7 +16,10 @@ import { formatDurationHumanReadable } from "@/components/ui/data-formatters";
 import { useNavigate } from "react-router-dom";
 import type { WorkflowExecution } from "../../types/executions";
 import { Button } from "../ui/button";
-import { CopyButton } from "../ui/copy-button";
+import {
+  CopyIdentifierChip,
+  truncateIdMiddle,
+} from "../ui/copy-identifier-chip";
 import { Badge } from "../ui/badge";
 import {
   AlertDialog,
@@ -44,7 +47,7 @@ import {
   AnimatedTabs,
   AnimatedTabsList,
   AnimatedTabsTrigger,
-} from "../ui/animated-tabs";
+} from "../ui/tabs";
 import { cn } from "../../lib/utils";
 import {
   normalizeExecutionStatus,
@@ -127,12 +130,6 @@ function useLiveElapsed(startedAt?: string, status?: string): number | null {
   }, [startedAt, isActive, isNonTerminal]);
 
   return elapsed;
-}
-
-function truncateId(id: string, maxLen = 20): string {
-  if (id.length <= maxLen) return id;
-  const keep = Math.floor((maxLen - 1) / 2);
-  return `${id.slice(0, keep + 2)}\u2026${id.slice(-keep)}`;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -323,14 +320,14 @@ export function CompactExecutionHeader({
 
               {/* Issue pill */}
               {hasError && (
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-destructive/10 text-destructive border border-destructive/20">
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-micro-plus font-medium bg-destructive/10 text-destructive border border-destructive/20">
                   1 issue
                 </span>
               )}
 
               {/* Retry indicator */}
               {(execution.retry_count ?? 0) > 0 && (
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-micro-plus font-medium bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
                   {execution.retry_count}{" "}
                   {execution.retry_count === 1 ? "retry" : "retries"}
                 </span>
@@ -390,24 +387,12 @@ export function CompactExecutionHeader({
               )}
 
               {/* Execution ID + Copy (lg+ only) */}
-              <div className="hidden lg:flex items-center gap-1 flex-shrink-0 ml-1">
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <code className="text-[11px] font-mono text-muted-foreground/70 px-1.5 py-0.5 rounded bg-muted/40 cursor-default">
-                      {truncateId(execution.execution_id)}
-                    </code>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    <code className="text-xs font-mono">
-                      {execution.execution_id}
-                    </code>
-                  </TooltipContent>
-                </Tooltip>
-                <CopyButton
+              <div className="hidden lg:flex flex-shrink-0 ml-1">
+                <CopyIdentifierChip
                   value={execution.execution_id}
                   tooltip="Copy run ID"
                   copiedTooltip="Run ID copied"
-                  className="h-6 w-6 [&_svg]:!h-3 [&_svg]:!w-3"
+                  formatDisplay={(v) => truncateIdMiddle(v, 20)}
                 />
               </div>
             </div>
@@ -621,7 +606,7 @@ export function CompactExecutionHeader({
             {execution.reasoner_id}
           </span>
           {showAgentNodeId && (
-            <code className="text-[11px] font-mono bg-muted text-muted-foreground px-1 py-0.5 rounded flex-shrink-0">
+            <code className="text-micro-plus font-mono bg-muted text-muted-foreground px-1 py-0.5 rounded flex-shrink-0">
               {execution.agent_node_id}
             </code>
           )}
@@ -637,7 +622,7 @@ export function CompactExecutionHeader({
             </span>
           )}
           {hasError && (
-            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium bg-destructive/10 text-destructive flex-shrink-0">
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-micro-plus font-medium bg-destructive/10 text-destructive flex-shrink-0">
               1 issue
             </span>
           )}

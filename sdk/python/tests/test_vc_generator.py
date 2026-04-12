@@ -1,5 +1,5 @@
 import base64
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from agentfield.vc_generator import VCGenerator
@@ -13,7 +13,7 @@ def make_execution_context():
         caller_did="did:caller",
         target_did="did:target",
         agent_node_did="did:agent",
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
     )
 
 
@@ -34,7 +34,7 @@ def test_generate_execution_vc_success(monkeypatch):
         "input_hash": "hash-in",
         "output_hash": "hash-out",
         "status": "succeeded",
-        "created_at": datetime.utcnow().isoformat() + "Z",
+        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
     }
 
     def fake_post(url, json=None, headers=None, timeout=None):
@@ -79,8 +79,8 @@ def test_create_workflow_vc(monkeypatch):
         "component_vcs": ["vc-1"],
         "workflow_vc_id": "wvc-1",
         "status": "succeeded",
-        "start_time": datetime.utcnow().isoformat() + "Z",
-        "end_time": datetime.utcnow().isoformat() + "Z",
+        "start_time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+        "end_time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
         "total_steps": 1,
         "completed_steps": 1,
     }

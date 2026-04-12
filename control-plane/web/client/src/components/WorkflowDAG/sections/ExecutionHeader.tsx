@@ -57,34 +57,34 @@ export function ExecutionHeader({
     switch (normalizeExecutionStatus(status)) {
       case "succeeded":
         return {
-          bg: "bg-status-success-bg",
-          border: "border-status-success-border",
-          text: "text-status-success-light",
+          bg: "bg-status-success/10",
+          border: "border-status-success/30",
+          text: "text-status-success",
         };
       case "failed":
         return {
-          bg: "bg-status-error-bg",
-          border: "border-status-error-border",
-          text: "text-status-error-light",
+          bg: "bg-status-error/10",
+          border: "border-status-error/30",
+          text: "text-status-error",
         };
       case "running":
         return {
-          bg: "bg-status-info-bg",
-          border: "border-status-info-border",
-          text: "text-status-info-light",
+          bg: "bg-status-info/10",
+          border: "border-status-info/30",
+          text: "text-status-info",
         };
       case "pending":
       case "queued":
         return {
-          bg: "bg-status-warning-bg",
-          border: "border-status-warning-border",
-          text: "text-status-warning-light",
+          bg: "bg-status-warning/10",
+          border: "border-status-warning/30",
+          text: "text-status-warning",
         };
       default:
         return {
-          bg: "bg-status-neutral-bg",
-          border: "border-status-neutral-border",
-          text: "text-status-neutral-light",
+          bg: "bg-muted",
+          border: "border-border",
+          text: "text-muted-foreground",
         };
     }
   };
@@ -106,7 +106,7 @@ export function ExecutionHeader({
                 size={14}
                 className="text-muted-foreground flex-shrink-0"
               />
-              <span className="text-body-small truncate">
+              <span className="text-sm text-muted-foreground truncate">
                 {node.agent_name || node.agent_node_id}
               </span>
             </div>

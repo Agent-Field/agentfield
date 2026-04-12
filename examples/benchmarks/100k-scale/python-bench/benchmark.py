@@ -79,7 +79,7 @@ def benchmark_agent_init(iterations: int, warmup: int, verbose: bool) -> list[fl
             node_id=f"init-bench-{i}",
             agentfield_server="http://localhost:8080",
             auto_register=False,
-            enable_mcp=False,  # MCP disabled by default
+
         )
 
         elapsed_ms = (time.perf_counter() - start) * 1000
@@ -111,7 +111,7 @@ def benchmark_handler_registration(num_handlers: int, iterations: int, warmup: i
             node_id=f"handler-bench-{i}",
             agentfield_server="http://localhost:8080",
             auto_register=False,
-            enable_mcp=False,  # MCP disabled by default
+
         )
 
         # Measure ONLY handler registration
@@ -156,7 +156,7 @@ def benchmark_agent_memory(iterations: int, warmup: int, verbose: bool) -> list[
             node_id=f"agent-mem-{i}",
             agentfield_server="http://localhost:8080",
             auto_register=False,
-            enable_mcp=False,  # MCP disabled by default
+
         )
 
         gc.collect()
@@ -193,7 +193,7 @@ def benchmark_handler_memory(num_handlers: int, iterations: int, warmup: int, ve
             node_id=f"handler-mem-{i}",
             agentfield_server="http://localhost:8080",
             auto_register=False,
-            enable_mcp=False,  # MCP disabled by default
+
         )
 
         gc.collect()
@@ -244,7 +244,7 @@ def benchmark_cold_start(iterations: int, warmup: int, verbose: bool) -> list[fl
             node_id=f"cold-{i}",
             agentfield_server="http://localhost:8080",
             auto_register=False,
-            enable_mcp=False,  # MCP disabled by default
+
         )
 
         @agent.reasoner("ping")

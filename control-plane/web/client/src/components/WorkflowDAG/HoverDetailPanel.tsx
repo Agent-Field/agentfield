@@ -16,7 +16,7 @@ import {
   type CanonicalStatus,
 } from "../../utils/status";
 import { AgentBadge } from "./AgentBadge";
-import type { WorkflowDAGNode } from "./DeckGLView";
+import type { WorkflowDAGNode } from "./DeckGLGraph";
 
 interface HoverDetailPanelProps {
   node: WorkflowDAGNode | null;
@@ -143,8 +143,8 @@ export const HoverDetailPanel = memo(({ node, position, visible }: HoverDetailPa
   const tone = statusTone[toneKey];
 
   // Handle optional fields that may not exist on WorkflowDAGLightweightNode
-  const agentNameField = (node as any).agent_name;
-  const taskNameField = (node as any).task_name;
+  const agentNameField = node.agent_name;
+  const taskNameField = node.task_name;
 
   const agentColor = agentColorManager.getAgentColor(
     agentNameField || node.agent_node_id,
@@ -243,14 +243,14 @@ export const HoverDetailPanel = memo(({ node, position, visible }: HoverDetailPa
 
         {/* Technical Details */}
         <div className="space-y-1.5 border-t border-border/60 pt-3">
-          <div className="flex justify-between gap-4 text-[10px]">
+          <div className="flex justify-between gap-4 text-micro">
             <span className="text-muted-foreground">Execution ID:</span>
             <span className="font-mono text-foreground">
               {node.execution_id.slice(0, 12)}...
             </span>
           </div>
           {node.workflow_id && (
-            <div className="flex justify-between gap-4 text-[10px]">
+            <div className="flex justify-between gap-4 text-micro">
               <span className="text-muted-foreground">Workflow ID:</span>
               <span className="font-mono text-foreground">
                 {node.workflow_id.slice(0, 12)}...
@@ -258,7 +258,7 @@ export const HoverDetailPanel = memo(({ node, position, visible }: HoverDetailPa
             </div>
           )}
           {node.workflow_depth !== undefined && (
-            <div className="flex justify-between gap-4 text-[10px]">
+            <div className="flex justify-between gap-4 text-micro">
               <span className="text-muted-foreground">Depth:</span>
               <span className="font-mono text-foreground">
                 Level {node.workflow_depth}

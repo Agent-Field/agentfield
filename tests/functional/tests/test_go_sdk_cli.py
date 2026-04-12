@@ -101,6 +101,44 @@ async def _resolve_workflow_id_from_execution(client, execution_id: str, timeout
     )
 
 
+async def _wait_for_execution_logs(client, execution_id: str, timeout: float = 15.0):
+    """Poll structured execution-log API until entries appear for an execution."""
+    deadline = time.time() + timeout
+    last_body = None
+    while time.time() < deadline:
+        resp = await client.get(f"/api/ui/v1/executions/{execution_id}/logs", params={"tail": "200"})
+        assert resp.status_code == 200, f"execution logs failed: {resp.status_code} {resp.text}"
+        body = resp.json()
+        last_body = body
+        entries = body.get("entries", [])
+        if entries:
+            return entries
+        await asyncio.sleep(0.5)
+    raise AssertionError(
+        f"Execution {execution_id} produced no structured logs after {timeout}s: {json.dumps(last_body, indent=2)}"
+    )
+
+
+async def _wait_for_node_logs_containing(client, node_id: str, marker: str, timeout: float = 15.0):
+    """Poll raw node-log proxy until a marker string appears in the visible tail."""
+    deadline = time.time() + timeout
+    last_joined = ""
+    while time.time() < deadline:
+        resp = await client.get(
+            f"/api/ui/v1/nodes/{node_id}/logs",
+            params={"tail_lines": "10000"},
+            timeout=30.0,
+        )
+        assert resp.status_code == 200, f"node logs failed: {resp.status_code} {resp.text}"
+        lines = [ln for ln in resp.text.strip().split("\n") if ln.strip()]
+        if lines:
+            last_joined = "\n".join(lines)
+            if marker in last_joined:
+                return lines
+        await asyncio.sleep(0.5)
+    raise AssertionError(f"Node {node_id} logs never contained marker {marker!r}: {last_joined}")
+
+
 @pytest.mark.functional
 @pytest.mark.asyncio
 async def test_go_sdk_cli_and_control_plane(async_http_client, control_plane_url):
@@ -231,3 +269,59 @@ async def test_go_sdk_local_calls_emit_workflow_events(async_http_client, contro
         for node in timeline:
             assert node.get("agent_node_id") == node_id
             assert node.get("workflow_depth") in (0, 1, 2)
+
+
+@pytest.mark.functional
+@pytest.mark.asyncio
+async def test_go_sdk_execution_observability_surfaces_structured_and_process_logs(async_http_client, control_plane_url):
+    """
+    Validate execution observability in the canonical functional harness:
+    - structured execution logs are queryable from the control plane for the execution
+    - raw node process logs still expose mirrored NDJSON carrying the same execution correlation
+    """
+    try:
+        get_go_agent_binary("hello")
+    except FileNotFoundError:
+        pytest.skip("Go agent binary not built; ensure go_agents are compiled in test image")
+
+    node_id = unique_node_id("go-observability")
+    env_server = {
+        **os.environ,
+        "AGENTFIELD_URL": control_plane_url,
+        "AGENT_NODE_ID": node_id,
+        "AGENT_LISTEN_ADDR": ":8001",
+        "AGENT_PUBLIC_URL": "http://test-runner:8001",
+    }
+
+    async with run_go_agent("hello", args=["serve"], env=env_server):
+        await _wait_for_registration(async_http_client, node_id)
+        await _wait_for_agent_health("http://127.0.0.1:8001/health")
+
+        resp = await async_http_client.post(
+            f"/api/v1/execute/{node_id}.demo_echo",
+            json={"input": {"message": "Execution observability"}},
+            timeout=30.0,
+        )
+        assert resp.status_code == 200, f"execute failed: {resp.status_code} {resp.text}"
+
+        body = resp.json()
+        execution_id = body.get("execution_id")
+        assert execution_id, f"execution_id missing in response: {body}"
+
+        workflow_id = await _resolve_workflow_id_from_execution(async_http_client, execution_id)
+        entries = await _wait_for_execution_logs(async_http_client, execution_id)
+
+        assert all(entry.get("execution_id") == execution_id for entry in entries)
+        assert any(entry.get("workflow_id") == workflow_id for entry in entries)
+        assert any(entry.get("agent_node_id") == node_id for entry in entries)
+        assert any(entry.get("source") == "sdk.runtime" for entry in entries)
+        assert any(entry.get("event_type") for entry in entries)
+        assert any(entry.get("system_generated") is True for entry in entries)
+        assert any(entry.get("message") for entry in entries)
+
+        proxy_lines = await _wait_for_node_logs_containing(async_http_client, node_id, execution_id)
+        parsed = [json.loads(line) for line in proxy_lines]
+        assert parsed, "expected mirrored structured NDJSON lines in raw node logs"
+        assert any(row.get("line", "").find(execution_id) >= 0 for row in parsed)
+        assert any(row.get("line", "").find(workflow_id) >= 0 for row in parsed)
+        assert any(row.get("line", "").find("sdk.runtime") >= 0 for row in parsed)

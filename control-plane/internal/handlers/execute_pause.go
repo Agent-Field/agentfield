@@ -62,21 +62,23 @@ func handlePauseResume(c *gin.Context, store ExecutionStore, expectedFromStatus,
 	reason := strings.TrimSpace(req.Reason)
 
 	reqCtx := c.Request.Context()
-	wfExec, err := store.GetWorkflowExecution(reqCtx, executionID)
-	if err != nil {
-		logger.Logger.Error().Err(err).Str("execution_id", executionID).Msg("failed to get workflow execution")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to look up execution"})
-		return
-	}
 	exec, err := store.GetExecutionRecord(reqCtx, executionID)
 	if err != nil {
 		logger.Logger.Error().Err(err).Str("execution_id", executionID).Msg("failed to get execution record")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to look up execution"})
 		return
 	}
-	if wfExec == nil || exec == nil {
+	if exec == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("execution %s not found", executionID)})
 		return
+	}
+
+	// workflow_executions may not exist for simple async executions; look it
+	// up but treat a nil result as non-fatal — we only need it for the
+	// secondary UpdateWorkflowExecution and for event metadata.
+	wfExec, err := store.GetWorkflowExecution(reqCtx, executionID)
+	if err != nil {
+		logger.Logger.Warn().Err(err).Str("execution_id", executionID).Msg("workflow execution lookup failed (non-fatal)")
 	}
 
 	now := time.Now().UTC()
@@ -118,23 +120,20 @@ func handlePauseResume(c *gin.Context, store ExecutionStore, expectedFromStatus,
 		return
 	}
 
-	err = store.UpdateWorkflowExecution(reqCtx, executionID, func(current *types.WorkflowExecution) (*types.WorkflowExecution, error) {
-		if current == nil {
-			return nil, fmt.Errorf("execution %s not found", executionID)
+	// Keep workflow_executions in sync when the row exists.
+	if wfExec != nil {
+		err = store.UpdateWorkflowExecution(reqCtx, executionID, func(current *types.WorkflowExecution) (*types.WorkflowExecution, error) {
+			if current == nil {
+				return nil, fmt.Errorf("execution %s not found", executionID)
+			}
+			current.Status = nextStatus
+			current.StatusReason = statusReason
+			current.UpdatedAt = now
+			return current, nil
+		})
+		if err != nil {
+			logger.Logger.Warn().Err(err).Str("execution_id", executionID).Msg("failed to update workflow execution (non-fatal)")
 		}
-		current.Status = nextStatus
-		current.StatusReason = statusReason
-		current.UpdatedAt = now
-		return current, nil
-	})
-	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "not found") {
-			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("execution %s not found", executionID)})
-			return
-		}
-		logger.Logger.Error().Err(err).Str("execution_id", executionID).Msg("failed to update workflow execution")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update execution status"})
-		return
 	}
 
 	eventData := map[string]interface{}{"reason": reason}
@@ -144,7 +143,14 @@ func handlePauseResume(c *gin.Context, store ExecutionStore, expectedFromStatus,
 		events.PublishExecutionResumed(executionID, updatedExec.RunID, updatedExec.AgentNodeID, eventData)
 	}
 
-	workflowID := wfExec.WorkflowID
+	// Derive event metadata from workflow_executions when available,
+	// otherwise fall back to the execution record.
+	workflowID := updatedExec.RunID
+	runID := &updatedExec.RunID
+	if wfExec != nil {
+		workflowID = wfExec.WorkflowID
+		runID = wfExec.RunID
+	}
 	eventType := "execution.resumed"
 	if nextStatus == types.ExecutionStatusPaused {
 		eventType = "execution.paused"
@@ -154,7 +160,7 @@ func handlePauseResume(c *gin.Context, store ExecutionStore, expectedFromStatus,
 	event := &types.WorkflowExecutionEvent{
 		ExecutionID:  executionID,
 		WorkflowID:   workflowID,
-		RunID:        wfExec.RunID,
+		RunID:        runID,
 		EventType:    eventType,
 		Status:       &statusCopy,
 		StatusReason: statusReason,

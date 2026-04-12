@@ -33,6 +33,5 @@ def build_provider(config: "HarnessConfig") -> "HarnessProvider":
 
         return OpenCodeProvider(
             bin_path=getattr(config, "opencode_bin", "opencode"),
-            server_url=getattr(config, "opencode_server", None),
         )
     raise NotImplementedError(f"Provider {provider_name!r} is not yet implemented.")

@@ -55,8 +55,6 @@ export function useNodeDetails(executionId?: string): UseNodeDetailsReturn {
     setError(null);
 
     try {
-      // Fetch execution details from the API (using same endpoint as ExecutionDetailPage)
-      console.log(`🔍 SIDEBAR DEBUG: Fetching execution details for ${executionId}`);
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/ui/v1';
       const headers: HeadersInit = {};
       const apiKey = getGlobalApiKey();
@@ -71,7 +69,6 @@ export function useNodeDetails(executionId?: string): UseNodeDetailsReturn {
       }
 
       const data = await response.json();
-      console.log(`🔍 SIDEBAR DEBUG: Raw API response:`, data);
 
       // Transform the API response to match our NodeDetails interface
       // The API returns input_data/output_data, not input/output
@@ -86,10 +83,6 @@ export function useNodeDetails(executionId?: string): UseNodeDetailsReturn {
           tokens_used: data.performance_metrics.tokens_used
         } : undefined
       };
-
-      console.log(`🔍 SIDEBAR DEBUG: Transformed details:`, details);
-      console.log(`🔍 SIDEBAR DEBUG: Input available:`, !!details.input);
-      console.log(`🔍 SIDEBAR DEBUG: Output available:`, !!details.output);
 
       setNodeDetails(details);
       NODE_DETAILS_CACHE.set(executionId, {

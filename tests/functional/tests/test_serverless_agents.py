@@ -190,6 +190,7 @@ async def run_python_serverless_agent(node_id: str, control_plane_url: str) -> A
         port=port,
         log_level="warning",
         access_log=True,
+        ws="websockets-sansio",
     )
     server = uvicorn.Server(config)
     loop = asyncio.new_event_loop()

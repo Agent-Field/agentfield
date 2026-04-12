@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -14,25 +15,31 @@ import (
 
 // mockWebhookStore implements WebhookStore for testing
 type mockWebhookStore struct {
-	executions      map[string]*types.Execution
-	webhooks        map[string]*types.ExecutionWebhook
-	webhookEvents   []*types.ExecutionWebhookEvent
-	inFlightMarked  map[string]time.Time
-	stateUpdates    map[string]types.ExecutionWebhookStateUpdate
+	executions         map[string]*types.Execution
+	workflowExecutions map[string]*types.WorkflowExecution
+	webhooks           map[string]*types.ExecutionWebhook
+	webhookEvents      []*types.ExecutionWebhookEvent
+	inFlightMarked     map[string]time.Time
+	stateUpdates       map[string]types.ExecutionWebhookStateUpdate
 }
 
 func newMockWebhookStore() *mockWebhookStore {
 	return &mockWebhookStore{
-		executions:     make(map[string]*types.Execution),
-		webhooks:        make(map[string]*types.ExecutionWebhook),
-		webhookEvents:   make([]*types.ExecutionWebhookEvent, 0),
-		inFlightMarked:  make(map[string]time.Time),
-		stateUpdates:    make(map[string]types.ExecutionWebhookStateUpdate),
+		executions:         make(map[string]*types.Execution),
+		workflowExecutions: make(map[string]*types.WorkflowExecution),
+		webhooks:           make(map[string]*types.ExecutionWebhook),
+		webhookEvents:      make([]*types.ExecutionWebhookEvent, 0),
+		inFlightMarked:     make(map[string]time.Time),
+		stateUpdates:       make(map[string]types.ExecutionWebhookStateUpdate),
 	}
 }
 
 func (m *mockWebhookStore) GetExecutionRecord(ctx context.Context, executionID string) (*types.Execution, error) {
 	return m.executions[executionID], nil
+}
+
+func (m *mockWebhookStore) GetWorkflowExecution(ctx context.Context, executionID string) (*types.WorkflowExecution, error) {
+	return m.workflowExecutions[executionID], nil
 }
 
 func (m *mockWebhookStore) GetExecutionWebhook(ctx context.Context, executionID string) (*types.ExecutionWebhook, error) {
@@ -131,12 +138,12 @@ func TestWebhookDispatcher_NormalizeWebhookConfig(t *testing.T) {
 
 	// Test with custom values
 	cfg2 := WebhookDispatcherConfig{
-		Timeout:       10 * time.Second,
-		MaxAttempts:   5,
-		RetryBackoff:  2 * time.Second,
-		PollInterval:  3 * time.Second,
-		WorkerCount:   4,
-		QueueSize:     200,
+		Timeout:      10 * time.Second,
+		MaxAttempts:  5,
+		RetryBackoff: 2 * time.Second,
+		PollInterval: 3 * time.Second,
+		WorkerCount:  4,
+		QueueSize:    200,
 	}
 	dispatcher2 := NewWebhookDispatcher(store, cfg2)
 	require.NotNil(t, dispatcher2)
@@ -240,9 +247,9 @@ func TestWebhookDispatcher_Notify_Success(t *testing.T) {
 	}
 
 	store.webhooks[executionID] = &types.ExecutionWebhook{
-		ExecutionID: executionID,
-		URL:         "http://example.com/webhook",
-		Status:      types.ExecutionWebhookStatusPending,
+		ExecutionID:  executionID,
+		URL:          "http://example.com/webhook",
+		Status:       types.ExecutionWebhookStatusPending,
 		AttemptCount: 0,
 	}
 
@@ -257,10 +264,58 @@ func TestWebhookDispatcher_Notify_Success(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestWebhookDispatcher_BuildPayload_EnrichesExecutionFacts(t *testing.T) {
+	store := newMockWebhookStore()
+	dispatcher := NewWebhookDispatcher(store, WebhookDispatcherConfig{}).(*webhookDispatcher)
+
+	completedAt := time.Now().UTC()
+	statusReason := "provider_timeout"
+	sessionID := "session-1"
+	actorID := "actor-1"
+	inputPayload, err := json.Marshal(map[string]interface{}{
+		"input": map[string]interface{}{"ticker": "NVDA"},
+		"context": map[string]interface{}{
+			"analysis_group": "summary.short_form",
+		},
+	})
+	require.NoError(t, err)
+
+	store.executions["exec-1"] = &types.Execution{
+		ExecutionID:  "exec-1",
+		RunID:        "run-1",
+		AgentNodeID:  "node-1",
+		NodeID:       "node-1",
+		ReasonerID:   "summarizer",
+		Status:       string(types.ExecutionStatusFailed),
+		StatusReason: &statusReason,
+		InputPayload: inputPayload,
+		StartedAt:    completedAt.Add(-2 * time.Second),
+		CompletedAt:  &completedAt,
+		SessionID:    &sessionID,
+		ActorID:      &actorID,
+	}
+	store.workflowExecutions["exec-1"] = &types.WorkflowExecution{
+		ExecutionID: "exec-1",
+		RetryCount:  3,
+	}
+
+	payload := dispatcher.buildPayload(context.Background(), store.executions["exec-1"], types.WebhookEventExecutionFailed)
+
+	require.Equal(t, "node-1", payload.AgentNodeID)
+	require.Equal(t, "summarizer", payload.ReasonerID)
+	require.Equal(t, 3, payload.RetryCount)
+	require.Equal(t, &statusReason, payload.StatusReason)
+	require.Equal(t, &statusReason, payload.ErrorCategory)
+	require.Equal(t, map[string]interface{}{"analysis_group": "summary.short_form"}, payload.Context)
+	require.Equal(t, "node-1.summarizer", payload.Target)
+	require.NotNil(t, payload.CompletedAt)
+	require.Equal(t, completedAt.Format(time.RFC3339), *payload.CompletedAt)
+}
+
 func TestWebhookDispatcher_Notify_EmptyExecutionID(t *testing.T) {
 	store := newMockWebhookStore()
 	cfg := WebhookDispatcherConfig{
-		Timeout:    5 * time.Second,
+		Timeout:     5 * time.Second,
 		WorkerCount: 1,
 		QueueSize:   10,
 	}
@@ -427,9 +482,9 @@ func TestWebhookDispatcher_DispatchWebhook_Success(t *testing.T) {
 	}
 
 	store.webhooks[executionID] = &types.ExecutionWebhook{
-		ExecutionID: executionID,
-		URL:         server.URL + "/webhook",
-		Status:      types.ExecutionWebhookStatusPending,
+		ExecutionID:  executionID,
+		URL:          server.URL + "/webhook",
+		Status:       types.ExecutionWebhookStatusPending,
 		AttemptCount: 0,
 	}
 
@@ -483,10 +538,10 @@ func TestWebhookDispatcher_DispatchWebhook_WithSecret(t *testing.T) {
 
 	secret := "test-secret"
 	store.webhooks[executionID] = &types.ExecutionWebhook{
-		ExecutionID: executionID,
-		URL:         server.URL + "/webhook",
-		Secret:      &secret,
-		Status:      types.ExecutionWebhookStatusPending,
+		ExecutionID:  executionID,
+		URL:          server.URL + "/webhook",
+		Secret:       &secret,
+		Status:       types.ExecutionWebhookStatusPending,
 		AttemptCount: 0,
 	}
 
@@ -516,13 +571,13 @@ func TestWebhookDispatcher_DispatchWebhook_RetryOnFailure(t *testing.T) {
 
 	store := newMockWebhookStore()
 	cfg := WebhookDispatcherConfig{
-		Timeout:        5 * time.Second,
-		MaxAttempts:    3,
-		RetryBackoff:   100 * time.Millisecond,
+		Timeout:         5 * time.Second,
+		MaxAttempts:     3,
+		RetryBackoff:    100 * time.Millisecond,
 		MaxRetryBackoff: 1 * time.Second,
-		WorkerCount:    1,
-		PollInterval:   1 * time.Second,
-		QueueSize:      10,
+		WorkerCount:     1,
+		PollInterval:    1 * time.Second,
+		QueueSize:       10,
 	}
 
 	dispatcher := NewWebhookDispatcher(store, cfg)
@@ -539,9 +594,9 @@ func TestWebhookDispatcher_DispatchWebhook_RetryOnFailure(t *testing.T) {
 	}
 
 	store.webhooks[executionID] = &types.ExecutionWebhook{
-		ExecutionID: executionID,
-		URL:         server.URL + "/webhook",
-		Status:      types.ExecutionWebhookStatusPending,
+		ExecutionID:  executionID,
+		URL:          server.URL + "/webhook",
+		Status:       types.ExecutionWebhookStatusPending,
 		AttemptCount: 0,
 	}
 
@@ -584,9 +639,9 @@ func TestWebhookDispatcher_DetermineWebhookEvent(t *testing.T) {
 	}{
 		{"succeeded", "execution.completed"},
 		{"failed", "execution.failed"},
-		{"running", "execution.failed"},   // Non-succeeded defaults to failed
-		{"pending", "execution.failed"},   // Non-succeeded defaults to failed
-		{"unknown", "execution.failed"},   // Non-succeeded defaults to failed
+		{"running", "execution.failed"}, // Non-succeeded defaults to failed
+		{"pending", "execution.failed"}, // Non-succeeded defaults to failed
+		{"unknown", "execution.failed"}, // Non-succeeded defaults to failed
 	}
 
 	for _, tt := range tests {
@@ -620,13 +675,13 @@ func TestWebhookDispatcher_MaxRetriesExceeded(t *testing.T) {
 
 	store := newMockWebhookStore()
 	cfg := WebhookDispatcherConfig{
-		Timeout:        5 * time.Second,
-		MaxAttempts:    2, // Low max attempts for testing
-		RetryBackoff:   50 * time.Millisecond,
+		Timeout:         5 * time.Second,
+		MaxAttempts:     2, // Low max attempts for testing
+		RetryBackoff:    50 * time.Millisecond,
 		MaxRetryBackoff: 200 * time.Millisecond,
-		WorkerCount:    1,
-		PollInterval:   1 * time.Second,
-		QueueSize:      10,
+		WorkerCount:     1,
+		PollInterval:    1 * time.Second,
+		QueueSize:       10,
 	}
 
 	dispatcher := NewWebhookDispatcher(store, cfg)
@@ -643,9 +698,9 @@ func TestWebhookDispatcher_MaxRetriesExceeded(t *testing.T) {
 	}
 
 	store.webhooks[executionID] = &types.ExecutionWebhook{
-		ExecutionID: executionID,
-		URL:         server.URL + "/webhook",
-		Status:      types.ExecutionWebhookStatusPending,
+		ExecutionID:  executionID,
+		URL:          server.URL + "/webhook",
+		Status:       types.ExecutionWebhookStatusPending,
 		AttemptCount: 0,
 	}
 
@@ -681,10 +736,10 @@ func TestWebhookDispatcher_TimeoutHandling(t *testing.T) {
 	store := newMockWebhookStore()
 	cfg := WebhookDispatcherConfig{
 		Timeout:      500 * time.Millisecond, // Short timeout
-		MaxAttempts: 1,
-		WorkerCount: 1,
+		MaxAttempts:  1,
+		WorkerCount:  1,
 		PollInterval: 1 * time.Second,
-		QueueSize:   10,
+		QueueSize:    10,
 	}
 
 	dispatcher := NewWebhookDispatcher(store, cfg)
@@ -701,9 +756,9 @@ func TestWebhookDispatcher_TimeoutHandling(t *testing.T) {
 	}
 
 	store.webhooks[executionID] = &types.ExecutionWebhook{
-		ExecutionID: executionID,
-		URL:         server.URL + "/webhook",
-		Status:      types.ExecutionWebhookStatusPending,
+		ExecutionID:  executionID,
+		URL:          server.URL + "/webhook",
+		Status:       types.ExecutionWebhookStatusPending,
 		AttemptCount: 0,
 	}
 
@@ -730,11 +785,11 @@ func TestWebhookDispatcher_CustomHeaders(t *testing.T) {
 
 	store := newMockWebhookStore()
 	cfg := WebhookDispatcherConfig{
-		Timeout:     5 * time.Second,
-		MaxAttempts: 1,
-		WorkerCount: 1,
+		Timeout:      5 * time.Second,
+		MaxAttempts:  1,
+		WorkerCount:  1,
 		PollInterval: 1 * time.Second,
-		QueueSize:   10,
+		QueueSize:    10,
 	}
 
 	dispatcher := NewWebhookDispatcher(store, cfg)
@@ -751,9 +806,9 @@ func TestWebhookDispatcher_CustomHeaders(t *testing.T) {
 	}
 
 	store.webhooks[executionID] = &types.ExecutionWebhook{
-		ExecutionID: executionID,
-		URL:         server.URL + "/webhook",
-		Status:      types.ExecutionWebhookStatusPending,
+		ExecutionID:  executionID,
+		URL:          server.URL + "/webhook",
+		Status:       types.ExecutionWebhookStatusPending,
 		AttemptCount: 0,
 		Headers: map[string]string{
 			"X-Custom-Header": "custom-value",

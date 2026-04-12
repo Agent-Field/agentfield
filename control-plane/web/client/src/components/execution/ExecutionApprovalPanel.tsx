@@ -82,7 +82,7 @@ export function ExecutionApprovalPanel({ execution }: ExecutionApprovalPanelProp
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center">
         <PauseCircle className="w-10 h-10 text-muted-foreground/40 mb-3" />
-        <p className="text-body-small text-muted-foreground">
+        <p className="text-sm text-muted-foreground text-muted-foreground">
           No approval request for this execution.
         </p>
       </div>
@@ -108,7 +108,7 @@ export function ExecutionApprovalPanel({ execution }: ExecutionApprovalPanelProp
         }
       >
         <div className="p-4 space-y-4">
-          <p className="text-body-small text-muted-foreground">
+          <p className="text-sm text-muted-foreground text-muted-foreground">
             {config.description}
           </p>
 
@@ -120,7 +120,7 @@ export function ExecutionApprovalPanel({ execution }: ExecutionApprovalPanelProp
               </div>
               <div className="min-w-0">
                 <p className="text-sm font-medium text-foreground">Approval Requested</p>
-                <p className="text-body-small text-muted-foreground font-mono">
+                <p className="text-sm text-muted-foreground text-muted-foreground font-mono">
                   {formatTimestamp(execution.approval_requested_at)}
                 </p>
               </div>
@@ -138,7 +138,7 @@ export function ExecutionApprovalPanel({ execution }: ExecutionApprovalPanelProp
                   <p className="text-sm font-medium text-foreground">
                     Decision: {config.label}
                   </p>
-                  <p className="text-body-small text-muted-foreground font-mono">
+                  <p className="text-sm text-muted-foreground text-muted-foreground font-mono">
                     {formatTimestamp(execution.approval_responded_at)}
                   </p>
                 </div>
@@ -151,7 +151,7 @@ export function ExecutionApprovalPanel({ execution }: ExecutionApprovalPanelProp
             <div className="border-t border-border pt-3">
               <h4 className="text-sm font-medium text-foreground mb-2">Reviewer Feedback</h4>
               <div className="bg-muted/30 rounded-md p-3">
-                <p className="text-body-small text-foreground whitespace-pre-wrap">{feedback}</p>
+                <p className="text-sm text-muted-foreground text-foreground whitespace-pre-wrap">{feedback}</p>
               </div>
             </div>
           )}

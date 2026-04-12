@@ -175,6 +175,33 @@ type WorkflowExecutionEventModel struct {
 
 func (WorkflowExecutionEventModel) TableName() string { return "workflow_execution_events" }
 
+type ExecutionLogEntryModel struct {
+	EventID           int64     `gorm:"column:event_id;primaryKey;autoIncrement"`
+	ExecutionID       string    `gorm:"column:execution_id;not null;index:idx_execution_logs_execution,priority:1"`
+	WorkflowID        string    `gorm:"column:workflow_id;not null;index"`
+	RunID             *string   `gorm:"column:run_id;index"`
+	RootWorkflowID    *string   `gorm:"column:root_workflow_id;index"`
+	ParentExecutionID *string   `gorm:"column:parent_execution_id;index"`
+	Sequence          int64     `gorm:"column:sequence;not null;index:idx_execution_logs_execution,priority:2"`
+	AgentNodeID       string    `gorm:"column:agent_node_id;not null;index"`
+	ReasonerID        *string   `gorm:"column:reasoner_id;index"`
+	Level             string    `gorm:"column:level;not null;index"`
+	Source            string    `gorm:"column:source;not null;index"`
+	EventType         *string   `gorm:"column:event_type;index"`
+	Message           string    `gorm:"column:message;not null"`
+	Attributes        string    `gorm:"column:attributes;default:'{}'"`
+	SystemGenerated   bool      `gorm:"column:system_generated;not null;default:false"`
+	SDKLanguage       *string   `gorm:"column:sdk_language;index"`
+	Attempt           *int      `gorm:"column:attempt"`
+	SpanID            *string   `gorm:"column:span_id;index"`
+	StepID            *string   `gorm:"column:step_id;index"`
+	ErrorCategory     *string   `gorm:"column:error_category;index"`
+	EmittedAt         time.Time `gorm:"column:emitted_at;not null;index"`
+	RecordedAt        time.Time `gorm:"column:recorded_at;autoCreateTime"`
+}
+
+func (ExecutionLogEntryModel) TableName() string { return "execution_logs" }
+
 type WorkflowRunEventModel struct {
 	EventID          int64     `gorm:"column:event_id;primaryKey;autoIncrement"`
 	RunID            string    `gorm:"column:run_id;not null;index:idx_workflow_run_events_run,priority:1"`

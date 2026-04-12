@@ -29,6 +29,7 @@ type GitHubPackageInfo struct {
 type GitHubInstaller struct {
 	AgentFieldHome string
 	Verbose        bool
+	HTTPClient     *http.Client // optional; defaults to http.DefaultClient
 }
 
 // newSpinner creates a new spinner with the given message
@@ -216,7 +217,11 @@ func (gi *GitHubInstaller) downloadAndExtract(info *GitHubPackageInfo) (string, 
 	}
 
 	// Download archive
-	resp, err := http.Get(info.ArchiveURL)
+	client := gi.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Get(info.ArchiveURL)
 	if err != nil {
 		os.RemoveAll(tempDir)
 		return "", fmt.Errorf("failed to download archive: %w", err)

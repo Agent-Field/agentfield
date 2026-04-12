@@ -227,6 +227,7 @@ def run_agent() -> (
             log_level="warning",
             access_log=False,
             loop="asyncio",
+            ws="websockets-sansio",
         )
         server = uvicorn.Server(config)
         loop = asyncio.new_event_loop()

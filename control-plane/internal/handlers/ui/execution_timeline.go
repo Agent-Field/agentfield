@@ -114,7 +114,7 @@ func (h *ExecutionTimelineHandler) GetExecutionTimelineHandler(c *gin.Context) {
 	timelineData, summary, err := h.generateTimelineData(ctx)
 	if err != nil {
 		logger.Logger.Error().Err(err).Msg("Failed to generate timeline data")
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to generate timeline data"})
+		RespondInternalError(c, "failed to generate timeline data")
 		return
 	}
 

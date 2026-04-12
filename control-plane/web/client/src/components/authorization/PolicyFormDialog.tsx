@@ -39,14 +39,14 @@ const actionOptions: ReadonlyArray<SegmentedControlOption> = [
     value: "allow",
     label: "Allow",
     icon: ({ className }: { className?: string }) => (
-      <CheckCircle size={16} weight="bold" className={cn("text-status-success", className)} />
+      <CheckCircle size={16} className={cn("text-status-success", className)} />
     ),
   },
   {
     value: "deny",
     label: "Deny",
     icon: ({ className }: { className?: string }) => (
-      <XCircle size={16} weight="bold" className={cn("text-status-error", className)} />
+      <XCircle size={16} className={cn("text-status-error", className)} />
     ),
   },
 ] as const;

@@ -207,6 +207,11 @@ func NewInitCommand() *cobra.Command {
 	var language string
 	var nonInteractive bool
 	var useDefaults bool
+	var withDocker bool
+	var controlPlaneImage string
+	var controlPlanePort int
+	var agentPort int
+	var defaultModel string
 
 	cmd := &cobra.Command{
 		Use:   "init [project-name]",
@@ -327,14 +332,18 @@ Example:
 
 			// Prepare template data
 			data := templates.TemplateData{
-				ProjectName: projectName,
-				NodeID:      nodeID,
-				GoModule:    projectName, // Use project name as Go module
-				AuthorName:  authorName,
-				AuthorEmail: authorEmail,
-				CurrentYear: time.Now().Year(),
-				CreatedAt:   time.Now().Format("2006-01-02 15:04:05 MST"),
-				Language:    language,
+				ProjectName:       projectName,
+				NodeID:            nodeID,
+				GoModule:          projectName, // Use project name as Go module
+				AuthorName:        authorName,
+				AuthorEmail:       authorEmail,
+				CurrentYear:       time.Now().Year(),
+				CreatedAt:         time.Now().Format("2006-01-02 15:04:05 MST"),
+				Language:          language,
+				ControlPlaneImage: controlPlaneImage,
+				ControlPlanePort:  controlPlanePort,
+				AgentPort:         agentPort,
+				DefaultModel:      defaultModel,
 			}
 
 			// Create project directory
@@ -378,6 +387,34 @@ Example:
 				}
 
 				printSuccess("  ✓ %s", destPath)
+			}
+
+			// If --docker is set, also generate Docker scaffold templates
+			if withDocker {
+				printInfo("🐳 Adding Docker scaffold...")
+				dockerTemplates := templates.GetDockerTemplateFiles(language)
+				for tmplPath, destPath := range dockerTemplates {
+					tmpl, err := templates.GetTemplate(tmplPath)
+					if err != nil {
+						printError("Error parsing docker template %s: %v", tmplPath, err)
+						return fmt.Errorf("error parsing docker template %s: %w", tmplPath, err)
+					}
+
+					var buf strings.Builder
+					if err := tmpl.Execute(&buf, data); err != nil {
+						printError("Error executing docker template %s: %v", tmplPath, err)
+						return fmt.Errorf("error executing docker template %s: %w", tmplPath, err)
+					}
+
+					fullDestPath := filepath.Join(projectPath, destPath)
+					// README.md may already exist from the language template — overwrite with the docker variant.
+					if err := os.WriteFile(fullDestPath, []byte(buf.String()), 0o644); err != nil {
+						printError("Error writing docker file %s: %v", fullDestPath, err)
+						return fmt.Errorf("error writing docker file %s: %w", fullDestPath, err)
+					}
+
+					printSuccess("  ✓ %s", destPath)
+				}
 			}
 
 			// Print success message
@@ -432,7 +469,7 @@ Example:
 
 			fmt.Println("  4. Restart your agent")
 			fmt.Println()
-			printInfo("Learn more: https://agentfield.ai/docs")
+			printInfo("Learn more: https://agentfield.ai/docs/learn")
 			fmt.Println()
 			printSuccess("Happy building! 🎉")
 
@@ -445,6 +482,20 @@ Example:
 	cmd.Flags().StringVarP(&authorEmail, "email", "e", "", "Author email for the project")
 	cmd.Flags().BoolVar(&nonInteractive, "non-interactive", false, "Run in non-interactive mode (use defaults)")
 	cmd.Flags().BoolVar(&useDefaults, "defaults", false, "Skip prompts and generate a project with default settings")
+	// --docker: the only new visible flag. Ships the four infrastructure files
+	// (Dockerfile, docker-compose.yml, .env.example, .dockerignore). CLAUDE.md
+	// and README.md are intentionally NOT generated — the skill produces them
+	// after the agent has written real reasoners.
+	cmd.Flags().BoolVar(&withDocker, "docker", false, "Also generate a Docker scaffold (Dockerfile, docker-compose.yml, .env.example, .dockerignore)")
+	cmd.Flags().StringVar(&defaultModel, "default-model", "openrouter/google/gemini-2.5-flash", "Default AI_MODEL string baked into the docker scaffold (LiteLLM-style, e.g. gpt-4o, anthropic/claude-3-5-sonnet-20241022)")
+
+	// Hidden flags — sensible defaults; only set when you have a real reason.
+	cmd.Flags().StringVar(&controlPlaneImage, "control-plane-image", "agentfield/control-plane:latest", "")
+	cmd.Flags().IntVar(&controlPlanePort, "control-plane-port", 8080, "")
+	cmd.Flags().IntVar(&agentPort, "agent-port", 8001, "")
+	_ = cmd.Flags().MarkHidden("control-plane-image")
+	_ = cmd.Flags().MarkHidden("control-plane-port")
+	_ = cmd.Flags().MarkHidden("agent-port")
 
 	if err := viper.BindPFlag("language", cmd.Flags().Lookup("language")); err != nil {
 		printError("failed to bind language flag: %v", err)

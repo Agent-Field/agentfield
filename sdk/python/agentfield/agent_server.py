@@ -11,6 +11,7 @@ from agentfield.agent_utils import AgentUtils
 from agentfield.logger import log_debug, log_error, log_info, log_success, log_warn
 from agentfield.utils import get_free_port
 from fastapi import Request
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.routing import APIRoute
 
 
@@ -28,6 +29,99 @@ class AgentServer:
 
     def setup_agentfield_routes(self):
         """Setup standard routes that AgentField server expects"""
+        from agentfield.node_logs import install_stdio_tee
+
+        install_stdio_tee()
+
+        @self.agent.get("/agentfield/v1/logs")
+        async def agentfield_process_logs(request: Request):
+            """NDJSON tail/stream of captured stdout/stderr (control plane proxy)."""
+            from agentfield import node_logs
+
+            if not node_logs.logs_enabled():
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": "logs_disabled", "message": "Process logs API is disabled"},
+                )
+            auth = request.headers.get("authorization") or request.headers.get(
+                "Authorization"
+            )
+            if not node_logs.verify_internal_bearer(auth):
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "unauthorized", "message": "Valid Authorization Bearer required"},
+                )
+            qp = request.query_params
+            try:
+                tail_lines = int(qp.get("tail_lines") or "0")
+            except ValueError:
+                tail_lines = 0
+            try:
+                since_seq = int(qp.get("since_seq") or "0")
+            except ValueError:
+                since_seq = 0
+            follow = (qp.get("follow") or "").lower() in ("1", "true", "yes")
+            max_tail = int(os.getenv("AGENTFIELD_LOG_MAX_TAIL_LINES", "50000"))
+            if tail_lines > max_tail:
+                return JSONResponse(
+                    status_code=413,
+                    content={
+                        "error": "tail_too_large",
+                        "message": f"tail_lines exceeds max {max_tail}",
+                    },
+                )
+            if tail_lines <= 0 and since_seq <= 0 and not follow:
+                tail_lines = 200
+            gen = node_logs.iter_tail_ndjson(tail_lines, since_seq, follow)
+            return StreamingResponse(
+                gen,
+                media_type="application/x-ndjson",
+                headers={
+                    "Cache-Control": "no-store",
+                    "X-Content-Type-Options": "nosniff",
+                },
+            )
+
+        @self.agent.get("/debug/tasks")
+        async def debug_tasks():
+            """Dump every live asyncio task with its current stack frames.
+
+            Use this to find deadlocked workflows: any task whose stack stays
+            the same across two calls is suspended on an await that never
+            resolves.
+            """
+            import io
+
+            tasks = list(asyncio.all_tasks())
+            out = []
+            for t in tasks:
+                buf = io.StringIO()
+                try:
+                    name = t.get_name()
+                except Exception:
+                    name = "?"
+                buf.write(f"=== Task {name} done={t.done()} cancelled={t.cancelled()} ===\n")
+                try:
+                    coro = t.get_coro()
+                    buf.write(f"coro: {coro!r}\n")
+                except Exception:
+                    pass
+                try:
+                    stack = t.get_stack(limit=30)
+                    if stack:
+                        for frame in stack:
+                            buf.write(
+                                f"  {frame.f_code.co_filename}:{frame.f_lineno} in {frame.f_code.co_name}\n"
+                            )
+                    else:
+                        buf.write("  <no stack — task is suspended on a Future/awaitable>\n")
+                except Exception as e:
+                    buf.write(f"  <stack error: {e}>\n")
+                out.append(buf.getvalue())
+            return JSONResponse(
+                content={"count": len(tasks), "tasks": out},
+                media_type="application/json",
+            )
 
         @self.agent.get("/health")
         async def health():
@@ -37,58 +131,6 @@ class AgentServer:
                 "version": self.agent.version,
                 "timestamp": datetime.now().isoformat(),
             }
-
-            # Add MCP server status if manager is available
-            if self.agent.mcp_manager:
-                try:
-                    all_status = self.agent.mcp_manager.get_all_status()
-
-                    # Calculate summary statistics
-                    total_servers = len(all_status)
-                    running_servers = sum(
-                        1
-                        for server in all_status.values()
-                        if server.get("status") == "running"
-                    )
-                    failed_servers = sum(
-                        1
-                        for server in all_status.values()
-                        if server.get("status") == "failed"
-                    )
-
-                    # Determine overall health status
-                    if failed_servers > 0:
-                        health_response["status"] = "degraded"
-
-                    # Add MCP information to health response
-                    mcp_server_info = {
-                        "total": total_servers,
-                        "running": running_servers,
-                        "failed": failed_servers,
-                        "servers": {},
-                    }
-
-                    # Add individual server details
-                    for alias, server_process in all_status.items():
-                        process = server_process.get("process")
-                        server_info = {
-                            "status": server_process.get("status"),
-                            "port": server_process.get("port"),
-                            "pid": process.pid if process else None,
-                        }
-                        mcp_server_info["servers"][alias] = server_info
-
-                    health_response["mcp_servers"] = mcp_server_info
-
-                except Exception as e:
-                    if self.agent.dev_mode:
-                        log_warn(f"Error getting MCP status for health check: {e}")
-                    health_response["mcp_servers"] = {
-                        "error": "Failed to get MCP status",
-                        "total": 0,
-                        "running": 0,
-                        "failed": 0,
-                    }
 
             return health_response
 
@@ -210,24 +252,6 @@ class AgentServer:
                     },
                 }
 
-                # Add MCP server information if available
-                if self.agent.mcp_manager:
-                    try:
-                        all_status = self.agent.mcp_manager.get_all_status()
-                        status_response["mcp_servers"] = {
-                            "total": len(all_status),
-                            "running": sum(
-                                1
-                                for s in all_status.values()
-                                if s.get("status") == "running"
-                            ),
-                            "servers": all_status,
-                        }
-                    except Exception as e:
-                        if self.agent.dev_mode:
-                            log_warn(f"Error getting MCP status: {e}")
-                        status_response["mcp_servers"] = {"error": str(e)}
-
                 return status_response
 
             except ImportError:
@@ -259,286 +283,6 @@ class AgentServer:
                 "skills": self.agent.skills,
                 "registered_at": datetime.now().isoformat(),
             }
-
-        @self.agent.get("/mcp/status")
-        async def mcp_status():
-            """Get status of all MCP servers"""
-            if not self.agent.mcp_manager:
-                return {
-                    "error": "MCP Manager not available",
-                    "servers": {},
-                    "total": 0,
-                    "running": 0,
-                    "failed": 0,
-                }
-
-            # MCP functionality disabled
-            return {
-                "error": "MCP functionality disabled - old modules removed",
-                "servers": {},
-                "total": 0,
-                "running": 0,
-                "failed": 0,
-            }
-
-        @self.agent.post("/mcp/{alias}/start")
-        async def start_mcp_server(alias: str):
-            """Start a specific MCP server"""
-            if not self.agent.mcp_manager:
-                return {
-                    "success": False,
-                    "error": "MCP Process Manager not available",
-                    "alias": alias,
-                }
-
-            try:
-                success = await self.agent.mcp_manager.start_server_by_alias(alias)
-                if success:
-                    # Get updated status
-                    status = self.agent.mcp_manager.get_server_status(alias)
-                    return {
-                        "success": True,
-                        "message": f"MCP server '{alias}' started successfully",
-                        "alias": alias,
-                        "status": status,
-                        "timestamp": datetime.now().isoformat(),
-                    }
-                else:
-                    return {
-                        "success": False,
-                        "error": f"Failed to start MCP server '{alias}'",
-                        "alias": alias,
-                        "timestamp": datetime.now().isoformat(),
-                    }
-
-            except Exception as e:
-                return {
-                    "success": False,
-                    "error": f"Error starting MCP server '{alias}': {str(e)}",
-                    "alias": alias,
-                    "timestamp": datetime.now().isoformat(),
-                }
-
-        @self.agent.post("/mcp/{alias}/stop")
-        async def stop_mcp_server(alias: str):
-            """Stop a specific MCP server"""
-            if not self.agent.mcp_manager:
-                return {
-                    "success": False,
-                    "error": "MCP Process Manager not available",
-                    "alias": alias,
-                }
-
-            try:
-                success = self.agent.mcp_manager.stop_server(alias)
-                if success:
-                    return {
-                        "success": True,
-                        "message": f"MCP server '{alias}' stopped successfully",
-                        "alias": alias,
-                        "timestamp": datetime.now().isoformat(),
-                    }
-                else:
-                    return {
-                        "success": False,
-                        "error": f"Failed to stop MCP server '{alias}' (may not be running)",
-                        "alias": alias,
-                        "timestamp": datetime.now().isoformat(),
-                    }
-
-            except Exception as e:
-                return {
-                    "success": False,
-                    "error": f"Error stopping MCP server '{alias}': {str(e)}",
-                    "alias": alias,
-                    "timestamp": datetime.now().isoformat(),
-                }
-
-        @self.agent.post("/mcp/{alias}/restart")
-        async def restart_mcp_server(alias: str):
-            """Restart a specific MCP server"""
-            if not self.agent.mcp_manager:
-                return {
-                    "success": False,
-                    "error": "MCP Process Manager not available",
-                    "alias": alias,
-                }
-
-            try:
-                success = await self.agent.mcp_manager.restart_server(alias)
-                if success:
-                    # Get updated status
-                    status = self.agent.mcp_manager.get_server_status(alias)
-                    return {
-                        "success": True,
-                        "message": f"MCP server '{alias}' restarted successfully",
-                        "alias": alias,
-                        "status": status,
-                        "timestamp": datetime.now().isoformat(),
-                    }
-                else:
-                    return {
-                        "success": False,
-                        "error": f"Failed to restart MCP server '{alias}'",
-                        "alias": alias,
-                        "timestamp": datetime.now().isoformat(),
-                    }
-
-            except Exception as e:
-                return {
-                    "success": False,
-                    "error": f"Error restarting MCP server '{alias}': {str(e)}",
-                    "alias": alias,
-                    "timestamp": datetime.now().isoformat(),
-                }
-
-        @self.agent.get("/health/mcp")
-        async def mcp_health():
-            """Get MCP health information in the format expected by AgentField server"""
-            if not self.agent.mcp_manager:
-                # Return empty response when MCP manager is not available
-                return {
-                    "servers": [],
-                    "summary": {
-                        "total_servers": 0,
-                        "running_servers": 0,
-                        "total_tools": 0,
-                        "overall_health": 0.0,
-                    },
-                }
-
-            try:
-                # Get all server status from MCP manager
-                all_status = self.agent.mcp_manager.get_all_status()
-                servers = []
-                total_tools = 0
-                running_servers = 0
-
-                # Process each server to get detailed health information
-                for alias, server_info in all_status.items():
-                    server_health = {
-                        "alias": alias,
-                        "status": server_info.get("status", "unknown"),
-                        "tool_count": 0,
-                        "started_at": None,
-                        "last_health_check": datetime.now().isoformat(),
-                        "port": server_info.get("port"),
-                        "process_id": None,
-                    }
-
-                    # Get process ID if available
-                    if alias in self.agent.mcp_manager.servers:
-                        server_process = self.agent.mcp_manager.servers[alias]
-                        if server_process.process:
-                            server_health["process_id"] = server_process.process.pid
-
-                    # Count running servers
-                    if server_health["status"] == "running":
-                        running_servers += 1
-
-                        # Try to get tool count from MCP client
-                        try:
-                            if self.agent.mcp_client_registry:
-                                client = self.agent.mcp_client_registry.get_client(
-                                    alias
-                                )
-                                if client:
-                                    tools = await client.list_tools()
-                                    server_health["tool_count"] = len(tools)
-                                    total_tools += len(tools)
-
-                                    # Set started_at time (approximate)
-                                    server_health["started_at"] = (
-                                        datetime.now().isoformat()
-                                    )
-
-                        except Exception as e:
-                            if self.agent.dev_mode:
-                                log_warn(f"Failed to get tools for {alias}: {e}")
-
-                    servers.append(server_health)
-
-                # Calculate overall health score
-                total_servers = len(servers)
-                if total_servers == 0:
-                    overall_health = 0.0
-                else:
-                    # Health score based on running servers ratio
-                    health_ratio = running_servers / total_servers
-                    # Adjust for any servers with errors
-                    error_servers = sum(1 for s in servers if s["status"] == "error")
-                    if error_servers > 0:
-                        health_ratio *= 1 - (
-                            error_servers * 0.2
-                        )  # Reduce health for errors
-                    overall_health = max(0.0, min(1.0, health_ratio))
-
-                # Build summary
-                summary = {
-                    "total_servers": total_servers,
-                    "running_servers": running_servers,
-                    "total_tools": total_tools,
-                    "overall_health": overall_health,
-                }
-
-                return {"servers": servers, "summary": summary}
-
-            except Exception as e:
-                if self.agent.dev_mode:
-                    log_error(f"Error getting MCP health: {e}")
-
-                # Return error response in expected format
-                return {
-                    "servers": [],
-                    "summary": {
-                        "total_servers": 0,
-                        "running_servers": 0,
-                        "total_tools": 0,
-                        "overall_health": 0.0,
-                    },
-                }
-
-        @self.agent.post("/mcp/servers/{alias}/restart")
-        async def restart_mcp_server_alt(alias: str):
-            """Alternative restart endpoint for AgentField server compatibility"""
-            return await restart_mcp_server(alias)
-
-        @self.agent.get("/mcp/servers/{alias}/tools")
-        async def get_mcp_server_tools(alias: str):
-            """Get tools from a specific MCP server"""
-            if not self.agent.mcp_client_registry:
-                return {"error": "MCP Client Registry not available", "tools": []}
-
-            try:
-                client = self.agent.mcp_client_registry.get_client(alias)
-                if not client:
-                    return {
-                        "error": f"MCP server '{alias}' not found or not running",
-                        "tools": [],
-                    }
-
-                tools = await client.list_tools()
-
-                # Transform tools to match expected format
-                formatted_tools = []
-                for tool in tools:
-                    formatted_tool = {
-                        "name": tool.get("name", ""),
-                        "description": tool.get("description", ""),
-                        "input_schema": tool.get("inputSchema", {}),
-                    }
-                    formatted_tools.append(formatted_tool)
-
-                return {"tools": formatted_tools}
-
-            except Exception as e:
-                if self.agent.dev_mode:
-                    log_error(f"Error getting tools for {alias}: {e}")
-
-                return {
-                    "error": f"Failed to get tools from MCP server '{alias}': {str(e)}",
-                    "tools": [],
-                }
 
         # -----------------------------------------------------------------
         # Approval webhook — receives callbacks from the control plane when
@@ -610,16 +354,6 @@ class AgentServer:
             if self.agent.dev_mode:
                 log_info(f"Starting graceful shutdown (timeout: {timeout_seconds}s)")
 
-            # Stop MCP servers first
-            try:
-                if hasattr(self.agent, "mcp_handler") and self.agent.mcp_handler:
-                    self.agent.mcp_handler._cleanup_mcp_servers()
-                    if self.agent.dev_mode:
-                        log_info("MCP servers stopped")
-            except Exception as e:
-                if self.agent.dev_mode:
-                    log_error(f"MCP shutdown error: {e}")
-
             # Stop heartbeat
             try:
                 if (
@@ -664,13 +398,6 @@ class AgentServer:
         try:
             if self.agent.dev_mode:
                 log_warn("Immediate shutdown initiated")
-
-            # Quick cleanup attempt
-            try:
-                if hasattr(self.agent, "mcp_handler") and self.agent.mcp_handler:
-                    self.agent.mcp_handler._cleanup_mcp_servers()
-            except Exception:
-                pass  # Ignore errors in immediate shutdown
 
             # Exit immediately
             os._exit(0)
@@ -819,7 +546,7 @@ class AgentServer:
         Setup signal handlers for graceful shutdown.
 
         This method registers signal handlers for SIGTERM and SIGINT
-        to ensure MCP servers are properly stopped when the agent shuts down.
+        to ensure proper cleanup when the agent shuts down.
         """
         try:
             # Register signal handlers for graceful shutdown
@@ -846,9 +573,6 @@ class AgentServer:
 
         if self.agent.dev_mode:
             log_warn(f"{signal_name} received, shutting down gracefully...")
-
-        # Perform cleanup
-        self.agent.mcp_handler._cleanup_mcp_servers()
 
         # Exit gracefully
         os._exit(0)
@@ -1066,17 +790,13 @@ class AgentServer:
             # Start connection manager (non-blocking)
             connected = await self.agent.connection_manager.start()
 
-            # Always connect memory event client and start MCP initialization
-            # These work independently of AgentField server connection
+            # Connect memory event client - works independently of AgentField server connection
             if self.agent.memory_event_client:
                 try:
                     await self.agent.memory_event_client.connect()
                 except Exception as e:
                     if self.agent.dev_mode:
                         log_error(f"Memory event client connection failed: {e}")
-
-            # Start background MCP initialization (non-blocking)
-            asyncio.create_task(self.agent.mcp_handler._background_mcp_initialization())
 
             if connected:
                 if self.agent.dev_mode:
@@ -1100,23 +820,6 @@ class AgentServer:
             if self.agent.memory_event_client:
                 await self.agent.memory_event_client.close()
 
-            # Stop MCP servers
-            if self.agent.mcp_manager:
-                try:
-                    await self.agent.mcp_manager.shutdown_all()
-                    if self.agent.dev_mode:
-                        log_info("MCP servers stopped")
-                except Exception as e:
-                    if self.agent.dev_mode:
-                        log_error(f"MCP shutdown error: {e}")
-
-            if self.agent.mcp_client_registry:
-                try:
-                    await self.agent.mcp_client_registry.close_all()
-                except Exception as e:
-                    if self.agent.dev_mode:
-                        log_error(f"MCP client shutdown error: {e}")
-
             if getattr(self.agent, "client", None):
                 try:
                     await self.agent.client.aclose()
@@ -1137,6 +840,7 @@ class AgentServer:
             and workers is None,  # Only enable reload in dev mode with single worker
             "access_log": access_log,
             "log_level": log_level,
+            "ws": "websockets-sansio",
             "timeout_graceful_shutdown": 30,  # Allow 30 seconds for graceful shutdown
             **kwargs,
         }
@@ -1230,15 +934,12 @@ class AgentServer:
             log_error(f"Unexpected server error: {e}")
             raise
         finally:
-            # Phase 5: Graceful shutdown - stop heartbeat and MCP servers
+            # Phase 5: Graceful shutdown - stop heartbeat
             if self.agent.dev_mode:
                 log_info("Agent shutdown initiated...")
 
             # Stop heartbeat worker
             self.agent.agentfield_handler.stop_heartbeat()
-
-            # Stop all MCP servers
-            self.agent.mcp_handler._cleanup_mcp_servers()
 
             if self.agent.dev_mode:
                 log_success("Agent shutdown complete")

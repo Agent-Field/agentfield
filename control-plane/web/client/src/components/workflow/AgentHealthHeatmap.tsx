@@ -213,7 +213,7 @@ export function AgentHealthHeatmap({ timedNodes, className }: AgentHealthHeatmap
           </ScatterChart>
         </ResponsiveContainer>
       </div>
-      <div className="flex justify-end gap-4 text-[10px] text-muted-foreground px-2">
+      <div className="flex justify-end gap-4 text-micro text-muted-foreground px-2">
          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500 opacity-60"></span> Healthy</span>
          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500 opacity-80"></span> Sporadic Errors</span>
          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-destructive opacity-80"></span> High Failure</span>

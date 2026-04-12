@@ -334,6 +334,9 @@ type Agent struct {
 	router      http.Handler
 	handlerOnce sync.Once
 
+	procLogRing *processLogRing
+	procLogOnce sync.Once
+
 	initMu        sync.Mutex
 	initialized   bool
 	leaseLoopOnce sync.Once
@@ -552,15 +555,32 @@ func (a *Agent) Initialize(ctx context.Context) error {
 		return nil
 	}
 
+	a.logExecutionInfo(ctx, "agent.initialize.start", "initializing agent", map[string]any{
+		"node_id":         a.cfg.NodeID,
+		"deployment_type": a.cfg.DeploymentType,
+	})
+
+	a.ensureProcessLogRing()
+
 	if a.client == nil {
+		a.logExecutionError(ctx, "agent.initialize.failed", "agent field URL is required for server mode", map[string]any{
+			"node_id": a.cfg.NodeID,
+		})
 		return errors.New("AgentFieldURL is required when running in server mode")
 	}
 
 	if len(a.reasoners) == 0 {
+		a.logExecutionError(ctx, "agent.initialize.failed", "no reasoners registered", map[string]any{
+			"node_id": a.cfg.NodeID,
+		})
 		return errors.New("no reasoners registered")
 	}
 
 	if err := a.registerNode(ctx); err != nil {
+		a.logExecutionError(ctx, "agent.initialize.failed", "node registration failed", map[string]any{
+			"node_id": a.cfg.NodeID,
+			"error":   err.Error(),
+		})
 		return fmt.Errorf("register node: %w", err)
 	}
 
@@ -581,6 +601,9 @@ func (a *Agent) Initialize(ctx context.Context) error {
 
 	a.startLeaseLoop()
 	a.initialized = true
+	a.logExecutionInfo(ctx, "agent.initialize.complete", "agent initialized", map[string]any{
+		"node_id": a.cfg.NodeID,
+	})
 	return nil
 }
 
@@ -600,6 +623,9 @@ func (a *Agent) Run(ctx context.Context) error {
 
 // Serve starts the agent HTTP server, registers with the control plane, and blocks until ctx is cancelled.
 func (a *Agent) Serve(ctx context.Context) error {
+	a.logExecutionInfo(ctx, "agent.serve.start", "starting agent server", map[string]any{
+		"node_id": a.cfg.NodeID,
+	})
 	if err := a.Initialize(ctx); err != nil {
 		return err
 	}
@@ -614,15 +640,26 @@ func (a *Agent) Serve(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
+		a.logExecutionInfo(context.Background(), "agent.serve.stop", "context cancelled, shutting down", map[string]any{
+			"node_id": a.cfg.NodeID,
+		})
 		return a.shutdown(context.Background())
 	case sig := <-sigCh:
 		a.logger.Printf("received signal %s, shutting down", sig)
+		a.logExecutionInfo(context.Background(), "agent.serve.stop", "received termination signal", map[string]any{
+			"node_id": a.cfg.NodeID,
+			"signal":  sig.String(),
+		})
 		return a.shutdown(context.Background())
 	}
 }
 
 func (a *Agent) registerNode(ctx context.Context) error {
 	now := time.Now().UTC()
+	a.logExecutionInfo(ctx, "node.register.start", "registering node with control plane", map[string]any{
+		"node_id":         a.cfg.NodeID,
+		"deployment_type": a.cfg.DeploymentType,
+	})
 
 	reasoners := make([]types.ReasonerDefinition, 0, len(a.reasoners))
 	for _, reasoner := range a.reasoners {
@@ -665,20 +702,34 @@ func (a *Agent) registerNode(ctx context.Context) error {
 
 	resp, err := a.client.RegisterNode(ctx, payload)
 	if err != nil {
+		a.logExecutionError(ctx, "node.register.failed", "node registration failed", map[string]any{
+			"node_id": a.cfg.NodeID,
+			"error":   err.Error(),
+		})
 		return err
 	}
 
 	// Handle pending approval state: poll until approved
 	if resp != nil && resp.Status == "pending_approval" {
 		a.logger.Printf("node %s registered but awaiting tag approval (pending tags: %v)", a.cfg.NodeID, resp.PendingTags)
+		a.logExecutionWarn(ctx, "node.register.pending_approval", "node registered but awaiting tag approval", map[string]any{
+			"node_id":      a.cfg.NodeID,
+			"pending_tags": resp.PendingTags,
+		})
 		if err := a.waitForApproval(ctx); err != nil {
 			return fmt.Errorf("tag approval wait failed: %w", err)
 		}
 		a.logger.Printf("node %s tag approval granted", a.cfg.NodeID)
+		a.logExecutionInfo(ctx, "node.register.approved", "tag approval granted", map[string]any{
+			"node_id": a.cfg.NodeID,
+		})
 		return nil
 	}
 
 	a.logger.Printf("node %s registered with AgentField", a.cfg.NodeID)
+	a.logExecutionInfo(ctx, "node.register.complete", "node registered with control plane", map[string]any{
+		"node_id": a.cfg.NodeID,
+	})
 	return nil
 }
 
@@ -690,12 +741,23 @@ func (a *Agent) waitForApproval(ctx context.Context) error {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
+	a.logExecutionInfo(ctx, "node.approval.wait.start", "waiting for tag approval", map[string]any{
+		"node_id": a.cfg.NodeID,
+	})
+
 	for {
 		select {
 		case <-ctx.Done():
 			if ctx.Err() == context.DeadlineExceeded {
+				a.logExecutionWarn(ctx, "node.approval.wait.timeout", "tag approval timed out", map[string]any{
+					"node_id": a.cfg.NodeID,
+				})
 				return fmt.Errorf("tag approval timed out after %s", approvalTimeout)
 			}
+			a.logExecutionWarn(ctx, "node.approval.wait.cancelled", "tag approval wait cancelled", map[string]any{
+				"node_id": a.cfg.NodeID,
+				"error":   ctx.Err().Error(),
+			})
 			return ctx.Err()
 		case <-ticker.C:
 			node, err := a.client.GetNode(ctx, a.cfg.NodeID)
@@ -705,9 +767,16 @@ func (a *Agent) waitForApproval(ctx context.Context) error {
 			}
 			status, _ := node["lifecycle_status"].(string)
 			if status != "" && status != "pending_approval" {
+				a.logExecutionInfo(ctx, "node.approval.wait.complete", "tag approval granted", map[string]any{
+					"node_id": a.cfg.NodeID,
+					"status":  status,
+				})
 				return nil
 			}
 			a.logger.Printf("node %s still pending approval...", a.cfg.NodeID)
+			a.logExecutionInfo(ctx, "node.approval.wait.pending", "tag approval still pending", map[string]any{
+				"node_id": a.cfg.NodeID,
+			})
 		}
 	}
 }
@@ -734,10 +803,18 @@ func (a *Agent) startServer() error {
 	go func() {
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			a.logger.Printf("server error: %v", err)
+			a.logExecutionError(context.Background(), "server.failed", "server listener exited with error", map[string]any{
+				"node_id": a.cfg.NodeID,
+				"error":   err.Error(),
+			})
 		}
 	}()
 
 	a.logger.Printf("listening on %s", a.cfg.ListenAddress)
+	a.logExecutionInfo(context.Background(), "server.start", "agent HTTP server listening", map[string]any{
+		"node_id": a.cfg.NodeID,
+		"listen":  a.cfg.ListenAddress,
+	})
 	return nil
 }
 
@@ -760,7 +837,28 @@ func (a *Agent) Execute(ctx context.Context, reasonerName string, input map[stri
 	if input == nil {
 		input = make(map[string]any)
 	}
-	return reasoner.Handler(ctx, input)
+	a.logExecutionInfo(ctx, "reasoner.invoke.start", "starting local reasoner execution", map[string]any{
+		"reasoner_id": reasonerName,
+		"mode":        "direct",
+	})
+	start := time.Now()
+	result, err := reasoner.Handler(ctx, input)
+	durationMS := time.Since(start).Milliseconds()
+	if err != nil {
+		a.logExecutionError(ctx, "reasoner.invoke.failed", "reasoner execution failed", map[string]any{
+			"reasoner_id": reasonerName,
+			"mode":        "direct",
+			"duration_ms": durationMS,
+			"error":       err.Error(),
+		})
+		return nil, err
+	}
+	a.logExecutionInfo(ctx, "reasoner.invoke.complete", "reasoner execution completed", map[string]any{
+		"reasoner_id": reasonerName,
+		"mode":        "direct",
+		"duration_ms": durationMS,
+	})
+	return result, nil
 }
 
 // HandleServerlessEvent allows custom serverless entrypoints to normalize arbitrary
@@ -796,10 +894,28 @@ func (a *Agent) HandleServerlessEvent(ctx context.Context, event map[string]any,
 		return map[string]any{"error": "reasoner not found"}, http.StatusNotFound, nil
 	}
 
+	a.logExecutionInfo(ctx, "reasoner.invoke.start", "starting serverless reasoner execution", map[string]any{
+		"reasoner_id": reasoner,
+		"mode":        "serverless",
+	})
+	start := time.Now()
 	result, err := handler.Handler(ctx, input)
+	durationMS := time.Since(start).Milliseconds()
 	if err != nil {
+		a.logExecutionError(ctx, "reasoner.invoke.failed", "reasoner execution failed", map[string]any{
+			"reasoner_id": reasoner,
+			"mode":        "serverless",
+			"duration_ms": durationMS,
+			"error":       err.Error(),
+		})
 		return map[string]any{"error": err.Error()}, http.StatusInternalServerError, nil
 	}
+
+	a.logExecutionInfo(ctx, "reasoner.invoke.complete", "reasoner execution completed", map[string]any{
+		"reasoner_id": reasoner,
+		"mode":        "serverless",
+		"duration_ms": durationMS,
+	})
 
 	// Normalize to map for consistent JSON responses.
 	if payload, ok := result.(map[string]any); ok {
@@ -813,6 +929,7 @@ func (a *Agent) handler() http.Handler {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/health", a.healthHandler)
 		mux.HandleFunc("/discover", a.handleDiscover)
+		mux.HandleFunc("/agentfield/v1/logs", a.handleAgentfieldLogs)
 		mux.HandleFunc("/execute", a.handleExecute)
 		mux.HandleFunc("/execute/", a.handleExecute)
 		mux.HandleFunc("/reasoners/", a.handleReasoner)
@@ -843,7 +960,7 @@ func (a *Agent) handler() http.Handler {
 func (a *Agent) originAuthMiddleware(next http.Handler, token string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
-		if path == "/health" || path == "/discover" {
+		if path == "/health" || path == "/discover" || path == "/agentfield/v1/logs" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -867,7 +984,7 @@ func (a *Agent) localVerificationMiddleware(next http.Handler) http.Handler {
 		path := r.URL.Path
 
 		// Only verify execution endpoints
-		if path == "/health" || path == "/discover" {
+		if path == "/health" || path == "/discover" || path == "/agentfield/v1/logs" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -1072,11 +1189,21 @@ func (a *Agent) handleExecute(w http.ResponseWriter, r *http.Request) {
 	ctx := contextWithExecution(r.Context(), execCtx)
 
 	start := time.Now()
+	a.logExecutionInfo(ctx, "reasoner.invoke.start", "starting reasoner execution", map[string]any{
+		"reasoner_id": reasonerName,
+		"mode":        "http",
+	})
 	result, err := reasoner.Handler(ctx, input)
 	durationMS := time.Since(start).Milliseconds()
 
 	if err != nil {
 		a.logger.Printf("reasoner %s failed: %v", reasonerName, err)
+		a.logExecutionError(ctx, "reasoner.invoke.failed", "reasoner execution failed", map[string]any{
+			"reasoner_id": reasonerName,
+			"mode":        "http",
+			"duration_ms": durationMS,
+			"error":       err.Error(),
+		})
 		a.maybeGenerateVC(execCtx, input, nil, "failed", err.Error(), durationMS, reasoner)
 		// Propagate structured error details (e.g. from a failed inner Call)
 		// so the control plane can expose them to the original caller.
@@ -1100,6 +1227,11 @@ func (a *Agent) handleExecute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.maybeGenerateVC(execCtx, input, result, "succeeded", "", durationMS, reasoner)
+	a.logExecutionInfo(ctx, "reasoner.invoke.complete", "reasoner execution completed", map[string]any{
+		"reasoner_id": reasonerName,
+		"mode":        "http",
+		"duration_ms": durationMS,
+	})
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -1235,6 +1367,10 @@ func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
 	// In serverless mode we want a synchronous execution so the control plane can return
 	// the result immediately; skip the async path even if an execution ID is present.
 	if a.cfg.DeploymentType != "serverless" && execCtx.ExecutionID != "" && strings.TrimSpace(a.cfg.AgentFieldURL) != "" {
+		a.logExecutionInfo(ctx, "reasoner.invoke.accepted", "accepted asynchronous execution request", map[string]any{
+			"reasoner_id": name,
+			"mode":        "async",
+		})
 		go a.executeReasonerAsync(reasoner, cloneInputMap(input), execCtx)
 		writeJSON(w, http.StatusAccepted, map[string]any{
 			"status":        "processing",
@@ -1246,11 +1382,21 @@ func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
 	}
 
 	start := time.Now()
+	a.logExecutionInfo(ctx, "reasoner.invoke.start", "starting reasoner execution", map[string]any{
+		"reasoner_id": name,
+		"mode":        "http",
+	})
 	result, err := reasoner.Handler(ctx, input)
 	durationMS := time.Since(start).Milliseconds()
 
 	if err != nil {
 		a.logger.Printf("reasoner %s failed: %v", name, err)
+		a.logExecutionError(ctx, "reasoner.invoke.failed", "reasoner execution failed", map[string]any{
+			"reasoner_id": name,
+			"mode":        "http",
+			"duration_ms": durationMS,
+			"error":       err.Error(),
+		})
 		a.maybeGenerateVC(execCtx, input, nil, "failed", err.Error(), durationMS, reasoner)
 		// Preserve structured downstream errors (e.g. policy denies from inner
 		// agent calls) so local endpoint callers receive the correct status code.
@@ -1275,12 +1421,21 @@ func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.maybeGenerateVC(execCtx, input, result, "succeeded", "", durationMS, reasoner)
+	a.logExecutionInfo(ctx, "reasoner.invoke.complete", "reasoner execution completed", map[string]any{
+		"reasoner_id": name,
+		"mode":        "http",
+		"duration_ms": durationMS,
+	})
 	writeJSON(w, http.StatusOK, result)
 }
 
 func (a *Agent) executeReasonerAsync(reasoner *Reasoner, input map[string]any, execCtx ExecutionContext) {
 	ctx := contextWithExecution(context.Background(), execCtx)
 	start := time.Now()
+	a.logExecutionInfo(ctx, "reasoner.invoke.start", "starting asynchronous reasoner execution", map[string]any{
+		"reasoner_id": reasoner.Name,
+		"mode":        "async",
+	})
 
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -1295,9 +1450,19 @@ func (a *Agent) executeReasonerAsync(reasoner *Reasoner, input map[string]any, e
 				"duration_ms":   durationMS,
 				"reasoner_name": reasoner.Name,
 			}
+			a.logExecutionError(ctx, "reasoner.invoke.failed", "reasoner execution panicked", map[string]any{
+				"reasoner_id": reasoner.Name,
+				"mode":        "async",
+				"duration_ms": durationMS,
+				"error":       errMsg,
+			})
 			a.maybeGenerateVC(execCtx, input, nil, "failed", errMsg, durationMS, reasoner)
 			if err := a.sendExecutionStatus(execCtx.ExecutionID, payload); err != nil {
 				a.logger.Printf("failed to send panic status: %v", err)
+				a.logExecutionWarn(ctx, "execution.status.failed", "failed to send panic status update", map[string]any{
+					"reasoner_id": reasoner.Name,
+					"error":       err.Error(),
+				})
 			}
 		}
 	}()
@@ -1315,15 +1480,30 @@ func (a *Agent) executeReasonerAsync(reasoner *Reasoner, input map[string]any, e
 	if err != nil {
 		payload["status"] = "failed"
 		payload["error"] = err.Error()
+		a.logExecutionError(ctx, "reasoner.invoke.failed", "reasoner execution failed", map[string]any{
+			"reasoner_id": reasoner.Name,
+			"mode":        "async",
+			"duration_ms": durationMS,
+			"error":       err.Error(),
+		})
 		a.maybeGenerateVC(execCtx, input, nil, "failed", err.Error(), durationMS, reasoner)
 	} else {
 		payload["status"] = "succeeded"
 		payload["result"] = result
+		a.logExecutionInfo(ctx, "reasoner.invoke.complete", "reasoner execution completed", map[string]any{
+			"reasoner_id": reasoner.Name,
+			"mode":        "async",
+			"duration_ms": durationMS,
+		})
 		a.maybeGenerateVC(execCtx, input, result, "succeeded", "", durationMS, reasoner)
 	}
 
 	if err := a.sendExecutionStatus(execCtx.ExecutionID, payload); err != nil {
 		a.logger.Printf("async status update failed: %v", err)
+		a.logExecutionWarn(ctx, "execution.status.failed", "failed to send execution status update", map[string]any{
+			"reasoner_id": reasoner.Name,
+			"error":       err.Error(),
+		})
 	}
 }
 
@@ -1403,9 +1583,17 @@ func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (
 		return nil, fmt.Errorf("marshal call payload: %w", err)
 	}
 
+	a.logExecutionInfo(ctx, "call.outbound.start", "starting cross-node call", map[string]any{
+		"target":      target,
+		"reasoner_id": strings.TrimPrefix(target, a.cfg.NodeID+"."),
+	})
 	url := fmt.Sprintf("%s/api/v1/execute/%s", strings.TrimSuffix(a.cfg.AgentFieldURL, "/"), strings.TrimPrefix(target, "/"))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
+		a.logExecutionError(ctx, "call.outbound.failed", "failed to build cross-node call request", map[string]any{
+			"target": target,
+			"error":  err.Error(),
+		})
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -1444,6 +1632,10 @@ func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
+		a.logExecutionError(ctx, "call.outbound.failed", "cross-node call failed", map[string]any{
+			"target": target,
+			"error":  err.Error(),
+		})
 		return nil, fmt.Errorf("perform execute call: %w", err)
 	}
 	defer resp.Body.Close()
@@ -1460,12 +1652,21 @@ func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (
 			ErrorDetails interface{} `json:"error_details"`
 		}
 		if json.Unmarshal(bodyBytes, &errResp) == nil && errResp.Error != "" {
+			a.logExecutionError(ctx, "call.outbound.failed", "cross-node call rejected", map[string]any{
+				"target": target,
+				"status": resp.StatusCode,
+				"error":  errResp.Error,
+			})
 			return nil, &ExecuteError{
 				StatusCode:   resp.StatusCode,
 				Message:      errResp.Error,
 				ErrorDetails: errResp.ErrorDetails,
 			}
 		}
+		a.logExecutionError(ctx, "call.outbound.failed", "cross-node call returned error status", map[string]any{
+			"target": target,
+			"status": resp.StatusCode,
+		})
 		return nil, &ExecuteError{
 			StatusCode: resp.StatusCode,
 			Message:    fmt.Sprintf("execute failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes))),
@@ -1481,10 +1682,18 @@ func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (
 		ErrorDetails interface{}    `json:"error_details"`
 	}
 	if err := json.Unmarshal(bodyBytes, &execResp); err != nil {
+		a.logExecutionError(ctx, "call.outbound.failed", "failed to decode cross-node call response", map[string]any{
+			"target": target,
+			"error":  err.Error(),
+		})
 		return nil, fmt.Errorf("decode execute response: %w", err)
 	}
 
 	if execResp.ErrorMessage != nil && *execResp.ErrorMessage != "" {
+		a.logExecutionError(ctx, "call.outbound.failed", "cross-node call returned execution error", map[string]any{
+			"target": target,
+			"error":  *execResp.ErrorMessage,
+		})
 		return nil, &ExecuteError{
 			StatusCode:   resp.StatusCode,
 			Message:      *execResp.ErrorMessage,
@@ -1492,6 +1701,10 @@ func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (
 		}
 	}
 	if !strings.EqualFold(execResp.Status, "succeeded") {
+		a.logExecutionError(ctx, "call.outbound.failed", "cross-node call did not succeed", map[string]any{
+			"target": target,
+			"status": execResp.Status,
+		})
 		return nil, &ExecuteError{
 			StatusCode:   resp.StatusCode,
 			Message:      fmt.Sprintf("execute status %s", execResp.Status),
@@ -1499,6 +1712,11 @@ func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (
 		}
 	}
 
+	a.logExecutionInfo(ctx, "call.outbound.complete", "cross-node call completed", map[string]any{
+		"target":       target,
+		"execution_id": execResp.ExecutionID,
+		"run_id":       execResp.RunID,
+	})
 	return execResp.Result, nil
 }
 
@@ -1605,6 +1823,10 @@ func (a *Agent) CallLocal(ctx context.Context, reasonerName string, input map[st
 	childCtx := a.buildChildContext(parentCtx, reasonerName)
 	ctx = contextWithExecution(ctx, childCtx)
 
+	a.logExecutionInfo(ctx, "call.local.start", "starting local reasoner call", map[string]any{
+		"reasoner_id": reasonerName,
+		"depth":       childCtx.Depth,
+	})
 	a.emitWorkflowEvent(childCtx, "running", input, nil, nil, 0)
 
 	start := time.Now()
@@ -1612,8 +1834,17 @@ func (a *Agent) CallLocal(ctx context.Context, reasonerName string, input map[st
 	durationMS := time.Since(start).Milliseconds()
 
 	if err != nil {
+		a.logExecutionError(ctx, "call.local.failed", "local reasoner call failed", map[string]any{
+			"reasoner_id": reasonerName,
+			"duration_ms": durationMS,
+			"error":       err.Error(),
+		})
 		a.emitWorkflowEvent(childCtx, "failed", input, nil, err, durationMS)
 	} else {
+		a.logExecutionInfo(ctx, "call.local.complete", "local reasoner call completed", map[string]any{
+			"reasoner_id": reasonerName,
+			"duration_ms": durationMS,
+		})
 		a.emitWorkflowEvent(childCtx, "succeeded", input, result, nil, durationMS)
 	}
 
@@ -1678,10 +1909,19 @@ func (a *Agent) startLeaseLoop() {
 }
 
 func (a *Agent) shutdown(ctx context.Context) error {
+	a.logExecutionInfo(ctx, "agent.shutdown.start", "shutting down agent", map[string]any{
+		"node_id": a.cfg.NodeID,
+	})
 	close(a.stopLease)
 
-	if _, err := a.client.Shutdown(ctx, a.cfg.NodeID, types.ShutdownRequest{Reason: "shutdown", Version: a.cfg.Version}); err != nil {
-		a.logger.Printf("failed to notify shutdown: %v", err)
+	if a.client != nil {
+		if _, err := a.client.Shutdown(ctx, a.cfg.NodeID, types.ShutdownRequest{Reason: "shutdown", Version: a.cfg.Version}); err != nil {
+			a.logger.Printf("failed to notify shutdown: %v", err)
+			a.logExecutionWarn(ctx, "agent.shutdown.status_failed", "failed to notify control plane about shutdown", map[string]any{
+				"node_id": a.cfg.NodeID,
+				"error":   err.Error(),
+			})
+		}
 	}
 
 	a.serverMu.RLock()
@@ -1695,6 +1935,9 @@ func (a *Agent) shutdown(ctx context.Context) error {
 			return err
 		}
 	}
+	a.logExecutionInfo(ctx, "agent.shutdown.complete", "agent shutdown complete", map[string]any{
+		"node_id": a.cfg.NodeID,
+	})
 	return nil
 }
 

@@ -272,7 +272,7 @@ export function GraphToolbar({
                         {meta.label}
                       </span>
                       {isSlow && (
-                        <span className="text-[10px] text-muted-foreground">
+                        <span className="text-micro text-muted-foreground">
                           slower
                         </span>
                       )}
@@ -291,7 +291,7 @@ export function GraphToolbar({
             {hasSlowLayouts && (
               <>
                 <DropdownMenuSeparator />
-                <div className="px-2 py-1.5 text-[10px] text-muted-foreground">
+                <div className="px-2 py-1.5 text-micro text-muted-foreground">
                   Some layouts may be slower for large graphs
                 </div>
               </>

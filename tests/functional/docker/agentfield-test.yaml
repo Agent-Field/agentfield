@@ -1,5 +1,8 @@
 agentfield:
   port: 8080
+  registration:
+    serverless_discovery_allowed_hosts:
+      - "test-runner"
   mode: "local"
   max_concurrent_requests: 512
   request_timeout: 180s

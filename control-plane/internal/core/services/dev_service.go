@@ -69,15 +69,7 @@ func (ds *DefaultDevService) GetDevStatus(path string) (*domain.DevStatus, error
 func (ds *DefaultDevService) runDev(packagePath string, options domain.DevOptions) error {
 	fmt.Printf("🔧 Development Mode: %s\n", packagePath)
 
-	// Temporarily disable MCP server startup - let Python SDK manage them
-	// Config loading removed since MCP manager is disabled
 	var agentCmd *exec.Cmd // Declare agentCmd here to be accessible in defer and signal handler
-
-	// Defer StopAll to ensure it's called on any exit path from runDev
-	defer func() {
-		// MCP server management disabled - Python SDK handles MCP servers
-		fmt.Println("\n✅ MCP server management delegated to Python SDK.")
-	}()
 
 	// Setup signal handling to gracefully shut down
 	sigs := make(chan os.Signal, 1)
@@ -97,11 +89,6 @@ func (ds *DefaultDevService) runDev(packagePath string, options domain.DevOption
 			}
 		}
 	}()
-
-	// MCP server startup disabled - Python SDK manages MCP servers
-	if options.Verbose {
-		fmt.Println("ℹ️ MCP server management delegated to Python SDK.")
-	}
 
 	// 1. Start agent process (let Python SDK choose its own port)
 	fmt.Printf("📡 Starting agent process...\n")
@@ -254,7 +241,13 @@ func (ds *DefaultDevService) startDevProcess(packagePath string, port int, optio
 
 // discoverAgentPort discovers the port the agent actually chose by scanning common ports
 func (ds *DefaultDevService) discoverAgentPort(timeout time.Duration) (int, error) {
-	client := &http.Client{Timeout: 2 * time.Second}
+	// Use the smaller of 2s and the total timeout for per-request deadlines,
+	// so short timeouts (e.g., in tests) are actually respected.
+	perReq := 2 * time.Second
+	if timeout < perReq {
+		perReq = timeout
+	}
+	client := &http.Client{Timeout: perReq}
 	deadline := time.Now().Add(timeout)
 
 	fmt.Printf("🔍 Discovering agent port...\n")
@@ -266,6 +259,9 @@ func (ds *DefaultDevService) discoverAgentPort(timeout time.Duration) (int, erro
 
 		// Try ports in range 8001-8999
 		for port := 8001; port <= 8999; port++ {
+			if time.Now().After(deadline) {
+				break
+			}
 			resp, err := client.Get(fmt.Sprintf("http://localhost:%d/health", port))
 
 			if err == nil && resp.StatusCode == 200 {

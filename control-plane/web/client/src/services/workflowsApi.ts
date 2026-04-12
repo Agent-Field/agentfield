@@ -80,6 +80,7 @@ interface ApiWorkflowRunSummary {
   run_id: string;
   workflow_id: string;
   root_execution_id?: string | null;
+  root_execution_status?: string | null;
   status: string;
   display_name: string;
   current_task: string;
@@ -208,6 +209,9 @@ function mapApiRunToWorkflowSummary(run: ApiWorkflowRunSummary): WorkflowSummary
     run_id: run.run_id,
     workflow_id: run.workflow_id,
     root_execution_id: run.root_execution_id ?? undefined,
+    root_execution_status: run.root_execution_status
+      ? normalizeExecutionStatus(run.root_execution_status)
+      : undefined,
     status: normalizedStatus,
     root_reasoner: run.root_reasoner || run.display_name,
     current_task: run.current_task || run.root_reasoner || run.display_name,
