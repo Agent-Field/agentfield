@@ -978,6 +978,14 @@ func (s *AgentFieldServer) setupRoutes() {
 	}))
 	if s.config.API.Auth.APIKey != "" {
 		logger.Logger.Info().Msg("🔐 API key authentication enabled")
+	} else {
+		// SECURITY WARNING: middleware is a no-op when API key is empty (issue #424)
+		// All non-public routes become accessible without credentials.
+		// Only public routes (/api/v1/agentic/kb/*, /health, /metrics) are safe without auth.
+		logger.Logger.Error().Msg("⚠️  SECURITY WARNING: No API key configured (AGENTFIELD_API_AUTH_APIKEY is empty). " +
+			"API key authentication is disabled — all non-public routes are unprotected. " +
+			"Set AGENTFIELD_API_AUTH_APIKEY for production deployments. " +
+			"See: https://github.com/Agent-Field/agentfield/issues/424")
 	}
 
 	// DID authentication middleware (applied globally, but only validates when headers present)

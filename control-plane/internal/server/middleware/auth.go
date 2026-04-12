@@ -109,13 +109,21 @@ func APIKeyAuth(config AuthConfig) gin.HandlerFunc {
 }
 
 // AdminTokenAuth enforces a separate admin token for admin routes.
-// If adminToken is empty, the middleware is a no-op (falls back to global API key auth).
 // Admin tokens must be sent via the X-Admin-Token header only (not Bearer) to avoid
 // collision with the API key Bearer token namespace.
+// Fixes #425: admin routes are now fail-closed when adminToken is unset (previously
+// the middleware was a no-op, silently falling back to API key auth or no auth at all).
 func AdminTokenAuth(adminToken string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if adminToken == "" {
-			c.Next()
+			// Fail closed: admin routes are inaccessible if admin token is not configured.
+			// This prevents accidental exposure of admin routes when the token is misconfigured.
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+				"error":   "configuration_error",
+				"message": "admin token is not configured on this server. " +
+					"Set AGENTFIELD_AUTHORIZATION_ADMIN_TOKEN for production use. " +
+					"See: https://github.com/Agent-Field/agentfield/issues/425",
+			})
 			return
 		}
 
