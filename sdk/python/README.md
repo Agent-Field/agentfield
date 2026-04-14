@@ -123,14 +123,17 @@ See `docs/DEVELOPMENT.md` for instructions on wiring agents to the control plane
 ## Testing
 
 ```bash
-pytest
+./scripts/run_pytest.sh
 ```
 
 To run coverage locally:
 
 ```bash
-pytest --cov=agentfield --cov-report=term-missing
+./scripts/run_pytest.sh --cov=agentfield --cov-report=term-missing
 ```
+
+The wrapper sets a private `PYTEST_DEBUG_TEMPROOT` automatically so local runs
+and CI do not rely on pytest's predictable default temp directory layout.
 
 ## License
 

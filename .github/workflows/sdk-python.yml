@@ -35,7 +35,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install .[dev]
-          pip install ruff pytest
+          pip install ruff
 
       - name: Lint
         working-directory: sdk/python
@@ -50,7 +50,7 @@ jobs:
 
       - name: Run tests
         working-directory: sdk/python
-        run: pytest
+        run: ./scripts/run_pytest.sh
 
   # Verify websockets version compatibility (v14 renamed extra_headers → additional_headers)
   websockets-compat:
@@ -72,7 +72,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install .[dev]
-          pip install pytest
           pip install websockets==${{ matrix.websockets-version }}
 
       - name: Verify websockets version
@@ -80,7 +79,7 @@ jobs:
 
       - name: Run memory events tests
         working-directory: sdk/python
-        run: pytest tests/test_memory_events.py -v --no-cov
+        run: ./scripts/run_pytest.sh tests/test_memory_events.py -v --no-cov
 
   # Summary job that depends on all critical checks
   required-checks:
