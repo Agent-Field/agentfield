@@ -1,6 +1,4 @@
 # TODO: source bug — see test_agent_stop_is_idempotent
-# TODO: source bug — see test_graceful_shutdown_cancels_in_flight_tasks_within_deadline
-# TODO: source bug — see test_graceful_shutdown_force_cancels_tasks_after_timeout
 
 import asyncio
 import os
@@ -127,6 +125,7 @@ async def test_graceful_shutdown_cancels_in_flight_tasks_within_deadline(monkeyp
         await asyncio.sleep(60)
 
     tasks = [asyncio.create_task(long_running()) for _ in range(5)]
+    server._in_flight_tasks.update(tasks)
     await started.wait()
 
     monkeypatch.setattr("agentfield.agent_server.clear_current_agent", lambda: None, raising=False)
@@ -135,12 +134,6 @@ async def test_graceful_shutdown_cancels_in_flight_tasks_within_deadline(monkeyp
 
     with pytest.raises(ExitCalled):
         await server._graceful_shutdown(timeout_seconds=0)
-
-    if any(not task.done() for task in tasks):
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        pytest.skip("source bug: graceful shutdown does not track or cancel in-flight tasks")
 
     assert all(task.done() for task in tasks)
 
@@ -153,6 +146,7 @@ async def test_graceful_shutdown_force_cancels_tasks_after_timeout(monkeypatch):
     server = AgentServer(agent)
 
     task = asyncio.create_task(asyncio.sleep(60))
+    server._in_flight_tasks.update({task})
 
     monkeypatch.setattr("agentfield.agent_server.clear_current_agent", lambda: None, raising=False)
     monkeypatch.setattr("agentfield.agent_server.asyncio.sleep", AsyncMock(return_value=None))
@@ -161,9 +155,25 @@ async def test_graceful_shutdown_force_cancels_tasks_after_timeout(monkeypatch):
     with pytest.raises(ExitCalled):
         await server._graceful_shutdown(timeout_seconds=0)
 
-    if not task.done():
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-        pytest.skip("source bug: graceful shutdown does not enforce timeout-based task cancellation")
-
     assert task.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_track_task_adds_and_removes_task_on_completion():
+    server = AgentServer(make_shutdown_agent())
+    release = asyncio.Event()
+
+    async def worker():
+        await release.wait()
+
+    task = asyncio.create_task(worker())
+    tracked = server._track_task(task)
+
+    assert tracked is task
+    assert task in server._in_flight_tasks
+
+    release.set()
+    await task
+    await asyncio.sleep(0)
+
+    assert task not in server._in_flight_tasks

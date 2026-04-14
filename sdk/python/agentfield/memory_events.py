@@ -84,7 +84,12 @@ class MemoryEventClient:
     """Enhanced memory event client with pattern-based subscriptions and event history."""
 
     def __init__(self, base_url: str, execution_context, api_key: Optional[str] = None):
-        self.base_url = base_url.replace("http", "ws")
+        if base_url.startswith("https://"):
+            self.base_url = "wss://" + base_url[len("https://"):]
+        elif base_url.startswith("http://"):
+            self.base_url = "ws://" + base_url[len("http://"):]
+        else:
+            self.base_url = base_url
         self.execution_context = execution_context
         self.api_key = api_key
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
@@ -341,7 +346,12 @@ class MemoryEventClient:
                     params["scope_id"] = scope_id
 
                 # Make request to history endpoint
-                http_url = self.base_url.replace("ws", "http")
+                if self.base_url.startswith("wss://"):
+                    http_url = "https://" + self.base_url[len("wss://"):]
+                elif self.base_url.startswith("ws://"):
+                    http_url = "http://" + self.base_url[len("ws://"):]
+                else:
+                    http_url = self.base_url
                 response = await client.get(
                     f"{http_url}/api/v1/memory/events/history",
                     params=params,
@@ -386,7 +396,12 @@ class MemoryEventClient:
                 params["scope_id"] = scope_id
 
             # Make request to history endpoint
-            http_url = self.base_url.replace("ws", "http")
+            if self.base_url.startswith("wss://"):
+                http_url = "https://" + self.base_url[len("wss://"):]
+            elif self.base_url.startswith("ws://"):
+                http_url = "http://" + self.base_url[len("ws://"):]
+            else:
+                http_url = self.base_url
             response = requests.get(
                 f"{http_url}/api/v1/memory/events/history",
                 params=params,

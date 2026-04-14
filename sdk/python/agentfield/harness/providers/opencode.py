@@ -17,7 +17,7 @@ logger = logging.getLogger("agentfield.harness.opencode")
 
 
 class OpenCodeProvider:
-    """OpenCode CLI provider. Invokes ``opencode -p <prompt>`` subprocess."""
+    """OpenCode CLI provider. Invokes ``opencode run`` subprocess (v1.4+)."""
 
     # Global concurrency limiter: prevents too many simultaneous opencode
     # processes from overwhelming the LLM API with concurrent requests.
@@ -46,18 +46,22 @@ class OpenCodeProvider:
             return await self._execute_impl(prompt, options)
 
     async def _execute_impl(self, prompt: str, options: dict[str, object]) -> RawResult:
-        cmd = [self._bin]
+        # opencode v1.4+ uses the `run` subcommand (replaces deprecated -p/-c flags)
+        cmd = [self._bin, "run"]
 
-        # Use -c for cwd (project directory)
+        # Use --dir for project directory (replaces deprecated -c which now means --continue)
         cwd_value = options.get("cwd")
         if isinstance(cwd_value, str):
-            cmd.extend(["-c", cwd_value])
+            cmd.extend(["--dir", cwd_value])
         elif isinstance(options.get("project_dir"), str):
-            # Fall back to project_dir if no cwd
-            cmd.extend(["-c", str(options["project_dir"])])
+            cmd.extend(["--dir", str(options["project_dir"])])
 
-        # Model is set via environment, not CLI flag
-        # (opencode picks up MODEL env var automatically)
+        # Pass model via -m flag on the run subcommand
+        if options.get("model"):
+            cmd.extend(["-m", str(options["model"])])
+
+        # Skip interactive permission prompts for headless execution
+        cmd.append("--dangerously-skip-permissions")
 
         # Handle system prompt - prepend to user prompt since OpenCode
         # has no native --system-prompt flag
@@ -69,8 +73,8 @@ class OpenCodeProvider:
                 f"---\n\nUSER REQUEST:\n{prompt}"
             )
 
-        # Use -p for single prompt mode (non-interactive)
-        cmd.extend(["-p", effective_prompt])
+        # Prompt is a positional arg to `opencode run` (not -p)
+        cmd.append(effective_prompt)
 
         env: Dict[str, str] = {}
         env_value = options.get("env")
@@ -81,9 +85,7 @@ class OpenCodeProvider:
                 if isinstance(key, str) and isinstance(value, str)
             }
 
-        # Set model via environment variable (opencode reads MODEL env var)
-        if options.get("model"):
-            env["MODEL"] = str(options["model"])
+        # Model is passed via -m flag on the run subcommand (see above)
 
         cwd: Optional[str] = None
 

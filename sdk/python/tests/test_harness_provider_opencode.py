@@ -40,15 +40,15 @@ async def test_opencode_provider_constructs_command_and_maps_result(
 
     assert captured["cmd"] == [
         "/usr/local/bin/opencode",
-        "-c",
+        "run",
+        "--dir",
         "/tmp/work",
-        "-p",
+        "--dangerously-skip-permissions",
         "hello",
     ]
     assert captured["env"]["A"] == "1"
-    assert "MODEL" not in captured["env"]
     assert "XDG_DATA_HOME" in captured["env"]
-    # Note: cwd is None because we use -c in command instead of cwd param
+    # Note: cwd is None because we use --dir in command instead of cwd param
     assert raw.is_error is False
     assert raw.result == "final text"
     assert raw.metrics.session_id == ""
@@ -122,10 +122,13 @@ async def test_opencode_passes_model_flag(monkeypatch: pytest.MonkeyPatch):
 
     assert captured["cmd"] == [
         "opencode",
-        "-p",
+        "run",
+        "-m",
+        "openai/gpt-5",
+        "--dangerously-skip-permissions",
         "hello",
     ]
-    assert captured["env"]["MODEL"] == "openai/gpt-5"
+    # Model is now passed via -m flag, not environment variable
     assert raw.is_error is False
 
 
@@ -188,14 +191,14 @@ async def test_opencode_command_does_not_use_attach_pattern(
     assert "http://" not in cmd_str
     assert "127.0.0.1" not in cmd_str
     assert "localhost" not in cmd_str
-    assert "opencode -p" in cmd_str
+    assert "opencode run" in cmd_str
 
 
 @pytest.mark.asyncio
 async def test_opencode_uses_project_dir_when_no_cwd(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Verify project_dir is used as -c argument when cwd is not provided."""
+    """Verify project_dir is used as --dir argument when cwd is not provided."""
     captured_cmd = None
 
     async def capture_cmd(cmd, *, env=None, cwd=None, timeout=None):
@@ -208,5 +211,48 @@ async def test_opencode_uses_project_dir_when_no_cwd(
     provider = OpenCodeProvider()
     await provider.execute("test", {"project_dir": "/my/project"})
 
-    assert "-c" in captured_cmd
+    assert "--dir" in captured_cmd
     assert "/my/project" in captured_cmd
+
+
+@pytest.mark.asyncio
+async def test_opencode_v14_cli_shape_no_deprecated_flags(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Regression test for SWE-AF#45: deprecated -p/-c flags must not be used.
+
+    opencode v1.4+ replaced:
+      -p <prompt>  → positional arg to `run` subcommand
+      -c <dir>     → --dir <dir> (since -c now means --continue)
+
+    Using the old flags causes silent failures where opencode prints help text
+    and exits with no output, which surfaces as 'Product manager failed to
+    produce a valid PRD'.
+    """
+    captured_cmd = None
+
+    async def capture_cmd(cmd, *, env=None, cwd=None, timeout=None):
+        nonlocal captured_cmd
+        captured_cmd = cmd
+        return "result", "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", capture_cmd)
+
+    provider = OpenCodeProvider(bin_path="opencode")
+    await provider.execute("build the feature", {"cwd": "/repo", "model": "gpt-4o"})
+
+    cmd_str = " ".join(captured_cmd)
+    # Must use `run` subcommand
+    assert captured_cmd[1] == "run", "Must use 'opencode run' subcommand (v1.4+)"
+    # Must NOT use deprecated -p flag
+    assert "-p" not in captured_cmd, "Must not use deprecated -p flag (v1.4+)"
+    # Must NOT use deprecated -c flag (now means --continue)
+    assert "-c" not in captured_cmd, "Must not use deprecated -c flag (v1.4+)"
+    # Must use --dir for project directory
+    assert "--dir" in captured_cmd, "Must use --dir for project directory (v1.4+)"
+    # Must use -m for model
+    assert "-m" in captured_cmd, "Must use -m flag for model (v1.4+)"
+    # Must skip permissions for headless execution
+    assert "--dangerously-skip-permissions" in cmd_str
+    # Prompt must be positional (last arg)
+    assert captured_cmd[-1] == "build the feature"

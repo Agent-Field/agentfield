@@ -1717,14 +1717,21 @@ class Agent(FastAPI):
                         input_data=validated_input,
                         request=request,
                     )
-
+                def _track_in_flight_task(task: asyncio.Task) -> asyncio.Task:
+                    server_handler = getattr(self, "server_handler", None)
+                    if server_handler and hasattr(server_handler, "_track_task"):
+                        return server_handler._track_task(task)
+                    return task
+                
                 execution_id_header = request.headers.get("X-Execution-ID")
                 if execution_id_header and self.agentfield_server:
-                    task = asyncio.create_task(
-                        self._execute_async_with_callback(
-                            reasoner_coro=run_reasoner,
-                            execution_id=execution_id_header,
-                            reasoner_name=reasoner_id,
+                    task = _track_in_flight_task(
+                        asyncio.create_task(
+                            self._execute_async_with_callback(
+                                reasoner_coro=run_reasoner,
+                                execution_id=execution_id_header,
+                                reasoner_name=reasoner_id,
+                            )
                         )
                     )
                     # prevent GC of fire-and-forget tasks
@@ -1738,7 +1745,8 @@ class Agent(FastAPI):
                         },
                     )
 
-                return await run_reasoner()
+                task = _track_in_flight_task(asyncio.create_task(run_reasoner()))
+                return await task
 
             # 🔥 ENHANCED: Comprehensive function replacement for unified tracking
             # Use weakref to avoid circular reference: Agent → tracked_func → Agent

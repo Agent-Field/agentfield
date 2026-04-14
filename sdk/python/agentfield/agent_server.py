@@ -26,6 +26,13 @@ class AgentServer:
             agent_instance: The Agent instance this server manages
         """
         self.agent = agent_instance
+        self._in_flight_tasks: set[asyncio.Task] = set()
+
+    def _track_task(self, task: asyncio.Task) -> asyncio.Task:
+        """Track an in-flight task until completion."""
+        self._in_flight_tasks.add(task)
+        task.add_done_callback(self._in_flight_tasks.discard)
+        return task
 
     def setup_agentfield_routes(self):
         """Setup standard routes that AgentField server expects"""
@@ -185,7 +192,9 @@ class AgentServer:
 
                 # Schedule graceful shutdown
                 if graceful:
-                    asyncio.create_task(self._graceful_shutdown(timeout_seconds))
+                    self._track_task(
+                        asyncio.create_task(self._graceful_shutdown(timeout_seconds))
+                    )
 
                     return {
                         "status": "shutting_down",
@@ -196,7 +205,7 @@ class AgentServer:
                     }
                 else:
                     # Immediate shutdown
-                    asyncio.create_task(self._immediate_shutdown())
+                    self._track_task(asyncio.create_task(self._immediate_shutdown()))
 
                     return {
                         "status": "shutting_down",
@@ -376,8 +385,36 @@ class AgentServer:
                 if self.agent.dev_mode:
                     log_error(f"Registry clear error: {e}")
 
-            # Wait a moment for cleanup to complete
-            await asyncio.sleep(1)
+            # Drain in-flight tasks, then force-cancel anything that misses the deadline.
+            tracked_tasks: set[asyncio.Task] = set(self._in_flight_tasks)
+
+            current_task = asyncio.current_task()
+            tracked_tasks = {
+                task
+                for task in tracked_tasks
+                if task is not None and task is not current_task and not task.done()
+            }
+
+            if tracked_tasks:
+                done, pending = await asyncio.wait(
+                    tracked_tasks,
+                    timeout=max(0, timeout_seconds),
+                )
+                if self.agent.dev_mode:
+                    log_debug(
+                        f"Graceful shutdown drain: done={len(done)} pending={len(pending)}"
+                    )
+
+                if pending:
+                    for task in list(pending):
+                        task.cancel()
+                    await asyncio.gather(*pending, return_exceptions=True)
+
+            # Clear tracked registries after drain/cancel pass.
+            self._in_flight_tasks.clear()
+
+            # Small yield so cancellations/cleanup callbacks run before process exit.
+            await asyncio.sleep(0)
 
             if self.agent.dev_mode:
                 log_success("Graceful shutdown completed")
@@ -757,8 +794,10 @@ class AgentServer:
                     )
                 # Kick a heartbeat immediately so the control plane renews the lease
                 try:
-                    asyncio.create_task(
-                        self.agent.agentfield_handler.send_enhanced_heartbeat()
+                    self._track_task(
+                        asyncio.create_task(
+                            self.agent.agentfield_handler.send_enhanced_heartbeat()
+                        )
                     )
                 except RuntimeError:
                     # Event loop not running; the heartbeat worker will recover shortly
@@ -768,9 +807,11 @@ class AgentServer:
                     not hasattr(self.agent, "_heartbeat_task")
                     or self.agent._heartbeat_task.done()
                 ):
-                    self.agent._heartbeat_task = asyncio.create_task(
-                        self.agent.agentfield_handler.enhanced_heartbeat_loop(
-                            heartbeat_interval
+                    self.agent._heartbeat_task = self._track_task(
+                        asyncio.create_task(
+                            self.agent.agentfield_handler.enhanced_heartbeat_loop(
+                                heartbeat_interval
+                            )
                         )
                     )
 
