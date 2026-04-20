@@ -6,6 +6,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.69-rc.7] - 2026-04-20
+
+
+### Added
+
+- Feat: implement Agent.stop() in python sdk (a641558)
+
+## [Unreleased]
+
+### Added
+
+- Feat: implement Agent.stop() in python sdk
+
+Implements `Agent.stop()` method that performs a clean async shutdown of an agent instance:
+- Marks agent as shutting down and transitions status to OFFLINE
+- Stops heartbeat background worker
+- Notifies AgentField control plane of graceful shutdown (best effort)
+- Cleans up async execution resources, memory event clients, and connection managers
+- Idempotent: repeated calls have no additional effect after the first
+
+Useful for applications that manage agent lifecycle programmatically (e.g.,
+context managers, signal handlers, test teardown). Uses try/except around each
+cleanup step so failures in one subsystem don't prevent cleanup of others.
+
+### Testing
+
+- Test(sdk-python): strengthen Agent.stop() idempotency and branch coverage
+
+Expanded `test_agent_stop_is_idempotent` with mock assertions verifying that all
+cleanup side effects (heartbeat stop, shutdown notification, connection manager
+stop, memory client close, async resource cleanup) are invoked exactly once across
+two consecutive stop() calls.
+
+Added `test_agent_stop_skips_shutdown_notification_when_not_connected` to verify
+graceful degradation: when `agentfield_connected=False`, the shutdown notification
+is skipped but local cleanup still runs.
+
+Removed obsolete TODO and dead implementation guard (`pytest.skip`); Agent.stop()
+is now fully implemented.
+
 ## [0.1.69-rc.6] - 2026-04-17
 
 
