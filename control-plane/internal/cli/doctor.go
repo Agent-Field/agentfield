@@ -26,6 +26,7 @@ type DoctorReport struct {
 	Docker          ToolStatus              `json:"docker"`
 	HarnessProviders map[string]ToolStatus  `json:"harness_providers"`
 	ProviderKeys    map[string]ProviderKey  `json:"provider_keys"`
+	Copilot         CopilotStatus           `json:"copilot"`
 	ControlPlane    ControlPlaneStatus      `json:"control_plane"`
 	Recommendation  Recommendation          `json:"recommendation"`
 }
@@ -52,6 +53,20 @@ type ControlPlaneStatus struct {
 	HealthStatus       string `json:"health_status,omitempty"`
 	DockerImageName    string `json:"docker_image_name"`
 	DockerImageLocal   bool   `json:"docker_image_local"`
+}
+
+// CopilotStatus reports what Copilot CLI auth *sources* are present. It
+// intentionally does NOT claim the user is "authenticated" — Copilot rejects
+// classic ghp_ PATs and requires a fine-grained PAT with the "Copilot
+// Requests" permission. Presence of a source only means the SDK will attempt
+// to use it; the user may still need to run `copilot --login` to verify.
+type CopilotStatus struct {
+	Binary           ToolStatus `json:"binary"`
+	ConfigDirPresent bool       `json:"config_dir_present"` // ~/.copilot exists
+	LoggedInUser     string     `json:"logged_in_user,omitempty"`
+	AuthEnvSources   []string   `json:"auth_env_sources"`    // names of env vars set (never values)
+	GhCliAuthSource  bool       `json:"gh_cli_auth_source"`  // `gh auth status` exits 0
+	Disclaimer       string     `json:"disclaimer"`
 }
 
 // Recommendation tells the caller (a skill or a coding agent) what to default to,
@@ -174,6 +189,9 @@ func buildDoctorReport(controlPlaneURL string) DoctorReport {
 	// Control plane
 	report.ControlPlane = checkControlPlane(controlPlaneURL)
 
+	// Copilot CLI
+	report.Copilot = checkCopilot()
+
 	// Recommendation
 	notes := []string{}
 	if chosenProvider == "" {
@@ -227,6 +245,51 @@ func checkTool(bin, versionFlag string) ToolStatus {
 		first := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
 		status.Version = first
 	}
+	return status
+}
+
+// checkCopilot inspects the environment for Copilot CLI auth *sources*. It
+// does not validate them; `copilot --login` is the only way to confirm the
+// user is actually authenticated (fine-grained PATs must have the "Copilot
+// Requests" permission; classic ghp_ tokens are rejected by the backend).
+func checkCopilot() CopilotStatus {
+	status := CopilotStatus{
+		Binary:         checkTool("copilot", "--version"),
+		AuthEnvSources: []string{},
+		Disclaimer:     "Auth sources detected are attempts, not proof of a working login. Copilot requires a fine-grained PAT with the 'Copilot Requests' permission (or an interactive `copilot --login`); classic ghp_* tokens will be rejected.",
+	}
+
+	home, err := os.UserHomeDir()
+	if err == nil && home != "" {
+		configDir := home + "/.copilot"
+		if info, err := os.Stat(configDir); err == nil && info.IsDir() {
+			status.ConfigDirPresent = true
+			// Best-effort read of config.json for the last logged-in user.
+			if data, err := os.ReadFile(configDir + "/config.json"); err == nil {
+				var cfg struct {
+					LastLoggedInUser string `json:"lastLoggedInUser"`
+				}
+				if json.Unmarshal(data, &cfg) == nil {
+					status.LoggedInUser = cfg.LastLoggedInUser
+				}
+			}
+		}
+	}
+
+	for _, v := range []string{"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"} {
+		if strings.TrimSpace(os.Getenv(v)) != "" {
+			status.AuthEnvSources = append(status.AuthEnvSources, v)
+		}
+	}
+
+	if _, err := exec.LookPath("gh"); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := exec.CommandContext(ctx, "gh", "auth", "status").Run(); err == nil {
+			status.GhCliAuthSource = true
+		}
+	}
+
 	return status
 }
 
@@ -313,6 +376,28 @@ func printDoctorReport(r DoctorReport) {
 		c = green
 	}
 	c.Printf("  %s (%s)\n", mark, r.ControlPlane.DockerImageName)
+	fmt.Println()
+
+	bold.Println("GitHub Copilot CLI")
+	printToolLine("copilot", r.Copilot.Binary, green, yellow)
+	if r.Copilot.ConfigDirPresent {
+		green.Printf("  ✓ ~/.copilot config dir present")
+		if r.Copilot.LoggedInUser != "" {
+			fmt.Printf(" (last user: %s)", r.Copilot.LoggedInUser)
+		}
+		fmt.Println()
+	} else {
+		yellow.Println("  • ~/.copilot config dir not found — run `copilot --login` to initialize")
+	}
+	if len(r.Copilot.AuthEnvSources) > 0 {
+		green.Printf("  ✓ auth env sources present: %s\n", strings.Join(r.Copilot.AuthEnvSources, ", "))
+	} else {
+		yellow.Println("  • no auth env vars set (COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN)")
+	}
+	if r.Copilot.GhCliAuthSource {
+		green.Println("  ✓ gh CLI auth source present")
+	}
+	fmt.Printf("  • %s\n", r.Copilot.Disclaimer)
 	fmt.Println()
 
 	bold.Println("Recommendation")

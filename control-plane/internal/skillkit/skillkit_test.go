@@ -301,7 +301,7 @@ func TestHelpersAndTargets(t *testing.T) {
 	for _, target := range AllTargets() {
 		targetNames[target.Name()] = true
 	}
-	for _, name := range []string{"aider", "claude-code", "codex", "cursor", "gemini", "opencode", "windsurf"} {
+	for _, name := range []string{"aider", "claude-code", "codex", "copilot", "cursor", "gemini", "opencode", "windsurf"} {
 		if !targetNames[name] {
 			t.Fatalf("missing registered target %q", name)
 		}
@@ -467,11 +467,15 @@ func TestHelpersAndTargets(t *testing.T) {
 		t.Fatalf("windsurf uninstall: %v", err)
 	}
 
+	if err := os.MkdirAll(filepath.Join(home, ".copilot"), 0o755); err != nil {
+		t.Fatalf("mkdir copilot dir: %v", err)
+	}
+
 	detected := map[string]bool{}
 	for _, target := range DetectedTargets() {
 		detected[target.Name()] = true
 	}
-	for _, name := range []string{"aider", "claude-code", "codex", "gemini", "opencode", "windsurf"} {
+	for _, name := range []string{"aider", "claude-code", "codex", "copilot", "gemini", "opencode", "windsurf"} {
 		if !detected[name] {
 			t.Fatalf("DetectedTargets missing %q: %+v", name, detected)
 		}
