@@ -36,7 +36,7 @@ from copilot.generated.session_events import (
 )
 
 
-def _deny_all_handler(request: Any, invocation: dict[str, str]) -> PermissionRequestResult:
+def deny_all_handler(request: Any, invocation: dict[str, str]) -> PermissionRequestResult:
     """Permission handler that denies every tool invocation.
 
     Used by reasoners that must not execute anything (``ask``, ``plan``).
@@ -161,7 +161,7 @@ async def run_copilot(
     available_tools: Optional[list[str]] = None,
     excluded_tools: Optional[list[str]] = None,
     system_message: Optional[str] = None,
-    permission_handler: Any = _deny_all_handler,
+    permission_handler: Any = deny_all_handler,
     timeout: float = 120.0,
 ) -> CopilotRunResult:
     """Run a single Copilot turn and return a structured result.
@@ -187,8 +187,10 @@ async def run_copilot(
     tool_calls: list[dict[str, Any]] = []
     usage: dict[str, int] = {}
     error_msg: Optional[str] = None
+    final_event: Optional[SessionEvent] = None
 
     def _on_event(event: SessionEvent) -> None:
+        nonlocal error_msg
         et = event.type
         data = event.data
         if et == SessionEventType.ASSISTANT_MESSAGE:
@@ -222,7 +224,6 @@ async def run_copilot(
                 if isinstance(v, int):
                     usage[k] = usage.get(k, 0) + v
         elif et == SessionEventType.SESSION_ERROR:
-            nonlocal error_msg  # noqa: PLW0603
             error_msg = getattr(data, "message", None) or "unknown session error"
 
     async with CopilotClient(**client_kwargs) as client:

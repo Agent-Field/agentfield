@@ -125,8 +125,9 @@ loudly if the preview SDK drifts — pin `github-copilot-sdk==0.2.2` in
 
 ## See also
 
-- `research/docs/2026-04-20-copilot-cli-support.md` — architecture overview.
-- `control-plane/internal/skillkit/target_copilot.go` — how `af skill install`
-  ships skills into `~/.copilot/skills/` for Copilot to discover.
+- **PR #491** ships `control-plane/internal/skillkit/target_copilot.go` —
+  the `af skill install` target that places AgentField skill packets into
+  `~/.copilot/skills/` for Copilot CLI to auto-discover. Merge that PR to
+  make the skill-integration half of this story fully end-to-end.
 - `af doctor --json | jq .copilot` — inspect Copilot auth/config on the
-  local machine.
+  local machine (also shipped in PR #491).

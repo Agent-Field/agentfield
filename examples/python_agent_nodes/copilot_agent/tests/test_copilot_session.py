@@ -14,7 +14,7 @@ from conftest import make_event  # noqa: E402
 
 
 @pytest.mark.asyncio
-async def test_ask_happy_path(fake_app, stub_copilot_client, monkeypatch):
+async def test_ask_happy_path(fake_app, stub_copilot_client):
     import copilot_session as cs
 
     stub_copilot_client["events"] = [
@@ -38,7 +38,7 @@ async def test_ask_happy_path(fake_app, stub_copilot_client, monkeypatch):
     assert result.copilot_session_id
     # Permission handler defaults to the deny-all handler defined in the module.
     kwargs = stub_copilot_client["captured_session_kwargs"]
-    assert kwargs["on_permission_request"] is cs._deny_all_handler
+    assert kwargs["on_permission_request"] is cs.deny_all_handler
     assert kwargs["available_tools"] == []
     assert stub_copilot_client["captured_prompt"] == "say hi"
 

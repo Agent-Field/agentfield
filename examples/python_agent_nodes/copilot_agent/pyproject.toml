@@ -11,7 +11,6 @@ dependencies = [
     # exist in the PyPI build; we discriminate events via SessionEventType
     # (stable, schema-generated).
     "github-copilot-sdk==0.2.2",
-    "pydantic>=2.0",
 ]
 
 [project.optional-dependencies]

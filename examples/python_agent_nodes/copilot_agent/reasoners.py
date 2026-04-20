@@ -18,7 +18,7 @@ from typing import Any, Optional
 
 from copilot.session import PermissionHandler
 
-from copilot_session import CopilotRunResult, run_copilot, _deny_all_handler
+from copilot_session import CopilotRunResult, deny_all_handler, run_copilot
 
 
 _DEFAULT_MODEL = os.getenv("COPILOT_MODEL", "gpt-5")
@@ -62,7 +62,7 @@ def register(app: Any) -> None:
             isolate=isolate,
             continue_session=continue_session,
             available_tools=[],
-            permission_handler=_deny_all_handler,
+            permission_handler=deny_all_handler,
             timeout=timeout,
             _ctx=execution_context,
         )
@@ -88,7 +88,7 @@ def register(app: Any) -> None:
             cwd=cwd,
             isolate=isolate,
             available_tools=[],
-            permission_handler=_deny_all_handler,
+            permission_handler=deny_all_handler,
             timeout=timeout,
             _ctx=execution_context,
         )
@@ -117,7 +117,7 @@ def register(app: Any) -> None:
                 cwd=cwd,
                 isolate=isolate,
                 available_tools=[],
-                permission_handler=_deny_all_handler,
+                permission_handler=deny_all_handler,
                 timeout=timeout,
                 _ctx=execution_context,
             )
