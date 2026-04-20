@@ -59,8 +59,6 @@ class TargetNotFoundError extends Error {}
 
 const harnessRunners = new WeakMap<object, HarnessRunner>();
 
-
-
 function normalizeExecutionContext(
   ctx: RawExecutionContext
 ): Partial<ExecutionMetadata> {
@@ -68,16 +66,14 @@ function normalizeExecutionContext(
     executionId: ctx.executionId ?? ctx.execution_id,
     runId: ctx.runId ?? ctx.run_id,
     workflowId: ctx.workflowId ?? ctx.workflow_id,
+    rootWorkflowId: ctx.rootWorkflowId ?? ctx.root_workflow_id,
     parentExecutionId: ctx.parentExecutionId ?? ctx.parent_execution_id,
+    reasonerId: ctx.reasonerId ?? ctx.reasoner_id,
     sessionId: ctx.sessionId ?? ctx.session_id,
     actorId: ctx.actorId ?? ctx.actor_id,
     callerDid: ctx.callerDid ?? ctx.caller_did,
     targetDid: ctx.targetDid ?? ctx.target_did,
-    agentNodeDid: ctx.agentNodeDid ?? ctx.agent_node_did,
-
-    // ✅ ADD THESE
-    rootWorkflowId: (ctx as any).rootWorkflowId ?? (ctx as any).root_workflow_id,
-    reasonerId: (ctx as any).reasonerId ?? (ctx as any).reasoner_id
+    agentNodeDid: ctx.agentNodeDid ?? ctx.agent_node_did
   };
 }
 
@@ -918,7 +914,7 @@ export class Agent {
       };
     }
 
-    const body = event?.body !== undefined ? this.parseBody(event.body): event;
+    const body = this.normalizeEventBody(event);
     const invocation = this.extractInvocationDetails({
       path,
       query: event?.queryStringParameters,
@@ -968,15 +964,22 @@ export class Agent {
   private normalizeEventBody(event: ServerlessEvent) {
     interface ParsedBody {
       input?: unknown;
-      data?: unknown;
       [key: string]: unknown;
     }
 
-    const parsed = this.parseBody(event?.body) as ParsedBody | undefined;
+    const parsed = this.parseBody(event?.body) as ParsedBody | null | undefined;
 
-    if (parsed?.input !== undefined) return parsed.input;
-    if (parsed?.data !== undefined) return parsed.data;
-
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      event?.input !== undefined &&
+      parsed.input === undefined
+    ) {
+      return { ...parsed, input: event.input };
+    }
+    if ((parsed === undefined || parsed === null) && event?.input !== undefined) {
+      return { input: event.input };
+    }
     return parsed;
   }
 

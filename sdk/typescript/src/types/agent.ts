@@ -204,7 +204,9 @@ export interface RawExecutionContext {
   executionId?: string;
   runId?: string;
   workflowId?: string;
+  rootWorkflowId?: string;
   parentExecutionId?: string;
+  reasonerId?: string;
   sessionId?: string;
   actorId?: string;
   callerDid?: string;
@@ -215,7 +217,9 @@ export interface RawExecutionContext {
   execution_id?: string;
   run_id?: string;
   workflow_id?: string;
+  root_workflow_id?: string;
   parent_execution_id?: string;
+  reasoner_id?: string;
   session_id?: string;
   actor_id?: string;
   caller_did?: string;

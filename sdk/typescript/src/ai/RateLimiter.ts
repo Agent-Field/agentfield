@@ -84,33 +84,30 @@ export class StatelessRateLimiter {
       return true;
     }
 
-    if (
-    typeof error === 'object' &&
-    error !== null &&
-    typeof (error as { constructor?: { name?: string } }).constructor?.name === 'string' &&
-    (error as { constructor: { name: string } }).constructor.name.includes('RateLimitError')
-  ) {
-    return true;
-  }
-  
-   if (isRateLimitError(error)) {
-    const statusCandidates = [
-      error.status,
-      error.statusCode,
-      error.response?.status,
-      error.response?.statusCode,
-      error.response?.status_code,
-    ];
-    if (statusCandidates.some((code) => code === 429 || code === 503)) {
-      return true;
+    if (typeof error === 'object' && error !== null) {
+      const ctorName = (error as { constructor?: { name?: string } }).constructor?.name;
+      if (typeof ctorName === 'string' && ctorName.includes('RateLimitError')) {
+        return true;
+      }
+
+      const err = error as {
+        status?: number;
+        statusCode?: number;
+        response?: { status?: number; statusCode?: number; status_code?: number };
+      };
+      const statusCandidates = [
+        err.status,
+        err.statusCode,
+        err.response?.status,
+        err.response?.statusCode,
+        err.response?.status_code
+      ];
+      if (statusCandidates.some((code) => code === 429 || code === 503)) {
+        return true;
+      }
     }
 
-    if (error.retryAfter !== undefined) {
-      return true;
-    }
-  }
-    const err = toError(error);
-    const message = err.message.toLowerCase();
+    const message = toError(error).message.toLowerCase();
     const rateLimitKeywords = [
       'rate limit',
       'rate-limit',
@@ -132,18 +129,26 @@ export class StatelessRateLimiter {
 
   protected _extractRetryAfter(error: unknown): number | undefined {
     if (!error) return undefined;
-    if (error instanceof RateLimitError) {
-      if (error.retryAfter) {
-        return error.retryAfter;
-      }
-    } 
 
-    if (isRateLimitError(error)) {
-    const headers = error.response?.headers;
+    if (error instanceof RateLimitError && error.retryAfter) {
+      return error.retryAfter;
+    }
+
+    if (typeof error !== 'object' || error === null) return undefined;
+
+    type HeaderBag = Record<string, string | string[] | undefined>;
+    const err = error as {
+      response?: { headers?: HeaderBag; Headers?: HeaderBag; header?: HeaderBag };
+      retryAfter?: string | number;
+      retry_after?: string | number;
+    };
+
+    const headers = err.response?.headers ?? err.response?.Headers ?? err.response?.header;
     if (headers && typeof headers === 'object') {
       const retryAfterKey = Object.keys(headers).find((k) => k.toLowerCase() === 'retry-after');
       if (retryAfterKey) {
-        const value = Array.isArray(headers[retryAfterKey]) ? headers[retryAfterKey][0] : headers[retryAfterKey];
+        const raw = headers[retryAfterKey];
+        const value = Array.isArray(raw) ? raw[0] : raw;
         if (value !== undefined) {
           const parsed = parseFloat(String(value));
           if (!Number.isNaN(parsed)) {
@@ -152,20 +157,15 @@ export class StatelessRateLimiter {
         }
       }
     }
-    if (error.retryAfter !== undefined) {
-      const parsed = parseFloat(String(error.retryAfter));
+
+    const rawRetry = err.retryAfter ?? err.retry_after;
+    if (rawRetry !== undefined) {
+      const parsed = parseFloat(String(rawRetry));
       if (!Number.isNaN(parsed)) {
         return parsed;
       }
     }
-  }
-    const err = error as { retryAfter?: string | number };
-    if (err.retryAfter !== undefined) {
-      const parsed = parseFloat(String(err.retryAfter));
-      if (!Number.isNaN(parsed)) {
-        return parsed;
-      }
-    }
+
     return undefined;
   }
 
@@ -272,19 +272,4 @@ export class StatelessRateLimiter {
 function toError(error: unknown): Error {
   if (error instanceof Error) return error;
   return new Error(String(error));
-}
-
-
-function isRateLimitError(error: unknown): error is RateLimitError {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    ('name' in error || 'message' in error) &&
-    (
-      'status' in error ||
-      'statusCode' in error ||
-      'response' in error ||
-      'retryAfter' in error
-    )
-  );
 }
