@@ -768,10 +768,26 @@ function WorkflowDAGViewerInner({
   );
 
   // Handle sidebar close
+  const closeSidebarTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
   const handleCloseSidebar = useCallback(() => {
     setSidebarOpen(false);
-    // Optionally clear selected node after animation
-    setTimeout(() => setSelectedNode(null), 300);
+    if (closeSidebarTimeoutRef.current) {
+      clearTimeout(closeSidebarTimeoutRef.current);
+    }
+    // Clear selected node after animation
+    closeSidebarTimeoutRef.current = setTimeout(() => {
+      setSelectedNode(null);
+      closeSidebarTimeoutRef.current = null;
+    }, 300);
+  }, []);
+  useEffect(() => {
+    return () => {
+      if (closeSidebarTimeoutRef.current) {
+        clearTimeout(closeSidebarTimeoutRef.current);
+      }
+    };
   }, []);
 
   // Handle agent filter - optimized to avoid dependency on nodes array
