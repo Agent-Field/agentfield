@@ -77,8 +77,8 @@ app.run()
 
 ```bash
 # Installs the af CLI AND drops the agentfield-multi-reasoner-builder skill
-# into every coding agent on your machine (Claude Code, Codex, Gemini,
-# OpenCode, Aider, Windsurf, Cursor) — no prompts, no second step.
+# into every coding agent on your machine (Claude Code, GitHub Copilot CLI,
+# Codex, Gemini, OpenCode, Aider, Windsurf, Cursor) — no prompts, no second step.
 curl -fsSL https://agentfield.ai/install.sh | bash
 
 af init my-agent --defaults                            # Scaffold agent
