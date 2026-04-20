@@ -6,6 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.69-rc.9] - 2026-04-20
+
+
+### Testing
+
+- Test(sdk-go): fix flaky DurationMS assertion in runner test
+
+The stub opencode provider can return in under 1ms on fast CI runners,
+making int(time.Since(start).Milliseconds()) round to 0 and failing
+assert.Positive. Switch to GreaterOrEqual(0) — a non-negative duration
+is the real invariant; sub-ms timing is not.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (98aa568)
+
+## [0.1.69-rc.8] - 2026-04-20
+
+
+### Added
+
+- Feat/refactor tool-calling, add ToolCallResult, PromptConfig, and sanitization(#234) (911009a)
+
+
+
+### Other
+
+- Added more unit tests for coverage(#234) (a88d3f4)
+
+- Added more unit tests for coverage(#234) (b597071)
+
 ## [0.1.69-rc.7] - 2026-04-20
 
 
