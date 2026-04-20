@@ -568,13 +568,125 @@ func TestStatusManager_Reconciliation_UsesConfiguredThreshold(t *testing.T) {
 	assert.True(t, sm.needsReconciliation(stuckStartingAgent),
 		"Agent stuck in 'starting' beyond MaxTransitionTime should need reconciliation")
 
-	// Agent in "starting" with recent heartbeat — should NOT need reconciliation (still initializing)
+	// Agent recently registered and still in "starting" with a recent heartbeat — should NOT
+	// need reconciliation (still within the startup grace period).
 	freshStartingAgent := &types.AgentNode{
 		ID:              "node-fresh-starting",
 		HealthStatus:    types.HealthStatusUnknown,
 		LifecycleStatus: types.AgentStatusStarting,
-		LastHeartbeat:   time.Now().Add(-30 * time.Second),
+		RegisteredAt:    time.Now().Add(-30 * time.Second),
+		LastHeartbeat:   time.Now().Add(-2 * time.Second),
 	}
 	assert.False(t, sm.needsReconciliation(freshStartingAgent),
-		"Agent in 'starting' with recent heartbeat should not need reconciliation yet")
+		"Agent registered 30s ago in 'starting' with fresh heartbeat should be within startup grace")
+
+	// Issue #484: Agent registered long ago, still in "starting", but sending fresh heartbeats.
+	// This is the SDK-never-transitions-to-ready case — reconciliation MUST rescue it.
+	stuckStartingFreshHeartbeat := &types.AgentNode{
+		ID:              "node-stuck-starting-fresh-hb",
+		HealthStatus:    types.HealthStatusUnknown,
+		LifecycleStatus: types.AgentStatusStarting,
+		RegisteredAt:    time.Now().Add(-10 * time.Minute),
+		LastHeartbeat:   time.Now().Add(-2 * time.Second),
+	}
+	assert.True(t, sm.needsReconciliation(stuckStartingFreshHeartbeat),
+		"Agent past startup grace with fresh heartbeat but still 'starting' should need reconciliation (issue #484)")
+}
+
+// TestStatusManager_StuckStartingIsReconciledToReady reproduces issue #484 end-to-end:
+// an agent registers, sends heartbeats indefinitely with status="starting" (the Python SDK's
+// default, since it never transitions _current_status to READY), and is expected to be
+// promoted to "ready" by the reconciliation loop once past the startup grace period — then
+// stay "ready" across subsequent "starting" heartbeats.
+func TestStatusManager_StuckStartingIsReconciledToReady(t *testing.T) {
+	provider, ctx := setupStatusManagerStorage(t)
+
+	// Register an agent that registered 10 minutes ago (long past any reasonable
+	// startup grace period) and is still in "starting" with a fresh heartbeat.
+	node := &types.AgentNode{
+		ID:              "stuck-starter",
+		TeamID:          "team",
+		BaseURL:         "http://localhost",
+		Version:         "1.0.0",
+		HealthStatus:    types.HealthStatusUnknown,
+		LifecycleStatus: types.AgentStatusStarting,
+		RegisteredAt:    time.Now().Add(-10 * time.Minute),
+		LastHeartbeat:   time.Now().Add(-1 * time.Second),
+		Reasoners:       []types.ReasonerDefinition{},
+		Skills:          []types.SkillDefinition{{ID: "greet"}},
+	}
+	require.NoError(t, provider.RegisterAgent(ctx, node))
+
+	// Use short timings so the test is deterministic.
+	sm := NewStatusManager(provider, StatusManagerConfig{
+		ReconcileInterval:       30 * time.Second,
+		HeartbeatStaleThreshold: 60 * time.Second,
+		MaxTransitionTime:       2 * time.Minute,
+	}, nil, nil)
+
+	// Sanity: the agent is indeed stuck and needs reconciliation.
+	persisted, err := provider.GetAgent(ctx, "stuck-starter")
+	require.NoError(t, err)
+	require.Equal(t, types.AgentStatusStarting, persisted.LifecycleStatus)
+	require.True(t, sm.needsReconciliation(persisted),
+		"Agent registered past grace period with fresh heartbeat should need reconciliation")
+
+	// Reconciliation should promote "starting" → "ready".
+	sm.performReconciliation()
+
+	promoted, err := provider.GetAgent(ctx, "stuck-starter")
+	require.NoError(t, err)
+	assert.Equal(t, types.AgentStatusReady, promoted.LifecycleStatus,
+		"Reconciliation must promote stuck 'starting' with fresh heartbeat to 'ready' (issue #484)")
+
+	// Now simulate what the Python SDK does: keep sending heartbeats with
+	// status="starting". These must NOT regress the lifecycle status back to
+	// "starting" — otherwise the agent would oscillate forever.
+	starting := types.AgentStatusStarting
+	for i := 0; i < 5; i++ {
+		require.NoError(t, sm.UpdateFromHeartbeat(ctx, "stuck-starter", &starting, ""))
+	}
+
+	stable, err := provider.GetAgent(ctx, "stuck-starter")
+	require.NoError(t, err)
+	assert.Equal(t, types.AgentStatusReady, stable.LifecycleStatus,
+		"Subsequent heartbeats carrying status='starting' must not regress a promoted agent (issue #484)")
+}
+
+// TestStatusManager_UpdateAgentStatus_ActivePromotesStarting verifies the other half of the
+// fix: when the health monitor marks an agent active (e.g. a successful HTTP /status check),
+// the lifecycle status should be promoted out of "starting" too — not only out of
+// offline/empty as before.
+func TestStatusManager_UpdateAgentStatus_ActivePromotesStarting(t *testing.T) {
+	provider, ctx := setupStatusManagerStorage(t)
+
+	node := &types.AgentNode{
+		ID:              "active-transition",
+		TeamID:          "team",
+		BaseURL:         "http://localhost",
+		Version:         "1.0.0",
+		HealthStatus:    types.HealthStatusUnknown,
+		LifecycleStatus: types.AgentStatusStarting,
+		RegisteredAt:    time.Now().Add(-5 * time.Minute),
+		LastHeartbeat:   time.Now(),
+		Reasoners:       []types.ReasonerDefinition{},
+		Skills:          []types.SkillDefinition{},
+	}
+	require.NoError(t, provider.RegisterAgent(ctx, node))
+
+	sm := NewStatusManager(provider, StatusManagerConfig{}, nil, nil)
+
+	// Simulate the health monitor marking the agent active (what happens after a
+	// successful HTTP health check).
+	active := types.AgentStateActive
+	require.NoError(t, sm.UpdateAgentStatus(ctx, "active-transition", &types.AgentStatusUpdate{
+		State:  &active,
+		Source: types.StatusSourceHealthCheck,
+		Reason: "HTTP /status succeeded",
+	}))
+
+	after, err := provider.GetAgent(ctx, "active-transition")
+	require.NoError(t, err)
+	assert.Equal(t, types.AgentStatusReady, after.LifecycleStatus,
+		"Transitioning to AgentStateActive must promote 'starting' → 'ready' (issue #484)")
 }

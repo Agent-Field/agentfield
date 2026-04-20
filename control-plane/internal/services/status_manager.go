@@ -353,8 +353,16 @@ func (sm *StatusManager) UpdateAgentStatus(ctx context.Context, nodeID string, u
 					newStatus.LifecycleStatus = types.AgentStatusOffline
 				}
 			case types.AgentStateActive:
-				// Agent is coming online - set lifecycle to ready if it was offline
-				if newStatus.LifecycleStatus == types.AgentStatusOffline || newStatus.LifecycleStatus == "" {
+				// Agent is coming online - set lifecycle to ready if it was offline,
+				// empty, or stuck in "starting". Once the agent is confirmed active
+				// (via heartbeat priority or successful HTTP health check), we should
+				// advance it out of "starting" — otherwise SDKs that never explicitly
+				// transition to "ready" (e.g. the Python SDK, which only ever sends
+				// status="starting" in its enhanced heartbeats) leave the agent wedged
+				// in "starting" indefinitely. See issue #484.
+				if newStatus.LifecycleStatus == types.AgentStatusOffline ||
+					newStatus.LifecycleStatus == "" ||
+					newStatus.LifecycleStatus == types.AgentStatusStarting {
 					newStatus.LifecycleStatus = types.AgentStatusReady
 				}
 			case types.AgentStateStarting:
@@ -443,6 +451,21 @@ func (sm *StatusManager) UpdateFromHeartbeat(ctx context.Context, nodeID string,
 	// issues, but a heartbeat is direct proof of life from the agent itself.
 	// The health monitor requires consecutive failures before marking inactive,
 	// so there is no need to suppress heartbeats here.
+
+	// Don't let a "starting" heartbeat regress an agent that has already been
+	// promoted to "ready" or "degraded". Some SDKs (notably the Python SDK prior
+	// to 0.1.69) never transition their internal status out of "starting", and
+	// every enhanced heartbeat carries status="starting". Without this guard,
+	// each heartbeat would clobber the promoted lifecycle status and the agent
+	// would oscillate between "starting" and whatever reconciliation promoted it
+	// to. The heartbeat itself is still processed (LastSeen/State refresh), we
+	// just ignore the regressive lifecycle signal. See issue #484.
+	if lifecycleStatus != nil && *lifecycleStatus == types.AgentStatusStarting {
+		switch currentStatus.LifecycleStatus {
+		case types.AgentStatusReady, types.AgentStatusDegraded:
+			lifecycleStatus = nil
+		}
+	}
 
 	// Update from heartbeat
 	currentStatus.UpdateFromHeartbeat(lifecycleStatus)
@@ -741,6 +764,21 @@ func (sm *StatusManager) needsReconciliation(agent *types.AgentNode) bool {
 		return true
 	}
 
+	// Agents stuck in "starting" with a FRESH heartbeat past the startup grace period
+	// must also be reconciled. This is the common case behind issue #484: SDKs that
+	// send heartbeats but never explicitly transition out of "starting" (e.g. the
+	// Python SDK, whose enhanced heartbeats always carry status="starting"). The fresh
+	// heartbeat proves the agent is alive, and time-since-registration past the grace
+	// period proves it has finished starting up — without this rule, such agents stay
+	// wedged in "starting" indefinitely, and the staleness branch above never fires
+	// because the heartbeat is always fresh.
+	if agent.LifecycleStatus == types.AgentStatusStarting &&
+		timeSinceHeartbeat <= sm.config.HeartbeatStaleThreshold &&
+		!agent.RegisteredAt.IsZero() &&
+		time.Since(agent.RegisteredAt) > sm.config.MaxTransitionTime {
+		return true
+	}
+
 	return false
 }
 
@@ -757,7 +795,14 @@ func (sm *StatusManager) reconcileAgentStatus(ctx context.Context, agent *types.
 		newLifecycleStatus = types.AgentStatusOffline
 	} else {
 		newHealthStatus = types.HealthStatusActive
-		if agent.LifecycleStatus == "" || agent.LifecycleStatus == types.AgentStatusOffline {
+		// Promote empty/offline/stuck-starting agents to ready. Before the fix for
+		// issue #484, "starting" was preserved here, which meant agents that
+		// reconciliation *should* have rescued (fresh heartbeat, registered past the
+		// grace period, still in "starting") got re-saved as "starting" and stayed
+		// stuck forever.
+		if agent.LifecycleStatus == "" ||
+			agent.LifecycleStatus == types.AgentStatusOffline ||
+			agent.LifecycleStatus == types.AgentStatusStarting {
 			newLifecycleStatus = types.AgentStatusReady
 		} else {
 			newLifecycleStatus = agent.LifecycleStatus

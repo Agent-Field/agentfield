@@ -6,6 +6,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.69-rc.12] - 2026-04-20
+
+
+### Fixed
+
+- Fix(control-plane): rescue nodes stuck in lifecycle_status=starting
+
+Agents that register and then send heartbeats indefinitely with
+status="starting" (notably the Python SDK, whose _current_status is
+initialized to STARTING and only ever transitions to OFFLINE on shutdown)
+were left wedged in lifecycle_status="starting" forever:
+
+- needsReconciliation() only fired for stuck-starting agents when their
+  heartbeat was ALSO stale, which never happens for a healthy agent
+  heartbeating every 2s.
+- reconcileAgentStatus() only promoted empty/offline → ready; it preserved
+  "starting" even when the heartbeat was fresh.
+- The UpdateAgentStatus auto-sync also only promoted offline/empty → ready
+  when state flipped to Active, so a successful HTTP health check couldn't
+  pull an agent out of "starting" either.
+- Every "starting" heartbeat from the SDK re-asserted lifecycle_status=
+  "starting" via UpdateFromHeartbeat, clobbering any promotion.
+
+This patch:
+
+- Adds a reconciliation rule for agents stuck in "starting" past
+  MaxTransitionTime since RegisteredAt with a FRESH heartbeat — the
+  fresh heartbeat proves liveness, registration age proves startup is done.
+- Promotes "starting" → "ready" in reconcileAgentStatus when the heartbeat
+  is fresh.
+- Promotes "starting" → "ready" in the UpdateAgentStatus auto-sync when
+  state transitions to Active (e.g. successful HTTP health check).
+- Guards UpdateFromHeartbeat so "starting" heartbeats don't regress an
+  already-promoted "ready"/"degraded" agent.
+
+Adds three tests covering the full scenario end-to-end: reconciliation
+rescues the stuck node, repeated "starting" heartbeats do not regress it,
+and health-check-driven Active state also promotes "starting" → "ready".
+
+Fixes #484 (c9c2242)
+
 ## [0.1.69-rc.11] - 2026-04-20
 
 
