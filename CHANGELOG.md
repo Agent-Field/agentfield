@@ -6,6 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.69-rc.10] - 2026-04-20
+
+
+### Fixed
+
+- Fix(web-ui): clear sidebar-close timeout on unmount
+
+handleCloseSidebar scheduled a 300ms setTimeout to clear the selected
+node after the close animation, but never tracked the handle. If the
+component unmounted within that window — common in tests — the timer
+still fired, called setState on an unmounted component, and React's
+internals threw "ReferenceError: window is not defined" after the test
+environment was torn down. Track the handle in a ref, clear on
+re-invocation, and clear on unmount.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (cb0d5b4)
+
+
+
+### Testing
+
+- Test(web-ui): cover sidebar-close timer cancel + deferred run
+
+Adds a test that opens, closes, reopens, and recloses the sidebar to
+exercise the clearTimeout branch on a pending handle, then waits long
+enough for the deferred setSelectedNode(null) callback to actually
+execute. Brings patch coverage on this PR's touched lines from 76% to
+100%.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (9aa1b66)
+
 ## [0.1.69-rc.9] - 2026-04-20
 
 
