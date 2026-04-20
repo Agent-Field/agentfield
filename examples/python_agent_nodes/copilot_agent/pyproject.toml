@@ -1,0 +1,21 @@
+[project]
+name = "agentfield-copilot-agent"
+version = "0.1.0"
+description = "AgentField example agent backed by GitHub Copilot CLI via github-copilot-sdk."
+requires-python = ">=3.10"
+readme = "README.md"
+dependencies = [
+    "agentfield",
+    # Pinned to the verified API surface. The repo's main samples reference
+    # event-data classes (AssistantMessageData, SessionIdleData) that do NOT
+    # exist in the PyPI build; we discriminate events via SessionEventType
+    # (stable, schema-generated).
+    "github-copilot-sdk==0.2.2",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7", "pytest-asyncio>=0.23"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
