@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.69-rc.11] - 2026-04-20
+
+
+### Testing
+
+- Tests: improve coverage for process_logs.go (ring eviction, snapshot, NDJSON) (e4e7e96)
+
 ## [0.1.69-rc.10] - 2026-04-20
 
 
