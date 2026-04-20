@@ -3457,6 +3457,103 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
         # Also clear from thread-local storage
         clear_current_agent()
 
+    async def stop(self) -> None:
+        """
+        Programmatically stop the agent and clean up resources.
+
+        This method performs a graceful shutdown by:
+        1. Marking the agent as shutting down and its status as OFFLINE.
+        2. Stopping the heartbeat background worker.
+        3. Notifying the AgentField control plane that the agent is shutting down.
+        4. Cleaning up resources and event subscriptions.
+
+        The method is idempotent; calling it multiple times has no additional effect.
+
+        Example:
+            ```python
+            app = Agent("my_agent")
+            # ... start agent in a background task or loop ...
+
+            # Later, shut down cleanly
+            await app.stop()
+            ```
+        """
+        if getattr(self, "_shutdown_requested", False):
+            # Already shutting down or stopped
+            return
+
+        self._shutdown_requested = True
+
+        from agentfield.types import AgentStatus
+
+        self._current_status = AgentStatus.OFFLINE
+
+        if hasattr(self, "agentfield_handler") and self.agentfield_handler:
+            try:
+                self.agentfield_handler.stop_heartbeat()
+            except Exception as e:
+                if self.dev_mode:
+                    from agentfield.logger import log_error
+
+                    log_error(f"Heartbeat stop error during stop(): {e}")
+
+        try:
+            if (
+                getattr(self, "agentfield_connected", False)
+                and hasattr(self, "client")
+                and self.client
+            ):
+                success = await self.client.notify_graceful_shutdown(self.node_id)
+                if self.dev_mode:
+                    from agentfield.logger import log_info
+
+                    state = "sent" if success else "failed"
+                    log_info(f"Shutdown notification {state}")
+        except Exception as e:
+            if self.dev_mode:
+                from agentfield.logger import log_error
+
+                log_error(f"Shutdown notification error during stop(): {e}")
+
+        try:
+            if getattr(self, "connection_manager", None):
+                await self.connection_manager.stop()
+        except Exception as e:
+            if self.dev_mode:
+                from agentfield.logger import log_error
+
+                log_error(f"Connection manager stop error during stop(): {e}")
+
+        try:
+            if getattr(self, "memory_event_client", None):
+                await self.memory_event_client.close()
+        except Exception as e:
+            if self.dev_mode:
+                from agentfield.logger import log_error
+
+                log_error(f"Memory event client close error during stop(): {e}")
+
+        try:
+            await self._cleanup_async_resources()
+        except Exception as e:
+            if self.dev_mode:
+                from agentfield.logger import log_error
+
+                log_error(f"Resource cleanup error during stop(): {e}")
+
+        try:
+            self._clear_current()
+        except Exception as e:
+            if self.dev_mode:
+                from agentfield.logger import log_error
+
+                log_error(f"Registry clear error during stop(): {e}")
+
+        if self.dev_mode:
+            from agentfield.logger import log_success
+
+            log_success("Agent programmatically stopped")
+
     def _emit_workflow_event_sync(
         self,
         context: ExecutionContext,

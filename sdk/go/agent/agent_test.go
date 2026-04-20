@@ -1444,3 +1444,30 @@ func TestCallLocalUnknownReasoner(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown reasoner")
 }
+
+func TestCall_TargetPrefixing(t *testing.T) {
+    var capturedPath string
+
+    server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        capturedPath = r.URL.Path
+
+        resp := map[string]any{
+            "status": "succeeded",
+            "result": map[string]any{"ok": true},
+        }
+        _ = json.NewEncoder(w).Encode(resp)
+    }))
+    defer server.Close()
+
+    agent, _ := New(Config{
+        NodeID:        "node-1",
+        Version:       "1.0.0",
+        AgentFieldURL: server.URL,
+        Logger:        log.New(io.Discard, "", 0),
+    })
+
+    _, err := agent.Call(context.Background(), "lookup", nil)
+    require.NoError(t, err)
+
+    assert.Contains(t, capturedPath, "/execute/node-1.lookup")
+}

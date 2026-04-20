@@ -2001,6 +2001,13 @@ func (a *Agent) AIWithTools(ctx context.Context, prompt string, config ai.ToolCa
 	}
 
 	callFn := func(ctx context.Context, target string, input map[string]interface{}) (map[string]interface{}, error) {
+		if strings.Contains(target, ":skill:") {
+			parts := strings.SplitN(target, ":skill:", 2)
+			target = parts[0] + "." + parts[1]
+		} else if strings.Contains(target, ":") {
+			parts := strings.SplitN(target, ":", 2)
+			target = parts[0] + "." + parts[1]
+		}
 		return a.Call(ctx, target, input)
 	}
 

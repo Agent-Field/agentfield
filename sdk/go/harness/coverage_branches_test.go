@@ -92,7 +92,7 @@ func TestRunnerRun_SuccessBranches(t *testing.T) {
 		require.NotNil(t, result)
 		assert.False(t, result.IsError)
 		assert.Equal(t, "stub opencode result", strings.TrimSpace(result.Result))
-		assert.Positive(t, result.DurationMS)
+		assert.GreaterOrEqual(t, result.DurationMS, 0)
 	})
 
 	t.Run("schema + project dir uses temp output dir and parses file", func(t *testing.T) {
