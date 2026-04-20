@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [Unreleased]
+
+### Added
+
+- feat(skillkit,doctor): GitHub Copilot CLI as a first-class skill-install target.
+  `af skill install --target copilot` symlinks skills into `~/.copilot/skills/`,
+  auto-detected when `~/.copilot/` exists or the `copilot` binary is on PATH.
+  `af doctor` (+ `--json`) reports Copilot presence, config dir, detected auth
+  sources (`COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN` / `gh auth`),
+  and the last logged-in user, with an explicit disclaimer that presence of a
+  source is not proof of a valid login.
+
 ## [0.1.70] - 2026-04-20
 
 ## [0.1.70-rc.3] - 2026-04-20
