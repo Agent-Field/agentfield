@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [Unreleased]
+
+### Added
+
+- feat(examples): GitHub Copilot CLI as an AgentField reasoner node. New
+  `examples/python_agent_nodes/copilot_agent/` exposes four reasoners
+  (`ask`, `plan`, `review`, `run_task`) backed by the official
+  `github-copilot-sdk==0.2.2`. Deny-by-default permission posture;
+  `run_task` requires explicit `allow_tools=True` and supports allow/deny
+  tool lists. AgentField session id is mapped to a Copilot session id via
+  session-scoped memory so `continue_session=True` resumes correctly.
+  Opt-in isolation via `AGENTFIELD_COPILOT_ISOLATE=1` uses a per-node
+  sandbox instead of the user's shared `~/.copilot/`.
+
 ## [0.1.70] - 2026-04-20
 
 ## [0.1.70-rc.3] - 2026-04-20
