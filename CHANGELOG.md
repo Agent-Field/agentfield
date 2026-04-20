@@ -6,6 +6,320 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.69-rc.14] - 2026-04-20
+
+## [0.1.69-rc.13] - 2026-04-20
+
+## [0.1.69-rc.12] - 2026-04-20
+
+
+### Fixed
+
+- Fix(control-plane): rescue nodes stuck in lifecycle_status=starting
+
+Agents that register and then send heartbeats indefinitely with
+status="starting" (notably the Python SDK, whose _current_status is
+initialized to STARTING and only ever transitions to OFFLINE on shutdown)
+were left wedged in lifecycle_status="starting" forever:
+
+- needsReconciliation() only fired for stuck-starting agents when their
+  heartbeat was ALSO stale, which never happens for a healthy agent
+  heartbeating every 2s.
+- reconcileAgentStatus() only promoted empty/offline → ready; it preserved
+  "starting" even when the heartbeat was fresh.
+- The UpdateAgentStatus auto-sync also only promoted offline/empty → ready
+  when state flipped to Active, so a successful HTTP health check couldn't
+  pull an agent out of "starting" either.
+- Every "starting" heartbeat from the SDK re-asserted lifecycle_status=
+  "starting" via UpdateFromHeartbeat, clobbering any promotion.
+
+This patch:
+
+- Adds a reconciliation rule for agents stuck in "starting" past
+  MaxTransitionTime since RegisteredAt with a FRESH heartbeat — the
+  fresh heartbeat proves liveness, registration age proves startup is done.
+- Promotes "starting" → "ready" in reconcileAgentStatus when the heartbeat
+  is fresh.
+- Promotes "starting" → "ready" in the UpdateAgentStatus auto-sync when
+  state transitions to Active (e.g. successful HTTP health check).
+- Guards UpdateFromHeartbeat so "starting" heartbeats don't regress an
+  already-promoted "ready"/"degraded" agent.
+
+Adds three tests covering the full scenario end-to-end: reconciliation
+rescues the stuck node, repeated "starting" heartbeats do not regress it,
+and health-check-driven Active state also promotes "starting" → "ready".
+
+Fixes #484 (c9c2242)
+
+## [0.1.69-rc.11] - 2026-04-20
+
+
+### Testing
+
+- Tests: improve coverage for process_logs.go (ring eviction, snapshot, NDJSON) (e4e7e96)
+
+## [0.1.69-rc.10] - 2026-04-20
+
+
+### Fixed
+
+- Fix(web-ui): clear sidebar-close timeout on unmount
+
+handleCloseSidebar scheduled a 300ms setTimeout to clear the selected
+node after the close animation, but never tracked the handle. If the
+component unmounted within that window — common in tests — the timer
+still fired, called setState on an unmounted component, and React's
+internals threw "ReferenceError: window is not defined" after the test
+environment was torn down. Track the handle in a ref, clear on
+re-invocation, and clear on unmount.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (cb0d5b4)
+
+
+
+### Testing
+
+- Test(web-ui): cover sidebar-close timer cancel + deferred run
+
+Adds a test that opens, closes, reopens, and recloses the sidebar to
+exercise the clearTimeout branch on a pending handle, then waits long
+enough for the deferred setSelectedNode(null) callback to actually
+execute. Brings patch coverage on this PR's touched lines from 76% to
+100%.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (9aa1b66)
+
+## [0.1.69-rc.9] - 2026-04-20
+
+
+### Testing
+
+- Test(sdk-go): fix flaky DurationMS assertion in runner test
+
+The stub opencode provider can return in under 1ms on fast CI runners,
+making int(time.Since(start).Milliseconds()) round to 0 and failing
+assert.Positive. Switch to GreaterOrEqual(0) — a non-negative duration
+is the real invariant; sub-ms timing is not.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (98aa568)
+
+## [0.1.69-rc.8] - 2026-04-20
+
+
+### Added
+
+- Feat/refactor tool-calling, add ToolCallResult, PromptConfig, and sanitization(#234) (911009a)
+
+
+
+### Other
+
+- Added more unit tests for coverage(#234) (a88d3f4)
+
+- Added more unit tests for coverage(#234) (b597071)
+
+## [0.1.69-rc.7] - 2026-04-20
+
+
+### Added
+
+- Feat: implement Agent.stop() in python sdk (a641558)
+
+## [Unreleased]
+
+### Added
+
+- Feat: implement Agent.stop() in python sdk
+
+Implements `Agent.stop()` method that performs a clean async shutdown of an agent instance:
+- Marks agent as shutting down and transitions status to OFFLINE
+- Stops heartbeat background worker
+- Notifies AgentField control plane of graceful shutdown (best effort)
+- Cleans up async execution resources, memory event clients, and connection managers
+- Idempotent: repeated calls have no additional effect after the first
+
+Useful for applications that manage agent lifecycle programmatically (e.g.,
+context managers, signal handlers, test teardown). Uses try/except around each
+cleanup step so failures in one subsystem don't prevent cleanup of others.
+
+### Testing
+
+- Test(sdk-python): strengthen Agent.stop() idempotency and branch coverage
+
+Expanded `test_agent_stop_is_idempotent` with mock assertions verifying that all
+cleanup side effects (heartbeat stop, shutdown notification, connection manager
+stop, memory client close, async resource cleanup) are invoked exactly once across
+two consecutive stop() calls.
+
+Added `test_agent_stop_skips_shutdown_notification_when_not_connected` to verify
+graceful degradation: when `agentfield_connected=False`, the shutdown notification
+is skipped but local cleanup still runs.
+
+Removed obsolete TODO and dead implementation guard (`pytest.skip`); Agent.stop()
+is now fully implemented.
+
+## [0.1.69-rc.6] - 2026-04-17
+
+
+### Chores
+
+- Chore(deps): bump github.com/jackc/pgx/v5
+
+Bumps the go_modules group with 1 update in the /control-plane directory: [github.com/jackc/pgx/v5](https://github.com/jackc/pgx).
+
+
+Updates `github.com/jackc/pgx/v5` from 5.7.5 to 5.9.0
+- [Changelog](https://github.com/jackc/pgx/blob/master/CHANGELOG.md)
+- [Commits](https://github.com/jackc/pgx/compare/v5.7.5...v5.9.0)
+
+---
+updated-dependencies:
+- dependency-name: github.com/jackc/pgx/v5
+  dependency-version: 5.9.0
+  dependency-type: direct:production
+  dependency-group: go_modules
+...
+
+Signed-off-by: dependabot[bot] <support@github.com> (10a0869)
+
+## [0.1.69-rc.5] - 2026-04-16
+
+
+### Testing
+
+- Tests/added tests for pydantic_utils + agent_registry thread(#401) (16de38a)
+
+## [0.1.69-rc.4] - 2026-04-16
+
+
+### Chores
+
+- Chore(deps): bump hono
+
+Bumps the npm_and_yarn group with 1 update in the /examples/benchmarks/100k-scale/mastra-bench directory: [hono](https://github.com/honojs/hono).
+
+
+Updates `hono` from 4.12.12 to 4.12.14
+- [Release notes](https://github.com/honojs/hono/releases)
+- [Commits](https://github.com/honojs/hono/compare/v4.12.12...v4.12.14)
+
+---
+updated-dependencies:
+- dependency-name: hono
+  dependency-version: 4.12.14
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com> (6cd3f91)
+
+
+
+### Fixed
+
+- Fix(sdk/go): send configured heartbeat interval in node registration
+
+registerNode hardcoded HeartbeatInterval as "0s", masking the
+agent's configured LeaseRefreshInterval from the control plane. The
+control plane uses that field to size presence TTLs and schedule
+lease refresh windows -- receiving "0s" either fell back to an
+undocumented default or marked the node as expired immediately.
+
+Send a.cfg.LeaseRefreshInterval.String() instead, through a helper
+that falls back to 30s when the field is zero (guards callers that
+bypass New's default). When DisableLeaseLoop is true the registered
+value stays "0s" so the control plane does not expect heartbeats
+the agent will not send.
+
+Fixes #439 (25caf47)
+
+## [0.1.69-rc.3] - 2026-04-15
+
+
+### Testing
+
+- Test: add tests for TypeScript SDK utils (pattern, schema, httpAgents)
+
+Resolves #406 (a945b79)
+
+## [0.1.69-rc.2] - 2026-04-15
+
+
+### Changed
+
+- Refactor: split agent.py into mixins (#411) (bab38af)
+
+- Refactor: split agent.py into mixins (#411) (2c23f8a)
+
+
+
+### Other
+
+- Removed unused module asyncio (033697b)
+
+- Agent.py split into mixins (4798b61)
+
+## [0.1.69-rc.1] - 2026-04-15
+
+
+### Chores
+
+- Chore: sync web client package-lock with installed deps
+
+Removes a stale dev-only marker on glob 10.5.0 so the lockfile matches the
+actual install graph (it's pulled in as a runtime dep transitively).
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com> (04901d0)
+
+## [0.1.68] - 2026-04-14
+
+## [0.1.68-rc.4] - 2026-04-14
+
+
+### Fixed
+
+- Fix(security): add webhook allowlist for trusted internal hosts
+
+The strict SSRF filter rejected legitimate RFC-1918 callbacks inside
+Docker/K8s clusters, breaking the functional test that webhooks back
+to the test-runner container at an internal bridge IP.
+
+Add an allowlist (hosts, wildcards, CIDRs) that bypasses the private-IP
+check for explicitly trusted targets, mirroring the existing
+`serverless_discovery_allowed_hosts` pattern:
+
+- `AGENTFIELD_WEBHOOK_ALLOWED_HOSTS` env var / `webhook_allowed_hosts`
+  YAML field feeds services.SetWebhookAllowedHosts at server startup.
+- Both `ValidateWebhookURL` and `NewSSRFSafeClient`'s DialContext honor
+  the allowlist before applying private-IP rejection.
+- Functional test docker-compose files set the env to "test-runner" so
+  the existing webhook contract test passes without weakening the gate.
+
+Added tests for allowlist parsing, hostname/wildcard/CIDR matching,
+bypass behavior in both validators, dialer error paths, and an
+end-to-end test that loopback traffic flows when 127.0.0.0/8 is
+allowlisted.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com> (e32ed28)
+
+- Fix(security): prevent SSRF via webhook URL validation (#418)
+
+Webhook URLs (execution webhooks and observability webhooks) were only
+validated for HTTP/HTTPS scheme, allowing users to target internal
+services, cloud metadata endpoints (169.254.169.254), and RFC-1918
+private networks through the server acting as an open proxy.
+
+This adds two layers of defense:
+- Registration-time validation: ValidateWebhookURL rejects URLs
+  pointing to private/loopback/link-local IPs before they are stored.
+- Transport-level enforcement: NewSSRFSafeClient uses a custom
+  DialContext that resolves DNS and rejects private IPs before the
+  TCP connection is established, preventing DNS rebinding attacks.
+
+Closes #418
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com> (12543c9)
+
 ## [0.1.68-rc.3] - 2026-04-14
 
 

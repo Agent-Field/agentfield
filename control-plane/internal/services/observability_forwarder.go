@@ -53,6 +53,7 @@ type ObservabilityForwarderConfig struct {
 	QueueSize         int           // Internal queue size (default: 1000)
 	ResponseBodyLimit int           // Max response body to capture (default: 16KB)
 	SnapshotInterval  time.Duration // Interval for system state snapshots (default: 60s, 0 to disable)
+	HTTPClient        *http.Client  // Optional; defaults to SSRF-safe client. Override in tests only.
 }
 
 type observabilityForwarder struct {
@@ -82,12 +83,14 @@ type observabilityForwarder struct {
 // NewObservabilityForwarder creates a new observability forwarder.
 func NewObservabilityForwarder(store ObservabilityWebhookStore, cfg ObservabilityForwarderConfig) ObservabilityForwarder {
 	normalized := normalizeObservabilityConfig(cfg)
+	client := normalized.HTTPClient
+	if client == nil {
+		client = NewSSRFSafeClient(normalized.HTTPTimeout)
+	}
 	return &observabilityForwarder{
-		store: store,
-		cfg:   normalized,
-		client: &http.Client{
-			Timeout: normalized.HTTPTimeout,
-		},
+		store:  store,
+		cfg:    normalized,
+		client: client,
 	}
 }
 

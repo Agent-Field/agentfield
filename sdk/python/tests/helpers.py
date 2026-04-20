@@ -496,6 +496,8 @@ def create_test_agent(
     monkeypatch.setattr("agentfield.agent.MemoryEventClient", _FakeMemoryEventClient)
     monkeypatch.setattr("agentfield.agent.DIDManager", _FakeDIDManager)
     monkeypatch.setattr("agentfield.agent.VCGenerator", _FakeVCGenerator)
+    monkeypatch.setattr("agentfield.agent_vc.DIDManager", _FakeDIDManager)
+    monkeypatch.setattr("agentfield.agent_vc.VCGenerator", _FakeVCGenerator)
     monkeypatch.setattr(
         AgentWorkflow, "notify_call_start", _record_call_start, raising=False
     )

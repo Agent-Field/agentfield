@@ -45,6 +45,7 @@ type WebhookDispatcherConfig struct {
 	WorkerCount       int
 	QueueSize         int
 	ResponseBodyLimit int
+	HTTPClient        *http.Client // Optional; defaults to SSRF-safe client. Override in tests only.
 }
 
 type webhookDispatcher struct {
@@ -66,12 +67,14 @@ type webhookJob struct {
 
 func NewWebhookDispatcher(store WebhookStore, cfg WebhookDispatcherConfig) WebhookDispatcher {
 	normalized := normalizeWebhookConfig(cfg)
+	client := normalized.HTTPClient
+	if client == nil {
+		client = NewSSRFSafeClient(normalized.Timeout)
+	}
 	return &webhookDispatcher{
-		store: store,
-		cfg:   normalized,
-		client: &http.Client{
-			Timeout: normalized.Timeout,
-		},
+		store:  store,
+		cfg:    normalized,
+		client: client,
 	}
 }
 

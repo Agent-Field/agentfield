@@ -9,6 +9,8 @@ services:
       AGENTFIELD_PORT: 8080
       AGENTFIELD_CONFIG_FILE: /etc/agentfield/agentfield-test.yaml
       AGENTFIELD_HOME: /data/agentfield
+      # Allow webhooks to the test-runner container (RFC-1918 Docker bridge IPs).
+      AGENTFIELD_WEBHOOK_ALLOWED_HOSTS: "test-runner"
     ports:
       - "8080:8080"
     volumes:

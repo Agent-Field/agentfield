@@ -1681,6 +1681,9 @@ func normalizeWebhookRequest(req *WebhookRequest) (*normalizedWebhookConfig, err
 	if parsed.User != nil {
 		return nil, fmt.Errorf("webhook url must not contain embedded credentials")
 	}
+	if err := services.ValidateWebhookURL(trimmedURL); err != nil {
+		return nil, fmt.Errorf("webhook url rejected: %w", err)
+	}
 	parsed.Fragment = ""
 
 	normalizedHeaders := make(map[string]string)

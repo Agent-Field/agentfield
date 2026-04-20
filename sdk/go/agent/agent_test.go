@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Agent-Field/agentfield/sdk/go/ai"
+	agentclient "github.com/Agent-Field/agentfield/sdk/go/client"
 	"github.com/Agent-Field/agentfield/sdk/go/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -242,6 +243,102 @@ func TestInitialize(t *testing.T) {
 	err = agent.Initialize(context.Background())
 	assert.NoError(t, err)
 	assert.True(t, agent.initialized)
+}
+
+func TestRegistration_UsesConfiguredHeartbeatInterval(t *testing.T) {
+	var captured types.NodeRegistrationRequest
+	httpClient := &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			require.Equal(t, http.MethodPost, req.Method)
+			require.Equal(t, "/api/v1/nodes", req.URL.Path)
+			require.NoError(t, json.NewDecoder(req.Body).Decode(&captured))
+
+			resp := types.NodeRegistrationResponse{
+				ID:      "node-1",
+				Success: true,
+			}
+			body, err := json.Marshal(resp)
+			require.NoError(t, err)
+
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		}),
+	}
+
+	cfg := Config{
+		NodeID:               "node-1",
+		Version:              "1.0.0",
+		TeamID:               "team-1",
+		AgentFieldURL:        "https://agentfield.example.com",
+		Logger:               log.New(io.Discard, "", 0),
+		DisableLeaseLoop:     true,
+		LeaseRefreshInterval: 45 * time.Second,
+	}
+
+	agent, err := New(cfg)
+	require.NoError(t, err)
+	agent.cfg.DisableLeaseLoop = false
+	agent.client, err = agentclient.New(cfg.AgentFieldURL, agentclient.WithHTTPClient(httpClient))
+	require.NoError(t, err)
+
+	agent.RegisterReasoner("test", func(ctx context.Context, input map[string]any) (any, error) {
+		return map[string]any{"ok": true}, nil
+	})
+
+	require.NoError(t, agent.registerNode(context.Background()))
+	assert.Equal(t, "45s", captured.CommunicationConfig.HeartbeatInterval)
+}
+
+func TestRegistration_HeartbeatIntervalFallsBackToDefault(t *testing.T) {
+	assert.Equal(t, "30s", formatHeartbeatInterval(0))
+}
+
+func TestRegistration_DisableLeaseLoopRegistersZeroHeartbeat(t *testing.T) {
+	var captured types.NodeRegistrationRequest
+	httpClient := &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			require.NoError(t, json.NewDecoder(req.Body).Decode(&captured))
+			resp := types.NodeRegistrationResponse{ID: "node-2", Success: true}
+			body, err := json.Marshal(resp)
+			require.NoError(t, err)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		}),
+	}
+
+	cfg := Config{
+		NodeID:               "node-2",
+		Version:              "1.0.0",
+		TeamID:               "team-1",
+		AgentFieldURL:        "https://agentfield.example.com",
+		Logger:               log.New(io.Discard, "", 0),
+		DisableLeaseLoop:     true,
+		LeaseRefreshInterval: 45 * time.Second,
+	}
+
+	agent, err := New(cfg)
+	require.NoError(t, err)
+	agent.client, err = agentclient.New(cfg.AgentFieldURL, agentclient.WithHTTPClient(httpClient))
+	require.NoError(t, err)
+
+	agent.RegisterReasoner("test", func(ctx context.Context, input map[string]any) (any, error) {
+		return map[string]any{"ok": true}, nil
+	})
+
+	require.NoError(t, agent.registerNode(context.Background()))
+	assert.Equal(t, "0s", captured.CommunicationConfig.HeartbeatInterval)
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func TestInitialize_NoReasoners(t *testing.T) {
@@ -803,16 +900,16 @@ func TestAIWithTools(t *testing.T) {
 		assert.Equal(t, 1, trace.TotalTurns)
 	})
 
-		t.Run("discovers tools and dispatches local calls", func(t *testing.T) {
-			var chatRequests atomic.Int32
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				switch r.URL.Path {
-				case "/api/v1/discovery/capabilities":
-					_, _ = w.Write([]byte(`{"discovered_at":"2025-01-01T00:00:00Z","total_agents":1,"total_reasoners":1,"total_skills":0,"pagination":{"limit":50,"offset":0,"has_more":false},"capabilities":[{"agent_id":"agent-1","reasoners":[{"id":"lookup","invocation_target":"agent-1.lookup","input_schema":{"type":"object"}}],"skills":[]}]}`))
-				case "/api/v1/execute/agent-1.lookup":
-					_, _ = w.Write([]byte(`{"status":"open"}`))
-				case "/chat/completions":
-					count := chatRequests.Add(1)
+	t.Run("discovers tools and dispatches local calls", func(t *testing.T) {
+		var chatRequests atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/v1/discovery/capabilities":
+				_, _ = w.Write([]byte(`{"discovered_at":"2025-01-01T00:00:00Z","total_agents":1,"total_reasoners":1,"total_skills":0,"pagination":{"limit":50,"offset":0,"has_more":false},"capabilities":[{"agent_id":"agent-1","reasoners":[{"id":"lookup","invocation_target":"agent-1.lookup","input_schema":{"type":"object"}}],"skills":[]}]}`))
+			case "/api/v1/execute/agent-1.lookup":
+				_, _ = w.Write([]byte(`{"status":"open"}`))
+			case "/chat/completions":
+				count := chatRequests.Add(1)
 				if count == 1 {
 					_ = json.NewEncoder(w).Encode(ai.Response{Choices: []ai.Choice{{Message: ai.Message{ToolCalls: []ai.ToolCall{{ID: "call-1", Type: "function", Function: ai.ToolCallFunction{Name: "agent-1.lookup", Arguments: `{"query":"status"}`}}}}}}})
 					return
@@ -832,7 +929,7 @@ func TestAIWithTools(t *testing.T) {
 			AIConfig:      &ai.Config{APIKey: "test-key", BaseURL: server.URL, Model: "gpt-4o"},
 		})
 		require.NoError(t, err)
-			resp, trace, err := agent.AIWithTools(context.Background(), "hello", ai.DefaultToolCallConfig())
+		resp, trace, err := agent.AIWithTools(context.Background(), "hello", ai.DefaultToolCallConfig())
 		require.NoError(t, err)
 		assert.Equal(t, "tool answer", resp.Text())
 		require.Len(t, trace.Calls, 1)
@@ -1346,4 +1443,31 @@ func TestCallLocalUnknownReasoner(t *testing.T) {
 	_, err = ag.CallLocal(context.Background(), "missing", map[string]any{})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown reasoner")
+}
+
+func TestCall_TargetPrefixing(t *testing.T) {
+    var capturedPath string
+
+    server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        capturedPath = r.URL.Path
+
+        resp := map[string]any{
+            "status": "succeeded",
+            "result": map[string]any{"ok": true},
+        }
+        _ = json.NewEncoder(w).Encode(resp)
+    }))
+    defer server.Close()
+
+    agent, _ := New(Config{
+        NodeID:        "node-1",
+        Version:       "1.0.0",
+        AgentFieldURL: server.URL,
+        Logger:        log.New(io.Discard, "", 0),
+    })
+
+    _, err := agent.Call(context.Background(), "lookup", nil)
+    require.NoError(t, err)
+
+    assert.Contains(t, capturedPath, "/execute/node-1.lookup")
 }

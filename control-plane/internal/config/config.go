@@ -47,6 +47,11 @@ type AgentFieldConfig struct {
 // RegistrationConfig governs validation of agent-supplied registration endpoints.
 type RegistrationConfig struct {
 	ServerlessDiscoveryAllowedHosts []string `yaml:"serverless_discovery_allowed_hosts" mapstructure:"serverless_discovery_allowed_hosts"`
+	// WebhookAllowedHosts lists hostnames, wildcards, or CIDRs that bypass
+	// SSRF filtering for execution and observability webhooks. Useful for
+	// deployments where webhooks legitimately target internal RFC-1918 hosts
+	// (e.g. Docker service names, Kubernetes cluster DNS).
+	WebhookAllowedHosts []string `yaml:"webhook_allowed_hosts" mapstructure:"webhook_allowed_hosts"`
 }
 
 // NodeLogProxyConfig limits the control plane proxy to agent process logs (NDJSON).
@@ -374,6 +379,17 @@ func ApplyEnvOverrides(cfg *Config) {
 			trimmed := strings.TrimSpace(part)
 			if trimmed != "" {
 				cfg.AgentField.Registration.ServerlessDiscoveryAllowedHosts = append(cfg.AgentField.Registration.ServerlessDiscoveryAllowedHosts, trimmed)
+			}
+		}
+	}
+
+	if val := os.Getenv("AGENTFIELD_WEBHOOK_ALLOWED_HOSTS"); val != "" {
+		parts := strings.Split(val, ",")
+		cfg.AgentField.Registration.WebhookAllowedHosts = cfg.AgentField.Registration.WebhookAllowedHosts[:0]
+		for _, part := range parts {
+			trimmed := strings.TrimSpace(part)
+			if trimmed != "" {
+				cfg.AgentField.Registration.WebhookAllowedHosts = append(cfg.AgentField.Registration.WebhookAllowedHosts, trimmed)
 			}
 		}
 	}

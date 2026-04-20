@@ -376,6 +376,10 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 
 	payloadStore := services.NewFilePayloadStore(dirs.PayloadsDir)
 
+	// Configure SSRF-safe webhook client allowlist. Hosts/CIDRs listed here
+	// bypass the private-IP check (e.g. for internal Docker/K8s service names).
+	services.SetWebhookAllowedHosts(cfg.AgentField.Registration.WebhookAllowedHosts)
+
 	webhookDispatcher := services.NewWebhookDispatcher(storageProvider, services.WebhookDispatcherConfig{
 		Timeout:         cfg.AgentField.ExecutionQueue.WebhookTimeout,
 		MaxAttempts:     cfg.AgentField.ExecutionQueue.WebhookMaxAttempts,

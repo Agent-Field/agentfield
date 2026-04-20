@@ -80,6 +80,10 @@ func (h *ObservabilityWebhookHandler) SetWebhookHandler(c *gin.Context) {
 		RespondBadRequest(c, "invalid url: must be http or https")
 		return
 	}
+	if err := services.ValidateWebhookURL(req.URL); err != nil {
+		RespondBadRequest(c, "invalid url: "+err.Error())
+		return
+	}
 
 	// Build config
 	enabled := true

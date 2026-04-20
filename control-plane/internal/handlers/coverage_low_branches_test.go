@@ -261,6 +261,46 @@ func TestNormalizeWebhookRequest(t *testing.T) {
 			wantErr: "webhook url must not contain embedded credentials",
 		},
 		{
+			name:    "ssrf loopback ipv4",
+			req:     &WebhookRequest{URL: "http://127.0.0.1:9999/cb"},
+			wantErr: "webhook url rejected",
+		},
+		{
+			name:    "ssrf cloud metadata",
+			req:     &WebhookRequest{URL: "http://169.254.169.254/latest/meta-data/"},
+			wantErr: "webhook url rejected",
+		},
+		{
+			name:    "ssrf rfc1918 10.x",
+			req:     &WebhookRequest{URL: "http://10.0.0.1:8080/cb"},
+			wantErr: "webhook url rejected",
+		},
+		{
+			name:    "ssrf rfc1918 192.168.x",
+			req:     &WebhookRequest{URL: "http://192.168.1.1:8080/cb"},
+			wantErr: "webhook url rejected",
+		},
+		{
+			name:    "ssrf rfc1918 172.16.x",
+			req:     &WebhookRequest{URL: "http://172.16.0.1:8080/cb"},
+			wantErr: "webhook url rejected",
+		},
+		{
+			name:    "ssrf localhost",
+			req:     &WebhookRequest{URL: "http://localhost:9999/cb"},
+			wantErr: "webhook url rejected",
+		},
+		{
+			name:    "ssrf ipv6 loopback",
+			req:     &WebhookRequest{URL: "http://[::1]:9999/cb"},
+			wantErr: "webhook url rejected",
+		},
+		{
+			name:    "ssrf unspecified",
+			req:     &WebhookRequest{URL: "http://0.0.0.0:9999/cb"},
+			wantErr: "webhook url rejected",
+		},
+		{
 			name:    "too many headers",
 			req:     &WebhookRequest{URL: "https://example.com/path", Headers: func() map[string]string { m := map[string]string{}; for i := 0; i < maxWebhookHeaders+1; i++ { m[time.Unix(int64(i), 0).UTC().Format(time.RFC3339)] = "v" }; return m }()},
 			wantErr: "webhook.headers supports at most",
