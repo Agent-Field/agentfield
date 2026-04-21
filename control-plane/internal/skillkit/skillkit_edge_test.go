@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -635,6 +636,114 @@ func TestTargetSpecificEdgeCases(t *testing.T) {
 		}
 		if dest, err := os.Readlink(stale); err != nil || dest != cmdSrc {
 			t.Fatalf("readlink = %q err=%v want %q", dest, err, cmdSrc)
+		}
+	})
+
+	t.Run("claude install surfaces mkdir error when commands destination is blocked by a file", func(t *testing.T) {
+		home := withTempHome(t)
+		if err := os.MkdirAll(filepath.Join(home, ".claude", "skills"), 0o755); err != nil {
+			t.Fatalf("mkdir skills: %v", err)
+		}
+		// Place a regular file at ~/.claude/commands so MkdirAll of it fails.
+		if err := os.WriteFile(filepath.Join(home, ".claude", "commands"), []byte("blocker"), 0o644); err != nil {
+			t.Fatalf("write blocker: %v", err)
+		}
+
+		current := filepath.Join(t.TempDir(), "current")
+		cmdDir := filepath.Join(current, "commands")
+		if err := os.MkdirAll(cmdDir, 0o755); err != nil {
+			t.Fatalf("mkdir cmdDir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(cmdDir, "agentfield.md"), []byte("body"), 0o644); err != nil {
+			t.Fatalf("write md: %v", err)
+		}
+
+		_, err := claudeCodeTarget{}.Install(Catalog[0], current)
+		if err == nil {
+			t.Fatalf("Install should fail when cmd destination is not a directory")
+		}
+		if !strings.Contains(err.Error(), "install commands") {
+			t.Fatalf("expected install commands wrap, got %v", err)
+		}
+	})
+
+	t.Run("claude install surfaces remove error when destination dir is read-only", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("permission semantics differ on windows")
+		}
+		if os.Geteuid() == 0 {
+			t.Skip("root bypasses permission checks")
+		}
+		home := withTempHome(t)
+		if err := os.MkdirAll(filepath.Join(home, ".claude", "skills"), 0o755); err != nil {
+			t.Fatalf("mkdir skills: %v", err)
+		}
+		cmdDst := filepath.Join(home, ".claude", "commands")
+		if err := os.MkdirAll(cmdDst, 0o755); err != nil {
+			t.Fatalf("mkdir cmdDst: %v", err)
+		}
+		stale := filepath.Join(cmdDst, "agentfield.md")
+		if err := os.WriteFile(stale, []byte("stale"), 0o644); err != nil {
+			t.Fatalf("write stale: %v", err)
+		}
+		if err := os.Chmod(cmdDst, 0o555); err != nil {
+			t.Fatalf("chmod: %v", err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(cmdDst, 0o755) })
+
+		current := filepath.Join(t.TempDir(), "current")
+		cmdDir := filepath.Join(current, "commands")
+		if err := os.MkdirAll(cmdDir, 0o755); err != nil {
+			t.Fatalf("mkdir cmdDir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(cmdDir, "agentfield.md"), []byte("new"), 0o644); err != nil {
+			t.Fatalf("write new: %v", err)
+		}
+
+		_, err := claudeCodeTarget{}.Install(Catalog[0], current)
+		if err == nil {
+			t.Fatalf("Install should fail when existing command cannot be removed")
+		}
+		if !strings.Contains(err.Error(), "remove existing") {
+			t.Fatalf("expected remove existing error, got %v", err)
+		}
+	})
+
+	t.Run("claude install surfaces symlink error when destination dir is not writable", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("permission semantics differ on windows")
+		}
+		if os.Geteuid() == 0 {
+			t.Skip("root bypasses permission checks")
+		}
+		home := withTempHome(t)
+		if err := os.MkdirAll(filepath.Join(home, ".claude", "skills"), 0o755); err != nil {
+			t.Fatalf("mkdir skills: %v", err)
+		}
+		cmdDst := filepath.Join(home, ".claude", "commands")
+		if err := os.MkdirAll(cmdDst, 0o755); err != nil {
+			t.Fatalf("mkdir cmdDst: %v", err)
+		}
+		if err := os.Chmod(cmdDst, 0o555); err != nil {
+			t.Fatalf("chmod: %v", err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(cmdDst, 0o755) })
+
+		current := filepath.Join(t.TempDir(), "current")
+		cmdDir := filepath.Join(current, "commands")
+		if err := os.MkdirAll(cmdDir, 0o755); err != nil {
+			t.Fatalf("mkdir cmdDir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(cmdDir, "agentfield.md"), []byte("x"), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+
+		_, err := claudeCodeTarget{}.Install(Catalog[0], current)
+		if err == nil {
+			t.Fatalf("Install should fail when symlink cannot be created")
+		}
+		if !strings.Contains(err.Error(), "symlink") {
+			t.Fatalf("expected symlink error, got %v", err)
 		}
 	})
 
