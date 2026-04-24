@@ -229,3 +229,74 @@ func TestRouter_MultipleMountsOnSameAgent(t *testing.T) {
 		t.Error("expected different handlers for users.list and orders.list")
 	}
 }
+
+// TestRouter_IssueExample mirrors the exact usage shown in the GitHub issue.
+// This is the canonical acceptance test for the feature.
+//
+// Issue: https://github.com/Agent-Field/agentfield/issues/<N>
+// "Add AgentRouter pattern to the Go SDK for modular agent organisation"
+func TestRouter_IssueExample(t *testing.T) {
+	a := newTestAgent(t)
+
+	// ── User router ───────────────────────────────────────────────────────
+	userRouter := agent.NewRouter()
+	userRouter.RegisterReasoner("get-profile", echoHandler("get-profile"),
+		agent.WithDescription("Get user profile by ID"))
+	userRouter.RegisterReasoner("update-profile", echoHandler("update-profile"),
+		agent.WithDescription("Update user profile"))
+	userRouter.RegisterSkill("validate-email", echoHandler("validate-email"))
+
+	// ── Order router ──────────────────────────────────────────────────────
+	orderRouter := agent.NewRouter()
+	orderRouter.RegisterReasoner("create", echoHandler("create"))
+	orderRouter.RegisterReasoner("cancel", echoHandler("cancel"))
+
+	// ── Mount both routers onto the agent with tags ────────────────────────
+	a.IncludeRouter(userRouter, agent.RouterOptions{
+		Prefix: "users",
+		Tags:   []string{"user-management"},
+	})
+	a.IncludeRouter(orderRouter, agent.RouterOptions{
+		Prefix: "orders",
+		Tags:   []string{"order-management"},
+	})
+
+	// Assert: users.* names exist and route to the right handlers
+	u1 := mustExecute(t, a, "users.get-profile")
+	if u1["handler"] != "get-profile" {
+		t.Errorf("users.get-profile: wrong handler %v", u1["handler"])
+	}
+	u2 := mustExecute(t, a, "users.update-profile")
+	if u2["handler"] != "update-profile" {
+		t.Errorf("users.update-profile: wrong handler %v", u2["handler"])
+	}
+	mustExecute(t, a, "users.validate-email")
+
+	// Assert: orders.* names exist
+	mustExecute(t, a, "orders.create")
+	mustExecute(t, a, "orders.cancel")
+
+	// Assert: unprefixed names do NOT exist (prefix is applied, not optional)
+	mustNotExecute(t, a, "get-profile")
+	mustNotExecute(t, a, "create")
+
+	// ── Nested router (admin wraps both) ──────────────────────────────────
+	b := newTestAgent(t)
+
+	adminRouter := agent.NewRouter()
+	adminRouter.IncludeRouter(userRouter, agent.RouterOptions{Prefix: "users"})
+	adminRouter.IncludeRouter(orderRouter, agent.RouterOptions{Prefix: "orders"})
+
+	b.IncludeRouter(adminRouter, agent.RouterOptions{Prefix: "admin"})
+
+	// Assert: admin.users.* and admin.orders.* exist
+	mustExecute(t, b, "admin.users.get-profile")
+	mustExecute(t, b, "admin.users.update-profile")
+	mustExecute(t, b, "admin.users.validate-email")
+	mustExecute(t, b, "admin.orders.create")
+	mustExecute(t, b, "admin.orders.cancel")
+
+	// Assert: shorter paths do not resolve
+	mustNotExecute(t, b, "users.get-profile")
+	mustNotExecute(t, b, "orders.create")
+}
