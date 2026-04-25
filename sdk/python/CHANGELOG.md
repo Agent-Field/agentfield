@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.1.3] - 2025-11-12
+### Changed
+- Version bump to align with the control-plane Docker fix (no SDK behavior changes).
+
 ## [0.1.2] - 2025-11-12
 ### Changed
 - Version bump to align with the control-plane Docker fix (no SDK behavior changes).

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .exceptions import AgentFieldClientError
+
 import asyncio
 import functools
 import inspect
@@ -143,19 +145,19 @@ class AgentRouter:
             The attribute/method from the attached agent
 
         Raises:
-            RuntimeError: If router is not attached to an agent
+            AgentFieldClientError: If router is not attached to an agent
             AttributeError: If the agent doesn't have the requested attribute
         """
         # Avoid infinite recursion by accessing _agent through object.__getattribute__
         try:
             agent = object.__getattribute__(self, '_agent')
         except AttributeError:
-            raise RuntimeError(
+            raise AgentFieldClientError(
                 "Router not attached to an agent. Call Agent.include_router(router) first."
             )
 
         if agent is None:
-            raise RuntimeError(
+            raise AgentFieldClientError(
                 "Router not attached to an agent. Call Agent.include_router(router) first."
             )
 
@@ -166,7 +168,7 @@ class AgentRouter:
     def app(self) -> "Agent":
         """Access the underlying Agent instance."""
         if not self._agent:
-            raise RuntimeError(
+            raise AgentFieldClientError(
                 "Router not attached to an agent. Call Agent.include_router(router) first."
             )
         return self._agent

@@ -5,9 +5,8 @@ from __future__ import annotations
 
 class AgentFieldError(Exception):
     """Base exception for all AgentField SDK errors."""
-
-    pass
-
+    def __init__(self, message:str):
+        super().__init__(message)
 
 class AgentFieldClientError(AgentFieldError):
     """Error communicating with the AgentField control plane."""

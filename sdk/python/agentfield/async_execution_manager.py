@@ -18,6 +18,7 @@ import aiohttp
 
 from .async_config import AsyncConfig
 from .execution_state import ExecuteError, ExecutionPriority, ExecutionState, ExecutionStatus
+from .exceptions import AgentFieldClientError, ExecutionTimeoutError
 from .http_connection_manager import ConnectionManager
 from .logger import get_logger
 from .result_cache import ResultCache
@@ -262,10 +263,10 @@ class AsyncExecutionManager:
         Start the execution manager and all background tasks.
 
         Raises:
-            RuntimeError: If manager is already started
+            AgentFieldClientError: If manager is already started
         """
         if self._polling_task is not None:
-            raise RuntimeError("AsyncExecutionManager is already started")
+            raise AgentFieldClientError("AsyncExecutionManager is already started")
 
         # Start components
         await self.connection_manager.start()
@@ -357,15 +358,15 @@ class AsyncExecutionManager:
             str: Execution ID for tracking the execution
 
         Raises:
-            RuntimeError: If manager is not started or at capacity
+            AgentFieldClientError: If manager is not started or circuit breaker is open
             aiohttp.ClientError: For HTTP-related errors
         """
         if self._polling_task is None:
-            raise RuntimeError("AsyncExecutionManager is not started")
+            raise AgentFieldClientError("AsyncExecutionManager is not started")
 
         # Check circuit breaker
         if self._is_circuit_breaker_open():
-            raise RuntimeError("Circuit breaker is open - too many recent failures")
+            raise AgentFieldClientError("Circuit breaker is open - too many recent failures")
 
         # Reserve capacity slot; released once terminal
         await self._capacity_semaphore.acquire()
@@ -513,8 +514,8 @@ class AsyncExecutionManager:
 
         Raises:
             KeyError: If execution_id is not found
-            TimeoutError: If execution times out
-            RuntimeError: If execution fails or is cancelled
+            ExecutionTimeoutError: If execution times out
+            AgentFieldClientError: If execution fails or is cancelled
         """
         # Check cache first
         cached_result = self.result_cache.get_execution_result(execution_id)
@@ -550,15 +551,15 @@ class AsyncExecutionManager:
                             )
                         return execution.result
                     elif execution.status == ExecutionStatus.FAILED:
-                        raise RuntimeError(
+                        raise AgentFieldClientError(
                             f"Execution failed: {execution.error_message}"
                         )
                     elif execution.status == ExecutionStatus.CANCELLED:
-                        raise RuntimeError(
+                        raise AgentFieldClientError(
                             f"Execution was cancelled: {execution._cancellation_reason}"
                         )
                     elif execution.status == ExecutionStatus.TIMEOUT:
-                        raise TimeoutError(
+                        raise ExecutionTimeoutError(
                             f"Execution timed out after {execution.timeout} seconds"
                         )
 
@@ -572,7 +573,7 @@ class AsyncExecutionManager:
                 execution.timeout_execution()
                 self.metrics.timeout_executions += 1
 
-        raise TimeoutError(f"Wait timeout reached after {wait_timeout} seconds")
+        raise ExecutionTimeoutError(f"Wait timeout reached after {wait_timeout} seconds")
 
     async def cancel_execution(
         self, execution_id: str, reason: Optional[str] = None

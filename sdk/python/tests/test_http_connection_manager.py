@@ -10,6 +10,7 @@ from agentfield.http_connection_manager import (
     ConnectionMetrics,
     ConnectionHealth,
 )
+from agentfield.exceptions import AgentFieldClientError
 
 
 def test_connection_metrics():
@@ -94,7 +95,7 @@ async def test_connection_manager_double_start():
     manager = ConnectionManager()
     await manager.start()
 
-    with pytest.raises(RuntimeError, match="already started"):
+    with pytest.raises(AgentFieldClientError, match="already started"):
         await manager.start()
 
     await manager.close()
@@ -107,7 +108,7 @@ async def test_connection_manager_start_after_close():
     await manager.start()
     await manager.close()
 
-    with pytest.raises(RuntimeError, match="closed"):
+    with pytest.raises(AgentFieldClientError, match="closed"):
         await manager.start()
 
 
@@ -129,7 +130,7 @@ async def test_connection_manager_get_session_not_started():
     """Test getting session before start raises error."""
     manager = ConnectionManager()
 
-    with pytest.raises(RuntimeError, match="not started"):
+    with pytest.raises(AgentFieldClientError, match="not started"):
         async with manager.get_session():
             pass
 

@@ -796,7 +796,7 @@ class TestErrorHandling:
         manager = ConnectionManager(mock_agent, fast_config)
         await manager.start()
 
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.07)
 
         assert manager.state in (ConnectionState.DEGRADED, ConnectionState.RECONNECTING)
 

@@ -3439,7 +3439,8 @@ class Agent(FastAPI):
             log_warn(
                 f"AgentField server unavailable - cannot make cross-agent call to {target}"
             )
-            raise Exception(
+            from agentfield.exceptions import AgentFieldClientError
+            raise AgentFieldClientError(
                 f"Cross-agent call to {target} failed: AgentField server unavailable. Agent is running in local mode."
             )
 
@@ -3574,7 +3575,8 @@ class Agent(FastAPI):
                 log_debug(
                     f"Execute call timed out after {elapsed_time:.2f} seconds (limit {execution_timeout:.0f}s)"
                 )
-                raise Exception(
+                from agentfield.exceptions import ExecutionTimeoutError
+                raise ExecutionTimeoutError(
                     f"Cross-agent call to {target} timed out after {int(execution_timeout)} seconds"
                 )
 
@@ -3858,8 +3860,7 @@ class Agent(FastAPI):
             ``ApprovalResult(decision="expired")``.
 
         Raises:
-            AgentFieldClientError: If the control plane request fails.
-            RuntimeError: If the agent is not serving (no callback URL).
+            AgentFieldClientError: If the control plane request fails or the agent is not serving.
         """
         from agentfield.exceptions import AgentFieldClientError
 
@@ -3873,7 +3874,7 @@ class Agent(FastAPI):
 
         # Build the callback URL from the agent's base URL
         if not self.base_url:
-            raise RuntimeError(
+            raise AgentFieldClientError(
                 "Agent is not serving — call app.serve() before app.pause(). "
                 "The callback URL is required for the control plane to notify "
                 "the agent when the approval resolves."
@@ -4327,7 +4328,8 @@ class Agent(FastAPI):
         """
 
         if not self.client:
-            raise RuntimeError("AgentField client is not configured")
+            from agentfield.exceptions import AgentFieldClientError
+            raise AgentFieldClientError("AgentField client is not configured")
 
         return self.client.discover_capabilities(
             agent=agent,
