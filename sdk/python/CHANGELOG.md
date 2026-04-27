@@ -1,14 +1,5 @@
 # Changelog
 
-## [0.1.3] - 2025-11-12
-### Changed
-- Replaced generic `RuntimeError`/`Exception`/`TimeoutError` raises with the typed `AgentFieldError` hierarchy (`AgentFieldClientError`, `ExecutionTimeoutError`, etc.) across `agent`, `async_execution_manager`, `http_connection_manager`, `router`, and `utils`.
-
-### Breaking
-- `AsyncExecutionManager.wait_for_result` now raises `ExecutionTimeoutError` instead of the builtin `TimeoutError`, and `AgentFieldClientError` instead of `RuntimeError`, on timeout/failure/cancellation. Callers catching the builtin exceptions must update to the new types (or their `AgentFieldError` base).
-- `ConnectionManager.start`/`get_session`, `AsyncExecutionManager.start`/`submit_execution`, `Agent.pause`/`Agent.discover`, and `AgentRouter` attribute access now raise `AgentFieldClientError` instead of `RuntimeError`.
-- `agentfield.utils.get_free_port` now raises `AgentFieldError` instead of `RuntimeError`.
-
 ## [0.1.2] - 2025-11-12
 ### Changed
 - Version bump to align with the control-plane Docker fix (no SDK behavior changes).
