@@ -8,14 +8,29 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
   SidebarHeader,
   SidebarRail,
   SidebarSeparator,
   useSidebar,
 } from "@/components/ui/sidebar";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { ChevronRight } from "@/components/ui/icon-bridge";
 import logoShortLight from "@/assets/logos/logo-short-light-v2.svg?url";
 import logoShortDark from "@/assets/logos/logo-short-dark-v2.svg?url";
-import { navigation, resourceLinks } from "@/config/navigation";
+import {
+  navigation,
+  isNavBranch,
+  resourceLinks,
+  type NavBranch,
+  type NavLeaf,
+} from "@/config/navigation";
 import { ModeToggle } from "@/components/ui/mode-toggle";
 import { cn } from "@/lib/utils";
 
@@ -68,9 +83,74 @@ function SidebarLogo() {
   );
 }
 
-export function AppSidebar() {
-  const location = useLocation();
+function isLeafActive(pathname: string, item: NavLeaf): boolean {
+  return pathname === item.path || pathname.startsWith(`${item.path}/`);
+}
 
+function isBranchActive(pathname: string, branch: NavBranch): boolean {
+  return branch.children.some((child) => isLeafActive(pathname, child));
+}
+
+function NavLeafItem({ item }: { item: NavLeaf }) {
+  const location = useLocation();
+  const active = isLeafActive(location.pathname, item);
+
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton asChild isActive={active} tooltip={item.title}>
+        <Link to={item.path}>
+          <item.icon />
+          <span>{item.title}</span>
+        </Link>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  );
+}
+
+function NavBranchItem({ item }: { item: NavBranch }) {
+  const location = useLocation();
+  const active = isBranchActive(location.pathname, item);
+
+  return (
+    <Collapsible
+      asChild
+      defaultOpen={active}
+      className="group/collapsible"
+    >
+      <SidebarMenuItem>
+        <CollapsibleTrigger asChild>
+          <SidebarMenuButton tooltip={item.title} isActive={active}>
+            <item.icon />
+            <span>{item.title}</span>
+            <ChevronRight
+              className="ml-auto text-muted-foreground transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90"
+              aria-hidden
+            />
+          </SidebarMenuButton>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <SidebarMenuSub>
+            {item.children.map((child) => {
+              const childActive = isLeafActive(location.pathname, child);
+              return (
+                <SidebarMenuSubItem key={child.path}>
+                  <SidebarMenuSubButton asChild isActive={childActive}>
+                    <Link to={child.path}>
+                      <child.icon />
+                      <span>{child.title}</span>
+                    </Link>
+                  </SidebarMenuSubButton>
+                </SidebarMenuSubItem>
+              );
+            })}
+          </SidebarMenuSub>
+        </CollapsibleContent>
+      </SidebarMenuItem>
+    </Collapsible>
+  );
+}
+
+export function AppSidebar() {
   return (
     <Sidebar collapsible="icon" variant="inset">
       <SidebarHeader className="gap-0 group-data-[collapsible=icon]:px-1 group-data-[collapsible=icon]:py-1.5">
@@ -102,26 +182,13 @@ export function AppSidebar() {
             <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                {group.items.map((item) => {
-                  const active =
-                    item.path === location.pathname ||
-                    location.pathname.startsWith(`${item.path}/`);
-
-                  return (
-                    <SidebarMenuItem key={item.path}>
-                      <SidebarMenuButton
-                        asChild
-                        isActive={active}
-                        tooltip={item.title}
-                      >
-                        <Link to={item.path}>
-                          <item.icon />
-                          <span>{item.title}</span>
-                        </Link>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  );
-                })}
+                {group.items.map((item) =>
+                  isNavBranch(item) ? (
+                    <NavBranchItem key={item.title} item={item} />
+                  ) : (
+                    <NavLeafItem key={item.path} item={item} />
+                  )
+                )}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>

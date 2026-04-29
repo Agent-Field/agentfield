@@ -132,11 +132,13 @@ func (a *Agent) registerNode(ctx context.Context) error {
 	reasoners := make([]types.ReasonerDefinition, 0, len(a.reasoners))
 	for _, reasoner := range a.reasoners {
 		reasoners = append(reasoners, types.ReasonerDefinition{
-			ID:           reasoner.Name,
-			InputSchema:  reasoner.InputSchema,
-			OutputSchema: reasoner.OutputSchema,
-			Tags:         reasoner.Tags,
-			ProposedTags: reasoner.Tags,
+			ID:             reasoner.Name,
+			InputSchema:    reasoner.InputSchema,
+			OutputSchema:   reasoner.OutputSchema,
+			Tags:           reasoner.Tags,
+			ProposedTags:   reasoner.Tags,
+			Triggers:       reasoner.Triggers,
+			AcceptsWebhook: reasoner.AcceptsWebhook,
 		})
 	}
 

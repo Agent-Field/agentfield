@@ -366,6 +366,9 @@ func (m *mockStorage) StoreAgentDIDWithComponents(ctx context.Context, agentID, 
 func (m *mockStorage) StoreExecutionVC(ctx context.Context, vcID, executionID, workflowID, sessionID, issuerDID, targetDID, callerDID, inputHash, outputHash, status string, vcDocument []byte, signature string, storageURI string, documentSizeBytes int64) error {
 	return nil
 }
+func (m *mockStorage) StoreExecutionVCRecord(ctx context.Context, vc *types.ExecutionVC) error {
+	return nil
+}
 func (m *mockStorage) GetExecutionVC(ctx context.Context, vcID string) (*types.ExecutionVCInfo, error) {
 	return nil, nil
 }
@@ -1296,3 +1299,22 @@ func toJSON(t *testing.T, v interface{}) string {
 	require.NoError(t, err)
 	return string(b)
 }
+
+// Trigger plugin system stubs — interface fillers for the test mock; not exercised.
+func (m *mockStorage) CreateTrigger(context.Context, *types.Trigger) error { return nil }
+func (m *mockStorage) GetTrigger(context.Context, string) (*types.Trigger, error) { return nil, nil }
+func (m *mockStorage) ListTriggers(context.Context, string, string) ([]*types.Trigger, error) { return nil, nil }
+func (m *mockStorage) UpdateTrigger(context.Context, *types.Trigger) error { return nil }
+func (m *mockStorage) DeleteTrigger(context.Context, string) error { return nil }
+func (m *mockStorage) UpsertCodeManagedTrigger(context.Context, *types.Trigger) (string, error) { return "", nil }
+func (m *mockStorage) MarkOrphanedTriggers(context.Context, string, []string) error { return nil }
+func (m *mockStorage) SetTriggerOverride(context.Context, string, bool, bool) error { return nil }
+func (m *mockStorage) ConvertTriggerToUIManaged(context.Context, string) error { return nil }
+func (m *mockStorage) InsertInboundEvent(context.Context, *types.InboundEvent) error { return nil }
+func (m *mockStorage) InboundEventExistsByIdempotency(context.Context, string, string) (bool, error) { return false, nil }
+func (m *mockStorage) GetInboundEvent(context.Context, string) (*types.InboundEvent, error) { return nil, nil }
+func (m *mockStorage) ListInboundEvents(context.Context, string, int) ([]*types.InboundEvent, error) { return nil, nil }
+func (m *mockStorage) MarkInboundEventProcessed(context.Context, string, string, string, string) error { return nil }
+func (m *mockStorage) SetInboundEventDispatchedWorkflow(context.Context, string, string) error { return nil }
+func (m *mockStorage) GetInboundEventByWorkflowID(context.Context, string) (*types.InboundEvent, error) { return nil, nil }
+func (m *mockStorage) TriggerMetrics(context.Context) (*types.TriggerMetrics, error) { return &types.TriggerMetrics{}, nil }

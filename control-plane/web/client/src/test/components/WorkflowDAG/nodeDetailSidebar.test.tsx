@@ -8,6 +8,17 @@ import { NodeDetailSidebar } from "@/components/WorkflowDAG/NodeDetailSidebar";
 
 const mockUseNodeDetails = vi.fn();
 
+vi.mock("@tanstack/react-query", () => ({
+  useQuery: () => ({
+    data: [],
+    isLoading: false,
+    isError: false,
+  }),
+  useQueryClient: () => ({
+    invalidateQueries: vi.fn(),
+  }),
+}));
+
 vi.mock("@/components/ui/icon-bridge", () => ({
   Close: () => <span>close</span>,
 }));
@@ -47,7 +58,34 @@ vi.mock("@/lib/theme", () => ({
       border: "error-border",
       accent: "error-accent",
     },
+    success: {
+      bg: "success-bg",
+      border: "success-border",
+      accent: "success-accent",
+    },
+    warning: {
+      bg: "warning-bg",
+      border: "warning-border",
+      accent: "warning-accent",
+    },
+    info: {
+      bg: "info-bg",
+      border: "info-border",
+      accent: "info-accent",
+    },
+    neutral: {
+      bg: "neutral-bg",
+      border: "neutral-border",
+      accent: "neutral-accent",
+    },
   },
+  getStatusTone: (tone: string) => ({
+    bg: `${tone}-bg`,
+    border: `${tone}-border`,
+    accent: `${tone}-accent`,
+    fg: `${tone}-fg`,
+  }),
+  getStatusBadgeClasses: (tone: string) => `${tone}-badge-classes`,
 }));
 
 vi.mock("@/lib/utils", () => ({

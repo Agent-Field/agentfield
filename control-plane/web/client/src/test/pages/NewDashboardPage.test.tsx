@@ -58,6 +58,16 @@ vi.mock("@/hooks/queries", () => ({
 
 vi.mock("@/services/dashboardService", () => ({
   getDashboardSummary: vi.fn(),
+  getTriggerMetrics: vi.fn(() => Promise.resolve({
+    total_triggers: 0,
+    enabled_triggers: 0,
+    orphaned_triggers: 0,
+    events_24h: 0,
+    dispatch_success_24h: 0,
+    dispatch_failed_24h: 0,
+    dispatch_success_rate_24h: 0,
+    dlq_depth: 0,
+  })),
 }));
 
 vi.mock("@/components/dashboard/DashboardActiveWorkload", () => ({

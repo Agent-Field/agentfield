@@ -76,6 +76,7 @@ class ExecutionHeaders:
     session_id: Optional[str] = None
     actor_id: Optional[str] = None
     parent_execution_id: Optional[str] = None
+    parent_vc_id: Optional[str] = None
 
     def to_headers(self) -> Dict[str, str]:
         headers = {"X-Run-ID": self.run_id}
@@ -83,6 +84,8 @@ class ExecutionHeaders:
             headers["X-Parent-Execution-ID"] = self.parent_execution_id
         if self.session_id:
             headers["X-Session-ID"] = self.session_id
+        if self.parent_vc_id:
+            headers["X-Parent-VC-ID"] = self.parent_vc_id
         if self.actor_id:
             headers["X-Actor-ID"] = self.actor_id
         return headers

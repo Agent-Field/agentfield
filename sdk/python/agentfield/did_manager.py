@@ -48,6 +48,12 @@ class DIDExecutionContext:
     target_did: str
     agent_node_did: str
     timestamp: datetime
+    # Chain pointer for trigger-driven runs. Populated by the agent runtime
+    # from the dispatcher's X-Parent-VC-ID header (which carries the trigger
+    # event VC's ID). VCGenerator forwards this in the execution_context body
+    # so the resulting reasoner execution VC can link back to the trigger
+    # event VC, letting `af vc verify` walk the chain to a CP-rooted credential.
+    parent_vc_id: Optional[str] = None
 
 
 class DIDManager:
@@ -151,6 +157,7 @@ class DIDManager:
         session_id: str,
         caller_function: str,
         target_function: str,
+        parent_vc_id: Optional[str] = None,
     ) -> Optional[DIDExecutionContext]:
         """
         Create execution context for DID-enabled execution.
@@ -193,6 +200,7 @@ class DIDManager:
                 target_did=target_did,
                 agent_node_did=self.identity_package.agent_did.did,
                 timestamp=datetime.now(timezone.utc),
+                parent_vc_id=parent_vc_id,
             )
 
         except Exception as e:

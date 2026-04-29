@@ -208,13 +208,15 @@ type CallbackTestResult struct {
 
 // ReasonerDefinition defines a reasoner provided by an agent node.
 type ReasonerDefinition struct {
-	ID           string          `json:"id"`
-	InputSchema  json.RawMessage `json:"input_schema"`
-	OutputSchema json.RawMessage `json:"output_schema"`
-	MemoryConfig MemoryConfig    `json:"memory_config"`
-	Tags         []string        `json:"tags,omitempty"`
-	ProposedTags []string        `json:"proposed_tags,omitempty"`
-	ApprovedTags []string        `json:"approved_tags,omitempty"`
+	ID             string           `json:"id"`
+	InputSchema    json.RawMessage  `json:"input_schema"`
+	OutputSchema   json.RawMessage  `json:"output_schema"`
+	MemoryConfig   MemoryConfig     `json:"memory_config"`
+	Tags           []string         `json:"tags,omitempty"`
+	ProposedTags   []string         `json:"proposed_tags,omitempty"`
+	ApprovedTags   []string         `json:"approved_tags,omitempty"`
+	Triggers       []TriggerBinding `json:"triggers,omitempty"`
+	AcceptsWebhook *string          `json:"accepts_webhook,omitempty"`
 }
 
 // SkillDefinition defines a skill provided by an agent node.

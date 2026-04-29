@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React from "react";
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const routeState = vi.hoisted(() => ({
   path: "/dashboard",
@@ -9,6 +9,7 @@ const routeState = vi.hoisted(() => ({
 }));
 
 vi.mock("react-router-dom", () => {
+  const navigate = vi.fn();
   const ReactRouterDom = {
     BrowserRouter: ({ children }: React.PropsWithChildren) => <>{children}</>,
     Routes: ({ children }: React.PropsWithChildren) => <div>{children}</div>,
@@ -22,7 +23,13 @@ vi.mock("react-router-dom", () => {
       </>
     ),
     Navigate: ({ to }: { to: string }) => <div>navigate:{to}</div>,
+    Link: ({ children, to }: React.PropsWithChildren<{ to: string }>) => (
+      <a href={to}>{children}</a>
+    ),
     useParams: () => ({ reasonerId: routeState.reasonerId }),
+    useNavigate: () => navigate,
+    useLocation: () => ({ pathname: routeState.path, search: "", hash: "" }),
+    useSearchParams: () => [new URLSearchParams(), vi.fn()],
   };
   return ReactRouterDom;
 });
@@ -103,11 +110,15 @@ vi.mock("@/pages/AccessManagementPage", () => ({
   AccessManagementPage: () => <div>AccessManagementPage</div>,
 }));
 
-describe("App", () => {
-  beforeEach(() => {
-    vi.resetModules();
-  });
+vi.mock("@/pages/TriggersPage", () => ({
+  TriggersPage: () => <div>TriggersPage</div>,
+}));
 
+vi.mock("@/pages/IntegrationsPage", () => ({
+  IntegrationsPage: () => <div>IntegrationsPage</div>,
+}));
+
+describe("App", () => {
   it("renders the routed application tree", async () => {
     const { default: App } = await import("@/App");
     render(<App />);

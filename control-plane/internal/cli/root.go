@@ -117,6 +117,7 @@ AI Agent? Run "af agent help" for structured JSON output optimized for programma
 	RootCmd.AddCommand(NewLogsCommand())
 	RootCmd.AddCommand(NewConfigCommand())
 RootCmd.AddCommand(NewVCCommand())
+	RootCmd.AddCommand(NewVerifyAliasCommand())
 	RootCmd.AddCommand(NewNodesCommand())
 	RootCmd.AddCommand(NewExecutionCommand())
 

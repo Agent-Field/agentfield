@@ -29,6 +29,12 @@ func (s *VCStorage) Initialize() error {
 }
 
 // StoreExecutionVC persists an execution VC using the backing storage provider.
+//
+// When the VC carries a Kind, ParentVCID, or trigger-event metadata, this
+// uses the StoreExecutionVCRecord path so those fields are persisted.
+// Storage providers that haven't implemented the record method yet fall
+// back to the legacy scalar-parameter path (with the trigger fields silently
+// dropped); production providers always implement both.
 func (s *VCStorage) StoreExecutionVC(ctx context.Context, vc *types.ExecutionVC) error {
 	if s.storageProvider == nil {
 		return fmt.Errorf("no storage provider configured for VC storage")
@@ -37,6 +43,19 @@ func (s *VCStorage) StoreExecutionVC(ctx context.Context, vc *types.ExecutionVC)
 	documentSizeBytes := vc.DocumentSize
 	if documentSizeBytes == 0 && len(vc.VCDocument) > 0 {
 		documentSizeBytes = int64(len(vc.VCDocument))
+	}
+	vc.DocumentSize = documentSizeBytes
+
+	// Prefer the record API so kind/parent_vc_id/trigger metadata are written.
+	// Fall back to the older scalar API if a storage backend doesn't yet
+	// implement the record path — that's a transition affordance for tests
+	// using thin mocks; production storage (LocalStorage, Postgres) always
+	// satisfies both.
+	type recordWriter interface {
+		StoreExecutionVCRecord(ctx context.Context, vc *types.ExecutionVC) error
+	}
+	if rw, ok := s.storageProvider.(recordWriter); ok {
+		return rw.StoreExecutionVCRecord(ctx, vc)
 	}
 
 	return s.storageProvider.StoreExecutionVC(
@@ -267,6 +286,19 @@ func (s *VCStorage) convertVCInfoToExecutionVC(vcInfo *types.ExecutionVCInfo) (*
 		OutputHash:   vcInfo.OutputHash,
 		Status:       vcInfo.Status,
 		CreatedAt:    vcInfo.CreatedAt,
+		// Chain pointers — these are populated by StoreExecutionVCRecord and
+		// read back by ListExecutionVCs into ExecutionVCInfo. Forwarding them
+		// here is what lets TriggerForExecution walk the parent chain and the
+		// vc-chain endpoint surface the trigger_event → execution linkage.
+		// Without this, the storage row has the pointers but every API
+		// consumer (chain UI, runs trigger badge, af vc verify) sees them as
+		// nil/empty and thinks the run wasn't webhook-triggered.
+		Kind:       vcInfo.Kind,
+		ParentVCID: vcInfo.ParentVCID,
+		TriggerID:  vcInfo.TriggerID,
+		SourceName: vcInfo.SourceName,
+		EventType:  vcInfo.EventType,
+		EventID:    vcInfo.EventID,
 	}, nil
 }
 

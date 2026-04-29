@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"runtime"
 	"sync"
 	"time"
 
@@ -103,6 +104,17 @@ func WithDescription(desc string) ReasonerOption {
 	}
 }
 
+// WithAcceptsWebhook sets the accepts_webhook flag for UI-managed trigger guardrailing.
+// Pass "true" to explicitly opt in, "false" to refuse, or omit for auto-detect (True if
+// any triggers declared, else "warn").
+func WithAcceptsWebhook(flag string) ReasonerOption {
+	return func(r *Reasoner) {
+		if flag != "" {
+			r.AcceptsWebhook = &flag
+		}
+	}
+}
+
 // Reasoner represents a single handler exposed by the agent.
 type Reasoner struct {
 	Name         string
@@ -123,6 +135,148 @@ type Reasoner struct {
 	// RequireRealtimeValidation forces control-plane verification for this
 	// reasoner, skipping local verification even when enabled.
 	RequireRealtimeValidation bool
+
+	// Triggers declares external Sources whose events should invoke this
+	// reasoner. Bindings are sent at registration time; the control plane
+	// upserts a code-managed Trigger per binding. The canonical form is
+	// WithTriggers(...); the WithEventTrigger / WithScheduleTrigger helpers
+	// are sugar that append to this slice.
+	Triggers []types.TriggerBinding
+
+	// AcceptsWebhook controls whether UI-managed triggers can invoke this reasoner.
+	// nil/empty = inherit default ("warn"), "true" = explicitly opt in, "false" = explicitly refuse.
+	// Auto-set to "true" if any Triggers are declared.
+	AcceptsWebhook *string
+}
+
+// EventTrigger describes an external event source binding for a reasoner.
+// Use it as a typed argument to WithTriggers — the control plane registers
+// the binding and minting of the public ingest URL happens server-side.
+type EventTrigger struct {
+	Source       string
+	Types        []string
+	SecretEnv    string
+	Config       map[string]any
+}
+
+// ScheduleTrigger describes a cron-style schedule binding for a reasoner.
+// Use it as a typed argument to WithTriggers; the control plane runs the
+// schedule and dispatches a synthetic "tick" event when it fires.
+type ScheduleTrigger struct {
+	Cron     string
+	Timezone string
+}
+
+// captureCodeOrigin captures the file and line number of the caller using runtime.Caller.
+// skip=1 walks past captureCodeOrigin to the immediate caller (e.g., WithEventTrigger).
+// skip=2 walks past captureCodeOrigin and WithEventTrigger to the user's call site.
+func captureCodeOrigin(skip int) string {
+	_, file, line, ok := runtime.Caller(skip)
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("%s:%d", file, line)
+}
+
+// WithTriggers is the canonical decorator-equivalent for declaring trigger
+// bindings on a Go reasoner. Pass a mix of EventTrigger and ScheduleTrigger
+// values; unknown types are silently ignored so adding new kinds later is
+// backward compatible.
+func WithTriggers(triggers ...any) ReasonerOption {
+	codeOrigin := captureCodeOrigin(2)
+	return func(r *Reasoner) {
+		for _, t := range triggers {
+			binding, ok := triggerToBinding(t)
+			if !ok {
+				continue
+			}
+			if binding.CodeOrigin == "" {
+				binding.CodeOrigin = codeOrigin
+			}
+			r.Triggers = append(r.Triggers, binding)
+		}
+	}
+}
+
+// WithEventTrigger is sugar that appends a single EventTrigger to the
+// reasoner's bindings. It is equivalent to
+// WithTriggers(EventTrigger{Source: source, Types: types}).
+func WithEventTrigger(source string, eventTypes ...string) ReasonerOption {
+	codeOrigin := captureCodeOrigin(2)
+	return func(r *Reasoner) {
+		b, _ := triggerToBinding(EventTrigger{Source: source, Types: eventTypes})
+		b.CodeOrigin = codeOrigin
+		r.Triggers = append(r.Triggers, b)
+	}
+}
+
+// WithScheduleTrigger is sugar for declaring a single cron schedule. The
+// expression follows the standard 5-field cron format.
+func WithScheduleTrigger(expression string) ReasonerOption {
+	codeOrigin := captureCodeOrigin(2)
+	return func(r *Reasoner) {
+		b, _ := triggerToBinding(ScheduleTrigger{Cron: expression})
+		b.CodeOrigin = codeOrigin
+		r.Triggers = append(r.Triggers, b)
+	}
+}
+
+// WithTriggerSecretEnv attaches a secret env var name to the most recently
+// declared trigger binding on the reasoner. Use it after WithEventTrigger
+// when the source requires a secret (Stripe, GitHub, Slack, generic_hmac).
+func WithTriggerSecretEnv(envVar string) ReasonerOption {
+	return func(r *Reasoner) {
+		if len(r.Triggers) == 0 {
+			return
+		}
+		r.Triggers[len(r.Triggers)-1].SecretEnvVar = envVar
+	}
+}
+
+// WithTriggerConfig attaches a config blob to the most recently declared
+// trigger binding. Source impls validate the config server-side.
+func WithTriggerConfig(cfg map[string]any) ReasonerOption {
+	return func(r *Reasoner) {
+		if len(r.Triggers) == 0 {
+			return
+		}
+		raw, err := json.Marshal(cfg)
+		if err != nil {
+			return
+		}
+		r.Triggers[len(r.Triggers)-1].Config = raw
+	}
+}
+
+// triggerToBinding normalizes typed trigger values into the wire payload.
+func triggerToBinding(t any) (types.TriggerBinding, bool) {
+	switch v := t.(type) {
+	case EventTrigger:
+		var cfg json.RawMessage
+		if len(v.Config) > 0 {
+			if raw, err := json.Marshal(v.Config); err == nil {
+				cfg = raw
+			}
+		}
+		return types.TriggerBinding{
+			Source:       v.Source,
+			EventTypes:   v.Types,
+			Config:       cfg,
+			SecretEnvVar: v.SecretEnv,
+		}, true
+	case ScheduleTrigger:
+		tz := v.Timezone
+		if tz == "" {
+			tz = "UTC"
+		}
+		cfg, _ := json.Marshal(map[string]any{
+			"expression": v.Cron,
+			"timezone":   tz,
+		})
+		return types.TriggerBinding{Source: "cron", Config: cfg}, true
+	default:
+		return types.TriggerBinding{}, false
+	}
 }
 
 // WithVCEnabled overrides VC generation for this specific reasoner.

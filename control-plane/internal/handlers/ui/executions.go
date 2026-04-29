@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/handlers"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
@@ -195,6 +196,7 @@ type ExecutionDetailsResponse struct {
 	TargetDID *string `json:"target_did,omitempty"`
 	InputHash *string `json:"input_hash,omitempty"`
 	OutputHash *string `json:"output_hash,omitempty"`
+	Trigger             *types.TriggerEventMetadata `json:"trigger,omitempty"`
 }
 
 type EnhancedExecution struct {
@@ -701,6 +703,20 @@ func (h *ExecutionHandler) toExecutionSummary(exec *types.Execution) ExecutionSu
 	}
 }
 
+// enrichExecutionWithTrigger resolves the parent trigger event VC and populates
+// the response with trigger metadata if available. The traversal logic itself
+// lives in handlers.TriggerForExecution so the runs-list and run-dag handlers
+// can reuse it.
+func (h *ExecutionHandler) enrichExecutionWithTrigger(ctx context.Context, exec *types.Execution, resp *ExecutionDetailsResponse) error {
+	if h.storage == nil {
+		return nil
+	}
+	if meta := handlers.TriggerForExecution(ctx, h.storage, exec.ExecutionID); meta != nil {
+		resp.Trigger = meta
+	}
+	return nil
+}
+
 func (h *ExecutionHandler) toExecutionDetails(ctx context.Context, exec *types.Execution) ExecutionDetailsResponse {
 	inputData, inputSize := h.resolveExecutionData(ctx, exec.InputPayload, exec.InputURI)
 	outputData, outputSize := h.resolveExecutionData(ctx, exec.ResultPayload, exec.ResultURI)
@@ -810,6 +826,11 @@ func (h *ExecutionHandler) toExecutionDetails(ctx context.Context, exec *types.E
 		}
 	}
 
+
+	// Enrich with trigger metadata if this execution was triggered by a webhook
+	if err := h.enrichExecutionWithTrigger(ctx, exec, &resp); err != nil {
+		logger.Logger.Warn().Err(err).Str("execution_id", exec.ExecutionID).Msg("failed to enrich execution with trigger metadata")
+	}
 	return resp
 }
 

@@ -155,3 +155,27 @@ export async function getEnhancedDashboardSummary(
     })
   );
 }
+
+/**
+ * Trigger metrics for dashboard
+ */
+export interface TriggerMetrics {
+  total_triggers: number;
+  enabled_triggers: number;
+  orphaned_triggers: number;
+  events_24h: number;
+  dispatch_success_24h: number;
+  dispatch_failed_24h: number;
+  dispatch_success_rate_24h: number;
+  dlq_depth: number;
+}
+
+/**
+ * Get trigger metrics
+ * GET /api/v1/triggers/metrics
+ */
+export async function getTriggerMetrics(): Promise<TriggerMetrics> {
+  return fetchWrapper<TriggerMetrics>('/triggers/metrics', {
+    timeout: 8000
+  });
+}

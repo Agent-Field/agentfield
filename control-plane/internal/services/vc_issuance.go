@@ -93,7 +93,15 @@ func (s *VCService) GenerateExecutionVC(ctx *types.ExecutionContext, inputData, 
 	// Persist canonical execution status for VC metadata
 	dbStatus := types.NormalizeExecutionStatus(status)
 
-	// Create execution VC
+	// Create execution VC. ParentVCID propagates a chain pointer when the
+	// caller (dispatcher, or an SDK that read X-Parent-VC-ID) passed one,
+	// so audit chains extend across system boundaries (e.g. trigger event VC
+	// → first reasoner's execution VC → downstream call VCs).
+	var parentPtr *string
+	if ctx.ParentVCID != "" {
+		p := ctx.ParentVCID
+		parentPtr = &p
+	}
 	executionVC := &types.ExecutionVC{
 		VCID:         s.generateVCID(),
 		ExecutionID:  ctx.ExecutionID,
@@ -110,6 +118,8 @@ func (s *VCService) GenerateExecutionVC(ctx *types.ExecutionContext, inputData, 
 		OutputHash:   outputHash,
 		Status:       dbStatus,
 		CreatedAt:    time.Now(),
+		Kind:         types.ExecutionVCKindExecution,
+		ParentVCID:   parentPtr,
 	}
 
 	// Store VC

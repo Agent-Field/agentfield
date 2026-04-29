@@ -96,6 +96,37 @@ func (s *workflowDAGStorageStub) ListExecutionWebhookEventsBatch(ctx context.Con
 	return out, nil
 }
 
+// GetInboundEventByWorkflowID is part of the StorageProvider surface that the
+// workflow_dag handler now consults via handlers.TriggerForRun. The stub
+// returns (nil, nil) so triggered enrichment cleanly degrades to "no
+// trigger" in tests that don't care about webhook origin.
+func (s *workflowDAGStorageStub) GetInboundEventByWorkflowID(context.Context, string) (*types.InboundEvent, error) {
+	return nil, nil
+}
+
+// SetInboundEventDispatchedWorkflow exists for parity — the dag handler
+// doesn't call it, but having the stub satisfy the interface keeps
+// compile-time invariants honest.
+func (s *workflowDAGStorageStub) SetInboundEventDispatchedWorkflow(context.Context, string, string) error {
+	return nil
+}
+
+// GetExecutionVC + GetInboundEvent are also reached by TriggerForExecution
+// when it falls back from the workflow-id path; both stubs return nil so
+// the trigger lookup returns nil cleanly without dereferencing the
+// embedded nil StorageProvider interface.
+func (s *workflowDAGStorageStub) GetExecutionVC(context.Context, string) (*types.ExecutionVCInfo, error) {
+	return nil, nil
+}
+
+func (s *workflowDAGStorageStub) GetInboundEvent(context.Context, string) (*types.InboundEvent, error) {
+	return nil, nil
+}
+
+func (s *workflowDAGStorageStub) GetTrigger(context.Context, string) (*types.Trigger, error) {
+	return nil, nil
+}
+
 func (s *workflowDAGStorageStub) ListExecutionVCs(ctx context.Context, filter types.VCFilters) ([]*types.ExecutionVCInfo, error) {
 	if s.vcErr != nil {
 		return nil, s.vcErr
@@ -183,6 +214,23 @@ func (s *nodeRESTStorageStub) UpdateAgentLifecycleStatus(ctx context.Context, no
 func (s *nodeRESTStorageStub) RegisterAgent(ctx context.Context, agent *types.AgentNode) error {
 	s.registeredAgent = agent
 	s.agent = agent
+	return nil
+}
+
+// Trigger stubs override the embedded nil StorageProvider interface so the
+// registration path's call to upsertCodeManagedTriggers + MarkOrphanedTriggers
+// doesn't deref nil. Tests in this file don't exercise trigger persistence
+// so empty no-ops are sufficient.
+func (s *nodeRESTStorageStub) UpsertCodeManagedTrigger(context.Context, *types.Trigger) (string, error) {
+	return "", nil
+}
+func (s *nodeRESTStorageStub) MarkOrphanedTriggers(context.Context, string, []string) error {
+	return nil
+}
+func (s *nodeRESTStorageStub) SetTriggerOverride(context.Context, string, bool, bool) error {
+	return nil
+}
+func (s *nodeRESTStorageStub) ConvertTriggerToUIManaged(context.Context, string) error {
 	return nil
 }
 
