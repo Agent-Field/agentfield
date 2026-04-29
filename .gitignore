@@ -49,7 +49,7 @@ node_modules/
 *.code-workspace
 .opencode/
 .agit/
-.claude/worktrees/
+.claude/
 
 # Generated assets
 coverage/
