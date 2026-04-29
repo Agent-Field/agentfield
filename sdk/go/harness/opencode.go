@@ -27,17 +27,36 @@ func NewOpenCodeProvider(binPath, serverURL string) *OpenCodeProvider {
 }
 
 func (p *OpenCodeProvider) Execute(ctx context.Context, prompt string, options Options) (*RawResult, error) {
-	cmd := []string{p.BinPath}
+	// opencode 1.14+ moved non-interactive execution to the `run` subcommand.
+	// The legacy top-level `-c <dir> -q -p <prompt>` surface was rebound:
+	//   -c → --continue (resume previous session)
+	//   -p → --password (provider password)
+	// so the old invocation made the binary print help and exit without
+	// running, leaving callers with empty trajectories. See issue #517.
+	cmd := []string{p.BinPath, "run"}
 
-	// OpenCode uses -c for working directory.
-	if options.ProjectDir != "" {
-		cmd = append(cmd, "-c", options.ProjectDir)
+	// OpenCode uses --dir for the project directory the agent operates on.
+	// ProjectDir is the canonical caller-facing field; fall back to Cwd if
+	// only that is set so we still honour the caller's explicit working
+	// directory.
+	dir := options.ProjectDir
+	if dir == "" {
+		dir = options.Cwd
+	}
+	if dir != "" {
+		cmd = append(cmd, "--dir", dir)
 	}
 
-	// Quiet mode suppresses spinner (avoids TTY errors in subprocess).
-	cmd = append(cmd, "-q")
+	// Pass model via -m on the run subcommand when supplied.
+	if options.Model != "" {
+		cmd = append(cmd, "-m", options.Model)
+	}
 
-	// Prepend system prompt if provided.
+	// Skip the interactive permission prompt for headless execution.
+	cmd = append(cmd, "--dangerously-skip-permissions")
+
+	// Prepend system prompt if provided. OpenCode has no native
+	// --system-prompt flag, so inline it ahead of the user prompt.
 	effectivePrompt := prompt
 	if options.SystemPrompt != "" {
 		effectivePrompt = fmt.Sprintf(
@@ -46,8 +65,8 @@ func (p *OpenCodeProvider) Execute(ctx context.Context, prompt string, options O
 		)
 	}
 
-	// Non-interactive prompt mode with -p flag.
-	cmd = append(cmd, "-p", effectivePrompt)
+	// Prompt is positional on `opencode run` (replaces deprecated -p).
+	cmd = append(cmd, effectivePrompt)
 
 	// Build environment
 	env := make(map[string]string)
