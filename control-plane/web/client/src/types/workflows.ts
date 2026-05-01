@@ -2,6 +2,16 @@
 
 import type { CanonicalStatus } from '../utils/status';
 
+export interface TriggerInfo {
+  trigger_id: string;
+  source_name: string;
+  event_type: string;
+  event_id: string;
+  received_at: string;
+  idempotency_key?: string;
+  payload?: Record<string, unknown>;
+}
+
 export interface WorkflowSummary {
   run_id: string;
   workflow_id: string;
@@ -30,6 +40,7 @@ export interface WorkflowSummary {
   status_counts: Record<string, number>;
   active_executions: number;
   terminal: boolean;
+  trigger?: TriggerInfo;
 }
 
 export interface EnhancedExecution {
@@ -168,4 +179,5 @@ export interface WorkflowDAGLightweightResponse {
   webhook_summary?: WebhookRunSummary;
   /** Executions with a failed delivery (capped); for run-level retry / focus step. */
   webhook_failures?: WebhookFailurePreview[];
+  trigger?: TriggerInfo;
 }

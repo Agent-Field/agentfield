@@ -112,6 +112,11 @@ import {
   HardDrive,
   Lightbulb,
   Server,
+  Webhook,
+  Plug,
+  Key,
+  SlidersHorizontal,
+  ArrowLeftRight,
 } from "lucide-react";
 
 export type IconComponent = LucideIcon;
@@ -463,3 +468,18 @@ export { HardDrive as ServerProxy };
 
 // ListChecks
 export { ListChecks };
+
+// Webhook / Trigger
+export { Webhook };
+
+// Plug / Integrations
+export { Plug };
+
+// Key (auth tokens, bearer)
+export { Key };
+
+// SlidersHorizontal (config knobs)
+export { SlidersHorizontal };
+
+// ArrowLeftRight (dispatch / data flow)
+export { ArrowLeftRight };

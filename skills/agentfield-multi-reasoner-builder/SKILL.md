@@ -207,6 +207,7 @@ The four infrastructure files are zero-change for the agent: Dockerfile installs
 | `verification.md` | Writing the smoke test ladder or declaring done |
 | `project-claude-template.md` | Generating the per-project CLAUDE.md (always) |
 | `anti-patterns.md` | When tempted to take a shortcut OR when the user pushes back on a rejection |
+| `triggers.md` | Use case is event-driven (webhook) or scheduled (cron) — read before declaring `@on_event` / `@on_schedule` / `triggers=[...]` |
 
 Reference files are one level deep from this file. Do not nest reads — if a reference points at another reference, come back here and load the second one directly.
 
@@ -244,6 +245,27 @@ Examples that do **NOT** warrant a follow-up: model preference, file naming, por
 - **`app.call(target, **kwargs)`** — inter-reasoner traffic THROUGH the control plane. Returns `dict`. **No model override param** — thread `model` as a regular reasoner kwarg.
 
 **The bias:** many small `@app.reasoner()` units. `@app.skill()` for anything code can do. `app.ai()` with explicit prompts. Reserve `app.harness()` for real coding-agent delegation.
+
+## Entry surfaces — triggers (cheat sheet — full detail in `triggers.md`)
+
+A reasoner can be entered three ways: programmatic call, public HTTP, **or** an inbound trigger (webhook / schedule). Triggers are the right surface when the system runs on external events (Stripe webhook, GitHub issue, Slack mention) or recurring time. Six built-in sources: `stripe`, `github`, `slack`, `generic_hmac`, `generic_bearer`, `cron`. The CP verifies signatures before dispatch.
+
+```python
+from agentfield import EventTrigger, TriggerContext, on_event, on_schedule
+
+@app.reasoner()
+@on_event(source="github", types=["issues"], secret_env="GITHUB_WEBHOOK_SECRET")
+async def on_issue(event: dict, trigger: TriggerContext | None = None):
+    if event.get("action") != "opened":
+        return {"skipped": True}
+    return await app.call(f"{app.node_id}.summarize_issue", **event["issue"])
+
+@app.reasoner()
+@on_schedule("* * * * *")
+async def on_tick(_input, trigger: TriggerContext | None = None): ...
+```
+
+**Rules at a glance:** Triggered reasoners are entry reasoners — keep them thin (route + fan out via `app.call` + `asyncio.gather`, don't put work in them). One trigger per (source, event_type) you handle differently — never `*` + internal switch. Idempotency is on you (use `trigger.idempotency_key`). Secrets via `secret_env=` only — never hardcoded. `trigger` parameter is `Optional` — keep the function callable from direct curls and tests. Read `triggers.md` before declaring any of `@on_event` / `@on_schedule` / `triggers=[...]`.
 
 ## Harness availability gate (READ BEFORE USING `app.harness()`)
 
@@ -313,6 +335,8 @@ The public entry reasoner is decorated with `tags=["entry"]` so it surfaces in t
 | Hardcoded model | `model=os.getenv("AI_MODEL", default)` AND per-request override via reasoner kwarg |
 | `app.ai()` schema with no `confident` field and no fallback | Schema must include `confident: bool`, call site checks it and escalates |
 | `app.harness(provider="claude-code")` in a default scaffold | Default container has no `claude` CLI. Use `app.ai(tools=[...])` or a chunked-loop reasoner. See "Harness availability gate" |
+| Long synthesis or multi-step reasoning **inside** a triggered reasoner | Triggered reasoner is the entry router — keep it thin, fan out to `@app.reasoner` specialists via `app.call` + `asyncio.gather`. Detail in `triggers.md` |
+| Hardcoded webhook secret, or `transform=` doing I/O / async work | `secret_env="STRIPE_WEBHOOK_SECRET"` (CP reads env at request time) and `transform` is sync envelope-peeling only |
 | `input_schema=` or `output_schema=` parameter on `@app.reasoner` | These don't exist. Schemas come from type hints |
 | `app.serve()` in `__main__` | `app.run()` — auto-detects CLI vs server mode |
 | Passing a Pydantic instance (or a list/dict of them) across `app.call` and expecting the receiver to get the instance | **Cross-boundary data never auto-reconstitutes.** The receiver gets plain `dict` / `list[dict]` regardless of type hints. Either reconstruct explicitly on the receiving side (`Model(**payload)`) OR render to prose in the caller and pass a string. See `choosing-primitives.md` → "Cross-boundary data does NOT auto-reconstitute" |

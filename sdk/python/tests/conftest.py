@@ -476,6 +476,12 @@ def http_mocks() -> AgentFieldHTTPMocks:
 
 # ---------------------------- 4) Sample Agent Fixture ----------------------------
 @pytest.fixture
+def test_agent(sample_agent):
+    """Alias for sample_agent to satisfy tests expecting test_agent."""
+    return sample_agent
+
+
+@pytest.fixture
 def sample_ai_config() -> AIConfig:
     """
     Returns a pre-configured AIConfig safe for tests.

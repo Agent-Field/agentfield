@@ -84,7 +84,7 @@ func DefaultEntries() []EndpointEntry {
 		{Method: "GET", Path: "/api/v1/executions/:execution_id/approval-status", Group: "approval", Summary: "Get approval status", AuthLevel: "api_key", Tags: []string{"approval", "status"}},
 		{Method: "POST", Path: "/api/v1/agents/:node_id/executions/:execution_id/request-approval", Group: "approval", Summary: "Request approval (agent-scoped)", AuthLevel: "api_key", Tags: []string{"approval", "request", "agent-scoped"}},
 		{Method: "GET", Path: "/api/v1/agents/:node_id/executions/:execution_id/approval-status", Group: "approval", Summary: "Get approval status (agent-scoped)", AuthLevel: "api_key", Tags: []string{"approval", "status", "agent-scoped"}},
-		{Method: "POST", Path: "/api/v1/webhooks/approval-response", Group: "approval", Summary: "Webhook for approval responses", AuthLevel: "api_key", Tags: []string{"approval", "webhook"}},
+		{Method: "POST", Path: "/api/v1/webhooks/approval-response", Group: "approval", Summary: "Webhook for approval responses (HMAC-signed)", AuthLevel: "webhook", Tags: []string{"approval", "webhook"}},
 
 		// --- Execution notes ---
 		{Method: "POST", Path: "/api/v1/executions/note", Group: "executions", Summary: "Add an execution note (app.note())", AuthLevel: "api_key", Tags: []string{"executions", "notes"}},

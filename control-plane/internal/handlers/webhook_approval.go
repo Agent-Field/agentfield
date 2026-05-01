@@ -117,12 +117,12 @@ func normalizeDecision(raw string) string {
 // webhookApprovalController handles the approval webhook callback.
 type webhookApprovalController struct {
 	store         ExecutionStore
-	webhookSecret string // optional HMAC-SHA256 secret for signature verification
+	webhookSecret string // HMAC-SHA256 secret for signature verification
 }
 
 // ApprovalWebhookHandler receives approval responses via webhook callback.
 // Can be called by external services (e.g. hax-sdk) or by agents directly.
-// The optional webhookSecret enables HMAC-SHA256 signature verification.
+// Requests are authenticated via HMAC-SHA256 signature verification using webhookSecret.
 func ApprovalWebhookHandler(store ExecutionStore, webhookSecret string) gin.HandlerFunc {
 	ctrl := &webhookApprovalController{
 		store:         store,
@@ -139,20 +139,32 @@ func (c *webhookApprovalController) handleApprovalWebhook(ctx *gin.Context) {
 		return
 	}
 
-	// Verify HMAC-SHA256 signature if webhook secret is configured
-	if c.webhookSecret != "" {
-		signature := ctx.GetHeader("X-Hax-Signature")
-		if signature == "" {
-			signature = ctx.GetHeader("X-Webhook-Signature")
-		}
-		if signature == "" {
-			signature = ctx.GetHeader("X-Hub-Signature-256")
-		}
-		if !c.verifySignature(bodyBytes, signature) {
-			logger.Logger.Warn().Msg("approval webhook signature verification failed")
-			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "invalid webhook signature"})
-			return
-		}
+	// Phase 1 auth posture: webhook endpoint is HMAC-only.
+	// If no secret is configured, treat the webhook endpoint as disabled.
+	if c.webhookSecret == "" {
+		logger.Logger.Error().Msg("approval webhook secret is not configured")
+		ctx.JSON(http.StatusServiceUnavailable, gin.H{
+			"error":   "approval webhook not configured",
+			"message": "set agentfield.approval.webhook_secret or AGENTFIELD_APPROVAL_WEBHOOK_SECRET to enable /api/v1/webhooks/approval-response",
+		})
+		return
+	}
+
+	signature := ctx.GetHeader("X-Hax-Signature")
+	if signature == "" {
+		signature = ctx.GetHeader("X-Webhook-Signature")
+	}
+	if signature == "" {
+		signature = ctx.GetHeader("X-Hub-Signature-256")
+	}
+	if signature == "" {
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing webhook signature"})
+		return
+	}
+	if !c.verifySignature(bodyBytes, signature) {
+		logger.Logger.Warn().Msg("approval webhook signature verification failed")
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "invalid webhook signature"})
+		return
 	}
 
 	payload, parseErr := parseWebhookPayload(bodyBytes)
@@ -418,8 +430,9 @@ func (c *webhookApprovalController) findExecutionByApprovalRequestID(ctx *gin.Co
 // - Raw hex: "<hex_signature>" (signs payload directly)
 // - Prefixed: "sha256=<hex_signature>" (signs payload directly)
 func (c *webhookApprovalController) verifySignature(body []byte, signature string) bool {
+	// Callers should ensure webhookSecret is configured before invoking.
 	if c.webhookSecret == "" {
-		return true // No secret configured, skip verification
+		return false
 	}
 	if signature == "" {
 		return false

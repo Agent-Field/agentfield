@@ -35,6 +35,7 @@ vi.mock("@/hooks/queries", () => ({
 
 vi.mock("@/services/dashboardService", () => ({
   getDashboardSummary: vi.fn(),
+  getTriggerMetrics: vi.fn(),
 }));
 
 // Mock child components that might have complex internal logic
@@ -48,7 +49,7 @@ vi.mock("@/components/dashboard/DashboardActiveWorkload", () => ({
 
 // Import mocks for manipulation
 import { useRuns, useLLMHealth, useQueueStatus, useAgents } from "@/hooks/queries";
-import { getDashboardSummary } from "@/services/dashboardService";
+import { getDashboardSummary, getTriggerMetrics } from "@/services/dashboardService";
 
 const queryClient = new QueryClient({
   defaultOptions: {

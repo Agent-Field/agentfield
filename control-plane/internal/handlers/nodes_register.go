@@ -679,6 +679,12 @@ func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *ser
 			presenceManager.Touch(newNode.ID, newNode.Version, time.Now().UTC())
 		}
 
+		// Upsert code-managed triggers for any reasoner that declared bindings.
+		// These rows are owned by agent code; the UI cannot delete them. We
+		// echo the assigned trigger IDs back so the SDK can log public webhook
+		// URLs at startup.
+		triggerSummary := upsertCodeManagedTriggers(ctx, storageProvider, &newNode)
+
 		responsePayload := gin.H{
 			"success": true,
 			"message": "Node registered successfully",
@@ -691,6 +697,10 @@ func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *ser
 
 		if newNode.CallbackDiscovery != nil {
 			responsePayload["callback_discovery"] = newNode.CallbackDiscovery
+		}
+
+		if len(triggerSummary) > 0 {
+			responsePayload["triggers"] = triggerSummary
 		}
 
 		// Include tag approval status in response when agent is pending

@@ -502,6 +502,13 @@ type StorageProvider interface {
 	// The ctx scopes the write, and the identifiers, hashes, document, signature, and storage fields describe the VC record.
 	// Returns an error if the execution VC cannot be saved.
 	StoreExecutionVC(ctx context.Context, vcID, executionID, workflowID, sessionID, issuerDID, targetDID, callerDID, inputHash, outputHash, status string, vcDocument []byte, signature string, storageURI string, documentSizeBytes int64) error
+	// StoreExecutionVCRecord persists a full ExecutionVC including the new
+	// kind discriminator, parent_vc_id chain pointer, and trigger-event
+	// metadata. Use this for any new VC write — the older scalar-parameter
+	// StoreExecutionVC stays for backward compatibility but cannot express
+	// kind='trigger_event' or chain pointers. Returns an error if the row
+	// cannot be saved.
+	StoreExecutionVCRecord(ctx context.Context, vc *types.ExecutionVC) error
 	// GetExecutionVC retrieves execution verifiable credential data by VC identifier.
 	// The ctx scopes the read, and vcID identifies the execution VC record to load.
 	// Returns the execution VC info or an error if it is missing or unreadable.
@@ -636,6 +643,55 @@ type StorageProvider interface {
 	// The ctx scopes the query, and status identifies which lifecycle state to filter by.
 	// Returns matching agents or an error if the query fails.
 	ListAgentsByLifecycleStatus(ctx context.Context, status types.AgentLifecycleStatus) ([]*types.AgentNode, error)
+
+	// Trigger and inbound event operations (webhook plugin system).
+	// CreateTrigger inserts a new trigger row.
+	CreateTrigger(ctx context.Context, t *types.Trigger) error
+	// GetTrigger fetches a single trigger by ID.
+	GetTrigger(ctx context.Context, id string) (*types.Trigger, error)
+	// ListTriggers returns triggers, optionally filtered by target node and source.
+	ListTriggers(ctx context.Context, targetNodeID, sourceName string) ([]*types.Trigger, error)
+	// UpdateTrigger writes a full trigger record.
+	UpdateTrigger(ctx context.Context, t *types.Trigger) error
+	// DeleteTrigger removes a trigger by ID.
+	DeleteTrigger(ctx context.Context, id string) error
+	// UpsertCodeManagedTrigger idempotently inserts or updates a code-managed
+	// trigger keyed by (target_node_id, target_reasoner, source_name) and
+	// returns the row's ID.
+	UpsertCodeManagedTrigger(ctx context.Context, t *types.Trigger) (string, error)
+	// MarkOrphanedTriggers flips orphaned=true on code-managed triggers for
+	// the given node whose (source, target_reasoner) tuple is missing from
+	// declaredKeys. Used by the registration handler after upserting all
+	// declared bindings to surface decorators removed from user code.
+	MarkOrphanedTriggers(ctx context.Context, nodeID string, declaredKeys []string) error
+	// SetTriggerOverride sets/clears the sticky-pause flag and updates
+	// enabled atomically. Used by the /pause and /resume endpoints.
+	SetTriggerOverride(ctx context.Context, triggerID string, override bool, enabled bool) error
+	// ConvertTriggerToUIManaged flips an orphaned code-managed trigger to
+	// UI-managed so the operator can edit/delete it via the UI.
+	ConvertTriggerToUIManaged(ctx context.Context, triggerID string) error
+	// InsertInboundEvent persists a received event before dispatch.
+	InsertInboundEvent(ctx context.Context, e *types.InboundEvent) error
+	// InboundEventExistsByIdempotency reports whether an event with the given
+	// (source_name, idempotency_key) is already persisted.
+	InboundEventExistsByIdempotency(ctx context.Context, sourceName, idempotencyKey string) (bool, error)
+	// GetInboundEvent fetches a stored event by ID for replay or inspection.
+	GetInboundEvent(ctx context.Context, id string) (*types.InboundEvent, error)
+	// ListInboundEvents returns recent events for a trigger, newest first.
+	ListInboundEvents(ctx context.Context, triggerID string, limit int) ([]*types.InboundEvent, error)
+	// MarkInboundEventProcessed updates an event's status after dispatch finishes.
+	MarkInboundEventProcessed(ctx context.Context, id, status, errorMessage, vcID string) error
+	// SetInboundEventDispatchedWorkflow records the dispatcher-generated
+	// workflow ID against the inbound event so runs-list / run-dag handlers
+	// can correlate a run to its triggering event without traversing the
+	// DID/VC chain.
+	SetInboundEventDispatchedWorkflow(ctx context.Context, eventID, workflowID string) error
+	// GetInboundEventByWorkflowID looks up an inbound event by the
+	// dispatcher-recorded workflow ID. Returns (nil, nil) when no row matches.
+	GetInboundEventByWorkflowID(ctx context.Context, workflowID string) (*types.InboundEvent, error)
+	// TriggerMetrics returns aggregate statistics for the dashboard tile
+	// (global across all triggers).
+	TriggerMetrics(ctx context.Context) (*types.TriggerMetrics, error)
 }
 
 // ComponentDIDRequest represents a component DID to be stored

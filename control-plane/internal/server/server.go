@@ -28,6 +28,7 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/internal/server/knowledgebase"
 	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services"
+	_ "github.com/Agent-Field/agentfield/control-plane/internal/sources/all" // register first-party trigger Sources
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/internal/utils"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/adminpb"
@@ -79,6 +80,10 @@ type AgentFieldServer struct {
 	executionTracer        *observability.ExecutionTracer
 	tracerShutdown         func(context.Context) error
 	configMu               sync.RWMutex
+	// Trigger / webhook plugin system
+	triggerDispatcher *services.TriggerDispatcher
+	sourceManager     *services.SourceManager
+	triggerHandlers   *handlers.TriggerHandlers
 	// Agentic API
 	apiCatalog *apicatalog.Catalog
 	kb         *knowledgebase.KB
@@ -443,6 +448,11 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		}
 	}
 
+	triggerDispatcher := services.NewTriggerDispatcher(storageProvider, vcService)
+	sourceManager := services.NewSourceManager(storageProvider, triggerDispatcher)
+	triggerHandlers := handlers.NewTriggerHandlers(storageProvider, triggerDispatcher, sourceManager)
+	handlers.SetTriggerSourceManager(sourceManager)
+
 	return &AgentFieldServer{
 		storage:                storageProvider,
 		cache:                  cacheProvider,
@@ -473,6 +483,9 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		tracerShutdown:         tracerShutdown,
 		registryWatcherCancel:  nil,
 		adminGRPCPort:          adminPort,
+		triggerDispatcher:      triggerDispatcher,
+		sourceManager:          sourceManager,
+		triggerHandlers:        triggerHandlers,
 		apiCatalog:             initAPICatalog(),
 		kb:                     initKnowledgeBase(),
 	}, nil
@@ -552,6 +565,15 @@ func (s *AgentFieldServer) Start() error {
 	// Start OpenTelemetry execution tracer in background
 	if s.executionTracer != nil {
 		s.executionTracer.Start(ctx)
+	}
+
+	// Boot loop-kind triggers (cron etc.) so a server restart resumes existing schedules.
+	if s.sourceManager != nil {
+		go func() {
+			if err := s.sourceManager.LoadAll(context.Background()); err != nil {
+				logger.Logger.Warn().Err(err).Msg("source manager: LoadAll failed")
+			}
+		}()
 	}
 
 	// Start reasoner event heartbeat (30 second intervals)
@@ -674,6 +696,11 @@ func (s *AgentFieldServer) Stop() error {
 		s.uiService.StopHeartbeat()
 	}
 
+	// Stop loop-source goroutines.
+	if s.sourceManager != nil {
+		s.sourceManager.StopAll()
+	}
+
 	// Stop observability forwarder
 	if s.observabilityForwarder != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -726,17 +753,20 @@ func (s *AgentFieldServer) setupRoutes() {
 		s.registerAdminRoutes(agentAPI)
 		s.registerConnectorRoutes(agentAPI)
 		s.registerAgenticRoutes(agentAPI)
+		s.registerTriggerRoutes(agentAPI)
 	}
 
 	s.registerKBRoutes()
 	s.register404()
 }
 
+var absPathForServerID = filepath.Abs
+
 // generateAgentFieldServerID creates a deterministic af server ID based on the agentfield home directory.
 // This ensures each agentfield instance has a unique ID while being deterministic for the same installation.
 func generateAgentFieldServerID(agentfieldHome string) string {
 	// Use the absolute path of agentfield home to generate a deterministic ID
-	absPath, err := filepath.Abs(agentfieldHome)
+	absPath, err := absPathForServerID(agentfieldHome)
 	if err != nil {
 		// Fallback to the original path if absolute path fails
 		absPath = agentfieldHome

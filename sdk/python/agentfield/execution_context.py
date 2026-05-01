@@ -6,7 +6,10 @@ import contextvars
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
+if TYPE_CHECKING:
+    from .triggers import TriggerContext
 
 
 _RUN_HEADER = "X-Run-ID"
@@ -17,6 +20,7 @@ _ACTOR_HEADER = "X-Actor-ID"
 _CALLER_DID_HEADER = "X-Caller-DID"
 _TARGET_DID_HEADER = "X-Target-DID"
 _AGENT_DID_HEADER = "X-Agent-Node-DID"
+_PARENT_VC_HEADER = "X-Parent-VC-ID"
 
 
 @dataclass
@@ -36,6 +40,8 @@ class ExecutionContext:
     caller_did: Optional[str] = None
     target_did: Optional[str] = None
     agent_node_did: Optional[str] = None
+    parent_vc_id: Optional[str] = None
+    trigger: Optional["TriggerContext"] = None
     # Compatibility fields retained for existing integrations
     workflow_id: Optional[str] = None
     parent_workflow_id: Optional[str] = None
@@ -89,6 +95,8 @@ class ExecutionContext:
             headers[_TARGET_DID_HEADER] = self.target_did
         if self.agent_node_did:
             headers[_AGENT_DID_HEADER] = self.agent_node_did
+        if self.parent_vc_id:
+            headers[_PARENT_VC_HEADER] = self.parent_vc_id
         agent_instance = getattr(self, "agent_instance", None)
         agent_node_id = self.agent_node_id or getattr(agent_instance, "node_id", None)
         if agent_node_id:
@@ -99,13 +107,17 @@ class ExecutionContext:
     def to_log_identity(self) -> Dict[str, Optional[str]]:
         """Return the core execution correlation fields for structured logs."""
 
-        agent_node_id = self.agent_node_id or getattr(self.agent_instance, "node_id", None)
+        agent_node_id = self.agent_node_id or getattr(
+            self.agent_instance, "node_id", None
+        )
 
         return {
             "execution_id": self.execution_id,
             "workflow_id": self.workflow_id or self.run_id,
             "run_id": self.run_id,
-            "root_workflow_id": self.root_workflow_id or self.workflow_id or self.run_id,
+            "root_workflow_id": self.root_workflow_id
+            or self.workflow_id
+            or self.run_id,
             "parent_execution_id": self.parent_execution_id,
             "agent_node_id": agent_node_id,
             "reasoner_id": self.reasoner_name,
@@ -129,6 +141,8 @@ class ExecutionContext:
             attributes["target_did"] = self.target_did
         if self.agent_node_did:
             attributes["agent_node_did"] = self.agent_node_did
+        if self.parent_vc_id:
+            attributes["parent_vc_id"] = self.parent_vc_id
         if self.started_at:
             attributes["started_at"] = self.started_at
         return attributes
@@ -155,6 +169,8 @@ class ExecutionContext:
             caller_did=self.caller_did,
             target_did=self.target_did,
             agent_node_did=self.agent_node_did,
+            parent_vc_id=self.parent_vc_id,
+            trigger=self.trigger,
             workflow_id=self.workflow_id,
             parent_workflow_id=self.workflow_id,
             root_workflow_id=self.root_workflow_id or self.workflow_id,
@@ -196,6 +212,7 @@ class ExecutionContext:
         caller_did = _read(_CALLER_DID_HEADER)
         target_did = _read(_TARGET_DID_HEADER)
         agent_node_did = _read(_AGENT_DID_HEADER)
+        parent_vc_id = _read(_PARENT_VC_HEADER)
         parent_workflow_id = _read("X-Parent-Workflow-ID")
         root_workflow_id = _read("X-Root-Workflow-ID")
 
@@ -213,6 +230,7 @@ class ExecutionContext:
             caller_did=caller_did,
             target_did=target_did,
             agent_node_did=agent_node_did,
+            parent_vc_id=parent_vc_id,
             workflow_id=workflow_id,
             parent_workflow_id=parent_workflow_id,
             root_workflow_id=root_workflow_id,

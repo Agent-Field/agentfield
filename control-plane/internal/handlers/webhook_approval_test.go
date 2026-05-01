@@ -57,6 +57,16 @@ func seedWaitingExecution(t *testing.T, executionID, agentNodeID, approvalReques
 	return store
 }
 
+const defaultWebhookSecret = "test-webhook-secret"
+
+func addWebhookSignature(t *testing.T, req *http.Request, secret string, body []byte) {
+	t.Helper()
+
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	req.Header.Set("X-Webhook-Signature", hex.EncodeToString(mac.Sum(nil)))
+}
+
 // ---------------------------------------------------------------------------
 // Flat format webhook
 // ---------------------------------------------------------------------------
@@ -67,7 +77,7 @@ func TestApprovalWebhook_Approved_FlatFormat(t *testing.T) {
 	store := seedWaitingExecution(t, "exec-1", "agent-1", "req-abc")
 
 	router := gin.New()
-	router.POST("/api/v1/webhooks/approval-response", ApprovalWebhookHandler(store, ""))
+	router.POST("/api/v1/webhooks/approval-response", ApprovalWebhookHandler(store, defaultWebhookSecret))
 
 	body, _ := json.Marshal(map[string]any{
 		"requestId": "req-abc",
@@ -78,6 +88,7 @@ func TestApprovalWebhook_Approved_FlatFormat(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/approval-response", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	addWebhookSignature(t, req, defaultWebhookSecret, body)
 	resp := httptest.NewRecorder()
 	router.ServeHTTP(resp, req)
 
@@ -113,7 +124,7 @@ func TestApprovalWebhook_Rejected_FlatFormat(t *testing.T) {
 	store := seedWaitingExecution(t, "exec-rej", "agent-1", "req-rej")
 
 	router := gin.New()
-	router.POST("/api/v1/webhooks/approval-response", ApprovalWebhookHandler(store, ""))
+	router.POST("/api/v1/webhooks/approval-response", ApprovalWebhookHandler(store, defaultWebhookSecret))
 
 	body, _ := json.Marshal(map[string]any{
 		"requestId": "req-rej",
@@ -123,6 +134,7 @@ func TestApprovalWebhook_Rejected_FlatFormat(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/approval-response", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	addWebhookSignature(t, req, defaultWebhookSecret, body)
 	resp := httptest.NewRecorder()
 	router.ServeHTTP(resp, req)
 
@@ -147,7 +159,7 @@ func TestApprovalWebhook_RequestChanges_FlatFormat(t *testing.T) {
 	store := seedWaitingExecution(t, "exec-rc", "agent-1", "req-rc")
 
 	router := gin.New()
-	router.POST("/api/v1/webhooks/approval-response", ApprovalWebhookHandler(store, ""))
+	router.POST("/api/v1/webhooks/approval-response", ApprovalWebhookHandler(store, defaultWebhookSecret))
 
 	body, _ := json.Marshal(map[string]any{
 		"requestId": "req-rc",
@@ -157,6 +169,7 @@ func TestApprovalWebhook_RequestChanges_FlatFormat(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/approval-response", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	addWebhookSignature(t, req, defaultWebhookSecret, body)
 	resp := httptest.NewRecorder()
 	router.ServeHTTP(resp, req)
 
@@ -187,7 +200,7 @@ func TestApprovalWebhook_Expired_FlatFormat(t *testing.T) {
 	store := seedWaitingExecution(t, "exec-exp", "agent-1", "req-exp")
 
 	router := gin.New()
-	router.POST("/api/v1/webhooks/approval-response", ApprovalWebhookHandler(store, ""))
+	router.POST("/api/v1/webhooks/approval-response", ApprovalWebhookHandler(store, defaultWebhookSecret))
 
 	body, _ := json.Marshal(map[string]any{
 		"requestId": "req-exp",
@@ -196,6 +209,7 @@ func TestApprovalWebhook_Expired_FlatFormat(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/approval-response", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	addWebhookSignature(t, req, defaultWebhookSecret, body)
 	resp := httptest.NewRecorder()
 	router.ServeHTTP(resp, req)
 
@@ -222,7 +236,7 @@ func TestApprovalWebhook_HaxSDKEnvelopeFormat(t *testing.T) {
 	store := seedWaitingExecution(t, "exec-hax", "agent-1", "req-hax")
 
 	router := gin.New()
-	router.POST("/api/v1/webhooks/approval-response", ApprovalWebhookHandler(store, ""))
+	router.POST("/api/v1/webhooks/approval-response", ApprovalWebhookHandler(store, defaultWebhookSecret))
 
 	body, _ := json.Marshal(map[string]any{
 		"id":        "evt_001",
@@ -239,6 +253,7 @@ func TestApprovalWebhook_HaxSDKEnvelopeFormat(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/approval-response", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	addWebhookSignature(t, req, defaultWebhookSecret, body)
 	resp := httptest.NewRecorder()
 	router.ServeHTTP(resp, req)
 
@@ -261,7 +276,7 @@ func TestApprovalWebhook_HaxSDKExpiredEvent(t *testing.T) {
 	store := seedWaitingExecution(t, "exec-hax-exp", "agent-1", "req-hax-exp")
 
 	router := gin.New()
-	router.POST("/api/v1/webhooks/approval-response", ApprovalWebhookHandler(store, ""))
+	router.POST("/api/v1/webhooks/approval-response", ApprovalWebhookHandler(store, defaultWebhookSecret))
 
 	body, _ := json.Marshal(map[string]any{
 		"id":        "evt_002",
@@ -275,6 +290,7 @@ func TestApprovalWebhook_HaxSDKExpiredEvent(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/approval-response", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	addWebhookSignature(t, req, defaultWebhookSecret, body)
 	resp := httptest.NewRecorder()
 	router.ServeHTTP(resp, req)
 
@@ -296,7 +312,7 @@ func TestApprovalWebhook_IdempotentDuplicate(t *testing.T) {
 	store := seedWaitingExecution(t, "exec-idem", "agent-1", "req-idem")
 
 	router := gin.New()
-	router.POST("/api/v1/webhooks/approval-response", ApprovalWebhookHandler(store, ""))
+	router.POST("/api/v1/webhooks/approval-response", ApprovalWebhookHandler(store, defaultWebhookSecret))
 
 	makeBody := func() []byte {
 		b, _ := json.Marshal(map[string]any{
@@ -307,8 +323,10 @@ func TestApprovalWebhook_IdempotentDuplicate(t *testing.T) {
 	}
 
 	// First call — should process
-	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/approval-response", bytes.NewReader(makeBody()))
+	body1 := makeBody()
+	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/approval-response", bytes.NewReader(body1))
 	req1.Header.Set("Content-Type", "application/json")
+	addWebhookSignature(t, req1, defaultWebhookSecret, body1)
 	resp1 := httptest.NewRecorder()
 	router.ServeHTTP(resp1, req1)
 	require.Equal(t, http.StatusOK, resp1.Code)
@@ -318,8 +336,10 @@ func TestApprovalWebhook_IdempotentDuplicate(t *testing.T) {
 	assert.Equal(t, "processed", result1["status"])
 
 	// Second call — should be idempotent
-	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/approval-response", bytes.NewReader(makeBody()))
+	body2 := makeBody()
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/approval-response", bytes.NewReader(body2))
 	req2.Header.Set("Content-Type", "application/json")
+	addWebhookSignature(t, req2, defaultWebhookSecret, body2)
 	resp2 := httptest.NewRecorder()
 	router.ServeHTTP(resp2, req2)
 	require.Equal(t, http.StatusOK, resp2.Code)
@@ -339,7 +359,7 @@ func TestApprovalWebhook_MissingRequestID(t *testing.T) {
 	store := newTestExecutionStorage(&types.AgentNode{ID: "agent-1"})
 
 	router := gin.New()
-	router.POST("/api/v1/webhooks/approval-response", ApprovalWebhookHandler(store, ""))
+	router.POST("/api/v1/webhooks/approval-response", ApprovalWebhookHandler(store, defaultWebhookSecret))
 
 	body, _ := json.Marshal(map[string]any{
 		"decision": "approved",
@@ -347,6 +367,7 @@ func TestApprovalWebhook_MissingRequestID(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/approval-response", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	addWebhookSignature(t, req, defaultWebhookSecret, body)
 	resp := httptest.NewRecorder()
 	router.ServeHTTP(resp, req)
 
@@ -359,7 +380,7 @@ func TestApprovalWebhook_InvalidDecision(t *testing.T) {
 	store := newTestExecutionStorage(&types.AgentNode{ID: "agent-1"})
 
 	router := gin.New()
-	router.POST("/api/v1/webhooks/approval-response", ApprovalWebhookHandler(store, ""))
+	router.POST("/api/v1/webhooks/approval-response", ApprovalWebhookHandler(store, defaultWebhookSecret))
 
 	body, _ := json.Marshal(map[string]any{
 		"requestId": "req-bad",
@@ -368,6 +389,7 @@ func TestApprovalWebhook_InvalidDecision(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/approval-response", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	addWebhookSignature(t, req, defaultWebhookSecret, body)
 	resp := httptest.NewRecorder()
 	router.ServeHTTP(resp, req)
 
@@ -380,7 +402,7 @@ func TestApprovalWebhook_UnknownRequestID(t *testing.T) {
 	store := newTestExecutionStorage(&types.AgentNode{ID: "agent-1"})
 
 	router := gin.New()
-	router.POST("/api/v1/webhooks/approval-response", ApprovalWebhookHandler(store, ""))
+	router.POST("/api/v1/webhooks/approval-response", ApprovalWebhookHandler(store, defaultWebhookSecret))
 
 	body, _ := json.Marshal(map[string]any{
 		"requestId": "req-unknown",
@@ -389,6 +411,7 @@ func TestApprovalWebhook_UnknownRequestID(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/approval-response", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	addWebhookSignature(t, req, defaultWebhookSecret, body)
 	resp := httptest.NewRecorder()
 	router.ServeHTTP(resp, req)
 
@@ -398,6 +421,35 @@ func TestApprovalWebhook_UnknownRequestID(t *testing.T) {
 // ---------------------------------------------------------------------------
 // HMAC signature verification
 // ---------------------------------------------------------------------------
+
+func TestApprovalWebhook_RejectsWhenSecretNotConfigured(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := seedWaitingExecution(t, "exec-nosecret", "agent-1", "req-nosecret")
+
+	router := gin.New()
+	router.POST("/api/v1/webhooks/approval-response", ApprovalWebhookHandler(store, ""))
+
+	body, _ := json.Marshal(map[string]any{
+		"requestId": "req-nosecret",
+		"decision":  "approved",
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/approval-response", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, resp.Code)
+}
+
+func TestWebhookApprovalController_VerifySignature_EmptySecretReturnsFalse(t *testing.T) {
+	ctrl := &webhookApprovalController{
+		store:         nil,
+		webhookSecret: "",
+	}
+	assert.False(t, ctrl.verifySignature([]byte(`{"k":"v"}`), "sha256=deadbeef"))
+}
 
 func TestApprovalWebhook_ValidSignature(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -553,7 +605,7 @@ func TestApprovalWebhook_CallbackNotification(t *testing.T) {
 	}))
 
 	router := gin.New()
-	router.POST("/api/v1/webhooks/approval-response", ApprovalWebhookHandler(store, ""))
+	router.POST("/api/v1/webhooks/approval-response", ApprovalWebhookHandler(store, defaultWebhookSecret))
 
 	body, _ := json.Marshal(map[string]any{
 		"requestId": "req-cb",
@@ -563,6 +615,7 @@ func TestApprovalWebhook_CallbackNotification(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/approval-response", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	addWebhookSignature(t, req, defaultWebhookSecret, body)
 	resp := httptest.NewRecorder()
 	router.ServeHTTP(resp, req)
 
@@ -611,7 +664,7 @@ func TestApprovalFlow_EndToEnd(t *testing.T) {
 	router.GET("/api/v1/agents/:node_id/executions/:execution_id/approval-status",
 		AgentScopedGetApprovalStatusHandler(store))
 	router.POST("/api/v1/webhooks/approval-response",
-		ApprovalWebhookHandler(store, ""))
+		ApprovalWebhookHandler(store, defaultWebhookSecret))
 
 	// ---- Step 1: Request approval ----
 	reqBody, _ := json.Marshal(map[string]any{
@@ -653,6 +706,7 @@ func TestApprovalFlow_EndToEnd(t *testing.T) {
 		"/api/v1/webhooks/approval-response",
 		bytes.NewReader(webhookBody))
 	reqWebhook.Header.Set("Content-Type", "application/json")
+	addWebhookSignature(t, reqWebhook, defaultWebhookSecret, webhookBody)
 	respWebhook := httptest.NewRecorder()
 	router.ServeHTTP(respWebhook, reqWebhook)
 
@@ -717,7 +771,7 @@ func TestApprovalFlow_RequestChanges_ThenReapprove(t *testing.T) {
 	router.POST("/api/v1/agents/:node_id/executions/:execution_id/request-approval",
 		AgentScopedRequestApprovalHandler(store))
 	router.POST("/api/v1/webhooks/approval-response",
-		ApprovalWebhookHandler(store, ""))
+		ApprovalWebhookHandler(store, defaultWebhookSecret))
 
 	// ---- Round 1: Request approval ----
 	reqBody1, _ := json.Marshal(map[string]any{
@@ -741,6 +795,7 @@ func TestApprovalFlow_RequestChanges_ThenReapprove(t *testing.T) {
 		"/api/v1/webhooks/approval-response",
 		bytes.NewReader(webhookBody1))
 	rw1.Header.Set("Content-Type", "application/json")
+	addWebhookSignature(t, rw1, defaultWebhookSecret, webhookBody1)
 	ww1 := httptest.NewRecorder()
 	router.ServeHTTP(ww1, rw1)
 	require.Equal(t, http.StatusOK, ww1.Code)
@@ -771,6 +826,7 @@ func TestApprovalFlow_RequestChanges_ThenReapprove(t *testing.T) {
 		"/api/v1/webhooks/approval-response",
 		bytes.NewReader(webhookBody2))
 	rw2.Header.Set("Content-Type", "application/json")
+	addWebhookSignature(t, rw2, defaultWebhookSecret, webhookBody2)
 	ww2 := httptest.NewRecorder()
 	router.ServeHTTP(ww2, rw2)
 	require.Equal(t, http.StatusOK, ww2.Code)

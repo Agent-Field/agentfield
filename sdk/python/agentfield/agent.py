@@ -72,6 +72,27 @@ if TYPE_CHECKING:
 _dataclass_kwargs = {"slots": True} if sys.version_info >= (3, 10) else {}
 
 
+class _HandlerInputError(ValueError):
+    """Reasoner input-validation error with a message safe to surface to HTTP clients.
+
+    All messages produced inside the SDK's validator are constructed by us
+    (not pulled from user payloads or underlying Python exceptions), so the
+    full text is safe to include in a 422 response body. We expose that
+    text via the explicit `safe_message` attribute rather than relying on
+    `str(self)` so the request handler can read a known-safe value without
+    tripping CodeQL's `py/stack-trace-exposure` rule.
+
+    Subclasses ValueError so existing `except ValueError` call sites still
+    catch validation failures unchanged.
+    """
+
+    __slots__ = ("safe_message",)
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.safe_message = message
+
+
 # Memory-efficient handler entry classes using __slots__ (on Python 3.10+)
 @dataclass(**_dataclass_kwargs)
 class ReasonerEntry:
@@ -86,6 +107,12 @@ class ReasonerEntry:
     output_type: type
     tags: List[str] = field(default_factory=list)
     vc_enabled: Optional[bool] = None
+    # Trigger bindings declared via @reasoner(triggers=[...]) or sugar
+    # decorators @on_event / @on_schedule. The control plane upserts a
+    # code-managed Trigger row per binding at registration.
+    triggers: List[Any] = field(default_factory=list)
+    # 3-state webhook flag: True (opt-in), False (opt-out), "warn" (default)
+    accepts_webhook: Union[bool, str] = "warn"
     # Note: input_schema and output_schema are generated on-demand via _get_handler_schema()
 
 
@@ -790,6 +817,24 @@ class Agent(FastAPI):
             if entry.vc_enabled is not None
             else self._agent_vc_enabled,
         }
+        triggers = getattr(entry, "triggers", None)
+        accepts_webhook = getattr(entry, "accepts_webhook", "warn")
+        if kind == "reasoner":
+            # Normalize the 3-state value to one of "true" / "false" / "warn"
+            # before serialization. The control plane's ReasonerDefinition
+            # types AcceptsWebhook as *string and rejects bool literals.
+            if accepts_webhook is True:
+                metadata["accepts_webhook"] = "true"
+            elif accepts_webhook is False:
+                metadata["accepts_webhook"] = "false"
+            elif isinstance(accepts_webhook, str) and accepts_webhook in ("true", "false", "warn"):
+                metadata["accepts_webhook"] = accepts_webhook
+            else:
+                metadata["accepts_webhook"] = "warn"
+        if kind == "reasoner" and triggers:
+            from .triggers import trigger_to_payload  # local import to avoid cycle
+
+            metadata["triggers"] = [trigger_to_payload(t) for t in triggers]
         return metadata
 
     def _types_to_json_schema(self, input_types: Dict[str, tuple]) -> Dict:
@@ -880,7 +925,7 @@ class Agent(FastAPI):
             # Check if field is present
             if name not in data:
                 if default is ...:  # Required field (no default)
-                    raise ValueError(f"Missing required field: {name}")
+                    raise _HandlerInputError(f"Missing required field: {name}")
                 result[name] = default
                 continue
 
@@ -899,7 +944,7 @@ class Agent(FastAPI):
                 if default is not ...:
                     result[name] = default
                     continue
-                raise ValueError(f"Field '{name}' cannot be None")
+                raise _HandlerInputError(f"Field '{name}' cannot be None")
 
             # Type coercion for basic types
             try:
@@ -931,14 +976,14 @@ class Agent(FastAPI):
                     or getattr(actual_type, "__origin__", None) is dict
                 ):
                     if not isinstance(value, dict):
-                        raise ValueError(f"Field '{name}' must be a dict")
+                        raise _HandlerInputError(f"Field '{name}' must be a dict")
                     result[name] = dict(value)
                 elif (
                     actual_type is list
                     or getattr(actual_type, "__origin__", None) is list
                 ):
                     if not isinstance(value, list):
-                        raise ValueError(f"Field '{name}' must be a list")
+                        raise _HandlerInputError(f"Field '{name}' must be a list")
                     result[name] = list(value)
                 elif hasattr(actual_type, "model_validate"):
                     # Pydantic model - use its validation
@@ -946,8 +991,14 @@ class Agent(FastAPI):
                 else:
                     # Pass through for complex/unknown types
                     result[name] = value
-            except (ValueError, TypeError) as e:
-                raise ValueError(f"Invalid value for field '{name}': {e}")
+            except _HandlerInputError:
+                raise
+            except (ValueError, TypeError):
+                # Underlying coercion failure (e.g. int("not a number")). The
+                # inner exception's text can carry Python-runtime detail, so
+                # we deliberately drop it from the message we surface to the
+                # client and just say which field failed.
+                raise _HandlerInputError(f"Invalid value for field '{name}'")
 
         return result
 
@@ -1620,6 +1671,8 @@ class Agent(FastAPI):
         *,
         vc_enabled: Optional[bool] = None,
         require_realtime_validation: bool = False,
+        triggers: Optional[List[Any]] = None,
+        accepts_webhook: Optional[Any] = None,
     ):
         """
         Decorator to register a reasoner function.
@@ -1633,12 +1686,17 @@ class Agent(FastAPI):
             tags (List[str] | None, optional): Organizational tags that travel with the reasoner metadata.
             vc_enabled (bool | None, optional): Override VC generation for this reasoner. True forces VC creation,
                 False disables it, and None inherits the agent-level policy.
+            triggers (list, optional): EventTrigger / ScheduleTrigger declarations. Same shape as the
+                module-level @reasoner kwarg. Stamps each as a code-managed trigger at registration time.
+            accepts_webhook (bool | "warn" | None, optional): 3-state UI guardrail flag.
         """
 
         direct_registration: Optional[Callable] = None
         decorator_path = path
         decorator_name = name
         decorator_tags = tags
+        kwarg_triggers = list(triggers) if triggers else None
+        kwarg_accepts_webhook = accepts_webhook
 
         if decorator_path and (
             inspect.isfunction(decorator_path) or inspect.ismethod(decorator_path)
@@ -1647,6 +1705,28 @@ class Agent(FastAPI):
             decorator_path = None
 
         def decorator(func: Callable) -> Callable:
+            # Merge any sugar-staged triggers (from @on_event / @on_schedule)
+            # with the explicit `triggers=[...]` kwarg passed to @app.reasoner.
+            # Mirrors the module-level @reasoner contract so the same syntax
+            # works under either decorator entry point.
+            staged = getattr(func, "_pending_triggers", None) or []
+            merged_triggers = list(kwarg_triggers or []) + list(staged)
+            if staged:
+                try:
+                    delattr(func, "_pending_triggers")
+                except AttributeError:
+                    pass
+            if merged_triggers:
+                setattr(func, "_reasoner_triggers", merged_triggers)
+                # Auto-set accepts_webhook=True when the dev declared triggers,
+                # unless they explicitly passed something else.
+                if kwarg_accepts_webhook is None:
+                    setattr(func, "_accepts_webhook", True)
+                else:
+                    setattr(func, "_accepts_webhook", kwarg_accepts_webhook)
+            elif kwarg_accepts_webhook is not None:
+                setattr(func, "_accepts_webhook", kwarg_accepts_webhook)
+
             # Extract function metadata
             func_name = func.__name__
             reasoner_id = decorator_name or func_name
@@ -1701,16 +1781,34 @@ class Agent(FastAPI):
                         content={"detail": "Invalid JSON body"},
                     )
 
-                # Validate input at runtime (replaces Pydantic validation)
-                try:
-                    validated_input = self._validate_handler_input(
-                        body, handler_input_fields
-                    )
-                except ValueError as e:
-                    return JSONResponse(
-                        status_code=422,
-                        content={"detail": str(e)},
-                    )
+                # Validate input at runtime (replaces Pydantic validation).
+                # When the body is the dispatcher's webhook envelope shape
+                # ({"event": ..., "_meta": ...}), skip field-level validation
+                # — the envelope is unwrapped further down and the reasoner's
+                # first positional gets the unwrapped (or transformed) value
+                # by way of _execute_reasoner_endpoint.
+                is_trigger_envelope = (
+                    isinstance(body, dict)
+                    and "event" in body
+                    and "_meta" in body
+                    and isinstance(body.get("_meta"), dict)
+                )
+                if is_trigger_envelope:
+                    validated_input = body
+                else:
+                    try:
+                        validated_input = self._validate_handler_input(
+                            body, handler_input_fields
+                        )
+                    except _HandlerInputError as e:
+                        # `safe_message` is a known-safe SDK-constructed
+                        # string. Reading the explicit attribute (rather
+                        # than `str(e)`) keeps the response out of CodeQL's
+                        # py/stack-trace-exposure taint flow.
+                        return JSONResponse(
+                            status_code=422,
+                            content={"detail": e.safe_message},
+                        )
 
                 async def run_reasoner() -> Any:
                     return await self._execute_reasoner_endpoint(
@@ -1795,6 +1893,14 @@ class Agent(FastAPI):
             vc_setting = self._effective_component_vc_setting(
                 reasoner_id, self._reasoner_vc_overrides
             )
+            decorator_triggers = getattr(original_func, "_reasoner_triggers", None)
+            if not decorator_triggers:
+                decorator_triggers = getattr(tracked_func, "_reasoner_triggers", None)
+            # Resolve accepts_webhook from the decorator
+            decorator_accepts_webhook = getattr(original_func, "_accepts_webhook", "warn")
+            if not decorator_accepts_webhook:
+                decorator_accepts_webhook = getattr(tracked_func, "_accepts_webhook", "warn")
+            
             self._reasoner_registry[reasoner_id] = ReasonerEntry(
                 id=reasoner_id,
                 func=func,
@@ -1802,6 +1908,8 @@ class Agent(FastAPI):
                 output_type=return_type,
                 tags=resolved_tags,
                 vc_enabled=vc_setting,
+                triggers=list(decorator_triggers or []),
+                accepts_webhook=decorator_accepts_webhook,
             )
 
             # NOTE: Legacy storage removed - reasoners property generates list on-demand
@@ -1828,6 +1936,107 @@ class Agent(FastAPI):
 
         return decorator
 
+    def _detect_and_unwrap_trigger_envelope(self, payload_dict: Dict[str, Any]) -> tuple[Dict[str, Any], Optional[Any]]:
+        """
+        Detect dispatcher webhook envelope {event: ..., _meta: ...} and unwrap it.
+        Returns (unwrapped_input, trigger_context_or_none).
+        If not an envelope, returns (payload_dict, None) for backward compat.
+        """
+        # Check if this looks like a dispatcher envelope
+        if not isinstance(payload_dict, dict):
+            return payload_dict, None
+        
+        if "event" in payload_dict and "_meta" in payload_dict:
+            # This is a dispatcher envelope
+            event_data = payload_dict.get("event", {})
+            meta_data = payload_dict.get("_meta", {})
+            
+            # Parse metadata into TriggerContext
+            try:
+                from datetime import datetime
+                from .triggers import TriggerContext
+                
+                received_at_str = meta_data.get("received_at", "")
+                if received_at_str:
+                    received_at = datetime.fromisoformat(received_at_str.replace('Z', '+00:00'))
+                else:
+                    received_at = datetime.utcnow()
+                
+                trigger_ctx = TriggerContext(
+                    trigger_id=meta_data.get("trigger_id", ""),
+                    source=meta_data.get("source", ""),
+                    event_type=meta_data.get("event_type", ""),
+                    event_id=meta_data.get("event_id", ""),
+                    idempotency_key=meta_data.get("idempotency_key", ""),
+                    received_at=received_at,
+                    vc_id=meta_data.get("vc_id"),
+                )
+                return event_data, trigger_ctx
+            except Exception:
+                # If parsing fails, return raw envelope for compatibility
+                return payload_dict, None
+        
+        # Not an envelope
+        return payload_dict, None
+
+    def _apply_trigger_transform(self, trigger_ctx, bindings: list, input_data: dict) -> dict:
+        """
+        Match trigger context against reasoner bindings and apply transform if found.
+        Returns transformed input or original input if no match.
+        
+        Matching logic:
+        1. Find bindings where binding.source == trigger_ctx.source
+        2. Check event_type: binding.types empty OR trigger_ctx.event_type matches (exact or prefix)
+        3. If multiple match, prefer most specific (non-empty types)
+        4. Apply transform if binding has one
+        """
+        from .triggers import EventTrigger
+        
+        if not bindings or not trigger_ctx:
+            return input_data
+        
+        # Find best-matching binding
+        best_match = None
+        best_specificity = -1  # -1 = no match, 0 = broad (empty types), 1+ = specific
+        
+        for binding in bindings:
+            if not isinstance(binding, EventTrigger):
+                continue
+            
+            if binding.source != trigger_ctx.source:
+                continue
+            
+            # Check event_type match
+            if binding.types:
+                # binding has specific types — check for match
+                matched = False
+                for btype in binding.types:
+                    if trigger_ctx.event_type.startswith(btype):
+                        matched = True
+                        break
+                if not matched:
+                    continue
+                specificity = 1
+            else:
+                # binding accepts all types
+                specificity = 0
+            
+            # This binding matches; is it better than current best?
+            if specificity > best_specificity:
+                best_match = binding
+                best_specificity = specificity
+        
+        # Apply transform if found
+        if best_match and best_match.transform:
+            try:
+                return best_match.transform(input_data)
+            except Exception as e:
+                if self.dev_mode:
+                    log_warn(f"Transform failed for {trigger_ctx.source}/{trigger_ctx.event_type}: {e}; using raw input")
+                return input_data
+        
+        return input_data
+
     async def _execute_reasoner_endpoint(
         self,
         *,
@@ -1842,6 +2051,10 @@ class Agent(FastAPI):
 
         execution_context = ExecutionContext.from_request(request, self.node_id)
         payload_dict = input_data  # Already a dict from runtime validation
+        # Unwrap dispatcher envelope if present (Phase 5 webhook DX)
+        payload_dict, trigger_context = self._detect_and_unwrap_trigger_envelope(payload_dict)
+        if trigger_context:
+            execution_context.trigger = trigger_context
 
         self._current_execution_context = execution_context
         context_token = set_execution_context(execution_context)
@@ -1870,35 +2083,59 @@ class Agent(FastAPI):
                 session_identifier,
                 "agent",
                 reasoner_id,
+                parent_vc_id=execution_context.parent_vc_id,
             )
             self._populate_execution_context_with_did(
                 execution_context, did_execution_context
             )
 
         try:
-            try:
-                if should_convert_args(func):
-                    converted_args, converted_kwargs = convert_function_args(
-                        func, (), payload_dict
-                    )
-                    args = converted_args
-                    kwargs = converted_kwargs
-                else:
+            # Phase 5: Apply trigger transform if applicable
+            trigger_bindings = getattr(func, "_reasoner_triggers", [])
+            if execution_context.trigger and trigger_bindings:
+                payload_dict = self._apply_trigger_transform(
+                    execution_context.trigger,
+                    trigger_bindings,
+                    payload_dict
+                )
+
+            # When invoked via an inbound trigger, the (possibly transformed)
+            # payload IS the first positional argument — it's the provider's
+            # event itself, not a dict of named kwargs. Direct app.call()
+            # invocations keep the historical kwargs-from-dict shape.
+            if execution_context.trigger is not None:
+                args, kwargs = (payload_dict,), {}
+            else:
+                try:
+                    if should_convert_args(func):
+                        converted_args, converted_kwargs = convert_function_args(
+                            func, (), payload_dict
+                        )
+                        args = converted_args
+                        kwargs = converted_kwargs
+                    else:
+                        args, kwargs = (), payload_dict
+                except ValidationError as exc:
+                    # Convert Pydantic validation error to safe _HandlerInputError
+                    # to prevent potential stack trace exposure in 422 responses.
+                    raise _HandlerInputError(
+                        f"Pydantic validation failed for reasoner '{reasoner_id}'"
+                    ) from exc
+                except Exception as exc:  # pragma: no cover - best effort log
+                    if self.dev_mode:
+                        log_debug(
+                            f"⚠️ Warning: Failed to convert arguments for {reasoner_id}: {exc}"
+                        )
                     args, kwargs = (), payload_dict
-            except ValidationError as exc:
-                raise ValidationError(
-                    f"Pydantic validation failed for reasoner '{reasoner_id}': {exc}",
-                    model=getattr(exc, "model", None),
-                ) from exc
-            except Exception as exc:  # pragma: no cover - best effort log
-                if self.dev_mode:
-                    log_debug(
-                        f"⚠️ Warning: Failed to convert arguments for {reasoner_id}: {exc}"
-                    )
-                args, kwargs = (), payload_dict
 
             if "execution_context" in signature.parameters:
                 kwargs["execution_context"] = execution_context
+
+            # Phase 5: Inject trigger context (webhook metadata)
+            if "trigger" in signature.parameters:
+                kwargs["trigger"] = execution_context.trigger
+            if "webhook" in signature.parameters:
+                kwargs["webhook"] = execution_context.trigger
 
             if asyncio.iscoroutinefunction(func):
                 result = await func(*args, **kwargs)
@@ -2340,16 +2577,34 @@ class Agent(FastAPI):
                         content={"detail": "Invalid JSON body"},
                     )
 
-                # Validate input at runtime (replaces Pydantic validation)
-                try:
-                    validated_input = self._validate_handler_input(
-                        body, handler_input_fields
-                    )
-                except ValueError as e:
-                    return JSONResponse(
-                        status_code=422,
-                        content={"detail": str(e)},
-                    )
+                # Validate input at runtime (replaces Pydantic validation).
+                # When the body is the dispatcher's webhook envelope shape
+                # ({"event": ..., "_meta": ...}), skip field-level validation
+                # — the envelope is unwrapped further down and the reasoner's
+                # first positional gets the unwrapped (or transformed) value
+                # by way of _execute_reasoner_endpoint.
+                is_trigger_envelope = (
+                    isinstance(body, dict)
+                    and "event" in body
+                    and "_meta" in body
+                    and isinstance(body.get("_meta"), dict)
+                )
+                if is_trigger_envelope:
+                    validated_input = body
+                else:
+                    try:
+                        validated_input = self._validate_handler_input(
+                            body, handler_input_fields
+                        )
+                    except _HandlerInputError as e:
+                        # `safe_message` is a known-safe SDK-constructed
+                        # string. Reading the explicit attribute (rather
+                        # than `str(e)`) keeps the response out of CodeQL's
+                        # py/stack-trace-exposure taint flow.
+                        return JSONResponse(
+                            status_code=422,
+                            content={"detail": e.safe_message},
+                        )
 
                 # Extract execution context from request headers
                 execution_context = ExecutionContext.from_request(request, self.node_id)
@@ -2372,6 +2627,7 @@ class Agent(FastAPI):
                         session_identifier,
                         "agent",  # caller function
                         skill_id,  # target function
+                        parent_vc_id=execution_context.parent_vc_id,
                     )
                     # Populate execution context with DID information
                     self._populate_execution_context_with_did(
@@ -2393,10 +2649,10 @@ class Agent(FastAPI):
                     else:
                         kwargs = dict(input_payload)
                 except ValidationError as e:
-                    # Re-raise validation errors with context
-                    raise ValidationError(
-                        f"Pydantic validation failed for skill '{skill_id}': {e}",
-                        model=getattr(e, "model", None),
+                    # Convert Pydantic validation error to safe _HandlerInputError
+                    # to prevent potential stack trace exposure in 422 responses.
+                    raise _HandlerInputError(
+                        f"Pydantic validation failed for skill '{skill_id}'"
                     ) from e
                 except Exception as e:
                     # Log conversion errors but continue with original args for backward compatibility
@@ -3424,6 +3680,8 @@ class Agent(FastAPI):
         # Ensure the current execution is the parent for sub-calls (not the inherited parent)
         # This fixes workflow graph attribution for local skill calls
         headers["X-Parent-Execution-ID"] = current_context.execution_id
+        if current_context.parent_vc_id:
+            headers["X-Parent-VC-ID"] = current_context.parent_vc_id
 
         # DISABLED: Same-agent call detection - Force all calls through AgentField server
         # This ensures all app.call() requests go through the AgentField server for proper
@@ -3440,6 +3698,7 @@ class Agent(FastAPI):
                 f"AgentField server unavailable - cannot make cross-agent call to {target}"
             )
             from agentfield.exceptions import AgentFieldClientError
+
             raise AgentFieldClientError(
                 f"Cross-agent call to {target} failed: AgentField server unavailable. Agent is running in local mode."
             )
@@ -3576,6 +3835,7 @@ class Agent(FastAPI):
                     f"Execute call timed out after {elapsed_time:.2f} seconds (limit {execution_timeout:.0f}s)"
                 )
                 from agentfield.exceptions import ExecutionTimeoutError
+
                 raise ExecutionTimeoutError(
                     f"Cross-agent call to {target} timed out after {int(execution_timeout)} seconds"
                 )
@@ -4329,6 +4589,7 @@ class Agent(FastAPI):
 
         if not self.client:
             from agentfield.exceptions import AgentFieldClientError
+
             raise AgentFieldClientError("AgentField client is not configured")
 
         return self.client.discover_capabilities(

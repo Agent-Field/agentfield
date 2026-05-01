@@ -778,16 +778,23 @@ class TestErrorHandling:
         self, mock_agent, fast_config
     ):
         """Test that health check errors trigger reconnection."""
-        mock_agent.client.register_agent_with_status = AsyncMock(
-            return_value=(True, None)
-        )
+        reg_call_count = 0
 
-        call_count = 0
+        async def register_mock(*args, **kwargs):
+            nonlocal reg_call_count
+            reg_call_count += 1
+            if reg_call_count > 1:
+                return False, None
+            return True, {"status": "ok"}
+
+        mock_agent.client.register_agent_with_status = register_mock
+
+        heartbeat_call_count = 0
 
         async def heartbeat_then_fail():
-            nonlocal call_count
-            call_count += 1
-            if call_count > 1:
+            nonlocal heartbeat_call_count
+            heartbeat_call_count += 1
+            if heartbeat_call_count > 1:
                 raise Exception("Heartbeat error")
             return True
 
@@ -796,9 +803,19 @@ class TestErrorHandling:
         manager = ConnectionManager(mock_agent, fast_config)
         await manager.start()
 
-        await asyncio.sleep(0.07)
+        # Do not assert a single ConnectionState snapshot: with fast_config the
+        # manager may move DEGRADED → RECONNECTING → CONNECTED (or DISCONNECTED
+        # after a failed register) within tens of ms, so polling often missed
+        # transient states on CI. Instead assert the health failure drove another
+        # registration attempt beyond the initial connect.
+        deadline = asyncio.get_event_loop().time() + 1.0
+        while asyncio.get_event_loop().time() < deadline:
+            if heartbeat_call_count >= 2 and reg_call_count >= 2:
+                break
+            await asyncio.sleep(0.02)
 
-        assert manager.state in (ConnectionState.DEGRADED, ConnectionState.RECONNECTING)
+        assert heartbeat_call_count >= 2
+        assert reg_call_count >= 2
 
         await manager.stop()
 

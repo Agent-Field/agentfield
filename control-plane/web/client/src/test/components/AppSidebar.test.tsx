@@ -32,6 +32,7 @@ vi.mock("@/config/navigation", () => ({
       icon: (props: LucideProps) => <LinkIcon {...props} />,
     },
   ],
+  isNavBranch: (item: any) => !!item.children,
 }));
 
 // Mock UI components

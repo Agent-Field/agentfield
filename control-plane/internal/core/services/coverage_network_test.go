@@ -19,6 +19,7 @@ func TestDevServiceDiscoverAgentPort(t *testing.T) {
 	// discoverAgentPort scans the hardcoded 8001-8999 range, so we must bind
 	// within that range. Find and hold a port atomically via startLocalServer.
 	port := findPortInAgentRange(t)
+	withAgentPortRange(t, port, port)
 	server := startLocalServer(t, port, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/health" {
 			http.NotFound(w, r)
@@ -35,11 +36,31 @@ func TestDevServiceDiscoverAgentPort(t *testing.T) {
 }
 
 func TestDevServiceDiscoverAgentPortTimeout(t *testing.T) {
+	closedPort := reserveClosedPort(t)
+	withAgentPortRange(t, closedPort, closedPort)
 	service := &DefaultDevService{}
 	port, err := service.discoverAgentPort(750 * time.Millisecond)
 	require.Error(t, err)
 	assert.Equal(t, 0, port)
 	assert.Contains(t, err.Error(), "could not discover agent port")
+}
+
+func withAgentPortRange(t *testing.T, start, end int) {
+	t.Helper()
+	originalStart, originalEnd := agentPortStart, agentPortEnd
+	agentPortStart, agentPortEnd = start, end
+	t.Cleanup(func() {
+		agentPortStart, agentPortEnd = originalStart, originalEnd
+	})
+}
+
+func reserveClosedPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := ln.Addr().(*net.TCPAddr).Port
+	require.NoError(t, ln.Close())
+	return port
 }
 
 func TestDevServiceWaitForAgent(t *testing.T) {

@@ -26,6 +26,20 @@ func NewVCCommand() *cobra.Command {
 	return vcCmd
 }
 
+// NewVerifyAliasCommand exposes `af verify <file>` as a top-level alias for
+// `af vc verify <file>`. The trigger plugin documentation (and longstanding
+// muscle memory) refers to the verifier as just `af verify` — without an
+// alias, that command flat-out errors with "unknown command", which trips
+// up operators who copy-paste from docs. The flag set + run target are
+// inherited from the canonical subcommand, so the two paths are guaranteed
+// to stay behaviourally identical.
+func NewVerifyAliasCommand() *cobra.Command {
+	canonical := NewVCVerifyCommand()
+	canonical.Use = "verify <vc-file.json>"
+	canonical.Long = canonical.Long + "\n\nThis is an alias for `af vc verify` — both produce identical output."
+	return canonical
+}
+
 // NewVCVerifyCommand creates the vc verify subcommand
 func NewVCVerifyCommand() *cobra.Command {
 	var outputFormat string

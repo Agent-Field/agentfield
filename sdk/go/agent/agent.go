@@ -12,11 +12,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/signal"
 	"strings"
+	"runtime"
 	"sync"
-
-	"syscall"
 	"time"
 
 	"github.com/Agent-Field/agentfield/sdk/go/ai"
@@ -106,6 +104,17 @@ func WithDescription(desc string) ReasonerOption {
 	}
 }
 
+// WithAcceptsWebhook sets the accepts_webhook flag for UI-managed trigger guardrailing.
+// Pass "true" to explicitly opt in, "false" to refuse, or omit for auto-detect (True if
+// any triggers declared, else "warn").
+func WithAcceptsWebhook(flag string) ReasonerOption {
+	return func(r *Reasoner) {
+		if flag != "" {
+			r.AcceptsWebhook = &flag
+		}
+	}
+}
+
 // Reasoner represents a single handler exposed by the agent.
 type Reasoner struct {
 	Name         string
@@ -126,6 +135,148 @@ type Reasoner struct {
 	// RequireRealtimeValidation forces control-plane verification for this
 	// reasoner, skipping local verification even when enabled.
 	RequireRealtimeValidation bool
+
+	// Triggers declares external Sources whose events should invoke this
+	// reasoner. Bindings are sent at registration time; the control plane
+	// upserts a code-managed Trigger per binding. The canonical form is
+	// WithTriggers(...); the WithEventTrigger / WithScheduleTrigger helpers
+	// are sugar that append to this slice.
+	Triggers []types.TriggerBinding
+
+	// AcceptsWebhook controls whether UI-managed triggers can invoke this reasoner.
+	// nil/empty = inherit default ("warn"), "true" = explicitly opt in, "false" = explicitly refuse.
+	// Auto-set to "true" if any Triggers are declared.
+	AcceptsWebhook *string
+}
+
+// EventTrigger describes an external event source binding for a reasoner.
+// Use it as a typed argument to WithTriggers — the control plane registers
+// the binding and minting of the public ingest URL happens server-side.
+type EventTrigger struct {
+	Source       string
+	Types        []string
+	SecretEnv    string
+	Config       map[string]any
+}
+
+// ScheduleTrigger describes a cron-style schedule binding for a reasoner.
+// Use it as a typed argument to WithTriggers; the control plane runs the
+// schedule and dispatches a synthetic "tick" event when it fires.
+type ScheduleTrigger struct {
+	Cron     string
+	Timezone string
+}
+
+// captureCodeOrigin captures the file and line number of the caller using runtime.Caller.
+// skip=1 walks past captureCodeOrigin to the immediate caller (e.g., WithEventTrigger).
+// skip=2 walks past captureCodeOrigin and WithEventTrigger to the user's call site.
+func captureCodeOrigin(skip int) string {
+	_, file, line, ok := runtime.Caller(skip)
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("%s:%d", file, line)
+}
+
+// WithTriggers is the canonical decorator-equivalent for declaring trigger
+// bindings on a Go reasoner. Pass a mix of EventTrigger and ScheduleTrigger
+// values; unknown types are silently ignored so adding new kinds later is
+// backward compatible.
+func WithTriggers(triggers ...any) ReasonerOption {
+	codeOrigin := captureCodeOrigin(2)
+	return func(r *Reasoner) {
+		for _, t := range triggers {
+			binding, ok := triggerToBinding(t)
+			if !ok {
+				continue
+			}
+			if binding.CodeOrigin == "" {
+				binding.CodeOrigin = codeOrigin
+			}
+			r.Triggers = append(r.Triggers, binding)
+		}
+	}
+}
+
+// WithEventTrigger is sugar that appends a single EventTrigger to the
+// reasoner's bindings. It is equivalent to
+// WithTriggers(EventTrigger{Source: source, Types: types}).
+func WithEventTrigger(source string, eventTypes ...string) ReasonerOption {
+	codeOrigin := captureCodeOrigin(2)
+	return func(r *Reasoner) {
+		b, _ := triggerToBinding(EventTrigger{Source: source, Types: eventTypes})
+		b.CodeOrigin = codeOrigin
+		r.Triggers = append(r.Triggers, b)
+	}
+}
+
+// WithScheduleTrigger is sugar for declaring a single cron schedule. The
+// expression follows the standard 5-field cron format.
+func WithScheduleTrigger(expression string) ReasonerOption {
+	codeOrigin := captureCodeOrigin(2)
+	return func(r *Reasoner) {
+		b, _ := triggerToBinding(ScheduleTrigger{Cron: expression})
+		b.CodeOrigin = codeOrigin
+		r.Triggers = append(r.Triggers, b)
+	}
+}
+
+// WithTriggerSecretEnv attaches a secret env var name to the most recently
+// declared trigger binding on the reasoner. Use it after WithEventTrigger
+// when the source requires a secret (Stripe, GitHub, Slack, generic_hmac).
+func WithTriggerSecretEnv(envVar string) ReasonerOption {
+	return func(r *Reasoner) {
+		if len(r.Triggers) == 0 {
+			return
+		}
+		r.Triggers[len(r.Triggers)-1].SecretEnvVar = envVar
+	}
+}
+
+// WithTriggerConfig attaches a config blob to the most recently declared
+// trigger binding. Source impls validate the config server-side.
+func WithTriggerConfig(cfg map[string]any) ReasonerOption {
+	return func(r *Reasoner) {
+		if len(r.Triggers) == 0 {
+			return
+		}
+		raw, err := json.Marshal(cfg)
+		if err != nil {
+			return
+		}
+		r.Triggers[len(r.Triggers)-1].Config = raw
+	}
+}
+
+// triggerToBinding normalizes typed trigger values into the wire payload.
+func triggerToBinding(t any) (types.TriggerBinding, bool) {
+	switch v := t.(type) {
+	case EventTrigger:
+		var cfg json.RawMessage
+		if len(v.Config) > 0 {
+			if raw, err := json.Marshal(v.Config); err == nil {
+				cfg = raw
+			}
+		}
+		return types.TriggerBinding{
+			Source:       v.Source,
+			EventTypes:   v.Types,
+			Config:       cfg,
+			SecretEnvVar: v.SecretEnv,
+		}, true
+	case ScheduleTrigger:
+		tz := v.Timezone
+		if tz == "" {
+			tz = "UTC"
+		}
+		cfg, _ := json.Marshal(map[string]any{
+			"expression": v.Cron,
+			"timezone":   tz,
+		})
+		return types.TriggerBinding{Source: "cron", Config: cfg}, true
+	default:
+		return types.TriggerBinding{}, false
+	}
 }
 
 // WithVCEnabled overrides VC generation for this specific reasoner.
@@ -517,310 +668,6 @@ func rawToMap(raw json.RawMessage) map[string]any {
 		return map[string]any{}
 	}
 	return out
-}
-
-// RegisterReasoner makes a handler available at /reasoners/{name}.
-func (a *Agent) RegisterReasoner(name string, handler HandlerFunc, opts ...ReasonerOption) {
-	if handler == nil {
-		panic("nil handler supplied")
-	}
-
-	meta := &Reasoner{
-		Name:         name,
-		Handler:      handler,
-		InputSchema:  json.RawMessage(`{"type":"object","additionalProperties":true}`),
-		OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":true}`),
-	}
-	for _, opt := range opts {
-		opt(meta)
-	}
-
-	if meta.DefaultCLI {
-		if a.defaultCLIReasoner != "" && a.defaultCLIReasoner != name {
-			a.logger.Printf("warn: default CLI reasoner already set to %s, ignoring default flag on %s", a.defaultCLIReasoner, name)
-			meta.DefaultCLI = false
-		} else {
-			a.defaultCLIReasoner = name
-		}
-	}
-
-	if meta.RequireRealtimeValidation {
-		a.realtimeValidationFunctions[name] = struct{}{}
-	}
-
-	a.reasoners[name] = meta
-}
-
-// Initialize registers the agent with the AgentField control plane without starting a listener.
-func (a *Agent) Initialize(ctx context.Context) error {
-	a.initMu.Lock()
-	defer a.initMu.Unlock()
-
-	if a.initialized {
-		return nil
-	}
-
-	a.logExecutionInfo(ctx, "agent.initialize.start", "initializing agent", map[string]any{
-		"node_id":         a.cfg.NodeID,
-		"deployment_type": a.cfg.DeploymentType,
-	})
-
-	a.ensureProcessLogRing()
-
-	if a.client == nil {
-		a.logExecutionError(ctx, "agent.initialize.failed", "agent field URL is required for server mode", map[string]any{
-			"node_id": a.cfg.NodeID,
-		})
-		return errors.New("AgentFieldURL is required when running in server mode")
-	}
-
-	if len(a.reasoners) == 0 {
-		a.logExecutionError(ctx, "agent.initialize.failed", "no reasoners registered", map[string]any{
-			"node_id": a.cfg.NodeID,
-		})
-		return errors.New("no reasoners registered")
-	}
-
-	if err := a.registerNode(ctx); err != nil {
-		a.logExecutionError(ctx, "agent.initialize.failed", "node registration failed", map[string]any{
-			"node_id": a.cfg.NodeID,
-			"error":   err.Error(),
-		})
-		return fmt.Errorf("register node: %w", err)
-	}
-
-	// Auto-register DIDs if enabled and not already configured.
-	if a.cfg.EnableDID || a.cfg.VCEnabled {
-		if err := a.initializeDIDSystem(ctx); err != nil {
-			a.logger.Printf("warn: DID initialization failed: %v (continuing without DID)", err)
-		}
-	}
-
-	// Mark agent as ready. The control plane protects pending_approval state
-	// (returns 409 if still pending), so this is safe to call unconditionally.
-	// For agents that went through tag approval, the admin process transitions
-	// them to "starting" first, so markReady correctly advances to "ready".
-	if err := a.markReady(ctx); err != nil {
-		a.logger.Printf("warn: initial status update failed: %v", err)
-	}
-
-	a.startLeaseLoop()
-	a.initialized = true
-	a.logExecutionInfo(ctx, "agent.initialize.complete", "agent initialized", map[string]any{
-		"node_id": a.cfg.NodeID,
-	})
-	return nil
-}
-
-// Run intelligently routes between CLI and server modes.
-func (a *Agent) Run(ctx context.Context) error {
-	args := os.Args[1:]
-	if len(args) == 0 && !a.hasCLIReasoners() {
-		return a.Serve(ctx)
-	}
-
-	if len(args) > 0 && args[0] == "serve" {
-		return a.Serve(ctx)
-	}
-
-	return a.runCLI(ctx, args)
-}
-
-// Serve starts the agent HTTP server, registers with the control plane, and blocks until ctx is cancelled.
-func (a *Agent) Serve(ctx context.Context) error {
-	a.logExecutionInfo(ctx, "agent.serve.start", "starting agent server", map[string]any{
-		"node_id": a.cfg.NodeID,
-	})
-	if err := a.Initialize(ctx); err != nil {
-		return err
-	}
-
-	if err := a.startServer(); err != nil {
-		return fmt.Errorf("start server: %w", err)
-	}
-
-	// listen for shutdown.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-
-	select {
-	case <-ctx.Done():
-		a.logExecutionInfo(context.Background(), "agent.serve.stop", "context cancelled, shutting down", map[string]any{
-			"node_id": a.cfg.NodeID,
-		})
-		return a.shutdown(context.Background())
-	case sig := <-sigCh:
-		a.logger.Printf("received signal %s, shutting down", sig)
-		a.logExecutionInfo(context.Background(), "agent.serve.stop", "received termination signal", map[string]any{
-			"node_id": a.cfg.NodeID,
-			"signal":  sig.String(),
-		})
-		return a.shutdown(context.Background())
-	}
-}
-
-func (a *Agent) registerNode(ctx context.Context) error {
-	now := time.Now().UTC()
-	a.logExecutionInfo(ctx, "node.register.start", "registering node with control plane", map[string]any{
-		"node_id":         a.cfg.NodeID,
-		"deployment_type": a.cfg.DeploymentType,
-	})
-
-	reasoners := make([]types.ReasonerDefinition, 0, len(a.reasoners))
-	for _, reasoner := range a.reasoners {
-		reasoners = append(reasoners, types.ReasonerDefinition{
-			ID:           reasoner.Name,
-			InputSchema:  reasoner.InputSchema,
-			OutputSchema: reasoner.OutputSchema,
-			Tags:         reasoner.Tags,
-			ProposedTags: reasoner.Tags,
-		})
-	}
-
-	payload := types.NodeRegistrationRequest{
-		ID:        a.cfg.NodeID,
-		TeamID:    a.cfg.TeamID,
-		BaseURL:   strings.TrimSuffix(a.cfg.PublicURL, "/"),
-		Version:   a.cfg.Version,
-		Reasoners: reasoners,
-		Skills:    []types.SkillDefinition{},
-		CommunicationConfig: types.CommunicationConfig{
-			Protocols:         []string{"http"},
-			HeartbeatInterval: a.registeredHeartbeatInterval(),
-		},
-		HealthStatus:  "healthy",
-		LastHeartbeat: now,
-		RegisteredAt:  now,
-		Metadata: map[string]any{
-			"deployment": map[string]any{
-				"environment": "development",
-				"platform":    "go",
-			},
-			"sdk": map[string]any{
-				"language": "go",
-			},
-			"tags": a.cfg.Tags,
-		},
-		Features:       map[string]any{},
-		DeploymentType: a.cfg.DeploymentType,
-	}
-
-	resp, err := a.client.RegisterNode(ctx, payload)
-	if err != nil {
-		a.logExecutionError(ctx, "node.register.failed", "node registration failed", map[string]any{
-			"node_id": a.cfg.NodeID,
-			"error":   err.Error(),
-		})
-		return err
-	}
-
-	// Handle pending approval state: poll until approved
-	if resp != nil && resp.Status == "pending_approval" {
-		a.logger.Printf("node %s registered but awaiting tag approval (pending tags: %v)", a.cfg.NodeID, resp.PendingTags)
-		a.logExecutionWarn(ctx, "node.register.pending_approval", "node registered but awaiting tag approval", map[string]any{
-			"node_id":      a.cfg.NodeID,
-			"pending_tags": resp.PendingTags,
-		})
-		if err := a.waitForApproval(ctx); err != nil {
-			return fmt.Errorf("tag approval wait failed: %w", err)
-		}
-		a.logger.Printf("node %s tag approval granted", a.cfg.NodeID)
-		a.logExecutionInfo(ctx, "node.register.approved", "tag approval granted", map[string]any{
-			"node_id": a.cfg.NodeID,
-		})
-		return nil
-	}
-
-	a.logger.Printf("node %s registered with AgentField", a.cfg.NodeID)
-	a.logExecutionInfo(ctx, "node.register.complete", "node registered with control plane", map[string]any{
-		"node_id": a.cfg.NodeID,
-	})
-	return nil
-}
-
-func (a *Agent) waitForApproval(ctx context.Context) error {
-	const approvalTimeout = 5 * time.Minute
-	ctx, cancel := context.WithTimeout(ctx, approvalTimeout)
-	defer cancel()
-
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	a.logExecutionInfo(ctx, "node.approval.wait.start", "waiting for tag approval", map[string]any{
-		"node_id": a.cfg.NodeID,
-	})
-
-	for {
-		select {
-		case <-ctx.Done():
-			if ctx.Err() == context.DeadlineExceeded {
-				a.logExecutionWarn(ctx, "node.approval.wait.timeout", "tag approval timed out", map[string]any{
-					"node_id": a.cfg.NodeID,
-				})
-				return fmt.Errorf("tag approval timed out after %s", approvalTimeout)
-			}
-			a.logExecutionWarn(ctx, "node.approval.wait.cancelled", "tag approval wait cancelled", map[string]any{
-				"node_id": a.cfg.NodeID,
-				"error":   ctx.Err().Error(),
-			})
-			return ctx.Err()
-		case <-ticker.C:
-			node, err := a.client.GetNode(ctx, a.cfg.NodeID)
-			if err != nil {
-				a.logger.Printf("polling for approval status failed: %v", err)
-				continue
-			}
-			status, _ := node["lifecycle_status"].(string)
-			if status != "" && status != "pending_approval" {
-				a.logExecutionInfo(ctx, "node.approval.wait.complete", "tag approval granted", map[string]any{
-					"node_id": a.cfg.NodeID,
-					"status":  status,
-				})
-				return nil
-			}
-			a.logger.Printf("node %s still pending approval...", a.cfg.NodeID)
-			a.logExecutionInfo(ctx, "node.approval.wait.pending", "tag approval still pending", map[string]any{
-				"node_id": a.cfg.NodeID,
-			})
-		}
-	}
-}
-
-func (a *Agent) markReady(ctx context.Context) error {
-	score := 100
-	_, err := a.client.UpdateStatus(ctx, a.cfg.NodeID, types.NodeStatusUpdate{
-		Phase:       "ready",
-		Version:     a.cfg.Version,
-		HealthScore: &score,
-	})
-	return err
-}
-
-func (a *Agent) startServer() error {
-	server := &http.Server{
-		Addr:    a.cfg.ListenAddress,
-		Handler: a.Handler(),
-	}
-	a.serverMu.Lock()
-	a.server = server
-	a.serverMu.Unlock()
-
-	go func() {
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			a.logger.Printf("server error: %v", err)
-			a.logExecutionError(context.Background(), "server.failed", "server listener exited with error", map[string]any{
-				"node_id": a.cfg.NodeID,
-				"error":   err.Error(),
-			})
-		}
-	}()
-
-	a.logger.Printf("listening on %s", a.cfg.ListenAddress)
-	a.logExecutionInfo(context.Background(), "server.start", "agent HTTP server listening", map[string]any{
-		"node_id": a.cfg.NodeID,
-		"listen":  a.cfg.ListenAddress,
-	})
-	return nil
 }
 
 // Handler exposes the agent as an http.Handler for serverless or custom hosting scenarios.
@@ -1888,64 +1735,6 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	}
 }
 
-func (a *Agent) startLeaseLoop() {
-	if a.cfg.DisableLeaseLoop || a.cfg.LeaseRefreshInterval <= 0 {
-		return
-	}
-
-	a.leaseLoopOnce.Do(func() {
-		ticker := time.NewTicker(a.cfg.LeaseRefreshInterval)
-		go func() {
-			for {
-				select {
-				case <-ticker.C:
-					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-					if err := a.markReady(ctx); err != nil {
-						a.logger.Printf("lease refresh failed: %v", err)
-					}
-					cancel()
-				case <-a.stopLease:
-					ticker.Stop()
-					return
-				}
-			}
-		}()
-	})
-}
-
-func (a *Agent) shutdown(ctx context.Context) error {
-	a.logExecutionInfo(ctx, "agent.shutdown.start", "shutting down agent", map[string]any{
-		"node_id": a.cfg.NodeID,
-	})
-	close(a.stopLease)
-
-	if a.client != nil {
-		if _, err := a.client.Shutdown(ctx, a.cfg.NodeID, types.ShutdownRequest{Reason: "shutdown", Version: a.cfg.Version}); err != nil {
-			a.logger.Printf("failed to notify shutdown: %v", err)
-			a.logExecutionWarn(ctx, "agent.shutdown.status_failed", "failed to notify control plane about shutdown", map[string]any{
-				"node_id": a.cfg.NodeID,
-				"error":   err.Error(),
-			})
-		}
-	}
-
-	a.serverMu.RLock()
-	server := a.server
-	a.serverMu.RUnlock()
-
-	if server != nil {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			return err
-		}
-	}
-	a.logExecutionInfo(ctx, "agent.shutdown.complete", "agent shutdown complete", map[string]any{
-		"node_id": a.cfg.NodeID,
-	})
-	return nil
-}
-
 // AI makes an AI/LLM call with the given prompt and options.
 // Returns an error if AI is not configured for this agent.
 //
@@ -2058,153 +1847,6 @@ func ExecutionContextFrom(ctx context.Context) ExecutionContext {
 //	agent.Memory().GlobalScope().Set(ctx, "shared_key", data)
 func (a *Agent) Memory() *Memory {
 	return a.memory
-}
-
-// DIDManager returns the agent's DID manager, or nil if DID is not enabled.
-func (a *Agent) DIDManager() *did.Manager {
-	return a.didManager
-}
-
-// VCGenerator returns the agent's VC generator, or nil if VC generation is not enabled.
-func (a *Agent) VCGenerator() *did.VCGenerator {
-	return a.vcGenerator
-}
-
-// initializeDIDSystem sets up DID registration and VC generation.
-// If DID/PrivateKeyJWK are already configured, it skips auto-registration
-// but still sets up the DID manager and VC generator.
-func (a *Agent) initializeDIDSystem(ctx context.Context) error {
-	// Create DID HTTP client for DID endpoints.
-	didClientOpts := []did.ClientOption{did.WithHTTPClient(a.httpClient)}
-	if a.cfg.Token != "" {
-		didClientOpts = append(didClientOpts, did.WithToken(a.cfg.Token))
-	}
-	didClient := did.NewClient(a.cfg.AgentFieldURL, didClientOpts...)
-
-	// Create DID manager.
-	mgr := did.NewManager(didClient, a.logger)
-
-	if a.cfg.DID != "" && a.cfg.PrivateKeyJWK != "" {
-		// Agent already has credentials — skip registration, just populate the manager.
-		mgr.SetIdentityFromCredentials(a.cfg.DID, a.cfg.PrivateKeyJWK)
-	} else {
-		// Auto-register with the control plane's DID service.
-		reasonerNames := make([]string, 0, len(a.reasoners))
-		for name := range a.reasoners {
-			reasonerNames = append(reasonerNames, name)
-		}
-
-		if err := mgr.RegisterAgent(ctx, a.cfg.NodeID, reasonerNames, nil); err != nil {
-			return fmt.Errorf("DID registration: %w", err)
-		}
-
-		// Wire the new credentials into the HTTP client.
-		agentDID := mgr.GetAgentDID()
-		privateKey := mgr.GetAgentPrivateKeyJWK()
-		if agentDID != "" && privateKey != "" {
-			if err := a.client.SetDIDCredentials(agentDID, privateKey); err != nil {
-				return fmt.Errorf("set DID credentials: %w", err)
-			}
-			// Update config so Call() and other paths can see the DID.
-			a.cfg.DID = agentDID
-			a.cfg.PrivateKeyJWK = privateKey
-		}
-	}
-
-	a.didManager = mgr
-
-	// Wire the sign function on the DID client so VC generation requests are DID-signed.
-	didClient.SetSignFunc(func(body []byte) map[string]string {
-		if a.client == nil {
-			return nil
-		}
-		return a.client.SignBody(body)
-	})
-
-	// Set up VC generator if enabled and DID auth is configured.
-	if a.cfg.VCEnabled && a.client != nil && a.client.DIDAuthConfigured() {
-		gen := did.NewVCGenerator(didClient, mgr, a.logger)
-		gen.SetEnabled(true)
-		a.vcGenerator = gen
-		a.logger.Printf("VC generation enabled")
-	}
-
-	return nil
-}
-
-// fillDIDContext populates DID fields on an execution context from the agent's
-// DID manager, if available and not already set from headers.
-func (a *Agent) fillDIDContext(ec *ExecutionContext) {
-	if a.didManager == nil || !a.didManager.IsRegistered() {
-		return
-	}
-	if ec.AgentNodeDID == "" {
-		ec.AgentNodeDID = a.didManager.GetAgentDID()
-	}
-}
-
-// maybeGenerateVC fires a background VC generation request if the agent and
-// reasoner configuration allow it.
-func (a *Agent) maybeGenerateVC(
-	execCtx ExecutionContext,
-	input any,
-	output any,
-	status string,
-	errMsg string,
-	durationMS int64,
-	reasoner *Reasoner,
-) {
-	if !a.shouldGenerateVC(reasoner) {
-		return
-	}
-
-	if execCtx.CallerDID == "" {
-		a.logger.Printf("⚠️ VC generation for %s: CallerDID is empty (anonymous caller?), control plane will use fallback DID", execCtx.ExecutionID)
-	}
-
-	didExecCtx := did.ExecutionContext{
-		ExecutionID:  execCtx.ExecutionID,
-		WorkflowID:   execCtx.WorkflowID,
-		SessionID:    execCtx.SessionID,
-		CallerDID:    execCtx.CallerDID,
-		TargetDID:    execCtx.TargetDID,
-		AgentNodeDID: execCtx.AgentNodeDID,
-	}
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if _, err := a.vcGenerator.GenerateExecutionVC(ctx, didExecCtx, input, output, status, errMsg, durationMS); err != nil {
-			a.logger.Printf("VC generation failed for %s: %v", execCtx.ExecutionID, err)
-		}
-	}()
-}
-
-// shouldGenerateVC checks agent-level and reasoner-level VC settings.
-func (a *Agent) shouldGenerateVC(reasoner *Reasoner) bool {
-	if a.vcGenerator == nil || !a.vcGenerator.IsEnabled() {
-		return false
-	}
-	if a.didManager == nil || !a.didManager.IsRegistered() {
-		return false
-	}
-	// Per-reasoner override takes precedence.
-	if reasoner != nil && reasoner.VCEnabled != nil {
-		return *reasoner.VCEnabled
-	}
-	return true
-}
-
-// registeredHeartbeatInterval returns the HeartbeatInterval value sent to
-// the control plane during node registration. When the lease loop is
-// disabled, the agent does not send periodic heartbeats, so we advertise
-// "0s" to signal that behavior accurately rather than registering a
-// cadence the agent does not honor.
-func (a *Agent) registeredHeartbeatInterval() string {
-	if a.cfg.DisableLeaseLoop {
-		return "0s"
-	}
-	return formatHeartbeatInterval(a.cfg.LeaseRefreshInterval)
 }
 
 // formatHeartbeatInterval formats a LeaseRefreshInterval as a Go duration

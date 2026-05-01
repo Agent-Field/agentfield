@@ -7,11 +7,33 @@ import (
 
 // ReasonerDefinition mirrors the AgentField server registration contract.
 type ReasonerDefinition struct {
-	ID           string          `json:"id"`
-	InputSchema  json.RawMessage `json:"input_schema"`
-	OutputSchema json.RawMessage `json:"output_schema"`
-	Tags         []string        `json:"tags,omitempty"`
-	ProposedTags []string        `json:"proposed_tags,omitempty"`
+	ID             string           `json:"id"`
+	InputSchema    json.RawMessage  `json:"input_schema"`
+	OutputSchema   json.RawMessage  `json:"output_schema"`
+	Tags           []string         `json:"tags,omitempty"`
+	ProposedTags   []string         `json:"proposed_tags,omitempty"`
+	Triggers       []TriggerBinding `json:"triggers,omitempty"`
+	AcceptsWebhook *string          `json:"accepts_webhook,omitempty"`
+}
+
+// TriggerBinding declares that a reasoner should fire when an external Source
+// emits a matching event. Bindings are sent at agent registration time and
+// the control plane upserts a code-managed Trigger row per binding so the
+// agent does not need to provision webhooks itself.
+//
+// Source is the registered Source name ("stripe", "github", "cron", etc.).
+// EventTypes filters which event types from that source dispatch to this
+// reasoner — empty matches all. Config is Source-specific JSON (passed through
+// the Source's Validate). SecretEnvVar names an env var on the control plane
+// that holds the provider secret used for signature verification.
+// CodeOrigin captures the caller's file and line number where the trigger
+// was declared, for observability and debugging purposes.
+type TriggerBinding struct {
+	Source       string          `json:"source"`
+	EventTypes   []string        `json:"event_types,omitempty"`
+	Config       json.RawMessage `json:"config,omitempty"`
+	SecretEnvVar string          `json:"secret_env_var,omitempty"`
+	CodeOrigin   string          `json:"code_origin,omitempty"`
 }
 
 // SkillDefinition is included for completeness.

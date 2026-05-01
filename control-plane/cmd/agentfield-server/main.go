@@ -245,6 +245,13 @@ func loadConfig(configFile string) (*config.Config, error) {
 	// This is needed because Viper's AutomaticEnv only works for keys that exist in config
 	_ = viper.BindEnv("api.auth.api_key", "AGENTFIELD_API_KEY")
 	_ = viper.BindEnv("api.auth.api_key", "AGENTFIELD_API_AUTH_API_KEY")
+	// AutomaticEnv makes viper.IsSet("features.did.enabled") return true once
+	// AGENTFIELD_FEATURES_DID_ENABLED is set, but Unmarshal won't actually
+	// populate the struct field unless the key is bound. Without this, setting
+	// the env var quietly leaves DID at its zero value (false) and skips the
+	// "default to true" branch below — i.e. the env var would silently turn DID
+	// off instead of on.
+	_ = viper.BindEnv("features.did.enabled", "AGENTFIELD_FEATURES_DID_ENABLED")
 
 	// Skip config file reading if explicitly set to /dev/null or empty
 	if configFile != "/dev/null" && configFile != "" {

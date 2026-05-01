@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -210,6 +211,40 @@ func TestAPIKeyAuth_SkipUIPath(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// TestAPIKeyAuth_SkipPublicWebhookIngest pins that the public webhook
+// ingest endpoint at /sources/:trigger_id is reachable without the global
+// API key. Webhook providers (Stripe / GitHub / Slack / generic HMAC /
+// generic Bearer) cannot be reconfigured to forward AGENTFIELD_API_KEY,
+// so requiring it here would 401 every real delivery before signature
+// verification ran. Each Source plugin enforces its own constant-time
+// signature check inside the handler.
+//
+// Regression target: production deployments that set AGENTFIELD_API_KEY
+// previously rejected every signed webhook with HTTP 401 before the
+// trigger handler had a chance to verify the payload.
+func TestAPIKeyAuth_SkipPublicWebhookIngest(t *testing.T) {
+	router := gin.New()
+	router.Use(APIKeyAuth(AuthConfig{APIKey: "secret-key"}))
+	router.POST("/sources/:trigger_id", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"received": 1, "status": "ok"})
+	})
+
+	// No API key on the request — simulating a real webhook from a
+	// provider that doesn't know our internal API key.
+	req := httptest.NewRequest(http.MethodPost, "/sources/trig-abc",
+		strings.NewReader(`{"id":"evt_1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Stripe-Signature", "t=123,v1=fake")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code,
+		"public webhook ingest must bypass global API key auth so providers "+
+			"can reach the trigger handler; signature verification happens "+
+			"inside the handler, not in this middleware")
 }
 
 func TestAPIKeyAuth_CustomSkipPaths(t *testing.T) {

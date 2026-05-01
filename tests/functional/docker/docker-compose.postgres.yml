@@ -31,6 +31,7 @@ services:
       AGENTFIELD_DATABASE_URL: postgres://agentfield:agentfield_test_pass@postgres:5432/agentfield_test?sslmode=disable
       AGENTFIELD_PORT: 8080
       AGENTFIELD_CONFIG_FILE: /etc/agentfield/agentfield-test.yaml
+      AGENTFIELD_APPROVAL_WEBHOOK_SECRET: test-approval-webhook-secret
       AGENTFIELD_HOME: /data/agentfield
       # Allow webhooks to the test-runner container (RFC-1918 Docker bridge IPs).
       AGENTFIELD_WEBHOOK_ALLOWED_HOSTS: "test-runner"
@@ -53,6 +54,7 @@ services:
     container_name: agentfield-test-runner-postgres
     environment:
       AGENTFIELD_SERVER: http://control-plane:8080
+      APPROVAL_WEBHOOK_SECRET: test-approval-webhook-secret
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openrouter/google/gemini-2.5-flash-lite}
       STORAGE_MODE: postgres

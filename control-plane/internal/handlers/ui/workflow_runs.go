@@ -51,6 +51,11 @@ type WorkflowRunSummary struct {
 	DurationMs       *int64         `json:"duration_ms,omitempty"`
 	LatestActivity   time.Time      `json:"latest_activity"`
 	Terminal         bool           `json:"terminal"`
+	// Trigger describes the inbound webhook (or schedule) that originated
+	// this run, when one exists. Populated by walking the root execution's
+	// VC chain back to the parent trigger_event VC. Nil for runs invoked
+	// directly or by another reasoner.
+	Trigger *types.TriggerEventMetadata `json:"trigger,omitempty"`
 }
 
 type WorkflowRunListResponse struct {
@@ -147,10 +152,22 @@ func (h *WorkflowRunHandler) ListWorkflowRunsHandler(c *gin.Context) {
 		return
 	}
 
-	// Convert aggregations to API response format
+	// Convert aggregations to API response format. Best-effort trigger
+	// enrichment per row — populates summary.Trigger when the run was
+	// dispatched by a webhook/schedule. TriggerForRun tries the direct
+	// dispatcher-recorded workflow_id mapping first, then falls back to
+	// the DID/VC chain. We swallow errors so the list never fails on
+	// metadata.
 	summaries := make([]WorkflowRunSummary, 0, len(runAggregations))
 	for _, agg := range runAggregations {
-		summaries = append(summaries, convertAggregationToSummary(agg))
+		summary := convertAggregationToSummary(agg)
+		summary.Trigger = handlers.TriggerForRun(
+			ctx,
+			h.storage,
+			summary.RunID,
+			summary.RootExecutionID,
+		)
+		summaries = append(summaries, summary)
 	}
 
 	totalCount := totalRuns

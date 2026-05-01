@@ -3,6 +3,11 @@ agentfield:
   registration:
     serverless_discovery_allowed_hosts:
       - "test-runner"
+  approval:
+    # Functional tests exercise /api/v1/webhooks/approval-response directly.
+    # The control plane requires HMAC signatures when this is set.
+    webhook_secret: "test-approval-webhook-secret"
+    default_expiry_hours: 72
   mode: "local"
   max_concurrent_requests: 512
   request_timeout: 180s

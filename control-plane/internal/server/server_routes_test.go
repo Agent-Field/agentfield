@@ -370,6 +370,9 @@ func (s *stubStorage) StoreAgentDIDWithComponents(ctx context.Context, agentID, 
 func (s *stubStorage) StoreExecutionVC(ctx context.Context, vcID, executionID, workflowID, sessionID, issuerDID, targetDID, callerDID, inputHash, outputHash, status string, vcDocument []byte, signature string, storageURI string, documentSizeBytes int64) error {
 	return nil
 }
+func (s *stubStorage) StoreExecutionVCRecord(ctx context.Context, vc *types.ExecutionVC) error {
+	return nil
+}
 func (s *stubStorage) GetExecutionVC(ctx context.Context, vcID string) (*types.ExecutionVCInfo, error) {
 	return nil, nil
 }
@@ -680,3 +683,22 @@ func TestUnregisterAgentFromMonitoringResponses(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code)
 	})
 }
+
+// Trigger plugin system stubs — interface fillers for the test mock; not exercised.
+func (s *stubStorage) CreateTrigger(context.Context, *types.Trigger) error { return nil }
+func (s *stubStorage) GetTrigger(context.Context, string) (*types.Trigger, error) { return nil, nil }
+func (s *stubStorage) ListTriggers(context.Context, string, string) ([]*types.Trigger, error) { return nil, nil }
+func (s *stubStorage) UpdateTrigger(context.Context, *types.Trigger) error { return nil }
+func (s *stubStorage) DeleteTrigger(context.Context, string) error { return nil }
+func (s *stubStorage) UpsertCodeManagedTrigger(context.Context, *types.Trigger) (string, error) { return "", nil }
+func (s *stubStorage) MarkOrphanedTriggers(context.Context, string, []string) error { return nil }
+func (s *stubStorage) SetTriggerOverride(context.Context, string, bool, bool) error { return nil }
+func (s *stubStorage) ConvertTriggerToUIManaged(context.Context, string) error { return nil }
+func (s *stubStorage) InsertInboundEvent(context.Context, *types.InboundEvent) error { return nil }
+func (s *stubStorage) InboundEventExistsByIdempotency(context.Context, string, string) (bool, error) { return false, nil }
+func (s *stubStorage) GetInboundEvent(context.Context, string) (*types.InboundEvent, error) { return nil, nil }
+func (s *stubStorage) ListInboundEvents(context.Context, string, int) ([]*types.InboundEvent, error) { return nil, nil }
+func (s *stubStorage) MarkInboundEventProcessed(context.Context, string, string, string, string) error { return nil }
+func (m *stubStorage) SetInboundEventDispatchedWorkflow(context.Context, string, string) error { return nil }
+func (m *stubStorage) GetInboundEventByWorkflowID(context.Context, string) (*types.InboundEvent, error) { return nil, nil }
+func (s *stubStorage) TriggerMetrics(context.Context) (*types.TriggerMetrics, error) { return &types.TriggerMetrics{}, nil }

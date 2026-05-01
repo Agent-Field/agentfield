@@ -270,6 +270,7 @@ func (h *DIDHandlers) CreateExecutionVC(c *gin.Context) {
 			TargetDID    string `json:"target_did"`
 			AgentNodeDID string `json:"agent_node_did"`
 			Timestamp    string `json:"timestamp"`
+			ParentVCID   string `json:"parent_vc_id,omitempty"`
 		} `json:"execution_context"`
 		InputData    []byte  `json:"input_data"`
 		OutputData   []byte  `json:"output_data"`
@@ -307,7 +308,10 @@ func (h *DIDHandlers) CreateExecutionVC(c *gin.Context) {
 		return
 	}
 
-	// Create execution context
+	// Create execution context. ParentVCID is optional and forwarded to
+	// GenerateExecutionVC so the resulting VC's parent_vc_id is populated
+	// and the chain extends across system boundaries (e.g. trigger event VC
+	// → reasoner execution VC).
 	execCtx := &types.ExecutionContext{
 		ExecutionID:  req.ExecutionContext.ExecutionID,
 		WorkflowID:   req.ExecutionContext.WorkflowID,
@@ -316,6 +320,7 @@ func (h *DIDHandlers) CreateExecutionVC(c *gin.Context) {
 		TargetDID:    req.ExecutionContext.TargetDID,
 		AgentNodeDID: req.ExecutionContext.AgentNodeDID,
 		Timestamp:    timestamp,
+		ParentVCID:   req.ExecutionContext.ParentVCID,
 	}
 
 	// Generate execution VC
