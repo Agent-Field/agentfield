@@ -19,12 +19,8 @@ func TestOpenCodeConcurrencyLimit(t *testing.T) {
 	var maxSeen int64
 	var wg sync.WaitGroup
 
-	// 🔥 save original runCLI
-	originalRunCLI := runCLI
-	defer func() { runCLI = originalRunCLI }()
-
-	// 🔥 mock runCLI
-	runCLI = func(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int) (*CLIResult, error) {
+	p := NewOpenCodeProvider("", "")
+	p.runCLI = func(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int) (*CLIResult, error) {
 		c := atomic.AddInt64(&current, 1)
 
 		// track max concurrency
@@ -46,8 +42,6 @@ func TestOpenCodeConcurrencyLimit(t *testing.T) {
 		return &CLIResult{}, nil
 	}
 
-	p := NewOpenCodeProvider("", "")
-
 	// launch 5 concurrent calls
 	for i := 0; i < 5; i++ {
 		wg.Add(1)
@@ -67,29 +61,25 @@ func TestOpenCodeConcurrencyLimit(t *testing.T) {
 func TestOpenCodeContextCancellation(t *testing.T) {
 	t.Setenv("OPENCODE_MAX_CONCURRENT", "1")
 
-	// reset semaphore
 	openCodeSemaphore = nil
 	semOnce = sync.Once{}
 
-	// hold the only slot
-	original := runCLI
-	defer func() { runCLI = original }()
-
 	block := make(chan struct{})
-
-	runCLI = func(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int) (*CLIResult, error) {
-		<-block // never releases until we close it
-		return &CLIResult{}, nil
-	}
+	defer close(block)
 
 	p := NewOpenCodeProvider("", "")
+
+	p.runCLI = func(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int) (*CLIResult, error) {
+		<-block
+		return &CLIResult{}, nil
+	}
 
 	// occupy the slot
 	go func() {
 		_, _ = p.Execute(context.Background(), "test", Options{})
 	}()
 
-	time.Sleep(50 * time.Millisecond) // ensure slot is taken
+	time.Sleep(50 * time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
