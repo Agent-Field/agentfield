@@ -6,16 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
-## [0.1.72-rc.6] - 2026-04-28
-
-### Added
-- Configurable concurrency limit via `OPENCODE_MAX_CONCURRENT`
-
-### Changed
-- Limited concurrent OpenCode executions to prevent resource exhaustion
-
-
 ## [0.1.72-rc.6] - 2026-04-27
+
 
 ### Added
 
