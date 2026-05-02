@@ -199,12 +199,24 @@ fi
 		raw, err := NewOpenCodeProvider(script, "").Execute(context.Background(), "prompt", Options{
 			Cwd:        dir,
 			ProjectDir: "/ignored/project",
+			Model:      "stub-model",
 		})
 		require.NoError(t, err)
 		assert.False(t, raw.IsError)
+		// $PWD reflects the subprocess working directory (Options.Cwd).
 		assert.Contains(t, raw.Result, dir)
-		assert.Contains(t, raw.Result, "-q")
-		assert.Contains(t, raw.Result, "-p prompt")
+		// opencode 1.14+ surface: `run` subcommand, --dir for project, -m for
+		// model, --dangerously-skip-permissions for headless, prompt is
+		// positional. -c, -q, -p are deprecated/rebound (see issue #517).
+		assert.Contains(t, raw.Result, "run")
+		assert.Contains(t, raw.Result, "--dir /ignored/project")
+		assert.Contains(t, raw.Result, "-m stub-model")
+		assert.Contains(t, raw.Result, "--dangerously-skip-permissions")
+		// Prompt is the last positional argument (no -p flag in front).
+		assert.Regexp(t, `\sprompt$`, strings.TrimSpace(raw.Result))
+		assert.NotContains(t, raw.Result, "-q ")
+		assert.NotContains(t, raw.Result, "-p prompt")
+		assert.NotContains(t, raw.Result, "-c /ignored/project")
 	})
 }
 

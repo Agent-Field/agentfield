@@ -6,6 +6,104 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.72-rc.11] - 2026-05-01
+
+
+### Fixed
+
+- Fix(harness): limit opencode concurrency with global semaphore (#438) (#505)
+
+* fix(harness): limit opencode concurrency with global semaphore (#438)
+
+* added in changelog
+
+* fix: address review feedback (remove global runCLI, fix test cleanup)
+
+* chore(changelog): drop manual entry, release bot owns CHANGELOG.md
+
+The release tooling auto-generates CHANGELOG.md entries on each
+chore(release) commit; manual edits collide with that and produced a
+duplicate [0.1.72-rc.6] heading here. Reverting CHANGELOG.md to its
+pre-edit state.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* test(harness/go): exercise OpenCode semaphore against real subprocesses
+
+The existing semaphore tests mock `p.runCLI`, which proves the channel
+arithmetic but not that the semaphore actually serializes real subprocess
+spawns alongside the new opencode 1.14+ flag construction (#519). Adds
+two functional tests that drive the full Execute path through RunCLI:
+
+- TestOpenCodeConcurrencyLimit_RealSubprocess: a fake `opencode` shell
+  script writes per-invocation start/end timestamps; a sweep-line over
+  the recorded spans asserts the maximum overlap never exceeds
+  OPENCODE_MAX_CONCURRENT (and, conversely, that real overlap was
+  observed — guarding against a future change that accidentally
+  serializes everything to 1).
+- TestOpenCodeSemaphore_ReleasedOnSubprocessFailure: with limit=1, three
+  sequential calls into a script that exits non-zero must all complete.
+  If a slot leaked on the failure path the second call would block
+  forever.
+
+Manually smoke-tested against a real opencode 1.14.29 binary as well:
+4 concurrent Execute calls with limit=2 produced the expected ~2x
+single-call duration (paired stair pattern), and the binary accepted
+the new `run --dir <project> -m <model> --dangerously-skip-permissions
+<prompt>` invocation without help-screen fallback.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (994e3bc)
+
+## [0.1.72-rc.10] - 2026-04-29
+
+
+### Fixed
+
+- Fix(harness/go): use opencode 1.14+ CLI surface (#519)
+
+Closes #517.
+
+opencode 1.14 rebound the legacy top-level flags the Go provider was
+emitting (`opencode -c <dir> -q -p <prompt>`):
+
+  - `-c` → `--continue` (resume previous session)
+  - `-p` → `--password` (provider password)
+
+Against a current install the binary printed help and exited without
+running, so callers got an empty `RawResult` — the success path
+returned a non-error result with no output, no diffs, and no tool
+calls. The Python SDK has already migrated to the modern surface; the
+Go SDK was the missing half.
+
+This change moves the Go provider to the same shape:
+
+    opencode run --dir <project> [-m <model>] \
+                 --dangerously-skip-permissions <prompt>
+
+`run` is the explicit non-interactive subcommand, `--dir` is the
+project root the agent operates on, `-m` selects the model, and
+`--dangerously-skip-permissions` is required for headless invocation.
+The prompt is positional now (no `-p` flag in front of it).
+
+For the project directory I take `Options.ProjectDir` first, falling
+back to `Options.Cwd`. That preserves the historical convention where
+callers set `ProjectDir` to point opencode at the project, while
+still honouring `Cwd` for callers that only set the working directory.
+The subprocess CWD continues to come from `Options.Cwd` so behaviour
+under `RunCLI` is unchanged.
+
+Updated the existing OpenCode coverage test to assert the new flag
+shape (`run`, `--dir`, `-m`, `--dangerously-skip-permissions`,
+positional prompt) and explicitly forbid the deprecated `-c`, `-q`,
+`-p prompt` strings so a regression wouldn't slip back in.
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (c566c0c)
+
 ## [0.1.72-rc.9] - 2026-04-29
 
 
