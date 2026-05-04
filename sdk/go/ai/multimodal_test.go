@@ -12,26 +12,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func Test_detectMIMEType(t *testing.T) {
-	tests := []struct {
-		name string // description of this test case
-		// Named input parameters for target function.
-		path string
-		want string
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := detectMIMEType(tt.path)
-			// TODO: update the condition below to compare got with tt.want.
-			if true {
-				t.Errorf("detectMIMEType() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestWithAudioFile(t *testing.T) {
 	tempFile, err := os.CreateTemp("", "test_audio_*.mp3")
 	assert.NoError(t, err)
