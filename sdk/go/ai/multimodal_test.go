@@ -161,3 +161,67 @@ func TestWithFile(t *testing.T) {
         })
     }
 }
+
+func TestWithAudioFile_ReadError(t *testing.T) {
+	req := &Request{}
+	err := WithAudioFile("/nonexistent/path/to/audio.mp3", "mp3")(req)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "read audio file")
+	assert.Empty(t, req.Messages)
+}
+
+func TestWithAudioURL_FetchError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	url := server.URL
+	server.Close()
+
+	req := &Request{}
+	err := WithAudioURL(url, "mp3")(req)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "fetch audio file")
+	assert.Empty(t, req.Messages)
+}
+
+func TestWithAudioURL_HTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	req := &Request{}
+	err := WithAudioURL(server.URL, "mp3")(req)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "HTTP 500")
+	assert.Empty(t, req.Messages)
+}
+
+func TestWithAudioURL_ExceedsSizeCap(t *testing.T) {
+	prev := maxAudioURLBytes
+	maxAudioURLBytes = 8
+	defer func() { maxAudioURLBytes = prev }()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("oversized-payload"))
+	}))
+	defer server.Close()
+
+	req := &Request{}
+	err := WithAudioURL(server.URL, "mp3")(req)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds")
+	assert.Empty(t, req.Messages)
+}
+
+func TestWithFile_ReadError(t *testing.T) {
+	req := &Request{}
+	err := WithFile("/nonexistent/path/to/file.pdf", "application/pdf")(req)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "read file")
+	assert.Empty(t, req.Messages)
+}

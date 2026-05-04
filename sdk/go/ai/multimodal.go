@@ -15,7 +15,8 @@ import (
 var audioURLClient = &http.Client{Timeout: 30 * time.Second}
 
 // maxAudioURLBytes caps the response body read by WithAudioURL.
-const maxAudioURLBytes = 50 * 1024 * 1024
+// Declared as a var so tests can shrink it without streaming 50 MiB.
+var maxAudioURLBytes int64 = 50 * 1024 * 1024
 
 func detectMIMEType(path string) string {
 	lower := strings.ToLower(path)
@@ -79,12 +80,13 @@ func WithAudioURL(url string, mediaType string) Option{
 			return fmt.Errorf("fetch audio file: HTTP %d", response.StatusCode)
 		}
 
-		data, err := io.ReadAll(io.LimitReader(response.Body, maxAudioURLBytes+1))
+		cap := maxAudioURLBytes
+		data, err := io.ReadAll(io.LimitReader(response.Body, cap+1))
 		if err != nil{
 			return fmt.Errorf("read audio response: %w", err)
 		}
-		if int64(len(data)) > maxAudioURLBytes {
-			return fmt.Errorf("fetch audio file: response exceeds %d bytes", maxAudioURLBytes)
+		if int64(len(data)) > cap {
+			return fmt.Errorf("fetch audio file: response exceeds %d bytes", cap)
 		}
 
 		encoded := base64.StdEncoding.EncodeToString(data)
