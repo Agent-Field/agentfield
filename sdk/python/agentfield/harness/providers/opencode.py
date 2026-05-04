@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -14,6 +15,36 @@ from agentfield.harness._cli import estimate_cli_cost, run_cli, strip_ansi
 from agentfield.harness._result import FailureType, Metrics, RawResult
 
 logger = logging.getLogger("agentfield.harness.opencode")
+
+# opencode CLI sometimes prints a hard error to stderr but exits 0
+# (notably "Model not found", auth errors, schema validation failures).
+# These patterns mark stderr as containing a real failure, not just noise
+# like the one-time SQLite migration prelude.
+_OPENCODE_STDERR_ERROR_PATTERNS = (
+    re.compile(r"^Error:", re.MULTILINE),
+    re.compile(r"\bModel not found\b"),
+    re.compile(r"\bAuthenticationError\b"),
+    re.compile(r"\bUnauthorized\b"),
+    re.compile(r"\bAPIError\b"),
+)
+
+
+def _extract_opencode_error(stderr: str) -> str:
+    """Pull the meaningful failure line(s) out of opencode stderr.
+
+    opencode's stderr typically opens with the SQLite migration prelude
+    ("Performing one time database migration…") followed by the real error.
+    Naively truncating the first 800 chars hides the part that matters,
+    so prefer the line carrying the error marker plus a small window of
+    context around it.
+    """
+    lines = stderr.splitlines()
+    for i, line in enumerate(lines):
+        for pat in _OPENCODE_STDERR_ERROR_PATTERNS:
+            if pat.search(line):
+                window = lines[max(0, i - 1) : i + 5]
+                return "\n".join(window).strip()[:1000]
+    return stderr[:1000]
 
 
 class OpenCodeProvider:
@@ -144,10 +175,22 @@ class OpenCodeProvider:
             failure_type = FailureType.CRASH
             is_error = True
             error_message = (
-                clean_stderr[:1000]
+                _extract_opencode_error(clean_stderr)
                 if clean_stderr
                 else (f"Process exited with code {returncode} and produced no output.")
             )
+        elif (
+            result_text is None
+            and clean_stderr
+            and any(pat.search(clean_stderr) for pat in _OPENCODE_STDERR_ERROR_PATTERNS)
+        ):
+            # opencode sometimes exits 0 even on hard failures like
+            # "Model not found" — surface the real error from stderr instead
+            # of silently returning empty output that downstream callers
+            # interpret as "agent failed to produce a valid result".
+            failure_type = FailureType.CRASH
+            is_error = True
+            error_message = _extract_opencode_error(clean_stderr)
         else:
             failure_type = FailureType.NONE
             is_error = False
