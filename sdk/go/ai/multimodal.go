@@ -7,7 +7,15 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
+
+// audioURLClient bounds remote audio fetches so a slow or oversized
+// response can't hang the caller or exhaust memory.
+var audioURLClient = &http.Client{Timeout: 30 * time.Second}
+
+// maxAudioURLBytes caps the response body read by WithAudioURL.
+const maxAudioURLBytes = 50 * 1024 * 1024
 
 func detectMIMEType(path string) string {
 	lower := strings.ToLower(path)
@@ -60,7 +68,7 @@ func WithAudioFile(path string, mediaType string) Option{
 // The format string must be explicitly provided (e.g., "mp3", "wav").
 func WithAudioURL(url string, mediaType string) Option{
 	return func(r* Request) error {
-		response, err := http.Get(url)
+		response, err := audioURLClient.Get(url)
 		if err != nil{
 			return fmt.Errorf("fetch audio file: %w", err)
 		}
@@ -71,9 +79,12 @@ func WithAudioURL(url string, mediaType string) Option{
 			return fmt.Errorf("fetch audio file: HTTP %d", response.StatusCode)
 		}
 
-		data, err := io.ReadAll(response.Body)
+		data, err := io.ReadAll(io.LimitReader(response.Body, maxAudioURLBytes+1))
 		if err != nil{
 			return fmt.Errorf("read audio response: %w", err)
+		}
+		if int64(len(data)) > maxAudioURLBytes {
+			return fmt.Errorf("fetch audio file: response exceeds %d bytes", maxAudioURLBytes)
 		}
 
 		encoded := base64.StdEncoding.EncodeToString(data)
