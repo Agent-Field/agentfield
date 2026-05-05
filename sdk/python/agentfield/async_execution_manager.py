@@ -18,7 +18,11 @@ import aiohttp
 
 from .async_config import AsyncConfig
 from .execution_state import ExecuteError, ExecutionPriority, ExecutionState, ExecutionStatus
-from .exceptions import AgentFieldClientError, ExecutionTimeoutError
+from .exceptions import (
+    AgentFieldClientError,
+    ExecutionFailedError,
+    ExecutionTimeoutError,
+)
 from .http_connection_manager import ConnectionManager
 from .logger import get_logger
 from .result_cache import ResultCache
@@ -551,7 +555,16 @@ class AsyncExecutionManager:
                             )
                         return execution.result
                     elif execution.status == ExecutionStatus.FAILED:
-                        raise AgentFieldClientError(
+                        # The reasoner ran and explicitly returned a failed
+                        # result. Surface as ExecutionFailedError (a subclass
+                        # of AgentFieldClientError, kept for backward compat)
+                        # so Agent.call can skip the sync fallback path: the
+                        # reasoner's already done its work, retrying with the
+                        # same input would burn the same budget for the same
+                        # outcome. Transient transport / submission errors
+                        # still surface as plain AgentFieldClientError and
+                        # remain retry-eligible.
+                        raise ExecutionFailedError(
                             f"Execution failed: {execution.error_message}"
                         )
                     elif execution.status == ExecutionStatus.CANCELLED:
