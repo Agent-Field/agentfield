@@ -221,6 +221,59 @@ func TestRegisterNodeHandler_PersistsInstanceID(t *testing.T) {
 		"instance_id must be propagated through to the stored agent record")
 }
 
+// TestRegisterNodeHandler_InstanceChangeWithNothingToReap covers the
+// realistic "agent restarted but had no in-flight work" branch: an instance
+// flip is detected, the reap query runs, and zero rows match. The handler
+// must take the "nothing to reap" log branch (rather than the success or
+// error branches) and the registration must succeed normally. Without this
+// case, the most common production trace — restart of an idle agent — would
+// be uncovered.
+func TestRegisterNodeHandler_InstanceChangeWithNothingToReap(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := &zeroReapStorageStub{
+		orphanReapStorageStub: orphanReapStorageStub{
+			nodeRESTStorageStub: nodeRESTStorageStub{
+				agent: &types.AgentNode{
+					ID:              "github-buddy",
+					BaseURL:         "http://10.0.0.5:8080",
+					LifecycleStatus: types.AgentStatusReady,
+					HealthStatus:    types.HealthStatusActive,
+					InstanceID:      "alpha",
+				},
+			},
+		},
+	}
+	router := gin.New()
+	router.POST("/nodes/register", RegisterNodeHandler(store, nil, nil, nil, nil, nil))
+
+	body := `{
+		"id":"github-buddy",
+		"base_url":"http://10.0.0.5:8080",
+		"instance_id":"beta",
+		"callback_discovery":{"mode":"manual","preferred":"http://10.0.0.5:8080"}
+	}`
+	rec := registerNodeWithBody(t, router, body)
+	require.Equal(t, http.StatusCreated, rec.Code,
+		"instance change with nothing to reap is the common idle-agent "+
+			"restart case; registration must complete normally")
+	require.Len(t, store.orphanCalls, 1,
+		"the reap is still invoked — the handler can't know in advance "+
+			"whether there's anything to reap")
+	require.NotNil(t, store.registeredAgent)
+	assert.Equal(t, "beta", store.registeredAgent.InstanceID)
+}
+
+// zeroReapStorageStub returns 0 from MarkAgentExecutionsOrphaned, simulating
+// a successful reap query that matched no rows.
+type zeroReapStorageStub struct {
+	orphanReapStorageStub
+}
+
+func (s *zeroReapStorageStub) MarkAgentExecutionsOrphaned(_ context.Context, agentNodeID, reasonMessage string) (int, error) {
+	s.orphanCalls = append(s.orphanCalls, orphanReapCall{agentNodeID: agentNodeID, reason: reasonMessage})
+	return 0, nil
+}
+
 // TestRegisterNodeHandlerReapFailureDoesNotBlockRegistration guards the
 // best-effort error path. The reap is logged-and-continue precisely so a
 // transient DB hiccup during cleanup never wedges agent registration —
