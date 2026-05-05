@@ -20,12 +20,17 @@ class HeartbeatData:
     status: AgentStatus
     timestamp: str
     version: str = ""
+    # Per-process identifier. Sent on every heartbeat so the control plane
+    # can detect a redeploy even if the post-restart re-registration step
+    # was missed (e.g. dropped while the new process was still booting).
+    instance_id: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "status": self.status.value,
             "timestamp": self.timestamp,
             "version": self.version,
+            "instance_id": self.instance_id,
         }
 
 

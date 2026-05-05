@@ -132,6 +132,7 @@ class AgentFieldHandler:
                 version=self.agent.version,
                 agent_metadata=self.agent._build_agent_metadata(),
                 tags=self.agent.agent_tags,
+                instance_id=getattr(self.agent, "agent_instance_id", "") or "",
             )
             if success:
                 if payload:
@@ -299,6 +300,7 @@ class AgentFieldHandler:
                 status=self.agent._current_status,
                 timestamp=datetime.now().isoformat(),
                 version=getattr(self.agent, 'version', '') or '',
+                instance_id=getattr(self.agent, 'agent_instance_id', '') or '',
             )
 
             # Send enhanced heartbeat
@@ -483,6 +485,7 @@ class AgentFieldHandler:
                 version=self.agent.version,
                 agent_metadata=self.agent._build_agent_metadata(),
                 tags=self.agent.agent_tags,
+                instance_id=getattr(self.agent, "agent_instance_id", "") or "",
             )
 
             if success:

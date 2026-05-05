@@ -594,6 +594,16 @@ class Agent(FastAPI):
         self.agent_tags = tags or []
         self.author = author
 
+        # Per-process identifier sent in registration and heartbeats. The control
+        # plane uses a change in this value across re-registrations to detect a
+        # mid-flight redeploy and fail every in-flight execution that was
+        # awaiting a result inside the previous OS process. A fresh UUID per
+        # __init__ is exactly what we want — every Python process gets a unique
+        # one, and a re-import in the same process keeps the same one (since the
+        # same Agent instance is being used).
+        import uuid as _uuid
+        self.agent_instance_id = _uuid.uuid4().hex
+
         # Memory-efficient handler registries (replaces old list-based storage)
         # Using Dict[str, Entry] with __slots__ dataclasses for minimal footprint
         self._reasoner_registry: Dict[str, ReasonerEntry] = {}

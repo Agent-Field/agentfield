@@ -31,6 +31,7 @@ class DummyAgentFieldClient:
         version: str = "1.0.0",
         agent_metadata=None,
         tags=None,
+        instance_id: Optional[str] = None,
     ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         self.register_calls.append(
             {
@@ -43,6 +44,7 @@ class DummyAgentFieldClient:
                 "version": version,
                 "agent_metadata": agent_metadata,
                 "tags": tags,
+                "instance_id": instance_id,
             }
         )
         return True, {"resolved_base_url": base_url}
@@ -59,6 +61,8 @@ class DummyAgentFieldClient:
         vc_metadata=None,
         version: str = "1.0.0",
         agent_metadata=None,
+        tags=None,
+        instance_id: Optional[str] = None,
     ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         return await self.register_agent(
             node_id=node_id,
@@ -69,6 +73,8 @@ class DummyAgentFieldClient:
             vc_metadata=vc_metadata,
             version=version,
             agent_metadata=agent_metadata,
+            tags=tags,
+            instance_id=instance_id,
         )
 
     async def send_enhanced_heartbeat(
