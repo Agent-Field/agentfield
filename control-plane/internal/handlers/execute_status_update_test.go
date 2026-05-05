@@ -305,6 +305,91 @@ func TestUpdateExecutionStatusHandler_ProgressUpdate(t *testing.T) {
 	require.Nil(t, updated.CompletedAt)
 }
 
+// TestUpdateExecutionStatusHandler_TerminalRegression covers the case where a
+// late /status callback (e.g. from a retried fire-and-forget update) tries to
+// move a finished execution back to a non-terminal state. The handler must
+// reject the regression so callers polling /api/v1/executions/:id keep seeing
+// the correct terminal status. Pinned a real production incident where the
+// caller's app.call hung for 7200s because pr-af.review reported "failed" but
+// a later event had stomped the status back to "running".
+func TestUpdateExecutionStatusHandler_TerminalRegression(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := newTestExecutionStorage(nil)
+	payloads := services.NewFilePayloadStore(t.TempDir())
+
+	completed := time.Now().UTC().Add(-time.Minute)
+	execution := &types.Execution{
+		ExecutionID: "exec-terminal",
+		RunID:       "run-1",
+		Status:      types.ExecutionStatusFailed,
+		StartedAt:   time.Now().UTC().Add(-5 * time.Minute),
+		CompletedAt: &completed,
+		CreatedAt:   time.Now().UTC().Add(-5 * time.Minute),
+		UpdatedAt:   completed,
+	}
+	require.NoError(t, store.CreateExecutionRecord(context.Background(), execution))
+
+	router := gin.New()
+	router.PUT("/api/v1/executions/:execution_id/status", UpdateExecutionStatusHandler(store, payloads, nil, 90*time.Second))
+
+	// Late "running" update arrives — must be rejected.
+	reqBody := `{"status": "running"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/executions/exec-terminal/status", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusInternalServerError, resp.Code)
+
+	// DB must still show the original terminal status — no regression.
+	updated, err := store.GetExecutionRecord(context.Background(), "exec-terminal")
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.Equal(t, types.ExecutionStatusFailed, updated.Status)
+	require.NotNil(t, updated.CompletedAt)
+}
+
+// TestUpdateExecutionStatusHandler_TerminalIdempotent confirms the regression
+// guard still allows callers to re-deliver the SAME terminal status (e.g. when
+// the SDK's status-callback retry succeeds after a transient network blip). A
+// terminal→same-terminal POST must return 200 and remain idempotent.
+func TestUpdateExecutionStatusHandler_TerminalIdempotent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := newTestExecutionStorage(nil)
+	payloads := services.NewFilePayloadStore(t.TempDir())
+
+	completed := time.Now().UTC().Add(-time.Minute)
+	execution := &types.Execution{
+		ExecutionID: "exec-idempotent",
+		RunID:       "run-1",
+		Status:      types.ExecutionStatusFailed,
+		StartedAt:   time.Now().UTC().Add(-5 * time.Minute),
+		CompletedAt: &completed,
+		CreatedAt:   time.Now().UTC().Add(-5 * time.Minute),
+		UpdatedAt:   completed,
+	}
+	require.NoError(t, store.CreateExecutionRecord(context.Background(), execution))
+
+	router := gin.New()
+	router.PUT("/api/v1/executions/:execution_id/status", UpdateExecutionStatusHandler(store, payloads, nil, 90*time.Second))
+
+	reqBody := `{"status": "failed", "error": "redelivered"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/executions/exec-idempotent/status", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	updated, err := store.GetExecutionRecord(context.Background(), "exec-idempotent")
+	require.NoError(t, err)
+	require.Equal(t, types.ExecutionStatusFailed, updated.Status)
+}
+
 func TestWaitForExecutionCompletion_Success(t *testing.T) {
 	store := newTestExecutionStorage(nil)
 	controller := newExecutionController(store, nil, nil, 90*time.Second, "")
