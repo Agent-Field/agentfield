@@ -30,8 +30,6 @@ right wires. They are the regression net for the Python half of PR #532.
 
 from __future__ import annotations
 
-import asyncio
-import importlib
 import json
 import re
 import sys
