@@ -70,6 +70,10 @@ type AgentNodeModel struct {
 	Metadata            []byte     `gorm:"column:metadata"`
 	ProposedTags        []byte     `gorm:"column:proposed_tags"`
 	ApprovedTags        []byte     `gorm:"column:approved_tags"`
+	// InstanceID is a per-process identifier emitted by the SDK on every
+	// startup. A change in this value across registrations is the signal the
+	// control plane uses to fail orphaned in-flight executions.
+	InstanceID string `gorm:"column:instance_id;default:''"`
 }
 
 func (AgentNodeModel) TableName() string { return "agent_nodes" }

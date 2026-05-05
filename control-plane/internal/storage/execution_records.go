@@ -1193,6 +1193,129 @@ func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAf
 	return updated, nil
 }
 
+// MarkAgentExecutionsOrphaned fails every still-running execution and workflow
+// execution owned by the given agent_node_id. This is invoked when an agent
+// re-registers with a new instance_id — the previous OS process is gone, and
+// any cross-agent `Agent.call` that was in its `wait_for_execution_result`
+// loop has lost its in-memory state with that process. Leaving those rows in
+// `running` strands the parent reasoner indefinitely (this is exactly the
+// run_1778004368903_9345a88f case observed in production), so we fail them
+// up-front the moment we detect the restart.
+//
+// We touch both `workflow_executions` (the source of truth for the DAG UI) and
+// the legacy `executions` table to keep them consistent — this matches the
+// pattern in MarkStaleWorkflowExecutions.
+//
+// reasonMessage is written to error_message AND status_reason. The terminal
+// status used is "failed" (the agent restarted mid-execution; the work was
+// not completed and was not a deadline timeout).
+func (ls *LocalStorage) MarkAgentExecutionsOrphaned(ctx context.Context, agentNodeID string, reasonMessage string) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, fmt.Errorf("context cancelled before orphan reap: %w", err)
+	}
+	if strings.TrimSpace(agentNodeID) == "" {
+		return 0, fmt.Errorf("agent_node_id is required")
+	}
+	if strings.TrimSpace(reasonMessage) == "" {
+		reasonMessage = "agent_restart_orphaned"
+	}
+
+	db := ls.requireSQLDB()
+
+	// Snapshot started_at so duration_ms reflects "ran until restart".
+	rows, err := db.QueryContext(ctx, `
+		SELECT execution_id, started_at
+		FROM workflow_executions
+		WHERE agent_node_id = ?
+		  AND status IN ('running', 'pending', 'queued', 'waiting')`,
+		agentNodeID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("query orphaned workflow executions: %w", err)
+	}
+	defer rows.Close()
+
+	type orphan struct {
+		id        string
+		startedAt time.Time
+	}
+	var orphans []orphan
+	for rows.Next() {
+		var rec orphan
+		if err := rows.Scan(&rec.id, &rec.startedAt); err != nil {
+			return 0, fmt.Errorf("scan orphan candidate: %w", err)
+		}
+		orphans = append(orphans, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate orphan candidates: %w", err)
+	}
+
+	if len(orphans) == 0 {
+		return 0, nil
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin orphan reap transaction: %w", err)
+	}
+	defer rollbackTx(tx, "MarkAgentExecutionsOrphaned")
+
+	updateWf, err := tx.PrepareContext(ctx, `
+		UPDATE workflow_executions
+		SET status = ?, status_reason = ?, error_message = ?, completed_at = ?, duration_ms = ?, updated_at = ?
+		WHERE execution_id = ?
+		  AND status IN ('running', 'pending', 'queued', 'waiting')`)
+	if err != nil {
+		return 0, fmt.Errorf("prepare orphan workflow update: %w", err)
+	}
+	defer updateWf.Close()
+
+	syncExec, err := tx.PrepareContext(ctx, `
+		UPDATE executions
+		SET status = ?, status_reason = ?, error_message = ?, completed_at = ?, duration_ms = ?, updated_at = ?
+		WHERE execution_id = ?
+		  AND status IN ('running', 'pending', 'queued', 'waiting')`)
+	if err != nil {
+		return 0, fmt.Errorf("prepare orphan executions sync: %w", err)
+	}
+	defer syncExec.Close()
+
+	now := time.Now().UTC()
+	updated := 0
+	for _, rec := range orphans {
+		duration := now.Sub(rec.startedAt)
+		if duration < 0 {
+			duration = 0
+		}
+		durationMS := int(duration.Milliseconds())
+		if durationMS < 0 {
+			durationMS = 0
+		}
+
+		res, err := updateWf.ExecContext(ctx, types.ExecutionStatusFailed, reasonMessage, reasonMessage, now, durationMS, now, rec.id)
+		if err != nil {
+			return 0, fmt.Errorf("update orphan workflow execution %s: %w", rec.id, err)
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return 0, fmt.Errorf("rows affected for orphan workflow execution %s: %w", rec.id, err)
+		}
+		if affected > 0 {
+			// Best-effort: keep legacy `executions` table consistent. Older paths
+			// don't always populate it, so no rows-affected here is fine.
+			_, _ = syncExec.ExecContext(ctx, types.ExecutionStatusFailed, reasonMessage, reasonMessage, now, durationMS, now, rec.id)
+			updated++
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit orphan reap transaction: %w", err)
+	}
+
+	return updated, nil
+}
+
 // RetryStaleWorkflowExecutions finds stale workflow executions that haven't exceeded
 // maxRetries and resets both workflow_executions and executions back to "pending"
 // so the paired records stay in sync for the retry path.

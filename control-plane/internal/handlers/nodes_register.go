@@ -603,6 +603,28 @@ func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *ser
 			}
 		}
 
+		// Detect a mid-flight redeploy BEFORE storing the new row, so we can
+		// compare the *previously stored* instance_id against the one the new
+		// process is sending. If they're both non-empty and differ, the previous
+		// OS process is gone — every in-flight Agent.call awaiting a result
+		// inside that process is orphaned (its in-memory poll died with the
+		// process). We must fail those rows or the parent reasoner sits in
+		// `running` forever in the DAG. See PR #532 for the production trace
+		// (run_1778004368903_9345a88f).
+		//
+		// Strict guard: BOTH must be non-empty. An empty stored value means
+		// the prior process was on an older SDK that didn't report instance_id;
+		// we can't safely conclude its work is dead, so we don't reap.
+		shouldReapOrphans := isReRegistration &&
+			existingNode != nil &&
+			strings.TrimSpace(existingNode.InstanceID) != "" &&
+			strings.TrimSpace(newNode.InstanceID) != "" &&
+			existingNode.InstanceID != newNode.InstanceID
+		oldInstanceID := ""
+		if shouldReapOrphans {
+			oldInstanceID = existingNode.InstanceID
+		}
+
 		// Store the new node
 		if err := storageProvider.RegisterAgent(ctx, &newNode); err != nil {
 			logger.Logger.Error().Err(err).Msg("❌ Storage error")
@@ -610,6 +632,37 @@ func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *ser
 			return
 		}
 		InvalidateDiscoveryCache()
+
+		if shouldReapOrphans {
+			reason := fmt.Sprintf(
+				"agent_restart_orphaned: %s re-registered with new instance %s (was %s); previous process is gone, in-flight reasoner cannot be revived",
+				newNode.ID, newNode.InstanceID, oldInstanceID,
+			)
+			reaped, reapErr := storageProvider.MarkAgentExecutionsOrphaned(ctx, newNode.ID, reason)
+			if reapErr != nil {
+				// Best-effort: log loudly but don't fail the registration. The agent
+				// is already persisted; the existing stale-execution sweep will
+				// eventually clean these up via the 30-minute updated_at fallback.
+				logger.Logger.Error().Err(reapErr).
+					Str("agent_node_id", newNode.ID).
+					Str("old_instance_id", oldInstanceID).
+					Str("new_instance_id", newNode.InstanceID).
+					Msg("⚠️ Failed to reap orphaned executions on agent restart; falling back to stale-execution sweep")
+			} else if reaped > 0 {
+				logger.Logger.Warn().
+					Int("orphans_reaped", reaped).
+					Str("agent_node_id", newNode.ID).
+					Str("old_instance_id", oldInstanceID).
+					Str("new_instance_id", newNode.InstanceID).
+					Msg("🧹 Reaped in-flight executions orphaned by agent restart")
+			} else {
+				logger.Logger.Debug().
+					Str("agent_node_id", newNode.ID).
+					Str("old_instance_id", oldInstanceID).
+					Str("new_instance_id", newNode.InstanceID).
+					Msg("Agent restart detected; no in-flight executions to reap")
+			}
+		}
 
 		logger.Logger.Debug().Msgf("✅ Successfully registered node: %s", newNode.ID)
 

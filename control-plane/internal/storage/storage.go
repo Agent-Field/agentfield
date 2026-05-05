@@ -174,6 +174,15 @@ type StorageProvider interface {
 	// back to "pending" status with incremented retry_count. Returns IDs of retried executions.
 	RetryStaleWorkflowExecutions(ctx context.Context, staleAfter time.Duration, maxRetries int, limit int) ([]string, error)
 
+	// MarkAgentExecutionsOrphaned fails every still-running execution and workflow
+	// execution owned by the given agent_node_id. Used when an agent re-registers
+	// with a new instance_id, signalling that the previous OS process is gone and
+	// any in-flight reasoner execution running inside it cannot be revived (its
+	// in-process wait_for_execution_result poll died with the process). The
+	// reasonMessage is written to the row's error_message / status_reason.
+	// Returns total rows updated across both tables.
+	MarkAgentExecutionsOrphaned(ctx context.Context, agentNodeID string, reasonMessage string) (int, error)
+
 	// Workflow cleanup operations - deletes all data related to a workflow ID
 	// CleanupWorkflow removes all stored data associated with a workflow.
 	// The ctx scopes the operation, workflowID selects the workflow, and dryRun skips destructive changes.

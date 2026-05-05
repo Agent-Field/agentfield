@@ -4464,8 +4464,8 @@ func (ls *LocalStorage) executeRegisterAgent(ctx context.Context, q DBTX, agent 
 		INSERT INTO agent_nodes (
 			id, version, group_id, team_id, base_url, traffic_weight, deployment_type, invocation_url, reasoners, skills,
 			communication_config, health_status, lifecycle_status, last_heartbeat,
-			registered_at, features, metadata, proposed_tags, approved_tags
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			registered_at, features, metadata, proposed_tags, approved_tags, instance_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id, version) DO UPDATE SET
 			group_id = excluded.group_id,
 			team_id = excluded.team_id,
@@ -4482,7 +4482,8 @@ func (ls *LocalStorage) executeRegisterAgent(ctx context.Context, q DBTX, agent 
 			features = excluded.features,
 			metadata = excluded.metadata,
 			proposed_tags = excluded.proposed_tags,
-			approved_tags = excluded.approved_tags;`
+			approved_tags = excluded.approved_tags,
+			instance_id = CASE WHEN excluded.instance_id = '' THEN agent_nodes.instance_id ELSE excluded.instance_id END;`
 
 	reasonersJSON, err := json.Marshal(agent.Reasoners)
 	if err != nil {
@@ -4522,6 +4523,7 @@ func (ls *LocalStorage) executeRegisterAgent(ctx context.Context, q DBTX, agent 
 		agent.ID, agent.Version, agent.GroupID, agent.TeamID, agent.BaseURL, trafficWeight, agent.DeploymentType, agent.InvocationURL,
 		reasonersJSON, skillsJSON, commConfigJSON, agent.HealthStatus, agent.LifecycleStatus,
 		agent.LastHeartbeat, agent.RegisteredAt, featuresJSON, metadataJSON, proposedTagsJSON, approvedTagsJSON,
+		agent.InstanceID,
 	)
 
 	if err != nil {
@@ -4544,7 +4546,7 @@ func (ls *LocalStorage) GetAgent(ctx context.Context, id string) (*types.AgentNo
 		SELECT
 			id, version, group_id, team_id, base_url, traffic_weight, deployment_type, invocation_url, reasoners, skills,
 			communication_config, health_status, lifecycle_status, last_heartbeat,
-			registered_at, features, metadata, proposed_tags, approved_tags
+			registered_at, features, metadata, proposed_tags, approved_tags, COALESCE(instance_id, '')
 		FROM agent_nodes WHERE id = ?
 		ORDER BY CASE WHEN version = '' THEN 0 ELSE 1 END, version ASC
 		LIMIT 1`
@@ -4562,7 +4564,7 @@ func (ls *LocalStorage) GetAgent(ctx context.Context, id string) (*types.AgentNo
 		&agent.ID, &agent.Version, &agent.GroupID, &agent.TeamID, &agent.BaseURL, &agent.TrafficWeight, &agent.DeploymentType, &invocationURL,
 		&reasonersJSON, &skillsJSON, &commConfigJSON, &healthStatusStr, &lifecycleStatusStr,
 		&lastHeartbeat, &registeredAt, &featuresJSON, &metadataJSON,
-		&proposedTagsJSON, &approvedTagsJSON,
+		&proposedTagsJSON, &approvedTagsJSON, &agent.InstanceID,
 	)
 
 	if err != nil {
@@ -4657,7 +4659,7 @@ func (ls *LocalStorage) GetAgentVersion(ctx context.Context, id string, version 
 		SELECT
 			id, version, group_id, team_id, base_url, traffic_weight, deployment_type, invocation_url, reasoners, skills,
 			communication_config, health_status, lifecycle_status, last_heartbeat,
-			registered_at, features, metadata, proposed_tags, approved_tags
+			registered_at, features, metadata, proposed_tags, approved_tags, COALESCE(instance_id, '')
 		FROM agent_nodes WHERE id = ? AND version = ?`
 
 	row := ls.db.QueryRowContext(ctx, query, id, version)
@@ -4687,7 +4689,7 @@ func (ls *LocalStorage) ListAgentVersions(ctx context.Context, id string) ([]*ty
 		SELECT
 			id, version, group_id, team_id, base_url, traffic_weight, deployment_type, invocation_url, reasoners, skills,
 			communication_config, health_status, lifecycle_status, last_heartbeat,
-			registered_at, features, metadata, proposed_tags, approved_tags
+			registered_at, features, metadata, proposed_tags, approved_tags, COALESCE(instance_id, '')
 		FROM agent_nodes WHERE id = ? AND version != '' ORDER BY registered_at DESC`
 
 	rows, err := ls.db.QueryContext(ctx, query, id)
@@ -4712,7 +4714,7 @@ func (ls *LocalStorage) scanAgentNode(row *sql.Row) (*types.AgentNode, error) {
 		&agent.ID, &agent.Version, &agent.GroupID, &agent.TeamID, &agent.BaseURL, &agent.TrafficWeight, &agent.DeploymentType, &invocationURL,
 		&reasonersJSON, &skillsJSON, &commConfigJSON, &healthStatusStr, &lifecycleStatusStr,
 		&lastHeartbeat, &registeredAt, &featuresJSON, &metadataJSON,
-		&proposedTagsJSON, &approvedTagsJSON,
+		&proposedTagsJSON, &approvedTagsJSON, &agent.InstanceID,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -4751,7 +4753,7 @@ func (ls *LocalStorage) scanAgentNodes(ctx context.Context, rows *sql.Rows) ([]*
 			&agent.ID, &agent.Version, &agent.GroupID, &agent.TeamID, &agent.BaseURL, &agent.TrafficWeight, &agent.DeploymentType, &invocationURL,
 			&reasonersJSON, &skillsJSON, &commConfigJSON, &healthStatusStr, &lifecycleStatusStr,
 			&lastHeartbeat, &registeredAt, &featuresJSON, &metadataJSON,
-			&proposedTagsJSON, &approvedTagsJSON,
+			&proposedTagsJSON, &approvedTagsJSON, &agent.InstanceID,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan agent node row: %w", err)
@@ -4839,7 +4841,7 @@ func (ls *LocalStorage) ListAgents(ctx context.Context, filters types.AgentFilte
 		SELECT
 			id, version, group_id, team_id, base_url, traffic_weight, deployment_type, invocation_url, reasoners, skills,
 			communication_config, health_status, lifecycle_status, last_heartbeat,
-			registered_at, features, metadata, proposed_tags, approved_tags
+			registered_at, features, metadata, proposed_tags, approved_tags, COALESCE(instance_id, '')
 		FROM agent_nodes`
 
 	var conditions []string
@@ -8448,7 +8450,7 @@ func (ls *LocalStorage) ListAgentsByLifecycleStatus(ctx context.Context, status 
 		SELECT
 			id, version, group_id, team_id, base_url, traffic_weight, deployment_type, invocation_url, reasoners, skills,
 			communication_config, health_status, lifecycle_status, last_heartbeat,
-			registered_at, features, metadata, proposed_tags, approved_tags
+			registered_at, features, metadata, proposed_tags, approved_tags, COALESCE(instance_id, '')
 		FROM agent_nodes WHERE lifecycle_status = ? ORDER BY registered_at DESC`
 
 	rows, err := ls.db.QueryContext(ctx, query, string(status))

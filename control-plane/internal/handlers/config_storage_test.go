@@ -152,6 +152,9 @@ func (m *configStorageMock) MarkStaleWorkflowExecutions(ctx context.Context, sta
 func (m *configStorageMock) RetryStaleWorkflowExecutions(ctx context.Context, staleAfter time.Duration, maxRetries int, limit int) ([]string, error) {
 	return nil, nil
 }
+func (m *configStorageMock) MarkAgentExecutionsOrphaned(ctx context.Context, agentNodeID string, reasonMessage string) (int, error) {
+	return 0, nil
+}
 func (m *configStorageMock) CleanupWorkflow(ctx context.Context, workflowID string, dryRun bool) (*types.WorkflowCleanupResult, error) {
 	return nil, nil
 }

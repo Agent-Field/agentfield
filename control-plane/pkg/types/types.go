@@ -178,6 +178,15 @@ type AgentNode struct {
 	LastHeartbeat   time.Time            `json:"last_heartbeat" db:"last_heartbeat"`
 	RegisteredAt    time.Time            `json:"registered_at" db:"registered_at"`
 
+	// InstanceID identifies the specific OS process running this agent. The SDK
+	// generates a fresh value on every startup. When the control plane sees a
+	// re-registration with a different InstanceID, every still-running execution
+	// owned by the previous instance is failed with status_reason
+	// "agent_restart_orphaned" — the previous process is gone and its in-memory
+	// wait-for-result polls cannot be revived. Empty string for SDKs that
+	// pre-date this field (treated as opt-out for backward compatibility).
+	InstanceID string `json:"instance_id,omitempty" db:"instance_id"`
+
 	Features AgentFeatures `json:"features" db:"features"`
 	Metadata AgentMetadata `json:"metadata" db:"metadata"`
 
