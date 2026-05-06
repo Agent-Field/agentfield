@@ -31,6 +31,15 @@ export class ReasonerContext<TInput = any> {
   readonly memory: MemoryInterface;
   readonly workflow: WorkflowReporter;
   readonly did: DidInterface;
+  /**
+   * AbortSignal that fires when the control plane cancels this execution
+   * (per-execution cancel, the bottom-up cancel-tree endpoint, or any
+   * future source that flips the bus). Pass it through to `fetch`, the
+   * @anthropic-ai/sdk, the openai SDK, or anywhere that accepts
+   * `{ signal }` to short-circuit in-flight work mid-call. For pure-JS
+   * CPU loops, check `ctx.signal.aborted` periodically and throw.
+   */
+  readonly signal: AbortSignal;
 
   constructor(params: {
     input: TInput;
@@ -53,6 +62,7 @@ export class ReasonerContext<TInput = any> {
     memory: MemoryInterface;
     workflow: WorkflowReporter;
     did: DidInterface;
+    signal?: AbortSignal;
   }) {
     this.input = params.input;
     this.executionId = params.executionId;
@@ -74,6 +84,9 @@ export class ReasonerContext<TInput = any> {
     this.memory = params.memory;
     this.workflow = params.workflow;
     this.did = params.did;
+    // Default to a never-aborted signal when none provided so existing
+    // call sites (tests, manual invocations) continue to work.
+    this.signal = params.signal ?? new AbortController().signal;
   }
 
   ai<T>(prompt: string, options: AIRequestOptions & { schema: ZodSchema<T> }): Promise<T>;
