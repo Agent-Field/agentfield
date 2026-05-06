@@ -195,6 +195,7 @@ func (s *AgentFieldServer) registerUIAPI() {
 		workflows := uiAPI.Group("/workflows")
 		{
 			workflows.GET("/:workflowId/dag", handlers.GetWorkflowDAGHandler(s.storage))
+			workflows.POST("/:workflowId/cancel-tree", handlers.CancelWorkflowTreeHandler(s.storage))
 			workflows.DELETE("/:workflowId/cleanup", handlers.CleanupWorkflowHandler(s.storage))
 			didHandler := ui.NewDIDHandler(s.storage, s.didService, s.vcService, s.didWebService)
 			workflows.POST("/vc-status", didHandler.GetWorkflowVCStatusBatchHandler)

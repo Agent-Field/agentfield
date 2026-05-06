@@ -78,6 +78,7 @@ func DefaultEntries() []EndpointEntry {
 		{Method: "POST", Path: "/api/v1/executions/:execution_id/cancel", Group: "executions", Summary: "Cancel a running execution", AuthLevel: "api_key", Tags: []string{"executions", "cancel"}},
 		{Method: "POST", Path: "/api/v1/executions/:execution_id/pause", Group: "executions", Summary: "Pause an execution", AuthLevel: "api_key", Tags: []string{"executions", "pause"}},
 		{Method: "POST", Path: "/api/v1/executions/:execution_id/resume", Group: "executions", Summary: "Resume a paused execution", AuthLevel: "api_key", Tags: []string{"executions", "resume"}},
+		{Method: "POST", Path: "/api/v1/workflows/:workflowId/cancel-tree", Group: "workflows", Summary: "Cancel every non-terminal execution in a run (bottom-up)", AuthLevel: "api_key", Tags: []string{"workflows", "executions", "cancel"}},
 
 		// --- Approval ---
 		{Method: "POST", Path: "/api/v1/executions/:execution_id/request-approval", Group: "approval", Summary: "Request approval for an execution", AuthLevel: "api_key", Tags: []string{"approval", "request"}},
