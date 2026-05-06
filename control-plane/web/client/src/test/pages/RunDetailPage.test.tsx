@@ -15,7 +15,7 @@ const state = vi.hoisted(() => ({
   },
   queryData: undefined as any,
   invalidateQueries: vi.fn<(args: unknown) => Promise<void>>(),
-  cancelMutateAsync: vi.fn<(executionId: string) => Promise<void>>(),
+  cancelTreeMutateAsync: vi.fn<(args: { workflowId: string; reason?: string }) => Promise<unknown>>(),
   pauseMutateAsync: vi.fn<(executionId: string) => Promise<void>>(),
   resumeMutateAsync: vi.fn<(executionId: string) => Promise<void>>(),
   showRunNotification: vi.fn<(message: string) => void>(),
@@ -48,7 +48,7 @@ vi.mock("@tanstack/react-query", () => ({
 
 vi.mock("@/hooks/queries", () => ({
   useRunDAG: () => state.runDag,
-  useCancelExecution: () => ({ mutateAsync: state.cancelMutateAsync, isPending: false }),
+  useCancelWorkflowTree: () => ({ mutateAsync: state.cancelTreeMutateAsync, isPending: false }),
   usePauseExecution: () => ({ mutateAsync: state.pauseMutateAsync, isPending: false }),
   useResumeExecution: () => ({ mutateAsync: state.resumeMutateAsync, isPending: false }),
 }));
@@ -330,7 +330,16 @@ describe("RunDetailPage", () => {
     };
     state.queryData = undefined;
     state.invalidateQueries.mockReset();
-    state.cancelMutateAsync.mockReset();
+    state.cancelTreeMutateAsync.mockReset();
+    state.cancelTreeMutateAsync.mockResolvedValue({
+      run_id: "run-1",
+      total_nodes: 1,
+      cancelled_count: 1,
+      skipped_count: 0,
+      error_count: 0,
+      nodes: [],
+      cancelled_at: new Date().toISOString(),
+    });
     state.pauseMutateAsync.mockReset();
     state.resumeMutateAsync.mockReset();
     state.showRunNotification.mockReset();
@@ -519,7 +528,7 @@ describe("RunDetailPage", () => {
       error: null,
     };
     state.pauseMutateAsync.mockResolvedValue(undefined);
-    state.cancelMutateAsync.mockRejectedValue(new Error("cancel exploded"));
+    state.cancelTreeMutateAsync.mockRejectedValue(new Error("cancel exploded"));
 
     const view = renderPage();
     expect(await screen.findByText("Run Alpha")).toBeInTheDocument();
@@ -535,7 +544,9 @@ describe("RunDetailPage", () => {
     fireEvent.click(screen.getByText("Cancel"));
     fireEvent.click(screen.getByRole("button", { name: "Cancel 1 run" }));
     await waitFor(() => {
-      expect(state.cancelMutateAsync).toHaveBeenCalledWith("exec-1");
+      expect(state.cancelTreeMutateAsync).toHaveBeenCalledWith(
+        expect.objectContaining({ workflowId: "run-1" }),
+      );
     });
     expect(state.showRunNotification).toHaveBeenCalledWith(
       expect.objectContaining({

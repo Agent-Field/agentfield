@@ -358,6 +358,44 @@ export async function getWorkflowDAGLightweight(
   });
 }
 
+export interface CancelWorkflowTreeNode {
+  execution_id: string;
+  agent_node_id?: string;
+  reasoner_id?: string;
+  workflow_depth: number;
+  previous_status: string;
+  status: string;
+  skip_reason?: string;
+}
+
+export interface CancelWorkflowTreeResponse {
+  run_id: string;
+  total_nodes: number;
+  cancelled_count: number;
+  skipped_count: number;
+  error_count: number;
+  nodes: CancelWorkflowTreeNode[];
+  cancelled_at: string;
+}
+
+// cancelWorkflowTree fans out cancel to every non-terminal execution in a
+// run, bottom-up. Use this in preference to per-execution cancel when the
+// user means "stop the whole run" — single-execution cancel can't reach
+// children of a root that already terminated.
+export async function cancelWorkflowTree(
+  workflowId: string,
+  reason?: string,
+): Promise<CancelWorkflowTreeResponse> {
+  return fetchWrapper<CancelWorkflowTreeResponse>(
+    `/workflows/${workflowId}/cancel-tree`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: reason ?? "" }),
+    },
+  );
+}
+
 export async function getWorkflowRunDetail(
   runId: string,
   signal?: AbortSignal

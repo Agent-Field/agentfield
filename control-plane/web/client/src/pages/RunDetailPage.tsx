@@ -3,7 +3,7 @@ import { useParams, useNavigate, Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   useRunDAG,
-  useCancelExecution,
+  useCancelWorkflowTree,
   usePauseExecution,
   useResumeExecution,
 } from "@/hooks/queries";
@@ -476,7 +476,7 @@ export function RunDetailPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { data: dag, isLoading, isError, error } = useRunDAG(runId);
-  const cancelMutation = useCancelExecution();
+  const cancelTreeMutation = useCancelWorkflowTree();
   const pauseMutation = usePauseExecution();
   const resumeMutation = useResumeExecution();
   const showRunNotification = useRunNotification();
@@ -853,24 +853,33 @@ export function RunDetailPage() {
             </DropdownMenuContent>
           </DropdownMenu>
 
-          {/* Lifecycle cluster — Pause / Resume / Cancel. Uses the ROOT
-              execution's own status (not the aggregated workflow status)
-              because that's the row the user controls. A run can be
-              aggregate-'running' while the root is already 'paused' if
-              in-flight children are still finishing. */}
+          {/* Lifecycle cluster — Pause / Resume / Cancel.
+              Pause/Resume still target the ROOT execution's own status
+              (a run can be aggregate-'running' while the root is already
+              'paused' because in-flight children keep going). Cancel
+              targets the AGGREGATE workflow status — when the root has
+              terminated but children are still flagged running (zombied
+              fan-out), the user still needs an escape hatch. The cancel
+              button hits a bottom-up cancel-tree endpoint that walks the
+              whole run rather than a single execution. */}
           {(() => {
             const rootNodeForStatus =
               dag.timeline.find((n) => n.workflow_depth === 0) ??
               dag.timeline[0];
-            const normalized = normalizeExecutionStatus(
+            const rootStatus = normalizeExecutionStatus(
               rootNodeForStatus?.status ?? dag.workflow_status,
             );
-            const isRunning = normalized === "running";
-            const isPaused = normalized === "paused";
-            if (isTerminalStatus(normalized)) return null;
-
+            const aggregateStatus = normalizeExecutionStatus(dag.workflow_status);
+            const isRunning = rootStatus === "running";
+            const isPaused = rootStatus === "paused";
+            // Cancel is allowed whenever there is anything left to cancel —
+            // i.e. the aggregate workflow has not reached a terminal state.
+            const showCancel = !isTerminalStatus(aggregateStatus);
+            // Pause/Resume require a live root execution.
             const rootExecId = rootNodeForStatus?.execution_id;
-            if (!rootExecId) return null;
+            const showPause = isRunning && !!rootExecId;
+            const showResume = isPaused && !!rootExecId;
+            if (!showCancel && !showPause && !showResume) return null;
 
             const busy = lifecycleBusy !== null;
 
@@ -882,6 +891,7 @@ export function RunDetailPage() {
             const runIdForNotif = runId ?? "";
 
             const handlePause = async () => {
+              if (!rootExecId) return;
               setLifecycleBusy("pause");
               try {
                 await pauseMutation.mutateAsync(rootExecId);
@@ -909,6 +919,7 @@ export function RunDetailPage() {
             };
 
             const handleResume = async () => {
+              if (!rootExecId) return;
               setLifecycleBusy("resume");
               try {
                 await resumeMutation.mutateAsync(rootExecId);
@@ -939,7 +950,7 @@ export function RunDetailPage() {
 
             return (
               <>
-                {isRunning ? (
+                {showPause ? (
                   <Button
                     variant="outline"
                     size="sm"
@@ -958,7 +969,7 @@ export function RunDetailPage() {
                     Pause
                   </Button>
                 ) : null}
-                {isPaused ? (
+                {showResume ? (
                   <Button
                     variant="outline"
                     size="sm"
@@ -977,20 +988,22 @@ export function RunDetailPage() {
                     Resume
                   </Button>
                 ) : null}
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  className="h-8 gap-1.5 text-xs"
-                  disabled={busy}
-                  onClick={() => setCancelDialogOpen(true)}
-                >
-                  {lifecycleBusy === "cancel" ? (
-                    <Activity className="size-3.5 animate-spin" aria-hidden />
-                  ) : (
-                    <XCircle className="size-3.5" aria-hidden />
-                  )}
-                  Cancel
-                </Button>
+                {showCancel ? (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    className="h-8 gap-1.5 text-xs"
+                    disabled={busy}
+                    onClick={() => setCancelDialogOpen(true)}
+                  >
+                    {lifecycleBusy === "cancel" ? (
+                      <Activity className="size-3.5 animate-spin" aria-hidden />
+                    ) : (
+                      <XCircle className="size-3.5" aria-hidden />
+                    )}
+                    Cancel
+                  </Button>
+                ) : null}
 
                 <AlertDialog
                   open={cancelDialogOpen}
@@ -1013,15 +1026,22 @@ export function RunDetailPage() {
                         disabled={busy}
                         className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                         onClick={async () => {
+                          if (!runId) return;
                           setCancelDialogOpen(false);
                           setLifecycleBusy("cancel");
                           try {
-                            await cancelMutation.mutateAsync(rootExecId);
+                            const result = await cancelTreeMutation.mutateAsync({
+                              workflowId: runId,
+                              reason: "user clicked cancel",
+                            });
                             showRunNotification({
                               type: "success",
                               eventKind: "cancel",
                               title: "Cancelled",
-                              message: `${runLabelForNotif} will stop after its current step finishes. In-flight work will be discarded.`,
+                              message:
+                                result.cancelled_count > 0
+                                  ? `${runLabelForNotif}: ${result.cancelled_count} ${result.cancelled_count === 1 ? "step" : "steps"} cancelled. In-flight work will finish and be discarded.`
+                                  : `${runLabelForNotif}: nothing left to cancel.`,
                               runId: runIdForNotif,
                               runLabel: runLabelForNotif,
                             });
