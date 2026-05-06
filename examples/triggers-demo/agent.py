@@ -186,7 +186,7 @@ async def summarize_issue(event: dict, trigger: TriggerContext | None = None):
             f"Title: {title}\n\n"
             f"Body:\n{body}"
         ),
-        model="openrouter/anthropic/claude-haiku-4-5",
+        model=os.getenv("AI_MODEL", "openrouter/anthropic/claude-haiku-4-5"),
         max_tokens=300,
     )
 

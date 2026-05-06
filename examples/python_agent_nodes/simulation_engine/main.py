@@ -33,7 +33,7 @@ app = Agent(
     agentfield_server=f"{os.getenv('AGENTFIELD_SERVER', 'http://localhost:8080')}",
     dev_mode=True,
     ai_config=AIConfig(
-        model="openrouter/deepseek/deepseek-v3.1-terminus",  # LiteLLM auto-detects provider from model name
+        model=os.getenv("AI_MODEL", "openrouter/deepseek/deepseek-v3.1-terminus"),  # LiteLLM auto-detects provider from model name
         api_key=os.getenv("OPENROUTER_API_KEY"),  # or set OPENAI_API_KEY env var
     ),
 )
