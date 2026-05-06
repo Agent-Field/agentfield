@@ -97,6 +97,12 @@ export interface AIToolRequestOptions extends AIRequestOptions {
   maxToolCalls?: number;
 }
 
+type ToolConfig = {
+  description:  string
+  inputSchema:  any;
+  execute?: (args: Record<string, unknown>) => Promise<any>;
+}
+
 // ---------------------------------------------------------------------------
 // Capability -> Tool Definition Conversion
 // ---------------------------------------------------------------------------
@@ -368,7 +374,7 @@ function wrapToolsWithObservability(
   const observableTools: ToolSet = {};
 
   for (const [name, t] of Object.entries(toolMap)) {
-    const originalTool = t as any;
+    const originalTool = t as ToolConfig;
     observableTools[name] = tool({
       description: originalTool.description ?? '',
       inputSchema: originalTool.inputSchema,
@@ -443,7 +449,7 @@ export async function executeToolCallLoop(
     // Create non-executable tool stubs so the LLM selects but doesn't execute
     const selectionTools: ToolSet = {};
     for (const [name, t] of Object.entries(toolMap)) {
-      const orig = t as any;
+      const orig = t as ToolConfig;
       selectionTools[name] = tool({
         description: orig.description ?? '',
         inputSchema: orig.inputSchema,

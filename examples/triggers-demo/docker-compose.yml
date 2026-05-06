@@ -1,0 +1,74 @@
+# AgentField triggers demo
+#
+# Brings up two services:
+#
+#   1. control-plane    — embedded UI, SQLite/local storage, exposes :8080
+#   2. triggers-demo-agent — Python agent declaring three triggers via
+#                            @on_event (Stripe, GitHub) and @on_schedule (cron)
+#
+# Once both services are healthy, open http://localhost:8080/ui/triggers in your
+# browser. The cron trigger fires automatically every minute. To fire signed
+# Stripe and GitHub events on demand, run:
+#
+#   ./scripts/fire-events.sh
+#
+# Both services share the same demo secrets via env vars so signature
+# verification roundtrips end-to-end without external configuration.
+
+services:
+  control-plane:
+    build:
+      context: ../..
+      dockerfile: deployments/docker/Dockerfile.control-plane
+    environment:
+      AGENTFIELD_HOME: /data
+      AGENTFIELD_HTTP_ADDR: 0.0.0.0:8080
+      # Local mode: SQLite + BoltDB, no external database.
+      AGENTFIELD_MODE: local
+      AGENTFIELD_STORAGE_MODE: local
+      # Demo secrets — the agent declares triggers with these env-var names,
+      # the CP reads them from its own environment when verifying inbound
+      # signatures. The fire-events script signs with the same values.
+      STRIPE_DEMO_SECRET: whsec_demo_stripe_secret_change_me_in_prod
+      GITHUB_DEMO_SECRET: ghsecret_demo_github_secret_change_me
+      # Secrets for the three secondary plugins exercised by fire-events.sh —
+      # Slack signing secret + a couple of bring-your-own-auth flavours. These
+      # back UI-managed triggers the script creates on first run; they aren't
+      # tied to any code-level @on_event decorator.
+      SLACK_DEMO_SIGNING_SECRET: slack_demo_signing_secret_change_me
+      GENERIC_HMAC_DEMO_SECRET: generic_hmac_demo_secret_change_me
+      GENERIC_BEARER_DEMO_TOKEN: generic_bearer_demo_token_change_me
+      # DID enabled so the dispatcher mints a trigger event VC and chains
+      # it onto the resulting execution VC. The runs-list / run-dag trigger
+      # enrichment walks this chain to populate WorkflowSummary.trigger and
+      # dag.trigger; without DID there is no chain to traverse, so the
+      # operator surfaces would show "Not triggered by webhook" on every run.
+      AGENTFIELD_FEATURES_DID_ENABLED: "true"
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    volumes:
+      - agentfield-data:/data
+
+  triggers-demo-agent:
+    build:
+      context: ../..
+      dockerfile: examples/triggers-demo/Dockerfile
+    environment:
+      AGENTFIELD_URL: http://control-plane:8080
+      AGENT_NODE_ID: triggers-demo-agent
+      AGENT_CALLBACK_URL: http://triggers-demo-agent:8001
+      PORT: "8001"
+      # OpenRouter API key is read from the host shell when compose starts.
+      # The summarize_issue reasoner uses litellm under the hood, which
+      # routes "openrouter/<model>" prefixed model strings to OpenRouter
+      # using this env var.
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    ports:
+      - "8001:8001"
+    restart: unless-stopped
+    depends_on:
+      - control-plane
+
+volumes:
+  agentfield-data:

@@ -216,6 +216,88 @@ async def test_opencode_uses_project_dir_when_no_cwd(
 
 
 @pytest.mark.asyncio
+async def test_opencode_exit0_with_error_stderr_is_treated_as_failure(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Regression test: opencode prints hard errors to stderr but exits 0.
+
+    Symptom seen in production: an invalid model string ("minimax/minimax-m2.5"
+    instead of "openrouter/minimax/minimax-m2.5") makes opencode print
+    'Error: Model not found: …' to stderr and exit 0. Without this guard the
+    harness sees empty stdout + clean exit and reports success with no
+    output, which downstream surfaces as 'agent failed to produce a valid
+    result' — hiding the real cause.
+    """
+    stderr_with_real_error = (
+        "Performing one time database migration, may take a few minutes...\n"
+        "sqlite-migration:done\n"
+        "Database migration complete.\n"
+        "\n"
+        "Error: Model not found: minimax/minimax-m2.5.\n"
+    )
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+        return "", stderr_with_real_error, 0
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
+
+    provider = OpenCodeProvider()
+    raw = await provider.execute("hello", {"model": "minimax/minimax-m2.5"})
+
+    assert raw.is_error is True
+    assert raw.failure_type.name == "CRASH"
+    assert raw.error_message is not None
+    # The real error must be surfaced — not buried under the migration prelude.
+    assert "Model not found" in raw.error_message
+    assert "minimax/minimax-m2.5" in raw.error_message
+
+
+@pytest.mark.asyncio
+async def test_opencode_exit0_with_only_migration_stderr_is_success(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Migration prelude on stderr without an Error: line should NOT be a failure."""
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+        return (
+            "actual model output\n",
+            "Performing one time database migration, may take a few minutes...\n"
+            "Database migration complete.\n",
+            0,
+        )
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
+
+    provider = OpenCodeProvider()
+    raw = await provider.execute("hello", {})
+
+    assert raw.is_error is False
+    assert raw.result == "actual model output"
+
+
+@pytest.mark.asyncio
+async def test_opencode_exit_nonzero_uses_extracted_error_not_truncated_prelude(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Non-zero exit + long migration prelude in stderr should still surface
+    the real Error: line, not just the first 1000 chars of the prelude."""
+    long_prelude = ("Performing one time database migration line\n" * 30)
+    stderr = long_prelude + "Error: AuthenticationError: bad key\n"
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+        return "", stderr, 1
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
+
+    provider = OpenCodeProvider()
+    raw = await provider.execute("hello", {})
+
+    assert raw.is_error is True
+    assert raw.error_message is not None
+    assert "AuthenticationError" in raw.error_message
+
+
+@pytest.mark.asyncio
 async def test_opencode_v14_cli_shape_no_deprecated_flags(
     monkeypatch: pytest.MonkeyPatch,
 ):

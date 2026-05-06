@@ -18,6 +18,8 @@ export * from './did/DidManager.js';
 export * from './ai/RateLimiter.js';
 export * from './ai/multimodal.js';
 export * from './ai/MultimodalResponse.js';
+export * from './ai/MediaProvider.js';
+export * from './ai/OpenRouterMediaProvider.js';
 export * from './types/agent.js';
 export * from './types/reasoner.js';
 export * from './types/skill.js';

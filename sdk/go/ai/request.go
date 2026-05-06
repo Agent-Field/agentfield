@@ -75,15 +75,28 @@ type Message struct {
 }
 
 type ContentPart struct {
-	Type     string        `json:"type"` // "text" or "image_url"
-	Text     string        `json:"text,omitempty"`
-	ImageURL *ImageURLData `json:"image_url,omitempty"`
+	Type       string          `json:"type"` // "text" or "image_url" or "input_audio" or "file"
+	Text       string          `json:"text,omitempty"`
+	ImageURL   *ImageURLData   `json:"image_url,omitempty"`
+	InputAudio *InputAudioData `json:"input_audio,omitempty"`
+	InputFile  *InputFileData  `json:"file,omitempty"`
 }
 
 // ImageURLData holds the URL and optional detail level for image content parts.
 type ImageURLData struct {
 	URL    string `json:"url"`
 	Detail string `json:"detail,omitempty"`
+}
+
+// InputAudioData holds the encoded data and the format for the audio content parts.
+type InputAudioData struct {
+	Data   string `json:"data"`
+	Format string `json:"format"`
+}
+
+// InputFileData holds the file data for a generic file content parts.
+type InputFileData struct {
+	FileData string `json:"file_data"`
 }
 
 // MarshalJSON serializes a Message. If the content is a single text part,

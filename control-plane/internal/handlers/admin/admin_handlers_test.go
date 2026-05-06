@@ -558,3 +558,22 @@ func TestTagApprovalHandlers_RevokeAgentTags_NotFoundFails(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	assert.Contains(t, w.Body.String(), "revocation_failed")
 }
+
+// Trigger plugin system stubs — interface fillers for the test mock; not exercised.
+func (m *mockTagStorage) CreateTrigger(context.Context, *types.Trigger) error { return nil }
+func (m *mockTagStorage) GetTrigger(context.Context, string) (*types.Trigger, error) { return nil, nil }
+func (m *mockTagStorage) ListTriggers(context.Context, string, string) ([]*types.Trigger, error) { return nil, nil }
+func (m *mockTagStorage) UpdateTrigger(context.Context, *types.Trigger) error { return nil }
+func (m *mockTagStorage) DeleteTrigger(context.Context, string) error { return nil }
+func (m *mockTagStorage) UpsertCodeManagedTrigger(context.Context, *types.Trigger) (string, error) { return "", nil }
+func (m *mockTagStorage) MarkOrphanedTriggers(context.Context, string, []string) error { return nil }
+func (m *mockTagStorage) SetTriggerOverride(context.Context, string, bool, bool) error { return nil }
+func (m *mockTagStorage) ConvertTriggerToUIManaged(context.Context, string) error { return nil }
+func (m *mockTagStorage) InsertInboundEvent(context.Context, *types.InboundEvent) error { return nil }
+func (m *mockTagStorage) InboundEventExistsByIdempotency(context.Context, string, string) (bool, error) { return false, nil }
+func (m *mockTagStorage) GetInboundEvent(context.Context, string) (*types.InboundEvent, error) { return nil, nil }
+func (m *mockTagStorage) ListInboundEvents(context.Context, string, int) ([]*types.InboundEvent, error) { return nil, nil }
+func (m *mockTagStorage) MarkInboundEventProcessed(context.Context, string, string, string, string) error { return nil }
+func (m *mockTagStorage) SetInboundEventDispatchedWorkflow(context.Context, string, string) error { return nil }
+func (m *mockTagStorage) GetInboundEventByWorkflowID(context.Context, string) (*types.InboundEvent, error) { return nil, nil }
+func (m *mockTagStorage) TriggerMetrics(context.Context) (*types.TriggerMetrics, error) { return &types.TriggerMetrics{}, nil }

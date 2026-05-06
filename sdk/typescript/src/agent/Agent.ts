@@ -9,7 +9,8 @@ import type {
   DeploymentType,
   HealthStatus,
   ServerlessEvent,
-  ServerlessResponse
+  ServerlessResponse,
+  RawExecutionContext
 } from '../types/agent.js';
 import { ReasonerRegistry } from './ReasonerRegistry.js';
 import { SkillRegistry } from './SkillRegistry.js';
@@ -43,15 +44,38 @@ import {
   type ExecutionLogger
 } from '../observability/ExecutionLogger.js';
 import { LocalVerifier } from '../verification/LocalVerifier.js';
+import type { Request, Response } from 'express';
+import type { ParamsDictionary } from 'express-serve-static-core';
 import {
   installStdioLogCapture,
   ProcessLogRing,
   registerAgentfieldLogsRoute
 } from './processLogs.js';
 
+interface WildcardParams extends ParamsDictionary {
+  0: string;
+}
 class TargetNotFoundError extends Error {}
 
 const harnessRunners = new WeakMap<object, HarnessRunner>();
+
+function normalizeExecutionContext(
+  ctx: RawExecutionContext
+): Partial<ExecutionMetadata> {
+  return {
+    executionId: ctx.executionId ?? ctx.execution_id,
+    runId: ctx.runId ?? ctx.run_id,
+    workflowId: ctx.workflowId ?? ctx.workflow_id,
+    rootWorkflowId: ctx.rootWorkflowId ?? ctx.root_workflow_id,
+    parentExecutionId: ctx.parentExecutionId ?? ctx.parent_execution_id,
+    reasonerId: ctx.reasonerId ?? ctx.reasoner_id,
+    sessionId: ctx.sessionId ?? ctx.session_id,
+    actorId: ctx.actorId ?? ctx.actor_id,
+    callerDid: ctx.callerDid ?? ctx.caller_did,
+    targetDid: ctx.targetDid ?? ctx.target_did,
+    agentNodeDid: ctx.agentNodeDid ?? ctx.agent_node_did
+  };
+}
 
 export class Agent {
   readonly config: AgentConfig;
@@ -739,10 +763,10 @@ export class Agent {
       });
     }
 
-    this.app.post('/api/v1/reasoners/*', (req, res) => this.executeReasoner(req, res, (req.params as any)[0]));
+    this.app.post('/api/v1/reasoners/*', (req: Request<WildcardParams>, res: Response) => this.executeReasoner(req, res, req.params[0]));
     this.app.post('/reasoners/:name', (req, res) => this.executeReasoner(req, res, req.params.name));
 
-    this.app.post('/api/v1/skills/*', (req, res) => this.executeSkill(req, res, (req.params as any)[0]));
+    this.app.post('/api/v1/skills/*', (req: Request<WildcardParams>, res: Response) => this.executeSkill(req, res, req.params[0]));
     this.app.post('/skills/:name', (req, res) => this.executeSkill(req, res, req.params.name));
 
     // Serverless-friendly execute endpoint that accepts { target, input } or { reasoner, input }
@@ -875,7 +899,7 @@ export class Agent {
 
   private handleHttpRequest(req: http.IncomingMessage | express.Request, res: http.ServerResponse | express.Response) {
     const handler = this.app as unknown as (req: http.IncomingMessage, res: http.ServerResponse) => void;
-    return handler(req as any, res as any);
+    return handler(req as http.IncomingMessage, res as http.ServerResponse);
   }
 
   private async handleServerlessEvent(event: ServerlessEvent): Promise<ServerlessResponse> {
@@ -938,9 +962,20 @@ export class Agent {
   }
 
   private normalizeEventBody(event: ServerlessEvent) {
-    const parsed = this.parseBody((event as any)?.body);
-    if (parsed && typeof parsed === 'object' && event?.input !== undefined && (parsed as any).input === undefined) {
-      return { ...(parsed as Record<string, any>), input: event.input };
+    interface ParsedBody {
+      input?: unknown;
+      [key: string]: unknown;
+    }
+
+    const parsed = this.parseBody(event?.body) as ParsedBody | null | undefined;
+
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      event?.input !== undefined &&
+      parsed.input === undefined
+    ) {
+      return { ...parsed, input: event.input };
     }
     if ((parsed === undefined || parsed === null) && event?.input !== undefined) {
       return { input: event.input };
@@ -949,37 +984,8 @@ export class Agent {
   }
 
   private mergeExecutionContext(event: ServerlessEvent): Partial<ExecutionMetadata> {
-    const ctx = (event?.executionContext ?? (event as any)?.execution_context) as Partial<
-      ExecutionMetadata & {
-        execution_id?: string;
-        run_id?: string;
-        workflow_id?: string;
-        root_workflow_id?: string;
-        parent_execution_id?: string;
-        reasoner_id?: string;
-        session_id?: string;
-        actor_id?: string;
-        caller_did?: string;
-        target_did?: string;
-        agent_node_did?: string;
-      }
-    >;
-
-    if (!ctx) return {};
-
-    return {
-      executionId: (ctx as any).executionId ?? ctx.execution_id ?? ctx.executionId,
-      runId: ctx.runId ?? (ctx as any).run_id,
-      workflowId: ctx.workflowId ?? (ctx as any).workflow_id,
-      rootWorkflowId: ctx.rootWorkflowId ?? (ctx as any).root_workflow_id,
-      parentExecutionId: ctx.parentExecutionId ?? (ctx as any).parent_execution_id,
-      reasonerId: ctx.reasonerId ?? (ctx as any).reasoner_id,
-      sessionId: ctx.sessionId ?? (ctx as any).session_id,
-      actorId: ctx.actorId ?? (ctx as any).actor_id,
-      callerDid: (ctx as any).callerDid ?? (ctx as any).caller_did,
-      targetDid: (ctx as any).targetDid ?? (ctx as any).target_did,
-      agentNodeDid: (ctx as any).agentNodeDid ?? (ctx as any).agent_node_did
-    };
+    const rawCtx = event?.executionContext ?? event?.execution_context;
+    return rawCtx ? normalizeExecutionContext(rawCtx) : {};
   }
 
   private extractInvocationDetails(params: {
@@ -1064,12 +1070,15 @@ export class Agent {
 
     if (parsed && typeof parsed === 'object') {
       const { target, reasoner, skill, type, targetType, ...rest } = parsed as Record<string, any>;
-      if ((parsed as any).input !== undefined) {
-        return (parsed as any).input;
+      interface ParsedBody {
+        input?: any;
+        data?: any;
+        [key: string]: any;
       }
-      if ((parsed as any).data !== undefined) {
-        return (parsed as any).data;
-      }
+
+      const parsedBody = parsed as ParsedBody;
+      if (parsedBody.input !== undefined) return parsedBody.input;
+      if (parsedBody.data !== undefined) return parsedBody.data;
       if (Object.keys(rest).length === 0) {
         return {};
       }

@@ -73,25 +73,44 @@ app.run()
 
 > **What you just saw:** `app.ai()` calls an LLM and returns structured output. `app.pause()` suspends for [human approval](https://agentfield.ai/docs/build/execution/human-in-the-loop?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-human-in-the-loop). `app.call()` routes to other agents through the control plane. `app.run()` auto-exposes everything as REST. [Read the full docs →](https://agentfield.ai/docs/learn?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-read-full-docs)
 
-## Quick Start
+## Prompt to production (recommended)
+
+**Describe the system in one line. Get a production-ready multi-agent backend.**
+
+Works in Claude Code, Codex, Gemini CLI, OpenCode, Aider, Windsurf, and Cursor.
 
 ```bash
-# Installs the af CLI AND drops the agentfield-multi-reasoner-builder skill
-# into every coding agent on your machine (Claude Code, Codex, Gemini,
-# OpenCode, Aider, Windsurf, Cursor) — no prompts, no second step.
 curl -fsSL https://agentfield.ai/install.sh | bash
-
-af init my-agent --defaults                            # Scaffold agent
-cd my-agent && pip install -r requirements.txt
 ```
 
-> **Just want the binary?** `curl -fsSL https://agentfield.ai/install.sh | bash -s -- --no-skill`
->
-> **Already have `af` installed and just want the skill?** `af skill install` (interactive picker) or `af skill install --all` (every detected agent). See [`af skill --help`](#) for `list`, `update`, `uninstall`, version pinning, and per-target installs.
+In Claude Code, fire it with the shipped slash command:
 
-The skill teaches any coding agent how to architect and ship a complete multi-reasoner backend on AgentField — composite-intelligence patterns, deep DAG composition, scaffold-to-curl in one workflow. Once installed, just open Claude Code / Codex / etc. and ask **"build me a multi-reasoner agent that does X"** — the skill fires automatically.
+```text
+/agentfield a claims processor with risk scoring and human approval
+```
+
+Or paste any of these directly — the skill auto-matches, no slash command needed:
+
+```text
+Build a claims-processor agent with risk scoring, pattern detection,
+and human approval for low-confidence decisions.
+
+Build a research agent that spawns parallel investigators and recurses
+into deeper sub-questions until the answer has citation-grade provenance.
+
+Build a compliance reviewer for support transcripts — extract claims,
+check each against policy, flag violations, emit a signed audit trail.
+```
+
+You get a Docker Compose stack already wired up — the agent, the control plane, and a local `curl` you paste into a terminal to try it.
+
+[See it in action →](https://agentfield.ai/docs/learn/build-with-claude-code?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-prompt-to-production)
+
+## Prefer to write it yourself?
 
 ```bash
+af init my-agent --defaults                            # Scaffold agent
+cd my-agent && pip install -r requirements.txt
 af server          # Terminal 1 → Dashboard at http://localhost:8080
 python main.py     # Terminal 2 → Agent auto-registers
 ```

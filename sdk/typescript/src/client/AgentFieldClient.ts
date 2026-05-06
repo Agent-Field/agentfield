@@ -24,6 +24,67 @@ export interface ExecutionStatusUpdate {
   statusReason?: string;
 }
 
+// Raw discovery payload from API (snake_case)
+interface RawDiscoveryPayload {
+  discovered_at?: string;
+  total_agents?: number;
+  total_reasoners?: number;
+  total_skills?: number;
+  pagination?: {
+    limit?: number;
+    offset?: number;
+    has_more?: boolean;
+  };
+  capabilities?: RawCapability[];
+}
+
+interface RawCapability {
+  agent_id?: string;
+  base_url?: string;
+  version?: string;
+  health_status?: string;
+  deployment_type?: string;
+  last_heartbeat?: string;
+  reasoners?: RawReasoner[];
+  skills?: RawSkill[];
+}
+
+interface RawReasoner {
+  id?: string;
+  description?: string;
+  tags?: string[];
+  input_schema?: any;
+  output_schema?: any;
+  examples?: any;
+  invocation_target?: string;
+}
+
+interface RawSkill {
+  id?: string;
+  description?: string;
+  tags?: string[];
+  input_schema?: any;
+  invocation_target?: string;
+}
+
+// Compact format
+interface RawCompactDiscoveryPayload {
+  discovered_at?: string;
+  reasoners?: RawCompactCapability[];
+  skills?: RawCompactCapability[];
+}
+
+interface RawCompactCapability {
+  id?: string;
+  agent_id?: string;
+  target?: string;
+  tags?: string[];
+}
+
+interface ExecutionError extends Error {
+  status: number;
+  responseData: unknown;
+}
 export class AgentFieldClient {
   private readonly http: AxiosInstance;
   private readonly config: AgentConfig;
@@ -121,9 +182,13 @@ this.http = axios.create({
       if (respData) {
         const status = err.response.status;
         const msg = respData.message || respData.error || JSON.stringify(respData);
-        const enriched = new Error(`execute ${target} failed (${status}): ${msg}`);
-        (enriched as any).status = status;
-        (enriched as any).responseData = respData;
+        const enriched: ExecutionError = Object.assign(
+          new Error(`execute ${target} failed (${status}): ${msg}`),
+          {
+            status,
+            responseData: respData
+          }
+        );
         throw enriched;
       }
       throw err;
@@ -277,72 +342,72 @@ this.http = axios.create({
       return { format: 'xml', raw, xml: raw };
     }
 
-    const parsed = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+    const parsed: RawDiscoveryPayload | RawCompactDiscoveryPayload = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
     if (format === 'compact') {
       return {
         format: 'compact',
         raw,
-        compact: this.mapCompactDiscovery(parsed as any)
+        compact: this.mapCompactDiscovery(parsed as RawCompactDiscoveryPayload)
       };
     }
 
     return {
       format: 'json',
       raw,
-      json: this.mapDiscoveryResponse(parsed as any)
+      json: this.mapDiscoveryResponse(parsed as RawDiscoveryPayload)
     };
   }
 
-  private mapDiscoveryResponse(payload: any): DiscoveryResponse {
+  private mapDiscoveryResponse(payload: RawDiscoveryPayload): DiscoveryResponse {
     return {
-      discoveredAt: String(payload?.discovered_at ?? ''),
-      totalAgents: Number(payload?.total_agents ?? 0),
-      totalReasoners: Number(payload?.total_reasoners ?? 0),
-      totalSkills: Number(payload?.total_skills ?? 0),
+      discoveredAt: String(payload.discovered_at ?? ''),
+      totalAgents: Number(payload.total_agents ?? 0),
+      totalReasoners: Number(payload.total_reasoners ?? 0),
+      totalSkills: Number(payload.total_skills ?? 0),
       pagination: {
-        limit: Number(payload?.pagination?.limit ?? 0),
-        offset: Number(payload?.pagination?.offset ?? 0),
-        hasMore: Boolean(payload?.pagination?.has_more)
+        limit: Number(payload.pagination?.limit ?? 0),
+        offset: Number(payload.pagination?.offset ?? 0),
+        hasMore: Boolean(payload.pagination?.has_more)
       },
-      capabilities: (payload?.capabilities ?? []).map((cap: any) => ({
-        agentId: cap?.agent_id ?? '',
-        baseUrl: cap?.base_url ?? '',
-        version: cap?.version ?? '',
-        healthStatus: cap?.health_status ?? '',
-        deploymentType: cap?.deployment_type,
-        lastHeartbeat: cap?.last_heartbeat,
-        reasoners: (cap?.reasoners ?? []).map((r: any) => ({
-          id: r?.id ?? '',
-          description: r?.description,
-          tags: r?.tags ?? [],
-          inputSchema: r?.input_schema,
-          outputSchema: r?.output_schema,
-          examples: r?.examples,
-          invocationTarget: r?.invocation_target ?? ''
+      capabilities: (payload.capabilities ?? []).map((cap) => ({
+        agentId: cap.agent_id ?? '',
+        baseUrl: cap.base_url ?? '',
+        version: cap.version ?? '',
+        healthStatus: cap.health_status ?? '',
+        deploymentType: cap.deployment_type,
+        lastHeartbeat: cap.last_heartbeat,
+        reasoners: (cap.reasoners ?? []).map((r) => ({
+          id: r.id ?? '',
+          description: r.description,
+          tags: r.tags ?? [],
+          inputSchema: r.input_schema,
+          outputSchema: r.output_schema,
+          examples: r.examples,
+          invocationTarget: r.invocation_target ?? ''
         })),
-        skills: (cap?.skills ?? []).map((s: any) => ({
-          id: s?.id ?? '',
-          description: s?.description,
-          tags: s?.tags ?? [],
-          inputSchema: s?.input_schema,
-          invocationTarget: s?.invocation_target ?? ''
+        skills: (cap.skills ?? []).map((s) => ({
+          id: s.id ?? '',
+          description: s.description,
+          tags: s.tags ?? [],
+          inputSchema: s.input_schema,
+          invocationTarget: s.invocation_target ?? ''
         }))
       }))
     };
   }
 
-  private mapCompactDiscovery(payload: any): CompactDiscoveryResponse {
-    const toCap = (cap: any) => ({
-      id: cap?.id ?? '',
-      agentId: cap?.agent_id ?? '',
-      target: cap?.target ?? '',
-      tags: cap?.tags ?? []
+  private mapCompactDiscovery(payload: RawCompactDiscoveryPayload): CompactDiscoveryResponse {
+    const toCap = (cap: RawCompactCapability) => ({
+      id: cap.id ?? '',
+      agentId: cap.agent_id ?? '',
+      target: cap.target ?? '',
+      tags: cap.tags ?? []
     });
 
     return {
-      discoveredAt: String(payload?.discovered_at ?? ''),
-      reasoners: (payload?.reasoners ?? []).map(toCap),
-      skills: (payload?.skills ?? []).map(toCap)
+      discoveredAt: String(payload.discovered_at ?? ''),
+      reasoners: (payload.reasoners ?? []).map(toCap),
+      skills: (payload.skills ?? []).map(toCap)
     };
   }
 

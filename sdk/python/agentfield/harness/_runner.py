@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import random
@@ -26,8 +27,11 @@ TRANSIENT_PATTERNS = {
     "rate limit",
     "rate_limit",
     "overloaded",
-    "timeout",
-    "timed out",
+    # Note: "timeout" / "timed out" are intentionally NOT here. The opencode
+    # provider's wall-clock timeout (default 30 min) is the cap on a *single*
+    # subprocess; if that hits, the prompt or model is wrong and re-running
+    # the entire 30-min subprocess won't fix it. Real network blips that
+    # surface as "connection reset" / "503" still trigger retry.
     "connection reset",
     "connection refused",
     "temporarily unavailable",
@@ -41,10 +45,100 @@ TRANSIENT_PATTERNS = {
 
 DEFAULT_SCHEMA_RETRIES = 2
 
+# Wall-clock cap on a single AI-based JSON repair call. The repair is one
+# LLM call with no tools, no repo access — it should finish in seconds.
+# If it doesn't, fall through to the existing harness retry path.
+_SCHEMA_REPAIR_TIMEOUT_SECONDS = 90
+
 
 def _is_transient(error_str: str) -> bool:
     lower = error_str.lower()
     return any(pattern in lower for pattern in TRANSIENT_PATTERNS)
+
+
+async def _ai_schema_repair(
+    text: str,
+    schema: Any,
+    options: Dict[str, Any],
+) -> Optional[Any]:
+    """Try to coerce raw text into a valid pydantic schema instance via ONE LLM call.
+
+    The harness's older fallback for schema-validation failures was to re-run the
+    *entire* opencode subprocess (30-minute wall-clock, full repo browsing) hoping
+    the model re-emitted something parseable. That's wildly expensive when the
+    actual problem is just "the JSON closes with an extra trailing comma" or
+    similar surface-level malformation — the model already produced the correct
+    information, it just didn't structure it cleanly.
+
+    This helper attempts cheap repair instead: take the existing text + the
+    pydantic schema, ask a fresh LLM call to re-emit valid JSON conforming to
+    the schema, and parse. No tools, no exploration, just reformatting.
+
+    Returns the parsed instance on success, None on any failure (caller falls
+    through to the existing retry-with-harness path). Skipped entirely when
+    `text` is empty — there's nothing to repair from in that case, and a real
+    rerun is the only option.
+    """
+    if not text or not text.strip():
+        # Nothing to repair from. The user explicitly called out this case:
+        # "if it actually failed and there was no output, then we can't do
+        # an AI-based JSON repair." Fall through to existing retry path.
+        return None
+
+    try:
+        import litellm  # type: ignore[import-not-found]
+    except ImportError:
+        return None
+
+    schema_json: Optional[Dict[str, Any]] = None
+    try:
+        if hasattr(schema, "model_json_schema"):
+            schema_json = schema.model_json_schema()
+    except Exception:
+        schema_json = None
+
+    schema_section = (
+        f"Target JSON schema:\n```json\n{json.dumps(schema_json, indent=2)}\n```\n\n"
+        if schema_json is not None
+        else ""
+    )
+
+    repair_prompt = (
+        "The text below was produced as the answer to a structured-output task, "
+        "but it did not parse as valid JSON conforming to the expected schema. "
+        "Re-emit the SAME content as valid JSON matching the schema. Preserve "
+        "every fact and finding from the original text — do NOT invent new "
+        "information or drop fields. Output ONLY the JSON object, no surrounding "
+        "prose, no markdown code fences, no commentary.\n\n"
+        f"{schema_section}"
+        f"Original text:\n{text}"
+    )
+
+    model = options.get("model")
+    if not model:
+        # No model configured — caller's harness call should have set one.
+        # Bail rather than guess; the existing retry path will handle this.
+        return None
+
+    try:
+        response = await asyncio.wait_for(
+            litellm.acompletion(
+                model=str(model),
+                messages=[{"role": "user", "content": repair_prompt}],
+                temperature=0.0,
+                response_format={"type": "json_object"},
+            ),
+            timeout=_SCHEMA_REPAIR_TIMEOUT_SECONDS,
+        )
+        content = response.choices[0].message.content  # type: ignore[union-attr]
+    except Exception as exc:
+        logger.info("AI schema repair: LLM call failed (%s); falling through to harness retry", exc)
+        return None
+
+    if not content:
+        return None
+
+    return try_parse_from_text(content, schema)
 
 
 def _resolve_options(
@@ -261,6 +355,17 @@ class HarnessRunner:
             validated = try_parse_from_text(initial_raw.result, schema)
             if validated is not None:
                 logger.info("Stdout fallback succeeded")
+
+        # Cheap-repair tier: if we have non-empty text but still no valid
+        # parse, try one focused LLM call that just reformats the text into
+        # valid JSON. This is dramatically cheaper than the retry loop below
+        # (which spawns a whole new opencode subprocess), so we prefer it
+        # whenever there's text to work with.
+        if validated is None and initial_raw.result and initial_raw.result.strip():
+            logger.info("Attempting AI-based JSON repair before harness retry")
+            validated = await _ai_schema_repair(initial_raw.result, schema, options)
+            if validated is not None:
+                logger.info("AI schema repair succeeded — skipped harness retry")
 
         if validated is not None:
             elapsed = int((time.monotonic() - start_time) * 1000)

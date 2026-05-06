@@ -166,7 +166,8 @@ async def test_fal_provider_logs_and_reraises(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_openrouter_audio_is_not_supported():
+async def test_openrouter_audio_requires_api_key(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     provider = OpenRouterProvider()
-    with pytest.raises(NotImplementedError, match="doesn't support audio generation"):
+    with pytest.raises(ValueError, match="API key required"):
         await provider.generate_audio("hello")

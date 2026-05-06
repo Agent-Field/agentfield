@@ -50,6 +50,10 @@ type WorkflowDAGResponse struct {
 	MaxDepth       int               `json:"max_depth"`
 	DAG            WorkflowDAGNode   `json:"dag"`
 	Timeline       []WorkflowDAGNode `json:"timeline"`
+	// Trigger describes the inbound webhook (or schedule) that originated
+	// this run, when one exists. Populated by walking the root execution's
+	// VC chain back to the parent trigger_event VC.
+	Trigger *types.TriggerEventMetadata `json:"trigger,omitempty"`
 }
 
 type SessionWorkflowsResponse struct {
@@ -106,6 +110,9 @@ type WorkflowDAGLightweightResponse struct {
 	WebhookSummary    *WebhookRunSummary `json:"webhook_summary,omitempty"`
 	// WebhookFailures lists executions with a failed delivery (latest failure per execution), capped for the run strip.
 	WebhookFailures []WebhookFailurePreview `json:"webhook_failures,omitempty"`
+	// Trigger describes the inbound webhook (or schedule) that originated
+	// this run, when one exists.
+	Trigger *types.TriggerEventMetadata `json:"trigger,omitempty"`
 }
 
 func GetWorkflowDAGHandler(storageProvider storage.StorageProvider) gin.HandlerFunc {
@@ -134,6 +141,8 @@ func (s *executionGraphService) handleGetWorkflowDAG(c *gin.Context) {
 		return
 	}
 
+	rootExecID := findRootExecutionID(executions)
+
 	if isLightweightRequest(c) {
 		timeline, workflowStatus, workflowName, sessionID, actorID, maxDepth := buildLightweightExecutionDAG(executions)
 
@@ -152,6 +161,7 @@ func (s *executionGraphService) handleGetWorkflowDAG(c *gin.Context) {
 			WorkflowIssuerDID: lookupWorkflowIssuerDID(ctx, s.store, runID),
 			WebhookSummary:     wh.summary,
 			WebhookFailures:    wh.failures,
+			Trigger:            TriggerForRun(ctx, s.store, runID, rootExecID),
 		}
 
 		c.JSON(http.StatusOK, response)
@@ -170,9 +180,29 @@ func (s *executionGraphService) handleGetWorkflowDAG(c *gin.Context) {
 		MaxDepth:       maxDepth,
 		DAG:            dag,
 		Timeline:       timeline,
+		Trigger:        TriggerForRun(ctx, s.store, runID, rootExecID),
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+// findRootExecutionID returns the execution_id of the root node — the
+// execution whose ParentExecutionID is nil/empty. Used to anchor trigger
+// enrichment to the run's originating step. Falls back to the first
+// execution when nothing has a clear nil parent (older rows).
+func findRootExecutionID(executions []*types.Execution) string {
+	for _, exec := range executions {
+		if exec == nil {
+			continue
+		}
+		if exec.ParentExecutionID == nil || *exec.ParentExecutionID == "" {
+			return exec.ExecutionID
+		}
+	}
+	if len(executions) > 0 && executions[0] != nil {
+		return executions[0].ExecutionID
+	}
+	return ""
 }
 
 func GetWorkflowChildrenHandler(storageProvider storage.StorageProvider) gin.HandlerFunc {

@@ -638,6 +638,7 @@ class AgentFieldClient:
         version: str = "1.0.0",
         agent_metadata: Optional[Dict[str, Any]] = None,
         tags: Optional[List[str]] = None,
+        instance_id: Optional[str] = None,
     ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """Register or update agent information with AgentField server."""
         try:
@@ -654,6 +655,10 @@ class AgentFieldClient:
                 "reasoners": reasoners,
                 "skills": skills,
                 "proposed_tags": agent_tags,
+                # instance_id distinguishes this OS process from any prior one.
+                # Empty string is the back-compat sentinel; the control plane
+                # treats empty as "no orphan-reap on this re-registration".
+                "instance_id": instance_id or "",
                 "communication_config": {
                     "protocols": ["http"],
                     "websocket_endpoint": "",
@@ -1195,6 +1200,7 @@ class AgentFieldClient:
         version: str = "1.0.0",
         agent_metadata: Optional[Dict[str, Any]] = None,
         tags: Optional[List[str]] = None,
+        instance_id: Optional[str] = None,
     ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """Register agent with immediate status reporting for fast lifecycle."""
         try:
@@ -1211,6 +1217,8 @@ class AgentFieldClient:
                 "reasoners": reasoners,
                 "skills": skills,
                 "proposed_tags": agent_tags,
+                # See register_agent for instance_id semantics.
+                "instance_id": instance_id or "",
                 "lifecycle_status": status.value,
                 "communication_config": {
                     "protocols": ["http"],

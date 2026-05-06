@@ -3,6 +3,7 @@ package application
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -58,25 +59,12 @@ func TestGenerateAgentFieldServerID(t *testing.T) {
 	})
 
 	t.Run("falls back to original path when absolute lookup fails", func(t *testing.T) {
-		originalWD, err := os.Getwd()
-		if err != nil {
-			t.Fatalf("Getwd failed: %v", err)
+		originalAbs := absPathForAgentFieldServerID
+		absPathForAgentFieldServerID = func(string) (string, error) {
+			return "", errors.New("abs failed")
 		}
-
-		badWD := t.TempDir()
-		if err := os.Chdir(badWD); err != nil {
-			t.Fatalf("Chdir to temp dir failed: %v", err)
-		}
-
-		if err := os.RemoveAll(badWD); err != nil {
-			_ = os.Chdir(originalWD)
-			t.Fatalf("RemoveAll failed: %v", err)
-		}
-
 		t.Cleanup(func() {
-			if err := os.Chdir(originalWD); err != nil {
-				t.Fatalf("failed to restore working directory: %v", err)
-			}
+			absPathForAgentFieldServerID = originalAbs
 		})
 
 		input := filepath.Join("relative", "agentfield-home")

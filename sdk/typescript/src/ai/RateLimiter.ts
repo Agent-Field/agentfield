@@ -3,11 +3,33 @@ import os from 'node:os';
 
 export class RateLimitError extends Error {
   retryAfter?: number;
+  status?: number;
+  statusCode?: number;
+  response?: {
+    status?: number;
+    statusCode?: number;
+    status_code?: number;
+    headers?: Record<string, string>;
+  };
 
-  constructor(message: string, retryAfter?: number) {
+  constructor(
+    message: string,
+    retryAfter?: number,
+    status?: number,
+    statusCode?: number,
+    response?: {
+      status?: number;
+      statusCode?: number;
+      status_code?: number;
+      headers?: Record<string, string>;
+    }
+  ) {
     super(message);
     this.name = 'RateLimitError';
     this.retryAfter = retryAfter;
+    this.status = status;
+    this.statusCode = statusCode;
+    this.response = response;
   }
 }
 
@@ -57,26 +79,35 @@ export class StatelessRateLimiter {
 
   protected _isRateLimitError(error: unknown): boolean {
     if (!error) return false;
-    const err = error as any;
 
-    const className = err?.constructor?.name;
-    if (className && className.includes('RateLimitError')) {
+    if (error instanceof RateLimitError) {
       return true;
     }
 
-    const response = err?.response;
-    const statusCandidates = [
-      err?.status,
-      err?.statusCode,
-      response?.status,
-      response?.statusCode,
-      response?.status_code
-    ];
-    if (statusCandidates.some((code: any) => code === 429 || code === 503)) {
-      return true;
+    if (typeof error === 'object' && error !== null) {
+      const ctorName = (error as { constructor?: { name?: string } }).constructor?.name;
+      if (typeof ctorName === 'string' && ctorName.includes('RateLimitError')) {
+        return true;
+      }
+
+      const err = error as {
+        status?: number;
+        statusCode?: number;
+        response?: { status?: number; statusCode?: number; status_code?: number };
+      };
+      const statusCandidates = [
+        err.status,
+        err.statusCode,
+        err.response?.status,
+        err.response?.statusCode,
+        err.response?.status_code
+      ];
+      if (statusCandidates.some((code) => code === 429 || code === 503)) {
+        return true;
+      }
     }
 
-    const message = String(err?.message ?? err ?? '').toLowerCase();
+    const message = toError(error).message.toLowerCase();
     const rateLimitKeywords = [
       'rate limit',
       'rate-limit',
@@ -98,24 +129,41 @@ export class StatelessRateLimiter {
 
   protected _extractRetryAfter(error: unknown): number | undefined {
     if (!error) return undefined;
-    const err = error as any;
 
-    const headers = err?.response?.headers ?? err?.response?.Headers ?? err?.response?.header;
+    if (error instanceof RateLimitError && error.retryAfter) {
+      return error.retryAfter;
+    }
+
+    if (typeof error !== 'object' || error === null) return undefined;
+
+    type HeaderBag = Record<string, string | string[] | undefined>;
+    const err = error as {
+      response?: { headers?: HeaderBag; Headers?: HeaderBag; header?: HeaderBag };
+      retryAfter?: string | number;
+      retry_after?: string | number;
+    };
+
+    const headers = err.response?.headers ?? err.response?.Headers ?? err.response?.header;
     if (headers && typeof headers === 'object') {
       const retryAfterKey = Object.keys(headers).find((k) => k.toLowerCase() === 'retry-after');
       if (retryAfterKey) {
-        const value = Array.isArray(headers[retryAfterKey]) ? headers[retryAfterKey][0] : headers[retryAfterKey];
-        const parsed = parseFloat(value);
-        if (!Number.isNaN(parsed)) {
-          return parsed;
+        const raw = headers[retryAfterKey];
+        const value = Array.isArray(raw) ? raw[0] : raw;
+        if (value !== undefined) {
+          const parsed = parseFloat(String(value));
+          if (!Number.isNaN(parsed)) {
+            return parsed;
+          }
         }
       }
     }
 
-    const retryAfter = err?.retryAfter ?? err?.retry_after;
-    const parsed = parseFloat(retryAfter);
-    if (!Number.isNaN(parsed)) {
-      return parsed;
+    const rawRetry = err.retryAfter ?? err.retry_after;
+    if (rawRetry !== undefined) {
+      const parsed = parseFloat(String(rawRetry));
+      if (!Number.isNaN(parsed)) {
+        return parsed;
+      }
     }
 
     return undefined;
@@ -218,4 +266,10 @@ export class StatelessRateLimiter {
       this._extractRetryAfter(lastError)
     );
   }
+}
+
+
+function toError(error: unknown): Error {
+  if (error instanceof Error) return error;
+  return new Error(String(error));
 }

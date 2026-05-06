@@ -487,8 +487,9 @@ class TestAgentAPIKey:
     def test_unattached_router_raises_error(self):
         """AgentRouter should raise error when accessing api_key without agent."""
         from agentfield.router import AgentRouter
+        from agentfield.exceptions import AgentFieldClientError
 
         router = AgentRouter(prefix="/test")
 
-        with pytest.raises(RuntimeError, match="Router not attached to an agent"):
+        with pytest.raises(AgentFieldClientError, match="Router not attached to an agent"):
             _ = router.api_key

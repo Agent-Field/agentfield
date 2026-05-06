@@ -189,9 +189,12 @@ func TestLevenshtein(t *testing.T) {
 
 func TestIsAccessible(t *testing.T) {
 	assert.True(t, isAccessible("public", "public"))
+	assert.True(t, isAccessible("webhook", "public"))
 	assert.True(t, isAccessible("public", "api_key"))
+	assert.True(t, isAccessible("webhook", "api_key"))
 	assert.True(t, isAccessible("api_key", "api_key"))
 	assert.False(t, isAccessible("api_key", "public"))
+	assert.False(t, isAccessible("api_key", "webhook"))
 	assert.True(t, isAccessible("admin", "admin"))
 	assert.False(t, isAccessible("admin", "api_key"))
 }

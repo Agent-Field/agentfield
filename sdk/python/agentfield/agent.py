@@ -63,11 +63,6 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
 from dataclasses import dataclass, field
 import weakref
-from .agent_schema import _AgentSchemaMixin
-from .agent_discovery import _AgentDiscoveryMixin
-from .agent_serverless import _AgentServerlessMixin
-from .agent_pause import _PauseManager
-from .agent_vc import _AgentVCMixin
 
 if TYPE_CHECKING:
     from agentfield.harness._result import HarnessResult
@@ -75,6 +70,27 @@ if TYPE_CHECKING:
 
 # Use slots=True for memory efficiency on Python 3.10+, fallback for older versions
 _dataclass_kwargs = {"slots": True} if sys.version_info >= (3, 10) else {}
+
+
+class _HandlerInputError(ValueError):
+    """Reasoner input-validation error with a message safe to surface to HTTP clients.
+
+    All messages produced inside the SDK's validator are constructed by us
+    (not pulled from user payloads or underlying Python exceptions), so the
+    full text is safe to include in a 422 response body. We expose that
+    text via the explicit `safe_message` attribute rather than relying on
+    `str(self)` so the request handler can read a known-safe value without
+    tripping CodeQL's `py/stack-trace-exposure` rule.
+
+    Subclasses ValueError so existing `except ValueError` call sites still
+    catch validation failures unchanged.
+    """
+
+    __slots__ = ("safe_message",)
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.safe_message = message
 
 
 # Memory-efficient handler entry classes using __slots__ (on Python 3.10+)
@@ -91,6 +107,12 @@ class ReasonerEntry:
     output_type: type
     tags: List[str] = field(default_factory=list)
     vc_enabled: Optional[bool] = None
+    # Trigger bindings declared via @reasoner(triggers=[...]) or sugar
+    # decorators @on_event / @on_schedule. The control plane upserts a
+    # code-managed Trigger row per binding at registration.
+    triggers: List[Any] = field(default_factory=list)
+    # 3-state webhook flag: True (opt-in), False (opt-out), "warn" (default)
+    accepts_webhook: Union[bool, str] = "warn"
     # Note: input_schema and output_schema are generated on-demand via _get_handler_schema()
 
 
@@ -352,7 +374,76 @@ def _resolve_callback_url(callback_url: Optional[str], port: int) -> str:
     return f"http://localhost:{port}"
 
 
-class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin,_AgentVCMixin):
+class _PauseManager:
+    """Manages pending execution pause futures resolved via webhook callback.
+
+    Each call to ``Agent.pause()`` registers an ``asyncio.Future`` keyed by
+    ``approval_request_id``.  When the webhook route receives a resolution
+    callback from the control plane it resolves the matching future, unblocking
+    the caller.
+    """
+
+    def __init__(self) -> None:
+        self._pending: Dict[str, asyncio.Future] = {}
+        # Also track execution_id → approval_request_id for fallback resolution
+        self._exec_to_request: Dict[str, str] = {}
+        self._lock = asyncio.Lock()
+
+    async def register(
+        self, approval_request_id: str, execution_id: str = ""
+    ) -> asyncio.Future:
+        """Register a new pending pause and return the Future to await."""
+        async with self._lock:
+            if approval_request_id in self._pending:
+                return self._pending[approval_request_id]
+            loop = asyncio.get_running_loop()
+            future = loop.create_future()
+            self._pending[approval_request_id] = future
+            if execution_id:
+                self._exec_to_request[execution_id] = approval_request_id
+            return future
+
+    async def resolve(self, approval_request_id: str, result: "ApprovalResult") -> bool:
+        """Resolve a pending pause by approval_request_id.  Returns True if a waiter was found."""
+        async with self._lock:
+            future = self._pending.pop(approval_request_id, None)
+            # Clean up execution mapping
+            exec_id = None
+            for eid, rid in self._exec_to_request.items():
+                if rid == approval_request_id:
+                    exec_id = eid
+                    break
+            if exec_id:
+                self._exec_to_request.pop(exec_id, None)
+            if future and not future.done():
+                future.set_result(result)
+                return True
+            return False
+
+    async def resolve_by_execution_id(
+        self, execution_id: str, result: "ApprovalResult"
+    ) -> bool:
+        """Fallback: resolve by execution_id when approval_request_id is not in the callback."""
+        async with self._lock:
+            request_id = self._exec_to_request.pop(execution_id, None)
+            if request_id:
+                future = self._pending.pop(request_id, None)
+                if future and not future.done():
+                    future.set_result(result)
+                    return True
+            return False
+
+    async def cancel_all(self) -> None:
+        """Cancel all pending futures (for shutdown)."""
+        async with self._lock:
+            for future in self._pending.values():
+                if not future.done():
+                    future.cancel()
+            self._pending.clear()
+            self._exec_to_request.clear()
+
+
+class Agent(FastAPI):
     """
     AgentField Agent - FastAPI subclass for creating AI agent nodes.
 
@@ -502,6 +593,16 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
         self.description = description
         self.agent_tags = tags or []
         self.author = author
+
+        # Per-process identifier sent in registration and heartbeats. The control
+        # plane uses a change in this value across re-registrations to detect a
+        # mid-flight redeploy and fail every in-flight execution that was
+        # awaiting a result inside the previous OS process. A fresh UUID per
+        # __init__ is exactly what we want — every Python process gets a unique
+        # one, and a re-import in the same process keeps the same one (since the
+        # same Agent instance is being used).
+        import uuid as _uuid
+        self.agent_instance_id = _uuid.uuid4().hex
 
         # Memory-efficient handler registries (replaces old list-based storage)
         # Using Dict[str, Entry] with __slots__ dataclasses for minimal footprint
@@ -726,7 +827,405 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
             if entry.vc_enabled is not None
             else self._agent_vc_enabled,
         }
+        triggers = getattr(entry, "triggers", None)
+        accepts_webhook = getattr(entry, "accepts_webhook", "warn")
+        if kind == "reasoner":
+            # Normalize the 3-state value to one of "true" / "false" / "warn"
+            # before serialization. The control plane's ReasonerDefinition
+            # types AcceptsWebhook as *string and rejects bool literals.
+            if accepts_webhook is True:
+                metadata["accepts_webhook"] = "true"
+            elif accepts_webhook is False:
+                metadata["accepts_webhook"] = "false"
+            elif isinstance(accepts_webhook, str) and accepts_webhook in ("true", "false", "warn"):
+                metadata["accepts_webhook"] = accepts_webhook
+            else:
+                metadata["accepts_webhook"] = "warn"
+        if kind == "reasoner" and triggers:
+            from .triggers import trigger_to_payload  # local import to avoid cycle
+
+            metadata["triggers"] = [trigger_to_payload(t) for t in triggers]
         return metadata
+
+    def _types_to_json_schema(self, input_types: Dict[str, tuple]) -> Dict:
+        """Convert Python types dict to JSON schema (on-demand generation)."""
+        properties = {}
+        required = []
+
+        for name, (typ, default) in input_types.items():
+            properties[name] = self._type_to_json_schema(typ)
+            if default is ...:  # Required field (no default)
+                required.append(name)
+
+        schema = {
+            "type": "object",
+            "properties": properties,
+        }
+        if required:
+            schema["required"] = required
+        return schema
+
+    def _type_to_json_schema(self, typ: type) -> Dict:
+        """Convert a Python type to JSON schema."""
+        # Handle None/NoneType
+        if typ is None or typ is type(None):
+            return {"type": "null"}
+
+        # Handle basic types
+        type_map = {
+            str: {"type": "string"},
+            int: {"type": "integer"},
+            float: {"type": "number"},
+            bool: {"type": "boolean"},
+            list: {"type": "array"},
+            dict: {"type": "object"},
+            bytes: {"type": "string", "format": "binary"},
+        }
+
+        if typ in type_map:
+            return type_map[typ]
+
+        # Handle Pydantic models
+        if hasattr(typ, "model_json_schema"):
+            return typ.model_json_schema()
+
+        # Handle typing constructs (List, Dict, Optional, etc.)
+        origin = getattr(typ, "__origin__", None)
+        if origin is list:
+            args = getattr(typ, "__args__", (Any,))
+            return {
+                "type": "array",
+                "items": self._type_to_json_schema(args[0]) if args else {},
+            }
+        if origin is dict:
+            return {"type": "object", "additionalProperties": True}
+        if origin is Union:
+            args = getattr(typ, "__args__", ())
+            # Handle Optional (Union with None)
+            non_none = [a for a in args if a is not type(None)]
+            if len(non_none) == 1:
+                return self._type_to_json_schema(non_none[0])
+            return {"anyOf": [self._type_to_json_schema(a) for a in args]}
+
+        # Default fallback
+        return {"type": "object"}
+
+    def _validate_handler_input(
+        self, data: dict, input_types: Dict[str, tuple]
+    ) -> dict:
+        """
+        Validate input data against expected types at runtime.
+
+        Replaces Pydantic model validation with lightweight runtime validation.
+        Saves ~1.5-2 KB per handler by not creating Pydantic classes.
+
+        Args:
+            data: Raw input dict from request body
+            input_types: Dict mapping field names to (type, default) tuples
+
+        Returns:
+            Validated dict with type coercion applied
+
+        Raises:
+            ValueError: If required field is missing or type conversion fails
+        """
+        result = {}
+
+        for name, (expected_type, default) in input_types.items():
+            # Check if field is present
+            if name not in data:
+                if default is ...:  # Required field (no default)
+                    raise _HandlerInputError(f"Missing required field: {name}")
+                result[name] = default
+                continue
+
+            value = data[name]
+
+            # Handle None values
+            if value is None:
+                # Check if Optional type
+                origin = getattr(expected_type, "__origin__", None)
+                if origin is Union:
+                    args = getattr(expected_type, "__args__", ())
+                    if type(None) in args:
+                        result[name] = None
+                        continue
+                # Not Optional, use default if available
+                if default is not ...:
+                    result[name] = default
+                    continue
+                raise _HandlerInputError(f"Field '{name}' cannot be None")
+
+            # Type coercion for basic types
+            try:
+                # Get the actual type (unwrap Optional)
+                actual_type = expected_type
+                origin = getattr(expected_type, "__origin__", None)
+                if origin is Union:
+                    args = getattr(expected_type, "__args__", ())
+                    non_none = [a for a in args if a is not type(None)]
+                    if len(non_none) == 1:
+                        actual_type = non_none[0]
+
+                # Basic type coercion
+                if actual_type is int:
+                    result[name] = int(value)
+                elif actual_type is float:
+                    result[name] = float(value)
+                elif actual_type is str:
+                    result[name] = str(value)
+                elif actual_type is bool:
+                    if isinstance(value, bool):
+                        result[name] = value
+                    elif isinstance(value, str):
+                        result[name] = value.lower() in ("true", "1", "yes")
+                    else:
+                        result[name] = bool(value)
+                elif (
+                    actual_type is dict
+                    or getattr(actual_type, "__origin__", None) is dict
+                ):
+                    if not isinstance(value, dict):
+                        raise _HandlerInputError(f"Field '{name}' must be a dict")
+                    result[name] = dict(value)
+                elif (
+                    actual_type is list
+                    or getattr(actual_type, "__origin__", None) is list
+                ):
+                    if not isinstance(value, list):
+                        raise _HandlerInputError(f"Field '{name}' must be a list")
+                    result[name] = list(value)
+                elif hasattr(actual_type, "model_validate"):
+                    # Pydantic model - use its validation
+                    result[name] = actual_type.model_validate(value)
+                else:
+                    # Pass through for complex/unknown types
+                    result[name] = value
+            except _HandlerInputError:
+                raise
+            except (ValueError, TypeError):
+                # Underlying coercion failure (e.g. int("not a number")). The
+                # inner exception's text can carry Python-runtime detail, so
+                # we deliberately drop it from the message we surface to the
+                # client and just say which field failed.
+                raise _HandlerInputError(f"Invalid value for field '{name}'")
+
+        return result
+
+    def handle_serverless(
+        self, event: dict, adapter: Optional[Callable] = None
+    ) -> dict:
+        """
+        Universal serverless handler for executing reasoners and skills.
+
+        This method enables agents to run in serverless environments (AWS Lambda,
+        Google Cloud Functions, Cloud Run, Kubernetes Jobs, etc.) by providing
+        a simple entry point that parses the event, executes the target function,
+        and returns the result.
+
+        Special Endpoints:
+            - /discover: Returns agent metadata for AgentField server registration
+            - /execute: Executes reasoners and skills
+
+        Args:
+            event (dict): Serverless event containing:
+                - path: Request path (/discover or /execute)
+                - action: Alternative to path (discover or execute)
+                - reasoner: Name of the reasoner to execute (for execution)
+                - input: Input parameters for the function (for execution)
+
+        Returns:
+            dict: Execution result with status and output, or discovery metadata
+
+        Example:
+            ```python
+            # AWS Lambda handler with API Gateway
+            from agentfield import Agent
+
+            app = Agent("my_agent", auto_register=False)
+
+            @app.reasoner()
+            async def analyze(text: str) -> dict:
+                return {"result": text.upper()}
+
+            def lambda_handler(event, context):
+                # Handle both discovery and execution
+                return app.handle_serverless(event)
+            ```
+        """
+        import asyncio
+
+        if adapter:
+            try:
+                event = adapter(event) or event
+            except Exception as exc:  # pragma: no cover - adapter failures
+                return {
+                    "statusCode": 400,
+                    "body": {"error": f"serverless adapter failed: {exc}"},
+                }
+
+        # Check if this is a discovery request
+        path = event.get("path") or event.get("rawPath") or ""
+        action = event.get("action", "")
+
+        if path == "/discover" or path.endswith("/discover") or action == "discover":
+            # Return agent metadata for AgentField server registration
+            return self._handle_discovery()
+
+        # Auto-register with AgentField if needed (for execution requests)
+        if self.auto_register and not self.agentfield_connected:
+            try:
+                # Attempt registration (non-blocking)
+                self.agentfield_handler._register_agent()
+                self.agentfield_connected = True
+            except Exception as e:
+                if self.dev_mode:
+                    log_warn(f"Auto-registration failed: {e}")
+
+        # Serverless invocations arrive via the control plane; mark as connected so
+        # cross-agent calls can route through the gateway without a lease loop.
+        self.agentfield_connected = True
+        # Serverless handlers should avoid async execute polling; force sync path.
+        if getattr(self.async_config, "enable_async_execution", True):
+            self.async_config.enable_async_execution = False
+
+        # Parse event format for execution
+        reasoner_name = (
+            event.get("reasoner") or event.get("target") or event.get("skill")
+        )
+        if not reasoner_name and path:
+            # Support paths like /execute/<target> or /reasoners/<name>
+            cleaned_path = path.split("?", 1)[0].strip("/")
+            parts = cleaned_path.split("/")
+            if parts and parts[0] not in ("", "discover"):
+                if len(parts) >= 2 and parts[0] in ("execute", "reasoners", "skills"):
+                    reasoner_name = parts[1]
+                elif parts[0] in ("execute", "reasoners", "skills"):
+                    reasoner_name = None
+                elif parts:
+                    reasoner_name = parts[-1]
+
+        input_data = event.get("input") or event.get("input_data", {})
+        execution_context_data = (
+            event.get("execution_context") or event.get("executionContext") or {}
+        )
+
+        if not reasoner_name:
+            return {
+                "statusCode": 400,
+                "body": {"error": "Missing 'reasoner' or 'target' in event"},
+            }
+
+        # Create execution context
+        exec_id = execution_context_data.get(
+            "execution_id", f"exec_{int(time.time() * 1000)}"
+        )
+        run_id = execution_context_data.get("run_id") or execution_context_data.get(
+            "workflow_id"
+        )
+        if not run_id:
+            run_id = f"wf_{int(time.time() * 1000)}"
+        workflow_id = execution_context_data.get("workflow_id", run_id)
+
+        execution_context = ExecutionContext(
+            run_id=run_id,
+            execution_id=exec_id,
+            agent_instance=self,
+            agent_node_id=self.node_id,
+            reasoner_name=reasoner_name,
+            parent_execution_id=execution_context_data.get("parent_execution_id"),
+            session_id=execution_context_data.get("session_id"),
+            actor_id=execution_context_data.get("actor_id"),
+            caller_did=execution_context_data.get("caller_did"),
+            target_did=execution_context_data.get("target_did"),
+            agent_node_did=execution_context_data.get(
+                "agent_node_did", execution_context_data.get("agent_did")
+            ),
+            workflow_id=workflow_id,
+            parent_workflow_id=execution_context_data.get("parent_workflow_id"),
+            root_workflow_id=execution_context_data.get("root_workflow_id"),
+        )
+
+        # Set execution context
+        self._current_execution_context = execution_context
+
+        try:
+            # Find and execute the target function
+            if hasattr(self, reasoner_name):
+                func = getattr(self, reasoner_name)
+
+                # Execute function (sync or async)
+                if asyncio.iscoroutinefunction(func):
+                    result = asyncio.run(func(**input_data))
+                else:
+                    result = func(**input_data)
+
+                return {"statusCode": 200, "body": result}
+            else:
+                return {
+                    "statusCode": 404,
+                    "body": {"error": f"Function '{reasoner_name}' not found"},
+                }
+
+        except Exception as e:
+            return {"statusCode": 500, "body": {"error": str(e)}}
+        finally:
+            # Clean up execution context
+            self._current_execution_context = None
+
+    def _handle_discovery(self) -> dict:
+        """
+        Handle discovery requests for serverless agent registration.
+
+        Returns agent metadata including reasoners, skills, and configuration
+        for automatic registration with the AgentField server.
+
+        Returns:
+            dict: Agent metadata for registration
+        """
+        return {
+            "node_id": self.node_id,
+            "version": self.version,
+            "deployment_type": "serverless",
+            "reasoners": [
+                {
+                    "id": r["id"],
+                    "input_schema": r.get("input_schema", {}),
+                    "output_schema": r.get("output_schema", {}),
+                    "memory_config": r.get("memory_config", {}),
+                    "tags": r.get("tags", []),
+                }
+                for r in self.reasoners
+            ],
+            "skills": [
+                {
+                    "id": s["id"],
+                    "input_schema": s.get("input_schema", {}),
+                    "tags": s.get("tags", []),
+                }
+                for s in self.skills
+            ],
+        }
+
+    def _initialize_did_system(self):
+        """Initialize DID and VC components."""
+        try:
+            # Initialize DID Manager
+            self.did_manager = DIDManager(
+                self.agentfield_server, self.node_id, self.api_key
+            )
+
+            # Initialize VC Generator
+            self.vc_generator = VCGenerator(self.agentfield_server, self.api_key)
+
+            if self.dev_mode:
+                log_debug("DID system initialized")
+
+        except Exception as e:
+            if self.dev_mode:
+                log_error(f"Failed to initialize DID system: {e}")
+            self.did_manager = None
+            self.vc_generator = None
 
     def _register_memory_event_listeners(self):
         """Scans for methods decorated with @on_change and registers them as listeners."""
@@ -906,6 +1405,192 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
             return self._current_execution_context
         return None
 
+    def _populate_execution_context_with_did(
+        self, execution_context, did_execution_context
+    ):
+        """
+        Populate the execution context with DID information.
+
+        Args:
+            execution_context: The main ExecutionContext
+            did_execution_context: The DIDExecutionContext with DID info
+        """
+        if did_execution_context:
+            execution_context.session_id = did_execution_context.session_id
+            execution_context.caller_did = did_execution_context.caller_did
+            execution_context.target_did = did_execution_context.target_did
+            execution_context.agent_node_did = did_execution_context.agent_node_did
+
+    def _agent_vc_default(self) -> bool:
+        """Resolve the agent-level VC default, falling back to enabled."""
+        return True if self._agent_vc_enabled is None else self._agent_vc_enabled
+
+    def _set_reasoner_vc_override(
+        self, reasoner_id: str, value: Optional[bool]
+    ) -> None:
+        if value is None:
+            self._reasoner_vc_overrides.pop(reasoner_id, None)
+        else:
+            self._reasoner_vc_overrides[reasoner_id] = value
+
+    def _set_skill_vc_override(self, skill_id: str, value: Optional[bool]) -> None:
+        if value is None:
+            self._skill_vc_overrides.pop(skill_id, None)
+        else:
+            self._skill_vc_overrides[skill_id] = value
+
+    def _effective_component_vc_setting(
+        self, component_id: str, overrides: Dict[str, bool]
+    ) -> bool:
+        if component_id in overrides:
+            return overrides[component_id]
+        return self._agent_vc_default()
+
+    def _should_generate_vc(
+        self, component_id: str, overrides: Dict[str, bool]
+    ) -> bool:
+        if (
+            not self.did_enabled
+            or not self.vc_generator
+            or not self.vc_generator.is_enabled()
+        ):
+            return False
+        return self._effective_component_vc_setting(component_id, overrides)
+
+    def _build_agent_metadata(self) -> Optional[Dict[str, Any]]:
+        """Build agent metadata (description, tags, author) for registration payload."""
+        metadata: Dict[str, Any] = {}
+        if self.description:
+            metadata["description"] = self.description
+        if self.agent_tags:
+            metadata["tags"] = self.agent_tags
+        if self.author:
+            metadata["author"] = self.author
+        return metadata if metadata else None
+
+    def _build_vc_metadata(self) -> Dict[str, Any]:
+        """Produce a serializable VC policy snapshot for control-plane visibility."""
+        effective_reasoners = {
+            reasoner["id"]: self._effective_component_vc_setting(
+                reasoner["id"], self._reasoner_vc_overrides
+            )
+            for reasoner in self.reasoners
+            if "id" in reasoner
+        }
+        effective_skills = {
+            skill["id"]: self._effective_component_vc_setting(
+                skill["id"], self._skill_vc_overrides
+            )
+            for skill in self.skills
+            if "id" in skill
+        }
+
+        return {
+            "agent_default": self._agent_vc_default(),
+            "reasoner_overrides": dict(self._reasoner_vc_overrides),
+            "skill_overrides": dict(self._skill_vc_overrides),
+            "effective_reasoners": effective_reasoners,
+            "effective_skills": effective_skills,
+        }
+
+    async def _generate_vc_async(
+        self,
+        vc_generator,
+        did_execution_context,
+        function_name,
+        input_data,
+        output_data,
+        status="success",
+        error_message=None,
+        duration_ms=0,
+    ):
+        """
+        Generate VC asynchronously without blocking execution.
+
+        Args:
+            vc_generator: VCGenerator instance
+            did_execution_context: DID execution context
+            function_name: Name of the executed function
+            input_data: Input data for the execution
+            output_data: Output data from the execution
+            status: Execution status
+            error_message: Error message if any
+            duration_ms: Execution duration in milliseconds
+        """
+        try:
+            if vc_generator and vc_generator.is_enabled():
+                vc = vc_generator.generate_execution_vc(
+                    execution_context=did_execution_context,
+                    input_data=input_data,
+                    output_data=output_data,
+                    status=status,
+                    error_message=error_message,
+                    duration_ms=duration_ms,
+                )
+                if vc:
+                    log_info(f"Generated VC {vc.vc_id} for {function_name}")
+        except Exception as e:
+            log_warn(f"Failed to generate VC for {function_name}: {e}")
+
+    def _build_callback_discovery_payload(self) -> Optional[Dict[str, Any]]:
+        """Prepare discovery metadata for agent registration."""
+
+        if not self.callback_candidates:
+            return None
+
+        payload: Dict[str, Any] = {
+            "mode": "python-sdk:auto",
+            "preferred": self.base_url,
+            "callback_candidates": self.callback_candidates,
+            "container": _is_running_in_container(),
+            "submitted_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[
+                :-3
+            ]
+            + "Z",
+        }
+
+        return payload
+
+    def _apply_discovery_response(self, payload: Optional[Dict[str, Any]]) -> None:
+        """Update agent networking state from AgentField discovery response."""
+
+        if not payload:
+            return
+
+        discovery_section = (
+            payload.get("callback_discovery") if isinstance(payload, dict) else None
+        )
+
+        resolved = None
+        if isinstance(payload, dict):
+            resolved = payload.get("resolved_base_url")
+        if not resolved and isinstance(discovery_section, dict):
+            resolved = (
+                discovery_section.get("resolved")
+                or discovery_section.get("selected")
+                or discovery_section.get("preferred")
+            )
+
+        if resolved and resolved != self.base_url:
+            log_debug(f"Applying resolved callback URL from AgentField: {resolved}")
+            self.base_url = resolved
+
+        if isinstance(discovery_section, dict):
+            candidates = discovery_section.get("candidates")
+            if isinstance(candidates, list):
+                normalized = []
+                for candidate in candidates:
+                    if isinstance(candidate, str):
+                        normalized.append(candidate)
+                # Ensure resolved URL is first when present
+                if resolved and resolved in normalized:
+                    normalized.remove(resolved)
+                    normalized.insert(0, resolved)
+                elif resolved:
+                    normalized.insert(0, resolved)
+
+                if normalized:
+                    self.callback_candidates = normalized
 
     def _register_agent_with_did(self) -> bool:
         """
@@ -996,6 +1681,8 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
         *,
         vc_enabled: Optional[bool] = None,
         require_realtime_validation: bool = False,
+        triggers: Optional[List[Any]] = None,
+        accepts_webhook: Optional[Any] = None,
     ):
         """
         Decorator to register a reasoner function.
@@ -1009,12 +1696,17 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
             tags (List[str] | None, optional): Organizational tags that travel with the reasoner metadata.
             vc_enabled (bool | None, optional): Override VC generation for this reasoner. True forces VC creation,
                 False disables it, and None inherits the agent-level policy.
+            triggers (list, optional): EventTrigger / ScheduleTrigger declarations. Same shape as the
+                module-level @reasoner kwarg. Stamps each as a code-managed trigger at registration time.
+            accepts_webhook (bool | "warn" | None, optional): 3-state UI guardrail flag.
         """
 
         direct_registration: Optional[Callable] = None
         decorator_path = path
         decorator_name = name
         decorator_tags = tags
+        kwarg_triggers = list(triggers) if triggers else None
+        kwarg_accepts_webhook = accepts_webhook
 
         if decorator_path and (
             inspect.isfunction(decorator_path) or inspect.ismethod(decorator_path)
@@ -1023,6 +1715,28 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
             decorator_path = None
 
         def decorator(func: Callable) -> Callable:
+            # Merge any sugar-staged triggers (from @on_event / @on_schedule)
+            # with the explicit `triggers=[...]` kwarg passed to @app.reasoner.
+            # Mirrors the module-level @reasoner contract so the same syntax
+            # works under either decorator entry point.
+            staged = getattr(func, "_pending_triggers", None) or []
+            merged_triggers = list(kwarg_triggers or []) + list(staged)
+            if staged:
+                try:
+                    delattr(func, "_pending_triggers")
+                except AttributeError:
+                    pass
+            if merged_triggers:
+                setattr(func, "_reasoner_triggers", merged_triggers)
+                # Auto-set accepts_webhook=True when the dev declared triggers,
+                # unless they explicitly passed something else.
+                if kwarg_accepts_webhook is None:
+                    setattr(func, "_accepts_webhook", True)
+                else:
+                    setattr(func, "_accepts_webhook", kwarg_accepts_webhook)
+            elif kwarg_accepts_webhook is not None:
+                setattr(func, "_accepts_webhook", kwarg_accepts_webhook)
+
             # Extract function metadata
             func_name = func.__name__
             reasoner_id = decorator_name or func_name
@@ -1077,16 +1791,34 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
                         content={"detail": "Invalid JSON body"},
                     )
 
-                # Validate input at runtime (replaces Pydantic validation)
-                try:
-                    validated_input = self._validate_handler_input(
-                        body, handler_input_fields
-                    )
-                except ValueError as e:
-                    return JSONResponse(
-                        status_code=422,
-                        content={"detail": str(e)},
-                    )
+                # Validate input at runtime (replaces Pydantic validation).
+                # When the body is the dispatcher's webhook envelope shape
+                # ({"event": ..., "_meta": ...}), skip field-level validation
+                # — the envelope is unwrapped further down and the reasoner's
+                # first positional gets the unwrapped (or transformed) value
+                # by way of _execute_reasoner_endpoint.
+                is_trigger_envelope = (
+                    isinstance(body, dict)
+                    and "event" in body
+                    and "_meta" in body
+                    and isinstance(body.get("_meta"), dict)
+                )
+                if is_trigger_envelope:
+                    validated_input = body
+                else:
+                    try:
+                        validated_input = self._validate_handler_input(
+                            body, handler_input_fields
+                        )
+                    except _HandlerInputError as e:
+                        # `safe_message` is a known-safe SDK-constructed
+                        # string. Reading the explicit attribute (rather
+                        # than `str(e)`) keeps the response out of CodeQL's
+                        # py/stack-trace-exposure taint flow.
+                        return JSONResponse(
+                            status_code=422,
+                            content={"detail": e.safe_message},
+                        )
 
                 async def run_reasoner() -> Any:
                     return await self._execute_reasoner_endpoint(
@@ -1096,21 +1828,14 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
                         input_data=validated_input,
                         request=request,
                     )
-                def _track_in_flight_task(task: asyncio.Task) -> asyncio.Task:
-                    server_handler = getattr(self, "server_handler", None)
-                    if server_handler and hasattr(server_handler, "_track_task"):
-                        return server_handler._track_task(task)
-                    return task
-                
+
                 execution_id_header = request.headers.get("X-Execution-ID")
                 if execution_id_header and self.agentfield_server:
-                    task = _track_in_flight_task(
-                        asyncio.create_task(
-                            self._execute_async_with_callback(
-                                reasoner_coro=run_reasoner,
-                                execution_id=execution_id_header,
-                                reasoner_name=reasoner_id,
-                            )
+                    task = asyncio.create_task(
+                        self._execute_async_with_callback(
+                            reasoner_coro=run_reasoner,
+                            execution_id=execution_id_header,
+                            reasoner_name=reasoner_id,
                         )
                     )
                     # prevent GC of fire-and-forget tasks
@@ -1124,8 +1849,7 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
                         },
                     )
 
-                task = _track_in_flight_task(asyncio.create_task(run_reasoner()))
-                return await task
+                return await run_reasoner()
 
             # 🔥 ENHANCED: Comprehensive function replacement for unified tracking
             # Use weakref to avoid circular reference: Agent → tracked_func → Agent
@@ -1179,6 +1903,14 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
             vc_setting = self._effective_component_vc_setting(
                 reasoner_id, self._reasoner_vc_overrides
             )
+            decorator_triggers = getattr(original_func, "_reasoner_triggers", None)
+            if not decorator_triggers:
+                decorator_triggers = getattr(tracked_func, "_reasoner_triggers", None)
+            # Resolve accepts_webhook from the decorator
+            decorator_accepts_webhook = getattr(original_func, "_accepts_webhook", "warn")
+            if not decorator_accepts_webhook:
+                decorator_accepts_webhook = getattr(tracked_func, "_accepts_webhook", "warn")
+            
             self._reasoner_registry[reasoner_id] = ReasonerEntry(
                 id=reasoner_id,
                 func=func,
@@ -1186,6 +1918,8 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
                 output_type=return_type,
                 tags=resolved_tags,
                 vc_enabled=vc_setting,
+                triggers=list(decorator_triggers or []),
+                accepts_webhook=decorator_accepts_webhook,
             )
 
             # NOTE: Legacy storage removed - reasoners property generates list on-demand
@@ -1212,6 +1946,107 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
 
         return decorator
 
+    def _detect_and_unwrap_trigger_envelope(self, payload_dict: Dict[str, Any]) -> tuple[Dict[str, Any], Optional[Any]]:
+        """
+        Detect dispatcher webhook envelope {event: ..., _meta: ...} and unwrap it.
+        Returns (unwrapped_input, trigger_context_or_none).
+        If not an envelope, returns (payload_dict, None) for backward compat.
+        """
+        # Check if this looks like a dispatcher envelope
+        if not isinstance(payload_dict, dict):
+            return payload_dict, None
+        
+        if "event" in payload_dict and "_meta" in payload_dict:
+            # This is a dispatcher envelope
+            event_data = payload_dict.get("event", {})
+            meta_data = payload_dict.get("_meta", {})
+            
+            # Parse metadata into TriggerContext
+            try:
+                from datetime import datetime
+                from .triggers import TriggerContext
+                
+                received_at_str = meta_data.get("received_at", "")
+                if received_at_str:
+                    received_at = datetime.fromisoformat(received_at_str.replace('Z', '+00:00'))
+                else:
+                    received_at = datetime.utcnow()
+                
+                trigger_ctx = TriggerContext(
+                    trigger_id=meta_data.get("trigger_id", ""),
+                    source=meta_data.get("source", ""),
+                    event_type=meta_data.get("event_type", ""),
+                    event_id=meta_data.get("event_id", ""),
+                    idempotency_key=meta_data.get("idempotency_key", ""),
+                    received_at=received_at,
+                    vc_id=meta_data.get("vc_id"),
+                )
+                return event_data, trigger_ctx
+            except Exception:
+                # If parsing fails, return raw envelope for compatibility
+                return payload_dict, None
+        
+        # Not an envelope
+        return payload_dict, None
+
+    def _apply_trigger_transform(self, trigger_ctx, bindings: list, input_data: dict) -> dict:
+        """
+        Match trigger context against reasoner bindings and apply transform if found.
+        Returns transformed input or original input if no match.
+        
+        Matching logic:
+        1. Find bindings where binding.source == trigger_ctx.source
+        2. Check event_type: binding.types empty OR trigger_ctx.event_type matches (exact or prefix)
+        3. If multiple match, prefer most specific (non-empty types)
+        4. Apply transform if binding has one
+        """
+        from .triggers import EventTrigger
+        
+        if not bindings or not trigger_ctx:
+            return input_data
+        
+        # Find best-matching binding
+        best_match = None
+        best_specificity = -1  # -1 = no match, 0 = broad (empty types), 1+ = specific
+        
+        for binding in bindings:
+            if not isinstance(binding, EventTrigger):
+                continue
+            
+            if binding.source != trigger_ctx.source:
+                continue
+            
+            # Check event_type match
+            if binding.types:
+                # binding has specific types — check for match
+                matched = False
+                for btype in binding.types:
+                    if trigger_ctx.event_type.startswith(btype):
+                        matched = True
+                        break
+                if not matched:
+                    continue
+                specificity = 1
+            else:
+                # binding accepts all types
+                specificity = 0
+            
+            # This binding matches; is it better than current best?
+            if specificity > best_specificity:
+                best_match = binding
+                best_specificity = specificity
+        
+        # Apply transform if found
+        if best_match and best_match.transform:
+            try:
+                return best_match.transform(input_data)
+            except Exception as e:
+                if self.dev_mode:
+                    log_warn(f"Transform failed for {trigger_ctx.source}/{trigger_ctx.event_type}: {e}; using raw input")
+                return input_data
+        
+        return input_data
+
     async def _execute_reasoner_endpoint(
         self,
         *,
@@ -1226,6 +2061,10 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
 
         execution_context = ExecutionContext.from_request(request, self.node_id)
         payload_dict = input_data  # Already a dict from runtime validation
+        # Unwrap dispatcher envelope if present (Phase 5 webhook DX)
+        payload_dict, trigger_context = self._detect_and_unwrap_trigger_envelope(payload_dict)
+        if trigger_context:
+            execution_context.trigger = trigger_context
 
         self._current_execution_context = execution_context
         context_token = set_execution_context(execution_context)
@@ -1254,35 +2093,59 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
                 session_identifier,
                 "agent",
                 reasoner_id,
+                parent_vc_id=execution_context.parent_vc_id,
             )
             self._populate_execution_context_with_did(
                 execution_context, did_execution_context
             )
 
         try:
-            try:
-                if should_convert_args(func):
-                    converted_args, converted_kwargs = convert_function_args(
-                        func, (), payload_dict
-                    )
-                    args = converted_args
-                    kwargs = converted_kwargs
-                else:
+            # Phase 5: Apply trigger transform if applicable
+            trigger_bindings = getattr(func, "_reasoner_triggers", [])
+            if execution_context.trigger and trigger_bindings:
+                payload_dict = self._apply_trigger_transform(
+                    execution_context.trigger,
+                    trigger_bindings,
+                    payload_dict
+                )
+
+            # When invoked via an inbound trigger, the (possibly transformed)
+            # payload IS the first positional argument — it's the provider's
+            # event itself, not a dict of named kwargs. Direct app.call()
+            # invocations keep the historical kwargs-from-dict shape.
+            if execution_context.trigger is not None:
+                args, kwargs = (payload_dict,), {}
+            else:
+                try:
+                    if should_convert_args(func):
+                        converted_args, converted_kwargs = convert_function_args(
+                            func, (), payload_dict
+                        )
+                        args = converted_args
+                        kwargs = converted_kwargs
+                    else:
+                        args, kwargs = (), payload_dict
+                except ValidationError as exc:
+                    # Convert Pydantic validation error to safe _HandlerInputError
+                    # to prevent potential stack trace exposure in 422 responses.
+                    raise _HandlerInputError(
+                        f"Pydantic validation failed for reasoner '{reasoner_id}'"
+                    ) from exc
+                except Exception as exc:  # pragma: no cover - best effort log
+                    if self.dev_mode:
+                        log_debug(
+                            f"⚠️ Warning: Failed to convert arguments for {reasoner_id}: {exc}"
+                        )
                     args, kwargs = (), payload_dict
-            except ValidationError as exc:
-                raise ValidationError(
-                    f"Pydantic validation failed for reasoner '{reasoner_id}': {exc}",
-                    model=getattr(exc, "model", None),
-                ) from exc
-            except Exception as exc:  # pragma: no cover - best effort log
-                if self.dev_mode:
-                    log_debug(
-                        f"⚠️ Warning: Failed to convert arguments for {reasoner_id}: {exc}"
-                    )
-                args, kwargs = (), payload_dict
 
             if "execution_context" in signature.parameters:
                 kwargs["execution_context"] = execution_context
+
+            # Phase 5: Inject trigger context (webhook metadata)
+            if "trigger" in signature.parameters:
+                kwargs["trigger"] = execution_context.trigger
+            if "webhook" in signature.parameters:
+                kwargs["webhook"] = execution_context.trigger
 
             if asyncio.iscoroutinefunction(func):
                 result = await func(*args, **kwargs)
@@ -1436,9 +2299,7 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
                 "execution_id": execution_id,
                 "reasoner": reasoner_name,
             }
-            log_error(
-                f"Execution {execution_id} timed out after {reasoner_timeout}s"
-            )
+            log_error(f"Execution {execution_id} timed out after {reasoner_timeout}s")
         except Exception as exc:
             error_details = getattr(exc, "error_details", None)
             payload = {
@@ -1726,16 +2587,34 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
                         content={"detail": "Invalid JSON body"},
                     )
 
-                # Validate input at runtime (replaces Pydantic validation)
-                try:
-                    validated_input = self._validate_handler_input(
-                        body, handler_input_fields
-                    )
-                except ValueError as e:
-                    return JSONResponse(
-                        status_code=422,
-                        content={"detail": str(e)},
-                    )
+                # Validate input at runtime (replaces Pydantic validation).
+                # When the body is the dispatcher's webhook envelope shape
+                # ({"event": ..., "_meta": ...}), skip field-level validation
+                # — the envelope is unwrapped further down and the reasoner's
+                # first positional gets the unwrapped (or transformed) value
+                # by way of _execute_reasoner_endpoint.
+                is_trigger_envelope = (
+                    isinstance(body, dict)
+                    and "event" in body
+                    and "_meta" in body
+                    and isinstance(body.get("_meta"), dict)
+                )
+                if is_trigger_envelope:
+                    validated_input = body
+                else:
+                    try:
+                        validated_input = self._validate_handler_input(
+                            body, handler_input_fields
+                        )
+                    except _HandlerInputError as e:
+                        # `safe_message` is a known-safe SDK-constructed
+                        # string. Reading the explicit attribute (rather
+                        # than `str(e)`) keeps the response out of CodeQL's
+                        # py/stack-trace-exposure taint flow.
+                        return JSONResponse(
+                            status_code=422,
+                            content={"detail": e.safe_message},
+                        )
 
                 # Extract execution context from request headers
                 execution_context = ExecutionContext.from_request(request, self.node_id)
@@ -1758,6 +2637,7 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
                         session_identifier,
                         "agent",  # caller function
                         skill_id,  # target function
+                        parent_vc_id=execution_context.parent_vc_id,
                     )
                     # Populate execution context with DID information
                     self._populate_execution_context_with_did(
@@ -1779,10 +2659,10 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
                     else:
                         kwargs = dict(input_payload)
                 except ValidationError as e:
-                    # Re-raise validation errors with context
-                    raise ValidationError(
-                        f"Pydantic validation failed for skill '{skill_id}': {e}",
-                        model=getattr(e, "model", None),
+                    # Convert Pydantic validation error to safe _HandlerInputError
+                    # to prevent potential stack trace exposure in 422 responses.
+                    raise _HandlerInputError(
+                        f"Pydantic validation failed for skill '{skill_id}'"
                     ) from e
                 except Exception as e:
                     # Log conversion errors but continue with original args for backward compatibility
@@ -2648,6 +3528,42 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
             **kwargs,
         )
 
+    async def ai_generate_music(  # pragma: no cover - relies on external services
+        self,
+        prompt: str,
+        model: Optional[str] = None,
+        duration: Optional[int] = None,
+        **kwargs,
+    ) -> "MultimodalResponse":
+        """
+        Generate music from a text prompt.
+
+        Routes to a music-capable provider (OpenRouter with models like
+        google/lyria-3-pro). Returns a MultimodalResponse with audio data.
+
+        Args:
+            prompt (str): Text description of the music to generate.
+            model (str, optional): Music model to use.
+            duration (int, optional): Duration hint in seconds.
+            **kwargs: Provider-specific parameters (e.g., format="wav").
+
+        Returns:
+            MultimodalResponse: Response with .audio containing AudioOutput.
+
+        Example:
+            ```python
+            result = await app.ai_generate_music("upbeat jazz piano solo")
+            if result.has_audio:
+                result.audio.save("jazz.wav")
+            ```
+        """
+        return await self.ai_handler.ai_generate_music(
+            prompt=prompt,
+            model=model,
+            duration=duration,
+            **kwargs,
+        )
+
     async def call(self, target: str, *args, **kwargs) -> dict:
         """
         Initiates a cross-agent call to another reasoner or skill via the AgentField execution gateway.
@@ -2774,6 +3690,8 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
         # Ensure the current execution is the parent for sub-calls (not the inherited parent)
         # This fixes workflow graph attribution for local skill calls
         headers["X-Parent-Execution-ID"] = current_context.execution_id
+        if current_context.parent_vc_id:
+            headers["X-Parent-VC-ID"] = current_context.parent_vc_id
 
         # DISABLED: Same-agent call detection - Force all calls through AgentField server
         # This ensures all app.call() requests go through the AgentField server for proper
@@ -2789,7 +3707,9 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
             log_warn(
                 f"AgentField server unavailable - cannot make cross-agent call to {target}"
             )
-            raise Exception(
+            from agentfield.exceptions import AgentFieldClientError
+
+            raise AgentFieldClientError(
                 f"Cross-agent call to {target} failed: AgentField server unavailable. Agent is running in local mode."
             )
 
@@ -2881,6 +3801,33 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
                         if _err_status in (401, 403):
                             raise async_error
 
+                        # Never fall back when the failure happened AFTER the
+                        # reasoner already ran. ExecutionFailedError means
+                        # the call reached the reasoner, the work executed,
+                        # and the reasoner returned an error — retrying
+                        # via sync would burn the same budget for the same
+                        # outcome. ExecutionTimeoutError means the work has
+                        # already used (or exceeded) its timeout budget on
+                        # the agent side; firing the same call again wastes
+                        # another full budget. Both classes surface as
+                        # subclasses of AgentFieldError so a local import
+                        # is safe even with the legacy AgentFieldClientError
+                        # catch path some callers depend on.
+                        from agentfield.exceptions import (
+                            ExecutionFailedError,
+                            ExecutionTimeoutError,
+                        )
+                        if isinstance(
+                            async_error,
+                            (ExecutionFailedError, ExecutionTimeoutError),
+                        ):
+                            if self.dev_mode:
+                                log_debug(
+                                    f"Skipping sync fallback for {type(async_error).__name__}: "
+                                    f"reasoner already ran; retry would re-burn the budget"
+                                )
+                            raise async_error
+
                         if not self.async_config.fallback_to_sync:
                             raise async_error
 
@@ -2924,7 +3871,9 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
                 log_debug(
                     f"Execute call timed out after {elapsed_time:.2f} seconds (limit {execution_timeout:.0f}s)"
                 )
-                raise Exception(
+                from agentfield.exceptions import ExecutionTimeoutError
+
+                raise ExecutionTimeoutError(
                     f"Cross-agent call to {target} timed out after {int(execution_timeout)} seconds"
                 )
 
@@ -3208,8 +4157,7 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
             ``ApprovalResult(decision="expired")``.
 
         Raises:
-            AgentFieldClientError: If the control plane request fails.
-            RuntimeError: If the agent is not serving (no callback URL).
+            AgentFieldClientError: If the control plane request fails or the agent is not serving.
         """
         from agentfield.exceptions import AgentFieldClientError
 
@@ -3223,7 +4171,7 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
 
         # Build the callback URL from the agent's base URL
         if not self.base_url:
-            raise RuntimeError(
+            raise AgentFieldClientError(
                 "Agent is not serving — call app.serve() before app.pause(). "
                 "The callback URL is required for the control plane to notify "
                 "the agent when the approval resolves."
@@ -3457,6 +4405,103 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
         # Also clear from thread-local storage
         clear_current_agent()
 
+    async def stop(self) -> None:
+        """
+        Programmatically stop the agent and clean up resources.
+
+        This method performs a graceful shutdown by:
+        1. Marking the agent as shutting down and its status as OFFLINE.
+        2. Stopping the heartbeat background worker.
+        3. Notifying the AgentField control plane that the agent is shutting down.
+        4. Cleaning up resources and event subscriptions.
+
+        The method is idempotent; calling it multiple times has no additional effect.
+
+        Example:
+            ```python
+            app = Agent("my_agent")
+            # ... start agent in a background task or loop ...
+
+            # Later, shut down cleanly
+            await app.stop()
+            ```
+        """
+        if getattr(self, "_shutdown_requested", False):
+            # Already shutting down or stopped
+            return
+
+        self._shutdown_requested = True
+
+        from agentfield.types import AgentStatus
+
+        self._current_status = AgentStatus.OFFLINE
+
+        if hasattr(self, "agentfield_handler") and self.agentfield_handler:
+            try:
+                self.agentfield_handler.stop_heartbeat()
+            except Exception as e:
+                if self.dev_mode:
+                    from agentfield.logger import log_error
+
+                    log_error(f"Heartbeat stop error during stop(): {e}")
+
+        try:
+            if (
+                getattr(self, "agentfield_connected", False)
+                and hasattr(self, "client")
+                and self.client
+            ):
+                success = await self.client.notify_graceful_shutdown(self.node_id)
+                if self.dev_mode:
+                    from agentfield.logger import log_info
+
+                    state = "sent" if success else "failed"
+                    log_info(f"Shutdown notification {state}")
+        except Exception as e:
+            if self.dev_mode:
+                from agentfield.logger import log_error
+
+                log_error(f"Shutdown notification error during stop(): {e}")
+
+        try:
+            if getattr(self, "connection_manager", None):
+                await self.connection_manager.stop()
+        except Exception as e:
+            if self.dev_mode:
+                from agentfield.logger import log_error
+
+                log_error(f"Connection manager stop error during stop(): {e}")
+
+        try:
+            if getattr(self, "memory_event_client", None):
+                await self.memory_event_client.close()
+        except Exception as e:
+            if self.dev_mode:
+                from agentfield.logger import log_error
+
+                log_error(f"Memory event client close error during stop(): {e}")
+
+        try:
+            await self._cleanup_async_resources()
+        except Exception as e:
+            if self.dev_mode:
+                from agentfield.logger import log_error
+
+                log_error(f"Resource cleanup error during stop(): {e}")
+
+        try:
+            self._clear_current()
+        except Exception as e:
+            if self.dev_mode:
+                from agentfield.logger import log_error
+
+                log_error(f"Registry clear error during stop(): {e}")
+
+        if self.dev_mode:
+            from agentfield.logger import log_success
+
+            log_success("Agent programmatically stopped")
+
     def _emit_workflow_event_sync(
         self,
         context: ExecutionContext,
@@ -3580,7 +4625,9 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
         """
 
         if not self.client:
-            raise RuntimeError("AgentField client is not configured")
+            from agentfield.exceptions import AgentFieldClientError
+
+            raise AgentFieldClientError("AgentField client is not configured")
 
         return self.client.discover_capabilities(
             agent=agent,
@@ -3910,6 +4957,3 @@ class Agent(FastAPI,_AgentSchemaMixin,_AgentDiscoveryMixin,_AgentServerlessMixin
             auto_port=auto_port,
             **kwargs,
         )
-
-    def _is_running_in_container(self) -> bool:
-        return _is_running_in_container()

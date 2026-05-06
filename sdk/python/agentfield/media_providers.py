@@ -11,25 +11,29 @@ Each provider implements the same interface, making it easy to swap
 backends or add new ones without changing agent code.
 """
 
+import ipaddress
+import re
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Literal, Optional, Union
+from urllib.parse import urlparse
 
 from agentfield.multimodal_response import (
     AudioOutput,
     FileOutput,
     ImageOutput,
     MultimodalResponse,
+    VideoOutput,
 )
 
 
 # Fal image size presets
 FalImageSize = Literal[
-    "square_hd",      # 1024x1024
-    "square",         # 512x512
-    "portrait_4_3",   # 768x1024
+    "square_hd",  # 1024x1024
+    "square",  # 512x512
+    "portrait_4_3",  # 768x1024
     "portrait_16_9",  # 576x1024
     "landscape_4_3",  # 1024x768
-    "landscape_16_9", # 1024x576
+    "landscape_16_9",  # 1024x576
 ]
 
 
@@ -121,6 +125,27 @@ class MediaProvider(ABC):
         """
         raise NotImplementedError(f"{self.name} does not support video generation")
 
+    async def generate_music(
+        self,
+        prompt: str,
+        model: Optional[str] = None,
+        duration: Optional[int] = None,
+        **kwargs,
+    ) -> MultimodalResponse:
+        """
+        Generate music from a text prompt.
+
+        Args:
+            prompt: Text description of the music to generate
+            model: Music generation model to use
+            duration: Duration in seconds
+            **kwargs: Provider-specific options
+
+        Returns:
+            MultimodalResponse with generated audio
+        """
+        raise NotImplementedError(f"{self.name} does not support music generation")
+
 
 class FalProvider(MediaProvider):
     """
@@ -191,6 +216,7 @@ class FalProvider(MediaProvider):
 
                 if self._api_key:
                     import os
+
                     os.environ["FAL_KEY"] = self._api_key
 
                 self._client = fal_client
@@ -200,9 +226,7 @@ class FalProvider(MediaProvider):
                 )
         return self._client
 
-    def _parse_image_size(
-        self, size: str
-    ) -> Union[str, Dict[str, int]]:
+    def _parse_image_size(self, size: str) -> Union[str, Dict[str, int]]:
         """
         Parse image size into fal format.
 
@@ -214,8 +238,12 @@ class FalProvider(MediaProvider):
         """
         # Check if it's a fal preset
         fal_presets = {
-            "square_hd", "square", "portrait_4_3", "portrait_16_9",
-            "landscape_4_3", "landscape_16_9"
+            "square_hd",
+            "square",
+            "portrait_4_3",
+            "portrait_16_9",
+            "landscape_4_3",
+            "landscape_16_9",
         }
         if size in fal_presets:
             return size
@@ -346,6 +374,7 @@ class FalProvider(MediaProvider):
 
         except Exception as e:
             from agentfield.logger import log_error
+
             log_error(f"Fal image generation failed: {e}")
             raise
 
@@ -434,6 +463,7 @@ class FalProvider(MediaProvider):
 
         except Exception as e:
             from agentfield.logger import log_error
+
             log_error(f"Fal audio generation failed: {e}")
             raise
 
@@ -522,16 +552,30 @@ class FalProvider(MediaProvider):
                     )
                 )
 
+            # Create VideoOutput from the file data
+            videos = []
+            for f in files:
+                videos.append(
+                    VideoOutput(
+                        url=f.url,
+                        data=f.data,
+                        mime_type=f.mime_type or "video/mp4",
+                        filename=f.filename,
+                    )
+                )
+
             return MultimodalResponse(
                 text=prompt,
                 audio=None,
                 images=[],
-                files=files,
+                files=files,  # Keep for backward compat
+                videos=videos,
                 raw_response=result,
             )
 
         except Exception as e:
             from agentfield.logger import log_error
+
             log_error(f"Fal video generation failed: {e}")
             raise
 
@@ -587,6 +631,7 @@ class FalProvider(MediaProvider):
 
         except Exception as e:
             from agentfield.logger import log_error
+
             log_error(f"Fal transcription failed: {e}")
             raise
 
@@ -702,6 +747,41 @@ class LiteLLMProvider(MediaProvider):
             raise
 
 
+MAX_VIDEO_BYTES = 500 * 1024 * 1024  # 500 MB hard limit for video downloads
+MAX_AUDIO_B64_BYTES = (
+    500 * 1024 * 1024
+)  # 500 MB hard limit for accumulated audio base64
+
+
+def _assert_safe_download_url(url: str) -> None:
+    parsed_url = urlparse(url)
+    if parsed_url.scheme != "https":
+        raise RuntimeError(f"Refusing to download video from non-HTTPS URL: {url}")
+
+    hostname = parsed_url.hostname
+    if not hostname:
+        raise RuntimeError(f"Refusing to download video from invalid URL: {url}")
+
+    normalized_host = hostname.lower().rstrip(".")
+    if normalized_host in {"localhost", "0.0.0.0"}:
+        raise RuntimeError(f"Refusing to download video from localhost: {url}")
+
+    try:
+        address = ipaddress.ip_address(normalized_host)
+    except ValueError:
+        return
+
+    if (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_unspecified
+        or address.is_reserved
+        or address.is_multicast
+    ):
+        raise RuntimeError(f"Refusing to download video from private IP: {url}")
+
+
 class OpenRouterProvider(MediaProvider):
     """
     OpenRouter provider for image generation via chat completions.
@@ -713,6 +793,14 @@ class OpenRouterProvider(MediaProvider):
     - Other OpenRouter models with image generation capabilities
     """
 
+    _VIDEO_ERROR_MESSAGES = {
+        400: "Bad request — check model name and parameters",
+        401: "Invalid API key",
+        402: "Insufficient credits",
+        429: "Rate limited — try again later",
+        500: "OpenRouter server error",
+    }
+
     def __init__(self, api_key: Optional[str] = None):
         self._api_key = api_key
 
@@ -722,7 +810,7 @@ class OpenRouterProvider(MediaProvider):
 
     @property
     def supported_modalities(self) -> List[str]:
-        return ["image"]  # OpenRouter primarily supports image generation
+        return ["image", "video", "audio", "music"]
 
     async def generate_image(
         self,
@@ -730,9 +818,14 @@ class OpenRouterProvider(MediaProvider):
         model: Optional[str] = None,
         size: str = "1024x1024",
         quality: str = "standard",
+        image_config: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> MultimodalResponse:
-        """Generate image using OpenRouter's chat completions API."""
+        """Generate image using OpenRouter's chat completions API.
+
+        Note: image_config is an OpenRouter-specific extension not present
+        in the base MediaProvider.generate_image() interface.
+        """
         from agentfield import vision
 
         model = model or "openrouter/google/gemini-2.5-flash-image-preview"
@@ -748,8 +841,337 @@ class OpenRouterProvider(MediaProvider):
             quality=quality,
             style=None,
             response_format="url",
+            image_config=image_config,
             **kwargs,
         )
+
+    async def generate_video(
+        self,
+        prompt: str,
+        model: Optional[str] = None,
+        image_url: Optional[str] = None,
+        duration: Optional[float] = None,
+        resolution: Optional[str] = None,
+        aspect_ratio: Optional[str] = None,
+        generate_audio: Optional[bool] = None,
+        seed: Optional[int] = None,
+        frame_images: Optional[List[Dict]] = None,
+        input_references: Optional[List[Dict]] = None,
+        poll_interval: float = 30.0,
+        timeout: float = 600.0,
+        **kwargs,
+    ) -> MultimodalResponse:
+        """
+        Generate video using OpenRouter's async video API.
+
+        Submits a job to POST /api/v1/videos, polls until completed,
+        then downloads the video content.
+
+        Args:
+            prompt: Text description for video generation
+            model: OpenRouter video model name
+            image_url: Optional input image for image-to-video
+            duration: Video duration in seconds
+            resolution: Video resolution (e.g., "1080p")
+            aspect_ratio: Aspect ratio (e.g., "16:9")
+            generate_audio: Whether to generate audio track
+            seed: Random seed for reproducibility
+            frame_images: List of frame image dicts for guided generation
+            input_references: List of reference input dicts
+            poll_interval: Seconds between status polls (default 30)
+            timeout: Maximum wait time in seconds (default 600)
+            **kwargs: Additional parameters passed to the API
+
+        Returns:
+            MultimodalResponse with video in both files[] and videos[]
+        """
+        import asyncio
+        import os
+        import time
+
+        import aiohttp
+
+        api_key = self._api_key or os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "OpenRouter API key required. Set OPENROUTER_API_KEY env var "
+                "or pass api_key to OpenRouterProvider."
+            )
+
+        base_url = "https://openrouter.ai/api/v1"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        # Strip openrouter/ prefix from model name
+        video_model = model or "openrouter/google/veo-2.0-generate-001"
+        if video_model.startswith("openrouter/"):
+            video_model = video_model[len("openrouter/") :]
+
+        # Build request body
+        body: Dict[str, Any] = {
+            "model": video_model,
+            "prompt": prompt,
+        }
+        if duration is not None:
+            body["duration"] = duration
+        if resolution is not None:
+            body["resolution"] = resolution
+        if aspect_ratio is not None:
+            body["aspect_ratio"] = aspect_ratio
+        if generate_audio is not None:
+            body["generate_audio"] = generate_audio
+        if seed is not None:
+            body["seed"] = seed
+        if frame_images is not None:
+            body["frame_images"] = frame_images
+        if input_references is not None:
+            body["input_references"] = input_references
+        if image_url is not None:
+            body["image_url"] = image_url
+
+        _error_messages = self._VIDEO_ERROR_MESSAGES
+
+        async with aiohttp.ClientSession() as session:
+            # Step 1: Submit video generation job
+            async with session.post(
+                f"{base_url}/videos", headers=headers, json=body
+            ) as resp:
+                if resp.status != 202:
+                    error_msg = _error_messages.get(
+                        resp.status, f"Unexpected status {resp.status}"
+                    )
+                    detail = await resp.text()
+                    raise RuntimeError(
+                        f"OpenRouter video submit failed: {error_msg} — {detail[:500]}"
+                    )
+                submit_data = await resp.json()
+
+            job_id = submit_data.get("id")
+            if not job_id:
+                raise RuntimeError(
+                    f"OpenRouter video submit returned no job id: {submit_data}"
+                )
+            if not re.match(r"^[a-zA-Z0-9_-]+$", job_id):
+                raise RuntimeError(f"OpenRouter returned invalid job id: {job_id!r}")
+
+            # Step 2: Poll for completion
+            poll_url = f"{base_url}/videos/{job_id}"
+            start_time = time.monotonic()
+            poll_data: Dict[str, Any] = {}
+
+            MAX_POLL_RETRIES = 3
+            consecutive_errors = 0
+
+            while True:
+                elapsed = time.monotonic() - start_time
+                if elapsed >= timeout:
+                    raise TimeoutError(
+                        f"OpenRouter video generation timed out after {timeout}s "
+                        f"(job {job_id})"
+                    )
+
+                try:
+                    async with session.get(poll_url, headers=headers) as resp:
+                        if resp.status in (502, 503, 504):
+                            consecutive_errors = consecutive_errors + 1
+                            if consecutive_errors >= MAX_POLL_RETRIES:
+                                detail = await resp.text()
+                                raise RuntimeError(
+                                    f"OpenRouter video poll failed after "
+                                    f"{MAX_POLL_RETRIES} retries: "
+                                    f"HTTP {resp.status} — {detail[:500]}"
+                                )
+                            await asyncio.sleep(poll_interval)
+                            continue
+                        if resp.status != 200:
+                            error_msg = _error_messages.get(
+                                resp.status, f"Unexpected status {resp.status}"
+                            )
+                            detail = await resp.text()
+                            raise RuntimeError(
+                                f"OpenRouter video poll failed: "
+                                f"{error_msg} — {detail[:500]}"
+                            )
+                        consecutive_errors = 0
+                        poll_data = await resp.json()
+                except aiohttp.ClientError:
+                    consecutive_errors = consecutive_errors + 1
+                    if consecutive_errors >= MAX_POLL_RETRIES:
+                        raise
+                    await asyncio.sleep(poll_interval)
+                    continue
+
+                status = poll_data.get("status", "")
+                if status == "completed":
+                    break
+                elif status == "failed":
+                    error = poll_data.get("error", "unknown error")
+                    raise RuntimeError(
+                        f"OpenRouter video generation failed: {error} (job {job_id})"
+                    )
+                # else pending/in_progress — keep polling
+
+                await asyncio.sleep(poll_interval)
+
+            # Step 3: Download video from unsigned URL
+            unsigned_urls = poll_data.get("unsigned_urls", [])
+            if not unsigned_urls:
+                raise RuntimeError(
+                    f"OpenRouter video completed but no URLs returned (job {job_id})"
+                )
+
+            video_url = unsigned_urls[0]
+            _assert_safe_download_url(video_url)
+
+            video_data_bytes: Optional[bytes] = None
+            # Download without auth headers — video_url is a public CDN URL
+            async with session.get(video_url) as resp:
+                if resp.status != 200:
+                    raise RuntimeError(
+                        f"Failed to download video from {video_url}: HTTP {resp.status}"
+                    )
+                content_length = resp.headers.get("Content-Length")
+                if content_length and int(content_length) > MAX_VIDEO_BYTES:
+                    raise RuntimeError(
+                        f"Video too large ({int(content_length)} bytes). "
+                        f"Max: {MAX_VIDEO_BYTES}"
+                    )
+                video_data_bytes = await resp.read()
+                if len(video_data_bytes) > MAX_VIDEO_BYTES:
+                    raise RuntimeError(
+                        f"Video download exceeded {MAX_VIDEO_BYTES} byte limit"
+                    )
+
+        # Build response objects
+        import base64
+
+        video_b64 = base64.b64encode(video_data_bytes).decode("utf-8")
+        usage_data = poll_data.get("usage", {})
+        cost = usage_data.get("cost")
+
+        file_out = FileOutput(
+            url=video_url,
+            data=video_b64,
+            mime_type="video/mp4",
+            filename="generated_video.mp4",
+        )
+        video_out = VideoOutput(
+            url=video_url,
+            data=video_b64,
+            mime_type="video/mp4",
+            filename="generated_video.mp4",
+            cost_usd=cost,
+        )
+
+        return MultimodalResponse(
+            text=prompt,
+            audio=None,
+            images=[],
+            files=[file_out],
+            videos=[video_out],
+            raw_response=poll_data,
+            cost_usd=cost,
+        )
+
+    async def _stream_openrouter_audio(
+        self,
+        payload: Dict[str, Any],
+        headers: Dict[str, str],
+        *,
+        timeout: float = 300.0,
+        label: str = "audio",
+    ) -> tuple:
+        """
+        Shared SSE streaming helper for audio and music generation.
+
+        Handles: SSE line-delimited parsing via readline(), chunk accumulation
+        with size limit, timeout, and error truncation.
+
+        Args:
+            payload: JSON body for the chat completions request
+            headers: HTTP headers including Authorization
+            timeout: Total request timeout in seconds (default 300)
+            label: Label for error messages ("audio" or "music")
+
+        Returns:
+            Tuple of (b64_data: str, transcript: str)
+        """
+        import json as json_mod
+
+        import aiohttp
+
+        client_timeout = aiohttp.ClientTimeout(total=timeout)
+
+        # Music models can send very large SSE lines (>128KB of base64
+        # audio data per chunk), exceeding aiohttp's default 64KB
+        # readline limit.  We read raw chunks and split on newlines
+        # ourselves to avoid LineTooLong errors.
+        _CHUNK_SIZE = 256 * 1024  # 256 KB read chunks
+
+        b64_chunks: list = []
+        transcript_parts: list = []
+        total_size = 0
+
+        async with aiohttp.ClientSession(timeout=client_timeout) as session:
+            async with session.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                json=payload,
+                headers=headers,
+            ) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    raise RuntimeError(
+                        f"OpenRouter {label} request failed ({resp.status}): "
+                        f"{body[:500]}"
+                    )
+
+                # Manual SSE line parsing to handle arbitrarily long lines
+                buf = b""
+                done = False
+                async for raw_chunk in resp.content.iter_any():
+                    if done:
+                        break
+                    buf += raw_chunk
+                    while b"\n" in buf:
+                        raw_line, buf = buf.split(b"\n", 1)
+                        decoded = raw_line.decode(
+                            "utf-8", errors="replace"
+                        ).strip()
+                        if not decoded.startswith("data: "):
+                            continue
+                        data_str = decoded[len("data: ") :]
+                        if data_str == "[DONE]":
+                            done = True
+                            break
+                        try:
+                            event = json_mod.loads(data_str)
+                        except json_mod.JSONDecodeError:
+                            continue
+
+                        choices = event.get("choices", [])
+                        if not choices:
+                            continue
+                        delta = choices[0].get("delta", {})
+                        audio_delta = delta.get("audio", {})
+                        if audio_delta.get("data"):
+                            chunk = audio_delta["data"]
+                            total_size += len(chunk)
+                            if total_size > MAX_AUDIO_B64_BYTES:
+                                raise RuntimeError(
+                                    f"Audio base64 data exceeded "
+                                    f"{MAX_AUDIO_B64_BYTES} byte limit"
+                                )
+                            b64_chunks.append(chunk)
+                        if audio_delta.get("transcript"):
+                            transcript_parts.append(
+                                audio_delta["transcript"]
+                            )
+
+        b64_full = "".join(b64_chunks)
+        transcript = "".join(transcript_parts)
+        return b64_full, transcript
 
     async def generate_audio(
         self,
@@ -759,9 +1181,153 @@ class OpenRouterProvider(MediaProvider):
         format: str = "wav",
         **kwargs,
     ) -> MultimodalResponse:
-        """OpenRouter doesn't support TTS directly."""
-        raise NotImplementedError(
-            "OpenRouter doesn't support audio generation. Use LiteLLMProvider or FalProvider."
+        """
+        Generate audio via OpenRouter chat completions with SSE streaming.
+
+        Uses the modalities parameter to request audio output from audio-capable
+        models on OpenRouter.
+
+        Args:
+            text: Text to convert to speech
+            model: OpenRouter model ID (e.g., "openai/gpt-4o-mini-tts")
+            voice: Voice identifier (alloy, echo, fable, onyx, nova, shimmer)
+            format: Audio format (wav, mp3, flac, opus, pcm16)
+            **kwargs: Additional parameters (timeout overrides default 300s)
+
+        Returns:
+            MultimodalResponse with generated audio
+        """
+        import os
+
+        api_key = self._api_key or os.environ.get("OPENROUTER_API_KEY", "")
+        if not api_key:
+            raise ValueError(
+                "OpenRouter API key required. Set OPENROUTER_API_KEY env var or pass api_key."
+            )
+
+        # Strip openrouter/ prefix if present
+        send_model = model or "openai/gpt-4o-mini-tts"
+        if send_model.startswith("openrouter/"):
+            send_model = send_model[len("openrouter/") :]
+
+        supported_voices = {"alloy", "echo", "fable", "onyx", "nova", "shimmer"}
+        if voice not in supported_voices:
+            voice = "alloy"
+
+        audio_format = format
+        supported_formats = {"wav", "mp3", "flac", "opus", "pcm16"}
+        if audio_format not in supported_formats:
+            audio_format = "wav"
+
+        timeout = kwargs.pop("timeout", 300.0)
+
+        payload = {
+            "model": send_model,
+            "messages": [{"role": "user", "content": text}],
+            "modalities": ["text", "audio"],
+            "audio": {"voice": voice, "format": audio_format},
+            "stream": True,
+        }
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        b64_full, transcript = await self._stream_openrouter_audio(
+            payload, headers, timeout=timeout, label="audio"
+        )
+
+        audio_output = AudioOutput(
+            data=b64_full if b64_full else None,
+            format=audio_format,
+            url=None,
+        )
+
+        return MultimodalResponse(
+            text=transcript or text,
+            audio=audio_output if b64_full else None,
+            images=[],
+            files=[],
+            raw_response={"transcript": transcript, "model": send_model},
+        )
+
+    async def generate_music(
+        self,
+        prompt: str,
+        model: Optional[str] = None,
+        duration: Optional[int] = None,
+        **kwargs,
+    ) -> MultimodalResponse:
+        """
+        Generate music via OpenRouter using a music-capable model.
+
+        Uses SSE streaming chat completions with audio modality, similar to
+        generate_audio but targeting music generation models.
+
+        Args:
+            prompt: Text description of the music to generate
+            model: Music model (defaults to "google/lyria-3-pro")
+            duration: Duration hint in seconds (must be >0 and <=600)
+            **kwargs: Additional parameters (timeout overrides default 300s)
+
+        Returns:
+            MultimodalResponse with generated audio (48kHz stereo)
+        """
+        import os
+
+        api_key = self._api_key or os.environ.get("OPENROUTER_API_KEY", "")
+        if not api_key:
+            raise ValueError(
+                "OpenRouter API key required. Set OPENROUTER_API_KEY env var or pass api_key."
+            )
+
+        send_model = model or "google/lyria-3-pro"
+        if send_model.startswith("openrouter/"):
+            send_model = send_model[len("openrouter/") :]
+
+        # Validate duration
+        if duration is not None:
+            if duration <= 0 or duration > 600:
+                raise ValueError(f"duration must be > 0 and <= 600, got {duration}")
+
+        # Build the user message with optional duration hint
+        user_content = prompt
+        if duration is not None:
+            user_content = f"{prompt} (duration: {duration} seconds)"
+
+        audio_format = kwargs.pop("format", "wav")
+        timeout = kwargs.pop("timeout", 300.0)
+
+        payload = {
+            "model": send_model,
+            "messages": [{"role": "user", "content": user_content}],
+            "modalities": ["text", "audio"],
+            "audio": {"format": audio_format},
+            "stream": True,
+        }
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        b64_full, transcript = await self._stream_openrouter_audio(
+            payload, headers, timeout=timeout, label="music"
+        )
+
+        audio_output = AudioOutput(
+            data=b64_full if b64_full else None,
+            format=audio_format,
+            url=None,
+        )
+
+        return MultimodalResponse(
+            text=transcript or prompt,
+            audio=audio_output if b64_full else None,
+            images=[],
+            files=[],
+            raw_response={"transcript": transcript, "model": send_model},
         )
 
 

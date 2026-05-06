@@ -2,6 +2,7 @@ import socket
 import pytest
 
 from agentfield.utils import get_free_port
+from agentfield.exceptions import AgentFieldError
 
 
 def test_get_free_port_iterates_until_success(monkeypatch):
@@ -50,5 +51,5 @@ def test_get_free_port_raises_when_exhausted(monkeypatch):
         "agentfield.utils.socket.socket", lambda *args, **kwargs: DummySocket()
     )
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(AgentFieldError):
         get_free_port(start_port=5, end_port=6)

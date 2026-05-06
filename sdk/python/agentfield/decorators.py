@@ -18,9 +18,32 @@ from .execution_context import (
     reset_execution_context,
 )
 from .agent_registry import get_current_agent_instance
+from .triggers import EventTrigger, ScheduleTrigger, Trigger
 from .types import ReasonerDefinition
 from .pydantic_utils import convert_function_args, should_convert_args
 from pydantic import ValidationError
+
+# Attribute used by the @on_event / @on_schedule sugar to stage triggers on a
+# function before the outer @reasoner consumes them. Keeping this off of the
+# function signature lets the canonical `triggers=[...]` kwarg coexist with
+# stacked sugar without either form leaking into the other.
+_PENDING_TRIGGERS_ATTR = "_pending_triggers"
+
+
+def _code_origin(fn) -> Optional[str]:
+    """Capture the source code location (file:line) of a function.
+
+    Returns the fully qualified path to the file and the line number where the
+    function is declared, in the format 'path/to/file.py:42'.
+    """
+    try:
+        src = inspect.getsourcefile(fn)
+        line = fn.__code__.co_firstlineno
+        if src and line:
+            return f"{src}:{line}"
+    except Exception:
+        pass
+    return None
 
 
 def reasoner(
@@ -30,28 +53,45 @@ def reasoner(
     tags: Optional[List[str]] = None,
     description: Optional[str] = None,
     track_workflow: bool = True,
+    triggers: Optional[List[Trigger]] = None,
+    accepts_webhook: Optional[Union[bool, str]] = None,
     **kwargs,
 ):
-    """
-    Enhanced reasoner decorator with automatic workflow tracking and full feature support.
+    """Enhanced reasoner decorator with automatic workflow tracking and triggers.
 
-    Supports both:
-    @reasoner                           # Default: track_workflow=True
-    @reasoner(track_workflow=False)     # Explicit: disable tracking
-    @reasoner(path="/custom/path")      # Custom endpoint path
-    @reasoner(tags=["ai", "nlp"])       # Tags for organization
-    @reasoner(description="...")        # Custom description
+    Examples:
+        @reasoner
+        async def hello(input, ctx): ...
+
+        @reasoner(tags=["payments"])
+        @reasoner(triggers=[EventTrigger(source="stripe", types=["payment_intent.succeeded"], secret_env="STRIPE_SECRET")])
+        async def handle_payment(input, ctx): ...
+
+        # Sugar (desugars to triggers=[...] internally):
+        @reasoner()
+        @on_schedule("*/5 * * * *")
+        async def poll(input, ctx): ...
+
+        # Explicitly opt into/out of webhook input:
+        @reasoner(accepts_webhook=True)
+        async def webhook_ready(input, ctx): ...
+
+        @reasoner(accepts_webhook=False)
+        async def not_for_webhooks(input, ctx): ...
 
     Args:
-        func: The function to decorate (when used without parentheses)
-        path: Custom API endpoint path for this reasoner
-        tags: List of tags for organizing and categorizing reasoners
-        description: Description of what this reasoner does
-        track_workflow: Whether to enable automatic workflow tracking (default: True)
-        **kwargs: Additional metadata to store with the reasoner
-
-    Returns:
-        Decorated function with workflow tracking capabilities and full metadata support
+        triggers: Typed trigger bindings (EventTrigger / ScheduleTrigger) that
+            cause this reasoner to fire when the named external Source emits
+            a matching event. The control plane upserts a code-managed Trigger
+            row per binding at agent registration time.
+        path: Custom API endpoint path.
+        tags: Tags for grouping and authorization.
+        description: Human-readable description (defaults to the docstring).
+        track_workflow: Whether to enable automatic workflow tracking.
+        accepts_webhook: Controls whether UI-managed triggers can invoke this reasoner.
+            True = explicitly opt in; False = explicitly refuse; None (default) = auto-detect
+            from triggers (True if any declared) or default to "warn".
+        **kwargs: Additional metadata stored on the function.
     """
 
     def decorator(f: Callable) -> Callable:
@@ -78,6 +118,43 @@ def reasoner(
             description or f.__doc__ or f"Reasoner: {f.__name__}"
         )
 
+        # Merge canonical triggers= kwarg with any sugar-staged bindings on the
+        # wrapped function. Sugar must run inside @reasoner so order is
+        # @reasoner outermost, @on_event / @on_schedule inner.
+        merged: List[Trigger] = []
+        if triggers:
+            merged.extend(triggers)
+        pending = getattr(f, _PENDING_TRIGGERS_ATTR, None)
+        if pending:
+            merged.extend(pending)
+            try:
+                delattr(f, _PENDING_TRIGGERS_ATTR)
+            except AttributeError:
+                pass
+        # Stamp code_origin on triggers that don't already have it
+
+        origin = _code_origin(f)
+
+        if origin:
+            for trigger in merged:
+                if not getattr(trigger, "code_origin", None):
+                    trigger.code_origin = origin
+
+        wrapper._reasoner_triggers = merged
+
+        # Resolve accepts_webhook value:
+        # - If explicitly passed (True/False/str), use that
+        # - Else if any triggers declared, auto-set to True
+        # - Else default to "warn"
+        resolved_accepts_webhook: Union[bool, str]
+        if accepts_webhook is not None:
+            resolved_accepts_webhook = accepts_webhook
+        elif merged:
+            resolved_accepts_webhook = True
+        else:
+            resolved_accepts_webhook = "warn"
+        wrapper._accepts_webhook = resolved_accepts_webhook
+
         # Store any additional metadata
         for key, value in kwargs.items():
             setattr(wrapper, f"_reasoner_{key}", value)
@@ -91,6 +168,62 @@ def reasoner(
     else:
         # Called as @reasoner (no parentheses)
         return decorator(func)
+
+
+def on_event(
+    source: str,
+    *,
+    types: Optional[List[str]] = None,
+    secret_env: Optional[str] = None,
+    config: Optional[Dict[str, Any]] = None,
+):
+    """Sugar that stages an :class:`EventTrigger` for the next outer ``@reasoner``.
+
+    Equivalent to passing ``triggers=[EventTrigger(...)]`` on ``@reasoner``.
+    Order matters: ``@reasoner`` MUST be the outermost decorator. Use the
+    canonical ``triggers=[...]`` form when you prefer to keep all reasoner
+    config in a single place.
+    """
+
+    def decorator(func: Callable) -> Callable:
+        binding = EventTrigger(
+            source=source,
+            types=list(types or []),
+            secret_env=secret_env,
+            config=dict(config or {}),
+        )
+        # Capture code origin automatically
+        if not binding.code_origin:
+            binding.code_origin = _code_origin(func)
+        existing = getattr(func, _PENDING_TRIGGERS_ATTR, None)
+        if existing is None:
+            existing = []
+            setattr(func, _PENDING_TRIGGERS_ATTR, existing)
+        existing.append(binding)
+        return func
+
+    return decorator
+
+
+def on_schedule(cron: str, *, timezone: str = "UTC"):
+    """Sugar that stages a :class:`ScheduleTrigger` for the next outer ``@reasoner``.
+
+    Equivalent to ``triggers=[ScheduleTrigger(cron=cron, timezone=timezone)]``.
+    """
+
+    def decorator(func: Callable) -> Callable:
+        binding = ScheduleTrigger(cron=cron, timezone=timezone)
+        # Capture code origin automatically
+        if not binding.code_origin:
+            binding.code_origin = _code_origin(func)
+        existing = getattr(func, _PENDING_TRIGGERS_ATTR, None)
+        if existing is None:
+            existing = []
+            setattr(func, _PENDING_TRIGGERS_ATTR, existing)
+        existing.append(binding)
+        return func
+
+    return decorator
 
 
 async def _execute_with_tracking(func: Callable, *args, **kwargs) -> Any:
@@ -184,6 +317,7 @@ async def _execute_with_tracking(func: Callable, *args, **kwargs) -> Any:
                 session_id,
                 "agent",
                 reasoner_name,
+                parent_vc_id=getattr(execution_context, "parent_vc_id", None),
             )
             if did_execution_context and hasattr(
                 agent_instance, "_populate_execution_context_with_did"
@@ -230,6 +364,12 @@ async def _execute_with_tracking(func: Callable, *args, **kwargs) -> Any:
         # Inject execution_context if the function accepts it
         if "execution_context" in sig.parameters:
             call_kwargs.setdefault("execution_context", execution_context)
+
+        # Phase 5: Inject trigger context (webhook metadata)
+        if "trigger" in sig.parameters:
+            call_kwargs.setdefault("trigger", execution_context.trigger)
+        if "webhook" in sig.parameters:
+            call_kwargs.setdefault("webhook", execution_context.trigger)
 
         # 🔥 NEW: Automatic Pydantic model conversion (FastAPI-like behavior)
         try:

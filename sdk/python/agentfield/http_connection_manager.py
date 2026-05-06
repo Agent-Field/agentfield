@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Union
 import aiohttp
 
 from .async_config import AsyncConfig
+from .exceptions import AgentFieldClientError
 from .logger import get_logger
 
 logger = get_logger(__name__)
@@ -128,14 +129,14 @@ class ConnectionManager:
         Start the connection manager and initialize session.
 
         Raises:
-            RuntimeError: If manager is already started or closed
+            AgentFieldClientError: If manager is already started or closed
         """
         async with self._lock:
             if self._session is not None:
-                raise RuntimeError("ConnectionManager is already started")
+                raise AgentFieldClientError("ConnectionManager is already started")
 
             if self._closed:
-                raise RuntimeError(
+                raise AgentFieldClientError(
                     "ConnectionManager is closed and cannot be restarted"
                 )
 
@@ -224,13 +225,13 @@ class ConnectionManager:
             aiohttp.ClientSession: Active session for making requests
 
         Raises:
-            RuntimeError: If manager is not started or is closed
+            AgentFieldClientError: If manager is not started or is closed
         """
         if self._session is None:
-            raise RuntimeError("ConnectionManager is not started. Call start() first.")
+            raise AgentFieldClientError("ConnectionManager is not started. Call start() first.")
 
         if self._closed:
-            raise RuntimeError("ConnectionManager is closed")
+            raise AgentFieldClientError("ConnectionManager is closed")
 
         try:
             yield self._session
