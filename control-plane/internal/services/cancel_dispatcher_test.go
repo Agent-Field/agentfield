@@ -201,6 +201,47 @@ func TestCancelDispatcher_HandlesUnregisteredAgent(t *testing.T) {
 	}
 }
 
+func TestCancelDispatcher_SendsAuthorizationHeader(t *testing.T) {
+	bus := events.NewExecutionEventBus()
+
+	gotAuth := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case gotAuth <- r.Header.Get("Authorization"):
+		default:
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	store := newFakeAgentStore()
+	store.seed("agent-1", srv.URL)
+
+	d := NewCancelDispatcher(store, CancelDispatcherConfig{
+		Bus:           bus,
+		InternalToken: "secret-token-xyz",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d.Start(ctx)
+	defer d.Stop()
+	require.Eventually(t, func() bool { return bus.GetSubscriberCount() >= 1 }, time.Second, 5*time.Millisecond)
+
+	bus.Publish(events.ExecutionEvent{
+		Type:        events.ExecutionCancelledEvent,
+		ExecutionID: "exec-1",
+		AgentNodeID: "agent-1",
+		Timestamp:   time.Now().UTC(),
+	})
+
+	select {
+	case auth := <-gotAuth:
+		require.Equal(t, "Bearer secret-token-xyz", auth)
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not receive cancel callback")
+	}
+}
+
 func TestCancelDispatcher_StopIsIdempotent(t *testing.T) {
 	bus := events.NewExecutionEventBus()
 	d := NewCancelDispatcher(newFakeAgentStore(), CancelDispatcherConfig{Bus: bus})
