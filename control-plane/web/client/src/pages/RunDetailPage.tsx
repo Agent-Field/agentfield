@@ -591,7 +591,7 @@ export function RunDetailPage() {
   const actorTrim = dag.actor_id?.trim();
 
   return (
-    <div className="flex min-w-0 flex-col h-[calc(100vh-8rem)] max-w-full">
+    <div className="flex min-w-0 flex-col h-[calc(100vh-8rem)] max-w-full overflow-hidden">
       {/* ─── Header ─────────────────────────────────────────────────────── */}
       <div className="mb-3 flex min-w-0 flex-shrink-0 flex-col gap-2 border-b border-border/50 pb-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
         <div className="min-w-0 flex-1 space-y-1.5">
@@ -1029,7 +1029,7 @@ export function RunDetailPage() {
 
       {/* Nodes + webhooks — always show run-level strip (empty states explicit) */}
       <TooltipProvider delayDuration={280}>
-        <div className="mb-3 grid min-w-0 gap-3 sm:grid-cols-2">
+        <div className="mb-3 grid min-w-0 shrink-0 gap-3 sm:grid-cols-2">
           <RunContextNodesCard
             participantIds={participants.ids}
             source={participants.source}
@@ -1051,7 +1051,7 @@ export function RunDetailPage() {
         onValueChange={(value) => setSurfaceTab(value as "execution" | "logs")}
         className="flex min-h-0 flex-1 flex-col"
       >
-        <div className="mb-3 flex min-w-0 items-center justify-between gap-3 border-b border-border/50 pb-3">
+        <div className="mb-3 flex min-w-0 shrink-0 items-center justify-between gap-3 border-b border-border/50 pb-3">
           <TabsList className="h-9" aria-label="Run detail surface">
             <TabsTrigger value="execution" className="px-4 text-sm">
               Execution
@@ -1062,7 +1062,10 @@ export function RunDetailPage() {
           </TabsList>
         </div>
 
-        <TabsContent value="logs" className="mt-0 min-h-0 flex-1 data-[state=inactive]:hidden">
+        <TabsContent
+          value="logs"
+          className="mt-0 flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden"
+        >
           {selectedExecution.execution_id ? (
             <ExecutionObservabilityPanel
               execution={selectedExecution}
@@ -1079,7 +1082,7 @@ export function RunDetailPage() {
 
         <TabsContent
           value="execution"
-          className="mt-0 min-h-0 flex-1 data-[state=inactive]:hidden"
+          className="mt-0 flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden"
         >
           {isSingleStep ? (
             <Card className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
@@ -1095,7 +1098,10 @@ export function RunDetailPage() {
             </Card>
           ) : (
             <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row lg:items-stretch">
-              <Card className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:min-w-0 lg:basis-0">
+              <Card
+                data-testid="run-detail-steps-card"
+                className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:w-[420px] lg:max-w-[520px] lg:flex-none lg:shrink-0 lg:basis-[420px]"
+              >
                 <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border/60 px-3 py-2">
                   <span className="text-xs font-medium text-muted-foreground">
                     Steps
@@ -1166,7 +1172,10 @@ export function RunDetailPage() {
                 </CardContent>
               </Card>
 
-              <Card className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:min-w-0 lg:basis-0">
+              <Card
+                data-testid="run-detail-step-detail-card"
+                className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:min-w-0 lg:basis-0"
+              >
                 <CardContent className="flex min-h-0 min-w-0 flex-1 flex-col p-0">
                   {selectedStepId ? (
                     <StepDetail executionId={selectedStepId} />
