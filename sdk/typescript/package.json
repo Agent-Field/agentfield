@@ -1,6 +1,6 @@
 {
   "name": "@agentfield/sdk",
-  "version": "0.1.75",
+  "version": "0.1.76",
   "description": "AgentField TypeScript SDK",
   "type": "module",
   "main": "dist/index.js",

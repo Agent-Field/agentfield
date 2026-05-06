@@ -6,6 +6,85 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.76] - 2026-05-06
+
+## [0.1.76-rc.1] - 2026-05-06
+
+
+### Performance
+
+- Perf(harness): stop retrying on timeout, repair JSON cheaply, raise opencode caps (#533)
+
+Production trace (pr-af review_pull_request, multiple runs) showed
+phases consistently hitting 30+ minutes — well past where Kimi K2.6's
+per-turn cost should land us. Profiling revealed three orthogonal
+issues in the harness layer that compound:
+
+1. Per-call opencode timeout was 600s (10 min). Kimi K2.6 on a
+   complex review legitimately needs more than that — the timeout was
+   killing slow-but-progressing calls mid-flight.
+
+2. The runner's TRANSIENT_PATTERNS included "timeout" / "timed out".
+   So when (1) fired, the runner classified it as transient and
+   re-ran the *entire* opencode subprocess up to 3 more times. A
+   single phase that should have been one 12-min call became four
+   10-min subprocess restarts (40 min wall, ~$$$ in tokens) for the
+   same deterministic outcome. Production trace: meta_systemic at
+   35m 57s ≈ exactly 3.5 timeouts.
+
+3. On schema-validation failure, the runner re-ran opencode (same
+   30-min agentic loop) hoping to coerce the output into valid JSON
+   — when the actual problem is usually "the model produced the
+   right answer but with a stray comma." The model already did the
+   work; we just needed a parser.
+
+Plus a side-effect of (2): the OPENCODE_MAX_CONCURRENT semaphore
+defaulted to 3, gating pr-af's bump to max_concurrent_reviewers=10
+(pr-af PR #19). Two semaphores in series at 3 = same throughput as
+either one at 3.
+
+Changes:
+
+  • opencode.py: per-call timeout 600s → 1800s (env-overridable as
+    AGENTFIELD_HARNESS_TIMEOUT_SECONDS). Rationale: if a single
+    opencode subprocess can't finish in 30 min, the prompt or model
+    is wrong and re-running won't fix it. Fail loud.
+
+  • opencode.py: OPENCODE_MAX_CONCURRENT default 3 → 10. Unblocks
+    pr-af's reviewer fan-out; OpenRouter Kimi K2.6 handles 10
+    concurrent comfortably. Lower via env if your provider is tighter.
+
+  • opencode.py: opt-in XDG_DATA_HOME reuse via
+    AGENTFIELD_OPENCODE_REUSE_DATA_DIR=true. SQLite migrations only
+    run once per process instead of per-call. Default off because
+    container layouts vary (read-only /tmp, multi-tenant, etc.).
+
+  • _runner.py: dropped "timeout" / "timed out" from
+    TRANSIENT_PATTERNS. A wall-clock timeout now fails immediately;
+    only true transient errors (502/503/rate_limit/connection_reset)
+    still trigger retry.
+
+  • _runner.py: new _ai_schema_repair() — when the harness call
+    produced non-empty text but it didn't validate, ONE focused LLM
+    call (no tools, no repo, 90s wall-clock) reformats the existing
+    text into valid JSON conforming to the schema. Skipped when
+    text is empty (per user requirement: 'if no output, can't
+    repair'). Wired into _handle_schema_with_retry so it runs BEFORE
+    the existing retry-via-harness loop. On failure, falls through
+    to the unchanged retry path.
+
+Tests: 7 new regression tests in test_harness_ai_schema_repair.py
+covering empty text → no LLM call, whitespace-only → no LLM call,
+no model configured → no LLM call, valid JSON response → parse,
+LLM exception → fall through, repair output unparseable → fall
+through, repair timeout → fall through. Full SDK suite (1451
+tests) green. ruff clean.
+
+Pairs with pr-af PR #20 (prompt softening). Together these should
+take typical review runtime from 60-110+ min to under an hour.
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (df6ca04)
+
 ## [0.1.75] - 2026-05-06
 
 ## [0.1.75-rc.1] - 2026-05-05

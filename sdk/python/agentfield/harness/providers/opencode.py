@@ -54,8 +54,17 @@ class OpenCodeProvider:
     # processes from overwhelming the LLM API with concurrent requests.
     # Each opencode run spawns a full subprocess (pyright, DB migration, etc.)
     # so unbounded concurrency causes rate-limiting and transient failures.
-    _MAX_CONCURRENT: ClassVar[int] = int(os.environ.get("OPENCODE_MAX_CONCURRENT", "3"))
+    # Default raised 3 → 10 to match the typical pr-af review fan-out
+    # (~6–8 review_dimension phases + 3 meta-lenses); OpenRouter handles
+    # this comfortably on Kimi K2.6. Lower via OPENCODE_MAX_CONCURRENT if
+    # your provider has tighter per-key rate limits.
+    _MAX_CONCURRENT: ClassVar[int] = int(os.environ.get("OPENCODE_MAX_CONCURRENT", "10"))
     _concurrency_sem: ClassVar[Optional[asyncio.Semaphore]] = None
+
+    # Shared XDG_DATA_HOME across calls when opt-in is enabled. SQLite
+    # migrations only run once per process instead of per-call. None means
+    # "fresh tempdir per call" (current default).
+    _shared_data_dir: ClassVar[Optional[str]] = None
 
     def __init__(self, bin_path: str = "opencode"):
         self._bin = bin_path
@@ -120,15 +129,46 @@ class OpenCodeProvider:
 
         cwd: Optional[str] = None
 
-        temp_data_dir = tempfile.mkdtemp(prefix=".secaf-opencode-data-")
-        env["XDG_DATA_HOME"] = temp_data_dir
+        # Per-call XDG_DATA_HOME by default — guarantees session isolation.
+        # AGENTFIELD_OPENCODE_REUSE_DATA_DIR=true reuses one dir across calls
+        # in this process so SQLite migrations only run once. Opt-in because
+        # the implications vary by container layout (read-only /tmp, multi-
+        # tenant deployments, etc.) — default behavior is unchanged.
+        reuse_data_dir = os.environ.get(
+            "AGENTFIELD_OPENCODE_REUSE_DATA_DIR", "false"
+        ).strip().lower() in ("1", "true", "yes")
+
+        temp_data_dir: Optional[str] = None
+        if reuse_data_dir:
+            if type(self)._shared_data_dir is None or not os.path.isdir(
+                type(self)._shared_data_dir or ""
+            ):
+                type(self)._shared_data_dir = tempfile.mkdtemp(
+                    prefix=".secaf-opencode-data-shared-"
+                )
+            data_dir = type(self)._shared_data_dir
+        else:
+            temp_data_dir = tempfile.mkdtemp(prefix=".secaf-opencode-data-")
+            data_dir = temp_data_dir
+        env["XDG_DATA_HOME"] = data_dir
+
+        # Wall-clock cap for ONE opencode subprocess. Default 1800s (30min):
+        # Kimi K2.6 on a complex review can need 20+ minutes; cutting at 600s
+        # (the previous default) was killing slow-but-progressing calls and
+        # then re-running them from scratch via the runner's transient retry
+        # path. If a call doesn't finish in 30 min, the prompt or the model
+        # is wrong — re-running won't help — so we let it fail cleanly.
+        # Override via AGENTFIELD_HARNESS_TIMEOUT_SECONDS for tighter caps.
+        timeout_seconds = int(
+            os.environ.get("AGENTFIELD_HARNESS_TIMEOUT_SECONDS", "1800")
+        )
 
         start_api = time.monotonic()
 
         try:
             try:
                 stdout, stderr, returncode = await run_cli(
-                    cmd, env=env, cwd=cwd, timeout=600
+                    cmd, env=env, cwd=cwd, timeout=timeout_seconds
                 )
             except FileNotFoundError:
                 return RawResult(
@@ -148,7 +188,10 @@ class OpenCodeProvider:
                     metrics=Metrics(),
                 )
         finally:
-            shutil.rmtree(temp_data_dir, ignore_errors=True)
+            # Only clean up the per-call tempdir; the shared one outlives the
+            # call by design (skip the SQLite migration on the next call).
+            if temp_data_dir is not None:
+                shutil.rmtree(temp_data_dir, ignore_errors=True)
 
         api_ms = int((time.monotonic() - start_api) * 1000)
         result_text = stdout.strip() if stdout.strip() else None
