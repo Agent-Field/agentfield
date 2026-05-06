@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.77-rc.4] - 2026-05-06
+
+
+### Fixed
+
+- Fix(web-ui): show Input/Output above Provenance on step detail (#526) (#537)
+
+Move <StepProvenanceCard> below Output so the Input/Output payloads —
+the primary debugging signal — render first. Provenance (caller DID,
+target DID, input/output hashes) is verification metadata and stays
+collapsed by default; it is unchanged in content and copy buttons.
+
+Same component is reused on the run detail panel and workflow node
+drawer, so the reorder applies to both.
+
+Refs #526
+
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com> (d9451b5)
+
 ## [0.1.77-rc.3] - 2026-05-06
 
 
