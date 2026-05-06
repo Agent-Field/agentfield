@@ -8,7 +8,7 @@ const {
   navigateMock,
   searchParamsState,
   useRunsMock,
-  cancelMutationMock,
+  cancelTreeMutationMock,
   pauseMutationMock,
   resumeMutationMock,
   useQueryMock,
@@ -21,7 +21,7 @@ const {
   navigateMock: vi.fn(),
   searchParamsState: { value: new URLSearchParams() },
   useRunsMock: vi.fn(),
-  cancelMutationMock: vi.fn(),
+  cancelTreeMutationMock: vi.fn(),
   pauseMutationMock: vi.fn(),
   resumeMutationMock: vi.fn(),
   useQueryMock: vi.fn(),
@@ -47,7 +47,7 @@ vi.mock("@/services/executionsApi", () => ({
 
 vi.mock("@/hooks/queries", () => ({
   useRuns: useRunsMock,
-  useCancelExecution: () => ({ mutateAsync: cancelMutationMock }),
+  useCancelWorkflowTree: () => ({ mutateAsync: cancelTreeMutationMock }),
   usePauseExecution: () => ({ mutateAsync: pauseMutationMock }),
   useResumeExecution: () => ({ mutateAsync: resumeMutationMock }),
 }));
@@ -399,7 +399,7 @@ describe("RunsPage", () => {
     vi.useRealTimers();
     navigateMock.mockReset();
     useRunsMock.mockReset();
-    cancelMutationMock.mockReset();
+    cancelTreeMutationMock.mockReset();
     pauseMutationMock.mockReset();
     resumeMutationMock.mockReset();
     useQueryMock.mockReset();
@@ -411,7 +411,15 @@ describe("RunsPage", () => {
     searchParamsState.value = new URLSearchParams();
 
     useQueryMock.mockReturnValue({ data: undefined, isLoading: false });
-    cancelMutationMock.mockResolvedValue(undefined);
+    cancelTreeMutationMock.mockResolvedValue({
+      run_id: "run",
+      total_nodes: 1,
+      cancelled_count: 1,
+      skipped_count: 0,
+      error_count: 0,
+      nodes: [],
+      cancelled_at: new Date().toISOString(),
+    });
     pauseMutationMock.mockResolvedValue(undefined);
     resumeMutationMock.mockResolvedValue(undefined);
     useRunsMock.mockImplementation((filters?: Record<string, unknown>) => ({
@@ -516,10 +524,14 @@ describe("RunsPage", () => {
     await user.click(screen.getByRole("button", { name: "Cancel 2 runs" }));
 
     await waitFor(() => {
-      expect(cancelMutationMock).toHaveBeenCalledTimes(2);
+      expect(cancelTreeMutationMock).toHaveBeenCalledTimes(2);
     });
-    expect(cancelMutationMock).toHaveBeenCalledWith("exec-1");
-    expect(cancelMutationMock).toHaveBeenCalledWith("exec-2");
+    expect(cancelTreeMutationMock).toHaveBeenCalledWith(
+      expect.objectContaining({ workflowId: "run-001-alpha" }),
+    );
+    expect(cancelTreeMutationMock).toHaveBeenCalledWith(
+      expect.objectContaining({ workflowId: "run-002-beta" }),
+    );
     expect(showSuccessMock).toHaveBeenCalledWith(
       "2 runs cancelled",
       "All selected runs were cancelled successfully.",
@@ -615,10 +627,14 @@ describe("RunsPage", () => {
     await user.click(screen.getByRole("button", { name: "Cancel run" }));
 
     await waitFor(() => {
-      expect(cancelMutationMock).toHaveBeenCalledTimes(1);
+      expect(cancelTreeMutationMock).toHaveBeenCalledTimes(1);
     });
-    expect(cancelMutationMock).toHaveBeenCalledWith("exec-1");
-    expect(cancelMutationMock).not.toHaveBeenCalledWith("exec-3");
+    expect(cancelTreeMutationMock).toHaveBeenCalledWith(
+      expect.objectContaining({ workflowId: "run-001-alpha" }),
+    );
+    expect(cancelTreeMutationMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ workflowId: "run-003-gamma" }),
+    );
     expect(showSuccessMock).toHaveBeenCalledWith("1 run cancelled", undefined);
   });
 
@@ -646,7 +662,15 @@ describe("RunsPage", () => {
     });
     pauseMutationMock.mockRejectedValueOnce(new Error("pause denied"));
     resumeMutationMock.mockResolvedValueOnce(undefined);
-    cancelMutationMock.mockResolvedValueOnce(undefined);
+    cancelTreeMutationMock.mockResolvedValueOnce({
+      run_id: "run-001-alpha",
+      total_nodes: 1,
+      cancelled_count: 1,
+      skipped_count: 0,
+      error_count: 0,
+      nodes: [],
+      cancelled_at: new Date().toISOString(),
+    });
 
     render(<RunsPage />);
 

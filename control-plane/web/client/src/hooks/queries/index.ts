@@ -11,6 +11,7 @@ export type {
 } from "./useSystemHealth";
 export {
   useCancelExecution,
+  useCancelWorkflowTree,
   usePauseExecution,
   useResumeExecution,
 } from "./useExecutionMutations";
