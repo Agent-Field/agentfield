@@ -594,6 +594,126 @@ describe("RunDetailPage", () => {
     );
   });
 
+  it("notifies with steps-cancelled message when cancel-tree succeeds with cancelled_count > 0", async () => {
+    state.runDag = {
+      data: buildDag(),
+      isLoading: false,
+      isError: false,
+      error: null,
+    };
+    state.cancelTreeMutateAsync.mockResolvedValue({
+      run_id: "run-1",
+      total_nodes: 3,
+      cancelled_count: 2,
+      skipped_count: 1,
+      error_count: 0,
+      nodes: [],
+      cancelled_at: new Date().toISOString(),
+    });
+
+    renderPage();
+    expect(await screen.findByText("Run Alpha")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Cancel"));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel 1 run" }));
+    await waitFor(() => {
+      expect(state.cancelTreeMutateAsync).toHaveBeenCalled();
+    });
+    expect(state.showRunNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Cancelled",
+        message: expect.stringMatching(/2 steps cancelled\. In-flight work will finish and be discarded\./),
+      }),
+    );
+  });
+
+  it("notifies with nothing-left-to-cancel message when cancelled_count is zero", async () => {
+    state.runDag = {
+      data: buildDag(),
+      isLoading: false,
+      isError: false,
+      error: null,
+    };
+    state.cancelTreeMutateAsync.mockResolvedValue({
+      run_id: "run-1",
+      total_nodes: 3,
+      cancelled_count: 0,
+      skipped_count: 3,
+      error_count: 0,
+      nodes: [],
+      cancelled_at: new Date().toISOString(),
+    });
+
+    renderPage();
+    expect(await screen.findByText("Run Alpha")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Cancel"));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel 1 run" }));
+    await waitFor(() => {
+      expect(state.cancelTreeMutateAsync).toHaveBeenCalled();
+    });
+    expect(state.showRunNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Cancelled",
+        message: expect.stringMatching(/nothing left to cancel/),
+      }),
+    );
+  });
+
+  it("notifies with single-step message when exactly one step was cancelled", async () => {
+    state.runDag = {
+      data: buildDag(),
+      isLoading: false,
+      isError: false,
+      error: null,
+    };
+    state.cancelTreeMutateAsync.mockResolvedValue({
+      run_id: "run-1",
+      total_nodes: 1,
+      cancelled_count: 1,
+      skipped_count: 0,
+      error_count: 0,
+      nodes: [],
+      cancelled_at: new Date().toISOString(),
+    });
+
+    renderPage();
+    expect(await screen.findByText("Run Alpha")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Cancel"));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel 1 run" }));
+    await waitFor(() => {
+      expect(state.cancelTreeMutateAsync).toHaveBeenCalled();
+    });
+    expect(state.showRunNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Cancelled",
+        message: expect.stringMatching(/1 step cancelled\b/),
+      }),
+    );
+  });
+
+  it("hides Cancel button when the workflow is in a terminal aggregate status", async () => {
+    state.runDag = {
+      data: {
+        ...buildDag(),
+        workflow_status: "succeeded",
+        timeline: [
+          { ...buildDag().timeline[0], status: "succeeded" },
+          { ...buildDag().timeline[1], status: "succeeded" },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+    };
+
+    renderPage();
+    expect(await screen.findByText("Run Alpha")).toBeInTheDocument();
+    // Cancel button should not be rendered when aggregate workflow_status is terminal.
+    expect(screen.queryByText("Cancel")).not.toBeInTheDocument();
+  });
+
   it("shows cancellation strip when the root is cancelled but children are still running", async () => {
     state.runDag = {
       data: {

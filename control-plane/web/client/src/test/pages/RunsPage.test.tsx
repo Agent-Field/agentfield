@@ -715,6 +715,50 @@ describe("RunsPage", () => {
     });
   });
 
+  it("notifies with nothing-left-to-cancel message when row cancel returns cancelled_count of zero", async () => {
+    const user = userEvent.setup();
+    cancelTreeMutationMock.mockReset();
+    cancelTreeMutationMock.mockResolvedValueOnce({
+      run_id: "run-001-alpha",
+      total_nodes: 0,
+      cancelled_count: 0,
+      skipped_count: 0,
+      error_count: 0,
+      nodes: [],
+      cancelled_at: new Date().toISOString(),
+    });
+
+    render(<RunsPage />);
+
+    await user.click(screen.getByRole("button", { name: "Cancel run-001-alpha" }));
+    await waitFor(() => {
+      expect(showRunNotificationMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Cancelled",
+          message: expect.stringMatching(/nothing left to cancel/),
+        }),
+      );
+    });
+  });
+
+  it("surfaces a Cancel-failed notification when the row cancel mutation rejects", async () => {
+    const user = userEvent.setup();
+    cancelTreeMutationMock.mockReset();
+    cancelTreeMutationMock.mockRejectedValueOnce(new Error("network down"));
+
+    render(<RunsPage />);
+
+    await user.click(screen.getByRole("button", { name: "Cancel run-001-alpha" }));
+    await waitFor(() => {
+      expect(showRunNotificationMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Cancel failed",
+          message: "network down",
+        }),
+      );
+    });
+  });
+
   it("runs bulk pause and resume actions", async () => {
     const user = userEvent.setup();
 
