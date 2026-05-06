@@ -308,4 +308,24 @@ describe("StepDetail", () => {
     expect(screen.getByText("boom")).toBeInTheDocument();
     expect(screen.queryByLabelText("Copy output JSON")).not.toBeInTheDocument();
   });
+
+  it("renders Input and Output above Provenance (issue #526)", () => {
+    state.useStepDetail.mockReturnValue({
+      data: buildExecution(),
+      isLoading: false,
+    });
+
+    const { container } = render(<StepDetail executionId="exec-1" />);
+
+    const text = container.textContent ?? "";
+    const inputIdx = text.indexOf("Input");
+    const outputIdx = text.indexOf("Output");
+    const provenanceIdx = text.indexOf("Provenance did:caller:1");
+
+    expect(inputIdx).toBeGreaterThanOrEqual(0);
+    expect(outputIdx).toBeGreaterThanOrEqual(0);
+    expect(provenanceIdx).toBeGreaterThanOrEqual(0);
+    expect(inputIdx).toBeLessThan(provenanceIdx);
+    expect(outputIdx).toBeLessThan(provenanceIdx);
+  });
 });

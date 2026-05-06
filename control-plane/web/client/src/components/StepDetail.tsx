@@ -379,13 +379,6 @@ export function StepDetail({ executionId }: { executionId: string }) {
           </TooltipProvider>
         </div>
 
-        <StepProvenanceCard
-          callerDid={execution.caller_did}
-          targetDid={execution.target_did}
-          inputHash={execution.input_hash}
-          outputHash={execution.output_hash}
-        />
-
         {/* Error above input so failures are visible before scrolling past payload */}
         {hasError ? (
           <div className="rounded-md bg-destructive/10 border border-destructive/20 p-3">
@@ -447,6 +440,13 @@ export function StepDetail({ executionId }: { executionId: string }) {
             No output
           </div>
         ) : null}
+
+        <StepProvenanceCard
+          callerDid={execution.caller_did}
+          targetDid={execution.target_did}
+          inputHash={execution.input_hash}
+          outputHash={execution.output_hash}
+        />
 
         {/* Notes */}
         {notes.length > 0 && (
