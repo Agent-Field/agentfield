@@ -20,6 +20,7 @@ class _DummyAIConfig:
     audio_model = "tts-1"
     vision_model = "dall-e-3"
     video_model = "fal-ai/video"
+    fal_api_key = None
     rate_limit_max_retries = 1
     rate_limit_base_delay = 0.1
     rate_limit_max_delay = 1.0
@@ -66,7 +67,12 @@ async def test_process_multimodal_args_covers_rich_input_types(ai_agent, monkeyp
                 "data:audio/mp3;base64,ZmFrZQ==",
                 b"\xff\xd8\xffjpeg",
                 b"RIFF0000WAVEfmt ",
-                {"system": "sys", "user": "usr", "text": "extra", "image": "https://img"},
+                {
+                    "system": "sys",
+                    "user": "usr",
+                    "text": "extra",
+                    "image": "https://img",
+                },
                 {"role": "assistant", "content": "prior"},
                 [{"role": "tool", "content": "done"}, {"user": "nested"}],
                 {"nested": True},
@@ -82,11 +88,21 @@ async def test_process_multimodal_args_covers_rich_input_types(ai_agent, monkeyp
     assert "tool" in roles
     assert "user" in roles
 
-    user_message = next(message for message in messages if message.get("role") == "user")
+    user_message = next(
+        message for message in messages if message.get("role") == "user"
+    )
     assert any(item["type"] == "image_url" for item in user_message["content"])
     assert any(item["type"] == "input_audio" for item in user_message["content"])
-    assert any("Data:" in item["text"] for item in user_message["content"] if item["type"] == "text")
-    assert any(item["text"] == "123" for item in user_message["content"] if item["type"] == "text")
+    assert any(
+        "Data:" in item["text"]
+        for item in user_message["content"]
+        if item["type"] == "text"
+    )
+    assert any(
+        item["text"] == "123"
+        for item in user_message["content"]
+        if item["type"] == "text"
+    )
 
 
 @pytest.mark.asyncio
@@ -97,7 +113,11 @@ async def test_audio_generation_paths(ai_agent, monkeypatch):
         generate_audio=fal_audio,
         generate_video=fal_video,
         generate_image=AsyncMock(return_value="fal-image"),
+        supported_modalities=["image", "audio", "video"],
+        name="fal",
     )
+    # Reset router so it picks up the new fal mock
+    ai_agent._media_router_instance = None
 
     tts_result = await ai_agent.ai_with_audio("say hi", model="fal-ai/kokoro")
     assert tts_result == "fal-audio"
@@ -108,7 +128,9 @@ async def test_audio_generation_paths(ai_agent, monkeypatch):
 
     ai_agent._generate_openai_direct_audio = AsyncMock(return_value="direct")
     assert (
-        await ai_agent.ai_with_audio("hello", model="gpt-4o-mini-tts", mode="openai_direct")
+        await ai_agent.ai_with_audio(
+            "hello", model="gpt-4o-mini-tts", mode="openai_direct"
+        )
         == "direct"
     )
 
@@ -119,13 +141,15 @@ async def test_audio_generation_paths(ai_agent, monkeypatch):
     assert ai_agent.ai.await_args.kwargs["audio"]["voice"] == "alloy"
 
     assert await ai_agent.ai_generate_video("clip") == "fal-video"
-    with pytest.raises(ValueError, match="only supports Fal.ai models"):
+    with pytest.raises(ValueError, match="No provider"):
         await ai_agent.ai_generate_video("clip", model="openai/not-video")
 
 
 @pytest.mark.asyncio
 async def test_tts_audio_success_and_fallback(ai_agent, monkeypatch):
-    litellm_module = types.SimpleNamespace(aspeech=AsyncMock(return_value=SimpleNamespace(content=b"abc")))
+    litellm_module = types.SimpleNamespace(
+        aspeech=AsyncMock(return_value=SimpleNamespace(content=b"abc"))
+    )
     monkeypatch.setattr("agentfield.agent_ai.litellm", litellm_module, raising=False)
 
     response = await ai_agent._generate_tts_audio("hello", format="mp3")
@@ -166,7 +190,9 @@ async def test_openai_direct_audio_success_and_fallback(ai_agent, monkeypatch):
     openai_module.OpenAI = _OpenAIClient
     monkeypatch.setitem(sys.modules, "openai", openai_module)
 
-    response = await ai_agent._generate_openai_direct_audio("hello", format="wav", speed=1.25)
+    response = await ai_agent._generate_openai_direct_audio(
+        "hello", format="wav", speed=1.25
+    )
     assert response.audio is not None
     assert base64.b64decode(response.audio.data) == b"streamed-audio"
 
@@ -178,17 +204,36 @@ async def test_openai_direct_audio_success_and_fallback(ai_agent, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_vision_and_generate_wrappers(ai_agent, monkeypatch):
-    vision_module = types.SimpleNamespace(
-        generate_image_openrouter=AsyncMock(return_value="openrouter-image"),
-        generate_image_litellm=AsyncMock(return_value="litellm-image"),
+    mock_openrouter = SimpleNamespace(
+        generate_image=AsyncMock(return_value="openrouter-image"),
+        generate_audio=AsyncMock(),
+        supported_modalities=["image"],
+        name="openrouter",
     )
-    monkeypatch.setattr("agentfield.vision", vision_module, raising=False)
+    mock_litellm = SimpleNamespace(
+        generate_image=AsyncMock(return_value="litellm-image"),
+        generate_audio=AsyncMock(),
+        supported_modalities=["image", "audio"],
+        name="litellm",
+    )
 
     ai_agent._fal_provider_instance = SimpleNamespace(
         generate_image=AsyncMock(return_value="fal-image"),
         generate_audio=AsyncMock(),
         generate_video=AsyncMock(),
+        supported_modalities=["image", "audio", "video"],
+        name="fal",
     )
+
+    # Build a custom router with our mocks
+    from agentfield.media_router import MediaRouter
+
+    router = MediaRouter()
+    router.register("fal-ai/", ai_agent._fal_provider_instance)
+    router.register("fal/", ai_agent._fal_provider_instance)
+    router.register("openrouter/", mock_openrouter)
+    router.register("", mock_litellm)
+    ai_agent._media_router_instance = router
 
     assert await ai_agent.ai_with_vision("draw", model="fal-ai/flux") == "fal-image"
     assert (
@@ -202,5 +247,11 @@ async def test_vision_and_generate_wrappers(ai_agent, monkeypatch):
 
     assert await ai_agent.ai_generate_image("sunset") == "wrapped-image"
     assert await ai_agent.ai_generate_audio("voiceover") == "wrapped-audio"
-    assert ai_agent.ai_with_vision.await_args.kwargs["model"] == ai_agent.agent.ai_config.vision_model
-    assert ai_agent.ai_with_audio.await_args.kwargs["model"] == ai_agent.agent.ai_config.audio_model
+    assert (
+        ai_agent.ai_with_vision.await_args.kwargs["model"]
+        == ai_agent.agent.ai_config.vision_model
+    )
+    assert (
+        ai_agent.ai_with_audio.await_args.kwargs["model"]
+        == ai_agent.agent.ai_config.audio_model
+    )

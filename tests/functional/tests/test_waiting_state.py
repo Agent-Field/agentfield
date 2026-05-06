@@ -14,6 +14,10 @@ service.
 """
 
 import asyncio
+import hashlib
+import hmac
+import json
+import os
 import uuid
 
 import pytest
@@ -77,12 +81,27 @@ async def _send_approval_webhook(client, request_id: str, decision: str, feedbac
     }
     if feedback:
         body["feedback"] = feedback
+
+    secret = os.environ.get("APPROVAL_WEBHOOK_SECRET", "test-approval-webhook-secret")
+    body_bytes = json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    sig = hmac.new(secret.encode("utf-8"), body_bytes, hashlib.sha256).hexdigest()
     resp = await client.post(
         "/api/v1/webhooks/approval-response",
-        json=body,
+        content=body_bytes,
+        headers={
+            "Content-Type": "application/json",
+            "X-Webhook-Signature": f"sha256={sig}",
+        },
         timeout=10.0,
     )
     return resp.json(), resp.status_code
+
+
+def _sign_approval_webhook_payload(payload: dict) -> tuple[bytes, str]:
+    secret = os.environ.get("APPROVAL_WEBHOOK_SECRET", "test-approval-webhook-secret")
+    body_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    sig = hmac.new(secret.encode("utf-8"), body_bytes, hashlib.sha256).hexdigest()
+    return body_bytes, f"sha256={sig}"
 
 
 async def _get_execution_status(client, execution_id: str) -> dict:
@@ -419,19 +438,25 @@ async def test_hax_sdk_envelope_webhook_format(make_test_agent, async_http_clien
         assert status == 200
 
         # Send in hax-sdk envelope format
+        payload = {
+            "id": f"evt_{uuid.uuid4().hex[:8]}",
+            "type": "completed",
+            "createdAt": "2026-03-02T12:00:00Z",
+            "data": {
+                "requestId": approval_request_id,
+                "response": {
+                    "decision": "approved",
+                    "feedback": "Approved from Response Hub",
+                },
+            },
+        }
+        body_bytes, signature = _sign_approval_webhook_payload(payload)
         webhook_resp = await async_http_client.post(
             "/api/v1/webhooks/approval-response",
-            json={
-                "id": f"evt_{uuid.uuid4().hex[:8]}",
-                "type": "completed",
-                "createdAt": "2026-03-02T12:00:00Z",
-                "data": {
-                    "requestId": approval_request_id,
-                    "response": {
-                        "decision": "approved",
-                        "feedback": "Approved from Response Hub",
-                    },
-                },
+            content=body_bytes,
+            headers={
+                "Content-Type": "application/json",
+                "X-Webhook-Signature": signature,
             },
             timeout=10.0,
         )

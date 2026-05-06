@@ -11,6 +11,8 @@ import { DataSection } from "./sections/DataSection";
 import { ExecutionHeader } from "./sections/ExecutionHeader";
 import { TechnicalSection } from "./sections/TechnicalSection";
 import { TimingSection } from "./sections/TimingSection";
+import { useQuery } from "@tanstack/react-query";
+import { Badge } from "../ui/badge";
 
 interface WorkflowNodeData {
   workflow_id: string;
@@ -166,6 +168,9 @@ export function NodeDetailSidebar({
                   onCopy={handleCopy}
                   copySuccess={copySuccess}
                 />
+
+                {/* Triggers Section */}
+                <TriggersSection nodeId={node.agent_node_id} />
               </>
             )}
           </div>
@@ -242,6 +247,115 @@ function ErrorState({
         >
           Try Again
         </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+
+// ─── Triggers Section ──────────────────────────────────────────────────────
+
+interface BoundTrigger {
+  trigger_id: string;
+  source_name: string;
+  enabled: boolean;
+  public_url: string;
+}
+
+
+function TriggersSection({ nodeId }: { nodeId: string }) {
+  const { data: triggers, isLoading } = useQuery({
+    queryKey: ["node-triggers", nodeId],
+    queryFn: async () => {
+      const response = await fetch(
+        `/api/v1/triggers?target_node_id=${encodeURIComponent(nodeId)}`,
+        {
+          headers: {
+            "X-API-Key": sessionStorage.getItem("apiKey") || "",
+          },
+        }
+      );
+      if (!response.ok) throw new Error("Failed to fetch triggers");
+      return response.json();
+    },
+    enabled: !!nodeId,
+  });
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardHeader className="pb-2">
+          <p className="text-micro font-medium uppercase tracking-wide text-muted-foreground">
+            Triggers
+          </p>
+        </CardHeader>
+        <CardContent>
+          <Skeleton className="h-20 w-full" />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const triggerList = triggers?.triggers || [];
+
+  if (triggerList.length === 0) {
+    return (
+      <Card>
+        <CardHeader className="pb-2">
+          <p className="text-micro font-medium uppercase tracking-wide text-muted-foreground">
+            Triggers
+          </p>
+        </CardHeader>
+        <CardContent>
+          <div className="py-6 text-center text-sm text-muted-foreground">
+            No triggers bound to this node yet. Triggers route inbound
+            webhook events into this node's reasoners.
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <p className="text-micro font-medium uppercase tracking-wide text-muted-foreground">
+          Triggers
+        </p>
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-2">
+          {triggerList.map((trigger: BoundTrigger) => (
+            <div
+              key={trigger.trigger_id}
+              className="flex items-center justify-between rounded-md border border-border/50 bg-muted/20 p-2"
+            >
+              <div className="flex flex-col gap-0.5 min-w-0">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-xs font-medium text-foreground">
+                    {trigger.source_name}
+                  </span>
+                  <Badge variant="outline" className="text-nano">
+                    {trigger.enabled ? "enabled" : "disabled"}
+                  </Badge>
+                </div>
+                <p className="text-nano text-muted-foreground truncate">
+                  {trigger.public_url}
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 text-xs ml-2 shrink-0"
+                onClick={() => {
+                  window.location.href = `/triggers?trigger=${trigger.trigger_id}`;
+                }}
+              >
+                →
+              </Button>
+            </div>
+          ))}
+        </div>
       </CardContent>
     </Card>
   );

@@ -33,4 +33,5 @@ import "embed"
 //
 //go:embed skill_data/agentfield-multi-reasoner-builder/SKILL.md
 //go:embed skill_data/agentfield-multi-reasoner-builder/references/*.md
+//go:embed skill_data/agentfield-multi-reasoner-builder/commands/*.md
 var SkillData embed.FS

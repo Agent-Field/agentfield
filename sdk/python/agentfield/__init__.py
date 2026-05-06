@@ -31,6 +31,7 @@ from .multimodal_response import (
     AudioOutput,
     ImageOutput,
     FileOutput,
+    VideoOutput,
     detect_multimodal_response,
 )
 from .media_providers import (
@@ -58,6 +59,8 @@ from .exceptions import (
     ValidationError,
 )
 from .client import ApprovalRequestResponse, ApprovalResult, ApprovalStatusResponse
+from .triggers import EventTrigger, ScheduleTrigger, TriggerContext
+from .decorators import on_event, on_schedule, reasoner
 from .tool_calling import (
     ToolCallConfig,
     ToolCallRecord,
@@ -99,6 +102,7 @@ __all__ = [
     "AudioOutput",
     "ImageOutput",
     "FileOutput",
+    "VideoOutput",
     "detect_multimodal_response",
     # Media providers
     "MediaProvider",
@@ -132,6 +136,13 @@ __all__ = [
     "MemoryAccessError",
     "RegistrationError",
     "ValidationError",
+    # Trigger / webhook plugin system
+    "EventTrigger",
+    "ScheduleTrigger",
+    "TriggerContext",
+    "on_event",
+    "on_schedule",
+    "reasoner",
 ]
 
-__version__ = "0.1.69-rc.6"
+__version__ = "0.1.77-rc.3"

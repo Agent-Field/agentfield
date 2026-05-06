@@ -1,4 +1,5 @@
 import {
+  Activity,
   LayoutDashboard,
   Play,
   Server,
@@ -8,6 +9,8 @@ import {
   FileCheck2,
   BookOpen,
   Github,
+  Webhook,
+  Plug,
   type LucideIcon,
 } from "lucide-react";
 
@@ -17,16 +20,29 @@ export type ResourceLinkItem = {
   href: string;
 };
 
-export type NavItem = {
+export type NavLeaf = {
   title: string;
   icon: LucideIcon;
   path: string;
 };
 
+export type NavBranch = {
+  title: string;
+  icon: LucideIcon;
+  /** Nested children. The branch button itself toggles the section open. */
+  children: NavLeaf[];
+};
+
+export type NavItem = NavLeaf | NavBranch;
+
 export type NavGroup = {
   label: string;
   items: NavItem[];
 };
+
+export function isNavBranch(item: NavItem): item is NavBranch {
+  return (item as NavBranch).children !== undefined;
+}
 
 export const navigation: NavGroup[] = [
   {
@@ -36,6 +52,14 @@ export const navigation: NavGroup[] = [
       { title: "Playground", icon: FlaskConical, path: "/playground" },
       { title: "Runs", icon: Play, path: "/runs" },
       { title: "Agent nodes", icon: Server, path: "/agents" },
+      {
+        title: "Triggers",
+        icon: Webhook,
+        children: [
+          { title: "Integrations", icon: Plug, path: "/integrations" },
+          { title: "Active", icon: Activity, path: "/triggers" },
+        ],
+      },
     ],
   },
   {

@@ -329,7 +329,9 @@ class TestAgentAIProviderRouting:
             assert provider1 is provider2
 
     @pytest.mark.asyncio
-    async def test_ai_with_vision_routes_fal_ai_prefix(self, agent_with_ai, monkeypatch):
+    async def test_ai_with_vision_routes_fal_ai_prefix(
+        self, agent_with_ai, monkeypatch
+    ):
         """ai_with_vision should route fal-ai/ models to FalProvider."""
         ai = AgentAI(agent_with_ai)
 
@@ -344,7 +346,10 @@ class TestAgentAIProviderRouting:
         # Patch the instance attribute directly
         mock_provider = MagicMock()
         mock_provider.generate_image = mock_generate
+        mock_provider.supported_modalities = ["image", "audio", "video"]
+        mock_provider.name = "fal"
         ai._fal_provider_instance = mock_provider
+        ai._media_router_instance = None
 
         result = await ai.ai_with_vision(
             prompt="A sunset",
@@ -370,7 +375,10 @@ class TestAgentAIProviderRouting:
         # Patch the instance attribute directly
         mock_provider = MagicMock()
         mock_provider.generate_image = mock_generate
+        mock_provider.supported_modalities = ["image", "audio", "video"]
+        mock_provider.name = "fal"
         ai._fal_provider_instance = mock_provider
+        ai._media_router_instance = None
 
         await ai.ai_with_vision(
             prompt="A sunset",
@@ -386,7 +394,9 @@ class TestAgentAIProviderRouting:
 
         mock_response = MultimodalResponse(
             text="Hello",
-            audio=AudioOutput(url="https://fal.media/audio.wav", data=None, format="wav"),
+            audio=AudioOutput(
+                url="https://fal.media/audio.wav", data=None, format="wav"
+            ),
             images=[],
             files=[],
         )
@@ -395,7 +405,10 @@ class TestAgentAIProviderRouting:
         # Patch the instance attribute directly
         mock_provider = MagicMock()
         mock_provider.generate_audio = mock_generate
+        mock_provider.supported_modalities = ["image", "audio", "video"]
+        mock_provider.name = "fal"
         ai._fal_provider_instance = mock_provider
+        ai._media_router_instance = None
 
         result = await ai.ai_with_audio(
             "Hello world",
@@ -423,14 +436,21 @@ class TestAIGenerateVideo:
             text="",
             audio=None,
             images=[],
-            files=[FileOutput(url="https://fal.media/video.mp4", data=None, mime_type="video/mp4")],
+            files=[
+                FileOutput(
+                    url="https://fal.media/video.mp4", data=None, mime_type="video/mp4"
+                )
+            ],
         )
         mock_generate = AsyncMock(return_value=mock_response)
 
         # Patch the instance attribute directly
         mock_provider = MagicMock()
         mock_provider.generate_video = mock_generate
+        mock_provider.supported_modalities = ["image", "audio", "video"]
+        mock_provider.name = "fal"
         ai._fal_provider_instance = mock_provider
+        ai._media_router_instance = None
 
         await ai.ai_generate_video(prompt="A cat playing")
 
@@ -448,14 +468,21 @@ class TestAIGenerateVideo:
             text="",
             audio=None,
             images=[],
-            files=[FileOutput(url="https://fal.media/video.mp4", data=None, mime_type="video/mp4")],
+            files=[
+                FileOutput(
+                    url="https://fal.media/video.mp4", data=None, mime_type="video/mp4"
+                )
+            ],
         )
         mock_generate = AsyncMock(return_value=mock_response)
 
         # Patch the instance attribute directly
         mock_provider = MagicMock()
         mock_provider.generate_video = mock_generate
+        mock_provider.supported_modalities = ["image", "audio", "video"]
+        mock_provider.name = "fal"
         ai._fal_provider_instance = mock_provider
+        ai._media_router_instance = None
 
         await ai.ai_generate_video(
             prompt="Camera pans",
@@ -468,10 +495,10 @@ class TestAIGenerateVideo:
 
     @pytest.mark.asyncio
     async def test_ai_generate_video_rejects_non_fal_models(self, agent_with_ai):
-        """ai_generate_video should reject non-Fal models."""
+        """ai_generate_video should reject non-Fal and non-OpenRouter models."""
         ai = AgentAI(agent_with_ai)
 
-        with pytest.raises(ValueError, match="only supports Fal.ai models"):
+        with pytest.raises(ValueError, match="No provider"):
             await ai.ai_generate_video(
                 prompt="A cat",
                 model="openai/video-model",
@@ -497,11 +524,12 @@ class TestAITranscribeAudio:
         # Patch the instance attribute directly
         mock_provider = MagicMock()
         mock_provider.transcribe_audio = mock_transcribe
+        mock_provider.supported_modalities = ["image", "audio", "video"]
+        mock_provider.name = "fal"
         ai._fal_provider_instance = mock_provider
+        ai._media_router_instance = None
 
-        result = await ai.ai_transcribe_audio(
-            audio_url="https://example.com/audio.mp3"
-        )
+        result = await ai.ai_transcribe_audio(audio_url="https://example.com/audio.mp3")
 
         call_kwargs = mock_transcribe.call_args[1]
         assert call_kwargs["model"] == "fal-ai/whisper"
@@ -512,13 +540,18 @@ class TestAITranscribeAudio:
         """ai_transcribe_audio should pass language hint."""
         ai = AgentAI(agent_with_ai)
 
-        mock_response = MultimodalResponse(text="Hola mundo", audio=None, images=[], files=[])
+        mock_response = MultimodalResponse(
+            text="Hola mundo", audio=None, images=[], files=[]
+        )
         mock_transcribe = AsyncMock(return_value=mock_response)
 
         # Patch the instance attribute directly
         mock_provider = MagicMock()
         mock_provider.transcribe_audio = mock_transcribe
+        mock_provider.supported_modalities = ["image", "audio", "video"]
+        mock_provider.name = "fal"
         ai._fal_provider_instance = mock_provider
+        ai._media_router_instance = None
 
         await ai.ai_transcribe_audio(
             audio_url="https://example.com/spanish.mp3",
@@ -560,7 +593,8 @@ class TestUnifiedMultimodalUX:
         async def mock_fal_generate(*args, **kwargs):
             calls.append(("fal", kwargs.get("model")))
             return MultimodalResponse(
-                text="", audio=None,
+                text="",
+                audio=None,
                 images=[ImageOutput(url="https://fal.media/img.png")],
                 files=[],
             )
@@ -568,7 +602,10 @@ class TestUnifiedMultimodalUX:
         # Setup mocks - patch the instance attribute directly
         mock_provider = MagicMock()
         mock_provider.generate_image = mock_fal_generate
+        mock_provider.supported_modalities = ["image", "audio", "video"]
+        mock_provider.name = "fal"
         ai._fal_provider_instance = mock_provider
+        ai._media_router_instance = None
 
         # Test fal-ai/ prefix
         await ai.ai_with_vision(prompt="test", model="fal-ai/flux/dev")

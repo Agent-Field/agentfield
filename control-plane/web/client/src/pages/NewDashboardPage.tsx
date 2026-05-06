@@ -31,7 +31,7 @@ import { shortRunIdForDashboard as shortRunId } from "@/components/dashboard/das
 import { useRuns } from "@/hooks/queries";
 import { useLLMHealth, useQueueStatus } from "@/hooks/queries";
 import { useAgents } from "@/hooks/queries";
-import { getDashboardSummary } from "@/services/dashboardService";
+import { getDashboardSummary, getTriggerMetrics } from "@/services/dashboardService";
 import { formatRelativeTime } from "@/utils/dateFormat";
 import {
   getStatusTheme,
@@ -576,6 +576,12 @@ export function NewDashboardPage() {
     refetchInterval: execConnected ? 30_000 : 15_000,
   });
 
+  const triggerMetricsQuery = useQuery({
+    queryKey: ["trigger-metrics"],
+    queryFn: getTriggerMetrics,
+    refetchInterval: 60_000, // Refresh every minute
+  });
+
   const unhealthyEndpoints =
     llmHealthQuery.data?.endpoints
       ?.filter((ep) => !ep.healthy)
@@ -682,6 +688,27 @@ export function NewDashboardPage() {
             <span className="text-muted-foreground">agents online</span>
           </div>
           <Separator orientation="vertical" className="hidden h-6 sm:block" />
+          {triggerMetricsQuery.data && (
+            <>
+              <div className="flex items-center gap-1.5">
+                <span className="text-2xl font-semibold tabular-nums">{triggerMetricsQuery.data.events_24h ?? "—"}</span>
+                <span className="text-muted-foreground">inbound events (24h)</span>
+                {triggerMetricsQuery.data.dlq_depth > 0 && (
+                  <Badge variant="destructive" className="ml-1 text-xs">
+                    {triggerMetricsQuery.data.dlq_depth} dead
+                  </Badge>
+                )}
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-auto gap-1 px-1 py-0 text-xs text-muted-foreground hover:text-foreground"
+                onClick={() => navigate("/triggers")}
+              >
+                View triggers <ArrowRight className="size-3" />
+              </Button>
+            </>
+          )}
           <div className="flex items-center gap-1.5">
             <span className="text-2xl font-semibold tabular-nums">{avgDuration ?? "—"}</span>
             <span className="text-muted-foreground">avg time</span>

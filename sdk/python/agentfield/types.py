@@ -20,12 +20,17 @@ class HeartbeatData:
     status: AgentStatus
     timestamp: str
     version: str = ""
+    # Per-process identifier. Sent on every heartbeat so the control plane
+    # can detect a redeploy even if the post-restart re-registration step
+    # was missed (e.g. dropped while the new process was still booting).
+    instance_id: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "status": self.status.value,
             "timestamp": self.timestamp,
             "version": self.version,
+            "instance_id": self.instance_id,
         }
 
 
@@ -76,6 +81,7 @@ class ExecutionHeaders:
     session_id: Optional[str] = None
     actor_id: Optional[str] = None
     parent_execution_id: Optional[str] = None
+    parent_vc_id: Optional[str] = None
 
     def to_headers(self) -> Dict[str, str]:
         headers = {"X-Run-ID": self.run_id}
@@ -83,6 +89,8 @@ class ExecutionHeaders:
             headers["X-Parent-Execution-ID"] = self.parent_execution_id
         if self.session_id:
             headers["X-Session-ID"] = self.session_id
+        if self.parent_vc_id:
+            headers["X-Parent-VC-ID"] = self.parent_vc_id
         if self.actor_id:
             headers["X-Actor-ID"] = self.actor_id
         return headers

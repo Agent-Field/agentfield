@@ -90,6 +90,7 @@ import {
 } from "@/components/ui/select";
 import { useSidebar } from "@/components/ui/sidebar";
 import { SortableHeaderCell } from "@/components/ui/CompactTable";
+import { SourceIcon } from "@/components/triggers/SourceIcon";
 import { getExecutionDetails } from "@/services/executionsApi";
 import {
   JsonHighlightedPre,
@@ -703,8 +704,11 @@ export function RunsPage() {
   const [timeRange, setTimeRange] = useState("all");
   /** Empty set = all statuses (no restriction). */
   const [selectedStatuses, setSelectedStatuses] = useState<Set<string>>(() => new Set());
-  const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  // Seed search from ?search= URL param so deep links from the trigger sheet's
+  // Dispatch target chip (e.g. /runs?search=summarize_issue) land pre-filtered.
+  const initialSearch = searchParams.get("search") ?? "";
+  const [search, setSearch] = useState(initialSearch);
+  const [debouncedSearch, setDebouncedSearch] = useState(initialSearch);
   const statusParam = searchParams.get("status");
 
   const statusFilterKey = useMemo(
@@ -1458,6 +1462,91 @@ function BulkActionBar({
 
 // ─── row sub-component ────────────────────────────────────────────────────────
 
+
+/**
+ * TriggerBadge renders an icon-tile for the inbound webhook source if the
+ * run was triggered by one. Hover shows event_type + idempotency key + a
+ * "view trigger" action; click jumps straight to the trigger sheet so the
+ * operator can inspect the upstream webhook.
+ */
+function TriggerBadge({ run }: { run: WorkflowSummary }) {
+  const navigate = useNavigate();
+  if (!run.trigger) {
+    return null;
+  }
+  const trigger = run.trigger;
+  const sourceLabel =
+    trigger.source_name.charAt(0).toUpperCase() + trigger.source_name.slice(1);
+  return (
+    <HoverCard openDelay={180} closeDelay={80}>
+      <HoverCardTrigger asChild>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            navigate(
+              `/triggers?trigger=${encodeURIComponent(trigger.trigger_id)}` +
+                (trigger.event_id
+                  ? `&event=${encodeURIComponent(trigger.event_id)}`
+                  : ""),
+            );
+          }}
+          className={cn(
+            "inline-flex h-6 shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-muted/30 px-1.5",
+            "text-muted-foreground transition-colors hover:border-border hover:bg-muted/60 hover:text-foreground",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+          )}
+          aria-label={`Triggered by ${sourceLabel} — view trigger`}
+        >
+          <SourceIcon
+            source={trigger.source_name}
+            size="compact"
+            className="size-4 border-none bg-transparent p-0"
+            iconClassName="size-3.5"
+          />
+          <span className="text-micro-plus font-medium">
+            {trigger.source_name}
+          </span>
+        </button>
+      </HoverCardTrigger>
+      <HoverCardContent
+        className="w-72 overflow-hidden border-border/80 p-0 shadow-md"
+        side="bottom"
+        align="start"
+        sideOffset={6}
+      >
+        <div className="flex flex-col gap-2 p-3">
+          <div className="flex items-center gap-2">
+            <SourceIcon source={trigger.source_name} size="default" />
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium lowercase">
+                {trigger.source_name}
+              </p>
+              <p className="truncate text-xs text-muted-foreground">
+                {trigger.event_type || "All events"}
+              </p>
+            </div>
+          </div>
+          {trigger.idempotency_key ? (
+            <div className="flex flex-col gap-0.5 border-t border-border/60 pt-2">
+              <span className="text-micro uppercase tracking-wider text-muted-foreground/80">
+                Idempotency key
+              </span>
+              <code className="truncate font-mono text-xs text-foreground/90">
+                {trigger.idempotency_key}
+              </code>
+            </div>
+          ) : null}
+          <p className="text-xs text-muted-foreground">
+            Click to open this trigger in the operator sheet.
+          </p>
+        </div>
+      </HoverCardContent>
+    </HoverCard>
+  );
+}
+
+
 interface RunRowProps {
   run: WorkflowSummary;
   isSelected: boolean;
@@ -1579,6 +1668,7 @@ function RunRow({
               <Copy className="size-3 shrink-0 opacity-60" aria-hidden />
             )}
           </button>
+          <TriggerBadge run={run} />
         </div>
       </TableCell>
       {/* Steps */}

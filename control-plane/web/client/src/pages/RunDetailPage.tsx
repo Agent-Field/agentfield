@@ -58,6 +58,8 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { RunTrace, buildTraceTree, formatDuration } from "@/components/RunTrace";
+import { SourceIcon } from "@/components/triggers/SourceIcon";
+import { ArrowUpRight } from "@/components/ui/icon-bridge";
 import { StepDetail } from "@/components/StepDetail";
 import { WorkflowDAGViewer } from "@/components/WorkflowDAG";
 import { ErrorBoundary } from '@/components/ErrorBoundary';
@@ -65,6 +67,7 @@ import { ExecutionObservabilityPanel } from "@/components/execution";
 import { normalizeExecutionStatus, isTerminalStatus } from "@/utils/status";
 import { StatusPill } from "@/components/ui/status-pill";
 import type {
+  TriggerInfo,
   WebhookFailurePreview,
   WebhookRunSummary,
   WorkflowDAGLightweightNode,
@@ -156,6 +159,8 @@ function deriveRunParticipants(dag: WorkflowDAGLightweightResponse): {
   return { ids: [...reasoners].sort(), source: "reasoner" };
 }
 
+
+
 function RunContextNodesCard({
   participantIds,
   source,
@@ -210,18 +215,30 @@ function RunContextNodesCard({
   );
 }
 
-/** Run-level webhook roll-up + failed rows with retry (like legacy workflow webhooks tab). */
+/**
+ * Run-level webhook roll-up.
+ *
+ * One card, two sections:
+ *   - Inbound: did a webhook (or schedule) trigger this run?
+ *   - Outbound: did this run register HTTP callbacks, and did any fail?
+ *
+ * Operators care about both directions — separating them into two cards
+ * created visual noise when one side was always empty for a given run.
+ */
 function RunContextWebhooksCard({
+  trigger,
   summary,
   failures,
   onSelectStep,
   onRefetchDag,
 }: {
+  trigger?: TriggerInfo;
   summary: WebhookRunSummary;
   failures: WebhookFailurePreview[];
   onSelectStep: (executionId: string) => void;
   onRefetchDag: () => void;
 }) {
+  const navigate = useNavigate();
   const [retrying, setRetrying] = useState<Record<string, boolean>>({});
   const [retryAllBusy, setRetryAllBusy] = useState(false);
   const [retryErr, setRetryErr] = useState<string | null>(null);
@@ -230,7 +247,9 @@ function RunContextWebhooksCard({
   const total = summary.total_deliveries;
   const failed = summary.failed_deliveries;
   const succeeded = Math.max(0, total - failed);
-  const empty = steps === 0 && total === 0;
+  const outboundEmpty = steps === 0 && total === 0;
+  const inboundEmpty = !trigger;
+  const empty = outboundEmpty && inboundEmpty;
   const pendingRegistrations = steps > 0 && total === 0;
 
   const runRetry = async (executionId: string) => {
@@ -274,34 +293,82 @@ function RunContextWebhooksCard({
       )}
     >
       <CardContent className={cn("p-3", empty && "py-2.5")}>
-        <div className={cn("flex items-center gap-0.5", empty ? "mb-0.5" : "mb-1")}>
+        <div className={cn("flex items-center gap-0.5", empty ? "mb-0.5" : "mb-2")}>
           <p className="text-micro font-medium uppercase tracking-wide text-muted-foreground">
             Webhooks
           </p>
           <RunContextHint label="About run-level webhook summary">
-            Counts outbound HTTP callbacks registered on steps in this run and delivery
-            attempts recorded by the control plane. Failed deliveries listed below can be
-            retried here; full attempt history stays in the selected step panel.
+            Inbound: the trigger that dispatched this run, if any. Outbound:
+            HTTP callbacks registered on steps in this run and delivery
+            attempts recorded by the control plane. Failed deliveries listed
+            below can be retried here.
           </RunContextHint>
         </div>
 
-        {empty ? (
-          <p className="text-micro-plus leading-tight text-muted-foreground">
-            No outbound webhooks—register a webhook URL on the reasoner to receive callbacks.
+        {/* INBOUND */}
+        <div className="mb-2">
+          <p className="mb-1 text-micro uppercase tracking-wider text-muted-foreground/75">
+            Inbound
           </p>
-        ) : pendingRegistrations ? (
-          <p className="text-xs text-foreground">
-            {steps} step{steps === 1 ? "" : "s"} registered for callbacks — no delivery
-            attempts recorded yet.
+          {trigger ? (
+            <button
+              type="button"
+              onClick={() => {
+                navigate(
+                  `/triggers?trigger=${encodeURIComponent(trigger.trigger_id)}` +
+                    (trigger.event_id
+                      ? `&event=${encodeURIComponent(trigger.event_id)}`
+                      : ""),
+                );
+              }}
+              className="group flex w-full items-center gap-2 rounded-md border border-border/60 bg-muted/30 px-2 py-1.5 text-left transition-colors hover:border-border hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              title={`View this trigger — ${trigger.event_type || "all events"}`}
+            >
+              <SourceIcon source={trigger.source_name} size="compact" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-medium lowercase">
+                  {trigger.source_name}
+                </p>
+                <p className="truncate font-mono text-micro text-muted-foreground">
+                  {trigger.event_type || "all events"}
+                </p>
+              </div>
+              <ArrowUpRight
+                className="size-3.5 shrink-0 text-muted-foreground transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5"
+                aria-hidden
+              />
+            </button>
+          ) : (
+            <p className="text-micro-plus leading-tight text-muted-foreground">
+              Not triggered by a webhook — invoked directly or by another reasoner.
+            </p>
+          )}
+        </div>
+
+        {/* OUTBOUND */}
+        <div className={cn("border-t border-border/40 pt-2", outboundEmpty && "border-dashed")}>
+          <p className="mb-1 text-micro uppercase tracking-wider text-muted-foreground/75">
+            Outbound
           </p>
-        ) : (
-          <p className="text-xs text-foreground">
-            {steps} step{steps === 1 ? "" : "s"} with callbacks · {total} delivery
-            {total === 1 ? "" : "ies"}
-            {succeeded > 0 ? ` · ${succeeded} succeeded` : ""}
-            {failed > 0 ? ` · ${failed} failed` : ""}
-          </p>
-        )}
+          {outboundEmpty ? (
+            <p className="text-micro-plus leading-tight text-muted-foreground">
+              No outbound webhooks — register a webhook URL on the reasoner to
+              receive callbacks.
+            </p>
+          ) : pendingRegistrations ? (
+            <p className="text-xs text-foreground">
+              {steps} step{steps === 1 ? "" : "s"} registered for callbacks — no
+              delivery attempts recorded yet.
+            </p>
+          ) : (
+            <p className="text-xs text-foreground">
+              {steps} step{steps === 1 ? "" : "s"} with callbacks · {total} delivery
+              {total === 1 ? "" : "ies"}
+              {succeeded > 0 ? ` · ${succeeded} succeeded` : ""}
+              {failed > 0 ? ` · ${failed} failed` : ""}
+            </p>
+          )}
+        </div>
 
         {failures.length > 0 ? (
           <div className="mt-2 space-y-1.5 border-t border-border/60 pt-2">
@@ -385,7 +452,7 @@ function RunContextWebhooksCard({
           <p className="mt-1.5 text-micro text-destructive">{retryErr}</p>
         ) : null}
 
-        {!empty ? (
+        {!outboundEmpty ? (
           <p
             className={cn(
               "mt-1.5 text-micro leading-snug text-muted-foreground",
@@ -591,7 +658,7 @@ export function RunDetailPage() {
   const actorTrim = dag.actor_id?.trim();
 
   return (
-    <div className="flex min-w-0 flex-col h-[calc(100vh-8rem)] max-w-full">
+    <div className="flex min-w-0 flex-col h-[calc(100vh-8rem)] max-w-full overflow-hidden">
       {/* ─── Header ─────────────────────────────────────────────────────── */}
       <div className="mb-3 flex min-w-0 flex-shrink-0 flex-col gap-2 border-b border-border/50 pb-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
         <div className="min-w-0 flex-1 space-y-1.5">
@@ -1027,14 +1094,15 @@ export function RunDetailPage() {
         );
       })()}
 
-      {/* Nodes + webhooks — always show run-level strip (empty states explicit) */}
+      {/* Nodes + webhooks — run-level strip with empty states */}
       <TooltipProvider delayDuration={280}>
-        <div className="mb-3 grid min-w-0 gap-3 sm:grid-cols-2">
+        <div className="mb-3 grid min-w-0 shrink-0 gap-3 sm:grid-cols-2">
           <RunContextNodesCard
             participantIds={participants.ids}
             source={participants.source}
           />
           <RunContextWebhooksCard
+            trigger={dag.trigger}
             summary={dag.webhook_summary ?? ZERO_WEBHOOK_SUMMARY}
             failures={dag.webhook_failures ?? []}
             onSelectStep={setSelectedStepId}
@@ -1051,7 +1119,7 @@ export function RunDetailPage() {
         onValueChange={(value) => setSurfaceTab(value as "execution" | "logs")}
         className="flex min-h-0 flex-1 flex-col"
       >
-        <div className="mb-3 flex min-w-0 items-center justify-between gap-3 border-b border-border/50 pb-3">
+        <div className="mb-3 flex min-w-0 shrink-0 items-center justify-between gap-3 border-b border-border/50 pb-3">
           <TabsList className="h-9" aria-label="Run detail surface">
             <TabsTrigger value="execution" className="px-4 text-sm">
               Execution
@@ -1062,7 +1130,10 @@ export function RunDetailPage() {
           </TabsList>
         </div>
 
-        <TabsContent value="logs" className="mt-0 min-h-0 flex-1 data-[state=inactive]:hidden">
+        <TabsContent
+          value="logs"
+          className="mt-0 flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden"
+        >
           {selectedExecution.execution_id ? (
             <ExecutionObservabilityPanel
               execution={selectedExecution}
@@ -1079,7 +1150,7 @@ export function RunDetailPage() {
 
         <TabsContent
           value="execution"
-          className="mt-0 min-h-0 flex-1 data-[state=inactive]:hidden"
+          className="mt-0 flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden"
         >
           {isSingleStep ? (
             <Card className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
@@ -1095,7 +1166,10 @@ export function RunDetailPage() {
             </Card>
           ) : (
             <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row lg:items-stretch">
-              <Card className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:min-w-0 lg:basis-0">
+              <Card
+                data-testid="run-detail-steps-card"
+                className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:w-[420px] lg:max-w-[520px] lg:flex-none lg:shrink-0 lg:basis-[420px]"
+              >
                 <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border/60 px-3 py-2">
                   <span className="text-xs font-medium text-muted-foreground">
                     Steps
@@ -1166,7 +1240,10 @@ export function RunDetailPage() {
                 </CardContent>
               </Card>
 
-              <Card className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:min-w-0 lg:basis-0">
+              <Card
+                data-testid="run-detail-step-detail-card"
+                className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:min-w-0 lg:basis-0"
+              >
                 <CardContent className="flex min-h-0 min-w-0 flex-1 flex-col p-0">
                   {selectedStepId ? (
                     <StepDetail executionId={selectedStepId} />

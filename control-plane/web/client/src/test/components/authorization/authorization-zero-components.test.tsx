@@ -61,6 +61,13 @@ vi.mock("@/lib/theme", () => ({
     success: { border: "success-border" },
     error: { border: "error-border" },
   },
+  getStatusTone: (tone: string) => ({
+    bg: `${tone}-bg`,
+    border: `${tone}-border`,
+    accent: `${tone}-accent`,
+    fg: `${tone}-fg`,
+  }),
+  getStatusBadgeClasses: (tone: string) => `${tone}-badge-classes`,
 }));
 
 describe("authorization zero-coverage components", () => {

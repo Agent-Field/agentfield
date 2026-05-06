@@ -1,0 +1,28 @@
+{
+  "id": "evt_1NYExample1234567890",
+  "object": "event",
+  "api_version": "2024-12-18.acacia",
+  "created": 1735395600,
+  "type": "payment_intent.succeeded",
+  "livemode": false,
+  "pending_webhooks": 1,
+  "request": {
+    "id": "req_example",
+    "idempotency_key": null
+  },
+  "data": {
+    "object": {
+      "id": "pi_3NYExample1234",
+      "object": "payment_intent",
+      "amount": 5000,
+      "amount_received": 5000,
+      "currency": "usd",
+      "customer": "cus_example1234",
+      "status": "succeeded",
+      "payment_method": "pm_example1234",
+      "metadata": {
+        "order_id": "ord_demo_42"
+      }
+    }
+  }
+}

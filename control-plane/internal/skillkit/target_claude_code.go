@@ -69,6 +69,13 @@ func (t claudeCodeTarget) Install(skill Skill, canonicalCurrentDir string) (Inst
 		return InstalledTarget{}, fmt.Errorf("symlink %s -> %s: %w", link, canonicalCurrentDir, err)
 	}
 
+	// Also expose any shipped slash commands (skills/<name>/commands/*.md)
+	// at ~/.claude/commands/<file>.md so Claude Code picks them up. This is
+	// best-effort: a missing commands dir in the skill is not an error.
+	if err := t.installCommands(canonicalCurrentDir); err != nil {
+		return InstalledTarget{}, fmt.Errorf("install commands: %w", err)
+	}
+
 	return InstalledTarget{
 		TargetName:  t.Name(),
 		Method:      t.Method(),
@@ -78,9 +85,45 @@ func (t claudeCodeTarget) Install(skill Skill, canonicalCurrentDir string) (Inst
 	}, nil
 }
 
+// installCommands symlinks every .md file under <skillDir>/commands/ into
+// ~/.claude/commands/. Missing commands dir is a no-op.
+func (claudeCodeTarget) installCommands(skillDir string) error {
+	src := filepath.Join(skillDir, "commands")
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	dst := filepath.Join(homeDir(), ".claude", "commands")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", dst, err)
+	}
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
+			continue
+		}
+		target := filepath.Join(src, e.Name())
+		link := filepath.Join(dst, e.Name())
+		if info, err := os.Lstat(link); err == nil {
+			if info.Mode()&os.ModeSymlink != 0 || info.Mode().IsRegular() {
+				if err := os.Remove(link); err != nil {
+					return fmt.Errorf("remove existing %s: %w", link, err)
+				}
+			}
+		}
+		if err := os.Symlink(target, link); err != nil {
+			return fmt.Errorf("symlink %s -> %s: %w", link, target, err)
+		}
+	}
+	return nil
+}
+
 func (t claudeCodeTarget) Uninstall() error {
 	// Remove every shipped skill's symlink. (Currently a single skill, but the
 	// catalog can grow.)
+	root, rootErr := CanonicalRoot()
 	for _, s := range Catalog {
 		link, err := t.skillLink(s)
 		if err != nil {
@@ -92,6 +135,23 @@ func (t claudeCodeTarget) Uninstall() error {
 					return fmt.Errorf("remove %s: %w", link, err)
 				}
 			}
+		}
+		// Best-effort cleanup of any slash-commands we installed for this skill.
+		// Source lives at ~/.agentfield/skills/<name>/current/commands/.
+		if rootErr != nil {
+			continue
+		}
+		cmdSrc := filepath.Join(root, s.Name, "current", "commands")
+		entries, err := os.ReadDir(cmdSrc)
+		if err != nil {
+			continue
+		}
+		cmdDst := filepath.Join(homeDir(), ".claude", "commands")
+		for _, e := range entries {
+			if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
+				continue
+			}
+			_ = os.Remove(filepath.Join(cmdDst, e.Name()))
 		}
 	}
 	return nil

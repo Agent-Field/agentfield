@@ -34,7 +34,20 @@ vi.mock("@/lib/theme", () => ({
       border: "info-border",
       fg: "info-fg",
     },
+    success: {
+      accent: "success-accent",
+      bg: "success-bg",
+      border: "success-border",
+      fg: "success-fg",
+    },
   },
+  getStatusTone: (tone: string) => ({
+    bg: `${tone}-bg`,
+    border: `${tone}-border`,
+    accent: `${tone}-accent`,
+    fg: `${tone}-fg`,
+  }),
+  getStatusBadgeClasses: (tone: string) => `${tone}-badge-classes`,
 }));
 
 vi.mock("@/utils/status", () => ({

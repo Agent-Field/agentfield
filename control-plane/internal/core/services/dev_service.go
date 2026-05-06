@@ -25,6 +25,12 @@ type DefaultDevService struct {
 	fileSystem     interfaces.FileSystemAdapter
 }
 
+var (
+	absPathForDevMode = filepath.Abs
+	agentPortStart    = 8001
+	agentPortEnd      = 8999
+)
+
 func NewDevService(
 	processManager interfaces.ProcessManager,
 	portManager interfaces.PortManager,
@@ -39,7 +45,7 @@ func NewDevService(
 
 func (ds *DefaultDevService) RunInDevMode(path string, options domain.DevOptions) error {
 	// Convert to absolute path
-	absPath, err := filepath.Abs(path)
+	absPath, err := absPathForDevMode(path)
 	if err != nil {
 		return fmt.Errorf("failed to resolve path: %w", err)
 	}
@@ -153,7 +159,7 @@ func (ds *DefaultDevService) getFreePort() (int, error) {
 	}
 
 	// Fallback: direct port checking
-	for port := 8001; port <= 8999; port++ {
+	for port := agentPortStart; port <= agentPortEnd; port++ {
 		if ds.isPortAvailable(port) {
 			return port, nil
 		}
@@ -171,7 +177,7 @@ func (ds *DefaultDevService) isPortAvailable(port int) bool {
 	}
 
 	// Fallback: direct port checking
-	conn, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	conn, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
 		return false
 	}
@@ -257,8 +263,7 @@ func (ds *DefaultDevService) discoverAgentPort(timeout time.Duration) (int, erro
 	for time.Now().Before(deadline) {
 		checkCount++
 
-		// Try ports in range 8001-8999
-		for port := 8001; port <= 8999; port++ {
+		for port := agentPortStart; port <= agentPortEnd; port++ {
 			if time.Now().After(deadline) {
 				break
 			}

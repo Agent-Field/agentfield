@@ -11,7 +11,7 @@ Supported Providers:
 
 import asyncio
 import os
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 from agentfield.logger import log_error
 
 
@@ -92,6 +92,7 @@ async def generate_image_openrouter(
     quality: str,
     style: Optional[str],
     response_format: str,
+    image_config: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> Any:
     """
@@ -112,7 +113,10 @@ async def generate_image_openrouter(
         quality: Image quality (may not be used by all OpenRouter models)
         style: Image style (may not be used by all OpenRouter models)
         response_format: Response format (may not be used by all OpenRouter models)
-        **kwargs: Additional OpenRouter-specific parameters (e.g., image_config)
+        image_config: Optional dict of OpenRouter image generation settings
+            (e.g., {"aspect_ratio": "16:9"}). Pass an empty dict to use
+            provider defaults explicitly.
+        **kwargs: Additional OpenRouter-specific parameters
 
     Returns:
         MultimodalResponse with generated image(s)
@@ -120,10 +124,6 @@ async def generate_image_openrouter(
     Raises:
         ImportError: If litellm is not installed
         Exception: If image generation fails
-
-    Note:
-        OpenRouter-specific parameters like `image_config` should be passed via kwargs.
-        Example: image_config={"aspect_ratio": "16:9"}
     """
     try:
         import litellm
@@ -143,8 +143,12 @@ async def generate_image_openrouter(
         "model": model,
         "messages": messages,
         "modalities": ["image", "text"],
-        **kwargs,  # Pass through any additional kwargs (e.g., image_config)
+        **kwargs,
     }
+
+    # Add image_config if provided
+    if image_config is not None:
+        completion_params["image_config"] = image_config
 
     try:
         # Use LiteLLM's completion function (OpenRouter uses chat API)

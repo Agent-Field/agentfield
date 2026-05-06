@@ -228,18 +228,16 @@ func TestCoverageGapAgentServiceBranches(t *testing.T) {
 }
 
 func TestCoverageGapRunInDevModeAbsError(t *testing.T) {
-	oldWd, err := os.Getwd()
-	require.NoError(t, err)
-
-	tmp := t.TempDir()
-	require.NoError(t, os.Chdir(tmp))
+	originalAbs := absPathForDevMode
+	absPathForDevMode = func(string) (string, error) {
+		return "", errors.New("abs failed")
+	}
 	t.Cleanup(func() {
-		_ = os.Chdir(oldWd)
+		absPathForDevMode = originalAbs
 	})
-	require.NoError(t, os.RemoveAll(tmp))
 
 	service := &DefaultDevService{fileSystem: newMockFileSystemAdapter()}
-	err = service.RunInDevMode("pkg", domain.DevOptions{})
+	err := service.RunInDevMode("pkg", domain.DevOptions{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to resolve path")
 }

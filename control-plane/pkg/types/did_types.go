@@ -61,6 +61,13 @@ const (
 )
 
 // ExecutionVC represents a verifiable credential for an execution.
+//
+// `Kind` discriminates the credential's purpose. `kind="execution"` (default)
+// is the historical row produced when a reasoner finishes. `kind="trigger_event"`
+// is the credential the control plane signs when an external signed payload
+// arrives via a Source plugin (Stripe, GitHub, Slack, etc.) and gets dispatched
+// to a reasoner — see TriggerEventVCSubject. Both kinds share the same table
+// so the chain walker and storage helpers stay unified.
 type ExecutionVC struct {
 	VCID         string          `json:"vc_id" db:"vc_id"`
 	ExecutionID  string          `json:"execution_id" db:"execution_id"`
@@ -81,7 +88,23 @@ type ExecutionVC struct {
 	CreatedAt    time.Time       `json:"created_at" db:"created_at"`
 	ParentVCID   *string         `json:"parent_vc_id,omitempty" db:"parent_vc_id"`
 	ChildVCIDs   []string        `json:"child_vc_ids,omitempty" db:"child_vc_ids"`
+
+	// Trigger event VC discriminator + metadata. All optional; populated only
+	// when Kind == ExecutionVCKindTriggerEvent.
+	Kind       string  `json:"kind" db:"kind"`
+	TriggerID  *string `json:"trigger_id,omitempty" db:"trigger_id"`
+	SourceName *string `json:"source_name,omitempty" db:"source_name"`
+	EventType  *string `json:"event_type,omitempty" db:"event_type"`
+	EventID    *string `json:"event_id,omitempty" db:"event_id"`
 }
+
+// ExecutionVC kind discriminator values. `Kind` defaults to
+// ExecutionVCKindExecution at the database layer so existing rows and existing
+// callers that don't pass a kind continue to work.
+const (
+	ExecutionVCKindExecution    = "execution"
+	ExecutionVCKindTriggerEvent = "trigger_event"
+)
 
 // WorkflowVC represents a workflow-level verifiable credential.
 type WorkflowVC struct {
@@ -121,6 +144,12 @@ type DIDIdentity struct {
 }
 
 // ExecutionContext represents the context for DID-enabled execution.
+//
+// ParentVCID, when set, is recorded on the resulting ExecutionVC's parent_vc_id
+// column so chains formed across system boundaries (e.g. trigger event VC →
+// reasoner execution VC) survive into the audit trail. Empty by default;
+// populated by the dispatcher (for trigger-rooted chains) and by the SDK
+// when an inbound reasoner request carries an X-Parent-VC-ID header.
 type ExecutionContext struct {
 	ExecutionID  string    `json:"execution_id"`
 	WorkflowID   string    `json:"workflow_id"`
@@ -129,6 +158,7 @@ type ExecutionContext struct {
 	TargetDID    string    `json:"target_did"`
 	AgentNodeDID string    `json:"agent_node_did"`
 	Timestamp    time.Time `json:"timestamp"`
+	ParentVCID   string    `json:"parent_vc_id,omitempty"`
 }
 
 // VCDocument represents a complete verifiable credential document.
@@ -375,6 +405,17 @@ type ExecutionVCInfo struct {
 	CreatedAt    time.Time `json:"created_at" db:"created_at"`
 	StorageURI   string    `json:"storage_uri" db:"storage_uri"`
 	DocumentSize int64     `json:"document_size_bytes" db:"document_size_bytes"`
+
+	// Phase 1 + Phase 3 fields. Optional pointers so nil means "not set".
+	// ParentVCID is the chain pointer (trigger_event VC → execution VC).
+	// Kind is "execution" or "trigger_event". The trigger_* fields are
+	// populated only on kind=trigger_event rows.
+	ParentVCID *string `json:"parent_vc_id,omitempty" db:"parent_vc_id"`
+	Kind       string  `json:"kind,omitempty" db:"kind"`
+	TriggerID  *string `json:"trigger_id,omitempty" db:"trigger_id"`
+	SourceName *string `json:"source_name,omitempty" db:"source_name"`
+	EventType  *string `json:"event_type,omitempty" db:"event_type"`
+	EventID    *string `json:"event_id,omitempty" db:"event_id"`
 }
 
 // WorkflowVCInfo represents information about a workflow VC.

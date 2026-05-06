@@ -114,7 +114,7 @@ func EffectiveExecutionLogs(c ExecutionLogsConfig) ExecutionLogsConfig {
 // The control plane manages execution state only — agents are responsible for
 // communicating with external approval services (e.g. hax-sdk).
 type ApprovalConfig struct {
-	WebhookSecret      string `yaml:"webhook_secret" mapstructure:"webhook_secret"`             // Optional HMAC-SHA256 secret for verifying webhook callbacks
+	WebhookSecret      string `yaml:"webhook_secret" mapstructure:"webhook_secret"`             // Required for HMAC auth on /api/v1/webhooks/approval-response (empty disables the endpoint)
 	DefaultExpiryHours int    `yaml:"default_expiry_hours" mapstructure:"default_expiry_hours"` // Default approval expiry (hours); 0 = 72h
 }
 

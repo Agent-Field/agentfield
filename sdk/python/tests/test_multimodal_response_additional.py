@@ -9,6 +9,7 @@ from agentfield.multimodal_response import (
     FileOutput,
     ImageOutput,
     MultimodalResponse,
+    VideoOutput,
     _extract_image_from_data,
     _find_images_recursive,
     detect_multimodal_response,
@@ -131,6 +132,22 @@ def test_multimodal_response_save_all_and_flags(tmp_path):
     assert (tmp_path / "artifact.bin").read_bytes() == b"file"
     assert (tmp_path / "sample_text.txt").read_text() == "hello"
     assert set(saved) == {"audio", "image_0", "file_0", "text"}
+
+
+def test_multimodal_response_save_all_sanitizes_video_filename(tmp_path):
+    escaped_filename = f"{tmp_path.name}-escape.mp4"
+    video = VideoOutput(
+        data=base64.b64encode(b"video").decode(),
+        filename=f"../../{escaped_filename}",
+        mime_type="video/mp4",
+    )
+    response = MultimodalResponse(videos=[video])
+
+    saved = response.save_all(tmp_path, prefix="sample")
+
+    assert saved == {"video_0": str(tmp_path / escaped_filename)}
+    assert (tmp_path / escaped_filename).read_bytes() == b"video"
+    assert not (tmp_path.parent.parent / escaped_filename).exists()
 
 
 def test_extract_and_find_images_cover_supported_shapes():

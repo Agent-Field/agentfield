@@ -1,6 +1,7 @@
 import pytest
 
 from agentfield.router import AgentRouter
+from agentfield.exceptions import AgentFieldClientError
 
 
 class DummyAgent:
@@ -32,7 +33,7 @@ class DummyAgent:
 async def test_router_requires_agent_before_use():
     router = AgentRouter()
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(AgentFieldClientError):
         await router.call("node.skill")
 
     agent = DummyAgent()
@@ -131,17 +132,17 @@ def test_router_automatic_delegation():
 
 
 def test_router_delegation_without_agent_raises_error():
-    """Test that accessing delegated methods without an attached agent raises RuntimeError."""
+    """Test that accessing delegated methods without an attached agent raises AgentFieldClientError."""
     router = AgentRouter()
 
-    # Test that note() raises RuntimeError when no agent is attached
-    with pytest.raises(RuntimeError, match="Router not attached to an agent"):
+    # Test that note() raises AgentFieldClientError when no agent is attached
+    with pytest.raises(AgentFieldClientError, match="Router not attached to an agent"):
         router.note("Test message")
 
-    # Test that discover() raises RuntimeError when no agent is attached
-    with pytest.raises(RuntimeError, match="Router not attached to an agent"):
+    # Test that discover() raises AgentFieldClientError when no agent is attached
+    with pytest.raises(AgentFieldClientError, match="Router not attached to an agent"):
         router.discover()
 
-    # Test that memory raises RuntimeError when no agent is attached
-    with pytest.raises(RuntimeError, match="Router not attached to an agent"):
+    # Test that memory raises AgentFieldClientError when no agent is attached
+    with pytest.raises(AgentFieldClientError, match="Router not attached to an agent"):
         _ = router.memory

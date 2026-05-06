@@ -3,23 +3,6 @@ name: Coverage Summary
 on:
   merge_group:
   pull_request:
-  push:
-    branches: [main]
-    paths:
-      - "control-plane/**"
-      - "sdk/**"
-      - "scripts/test-all.sh"
-      - "scripts/coverage-summary.sh"
-      - "scripts/coverage-surface.sh"
-      - "scripts/coverage-aggregate.py"
-      - "scripts/coverage-gate.py"
-      - "scripts/patch-coverage-gate.sh"
-      - ".coverage-gate.toml"
-      - "coverage-baseline.json"
-      - ".github/workflows/coverage.yml"
-      - "docs/COVERAGE.md"
-      - "docs/DEVELOPMENT.md"
-      - ".github/BRANCH_PROTECTION.md"
   workflow_dispatch:
 
 permissions:
@@ -242,7 +225,10 @@ jobs:
         with:
           name: coverage-summary
           path: test-reports/coverage/
-          retention-days: 7
+          # Retention is long enough to cover the gap between a PR's last
+          # coverage run and the eventual merge to main, so coverage-badge.yml
+          # can still find the artifact when it runs post-merge.
+          retention-days: 30
 
       - name: Fail the job if any gate failed
         if: github.event_name != 'merge_group' && needs.changes.outputs.has_coverage_files == 'true' && (steps.gate.outcome == 'failure' || steps.patch_gate.outcome == 'failure')
@@ -250,26 +236,6 @@ jobs:
           echo "::error::Coverage gate failed. See the coverage report comment(s) on the PR for details and remediation steps."
           exit 1
 
-      - name: Update coverage badge gist
-        # NOTE: GitHub Actions does not allow `secrets.*` inside `if:` expressions
-        # (they evaluate to empty). We surface them through `env` and gate on that
-        # so the step silently skips on forks / PRs without the secret configured.
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.COVERAGE_GIST_ID != '' && env.GIST_TOKEN != ''
-        uses: actions/github-script@v7
-        env:
-          COVERAGE_GIST_ID: ${{ secrets.COVERAGE_GIST_ID }}
-          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
-        with:
-          github-token: ${{ secrets.GIST_TOKEN }}
-          script: |
-            const fs = require('fs');
-            const badge = fs.readFileSync('test-reports/coverage/badge.json', 'utf8');
-            const summary = fs.readFileSync('test-reports/coverage/summary.json', 'utf8');
-
-            await github.rest.gists.update({
-              gist_id: process.env.COVERAGE_GIST_ID,
-              files: {
-                'badge.json': { content: badge },
-                'coverage-summary.json': { content: summary },
-              },
-            });
+      # Badge gist updates on merge to main are handled by coverage-badge.yml,
+      # which reuses this workflow's coverage-summary artifact rather than
+      # recomputing coverage on every push to main.

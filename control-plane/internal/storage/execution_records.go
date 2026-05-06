@@ -1193,6 +1193,62 @@ func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAf
 	return updated, nil
 }
 
+// MarkAgentExecutionsOrphaned fails every still-running execution and workflow
+// execution owned by the given agent_node_id. This is invoked when an agent
+// re-registers with a new instance_id — the previous OS process is gone, and
+// any cross-agent `Agent.call` that was in its `wait_for_execution_result`
+// loop has lost its in-memory state with that process. Leaving those rows in
+// `running` strands the parent reasoner indefinitely (this is exactly the
+// run_1778004368903_9345a88f case observed in production), so we fail them
+// up-front the moment we detect the restart.
+//
+// reasonMessage is written to error_message AND status_reason. The terminal
+// status used is "failed" (the agent restarted mid-execution; the work was
+// not completed and was not a deadline timeout).
+//
+// Two single bulk UPDATEs — workflow_executions is the source of truth for
+// the DAG UI; the legacy `executions` table is mirrored best-effort so any
+// older code path reading it sees a consistent picture. We deliberately do
+// not write duration_ms here: the row's started_at is preserved, so consumers
+// that need the runtime can compute completed_at - started_at directly.
+func (ls *LocalStorage) MarkAgentExecutionsOrphaned(ctx context.Context, agentNodeID string, reasonMessage string) (int, error) {
+	if strings.TrimSpace(agentNodeID) == "" {
+		return 0, fmt.Errorf("agent_node_id is required")
+	}
+	if strings.TrimSpace(reasonMessage) == "" {
+		reasonMessage = "agent_restart_orphaned"
+	}
+
+	db := ls.requireSQLDB()
+	now := time.Now().UTC()
+
+	res, err := db.ExecContext(ctx, `
+		UPDATE workflow_executions
+		SET status = ?, status_reason = ?, error_message = ?, completed_at = ?, updated_at = ?
+		WHERE agent_node_id = ?
+		  AND status IN ('running', 'pending', 'queued', 'waiting')`,
+		types.ExecutionStatusFailed, reasonMessage, reasonMessage, now, now, agentNodeID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("update orphaned workflow executions: %w", err)
+	}
+	affected, _ := res.RowsAffected()
+
+	// Best-effort sync to the legacy `executions` table. Errors are
+	// intentionally swallowed: workflow_executions is the source of truth,
+	// and the legacy mirror is allowed to lag without blocking restart
+	// recovery.
+	_, _ = db.ExecContext(ctx, `
+		UPDATE executions
+		SET status = ?, status_reason = ?, error_message = ?, completed_at = ?, updated_at = ?
+		WHERE agent_node_id = ?
+		  AND status IN ('running', 'pending', 'queued', 'waiting')`,
+		types.ExecutionStatusFailed, reasonMessage, reasonMessage, now, now, agentNodeID,
+	)
+
+	return int(affected), nil
+}
+
 // RetryStaleWorkflowExecutions finds stale workflow executions that haven't exceeded
 // maxRetries and resets both workflow_executions and executions back to "pending"
 // so the paired records stay in sync for the retry path.

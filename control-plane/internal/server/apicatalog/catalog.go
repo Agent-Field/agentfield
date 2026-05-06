@@ -12,7 +12,7 @@ type EndpointEntry struct {
 	Path        string       `json:"path"`
 	Group       string       `json:"group"`
 	Summary     string       `json:"summary"`
-	AuthLevel   string       `json:"auth_level"` // "public", "api_key", "admin", "connector"
+	AuthLevel   string       `json:"auth_level"` // "public", "api_key", "admin", "connector", "webhook"
 	Parameters  []ParamEntry `json:"parameters,omitempty"`
 	RequestBody *BodyEntry   `json:"request_body,omitempty"`
 	Tags        []string     `json:"tags,omitempty"`
@@ -296,6 +296,7 @@ func min3(a, b, c int) int {
 func isAccessible(endpointAuth, callerAuth string) bool {
 	levels := map[string]int{
 		"public":    0,
+		"webhook":   0,
 		"api_key":   1,
 		"admin":     2,
 		"connector": 2,

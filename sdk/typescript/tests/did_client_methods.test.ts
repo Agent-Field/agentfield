@@ -234,6 +234,153 @@ describe('DidClient exported methods', () => {
     });
   });
 
+  it('verifies credentials with the raw verifier payload', async () => {
+    const client = new DidClient('http://localhost:8080', {
+      Authorization: 'Bearer token'
+    });
+    const http = getCreatedClient();
+    http.post.mockResolvedValue({
+      data: {
+        valid: true,
+        issuer_did: 'did:example:issuer',
+        message: 'verified'
+      }
+    });
+
+    const vcDocument = {
+      id: 'urn:agentfield:vc:vc-1',
+      proof: { proofValue: 'embedded-signature' }
+    };
+    const result = await client.verifyCredential(vcDocument);
+
+    expect(http.post).toHaveBeenCalledWith(
+      '/api/v1/did/verify',
+      { vc_document: vcDocument },
+      {
+        headers: {
+          Authorization: 'Bearer token'
+        }
+      }
+    );
+    expect(result).toEqual({
+      valid: true,
+      issuer_did: 'did:example:issuer',
+      message: 'verified'
+    });
+  });
+
+  it('verifies credential without extra headers', async () => {
+    const client = new DidClient('http://localhost:8080');
+    const http = getCreatedClient();
+
+    http.post.mockResolvedValue({
+      data: { valid: true }
+    });
+
+    const vcDocument = { id: 'vc-1' };
+
+    const result = await client.verifyCredential(vcDocument);
+
+    expect(http.post).toHaveBeenCalledWith(
+      '/api/v1/did/verify',
+      { vc_document: vcDocument },
+      { headers: {} }
+    );
+
+    expect(result).toEqual({ valid: true });
+  });
+
+  
+  it('gets the raw workflow VC chain response', async () => {
+    const client = new DidClient('http://localhost:8080');
+    const http = getCreatedClient();
+    http.get.mockResolvedValue({
+      data: {
+        workflow_id: 'wf-1',
+        component_vcs: [
+          {
+            vc_id: 'vc-1',
+            execution_id: 'exec-1'
+          }
+        ],
+        workflow_vc: {
+          workflow_id: 'wf-1',
+          workflow_vc_id: 'wvc-1'
+        },
+        total_steps: 1,
+        status: 'succeeded'
+      }
+    });
+
+    const result = await client.getWorkflowVcChain('wf-1');
+
+    expect(http.get).toHaveBeenCalledWith(
+      '/api/v1/did/workflow/wf-1/vc-chain',
+      expect.objectContaining({ headers: expect.any(Object) })
+    );
+    expect(result).toEqual({
+      workflow_id: 'wf-1',
+      component_vcs: [
+        {
+          vc_id: 'vc-1',
+          execution_id: 'exec-1'
+        }
+      ],
+      workflow_vc: {
+        workflow_id: 'wf-1',
+        workflow_vc_id: 'wvc-1'
+      },
+      total_steps: 1,
+      status: 'succeeded'
+    });
+  });
+
+  it('creates a workflow VC from workflow metadata and execution VC ids', async () => {
+    const client = new DidClient('http://localhost:8080', {
+      Authorization: 'Bearer token'
+    });
+    const http = getCreatedClient();
+    http.post.mockResolvedValue({
+      data: {
+        workflow_id: 'wf-1',
+        session_id: 'sess-1',
+        component_vcs: ['vc-1', 'vc-2'],
+        workflow_vc_id: 'wvc-1',
+        status: 'succeeded',
+        start_time: '2025-01-01T00:00:00Z',
+        end_time: '2025-01-01T00:00:01Z',
+        total_steps: 2,
+        completed_steps: 2
+      }
+    });
+
+    const result = await client.createWorkflowVc('wf-1', 'sess-1', ['vc-1', 'vc-2']);
+
+    expect(http.post).toHaveBeenCalledWith(
+      '/api/v1/did/workflow/wf-1/vc',
+      {
+        session_id: 'sess-1',
+        execution_vc_ids: ['vc-1', 'vc-2']
+      },
+      {
+        headers: {
+          Authorization: 'Bearer token'
+        }
+      }
+    );
+    expect(result).toEqual({
+      workflowId: 'wf-1',
+      sessionId: 'sess-1',
+      componentVcs: ['vc-1', 'vc-2'],
+      workflowVcId: 'wvc-1',
+      status: 'succeeded',
+      startTime: '2025-01-01T00:00:00Z',
+      endTime: '2025-01-01T00:00:01Z',
+      totalSteps: 2,
+      completedSteps: 2
+    });
+  });
+
   it('exports an audit trail with cleaned filters and fallback workflow VC ids', async () => {
     const client = new DidClient('http://localhost:8080');
     const http = getCreatedClient();

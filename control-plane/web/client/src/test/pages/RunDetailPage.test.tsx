@@ -653,7 +653,9 @@ describe("RunDetailPage", () => {
     expect(screen.getByText("Reasoners")).toBeInTheDocument();
     expect(screen.getByText("worker-fallback")).toBeInTheDocument();
     expect(
-      screen.getByText("No outbound webhooks—register a webhook URL on the reasoner to receive callbacks."),
+      screen.getByText(
+        /No outbound webhooks — register a webhook URL on the reasoner to\s+receive callbacks\./,
+      ),
     ).toBeInTheDocument();
   });
 

@@ -511,7 +511,7 @@ describe("WorkflowDAGViewer supplemental coverage", () => {
 
   it("renders the virtualized branch and warns when viewport persistence fails", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const setItemSpy = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    const setItemSpy = vi.spyOn(window.localStorage, "setItem").mockImplementation(() => {
       throw new Error("quota");
     });
     const { WorkflowDAGViewer } = await import("@/components/WorkflowDAG");
@@ -575,5 +575,52 @@ describe("WorkflowDAGViewer supplemental coverage", () => {
 
     warnSpy.mockRestore();
     setItemSpy.mockRestore();
+  });
+
+  it("clears the pending sidebar-close timer when the sidebar is reopened and reclosed, and lets the timer fire safely", async () => {
+    const { WorkflowDAGViewer } = await import("@/components/WorkflowDAG");
+    state.getWorkflowDAG.mockResolvedValue({
+      lightweight: true,
+      workflow_name: "Reopen Workflow",
+      nodes: [
+        {
+          workflow_id: "wf-reopen",
+          execution_id: "exec-reopen",
+          agent_node_id: "agent-reopen",
+          reasoner_id: "task_reopen",
+          status: "succeeded",
+          started_at: "2026-04-09T10:00:00Z",
+          workflow_depth: 1,
+          task_name: "task_reopen",
+          agent_name: "Reopen Agent",
+        },
+      ],
+    });
+
+    const clearSpy = vi.spyOn(globalThis, "clearTimeout");
+    render(<WorkflowDAGViewer workflowId="wf-reopen" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("nodes:1")).toBeInTheDocument();
+    });
+
+    // Open then close — schedules the deferred clear, no prior handle to cancel.
+    fireEvent.click(screen.getByRole("button", { name: "click-node" }));
+    expect(screen.getByText("sidebar:exec-reopen")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "sidebar-close" }));
+
+    // Re-open and close again before the deferred clear fires —
+    // exercises the clearTimeout branch on the prior pending handle.
+    clearSpy.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "click-node" }));
+    expect(screen.getByText("sidebar:exec-reopen")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "sidebar-close" }));
+    expect(clearSpy).toHaveBeenCalled();
+
+    // Let the deferred clear actually run so the setTimeout body executes.
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    expect(screen.getByText("sidebar:closed")).toBeInTheDocument();
+
+    clearSpy.mockRestore();
   });
 });

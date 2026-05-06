@@ -10,6 +10,7 @@ import pytest
 from agentfield.async_config import AsyncConfig
 from agentfield.async_execution_manager import AsyncExecutionManager
 from agentfield.execution_state import ExecutionState, ExecutionStatus
+from agentfield.exceptions import AgentFieldClientError, ExecutionTimeoutError
 
 
 class _DummyTask:
@@ -121,10 +122,10 @@ async def test_wait_for_result_handles_success_failure_cancel_timeout(manager, m
     assert await manager.wait_for_result("success") == {"ok": True}
     manager.result_cache.set_execution_result.assert_called_with("success", {"ok": True})
 
-    with pytest.raises(RuntimeError, match="boom"):
+    with pytest.raises(AgentFieldClientError, match="boom"):
         await manager.wait_for_result("failed")
 
-    with pytest.raises(RuntimeError, match="cancelled"):
+    with pytest.raises(AgentFieldClientError, match="cancelled"):
         await manager.wait_for_result("cancelled")
 
     async def fast_sleep(_seconds):
@@ -139,7 +140,7 @@ async def test_wait_for_result_handles_success_failure_cancel_timeout(manager, m
     monkeypatch.setattr("agentfield.async_execution_manager.asyncio.sleep", fast_sleep)
     monkeypatch.setattr("agentfield.async_execution_manager.time.time", fake_time)
 
-    with pytest.raises(TimeoutError, match="Wait timeout reached"):
+    with pytest.raises(ExecutionTimeoutError, match="Wait timeout reached"):
         await manager.wait_for_result("pending", timeout=0.01)
 
     assert pending.status == ExecutionStatus.TIMEOUT

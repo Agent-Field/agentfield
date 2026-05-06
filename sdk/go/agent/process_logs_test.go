@@ -36,7 +36,7 @@ func decodeProcessLogEntries(t *testing.T, body string) []processLogEntry {
 	return entries
 }
 
-func TestProcessLogHelpersAndRing(t *testing.T) {
+func TestProcessLogs_Ring(t *testing.T) {
 	t.Run("config parsing and auth", func(t *testing.T) {
 		t.Setenv("AGENTFIELD_LOG_BUFFER_BYTES", "invalid")
 		if got := processLogsMaxBytes(); got != 4<<20 {
@@ -127,7 +127,7 @@ func TestProcessLogHelpersAndRing(t *testing.T) {
 	})
 }
 
-func TestHandleAgentfieldLogs(t *testing.T) {
+func TestProcessLogs_Handler(t *testing.T) {
 	t.Run("method not allowed", func(t *testing.T) {
 		t.Setenv("AGENTFIELD_LOGS_ENABLED", "true")
 		req := httptest.NewRequest(http.MethodPost, "/agentfield/v1/logs", nil)
@@ -204,4 +204,59 @@ func TestHandleAgentfieldLogs(t *testing.T) {
 			t.Fatalf("follow entries = %#v", followEntries)
 		}
 	})
+	
+
+t.Run("evicts oldest entries when exceeding maxBytes", func(t *testing.T) {
+	ring := newProcessLogRing(100) // VERY small buffer
+
+	big := strings.Repeat("x", 500) // VERY large lines
+
+	ring.appendLine("stdout", big+"1", false)
+	ring.appendLine("stdout", big+"2", false)
+	ring.appendLine("stdout", big+"3", false)
+
+	entries := ring.tail(10)
+
+	// After eviction, only latest entry should remain
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry after eviction, got %d", len(entries))
+	}
+
+	if !strings.HasSuffix(entries[0].Line, "3") {
+		t.Fatalf("expected latest entry to remain, got %#v", entries)
+	}
+})
+    t.Run("snapshotAfter returns only newer entries", func(t *testing.T) {
+	ring := newProcessLogRing(1024)
+
+	ring.appendLine("stdout", "first", false)
+	ring.appendLine("stdout", "second", false)
+	ring.appendLine("stdout", "third", false)
+
+	entries := ring.snapshotAfter(2, 0)
+
+	if len(entries) != 1 || entries[0].Line != "third" {
+		t.Fatalf("unexpected snapshotAfter result: %#v", entries)
+	}
+   })
+     t.Run("returns NDJSON formatted logs", func(t *testing.T) {
+	t.Setenv("AGENTFIELD_LOGS_ENABLED", "true")
+
+	ring := newProcessLogRing(1024)
+	ring.appendLine("stdout", "hello", false)
+
+	req := httptest.NewRequest(http.MethodGet, "/agentfield/v1/logs", nil)
+	req.Header.Set("Authorization", "Bearer")
+
+	resp := httptest.NewRecorder()
+
+	testAgentWithProcessLogRing(ring).handleAgentfieldLogs(resp, req)
+
+	body := resp.Body.String()
+
+	if !strings.Contains(body, "\n") {
+		t.Fatalf("expected NDJSON format")
+	}
+   })
+	  
 }

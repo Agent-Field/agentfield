@@ -50,6 +50,7 @@ def test_agent_registry_concurrent_set():
     clear_current_agent()
     main_thread_agent = DummyAgent()
     set_current_agent(main_thread_agent)
+    assert get_current_agent_instance() is main_thread_agent
 
     result_queue: "queue.Queue[tuple[str, object]]" = queue.Queue()
     lock = threading.Lock()
@@ -87,6 +88,5 @@ def test_agent_registry_concurrent_set():
     assert thread_results["a"] is not thread_results["b"]
     assert thread_results["a"] is not main_thread_agent
     assert thread_results["b"] is not main_thread_agent
-    assert get_current_agent_instance() is main_thread_agent
 
     clear_current_agent()

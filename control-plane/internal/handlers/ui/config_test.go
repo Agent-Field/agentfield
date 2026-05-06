@@ -567,6 +567,10 @@ func (m *MockStorageProvider) StoreExecutionVC(ctx context.Context, vcID, execut
 	args := m.Called(ctx, vcID, executionID, workflowID, sessionID, issuerDID, targetDID, callerDID, inputHash, outputHash, status, vcDocument, signature)
 	return args.Error(0)
 }
+func (m *MockStorageProvider) StoreExecutionVCRecord(ctx context.Context, vc *types.ExecutionVC) error {
+	args := m.Called(ctx, vc)
+	return args.Error(0)
+}
 
 func (m *MockStorageProvider) GetExecutionVC(ctx context.Context, vcID string) (*types.ExecutionVCInfo, error) {
 	args := m.Called(ctx, vcID)

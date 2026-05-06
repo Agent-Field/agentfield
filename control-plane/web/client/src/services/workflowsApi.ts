@@ -76,6 +76,15 @@ interface WorkflowRunListResponse {
   has_more: boolean;
 }
 
+interface ApiTriggerInfo {
+  trigger_id: string;
+  source_name: string;
+  event_type: string;
+  event_id: string;
+  received_at: string;
+  idempotency_key?: string;
+}
+
 interface ApiWorkflowRunSummary {
   run_id: string;
   workflow_id: string;
@@ -98,6 +107,7 @@ interface ApiWorkflowRunSummary {
   completed_at?: string | null;
   duration_ms?: number | null;
   terminal: boolean;
+  trigger?: ApiTriggerInfo | null;
 }
 
 interface ApiWorkflowExecution {
@@ -229,6 +239,16 @@ function mapApiRunToWorkflowSummary(run: ApiWorkflowRunSummary): WorkflowSummary
     status_counts: statusCounts,
     active_executions: activeExecutions,
     terminal: run.terminal,
+    trigger: run.trigger
+      ? {
+          trigger_id: run.trigger.trigger_id,
+          source_name: run.trigger.source_name,
+          event_type: run.trigger.event_type,
+          event_id: run.trigger.event_id,
+          received_at: run.trigger.received_at,
+          idempotency_key: run.trigger.idempotency_key,
+        }
+      : undefined,
   };
 }
 
