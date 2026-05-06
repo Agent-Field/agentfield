@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  cancelWorkflowTree,
   deleteWorkflow,
   getExecutionViewStats,
   getFilterOptions,
@@ -159,5 +160,55 @@ describe("workflowsApi extras", () => {
     const [deleteUrl, deleteInit] = vi.mocked(globalThis.fetch).mock.calls[2] as [string, RequestInit];
     expect(deleteUrl).toBe("/api/ui/v1/workflows/wf-2/cleanup?confirm=true");
     expect(deleteInit.method).toBe("DELETE");
+  });
+
+  it("posts to cancel-tree with the supplied reason", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        mockResponse(200, {
+          run_id: "run-1",
+          total_nodes: 3,
+          cancelled_count: 2,
+          skipped_count: 1,
+          error_count: 0,
+          nodes: [],
+          cancelled_at: "2026-04-08T12:00:00Z",
+        })
+      );
+    globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
+
+    await expect(cancelWorkflowTree("run-1", "user clicked cancel")).resolves.toMatchObject({
+      run_id: "run-1",
+      cancelled_count: 2,
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/ui/v1/workflows/run-1/cancel-tree");
+    expect(init.method).toBe("POST");
+    const headers = new Headers(init.headers as HeadersInit);
+    expect(headers.get("Content-Type")).toBe("application/json");
+    expect(init.body).toBe(JSON.stringify({ reason: "user clicked cancel" }));
+  });
+
+  it("defaults the reason to empty string when omitted", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        mockResponse(200, {
+          run_id: "run-2",
+          total_nodes: 0,
+          cancelled_count: 0,
+          skipped_count: 0,
+          error_count: 0,
+          nodes: [],
+          cancelled_at: "2026-04-08T12:00:00Z",
+        })
+      );
+    globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
+
+    await cancelWorkflowTree("run-2");
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.body).toBe(JSON.stringify({ reason: "" }));
   });
 });
