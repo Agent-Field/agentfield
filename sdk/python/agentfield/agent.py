@@ -653,6 +653,21 @@ class Agent(FastAPI):
         # prevent GC of fire-and-forget async execution tasks
         self._background_tasks: set[asyncio.Task] = set()
 
+        # Cooperative cancel registry. The control plane's cancel dispatcher
+        # POSTs /_internal/executions/{id}/cancel to signal that the user's
+        # reasoner code should stop. We track the active asyncio.Task per
+        # execution_id so the cancel handler can call task.cancel() — that
+        # raises CancelledError into the user's coroutine, which any
+        # well-behaved async I/O (httpx, anthropic, openai) honors.
+        self._cancel_tasks: Dict[str, asyncio.Task] = {}
+        self._cancel_lock = asyncio.Lock()
+
+        # Install the /_internal/executions/{execution_id}/cancel route
+        # before any user-defined reasoners are registered so the path is
+        # always available for the control-plane callback.
+        from .cancel import install_cancel_route
+        install_cancel_route(self)
+
         # Initialize async execution manager (will be lazily created when needed)
         self._async_execution_manager: Optional[AsyncExecutionManager] = None
 
@@ -1841,6 +1856,12 @@ class Agent(FastAPI):
                     # prevent GC of fire-and-forget tasks
                     self._background_tasks.add(task)
                     task.add_done_callback(self._background_tasks.discard)
+                    # Register so the cancel callback can short-circuit
+                    # the still-running reasoner. The async path's
+                    # execute_async_with_callback handles its own
+                    # cancellation accounting on top of this.
+                    from .cancel import register_execution_task
+                    await register_execution_task(self, execution_id_header, task)
                     return JSONResponse(
                         status_code=202,
                         content={
@@ -1848,6 +1869,32 @@ class Agent(FastAPI):
                             "execution_id": execution_id_header,
                         },
                     )
+
+                # Sync path: wrap the coroutine in a Task so the cancel
+                # callback can call task.cancel() and have CancelledError
+                # propagate into the reasoner. Without this wrapping the
+                # await happens inside the FastAPI request handler frame
+                # directly and there's no Task handle to cancel.
+                if execution_id_header:
+                    from .cancel import (
+                        register_execution_task,
+                        deregister_execution,
+                    )
+                    sync_task = asyncio.create_task(run_reasoner())
+                    await register_execution_task(self, execution_id_header, sync_task)
+                    try:
+                        return await sync_task
+                    except asyncio.CancelledError:
+                        return JSONResponse(
+                            status_code=499,
+                            content={
+                                "status": "cancelled",
+                                "execution_id": execution_id_header,
+                                "reason": "cancelled_by_control_plane",
+                            },
+                        )
+                    finally:
+                        await deregister_execution(self, execution_id_header)
 
                 return await run_reasoner()
 
@@ -2300,6 +2347,20 @@ class Agent(FastAPI):
                 "reasoner": reasoner_name,
             }
             log_error(f"Execution {execution_id} timed out after {reasoner_timeout}s")
+        except asyncio.CancelledError:
+            # Cooperative cancel hit while the reasoner was awaiting.
+            # Report cancelled status so the control-plane sees a clean
+            # terminal transition rather than a generic failure.
+            payload = {
+                "status": "cancelled",
+                "error": "cancelled_by_control_plane",
+                "error_details": {"reason": "cancelled"},
+                "duration_ms": int((time.time() - start_time) * 1000),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "execution_id": execution_id,
+                "reasoner": reasoner_name,
+            }
+            log_info(f"Execution {execution_id} cancelled cooperatively")
         except Exception as exc:
             error_details = getattr(exc, "error_details", None)
             payload = {
@@ -2312,6 +2373,10 @@ class Agent(FastAPI):
                 "reasoner": reasoner_name,
             }
             log_error(f"Execution {execution_id} failed asynchronously: {exc}")
+        finally:
+            # Deregister the cancel hook regardless of outcome.
+            from .cancel import deregister_execution
+            await deregister_execution(self, execution_id)
         await self._post_execution_status(callback_url, payload, execution_id)
 
     async def _post_execution_status(
