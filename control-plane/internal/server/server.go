@@ -457,7 +457,9 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 	triggerHandlers := handlers.NewTriggerHandlers(storageProvider, triggerDispatcher, sourceManager)
 	handlers.SetTriggerSourceManager(sourceManager)
 
-	cancelDispatcher := services.NewCancelDispatcher(storageProvider, services.CancelDispatcherConfig{})
+	cancelDispatcher := services.NewCancelDispatcher(storageProvider, services.CancelDispatcherConfig{
+		InternalToken: cfg.Features.DID.Authorization.InternalToken,
+	})
 
 	return &AgentFieldServer{
 		storage:                storageProvider,

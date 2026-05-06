@@ -38,10 +38,11 @@ import (
 // Missed deliveries fall back to the existing behaviour (in-flight work
 // finishes naturally and its output is discarded).
 type CancelDispatcher struct {
-	store      storage.StorageProvider
-	bus        *events.ExecutionEventBus
-	httpClient *http.Client
-	cancelPath string
+	store         storage.StorageProvider
+	bus           *events.ExecutionEventBus
+	httpClient    *http.Client
+	cancelPath    string
+	internalToken string
 
 	subscriberID string
 
@@ -66,6 +67,10 @@ type CancelDispatcherConfig struct {
 	// SubscriberID identifies this dispatcher's subscription on the bus.
 	// Defaults to "cancel-dispatcher".
 	SubscriberID string
+	// InternalToken is sent as Authorization: Bearer on the cancel
+	// callback so workers running with RequireOriginAuth=true accept it.
+	// Matches the existing reasoner-dispatch auth contract.
+	InternalToken string
 }
 
 // NewCancelDispatcher constructs a dispatcher with sensible defaults.
@@ -87,11 +92,12 @@ func NewCancelDispatcher(store storage.StorageProvider, cfg CancelDispatcherConf
 		subscriberID = "cancel-dispatcher"
 	}
 	return &CancelDispatcher{
-		store:        store,
-		bus:          bus,
-		httpClient:   httpClient,
-		cancelPath:   path,
-		subscriberID: subscriberID,
+		store:         store,
+		bus:           bus,
+		httpClient:    httpClient,
+		cancelPath:    path,
+		subscriberID:  subscriberID,
+		internalToken: cfg.InternalToken,
 	}
 }
 
@@ -203,6 +209,9 @@ func (d *CancelDispatcher) dispatch(ctx context.Context, ev events.ExecutionEven
 	req.Header.Set("X-Execution-ID", executionID)
 	req.Header.Set("X-Workflow-ID", ev.WorkflowID)
 	req.Header.Set("X-AgentField-Source", "cancel-dispatcher")
+	if d.internalToken != "" {
+		req.Header.Set("Authorization", "Bearer "+d.internalToken)
+	}
 
 	resp, err := d.httpClient.Do(req)
 	if err != nil {
