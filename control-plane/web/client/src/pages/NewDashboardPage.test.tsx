@@ -120,7 +120,10 @@ describe("NewDashboardPage", () => {
       data: { endpoints: [{ name: "test-llm", healthy: true }] },
       isLoading: false,
     });
-    vi.mocked(useQueueStatus).mockReturnValue({ data: { agents: {} }, isLoading: false });
+    vi.mocked(useQueueStatus).mockReturnValue({
+      data: { enabled: true, max_per_agent: 3, total_running: 0, agents: [] },
+      isLoading: false,
+    });
     vi.mocked(useAgents).mockReturnValue({
       data: { count: 1, nodes: [{ health_status: "ready" }] },
       isLoading: false,
@@ -186,7 +189,12 @@ describe("NewDashboardPage", () => {
 
   it("renders issues banner for overloaded agent queues", () => {
     vi.mocked(useQueueStatus).mockReturnValue({
-      data: { agents: { "agent-1": { running: 10, max_concurrent: 10 } } },
+      data: {
+        enabled: true,
+        max_per_agent: 10,
+        total_running: 10,
+        agents: [{ agent_node_id: "agent-1", running: 10, max: 10, available: 0 }],
+      },
       isLoading: false,
     });
     vi.mocked(useRuns).mockReturnValue({ isLoading: false, data: { workflows: [], total_count: 0 } });
@@ -195,6 +203,41 @@ describe("NewDashboardPage", () => {
 
     expect(screen.getByText("System issues")).toBeInTheDocument();
     expect(screen.getByText(/Queue at capacity for agent: agent-1/i)).toBeInTheDocument();
+  });
+
+  it("renders queue card disabled state when limiter is off", () => {
+    vi.mocked(useQueueStatus).mockReturnValue({
+      data: {
+        enabled: false,
+        max_per_agent: 0,
+        total_running: 0,
+        agents: [],
+      },
+      isLoading: false,
+    });
+    vi.mocked(useRuns).mockReturnValue({ isLoading: false, data: { workflows: [], total_count: 0 } });
+
+    render(<NewDashboardPage />, { wrapper });
+
+    expect(screen.getByText("Queue concurrency")).toBeInTheDocument();
+    expect(screen.getByText("Concurrency limiter is disabled.")).toBeInTheDocument();
+  });
+
+  it("computes total running from agents when API omits total_running", () => {
+    vi.mocked(useQueueStatus).mockReturnValue({
+      data: {
+        enabled: true,
+        max_per_agent: 3,
+        agents: [{ agent_node_id: "agent-fallback", running: 2, max: 3, available: 1 }],
+      },
+      isLoading: false,
+    });
+    vi.mocked(useRuns).mockReturnValue({ isLoading: false, data: { workflows: [], total_count: 0 } });
+
+    render(<NewDashboardPage />, { wrapper });
+
+    expect(screen.getByText("2 running")).toBeInTheDocument();
+    expect(screen.getByText("Max concurrency per agent: 3")).toBeInTheDocument();
   });
   
   it("renders failures attention card with failed runs", () => {

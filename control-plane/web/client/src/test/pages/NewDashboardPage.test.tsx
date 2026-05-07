@@ -25,7 +25,17 @@ const pageState = vi.hoisted(() => ({
     data: { endpoints: [] as Array<{ name: string; healthy: boolean }> },
   },
   queueResult: {
-    data: { agents: {} as Record<string, { running: number; max_concurrent: number }> },
+    data: {
+      enabled: true,
+      max_per_agent: 3,
+      total_running: 0,
+      agents: [] as Array<{
+        agent_node_id: string;
+        running: number;
+        max: number;
+        available: number;
+      }>,
+    },
   },
   agentsResult: {
     isLoading: false,
@@ -174,7 +184,12 @@ describe("NewDashboardPage", () => {
       data: { endpoints: [{ name: "primary-llm", healthy: false }] },
     };
     pageState.queueResult = {
-      data: { agents: { "agent-1": { running: 2, max_concurrent: 2 } } },
+      data: {
+        enabled: true,
+        max_per_agent: 2,
+        total_running: 2,
+        agents: [{ agent_node_id: "agent-1", running: 2, max: 2, available: 0 }],
+      },
     };
     pageState.agentsResult = {
       isLoading: false,
@@ -196,6 +211,9 @@ describe("NewDashboardPage", () => {
     expect(screen.getByText(/LLM circuit OPEN on endpoint: primary-llm/)).toBeInTheDocument();
     expect(screen.getByText(/Queue at capacity for agent: agent-1/)).toBeInTheDocument();
     expect(screen.getByText("Active runs")).toBeInTheDocument();
+    expect(screen.getByText("Queue concurrency")).toBeInTheDocument();
+    expect(screen.getByText("agent-1")).toBeInTheDocument();
+    expect(screen.getByText("0 slots available · at capacity")).toBeInTheDocument();
     expect(screen.getByText("Needs attention")).toBeInTheDocument();
     expect(screen.getByText("Run timeline")).toBeInTheDocument();
     expect(screen.getByText("Active by reasoner")).toBeInTheDocument();
@@ -226,7 +244,7 @@ describe("NewDashboardPage", () => {
       data: { endpoints: [] },
     };
     pageState.queueResult = {
-      data: { agents: {} },
+      data: { enabled: true, max_per_agent: 3, total_running: 0, agents: [] },
     };
 
     render(<NewDashboardPage />);
