@@ -149,6 +149,88 @@ func TestQueryRunSummariesSearchFilter(t *testing.T) {
 	require.Empty(t, got)
 }
 
+func TestQueryRunSummariesIncludesRootErrorFields(t *testing.T) {
+	ls, ctx := setupLocalStorage(t)
+
+	runID := "run-root-error-fields"
+	base := time.Date(2024, 2, 10, 9, 0, 0, 0, time.UTC)
+	rootCategory := "concurrency_limit"
+	rootMessage := "agent test-slow has reached max concurrent executions (3)"
+	rootExecutionID := "exec-root"
+
+	root := &types.Execution{
+		ExecutionID: rootExecutionID,
+		RunID:       runID,
+		AgentNodeID: "test-slow",
+		ReasonerID:  "slow_task",
+		NodeID:      "node-root",
+		Status:      string(types.ExecutionStatusFailed),
+		StatusReason: &rootCategory,
+		ErrorMessage: &rootMessage,
+		StartedAt:   base,
+		CreatedAt:   base,
+		UpdatedAt:   base,
+	}
+	child := &types.Execution{
+		ExecutionID:       "exec-child",
+		RunID:             runID,
+		ParentExecutionID: &rootExecutionID,
+		AgentNodeID:       "test-slow",
+		ReasonerID:        "child_task",
+		NodeID:            "node-child",
+		Status:            string(types.ExecutionStatusFailed),
+		StartedAt:         base.Add(1 * time.Second),
+		CreatedAt:         base.Add(1 * time.Second),
+		UpdatedAt:         base.Add(1 * time.Second),
+	}
+
+	require.NoError(t, ls.CreateExecutionRecord(ctx, root))
+	require.NoError(t, ls.CreateExecutionRecord(ctx, child))
+
+	results, total, err := ls.QueryRunSummaries(ctx, types.ExecutionFilter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Len(t, results, 1)
+	require.Equal(t, runID, results[0].RunID)
+	require.NotNil(t, results[0].RootErrorCategory)
+	require.Equal(t, rootCategory, *results[0].RootErrorCategory)
+	require.NotNil(t, results[0].RootErrorMessage)
+	require.Equal(t, rootMessage, *results[0].RootErrorMessage)
+}
+
+func TestGetRunAggregationIncludesRootErrorFields(t *testing.T) {
+	ls, ctx := setupLocalStorage(t)
+
+	runID := "run-root-error-get-aggregation"
+	base := time.Date(2024, 2, 10, 10, 0, 0, 0, time.UTC)
+	rootCategory := "concurrency_limit"
+	rootMessage := "agent test-slow has reached max concurrent executions (3)"
+
+	root := &types.Execution{
+		ExecutionID:  "exec-root",
+		RunID:        runID,
+		AgentNodeID:  "test-slow",
+		ReasonerID:   "slow_task",
+		NodeID:       "node-root",
+		Status:       string(types.ExecutionStatusFailed),
+		StatusReason: &rootCategory,
+		ErrorMessage: &rootMessage,
+		StartedAt:    base,
+		CreatedAt:    base,
+		UpdatedAt:    base,
+	}
+
+	require.NoError(t, ls.CreateExecutionRecord(ctx, root))
+
+	agg, err := ls.getRunAggregation(ctx, runID)
+	require.NoError(t, err)
+	require.NotNil(t, agg)
+	require.NotNil(t, agg.RootErrorCategory)
+	require.Equal(t, rootCategory, *agg.RootErrorCategory)
+	require.NotNil(t, agg.RootErrorMessage)
+	require.Equal(t, rootMessage, *agg.RootErrorMessage)
+}
+
 func pointerTime(t time.Time) *time.Time {
 	return &t
 }

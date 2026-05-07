@@ -15,6 +15,8 @@ func TestConvertAggregationToSummary(t *testing.T) {
 	rootExecutionID := "exec-root"
 	rootReasonerID := "planner"
 	rootAgentID := "agent-alpha"
+	rootErrorCategory := "concurrency_limit"
+	rootErrorMessage := "agent is at max concurrent executions"
 	sessionID := "session-1"
 	actorID := "actor-1"
 
@@ -23,6 +25,8 @@ func TestConvertAggregationToSummary(t *testing.T) {
 		RootExecutionID:  &rootExecutionID,
 		RootReasonerID:   &rootReasonerID,
 		RootAgentNodeID:  &rootAgentID,
+		RootErrorCategory: &rootErrorCategory,
+		RootErrorMessage:  &rootErrorMessage,
 		SessionID:        &sessionID,
 		ActorID:          &actorID,
 		StatusCounts:     map[string]int{string(types.ExecutionStatusSucceeded): 3},
@@ -37,6 +41,8 @@ func TestConvertAggregationToSummary(t *testing.T) {
 	require.Equal(t, "run-1", summary.WorkflowID)
 	require.Equal(t, "run-1", summary.RunID)
 	require.Equal(t, "exec-root", summary.RootExecutionID)
+	require.Equal(t, rootErrorCategory, summary.RootErrorCategory)
+	require.Equal(t, rootErrorMessage, summary.RootErrorMessage)
 	require.Equal(t, "planner", summary.DisplayName)
 	require.Equal(t, "planner", summary.RootReasoner)
 	require.Equal(t, "planner", summary.CurrentTask)
