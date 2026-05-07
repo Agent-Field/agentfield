@@ -41,6 +41,8 @@ async def test_opencode_provider_constructs_command_and_maps_result(
     assert captured["cmd"] == [
         "/usr/local/bin/opencode",
         "run",
+        "--format",
+        "json",
         "--dir",
         "/tmp/work",
         "--dangerously-skip-permissions",
@@ -123,6 +125,8 @@ async def test_opencode_passes_model_flag(monkeypatch: pytest.MonkeyPatch):
     assert captured["cmd"] == [
         "opencode",
         "run",
+        "--format",
+        "json",
         "-m",
         "openai/gpt-5",
         "--dangerously-skip-permissions",
@@ -326,6 +330,8 @@ async def test_opencode_v14_cli_shape_no_deprecated_flags(
     cmd_str = " ".join(captured_cmd)
     # Must use `run` subcommand
     assert captured_cmd[1] == "run", "Must use 'opencode run' subcommand (v1.4+)"
+    assert "--format" in captured_cmd, "Must request JSON stream for metrics parsing"
+    assert "json" in captured_cmd, "Must request JSON output format"
     # Must NOT use deprecated -p flag
     assert "-p" not in captured_cmd, "Must not use deprecated -p flag (v1.4+)"
     # Must NOT use deprecated -c flag (now means --continue)
@@ -338,3 +344,33 @@ async def test_opencode_v14_cli_shape_no_deprecated_flags(
     assert "--dangerously-skip-permissions" in cmd_str
     # Prompt must be positional (last arg)
     assert captured_cmd[-1] == "build the feature"
+
+
+@pytest.mark.asyncio
+async def test_opencode_num_turns_counts_step_start_events(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Regression test for issue #518: count actual opencode steps as turns."""
+    stdout = "\n".join(
+        [
+            '{"type":"step_start","step":1}',
+            '{"type":"tool_use","name":"read"}',
+            '{"type":"step_start","step":2}',
+            '{"type":"tool_use","name":"edit"}',
+            '{"type":"step_start","step":3}',
+            '{"type":"result","result":"final text"}',
+        ]
+    )
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+        _ = (cmd, env, cwd, timeout)
+        return stdout, "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
+
+    provider = OpenCodeProvider()
+    raw = await provider.execute("hello", {})
+
+    assert raw.is_error is False
+    assert raw.result == "final text"
+    assert raw.metrics.num_turns == 3
