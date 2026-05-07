@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   ArrowDown,
   ArrowLeftRight,
@@ -104,6 +104,7 @@ import {
   hasMeaningfulPayload,
   shortRunIdDisplay,
 } from "@/pages/runsPageUtils";
+import { getExecutionErrorCategoryMeta } from "@/utils/executionErrorCategory";
 
 // ─── module-level singletons ──────────────────────────────────────────────────
 
@@ -1031,7 +1032,7 @@ export function RunsPage() {
                 />
               </TableHead>
               {/* Status first — most scannable */}
-              <TableHead className="h-8 px-3 w-24"><SortableHeaderCell field="status" label="Status" sortBy={sortBy} sortOrder={sortOrder as "asc" | "desc"} onSortChange={handleSortClick} /></TableHead>
+              <TableHead className="h-8 px-3 w-44 min-w-[11rem]"><SortableHeaderCell field="status" label="Status" sortBy={sortBy} sortOrder={sortOrder as "asc" | "desc"} onSortChange={handleSortClick} /></TableHead>
               {/* Target + short run id (full id via copy) */}
               <TableHead
                 className="h-8 px-3 text-micro-plus font-medium text-muted-foreground min-w-0"
@@ -1588,6 +1589,10 @@ function RunRow({
   const agentLabel = run.agent_id || run.agent_name || "";
   const reasonerLabel = run.root_reasoner || run.display_name || "—";
   const [copied, setCopied] = useState(false);
+  const errorMeta =
+    (run.root_execution_status ?? run.status) === "failed"
+      ? getExecutionErrorCategoryMeta(run.root_error_category)
+      : null;
 
   return (
     <TableRow
@@ -1612,8 +1617,32 @@ function RunRow({
       </TableCell>
       {/* Status dot — prefer the root execution status so pause/cancel are
           reflected immediately, even when stragglers are still in-flight */}
-      <TableCell className="w-24">
-        <StatusDot status={run.root_execution_status ?? run.status} />
+      <TableCell className="w-44 min-w-[11rem]">
+        <div className="flex flex-col items-start gap-1">
+          <StatusDot status={run.root_execution_status ?? run.status} />
+          {errorMeta ? (
+            <div className="flex max-w-full flex-wrap items-center gap-1">
+              <span
+                className={cn(
+                  badgeVariants({ variant: "outline", size: "sm" }),
+                  "h-5 max-w-full px-1.5 text-micro-plus capitalize",
+                  errorMeta.badgeClassName,
+                )}
+              >
+                {errorMeta.label}
+              </span>
+              {errorMeta.diagnosticsLabel && errorMeta.diagnosticsPath ? (
+                <Link
+                  to={errorMeta.diagnosticsPath}
+                  className="text-micro-plus text-sky-600 underline-offset-2 hover:underline dark:text-sky-400"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {errorMeta.diagnosticsLabel}
+                </Link>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       </TableCell>
       {/* Target name, then inline copy-chip for run id (no sub-column) */}
       <TableCell

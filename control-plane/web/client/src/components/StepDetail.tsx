@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { useStepDetail } from "@/hooks/queries";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
@@ -36,6 +37,7 @@ import { retryExecutionWebhook } from "@/services/executionsApi";
 import { formatDuration } from "./RunTrace";
 import { JsonHighlightedPre } from "@/components/ui/json-syntax-highlight";
 import { StepProvenanceCard } from "@/components/StepProvenanceCard";
+import { getExecutionErrorCategoryMeta } from "@/utils/executionErrorCategory";
 
 // ─── cURL snippet: copy + minimal info (hover) ────────────────────────────────
 
@@ -229,6 +231,7 @@ export function StepDetail({ executionId }: { executionId: string }) {
   }
 
   const hasError = Boolean(execution.error_message);
+  const errorCategoryMeta = getExecutionErrorCategoryMeta(execution.error_category);
   const hasOutput = execution.output_data != null;
   const hasInput = execution.input_data != null;
   const notes = execution.notes ?? [];
@@ -383,6 +386,30 @@ export function StepDetail({ executionId }: { executionId: string }) {
         {hasError ? (
           <div className="rounded-md bg-destructive/10 border border-destructive/20 p-3">
             <p className="text-xs font-medium text-destructive">Error</p>
+            {errorCategoryMeta ? (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "h-5 px-1.5 text-micro-plus capitalize",
+                    errorCategoryMeta.badgeClassName,
+                  )}
+                >
+                  {errorCategoryMeta.label}
+                </Badge>
+                <span className="text-xs text-muted-foreground">
+                  {errorCategoryMeta.description}
+                </span>
+                {errorCategoryMeta.diagnosticsLabel && errorCategoryMeta.diagnosticsPath ? (
+                  <Link
+                    to={errorCategoryMeta.diagnosticsPath}
+                    className="text-xs text-sky-600 underline-offset-2 hover:underline dark:text-sky-400"
+                  >
+                    Open {errorCategoryMeta.diagnosticsLabel}
+                  </Link>
+                ) : null}
+              </div>
+            ) : null}
             <p className="text-xs mt-1 font-mono whitespace-pre-wrap break-all">
               {execution.error_message}
             </p>

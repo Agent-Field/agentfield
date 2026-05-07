@@ -19,6 +19,8 @@ type RunSummaryAggregation struct {
 	LatestStarted    time.Time
 	RootExecutionID  *string
 	RootStatus       *string
+	RootErrorCategory *string
+	RootErrorMessage  *string
 	RootAgentNodeID  *string
 	RootReasonerID   *string
 	SessionID        *string

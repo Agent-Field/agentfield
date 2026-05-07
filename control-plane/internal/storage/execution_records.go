@@ -437,6 +437,8 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 			SUM(CASE WHEN LOWER(status) IN ('running','pending','queued','waiting') THEN 1 ELSE 0 END) AS active_executions,
 			MAX(CASE WHEN parent_execution_id IS NULL OR parent_execution_id = '' THEN execution_id END) AS root_execution_id,
 			MAX(CASE WHEN parent_execution_id IS NULL OR parent_execution_id = '' THEN status END) AS root_status,
+			MAX(CASE WHEN parent_execution_id IS NULL OR parent_execution_id = '' THEN status_reason END) AS root_error_category,
+			MAX(CASE WHEN parent_execution_id IS NULL OR parent_execution_id = '' THEN error_message END) AS root_error_message,
 			MAX(CASE WHEN parent_execution_id IS NULL OR parent_execution_id = '' THEN agent_node_id END) AS root_agent_node_id,
 			MAX(CASE WHEN parent_execution_id IS NULL OR parent_execution_id = '' THEN reasoner_id END) AS root_reasoner_id,
 			MAX(session_id) AS session_id,
@@ -487,6 +489,8 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 			activeExecutions   int
 			rootExecutionID    sql.NullString
 			rootStatus         sql.NullString
+			rootErrorCategory  sql.NullString
+			rootErrorMessage   sql.NullString
 			rootAgentNodeID    sql.NullString
 			rootReasonerID     sql.NullString
 			sessionID          sql.NullString
@@ -511,6 +515,8 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 			&activeExecutions,
 			&rootExecutionID,
 			&rootStatus,
+			&rootErrorCategory,
+			&rootErrorMessage,
 			&rootAgentNodeID,
 			&rootReasonerID,
 			&sessionID,
@@ -564,6 +570,12 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 		if rootStatus.Valid && rootStatus.String != "" {
 			normalized := types.NormalizeExecutionStatus(rootStatus.String)
 			summary.RootStatus = &normalized
+		}
+		if rootErrorCategory.Valid && rootErrorCategory.String != "" {
+			summary.RootErrorCategory = &rootErrorCategory.String
+		}
+		if rootErrorMessage.Valid && rootErrorMessage.String != "" {
+			summary.RootErrorMessage = &rootErrorMessage.String
 		}
 		if rootAgentNodeID.Valid && rootAgentNodeID.String != "" {
 			summary.RootAgentNodeID = &rootAgentNodeID.String
@@ -744,17 +756,19 @@ func (ls *LocalStorage) getRunAggregation(ctx context.Context, runID string) (*R
 
 	// Query 3: Get root execution info (execution with no parent)
 	rootQuery := `
-		SELECT execution_id, status, agent_node_id, reasoner_id, session_id, actor_id
+		SELECT execution_id, status, status_reason, error_message, agent_node_id, reasoner_id, session_id, actor_id
 		FROM executions
 		WHERE run_id = ? AND (parent_execution_id IS NULL OR parent_execution_id = '')
 		ORDER BY started_at ASC
 		LIMIT 1`
 
-	var rootExecID, rootStatus, rootAgentNodeID, rootReasonerID sql.NullString
+	var rootExecID, rootStatus, rootErrorCategory, rootErrorMessage, rootAgentNodeID, rootReasonerID sql.NullString
 	var sessionID, actorID sql.NullString
 	err = db.QueryRowContext(ctx, rootQuery, runID).Scan(
 		&rootExecID,
 		&rootStatus,
+		&rootErrorCategory,
+		&rootErrorMessage,
 		&rootAgentNodeID,
 		&rootReasonerID,
 		&sessionID,
@@ -770,6 +784,12 @@ func (ls *LocalStorage) getRunAggregation(ctx context.Context, runID string) (*R
 	if rootStatus.Valid && rootStatus.String != "" {
 		normalized := types.NormalizeExecutionStatus(rootStatus.String)
 		summary.RootStatus = &normalized
+	}
+	if rootErrorCategory.Valid && rootErrorCategory.String != "" {
+		summary.RootErrorCategory = &rootErrorCategory.String
+	}
+	if rootErrorMessage.Valid && rootErrorMessage.String != "" {
+		summary.RootErrorMessage = &rootErrorMessage.String
 	}
 	if rootAgentNodeID.Valid {
 		summary.RootAgentNodeID = &rootAgentNodeID.String

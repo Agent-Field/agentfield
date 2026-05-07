@@ -14,6 +14,7 @@ export interface ExecutionSummary {
   input_size: number;
   output_size: number;
   error_message?: string;
+  error_category?: string;
   created_at: string;
   // Computed fields for frontend compatibility
   started_at?: string;
@@ -149,6 +150,7 @@ export interface WorkflowExecution {
   completed_at?: string;
   duration_ms?: number;
   error_message?: string;
+  error_category?: string;
   retry_count: number;
   approval_request_id?: string;
   approval_request_url?: string;

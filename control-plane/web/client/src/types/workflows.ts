@@ -16,6 +16,8 @@ export interface WorkflowSummary {
   run_id: string;
   workflow_id: string;
   root_execution_id?: string;
+  root_error_category?: string;
+  root_error_message?: string;
   /**
    * Status of the root execution row, which is the unit the user actually
    * controls via Pause/Resume/Cancel. The aggregate `status` field can
@@ -140,6 +142,7 @@ export interface WorkflowDAGLightweightNode {
   agent_node_id: string;
   reasoner_id: string;
   status: string;
+  status_reason?: string;
   started_at: string;
   completed_at?: string;
   duration_ms?: number;

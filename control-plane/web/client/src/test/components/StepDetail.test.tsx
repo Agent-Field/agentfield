@@ -18,6 +18,18 @@ vi.mock("@tanstack/react-query", () => ({
   }),
 }));
 
+vi.mock("react-router-dom", () => ({
+  Link: ({
+    to,
+    children,
+    ...props
+  }: React.PropsWithChildren<{ to: string } & React.AnchorHTMLAttributes<HTMLAnchorElement>>) => (
+    <a href={to} {...props}>
+      {children}
+    </a>
+  ),
+}));
+
 vi.mock("@/hooks/queries", () => ({
   useStepDetail: (executionId: string) => state.useStepDetail(executionId),
 }));
@@ -307,6 +319,22 @@ describe("StepDetail", () => {
     expect(screen.getByText("Error")).toBeInTheDocument();
     expect(screen.getByText("boom")).toBeInTheDocument();
     expect(screen.queryByLabelText("Copy output JSON")).not.toBeInTheDocument();
+  });
+
+  it("shows error category guidance and diagnostics links", () => {
+    state.useStepDetail.mockReturnValue({
+      data: buildExecution({
+        error_message: "provider down",
+        error_category: "llm_unavailable",
+      }),
+      isLoading: false,
+    });
+
+    render(<StepDetail executionId="exec-1" />);
+
+    expect(screen.getByText("LLM unavailable")).toBeInTheDocument();
+    expect(screen.getByText("LLM backend circuit breaker is open.")).toBeInTheDocument();
+    expect(screen.getByText("Open LLM health")).toHaveAttribute("href", "/dashboard");
   });
 
   it("renders Input and Output above Provenance (issue #526)", () => {

@@ -198,6 +198,7 @@ function transformExecutionDetailsResponse(raw: any): WorkflowExecution {
     duration_ms:
       typeof raw.duration_ms === "number" ? raw.duration_ms : undefined,
     error_message: raw.error_message ?? undefined,
+    error_category: raw.error_category ?? raw.status_reason ?? undefined,
     retry_count: typeof raw.retry_count === "number" ? raw.retry_count : 0,
     approval_request_id: raw.approval_request_id ?? undefined,
     approval_request_url: raw.approval_request_url ?? undefined,
