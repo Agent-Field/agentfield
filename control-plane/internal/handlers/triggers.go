@@ -168,7 +168,9 @@ func (h *TriggerHandlers) IngestSourceHandler() gin.HandlerFunc {
 			}
 			persisted++
 			// Async dispatch — provider has waited long enough.
-			go h.dispatcher.DispatchEvent(context.Background(), trig, stored)
+			if h.dispatcher != nil {
+				go h.dispatcher.DispatchEvent(context.Background(), trig, stored)
+			}
 		}
 
 		// Status string is structured so operators don't need to parse
@@ -647,7 +649,9 @@ func (h *TriggerHandlers) ReplayEvent() gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		go h.dispatcher.DispatchEvent(context.Background(), trig, replayed)
+		if h.dispatcher != nil {
+			go h.dispatcher.DispatchEvent(context.Background(), trig, replayed)
+		}
 		c.JSON(http.StatusAccepted, gin.H{
 			"event_id":  replayed.ID,
 			"replay_of": ev.ID,
@@ -841,7 +845,9 @@ func (h *TriggerHandlers) TestTrigger() gin.HandlerFunc {
 		}
 
 		// Dispatch asynchronously
-		go h.dispatcher.DispatchEvent(context.Background(), trig, syntheticEvent)
+		if h.dispatcher != nil {
+			go h.dispatcher.DispatchEvent(context.Background(), trig, syntheticEvent)
+		}
 
 		c.JSON(http.StatusAccepted, gin.H{
 			"event_id": syntheticEvent.ID,
