@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.78-rc.3] - 2026-05-07
+
+
+### Other
+
+- Feat/UI error category 325 (#548)
+
+* fix(sdk-python): count opencode turns from JSON step events
+
+* fix(sdk-python): parse opencode JSON text events for final output
+
+* feat(ui): surface per-agent queue concurrency and capacity status
+
+* feat(ui): Added error-category badges, human-readable guidance, and diagnostics links for failed executions.
+
+* feat(ui): show error_category with diagnostics on failed executions
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (856d40c)
+
 ## [0.1.78-rc.2] - 2026-05-07
 
 
