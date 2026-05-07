@@ -234,7 +234,12 @@ describe("trigger management pages", () => {
     expect(await screen.findByText("Public ingest URL")).toBeInTheDocument();
     expect(screen.getAllByText("checkout.session.completed").length).toBeGreaterThan(0);
 
-    const eventToggle = screen.getByRole("button", {
+    // The events list is fetched asynchronously after the sheet opens
+    // (TriggerSheet useEffect → refreshEvents). Under CI load the fetch
+    // hasn't resolved when the next assertion runs, so the EventRow
+    // button hasn't mounted yet — use findByRole to wait for it instead
+    // of getByRole, which races and flakes.
+    const eventToggle = await screen.findByRole("button", {
       name: /checkout\.session\.completed/i,
     });
     fireEvent.click(eventToggle);
