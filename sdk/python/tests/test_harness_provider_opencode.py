@@ -157,6 +157,39 @@ async def test_opencode_cost_flows_through_metrics(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.asyncio
+async def test_opencode_cost_prefers_stream_cost_when_present(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """OpenCode JSON streams report per-step cost on step_finish.part.cost."""
+    stdout = "\n".join(
+        [
+            '{"type":"step_start","step":1}',
+            '{"type":"step_finish","part":{"type":"step-finish","cost":0.0012}}',
+            '{"type":"step_start","step":2}',
+            '{"type":"text","part":{"type":"text","text":"done"}}',
+            '{"type":"step_finish","part":{"type":"step-finish","cost":0.0023}}',
+        ]
+    )
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+        _ = (cmd, env, cwd, timeout)
+        return stdout, "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
+
+    with patch(
+        "agentfield.harness.providers.opencode.estimate_cli_cost", return_value=99.0
+    ):
+        provider = OpenCodeProvider()
+        raw = await provider.execute("hello", {"model": "openai/gpt-4o"})
+
+    assert raw.is_error is False
+    assert raw.result == "done"
+    assert raw.metrics.num_turns == 2
+    assert raw.metrics.total_cost_usd == pytest.approx(0.0035)
+
+
+@pytest.mark.asyncio
 async def test_opencode_cost_none_without_model(monkeypatch: pytest.MonkeyPatch):
     """Without a model, cost estimation returns None (not 0)."""
 
@@ -280,6 +313,33 @@ async def test_opencode_exit0_with_only_migration_stderr_is_success(
 
 
 @pytest.mark.asyncio
+async def test_opencode_exit0_with_json_error_event_is_treated_as_failure(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """OpenCode may report failures via JSON events with clean stderr/exit code."""
+    stdout = "\n".join(
+        [
+            '{"type":"step_start","step":1}',
+            '{"type":"error","message":"AuthenticationError: bad key"}',
+        ]
+    )
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+        _ = (cmd, env, cwd, timeout)
+        return stdout, "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
+
+    provider = OpenCodeProvider()
+    raw = await provider.execute("hello", {})
+
+    assert raw.is_error is True
+    assert raw.result is None
+    assert raw.error_message is not None
+    assert "AuthenticationError" in raw.error_message
+
+
+@pytest.mark.asyncio
 async def test_opencode_exit_nonzero_uses_extracted_error_not_truncated_prelude(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -374,3 +434,58 @@ async def test_opencode_num_turns_counts_step_start_events(
     assert raw.is_error is False
     assert raw.result == "final text"
     assert raw.metrics.num_turns == 3
+
+
+@pytest.mark.asyncio
+async def test_opencode_extracts_result_from_text_events(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """OpenCode JSON streams emit assistant output as type='text' with part.text."""
+    stdout = "\n".join(
+        [
+            '{"type":"step_start","step":1}',
+            '{"type":"text","part":{"type":"text","text":"draft"}}',
+            '{"type":"step_start","step":2}',
+            '{"type":"text","part":{"type":"text","text":"final answer"}}',
+        ]
+    )
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+        _ = (cmd, env, cwd, timeout)
+        return stdout, "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
+
+    provider = OpenCodeProvider()
+    raw = await provider.execute("hello", {})
+
+    assert raw.is_error is False
+    assert raw.result == "final answer"
+    assert raw.metrics.num_turns == 2
+
+
+@pytest.mark.asyncio
+async def test_opencode_accumulates_multiple_text_parts(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """OpenCode may emit multiple text parts for one final assistant answer."""
+    stdout = "\n".join(
+        [
+            '{"type":"step_start","step":1}',
+            '{"type":"text","part":{"type":"text","text":"first "}}',
+            '{"type":"text","part":{"type":"text","text":"second"}}',
+        ]
+    )
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+        _ = (cmd, env, cwd, timeout)
+        return stdout, "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
+
+    provider = OpenCodeProvider()
+    raw = await provider.execute("hello", {})
+
+    assert raw.is_error is False
+    assert raw.result == "first second"
+    assert raw.metrics.num_turns == 1
