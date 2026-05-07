@@ -11,7 +11,13 @@ import tempfile
 import time
 from typing import ClassVar, Dict, Optional
 
-from agentfield.harness._cli import estimate_cli_cost, run_cli, strip_ansi
+from agentfield.harness._cli import (
+    estimate_cli_cost,
+    extract_final_text,
+    parse_jsonl,
+    run_cli,
+    strip_ansi,
+)
 from agentfield.harness._result import FailureType, Metrics, RawResult
 
 logger = logging.getLogger("agentfield.harness.opencode")
@@ -27,6 +33,62 @@ _OPENCODE_STDERR_ERROR_PATTERNS = (
     re.compile(r"\bUnauthorized\b"),
     re.compile(r"\bAPIError\b"),
 )
+
+
+def _count_turns_from_events(events: list[dict[str, object]]) -> int:
+    """Count opencode turns from JSON events.
+
+    Preferred definition is one turn per ``step_start`` event. If a stream
+    has no step markers, fall back to counting ``tool_use`` events.
+    """
+    step_starts = sum(1 for event in events if event.get("type") == "step_start")
+    if step_starts > 0:
+        return step_starts
+
+    tool_uses = sum(1 for event in events if event.get("type") == "tool_use")
+    return tool_uses
+
+
+def _cost_from_events(events: list[dict[str, object]]) -> float | None:
+    """Sum opencode per-step costs when present in the JSON stream."""
+    total_cost = 0.0
+    found_cost = False
+
+    for event in events:
+        if event.get("type") != "step_finish":
+            continue
+        part = event.get("part")
+        if not isinstance(part, dict):
+            continue
+        cost = part.get("cost")
+        if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+            total_cost += float(cost)
+            found_cost = True
+
+    return total_cost if found_cost else None
+
+
+def _extract_opencode_event_error(events: list[dict[str, object]]) -> str | None:
+    """Pull a meaningful failure message from an in-band JSON error event."""
+    for event in events:
+        if event.get("type") != "error":
+            continue
+
+        for key in ("message", "error", "text"):
+            value = event.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()[:1000]
+
+        part = event.get("part")
+        if isinstance(part, dict):
+            for key in ("message", "error", "text"):
+                value = part.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()[:1000]
+
+        return str(event)[:1000]
+
+    return None
 
 
 def _extract_opencode_error(stderr: str) -> str:
@@ -88,6 +150,7 @@ class OpenCodeProvider:
     async def _execute_impl(self, prompt: str, options: dict[str, object]) -> RawResult:
         # opencode v1.4+ uses the `run` subcommand (replaces deprecated -p/-c flags)
         cmd = [self._bin, "run"]
+        cmd.extend(["--format", "json"])
 
         # Use --dir for project directory (replaces deprecated -c which now means --continue)
         cwd_value = options.get("cwd")
@@ -194,7 +257,12 @@ class OpenCodeProvider:
                 shutil.rmtree(temp_data_dir, ignore_errors=True)
 
         api_ms = int((time.monotonic() - start_api) * 1000)
-        result_text = stdout.strip() if stdout.strip() else None
+        events = parse_jsonl(stdout)
+        if events:
+            result_text = extract_final_text(events)
+        else:
+            result_text = stdout.strip() if stdout.strip() else None
+        event_error = _extract_opencode_event_error(events)
         clean_stderr = strip_ansi(stderr.strip()) if stderr else ""
 
         logger.info(
@@ -223,6 +291,13 @@ class OpenCodeProvider:
                 else (f"Process exited with code {returncode} and produced no output.")
             )
         elif (
+            event_error is not None
+            and result_text is None
+        ):
+            failure_type = FailureType.CRASH
+            is_error = True
+            error_message = event_error
+        elif (
             result_text is None
             and clean_stderr
             and any(pat.search(clean_stderr) for pat in _OPENCODE_STDERR_ERROR_PATTERNS)
@@ -239,18 +314,26 @@ class OpenCodeProvider:
             is_error = False
             error_message = None
 
-        estimated_cost = estimate_cli_cost(
-            model=str(options.get("model", "")),
-            prompt=effective_prompt,
-            result_text=result_text,
-        )
+        stream_cost = _cost_from_events(events)
+        if stream_cost is not None:
+            estimated_cost = stream_cost
+        else:
+            estimated_cost = estimate_cli_cost(
+                model=str(options.get("model", "")),
+                prompt=effective_prompt,
+                result_text=result_text,
+            )
+
+        num_turns = _count_turns_from_events(events)
+        if num_turns == 0 and result_text:
+            num_turns = 1
 
         return RawResult(
             result=result_text,
-            messages=[],
+            messages=events,
             metrics=Metrics(
                 duration_api_ms=api_ms,
-                num_turns=1 if result_text else 0,
+                num_turns=num_turns,
                 total_cost_usd=estimated_cost,
                 session_id="",
             ),

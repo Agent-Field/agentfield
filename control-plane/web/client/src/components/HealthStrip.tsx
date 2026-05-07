@@ -24,6 +24,7 @@ import { useLLMHealth, useQueueStatus, useAgents } from "@/hooks/queries";
 import { useSSESync } from "@/hooks/useSSEQuerySync";
 import { cn } from "@/lib/utils";
 import type { AgentNodeSummary } from "@/types/agentfield";
+import type { QueueAgentStatus } from "@/hooks/queries";
 
 type HealthStripProps = {
   className?: string;
@@ -54,10 +55,39 @@ export function HealthStrip({ className }: HealthStripProps) {
       n.lifecycle_status === "ready",
   ).length;
 
-  const totalRunning = Object.values(queueStatus.data?.agents ?? {}).reduce(
+  const queueAgents = queueStatus.data?.agents ?? [];
+  const totalRunning = queueStatus.data?.total_running ?? queueAgents.reduce(
     (sum, a) => sum + (a.running || 0),
     0,
   );
+  const topQueueAgents = [...queueAgents]
+    .sort((a, b) => b.running - a.running)
+    .slice(0, 3);
+
+  const renderQueueAgentLine = (agent: QueueAgentStatus) => {
+    const atCapacity = agent.max > 0 && agent.running >= agent.max;
+    return (
+      <li key={agent.agent_node_id} className="flex items-center justify-between text-xs">
+        <span
+          className={cn(
+            "max-w-[11rem] truncate",
+            atCapacity ? "text-destructive" : "text-muted-foreground",
+          )}
+          title={agent.agent_node_id}
+        >
+          {agent.agent_node_id}
+        </span>
+        <span
+          className={cn(
+            "font-mono tabular-nums",
+            atCapacity ? "text-destructive" : "text-muted-foreground",
+          )}
+        >
+          {agent.running}/{agent.max} ({agent.available} free)
+        </span>
+      </li>
+    );
+  };
 
   const sseLabel = sseConnected
     ? "Live"
@@ -175,6 +205,11 @@ export function HealthStrip({ className }: HealthStripProps) {
                       {totalRunning} execution{totalRunning === 1 ? "" : "s"}{" "}
                       running
                     </div>
+                    {topQueueAgents.length > 0 ? (
+                      <ul className="mt-1.5 space-y-1">
+                        {topQueueAgents.map(renderQueueAgentLine)}
+                      </ul>
+                    ) : null}
                   </div>
                 </li>
                 <li className="flex items-start gap-2">
@@ -299,7 +334,18 @@ export function HealthStrip({ className }: HealthStripProps) {
                 </Badge>
               </div>
             </TooltipTrigger>
-            <TooltipContent>Execution queue status</TooltipContent>
+            <TooltipContent>
+              <div className="space-y-1">
+                <div>Execution queue status</div>
+                {topQueueAgents.length > 0 ? (
+                  <ul className="space-y-0.5">
+                    {topQueueAgents.map(renderQueueAgentLine)}
+                  </ul>
+                ) : (
+                  <div className="text-xs text-muted-foreground">No active agent slots</div>
+                )}
+              </div>
+            </TooltipContent>
           </Tooltip>
 
           <Separator orientation="vertical" className="h-4" />
