@@ -6,6 +6,59 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.78-rc.4] - 2026-05-07
+
+
+### Chores
+
+- Chore(deps): bump the uv group across 1 directory with 2 updates (#550)
+
+Bumps the uv group with 2 updates in the /sdk/python directory: [python-dotenv](https://github.com/theskumar/python-dotenv) and [python-multipart](https://github.com/Kludex/python-multipart).
+
+
+Updates `python-dotenv` from 1.0.1 to 1.2.2
+- [Release notes](https://github.com/theskumar/python-dotenv/releases)
+- [Changelog](https://github.com/theskumar/python-dotenv/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/theskumar/python-dotenv/compare/v1.0.1...v1.2.2)
+
+Updates `python-multipart` from 0.0.26 to 0.0.27
+- [Release notes](https://github.com/Kludex/python-multipart/releases)
+- [Changelog](https://github.com/Kludex/python-multipart/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/Kludex/python-multipart/compare/0.0.26...0.0.27)
+
+---
+updated-dependencies:
+- dependency-name: python-dotenv
+  dependency-version: 1.2.2
+  dependency-type: indirect
+- dependency-name: python-multipart
+  dependency-version: 0.0.27
+  dependency-type: indirect
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (41c2faf)
+
+- Chore(deps): bump hono (#551)
+
+Bumps the npm_and_yarn group with 1 update in the /examples/benchmarks/100k-scale/mastra-bench directory: [hono](https://github.com/honojs/hono).
+
+
+Updates `hono` from 4.12.14 to 4.12.18
+- [Release notes](https://github.com/honojs/hono/releases)
+- [Commits](https://github.com/honojs/hono/compare/v4.12.14...v4.12.18)
+
+---
+updated-dependencies:
+- dependency-name: hono
+  dependency-version: 4.12.18
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (89be5ed)
+
 ## [0.1.78-rc.3] - 2026-05-07
 
 
