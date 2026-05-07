@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.78-rc.2] - 2026-05-07
+
+
+### Fixed
+
+- Fix(sdk-python): count opencode turns from JSON step events (#546)
+
+* fix(sdk-python): count opencode turns from JSON step events
+
+* fix(sdk-python): parse opencode JSON text events for final output (d134751)
+
+
+
+### Other
+
+- Feat/UI queue concurrency status 323 (#547)
+
+* fix(sdk-python): count opencode turns from JSON step events
+
+* fix(sdk-python): parse opencode JSON text events for final output
+
+* feat(ui): surface per-agent queue concurrency and capacity status (365572d)
+
 ## [0.1.78-rc.1] - 2026-05-06
 
 
