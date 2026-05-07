@@ -6,6 +6,7 @@ export { useLLMHealth, useQueueStatus } from "./useSystemHealth";
 export type {
   LLMHealthResponse,
   LLMEndpointHealth,
+  LLMCircuitState,
   QueueStatusResponse,
   QueueAgentStatus,
 } from "./useSystemHealth";

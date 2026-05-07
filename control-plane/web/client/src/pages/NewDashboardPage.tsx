@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/data-formatters";
 
 import { DashboardActiveWorkload } from "@/components/dashboard/DashboardActiveWorkload";
+import { LLMHealthWidget } from "@/components/dashboard/LLMHealthWidget";
 import { DashboardRunOutcomeStrip } from "@/components/dashboard/DashboardRunOutcomeStrip";
 import { shortRunIdForDashboard as shortRunId } from "@/components/dashboard/dashboardRunUtils";
 
@@ -635,6 +636,11 @@ export function NewDashboardPage() {
           overloadedAgents={overloadedAgents}
         />
       )}
+
+      <LLMHealthWidget
+        loading={llmHealthQuery.isLoading}
+        health={llmHealthQuery.data}
+      />
 
       <PrimaryRunFocus
         loading={runsQuery.isLoading}

@@ -194,6 +194,8 @@ describe("NewDashboardPage", () => {
     render(<NewDashboardPage />, { wrapper });
 
     expect(screen.getByText("System issues")).toBeInTheDocument();
+    expect(screen.getByText("LLM backend health")).toBeInTheDocument();
+    expect(screen.getByText("Healthy")).toBeInTheDocument();
     expect(screen.getByText(/Queue at capacity for agent: agent-1/i)).toBeInTheDocument();
   });
   

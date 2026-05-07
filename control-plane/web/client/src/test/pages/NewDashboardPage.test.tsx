@@ -171,7 +171,22 @@ describe("NewDashboardPage", () => {
     };
     pageState.llmHealthResult = {
       isLoading: false,
-      data: { endpoints: [{ name: "primary-llm", healthy: false }] },
+      data: {
+        enabled: true,
+        healthy: false,
+        checked_at: "2026-04-08T10:06:00Z",
+        endpoints: [
+          {
+            name: "primary-llm",
+            healthy: false,
+            circuit_state: "open",
+            consecutive_failures: 3,
+            last_error: "unhealthy status code: 500",
+            last_success: "2026-04-08T09:58:00Z",
+            last_checked: "2026-04-08T10:06:00Z",
+          },
+        ],
+      },
     };
     pageState.queueResult = {
       data: { agents: { "agent-1": { running: 2, max_concurrent: 2 } } },
@@ -194,6 +209,11 @@ describe("NewDashboardPage", () => {
 
     expect(screen.getByText("System issues")).toBeInTheDocument();
     expect(screen.getByText(/LLM circuit OPEN on endpoint: primary-llm/)).toBeInTheDocument();
+    expect(screen.getByText("LLM backend health")).toBeInTheDocument();
+    expect(screen.getByText("Circuit breaker open")).toBeInTheDocument();
+    expect(screen.getAllByText("Open").length).toBeGreaterThan(0);
+    expect(screen.getByText(/3 failures/)).toBeInTheDocument();
+    expect(screen.getByText(/unhealthy status code: 500/)).toBeInTheDocument();
     expect(screen.getByText(/Queue at capacity for agent: agent-1/)).toBeInTheDocument();
     expect(screen.getByText("Active runs")).toBeInTheDocument();
     expect(screen.getByText("Needs attention")).toBeInTheDocument();
