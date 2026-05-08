@@ -65,6 +65,7 @@ from dataclasses import dataclass, field
 import weakref
 
 if TYPE_CHECKING:
+    from agentfield.execution_state import ExecutionStatus
     from agentfield.harness._result import HarnessResult
     from agentfield.harness._runner import HarnessRunner
 

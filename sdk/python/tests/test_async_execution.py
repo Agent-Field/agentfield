@@ -530,7 +530,7 @@ async def test_wait_for_result_subtracts_pause_clock_from_elapsed(monkeypatch):
     aware so it survives long human-approval gaps."""
     from agentfield.async_execution_manager import AsyncExecutionManager
     from agentfield.async_config import AsyncConfig
-    from agentfield.execution_state import ExecutionState, ExecutionStatus
+    from agentfield.execution_state import ExecutionState
     from agentfield.exceptions import ExecutionTimeoutError
 
     cfg = AsyncConfig()
