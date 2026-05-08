@@ -11,7 +11,7 @@ import json
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 from urllib.parse import urljoin
 
 import aiohttp
@@ -240,7 +240,37 @@ class AsyncExecutionManager:
         self._circuit_breaker_last_failure = 0.0
         self._circuit_breaker_open = False
 
+        # Listeners notified on every observed execution status transition.
+        # The Agent registers a listener here so a parent reasoner waiting on
+        # a child via ``app.call`` can pause its own pause-clock while the
+        # child is in ``waiting``/``paused``, and resume it when the child
+        # transitions back to ``running`` (or terminates).
+        self._status_listeners: List[Callable[[str, ExecutionStatus], None]] = []
+
         logger.debug(f"AsyncExecutionManager initialized with base_url={base_url}")
+
+    def register_status_listener(
+        self, callback: Callable[[str, ExecutionStatus], None]
+    ) -> None:
+        """Register a callback invoked on every observed status transition.
+
+        The callback receives ``(execution_id, status)`` and must be
+        non-blocking — it is invoked from the SSE event loop. Idempotent:
+        the same callable is only registered once.
+        """
+        if callback not in self._status_listeners:
+            self._status_listeners.append(callback)
+
+    def _fire_status_listeners(
+        self, execution_id: str, status: ExecutionStatus
+    ) -> None:
+        for cb in self._status_listeners:
+            try:
+                cb(execution_id, status)
+            except Exception as exc:
+                logger.debug(
+                    f"Status listener raised for {execution_id[:8]}...: {exc}"
+                )
 
     def set_event_stream_headers(self, headers: Optional[Dict[str, str]]) -> None:
         """Configure headers forwarded to the SSE event stream."""
@@ -504,7 +534,10 @@ class AsyncExecutionManager:
             return None
 
     async def wait_for_result(
-        self, execution_id: str, timeout: Optional[float] = None
+        self,
+        execution_id: str,
+        timeout: Optional[float] = None,
+        pause_clock: Optional[Any] = None,
     ) -> Any:
         """
         Wait for execution result with intelligent polling.
@@ -512,6 +545,12 @@ class AsyncExecutionManager:
         Args:
             execution_id: Execution ID to wait for
             timeout: Optional timeout override
+            pause_clock: Optional ``PauseClock`` whose accumulated paused
+                seconds are subtracted from elapsed wall-clock when checking
+                ``timeout``. Supplied by ``Agent.call()`` so the wait
+                doesn't time out while the awaited child is parked on a
+                human approval — the active-time semantics here match the
+                reasoner watchdog in ``_execute_async_with_callback``.
 
         Returns:
             Any: Execution result
@@ -539,8 +578,17 @@ class AsyncExecutionManager:
         )
         start_time = time.time()
 
+        def _active_elapsed() -> float:
+            elapsed = time.time() - start_time
+            if pause_clock is not None:
+                try:
+                    elapsed -= pause_clock.total_paused()
+                except Exception:
+                    pass
+            return elapsed
+
         # Wait for completion
-        while time.time() - start_time < wait_timeout:
+        while _active_elapsed() < wait_timeout:
             async with self._execution_lock:
                 execution = self._executions.get(execution_id)
                 if execution is None:
@@ -822,18 +870,31 @@ class AsyncExecutionManager:
         schedule_poll = False
         status_hint = normalize_status(payload.get("status"))
         event_type = str(payload.get("type", "")).lower()
+        # ``execution.waiting`` is what RequestApprovalHandler publishes when
+        # a child reasoner enters ``app.pause``; the payload often omits an
+        # explicit status field, in which case ``normalize_status`` would
+        # report ``"unknown"`` and we'd lose the signal. Override based on
+        # event_type so the hint reflects what actually happened.
+        if event_type == "execution.waiting":
+            status_hint = "waiting"
 
+        new_status: Optional[ExecutionStatus] = None
         async with self._execution_lock:
             execution = self._executions.get(execution_id)
             if execution is None:
                 return
 
             if event_type == "execution_started" or status_hint == "running":
-                execution.update_status(ExecutionStatus.RUNNING)
+                new_status = ExecutionStatus.RUNNING
             elif status_hint == "queued":
-                execution.update_status(ExecutionStatus.QUEUED)
+                new_status = ExecutionStatus.QUEUED
             elif status_hint == "pending":
-                execution.update_status(ExecutionStatus.PENDING)
+                new_status = ExecutionStatus.PENDING
+            elif status_hint in {"waiting", "paused"}:
+                # Child entered an external-wait state (e.g. waiting on a
+                # human approval via app.pause). The status listener uses
+                # this transition to pause the parent's pause-clock.
+                new_status = ExecutionStatus.WAITING
             elif status_hint in {
                 "succeeded",
                 "failed",
@@ -841,14 +902,22 @@ class AsyncExecutionManager:
                 "timeout",
             } or event_type in {"execution_completed", "execution_failed"}:
                 if status_hint == "failed":
-                    execution.update_status(ExecutionStatus.FAILED)
+                    new_status = ExecutionStatus.FAILED
                 elif status_hint == "cancelled":
-                    execution.update_status(ExecutionStatus.CANCELLED)
+                    new_status = ExecutionStatus.CANCELLED
                 elif status_hint == "timeout":
-                    execution.update_status(ExecutionStatus.TIMEOUT)
+                    new_status = ExecutionStatus.TIMEOUT
                 else:
-                    execution.update_status(ExecutionStatus.SUCCEEDED)
+                    new_status = ExecutionStatus.SUCCEEDED
                 schedule_poll = True
+
+            if new_status is not None and new_status != execution.status:
+                execution.update_status(new_status)
+            else:
+                new_status = None  # no-op transition; don't fire listeners
+
+        if new_status is not None:
+            self._fire_status_listeners(execution_id, new_status)
 
         if schedule_poll:
             asyncio.create_task(self._poll_execution_immediate(execution_id))
