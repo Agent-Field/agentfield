@@ -33,6 +33,9 @@ def make_agent():
         resolve=AsyncMock(),
     )
     agent._pause_clocks = {}
+    agent._waiting_children = {}
+    agent._parent_paused_children = {}
+    agent._waiting_children_lock = asyncio.Lock()
     agent.note = Mock()
     agent.agentfield_server = "http://agentfield.test"
     agent.api_key = "key"

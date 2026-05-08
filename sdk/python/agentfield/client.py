@@ -1503,7 +1503,10 @@ class AgentFieldClient:
             ) from e
 
     async def wait_for_execution_result(
-        self, execution_id: str, timeout: Optional[float] = None
+        self,
+        execution_id: str,
+        timeout: Optional[float] = None,
+        pause_clock: Optional[Any] = None,
     ) -> Any:
         """
         Wait for execution completion with polling.
@@ -1511,6 +1514,10 @@ class AgentFieldClient:
         Args:
             execution_id: Execution ID to wait for
             timeout: Optional timeout override (uses config default if None)
+            pause_clock: Optional ``PauseClock`` whose accumulated paused
+                seconds are subtracted from elapsed wall-clock when checking
+                ``timeout`` — used by ``Agent.call`` to keep the wait alive
+                across child pauses.
 
         Returns:
             Any: Execution result
@@ -1524,7 +1531,9 @@ class AgentFieldClient:
 
         try:
             manager = await self._get_async_execution_manager()
-            result = await manager.wait_for_result(execution_id, timeout)
+            result = await manager.wait_for_result(
+                execution_id, timeout, pause_clock=pause_clock
+            )
 
             logger.debug(f"Execution {execution_id[:8]}... completed successfully")
             return result
