@@ -409,134 +409,200 @@ async def test_external_cancel_during_pause_reports_cancelled_not_timeout(monkey
 # ---------------------------------------------------------------------------
 
 
-def _make_propagation_agent() -> Agent:
-    """Build a real Agent so the pause-clock dict, registry and listener
-    method are wired up via ``__init__``. Tests poke at those structures
-    directly instead of going through the full HTTP / SSE pipeline."""
-    return Agent(
-        node_id="parent-agent",
-        agentfield_server="http://control",
-        auto_register=False,
+@pytest.mark.asyncio
+async def test_wait_for_result_pauses_parent_clock_while_child_waits():
+    """End-to-end check on the production path: the polling task updates
+    ``_executions[child].status`` from RUNNING -> WAITING -> RUNNING -> SUCCEEDED,
+    and ``wait_for_result`` (with a pause_clock) toggles the parent's clock
+    accordingly. No SSE listener, no internal hooks — just the data path the
+    deployed services actually use.
+
+    Regression for run_1778268481826_8c9dd544 where the parent watchdog tripped
+    at exactly the wallclock budget despite a long approval wait, because the
+    listener-based mechanism was gated off behind ``enable_event_stream`` and
+    never fired in production. Polling is unconditional, so this version of
+    the propagation works regardless of the SSE flag.
+    """
+    from agentfield.async_execution_manager import AsyncExecutionManager
+    from agentfield.async_config import AsyncConfig
+    from agentfield.execution_state import ExecutionState, ExecutionStatus
+
+    manager = AsyncExecutionManager(base_url="http://control", config=AsyncConfig())
+    exec_id = "exec-child"
+    state = ExecutionState(
+        execution_id=exec_id,
+        target="agent.reasoner",
+        input_data={},
+        timeout=5.0,
     )
-
-
-def test_child_status_change_pauses_parent_clock_on_waiting():
-    """Child entering WAITING should pause the parent's clock immediately;
-    transitioning back to RUNNING should end the pause."""
-    from agentfield.execution_state import ExecutionStatus
-
-    agent = _make_propagation_agent()
-    parent_id = "exec-parent"
-    child_id = "exec-child"
+    state.update_status(ExecutionStatus.RUNNING)
+    manager._executions[exec_id] = state
 
     parent_clock = PauseClock()
-    agent._pause_clocks[parent_id] = parent_clock
-    agent._waiting_children[child_id] = parent_id
 
-    assert parent_clock.total_paused() == 0.0
+    async def _drive_polling():
+        # t=0.05: child enters WAITING (e.g. hax-sdk approval gate fires).
+        await asyncio.sleep(0.05)
+        async with manager._execution_lock:
+            state.update_status(ExecutionStatus.WAITING)
+        # t=0.25: child resumes after ~0.2s of waiting.
+        await asyncio.sleep(0.20)
+        async with manager._execution_lock:
+            state.update_status(ExecutionStatus.RUNNING)
+        # t=0.30: child finishes shortly after resuming.
+        await asyncio.sleep(0.05)
+        async with manager._execution_lock:
+            state.set_result({"ok": True})
 
-    agent._on_child_status_change(child_id, ExecutionStatus.WAITING)
-    time.sleep(0.05)
-    paused_after_waiting = parent_clock.total_paused()
-    assert paused_after_waiting > 0.0, (
-        "parent clock must accumulate paused time while child is in WAITING"
+    poller = asyncio.create_task(_drive_polling())
+    result = await manager.wait_for_result(
+        exec_id, timeout=5.0, pause_clock=parent_clock
     )
+    await poller
 
-    agent._on_child_status_change(child_id, ExecutionStatus.RUNNING)
-    final_paused = parent_clock.total_paused()
-    # After end_pause, total_paused freezes — sleeping should not grow it.
-    time.sleep(0.05)
-    assert abs(parent_clock.total_paused() - final_paused) < 1e-3, (
-        "parent clock must stop accumulating once child resumes"
+    assert result == {"ok": True}
+    paused = parent_clock.total_paused()
+    # The WAITING window was ~0.2s. Allow generous slack for scheduler jitter.
+    assert paused >= 0.15, (
+        f"parent clock should reflect the child's WAITING window, got {paused:.3f}s"
     )
-    assert child_id not in agent._parent_paused_children.get(parent_id, set())
-
-
-def test_child_status_change_refcounts_parallel_children():
-    """Two children pausing in parallel must not double-pause the parent
-    clock. The parent stays paused while ANY awaited child is paused, and
-    only resumes when ALL of them are running again."""
-    from agentfield.execution_state import ExecutionStatus
-
-    agent = _make_propagation_agent()
-    parent_id = "exec-parent"
-    child_a = "exec-a"
-    child_b = "exec-b"
-
-    parent_clock = PauseClock()
-    agent._pause_clocks[parent_id] = parent_clock
-    agent._waiting_children[child_a] = parent_id
-    agent._waiting_children[child_b] = parent_id
-
-    agent._on_child_status_change(child_a, ExecutionStatus.WAITING)
-    assert parent_clock._pause_started_at is not None
-    first_pause_started = parent_clock._pause_started_at
-
-    # Second child also pausing should NOT reset the pause start (which
-    # would erase the time accumulated since child A first paused).
-    time.sleep(0.05)
-    agent._on_child_status_change(child_b, ExecutionStatus.WAITING)
-    assert parent_clock._pause_started_at == first_pause_started, (
-        "second child entering WAITING must not restart the parent pause"
+    assert paused < 0.5, (
+        f"parent clock should not include time outside WAITING, got {paused:.3f}s"
     )
-
-    # Only one child resuming: parent stays paused (refcount > 0).
-    agent._on_child_status_change(child_a, ExecutionStatus.RUNNING)
-    assert parent_clock._pause_started_at is not None, (
-        "parent must remain paused while any awaited child is still paused"
-    )
-
-    # Last child resumes: parent's pause finally ends.
-    agent._on_child_status_change(child_b, ExecutionStatus.RUNNING)
-    assert parent_clock._pause_started_at is None
-    assert parent_id not in agent._parent_paused_children
-
-
-def test_child_status_change_ignores_unrelated_executions():
-    """An execution we're not awaiting must be a no-op — the listener fires
-    for every execution on the SSE bus, including unrelated ones."""
-    from agentfield.execution_state import ExecutionStatus
-
-    agent = _make_propagation_agent()
-    parent_clock = PauseClock()
-    agent._pause_clocks["exec-parent"] = parent_clock
-    # Note: no _waiting_children entry for the unrelated child.
-
-    agent._on_child_status_change("exec-stranger", ExecutionStatus.WAITING)
-    assert parent_clock.total_paused() == 0.0
-    assert "exec-parent" not in agent._parent_paused_children
-
-
-def test_child_status_change_terminal_cleans_up_registry():
-    """A terminal child status must purge the binding so a long-lived
-    parent doesn't accumulate stale child refs."""
-    from agentfield.execution_state import ExecutionStatus
-
-    agent = _make_propagation_agent()
-    parent_id = "exec-parent"
-    child_id = "exec-child"
-    agent._pause_clocks[parent_id] = PauseClock()
-    agent._waiting_children[child_id] = parent_id
-
-    agent._on_child_status_change(child_id, ExecutionStatus.SUCCEEDED)
-    assert child_id not in agent._waiting_children
 
 
 @pytest.mark.asyncio
-async def test_wait_for_result_subtracts_pause_clock_from_elapsed(monkeypatch):
-    """``wait_for_result`` is the cross-agent wait; if its own timeout is
-    wall-clock it'll fire while the child is correctly paused on a human
-    approval. Passing the parent's pause_clock makes the wait active-time
-    aware so it survives long human-approval gaps."""
+async def test_wait_for_result_preserves_budget_across_long_wait():
+    """The headline scenario: the WAITING window is longer than the entire
+    wait_timeout, but ``wait_for_result`` must still complete because
+    waiting time is excluded from active-elapsed. Without the pause toggle
+    in the wait loop this would (and previously did) trip the timeout."""
+    from agentfield.async_execution_manager import AsyncExecutionManager
+    from agentfield.async_config import AsyncConfig
+    from agentfield.execution_state import ExecutionState, ExecutionStatus
+
+    manager = AsyncExecutionManager(base_url="http://control", config=AsyncConfig())
+    exec_id = "exec-long-wait"
+    state = ExecutionState(
+        execution_id=exec_id,
+        target="agent.reasoner",
+        input_data={},
+        timeout=0.5,
+    )
+    state.update_status(ExecutionStatus.RUNNING)
+    manager._executions[exec_id] = state
+
+    parent_clock = PauseClock()
+
+    async def _drive_polling():
+        await asyncio.sleep(0.05)
+        async with manager._execution_lock:
+            state.update_status(ExecutionStatus.WAITING)
+        # WAITING for 0.7s — longer than the 0.5s wait_timeout. With the
+        # pause_clock active this whole window is excluded from active time,
+        # so the wait must NOT raise ExecutionTimeoutError here.
+        await asyncio.sleep(0.7)
+        async with manager._execution_lock:
+            state.update_status(ExecutionStatus.RUNNING)
+        await asyncio.sleep(0.05)
+        async with manager._execution_lock:
+            state.set_result({"value": 42})
+
+    poller = asyncio.create_task(_drive_polling())
+    result = await manager.wait_for_result(
+        exec_id, timeout=0.5, pause_clock=parent_clock
+    )
+    await poller
+
+    assert result == {"value": 42}
+
+
+@pytest.mark.asyncio
+async def test_wait_for_result_without_pause_clock_unaffected():
+    """No pause_clock kwarg = no toggling, behaves as a plain wallclock wait.
+    Regression check that the new toggle code doesn't change pre-existing
+    semantics for callers that don't pass a clock."""
+    from agentfield.async_execution_manager import AsyncExecutionManager
+    from agentfield.async_config import AsyncConfig
+    from agentfield.execution_state import ExecutionState, ExecutionStatus
+    from agentfield.exceptions import ExecutionTimeoutError
+
+    manager = AsyncExecutionManager(base_url="http://control", config=AsyncConfig())
+    exec_id = "exec-plain"
+    state = ExecutionState(
+        execution_id=exec_id,
+        target="agent.reasoner",
+        input_data={},
+        timeout=0.2,
+    )
+    state.update_status(ExecutionStatus.WAITING)
+    manager._executions[exec_id] = state
+
+    # No pause_clock provided. Even though the child sits in WAITING, the
+    # wait must time out at wallclock since there's no clock to subtract from.
+    with pytest.raises(ExecutionTimeoutError):
+        await manager.wait_for_result(exec_id, timeout=0.2)
+
+
+@pytest.mark.asyncio
+async def test_wait_for_result_ends_pause_on_terminal_while_waiting():
+    """If the child transitions straight from WAITING to a terminal state
+    (e.g. cancelled mid-approval), the wait's finally block must still close
+    the in-flight pause so the parent's clock isn't stuck paused forever."""
+    from agentfield.async_execution_manager import AsyncExecutionManager
+    from agentfield.async_config import AsyncConfig
+    from agentfield.execution_state import ExecutionState, ExecutionStatus
+    from agentfield.exceptions import AgentFieldClientError
+
+    manager = AsyncExecutionManager(base_url="http://control", config=AsyncConfig())
+    exec_id = "exec-cancelled-while-waiting"
+    state = ExecutionState(
+        execution_id=exec_id,
+        target="agent.reasoner",
+        input_data={},
+        timeout=5.0,
+    )
+    state.update_status(ExecutionStatus.RUNNING)
+    manager._executions[exec_id] = state
+
+    parent_clock = PauseClock()
+
+    async def _drive_polling():
+        await asyncio.sleep(0.05)
+        async with manager._execution_lock:
+            state.update_status(ExecutionStatus.WAITING)
+        await asyncio.sleep(0.10)
+        async with manager._execution_lock:
+            state.cancel("user_cancelled_during_approval")
+
+    poller = asyncio.create_task(_drive_polling())
+    with pytest.raises(AgentFieldClientError):
+        await manager.wait_for_result(
+            exec_id, timeout=5.0, pause_clock=parent_clock
+        )
+    await poller
+
+    # Pause must be closed: total_paused stops accumulating once the wait
+    # returns. Sleep and verify the value is stable.
+    paused_at_exit = parent_clock.total_paused()
+    await asyncio.sleep(0.1)
+    assert abs(parent_clock.total_paused() - paused_at_exit) < 1e-3, (
+        "pause must be closed when wait_for_result exits via terminal child status"
+    )
+
+
+@pytest.mark.asyncio
+async def test_wait_for_result_subtracts_pause_clock_from_elapsed():
+    """Direct check on the active-elapsed math: a pause_clock that reports
+    10s of paused time keeps a 0.5s wait alive long enough to settle."""
     from agentfield.async_execution_manager import AsyncExecutionManager
     from agentfield.async_config import AsyncConfig
     from agentfield.execution_state import ExecutionState
     from agentfield.exceptions import ExecutionTimeoutError
 
-    cfg = AsyncConfig()
-    manager = AsyncExecutionManager(base_url="http://control", config=cfg)
+    manager = AsyncExecutionManager(base_url="http://control", config=AsyncConfig())
 
-    exec_id = "exec-child"
+    exec_id = "exec-fake-clock"
     state = ExecutionState(
         execution_id=exec_id,
         target="agent.reasoner",
@@ -545,13 +611,15 @@ async def test_wait_for_result_subtracts_pause_clock_from_elapsed(monkeypatch):
     )
     manager._executions[exec_id] = state
 
-    # Pause clock that always reports 10s of paused time — way more than
-    # the 0.5s wait timeout. Without subtraction, wait_for_result would
-    # fire instantly; with subtraction, elapsed - paused stays negative
-    # so the loop keeps running until the execution becomes terminal.
     class _FakeClock:
         def total_paused(self) -> float:
             return 10.0
+
+        def start_pause(self) -> None:
+            pass
+
+        def end_pause(self) -> None:
+            pass
 
     async def _settle_after_short_delay():
         await asyncio.sleep(0.2)
@@ -564,8 +632,8 @@ async def test_wait_for_result_subtracts_pause_clock_from_elapsed(monkeypatch):
     )
     assert result == {"ok": True}
 
-    # Sanity: without the pause_clock the same setup with a stricter
-    # timeout would actually time out.
+    # Sanity: without any pause_clock, the same kind of setup with a tighter
+    # timeout actually trips ExecutionTimeoutError.
     state2 = ExecutionState(
         execution_id="exec-strict",
         target="agent.reasoner",
@@ -575,56 +643,3 @@ async def test_wait_for_result_subtracts_pause_clock_from_elapsed(monkeypatch):
     manager._executions["exec-strict"] = state2
     with pytest.raises(ExecutionTimeoutError):
         await manager.wait_for_result("exec-strict", timeout=0.1)
-
-
-@pytest.mark.asyncio
-async def test_sse_handler_fires_status_listener_on_waiting():
-    """The SSE event handler must translate ``execution.waiting`` events
-    into a listener invocation so the parent process learns its child is
-    paused."""
-    from agentfield.async_execution_manager import AsyncExecutionManager
-    from agentfield.async_config import AsyncConfig
-    from agentfield.execution_state import ExecutionState, ExecutionStatus
-
-    manager = AsyncExecutionManager(base_url="http://control", config=AsyncConfig())
-    exec_id = "exec-waiter"
-    manager._executions[exec_id] = ExecutionState(
-        execution_id=exec_id, target="agent.reasoner", input_data={},
-    )
-
-    seen: list[tuple[str, ExecutionStatus]] = []
-    manager.register_status_listener(lambda eid, st: seen.append((eid, st)))
-
-    await manager._handle_event_stream_payload(
-        {"execution_id": exec_id, "type": "execution.waiting"}
-    )
-    assert (exec_id, ExecutionStatus.WAITING) in seen
-
-    await manager._handle_event_stream_payload(
-        {"execution_id": exec_id, "status": "running"}
-    )
-    assert (exec_id, ExecutionStatus.RUNNING) in seen
-
-    # Duplicate event with no transition: listener must NOT re-fire.
-    seen.clear()
-    await manager._handle_event_stream_payload(
-        {"execution_id": exec_id, "status": "running"}
-    )
-    assert seen == []
-
-
-@pytest.mark.asyncio
-async def test_sse_handler_ignores_unknown_executions():
-    """SSE events for executions this manager didn't submit must be a
-    no-op — they belong to a different waiter or an unrelated agent."""
-    from agentfield.async_execution_manager import AsyncExecutionManager
-    from agentfield.async_config import AsyncConfig
-
-    manager = AsyncExecutionManager(base_url="http://control", config=AsyncConfig())
-    seen: list[str] = []
-    manager.register_status_listener(lambda eid, st: seen.append(eid))
-
-    await manager._handle_event_stream_payload(
-        {"execution_id": "exec-unknown", "status": "waiting"}
-    )
-    assert seen == []

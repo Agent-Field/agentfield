@@ -65,7 +65,6 @@ from dataclasses import dataclass, field
 import weakref
 
 if TYPE_CHECKING:
-    from agentfield.execution_state import ExecutionStatus
     from agentfield.harness._result import HarnessResult
     from agentfield.harness._runner import HarnessRunner
 
@@ -672,19 +671,6 @@ class Agent(FastAPI):
         from .agent_pause import PauseClock
 
         self._pause_clocks: Dict[str, PauseClock] = {}
-
-        # Cross-reasoner pause propagation registry. Populated by ``call()``
-        # before awaiting a child execution, consumed by the SSE status
-        # listener so that when the child enters ``waiting``/``paused`` the
-        # parent's pause-clock is paused too — otherwise the parent's
-        # active-time budget burns through the child's human-approval delay.
-        # ``_waiting_children`` maps child_execution_id -> parent_execution_id;
-        # ``_parent_paused_children`` maps parent_execution_id -> set of
-        # child_execution_ids currently paused, used to refcount so multiple
-        # children pausing in parallel don't double-toggle the parent clock.
-        self._waiting_children: Dict[str, str] = {}
-        self._parent_paused_children: Dict[str, set] = {}
-        self._waiting_children_lock = asyncio.Lock()
 
         # Install the /_internal/executions/{execution_id}/cancel route
         # before any user-defined reasoners are registered so the path is
@@ -2452,63 +2438,6 @@ class Agent(FastAPI):
             await deregister_execution(self, execution_id)
         await self._post_execution_status(callback_url, payload, execution_id)
 
-    def _on_child_status_change(
-        self, child_execution_id: str, status: "ExecutionStatus"
-    ) -> None:
-        """Cross-reasoner pause propagation hook.
-
-        Invoked from the AsyncExecutionManager's SSE listener for every
-        observed child status transition. If the child belongs to a parent
-        we're currently awaiting via ``call()``, toggles the parent's
-        pause-clock so its watchdog doesn't burn the budget while the child
-        is paused on a human approval.
-
-        Refcounts via ``_parent_paused_children`` so multiple children
-        pausing in parallel don't double-pause the parent clock; the parent
-        is paused while any awaited child is paused, and resumed only when
-        all of them are running again. Terminal child states clean up the
-        binding without leaving the parent stuck in a paused state.
-        """
-        from .execution_state import ExecutionStatus
-
-        parent_execution_id = self._waiting_children.get(child_execution_id)
-        if not parent_execution_id:
-            return
-        pause_clock = self._pause_clocks.get(parent_execution_id)
-        if pause_clock is None:
-            return
-
-        is_paused_state = status == ExecutionStatus.WAITING
-        is_terminal = status in {
-            ExecutionStatus.SUCCEEDED,
-            ExecutionStatus.FAILED,
-            ExecutionStatus.CANCELLED,
-            ExecutionStatus.TIMEOUT,
-        }
-
-        paused_set = self._parent_paused_children.get(parent_execution_id)
-        was_paused = paused_set is not None and child_execution_id in paused_set
-
-        if is_paused_state and not was_paused:
-            if paused_set is None:
-                paused_set = set()
-                self._parent_paused_children[parent_execution_id] = paused_set
-            paused_set.add(child_execution_id)
-            if len(paused_set) == 1:
-                pause_clock.start_pause()
-        elif (not is_paused_state) and was_paused:
-            assert paused_set is not None
-            paused_set.discard(child_execution_id)
-            if not paused_set:
-                pause_clock.end_pause()
-                self._parent_paused_children.pop(parent_execution_id, None)
-
-        if is_terminal:
-            # ``call()``'s finally block also cleans up, but doing it here
-            # too keeps the registry tidy if the listener observes the
-            # terminal transition before the awaiting task wakes up.
-            self._waiting_children.pop(child_execution_id, None)
-
     async def _post_execution_status(
         self,
         callback_url: str,
@@ -3969,81 +3898,38 @@ class Agent(FastAPI):
                             timeout=execution_timeout,
                         )
 
-                        # Wire cross-reasoner pause propagation: register the
-                        # child -> parent binding and ensure the SSE listener
-                        # is hooked up so child waiting/paused transitions
-                        # toggle the parent's pause-clock. Lookup of the
-                        # parent uses the current execution context and is
-                        # only meaningful when this call is made from inside
-                        # a reasoner that has a tracked pause-clock.
+                        # Cross-reasoner pause propagation: when this call is
+                        # made from inside a reasoner that has a tracked
+                        # pause-clock, hand it to ``wait_for_execution_result``
+                        # so the wait loop can pause the clock while the awaited
+                        # child sits in ``WAITING`` (e.g. on a hax-sdk human
+                        # approval). Without this, the parent's active-time
+                        # budget would burn through the child's wait and
+                        # spuriously trip the watchdog at the wallclock budget.
                         parent_execution_id = (
                             current_context.execution_id if current_context else None
                         )
                         # ``_pause_clocks`` is set in __init__; getattr keeps
-                        # bypass-init test fixtures from AttributeErroring
-                        # here. When the parent has no clock registered, we
-                        # have nothing meaningful to propagate to anyway.
+                        # bypass-init test fixtures from AttributeErroring here.
                         _all_pause_clocks = getattr(self, "_pause_clocks", None) or {}
-                        propagate_pause = bool(
-                            parent_execution_id
-                            and parent_execution_id in _all_pause_clocks
+                        parent_pause_clock = (
+                            _all_pause_clocks.get(parent_execution_id)
+                            if parent_execution_id
+                            else None
                         )
-                        if propagate_pause:
-                            try:
-                                _mgr = await self.client._get_async_execution_manager()
-                                _mgr.register_status_listener(
-                                    self._on_child_status_change
-                                )
-                                async with self._waiting_children_lock:
-                                    self._waiting_children[execution_id] = (
-                                        parent_execution_id
-                                    )
-                            except Exception as _exc:
-                                # Pause propagation is best-effort; never
-                                # block the actual call on registry wiring.
-                                propagate_pause = False
-                                if self.dev_mode:
-                                    log_debug(
-                                        f"Pause propagation registration failed: {_exc}"
-                                    )
 
-                        try:
-                            # Only pass the pause_clock kwarg when we actually
-                            # have one to propagate — keeps the call shape
-                            # backward-compatible with mocks / older clients
-                            # that don't yet accept the kwarg.
-                            _wait_kwargs: Dict[str, Any] = {
-                                "execution_id": execution_id,
-                                "timeout": execution_timeout,
-                            }
-                            if propagate_pause:
-                                _wait_kwargs["pause_clock"] = (
-                                    self._pause_clocks.get(parent_execution_id)
-                                )
-                            result = await self.client.wait_for_execution_result(
-                                **_wait_kwargs
-                            )
-                        finally:
-                            if propagate_pause:
-                                async with self._waiting_children_lock:
-                                    self._waiting_children.pop(execution_id, None)
-                                    paused_set = self._parent_paused_children.get(
-                                        parent_execution_id
-                                    )
-                                    if (
-                                        paused_set is not None
-                                        and execution_id in paused_set
-                                    ):
-                                        paused_set.discard(execution_id)
-                                        if not paused_set:
-                                            _pc = self._pause_clocks.get(
-                                                parent_execution_id
-                                            )
-                                            if _pc is not None:
-                                                _pc.end_pause()
-                                            self._parent_paused_children.pop(
-                                                parent_execution_id, None
-                                            )
+                        # Only pass the pause_clock kwarg when we actually have
+                        # one — keeps the call shape backward-compatible with
+                        # mocks / older clients that don't yet accept the kwarg.
+                        _wait_kwargs: Dict[str, Any] = {
+                            "execution_id": execution_id,
+                            "timeout": execution_timeout,
+                        }
+                        if parent_pause_clock is not None:
+                            _wait_kwargs["pause_clock"] = parent_pause_clock
+                        result = await self.client.wait_for_execution_result(
+                            **_wait_kwargs
+                        )
 
                         elapsed_time = time.time() - start_time
                         if self.dev_mode:

@@ -11,7 +11,7 @@ import json
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urljoin
 
 import aiohttp
@@ -240,37 +240,7 @@ class AsyncExecutionManager:
         self._circuit_breaker_last_failure = 0.0
         self._circuit_breaker_open = False
 
-        # Listeners notified on every observed execution status transition.
-        # The Agent registers a listener here so a parent reasoner waiting on
-        # a child via ``app.call`` can pause its own pause-clock while the
-        # child is in ``waiting``/``paused``, and resume it when the child
-        # transitions back to ``running`` (or terminates).
-        self._status_listeners: List[Callable[[str, ExecutionStatus], None]] = []
-
         logger.debug(f"AsyncExecutionManager initialized with base_url={base_url}")
-
-    def register_status_listener(
-        self, callback: Callable[[str, ExecutionStatus], None]
-    ) -> None:
-        """Register a callback invoked on every observed status transition.
-
-        The callback receives ``(execution_id, status)`` and must be
-        non-blocking — it is invoked from the SSE event loop. Idempotent:
-        the same callable is only registered once.
-        """
-        if callback not in self._status_listeners:
-            self._status_listeners.append(callback)
-
-    def _fire_status_listeners(
-        self, execution_id: str, status: ExecutionStatus
-    ) -> None:
-        for cb in self._status_listeners:
-            try:
-                cb(execution_id, status)
-            except Exception as exc:
-                logger.debug(
-                    f"Status listener raised for {execution_id[:8]}...: {exc}"
-                )
 
     def set_event_stream_headers(self, headers: Optional[Dict[str, str]]) -> None:
         """Configure headers forwarded to the SSE event stream."""
@@ -587,54 +557,88 @@ class AsyncExecutionManager:
                     pass
             return elapsed
 
-        # Wait for completion
-        while _active_elapsed() < wait_timeout:
+        # Tracks whether we currently have ``pause_clock`` paused on behalf of
+        # the awaited child. Toggled below as we observe the child entering
+        # and leaving ``WAITING`` via the polling task's status updates.
+        # Polling is unconditional, so this works whether or not the SSE
+        # event stream is enabled.
+        child_pause_active = False
+        try:
+            # Wait for completion
+            while _active_elapsed() < wait_timeout:
+                async with self._execution_lock:
+                    execution = self._executions.get(execution_id)
+                    if execution is None:
+                        raise KeyError(f"Execution {execution_id} was removed")
+
+                    is_waiting = execution.status == ExecutionStatus.WAITING
+
+                    if execution.is_terminal:
+                        if execution.is_successful:
+                            # Cache successful result
+                            if execution.result is not None:
+                                self.result_cache.set_execution_result(
+                                    execution_id, execution.result
+                                )
+                            return execution.result
+                        elif execution.status == ExecutionStatus.FAILED:
+                            # The reasoner ran and explicitly returned a failed
+                            # result. Surface as ExecutionFailedError (a subclass
+                            # of AgentFieldClientError, kept for backward compat)
+                            # so Agent.call can skip the sync fallback path: the
+                            # reasoner's already done its work, retrying with the
+                            # same input would burn the same budget for the same
+                            # outcome. Transient transport / submission errors
+                            # still surface as plain AgentFieldClientError and
+                            # remain retry-eligible.
+                            raise ExecutionFailedError(
+                                f"Execution failed: {execution.error_message}"
+                            )
+                        elif execution.status == ExecutionStatus.CANCELLED:
+                            raise AgentFieldClientError(
+                                f"Execution was cancelled: {execution._cancellation_reason}"
+                            )
+                        elif execution.status == ExecutionStatus.TIMEOUT:
+                            raise ExecutionTimeoutError(
+                                f"Execution timed out after {execution.timeout} seconds"
+                            )
+
+                # Toggle the parent's pause-clock based on the child's status.
+                # Doing this in the wait loop (rather than via the SSE event
+                # listener) means cross-reasoner pause propagation works
+                # whenever ``Agent.call`` is awaited, regardless of whether
+                # ``enable_event_stream`` is on. Done outside the lock so the
+                # ``time.time()`` reads in PauseClock don't pile up under it.
+                if pause_clock is not None:
+                    if is_waiting and not child_pause_active:
+                        pause_clock.start_pause()
+                        child_pause_active = True
+                    elif (not is_waiting) and child_pause_active:
+                        pause_clock.end_pause()
+                        child_pause_active = False
+
+                # Wait before next check
+                await asyncio.sleep(0.1)
+
+            # Timeout reached
             async with self._execution_lock:
                 execution = self._executions.get(execution_id)
-                if execution is None:
-                    raise KeyError(f"Execution {execution_id} was removed")
+                if execution and execution.is_active:
+                    execution.timeout_execution()
+                    self.metrics.timeout_executions += 1
 
-                if execution.is_terminal:
-                    if execution.is_successful:
-                        # Cache successful result
-                        if execution.result is not None:
-                            self.result_cache.set_execution_result(
-                                execution_id, execution.result
-                            )
-                        return execution.result
-                    elif execution.status == ExecutionStatus.FAILED:
-                        # The reasoner ran and explicitly returned a failed
-                        # result. Surface as ExecutionFailedError (a subclass
-                        # of AgentFieldClientError, kept for backward compat)
-                        # so Agent.call can skip the sync fallback path: the
-                        # reasoner's already done its work, retrying with the
-                        # same input would burn the same budget for the same
-                        # outcome. Transient transport / submission errors
-                        # still surface as plain AgentFieldClientError and
-                        # remain retry-eligible.
-                        raise ExecutionFailedError(
-                            f"Execution failed: {execution.error_message}"
-                        )
-                    elif execution.status == ExecutionStatus.CANCELLED:
-                        raise AgentFieldClientError(
-                            f"Execution was cancelled: {execution._cancellation_reason}"
-                        )
-                    elif execution.status == ExecutionStatus.TIMEOUT:
-                        raise ExecutionTimeoutError(
-                            f"Execution timed out after {execution.timeout} seconds"
-                        )
-
-            # Wait before next check
-            await asyncio.sleep(0.1)
-
-        # Timeout reached
-        async with self._execution_lock:
-            execution = self._executions.get(execution_id)
-            if execution and execution.is_active:
-                execution.timeout_execution()
-                self.metrics.timeout_executions += 1
-
-        raise ExecutionTimeoutError(f"Wait timeout reached after {wait_timeout} seconds")
+            raise ExecutionTimeoutError(
+                f"Wait timeout reached after {wait_timeout} seconds"
+            )
+        finally:
+            # Ensure we don't leave the parent's clock stuck in a paused state
+            # if we exit via terminal / timeout / exception while the child
+            # was last seen waiting.
+            if child_pause_active and pause_clock is not None:
+                try:
+                    pause_clock.end_pause()
+                except Exception:
+                    pass
 
     async def cancel_execution(
         self, execution_id: str, reason: Optional[str] = None
@@ -870,20 +874,13 @@ class AsyncExecutionManager:
         schedule_poll = False
         status_hint = normalize_status(payload.get("status"))
         event_type = str(payload.get("type", "")).lower()
-        # ``execution.waiting`` is what RequestApprovalHandler publishes when
-        # a child reasoner enters ``app.pause``; the payload often omits an
-        # explicit status field, in which case ``normalize_status`` would
-        # report ``"unknown"`` and we'd lose the signal. Override based on
-        # event_type so the hint reflects what actually happened.
-        if event_type == "execution.waiting":
-            status_hint = "waiting"
 
-        new_status: Optional[ExecutionStatus] = None
         async with self._execution_lock:
             execution = self._executions.get(execution_id)
             if execution is None:
                 return
 
+            new_status: Optional[ExecutionStatus] = None
             if event_type == "execution_started" or status_hint == "running":
                 new_status = ExecutionStatus.RUNNING
             elif status_hint == "queued":
@@ -891,9 +888,6 @@ class AsyncExecutionManager:
             elif status_hint == "pending":
                 new_status = ExecutionStatus.PENDING
             elif status_hint in {"waiting", "paused"}:
-                # Child entered an external-wait state (e.g. waiting on a
-                # human approval via app.pause). The status listener uses
-                # this transition to pause the parent's pause-clock.
                 new_status = ExecutionStatus.WAITING
             elif status_hint in {
                 "succeeded",
@@ -913,11 +907,6 @@ class AsyncExecutionManager:
 
             if new_status is not None and new_status != execution.status:
                 execution.update_status(new_status)
-            else:
-                new_status = None  # no-op transition; don't fire listeners
-
-        if new_status is not None:
-            self._fire_status_listeners(execution_id, new_status)
 
         if schedule_poll:
             asyncio.create_task(self._poll_execution_immediate(execution_id))
