@@ -3954,29 +3954,34 @@ class Agent(FastAPI):
                             raise async_error
 
                         # Never fall back when the failure happened AFTER the
-                        # reasoner already ran. ExecutionFailedError means
-                        # the call reached the reasoner, the work executed,
-                        # and the reasoner returned an error — retrying
-                        # via sync would burn the same budget for the same
-                        # outcome. ExecutionTimeoutError means the work has
-                        # already used (or exceeded) its timeout budget on
-                        # the agent side; firing the same call again wastes
-                        # another full budget. Both classes surface as
-                        # subclasses of AgentFieldError so a local import
-                        # is safe even with the legacy AgentFieldClientError
-                        # catch path some callers depend on.
+                        # reasoner already ran, OR when the user explicitly
+                        # cancelled. ExecutionFailedError means the call
+                        # reached the reasoner, the work executed, and the
+                        # reasoner returned an error — retrying via sync
+                        # would burn the same budget for the same outcome.
+                        # ExecutionTimeoutError means the work has already
+                        # used (or exceeded) its timeout budget on the agent
+                        # side; firing the same call again wastes another
+                        # full budget. ExecutionCancelledError means the user
+                        # told us to stop — silently re-issuing the call via
+                        # sync fallback would defeat the cancellation.
                         from agentfield.exceptions import (
+                            ExecutionCancelledError,
                             ExecutionFailedError,
                             ExecutionTimeoutError,
                         )
                         if isinstance(
                             async_error,
-                            (ExecutionFailedError, ExecutionTimeoutError),
+                            (
+                                ExecutionFailedError,
+                                ExecutionTimeoutError,
+                                ExecutionCancelledError,
+                            ),
                         ):
                             if self.dev_mode:
                                 log_debug(
                                     f"Skipping sync fallback for {type(async_error).__name__}: "
-                                    f"reasoner already ran; retry would re-burn the budget"
+                                    f"reasoner already ran or was cancelled by user"
                                 )
                             raise async_error
 
