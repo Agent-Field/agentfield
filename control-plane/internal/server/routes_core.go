@@ -127,6 +127,13 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	agentAPI.POST("/agents/:node_id/executions/:execution_id/request-approval", handlers.AgentScopedRequestApprovalHandler(s.storage))
 	agentAPI.GET("/agents/:node_id/executions/:execution_id/approval-status", handlers.AgentScopedGetApprovalStatusHandler(s.storage))
 
+	// Multi-hop pause propagation: an agent's app.call wait loop pushes its
+	// OWN status to WAITING when its awaited child enters WAITING, so any
+	// further ancestor sees WAITING transitively. Without this, pause only
+	// propagates one hop up the call tree and 3+-deep chains time out at
+	// wallclock on the great-grandparent.
+	agentAPI.POST("/agents/:node_id/executions/:execution_id/awaiter-status", handlers.UpdateAwaiterStatusHandler(s.storage))
+
 	// Approval resolution webhook (called by agents or external services when approval resolves)
 	agentAPI.POST("/webhooks/approval-response", handlers.ApprovalWebhookHandler(s.storage, s.config.AgentField.Approval.WebhookSecret))
 
