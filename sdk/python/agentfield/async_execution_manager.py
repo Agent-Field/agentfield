@@ -20,6 +20,7 @@ from .async_config import AsyncConfig
 from .execution_state import ExecuteError, ExecutionPriority, ExecutionState, ExecutionStatus
 from .exceptions import (
     AgentFieldClientError,
+    ExecutionCancelledError,
     ExecutionFailedError,
     ExecutionTimeoutError,
 )
@@ -528,7 +529,9 @@ class AsyncExecutionManager:
         Raises:
             KeyError: If execution_id is not found
             ExecutionTimeoutError: If execution times out
-            AgentFieldClientError: If execution fails or is cancelled
+            ExecutionFailedError: If the reasoner ran and returned a failed status
+            ExecutionCancelledError: If the execution was cancelled (user intent)
+            AgentFieldClientError: For other transport / submission failures
         """
         # Check cache first
         cached_result = self.result_cache.get_execution_result(execution_id)
@@ -615,7 +618,11 @@ class AsyncExecutionManager:
                                 f"Execution failed: {execution.error_message}"
                             )
                         elif execution.status == ExecutionStatus.CANCELLED:
-                            raise AgentFieldClientError(
+                            # Surface as ExecutionCancelledError (NOT a subclass
+                            # of AgentFieldClientError) so Agent.call's
+                            # sync-fallback path skips it: cancellation is
+                            # explicit user intent, never retry-eligible.
+                            raise ExecutionCancelledError(
                                 f"Execution was cancelled: {execution._cancellation_reason}"
                             )
                         elif execution.status == ExecutionStatus.TIMEOUT:
