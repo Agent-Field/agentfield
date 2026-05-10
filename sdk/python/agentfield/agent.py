@@ -3927,6 +3927,54 @@ class Agent(FastAPI):
                         }
                         if parent_pause_clock is not None:
                             _wait_kwargs["pause_clock"] = parent_pause_clock
+
+                            # Multi-hop pause propagation: when our awaited
+                            # child enters WAITING, push OUR OWN execution
+                            # status to WAITING so anyone awaiting us sees
+                            # WAITING too (and transitively up the chain).
+                            # Fire-and-forget; the wait loop swallows
+                            # exceptions so a transient control-plane blip
+                            # can't break the call graph. See run
+                            # run_1778429268006_76e417b7 — implement_from_issue
+                            # timed out at 7200s wallclock because two-or-more
+                            # hops up from a paused descendant, no clock pause
+                            # ever fired without this.
+                            _self_exec_id = parent_execution_id
+                            _client = self.client
+                            if _self_exec_id and _client is not None:
+                                _waiting_reason = f"awaiting child {execution_id}"
+
+                                async def _push_self_waiting() -> None:
+                                    try:
+                                        await _client.notify_awaiter_status(
+                                            execution_id=_self_exec_id,
+                                            status="waiting",
+                                            reason=_waiting_reason,
+                                        )
+                                    except Exception as exc:
+                                        if self.dev_mode:
+                                            log_debug(
+                                                f"notify_awaiter_status(waiting) "
+                                                f"failed (swallowed): {exc}"
+                                            )
+
+                                async def _push_self_running() -> None:
+                                    try:
+                                        await _client.notify_awaiter_status(
+                                            execution_id=_self_exec_id,
+                                            status="running",
+                                            reason=_waiting_reason,
+                                        )
+                                    except Exception as exc:
+                                        if self.dev_mode:
+                                            log_debug(
+                                                f"notify_awaiter_status(running) "
+                                                f"failed (swallowed): {exc}"
+                                            )
+
+                                _wait_kwargs["on_child_waiting"] = _push_self_waiting
+                                _wait_kwargs["on_child_running"] = _push_self_running
+
                         result = await self.client.wait_for_execution_result(
                             **_wait_kwargs
                         )
