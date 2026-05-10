@@ -552,7 +552,7 @@ async def test_wait_for_result_ends_pause_on_terminal_while_waiting():
     from agentfield.async_execution_manager import AsyncExecutionManager
     from agentfield.async_config import AsyncConfig
     from agentfield.execution_state import ExecutionState, ExecutionStatus
-    from agentfield.exceptions import AgentFieldClientError
+    from agentfield.exceptions import ExecutionCancelledError
 
     manager = AsyncExecutionManager(base_url="http://control", config=AsyncConfig())
     exec_id = "exec-cancelled-while-waiting"
@@ -576,7 +576,7 @@ async def test_wait_for_result_ends_pause_on_terminal_while_waiting():
             state.cancel("user_cancelled_during_approval")
 
     poller = asyncio.create_task(_drive_polling())
-    with pytest.raises(AgentFieldClientError):
+    with pytest.raises(ExecutionCancelledError):
         await manager.wait_for_result(
             exec_id, timeout=5.0, pause_clock=parent_clock
         )

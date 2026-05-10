@@ -215,6 +215,54 @@ async def test_call_skips_sync_fallback_on_execution_timeout_error():
 
 
 @pytest.mark.asyncio
+async def test_call_skips_sync_fallback_on_execution_cancelled_error():
+    """ExecutionCancelledError = the user explicitly cancelled the awaited
+    child (typically via the control plane's cancel-tree endpoint). The SDK
+    must NOT retry via sync — silently re-issuing a cancelled call defeats
+    the cancellation and re-runs work the user told the system to abandon.
+    Repro: github-buddy → pr-af.review run cancelled mid-flight; pr-af got
+    invoked again seconds later because the cancellation surfaced as a
+    plain AgentFieldClientError and slipped past the skip-list."""
+    from agentfield.exceptions import ExecutionCancelledError
+
+    agent = _make_agent_with_async_path()
+
+    sync_calls = 0
+
+    async def fake_execute_async(target, input_data, headers, timeout=None):
+        return "exec_xyz"
+
+    async def fake_wait_for_execution_result(execution_id, timeout=None):
+        raise ExecutionCancelledError(
+            "Execution was cancelled: user clicked cancel"
+        )
+
+    async def fake_execute(target, input_data, headers):
+        nonlocal sync_calls
+        sync_calls += 1
+        return {"result": {"never_reached": True}}
+
+    agent.client = SimpleNamespace(
+        execute=fake_execute,
+        execute_async=fake_execute_async,
+        wait_for_execution_result=fake_wait_for_execution_result,
+    )
+
+    set_current_agent(agent)
+    try:
+        with pytest.raises(ExecutionCancelledError):
+            await agent.call("other.reasoner", 1)
+    finally:
+        clear_current_agent()
+
+    assert sync_calls == 0, (
+        "ExecutionCancelledError must NOT trigger sync fallback — "
+        "the user explicitly told the system to stop; silently re-issuing "
+        "the call defeats the cancellation."
+    )
+
+
+@pytest.mark.asyncio
 async def test_call_still_falls_back_on_transport_errors():
     """Plain AgentFieldClientError (transport / submission / network) MUST
     still trigger the sync fallback. Only post-execution errors are skipped.
