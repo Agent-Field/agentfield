@@ -33,6 +33,24 @@ from .types import WebhookConfig
 logger = get_logger(__name__)
 
 
+async def _safe_pause_callback(callback: Any, name: str, timeout: float = 2.0) -> None:
+    """Run a pause-transition callback, swallowing any exception.
+
+    The on_child_waiting / on_child_running hooks fire HTTP calls to the
+    control plane (for multi-hop pause propagation). A transient blip there
+    must not break the wait loop or leave the local pause_clock stuck.
+    Bounded by ``timeout`` so a hung control plane can't stall the wait
+    loop — propagation is best-effort, and a missed update just falls back
+    to one-hop pause-clock semantics (the prior behavior).
+    """
+    try:
+        await asyncio.wait_for(callback(), timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.debug(f"{name} callback timed out after {timeout}s (swallowed)")
+    except Exception as exc:
+        logger.debug(f"{name} callback raised (swallowed): {exc}")
+
+
 class LazyAsyncLock:
     """Deferred asyncio.Lock that instantiates once the event loop is running."""
 
@@ -509,6 +527,8 @@ class AsyncExecutionManager:
         execution_id: str,
         timeout: Optional[float] = None,
         pause_clock: Optional[Any] = None,
+        on_child_waiting: Optional[Any] = None,
+        on_child_running: Optional[Any] = None,
     ) -> Any:
         """
         Wait for execution result with intelligent polling.
@@ -522,6 +542,18 @@ class AsyncExecutionManager:
                 doesn't time out while the awaited child is parked on a
                 human approval — the active-time semantics here match the
                 reasoner watchdog in ``_execute_async_with_callback``.
+            on_child_waiting: Optional async callable fired (best-effort,
+                fire-and-forget) when the awaited child transitions into
+                WAITING. ``Agent.call`` wires this to push the AWAITER's own
+                execution status to WAITING so any further ancestor sees
+                WAITING transitively — without this, the parent's pause-clock
+                only pauses for immediate-child waits, not for grandchild or
+                deeper waits, and the great-grandparent times out at
+                wallclock on multi-hop call chains.
+            on_child_running: Mirror of ``on_child_waiting`` fired when the
+                child exits WAITING, used to push the awaiter back to
+                RUNNING. Exceptions from either callback are swallowed so a
+                transient control-plane blip can't break the wait loop.
 
         Returns:
             Any: Execution result
@@ -636,13 +668,34 @@ class AsyncExecutionManager:
                 # whenever ``Agent.call`` is awaited, regardless of whether
                 # ``enable_event_stream`` is on. Done outside the lock so the
                 # ``time.time()`` reads in PauseClock don't pile up under it.
+                #
+                # The ``on_child_waiting`` / ``on_child_running`` callbacks
+                # fire in lockstep — ``Agent.call`` uses them to push the
+                # AWAITER's own status to the control plane so multi-hop
+                # propagation works (one-hop pause-clock pause isn't enough
+                # when the awaiter has its own parent watching).
+                #
+                # We ``await`` the callback rather than ``create_task`` so
+                # the WAITING and RUNNING notifications can't race past each
+                # other and leave the awaiter stuck in WAITING after the
+                # child has already resumed. ``_safe_pause_callback`` enforces
+                # a short timeout and swallows exceptions, so a slow / dead
+                # control plane can't stall the wait loop indefinitely.
                 if pause_clock is not None:
                     if is_waiting and not child_pause_active:
                         pause_clock.start_pause()
                         child_pause_active = True
+                        if on_child_waiting is not None:
+                            await _safe_pause_callback(
+                                on_child_waiting, "on_child_waiting"
+                            )
                     elif (not is_waiting) and child_pause_active:
                         pause_clock.end_pause()
                         child_pause_active = False
+                        if on_child_running is not None:
+                            await _safe_pause_callback(
+                                on_child_running, "on_child_running"
+                            )
 
                 # Wait before next check
                 await asyncio.sleep(0.1)
