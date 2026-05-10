@@ -32,6 +32,7 @@ def make_agent():
         register=AsyncMock(),
         resolve=AsyncMock(),
     )
+    agent._pause_clocks = {}
     agent.note = Mock()
     agent.agentfield_server = "http://agentfield.test"
     agent.api_key = "key"

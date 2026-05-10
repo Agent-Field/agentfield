@@ -207,6 +207,9 @@ func (m *mockStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAfte
 func (m *mockStorage) RetryStaleWorkflowExecutions(ctx context.Context, staleAfter time.Duration, maxRetries int, limit int) ([]string, error) {
 	return nil, nil
 }
+func (m *mockStorage) MarkAgentExecutionsOrphaned(ctx context.Context, agentNodeID string, reasonMessage string) (int, error) {
+	return 0, nil
+}
 func (m *mockStorage) CleanupWorkflow(ctx context.Context, workflowID string, dryRun bool) (*types.WorkflowCleanupResult, error) {
 	return nil, nil
 }

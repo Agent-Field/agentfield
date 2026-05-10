@@ -4,14 +4,37 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
+
+var (
+	openCodeSemaphore chan struct{}
+	semOnce           sync.Once
+)
+
+const defaultMaxConcurrent = 4
 
 // OpenCodeProvider invokes the opencode CLI as a subprocess.
 type OpenCodeProvider struct {
 	BinPath   string
 	ServerURL string
+	runCLI    func(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int) (*CLIResult, error)
+}
+
+func getSemaphore() chan struct{} {
+	semOnce.Do(func() {
+		max := defaultMaxConcurrent
+		if val := os.Getenv("OPENCODE_MAX_CONCURRENT"); val != "" {
+			if i, err := strconv.Atoi(val); err == nil && i > 0 {
+				max = i
+			}
+		}
+		openCodeSemaphore = make(chan struct{}, max)
+	})
+	return openCodeSemaphore
 }
 
 // NewOpenCodeProvider creates an OpenCode provider. If binPath is empty,
@@ -23,7 +46,7 @@ func NewOpenCodeProvider(binPath, serverURL string) *OpenCodeProvider {
 	if serverURL == "" {
 		serverURL = os.Getenv("OPENCODE_SERVER")
 	}
-	return &OpenCodeProvider{BinPath: binPath, ServerURL: serverURL}
+	return &OpenCodeProvider{BinPath: binPath, ServerURL: serverURL, runCLI: RunCLI}
 }
 
 func (p *OpenCodeProvider) Execute(ctx context.Context, prompt string, options Options) (*RawResult, error) {
@@ -74,6 +97,14 @@ func (p *OpenCodeProvider) Execute(ctx context.Context, prompt string, options O
 		env[k] = v
 	}
 
+	sem := getSemaphore()
+	select {
+	case sem <- struct{}{}:
+		defer func() { <-sem }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
 	// Use a temp data dir to isolate opencode state.
 	tempDataDir, err := os.MkdirTemp("", ".agentfield-opencode-data-")
 	if err != nil {
@@ -84,7 +115,7 @@ func (p *OpenCodeProvider) Execute(ctx context.Context, prompt string, options O
 
 	startAPI := time.Now()
 
-	cliResult, err := RunCLI(ctx, cmd, env, options.Cwd, options.timeout())
+	cliResult, err := p.runCLI(ctx, cmd, env, options.Cwd, options.timeout())
 	apiMS := int(time.Since(startAPI).Milliseconds())
 
 	if err != nil {

@@ -63,7 +63,13 @@ describe("HealthStrip", () => {
       data: { healthy: true, endpoints: [{ healthy: true }] },
     });
     state.queueStatus.mockReturnValue({
-      data: { agents: { a: { running: 2 }, b: { running: 1 } } },
+      data: {
+        total_running: 3,
+        agents: [
+          { agent_node_id: "a", running: 2, max: 3, available: 1 },
+          { agent_node_id: "b", running: 1, max: 3, available: 2 },
+        ],
+      },
     });
     state.agents.mockReturnValue({
       data: {
@@ -105,7 +111,7 @@ describe("HealthStrip", () => {
       isLoading: true,
       data: undefined,
     });
-    state.queueStatus.mockReturnValue({ data: { agents: {} } });
+    state.queueStatus.mockReturnValue({ data: { agents: [], total_running: 0 } });
     state.agents.mockReturnValue({
       data: {
         count: 1,

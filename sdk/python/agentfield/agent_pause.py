@@ -1,9 +1,50 @@
 import asyncio
-from typing import Dict
+import time
+from typing import Dict, Optional
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from agentfield.client import ApprovalResult
+
+
+class PauseClock:
+    """Tracks how long a single execution has spent inside ``Agent.pause()``.
+
+    The reasoner-level wall-clock timeout in ``_execute_async_with_callback``
+    must not count time spent waiting for an external approval — otherwise
+    ``expires_in_hours`` is silently capped at the reasoner timeout.  The
+    watchdog in ``_execute_async_with_callback`` reads ``total_paused()`` and
+    subtracts it from elapsed wall-clock to decide whether to fire a timeout.
+
+    A reasoner is a single asyncio task, so ``pause()`` calls cannot overlap
+    on the same clock.  No locking is needed.
+    """
+
+    __slots__ = ("_total_paused", "_pause_started_at", "timed_out")
+
+    def __init__(self) -> None:
+        self._total_paused: float = 0.0
+        self._pause_started_at: Optional[float] = None
+        # Set by the watchdog when it cancels the reasoner for exceeding
+        # the active-time budget.  Distinguishes timeout-cancel from an
+        # external cooperative cancel arriving via the cancel dispatcher.
+        self.timed_out: bool = False
+
+    def start_pause(self) -> None:
+        if self._pause_started_at is None:
+            self._pause_started_at = time.time()
+
+    def end_pause(self) -> None:
+        if self._pause_started_at is not None:
+            self._total_paused += time.time() - self._pause_started_at
+            self._pause_started_at = None
+
+    def total_paused(self) -> float:
+        """Cumulative paused seconds, including any in-progress pause."""
+        if self._pause_started_at is None:
+            return self._total_paused
+        return self._total_paused + (time.time() - self._pause_started_at)
+
 
 class _PauseManager:
     """Manages pending execution pause futures resolved via webhook callback.

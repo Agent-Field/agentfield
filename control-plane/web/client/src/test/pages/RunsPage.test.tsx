@@ -8,7 +8,7 @@ const {
   navigateMock,
   searchParamsState,
   useRunsMock,
-  cancelMutationMock,
+  cancelTreeMutationMock,
   pauseMutationMock,
   resumeMutationMock,
   useQueryMock,
@@ -21,7 +21,7 @@ const {
   navigateMock: vi.fn(),
   searchParamsState: { value: new URLSearchParams() },
   useRunsMock: vi.fn(),
-  cancelMutationMock: vi.fn(),
+  cancelTreeMutationMock: vi.fn(),
   pauseMutationMock: vi.fn(),
   resumeMutationMock: vi.fn(),
   useQueryMock: vi.fn(),
@@ -35,6 +35,15 @@ const {
 vi.mock("react-router-dom", () => ({
   useNavigate: () => navigateMock,
   useSearchParams: () => [searchParamsState.value, vi.fn()],
+  Link: ({
+    to,
+    children,
+    ...props
+  }: React.PropsWithChildren<{ to: string } & React.AnchorHTMLAttributes<HTMLAnchorElement>>) => (
+    <a href={to} {...props}>
+      {children}
+    </a>
+  ),
 }));
 
 vi.mock("@tanstack/react-query", () => ({
@@ -47,7 +56,7 @@ vi.mock("@/services/executionsApi", () => ({
 
 vi.mock("@/hooks/queries", () => ({
   useRuns: useRunsMock,
-  useCancelExecution: () => ({ mutateAsync: cancelMutationMock }),
+  useCancelWorkflowTree: () => ({ mutateAsync: cancelTreeMutationMock }),
   usePauseExecution: () => ({ mutateAsync: pauseMutationMock }),
   useResumeExecution: () => ({ mutateAsync: resumeMutationMock }),
 }));
@@ -399,7 +408,7 @@ describe("RunsPage", () => {
     vi.useRealTimers();
     navigateMock.mockReset();
     useRunsMock.mockReset();
-    cancelMutationMock.mockReset();
+    cancelTreeMutationMock.mockReset();
     pauseMutationMock.mockReset();
     resumeMutationMock.mockReset();
     useQueryMock.mockReset();
@@ -411,7 +420,15 @@ describe("RunsPage", () => {
     searchParamsState.value = new URLSearchParams();
 
     useQueryMock.mockReturnValue({ data: undefined, isLoading: false });
-    cancelMutationMock.mockResolvedValue(undefined);
+    cancelTreeMutationMock.mockResolvedValue({
+      run_id: "run",
+      total_nodes: 1,
+      cancelled_count: 1,
+      skipped_count: 0,
+      error_count: 0,
+      nodes: [],
+      cancelled_at: new Date().toISOString(),
+    });
     pauseMutationMock.mockResolvedValue(undefined);
     resumeMutationMock.mockResolvedValue(undefined);
     useRunsMock.mockImplementation((filters?: Record<string, unknown>) => ({
@@ -516,10 +533,14 @@ describe("RunsPage", () => {
     await user.click(screen.getByRole("button", { name: "Cancel 2 runs" }));
 
     await waitFor(() => {
-      expect(cancelMutationMock).toHaveBeenCalledTimes(2);
+      expect(cancelTreeMutationMock).toHaveBeenCalledTimes(2);
     });
-    expect(cancelMutationMock).toHaveBeenCalledWith("exec-1");
-    expect(cancelMutationMock).toHaveBeenCalledWith("exec-2");
+    expect(cancelTreeMutationMock).toHaveBeenCalledWith(
+      expect.objectContaining({ workflowId: "run-001-alpha" }),
+    );
+    expect(cancelTreeMutationMock).toHaveBeenCalledWith(
+      expect.objectContaining({ workflowId: "run-002-beta" }),
+    );
     expect(showSuccessMock).toHaveBeenCalledWith(
       "2 runs cancelled",
       "All selected runs were cancelled successfully.",
@@ -615,10 +636,14 @@ describe("RunsPage", () => {
     await user.click(screen.getByRole("button", { name: "Cancel run" }));
 
     await waitFor(() => {
-      expect(cancelMutationMock).toHaveBeenCalledTimes(1);
+      expect(cancelTreeMutationMock).toHaveBeenCalledTimes(1);
     });
-    expect(cancelMutationMock).toHaveBeenCalledWith("exec-1");
-    expect(cancelMutationMock).not.toHaveBeenCalledWith("exec-3");
+    expect(cancelTreeMutationMock).toHaveBeenCalledWith(
+      expect.objectContaining({ workflowId: "run-001-alpha" }),
+    );
+    expect(cancelTreeMutationMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ workflowId: "run-003-gamma" }),
+    );
     expect(showSuccessMock).toHaveBeenCalledWith("1 run cancelled", undefined);
   });
 
@@ -646,7 +671,15 @@ describe("RunsPage", () => {
     });
     pauseMutationMock.mockRejectedValueOnce(new Error("pause denied"));
     resumeMutationMock.mockResolvedValueOnce(undefined);
-    cancelMutationMock.mockResolvedValueOnce(undefined);
+    cancelTreeMutationMock.mockResolvedValueOnce({
+      run_id: "run-001-alpha",
+      total_nodes: 1,
+      cancelled_count: 1,
+      skipped_count: 0,
+      error_count: 0,
+      nodes: [],
+      cancelled_at: new Date().toISOString(),
+    });
 
     render(<RunsPage />);
 
@@ -691,6 +724,50 @@ describe("RunsPage", () => {
     });
   });
 
+  it("notifies with nothing-left-to-cancel message when row cancel returns cancelled_count of zero", async () => {
+    const user = userEvent.setup();
+    cancelTreeMutationMock.mockReset();
+    cancelTreeMutationMock.mockResolvedValueOnce({
+      run_id: "run-001-alpha",
+      total_nodes: 0,
+      cancelled_count: 0,
+      skipped_count: 0,
+      error_count: 0,
+      nodes: [],
+      cancelled_at: new Date().toISOString(),
+    });
+
+    render(<RunsPage />);
+
+    await user.click(screen.getByRole("button", { name: "Cancel run-001-alpha" }));
+    await waitFor(() => {
+      expect(showRunNotificationMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Cancelled",
+          message: expect.stringMatching(/nothing left to cancel/),
+        }),
+      );
+    });
+  });
+
+  it("surfaces a Cancel-failed notification when the row cancel mutation rejects", async () => {
+    const user = userEvent.setup();
+    cancelTreeMutationMock.mockReset();
+    cancelTreeMutationMock.mockRejectedValueOnce(new Error("network down"));
+
+    render(<RunsPage />);
+
+    await user.click(screen.getByRole("button", { name: "Cancel run-001-alpha" }));
+    await waitFor(() => {
+      expect(showRunNotificationMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Cancel failed",
+          message: "network down",
+        }),
+      );
+    });
+  });
+
   it("runs bulk pause and resume actions", async () => {
     const user = userEvent.setup();
 
@@ -710,5 +787,67 @@ describe("RunsPage", () => {
       expect(resumeMutationMock).toHaveBeenCalledWith("exec-2");
     });
     expect(showSuccessMock).toHaveBeenCalledWith("1 run resumed", undefined);
+  });
+
+  it("shows failed run error category with diagnostic links", async () => {
+    useRunsMock.mockReturnValue({
+      data: {
+        workflows: [
+          {
+            run_id: "run-004-failed",
+            workflow_id: "wf-4",
+            root_execution_id: "exec-4",
+            root_execution_status: "failed",
+            status: "failed",
+            root_reasoner: "delta",
+            current_task: "task-d",
+            total_executions: 1,
+            max_depth: 0,
+            started_at: "2026-04-08T09:00:00Z",
+            latest_activity: "2026-04-08T09:01:00Z",
+            display_name: "Delta",
+            agent_id: "agent-four",
+            agent_name: "Agent Four",
+            status_counts: {},
+            active_executions: 0,
+            terminal: true,
+            root_error_category: "llm_unavailable",
+          },
+          {
+            run_id: "run-005-failed",
+            workflow_id: "wf-5",
+            root_execution_id: "exec-5",
+            root_execution_status: "failed",
+            status: "failed",
+            root_reasoner: "epsilon",
+            current_task: "task-e",
+            total_executions: 1,
+            max_depth: 0,
+            started_at: "2026-04-08T09:10:00Z",
+            latest_activity: "2026-04-08T09:11:00Z",
+            display_name: "Epsilon",
+            agent_id: "agent-five",
+            agent_name: "Agent Five",
+            status_counts: {},
+            active_executions: 0,
+            terminal: true,
+            root_error_category: "agent_unreachable",
+          },
+        ],
+        total_count: 2,
+        total_pages: 1,
+      },
+      isLoading: false,
+      isFetching: false,
+      isError: false,
+      error: null,
+    });
+
+    render(<RunsPage />);
+
+    expect(screen.getByText("LLM unavailable")).toBeInTheDocument();
+    expect(screen.getByText("Agent unreachable")).toBeInTheDocument();
+    expect(screen.getByText("LLM health")).toHaveAttribute("href", "/dashboard");
+    expect(screen.getByText("Node status")).toHaveAttribute("href", "/agents");
   });
 });

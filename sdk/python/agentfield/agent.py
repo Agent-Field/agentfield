@@ -594,6 +594,16 @@ class Agent(FastAPI):
         self.agent_tags = tags or []
         self.author = author
 
+        # Per-process identifier sent in registration and heartbeats. The control
+        # plane uses a change in this value across re-registrations to detect a
+        # mid-flight redeploy and fail every in-flight execution that was
+        # awaiting a result inside the previous OS process. A fresh UUID per
+        # __init__ is exactly what we want — every Python process gets a unique
+        # one, and a re-import in the same process keeps the same one (since the
+        # same Agent instance is being used).
+        import uuid as _uuid
+        self.agent_instance_id = _uuid.uuid4().hex
+
         # Memory-efficient handler registries (replaces old list-based storage)
         # Using Dict[str, Entry] with __slots__ dataclasses for minimal footprint
         self._reasoner_registry: Dict[str, ReasonerEntry] = {}
@@ -642,6 +652,31 @@ class Agent(FastAPI):
 
         # prevent GC of fire-and-forget async execution tasks
         self._background_tasks: set[asyncio.Task] = set()
+
+        # Cooperative cancel registry. The control plane's cancel dispatcher
+        # POSTs /_internal/executions/{id}/cancel to signal that the user's
+        # reasoner code should stop. We track the active asyncio.Task per
+        # execution_id so the cancel handler can call task.cancel() — that
+        # raises CancelledError into the user's coroutine, which any
+        # well-behaved async I/O (httpx, anthropic, openai) honors.
+        self._cancel_tasks: Dict[str, asyncio.Task] = {}
+        self._cancel_lock = asyncio.Lock()
+
+        # Per-execution pause clock. Populated by _execute_async_with_callback
+        # before the reasoner task starts, consumed by Agent.pause() /
+        # Agent.wait_for_resume() to record paused intervals, and read by the
+        # watchdog to subtract paused time from elapsed wall-clock. Lifecycle
+        # is bounded by a single execution (single asyncio.Task), so no lock
+        # is required for the dict access.
+        from .agent_pause import PauseClock
+
+        self._pause_clocks: Dict[str, PauseClock] = {}
+
+        # Install the /_internal/executions/{execution_id}/cancel route
+        # before any user-defined reasoners are registered so the path is
+        # always available for the control-plane callback.
+        from .cancel import install_cancel_route
+        install_cancel_route(self)
 
         # Initialize async execution manager (will be lazily created when needed)
         self._async_execution_manager: Optional[AsyncExecutionManager] = None
@@ -1831,6 +1866,12 @@ class Agent(FastAPI):
                     # prevent GC of fire-and-forget tasks
                     self._background_tasks.add(task)
                     task.add_done_callback(self._background_tasks.discard)
+                    # Register so the cancel callback can short-circuit
+                    # the still-running reasoner. The async path's
+                    # execute_async_with_callback handles its own
+                    # cancellation accounting on top of this.
+                    from .cancel import register_execution_task
+                    await register_execution_task(self, execution_id_header, task)
                     return JSONResponse(
                         status_code=202,
                         content={
@@ -1838,6 +1879,32 @@ class Agent(FastAPI):
                             "execution_id": execution_id_header,
                         },
                     )
+
+                # Sync path: wrap the coroutine in a Task so the cancel
+                # callback can call task.cancel() and have CancelledError
+                # propagate into the reasoner. Without this wrapping the
+                # await happens inside the FastAPI request handler frame
+                # directly and there's no Task handle to cancel.
+                if execution_id_header:
+                    from .cancel import (
+                        register_execution_task,
+                        deregister_execution,
+                    )
+                    sync_task = asyncio.create_task(run_reasoner())
+                    await register_execution_task(self, execution_id_header, sync_task)
+                    try:
+                        return await sync_task
+                    except asyncio.CancelledError:
+                        return JSONResponse(
+                            status_code=499,
+                            content={
+                                "status": "cancelled",
+                                "execution_id": execution_id_header,
+                                "reason": "cancelled_by_control_plane",
+                            },
+                        )
+                    finally:
+                        await deregister_execution(self, execution_id_header)
 
                 return await run_reasoner()
 
@@ -2258,16 +2325,45 @@ class Agent(FastAPI):
             log_warn("Unable to construct callback URL for execution updates")
             return
 
-        # Wall-clock timeout to guarantee the callback always fires.
+        # Wall-clock budget to guarantee the callback always fires.
         # Without this, a hung reasoner blocks the execution forever and the
-        # control plane never sees a terminal status.
+        # control plane never sees a terminal status. The budget applies to
+        # *active* time only — intervals spent inside ``Agent.pause()`` or
+        # ``Agent.wait_for_resume()`` are subtracted by the watchdog so the
+        # ``expires_in_hours`` argument to ``pause()`` actually means what it
+        # says rather than being silently capped at this timeout.
         reasoner_timeout = getattr(
             self.async_config, "default_execution_timeout", 7200.0
         )
 
+        from .agent_pause import PauseClock
+
+        pause_clock = PauseClock()
+        self._pause_clocks[execution_id] = pause_clock
+
         start_time = time.time()
+        reasoner_task = asyncio.create_task(reasoner_coro())
+
+        async def _watchdog() -> None:
+            # Poll active-elapsed time and cancel the reasoner if the active
+            # budget is exceeded. ``check_interval`` is a small fraction of
+            # the timeout so we don't oversleep our own deadline by much.
+            check_interval = min(5.0, max(0.1, reasoner_timeout / 4.0))
+            while not reasoner_task.done():
+                try:
+                    await asyncio.sleep(check_interval)
+                except asyncio.CancelledError:
+                    return
+                active_elapsed = (time.time() - start_time) - pause_clock.total_paused()
+                if active_elapsed > reasoner_timeout:
+                    pause_clock.timed_out = True
+                    reasoner_task.cancel()
+                    return
+
+        watchdog_task = asyncio.create_task(_watchdog())
+
         try:
-            result = await asyncio.wait_for(reasoner_coro(), timeout=reasoner_timeout)
+            result = await reasoner_task
             payload = {
                 "status": "succeeded",
                 "result": jsonable_encoder(result),
@@ -2277,19 +2373,38 @@ class Agent(FastAPI):
                 "reasoner": reasoner_name,
             }
             log_info(f"Execution {execution_id} completed asynchronously")
-        except asyncio.TimeoutError:
-            payload = {
-                "status": "failed",
-                "error": (
-                    f"Reasoner '{reasoner_name}' timed out after {reasoner_timeout}s"
-                ),
-                "error_details": {"reason": "reasoner_timeout"},
-                "duration_ms": int((time.time() - start_time) * 1000),
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-                "execution_id": execution_id,
-                "reasoner": reasoner_name,
-            }
-            log_error(f"Execution {execution_id} timed out after {reasoner_timeout}s")
+        except asyncio.CancelledError:
+            if pause_clock.timed_out:
+                payload = {
+                    "status": "failed",
+                    "error": (
+                        f"Reasoner '{reasoner_name}' timed out after "
+                        f"{reasoner_timeout}s of active time"
+                    ),
+                    "error_details": {"reason": "reasoner_timeout"},
+                    "duration_ms": int((time.time() - start_time) * 1000),
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                    "execution_id": execution_id,
+                    "reasoner": reasoner_name,
+                }
+                log_error(
+                    f"Execution {execution_id} timed out after "
+                    f"{reasoner_timeout}s of active time"
+                )
+            else:
+                # External cooperative cancel arrived (cancel dispatcher or
+                # outer task cancellation). Report cancelled status so the
+                # control plane sees a clean terminal transition.
+                payload = {
+                    "status": "cancelled",
+                    "error": "cancelled_by_control_plane",
+                    "error_details": {"reason": "cancelled"},
+                    "duration_ms": int((time.time() - start_time) * 1000),
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                    "execution_id": execution_id,
+                    "reasoner": reasoner_name,
+                }
+                log_info(f"Execution {execution_id} cancelled cooperatively")
         except Exception as exc:
             error_details = getattr(exc, "error_details", None)
             payload = {
@@ -2302,6 +2417,25 @@ class Agent(FastAPI):
                 "reasoner": reasoner_name,
             }
             log_error(f"Execution {execution_id} failed asynchronously: {exc}")
+        finally:
+            # If we landed here without the reasoner finishing (e.g. our own
+            # task was cancelled mid-await), make sure the user code stops
+            # too so it doesn't keep running detached.
+            if not reasoner_task.done():
+                reasoner_task.cancel()
+                try:
+                    await reasoner_task
+                except BaseException:
+                    pass
+            watchdog_task.cancel()
+            try:
+                await watchdog_task
+            except BaseException:
+                pass
+            self._pause_clocks.pop(execution_id, None)
+            # Deregister the cancel hook regardless of outcome.
+            from .cancel import deregister_execution
+            await deregister_execution(self, execution_id)
         await self._post_execution_status(callback_url, payload, execution_id)
 
     async def _post_execution_status(
@@ -3764,9 +3898,37 @@ class Agent(FastAPI):
                             timeout=execution_timeout,
                         )
 
+                        # Cross-reasoner pause propagation: when this call is
+                        # made from inside a reasoner that has a tracked
+                        # pause-clock, hand it to ``wait_for_execution_result``
+                        # so the wait loop can pause the clock while the awaited
+                        # child sits in ``WAITING`` (e.g. on a hax-sdk human
+                        # approval). Without this, the parent's active-time
+                        # budget would burn through the child's wait and
+                        # spuriously trip the watchdog at the wallclock budget.
+                        parent_execution_id = (
+                            current_context.execution_id if current_context else None
+                        )
+                        # ``_pause_clocks`` is set in __init__; getattr keeps
+                        # bypass-init test fixtures from AttributeErroring here.
+                        _all_pause_clocks = getattr(self, "_pause_clocks", None) or {}
+                        parent_pause_clock = (
+                            _all_pause_clocks.get(parent_execution_id)
+                            if parent_execution_id
+                            else None
+                        )
+
+                        # Only pass the pause_clock kwarg when we actually have
+                        # one — keeps the call shape backward-compatible with
+                        # mocks / older clients that don't yet accept the kwarg.
+                        _wait_kwargs: Dict[str, Any] = {
+                            "execution_id": execution_id,
+                            "timeout": execution_timeout,
+                        }
+                        if parent_pause_clock is not None:
+                            _wait_kwargs["pause_clock"] = parent_pause_clock
                         result = await self.client.wait_for_execution_result(
-                            execution_id=execution_id,
-                            timeout=execution_timeout,
+                            **_wait_kwargs
                         )
 
                         elapsed_time = time.time() - start_time
@@ -3789,6 +3951,33 @@ class Agent(FastAPI):
                         # these are permanent failures that retrying won't fix.
                         _err_status = getattr(async_error, "status", None)
                         if _err_status in (401, 403):
+                            raise async_error
+
+                        # Never fall back when the failure happened AFTER the
+                        # reasoner already ran. ExecutionFailedError means
+                        # the call reached the reasoner, the work executed,
+                        # and the reasoner returned an error — retrying
+                        # via sync would burn the same budget for the same
+                        # outcome. ExecutionTimeoutError means the work has
+                        # already used (or exceeded) its timeout budget on
+                        # the agent side; firing the same call again wastes
+                        # another full budget. Both classes surface as
+                        # subclasses of AgentFieldError so a local import
+                        # is safe even with the legacy AgentFieldClientError
+                        # catch path some callers depend on.
+                        from agentfield.exceptions import (
+                            ExecutionFailedError,
+                            ExecutionTimeoutError,
+                        )
+                        if isinstance(
+                            async_error,
+                            (ExecutionFailedError, ExecutionTimeoutError),
+                        ):
+                            if self.dev_mode:
+                                log_debug(
+                                    f"Skipping sync fallback for {type(async_error).__name__}: "
+                                    f"reasoner already ran; retry would re-burn the budget"
+                                )
                             raise async_error
 
                         if not self.async_config.fallback_to_sync:
@@ -4174,6 +4363,12 @@ class Agent(FastAPI):
         effective_timeout = (
             timeout if timeout is not None else expires_in_hours * 3600.0
         )
+        # Tell the reasoner-level watchdog to discount this wait from the
+        # active-time budget. ``end_pause`` runs on every exit path (including
+        # the timeout branch) so the clock never gets stuck open.
+        pause_clock = self._pause_clocks.get(execution_id)
+        if pause_clock is not None:
+            pause_clock.start_pause()
         try:
             result = await asyncio.wait_for(future, timeout=effective_timeout)
         except asyncio.TimeoutError:
@@ -4186,6 +4381,9 @@ class Agent(FastAPI):
             )
             await self._pause_manager.resolve(approval_request_id, expired_result)
             return expired_result
+        finally:
+            if pause_clock is not None:
+                pause_clock.end_pause()
 
         return result
 
@@ -4223,11 +4421,17 @@ class Agent(FastAPI):
         )
 
         effective_timeout = timeout if timeout is not None else 72 * 3600.0
+        pause_clock = self._pause_clocks.get(execution_id or "")
+        if pause_clock is not None:
+            pause_clock.start_pause()
         try:
             result = await asyncio.wait_for(future, timeout=effective_timeout)
             return result
         except asyncio.TimeoutError:
             pass
+        finally:
+            if pause_clock is not None:
+                pause_clock.end_pause()
 
         # Fallback: poll CP once
         try:

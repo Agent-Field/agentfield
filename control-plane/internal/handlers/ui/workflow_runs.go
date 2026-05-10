@@ -34,6 +34,8 @@ type WorkflowRunSummary struct {
 	// children are still running after the user pauses or cancels the
 	// root — see execute.go's dispatch-time guard for the full story.
 	RootExecutionStatus string     `json:"root_execution_status,omitempty"`
+	RootErrorCategory string       `json:"root_error_category,omitempty"`
+	RootErrorMessage  string       `json:"root_error_message,omitempty"`
 	Status           string         `json:"status"`
 	DisplayName      string         `json:"display_name"`
 	CurrentTask      string         `json:"current_task"`
@@ -209,6 +211,12 @@ func convertAggregationToSummary(agg *storage.RunSummaryAggregation) WorkflowRun
 	}
 	if agg.RootStatus != nil {
 		summary.RootExecutionStatus = *agg.RootStatus
+	}
+	if agg.RootErrorCategory != nil {
+		summary.RootErrorCategory = *agg.RootErrorCategory
+	}
+	if agg.RootErrorMessage != nil {
+		summary.RootErrorMessage = *agg.RootErrorMessage
 	}
 
 	// Set display name from root reasoner or run ID

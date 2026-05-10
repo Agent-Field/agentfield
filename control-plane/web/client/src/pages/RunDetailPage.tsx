@@ -3,7 +3,7 @@ import { useParams, useNavigate, Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   useRunDAG,
-  useCancelExecution,
+  useCancelWorkflowTree,
   usePauseExecution,
   useResumeExecution,
 } from "@/hooks/queries";
@@ -476,7 +476,7 @@ export function RunDetailPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { data: dag, isLoading, isError, error } = useRunDAG(runId);
-  const cancelMutation = useCancelExecution();
+  const cancelTreeMutation = useCancelWorkflowTree();
   const pauseMutation = usePauseExecution();
   const resumeMutation = useResumeExecution();
   const showRunNotification = useRunNotification();
@@ -658,7 +658,7 @@ export function RunDetailPage() {
   const actorTrim = dag.actor_id?.trim();
 
   return (
-    <div className="flex min-w-0 flex-col h-[calc(100vh-8rem)] max-w-full">
+    <div className="flex min-w-0 flex-col h-[calc(100vh-8rem)] max-w-full overflow-hidden">
       {/* ─── Header ─────────────────────────────────────────────────────── */}
       <div className="mb-3 flex min-w-0 flex-shrink-0 flex-col gap-2 border-b border-border/50 pb-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
         <div className="min-w-0 flex-1 space-y-1.5">
@@ -853,24 +853,33 @@ export function RunDetailPage() {
             </DropdownMenuContent>
           </DropdownMenu>
 
-          {/* Lifecycle cluster — Pause / Resume / Cancel. Uses the ROOT
-              execution's own status (not the aggregated workflow status)
-              because that's the row the user controls. A run can be
-              aggregate-'running' while the root is already 'paused' if
-              in-flight children are still finishing. */}
+          {/* Lifecycle cluster — Pause / Resume / Cancel.
+              Pause/Resume still target the ROOT execution's own status
+              (a run can be aggregate-'running' while the root is already
+              'paused' because in-flight children keep going). Cancel
+              targets the AGGREGATE workflow status — when the root has
+              terminated but children are still flagged running (zombied
+              fan-out), the user still needs an escape hatch. The cancel
+              button hits a bottom-up cancel-tree endpoint that walks the
+              whole run rather than a single execution. */}
           {(() => {
             const rootNodeForStatus =
               dag.timeline.find((n) => n.workflow_depth === 0) ??
               dag.timeline[0];
-            const normalized = normalizeExecutionStatus(
+            const rootStatus = normalizeExecutionStatus(
               rootNodeForStatus?.status ?? dag.workflow_status,
             );
-            const isRunning = normalized === "running";
-            const isPaused = normalized === "paused";
-            if (isTerminalStatus(normalized)) return null;
-
+            const aggregateStatus = normalizeExecutionStatus(dag.workflow_status);
+            const isRunning = rootStatus === "running";
+            const isPaused = rootStatus === "paused";
+            // Cancel is allowed whenever there is anything left to cancel —
+            // i.e. the aggregate workflow has not reached a terminal state.
+            const showCancel = !isTerminalStatus(aggregateStatus);
+            // Pause/Resume require a live root execution.
             const rootExecId = rootNodeForStatus?.execution_id;
-            if (!rootExecId) return null;
+            const showPause = isRunning && !!rootExecId;
+            const showResume = isPaused && !!rootExecId;
+            if (!showCancel && !showPause && !showResume) return null;
 
             const busy = lifecycleBusy !== null;
 
@@ -882,6 +891,7 @@ export function RunDetailPage() {
             const runIdForNotif = runId ?? "";
 
             const handlePause = async () => {
+              if (!rootExecId) return;
               setLifecycleBusy("pause");
               try {
                 await pauseMutation.mutateAsync(rootExecId);
@@ -909,6 +919,7 @@ export function RunDetailPage() {
             };
 
             const handleResume = async () => {
+              if (!rootExecId) return;
               setLifecycleBusy("resume");
               try {
                 await resumeMutation.mutateAsync(rootExecId);
@@ -939,7 +950,7 @@ export function RunDetailPage() {
 
             return (
               <>
-                {isRunning ? (
+                {showPause ? (
                   <Button
                     variant="outline"
                     size="sm"
@@ -958,7 +969,7 @@ export function RunDetailPage() {
                     Pause
                   </Button>
                 ) : null}
-                {isPaused ? (
+                {showResume ? (
                   <Button
                     variant="outline"
                     size="sm"
@@ -977,20 +988,22 @@ export function RunDetailPage() {
                     Resume
                   </Button>
                 ) : null}
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  className="h-8 gap-1.5 text-xs"
-                  disabled={busy}
-                  onClick={() => setCancelDialogOpen(true)}
-                >
-                  {lifecycleBusy === "cancel" ? (
-                    <Activity className="size-3.5 animate-spin" aria-hidden />
-                  ) : (
-                    <XCircle className="size-3.5" aria-hidden />
-                  )}
-                  Cancel
-                </Button>
+                {showCancel ? (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    className="h-8 gap-1.5 text-xs"
+                    disabled={busy}
+                    onClick={() => setCancelDialogOpen(true)}
+                  >
+                    {lifecycleBusy === "cancel" ? (
+                      <Activity className="size-3.5 animate-spin" aria-hidden />
+                    ) : (
+                      <XCircle className="size-3.5" aria-hidden />
+                    )}
+                    Cancel
+                  </Button>
+                ) : null}
 
                 <AlertDialog
                   open={cancelDialogOpen}
@@ -1013,15 +1026,22 @@ export function RunDetailPage() {
                         disabled={busy}
                         className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                         onClick={async () => {
+                          if (!runId) return;
                           setCancelDialogOpen(false);
                           setLifecycleBusy("cancel");
                           try {
-                            await cancelMutation.mutateAsync(rootExecId);
+                            const result = await cancelTreeMutation.mutateAsync({
+                              workflowId: runId,
+                              reason: "user clicked cancel",
+                            });
                             showRunNotification({
                               type: "success",
                               eventKind: "cancel",
                               title: "Cancelled",
-                              message: `${runLabelForNotif} will stop after its current step finishes. In-flight work will be discarded.`,
+                              message:
+                                result.cancelled_count > 0
+                                  ? `${runLabelForNotif}: ${result.cancelled_count} ${result.cancelled_count === 1 ? "step" : "steps"} cancelled. In-flight work will finish and be discarded.`
+                                  : `${runLabelForNotif}: nothing left to cancel.`,
                               runId: runIdForNotif,
                               runLabel: runLabelForNotif,
                             });
@@ -1096,7 +1116,7 @@ export function RunDetailPage() {
 
       {/* Nodes + webhooks — run-level strip with empty states */}
       <TooltipProvider delayDuration={280}>
-        <div className="mb-3 grid min-w-0 gap-3 sm:grid-cols-2">
+        <div className="mb-3 grid min-w-0 shrink-0 gap-3 sm:grid-cols-2">
           <RunContextNodesCard
             participantIds={participants.ids}
             source={participants.source}
@@ -1119,7 +1139,7 @@ export function RunDetailPage() {
         onValueChange={(value) => setSurfaceTab(value as "execution" | "logs")}
         className="flex min-h-0 flex-1 flex-col"
       >
-        <div className="mb-3 flex min-w-0 items-center justify-between gap-3 border-b border-border/50 pb-3">
+        <div className="mb-3 flex min-w-0 shrink-0 items-center justify-between gap-3 border-b border-border/50 pb-3">
           <TabsList className="h-9" aria-label="Run detail surface">
             <TabsTrigger value="execution" className="px-4 text-sm">
               Execution
@@ -1130,7 +1150,10 @@ export function RunDetailPage() {
           </TabsList>
         </div>
 
-        <TabsContent value="logs" className="mt-0 min-h-0 flex-1 data-[state=inactive]:hidden">
+        <TabsContent
+          value="logs"
+          className="mt-0 flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden"
+        >
           {selectedExecution.execution_id ? (
             <ExecutionObservabilityPanel
               execution={selectedExecution}
@@ -1147,7 +1170,7 @@ export function RunDetailPage() {
 
         <TabsContent
           value="execution"
-          className="mt-0 min-h-0 flex-1 data-[state=inactive]:hidden"
+          className="mt-0 flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden"
         >
           {isSingleStep ? (
             <Card className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
@@ -1163,7 +1186,10 @@ export function RunDetailPage() {
             </Card>
           ) : (
             <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row lg:items-stretch">
-              <Card className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:min-w-0 lg:basis-0">
+              <Card
+                data-testid="run-detail-steps-card"
+                className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:w-[420px] lg:max-w-[520px] lg:flex-none lg:shrink-0 lg:basis-[420px]"
+              >
                 <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border/60 px-3 py-2">
                   <span className="text-xs font-medium text-muted-foreground">
                     Steps
@@ -1234,7 +1260,10 @@ export function RunDetailPage() {
                 </CardContent>
               </Card>
 
-              <Card className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:min-w-0 lg:basis-0">
+              <Card
+                data-testid="run-detail-step-detail-card"
+                className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:min-w-0 lg:basis-0"
+              >
                 <CardContent className="flex min-h-0 min-w-0 flex-1 flex-col p-0">
                   {selectedStepId ? (
                     <StepDetail executionId={selectedStepId} />

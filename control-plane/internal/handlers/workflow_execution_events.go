@@ -128,7 +128,22 @@ func buildExecutionRecordFromEvent(req *WorkflowExecutionEventRequest, now time.
 }
 
 func applyEventToExecution(current *types.Execution, req *WorkflowExecutionEventRequest, now time.Time) {
-	current.Status = types.NormalizeExecutionStatus(req.Status)
+	incomingStatus := types.NormalizeExecutionStatus(req.Status)
+
+	// Terminal-state regression guard. Fire-and-forget workflow events from
+	// the SDK are not strictly ordered — a late "running" event can race past
+	// a "failed"/"succeeded" event for the same execution_id (e.g. when the
+	// outer reasoner errors while inner reasoners are still emitting). Once
+	// an execution has reached a terminal state, treat the row as immutable
+	// for status/result/error/completion purposes; the UI and callers polling
+	// /api/v1/executions/:id will keep seeing the correct terminal status
+	// instead of a phantom "running".
+	if types.IsTerminalExecutionStatus(current.Status) {
+		current.UpdatedAt = now
+		return
+	}
+
+	current.Status = incomingStatus
 	current.UpdatedAt = now
 
 	if current.StartedAt.IsZero() {
@@ -164,11 +179,11 @@ func applyEventToExecution(current *types.Execution, req *WorkflowExecutionEvent
 	if req.Error != "" {
 		errCopy := req.Error
 		current.ErrorMessage = &errCopy
-	} else if types.NormalizeExecutionStatus(req.Status) == string(types.ExecutionStatusSucceeded) {
+	} else if incomingStatus == string(types.ExecutionStatusSucceeded) {
 		current.ErrorMessage = nil
 	}
 
-	if types.IsTerminalExecutionStatus(req.Status) {
+	if types.IsTerminalExecutionStatus(incomingStatus) {
 		completed := now
 		current.CompletedAt = &completed
 	}

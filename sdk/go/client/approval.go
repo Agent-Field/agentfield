@@ -11,15 +11,13 @@ import (
 
 // RequestApprovalRequest is the payload for requesting human approval.
 type RequestApprovalRequest struct {
-	Title          string                 `json:"title"`
-	Description    string                 `json:"description,omitempty"`
-	TemplateType   string                 `json:"template_type"`
-	Payload        map[string]interface{} `json:"payload,omitempty"`
-	ProjectID      string                 `json:"project_id"`
-	ExpiresInHours int                    `json:"expires_in_hours,omitempty"`
+	ApprovalRequestID  string `json:"approval_request_id"`
+	ApprovalRequestURL string `json:"approval_request_url,omitempty"`
+	CallbackURL        string `json:"callback_url,omitempty"`
+	ExpiresInHours     int    `json:"expires_in_hours,omitempty"`
 }
 
-// RequestApprovalResponse is returned after creating an approval request.
+// RequestApprovalResponse is returned after tracking an approval request.
 type RequestApprovalResponse struct {
 	ApprovalRequestID  string `json:"approval_request_id"`
 	ApprovalRequestURL string `json:"approval_request_url"`
@@ -63,6 +61,10 @@ func (o *WaitForApprovalOptions) defaults() {
 func (c *Client) RequestApproval(ctx context.Context, nodeID, executionID string, req RequestApprovalRequest) (*RequestApprovalResponse, error) {
 	route := fmt.Sprintf("/api/v1/agents/%s/executions/%s/request-approval",
 		url.PathEscape(nodeID), url.PathEscape(executionID))
+
+	if req.ExpiresInHours == 0 {
+		req.ExpiresInHours = 72
+	}
 
 	var resp RequestApprovalResponse
 	if err := c.do(ctx, http.MethodPost, route, req, &resp); err != nil {

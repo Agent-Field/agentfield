@@ -23,6 +23,8 @@ export class SkillContext<TInput = any> {
   readonly memory: MemoryInterface;
   readonly workflow: WorkflowReporter;
   readonly did: DidInterface;
+  /** AbortSignal — see ReasonerContext for usage. */
+  readonly signal: AbortSignal;
 
   constructor(params: {
     input: TInput;
@@ -40,6 +42,7 @@ export class SkillContext<TInput = any> {
     memory: MemoryInterface;
     workflow: WorkflowReporter;
     did: DidInterface;
+    signal?: AbortSignal;
   }) {
     this.input = params.input;
     this.executionId = params.executionId;
@@ -56,6 +59,7 @@ export class SkillContext<TInput = any> {
     this.memory = params.memory;
     this.workflow = params.workflow;
     this.did = params.did;
+    this.signal = params.signal ?? new AbortController().signal;
   }
 
   discover(options?: DiscoveryOptions) {

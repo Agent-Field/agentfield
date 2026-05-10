@@ -498,6 +498,15 @@ type Agent struct {
 	leaseLoopOnce sync.Once
 
 	defaultCLIReasoner string
+
+	// cancelFuncs tracks the context.CancelFunc for every in-flight reasoner
+	// invocation, keyed by execution_id. The control plane's cancel
+	// dispatcher POSTs to /_internal/executions/:id/cancel and we look up
+	// the matching cancel func to short-circuit the reasoner's context.
+	// Reasoners are responsible for honoring ctx.Done() — most idiomatic
+	// Go code does this through net/http, database/sql, etc.
+	cancelMu    sync.Mutex
+	cancelFuncs map[string]context.CancelFunc
 }
 
 // New constructs an Agent.
@@ -550,6 +559,7 @@ func New(cfg Config) (*Agent, error) {
 		stopLease:                   make(chan struct{}),
 		logger:                      cfg.Logger,
 		realtimeValidationFunctions: make(map[string]struct{}),
+		cancelFuncs:                 make(map[string]context.CancelFunc),
 	}
 
 	// Initialize local verifier if enabled
@@ -785,6 +795,7 @@ func (a *Agent) handler() http.Handler {
 		mux.HandleFunc("/execute", a.handleExecute)
 		mux.HandleFunc("/execute/", a.handleExecute)
 		mux.HandleFunc("/reasoners/", a.handleReasoner)
+		mux.HandleFunc("/_internal/executions/", a.handleInternalCancel)
 
 		var handler http.Handler = mux
 
@@ -837,6 +848,13 @@ func (a *Agent) localVerificationMiddleware(next http.Handler) http.Handler {
 
 		// Only verify execution endpoints
 		if path == "/health" || path == "/discover" || path == "/agentfield/v1/logs" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// /_internal/executions/.../cancel is a control-plane→worker
+		// notification, not a DID-signed user-initiated call. Bearer-token
+		// origin auth still applies via originAuthMiddleware.
+		if strings.HasPrefix(path, "/_internal/") {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -1038,7 +1056,9 @@ func (a *Agent) handleExecute(w http.ResponseWriter, r *http.Request) {
 	input := extractInputFromServerless(payload)
 	execCtx := a.buildExecutionContextFromServerless(r, payload, reasonerName)
 	a.fillDIDContext(&execCtx)
-	ctx := contextWithExecution(r.Context(), execCtx)
+	cancellableCtx, releaseCancel := a.registerCancellableExecution(r.Context(), execCtx.ExecutionID)
+	defer releaseCancel()
+	ctx := contextWithExecution(cancellableCtx, execCtx)
 
 	start := time.Now()
 	a.logExecutionInfo(ctx, "reasoner.invoke.start", "starting reasoner execution", map[string]any{
@@ -1214,11 +1234,14 @@ func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
 	}
 	a.fillDIDContext(&execCtx)
 
-	ctx := contextWithExecution(r.Context(), execCtx)
-
 	// In serverless mode we want a synchronous execution so the control plane can return
 	// the result immediately; skip the async path even if an execution ID is present.
 	if a.cfg.DeploymentType != "serverless" && execCtx.ExecutionID != "" && strings.TrimSpace(a.cfg.AgentFieldURL) != "" {
+		// Async dispatch — handleReasoner returns 202 immediately, the
+		// goroutine owns the lifetime. executeReasonerAsync registers its
+		// own cancellation hook against execution_id, so the cancel
+		// dispatcher can still reach this run.
+		ctx := contextWithExecution(r.Context(), execCtx)
 		a.logExecutionInfo(ctx, "reasoner.invoke.accepted", "accepted asynchronous execution request", map[string]any{
 			"reasoner_id": name,
 			"mode":        "async",
@@ -1232,6 +1255,15 @@ func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+
+	// Sync path — wrap r.Context() with a cancel hook keyed on
+	// execution_id so the control-plane cancel-dispatcher (POST
+	// /_internal/executions/:id/cancel) can short-circuit reasoner code
+	// that honors ctx.Done().
+	cancellableCtx, releaseCancel := a.registerCancellableExecution(r.Context(), execCtx.ExecutionID)
+	defer releaseCancel()
+
+	ctx := contextWithExecution(cancellableCtx, execCtx)
 
 	start := time.Now()
 	a.logExecutionInfo(ctx, "reasoner.invoke.start", "starting reasoner execution", map[string]any{
@@ -1282,7 +1314,12 @@ func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Agent) executeReasonerAsync(reasoner *Reasoner, input map[string]any, execCtx ExecutionContext) {
-	ctx := contextWithExecution(context.Background(), execCtx)
+	// Register a cancel hook keyed on execution_id so a control-plane
+	// cancel reaches the still-running reasoner. release fires both on
+	// natural completion (deferred) and on cancel (via ctx.Done()).
+	cancellableCtx, release := a.registerCancellableExecution(context.Background(), execCtx.ExecutionID)
+	defer release()
+	ctx := contextWithExecution(cancellableCtx, execCtx)
 	start := time.Now()
 	a.logExecutionInfo(ctx, "reasoner.invoke.start", "starting asynchronous reasoner execution", map[string]any{
 		"reasoner_id": reasoner.Name,

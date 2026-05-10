@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   ArrowDown,
   ArrowLeftRight,
@@ -11,7 +11,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import {
   useRuns,
-  useCancelExecution,
+  useCancelWorkflowTree,
   usePauseExecution,
   useResumeExecution,
 } from "@/hooks/queries";
@@ -104,6 +104,7 @@ import {
   hasMeaningfulPayload,
   shortRunIdDisplay,
 } from "@/pages/runsPageUtils";
+import { getExecutionErrorCategoryMeta } from "@/utils/executionErrorCategory";
 
 // ─── module-level singletons ──────────────────────────────────────────────────
 
@@ -553,7 +554,7 @@ function RunsPaginationBar({
 export function RunsPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const cancelMutation = useCancelExecution();
+  const cancelTreeMutation = useCancelWorkflowTree();
   const pauseMutation = usePauseExecution();
   const resumeMutation = useResumeExecution();
   const showSuccess = useSuccessNotification();
@@ -655,16 +656,27 @@ export function RunsPage() {
 
   const handleCancelRun = useCallback(
     async (run: WorkflowSummary) => {
-      const execId = run.root_execution_id;
-      if (!execId) return;
-      markPending(execId);
+      // Use cancel-tree (bottom-up bulk cancel) rather than per-execution
+      // cancel — a run can have a terminated root with non-terminal
+      // children (zombied fan-out) and only the tree walk reaches them.
+      // Pending key is the root_execution_id when present (matches the
+      // existing optimistic-busy contract for the kebab spinner); falls
+      // back to run_id so we still spin when no root exec is recorded.
+      const pendingKey = run.root_execution_id ?? run.run_id;
+      markPending(pendingKey);
       try {
-        await cancelMutation.mutateAsync(execId);
+        const result = await cancelTreeMutation.mutateAsync({
+          workflowId: run.run_id,
+          reason: "user clicked cancel",
+        });
         showRunNotification({
           type: "success",
           eventKind: "cancel",
           title: "Cancelled",
-          message: `${runDisplayLabel(run)} will stop after its current step finishes. In-flight work will be discarded.`,
+          message:
+            result.cancelled_count > 0
+              ? `${runDisplayLabel(run)}: ${result.cancelled_count} ${result.cancelled_count === 1 ? "step" : "steps"} cancelled. In-flight work will finish and be discarded.`
+              : `${runDisplayLabel(run)}: nothing left to cancel.`,
           runId: run.run_id,
           runLabel: runDisplayLabel(run),
         });
@@ -678,10 +690,10 @@ export function RunsPage() {
           runLabel: runDisplayLabel(run),
         });
       } finally {
-        clearPending(execId);
+        clearPending(pendingKey);
       }
     },
-    [cancelMutation, showRunNotification, markPending, clearPending, runDisplayLabel],
+    [cancelTreeMutation, showRunNotification, markPending, clearPending, runDisplayLabel],
   );
 
   // Bulk confirmation dialog state — a single shared AlertDialog for the
@@ -1020,7 +1032,7 @@ export function RunsPage() {
                 />
               </TableHead>
               {/* Status first — most scannable */}
-              <TableHead className="h-8 px-3 w-24"><SortableHeaderCell field="status" label="Status" sortBy={sortBy} sortOrder={sortOrder as "asc" | "desc"} onSortChange={handleSortClick} /></TableHead>
+              <TableHead className="h-8 px-3 w-44 min-w-[11rem]"><SortableHeaderCell field="status" label="Status" sortBy={sortBy} sortOrder={sortOrder as "asc" | "desc"} onSortChange={handleSortClick} /></TableHead>
               {/* Target + short run id (full id via copy) */}
               <TableHead
                 className="h-8 px-3 text-micro-plus font-medium text-muted-foreground min-w-0"
@@ -1215,23 +1227,31 @@ export function RunsPage() {
               disabled={bulkBusy}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={async () => {
+                // Bulk cancel uses cancel-tree per run — same reason as the
+                // per-row path: a run with a terminated root and zombied
+                // children needs the bottom-up walk to actually flip every
+                // execution. We gate inclusion on aggregate `r.status` being
+                // non-terminal (not the root's status) so users can sweep
+                // up zombies even when the root has succeeded.
                 const targets = [...selected]
                   .map((id) => filteredRuns.find((r) => r.run_id === id))
                   .filter(
                     (r): r is WorkflowSummary =>
-                      !!r &&
-                      !isTerminalStatus(r.root_execution_status ?? r.status) &&
-                      !!r.root_execution_id,
+                      !!r && !isTerminalStatus(r.status),
                   );
                 setBulkCancelOpen(false);
                 await runBulkMutation({
                   targets,
                   run: async (r) => {
-                    markPending(r.root_execution_id!);
+                    const pendingKey = r.root_execution_id ?? r.run_id;
+                    markPending(pendingKey);
                     try {
-                      await cancelMutation.mutateAsync(r.root_execution_id!);
+                      await cancelTreeMutation.mutateAsync({
+                        workflowId: r.run_id,
+                        reason: "user clicked bulk cancel",
+                      });
                     } finally {
-                      clearPending(r.root_execution_id!);
+                      clearPending(pendingKey);
                     }
                   },
                   verb: "cancelled",
@@ -1249,9 +1269,7 @@ export function RunsPage() {
                   .map((id) => filteredRuns.find((r) => r.run_id === id))
                   .filter(
                     (r): r is WorkflowSummary =>
-                      !!r &&
-                      !isTerminalStatus(r.root_execution_status ?? r.status) &&
-                      !!r.root_execution_id,
+                      !!r && !isTerminalStatus(r.status),
                   );
                 return CANCEL_RUN_COPY.confirmLabel(cancellable.length);
               })()}
@@ -1571,6 +1589,10 @@ function RunRow({
   const agentLabel = run.agent_id || run.agent_name || "";
   const reasonerLabel = run.root_reasoner || run.display_name || "—";
   const [copied, setCopied] = useState(false);
+  const errorMeta =
+    (run.root_execution_status ?? run.status) === "failed"
+      ? getExecutionErrorCategoryMeta(run.root_error_category)
+      : null;
 
   return (
     <TableRow
@@ -1595,8 +1617,32 @@ function RunRow({
       </TableCell>
       {/* Status dot — prefer the root execution status so pause/cancel are
           reflected immediately, even when stragglers are still in-flight */}
-      <TableCell className="w-24">
-        <StatusDot status={run.root_execution_status ?? run.status} />
+      <TableCell className="w-44 min-w-[11rem]">
+        <div className="flex flex-col items-start gap-1">
+          <StatusDot status={run.root_execution_status ?? run.status} />
+          {errorMeta ? (
+            <div className="flex max-w-full flex-wrap items-center gap-1">
+              <span
+                className={cn(
+                  badgeVariants({ variant: "outline", size: "sm" }),
+                  "h-5 max-w-full px-1.5 text-micro-plus capitalize",
+                  errorMeta.badgeClassName,
+                )}
+              >
+                {errorMeta.label}
+              </span>
+              {errorMeta.diagnosticsLabel && errorMeta.diagnosticsPath ? (
+                <Link
+                  to={errorMeta.diagnosticsPath}
+                  className="text-micro-plus text-sky-600 underline-offset-2 hover:underline dark:text-sky-400"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {errorMeta.diagnosticsLabel}
+                </Link>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       </TableCell>
       {/* Target name, then inline copy-chip for run id (no sub-column) */}
       <TableCell

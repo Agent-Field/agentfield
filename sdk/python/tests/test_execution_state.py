@@ -57,6 +57,57 @@ def test_polling_and_timeout():
     assert st.status == ExecutionStatus.TIMEOUT
 
 
+class _StubPauseClock:
+    """Minimal stand-in for ``agent_pause.PauseClock`` for unit tests."""
+
+    def __init__(self, paused: float) -> None:
+        self._paused = paused
+
+    def total_paused(self) -> float:
+        return self._paused
+
+
+def test_is_overdue_subtracts_attached_pause_clock_from_age():
+    """Regression: the polling task's overdue check must respect a parent's
+    pause clock so a long-paused child is not flipped TIMEOUT at the
+    wallclock budget. Mirrors the production scenario where github-buddy's
+    ``app.call`` to swe-af.build sat in ``waiting`` for hours and the
+    polling task pre-empted the pause-aware wait_for_result."""
+
+    st = ExecutionState(execution_id="e-pause", target="t", input_data={}, timeout=0.1)
+    time.sleep(0.12)
+    # Wallclock alone says overdue.
+    assert st.is_overdue is True
+    # Attach a clock claiming most of the wallclock was paused; subtracting
+    # it pulls the active age back under the budget so the polling task
+    # should NOT mark this execution TIMEOUT.
+    st._pause_clock = _StubPauseClock(paused=0.20)
+    assert st.is_overdue is False
+
+
+def test_is_overdue_pause_clock_failure_falls_back_to_wallclock():
+    """If the attached clock raises (defensive), we fall back to wallclock
+    so executions still time out eventually rather than hanging forever."""
+
+    class _BrokenClock:
+        def total_paused(self):
+            raise RuntimeError("clock broken")
+
+    st = ExecutionState(execution_id="e-broken", target="t", input_data={}, timeout=0.1)
+    st._pause_clock = _BrokenClock()
+    time.sleep(0.12)
+    assert st.is_overdue is True
+
+
+def test_is_overdue_no_pause_clock_matches_legacy_behavior():
+    """Without a pause clock the property must be unchanged from before."""
+
+    st = ExecutionState(execution_id="e-legacy", target="t", input_data={}, timeout=0.1)
+    assert st._pause_clock is None
+    time.sleep(0.12)
+    assert st.is_overdue is True
+
+
 def test_execution_metrics_computations():
     metrics = ExecutionState(execution_id="e5", target="t", input_data={}).metrics
     metrics.submit_time = 10.0

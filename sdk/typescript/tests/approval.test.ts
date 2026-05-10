@@ -6,12 +6,20 @@ import { ApprovalClient } from '../src/approval/ApprovalClient.js';
 /**
  * Minimal HTTP server that returns canned JSON responses for approval endpoints.
  */
-function createMockServer(responses: Array<{ status: number; body: unknown }>) {
+function createMockServer(
+  responses: Array<{ status: number; body: unknown }>,
+  onRequest?: (req: http.IncomingMessage, body: string) => void
+) {
   let callIndex = 0;
   const server = http.createServer((req, res) => {
-    const resp = responses[Math.min(callIndex++, responses.length - 1)];
-    res.writeHead(resp.status, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(resp.body));
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+    req.on('end', () => {
+      onRequest?.(req, Buffer.concat(chunks).toString('utf8'));
+      const resp = responses[Math.min(callIndex++, responses.length - 1)];
+      res.writeHead(resp.status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(resp.body));
+    });
   });
   return server;
 }
@@ -40,7 +48,9 @@ describe('ApprovalClient', () => {
   // -------------------------------------------------------------------
 
   describe('requestApproval', () => {
-    it('returns typed response on success', async () => {
+    it('posts the control-plane approval tracking contract and returns typed response', async () => {
+      let receivedBody: Record<string, unknown> | undefined;
+
       server = createMockServer([
         {
           status: 200,
@@ -49,7 +59,9 @@ describe('ApprovalClient', () => {
             approval_request_url: 'https://hub.example.com/r/req-abc',
           },
         },
-      ]);
+      ], (_req, body) => {
+        receivedBody = JSON.parse(body) as Record<string, unknown>;
+      });
       await new Promise<void>((resolve) => server.listen(0, resolve));
 
       const client = new ApprovalClient({
@@ -59,10 +71,21 @@ describe('ApprovalClient', () => {
       });
 
       const result = await client.requestApproval('exec-1', {
-        projectId: 'proj-1',
-        title: 'Plan Review',
+        approvalRequestId: 'req-abc',
+        approvalRequestUrl: 'https://hub.example.com/r/req-abc',
+        callbackUrl: 'https://agent.example.com/webhooks/approval',
+        expiresInHours: 24,
       });
 
+      expect(receivedBody).toEqual({
+        approval_request_id: 'req-abc',
+        approval_request_url: 'https://hub.example.com/r/req-abc',
+        callback_url: 'https://agent.example.com/webhooks/approval',
+        expires_in_hours: 24,
+      });
+      expect(receivedBody).not.toHaveProperty('title');
+      expect(receivedBody).not.toHaveProperty('project_id');
+      expect(receivedBody).not.toHaveProperty('template_type');
       expect(result.approvalRequestId).toBe('req-abc');
       expect(result.approvalRequestUrl).toBe('https://hub.example.com/r/req-abc');
     });
@@ -79,7 +102,7 @@ describe('ApprovalClient', () => {
       });
 
       await expect(
-        client.requestApproval('exec-1', { projectId: 'p' })
+        client.requestApproval('exec-1', { approvalRequestId: 'req-fail' })
       ).rejects.toThrow();
     });
   });

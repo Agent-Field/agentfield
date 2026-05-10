@@ -137,6 +137,9 @@ func (s *stubStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAfte
 func (s *stubStorage) RetryStaleWorkflowExecutions(ctx context.Context, staleAfter time.Duration, maxRetries int, limit int) ([]string, error) {
 	return nil, nil
 }
+func (s *stubStorage) MarkAgentExecutionsOrphaned(ctx context.Context, agentNodeID string, reasonMessage string) (int, error) {
+	return 0, nil
+}
 func (s *stubStorage) CleanupWorkflow(ctx context.Context, workflowID string, dryRun bool) (*types.WorkflowCleanupResult, error) {
 	return &types.WorkflowCleanupResult{
 		Success:        true,

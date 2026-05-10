@@ -534,6 +534,23 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 			}
 		}
 
+		// Terminal-state regression guard. Once an execution has reached
+		// a terminal state, reject any non-terminal write — otherwise a
+		// late /status callback (e.g. from a retried fire-and-forget update)
+		// can stomp the terminal status back to "running" and strand the
+		// caller's poll loop. Idempotent terminal→same-terminal updates
+		// are allowed so callers can retry their own callback safely.
+		if types.IsTerminalExecutionStatus(string(current.Status)) {
+			if !types.IsTerminalExecutionStatus(normalizedStatus) {
+				logger.Logger.Warn().
+					Str("execution_id", executionID).
+					Str("current_status", string(current.Status)).
+					Str("requested_status", normalizedStatus).
+					Msg("rejecting status update: execution is already in a terminal state")
+				return nil, fmt.Errorf("execution %s is already in terminal state '%s'; cannot transition to '%s'", executionID, current.Status, normalizedStatus)
+			}
+		}
+
 		current.Status = normalizedStatus
 		current.StatusReason = req.StatusReason
 		if len(resultBytes) > 0 {

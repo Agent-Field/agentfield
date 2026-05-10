@@ -6,6 +6,1319 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.82] - 2026-05-10
+
+## [0.1.82-rc.1] - 2026-05-10
+
+
+### Fixed
+
+- Fix(sdk): pause-aware overdue check in async polling task (#564)
+
+* fix(sdk): make ExecutionState.is_overdue pause-aware via attached PauseClock
+
+Add an optional ``_pause_clock`` field to ``ExecutionState`` and have
+``is_overdue`` subtract ``total_paused()`` from wallclock age before
+comparing against the timeout. With no clock attached the property
+behaves identically to before.
+
+This is the data-structure half of the fix for the polling task
+pre-empting the pause-aware ``wait_for_result`` loop in v0.1.81 — the
+caller-side wiring lives in the next commit. Tests pin the new branch
+(clock attached → not overdue), the failure-fallback (broken clock →
+behaves as wallclock), and backward-compat (no clock → unchanged).
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* fix(sdk): attach pause_clock to awaited execution so polling honors it
+
+``wait_for_result`` already subtracts the parent's PauseClock from its
+own loop's elapsed time (v0.1.81), but the manager's polling loop runs
+the wallclock-only ``is_overdue`` check on every active execution and
+calls ``timeout_execution()`` independently of the wait loop. After
+``timeout`` seconds of wallclock the polling task flips the awaited
+execution to TIMEOUT — even when most of that wallclock was spent in
+the child's ``waiting`` state — and the next wait iteration surfaces it
+as ``ExecutionTimeoutError("Execution timed out after N seconds")``.
+
+Attach the caller-supplied ``pause_clock`` to the awaited
+``ExecutionState`` so the polling task's overdue check reads the same
+paused total the wait loop is using, and restore the previous value in
+``finally``. With this, github-buddy's ``app.call`` to swe-af.build
+survives the full ``max_execution_timeout`` of *active* time across
+arbitrarily long human-approval pauses, instead of timing out at exactly
+21600s wallclock as observed on Railway run run_1778346573033_dafddc40.
+
+Validation contract for the fix:
+- A paused execution must NOT be flipped TIMEOUT by ``_poll_active_executions``
+  while wallclock > timeout but paused-time > (wallclock - timeout). Pinned
+  by ``test_poll_active_executions_respects_attached_pause_clock``.
+- An execution with NO pause_clock must keep timing out at wallclock — same
+  legacy behaviour. Pinned by
+  ``test_poll_active_executions_still_times_out_without_pause_clock``.
+- The clock must be attached for the duration of the wait and detached on
+  return (success / timeout / exception), so a future wait on the same
+  execution does not consume a stale parent clock. Pinned by
+  ``test_wait_for_result_attaches_pause_clock_to_execution_state``.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (cf5650e)
+
+## [0.1.81] - 2026-05-09
+
+## [0.1.81-rc.2] - 2026-05-09
+
+
+### Fixed
+
+- Fix(sdk): poll-driven cross-reasoner pause propagation (#562)
+
+The v0.1.80 listener-based propagation never fired in production because
+it depended on the AsyncExecutionManager's SSE event-stream loop, which is
+gated behind ``enable_event_stream`` (default False) and was not enabled
+on any deployed service. Result: parents waiting on an ``app.call`` that
+hit a hax-sdk human-approval gate kept ticking wallclock, and the parent
+watchdog tripped at exactly the budget despite the visible WAITING state
+(reproduced on Railway run_1778268481826_8c9dd544).
+
+Replace the SSE-listener mechanism with a poll-driven toggle inside
+``wait_for_result``: when the awaited child's status reads as WAITING
+(updated unconditionally by the existing polling task), pause the parent's
+pause-clock; when it reads back as not-WAITING, end the pause. A finally
+block closes any in-flight pause if we exit via terminal/timeout. No SSE
+subscription required, no listener registry, no refcount machinery.
+
+Removes from ``async_execution_manager.py``:
+  - ``register_status_listener`` / ``_status_listeners`` / ``_fire_status_listeners``
+  - the ``execution.waiting`` event-type override (the WAITING-status branch
+    in ``_handle_event_stream_payload`` stays for the case where SSE is on)
+
+Removes from ``agent.py``:
+  - ``_on_child_status_change`` and the ``_waiting_children`` /
+    ``_parent_paused_children`` registries it consumed
+  - the listener registration in ``call()``; the ``pause_clock`` kwarg
+    pass-through (the actual fix) is preserved
+
+Tests: the previous tests poked ``_on_child_status_change`` and
+``_handle_event_stream_payload`` directly, which bypassed the
+``enable_event_stream`` gate and never exercised the production data path.
+The new tests drive the production path: they update ``_executions[id].status``
+the same way the polling task does and assert that ``wait_for_result``
+toggles the parent clock and survives a long WAITING window.
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (5bfd1ed)
+
+## [0.1.81-rc.1] - 2026-05-08
+
+
+### Fixed
+
+- Fix: align approval request contract with control plane (#524) (#553)
+
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (746bebe)
+
+## [0.1.80] - 2026-05-08
+
+## [0.1.80-rc.1] - 2026-05-08
+
+
+### Fixed
+
+- Fix(sdk): propagate child pause state across app.call to parent pause-clock (#555)
+
+* feat(sdk): add status-listener hook to AsyncExecutionManager
+
+Lets external code react to every observed execution status transition
+the manager learns about over its SSE event stream. Also recognizes
+``execution.waiting`` events and the canonical ``waiting``/``paused``
+status hints, mapping them to ``ExecutionStatus.WAITING`` so callers can
+distinguish a child that's parked on an external await from one that's
+actively running.
+
+The next commit uses this hook to propagate child pauses up to the
+parent reasoner's pause-clock.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* fix(sdk): propagate child pause state to parent pause-clock through app.call
+
+When a parent reasoner calls a child via ``app.call`` and the child
+enters ``app.pause`` (e.g. waiting on a hax-sdk human approval), the
+parent's pause-clock must be paused too — otherwise the parent's
+``default_execution_timeout`` watchdog burns through the child's
+human-response time and cancels the parent at 7200s while the child is
+correctly waiting.
+
+Symptom: SWE-AF ``implement_from_issue`` -> ``swe-planner.build`` chains
+hit ``Reasoner timed out after 7200.0s`` when build paused for hax-sdk
+approval, even with the v0.1.79 pause-clock fix in place — that fix
+was scoped to the reasoner that called ``pause()``, not to ancestors
+awaiting it via ``app.call``.
+
+Mechanism:
+- New ``Agent._waiting_children`` registry maps child_execution_id to
+  parent_execution_id; populated by ``call()`` for cross-agent waits
+  whose parent has a tracked pause-clock.
+- ``_parent_paused_children`` refcount of currently-paused children per
+  parent; ensures multiple children pausing in parallel don't double-
+  toggle the parent clock and that the parent stays paused while ANY
+  awaited child is still in WAITING.
+- Listener registered on the AsyncExecutionManager observes the SSE
+  ``execution.waiting`` / ``execution.running`` transitions for awaited
+  children and toggles the parent's pause-clock accordingly.
+- ``client.wait_for_execution_result`` and ``manager.wait_for_result``
+  accept an optional ``pause_clock`` kwarg whose accumulated paused
+  seconds are subtracted from elapsed wall-clock when checking the
+  wait timeout — without this the wait itself would still time out at
+  7200s during long human-approval gaps even with the propagation
+  hooked up.
+- Updated test_agent_coverage_additions.py fixture for the new Agent
+  attributes; the bypass-init pattern there constructs Agent via
+  ``object.__new__`` and needs each new instance attribute mirrored.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* test(sdk): cover cross-reasoner pause-clock propagation
+
+- Direct unit tests for ``Agent._on_child_status_change``: WAITING
+  pauses the parent clock, RUNNING resumes it, parallel children
+  refcount correctly, unrelated executions are ignored, terminal
+  events clean up the registry.
+- Integration test for ``manager.wait_for_result`` with a synthetic
+  pause_clock: the wait survives a paused interval that exceeds the
+  configured timeout, and the same setup without the pause_clock kwarg
+  still times out (regression guard).
+- SSE event-stream handler tests: ``execution.waiting`` events fire the
+  listener with WAITING status, duplicate transitions don't re-fire,
+  unknown executions are ignored.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* fix(sdk): satisfy ruff F821/F401 on cross-reasoner pause propagation
+
+Two lint regressions caught by CI but not by my local pytest run:
+
+- ``Agent._on_child_status_change`` annotated ``status`` as a string
+  forward-ref ``"ExecutionStatus"`` without a corresponding TYPE_CHECKING
+  import; ruff F821 flagged it. Add the TYPE_CHECKING import alongside
+  the existing harness imports.
+- ``test_wait_for_result_subtracts_pause_clock_from_elapsed`` imported
+  ``ExecutionStatus`` it never used; ruff F401. Drop the import.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (d78fbf7)
+
+## [0.1.79] - 2026-05-08
+
+## [0.1.79-rc.1] - 2026-05-08
+
+
+### Fixed
+
+- Fix(sdk): exclude Agent.pause() time from reasoner wall-clock timeout (#552)
+
+* feat(sdk): add PauseClock to track paused intervals per execution
+
+PauseClock records the cumulative time a reasoner has spent inside
+Agent.pause() / Agent.wait_for_resume(). The reasoner-level wall-clock
+timeout in _execute_async_with_callback consumes this so paused
+seconds don't count against the active-time budget.
+
+No behaviour change yet — wired up in a follow-up commit.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* fix(sdk): exclude pause() time from reasoner wall-clock timeout
+
+The async reasoner timeout in _execute_async_with_callback was a
+straight wallclock asyncio.wait_for around the reasoner coroutine.
+That meant time spent inside Agent.pause() — waiting for an external
+human approval via hax-sdk or similar — was billed against the same
+budget. The expires_in_hours argument to pause() was silently capped
+at the reasoner timeout (default 7200s), so a reviewer who took longer
+than two hours to respond would always see "Reasoner 'build' timed out
+after 7200.0s" regardless of expires_in_hours.
+
+Replace the asyncio.wait_for with a watchdog task that subtracts the
+PauseClock's accumulated paused time from elapsed wall-clock before
+comparing against the budget. pause() and wait_for_resume() update the
+clock around their own asyncio.wait_for so the watchdog discounts the
+wait. Active CPU/IO time past the budget still trips the watchdog and
+produces the same reasoner_timeout failure payload.
+
+The watchdog distinguishes its own timeout-cancel from an external
+cooperative cancel by setting PauseClock.timed_out before cancelling
+the reasoner task; the CancelledError handler branches on that flag to
+emit either a "failed/reasoner_timeout" payload or the existing
+"cancelled_by_control_plane" payload.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* test(sdk): cover pause-aware reasoner timeout
+
+Two tests added against the async reasoner path:
+
+- A reasoner that calls Agent.pause() for longer than
+  default_execution_timeout still succeeds once the approval webhook
+  resolves the future. Without the PauseClock subtraction the watchdog
+  would have fired first and produced a reasoner_timeout failure.
+
+- A reasoner doing real asyncio work past the active budget still
+  trips the watchdog and emits a failed/reasoner_timeout payload. This
+  guards against the subtraction accidentally disabling the safety net.
+
+Both tests filter for terminal status callbacks (succeeded / failed /
+cancelled) rather than any /executions/ URL, since the workflow event
+bus also posts running-status events that would otherwise race the
+terminal callback.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* test(sdk): wire _pause_clocks into Agent test fixture
+
+The make_agent() helper in test_agent_coverage_additions.py builds an
+Agent via object.__new__(Agent) and manually pins the attributes the
+tests-under-test consume.  After the previous commit the pause() and
+wait_for_resume() paths read self._pause_clocks, so the fixture has to
+provide it.  Empty dict is the right default — none of the affected
+tests exercise the paused-time accounting, only that pause()/wait_for_resume()
+return the expected ApprovalResult shapes on timeout.
+
+Caught by the lint-and-test (3.10/3.11/3.12) CI jobs on the parent PR.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* test(sdk): unit-cover PauseClock and external-cancel-during-pause
+
+Five direct unit tests pin PauseClock semantics (zero-baseline, interval
+accumulation, in-progress visibility, double-start idempotency, no-op
+end-without-start).  These give a sharper failure signal than the
+end-to-end Agent tests when the primitive itself regresses.
+
+A sixth integration test fires a cooperative cancel (via the same path
+the control-plane CancelDispatcher uses) while the reasoner is parked
+inside Agent.pause().  Without the watchdog/external-cancel disambig
+the cancel would surface as a phantom reasoner_timeout — this test
+locks in that the payload is "cancelled".
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (755a80c)
+
+## [0.1.78] - 2026-05-07
+
+## [0.1.78-rc.5] - 2026-05-07
+
+
+### Other
+
+- Feat/UI llm health widget 322 (#549)
+
+* feat(ui): add LLM health dashboard widget
+
+* fix(handlers): deflake TestReplayEvent_StoresReplayOfPointer
+
+The test pinned the *boot* status of a freshly-minted replay row
+(=replayed), but ReplayEvent kicks off the dispatcher in a goroutine
+that immediately marks the row "failed" because the test fixture has
+no target agent node registered. Under CI load that goroutine wins
+the race against the test's GetInboundEvent and the assertion flips
+to "failed", breaking the control-plane coverage job and (cascading)
+the coverage-summary check.
+
+Pass nil for the dispatcher in this test — many sibling tests in
+triggers_api_contract_test.go already do this — and gate the three
+goroutine launch sites in the trigger handler on a nil-check so the
+contract is honored consistently.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* test(web-ui): await events fetch in triggers-pages flake
+
+The "filters active triggers..." test queries for the EventRow toggle
+button with getByRole synchronously, but the events list is fetched
+async by TriggerSheet on open (useEffect → refreshEvents). Under CI
+load the fetch hasn't resolved when the assertion runs, so no EventRow
+has mounted and the query throws. Locally the fetch is fast enough
+that the race never surfaces.
+
+Switch to findByRole so the query waits for the events list to render.
+The earlier getAllByText still passes because it matches the trigger's
+event_types summary which renders synchronously from the trigger row.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (27614d8)
+
+## [0.1.78-rc.4] - 2026-05-07
+
+
+### Chores
+
+- Chore(deps): bump the uv group across 1 directory with 2 updates (#550)
+
+Bumps the uv group with 2 updates in the /sdk/python directory: [python-dotenv](https://github.com/theskumar/python-dotenv) and [python-multipart](https://github.com/Kludex/python-multipart).
+
+
+Updates `python-dotenv` from 1.0.1 to 1.2.2
+- [Release notes](https://github.com/theskumar/python-dotenv/releases)
+- [Changelog](https://github.com/theskumar/python-dotenv/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/theskumar/python-dotenv/compare/v1.0.1...v1.2.2)
+
+Updates `python-multipart` from 0.0.26 to 0.0.27
+- [Release notes](https://github.com/Kludex/python-multipart/releases)
+- [Changelog](https://github.com/Kludex/python-multipart/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/Kludex/python-multipart/compare/0.0.26...0.0.27)
+
+---
+updated-dependencies:
+- dependency-name: python-dotenv
+  dependency-version: 1.2.2
+  dependency-type: indirect
+- dependency-name: python-multipart
+  dependency-version: 0.0.27
+  dependency-type: indirect
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (41c2faf)
+
+- Chore(deps): bump hono (#551)
+
+Bumps the npm_and_yarn group with 1 update in the /examples/benchmarks/100k-scale/mastra-bench directory: [hono](https://github.com/honojs/hono).
+
+
+Updates `hono` from 4.12.14 to 4.12.18
+- [Release notes](https://github.com/honojs/hono/releases)
+- [Commits](https://github.com/honojs/hono/compare/v4.12.14...v4.12.18)
+
+---
+updated-dependencies:
+- dependency-name: hono
+  dependency-version: 4.12.18
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (89be5ed)
+
+## [0.1.78-rc.3] - 2026-05-07
+
+
+### Other
+
+- Feat/UI error category 325 (#548)
+
+* fix(sdk-python): count opencode turns from JSON step events
+
+* fix(sdk-python): parse opencode JSON text events for final output
+
+* feat(ui): surface per-agent queue concurrency and capacity status
+
+* feat(ui): Added error-category badges, human-readable guidance, and diagnostics links for failed executions.
+
+* feat(ui): show error_category with diagnostics on failed executions
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (856d40c)
+
+## [0.1.78-rc.2] - 2026-05-07
+
+
+### Fixed
+
+- Fix(sdk-python): count opencode turns from JSON step events (#546)
+
+* fix(sdk-python): count opencode turns from JSON step events
+
+* fix(sdk-python): parse opencode JSON text events for final output (d134751)
+
+
+
+### Other
+
+- Feat/UI queue concurrency status 323 (#547)
+
+* fix(sdk-python): count opencode turns from JSON step events
+
+* fix(sdk-python): parse opencode JSON text events for final output
+
+* feat(ui): surface per-agent queue concurrency and capacity status (365572d)
+
+## [0.1.78-rc.1] - 2026-05-06
+
+
+### Testing
+
+- Test(harness): regression-guard run_cli parent env propagation (#544)
+
+Adds a small unit test asserting that ``run_cli``:
+
+1. Propagates parent process env to the subprocess (the contract that lets
+   CLI providers inherit deployment-level vars like OPENCODE_ENABLE_EXA /
+   EXA_API_KEY)
+2. Lets explicit per-call env override parent env on conflict
+3. Layers explicit env on top of parent env additively
+4. Inherits parent env even when the explicit env arg is None
+
+Motivates why this matters: opencode's built-in websearch / webfetch tools
+are gated on env vars (OPENCODE_ENABLE_EXA + EXA_API_KEY). They reach the
+opencode subprocess only because run_cli's ``merged_env = {**os.environ}``
+preserves parent env. If a refactor ever drops that line, every CLI
+provider quietly stops seeing deployment env and tools that depend on
+them silently break across every consumer (SWE-AF, PR-AF, github-buddy).
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (04cacd1)
+
+## [0.1.77] - 2026-05-06
+
+## [0.1.77-rc.5] - 2026-05-06
+
+
+### Added
+
+- Feat: end-to-end cooperative cancellation (cancel-tree + dispatcher + 3 SDKs) (#542)
+
+* feat(workflows): add bottom-up cancel-tree endpoint
+
+POST /workflows/:run_id/cancel-tree walks the run DAG and marks every
+non-terminal execution cancelled, bottom-up by computed depth so leaves
+transition before their parents. Reuses the existing per-execution cancel
+state-transition, sibling-table sync, and event-publishing pattern via a
+local helper to keep blast radius small.
+
+Motivation: per-execution cancel cannot reach a run whose root has already
+terminated but whose children are still flagged non-terminal (zombied
+fan-out workers, dispatched siblings outliving their parent). The control
+plane needs a single endpoint the UI can hit that means "stop the whole
+run" without the caller having to enumerate child executions.
+
+Mounted at both /api/v1/ and /api/ui/v1/, mirroring the existing per-execution
+cancel surface. Catalog entry added.
+
+* feat(ui-runs): wire Cancel to cancel-tree, gate on aggregate status
+
+The Cancel button on the run detail page and the per-row kebab in the
+runs list both gated visibility on the ROOT execution's status. That
+left users with no way to cancel a run whose root had already
+terminated while children were still flagged non-terminal — the
+button simply did not render.
+
+Switch the Cancel guard to the aggregate workflow_status (root status
+still drives Pause/Resume, since those are scoped to the root row the
+user controls). Wire all three Cancel surfaces — run-detail header,
+per-row kebab, and bulk toolbar — to the new useCancelWorkflowTree
+mutation, which calls POST /workflows/:run_id/cancel-tree to walk the
+whole DAG.
+
+Tests updated to match the new call shape.
+
+* feat(workers): cancel-signal transport via HTTP callback
+
+Add a CancelDispatcher service that subscribes to the in-process
+ExecutionEventBus and forwards every ExecutionCancelledEvent as an HTTP
+POST to the worker that owns the execution. The cancel-tree endpoint
+(PR #536) and the per-execution cancel handler both publish to this bus
+already, so the dispatcher gives every cancellation source a single
+mechanism for reaching remote SDK workers.
+
+Transport: POST {agent.BaseURL}/_internal/executions/:exec_id/cancel
+with a JSON body of {execution_id, workflow_id, reason, emitted_at}
+and an X-AgentField-Source header. Reuses the existing dispatch HTTP
+channel — no second long-lived connection per worker, no auth changes.
+
+Best-effort delivery: 5s timeout, no retries, 404 from older SDKs is
+treated as a no-op. The control plane's storage record of the cancelled
+status is the source of truth; the callback only exists so the worker's
+SDK can short-circuit in-flight reasoner code (raise CancelledError /
+abort signals / cancel contexts), which the per-language SDK PRs will
+implement on top of this transport.
+
+Wired into server.Start/Stop alongside the other background services.
+
+* feat(workers): forward Authorization: Bearer to worker cancel callback
+
+Workers running with RequireOriginAuth=true reject requests without a
+matching Authorization header. The reasoner-dispatch path already sends
+Authorization: Bearer <internal_token> from
+config.Features.DID.Authorization.InternalToken; thread the same value
+into CancelDispatcher so the cancel callback is accepted on auth-on
+workers.
+
+Empty-token deployments fall back to no Authorization header (current
+behaviour preserved).
+
+* feat(sdk-go): cooperative cancel via /_internal/executions/:id/cancel
+
+Register a context.CancelFunc per in-flight reasoner invocation, keyed
+on execution_id. The control plane's cancel dispatcher (PR #538) POSTs
+to /_internal/executions/:id/cancel; the SDK looks up the matching
+cancel func and fires it, short-circuiting reasoner code that honors
+ctx.Done(). Idiomatic Go code already does this via net/http,
+database/sql, and the official Anthropic SDK — so most reasoners get
+cooperative cancellation for free.
+
+Backwards compatible: reasoners that don't honor ctx.Done() finish
+naturally, and their output is discarded by the control plane (existing
+behaviour). The endpoint is exempted from local DID verification but
+still gated by the existing originAuthMiddleware Bearer token check.
+
+Three call sites wire the registration:
+  - sync /reasoners/ handler
+  - async executeReasonerAsync (dispatched goroutine)
+  - /execute/ serverless-style entry point
+
+Tests cover the cancel registry (register / release / concurrent
+release+cancel), the HTTP handler (active / unknown / malformed paths,
+method gate), and an end-to-end test where a long-running reasoner
+exits cleanly via the HTTP cancel endpoint.
+
+* feat(sdk-python): cooperative cancel via /_internal/executions/:id/cancel
+
+Register an asyncio.Task per in-flight reasoner invocation, keyed on
+execution_id. The control plane's cancel dispatcher (PR #538) POSTs
+/_internal/executions/:id/cancel; the SDK looks up the matching task
+and calls task.cancel(), which raises asyncio.CancelledError into the
+user's coroutine. Async I/O libraries (httpx, the official anthropic
+and openai SDKs, asyncpg) honor task cancellation natively, so most
+reasoners get cooperative cancellation without changes.
+
+Two call sites wire the registration:
+  - sync path of the FastAPI reasoner endpoint: wrap run_reasoner() in
+    a Task, register, await, catch CancelledError → 499 response.
+  - async path (_execute_async_with_callback): catch CancelledError,
+    emit a "cancelled" status payload to the control-plane callback,
+    deregister in finally.
+
+The cancel route bypasses path-based DID verification (control-plane→
+worker notification, not a DID-signed user call). Bearer-token origin
+auth still applies through the usual middleware path.
+
+Backwards compatible: reasoners that swallow CancelledError or use
+blocking sync code finish naturally, and their output is discarded by
+the control plane (existing behaviour). Authors who need to poll
+inside CPU loops can use is_execution_cancelled(agent, execution_id).
+
+Tests cover the registry (register/replace/deregister/concurrent),
+direct cancel via cancel_execution(), the HTTP route handler shape,
+and the info-log path on actual cancellation.
+
+* feat(sdk-typescript): cooperative cancel via /_internal/executions/:id/cancel
+
+Register an AbortController per in-flight reasoner / skill invocation,
+keyed on execution_id. The control plane's cancel dispatcher (PR #538)
+POSTs /_internal/executions/:id/cancel; the SDK looks up the matching
+controller and calls .abort(), which fires signal.aborted=true and
+rejects any pending fetch / Anthropic SDK / OpenAI SDK call bound to
+ctx.signal. Pure-JS CPU loops can poll signal.aborted between chunks.
+
+Three pieces:
+  - new src/agent/cancel.ts: CancelRegistry + installCancelRoute
+  - Agent ctor: install the route on this.app, hold a registry instance
+  - runReasoner / runSkill: register a controller around the handler
+    invocation, pass signal: controller.signal into the context, release
+    in finally
+  - ReasonerContext / SkillContext: new readonly signal: AbortSignal
+    field. Optional in the constructor, defaults to a never-aborted
+    signal so existing call sites and getCurrent*Context helpers
+    continue to work unchanged.
+
+Backwards compatible: handlers that ignore ctx.signal finish naturally
+and their output is discarded by the control plane (existing per-
+execution cancel behaviour). Workers running without the dispatcher in
+front of them simply never see the cancel callback.
+
+Tests: 14 pass — registry semantics (register/cancel/release/replace/
+double-cancel/idempotent-release/empty-id), HTTP route shape (active /
+unknown / reason forwarding / source-header logging), and an Agent-
+level integration test where ctx.signal aborts mid-flight when the
+cancel route fires.
+
+* test(control-plane): cover cancel-tree handler + cancel-dispatcher edge cases
+
+Lifts patch coverage on the new files above the 80% gate. New cases:
+- cancel_tree handler: missing/fallback workflowId param, malformed JSON
+  body, empty body (io.EOF bind), QueryExecutionRecords failure,
+  errAlreadyTerminal race, generic update error, nil workflow_executions
+  row.
+- cancel_dispatcher: default Bus/path/subscriber, idempotent Start,
+  ctx.Done() loop exit, blank execution_id, blank agent_node_id, empty
+  BaseURL (serverless agents), worker 404, worker 5xx, transport error
+  recovery, trailing-slash BaseURL, non-string reason fallback.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* test(web-ui): cover cancelWorkflowTree service and useCancelWorkflowTree hook
+
+The patch-coverage gate flagged both files at 0% on the touched lines.
+Adds:
+- workflowsApi: posts URL/method/body/reason; defaults reason to ""
+  when omitted.
+- useExecutionMutations: covers the new useCancelWorkflowTree mutation
+  (success invalidates ["runs"]/["run-dag"]; error surfaces without
+  invalidating) plus the existing cancel/pause/resume hooks.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* test(web-ui): cover cancel-tree success and zero-cancel branches in pages
+
+RunDetailPage: separate cases for cancelled_count > 1 (plural-step copy),
+cancelled_count == 1 (singular-step copy), cancelled_count == 0 (nothing
+to cancel), and aggregate-terminal status (Cancel button hidden).
+RunsPage: row-level zero-cancel notification and Cancel-failed
+notification when the row mutation rejects.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (bba55d8)
+
+## [0.1.77-rc.4] - 2026-05-06
+
+
+### Fixed
+
+- Fix(web-ui): show Input/Output above Provenance on step detail (#526) (#537)
+
+Move <StepProvenanceCard> below Output so the Input/Output payloads —
+the primary debugging signal — render first. Provenance (caller DID,
+target DID, input/output hashes) is verification metadata and stays
+collapsed by default; it is unchanged in content and copy buttons.
+
+Same component is reused on the run detail panel and workflow node
+drawer, so the reorder applies to both.
+
+Refs #526
+
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com> (d9451b5)
+
+## [0.1.77-rc.3] - 2026-05-06
+
+
+### Fixed
+
+- Fix(web-ui): independent scroll for Steps list and run detail panel (#527) (#535)
+
+The execution detail page used a single page-level scroll, so on
+fan-out runs with 100+ steps the right-hand Input/Output/Provenance
+panel scrolled out of view as the user moved through the Steps list.
+
+Root cause: <TabsContent> (Radix) renders a non-flex <div>, breaking
+the flex-1/min-h-0 height chain that the inner two-pane wrapper
+relied on. Cards collapsed to content height and overflow bubbled up
+to the page-level <main> scroller. Measured: <main> scrollHeight was
+3128px on a 100-step run with viewport 820px.
+
+Fix (CSS only, no data change):
+
+- overflow-hidden on the page wrapper so the height budget is bounded.
+- flex flex-col on both <TabsContent> panels so the inner two-pane
+  wrapper sizes correctly.
+- Pin the Steps column on lg+ to a fixed width (lg:w-[420px],
+  lg:max-w-[520px], lg:flex-none); long agent names truncate via the
+  existing truncate min-w-0 pattern in RunTrace.
+- shrink-0 on the run-context cards row and tab bar header.
+
+The existing internal scrollers — RunTrace (overflow-auto), StepDetail
+(<ScrollArea>), and WorkflowDAGViewer — now receive a bounded parent
+height and scroll independently. Same behavior in Trace and Graph
+view modes.
+
+Refs #527
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (05a76e9)
+
+## [0.1.77-rc.2] - 2026-05-06
+
+
+### Chores
+
+- Chore(deps): bump the npm_and_yarn group across 2 directories with 1 update (#534)
+
+Bumps the npm_and_yarn group with 1 update in the /examples/benchmarks/100k-scale/mastra-bench directory: [ip-address](https://github.com/beaugunderson/ip-address).
+Bumps the npm_and_yarn group with 1 update in the /sdk/typescript directory: [ip-address](https://github.com/beaugunderson/ip-address).
+
+
+Updates `ip-address` from 10.1.0 to 10.2.0
+- [Commits](https://github.com/beaugunderson/ip-address/commits)
+
+Updates `ip-address` from 10.1.0 to 10.2.0
+- [Commits](https://github.com/beaugunderson/ip-address/commits)
+
+---
+updated-dependencies:
+- dependency-name: ip-address
+  dependency-version: 10.2.0
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+- dependency-name: ip-address
+  dependency-version: 10.2.0
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (dc8a488)
+
+## [0.1.77-rc.1] - 2026-05-06
+
+
+### Chores
+
+- Chore(deps): bump axios (#532)
+
+Bumps the npm_and_yarn group with 1 update in the /sdk/typescript directory: [axios](https://github.com/axios/axios).
+
+
+Updates `axios` from 1.15.0 to 1.15.2
+- [Release notes](https://github.com/axios/axios/releases)
+- [Changelog](https://github.com/axios/axios/blob/v1.x/CHANGELOG.md)
+- [Commits](https://github.com/axios/axios/compare/v1.15.0...v1.15.2)
+
+---
+updated-dependencies:
+- dependency-name: axios
+  dependency-version: 1.15.2
+  dependency-type: direct:production
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (8c5a4a8)
+
+## [0.1.76] - 2026-05-06
+
+## [0.1.76-rc.1] - 2026-05-06
+
+
+### Performance
+
+- Perf(harness): stop retrying on timeout, repair JSON cheaply, raise opencode caps (#533)
+
+Production trace (pr-af review_pull_request, multiple runs) showed
+phases consistently hitting 30+ minutes — well past where Kimi K2.6's
+per-turn cost should land us. Profiling revealed three orthogonal
+issues in the harness layer that compound:
+
+1. Per-call opencode timeout was 600s (10 min). Kimi K2.6 on a
+   complex review legitimately needs more than that — the timeout was
+   killing slow-but-progressing calls mid-flight.
+
+2. The runner's TRANSIENT_PATTERNS included "timeout" / "timed out".
+   So when (1) fired, the runner classified it as transient and
+   re-ran the *entire* opencode subprocess up to 3 more times. A
+   single phase that should have been one 12-min call became four
+   10-min subprocess restarts (40 min wall, ~$$$ in tokens) for the
+   same deterministic outcome. Production trace: meta_systemic at
+   35m 57s ≈ exactly 3.5 timeouts.
+
+3. On schema-validation failure, the runner re-ran opencode (same
+   30-min agentic loop) hoping to coerce the output into valid JSON
+   — when the actual problem is usually "the model produced the
+   right answer but with a stray comma." The model already did the
+   work; we just needed a parser.
+
+Plus a side-effect of (2): the OPENCODE_MAX_CONCURRENT semaphore
+defaulted to 3, gating pr-af's bump to max_concurrent_reviewers=10
+(pr-af PR #19). Two semaphores in series at 3 = same throughput as
+either one at 3.
+
+Changes:
+
+  • opencode.py: per-call timeout 600s → 1800s (env-overridable as
+    AGENTFIELD_HARNESS_TIMEOUT_SECONDS). Rationale: if a single
+    opencode subprocess can't finish in 30 min, the prompt or model
+    is wrong and re-running won't fix it. Fail loud.
+
+  • opencode.py: OPENCODE_MAX_CONCURRENT default 3 → 10. Unblocks
+    pr-af's reviewer fan-out; OpenRouter Kimi K2.6 handles 10
+    concurrent comfortably. Lower via env if your provider is tighter.
+
+  • opencode.py: opt-in XDG_DATA_HOME reuse via
+    AGENTFIELD_OPENCODE_REUSE_DATA_DIR=true. SQLite migrations only
+    run once per process instead of per-call. Default off because
+    container layouts vary (read-only /tmp, multi-tenant, etc.).
+
+  • _runner.py: dropped "timeout" / "timed out" from
+    TRANSIENT_PATTERNS. A wall-clock timeout now fails immediately;
+    only true transient errors (502/503/rate_limit/connection_reset)
+    still trigger retry.
+
+  • _runner.py: new _ai_schema_repair() — when the harness call
+    produced non-empty text but it didn't validate, ONE focused LLM
+    call (no tools, no repo, 90s wall-clock) reformats the existing
+    text into valid JSON conforming to the schema. Skipped when
+    text is empty (per user requirement: 'if no output, can't
+    repair'). Wired into _handle_schema_with_retry so it runs BEFORE
+    the existing retry-via-harness loop. On failure, falls through
+    to the unchanged retry path.
+
+Tests: 7 new regression tests in test_harness_ai_schema_repair.py
+covering empty text → no LLM call, whitespace-only → no LLM call,
+no model configured → no LLM call, valid JSON response → parse,
+LLM exception → fall through, repair output unparseable → fall
+through, repair timeout → fall through. Full SDK suite (1451
+tests) green. ruff clean.
+
+Pairs with pr-af PR #20 (prompt softening). Together these should
+take typical review runtime from 60-110+ min to under an hour.
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (df6ca04)
+
+## [0.1.75] - 2026-05-06
+
+## [0.1.75-rc.1] - 2026-05-05
+
+
+### Fixed
+
+- Fix: detect mid-flight agent redeploys via instance_id and reap orphaned executions (#531)
+
+* fix(control-plane): reap orphaned executions on agent instance change
+
+When an agent process is killed mid-flight (graceful redeploy, OOM,
+SIGKILL), every cross-agent Agent.call that was inside its
+wait_for_execution_result poll loses its in-memory state with the
+process. Until now the control plane had no way to detect this — the
+parent reasoner sat in `running` forever, even after the child completed
+successfully (production trace: run_1778004368903_9345a88f, where pr-af
+finished but the parent github-buddy reasoner was orphaned by the
+previous PR's deploy and stayed `running` for 70+ minutes with nothing
+listening).
+
+Fix: add a per-process `instance_id` to AgentNode. SDKs send it on every
+registration; the control plane compares the incoming value to the one
+last stored. If both are non-empty and differ, MarkAgentExecutionsOrphaned
+fails every still-running execution owned by that agent_node_id with
+status_reason="agent_restart_orphaned".
+
+Backward compatible: empty instance_id is the legacy-SDK signal; reap
+only fires when both old and new are populated and differ. Reap failures
+are logged-and-continue — the existing 30-minute stale-execution sweep
+remains as the safety net.
+
+Coverage:
+- Storage: 5 tests for MarkAgentExecutionsOrphaned (status filtering,
+  agent isolation, terminal-status protection, empty-id rejection,
+  default-reason fallback)
+- Handler: 6 tests for the registration path (reap on change, no reap
+  on same instance / first registration / legacy SDK, instance_id
+  persists through, reap failure does not block registration)
+
+Includes goose migration 033_agent_instance_id.sql for Postgres
+production. SQLite picks up the column via GORM AutoMigrate.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* feat(sdk/python): emit per-process agent_instance_id for orphan-reap
+
+Pairs with the control-plane fix in the previous commit. The SDK now
+generates a fresh UUID4 hex on every Agent() construction (i.e. every
+Python process) and ships it on:
+
+  * register_agent (the long-form registration path)
+  * register_agent_with_status (the fast-lifecycle path used after
+    redeploys; this is the load-bearing path for the redeploy-orphan
+    detection)
+  * every HeartbeatData (defense-in-depth in case re-registration is
+    suppressed by the connection manager's reconnect short-circuit)
+
+The control plane compares this value across re-registrations and fails
+every in-flight execution owned by the previous instance — the work
+inside that process is unrecoverable (the wait_for_execution_result
+poll died with the OS process), so leaving it `running` strands the
+parent reasoner forever.
+
+Tests pin the load-bearing invariants:
+  - instance_id is generated, non-empty, and a valid UUID4 hex
+  - distinct Agent instances produce distinct values (= a redeploy is
+    detectable)
+  - the same Agent instance returns a stable value (= heartbeats don't
+    look like fake redeploys)
+  - register_agent and register_agent_with_status both put it on the
+    wire; missing kwarg defaults to "" (legacy-SDK back-compat)
+  - HeartbeatData.to_dict carries it; default is "" so positional
+    constructors still work
+  - end-to-end: agent_field_handler threads agent.agent_instance_id
+    through to the client (the most regression-prone link — silent
+    breakage here would disable the whole feature)
+
+DummyAgentFieldClient in tests/helpers.py is updated to accept the new
+kwarg so existing tests that exercise registration keep passing.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* chore(sdk/python): drop unused imports flagged by ruff
+
+asyncio and importlib were leftovers from earlier drafts of the test —
+neither is used by any test in the file. Caught by `ruff check .` in CI;
+the lint step is what failed PR #531's lint-and-test (3.10/3.11/3.12)
+matrix jobs.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* refactor(control-plane): collapse MarkAgentExecutionsOrphaned to bulk UPDATE
+
+The original implementation followed the prepare-statement-then-loop
+pattern from MarkStaleWorkflowExecutions, which left ~30 unreachable SQL
+error paths in the patch — every prepare/exec/scan call had its own
+fmt.Errorf wrap. The patch coverage gate (≥80% on touched lines) failed
+at 70% because those error paths are only reachable via DB fault
+injection.
+
+The bulk UPDATE form is equivalent for our needs and much smaller:
+
+  - workflow_executions update is the source of truth (DAG UI reads it)
+  - executions update is a best-effort legacy mirror (errors swallowed
+    intentionally — the comment makes that explicit)
+  - duration_ms is no longer written; consumers that care about runtime
+    can compute completed_at - started_at since started_at is preserved
+
+Net effect: ~70 lines of error-handling boilerplate removed, the
+function runs as a single SQL statement against the source of truth
+(faster too — was N+1), and the audit signal (status='failed' +
+status_reason='agent_restart_orphaned') is unchanged.
+
+Adds TestRegisterNodeHandler_InstanceChangeWithNothingToReap to cover
+the "instance flipped but no in-flight work" branch — the most common
+production case (idle-agent restart).
+
+All existing storage and handler tests still pass.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (5da0e27)
+
+## [0.1.74] - 2026-05-05
+
+## [0.1.74-rc.2] - 2026-05-05
+
+
+### Fixed
+
+- Fix(sdk): don't fall back to sync when the reasoner already ran (#530)
+
+`Agent.call`'s async-then-sync-fallback was retrying any non-401/403
+exception from the async path. That includes the case where the call
+reached the reasoner, the reasoner ran, and the reasoner explicitly
+returned a failed status — at which point retrying via the sync path
+just runs the same reasoner again with the same input, burns the same
+budget, and produces the same deterministic failure.
+
+Observed in production: github-buddy → pr-af.review fails with
+`pr_af.orchestrator.BudgetExhaustedError`; the SDK silently retries
+via sync 1 ms later, pr-af runs intake + anatomy from scratch, hits
+budget again, double-billed. Same pattern would apply to any
+deterministic 5xx surface (validation errors, malformed input, exhausted
+quotas) — one logical failure, two charges.
+
+## Fix
+
+Add a new `ExecutionFailedError(AgentFieldClientError)` exception to
+distinguish "the work ran and failed" from "the call never reached the
+reasoner":
+
+- `async_execution_manager.wait_for_result` now raises
+  `ExecutionFailedError` instead of plain `AgentFieldClientError` when
+  the polled execution status is `FAILED`. (Backward-compatible:
+  `ExecutionFailedError` inherits from `AgentFieldClientError`, so
+  callers catching the parent still see it.)
+- `Agent.call`'s exception handler skips the sync fallback when the
+  async exception is `ExecutionFailedError` or `ExecutionTimeoutError`
+  — both mean the work has already used its budget on the agent side.
+  Plain `AgentFieldClientError` (transport / submission / network)
+  continues to fall back via sync, preserving the recovery path that
+  fallback_to_sync was designed for.
+
+The fix is asymmetric on purpose: retry remains on for transient
+transport failures (the legitimate use case), but is now off for
+post-execution failures (the wasteful case). No new config knob —
+this is the right default and an opt-in env override would invite
+future regressions.
+
+## Test plan
+
+`tests/test_agent_call.py` adds three pinning tests:
+- `test_call_skips_sync_fallback_on_execution_failed_error`
+- `test_call_skips_sync_fallback_on_execution_timeout_error`
+- `test_call_still_falls_back_on_transport_errors` (regression guard
+  for the recovery path)
+
+All 65 tests pass across the affected files (`test_agent_call.py`,
+`test_agent_core.py`, `test_async_execution_manager_*`,
+`test_client_*`).
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (cecb776)
+
+## [0.1.74-rc.1] - 2026-05-05
+
+
+### Fixed
+
+- Fix: reject terminal-state regression on execution status writes (#528)
+
+* fix(workflow-events): reject terminal-state regression on /workflow/executions/events
+
+`applyEventToExecution` was unconditionally writing whatever status
+arrived in the fire-and-forget workflow event, with no guard against
+regressing from a terminal state (failed/succeeded/cancelled/timeout)
+back to a non-terminal one (running/queued/pending).
+
+The Python SDK fires these events from many paths — notify_call_start,
+notify_call_complete, notify_call_error, plus retries — and they are
+not strictly ordered. A late "running" event for the same execution_id
+could land after a "failed" event and stomp the row's status back, so
+callers polling /api/v1/executions/:id would never see the terminal
+status. In production this stranded github-buddy's `app.call` for the
+full 7200s wall-clock timeout despite pr-af.review having reported
+"failed" 6 minutes in.
+
+Once an execution has reached a terminal state, treat the row as
+immutable for status / result / error / completion fields. The endpoint
+still returns 200 so the SDK's fire-and-forget call site doesn't trip
+its own retry, but the row no longer regresses.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* fix(executions): reject terminal-state regression on /executions/:id/status
+
+Companion to the /workflow/executions/events guard: the
+/api/v1/executions/:id/status callback handler had a partial transition
+guard (only for the 'waiting' state) but allowed terminal→non-terminal
+writes. A late or replayed status callback could regress a finished
+execution back to 'running' and strand any caller polling the GET
+endpoint for completion.
+
+Reject any non-terminal write against an already-terminal record with
+500 + a descriptive error so the SDK's `_post_execution_status` retry
+loop sees a hard failure (rather than silently re-stomping). Same-
+terminal writes are still accepted to keep the SDK's at-least-once
+delivery idempotent.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (290d3df)
+
+## [0.1.73] - 2026-05-04
+
+## [0.1.73-rc.2] - 2026-05-04
+
+
+### Fixed
+
+- Fix(harness/opencode): surface stderr Error: lines on exit 0 (#525)
+
+The opencode CLI sometimes prints a hard error to stderr but exits 0,
+notably "Error: Model not found: …", auth errors, and APIErrors. The
+provider's previous logic only flagged failures on non-zero exit, so
+these cases returned RawResult(is_error=False, result=None) — silently
+empty output that downstream callers interpret as "agent failed to
+produce a valid result".
+
+The bug also hid behind the diagnostic: clean_stderr is logged truncated
+to 800 chars, but opencode opens stderr with the SQLite migration
+prelude ("Performing one time database migration..."), pushing the real
+Error: line off the end of the truncation window. Operators saw the
+prelude in logs and assumed migration was the issue.
+
+This change:
+
+- Adds explicit detection of error-shaped stderr (Error:, Model not
+  found, AuthenticationError, Unauthorized, APIError) and treats them
+  as CRASH failures even when returncode == 0.
+- Extracts the meaningful error line + a small context window via
+  _extract_opencode_error() so the surfaced message contains the real
+  cause, not the migration prelude.
+- Uses the same extractor for the existing non-zero-exit branch so log
+  truncation can no longer hide the cause there either.
+
+Tests: 3 new regression tests (Model not found exit 0, migration-only
+stderr is not a failure, long-prelude + AuthenticationError on
+non-zero exit). Full opencode + harness suite: 48/48.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (720a48e)
+
+## [0.1.73-rc.1] - 2026-05-04
+
+
+### Added
+
+- Feat(sdk/go): add audio and file multimodal helpers (#520)
+
+* feat(sdk/go): add audio and file multimodal helpers
+
+* fix(sdk/go): bound WithAudioURL with timeout and size cap
+
+Replace bare http.Get with a client that has a 30s timeout, and cap
+the response body at 50 MiB via io.LimitReader so a slow or oversized
+URL can't hang the caller or exhaust memory.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* test(sdk/go): drop empty Test_detectMIMEType stub
+
+The auto-generated stub had no test cases (the loop body never ran)
+and silently passed. detectMIMEType is already covered by
+TestDetectMIMEType in multimodal_additional_test.go.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* test(sdk/go): cover WithAudioURL/WithAudioFile/WithFile error paths
+
+Adds tests for the read-error, fetch-error, HTTP-error, and size-cap
+branches so patch coverage stays above the 80% gate. Switches
+maxAudioURLBytes from const to var so the cap test can shrink it
+instead of streaming 50 MiB.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (395336b)
+
+
+
+### Fixed
+
+- Fix(railway): remove dead root railway.json hijacking template builds (#523)
+
+* fix(railway): remove dead repo-root railway.json
+
+Every Railway template that ships AgentField (controlplane-template,
+sec-af, swe-af, contract-af, cloudsecurity-af, agentfield-deep-research)
+deploys the control plane via the prebuilt image
+agentfield/control-plane:latest, not by building this repo. No live
+service in the workspace builds the agentfield repo as a control plane,
+and deployments/railway/README.md documents image-based deploys only.
+
+This file was a leftover from before the switchover to prebuilt images.
+Worse, it actively breaks any service that points at a sub-path of the
+repo via rootDirectory: Railway falls back to /railway.json, finds
+"dockerfilePath: deployments/docker/Dockerfile.control-plane", and tries
+to build the control plane Dockerfile against the sub-path's context —
+which has no control-plane/ directory, so the first COPY fails with:
+
+    failed to compute cache key: "/control-plane/web/client": not found
+
+That's exactly what the controlplane-template's "example node" service
+(rootDirectory /examples/ts-node-examples/init-example) hit on every
+fresh template instantiation since PR #151. With this file gone Railway
+falls through to auto-detecting the local Dockerfile in the service's
+rootDirectory, which is what the example was always meant to use.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* chore(examples/init-example): drop now-redundant railway.json
+
+Added in #522 as a defensive override against the dead repo-root
+railway.json. With that root file removed in the previous commit,
+Railway auto-detects the local Dockerfile in the service's rootDirectory
+on its own, so this per-example config is dead weight too.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (5338ac5)
+
+- Fix(examples/init-example): pin Railway build to local Dockerfile (#522)
+
+The Railway "example node" service deploys with rootDirectory set to
+examples/ts-node-examples/init-example/. With no local railway.json,
+Railway falls back to the repo-root /railway.json, which targets
+deployments/docker/Dockerfile.control-plane. That Dockerfile expects
+the repo root as build context (it COPYs control-plane/web/client/...),
+but the build context here is the example dir, so the build fails with:
+
+    failed to compute cache key: "/control-plane/web/client": not found
+
+Add an example-local railway.json that pins the build to the existing
+Dockerfile in this directory, so the example builds as the simple Node
+agent it is and is no longer coupled to the control-plane template
+config.
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (9fb4315)
+
+## [0.1.72] - 2026-05-03
+
+## [0.1.72-rc.11] - 2026-05-01
+
+
+### Fixed
+
+- Fix(harness): limit opencode concurrency with global semaphore (#438) (#505)
+
+* fix(harness): limit opencode concurrency with global semaphore (#438)
+
+* added in changelog
+
+* fix: address review feedback (remove global runCLI, fix test cleanup)
+
+* chore(changelog): drop manual entry, release bot owns CHANGELOG.md
+
+The release tooling auto-generates CHANGELOG.md entries on each
+chore(release) commit; manual edits collide with that and produced a
+duplicate [0.1.72-rc.6] heading here. Reverting CHANGELOG.md to its
+pre-edit state.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* test(harness/go): exercise OpenCode semaphore against real subprocesses
+
+The existing semaphore tests mock `p.runCLI`, which proves the channel
+arithmetic but not that the semaphore actually serializes real subprocess
+spawns alongside the new opencode 1.14+ flag construction (#519). Adds
+two functional tests that drive the full Execute path through RunCLI:
+
+- TestOpenCodeConcurrencyLimit_RealSubprocess: a fake `opencode` shell
+  script writes per-invocation start/end timestamps; a sweep-line over
+  the recorded spans asserts the maximum overlap never exceeds
+  OPENCODE_MAX_CONCURRENT (and, conversely, that real overlap was
+  observed — guarding against a future change that accidentally
+  serializes everything to 1).
+- TestOpenCodeSemaphore_ReleasedOnSubprocessFailure: with limit=1, three
+  sequential calls into a script that exits non-zero must all complete.
+  If a slot leaked on the failure path the second call would block
+  forever.
+
+Manually smoke-tested against a real opencode 1.14.29 binary as well:
+4 concurrent Execute calls with limit=2 produced the expected ~2x
+single-call duration (paired stair pattern), and the binary accepted
+the new `run --dir <project> -m <model> --dangerously-skip-permissions
+<prompt>` invocation without help-screen fallback.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (994e3bc)
+
 ## [0.1.72-rc.10] - 2026-04-29
 
 

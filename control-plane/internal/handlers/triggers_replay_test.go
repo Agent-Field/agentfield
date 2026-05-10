@@ -22,8 +22,14 @@ import (
 // replay back to the signed original. The "did this run come from a real
 // webhook or a button-click?" question was un-answerable.
 func TestReplayEvent_StoresReplayOfPointer(t *testing.T) {
-	provider, dispatcher, ctx := setupAPIContractTestEnv(t)
-	h := NewTriggerHandlers(provider, dispatcher, nil)
+	provider, _, ctx := setupAPIContractTestEnv(t)
+	// Pass a nil dispatcher: the assertion below pins the row's *boot*
+	// status (=replayed). A real dispatcher fires asynchronously and races
+	// the GetInboundEvent below — under CI load it wins and overwrites the
+	// status to "failed" because the target node doesn't exist in this
+	// minimal fixture, producing a flake. The dispatch path is exercised by
+	// dedicated dispatcher tests; here we only care about replay metadata.
+	h := NewTriggerHandlers(provider, nil, nil)
 	r := triggerCoverageRouter(h)
 
 	trig := &types.Trigger{

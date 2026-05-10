@@ -116,6 +116,7 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	agentAPI.POST("/executions/:execution_id/cancel", handlers.CancelExecutionHandler(s.storage))
 	agentAPI.POST("/executions/:execution_id/pause", handlers.PauseExecutionHandler(s.storage))
 	agentAPI.POST("/executions/:execution_id/resume", handlers.ResumeExecutionHandler(s.storage))
+	agentAPI.POST("/workflows/:workflowId/cancel-tree", handlers.CancelWorkflowTreeHandler(s.storage))
 
 	// Approval workflow endpoints — CP manages execution state only;
 	// agents handle external approval service communication directly.

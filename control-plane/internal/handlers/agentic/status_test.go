@@ -136,6 +136,9 @@ func (m *mockStatusStorage) MarkStaleExecutions(ctx context.Context, staleAfter 
 func (m *mockStatusStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAfter time.Duration, limit int) (int, error) {
 	return 0, nil
 }
+func (m *mockStatusStorage) MarkAgentExecutionsOrphaned(ctx context.Context, agentNodeID string, reasonMessage string) (int, error) {
+	return 0, nil
+}
 func (m *mockStatusStorage) RegisterAgent(ctx context.Context, agent *types.AgentNode) error {
 	return nil
 }

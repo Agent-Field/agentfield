@@ -15,7 +15,7 @@ const state = vi.hoisted(() => ({
   },
   queryData: undefined as any,
   invalidateQueries: vi.fn<(args: unknown) => Promise<void>>(),
-  cancelMutateAsync: vi.fn<(executionId: string) => Promise<void>>(),
+  cancelTreeMutateAsync: vi.fn<(args: { workflowId: string; reason?: string }) => Promise<unknown>>(),
   pauseMutateAsync: vi.fn<(executionId: string) => Promise<void>>(),
   resumeMutateAsync: vi.fn<(executionId: string) => Promise<void>>(),
   showRunNotification: vi.fn<(message: string) => void>(),
@@ -48,7 +48,7 @@ vi.mock("@tanstack/react-query", () => ({
 
 vi.mock("@/hooks/queries", () => ({
   useRunDAG: () => state.runDag,
-  useCancelExecution: () => ({ mutateAsync: state.cancelMutateAsync, isPending: false }),
+  useCancelWorkflowTree: () => ({ mutateAsync: state.cancelTreeMutateAsync, isPending: false }),
   usePauseExecution: () => ({ mutateAsync: state.pauseMutateAsync, isPending: false }),
   useResumeExecution: () => ({ mutateAsync: state.resumeMutateAsync, isPending: false }),
 }));
@@ -330,7 +330,16 @@ describe("RunDetailPage", () => {
     };
     state.queryData = undefined;
     state.invalidateQueries.mockReset();
-    state.cancelMutateAsync.mockReset();
+    state.cancelTreeMutateAsync.mockReset();
+    state.cancelTreeMutateAsync.mockResolvedValue({
+      run_id: "run-1",
+      total_nodes: 1,
+      cancelled_count: 1,
+      skipped_count: 0,
+      error_count: 0,
+      nodes: [],
+      cancelled_at: new Date().toISOString(),
+    });
     state.pauseMutateAsync.mockReset();
     state.resumeMutateAsync.mockReset();
     state.showRunNotification.mockReset();
@@ -519,7 +528,7 @@ describe("RunDetailPage", () => {
       error: null,
     };
     state.pauseMutateAsync.mockResolvedValue(undefined);
-    state.cancelMutateAsync.mockRejectedValue(new Error("cancel exploded"));
+    state.cancelTreeMutateAsync.mockRejectedValue(new Error("cancel exploded"));
 
     const view = renderPage();
     expect(await screen.findByText("Run Alpha")).toBeInTheDocument();
@@ -535,7 +544,9 @@ describe("RunDetailPage", () => {
     fireEvent.click(screen.getByText("Cancel"));
     fireEvent.click(screen.getByRole("button", { name: "Cancel 1 run" }));
     await waitFor(() => {
-      expect(state.cancelMutateAsync).toHaveBeenCalledWith("exec-1");
+      expect(state.cancelTreeMutateAsync).toHaveBeenCalledWith(
+        expect.objectContaining({ workflowId: "run-1" }),
+      );
     });
     expect(state.showRunNotification).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -581,6 +592,126 @@ describe("RunDetailPage", () => {
     expect(state.showRunNotification).toHaveBeenCalledWith(
       expect.objectContaining({ title: "Resumed" }),
     );
+  });
+
+  it("notifies with steps-cancelled message when cancel-tree succeeds with cancelled_count > 0", async () => {
+    state.runDag = {
+      data: buildDag(),
+      isLoading: false,
+      isError: false,
+      error: null,
+    };
+    state.cancelTreeMutateAsync.mockResolvedValue({
+      run_id: "run-1",
+      total_nodes: 3,
+      cancelled_count: 2,
+      skipped_count: 1,
+      error_count: 0,
+      nodes: [],
+      cancelled_at: new Date().toISOString(),
+    });
+
+    renderPage();
+    expect(await screen.findByText("Run Alpha")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Cancel"));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel 1 run" }));
+    await waitFor(() => {
+      expect(state.cancelTreeMutateAsync).toHaveBeenCalled();
+    });
+    expect(state.showRunNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Cancelled",
+        message: expect.stringMatching(/2 steps cancelled\. In-flight work will finish and be discarded\./),
+      }),
+    );
+  });
+
+  it("notifies with nothing-left-to-cancel message when cancelled_count is zero", async () => {
+    state.runDag = {
+      data: buildDag(),
+      isLoading: false,
+      isError: false,
+      error: null,
+    };
+    state.cancelTreeMutateAsync.mockResolvedValue({
+      run_id: "run-1",
+      total_nodes: 3,
+      cancelled_count: 0,
+      skipped_count: 3,
+      error_count: 0,
+      nodes: [],
+      cancelled_at: new Date().toISOString(),
+    });
+
+    renderPage();
+    expect(await screen.findByText("Run Alpha")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Cancel"));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel 1 run" }));
+    await waitFor(() => {
+      expect(state.cancelTreeMutateAsync).toHaveBeenCalled();
+    });
+    expect(state.showRunNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Cancelled",
+        message: expect.stringMatching(/nothing left to cancel/),
+      }),
+    );
+  });
+
+  it("notifies with single-step message when exactly one step was cancelled", async () => {
+    state.runDag = {
+      data: buildDag(),
+      isLoading: false,
+      isError: false,
+      error: null,
+    };
+    state.cancelTreeMutateAsync.mockResolvedValue({
+      run_id: "run-1",
+      total_nodes: 1,
+      cancelled_count: 1,
+      skipped_count: 0,
+      error_count: 0,
+      nodes: [],
+      cancelled_at: new Date().toISOString(),
+    });
+
+    renderPage();
+    expect(await screen.findByText("Run Alpha")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Cancel"));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel 1 run" }));
+    await waitFor(() => {
+      expect(state.cancelTreeMutateAsync).toHaveBeenCalled();
+    });
+    expect(state.showRunNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Cancelled",
+        message: expect.stringMatching(/1 step cancelled\b/),
+      }),
+    );
+  });
+
+  it("hides Cancel button when the workflow is in a terminal aggregate status", async () => {
+    state.runDag = {
+      data: {
+        ...buildDag(),
+        workflow_status: "succeeded",
+        timeline: [
+          { ...buildDag().timeline[0], status: "succeeded" },
+          { ...buildDag().timeline[1], status: "succeeded" },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+    };
+
+    renderPage();
+    expect(await screen.findByText("Run Alpha")).toBeInTheDocument();
+    // Cancel button should not be rendered when aggregate workflow_status is terminal.
+    expect(screen.queryByText("Cancel")).not.toBeInTheDocument();
   });
 
   it("shows cancellation strip when the root is cancelled but children are still running", async () => {

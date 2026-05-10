@@ -89,3 +89,67 @@ func TestWorkflowExecutionEventHandler_CreateAndUpdate(t *testing.T) {
 	require.NotNil(t, exec.DurationMS)
 	assert.Equal(t, duration, *exec.DurationMS)
 }
+
+// TestWorkflowExecutionEventHandler_TerminalRegression covers the case where
+// fire-and-forget workflow events from the SDK arrive out of order — e.g. an
+// outer reasoner emits "failed" while an inner reasoner emits a delayed
+// "running" with the same execution_id (or a retried event lands after the
+// terminal one). The handler must NOT regress a terminal status back to a
+// non-terminal one. Pinned the production hang where pr-af.review reported
+// "failed" but a later workflow event flipped the row back to "running",
+// stranding github-buddy's poll loop until its 7200s wall-clock timeout.
+func TestWorkflowExecutionEventHandler_TerminalRegression(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	storage := newTestExecutionStorage(&types.AgentNode{ID: "agent"})
+	handler := WorkflowExecutionEventHandler(storage)
+
+	// Seed the execution as already failed.
+	failPayload := WorkflowExecutionEventRequest{
+		ExecutionID: "exec_late_running",
+		RunID:       "run_1",
+		ReasonerID:  "review",
+		AgentNodeID: "agent",
+		Status:      "failed",
+		Error:       "Budget exhausted",
+	}
+	body, err := json.Marshal(failPayload)
+	require.NoError(t, err)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/workflow/executions/events", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	handler(c)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	exec, err := storage.GetExecutionRecord(context.Background(), "exec_late_running")
+	require.NoError(t, err)
+	require.Equal(t, string(types.ExecutionStatusFailed), exec.Status)
+	require.NotNil(t, exec.CompletedAt)
+	originalCompletedAt := *exec.CompletedAt
+
+	// A late "running" event arrives. The handler must accept the request
+	// (200) but must NOT regress the status — the row should remain failed
+	// and CompletedAt should be unchanged.
+	latePayload := WorkflowExecutionEventRequest{
+		ExecutionID: "exec_late_running",
+		RunID:       "run_1",
+		ReasonerID:  "review",
+		AgentNodeID: "agent",
+		Status:      "running",
+	}
+	body, err = json.Marshal(latePayload)
+	require.NoError(t, err)
+	w = httptest.NewRecorder()
+	c, _ = gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/workflow/executions/events", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	handler(c)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	exec, err = storage.GetExecutionRecord(context.Background(), "exec_late_running")
+	require.NoError(t, err)
+	assert.Equal(t, string(types.ExecutionStatusFailed), exec.Status, "terminal status must not regress to running")
+	require.NotNil(t, exec.CompletedAt)
+	assert.True(t, exec.CompletedAt.Equal(originalCompletedAt), "CompletedAt must not be cleared by a regressing event")
+}

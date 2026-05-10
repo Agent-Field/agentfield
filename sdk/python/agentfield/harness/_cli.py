@@ -71,14 +71,18 @@ def extract_final_text(events: List[Dict[str, Any]]) -> Optional[str]:
     Looks for common patterns across different CLI tools:
     - type: "result" with text/result field
     - type: "item.completed" with item.text field (Codex)
+    - type: "text" with part.text field (OpenCode JSON stream)
     - Last assistant message text
     """
     result_text = None
+    current_text_parts: List[str] = []
 
     for event in events:
         event_type = event.get("type", "")
 
-        if event_type == "item.completed":
+        if event_type == "step_start":
+            current_text_parts = []
+        elif event_type == "item.completed":
             item = event.get("item", {})
             if item.get("type") == "agent_message":
                 text = item.get("text", "")
@@ -94,6 +98,14 @@ def extract_final_text(events: List[Dict[str, Any]]) -> Optional[str]:
             content = event.get("content", event.get("text", ""))
             if isinstance(content, str) and content:
                 result_text = content
+        elif event_type == "text":
+            content = event.get("text", event.get("content", ""))
+            part = event.get("part")
+            if not content and isinstance(part, dict):
+                content = part.get("text", "")
+            if isinstance(content, str) and content:
+                current_text_parts.append(content)
+                result_text = "".join(current_text_parts)
 
     return result_text
 

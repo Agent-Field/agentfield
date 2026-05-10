@@ -84,6 +84,10 @@ type AgentFieldServer struct {
 	triggerDispatcher *services.TriggerDispatcher
 	sourceManager     *services.SourceManager
 	triggerHandlers   *handlers.TriggerHandlers
+	// cancelDispatcher forwards execution-cancelled events to remote SDK
+	// workers so they can cooperatively short-circuit in-flight reasoner
+	// code (raise CancelledError / abort signals / cancel contexts).
+	cancelDispatcher *services.CancelDispatcher
 	// Agentic API
 	apiCatalog *apicatalog.Catalog
 	kb         *knowledgebase.KB
@@ -453,6 +457,10 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 	triggerHandlers := handlers.NewTriggerHandlers(storageProvider, triggerDispatcher, sourceManager)
 	handlers.SetTriggerSourceManager(sourceManager)
 
+	cancelDispatcher := services.NewCancelDispatcher(storageProvider, services.CancelDispatcherConfig{
+		InternalToken: cfg.Features.DID.Authorization.InternalToken,
+	})
+
 	return &AgentFieldServer{
 		storage:                storageProvider,
 		cache:                  cacheProvider,
@@ -486,6 +494,7 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		triggerDispatcher:      triggerDispatcher,
 		sourceManager:          sourceManager,
 		triggerHandlers:        triggerHandlers,
+		cancelDispatcher:       cancelDispatcher,
 		apiCatalog:             initAPICatalog(),
 		kb:                     initKnowledgeBase(),
 	}, nil
@@ -560,6 +569,13 @@ func (s *AgentFieldServer) Start() error {
 	if err := s.cleanupService.Start(ctx); err != nil {
 		logger.Logger.Error().Err(err).Msg("Failed to start execution cleanup service")
 		// Don't fail server startup if cleanup service fails to start
+	}
+
+	// Start cancel dispatcher: forwards bus ExecutionCancelledEvent to
+	// remote workers via HTTP callback. Best-effort; missing endpoint on
+	// older SDKs is treated as a no-op.
+	if s.cancelDispatcher != nil {
+		s.cancelDispatcher.Start(ctx)
 	}
 
 	// Start OpenTelemetry execution tracer in background
@@ -684,6 +700,11 @@ func (s *AgentFieldServer) Stop() error {
 		if err := s.cleanupService.Stop(); err != nil {
 			logger.Logger.Error().Err(err).Msg("Failed to stop execution cleanup service")
 		}
+	}
+
+	// Stop cancel dispatcher
+	if s.cancelDispatcher != nil {
+		s.cancelDispatcher.Stop()
 	}
 
 	if s.registryWatcherCancel != nil {
