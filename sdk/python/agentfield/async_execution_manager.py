@@ -563,6 +563,26 @@ class AsyncExecutionManager:
         # Polling is unconditional, so this works whether or not the SSE
         # event stream is enabled.
         child_pause_active = False
+        # Attach the pause-clock to the execution state so the polling task's
+        # ``is_overdue`` check is also pause-aware. Without this, the polling
+        # loop's wallclock-based overdue check pre-empts the pause-aware loop
+        # below: it marks the execution TIMEOUT at exactly ``timeout`` seconds
+        # of wallclock — even when most of that wallclock was spent in the
+        # child's ``waiting`` state — and we surface that as a spurious
+        # ExecutionTimeoutError. Snapshot the previous value so we restore it
+        # in the finally block (concurrent waiters on the same execution_id
+        # are unusual but supported by the manager API).
+        previous_pause_clock = None
+        attached_pause_clock = False
+        if pause_clock is not None:
+            async with self._execution_lock:
+                execution = self._executions.get(execution_id)
+                if execution is not None:
+                    previous_pause_clock = getattr(
+                        execution, "_pause_clock", None
+                    )
+                    execution._pause_clock = pause_clock
+                    attached_pause_clock = True
         try:
             # Wait for completion
             while _active_elapsed() < wait_timeout:
@@ -639,6 +659,13 @@ class AsyncExecutionManager:
                     pause_clock.end_pause()
                 except Exception:
                     pass
+            # Restore the previous ``_pause_clock`` so future polling passes
+            # don't keep subtracting paused time from a stale parent clock.
+            if attached_pause_clock:
+                async with self._execution_lock:
+                    execution = self._executions.get(execution_id)
+                    if execution is not None:
+                        execution._pause_clock = previous_pause_clock
 
     async def cancel_execution(
         self, execution_id: str, reason: Optional[str] = None
