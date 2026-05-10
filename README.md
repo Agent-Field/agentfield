@@ -377,7 +377,9 @@ docker run -p 8080:8080 agentfield/control-plane:latest
   </tr>
 </table>
 
-[See all examples →](https://agentfield.ai/docs/learn/examples?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-see-all-examples)
+[See all examples →](https://www.agentfield.ai/examples?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-see-all-examples)
+
+Built something with AgentField? [Submit your project to be featured on the examples page](https://github.com/Agent-Field/agentfield/issues/new?template=community-project.md).
 
 ## See It In Action
 
