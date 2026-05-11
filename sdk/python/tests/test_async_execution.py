@@ -576,10 +576,18 @@ async def test_wait_for_result_invokes_callbacks_on_child_waiting_transitions():
         await asyncio.sleep(0.05)
         async with manager._execution_lock:
             state.update_status(ExecutionStatus.WAITING)
-        await asyncio.sleep(0.20)
+        # Keep the WAITING and RUNNING windows comfortably above the wait
+        # loop's 0.1s poll interval so the loop is guaranteed to observe
+        # each transition before the next one happens. The original 0.05s
+        # post-RUNNING gap raced with the loop's poll cycle and any added
+        # work inside the toggle block (logging, callback overhead) tipped
+        # the race the wrong way on 3.10/3.11 — the loop would see
+        # WAITING then jump straight to SUCCEEDED, never firing
+        # on_child_running.
+        await asyncio.sleep(0.30)
         async with manager._execution_lock:
             state.update_status(ExecutionStatus.RUNNING)
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.30)
         async with manager._execution_lock:
             state.set_result({"ok": True})
 
