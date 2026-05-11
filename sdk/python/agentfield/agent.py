@@ -65,7 +65,6 @@ from dataclasses import dataclass, field
 import weakref
 
 if TYPE_CHECKING:
-    from agentfield.execution_state import ExecutionStatus
     from agentfield.harness._result import HarnessResult
     from agentfield.harness._runner import HarnessRunner
 
@@ -672,19 +671,6 @@ class Agent(FastAPI):
         from .agent_pause import PauseClock
 
         self._pause_clocks: Dict[str, PauseClock] = {}
-
-        # Cross-reasoner pause propagation registry. Populated by ``call()``
-        # before awaiting a child execution, consumed by the SSE status
-        # listener so that when the child enters ``waiting``/``paused`` the
-        # parent's pause-clock is paused too — otherwise the parent's
-        # active-time budget burns through the child's human-approval delay.
-        # ``_waiting_children`` maps child_execution_id -> parent_execution_id;
-        # ``_parent_paused_children`` maps parent_execution_id -> set of
-        # child_execution_ids currently paused, used to refcount so multiple
-        # children pausing in parallel don't double-toggle the parent clock.
-        self._waiting_children: Dict[str, str] = {}
-        self._parent_paused_children: Dict[str, set] = {}
-        self._waiting_children_lock = asyncio.Lock()
 
         # Install the /_internal/executions/{execution_id}/cancel route
         # before any user-defined reasoners are registered so the path is
@@ -2354,6 +2340,10 @@ class Agent(FastAPI):
 
         pause_clock = PauseClock()
         self._pause_clocks[execution_id] = pause_clock
+        log_info(
+            f"pause_cascade: registered pause_clock id={id(pause_clock)} "
+            f"for execution_id={execution_id} reasoner={reasoner_name}"
+        )
 
         start_time = time.time()
         reasoner_task = asyncio.create_task(reasoner_coro())
@@ -2370,6 +2360,21 @@ class Agent(FastAPI):
                     return
                 active_elapsed = (time.time() - start_time) - pause_clock.total_paused()
                 if active_elapsed > reasoner_timeout:
+                    # Capture pause_clock state at the moment of timeout so
+                    # we can tell "watchdog fired with non-zero pause time
+                    # (legitimate long-running work)" apart from "watchdog
+                    # fired with zero pause time (cascade never ran even
+                    # though a descendant was clearly paused)" — the latter
+                    # is the production bug we're hunting.
+                    log_error(
+                        f"pause_cascade: WATCHDOG_FIRING execution_id={execution_id} "
+                        f"reasoner={reasoner_name} "
+                        f"wall_elapsed={time.time() - start_time:.1f}s "
+                        f"total_paused={pause_clock.total_paused():.1f}s "
+                        f"active_elapsed={active_elapsed:.1f}s "
+                        f"budget={reasoner_timeout:.1f}s "
+                        f"pause_clock_id={id(pause_clock)}"
+                    )
                     pause_clock.timed_out = True
                     reasoner_task.cancel()
                     return
@@ -2451,63 +2456,6 @@ class Agent(FastAPI):
             from .cancel import deregister_execution
             await deregister_execution(self, execution_id)
         await self._post_execution_status(callback_url, payload, execution_id)
-
-    def _on_child_status_change(
-        self, child_execution_id: str, status: "ExecutionStatus"
-    ) -> None:
-        """Cross-reasoner pause propagation hook.
-
-        Invoked from the AsyncExecutionManager's SSE listener for every
-        observed child status transition. If the child belongs to a parent
-        we're currently awaiting via ``call()``, toggles the parent's
-        pause-clock so its watchdog doesn't burn the budget while the child
-        is paused on a human approval.
-
-        Refcounts via ``_parent_paused_children`` so multiple children
-        pausing in parallel don't double-pause the parent clock; the parent
-        is paused while any awaited child is paused, and resumed only when
-        all of them are running again. Terminal child states clean up the
-        binding without leaving the parent stuck in a paused state.
-        """
-        from .execution_state import ExecutionStatus
-
-        parent_execution_id = self._waiting_children.get(child_execution_id)
-        if not parent_execution_id:
-            return
-        pause_clock = self._pause_clocks.get(parent_execution_id)
-        if pause_clock is None:
-            return
-
-        is_paused_state = status == ExecutionStatus.WAITING
-        is_terminal = status in {
-            ExecutionStatus.SUCCEEDED,
-            ExecutionStatus.FAILED,
-            ExecutionStatus.CANCELLED,
-            ExecutionStatus.TIMEOUT,
-        }
-
-        paused_set = self._parent_paused_children.get(parent_execution_id)
-        was_paused = paused_set is not None and child_execution_id in paused_set
-
-        if is_paused_state and not was_paused:
-            if paused_set is None:
-                paused_set = set()
-                self._parent_paused_children[parent_execution_id] = paused_set
-            paused_set.add(child_execution_id)
-            if len(paused_set) == 1:
-                pause_clock.start_pause()
-        elif (not is_paused_state) and was_paused:
-            assert paused_set is not None
-            paused_set.discard(child_execution_id)
-            if not paused_set:
-                pause_clock.end_pause()
-                self._parent_paused_children.pop(parent_execution_id, None)
-
-        if is_terminal:
-            # ``call()``'s finally block also cleans up, but doing it here
-            # too keeps the registry tidy if the listener observes the
-            # terminal transition before the awaiting task wakes up.
-            self._waiting_children.pop(child_execution_id, None)
 
     async def _post_execution_status(
         self,
@@ -3969,81 +3917,102 @@ class Agent(FastAPI):
                             timeout=execution_timeout,
                         )
 
-                        # Wire cross-reasoner pause propagation: register the
-                        # child -> parent binding and ensure the SSE listener
-                        # is hooked up so child waiting/paused transitions
-                        # toggle the parent's pause-clock. Lookup of the
-                        # parent uses the current execution context and is
-                        # only meaningful when this call is made from inside
-                        # a reasoner that has a tracked pause-clock.
+                        # Cross-reasoner pause propagation: when this call is
+                        # made from inside a reasoner that has a tracked
+                        # pause-clock, hand it to ``wait_for_execution_result``
+                        # so the wait loop can pause the clock while the awaited
+                        # child sits in ``WAITING`` (e.g. on a hax-sdk human
+                        # approval). Without this, the parent's active-time
+                        # budget would burn through the child's wait and
+                        # spuriously trip the watchdog at the wallclock budget.
                         parent_execution_id = (
                             current_context.execution_id if current_context else None
                         )
                         # ``_pause_clocks`` is set in __init__; getattr keeps
-                        # bypass-init test fixtures from AttributeErroring
-                        # here. When the parent has no clock registered, we
-                        # have nothing meaningful to propagate to anyway.
+                        # bypass-init test fixtures from AttributeErroring here.
                         _all_pause_clocks = getattr(self, "_pause_clocks", None) or {}
-                        propagate_pause = bool(
-                            parent_execution_id
-                            and parent_execution_id in _all_pause_clocks
+                        parent_pause_clock = (
+                            _all_pause_clocks.get(parent_execution_id)
+                            if parent_execution_id
+                            else None
                         )
-                        if propagate_pause:
-                            try:
-                                _mgr = await self.client._get_async_execution_manager()
-                                _mgr.register_status_listener(
-                                    self._on_child_status_change
-                                )
-                                async with self._waiting_children_lock:
-                                    self._waiting_children[execution_id] = (
-                                        parent_execution_id
-                                    )
-                            except Exception as _exc:
-                                # Pause propagation is best-effort; never
-                                # block the actual call on registry wiring.
-                                propagate_pause = False
-                                if self.dev_mode:
-                                    log_debug(
-                                        f"Pause propagation registration failed: {_exc}"
-                                    )
+                        # INFO-level so this fires in production (dev_mode-gated
+                        # logs were silent during the run that motivated this
+                        # diagnostic). The three values together pinpoint the
+                        # cascade-disabled case: a missing parent_execution_id
+                        # (no current_context) vs. a missing _pause_clocks entry
+                        # (reasoner not invoked via _execute_async_with_callback)
+                        # are different failure modes that need different fixes.
+                        log_info(
+                            f"pause_cascade: target={target} "
+                            f"parent_execution_id={parent_execution_id} "
+                            f"parent_pause_clock_id="
+                            f"{id(parent_pause_clock) if parent_pause_clock else 'None'} "
+                            f"pause_clocks_keys="
+                            f"{list(_all_pause_clocks.keys())[:5]}"
+                            f"{'...' if len(_all_pause_clocks) > 5 else ''}"
+                        )
 
-                        try:
-                            # Only pass the pause_clock kwarg when we actually
-                            # have one to propagate — keeps the call shape
-                            # backward-compatible with mocks / older clients
-                            # that don't yet accept the kwarg.
-                            _wait_kwargs: Dict[str, Any] = {
-                                "execution_id": execution_id,
-                                "timeout": execution_timeout,
-                            }
-                            if propagate_pause:
-                                _wait_kwargs["pause_clock"] = (
-                                    self._pause_clocks.get(parent_execution_id)
-                                )
-                            result = await self.client.wait_for_execution_result(
-                                **_wait_kwargs
-                            )
-                        finally:
-                            if propagate_pause:
-                                async with self._waiting_children_lock:
-                                    self._waiting_children.pop(execution_id, None)
-                                    paused_set = self._parent_paused_children.get(
-                                        parent_execution_id
-                                    )
-                                    if (
-                                        paused_set is not None
-                                        and execution_id in paused_set
-                                    ):
-                                        paused_set.discard(execution_id)
-                                        if not paused_set:
-                                            _pc = self._pause_clocks.get(
-                                                parent_execution_id
+                        # Only pass the pause_clock kwarg when we actually have
+                        # one — keeps the call shape backward-compatible with
+                        # mocks / older clients that don't yet accept the kwarg.
+                        _wait_kwargs: Dict[str, Any] = {
+                            "execution_id": execution_id,
+                            "timeout": execution_timeout,
+                        }
+                        if parent_pause_clock is not None:
+                            _wait_kwargs["pause_clock"] = parent_pause_clock
+
+                            # Multi-hop pause propagation: when our awaited
+                            # child enters WAITING, push OUR OWN execution
+                            # status to WAITING so anyone awaiting us sees
+                            # WAITING too (and transitively up the chain).
+                            # Fire-and-forget; the wait loop swallows
+                            # exceptions so a transient control-plane blip
+                            # can't break the call graph. See run
+                            # run_1778429268006_76e417b7 — implement_from_issue
+                            # timed out at 7200s wallclock because two-or-more
+                            # hops up from a paused descendant, no clock pause
+                            # ever fired without this.
+                            _self_exec_id = parent_execution_id
+                            _client = self.client
+                            if _self_exec_id and _client is not None:
+                                _waiting_reason = f"awaiting child {execution_id}"
+
+                                async def _push_self_waiting() -> None:
+                                    try:
+                                        await _client.notify_awaiter_status(
+                                            execution_id=_self_exec_id,
+                                            status="waiting",
+                                            reason=_waiting_reason,
+                                        )
+                                    except Exception as exc:
+                                        if self.dev_mode:
+                                            log_debug(
+                                                f"notify_awaiter_status(waiting) "
+                                                f"failed (swallowed): {exc}"
                                             )
-                                            if _pc is not None:
-                                                _pc.end_pause()
-                                            self._parent_paused_children.pop(
-                                                parent_execution_id, None
+
+                                async def _push_self_running() -> None:
+                                    try:
+                                        await _client.notify_awaiter_status(
+                                            execution_id=_self_exec_id,
+                                            status="running",
+                                            reason=_waiting_reason,
+                                        )
+                                    except Exception as exc:
+                                        if self.dev_mode:
+                                            log_debug(
+                                                f"notify_awaiter_status(running) "
+                                                f"failed (swallowed): {exc}"
                                             )
+
+                                _wait_kwargs["on_child_waiting"] = _push_self_waiting
+                                _wait_kwargs["on_child_running"] = _push_self_running
+
+                        result = await self.client.wait_for_execution_result(
+                            **_wait_kwargs
+                        )
 
                         elapsed_time = time.time() - start_time
                         if self.dev_mode:
@@ -4068,29 +4037,34 @@ class Agent(FastAPI):
                             raise async_error
 
                         # Never fall back when the failure happened AFTER the
-                        # reasoner already ran. ExecutionFailedError means
-                        # the call reached the reasoner, the work executed,
-                        # and the reasoner returned an error — retrying
-                        # via sync would burn the same budget for the same
-                        # outcome. ExecutionTimeoutError means the work has
-                        # already used (or exceeded) its timeout budget on
-                        # the agent side; firing the same call again wastes
-                        # another full budget. Both classes surface as
-                        # subclasses of AgentFieldError so a local import
-                        # is safe even with the legacy AgentFieldClientError
-                        # catch path some callers depend on.
+                        # reasoner already ran, OR when the user explicitly
+                        # cancelled. ExecutionFailedError means the call
+                        # reached the reasoner, the work executed, and the
+                        # reasoner returned an error — retrying via sync
+                        # would burn the same budget for the same outcome.
+                        # ExecutionTimeoutError means the work has already
+                        # used (or exceeded) its timeout budget on the agent
+                        # side; firing the same call again wastes another
+                        # full budget. ExecutionCancelledError means the user
+                        # told us to stop — silently re-issuing the call via
+                        # sync fallback would defeat the cancellation.
                         from agentfield.exceptions import (
+                            ExecutionCancelledError,
                             ExecutionFailedError,
                             ExecutionTimeoutError,
                         )
                         if isinstance(
                             async_error,
-                            (ExecutionFailedError, ExecutionTimeoutError),
+                            (
+                                ExecutionFailedError,
+                                ExecutionTimeoutError,
+                                ExecutionCancelledError,
+                            ),
                         ):
                             if self.dev_mode:
                                 log_debug(
                                     f"Skipping sync fallback for {type(async_error).__name__}: "
-                                    f"reasoner already ran; retry would re-burn the budget"
+                                    f"reasoner already ran or was cancelled by user"
                                 )
                             raise async_error
 

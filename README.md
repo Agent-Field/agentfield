@@ -20,9 +20,15 @@
 
 </div>
 
+<div align="center">
+<a href="https://agentfield.ai/docs/build/intelligence/harness?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-harness-banner">
+<img src="assets/harness-banner.png" alt="Now includes Harness Orchestration — multi-turn coding agents with Claude Code, Codex, Gemini CLI, and OpenCode" width="100%" />
+</a>
+</div>
+
 ---
 
-AgentField is an open-source control plane that makes AI agents callable by any service in your stack - frontends, backends, other agents, cron jobs - just like any other API. You write agent logic in Python, Go, or TypeScript. AgentField turns it into production infrastructure: routing, coordination, memory, async execution, and cryptographic audit trails. Every function becomes a REST endpoint. Every agent gets a cryptographic identity. Every decision is traceable.
+AgentField is an open-source control plane that lets you build AI agents callable by any service in your stack - frontends, backends, other agents, cron jobs - just like any other API. You write agent logic in Python, Go, or TypeScript. AgentField turns it into production infrastructure: routing, coordination, memory, async execution, and cryptographic audit trails. Every function becomes a REST endpoint. Every agent gets a cryptographic identity. Every decision is traceable.
 
 ```python
 from agentfield import Agent, AIConfig
@@ -377,7 +383,9 @@ docker run -p 8080:8080 agentfield/control-plane:latest
   </tr>
 </table>
 
-[See all examples →](https://agentfield.ai/docs/learn/examples?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-see-all-examples)
+[See all examples →](https://www.agentfield.ai/examples?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-see-all-examples)
+
+Built something with AgentField? [Submit your project to be featured on the examples page](https://github.com/Agent-Field/agentfield/issues/new?template=community-project.md).
 
 ## See It In Action
 

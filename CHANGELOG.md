@@ -6,6 +6,394 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.84] - 2026-05-11
+
+## [0.1.84-rc.1] - 2026-05-11
+
+
+### Other
+
+- Obs(sdk): info-level diagnostics on the pause-cascade hot path (#569)
+
+* obs(sdk): info-level diagnostics on the pause-cascade hot path
+
+Cascade fired correctly in local repros but didn't on run
+run_1778458437977_fb6f588b (implement_from_issue timed out at exactly
+7200.0s "active time" while swe-planner.build was paused on a hax
+approval for ~20min — math says pause_clock.total_paused()=0 despite
+the awaited child being visibly WAITING in the CP). All cascade
+toggles were debug-only, so production logs gave no signal on which
+specific link broke. Promotes five points to INFO so the next
+occurrence is diagnosable from logs alone:
+
+- agent.py: log pause_clock registration with id+execution_id, log
+  parent_pause_clock lookup result at app.call time (including the
+  _pause_clocks keyset so a missing-entry case is visible), and log
+  full pause_clock state at the moment the watchdog fires (wall
+  elapsed, total_paused, active_elapsed, budget). The last one in
+  particular tells "legitimate long active work" apart from "cascade
+  never ran" without needing to re-derive it from the timeline.
+
+- async_execution_manager.py: log start_pause / end_pause on the
+  parent's pause_clock with the awaited child id + clock id, and log
+  poll-observed WAITING<->RUNNING transitions for the awaited child
+  (other status transitions stay at debug). The two together pin
+  exactly when the polling task saw WAITING and whether the wait
+  loop translated that observation into a clock pause.
+
+No behavior change — same imports, same control flow. Safe on hot
+paths: at most one log line per status transition on the awaited
+child, and a one-line registration on reasoner entry.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* test(sdk): widen WAITING/RUNNING windows in cascade test
+
+test_wait_for_result_invokes_callbacks_on_child_waiting_transitions
+raced the wait loop's 0.1s poll interval — original 0.05s gap between
+the RUNNING transition and the SUCCEEDED transition meant the loop
+had a coin-flip chance of seeing WAITING then jumping straight to
+SUCCEEDED, never firing on_child_running. Any added work in the
+toggle block (e.g. the diagnostic logger.info lines from the prior
+commit) shifts that race; passed on 3.12, failed on 3.10/3.11.
+
+Fix: bump both inter-transition sleeps from 0.05/0.20 to 0.30s — well
+above the loop's poll interval — so each transition is observed
+deterministically. The same widening applied to only this test
+because the neighbouring test_wait_for_result_pauses_clock_on_child_waiting
+asserts only total_paused() (which includes the in-progress pause via
+PauseClock.total_paused) and so doesn't race the way this one did.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (1bd51fa)
+
+## [0.1.83] - 2026-05-10
+
+## [0.1.83-rc.2] - 2026-05-10
+
+
+### Fixed
+
+- Fix(sdk+cp): multi-hop pause propagation (3+-deep chains no longer time out) (#568)
+
+* feat(cp): awaiter-status endpoint for multi-hop pause propagation
+
+Adds POST /api/v1/agents/:node_id/executions/:execution_id/awaiter-status,
+the control-plane half of fixing the case where a 3+-deep call chain (e.g.
+implement_from_issue -> swe-planner.build -> plan -> run_X, where only
+run_X explicitly app.pause()-s) times out at wallclock on the
+great-grandparent because intermediate reasoners stay in RUNNING while
+blocked on awaiting a paused descendant.
+
+The endpoint lets an SDK push a non-terminal RUNNING <-> WAITING
+transition on its OWN execution (separate from the approval flow). The
+SDK uses it inside Agent.call's wait loop: when the awaited child enters
+WAITING, the awaiter posts status=waiting so any ancestor watching it
+sees WAITING and pauses its own clock — and so on transitively up the
+chain.
+
+State-machine guards (pinned by tests):
+
+- RUNNING -> WAITING with status_reason=awaiting_child (so the matching
+  RUNNING flip can be distinguished from one that would resume an
+  approval-driven WAITING)
+- WAITING -> RUNNING only when status_reason matches awaiting_child;
+  approval-driven WAITING is never silently resumed
+- Terminal executions (succeeded/failed/cancelled/timeout) are a no-op,
+  not an error — the cascade can race with the awaiter resolving
+- Idempotent: WAITING -> WAITING and RUNNING -> RUNNING no-op cleanly
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* feat(sdk): on_child_waiting / on_child_running hooks in wait_for_result
+
+The wait loop already pauses a caller-supplied pause_clock when the
+awaited child enters WAITING. Add async callbacks that fire in lockstep
+with the pause-clock toggle so callers can additionally push their OWN
+execution's status upstream — the multi-hop propagation Agent.call needs
+when there's a grandparent watching.
+
+Design notes pinned by tests:
+
+- Callbacks are awaited (not fire-and-forget) so a WAITING + RUNNING
+  pair can't reorder on the network and leave the awaiter stuck in
+  WAITING after the child resumed.
+- _safe_pause_callback bounds the await with a 2s timeout and swallows
+  exceptions — a hung or unreachable control plane must not stall the
+  wait loop. Multi-hop propagation is best-effort: a missed callback
+  falls back to the prior one-hop pause-clock-only behavior.
+- Optional kwargs: callers that don't pass them see no change in
+  behavior, so existing one-hop callers don't break.
+
+Tests pin the contract end-to-end:
+  test_wait_for_result_invokes_callbacks_on_child_waiting_transitions
+  test_wait_for_result_callback_exceptions_dont_break_wait_loop
+  test_wait_for_result_callbacks_optional_for_backward_compat
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* fix(sdk): Agent.call propagates own WAITING upstream so 3+-hop chains don't time out
+
+Wires the on_child_waiting / on_child_running hooks from the previous
+commit into Agent.call. When a parent reasoner is awaiting a child via
+app.call() and the child enters WAITING, the SDK now pushes the parent's
+OWN execution status to WAITING via the new awaiter-status endpoint, and
+flips it back to RUNNING when the child resumes.
+
+This closes the gap the prior pause-clock PRs (#562 / #564) didn't:
+those fixed the ONE-hop case (parent's local clock pauses when its
+direct child waits), but two-or-more hops down a paused descendant still
+left the great-grandparent ticking at wallclock — because intermediate
+reasoners stay in RUNNING while blocked on their own awaited child, so
+no ancestor's wait loop ever saw a WAITING child to pause on.
+
+Repro: run_1778429268006_76e417b7. Chain was
+  github-buddy.implement_from_issue
+    -> swe-planner.build           (RUNNING — awaiting plan)
+       -> plan                     (RUNNING — awaiting run_X)
+          -> run_X                 (WAITING — paused on hax-sdk approval)
+
+Only run_X transitioned to WAITING; build and plan stayed RUNNING. The
+parent reasoner watchdog on implement_from_issue saw build as RUNNING
+the entire time, never paused its own clock, and tripped at exactly
+7200s of wallclock. With this change, plan -> build -> implement_from_issue
+each cascade into WAITING as the descendant pauses, so the entire chain's
+local clocks track active-time correctly to arbitrary depth.
+
+Added:
+- client.notify_awaiter_status(execution_id, status, reason): POSTs
+  the new /awaiter-status endpoint. Distinct from request_approval
+  (no approval ID, no webhook, no human in the loop).
+- Agent.call now constructs on_child_waiting / on_child_running callbacks
+  closing over the parent's execution_id and passes them to
+  wait_for_execution_result. Best-effort; exceptions are swallowed by
+  the wait-loop wrapper.
+
+Pinned by test_call_wires_awaiter_status_callbacks_for_multihop_pause:
+asserts Agent.call passes the callbacks AND that invoking them hits
+notify_awaiter_status targeting the AWAITER's own execution_id (not the
+child's — pushing the child's status would be a no-op).
+
+Known limitation: parallel app.call children (gather) can race on the
+RUNNING flip — one resolving will flip the parent to RUNNING even if
+another's child is still WAITING. Local pause_clock is unaffected; the
+propagated status to control plane is what flaps. Acceptable for v1;
+follow-up can add a server-side counter on awaiter_pause_count.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* test: cover error paths in awaiter-status handler + notify_awaiter_status
+
+Adds coverage for the paths the happy-path tests didn't reach:
+
+control-plane (4 tests):
+- Malformed JSON body -> 400
+- Storage GetWorkflowExecution failure -> 500
+- UpdateExecutionRecord failure -> 500
+- UpdateWorkflowExecution failure -> 500
+
+sdk/python (5 tests for client.notify_awaiter_status):
+- Happy path: status=waiting posts the expected body
+- Happy path: status=running
+- Invalid status raises AgentFieldClientError pre-network
+- 5xx response surfaces AgentFieldClientError so the wait-loop wrapper swallows it
+- Transport failure surfaces AgentFieldClientError likewise
+
+Pushes patch coverage above the 80% gate on the awaiter-status surface.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (7a78bd5)
+
+## [0.1.83-rc.1] - 2026-05-10
+
+
+### Documentation
+
+- Docs(readme): add harness orchestration announcement banner
+
+Slim ribbon under the hero block linking to the harness docs page. (4b2962c)
+
+- Docs: add community project submission flow (1e381f3)
+
+
+
+### Fixed
+
+- Fix(sdk): treat cancellation as non-retryable in Agent.call sync-fallback path (#566)
+
+* feat(sdk): introduce ExecutionCancelledError for cancelled awaits
+
+When a child execution awaited via `app.call(...)` is cancelled (typically
+via the control plane's `cancel-tree` endpoint), the wait loop now raises
+a dedicated ExecutionCancelledError instead of a plain AgentFieldClientError.
+
+The new exception is intentionally NOT a subclass of AgentFieldClientError
+(the retry-eligible bucket): cancellation is explicit user intent, not a
+transient transport failure. Agent.call's sync-fallback path will be
+updated in a follow-up commit to skip on this exception.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* fix(sdk): skip sync fallback on ExecutionCancelledError
+
+Cancellation expresses explicit user intent to stop a running execution.
+The previous behavior was to surface cancellation as a plain
+AgentFieldClientError, which Agent.call's exception handler treated as a
+transient transport failure and silently re-issued via the sync execution
+path. From the user's perspective: they cancelled a run, and the work
+got re-run anyway (creating a brand-new execution against the same
+target). Reproduced on a github-buddy → pr-af.review run that the user
+cancelled mid-flight via the cancel-tree UI; pr-af got invoked again
+seconds later.
+
+Add ExecutionCancelledError to the post-execution skip-list alongside
+ExecutionFailedError and ExecutionTimeoutError. Cancellation is never
+retry-eligible regardless of async_config.fallback_to_sync.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* test(sdk): pin cancellation behavior in Agent.call and wait loop
+
+Add a test mirroring test_call_skips_sync_fallback_on_execution_failed_error
+that proves Agent.call does NOT issue a sync-fallback re-execution when the
+awaited child surfaces ExecutionCancelledError. This is the behavior the
+new exception class was introduced to enable.
+
+Also update two pre-existing tests whose expected exception class is now
+ExecutionCancelledError instead of plain AgentFieldClientError:
+
+- test_async_execution.py::test_wait_for_result_ends_pause_on_terminal_while_waiting
+- test_async_execution_manager_final90.py::test_wait_for_result_handles_success_failure_cancel_timeout
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (bc0bc36)
+
+## [0.1.82] - 2026-05-10
+
+## [0.1.82-rc.1] - 2026-05-10
+
+
+### Fixed
+
+- Fix(sdk): pause-aware overdue check in async polling task (#564)
+
+* fix(sdk): make ExecutionState.is_overdue pause-aware via attached PauseClock
+
+Add an optional ``_pause_clock`` field to ``ExecutionState`` and have
+``is_overdue`` subtract ``total_paused()`` from wallclock age before
+comparing against the timeout. With no clock attached the property
+behaves identically to before.
+
+This is the data-structure half of the fix for the polling task
+pre-empting the pause-aware ``wait_for_result`` loop in v0.1.81 — the
+caller-side wiring lives in the next commit. Tests pin the new branch
+(clock attached → not overdue), the failure-fallback (broken clock →
+behaves as wallclock), and backward-compat (no clock → unchanged).
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* fix(sdk): attach pause_clock to awaited execution so polling honors it
+
+``wait_for_result`` already subtracts the parent's PauseClock from its
+own loop's elapsed time (v0.1.81), but the manager's polling loop runs
+the wallclock-only ``is_overdue`` check on every active execution and
+calls ``timeout_execution()`` independently of the wait loop. After
+``timeout`` seconds of wallclock the polling task flips the awaited
+execution to TIMEOUT — even when most of that wallclock was spent in
+the child's ``waiting`` state — and the next wait iteration surfaces it
+as ``ExecutionTimeoutError("Execution timed out after N seconds")``.
+
+Attach the caller-supplied ``pause_clock`` to the awaited
+``ExecutionState`` so the polling task's overdue check reads the same
+paused total the wait loop is using, and restore the previous value in
+``finally``. With this, github-buddy's ``app.call`` to swe-af.build
+survives the full ``max_execution_timeout`` of *active* time across
+arbitrarily long human-approval pauses, instead of timing out at exactly
+21600s wallclock as observed on Railway run run_1778346573033_dafddc40.
+
+Validation contract for the fix:
+- A paused execution must NOT be flipped TIMEOUT by ``_poll_active_executions``
+  while wallclock > timeout but paused-time > (wallclock - timeout). Pinned
+  by ``test_poll_active_executions_respects_attached_pause_clock``.
+- An execution with NO pause_clock must keep timing out at wallclock — same
+  legacy behaviour. Pinned by
+  ``test_poll_active_executions_still_times_out_without_pause_clock``.
+- The clock must be attached for the duration of the wait and detached on
+  return (success / timeout / exception), so a future wait on the same
+  execution does not consume a stale parent clock. Pinned by
+  ``test_wait_for_result_attaches_pause_clock_to_execution_state``.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (cf5650e)
+
+## [0.1.81] - 2026-05-09
+
+## [0.1.81-rc.2] - 2026-05-09
+
+
+### Fixed
+
+- Fix(sdk): poll-driven cross-reasoner pause propagation (#562)
+
+The v0.1.80 listener-based propagation never fired in production because
+it depended on the AsyncExecutionManager's SSE event-stream loop, which is
+gated behind ``enable_event_stream`` (default False) and was not enabled
+on any deployed service. Result: parents waiting on an ``app.call`` that
+hit a hax-sdk human-approval gate kept ticking wallclock, and the parent
+watchdog tripped at exactly the budget despite the visible WAITING state
+(reproduced on Railway run_1778268481826_8c9dd544).
+
+Replace the SSE-listener mechanism with a poll-driven toggle inside
+``wait_for_result``: when the awaited child's status reads as WAITING
+(updated unconditionally by the existing polling task), pause the parent's
+pause-clock; when it reads back as not-WAITING, end the pause. A finally
+block closes any in-flight pause if we exit via terminal/timeout. No SSE
+subscription required, no listener registry, no refcount machinery.
+
+Removes from ``async_execution_manager.py``:
+  - ``register_status_listener`` / ``_status_listeners`` / ``_fire_status_listeners``
+  - the ``execution.waiting`` event-type override (the WAITING-status branch
+    in ``_handle_event_stream_payload`` stays for the case where SSE is on)
+
+Removes from ``agent.py``:
+  - ``_on_child_status_change`` and the ``_waiting_children`` /
+    ``_parent_paused_children`` registries it consumed
+  - the listener registration in ``call()``; the ``pause_clock`` kwarg
+    pass-through (the actual fix) is preserved
+
+Tests: the previous tests poked ``_on_child_status_change`` and
+``_handle_event_stream_payload`` directly, which bypassed the
+``enable_event_stream`` gate and never exercised the production data path.
+The new tests drive the production path: they update ``_executions[id].status``
+the same way the polling task does and assert that ``wait_for_result``
+toggles the parent clock and survives a long WAITING window.
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (5bfd1ed)
+
+## [0.1.81-rc.1] - 2026-05-08
+
+
+### Fixed
+
+- Fix: align approval request contract with control plane (#524) (#553)
+
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (746bebe)
+
+## [0.1.80] - 2026-05-08
+
 ## [0.1.80-rc.1] - 2026-05-08
 
 

@@ -1507,6 +1507,8 @@ class AgentFieldClient:
         execution_id: str,
         timeout: Optional[float] = None,
         pause_clock: Optional[Any] = None,
+        on_child_waiting: Optional[Any] = None,
+        on_child_running: Optional[Any] = None,
     ) -> Any:
         """
         Wait for execution completion with polling.
@@ -1518,6 +1520,11 @@ class AgentFieldClient:
                 seconds are subtracted from elapsed wall-clock when checking
                 ``timeout`` — used by ``Agent.call`` to keep the wait alive
                 across child pauses.
+            on_child_waiting / on_child_running: Optional async callables
+                fired when the awaited child transitions in/out of WAITING.
+                ``Agent.call`` wires these to push the AWAITER's own status
+                upstream so multi-hop pause propagation works (a child two+
+                hops below WAITING wouldn't pause anything otherwise).
 
         Returns:
             Any: Execution result
@@ -1532,7 +1539,11 @@ class AgentFieldClient:
         try:
             manager = await self._get_async_execution_manager()
             result = await manager.wait_for_result(
-                execution_id, timeout, pause_clock=pause_clock
+                execution_id,
+                timeout,
+                pause_clock=pause_clock,
+                on_child_waiting=on_child_waiting,
+                on_child_running=on_child_running,
             )
 
             logger.debug(f"Execution {execution_id[:8]}... completed successfully")
@@ -1772,6 +1783,65 @@ class AgentFieldClient:
             approval_request_id=data.get("approval_request_id", ""),
             approval_request_url=data.get("approval_request_url", ""),
         )
+
+    async def notify_awaiter_status(
+        self,
+        execution_id: str,
+        status: str,
+        reason: str = "",
+    ) -> None:
+        """Notify the control plane that this execution is now WAITING or
+        RUNNING because of its awaited child's state — propagation hook.
+
+        Calls ``POST /api/v1/agents/{node}/executions/{id}/awaiter-status``.
+        Distinct from ``request_approval``: there's no approval ID, no
+        webhook callback, no human in the loop. It exists only so that
+        ancestors watching this execution see WAITING transitively when
+        any descendant is paused. The control plane validates that the
+        execution is non-terminal and the transition is RUNNING<->WAITING.
+
+        Fire-and-forget from the caller's perspective: failures are swallowed
+        by the caller. We still want to know on the server side if a bad
+        transition was attempted, hence the response check here for logs.
+
+        Args:
+            execution_id: The awaiter's own execution_id (NOT the child's).
+            status: ``"waiting"`` or ``"running"``.
+            reason: Optional free-text reason for observability (e.g.
+                ``"awaiting child exec_abc"``).
+
+        Raises:
+            AgentFieldClientError: If the control plane returns 4xx/5xx.
+        """
+        if status not in {"waiting", "running"}:
+            raise AgentFieldClientError(
+                f"notify_awaiter_status: status must be 'waiting' or 'running', got {status!r}"
+            )
+
+        node_id = self.caller_agent_id or ""
+        body: Dict[str, Any] = {"status": status}
+        if reason:
+            body["reason"] = reason
+        url = f"{self.api_base}/agents/{node_id}/executions/{execution_id}/awaiter-status"
+
+        try:
+            client = await self.get_async_http_client()
+            response = await client.post(
+                url,
+                json=body,
+                headers=self._sanitize_header_values(self._get_headers_with_context(None)),
+                timeout=10,
+            )
+        except Exception as exc:
+            raise AgentFieldClientError(
+                f"Failed to notify awaiter status: {exc}"
+            ) from exc
+
+        if response.status_code >= 400:
+            raise AgentFieldClientError(
+                f"Awaiter-status update failed ({response.status_code}): "
+                f"{response.text[:500]}"
+            )
 
     async def get_approval_status(
         self,

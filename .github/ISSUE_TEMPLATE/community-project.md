@@ -1,10 +1,16 @@
 ---
 name: "🌍 Community Project Submission"
-about: Share your project built with AgentField to be featured on our website
+about: Submit your AgentField project for the public examples page
 title: "[Community Project] "
-labels: ["community-project", "website-update"]
+labels: ["community-project", "needs-review"]
 assignees: []
 ---
+
+Thanks for building with AgentField. Use this issue to submit a project for consideration on the public examples page:
+
+https://www.agentfield.ai/examples
+
+We review submissions for relevance, quality, and clarity before listing them. Accepted projects may be added by a maintainer or through a follow-up PR.
 
 ## Project Details
 
@@ -14,16 +20,26 @@ assignees: []
 **One-Line Description:**
 <!-- A single sentence describing what your project does (max 120 characters) -->
 
-**Project URL:**
-<!-- GitHub repo URL, demo URL, or website -->
+**Preferred listing URL:**
+<!-- GitHub repo, live demo, blog post, docs page, or website -->
 
-**GitHub Repository (if open source):**
+**GitHub Repository:**
 <!-- https://github.com/your-org/your-repo -->
+
+**Project status:**
+<!-- Check one -->
+- [ ] Production
+- [ ] Demo
+- [ ] Prototype
+- [ ] Tutorial / example
 
 ## About Your Project
 
 **What does it do?**
 <!-- 2-3 sentences about what your project does and the problem it solves -->
+
+**AgentField usage proof:**
+<!-- Link to a README section, source file, demo, or docs showing how AgentField is used -->
 
 **Which AgentField features does it use?**
 <!-- Check all that apply -->
@@ -61,6 +77,10 @@ assignees: []
 **Your name / organization (for attribution):**
 <!-- How should we credit you? -->
 
+**Permission to feature:**
+- [ ] AgentField may list this project on https://www.agentfield.ai/examples
+- [ ] AgentField may use the submitted project name, description, attribution, and screenshot/demo media for the examples listing
+
 ---
 
-*Projects submitted here may be featured on agentfield.ai/open-source. We review submissions weekly.*
+*Projects submitted here may be featured on https://www.agentfield.ai/examples. New submissions are labeled `needs-review`; accepted submissions may be relabeled `website-update` when they are ready to add to the website.*

@@ -10,15 +10,13 @@ import { httpAgent, httpsAgent } from '../utils/httpAgents.js';
 
 /** Payload sent when requesting approval. */
 export interface RequestApprovalPayload {
-  title?: string;
-  description?: string;
-  templateType?: string;
-  payload?: Record<string, any>;
-  projectId: string;
+  approvalRequestId: string;
+  approvalRequestUrl?: string;
+  callbackUrl?: string;
   expiresInHours?: number;
 }
 
-/** Response from the control plane after creating an approval request. */
+/** Response from the control plane after tracking an approval request. */
 export interface ApprovalRequestResponse {
   approvalRequestId: string;
   approvalRequestUrl: string;
@@ -78,14 +76,16 @@ export class ApprovalClient {
     executionId: string,
     payload: RequestApprovalPayload
   ): Promise<ApprovalRequestResponse> {
-    const body = {
-      title: payload.title ?? 'Approval Request',
-      description: payload.description ?? '',
-      template_type: payload.templateType ?? 'plan-review-v1',
-      payload: payload.payload ?? {},
-      project_id: payload.projectId,
+    const body: Record<string, unknown> = {
+      approval_request_id: payload.approvalRequestId,
       expires_in_hours: payload.expiresInHours ?? 72,
     };
+    if (payload.approvalRequestUrl) {
+      body.approval_request_url = payload.approvalRequestUrl;
+    }
+    if (payload.callbackUrl) {
+      body.callback_url = payload.callbackUrl;
+    }
 
     const res = await this.http.post(
       `/api/v1/agents/${encodeURIComponent(this.nodeId)}/executions/${encodeURIComponent(executionId)}/request-approval`,

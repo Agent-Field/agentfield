@@ -215,6 +215,159 @@ async def test_call_skips_sync_fallback_on_execution_timeout_error():
 
 
 @pytest.mark.asyncio
+async def test_call_skips_sync_fallback_on_execution_cancelled_error():
+    """ExecutionCancelledError = the user explicitly cancelled the awaited
+    child (typically via the control plane's cancel-tree endpoint). The SDK
+    must NOT retry via sync — silently re-issuing a cancelled call defeats
+    the cancellation and re-runs work the user told the system to abandon.
+    Repro: github-buddy → pr-af.review run cancelled mid-flight; pr-af got
+    invoked again seconds later because the cancellation surfaced as a
+    plain AgentFieldClientError and slipped past the skip-list."""
+    from agentfield.exceptions import ExecutionCancelledError
+
+    agent = _make_agent_with_async_path()
+
+    sync_calls = 0
+
+    async def fake_execute_async(target, input_data, headers, timeout=None):
+        return "exec_xyz"
+
+    async def fake_wait_for_execution_result(execution_id, timeout=None):
+        raise ExecutionCancelledError(
+            "Execution was cancelled: user clicked cancel"
+        )
+
+    async def fake_execute(target, input_data, headers):
+        nonlocal sync_calls
+        sync_calls += 1
+        return {"result": {"never_reached": True}}
+
+    agent.client = SimpleNamespace(
+        execute=fake_execute,
+        execute_async=fake_execute_async,
+        wait_for_execution_result=fake_wait_for_execution_result,
+    )
+
+    set_current_agent(agent)
+    try:
+        with pytest.raises(ExecutionCancelledError):
+            await agent.call("other.reasoner", 1)
+    finally:
+        clear_current_agent()
+
+    assert sync_calls == 0, (
+        "ExecutionCancelledError must NOT trigger sync fallback — "
+        "the user explicitly told the system to stop; silently re-issuing "
+        "the call defeats the cancellation."
+    )
+
+
+@pytest.mark.asyncio
+async def test_call_wires_awaiter_status_callbacks_for_multihop_pause():
+    """Agent.call must pass on_child_waiting / on_child_running callbacks to
+    wait_for_execution_result, and those callbacks must hit
+    client.notify_awaiter_status(execution_id=<MY exec_id>, status=...).
+
+    Without this wiring, multi-hop pause propagation breaks: a grandparent
+    awaiting a middle reasoner only ever sees middle as RUNNING (because
+    middle's status doesn't transition while it's blocked on its own
+    awaited child), so grandparent's pause_clock never pauses and it times
+    out at wallclock. This pins the contract end-to-end through Agent.call.
+    """
+    from agentfield.agent_pause import PauseClock
+    from agentfield.execution_context import (
+        ExecutionContext,
+        set_execution_context,
+        reset_execution_context,
+    )
+
+    agent = object.__new__(Agent)
+    agent.node_id = "middle"
+    agent.agentfield_connected = True
+    agent.dev_mode = False
+    agent.async_config = SimpleNamespace(
+        enable_async_execution=True,
+        fallback_to_sync=True,
+    )
+    agent._async_execution_manager = None
+    agent._current_execution_context = None
+    # PauseClock registry — this is how Agent.call recovers the parent's clock.
+    agent._pause_clocks = {"middle-exec-id": PauseClock()}
+
+    notify_calls: list[dict] = []
+
+    async def fake_notify_awaiter_status(execution_id, status, reason=""):
+        notify_calls.append(
+            {"execution_id": execution_id, "status": status, "reason": reason}
+        )
+
+    captured_wait_kwargs: dict = {}
+
+    async def fake_execute_async(target, input_data, headers, timeout=None):
+        return "exec_child_xyz"
+
+    async def fake_wait_for_execution_result(**kwargs):
+        # Capture so we can verify the kwargs Agent.call constructed.
+        captured_wait_kwargs.update(kwargs)
+        # Simulate the wait loop firing the on_child_waiting / on_child_running
+        # callbacks the way wait_for_result would when the awaited child enters
+        # and leaves WAITING.
+        if "on_child_waiting" in kwargs:
+            await kwargs["on_child_waiting"]()
+        if "on_child_running" in kwargs:
+            await kwargs["on_child_running"]()
+        return {"result": {"ok": True}}
+
+    agent.client = SimpleNamespace(
+        execute_async=fake_execute_async,
+        wait_for_execution_result=fake_wait_for_execution_result,
+        notify_awaiter_status=fake_notify_awaiter_status,
+    )
+
+    ctx = ExecutionContext(
+        run_id="run-123",
+        execution_id="middle-exec-id",
+        agent_instance=agent,
+        reasoner_name="middle.process",
+        agent_node_id="middle",
+    )
+    ctx_token = set_execution_context(ctx)
+    set_current_agent(agent)
+    try:
+        result = await agent.call("other.reasoner", 1)
+    finally:
+        clear_current_agent()
+        reset_execution_context(ctx_token)
+
+    assert result == {"ok": True}
+
+    # The callbacks must have been passed.
+    assert "on_child_waiting" in captured_wait_kwargs, (
+        "Agent.call must pass on_child_waiting to wait_for_execution_result "
+        "when it has a parent pause_clock — otherwise multi-hop propagation "
+        "is impossible"
+    )
+    assert "on_child_running" in captured_wait_kwargs
+
+    # The callbacks must target THIS reasoner's own execution_id, not the
+    # child's — pushing the child's status would be a no-op (child already
+    # handles its own status).
+    waiting_calls = [c for c in notify_calls if c["status"] == "waiting"]
+    running_calls = [c for c in notify_calls if c["status"] == "running"]
+    assert len(waiting_calls) == 1, (
+        f"on_child_waiting must call notify_awaiter_status once; got {notify_calls}"
+    )
+    assert len(running_calls) == 1
+    assert waiting_calls[0]["execution_id"] == "middle-exec-id", (
+        f"awaiter-status update must target the awaiter's own execution_id, "
+        f"not the child's; got {waiting_calls[0]['execution_id']}"
+    )
+    assert running_calls[0]["execution_id"] == "middle-exec-id"
+    # Reason should reference the awaited child for observability.
+    assert "exec_child_xyz" in waiting_calls[0]["reason"]
+
+
+@pytest.mark.asyncio
 async def test_call_still_falls_back_on_transport_errors():
     """Plain AgentFieldClientError (transport / submission / network) MUST
     still trigger the sync fallback. Only post-execution errors are skipped.

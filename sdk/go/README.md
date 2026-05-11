@@ -87,14 +87,15 @@ The `client` package provides methods for requesting human approval, checking st
 import "github.com/Agent-Field/agentfield/sdk/go/client"
 
 approvalClient := client.New("http://localhost:8080", nil)
+approvalRequestID := "req-abc123"
 
-// Request approval — transitions execution to "waiting"
+// Create the human-facing approval request in your approval service first,
+// then pass its ID/URL to AgentField so the execution transitions to "waiting".
 _, err := approvalClient.RequestApproval(ctx, nodeID, executionID,
     client.RequestApprovalRequest{
-        Title:          "Review Deployment",
-        ProjectID:      "my-project",
-        TemplateType:   "plan-review-v1",
-        ExpiresInHours: 24,
+        ApprovalRequestID:  approvalRequestID,
+        ApprovalRequestURL: "https://approvals.example.com/review/" + approvalRequestID,
+        ExpiresInHours:     24,
     },
 )
 

@@ -13,6 +13,7 @@ import { Agent, ApprovalClient } from '@agentfield/sdk';
 import crypto from 'node:crypto';
 
 const agentFieldUrl = process.env.AGENTFIELD_URL ?? 'http://localhost:8080';
+const openAIApiKey = process.env.OPENAI_API_KEY;
 
 const agent = new Agent({
   nodeId: process.env.AGENT_ID ?? 'waiting-state-demo',
@@ -22,11 +23,15 @@ const agent = new Agent({
   version: '1.0.0',
   devMode: true,
   apiKey: process.env.AGENTFIELD_API_KEY,
-  aiConfig: {
-    provider: 'openai',
-    model: process.env.SMALL_MODEL ?? 'gpt-4o-mini',
-    apiKey: process.env.OPENAI_API_KEY,
-  },
+  ...(openAIApiKey
+    ? {
+        aiConfig: {
+          provider: 'openai' as const,
+          model: process.env.SMALL_MODEL ?? 'gpt-4o-mini',
+          apiKey: openAIApiKey,
+        },
+      }
+    : {}),
 });
 
 // Create an ApprovalClient for the low-level approval API
@@ -36,11 +41,23 @@ const approvalClient = new ApprovalClient({
   apiKey: process.env.AGENTFIELD_API_KEY,
 });
 
+function staticPlan(task: string): string {
+  return [
+    `1. Clarify the goal and success criteria for: ${task}`,
+    '2. Identify the safest implementation steps and any dependencies.',
+    '3. Execute the plan, verify the outcome, and report the result.',
+  ].join('\n');
+}
+
+function stringifyPlan(plan: unknown): string {
+  return typeof plan === 'string' ? plan : JSON.stringify(plan);
+}
+
 /**
  * Reasoner that generates a plan and pauses for human approval.
  *
  * Flow:
- * 1. AI generates a plan for the given task
+ * 1. AI generates a plan for the given task, or a static fallback is used
  * 2. Execution transitions to "waiting" state via approval request
  * 3. Human reviews and approves/rejects (via webhook)
  * 4. Execution resumes based on the decision
@@ -51,12 +68,16 @@ agent.reasoner<
 >('planWithApproval', async (ctx) => {
   ctx.note('Starting plan generation', ['approval', 'start']);
 
-  // Step 1: Generate a plan using AI
-  const plan = await ctx.ai(
-    `You are a project planner. Create a concise 3-step plan for: ${ctx.input.task}`,
-    { temperature: 0.7 }
-  );
-  const planText = typeof plan === 'string' ? plan : JSON.stringify(plan);
+  // Step 1: Generate a plan using AI when configured; otherwise keep the
+  // approval demo runnable without external provider credentials.
+  const planText = openAIApiKey
+    ? stringifyPlan(
+        await ctx.ai(
+          `You are a project planner. Create a concise 3-step plan for: ${ctx.input.task}`,
+          { temperature: 0.7 }
+        )
+      )
+    : staticPlan(ctx.input.task);
 
   ctx.note('Plan generated, requesting approval', ['approval', 'waiting']);
 
@@ -66,12 +87,11 @@ agent.reasoner<
   const approvalResponse = await approvalClient.requestApproval(
     ctx.executionId,
     {
-      projectId: 'waiting-state-demo',
-      title: `Plan Review: ${ctx.input.task}`,
-      description: planText,
+      approvalRequestId,
       expiresInHours: 24,
     }
   );
+  ctx.note(`Approval requested: ${approvalResponse.approvalRequestId}`, ['approval', 'waiting']);
 
   // Step 3: Wait for approval resolution (polls with exponential backoff)
   const result = await approvalClient.waitForApproval(ctx.executionId, {

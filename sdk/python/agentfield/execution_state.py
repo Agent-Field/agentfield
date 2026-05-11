@@ -168,6 +168,13 @@ class ExecutionState:
     _is_cancelled: bool = field(default=False, init=False)
     _cancellation_reason: Optional[str] = field(default=None, init=False)
     _capacity_released: bool = field(default=False, init=False, repr=False)
+    # Optional ``PauseClock`` attached by the caller awaiting this execution
+    # (typically ``AsyncExecutionManager.wait_for_result``). When set, the
+    # cumulative ``total_paused()`` is subtracted from wallclock age before
+    # ``is_overdue`` fires — without this, the polling task would mark a
+    # long-paused execution TIMEOUT at exactly the wallclock budget even
+    # though the awaited child was paused for most of that time.
+    _pause_clock: Optional[Any] = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
         """Post-initialization setup."""
@@ -225,10 +232,28 @@ class ExecutionState:
 
     @property
     def is_overdue(self) -> bool:
-        """Whether this execution has exceeded its timeout."""
+        """Whether this execution has exceeded its timeout.
+
+        Subtracts ``_pause_clock.total_paused()`` from wallclock age when a
+        pause-clock is attached so the polling task does not pre-empt the
+        pause-aware ``wait_for_result`` loop. Without the subtraction, a
+        parent waiting on a child that sits in ``waiting`` for several hours
+        gets its execution flipped to TIMEOUT at exactly ``timeout`` seconds
+        of wallclock — independent of how much of that was paused — and
+        ``wait_for_result`` then surfaces the spurious timeout.
+        """
         if self.timeout is None:
             return False
-        return self.age > self.timeout
+        age = self.age
+        pause_clock = self._pause_clock
+        if pause_clock is not None:
+            try:
+                age -= pause_clock.total_paused()
+            except Exception:
+                # PauseClock is best-effort instrumentation; fall back to
+                # wallclock if it raises so we still time out eventually.
+                pass
+        return age > self.timeout
 
     def update_status(
         self, status: ExecutionStatus, error_message: Optional[str] = None

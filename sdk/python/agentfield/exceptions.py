@@ -39,6 +39,25 @@ class ExecutionTimeoutError(AgentFieldError):
     pass
 
 
+class ExecutionCancelledError(AgentFieldError):
+    """The awaited execution was cancelled (typically by user action via the
+    control plane's cancel-tree endpoint).
+
+    Distinct from ``ExecutionFailedError`` (the reasoner ran and failed) and
+    from a transport / submission failure (plain ``AgentFieldClientError``):
+    cancellation expresses *explicit user intent* to stop the work. The SDK's
+    ``Agent.call`` must not silently re-issue a cancelled call via the sync
+    fallback path — that would re-run work the user explicitly told the
+    system to abandon.
+
+    Intentionally NOT a subclass of ``AgentFieldClientError`` (the
+    retry-eligible bucket): cancellation is never retry-eligible, regardless
+    of ``async_config.fallback_to_sync``.
+    """
+
+    pass
+
+
 class MemoryAccessError(AgentFieldError):
     """Error accessing agent memory storage."""
 
@@ -62,6 +81,7 @@ __all__ = [
     "AgentFieldClientError",
     "ExecutionFailedError",
     "ExecutionTimeoutError",
+    "ExecutionCancelledError",
     "MemoryAccessError",
     "RegistrationError",
     "ValidationError",
