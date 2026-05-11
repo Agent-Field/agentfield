@@ -685,6 +685,16 @@ class AsyncExecutionManager:
                     if is_waiting and not child_pause_active:
                         pause_clock.start_pause()
                         child_pause_active = True
+                        # INFO-level — this is the moment cascade either works
+                        # or doesn't. If we never see this log for a parent
+                        # awaiting a paused child, the polling task isn't
+                        # marking the local ExecutionState as WAITING and the
+                        # rest of the cascade can't fire.
+                        logger.info(
+                            f"pause_cascade: start_pause child={execution_id[:8]}... "
+                            f"pause_clock_id={id(pause_clock)} "
+                            f"total_paused_so_far={pause_clock.total_paused():.2f}s"
+                        )
                         if on_child_waiting is not None:
                             await _safe_pause_callback(
                                 on_child_waiting, "on_child_waiting"
@@ -692,6 +702,11 @@ class AsyncExecutionManager:
                     elif (not is_waiting) and child_pause_active:
                         pause_clock.end_pause()
                         child_pause_active = False
+                        logger.info(
+                            f"pause_cascade: end_pause child={execution_id[:8]}... "
+                            f"pause_clock_id={id(pause_clock)} "
+                            f"total_paused_so_far={pause_clock.total_paused():.2f}s"
+                        )
                         if on_child_running is not None:
                             await _safe_pause_callback(
                                 on_child_running, "on_child_running"
@@ -1328,6 +1343,19 @@ class AsyncExecutionManager:
             logger.debug(
                 f"Execution {execution.execution_id[:8]}... status: {old_repr} -> {new_repr}"
             )
+            # INFO-level for the specific WAITING / RUNNING transitions a
+            # cascading parent cares about — debug-only logs were silent in
+            # the failing production run so we couldn't tell whether the
+            # awaited child was ever observed entering WAITING. Other status
+            # transitions (queued/running/succeeded/failed) stay at debug to
+            # avoid log spam from healthy workflows.
+            if new_status in (ExecutionStatus.WAITING, ExecutionStatus.RUNNING) and (
+                old_status != new_status
+            ):
+                logger.info(
+                    f"pause_cascade: poll_observed execution_id={execution.execution_id} "
+                    f"status_transition={old_repr}->{new_repr}"
+                )
 
     def _release_capacity_for_execution(self, execution: ExecutionState) -> None:
         if getattr(execution, "_capacity_released", False):

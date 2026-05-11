@@ -2340,6 +2340,10 @@ class Agent(FastAPI):
 
         pause_clock = PauseClock()
         self._pause_clocks[execution_id] = pause_clock
+        log_info(
+            f"pause_cascade: registered pause_clock id={id(pause_clock)} "
+            f"for execution_id={execution_id} reasoner={reasoner_name}"
+        )
 
         start_time = time.time()
         reasoner_task = asyncio.create_task(reasoner_coro())
@@ -2356,6 +2360,21 @@ class Agent(FastAPI):
                     return
                 active_elapsed = (time.time() - start_time) - pause_clock.total_paused()
                 if active_elapsed > reasoner_timeout:
+                    # Capture pause_clock state at the moment of timeout so
+                    # we can tell "watchdog fired with non-zero pause time
+                    # (legitimate long-running work)" apart from "watchdog
+                    # fired with zero pause time (cascade never ran even
+                    # though a descendant was clearly paused)" — the latter
+                    # is the production bug we're hunting.
+                    log_error(
+                        f"pause_cascade: WATCHDOG_FIRING execution_id={execution_id} "
+                        f"reasoner={reasoner_name} "
+                        f"wall_elapsed={time.time() - start_time:.1f}s "
+                        f"total_paused={pause_clock.total_paused():.1f}s "
+                        f"active_elapsed={active_elapsed:.1f}s "
+                        f"budget={reasoner_timeout:.1f}s "
+                        f"pause_clock_id={id(pause_clock)}"
+                    )
                     pause_clock.timed_out = True
                     reasoner_task.cancel()
                     return
@@ -3916,6 +3935,22 @@ class Agent(FastAPI):
                             _all_pause_clocks.get(parent_execution_id)
                             if parent_execution_id
                             else None
+                        )
+                        # INFO-level so this fires in production (dev_mode-gated
+                        # logs were silent during the run that motivated this
+                        # diagnostic). The three values together pinpoint the
+                        # cascade-disabled case: a missing parent_execution_id
+                        # (no current_context) vs. a missing _pause_clocks entry
+                        # (reasoner not invoked via _execute_async_with_callback)
+                        # are different failure modes that need different fixes.
+                        log_info(
+                            f"pause_cascade: target={target} "
+                            f"parent_execution_id={parent_execution_id} "
+                            f"parent_pause_clock_id="
+                            f"{id(parent_pause_clock) if parent_pause_clock else 'None'} "
+                            f"pause_clocks_keys="
+                            f"{list(_all_pause_clocks.keys())[:5]}"
+                            f"{'...' if len(_all_pause_clocks) > 5 else ''}"
                         )
 
                         # Only pass the pause_clock kwarg when we actually have
