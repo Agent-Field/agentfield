@@ -6,6 +6,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.85-rc.1] - 2026-05-12
+
+
+### Chores
+
+- Chore(deps): bump fast-uri (#556)
+
+Bumps the npm_and_yarn group with 1 update in the /examples/benchmarks/100k-scale/mastra-bench directory: [fast-uri](https://github.com/fastify/fast-uri).
+
+
+Updates `fast-uri` from 3.1.0 to 3.1.2
+- [Release notes](https://github.com/fastify/fast-uri/releases)
+- [Commits](https://github.com/fastify/fast-uri/compare/v3.1.0...v3.1.2)
+
+---
+updated-dependencies:
+- dependency-name: fast-uri
+  dependency-version: 3.1.2
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (3bc087c)
+
+
+
+### Other
+
+- Fix VC verification lifecycle and proof checks (#567)
+
+* Fix VC verification lifecycle and proof checks
+
+* fixed the coverage gap and patch gate passed
+
+---------
+
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com> (f0e290a)
+
+- Update README for clarity in AgentField description (5d8e322)
+
 ## [0.1.84] - 2026-05-11
 
 ## [0.1.84-rc.1] - 2026-05-11
