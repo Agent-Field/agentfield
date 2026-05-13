@@ -202,7 +202,7 @@ func (s *VCService) createVCDocument(ctx *types.ExecutionContext, callerIdentity
 		Execution: types.VCExecution{
 			InputHash:  inputHash,
 			OutputHash: outputHash,
-			Timestamp:  ctx.Timestamp.UTC().Format(time.RFC3339),
+			Timestamp:  formatVCDateTime(ctx.Timestamp),
 			DurationMS: durationMS,
 			Status:     status,
 		},
@@ -231,7 +231,7 @@ func (s *VCService) createVCDocument(ctx *types.ExecutionContext, callerIdentity
 		},
 		ID:                fmt.Sprintf("urn:agentfield:vc:%s", vcID),
 		Issuer:            ctx.CallerDID,
-		IssuanceDate:      time.Now().UTC().Format(time.RFC3339),
+		IssuanceDate:      formatVCDateTime(time.Now()),
 		CredentialSubject: credentialSubject,
 	}
 }

@@ -14,6 +14,8 @@ import (
 	"github.com/google/uuid"
 )
 
+const vcDateTimeLayout = time.RFC3339
+
 // VCService handles verifiable credential generation, verification, and management.
 type VCService struct {
 	config     *config.DIDConfig
@@ -156,4 +158,16 @@ func marshalDataOrNull(data interface{}) []byte {
 		return jsonData
 	}
 	return []byte("null")
+}
+
+func formatVCDateTime(ts time.Time) string {
+	return ts.UTC().Format(vcDateTimeLayout)
+}
+
+func parseVCDateTime(fieldName, value string) (time.Time, error) {
+	parsed, err := time.Parse(vcDateTimeLayout, value)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid %s: %w", fieldName, err)
+	}
+	return parsed.UTC(), nil
 }

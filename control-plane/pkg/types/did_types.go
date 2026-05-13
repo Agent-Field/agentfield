@@ -168,6 +168,8 @@ type VCDocument struct {
 	ID                string              `json:"id"`
 	Issuer            string              `json:"issuer"`
 	IssuanceDate      string              `json:"issuanceDate"`
+	ExpirationDate    string              `json:"expirationDate,omitempty"`
+	NotBefore         string              `json:"notBefore,omitempty"`
 	CredentialSubject VCCredentialSubject `json:"credentialSubject"`
 	Proof             VCProof             `json:"proof"`
 }
@@ -299,13 +301,28 @@ type VCVerificationRequest struct {
 	VCDocument json.RawMessage `json:"vc_document"`
 }
 
+// VCVerificationReason represents a machine-readable VC verification result.
+type VCVerificationReason string
+
+const (
+	VCVerificationReasonSystemDisabled       VCVerificationReason = "system_disabled"
+	VCVerificationReasonInvalidDocument      VCVerificationReason = "invalid_document"
+	VCVerificationReasonUnknownIssuer        VCVerificationReason = "unknown_issuer"
+	VCVerificationReasonInvalidSignature     VCVerificationReason = "invalid_signature"
+	VCVerificationReasonProofPurposeMismatch VCVerificationReason = "proof_purpose_mismatch"
+	VCVerificationReasonNotYetValid          VCVerificationReason = "not_yet_valid"
+	VCVerificationReasonExpired              VCVerificationReason = "expired"
+	VCVerificationReasonRevoked              VCVerificationReason = "revoked"
+)
+
 // VCVerificationResponse represents the response to a VC verification request.
 type VCVerificationResponse struct {
-	Valid     bool   `json:"valid"`
-	IssuerDID string `json:"issuer_did,omitempty"`
-	IssuedAt  string `json:"issued_at,omitempty"`
-	Message   string `json:"message,omitempty"`
-	Error     string `json:"error,omitempty"`
+	Valid     bool                 `json:"valid"`
+	IssuerDID string               `json:"issuer_did,omitempty"`
+	IssuedAt  string               `json:"issued_at,omitempty"`
+	Reason    VCVerificationReason `json:"reason,omitempty"`
+	Message   string               `json:"message,omitempty"`
+	Error     string               `json:"error,omitempty"`
 }
 
 // WorkflowVCChainRequest represents a request to get a workflow VC chain.
