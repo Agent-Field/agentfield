@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.85-rc.2] - 2026-05-13
+
+
+### Chores
+
+- Chore(deps): bump urllib3 (#570)
+
+Bumps the uv group with 1 update in the /sdk/python directory: [urllib3](https://github.com/urllib3/urllib3).
+
+
+Updates `urllib3` from 2.6.3 to 2.7.0
+- [Release notes](https://github.com/urllib3/urllib3/releases)
+- [Changelog](https://github.com/urllib3/urllib3/blob/main/CHANGES.rst)
+- [Commits](https://github.com/urllib3/urllib3/compare/2.6.3...2.7.0)
+
+---
+updated-dependencies:
+- dependency-name: urllib3
+  dependency-version: 2.7.0
+  dependency-type: indirect
+  dependency-group: uv
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (eacb9dc)
+
 ## [0.1.85-rc.1] - 2026-05-12
 
 
