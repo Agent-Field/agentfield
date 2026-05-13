@@ -234,6 +234,10 @@ type AuthorizationConfig struct {
 	TagApprovalRules TagApprovalRulesConfig `yaml:"tag_approval_rules" mapstructure:"tag_approval_rules"`
 	// AccessPolicies defines tag-based authorization policies for cross-agent calls.
 	AccessPolicies []AccessPolicyConfig `yaml:"access_policies" mapstructure:"access_policies"`
+	// DefaultDeny, when true, causes the permission middleware to return 403 if
+	// no access policy matches a request. Default false preserves the existing
+	// behavior of allowing unmatched requests (backward compat for untagged agents).
+	DefaultDeny bool `yaml:"default_deny" mapstructure:"default_deny" default:"false"`
 }
 
 // TagApprovalRulesConfig configures tag approval behavior at registration.
@@ -491,6 +495,9 @@ func ApplyEnvOverrides(cfg *Config) {
 	}
 	if val := os.Getenv("AGENTFIELD_AUTHORIZATION_INTERNAL_TOKEN"); val != "" {
 		cfg.Features.DID.Authorization.InternalToken = val
+	}
+	if val := os.Getenv("AGENTFIELD_AUTHORIZATION_DEFAULT_DENY"); val != "" {
+		cfg.Features.DID.Authorization.DefaultDeny = val == "true" || val == "1"
 	}
 
 	// Node log proxy (UI → agent NDJSON)

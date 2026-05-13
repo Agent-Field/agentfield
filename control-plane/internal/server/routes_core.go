@@ -67,7 +67,8 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 		legacyReasonerGroup := agentAPI.Group("/reasoners")
 		legacySkillGroup := agentAPI.Group("/skills")
 		permConfigLegacy := middleware.PermissionConfig{
-			Enabled: true,
+			Enabled:     true,
+			DefaultDeny: s.config.Features.DID.Authorization.DefaultDeny,
 		}
 		legacyMiddleware := middleware.PermissionCheckMiddleware(
 			s.accessPolicyService,
@@ -92,7 +93,8 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	{
 		if s.config.Features.DID.Authorization.Enabled && s.accessPolicyService != nil && s.didWebService != nil {
 			permConfig := middleware.PermissionConfig{
-				Enabled: true,
+				Enabled:     true,
+				DefaultDeny: s.config.Features.DID.Authorization.DefaultDeny,
 			}
 			executeGroup.Use(middleware.PermissionCheckMiddleware(
 				s.accessPolicyService,

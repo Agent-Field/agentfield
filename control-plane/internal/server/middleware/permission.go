@@ -40,6 +40,9 @@ type TagVCVerifierInterface interface {
 type PermissionConfig struct {
 	// Enabled determines if permission checking is active
 	Enabled bool
+	// DefaultDeny returns 403 instead of allowing fall-through when no
+	// access policy matches. Default false preserves backward compat.
+	DefaultDeny bool
 }
 
 // PermissionCheckResult contains the result of a permission check.
@@ -69,7 +72,12 @@ const (
 //  2. Resolves the target agent from the request path
 //  3. Evaluates access policies based on caller/target tags
 //  4. If a policy denies access, returns 403 Forbidden
-//  5. If no policy matches, allows the request (backward compat for untagged agents)
+//  5. If no policy matches and DefaultDeny is false, allows the request
+//     (backward compat for untagged agents). When DefaultDeny is true,
+//     returns HTTP 403 with an opaque error. The unmatched
+//     (caller_tags, target_tags, function) tuple is logged at DEBUG in
+//     both modes; it is not included in the response body to avoid
+//     leaking tag taxonomy to denied callers.
 func PermissionCheckMiddleware(
 	policyService AccessPolicyServiceInterface,
 	tagVCVerifier TagVCVerifierInterface,
@@ -232,9 +240,26 @@ func PermissionCheckMiddleware(
 				c.Next()
 				return
 			}
+
+			// No policy matched. Log the tuple at DEBUG so operators can
+			// diagnose coverage gaps even when DefaultDeny is off.
+			logger.Logger.Debug().
+				Str("target", target).
+				Str("function", functionName).
+				Strs("caller_tags", callerTags).
+				Strs("target_tags", tags).
+				Msg("Permission middleware: no policy matched")
+
+			if config.DefaultDeny {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+					"error":   "no_policy_matched",
+					"message": "no access policy matches this request; see server logs for the unmatched tuple",
+				})
+				return
+			}
 		}
 
-		// No policy matched — allow (backward compat for untagged agents)
+		// No policy service configured, or no policy matched with DefaultDeny off.
 		c.Set(string(PermissionCheckResultKey), &PermissionCheckResult{Allowed: true})
 		c.Next()
 	}

@@ -249,6 +249,7 @@ func TestApplyEnvOverrides(t *testing.T) {
 		"AGENTFIELD_AUTHORIZATION_DOMAIN":                            "auth.local",
 		"AGENTFIELD_AUTHORIZATION_ADMIN_TOKEN":                       "admin-token",
 		"AGENTFIELD_AUTHORIZATION_INTERNAL_TOKEN":                    "internal-token",
+		"AGENTFIELD_AUTHORIZATION_DEFAULT_DENY":                      "true",
 		"AGENTFIELD_NODE_LOG_PROXY_CONNECT_TIMEOUT":                  "21s",
 		"AGENTFIELD_NODE_LOG_PROXY_STREAM_IDLE_TIMEOUT":              "22s",
 		"AGENTFIELD_NODE_LOG_PROXY_MAX_DURATION":                     "23s",
@@ -309,7 +310,8 @@ func TestApplyEnvOverrides(t *testing.T) {
 		!cfg.Features.DID.Authorization.DIDAuthEnabled ||
 		cfg.Features.DID.Authorization.Domain != "auth.local" ||
 		cfg.Features.DID.Authorization.AdminToken != "admin-token" ||
-		cfg.Features.DID.Authorization.InternalToken != "internal-token" {
+		cfg.Features.DID.Authorization.InternalToken != "internal-token" ||
+		!cfg.Features.DID.Authorization.DefaultDeny {
 		t.Fatalf("unexpected authorization overrides: %+v", cfg.Features.DID.Authorization)
 	}
 	if cfg.AgentField.NodeLogProxy.ConnectTimeout != 21*time.Second ||
