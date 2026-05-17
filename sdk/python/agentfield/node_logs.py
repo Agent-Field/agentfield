@@ -177,7 +177,6 @@ class _TeeTextIO(io.TextIOBase):
             self._ring.append(self._stream_name, self._buf, self._max_line_bytes)
             self._buf = ""
         super().close()
-        self._original.close()
 
     @property
     def encoding(self) -> str:

@@ -366,8 +366,10 @@ class TestTeeTextIO:
 
             sys.stdout.write("partial")
             sys.stdout.close()
-            assert original_stdout.closed is True
+            assert original_stdout.closed is False
             assert ring.tail(1)[0].line == "partial"
+            original_stdout.write(" still usable")
+            assert original_stdout.getvalue().endswith("partial still usable")
         finally:
             sys.stdout = previous_stdout
             sys.stderr = previous_stderr
