@@ -91,6 +91,24 @@ def test_extract_final_text_codex_style():
     assert extract_final_text(events) == "final answer"
 
 
+@pytest.mark.parametrize(
+    ("events", "expected"),
+    [
+        ([{"type": "result", "result": "result answer"}], "result answer"),
+        ([{"type": "result", "text": "text answer"}], "text answer"),
+        ([{"type": "turn.completed", "text": "turn answer"}], "turn answer"),
+        ([{"type": "message", "content": "message answer"}], "message answer"),
+        ([{"type": "assistant", "text": "assistant answer"}], "assistant answer"),
+    ],
+)
+def test_extract_final_text_event_variants(events, expected):
+    assert extract_final_text(events) == expected
+
+
+def test_extract_final_text_empty_events():
+    assert extract_final_text([]) is None
+
+
 def test_estimate_cli_cost_calls_litellm():
     mock_litellm = MagicMock()
     mock_litellm.completion_cost.return_value = 0.05
@@ -108,3 +126,47 @@ def test_estimate_cli_cost_calls_litellm():
         prompt="Summarize this run",
         completion="Done",
     )
+
+
+def test_estimate_cli_cost_returns_none_without_model():
+    assert estimate_cli_cost(model="", prompt="prompt", result_text="Done") is None
+
+
+def test_estimate_cli_cost_returns_none_when_litellm_missing():
+    with patch.dict("sys.modules", {"litellm": None}):
+        cost = estimate_cli_cost(
+            model="openai/gpt-4o",
+            prompt="Summarize this run",
+            result_text="Done",
+        )
+
+    assert cost is None
+
+
+@pytest.mark.parametrize("raw_cost", [0, None])
+def test_estimate_cli_cost_returns_none_for_non_positive_cost(raw_cost):
+    mock_litellm = MagicMock()
+    mock_litellm.completion_cost.return_value = raw_cost
+
+    with patch.dict("sys.modules", {"litellm": mock_litellm}):
+        cost = estimate_cli_cost(
+            model="openai/gpt-4o",
+            prompt="Summarize this run",
+            result_text="Done",
+        )
+
+    assert cost is None
+
+
+def test_estimate_cli_cost_returns_none_when_litellm_raises():
+    mock_litellm = MagicMock()
+    mock_litellm.completion_cost.side_effect = RuntimeError("pricing unavailable")
+
+    with patch.dict("sys.modules", {"litellm": mock_litellm}):
+        cost = estimate_cli_cost(
+            model="openai/gpt-4o",
+            prompt="Summarize this run",
+            result_text="Done",
+        )
+
+    assert cost is None

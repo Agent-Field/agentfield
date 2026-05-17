@@ -9,7 +9,6 @@ import json
 import queue
 import sys
 import threading
-import time
 
 import pytest
 
@@ -334,6 +333,46 @@ class TestTeeTextIO:
         assert entries[0].stream == "stderr"
         assert entries[0].line == "partial line"
 
+    def test_installed_tee_exposes_text_io_methods(self, monkeypatch):
+        import agentfield.node_logs as nl
+
+        class TextStream(io.StringIO):
+            def fileno(self):
+                return 42
+
+        previous_stdout = sys.stdout
+        previous_stderr = sys.stderr
+        original_stdout = TextStream()
+        original_stderr = TextStream()
+        ring = ProcessLogRing(max_bytes=1024 * 1024)
+
+        monkeypatch.setenv("AGENTFIELD_LOGS_ENABLED", "true")
+        monkeypatch.setattr(sys, "__stdout__", original_stdout)
+        monkeypatch.setattr(sys, "__stderr__", original_stderr)
+        monkeypatch.setattr(nl, "_global_ring", ring)
+        monkeypatch.setattr(nl, "_tee_installed", False)
+
+        try:
+            install_stdio_tee()
+            assert isinstance(sys.stdout, _TeeTextIO)
+            assert sys.stdout.fileno() == 42
+            assert sys.stdout.readable() is True
+            assert sys.stdout.writable() is True
+            assert sys.stdout.seekable() is True
+
+            sys.stdout.writelines(["first\n", "second\n"])
+            assert original_stdout.getvalue() == "first\nsecond\n"
+            assert [entry.line for entry in ring.tail(2)] == ["first", "second"]
+
+            sys.stdout.write("partial")
+            sys.stdout.close()
+            assert original_stdout.closed is True
+            assert ring.tail(1)[0].line == "partial"
+        finally:
+            sys.stdout = previous_stdout
+            sys.stderr = previous_stderr
+            nl._tee_installed = False
+
     def test_install_stdio_tee_replaces_sys_stdout(self, monkeypatch):
         import agentfield.node_logs as nl
 
@@ -353,6 +392,10 @@ class TestTeeTextIO:
             install_stdio_tee()
             assert isinstance(sys.stdout, _TeeTextIO)
             assert isinstance(sys.stderr, _TeeTextIO)
+            first_stdout = sys.stdout
+            install_stdio_tee()
+            assert sys.stdout is first_stdout
+            assert sys.stdout._original is original_stdout
 
             sys.stdout.write("captured\n")
             assert original_stdout.getvalue() == "captured\n"
@@ -362,6 +405,26 @@ class TestTeeTextIO:
             sys.stderr = previous_stderr
             nl._tee_installed = False
 
+    def test_install_stdio_tee_disabled_env_leaves_streams_unchanged(self, monkeypatch):
+        import agentfield.node_logs as nl
+
+        previous_stdout = sys.stdout
+        previous_stderr = sys.stderr
+        original_stdout = io.StringIO()
+        original_stderr = io.StringIO()
+
+        monkeypatch.setenv("AGENTFIELD_LOGS_ENABLED", "false")
+        monkeypatch.setattr(sys, "__stdout__", original_stdout)
+        monkeypatch.setattr(sys, "__stderr__", original_stderr)
+        monkeypatch.setattr(nl, "_global_ring", ProcessLogRing(max_bytes=1024 * 1024))
+        monkeypatch.setattr(nl, "_tee_installed", False)
+
+        install_stdio_tee()
+
+        assert sys.stdout is previous_stdout
+        assert sys.stderr is previous_stderr
+        assert nl._tee_installed is False
+
 
 class TestIterTailNdjsonFollow:
     def test_iter_tail_ndjson_follow_mode(self, monkeypatch):
@@ -370,6 +433,14 @@ class TestIterTailNdjsonFollow:
         ring = ProcessLogRing(max_bytes=1024 * 1024)
         monkeypatch.setattr(nl, "_global_ring", ring)
         monkeypatch.setattr(nl, "_follow_queues", [])
+        queue_registered = threading.Event()
+        original_register_follow_queue = nl.register_follow_queue
+
+        def register_follow_queue(q):
+            original_register_follow_queue(q)
+            queue_registered.set()
+
+        monkeypatch.setattr(nl, "register_follow_queue", register_follow_queue)
 
         chunks: list[bytes] = []
         errors: list[BaseException] = []
@@ -383,11 +454,7 @@ class TestIterTailNdjsonFollow:
 
         thread = threading.Thread(target=read_next)
         thread.start()
-        deadline = time.monotonic() + 2
-        while (
-            not nl._follow_queues and thread.is_alive() and time.monotonic() < deadline
-        ):
-            time.sleep(0.001)
+        assert queue_registered.wait(timeout=2)
 
         ring.append("stdout", "new log", max_line_bytes=1024)
         thread.join(timeout=2)
@@ -396,6 +463,47 @@ class TestIterTailNdjsonFollow:
         assert errors == []
         assert len(chunks) == 1
         assert json.loads(chunks[0].decode())["line"] == "new log"
+
+    def test_iter_tail_ndjson_follow_emits_tail_then_new_entries(self, monkeypatch):
+        import agentfield.node_logs as nl
+
+        ring = ProcessLogRing(max_bytes=1024 * 1024)
+        for i in range(3):
+            ring.append("stdout", f"line{i}", max_line_bytes=1024)
+        monkeypatch.setattr(nl, "_global_ring", ring)
+        monkeypatch.setattr(nl, "_follow_queues", [])
+        queue_registered = threading.Event()
+        original_register_follow_queue = nl.register_follow_queue
+
+        def register_follow_queue(q):
+            original_register_follow_queue(q)
+            queue_registered.set()
+
+        monkeypatch.setattr(nl, "register_follow_queue", register_follow_queue)
+
+        generator = iter_tail_ndjson(tail_lines=2, since_seq=0, follow=True)
+        prelude = [json.loads(next(generator).decode()) for _ in range(2)]
+        chunks: list[bytes] = []
+        errors: list[BaseException] = []
+
+        def read_next():
+            try:
+                chunks.append(next(generator))
+            except Exception as exc:  # pragma: no cover - assertion reports details
+                errors.append(exc)
+
+        thread = threading.Thread(target=read_next)
+        thread.start()
+        assert queue_registered.wait(timeout=2)
+
+        ring.append("stdout", "followed", max_line_bytes=1024)
+        thread.join(timeout=2)
+        generator.close()
+
+        assert [entry["line"] for entry in prelude] == ["line1", "line2"]
+        assert errors == []
+        assert len(chunks) == 1
+        assert json.loads(chunks[0].decode())["line"] == "followed"
 
     def test_iter_tail_ndjson_unregisters_on_close(self, monkeypatch):
         import agentfield.node_logs as nl
