@@ -88,6 +88,8 @@ class ImageOutput(BaseModel):
 
     def save(self, path: Union[str, Path]) -> None:
         """Save image to file."""
+        if not self.b64_json and not self.url:
+            raise ValueError("No image data or URL available to save")
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "wb") as f:
