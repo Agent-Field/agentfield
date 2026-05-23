@@ -414,7 +414,19 @@ export class OpenRouterMediaProvider implements MediaProvider {
     const data = (await res.json()) as Record<string, unknown>;
     const resp = emptyMediaResponse(data);
 
-    // Extract images from choices
+    // Extract images from choices. OpenRouter places images either inline in
+    // `message.content` as multimodal parts (gpt-image-1 style) or in a
+    // dedicated `message.images` array (gemini-*-image, grok-imagine style
+    // where `content` is null).
+    const pushImageFromUrl = (url: string | undefined) => {
+      if (!url) return;
+      if (url.startsWith('data:')) {
+        const b64 = url.split(',', 2)[1];
+        resp.images.push({ url, b64Json: b64 });
+      } else {
+        resp.images.push({ url });
+      }
+    };
     const choices = data.choices as Array<Record<string, unknown>> | undefined;
     if (choices) {
       for (const choice of choices) {
@@ -424,7 +436,7 @@ export class OpenRouterMediaProvider implements MediaProvider {
         if (typeof msg.content === 'string') {
           resp.text += msg.content;
         }
-        // Content array (multimodal)
+        // Content array (gpt-image-1 multimodal style)
         if (Array.isArray(msg.content)) {
           for (const part of msg.content) {
             const p = part as Record<string, unknown>;
@@ -432,14 +444,16 @@ export class OpenRouterMediaProvider implements MediaProvider {
               resp.text += p.text as string;
             } else if (p.type === 'image_url') {
               const imgUrl = p.image_url as Record<string, unknown> | undefined;
-              const url = imgUrl?.url as string | undefined;
-              if (url?.startsWith('data:')) {
-                const b64 = url.split(',', 2)[1];
-                resp.images.push({ url, b64Json: b64 });
-              } else if (url) {
-                resp.images.push({ url });
-              }
+              pushImageFromUrl(imgUrl?.url as string | undefined);
             }
+          }
+        }
+        // Dedicated images array (gemini-*-image, grok-imagine — content is null)
+        const images = msg.images as Array<Record<string, unknown>> | undefined;
+        if (Array.isArray(images)) {
+          for (const img of images) {
+            const imgUrl = img.image_url as Record<string, unknown> | undefined;
+            pushImageFromUrl(imgUrl?.url as string | undefined);
           }
         }
       }
