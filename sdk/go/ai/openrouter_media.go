@@ -5,13 +5,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,13 +25,24 @@ const (
 	defaultOpenRouterBaseURL  = "https://openrouter.ai/api/v1"
 	defaultVideoPollInterval  = 30 * time.Second
 	defaultVideoTimeout       = 10 * time.Minute
+	defaultTTSSampleRate      = 24000
+	openRouterModelMetaTTL    = 30 * time.Minute
 )
+
+// modelMeta holds the architecture metadata for an OpenRouter model.
+type modelMeta struct {
+	OutputModalities []string
+	InputModalities  []string
+}
 
 // OpenRouterMediaProvider implements MediaProvider for OpenRouter's media APIs.
 type OpenRouterMediaProvider struct {
 	APIKey  string
 	BaseURL string
 	Client  *http.Client
+
+	metaMu    sync.Mutex
+	metaCache map[string]modelMeta
 }
 
 // NewOpenRouterMediaProvider creates a provider. If apiKey is empty, reads OPENROUTER_API_KEY.
@@ -67,6 +81,114 @@ func stripPrefix(model string) string {
 	return strings.TrimPrefix(model, "openrouter/")
 }
 
+// SeedModelMeta lets callers (or tests) pre-populate the metadata cache for a
+// model. Useful when running against test servers that don't expose
+// `GET /models/{id}/endpoints`. Output modalities follow OpenRouter's
+// convention — e.g. `[]string{"speech"}` for TTS-only or
+// `[]string{"text","audio"}` for chat-audio models.
+func (p *OpenRouterMediaProvider) SeedModelMeta(model string, outputModalities, inputModalities []string) {
+	stripped := stripPrefix(model)
+	p.metaMu.Lock()
+	defer p.metaMu.Unlock()
+	if p.metaCache == nil {
+		p.metaCache = make(map[string]modelMeta)
+	}
+	p.metaCache[stripped] = modelMeta{
+		OutputModalities: append([]string(nil), outputModalities...),
+		InputModalities:  append([]string(nil), inputModalities...),
+	}
+}
+
+// fetchModelMeta retrieves and caches a model's output_modalities so we can
+// route audio/image requests to the right OpenRouter endpoint. Returns a
+// zero-value meta on any failure so callers can fall back to defaults.
+func (p *OpenRouterMediaProvider) fetchModelMeta(ctx context.Context, model string) modelMeta {
+	stripped := stripPrefix(model)
+	p.metaMu.Lock()
+	if p.metaCache == nil {
+		p.metaCache = make(map[string]modelMeta)
+	}
+	if cached, ok := p.metaCache[stripped]; ok {
+		p.metaMu.Unlock()
+		return cached
+	}
+	p.metaMu.Unlock()
+
+	reqURL := p.baseURL() + "/models/" + stripped + "/endpoints"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return modelMeta{}
+	}
+	p.setHeaders(httpReq)
+	resp, err := p.Client.Do(httpReq)
+	if err != nil {
+		return modelMeta{}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return modelMeta{}
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1*1024*1024))
+	if err != nil {
+		return modelMeta{}
+	}
+	var payload struct {
+		Data struct {
+			Architecture struct {
+				OutputModalities []string `json:"output_modalities"`
+				InputModalities  []string `json:"input_modalities"`
+			} `json:"architecture"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return modelMeta{}
+	}
+	meta := modelMeta{
+		OutputModalities: payload.Data.Architecture.OutputModalities,
+		InputModalities:  payload.Data.Architecture.InputModalities,
+	}
+	p.metaMu.Lock()
+	p.metaCache[stripped] = meta
+	p.metaMu.Unlock()
+	return meta
+}
+
+// wrapPCM16AsWAV wraps raw little-endian PCM16 mono bytes in a WAV (RIFF) container.
+func wrapPCM16AsWAV(pcm []byte, sampleRate int) []byte {
+	channels := uint16(1)
+	bitsPerSample := uint16(16)
+	byteRate := uint32(sampleRate) * uint32(channels) * uint32(bitsPerSample) / 8
+	blockAlign := channels * bitsPerSample / 8
+	dataSize := uint32(len(pcm))
+
+	buf := bytes.NewBuffer(make([]byte, 0, 44+len(pcm)))
+	buf.WriteString("RIFF")
+	_ = binary.Write(buf, binary.LittleEndian, uint32(36+dataSize))
+	buf.WriteString("WAVE")
+	buf.WriteString("fmt ")
+	_ = binary.Write(buf, binary.LittleEndian, uint32(16))           // PCM fmt chunk size
+	_ = binary.Write(buf, binary.LittleEndian, uint16(1))            // PCM format
+	_ = binary.Write(buf, binary.LittleEndian, channels)
+	_ = binary.Write(buf, binary.LittleEndian, uint32(sampleRate))
+	_ = binary.Write(buf, binary.LittleEndian, byteRate)
+	_ = binary.Write(buf, binary.LittleEndian, blockAlign)
+	_ = binary.Write(buf, binary.LittleEndian, bitsPerSample)
+	buf.WriteString("data")
+	_ = binary.Write(buf, binary.LittleEndian, dataSize)
+	buf.Write(pcm)
+	return buf.Bytes()
+}
+
+// containsString reports whether haystack contains s (case-sensitive).
+func containsString(haystack []string, s string) bool {
+	for _, h := range haystack {
+		if h == s {
+			return true
+		}
+	}
+	return false
+}
+
 // GenerateVideo submits a video job, polls until complete, downloads result.
 func (p *OpenRouterMediaProvider) GenerateVideo(ctx context.Context, req VideoRequest) (*MediaResponse, error) {
 	if strings.TrimSpace(req.Prompt) == "" {
@@ -101,6 +223,9 @@ func (p *OpenRouterMediaProvider) GenerateVideo(ctx context.Context, req VideoRe
 	}
 	if req.Seed != nil {
 		payload["seed"] = *req.Seed
+	}
+	if req.ImageURL != "" {
+		payload["image_url"] = req.ImageURL
 	}
 	if len(req.FrameImages) > 0 {
 		payload["frame_images"] = req.FrameImages
@@ -195,12 +320,16 @@ func (p *OpenRouterMediaProvider) GenerateVideo(ctx context.Context, req VideoRe
 }
 
 type videoJobStatus struct {
-	ID          string  `json:"id"`
-	Status      string  `json:"status"`
-	Error       string  `json:"error,omitempty"`
-	UnsignedURL string  `json:"unsigned_url,omitempty"`
-	Duration    float64 `json:"duration,omitempty"`
-	CostUSD     float64 `json:"cost_usd,omitempty"`
+	ID           string   `json:"id"`
+	Status       string   `json:"status"`
+	Error        string   `json:"error,omitempty"`
+	UnsignedURL  string   `json:"unsigned_url,omitempty"`  // legacy single-URL form
+	UnsignedURLs []string `json:"unsigned_urls,omitempty"` // current API
+	Duration     float64  `json:"duration,omitempty"`
+	CostUSD      float64  `json:"cost_usd,omitempty"`
+	Usage        struct {
+		Cost float64 `json:"cost,omitempty"`
+	} `json:"usage,omitempty"`
 }
 
 func (p *OpenRouterMediaProvider) pollVideoJob(ctx context.Context, url string) (*videoJobStatus, error) {
@@ -231,13 +360,51 @@ func (p *OpenRouterMediaProvider) pollVideoJob(ctx context.Context, url string) 
 	return &status, nil
 }
 
-func (p *OpenRouterMediaProvider) buildVideoResponse(_ context.Context, status *videoJobStatus) (*MediaResponse, error) {
+func (p *OpenRouterMediaProvider) buildVideoResponse(ctx context.Context, status *videoJobStatus) (*MediaResponse, error) {
+	videoURL := ""
+	if len(status.UnsignedURLs) > 0 {
+		videoURL = status.UnsignedURLs[0]
+	} else if status.UnsignedURL != "" {
+		videoURL = status.UnsignedURL
+	}
+
+	cost := status.CostUSD
+	if cost == 0 {
+		cost = status.Usage.Cost
+	}
+
 	video := VideoData{
-		URL:      status.UnsignedURL,
+		URL:      videoURL,
 		MimeType: "video/mp4",
 		Filename: "generated_video.mp4",
 		Duration: status.Duration,
-		CostUSD:  status.CostUSD,
+		CostUSD:  cost,
+	}
+
+	// Download bytes when we have a URL. OpenRouter's "unsigned" URLs are
+	// actually served from openrouter.ai itself and require the same Bearer
+	// auth as the API; other hosts (CDNs) take the URL bare.
+	if videoURL != "" {
+		dlReq, err := http.NewRequestWithContext(ctx, http.MethodGet, videoURL, nil)
+		if err == nil {
+			if u, perr := url.Parse(videoURL); perr == nil {
+				host := strings.ToLower(u.Hostname())
+				if host == "openrouter.ai" || strings.HasSuffix(host, ".openrouter.ai") {
+					dlReq.Header.Set("Authorization", "Bearer "+p.APIKey)
+				}
+			}
+			dlResp, derr := p.Client.Do(dlReq)
+			if derr == nil {
+				defer dlResp.Body.Close()
+				if dlResp.StatusCode == http.StatusOK {
+					const maxVideoBytes = 500 * 1024 * 1024 // 500 MB
+					raw, rerr := io.ReadAll(io.LimitReader(dlResp.Body, maxVideoBytes))
+					if rerr == nil {
+						video.Data = base64.StdEncoding.EncodeToString(raw)
+					}
+				}
+			}
+		}
 	}
 
 	return &MediaResponse{
@@ -254,12 +421,26 @@ func (p *OpenRouterMediaProvider) GenerateImage(ctx context.Context, req ImageRe
 	}
 	model = stripPrefix(model)
 
+	// Request only image output — works for both image-only models (e.g.
+	// x-ai/grok-imagine-image-quality) and dual-output models. Image-only
+	// models return 404 when "text" is also requested.
+	var userContent any = req.Prompt
+	if len(req.ImageURLs) > 0 {
+		parts := []map[string]any{{"type": "text", "text": req.Prompt}}
+		for _, u := range req.ImageURLs {
+			parts = append(parts, map[string]any{
+				"type":      "image_url",
+				"image_url": map[string]string{"url": u},
+			})
+		}
+		userContent = parts
+	}
 	payload := map[string]any{
 		"model": model,
 		"messages": []map[string]any{
-			{"role": "user", "content": req.Prompt},
+			{"role": "user", "content": userContent},
 		},
-		"modalities": []string{"image", "text"},
+		"modalities": []string{"image"},
 	}
 	if req.Size != "" {
 		payload["size"] = req.Size
@@ -269,6 +450,9 @@ func (p *OpenRouterMediaProvider) GenerateImage(ctx context.Context, req ImageRe
 	}
 	if req.ImageConfig != nil {
 		payload["image_config"] = req.ImageConfig
+	}
+	for k, v := range req.Extra {
+		payload[k] = v
 	}
 
 	body, err := json.Marshal(payload)
@@ -379,7 +563,11 @@ func (p *OpenRouterMediaProvider) GenerateImage(ctx context.Context, req ImageRe
 	return result, nil
 }
 
-// GenerateAudio uses streaming chat completions with audio modality.
+// GenerateAudio auto-routes to the right OpenRouter endpoint based on the
+// model's output_modalities:
+//   - ["speech"] (e.g. hexgrad/kokoro-82m)  → POST /audio/speech
+//   - contains "audio" (e.g. openai/gpt-audio*) → chat-completions SSE
+//   - unknown                                → POST /audio/speech (broader compat)
 func (p *OpenRouterMediaProvider) GenerateAudio(ctx context.Context, req AudioRequest) (*MediaResponse, error) {
 	if strings.TrimSpace(req.Text) == "" {
 		return nil, fmt.Errorf("audio text input must not be empty")
@@ -387,10 +575,36 @@ func (p *OpenRouterMediaProvider) GenerateAudio(ctx context.Context, req AudioRe
 
 	model := req.Model
 	if model == "" {
-		model = "openai/gpt-4o-audio-preview"
+		model = "openai/gpt-4o-mini-tts"
 	}
 	model = stripPrefix(model)
 
+	requestedFormat := req.Format
+	if requestedFormat == "" {
+		requestedFormat = "wav"
+	}
+
+	meta := p.fetchModelMeta(ctx, model)
+	useSpeech := len(meta.OutputModalities) == 0 ||
+		containsString(meta.OutputModalities, "speech") ||
+		!containsString(meta.OutputModalities, "audio")
+
+	if useSpeech {
+		return p.generateAudioViaSpeechEndpoint(ctx, model, req.Text, req.Voice, requestedFormat, &req)
+	}
+
+	// Chat-completions audio modality (gpt-audio family). Streaming on OpenAI
+	// is locked to pcm16 — wire that, then re-wrap to caller's format below.
+	wireFormat := requestedFormat
+	if requestedFormat == "wav" {
+		wireFormat = "pcm16"
+	}
+	audioConfig := map[string]string{"format": wireFormat}
+	if req.Voice != "" {
+		audioConfig["voice"] = req.Voice
+	} else {
+		audioConfig["voice"] = "alloy"
+	}
 	payload := map[string]any{
 		"model": model,
 		"messages": []map[string]any{
@@ -398,20 +612,8 @@ func (p *OpenRouterMediaProvider) GenerateAudio(ctx context.Context, req AudioRe
 		},
 		"modalities": []string{"text", "audio"},
 		"stream":     true,
+		"audio":      audioConfig,
 	}
-
-	// When streaming, OpenAI only supports pcm16 format; use pcm16 as default.
-	audioFormat := "pcm16"
-	if req.Format != "" {
-		audioFormat = req.Format
-	}
-	audioConfig := map[string]string{"format": audioFormat}
-	if req.Voice != "" {
-		audioConfig["voice"] = req.Voice
-	} else {
-		audioConfig["voice"] = "alloy"
-	}
-	payload["audio"] = audioConfig
 
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -482,26 +684,25 @@ func (p *OpenRouterMediaProvider) GenerateAudio(ctx context.Context, req AudioRe
 		return nil, fmt.Errorf("read audio stream: %w", err)
 	}
 
-	// Concatenate base64 audio chunks
-	outputFormat := "pcm16"
-	if req.Format != "" {
-		outputFormat = req.Format
-	}
+	outputFormat := requestedFormat
 
 	var audioData string
 	if len(audioChunks) > 0 {
-		// Decode all chunks, concatenate raw bytes, re-encode
+		// Decode all chunks, concatenate raw bytes, re-encode (with WAV
+		// header when caller asked for wav).
 		var raw []byte
 		for _, chunk := range audioChunks {
 			decoded, err := base64.StdEncoding.DecodeString(chunk)
 			if err != nil {
-				// Try without padding
 				decoded, err = base64.RawStdEncoding.DecodeString(chunk)
 				if err != nil {
 					return nil, fmt.Errorf("decode audio chunk: %w (chunk length: %d)", err, len(chunk))
 				}
 			}
 			raw = append(raw, decoded...)
+		}
+		if outputFormat == "wav" {
+			raw = wrapPCM16AsWAV(raw, defaultTTSSampleRate)
 		}
 		audioData = base64.StdEncoding.EncodeToString(raw)
 	}
@@ -518,4 +719,81 @@ func (p *OpenRouterMediaProvider) GenerateAudio(ctx context.Context, req AudioRe
 func (p *OpenRouterMediaProvider) setHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+p.APIKey)
+}
+
+// generateAudioViaSpeechEndpoint calls POST /api/v1/audio/speech (OpenAI-compat
+// TTS). Returns raw bytes for the caller's requested format; wraps PCM → WAV
+// client-side when requestedFormat == "wav".
+func (p *OpenRouterMediaProvider) generateAudioViaSpeechEndpoint(
+	ctx context.Context, model, text, voice, requestedFormat string, req *AudioRequest,
+) (*MediaResponse, error) {
+	wireFormat := requestedFormat
+	switch requestedFormat {
+	case "wav", "pcm", "pcm16":
+		wireFormat = "pcm"
+	}
+
+	if voice == "" {
+		voice = "alloy"
+	}
+
+	payload := map[string]any{
+		"model":           model,
+		"input":           text,
+		"voice":           voice,
+		"response_format": wireFormat,
+	}
+	if req != nil && req.Speed != nil {
+		payload["speed"] = *req.Speed
+	}
+	if req != nil {
+		for k, v := range req.Extra {
+			payload[k] = v
+		}
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal speech request: %w", err)
+	}
+
+	endpoint := p.baseURL() + "/audio/speech"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create speech request: %w", err)
+	}
+	p.setHeaders(httpReq)
+
+	resp, err := p.Client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("execute speech request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
+		return nil, fmt.Errorf("audio/speech error (%d): %s", resp.StatusCode, string(errBody))
+	}
+
+	const maxAudioBytes = 100 * 1024 * 1024
+	audioBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxAudioBytes))
+	if err != nil {
+		return nil, fmt.Errorf("read speech body: %w", err)
+	}
+
+	if requestedFormat == "wav" {
+		audioBytes = wrapPCM16AsWAV(audioBytes, defaultTTSSampleRate)
+	}
+
+	return &MediaResponse{
+		Text: text,
+		Audio: &AudioData{
+			Data:   base64.StdEncoding.EncodeToString(audioBytes),
+			Format: requestedFormat,
+		},
+		RawResponse: map[string]string{
+			"endpoint":  "audio/speech",
+			"model":     model,
+			"mime_type": resp.Header.Get("Content-Type"),
+		},
+	}, nil
 }

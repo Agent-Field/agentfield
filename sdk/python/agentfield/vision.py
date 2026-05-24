@@ -134,15 +134,29 @@ async def generate_image_openrouter(
 
     from agentfield.multimodal_response import ImageOutput, MultimodalResponse
 
+    # Pull image_urls out of kwargs so we can build a multi-part user message
+    # for image+text→image models (e.g. x-ai/grok-imagine-image-quality).
+    image_urls = kwargs.pop("image_urls", None) or []
+    if image_urls:
+        user_content: Any = [{"type": "text", "text": prompt}] + [
+            {"type": "image_url", "image_url": {"url": u}} for u in image_urls
+        ]
+    else:
+        user_content = prompt
+
     # Build messages for OpenRouter chat completions
-    messages = [{"role": "user", "content": prompt}]
+    messages = [{"role": "user", "content": user_content}]
 
     # Prepare parameters for OpenRouter
     # OpenRouter uses chat completions with modalities parameter
+    # Request only image output — works for both image-only models (e.g.
+    # x-ai/grok-imagine-image-quality) and dual-output models (e.g.
+    # google/gemini-2.5-flash-image). Image-only models 404 when "text" is
+    # also requested.
     completion_params = {
         "model": model,
         "messages": messages,
-        "modalities": ["image", "text"],
+        "modalities": ["image"],
         **kwargs,
     }
 

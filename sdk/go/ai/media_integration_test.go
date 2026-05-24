@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -250,7 +251,7 @@ func TestIntegrationAudioSSEStream(t *testing.T) {
 		var payload map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
 		assert.Equal(t, true, payload["stream"])
-		assert.Equal(t, "openai/gpt-4o-mini-tts", payload["model"])
+		assert.Equal(t, "openai/gpt-audio-mini", payload["model"])
 
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher, _ := w.(http.Flusher)
@@ -274,18 +275,21 @@ func TestIntegrationAudioSSEStream(t *testing.T) {
 		BaseURL: srv.URL,
 		Client:  srv.Client(),
 	}
+	// Pre-seed metadata so routing picks the chat-completions path
+	// without hitting the real OpenRouter `/models/.../endpoints` endpoint.
+	p.SeedModelMeta("openai/gpt-audio-mini", []string{"text", "audio"}, []string{"text"})
 
 	resp, err := p.GenerateAudio(context.Background(), AudioRequest{
 		Text:   "Say hello",
-		Model:  "openrouter/openai/gpt-4o-mini-tts",
+		Model:  "openrouter/openai/gpt-audio-mini",
 		Voice:  "nova",
-		Format: "wav",
+		Format: "mp3", // avoid pcm→wav rewrap so we can compare raw bytes
 	})
 
 	require.NoError(t, err)
 	assert.Equal(t, "Hello world", resp.Text)
 	require.NotNil(t, resp.Audio)
-	assert.Equal(t, "wav", resp.Audio.Format)
+	assert.Equal(t, "mp3", resp.Audio.Format)
 	assert.NotEmpty(t, resp.Audio.Data)
 
 	// Decode and verify audio bytes
@@ -315,14 +319,53 @@ func TestIntegrationAudioWithCustomFormat(t *testing.T) {
 		BaseURL: srv.URL,
 		Client:  srv.Client(),
 	}
+	p.SeedModelMeta("openai/gpt-audio-mini", []string{"text", "audio"}, []string{"text"})
 
 	resp, err := p.GenerateAudio(context.Background(), AudioRequest{
 		Text:   "test",
+		Model:  "openai/gpt-audio-mini",
 		Voice:  "echo",
 		Format: "mp3",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "mp3", resp.Audio.Format)
+}
+
+func TestIntegrationAudioSpeechEndpoint(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/audio/speech", r.URL.Path)
+		assert.Equal(t, "Bearer test-key", r.Header.Get("Authorization"))
+
+		var payload map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+		assert.Equal(t, "hexgrad/kokoro-82m", payload["model"])
+		assert.Equal(t, "af_bella", payload["voice"])
+		assert.Equal(t, "pcm", payload["response_format"]) // wav → pcm on wire
+
+		// Return 1KB of fake PCM16
+		pcm := bytes.Repeat([]byte{0x00, 0x01}, 500)
+		w.Header().Set("Content-Type", "audio/pcm")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(pcm)
+	}))
+	defer srv.Close()
+
+	p := &OpenRouterMediaProvider{APIKey: "test-key", BaseURL: srv.URL, Client: srv.Client()}
+	p.SeedModelMeta("hexgrad/kokoro-82m", []string{"speech"}, []string{"text"})
+
+	resp, err := p.GenerateAudio(context.Background(), AudioRequest{
+		Text:   "hello",
+		Model:  "openrouter/hexgrad/kokoro-82m",
+		Voice:  "af_bella",
+		Format: "wav",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp.Audio)
+	assert.Equal(t, "wav", resp.Audio.Format)
+	decoded, err := base64.StdEncoding.DecodeString(resp.Audio.Data)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("RIFF"), decoded[:4])
+	assert.Equal(t, []byte("WAVE"), decoded[8:12])
 }
 
 func TestIntegrationImageGeneration(t *testing.T) {

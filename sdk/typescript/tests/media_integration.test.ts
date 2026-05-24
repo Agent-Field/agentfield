@@ -289,6 +289,7 @@ describe('Integration: OpenRouterMediaProvider', () => {
   describe('generateAudio', () => {
     it('parses SSE stream into audio output', async () => {
       const provider = new OpenRouterMediaProvider({ apiKey: 'test-key' });
+      provider.seedModelMeta('openai/gpt-audio-mini', ['text', 'audio'], ['text']);
 
       const sseLines = [
         'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n',
@@ -315,16 +316,22 @@ describe('Integration: OpenRouterMediaProvider', () => {
         body: { getReader: () => mockReader },
       });
 
-      const resp = await provider.generateAudio({ text: 'say hello', voice: 'nova' });
+      const resp = await provider.generateAudio({
+        text: 'say hello',
+        model: 'openai/gpt-audio-mini',
+        voice: 'nova',
+        format: 'mp3',
+      });
 
       expect(resp.text).toBe('Hello');
       expect(resp.audio).not.toBeNull();
       expect(resp.audio!.data).toBe('AAAABBBB');
-      expect(resp.audio!.format).toBe('wav');
+      expect(resp.audio!.format).toBe('mp3');
     });
 
     it('custom format is respected', async () => {
       const provider = new OpenRouterMediaProvider({ apiKey: 'test-key' });
+      provider.seedModelMeta('openai/gpt-audio-mini', ['text', 'audio'], ['text']);
 
       const sseLines = [
         'data: {"choices":[{"delta":{"audio":{"data":"X"}}}]}\n\n',
@@ -351,6 +358,7 @@ describe('Integration: OpenRouterMediaProvider', () => {
 
       const resp = await provider.generateAudio({
         text: 'test',
+        model: 'openai/gpt-audio-mini',
         format: 'mp3',
       });
 
@@ -361,8 +369,43 @@ describe('Integration: OpenRouterMediaProvider', () => {
       expect(body.audio.format).toBe('mp3');
     });
 
+    it('routes TTS-only models to /audio/speech and WAV-wraps PCM', async () => {
+      const provider = new OpenRouterMediaProvider({ apiKey: 'test-key' });
+      provider.seedModelMeta('hexgrad/kokoro-82m', ['speech'], ['text']);
+
+      const pcmBytes = new Uint8Array(2000); // raw fake PCM
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => 'audio/pcm' },
+        arrayBuffer: async () => pcmBytes.buffer,
+        text: async () => '',
+      });
+
+      const resp = await provider.generateAudio({
+        text: 'hello',
+        model: 'openrouter/hexgrad/kokoro-82m',
+        voice: 'af_bella',
+        format: 'wav',
+      });
+      expect(resp.audio).not.toBeNull();
+      expect(resp.audio!.format).toBe('wav');
+
+      // /audio/speech endpoint + correct payload
+      const [url, init] = mockFetch.mock.calls[0];
+      expect(String(url)).toContain('/audio/speech');
+      const body = JSON.parse(init.body);
+      expect(body.model).toBe('hexgrad/kokoro-82m');
+      expect(body.voice).toBe('af_bella');
+      expect(body.response_format).toBe('pcm');
+
+      const wav = Buffer.from(resp.audio!.data!, 'base64');
+      expect(wav.subarray(0, 4).toString()).toBe('RIFF');
+      expect(wav.subarray(8, 12).toString()).toBe('WAVE');
+    });
+
     it('throws MediaProviderError on HTTP failure', async () => {
       const provider = new OpenRouterMediaProvider({ apiKey: 'test-key' });
+      provider.seedModelMeta('openai/gpt-audio-mini', ['text', 'audio'], ['text']);
 
       mockFetch.mockResolvedValueOnce({
         ok: false,
@@ -371,7 +414,9 @@ describe('Integration: OpenRouterMediaProvider', () => {
       });
 
       await expect(
-        provider.generateAudio({ text: 'test' })
+        provider.generateAudio({
+          text: 'test', model: 'openai/gpt-audio-mini', format: 'mp3',
+        })
       ).rejects.toThrow(MediaProviderError);
     });
   });
