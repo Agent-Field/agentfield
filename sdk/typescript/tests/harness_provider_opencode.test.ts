@@ -22,9 +22,10 @@ describe('opencode provider', () => {
       env: { A: '1' },
     });
 
-    expect(cli.runCli).toHaveBeenCalledWith(['/usr/local/bin/opencode', '-c', '/tmp/work', '-p', 'hello'], {
-      env: { A: '1' },
-    });
+    expect(cli.runCli).toHaveBeenCalledWith(
+      ['/usr/local/bin/opencode', 'run', '--dir', '/tmp/work', 'hello'],
+      { env: { A: '1' } },
+    );
     expect(result.isError).toBe(false);
     expect(result.result).toBe('final text');
     expect(result.metrics.numTurns).toBe(1);
@@ -68,10 +69,8 @@ describe('opencode provider', () => {
     const result = await provider.execute('hello', { model: 'openai/gpt-5' });
 
     expect(cli.runCli).toHaveBeenCalledWith(
-      ['opencode', '-p', 'hello'],
-      {
-        env: { MODEL: 'openai/gpt-5' },
-      }
+      ['opencode', 'run', '-m', 'openai/gpt-5', 'hello'],
+      { env: {} },
     );
     expect(result.isError).toBe(false);
   });
