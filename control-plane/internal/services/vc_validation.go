@@ -1,29 +1,35 @@
 package services
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
+const expectedVCProofPurpose = "assertionMethod"
+
 // VerifyVC verifies a verifiable credential.
 func (s *VCService) VerifyVC(vcDocument json.RawMessage) (*types.VCVerificationResponse, error) {
 	if !s.config.Enabled {
 		return &types.VCVerificationResponse{
-			Valid: false,
-			Error: "DID system is disabled",
+			Valid:  false,
+			Reason: types.VCVerificationReasonSystemDisabled,
+			Error:  "DID system is disabled",
 		}, nil
 	}
 
 	var vcDoc types.VCDocument
 	if err := json.Unmarshal(vcDocument, &vcDoc); err != nil {
 		return &types.VCVerificationResponse{
-			Valid: false,
-			Error: fmt.Sprintf("failed to parse VC document: %v", err),
+			Valid:  false,
+			Reason: types.VCVerificationReasonInvalidDocument,
+			Error:  fmt.Sprintf("failed to parse VC document: %v", err),
 		}, nil
 	}
 
@@ -31,8 +37,9 @@ func (s *VCService) VerifyVC(vcDocument json.RawMessage) (*types.VCVerificationR
 	issuerIdentity, err := s.didService.ResolveDID(vcDoc.Issuer)
 	if err != nil {
 		return &types.VCVerificationResponse{
-			Valid: false,
-			Error: fmt.Sprintf("failed to resolve issuer DID: %v", err),
+			Valid:  false,
+			Reason: types.VCVerificationReasonUnknownIssuer,
+			Error:  fmt.Sprintf("failed to resolve issuer DID: %v", err),
 		}, nil
 	}
 
@@ -40,16 +47,30 @@ func (s *VCService) VerifyVC(vcDocument json.RawMessage) (*types.VCVerificationR
 	valid, err := s.verifyVCSignature(&vcDoc, issuerIdentity)
 	if err != nil {
 		return &types.VCVerificationResponse{
-			Valid: false,
-			Error: fmt.Sprintf("failed to verify signature: %v", err),
+			Valid:  false,
+			Reason: types.VCVerificationReasonInvalidSignature,
+			Error:  fmt.Sprintf("failed to verify signature: %v", err),
 		}, nil
 	}
 
 	if !valid {
 		return &types.VCVerificationResponse{
 			Valid:   false,
+			Reason:  types.VCVerificationReasonInvalidSignature,
 			Message: "Invalid signature",
 		}, nil
+	}
+
+	if response := s.verifyVCProofPurpose(&vcDoc); response != nil {
+		return response, nil
+	}
+
+	if response := s.verifyVCValidityWindow(&vcDoc, time.Now().UTC()); response != nil {
+		return response, nil
+	}
+
+	if response := s.verifyVCRevocation(&vcDoc); response != nil {
+		return response, nil
 	}
 
 	return &types.VCVerificationResponse{
@@ -58,6 +79,146 @@ func (s *VCService) VerifyVC(vcDocument json.RawMessage) (*types.VCVerificationR
 		IssuedAt:  vcDoc.IssuanceDate,
 		Message:   "VC verified successfully",
 	}, nil
+}
+
+func (s *VCService) verifyVCProofPurpose(vcDoc *types.VCDocument) *types.VCVerificationResponse {
+	if vcDoc == nil {
+		return &types.VCVerificationResponse{
+			Valid:  false,
+			Reason: types.VCVerificationReasonInvalidDocument,
+			Error:  "VC document is nil",
+		}
+	}
+
+	if vcDoc.Proof.ProofPurpose == expectedVCProofPurpose {
+		return nil
+	}
+
+	return &types.VCVerificationResponse{
+		Valid:   false,
+		Reason:  types.VCVerificationReasonProofPurposeMismatch,
+		Message: fmt.Sprintf("VC proofPurpose must be %s", expectedVCProofPurpose),
+	}
+}
+
+func (s *VCService) verifyVCValidityWindow(vcDoc *types.VCDocument, now time.Time) *types.VCVerificationResponse {
+	if vcDoc == nil {
+		return &types.VCVerificationResponse{
+			Valid:  false,
+			Reason: types.VCVerificationReasonInvalidDocument,
+			Error:  "VC document is nil",
+		}
+	}
+
+	issuanceDate, err := parseVCDateTime("issuanceDate", vcDoc.IssuanceDate)
+	if err != nil {
+		return &types.VCVerificationResponse{
+			Valid:  false,
+			Reason: types.VCVerificationReasonInvalidDocument,
+			Error:  fmt.Sprintf("failed to validate VC issuance date: %v", err),
+		}
+	}
+
+	if now.Before(issuanceDate) {
+		return &types.VCVerificationResponse{
+			Valid:   false,
+			Reason:  types.VCVerificationReasonNotYetValid,
+			Message: fmt.Sprintf("VC issuanceDate %s is in the future", vcDoc.IssuanceDate),
+		}
+	}
+
+	if vcDoc.NotBefore != "" {
+		notBefore, err := parseVCDateTime("notBefore", vcDoc.NotBefore)
+		if err != nil {
+			return &types.VCVerificationResponse{
+				Valid:  false,
+				Reason: types.VCVerificationReasonInvalidDocument,
+				Error:  fmt.Sprintf("failed to validate VC notBefore: %v", err),
+			}
+		}
+		if now.Before(notBefore) {
+			return &types.VCVerificationResponse{
+				Valid:   false,
+				Reason:  types.VCVerificationReasonNotYetValid,
+				Message: fmt.Sprintf("VC is not valid before %s", vcDoc.NotBefore),
+			}
+		}
+	}
+
+	if vcDoc.ExpirationDate == "" {
+		return nil
+	}
+
+	expirationDate, err := parseVCDateTime("expirationDate", vcDoc.ExpirationDate)
+	if err != nil {
+		return &types.VCVerificationResponse{
+			Valid:  false,
+			Reason: types.VCVerificationReasonInvalidDocument,
+			Error:  fmt.Sprintf("failed to validate VC expiration date: %v", err),
+		}
+	}
+
+	if !now.Before(expirationDate) {
+		return &types.VCVerificationResponse{
+			Valid:   false,
+			Reason:  types.VCVerificationReasonExpired,
+			Message: fmt.Sprintf("VC expired at %s", vcDoc.ExpirationDate),
+		}
+	}
+
+	return nil
+}
+
+func (s *VCService) verifyVCRevocation(vcDoc *types.VCDocument) *types.VCVerificationResponse {
+	if vcDoc == nil {
+		return &types.VCVerificationResponse{
+			Valid:  false,
+			Reason: types.VCVerificationReasonInvalidDocument,
+			Error:  "VC document is nil",
+		}
+	}
+
+	if strings.EqualFold(strings.TrimSpace(vcDoc.CredentialSubject.Execution.Status), "revoked") {
+		return &types.VCVerificationResponse{
+			Valid:   false,
+			Reason:  types.VCVerificationReasonRevoked,
+			Message: "VC has been revoked",
+		}
+	}
+
+	if s.vcStorage == nil || s.vcStorage.storageProvider == nil {
+		return nil
+	}
+
+	filters := types.VCFilters{
+		ExecutionID: vcVerificationStringPtr(vcDoc.CredentialSubject.ExecutionID),
+		IssuerDID:   vcVerificationStringPtr(vcDoc.Issuer),
+		TargetDID:   vcVerificationStringPtr(vcDoc.CredentialSubject.Target.DID),
+	}
+
+	records, err := s.vcStorage.storageProvider.ListExecutionVCs(context.Background(), filters)
+	if err != nil {
+		return nil
+	}
+
+	for _, record := range records {
+		if record == nil {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(record.Status), "revoked") {
+			return &types.VCVerificationResponse{
+				Valid:   false,
+				Reason:  types.VCVerificationReasonRevoked,
+				Message: "VC has been revoked",
+			}
+		}
+	}
+
+	return nil
+}
+
+func vcVerificationStringPtr(value string) *string {
+	return &value
 }
 
 // VerifyAgentTagVCSignature verifies the Ed25519 signature on an AgentTagVCDocument.

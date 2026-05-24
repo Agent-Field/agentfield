@@ -381,3 +381,17 @@ export function useNodeUnifiedStatusSSE(_nodeId: string | null) {
     exponentialBackoff: true
   });
 }
+
+/**
+ * MCP health stream for a node (reserved for control-plane MCP SSE; no-op URL until wired).
+ */
+export function useMCPHealthSSE(nodeId: string | null) {
+  const url = nodeId ? `/api/ui/v1/nodes/${nodeId}/mcp/health/stream` : null;
+  return useSSE(url, {
+    eventTypes: ['mcp_health_changed', 'mcp_server_status'],
+    autoReconnect: false,
+    maxReconnectAttempts: 0,
+    reconnectDelayMs: 5000,
+    exponentialBackoff: false,
+  });
+}

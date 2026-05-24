@@ -38,9 +38,10 @@ func TestRequestApproval(t *testing.T) {
 	require.NoError(t, err)
 
 	resp, err := c.RequestApproval(context.Background(), "node-1", "exec-1", RequestApprovalRequest{
-		Title:        "Plan Review",
-		TemplateType: "plan-review-v1",
-		ProjectID:    "proj-1",
+		ApprovalRequestID:  "req-abc",
+		ApprovalRequestURL: "https://hub.example.com/r/req-abc",
+		CallbackURL:        "https://agent.example.com/webhooks/approval",
+		ExpiresInHours:     24,
 	})
 
 	require.NoError(t, err)
@@ -48,9 +49,13 @@ func TestRequestApproval(t *testing.T) {
 	assert.Equal(t, "https://hub.example.com/r/req-abc", resp.ApprovalRequestURL)
 
 	// Verify the request body was sent correctly
-	assert.Equal(t, "Plan Review", receivedBody["title"])
-	assert.Equal(t, "plan-review-v1", receivedBody["template_type"])
-	assert.Equal(t, "proj-1", receivedBody["project_id"])
+	assert.Equal(t, "req-abc", receivedBody["approval_request_id"])
+	assert.Equal(t, "https://hub.example.com/r/req-abc", receivedBody["approval_request_url"])
+	assert.Equal(t, "https://agent.example.com/webhooks/approval", receivedBody["callback_url"])
+	assert.Equal(t, float64(24), receivedBody["expires_in_hours"])
+	assert.NotContains(t, receivedBody, "title")
+	assert.NotContains(t, receivedBody, "project_id")
+	assert.NotContains(t, receivedBody, "template_type")
 }
 
 func TestRequestApproval_HTTPError(t *testing.T) {
@@ -64,7 +69,7 @@ func TestRequestApproval_HTTPError(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = c.RequestApproval(context.Background(), "node-1", "exec-1", RequestApprovalRequest{
-		ProjectID: "p",
+		ApprovalRequestID: "req-fail",
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "request approval")

@@ -105,6 +105,8 @@ export interface VCDocument {
   id: string;
   issuer: string;
   issuanceDate: string;
+  expirationDate?: string;
+  notBefore?: string;
   credentialSubject: VCCredentialSubject;
   proof: VCProof;
 }
@@ -188,6 +190,7 @@ export interface VCVerificationResponse {
   valid: boolean;
   issuer_did?: string;
   issued_at?: string;
+  reason?: string;
   message?: string;
   error?: string;
 }

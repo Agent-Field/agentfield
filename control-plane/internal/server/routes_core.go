@@ -67,7 +67,8 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 		legacyReasonerGroup := agentAPI.Group("/reasoners")
 		legacySkillGroup := agentAPI.Group("/skills")
 		permConfigLegacy := middleware.PermissionConfig{
-			Enabled: true,
+			Enabled:     true,
+			DefaultDeny: s.config.Features.DID.Authorization.DefaultDeny,
 		}
 		legacyMiddleware := middleware.PermissionCheckMiddleware(
 			s.accessPolicyService,
@@ -92,7 +93,8 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	{
 		if s.config.Features.DID.Authorization.Enabled && s.accessPolicyService != nil && s.didWebService != nil {
 			permConfig := middleware.PermissionConfig{
-				Enabled: true,
+				Enabled:     true,
+				DefaultDeny: s.config.Features.DID.Authorization.DefaultDeny,
 			}
 			executeGroup.Use(middleware.PermissionCheckMiddleware(
 				s.accessPolicyService,
@@ -116,6 +118,7 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	agentAPI.POST("/executions/:execution_id/cancel", handlers.CancelExecutionHandler(s.storage))
 	agentAPI.POST("/executions/:execution_id/pause", handlers.PauseExecutionHandler(s.storage))
 	agentAPI.POST("/executions/:execution_id/resume", handlers.ResumeExecutionHandler(s.storage))
+	agentAPI.POST("/workflows/:workflowId/cancel-tree", handlers.CancelWorkflowTreeHandler(s.storage))
 
 	// Approval workflow endpoints — CP manages execution state only;
 	// agents handle external approval service communication directly.
@@ -125,6 +128,13 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	// Agent-scoped approval routes — enforce that the execution belongs to the requesting agent.
 	agentAPI.POST("/agents/:node_id/executions/:execution_id/request-approval", handlers.AgentScopedRequestApprovalHandler(s.storage))
 	agentAPI.GET("/agents/:node_id/executions/:execution_id/approval-status", handlers.AgentScopedGetApprovalStatusHandler(s.storage))
+
+	// Multi-hop pause propagation: an agent's app.call wait loop pushes its
+	// OWN status to WAITING when its awaited child enters WAITING, so any
+	// further ancestor sees WAITING transitively. Without this, pause only
+	// propagates one hop up the call tree and 3+-deep chains time out at
+	// wallclock on the great-grandparent.
+	agentAPI.POST("/agents/:node_id/executions/:execution_id/awaiter-status", handlers.UpdateAwaiterStatusHandler(s.storage))
 
 	// Approval resolution webhook (called by agents or external services when approval resolves)
 	agentAPI.POST("/webhooks/approval-response", handlers.ApprovalWebhookHandler(s.storage, s.config.AgentField.Approval.WebhookSecret))

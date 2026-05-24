@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -165,7 +167,10 @@ func TestStartAdminGRPCServer(t *testing.T) {
 	require.NoError(t, srv.startAdminGRPCServer())
 
 	srv.adminGRPCServer.GracefulStop()
-	require.NoError(t, srv.adminListener.Close())
+	err := srv.adminListener.Close()
+	if err != nil && !errors.Is(err, net.ErrClosed) {
+		require.NoError(t, err)
+	}
 }
 
 func TestStartAndStop(t *testing.T) {
@@ -597,4 +602,45 @@ func newTestDIDServices(t *testing.T) (*services.DIDService, *services.DIDWebSer
 	require.NoError(t, didService.Initialize("server-id"))
 
 	return didService, services.NewDIDWebService("example.com", didService, store), store
+}
+
+// Trigger plugin system stubs — interface fillers for the test mock; not exercised.
+func (s *listAgentsStorage) CreateTrigger(context.Context, *types.Trigger) error { return nil }
+func (s *listAgentsStorage) GetTrigger(context.Context, string) (*types.Trigger, error) {
+	return nil, nil
+}
+func (s *listAgentsStorage) ListTriggers(context.Context, string, string) ([]*types.Trigger, error) {
+	return nil, nil
+}
+func (s *listAgentsStorage) UpdateTrigger(context.Context, *types.Trigger) error { return nil }
+func (s *listAgentsStorage) DeleteTrigger(context.Context, string) error         { return nil }
+func (s *listAgentsStorage) UpsertCodeManagedTrigger(context.Context, *types.Trigger) (string, error) {
+	return "", nil
+}
+func (s *listAgentsStorage) MarkOrphanedTriggers(context.Context, string, []string) error { return nil }
+func (s *listAgentsStorage) SetTriggerOverride(context.Context, string, bool, bool) error { return nil }
+func (s *listAgentsStorage) ConvertTriggerToUIManaged(context.Context, string) error      { return nil }
+func (s *listAgentsStorage) InsertInboundEvent(context.Context, *types.InboundEvent) error {
+	return nil
+}
+func (s *listAgentsStorage) InboundEventExistsByIdempotency(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+func (s *listAgentsStorage) GetInboundEvent(context.Context, string) (*types.InboundEvent, error) {
+	return nil, nil
+}
+func (s *listAgentsStorage) ListInboundEvents(context.Context, string, int) ([]*types.InboundEvent, error) {
+	return nil, nil
+}
+func (s *listAgentsStorage) MarkInboundEventProcessed(context.Context, string, string, string, string) error {
+	return nil
+}
+func (m *listAgentsStorage) SetInboundEventDispatchedWorkflow(context.Context, string, string) error {
+	return nil
+}
+func (m *listAgentsStorage) GetInboundEventByWorkflowID(context.Context, string) (*types.InboundEvent, error) {
+	return nil, nil
+}
+func (s *listAgentsStorage) TriggerMetrics(context.Context) (*types.TriggerMetrics, error) {
+	return &types.TriggerMetrics{}, nil
 }

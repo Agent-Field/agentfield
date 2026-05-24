@@ -511,7 +511,7 @@ describe("WorkflowDAGViewer supplemental coverage", () => {
 
   it("renders the virtualized branch and warns when viewport persistence fails", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const setItemSpy = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    const setItemSpy = vi.spyOn(window.localStorage, "setItem").mockImplementation(() => {
       throw new Error("quota");
     });
     const { WorkflowDAGViewer } = await import("@/components/WorkflowDAG");

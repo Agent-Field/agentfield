@@ -76,11 +76,22 @@ interface WorkflowRunListResponse {
   has_more: boolean;
 }
 
+interface ApiTriggerInfo {
+  trigger_id: string;
+  source_name: string;
+  event_type: string;
+  event_id: string;
+  received_at: string;
+  idempotency_key?: string;
+}
+
 interface ApiWorkflowRunSummary {
   run_id: string;
   workflow_id: string;
   root_execution_id?: string | null;
   root_execution_status?: string | null;
+  root_error_category?: string | null;
+  root_error_message?: string | null;
   status: string;
   display_name: string;
   current_task: string;
@@ -98,6 +109,7 @@ interface ApiWorkflowRunSummary {
   completed_at?: string | null;
   duration_ms?: number | null;
   terminal: boolean;
+  trigger?: ApiTriggerInfo | null;
 }
 
 interface ApiWorkflowExecution {
@@ -212,6 +224,8 @@ function mapApiRunToWorkflowSummary(run: ApiWorkflowRunSummary): WorkflowSummary
     root_execution_status: run.root_execution_status
       ? normalizeExecutionStatus(run.root_execution_status)
       : undefined,
+    root_error_category: run.root_error_category ?? undefined,
+    root_error_message: run.root_error_message ?? undefined,
     status: normalizedStatus,
     root_reasoner: run.root_reasoner || run.display_name,
     current_task: run.current_task || run.root_reasoner || run.display_name,
@@ -229,6 +243,16 @@ function mapApiRunToWorkflowSummary(run: ApiWorkflowRunSummary): WorkflowSummary
     status_counts: statusCounts,
     active_executions: activeExecutions,
     terminal: run.terminal,
+    trigger: run.trigger
+      ? {
+          trigger_id: run.trigger.trigger_id,
+          source_name: run.trigger.source_name,
+          event_type: run.trigger.event_type,
+          event_id: run.trigger.event_id,
+          received_at: run.trigger.received_at,
+          idempotency_key: run.trigger.idempotency_key,
+        }
+      : undefined,
   };
 }
 
@@ -336,6 +360,44 @@ export async function getWorkflowDAGLightweight(
     lightweight: true,
     signal,
   });
+}
+
+export interface CancelWorkflowTreeNode {
+  execution_id: string;
+  agent_node_id?: string;
+  reasoner_id?: string;
+  workflow_depth: number;
+  previous_status: string;
+  status: string;
+  skip_reason?: string;
+}
+
+export interface CancelWorkflowTreeResponse {
+  run_id: string;
+  total_nodes: number;
+  cancelled_count: number;
+  skipped_count: number;
+  error_count: number;
+  nodes: CancelWorkflowTreeNode[];
+  cancelled_at: string;
+}
+
+// cancelWorkflowTree fans out cancel to every non-terminal execution in a
+// run, bottom-up. Use this in preference to per-execution cancel when the
+// user means "stop the whole run" — single-execution cancel can't reach
+// children of a root that already terminated.
+export async function cancelWorkflowTree(
+  workflowId: string,
+  reason?: string,
+): Promise<CancelWorkflowTreeResponse> {
+  return fetchWrapper<CancelWorkflowTreeResponse>(
+    `/workflows/${workflowId}/cancel-tree`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: reason ?? "" }),
+    },
+  );
 }
 
 export async function getWorkflowRunDetail(

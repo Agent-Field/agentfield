@@ -821,3 +821,109 @@ async def test_approval_helpers_surface_http_errors_and_log_post_is_best_effort(
             assert log_route.call_count == 2
         finally:
             monkeypatch.undo()
+
+
+# ---------------------------------------------------------------------------
+# notify_awaiter_status — multi-hop pause propagation HTTP method
+#
+# Pins behavior of the new client method that the SDK's wait_for_result loop
+# calls when an awaited child enters/leaves WAITING. Direct tests because
+# the in-tree Agent.call integration test mocks this method, leaving the
+# real HTTP machinery uncovered.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_notify_awaiter_status_posts_waiting(client, monkeypatch):
+    """Happy path: status='waiting' posts to the agent-scoped endpoint with
+    the body the control-plane handler expects."""
+    client.caller_agent_id = "middle-agent"
+    router = respx.MockRouter(assert_all_called=True, assert_all_mocked=True)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(router.async_handler)) as async_client:
+        monkeypatch.setattr(client, "get_async_http_client", AsyncMock(return_value=async_client))
+
+        route = router.post(
+            "http://example.test/api/v1/agents/middle-agent/executions/middle-exec-1/awaiter-status"
+        ).mock(return_value=Response(200, json={"status": "waiting", "applied": True}))
+
+        await client.notify_awaiter_status(
+            execution_id="middle-exec-1",
+            status="waiting",
+            reason="awaiting child exec_xyz",
+        )
+
+        assert route.called
+        request = route.calls[0].request
+        body = request.content.decode()
+        assert '"status": "waiting"' in body or '"status":"waiting"' in body
+        assert "awaiting child exec_xyz" in body
+
+
+@pytest.mark.asyncio
+async def test_notify_awaiter_status_posts_running(client, monkeypatch):
+    """Symmetric: status='running' completes the cascade pair."""
+    client.caller_agent_id = "middle-agent"
+    router = respx.MockRouter(assert_all_called=True, assert_all_mocked=True)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(router.async_handler)) as async_client:
+        monkeypatch.setattr(client, "get_async_http_client", AsyncMock(return_value=async_client))
+
+        route = router.post(
+            "http://example.test/api/v1/agents/middle-agent/executions/middle-exec-1/awaiter-status"
+        ).mock(return_value=Response(200, json={"status": "running", "applied": True}))
+
+        await client.notify_awaiter_status(
+            execution_id="middle-exec-1",
+            status="running",
+        )
+
+        assert route.called
+
+
+@pytest.mark.asyncio
+async def test_notify_awaiter_status_rejects_bad_status(client):
+    """The client validates ``status`` before going to the network — a bad
+    value is a programmer error in the SDK call site, not a CP-side issue,
+    so it surfaces as an immediate AgentFieldClientError."""
+    with pytest.raises(AgentFieldClientError, match="status must be 'waiting' or 'running'"):
+        await client.notify_awaiter_status(
+            execution_id="exec-1",
+            status="succeeded",  # invalid for this endpoint
+        )
+
+
+@pytest.mark.asyncio
+async def test_notify_awaiter_status_surfaces_http_errors(client, monkeypatch):
+    """A 4xx/5xx response surfaces as AgentFieldClientError so the wait-loop
+    wrapper (``_safe_pause_callback``) can swallow it and continue. Pinned
+    so the error path isn't silently dropped at this layer."""
+    client.caller_agent_id = "middle-agent"
+    router = respx.MockRouter(assert_all_called=True, assert_all_mocked=True)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(router.async_handler)) as async_client:
+        monkeypatch.setattr(client, "get_async_http_client", AsyncMock(return_value=async_client))
+
+        router.post(
+            "http://example.test/api/v1/agents/middle-agent/executions/exec-bad/awaiter-status"
+        ).mock(return_value=Response(500, text="boom"))
+
+        with pytest.raises(AgentFieldClientError, match="Awaiter-status update failed"):
+            await client.notify_awaiter_status(
+                execution_id="exec-bad",
+                status="waiting",
+            )
+
+
+@pytest.mark.asyncio
+async def test_notify_awaiter_status_surfaces_transport_errors(client, monkeypatch):
+    """A transport-level failure (network down, DNS, etc) surfaces as
+    AgentFieldClientError. Pinned so the wait-loop wrapper can swallow it."""
+
+    async def boom_client():
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(client, "get_async_http_client", boom_client)
+
+    with pytest.raises(AgentFieldClientError, match="Failed to notify awaiter status"):
+        await client.notify_awaiter_status(
+            execution_id="exec-1",
+            status="waiting",
+        )

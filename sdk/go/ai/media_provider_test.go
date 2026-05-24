@@ -219,15 +219,18 @@ func TestOpenRouterGenerateAudio(t *testing.T) {
 		BaseURL: srv.URL,
 		Client:  srv.Client(),
 	}
+	p.SeedModelMeta("openai/gpt-audio-mini", []string{"text", "audio"}, []string{"text"})
 
 	resp, err := p.GenerateAudio(context.Background(), AudioRequest{
-		Text:  "Say hello",
-		Voice: "nova",
+		Text:   "Say hello",
+		Model:  "openai/gpt-audio-mini",
+		Voice:  "nova",
+		Format: "mp3",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "Hello", resp.Text)
 	require.NotNil(t, resp.Audio)
-	assert.Equal(t, "pcm16", resp.Audio.Format)
+	assert.Equal(t, "mp3", resp.Audio.Format)
 	assert.NotEmpty(t, resp.Audio.Data)
 }
 

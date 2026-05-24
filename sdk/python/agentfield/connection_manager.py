@@ -144,6 +144,7 @@ class ConnectionManager:
                     version=self.agent.version,
                     agent_metadata=self.agent._build_agent_metadata(),
                     tags=self.agent.agent_tags,
+                    instance_id=getattr(self.agent, "agent_instance_id", "") or "",
                 )
             finally:
                 # Restore original logging levels

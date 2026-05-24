@@ -9,6 +9,8 @@ import type {
   PauseExecutionResponse,
   ResumeExecutionResponse,
 } from "../../services/executionsApi";
+import { cancelWorkflowTree } from "../../services/workflowsApi";
+import type { CancelWorkflowTreeResponse } from "../../services/workflowsApi";
 
 export function useCancelExecution() {
   const queryClient = useQueryClient();
@@ -25,6 +27,21 @@ export function usePauseExecution() {
   const queryClient = useQueryClient();
   return useMutation<PauseExecutionResponse, Error, string>({
     mutationFn: (executionId: string) => pauseExecution(executionId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["runs"] });
+      queryClient.invalidateQueries({ queryKey: ["run-dag"] });
+    },
+  });
+}
+
+export function useCancelWorkflowTree() {
+  const queryClient = useQueryClient();
+  return useMutation<
+    CancelWorkflowTreeResponse,
+    Error,
+    { workflowId: string; reason?: string }
+  >({
+    mutationFn: ({ workflowId, reason }) => cancelWorkflowTree(workflowId, reason),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["runs"] });
       queryClient.invalidateQueries({ queryKey: ["run-dag"] });

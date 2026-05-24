@@ -2,10 +2,22 @@
 
 import type { CanonicalStatus } from '../utils/status';
 
+export interface TriggerInfo {
+  trigger_id: string;
+  source_name: string;
+  event_type: string;
+  event_id: string;
+  received_at: string;
+  idempotency_key?: string;
+  payload?: Record<string, unknown>;
+}
+
 export interface WorkflowSummary {
   run_id: string;
   workflow_id: string;
   root_execution_id?: string;
+  root_error_category?: string;
+  root_error_message?: string;
   /**
    * Status of the root execution row, which is the unit the user actually
    * controls via Pause/Resume/Cancel. The aggregate `status` field can
@@ -30,6 +42,7 @@ export interface WorkflowSummary {
   status_counts: Record<string, number>;
   active_executions: number;
   terminal: boolean;
+  trigger?: TriggerInfo;
 }
 
 export interface EnhancedExecution {
@@ -129,6 +142,7 @@ export interface WorkflowDAGLightweightNode {
   agent_node_id: string;
   reasoner_id: string;
   status: string;
+  status_reason?: string;
   started_at: string;
   completed_at?: string;
   duration_ms?: number;
@@ -168,4 +182,5 @@ export interface WorkflowDAGLightweightResponse {
   webhook_summary?: WebhookRunSummary;
   /** Executions with a failed delivery (capped); for run-level retry / focus step. */
   webhook_failures?: WebhookFailurePreview[];
+  trigger?: TriggerInfo;
 }

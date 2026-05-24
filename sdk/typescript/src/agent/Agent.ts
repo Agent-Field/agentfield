@@ -14,6 +14,7 @@ import type {
 } from '../types/agent.js';
 import { ReasonerRegistry } from './ReasonerRegistry.js';
 import { SkillRegistry } from './SkillRegistry.js';
+import { CancelRegistry, installCancelRoute } from './cancel.js';
 import { AgentRouter } from '../router/AgentRouter.js';
 import type { ReasonerHandler, ReasonerOptions } from '../types/reasoner.js';
 import type { SkillHandler, SkillOptions } from '../types/skill.js';
@@ -95,6 +96,11 @@ export class Agent {
   private readonly realtimeValidationFunctions = new Set<string>();
   private readonly processLogRing = new ProcessLogRing();
   private readonly executionLogger: ExecutionLogger;
+  /** Tracks an AbortController per in-flight execution_id so the
+   *  `/_internal/executions/:id/cancel` route can short-circuit reasoner
+   *  code that respects `signal.aborted` (fetch, anthropic SDK, openai
+   *  SDK, etc.). See ./cancel.ts. */
+  private readonly cancelRegistry = new CancelRegistry();
 
   constructor(config: AgentConfig) {
     this.config = {
@@ -137,6 +143,13 @@ export class Agent {
     this.registerDefaultRoutes();
     installStdioLogCapture(this.processLogRing);
     registerAgentfieldLogsRoute(this.app, this.processLogRing);
+    // Install the control-plane cancel callback route. Always-on so the
+    // dispatcher reaches the worker regardless of which routes the user
+    // has registered first.
+    installCancelRoute(this.app, this.cancelRegistry, {
+      info: (message, meta) =>
+        this.executionLogger.system('execution.cancel.received', message, meta ?? {})
+    });
   }
 
   reasoner<TInput = any, TOutput = any>(
@@ -1196,6 +1209,14 @@ export class Agent {
       agent: this
     });
 
+    // Register an AbortController for this execution so the control-plane
+    // cancel callback (POST /_internal/executions/:id/cancel) can abort
+    // in-flight `fetch` / Anthropic SDK / OpenAI SDK requests bound to
+    // ctx.signal. release() is always called, even on throw.
+    const { controller, release } = this.cancelRegistry.register(
+      executionMetadata.executionId
+    );
+
     return ExecutionContext.run(execCtx, async () => {
       this.executionLogger.system('execution.started', 'Execution started', {
         target: params.targetName,
@@ -1234,7 +1255,8 @@ export class Agent {
           aiClient: this.aiClient,
           memory: this.getMemoryInterface(executionMetadata),
           workflow: this.getWorkflowReporter(executionMetadata),
-          did: this.getDidInterface(executionMetadata, params.input, params.targetName)
+          did: this.getDidInterface(executionMetadata, params.input, params.targetName),
+          signal: controller.signal
         });
 
         const result = await reasoner.handler(ctx);
@@ -1296,6 +1318,8 @@ export class Agent {
           return;
         }
         throw err;
+      } finally {
+        release();
       }
     });
   }
@@ -1326,6 +1350,10 @@ export class Agent {
       res,
       agent: this
     });
+
+    const { controller, release } = this.cancelRegistry.register(
+      executionMetadata.executionId
+    );
 
     return ExecutionContext.run(execCtx, async () => {
       this.executionLogger.system('execution.started', 'Execution started', {
@@ -1358,7 +1386,8 @@ export class Agent {
           logger: this.executionLogger,
           memory: this.getMemoryInterface(executionMetadata),
           workflow: this.getWorkflowReporter(executionMetadata),
-          did: this.getDidInterface(executionMetadata, params.input, params.targetName)
+          did: this.getDidInterface(executionMetadata, params.input, params.targetName),
+          signal: controller.signal
         });
 
         const result = await skill.handler(ctx);
@@ -1420,6 +1449,8 @@ export class Agent {
           return;
         }
         throw err;
+      } finally {
+        release();
       }
     });
   }

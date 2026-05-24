@@ -10,7 +10,11 @@ import pytest
 from agentfield.async_config import AsyncConfig
 from agentfield.async_execution_manager import AsyncExecutionManager
 from agentfield.execution_state import ExecutionState, ExecutionStatus
-from agentfield.exceptions import AgentFieldClientError, ExecutionTimeoutError
+from agentfield.exceptions import (
+    AgentFieldClientError,
+    ExecutionCancelledError,
+    ExecutionTimeoutError,
+)
 
 
 class _DummyTask:
@@ -125,7 +129,7 @@ async def test_wait_for_result_handles_success_failure_cancel_timeout(manager, m
     with pytest.raises(AgentFieldClientError, match="boom"):
         await manager.wait_for_result("failed")
 
-    with pytest.raises(AgentFieldClientError, match="cancelled"):
+    with pytest.raises(ExecutionCancelledError, match="cancelled"):
         await manager.wait_for_result("cancelled")
 
     async def fast_sleep(_seconds):

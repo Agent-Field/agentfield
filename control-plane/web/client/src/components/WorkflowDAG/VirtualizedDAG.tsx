@@ -163,8 +163,11 @@ export function VirtualizedDAG({
             viewportStorageKey,
             JSON.stringify(viewport)
           );
-        } catch {
-          /* ignore quota / private mode */
+        } catch (storageError) {
+          console.warn(
+            "Failed to persist workflow DAG viewport",
+            storageError
+          );
         }
       }}
       nodeTypes={nodeTypes as unknown as NodeTypes}

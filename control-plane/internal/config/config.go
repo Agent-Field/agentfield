@@ -114,7 +114,7 @@ func EffectiveExecutionLogs(c ExecutionLogsConfig) ExecutionLogsConfig {
 // The control plane manages execution state only — agents are responsible for
 // communicating with external approval services (e.g. hax-sdk).
 type ApprovalConfig struct {
-	WebhookSecret      string `yaml:"webhook_secret" mapstructure:"webhook_secret"`             // Optional HMAC-SHA256 secret for verifying webhook callbacks
+	WebhookSecret      string `yaml:"webhook_secret" mapstructure:"webhook_secret"`             // Required for HMAC auth on /api/v1/webhooks/approval-response (empty disables the endpoint)
 	DefaultExpiryHours int    `yaml:"default_expiry_hours" mapstructure:"default_expiry_hours"` // Default approval expiry (hours); 0 = 72h
 }
 
@@ -234,6 +234,10 @@ type AuthorizationConfig struct {
 	TagApprovalRules TagApprovalRulesConfig `yaml:"tag_approval_rules" mapstructure:"tag_approval_rules"`
 	// AccessPolicies defines tag-based authorization policies for cross-agent calls.
 	AccessPolicies []AccessPolicyConfig `yaml:"access_policies" mapstructure:"access_policies"`
+	// DefaultDeny, when true, causes the permission middleware to return 403 if
+	// no access policy matches a request. Default false preserves the existing
+	// behavior of allowing unmatched requests (backward compat for untagged agents).
+	DefaultDeny bool `yaml:"default_deny" mapstructure:"default_deny" default:"false"`
 }
 
 // TagApprovalRulesConfig configures tag approval behavior at registration.
@@ -491,6 +495,9 @@ func ApplyEnvOverrides(cfg *Config) {
 	}
 	if val := os.Getenv("AGENTFIELD_AUTHORIZATION_INTERNAL_TOKEN"); val != "" {
 		cfg.Features.DID.Authorization.InternalToken = val
+	}
+	if val := os.Getenv("AGENTFIELD_AUTHORIZATION_DEFAULT_DENY"); val != "" {
+		cfg.Features.DID.Authorization.DefaultDeny = val == "true" || val == "1"
 	}
 
 	// Node log proxy (UI → agent NDJSON)

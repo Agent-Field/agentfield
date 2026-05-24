@@ -782,6 +782,29 @@ def _assert_safe_download_url(url: str) -> None:
         raise RuntimeError(f"Refusing to download video from private IP: {url}")
 
 
+def _wrap_pcm16_bytes_as_wav(pcm: bytes, *, sample_rate: int = 24000) -> bytes:
+    """Wrap raw little-endian PCM16 mono bytes in a WAV (RIFF) container."""
+    import io
+    import wave
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sample_rate)
+        w.writeframes(pcm)
+    return buf.getvalue()
+
+
+def _wrap_pcm16_as_wav_b64(pcm_b64: str, *, sample_rate: int = 24000) -> str:
+    """Decode base64 PCM16 → wrap as WAV → re-encode base64."""
+    import base64
+
+    pcm = base64.b64decode(pcm_b64)
+    wav = _wrap_pcm16_bytes_as_wav(pcm, sample_rate=sample_rate)
+    return base64.b64encode(wav).decode("ascii")
+
+
 class OpenRouterProvider(MediaProvider):
     """
     OpenRouter provider for image generation via chat completions.
@@ -803,6 +826,10 @@ class OpenRouterProvider(MediaProvider):
 
     def __init__(self, api_key: Optional[str] = None):
         self._api_key = api_key
+        # Per-instance cache of model metadata (output_modalities) so we can
+        # route requests to the right OpenRouter endpoint without re-fetching
+        # on every call. Keyed by the stripped model id ("hexgrad/kokoro-82m").
+        self._model_meta_cache: Dict[str, Dict[str, Any]] = {}
 
     @property
     def name(self) -> str:
@@ -812,27 +839,91 @@ class OpenRouterProvider(MediaProvider):
     def supported_modalities(self) -> List[str]:
         return ["image", "video", "audio", "music"]
 
+    @staticmethod
+    def _strip_or_prefix(model: str) -> str:
+        return model[len("openrouter/") :] if model.startswith("openrouter/") else model
+
+    async def _fetch_model_meta(self, model: str) -> Dict[str, Any]:
+        """Fetch + cache OpenRouter model metadata (output_modalities etc.).
+
+        On any error, returns an empty dict so callers can fall back to
+        defaults rather than fail the user's call.
+        """
+        import os
+
+        import aiohttp
+
+        stripped = self._strip_or_prefix(model)
+        cached = self._model_meta_cache.get(stripped)
+        if cached is not None:
+            return cached
+
+        api_key = self._api_key or os.environ.get("OPENROUTER_API_KEY", "")
+        if not api_key:
+            return {}
+
+        url = f"https://openrouter.ai/api/v1/models/{stripped}/endpoints"
+        headers = {"Authorization": f"Bearer {api_key}"}
+        try:
+            timeout = aiohttp.ClientTimeout(total=10.0)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url, headers=headers) as resp:
+                    if resp.status != 200:
+                        return {}
+                    payload = await resp.json()
+        except Exception:
+            return {}
+
+        data = payload.get("data", {}) if isinstance(payload, dict) else {}
+        arch = data.get("architecture", {}) if isinstance(data, dict) else {}
+        meta = {
+            "id": data.get("id", stripped),
+            "output_modalities": list(arch.get("output_modalities", []) or []),
+            "input_modalities": list(arch.get("input_modalities", []) or []),
+        }
+        self._model_meta_cache[stripped] = meta
+        return meta
+
     async def generate_image(
         self,
         prompt: str,
         model: Optional[str] = None,
         size: str = "1024x1024",
         quality: str = "standard",
+        image_urls: Optional[List[str]] = None,
         image_config: Optional[Dict[str, Any]] = None,
+        extra: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> MultimodalResponse:
         """Generate image using OpenRouter's chat completions API.
 
-        Note: image_config is an OpenRouter-specific extension not present
-        in the base MediaProvider.generate_image() interface.
+        Args:
+            prompt: Text description for image generation.
+            model: OpenRouter model (defaults to ``google/gemini-2.5-flash-image``).
+            size: Image dimensions (model-specific).
+            quality: Quality hint (model-specific).
+            image_urls: Optional reference / source images for image+text→image
+                models (e.g. ``x-ai/grok-imagine-image-quality``). Each entry can
+                be an http(s) URL or a ``data:`` URL.
+            image_config: OpenRouter-specific extras — ``aspect_ratio``,
+                ``image_size``, ``strength``, ``style``, ``rgb_colors``,
+                ``background_rgb_color``, ``super_resolution_references``,
+                ``font_inputs``.
+            extra: Arbitrary passthrough fields merged into the completion
+                request (e.g. model-specific switches).
         """
         from agentfield import vision
 
-        model = model or "openrouter/google/gemini-2.5-flash-image-preview"
+        model = model or "openrouter/google/gemini-2.5-flash-image"
 
         # Ensure model has openrouter prefix
         if not model.startswith("openrouter/"):
             model = f"openrouter/{model}"
+
+        if image_urls:
+            kwargs["image_urls"] = image_urls
+        if extra:
+            kwargs.update(extra)
 
         return await vision.generate_image_openrouter(
             prompt=prompt,
@@ -857,6 +948,7 @@ class OpenRouterProvider(MediaProvider):
         seed: Optional[int] = None,
         frame_images: Optional[List[Dict]] = None,
         input_references: Optional[List[Dict]] = None,
+        extra: Optional[Dict[str, Any]] = None,
         poll_interval: float = 30.0,
         timeout: float = 600.0,
         **kwargs,
@@ -930,6 +1022,8 @@ class OpenRouterProvider(MediaProvider):
             body["input_references"] = input_references
         if image_url is not None:
             body["image_url"] = image_url
+        if extra:
+            body.update(extra)
 
         _error_messages = self._VIDEO_ERROR_MESSAGES
 
@@ -1025,9 +1119,19 @@ class OpenRouterProvider(MediaProvider):
             video_url = unsigned_urls[0]
             _assert_safe_download_url(video_url)
 
+            # OpenRouter's "unsigned_urls" are served from openrouter.ai itself
+            # and require the same Bearer auth as the API. CDN-hosted URLs
+            # (other hosts) don't need auth — strip in that case.
+            from urllib.parse import urlparse
+
+            download_headers = (
+                headers
+                if (urlparse(video_url).hostname or "").endswith("openrouter.ai")
+                else {}
+            )
+
             video_data_bytes: Optional[bytes] = None
-            # Download without auth headers — video_url is a public CDN URL
-            async with session.get(video_url) as resp:
+            async with session.get(video_url, headers=download_headers) as resp:
                 if resp.status != 200:
                     raise RuntimeError(
                         f"Failed to download video from {video_url}: HTTP {resp.status}"
@@ -1179,19 +1283,34 @@ class OpenRouterProvider(MediaProvider):
         model: Optional[str] = None,
         voice: str = "alloy",
         format: str = "wav",
+        speed: Optional[float] = None,
+        extra: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> MultimodalResponse:
         """
-        Generate audio via OpenRouter chat completions with SSE streaming.
+        Generate audio via OpenRouter, auto-routing to the right endpoint.
 
-        Uses the modalities parameter to request audio output from audio-capable
-        models on OpenRouter.
+        OpenRouter exposes two API surfaces for audio output:
+          - ``POST /audio/speech`` (OpenAI-compatible TTS) — used by dedicated
+            TTS models like ``hexgrad/kokoro-82m`` whose ``output_modalities``
+            is ``["speech"]``.
+          - ``POST /chat/completions`` with ``modalities=["text","audio"]``
+            SSE streaming — used by chat-audio models like the ``openai/gpt-audio``
+            family whose ``output_modalities`` contains ``"audio"``.
+
+        We fetch the model's metadata once (cached per provider instance) and
+        pick the right path. On metadata failure we default to ``/audio/speech``
+        because it covers the broader population of TTS models.
 
         Args:
             text: Text to convert to speech
-            model: OpenRouter model ID (e.g., "openai/gpt-4o-mini-tts")
-            voice: Voice identifier (alloy, echo, fable, onyx, nova, shimmer)
-            format: Audio format (wav, mp3, flac, opus, pcm16)
+            model: OpenRouter model ID (e.g., "openai/gpt-audio-mini",
+                "hexgrad/kokoro-82m"). Default: ``openai/gpt-4o-mini-tts``.
+            voice: Voice identifier (model-specific — e.g. ``alloy`` for
+                OpenAI, ``af_bella`` for Kokoro)
+            format: Audio format (wav, mp3, flac, opus, pcm16). ``wav`` is
+                synthesized client-side when the upstream endpoint only emits
+                pcm.
             **kwargs: Additional parameters (timeout overrides default 300s)
 
         Returns:
@@ -1205,45 +1324,80 @@ class OpenRouterProvider(MediaProvider):
                 "OpenRouter API key required. Set OPENROUTER_API_KEY env var or pass api_key."
             )
 
-        # Strip openrouter/ prefix if present
-        send_model = model or "openai/gpt-4o-mini-tts"
-        if send_model.startswith("openrouter/"):
-            send_model = send_model[len("openrouter/") :]
-
-        supported_voices = {"alloy", "echo", "fable", "onyx", "nova", "shimmer"}
-        if voice not in supported_voices:
-            voice = "alloy"
+        send_model = self._strip_or_prefix(model or "openai/gpt-4o-mini-tts")
 
         audio_format = format
-        supported_formats = {"wav", "mp3", "flac", "opus", "pcm16"}
+        supported_formats = {"wav", "mp3", "flac", "opus", "pcm16", "pcm"}
         if audio_format not in supported_formats:
             audio_format = "wav"
 
         timeout = kwargs.pop("timeout", 300.0)
-
-        payload = {
-            "model": send_model,
-            "messages": [{"role": "user", "content": text}],
-            "modalities": ["text", "audio"],
-            "audio": {"voice": voice, "format": audio_format},
-            "stream": True,
-        }
-
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
 
+        meta = await self._fetch_model_meta(send_model)
+        output_mods = meta.get("output_modalities") or []
+        # Choose path: TTS-only models advertise "speech"; chat-audio models
+        # advertise "audio". If metadata is missing, prefer /audio/speech as
+        # the broader-compat default.
+        use_speech_endpoint = ("speech" in output_mods) or (not output_mods)
+        if "audio" in output_mods and "speech" not in output_mods:
+            use_speech_endpoint = False
+
+        if use_speech_endpoint:
+            audio_b64, mime = await self._openrouter_audio_speech(
+                text=text,
+                model=send_model,
+                voice=voice,
+                requested_format=audio_format,
+                headers=headers,
+                timeout=timeout,
+                speed=speed,
+                extra=extra,
+            )
+            audio_output = AudioOutput(
+                data=audio_b64 if audio_b64 else None,
+                format=audio_format,
+                url=None,
+            )
+            return MultimodalResponse(
+                text=text,
+                audio=audio_output if audio_b64 else None,
+                images=[],
+                files=[],
+                raw_response={
+                    "endpoint": "audio/speech",
+                    "model": send_model,
+                    "mime_type": mime,
+                },
+            )
+
+        # Chat-completions audio modality path (gpt-audio family).
+        # Streaming on the OpenAI provider only emits pcm16 — fall back to
+        # pcm16 over the wire and re-wrap to user's requested format below.
+        wire_format = "pcm16" if audio_format == "wav" else audio_format
+        payload = {
+            "model": send_model,
+            "messages": [{"role": "user", "content": text}],
+            "modalities": ["text", "audio"],
+            "audio": {"voice": voice, "format": wire_format},
+            "stream": True,
+        }
         b64_full, transcript = await self._stream_openrouter_audio(
             payload, headers, timeout=timeout, label="audio"
         )
+
+        # Re-wrap pcm16 -> wav if user asked for wav.
+        if audio_format == "wav" and b64_full:
+            b64_full = _wrap_pcm16_as_wav_b64(b64_full, sample_rate=24000)
 
         audio_output = AudioOutput(
             data=b64_full if b64_full else None,
             format=audio_format,
             url=None,
         )
-
         return MultimodalResponse(
             text=transcript or text,
             audio=audio_output if b64_full else None,
@@ -1251,6 +1405,67 @@ class OpenRouterProvider(MediaProvider):
             files=[],
             raw_response={"transcript": transcript, "model": send_model},
         )
+
+    async def _openrouter_audio_speech(
+        self,
+        *,
+        text: str,
+        model: str,
+        voice: str,
+        requested_format: str,
+        headers: Dict[str, str],
+        timeout: float,
+        speed: Optional[float] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> tuple:
+        """Call ``POST /api/v1/audio/speech`` and return ``(b64_data, mime)``.
+
+        Handles format translation: when the caller wants ``wav`` we ask the
+        upstream for ``pcm`` and wrap it in a WAV header ourselves (24 kHz
+        mono int16 — the rate that current OpenRouter TTS endpoints emit).
+        """
+        import base64
+
+        import aiohttp
+
+        # Map caller's format → upstream response_format
+        if requested_format in ("wav", "pcm", "pcm16"):
+            wire_format = "pcm"
+        else:
+            wire_format = requested_format  # mp3 / flac / opus / aac
+
+        body: Dict[str, Any] = {
+            "model": model,
+            "input": text,
+            "voice": voice,
+            "response_format": wire_format,
+        }
+        if speed is not None:
+            body["speed"] = speed
+        if extra:
+            body.update(extra)
+
+        client_timeout = aiohttp.ClientTimeout(total=timeout)
+        async with aiohttp.ClientSession(timeout=client_timeout) as session:
+            async with session.post(
+                "https://openrouter.ai/api/v1/audio/speech",
+                json=body,
+                headers=headers,
+            ) as resp:
+                content_type = resp.headers.get("Content-Type", "")
+                if resp.status >= 400:
+                    detail = await resp.text()
+                    raise RuntimeError(
+                        f"OpenRouter audio/speech request failed "
+                        f"({resp.status}): {detail[:500]}"
+                    )
+                audio_bytes = await resp.read()
+
+        if requested_format == "wav":
+            wav_bytes = _wrap_pcm16_bytes_as_wav(audio_bytes, sample_rate=24000)
+            return base64.b64encode(wav_bytes).decode("ascii"), "audio/wav"
+
+        return base64.b64encode(audio_bytes).decode("ascii"), content_type
 
     async def generate_music(
         self,

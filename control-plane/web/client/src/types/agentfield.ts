@@ -25,6 +25,8 @@ export interface AgentNodeSummary {
   invocation_url?: string; // For serverless agents
   reasoner_count: number;
   skill_count: number;
+  /** Optional MCP roll-up when the control plane exposes it on the summary endpoint */
+  mcp_summary?: MCPSummaryForUI;
 }
 
 export interface AgentNodeDetailsForUI extends AgentNode {}
@@ -33,6 +35,8 @@ export interface AgentNodeDetailsForUIWithPackage extends AgentNode {
   package_info?: {
     package_id: string;
   };
+  mcp_summary?: MCPSummaryForUI;
+  mcp_servers?: MCPServerHealthForUI[];
 }
 
 export type AppMode = 'user' | 'admin' | 'developer';
@@ -73,6 +77,8 @@ export interface AgentStatus {
   last_seen?: string;
   health_status?: HealthStatus;
   lifecycle_status?: LifecycleStatus;
+  /** Optional MCP health snapshot when the control plane includes it on status */
+  mcp_status?: MCPServerStatus;
 }
 
 export interface AgentStatusUpdate {
@@ -177,3 +183,23 @@ export interface ConfigurationSchema {
   version?: string;
 }
 
+
+// Pre-existing MCP-related types — re-exported here as compatibility stubs
+// while the MCP feature is mid-refactor. Typed loosely on purpose so the
+// build doesn't block on the surrounding scaffold; the MCP UI doesn't ship
+// any real behavior in the triggers-demo path.
+export type MCPSummaryForUI = any;
+export type MCPServerHealthForUI = any;
+export type MCPServerMetrics = any;
+export type MCPServerStatus = any;
+export type MCPHealthEvent = any;
+export type MCPTool = any;
+export type MCPToolTestRequest = any;
+export type MCPToolTestResponse = any;
+export type MCPNodeMetrics = any;
+export type MCPErrorDetails = any;
+export type MCPError = any;
+export type MCPToolsResponse = any;
+export type MCPOverallStatusResponse = any;
+export type MCPHealthResponseModeAware = any;
+export type MCPHealthResponseDeveloper = any;

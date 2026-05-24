@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -27,10 +26,12 @@ type forwarderStub struct {
 	stopErr error
 }
 
-func (f *forwarderStub) Start(context.Context) error                    { return nil }
-func (f *forwarderStub) Stop(context.Context) error                     { return f.stopErr }
-func (f *forwarderStub) ReloadConfig(context.Context) error             { return nil }
-func (f *forwarderStub) GetStatus() types.ObservabilityForwarderStatus  { return types.ObservabilityForwarderStatus{} }
+func (f *forwarderStub) Start(context.Context) error        { return nil }
+func (f *forwarderStub) Stop(context.Context) error         { return f.stopErr }
+func (f *forwarderStub) ReloadConfig(context.Context) error { return nil }
+func (f *forwarderStub) GetStatus() types.ObservabilityForwarderStatus {
+	return types.ObservabilityForwarderStatus{}
+}
 func (f *forwarderStub) Redrive(context.Context) types.ObservabilityRedriveResponse {
 	return types.ObservabilityRedriveResponse{}
 }
@@ -398,14 +399,12 @@ func TestSetupRoutesAgentFieldDIDRouteHandlesUninitializedService(t *testing.T) 
 }
 
 func TestGenerateAgentFieldServerIDFallsBackWhenGetwdFails(t *testing.T) {
-	originalWD, err := os.Getwd()
-	require.NoError(t, err)
-
-	brokenWD := t.TempDir()
-	require.NoError(t, os.Chdir(brokenWD))
-	require.NoError(t, os.Remove(brokenWD))
+	originalAbs := absPathForServerID
+	absPathForServerID = func(string) (string, error) {
+		return "", errors.New("abs failed")
+	}
 	t.Cleanup(func() {
-		_ = os.Chdir(originalWD)
+		absPathForServerID = originalAbs
 	})
 
 	got := generateAgentFieldServerID("relative/path")
@@ -416,18 +415,14 @@ func TestGenerateAgentFieldServerIDFallsBackWhenGetwdFails(t *testing.T) {
 }
 
 func TestStartAdminGRPCServerReturnsListenError(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	defer listener.Close()
-
 	cfg := baseConfigForDBTests()
 	cfg.API.Auth.APIKey = "secret"
 	srv := &AgentFieldServer{
-		config: &cfg,
-		adminGRPCPort: listener.Addr().(*net.TCPAddr).Port,
+		config:        &cfg,
+		adminGRPCPort: -1,
 	}
 
-	err = srv.startAdminGRPCServer()
+	err := srv.startAdminGRPCServer()
 	require.Error(t, err)
 	require.Nil(t, srv.adminGRPCServer)
 	require.Nil(t, srv.adminListener)

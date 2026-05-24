@@ -68,6 +68,19 @@ func APIKeyAuth(config AuthConfig) gin.HandlerFunc {
 			return
 		}
 
+		// Public webhook ingest at /sources/:trigger_id — Stripe / GitHub /
+		// Slack / generic providers can't be reconfigured to send the
+		// AgentField API key, so we bypass the global key check here.
+		// Security: each Source plugin enforces its own signature
+		// verification (HMAC-SHA256 with constant-time comparison; Stripe
+		// and Slack additionally enforce a timestamp-tolerance window).
+		// Disabled triggers and unknown trigger_ids are rejected by the
+		// handler before any payload work happens.
+		if strings.HasPrefix(c.Request.URL.Path, "/sources/") {
+			c.Next()
+			return
+		}
+
 		apiKey := ""
 
 		// Preferred: X-API-Key header

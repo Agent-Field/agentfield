@@ -17,35 +17,69 @@ type VideoRequest struct {
 	AspectRatio     string           `json:"aspect_ratio,omitempty"`
 	GenerateAudio   *bool            `json:"generate_audio,omitempty"`
 	Seed            *int             `json:"seed,omitempty"`
+	// ImageURL is a single input image for image-to-video models (convenience
+	// alternative to FrameImages with frame_type=first_frame).
+	ImageURL        string           `json:"image_url,omitempty"`
+	// FrameImages is per-frame guidance — first_frame / last_frame. Items
+	// follow OpenRouter's shape: {type, image_url:{url}, frame_type}.
 	FrameImages     []map[string]any `json:"frame_images,omitempty"`
+	// InputReferences supplies style/subject reference images (Veo
+	// "reference-to-video").
 	InputReferences []map[string]any `json:"input_references,omitempty"`
 	PollInterval    time.Duration    `json:"-"`
 	Timeout         time.Duration    `json:"-"`
+	// Extra passes through additional model-specific parameters (e.g. Veo's
+	// `personGeneration`).
 	Extra           map[string]any   `json:"-"`
 }
 
 // ImageRequest holds parameters for image generation.
 type ImageRequest struct {
-	Prompt      string       `json:"prompt"`
-	Model       string       `json:"model,omitempty"`
-	Size        string       `json:"size,omitempty"`
-	Quality     string       `json:"quality,omitempty"`
-	ImageConfig *ImageConfig `json:"image_config,omitempty"`
+	Prompt      string         `json:"prompt"`
+	Model       string         `json:"model,omitempty"`
+	Size        string         `json:"size,omitempty"`
+	Quality     string         `json:"quality,omitempty"`
+	// ImageURLs are reference / source images for image+text→image models
+	// (e.g. x-ai/grok-imagine-image-quality). Each may be an http(s) or
+	// data: URL.
+	ImageURLs   []string       `json:"-"`
+	ImageConfig *ImageConfig   `json:"image_config,omitempty"`
+	// Extra passes through additional model-specific parameters.
+	Extra       map[string]any `json:"-"`
 }
 
 // ImageConfig holds OpenRouter-specific image configuration.
 type ImageConfig struct {
-	AspectRatio               string   `json:"aspect_ratio,omitempty"`
-	ImageSize                 string   `json:"image_size,omitempty"`
-	SuperResolutionReferences []string `json:"super_resolution_references,omitempty"`
+	AspectRatio               string     `json:"aspect_ratio,omitempty"`
+	ImageSize                 string     `json:"image_size,omitempty"`
+	// Strength is the image-to-image blend (0–1, model-dependent).
+	Strength                  *float64   `json:"strength,omitempty"`
+	// Style hint (e.g. Recraft V3 styles).
+	Style                     string     `json:"style,omitempty"`
+	// RgbColors is a color palette — array of [r,g,b].
+	RgbColors                 [][3]int   `json:"rgb_colors,omitempty"`
+	// BackgroundRgbColor is [r,g,b].
+	BackgroundRgbColor        *[3]int    `json:"background_rgb_color,omitempty"`
+	SuperResolutionReferences []string   `json:"super_resolution_references,omitempty"`
+	FontInputs                []FontInput `json:"font_inputs,omitempty"`
+}
+
+// FontInput configures custom text rendering for compatible image models.
+type FontInput struct {
+	FontURL string `json:"font_url"`
+	Text    string `json:"text"`
 }
 
 // AudioRequest holds parameters for audio generation.
 type AudioRequest struct {
-	Text   string `json:"text"`
-	Model  string `json:"model,omitempty"`
-	Voice  string `json:"voice,omitempty"`
-	Format string `json:"format,omitempty"`
+	Text   string         `json:"text"`
+	Model  string         `json:"model,omitempty"`
+	Voice  string         `json:"voice,omitempty"`
+	Format string         `json:"format,omitempty"`
+	// Speed multiplier (OpenAI TTS respects; other models ignore).
+	Speed  *float64       `json:"speed,omitempty"`
+	// Extra passes through additional model-specific parameters.
+	Extra  map[string]any `json:"-"`
 }
 
 // MediaResponse holds the result of a media generation call.

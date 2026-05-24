@@ -25,13 +25,14 @@ import {
 } from "@/components/ui/data-formatters";
 
 import { DashboardActiveWorkload } from "@/components/dashboard/DashboardActiveWorkload";
+import { LLMHealthWidget } from "@/components/dashboard/LLMHealthWidget";
 import { DashboardRunOutcomeStrip } from "@/components/dashboard/DashboardRunOutcomeStrip";
 import { shortRunIdForDashboard as shortRunId } from "@/components/dashboard/dashboardRunUtils";
 
 import { useRuns } from "@/hooks/queries";
 import { useLLMHealth, useQueueStatus } from "@/hooks/queries";
 import { useAgents } from "@/hooks/queries";
-import { getDashboardSummary } from "@/services/dashboardService";
+import { getDashboardSummary, getTriggerMetrics } from "@/services/dashboardService";
 import { formatRelativeTime } from "@/utils/dateFormat";
 import {
   getStatusTheme,
@@ -39,6 +40,7 @@ import {
   isTerminalStatus,
   isTimeoutStatus,
 } from "@/utils/status";
+import { cn } from "@/lib/utils";
 import type { WorkflowSummary } from "@/types/workflows";
 import type { AgentNodeSummary } from "@/types/agentfield";
 
@@ -174,6 +176,89 @@ function IssuesBanner({
         ))}
       </AlertDescription>
     </Alert>
+  );
+}
+
+interface QueueConcurrencyProps {
+  totalRunning: number;
+  queueEnabled: boolean;
+  maxPerAgent: number;
+  queueAgents: Array<{
+    agent_node_id: string;
+    running: number;
+    max: number;
+    available: number;
+  }>;
+}
+
+function QueueConcurrencyCard({
+  totalRunning,
+  queueEnabled,
+  maxPerAgent,
+  queueAgents,
+}: QueueConcurrencyProps) {
+  const sortedAgents = [...queueAgents].sort((a, b) => b.running - a.running);
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="space-y-1">
+            <CardTitle className="text-base font-semibold">Queue concurrency</CardTitle>
+            <CardDescription>
+              Per-agent slot usage with saturation warnings when an agent reaches max concurrency.
+            </CardDescription>
+          </div>
+          <Badge variant="secondary" className="shrink-0">
+            {totalRunning} running
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="pt-0">
+        {!queueEnabled ? (
+          <p className="text-sm text-muted-foreground">
+            Concurrency limiter is disabled.
+          </p>
+        ) : sortedAgents.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No agents are currently consuming execution slots.
+          </p>
+        ) : (
+          <ul className="space-y-2.5">
+            {sortedAgents.map((agent) => {
+              const atCapacity = agent.max > 0 && agent.running >= agent.max;
+              return (
+                <li
+                  key={agent.agent_node_id}
+                  className={cn(
+                    "rounded-md border px-3 py-2",
+                    atCapacity ? "border-destructive/50 bg-destructive/5" : "border-border bg-card",
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-medium" title={agent.agent_node_id}>
+                      {agent.agent_node_id}
+                    </span>
+                    <Badge variant={atCapacity ? "destructive" : "secondary"}>
+                      {agent.running}/{agent.max}
+                    </Badge>
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {agent.available} slot{agent.available === 1 ? "" : "s"} available
+                    {atCapacity ? " · at capacity" : ""}
+                  </p>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {queueEnabled && maxPerAgent > 0 ? (
+          <p className="mt-3 text-xs text-muted-foreground">
+            Max concurrency per agent: {maxPerAgent}
+          </p>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -576,14 +661,27 @@ export function NewDashboardPage() {
     refetchInterval: execConnected ? 30_000 : 15_000,
   });
 
+  const triggerMetricsQuery = useQuery({
+    queryKey: ["trigger-metrics"],
+    queryFn: getTriggerMetrics,
+    refetchInterval: 60_000, // Refresh every minute
+  });
+
   const unhealthyEndpoints =
     llmHealthQuery.data?.endpoints
       ?.filter((ep) => !ep.healthy)
       .map((ep) => ep.name) ?? [];
 
-  const overloadedAgents = Object.entries(queueQuery.data?.agents ?? {})
-    .filter(([, s]) => s.running >= s.max_concurrent && s.max_concurrent > 0)
-    .map(([name]) => name);
+  const queueAgents = queueQuery.data?.agents ?? [];
+  const overloadedAgents = queueAgents
+    .filter((s) => s.running >= s.max && s.max > 0)
+    .map((s) => s.agent_node_id);
+  const totalRunning = queueQuery.data?.total_running ?? queueAgents.reduce(
+    (sum, agent) => sum + agent.running,
+    0,
+  );
+  const queueEnabled = queueQuery.data?.enabled ?? false;
+  const maxPerAgent = queueQuery.data?.max_per_agent ?? 0;
 
   const hasIssues = unhealthyEndpoints.length > 0 || overloadedAgents.length > 0;
 
@@ -630,12 +728,24 @@ export function NewDashboardPage() {
         />
       )}
 
+      <LLMHealthWidget
+        loading={llmHealthQuery.isLoading}
+        health={llmHealthQuery.data}
+      />
+
       <PrimaryRunFocus
         loading={runsQuery.isLoading}
         active={active}
         latestCompleted={latestCompleted}
         onOpenRun={(runId) => navigate(`/runs/${runId}`)}
         onViewRunsList={() => navigate("/runs")}
+      />
+
+      <QueueConcurrencyCard
+        totalRunning={totalRunning}
+        queueEnabled={queueEnabled}
+        maxPerAgent={maxPerAgent}
+        queueAgents={queueAgents}
       />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -682,6 +792,27 @@ export function NewDashboardPage() {
             <span className="text-muted-foreground">agents online</span>
           </div>
           <Separator orientation="vertical" className="hidden h-6 sm:block" />
+          {triggerMetricsQuery.data && (
+            <>
+              <div className="flex items-center gap-1.5">
+                <span className="text-2xl font-semibold tabular-nums">{triggerMetricsQuery.data.events_24h ?? "—"}</span>
+                <span className="text-muted-foreground">inbound events (24h)</span>
+                {triggerMetricsQuery.data.dlq_depth > 0 && (
+                  <Badge variant="destructive" className="ml-1 text-xs">
+                    {triggerMetricsQuery.data.dlq_depth} dead
+                  </Badge>
+                )}
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-auto gap-1 px-1 py-0 text-xs text-muted-foreground hover:text-foreground"
+                onClick={() => navigate("/triggers")}
+              >
+                View triggers <ArrowRight className="size-3" />
+              </Button>
+            </>
+          )}
           <div className="flex items-center gap-1.5">
             <span className="text-2xl font-semibold tabular-nums">{avgDuration ?? "—"}</span>
             <span className="text-muted-foreground">avg time</span>

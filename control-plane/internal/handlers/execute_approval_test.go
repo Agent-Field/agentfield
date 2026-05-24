@@ -131,6 +131,31 @@ func TestRequestApprovalHandler_MissingApprovalRequestID(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, resp.Code)
 }
 
+func TestRequestApprovalHandler_RejectsApprovalCreationPayload(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := newTestExecutionStorage(&types.AgentNode{ID: "agent-1"})
+
+	router := gin.New()
+	router.POST("/executions/:execution_id/request-approval", RequestApprovalHandler(store))
+
+	body, _ := json.Marshal(map[string]any{
+		"title":            "Plan Review",
+		"description":      "Review this plan",
+		"template_type":    "plan-review-v1",
+		"project_id":       "project-1",
+		"expires_in_hours": 24,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/executions/exec-legacy/request-approval", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	assert.Equal(t, http.StatusBadRequest, resp.Code)
+	assert.Contains(t, resp.Body.String(), "ApprovalRequestID")
+}
+
 func TestRequestApprovalHandler_ExecutionNotFound(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -326,16 +351,16 @@ func TestGetApprovalStatusHandler_Pending(t *testing.T) {
 	status := "pending"
 	expiresAt := now.Add(72 * time.Hour)
 	require.NoError(t, store.StoreWorkflowExecution(context.Background(), &types.WorkflowExecution{
-		ExecutionID:        "exec-pend",
-		WorkflowID:         "wf-1",
-		AgentNodeID:        "agent-1",
-		Status:             types.ExecutionStatusWaiting,
-		StartedAt:          now,
-		ApprovalRequestID:  &reqID,
-		ApprovalRequestURL: &reqURL,
-		ApprovalStatus:     &status,
+		ExecutionID:         "exec-pend",
+		WorkflowID:          "wf-1",
+		AgentNodeID:         "agent-1",
+		Status:              types.ExecutionStatusWaiting,
+		StartedAt:           now,
+		ApprovalRequestID:   &reqID,
+		ApprovalRequestURL:  &reqURL,
+		ApprovalStatus:      &status,
 		ApprovalRequestedAt: &now,
-		ApprovalExpiresAt:  &expiresAt,
+		ApprovalExpiresAt:   &expiresAt,
 	}))
 
 	router := gin.New()

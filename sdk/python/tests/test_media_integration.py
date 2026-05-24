@@ -426,16 +426,25 @@ class TestOpenRouterAudioE2E:
         session_cm.__aenter__ = AsyncMock(return_value=mock_session)
         session_cm.__aexit__ = AsyncMock(return_value=False)
 
+        # Pre-populate metadata cache so routing picks chat-completions instead
+        # of /audio/speech (the gpt-4o-mini-tts default is actually TTS-only).
+        provider._model_meta_cache["openai/gpt-audio-mini"] = {
+            "id": "openai/gpt-audio-mini",
+            "output_modalities": ["text", "audio"],
+            "input_modalities": ["text"],
+        }
+
         with patch("aiohttp.ClientSession", return_value=session_cm):
             result = await provider.generate_audio(
                 text="Say hello",
-                model="openai/gpt-4o-mini-tts",
+                model="openai/gpt-audio-mini",
                 voice="nova",
+                format="mp3",  # avoid pcm→wav re-wrap so we can compare base64
             )
 
         assert result.audio is not None
         assert result.audio.data == "AAAABBBB"
-        assert result.audio.format == "wav"
+        assert result.audio.format == "mp3"
 
     @pytest.mark.asyncio
     async def test_audio_api_key_required(self):

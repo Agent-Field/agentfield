@@ -78,18 +78,19 @@ export function RunLifecycleMenu({
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
-  // Prefer the root execution status when available — that's the row the
-  // user actually controls. The aggregate `run.status` can stay 'running'
-  // even after the user paused the root because in-flight children keep
-  // going (see backend execute.go dispatch-time guard). Falling back to
-  // the aggregate keeps things working for older API responses.
-  const effectiveStatus = run.root_execution_status ?? run.status;
-  const isRunning = effectiveStatus === "running";
-  const isPaused = effectiveStatus === "paused";
-  const isTerminal = isTerminalStatus(effectiveStatus);
+  // Pause/Resume target the root execution — they're scoped operations on
+  // the row the user actually controls, and the aggregate `run.status` can
+  // stay 'running' even after the user paused the root because in-flight
+  // children keep going (see backend execute.go dispatch-time guard).
+  // Cancel targets the AGGREGATE status because a run with a terminated
+  // root and zombied children still has work that needs cancelling — the
+  // bulk-cancel path walks the whole DAG.
+  const rootStatus = run.root_execution_status ?? run.status;
+  const isRunning = rootStatus === "running";
+  const isPaused = rootStatus === "paused";
   const canPause = isRunning && Boolean(run.root_execution_id);
   const canResume = isPaused && Boolean(run.root_execution_id);
-  const canCancel = !isTerminal && Boolean(run.root_execution_id);
+  const canCancel = !isTerminalStatus(run.status);
   const hasAnyAction = canPause || canResume || canCancel;
 
   // Render an inert placeholder with the same footprint so the column

@@ -28,6 +28,7 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/internal/server/knowledgebase"
 	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services"
+	_ "github.com/Agent-Field/agentfield/control-plane/internal/sources/all" // register first-party trigger Sources
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/internal/utils"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/adminpb"
@@ -79,6 +80,14 @@ type AgentFieldServer struct {
 	executionTracer        *observability.ExecutionTracer
 	tracerShutdown         func(context.Context) error
 	configMu               sync.RWMutex
+	// Trigger / webhook plugin system
+	triggerDispatcher *services.TriggerDispatcher
+	sourceManager     *services.SourceManager
+	triggerHandlers   *handlers.TriggerHandlers
+	// cancelDispatcher forwards execution-cancelled events to remote SDK
+	// workers so they can cooperatively short-circuit in-flight reasoner
+	// code (raise CancelledError / abort signals / cancel contexts).
+	cancelDispatcher *services.CancelDispatcher
 	// Agentic API
 	apiCatalog *apicatalog.Catalog
 	kb         *knowledgebase.KB
@@ -443,6 +452,15 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		}
 	}
 
+	triggerDispatcher := services.NewTriggerDispatcher(storageProvider, vcService)
+	sourceManager := services.NewSourceManager(storageProvider, triggerDispatcher)
+	triggerHandlers := handlers.NewTriggerHandlers(storageProvider, triggerDispatcher, sourceManager)
+	handlers.SetTriggerSourceManager(sourceManager)
+
+	cancelDispatcher := services.NewCancelDispatcher(storageProvider, services.CancelDispatcherConfig{
+		InternalToken: cfg.Features.DID.Authorization.InternalToken,
+	})
+
 	return &AgentFieldServer{
 		storage:                storageProvider,
 		cache:                  cacheProvider,
@@ -473,6 +491,10 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		tracerShutdown:         tracerShutdown,
 		registryWatcherCancel:  nil,
 		adminGRPCPort:          adminPort,
+		triggerDispatcher:      triggerDispatcher,
+		sourceManager:          sourceManager,
+		triggerHandlers:        triggerHandlers,
+		cancelDispatcher:       cancelDispatcher,
 		apiCatalog:             initAPICatalog(),
 		kb:                     initKnowledgeBase(),
 	}, nil
@@ -549,9 +571,25 @@ func (s *AgentFieldServer) Start() error {
 		// Don't fail server startup if cleanup service fails to start
 	}
 
+	// Start cancel dispatcher: forwards bus ExecutionCancelledEvent to
+	// remote workers via HTTP callback. Best-effort; missing endpoint on
+	// older SDKs is treated as a no-op.
+	if s.cancelDispatcher != nil {
+		s.cancelDispatcher.Start(ctx)
+	}
+
 	// Start OpenTelemetry execution tracer in background
 	if s.executionTracer != nil {
 		s.executionTracer.Start(ctx)
+	}
+
+	// Boot loop-kind triggers (cron etc.) so a server restart resumes existing schedules.
+	if s.sourceManager != nil {
+		go func() {
+			if err := s.sourceManager.LoadAll(context.Background()); err != nil {
+				logger.Logger.Warn().Err(err).Msg("source manager: LoadAll failed")
+			}
+		}()
 	}
 
 	// Start reasoner event heartbeat (30 second intervals)
@@ -664,6 +702,11 @@ func (s *AgentFieldServer) Stop() error {
 		}
 	}
 
+	// Stop cancel dispatcher
+	if s.cancelDispatcher != nil {
+		s.cancelDispatcher.Stop()
+	}
+
 	if s.registryWatcherCancel != nil {
 		s.registryWatcherCancel()
 		s.registryWatcherCancel = nil
@@ -672,6 +715,11 @@ func (s *AgentFieldServer) Stop() error {
 	// Stop UI service heartbeat
 	if s.uiService != nil {
 		s.uiService.StopHeartbeat()
+	}
+
+	// Stop loop-source goroutines.
+	if s.sourceManager != nil {
+		s.sourceManager.StopAll()
 	}
 
 	// Stop observability forwarder
@@ -726,17 +774,20 @@ func (s *AgentFieldServer) setupRoutes() {
 		s.registerAdminRoutes(agentAPI)
 		s.registerConnectorRoutes(agentAPI)
 		s.registerAgenticRoutes(agentAPI)
+		s.registerTriggerRoutes(agentAPI)
 	}
 
 	s.registerKBRoutes()
 	s.register404()
 }
 
+var absPathForServerID = filepath.Abs
+
 // generateAgentFieldServerID creates a deterministic af server ID based on the agentfield home directory.
 // This ensures each agentfield instance has a unique ID while being deterministic for the same installation.
 func generateAgentFieldServerID(agentfieldHome string) string {
 	// Use the absolute path of agentfield home to generate a deterministic ID
-	absPath, err := filepath.Abs(agentfieldHome)
+	absPath, err := absPathForServerID(agentfieldHome)
 	if err != nil {
 		// Fallback to the original path if absolute path fails
 		absPath = agentfieldHome

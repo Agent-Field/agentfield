@@ -123,6 +123,10 @@ class VCGenerator:
                     "caller_did": execution_context.caller_did,
                     "target_did": execution_context.target_did,
                     "agent_node_did": execution_context.agent_node_did,
+                    # parent_vc_id is optional — older ExecutionContext shapes
+                    # (and the SimpleNamespace test doubles in
+                    # test_vc_generator.py) don't carry it. Read defensively.
+                    "parent_vc_id": getattr(execution_context, "parent_vc_id", None),
                     "timestamp": execution_context.timestamp.isoformat() + "Z"
                     if execution_context.timestamp.tzinfo is None
                     else execution_context.timestamp.isoformat(),

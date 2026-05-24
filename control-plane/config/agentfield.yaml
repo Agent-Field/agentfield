@@ -16,7 +16,7 @@ agentfield:
     webhook_retry_backoff: 1s     # Initial backoff between webhook retries (exponential)
     webhook_max_retry_backoff: 5s # Upper bound for webhook retry backoff
   approval:
-    webhook_secret: ""                 # Optional HMAC-SHA256 secret for verifying approval webhook callbacks
+    webhook_secret: ""                 # Required for HMAC auth on approval webhook callbacks; empty disables the endpoint
     default_expiry_hours: 72           # Default approval expiry (hours)
 
 ui:

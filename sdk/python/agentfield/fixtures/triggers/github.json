@@ -1,0 +1,42 @@
+{
+  "action": "opened",
+  "number": 42,
+  "pull_request": {
+    "id": 1234567890,
+    "node_id": "PR_example",
+    "html_url": "https://github.com/Agent-Field/agentfield/pull/42",
+    "number": 42,
+    "state": "open",
+    "title": "Add Phase 5 webhook DX core",
+    "user": {
+      "login": "demo-user",
+      "id": 1000,
+      "type": "User"
+    },
+    "body": "Implements TriggerContext, envelope unwrap, transform kwarg.",
+    "base": {
+      "ref": "main",
+      "sha": "abc123def456"
+    },
+    "head": {
+      "ref": "feat/webhooks",
+      "sha": "9d26e619def00"
+    },
+    "draft": false,
+    "merged": false
+  },
+  "repository": {
+    "id": 654321,
+    "name": "agentfield",
+    "full_name": "Agent-Field/agentfield",
+    "private": false,
+    "owner": {
+      "login": "Agent-Field",
+      "type": "Organization"
+    }
+  },
+  "sender": {
+    "login": "demo-user",
+    "type": "User"
+  }
+}

@@ -113,12 +113,13 @@ const approvalClient = new ApprovalClient({
 
 agent.reasoner<{ task: string }, { status: string }>('deploy', async (ctx) => {
   const plan = await ctx.ai(`Create deployment plan for: ${ctx.input.task}`);
+  const approvalRequestId = `req-${ctx.executionId}`;
 
-  // Request approval — transitions execution to "waiting"
+  // Create the human-facing approval request in your approval service first,
+  // then pass its ID/URL to AgentField so the execution transitions to "waiting".
   await approvalClient.requestApproval(ctx.executionId, {
-    projectId: 'my-project',
-    title: `Deploy: ${ctx.input.task}`,
-    description: String(plan),
+    approvalRequestId,
+    approvalRequestUrl: `https://approvals.example.com/review/${approvalRequestId}`,
     expiresInHours: 24,
   });
 

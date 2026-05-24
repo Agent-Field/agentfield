@@ -7,7 +7,9 @@ import type {
   SetEnvRequest,
   ConfigSchemaResponse,
   AgentStatus,
-  AgentStatusUpdate
+  AgentStatusUpdate,
+  MCPHealthResponseModeAware,
+  MCPServerMetrics,
 } from '../types/agentfield';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/ui/v1';
@@ -184,6 +186,28 @@ export async function getNodeDetailsWithPackageInfo(
   return fetchWrapper<AgentNodeDetailsForUIWithPackage>(`/nodes/${nodeId}/details?mode=${mode}`, {
     timeout: 8000 // 8 second timeout for node details
   });
+}
+
+/** Mode-aware MCP health summary (optional control-plane surface). */
+export async function getMCPHealthModeAware(
+  nodeId: string,
+  mode: AppMode = 'user'
+): Promise<MCPHealthResponseModeAware> {
+  return fetchWrapper<MCPHealthResponseModeAware>(
+    `/nodes/${nodeId}/mcp/health?mode=${mode}`,
+    { timeout: 8000 }
+  );
+}
+
+/** Per-server or node-level MCP metrics (optional control-plane surface). */
+export async function getMCPServerMetrics(
+  nodeId: string,
+  serverId?: string
+): Promise<MCPServerMetrics> {
+  const path = serverId
+    ? `/nodes/${nodeId}/mcp/servers/${encodeURIComponent(serverId)}/metrics`
+    : `/nodes/${nodeId}/mcp/metrics`;
+  return fetchWrapper<MCPServerMetrics>(path);
 }
 
 // ============================================================================
