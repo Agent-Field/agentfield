@@ -6,6 +6,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.85-rc.8] - 2026-05-25
+
+
+### Fixed
+
+- Fix(sdk): drop --dangerously-skip-permissions + finish v1.4 migration in opencode harness (#583)
+
+Closes #582.
+
+opencode v1.14 does not accept `--dangerously-skip-permissions` on the `run`
+subcommand. yargs prints the run-help screen to stdout and exits 0, so every
+SDK on top of OpenCodeProvider was silently capturing CLI help text as the LLM
+response — APPROVE'd reviews with 0 findings, empty turns, zero cost. The
+failure is fully silent (no stderr, no error, no non-zero exit).
+
+This PR:
+
+- Python (sdk/python/agentfield/harness/providers/opencode.py): drop the bad
+  flag. opencode in non-TTY mode proceeds without permission prompting.
+- TypeScript (sdk/typescript/src/harness/providers/opencode.ts): switch from
+  deprecated `opencode -c <dir> -p <prompt>` (pre-v1.4) to
+  `opencode run --dir <dir> -m <model> <prompt>`. The deprecated form is
+  broken on v1.14: `-c` rebound to `--continue` (boolean), no top-level `-p`.
+- Go (sdk/go/harness/opencode.go): drop the bad flag (the file already used
+  the `run` subcommand otherwise).
+- Tests updated across all three SDKs to assert the new canonical invocation
+  and to assert `--dangerously-skip-permissions` is NOT present.
+
+Reproduced end-to-end on Agent-Field/pr-af reviewing agentfield#575 with
+HARNESS_PROVIDER=opencode HARNESS_MODEL=openrouter/deepseek/deepseek-v4-pro:
+every cluster_scout returned the `opencode run [message..]` USAGE screen
+verbatim as its findings, meta_strategist saw garbage, pipeline early-exited
+with APPROVE / 0 findings in 5 min / $0.
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (c4f0d5f)
+
 ## [0.1.85-rc.7] - 2026-05-25
 
 
