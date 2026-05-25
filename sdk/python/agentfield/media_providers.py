@@ -87,6 +87,8 @@ class MediaProvider(ABC):
         model: Optional[str] = None,
         voice: str = "alloy",
         format: str = "wav",
+        *,
+        system: Optional[str] = None,
         **kwargs,
     ) -> MultimodalResponse:
         """
@@ -97,6 +99,8 @@ class MediaProvider(ABC):
             model: TTS model to use
             voice: Voice identifier
             format: Audio format
+            system: Optional system instructions for providers/models that
+                support chat-style audio generation
             **kwargs: Provider-specific options
 
         Returns:
@@ -386,6 +390,7 @@ class FalProvider(MediaProvider):
         format: str = "wav",
         ref_audio_url: Optional[str] = None,
         speed: float = 1.0,
+        system: Optional[str] = None,
         **kwargs,
     ) -> MultimodalResponse:
         """
@@ -696,6 +701,7 @@ class LiteLLMProvider(MediaProvider):
         voice: str = "alloy",
         format: str = "wav",
         speed: float = 1.0,
+        system: Optional[str] = None,
         **kwargs,
     ) -> MultimodalResponse:
         """Generate audio using LiteLLM TTS."""
@@ -1285,6 +1291,7 @@ class OpenRouterProvider(MediaProvider):
         format: str = "wav",
         speed: Optional[float] = None,
         extra: Optional[Dict[str, Any]] = None,
+        system: Optional[str] = None,
         **kwargs,
     ) -> MultimodalResponse:
         """
@@ -1311,6 +1318,10 @@ class OpenRouterProvider(MediaProvider):
             format: Audio format (wav, mp3, flac, opus, pcm16). ``wav`` is
                 synthesized client-side when the upstream endpoint only emits
                 pcm.
+            speed: Optional speech speed for ``/audio/speech`` models.
+            extra: Optional extra request fields for ``/audio/speech`` models.
+            system: Optional system instructions for chat-completions audio
+                models. Ignored for ``/audio/speech`` models.
             **kwargs: Additional parameters (timeout overrides default 300s)
 
         Returns:
@@ -1378,9 +1389,12 @@ class OpenRouterProvider(MediaProvider):
         # Streaming on the OpenAI provider only emits pcm16 — fall back to
         # pcm16 over the wire and re-wrap to user's requested format below.
         wire_format = "pcm16" if audio_format == "wav" else audio_format
+        messages = [{"role": "user", "content": text}]
+        if system is not None:
+            messages.insert(0, {"role": "system", "content": system})
         payload = {
             "model": send_model,
-            "messages": [{"role": "user", "content": text}],
+            "messages": messages,
             "modalities": ["text", "audio"],
             "audio": {"voice": voice, "format": wire_format},
             "stream": True,

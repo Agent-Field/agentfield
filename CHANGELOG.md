@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.85-rc.7] - 2026-05-25
+
+
+### Added
+
+- Feat(sdk): support OpenRouter audio system prompts (#590) (a11b5cf)
+
 ## [0.1.85-rc.6] - 2026-05-23
 
 
