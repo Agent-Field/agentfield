@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -978,6 +979,36 @@ func TestAIWithTools(t *testing.T) {
 	})
 }
 
+func TestNormalizeToolInvocationTarget(t *testing.T) {
+	tests := []struct {
+		name   string
+		target string
+		want   string
+	}{
+		{
+			name:   "skill target",
+			target: "agent-1:skill:lookup",
+			want:   "agent-1.lookup",
+		},
+		{
+			name:   "reasoner target",
+			target: "agent-1:lookup",
+			want:   "agent-1.lookup",
+		},
+		{
+			name:   "already normalized",
+			target: "agent-1.lookup",
+			want:   "agent-1.lookup",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, normalizeToolInvocationTarget(tt.target))
+		})
+	}
+}
+
 func TestRunAndServe_ShutdownOnContextCancel(t *testing.T) {
 	var shutdownCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1468,6 +1499,84 @@ func TestCallLocalEmitsStructuredExecutionLogs(t *testing.T) {
 		assert.NotEmpty(t, first.ExecutionID)
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for structured execution logs")
+	}
+}
+
+func TestCallLocalCoversCompletionAndFailureBranches(t *testing.T) {
+	tests := []struct {
+		name      string
+		handler   func(context.Context, map[string]any) (any, error)
+		wantEvent string
+		wantLevel string
+		wantErr   string
+	}{
+		{
+			name: "success",
+			handler: func(_ context.Context, input map[string]any) (any, error) {
+				return map[string]any{"echo": input["msg"]}, nil
+			},
+			wantEvent: "call.local.complete",
+			wantLevel: "info",
+		},
+		{
+			name: "failure",
+			handler: func(context.Context, map[string]any) (any, error) {
+				return nil, errors.New("handler failed")
+			},
+			wantEvent: "call.local.failed",
+			wantLevel: "error",
+			wantErr:   "handler failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ag, err := New(Config{
+				NodeID:  "node-1",
+				Version: "1.0.0",
+				Logger:  log.New(io.Discard, "", 0),
+			})
+			require.NoError(t, err)
+			ag.RegisterReasoner("child", tt.handler)
+
+			parentCtx := contextWithExecution(context.Background(), ExecutionContext{
+				RunID:          "run-1",
+				ExecutionID:    "exec-parent",
+				WorkflowID:     "wf-1",
+				RootWorkflowID: "wf-1",
+				ReasonerName:   "parent",
+				AgentNodeID:    "node-1",
+			})
+
+			stdout, _, callErr := captureOutput(t, func() error {
+				_, err := ag.CallLocal(parentCtx, "child", map[string]any{"msg": "hi"})
+				return err
+			})
+
+			if tt.wantErr == "" {
+				require.NoError(t, callErr)
+			} else {
+				require.Error(t, callErr)
+				assert.Contains(t, callErr.Error(), tt.wantErr)
+			}
+
+			lines := strings.Split(strings.TrimSpace(stdout), "\n")
+			require.GreaterOrEqual(t, len(lines), 2)
+
+			var seen bool
+			for _, line := range lines {
+				var entry ExecutionLogEntry
+				require.NoError(t, json.Unmarshal([]byte(line), &entry))
+				if entry.EventType != tt.wantEvent {
+					continue
+				}
+				seen = true
+				assert.Equal(t, "child", entry.ReasonerID)
+				assert.Equal(t, tt.wantLevel, entry.Level)
+				assert.Equal(t, "sdk.runtime", entry.Source)
+			}
+			assert.True(t, seen, "expected %s log entry", tt.wantEvent)
+		})
 	}
 }
 
