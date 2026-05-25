@@ -447,6 +447,56 @@ class TestOpenRouterAudioE2E:
         assert result.audio.format == "mp3"
 
     @pytest.mark.asyncio
+    async def test_audio_sse_includes_optional_system_message(self):
+        """System instructions are sent before the user text for chat-audio models."""
+        provider = OpenRouterProvider(api_key="test-key")
+        provider._model_meta_cache["openai/gpt-audio-mini"] = {
+            "id": "openai/gpt-audio-mini",
+            "output_modalities": ["text", "audio"],
+            "input_modalities": ["text"],
+        }
+
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_resp.content = MagicMock()
+
+        async def fake_iter_any():
+            yield b'data: {"choices":[{"delta":{"audio":{"data":"AAAA"}}}]}\n'
+            yield b"data: [DONE]\n"
+
+        mock_resp.content.iter_any = fake_iter_any
+
+        post_cm = AsyncMock()
+        post_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+        post_cm.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = AsyncMock()
+        mock_session.post = MagicMock(return_value=post_cm)
+
+        session_cm = AsyncMock()
+        session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+        session_cm.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("aiohttp.ClientSession", return_value=session_cm):
+            result = await provider.generate_audio(
+                text="Read this dramatically",
+                model="openai/gpt-audio-mini",
+                voice="nova",
+                format="mp3",
+                system="You are a narrator. Use a calm documentary style.",
+            )
+
+        assert result.audio is not None
+        payload = mock_session.post.call_args.kwargs["json"]
+        assert payload["messages"] == [
+            {
+                "role": "system",
+                "content": "You are a narrator. Use a calm documentary style.",
+            },
+            {"role": "user", "content": "Read this dramatically"},
+        ]
+
+    @pytest.mark.asyncio
     async def test_audio_api_key_required(self):
         """Missing API key raises ValueError."""
         provider = OpenRouterProvider.__new__(OpenRouterProvider)
