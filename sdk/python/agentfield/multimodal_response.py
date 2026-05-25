@@ -88,47 +88,32 @@ class ImageOutput(BaseModel):
 
     def save(self, path: Union[str, Path]) -> None:
         """Save image to file."""
+        if not self.b64_json and not self.url:
+            raise ValueError("No image data or URL available to save")
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-
-        if self.b64_json:
-            # Save from base64 data
-            image_bytes = base64.b64decode(self.b64_json)
-            with open(path, "wb") as f:
-                f.write(image_bytes)
-        elif self.url:
-            # Download from URL
-            try:
-                import requests
-
-                response = requests.get(self.url)
-                response.raise_for_status()
-                with open(path, "wb") as f:
-                    f.write(response.content)
-            except ImportError:
-                raise ImportError(
-                    "URL download requires requests: pip install requests"
-                )
-        else:
-            raise ValueError("No image data or URL available to save")
+        with open(path, "wb") as f:
+            f.write(self.get_bytes())
 
     def get_bytes(self) -> bytes:
-        """Get raw image bytes."""
+        """Get raw image bytes from b64_json, a data: URL, or an http(s) URL."""
         if self.b64_json:
             return base64.b64decode(self.b64_json)
-        elif self.url:
+        if self.url:
+            if self.url.startswith("data:"):
+                # data:image/jpeg;base64,<payload>
+                _, _, payload = self.url.partition(",")
+                return base64.b64decode(payload)
             try:
                 import requests
-
-                response = requests.get(self.url)
-                response.raise_for_status()
-                return response.content
             except ImportError:
                 raise ImportError(
                     "URL download requires requests: pip install requests"
                 )
-        else:
-            raise ValueError("No image data or URL available")
+            response = requests.get(self.url)
+            response.raise_for_status()
+            return response.content
+        raise ValueError("No image data or URL available")
 
     def show(self) -> None:
         """Display image if possible (requires PIL/Pillow)."""

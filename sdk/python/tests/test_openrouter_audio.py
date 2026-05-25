@@ -154,14 +154,51 @@ class StubAgent:
 # =============================================================================
 
 
+def _prime_chat_audio_cache(provider: OpenRouterProvider, model: str) -> None:
+    """Pre-populate model metadata so audio requests route via chat-completions.
+
+    Without this, the provider tries to GET /api/v1/models/{id}/endpoints to
+    discover routing — that's already mocked away in these tests.
+    """
+    stripped = model.removeprefix("openrouter/")
+    provider._model_meta_cache[stripped] = {
+        "id": stripped,
+        "output_modalities": ["text", "audio"],
+        "input_modalities": ["text"],
+    }
+
+
+class _BytesResponse:
+    """Fake aiohttp response for /audio/speech (returns raw bytes)."""
+
+    def __init__(self, body: bytes, status: int = 200, content_type: str = "audio/pcm"):
+        self.status = status
+        self._body = body
+        self.headers = {"Content-Type": content_type}
+
+    async def read(self) -> bytes:
+        return self._body
+
+    async def text(self) -> str:
+        return self._body.decode("utf-8", errors="replace")
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        pass
+
+
 class TestOpenRouterGenerateAudio:
-    """Tests for OpenRouterProvider.generate_audio SSE streaming."""
+    """Tests for OpenRouterProvider.generate_audio (chat-completions SSE path)."""
 
     @pytest.mark.asyncio
     async def test_sse_stream_parsing_and_concatenation(self, monkeypatch):
-        """Audio base64 chunks from SSE should be concatenated correctly."""
+        """Audio chunks from SSE should be concatenated correctly for chat-audio models."""
+        # Two valid base64 chunks decode to "audio_part_1" + "audio_part_2".
         chunk1 = base64.b64encode(b"audio_part_1").decode()
         chunk2 = base64.b64encode(b"audio_part_2").decode()
+        merged_b64 = base64.b64encode(b"audio_part_1" + b"audio_part_2").decode()
 
         events = [
             _audio_event(b64_chunk=chunk1, transcript="Hello "),
@@ -175,25 +212,32 @@ class TestOpenRouterGenerateAudio:
 
         with patch("aiohttp.ClientSession", return_value=fake_session):
             provider = OpenRouterProvider()
+            _prime_chat_audio_cache(provider, "openai/gpt-audio-mini")
             result = await provider.generate_audio(
                 text="Say hello",
-                model="openai/gpt-4o-mini-tts",
+                model="openai/gpt-audio-mini",
                 voice="alloy",
-                format="wav",
+                format="mp3",  # avoid pcm→wav rewrap so we can assert raw concat
             )
 
         assert result.has_audio
-        assert result.audio.data == chunk1 + chunk2
-        assert result.audio.format == "wav"
+        assert result.audio.data == merged_b64
+        assert result.audio.format == "mp3"
         assert result.text == "Hello world"
 
     @pytest.mark.asyncio
     async def test_transcript_extraction(self, monkeypatch):
         """Transcript text should be accumulated from SSE events."""
+        # Use valid base64 chunks so the new merged-bytes path doesn't error.
+        chunks = [
+            base64.b64encode(b"AAAA").decode(),
+            base64.b64encode(b"BBBB").decode(),
+            base64.b64encode(b"CCCC").decode(),
+        ]
         events = [
-            _audio_event(b64_chunk="AAAA", transcript="First "),
-            _audio_event(b64_chunk="BBBB", transcript="second "),
-            _audio_event(b64_chunk="CCCC", transcript="third."),
+            _audio_event(b64_chunk=chunks[0], transcript="First "),
+            _audio_event(b64_chunk=chunks[1], transcript="second "),
+            _audio_event(b64_chunk=chunks[2], transcript="third."),
         ]
         lines = _make_sse_lines(events)
         fake_resp = _FakeStreamResponse(lines)
@@ -203,14 +247,17 @@ class TestOpenRouterGenerateAudio:
 
         with patch("aiohttp.ClientSession", return_value=fake_session):
             provider = OpenRouterProvider()
-            result = await provider.generate_audio(text="test")
+            _prime_chat_audio_cache(provider, "openai/gpt-audio-mini")
+            result = await provider.generate_audio(
+                text="test", model="openai/gpt-audio-mini", format="mp3"
+            )
 
         assert result.text == "First second third."
 
     @pytest.mark.asyncio
     async def test_model_prefix_stripping(self, monkeypatch):
-        """openrouter/ prefix should be stripped from model before sending."""
-        events = [_audio_event(b64_chunk="AAAA")]
+        """openrouter/ prefix should be stripped from model before sending (chat path)."""
+        events = [_audio_event(b64_chunk=base64.b64encode(b"AAAA").decode())]
         lines = _make_sse_lines(events)
         fake_resp = _FakeStreamResponse(lines)
         fake_session = _FakeSession(fake_resp)
@@ -219,20 +266,20 @@ class TestOpenRouterGenerateAudio:
 
         with patch("aiohttp.ClientSession", return_value=fake_session):
             provider = OpenRouterProvider()
+            _prime_chat_audio_cache(provider, "openai/gpt-audio-mini")
             await provider.generate_audio(
                 text="test",
-                model="openrouter/openai/gpt-4o-mini-tts",
+                model="openrouter/openai/gpt-audio-mini",
+                format="mp3",
             )
 
-        # Check the payload sent
-        post_kwargs = fake_session._last_post_kwargs
-        payload = post_kwargs["json"]
-        assert payload["model"] == "openai/gpt-4o-mini-tts"
+        payload = fake_session._last_post_kwargs["json"]
+        assert payload["model"] == "openai/gpt-audio-mini"
         assert not payload["model"].startswith("openrouter/")
 
     @pytest.mark.asyncio
     async def test_empty_stream_returns_no_audio(self, monkeypatch):
-        """Empty SSE stream should return response with no audio."""
+        """Empty SSE stream should return response with no audio (chat-audio path)."""
         lines = _make_sse_lines([])
         fake_resp = _FakeStreamResponse(lines)
         fake_session = _FakeSession(fake_resp)
@@ -241,48 +288,17 @@ class TestOpenRouterGenerateAudio:
 
         with patch("aiohttp.ClientSession", return_value=fake_session):
             provider = OpenRouterProvider()
-            result = await provider.generate_audio(text="test")
+            _prime_chat_audio_cache(provider, "openai/gpt-audio-mini")
+            result = await provider.generate_audio(
+                text="test", model="openai/gpt-audio-mini", format="mp3"
+            )
 
         assert not result.has_audio
         assert result.text == "test"
 
     @pytest.mark.asyncio
-    async def test_invalid_voice_defaults_to_alloy(self, monkeypatch):
-        """Invalid voice should fall back to alloy."""
-        events = [_audio_event(b64_chunk="AAAA")]
-        lines = _make_sse_lines(events)
-        fake_resp = _FakeStreamResponse(lines)
-        fake_session = _FakeSession(fake_resp)
-
-        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-
-        with patch("aiohttp.ClientSession", return_value=fake_session):
-            provider = OpenRouterProvider()
-            await provider.generate_audio(text="test", voice="invalid_voice")
-
-        payload = fake_session._last_post_kwargs["json"]
-        assert payload["audio"]["voice"] == "alloy"
-
-    @pytest.mark.asyncio
-    async def test_invalid_format_defaults_to_wav(self, monkeypatch):
-        """Invalid format should fall back to wav."""
-        events = [_audio_event(b64_chunk="AAAA")]
-        lines = _make_sse_lines(events)
-        fake_resp = _FakeStreamResponse(lines)
-        fake_session = _FakeSession(fake_resp)
-
-        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-
-        with patch("aiohttp.ClientSession", return_value=fake_session):
-            provider = OpenRouterProvider()
-            await provider.generate_audio(text="test", format="invalid_fmt")
-
-        payload = fake_session._last_post_kwargs["json"]
-        assert payload["audio"]["format"] == "wav"
-
-    @pytest.mark.asyncio
     async def test_http_error_raises(self, monkeypatch):
-        """Non-200 response should raise RuntimeError."""
+        """Non-200 response should raise RuntimeError (chat-audio path)."""
         fake_resp = _FakeStreamResponse([], status=400)
         fake_session = _FakeSession(fake_resp)
 
@@ -290,8 +306,11 @@ class TestOpenRouterGenerateAudio:
 
         with patch("aiohttp.ClientSession", return_value=fake_session):
             provider = OpenRouterProvider()
+            _prime_chat_audio_cache(provider, "openai/gpt-audio-mini")
             with pytest.raises(RuntimeError, match="failed.*400"):
-                await provider.generate_audio(text="test")
+                await provider.generate_audio(
+                    text="test", model="openai/gpt-audio-mini", format="mp3"
+                )
 
     @pytest.mark.asyncio
     async def test_missing_api_key_raises(self, monkeypatch):
@@ -304,11 +323,12 @@ class TestOpenRouterGenerateAudio:
     @pytest.mark.asyncio
     async def test_malformed_sse_lines_skipped(self, monkeypatch):
         """Non-JSON SSE lines and non-data lines should be safely skipped."""
+        valid_b64 = base64.b64encode(b"AAA").decode()
         lines = [
             b"event: ping\n",
             b"data: not_json\n",
             b'data: {"choices": []}\n',
-            f"data: {json.dumps(_audio_event(b64_chunk='QUFB'))}\n".encode(),
+            f"data: {json.dumps(_audio_event(b64_chunk=valid_b64))}\n".encode(),
             b"data: [DONE]\n",
         ]
         fake_resp = _FakeStreamResponse(lines)
@@ -318,10 +338,83 @@ class TestOpenRouterGenerateAudio:
 
         with patch("aiohttp.ClientSession", return_value=fake_session):
             provider = OpenRouterProvider()
-            result = await provider.generate_audio(text="test")
+            _prime_chat_audio_cache(provider, "openai/gpt-audio-mini")
+            result = await provider.generate_audio(
+                text="test", model="openai/gpt-audio-mini", format="mp3"
+            )
 
         assert result.has_audio
-        assert result.audio.data == "QUFB"
+        assert result.audio.data == valid_b64
+
+
+class TestOpenRouterAudioSpeechEndpoint:
+    """Tests for OpenRouterProvider.generate_audio routing to /audio/speech."""
+
+    @pytest.mark.asyncio
+    async def test_tts_only_model_routes_to_audio_speech(self, monkeypatch):
+        """A model with output_modalities=['speech'] (e.g. Kokoro) hits /audio/speech."""
+        pcm_body = b"\x00\x01" * 1000  # 2KB of fake PCM
+        speech_resp = _BytesResponse(pcm_body, status=200, content_type="audio/pcm")
+        fake_session = _FakeSession(speech_resp)
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+        with patch("aiohttp.ClientSession", return_value=fake_session):
+            provider = OpenRouterProvider()
+            # Pre-populate cache as a TTS-only model so routing is deterministic.
+            provider._model_meta_cache["hexgrad/kokoro-82m"] = {
+                "id": "hexgrad/kokoro-82m",
+                "output_modalities": ["speech"],
+                "input_modalities": ["text"],
+            }
+            result = await provider.generate_audio(
+                text="hello",
+                model="openrouter/hexgrad/kokoro-82m",
+                voice="af_bella",
+                format="wav",
+            )
+
+        # Verify endpoint and payload.
+        assert "audio/speech" in fake_session._last_post_url
+        payload = fake_session._last_post_kwargs["json"]
+        assert payload["model"] == "hexgrad/kokoro-82m"
+        assert payload["voice"] == "af_bella"
+        assert payload["response_format"] == "pcm"  # wav→pcm wire, wrapped client-side
+        assert payload["input"] == "hello"
+
+        # WAV wrapping should produce a RIFF/WAVE container.
+        assert result.has_audio
+        decoded = base64.b64decode(result.audio.data)
+        assert decoded[:4] == b"RIFF"
+        assert decoded[8:12] == b"WAVE"
+
+    @pytest.mark.asyncio
+    async def test_audio_speech_passes_speed_and_extra(self, monkeypatch):
+        """speed and extra are forwarded to /audio/speech body."""
+        speech_resp = _BytesResponse(b"\x00\x01" * 100)
+        fake_session = _FakeSession(speech_resp)
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+        with patch("aiohttp.ClientSession", return_value=fake_session):
+            provider = OpenRouterProvider()
+            provider._model_meta_cache["openai/gpt-4o-mini-tts"] = {
+                "id": "openai/gpt-4o-mini-tts",
+                "output_modalities": ["speech"],
+                "input_modalities": ["text"],
+            }
+            await provider.generate_audio(
+                text="hi",
+                model="openai/gpt-4o-mini-tts",
+                speed=1.25,
+                extra={"language": "en-US"},
+                format="mp3",
+            )
+
+        payload = fake_session._last_post_kwargs["json"]
+        assert payload["speed"] == 1.25
+        assert payload["language"] == "en-US"
+        assert payload["response_format"] == "mp3"
 
 
 # =============================================================================
@@ -358,6 +451,7 @@ class TestGenerateMusic:
 
         with patch("aiohttp.ClientSession", return_value=fake_session):
             provider = OpenRouterProvider()
+            _prime_chat_audio_cache(provider, "google/lyria-3-pro")
             result = await provider.generate_music(
                 prompt="jazz piano",
                 model="google/lyria-3-pro",
@@ -385,6 +479,7 @@ class TestGenerateMusic:
 
         with patch("aiohttp.ClientSession", return_value=fake_session):
             provider = OpenRouterProvider()
+            _prime_chat_audio_cache(provider, "google/lyria-3-pro")
             await provider.generate_music(prompt="test")
 
         payload = fake_session._last_post_kwargs["json"]
@@ -402,6 +497,7 @@ class TestGenerateMusic:
 
         with patch("aiohttp.ClientSession", return_value=fake_session):
             provider = OpenRouterProvider()
+            _prime_chat_audio_cache(provider, "google/lyria-3-pro")
             await provider.generate_music(
                 prompt="test",
                 model="openrouter/google/lyria-3-pro",

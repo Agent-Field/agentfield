@@ -25,12 +25,58 @@ const MAX_CONSECUTIVE_PARSE_ERRORS = 50;
 /** Module-level WeakMap to keep API key off the instance (CR-03). */
 const apiKeyStore = new WeakMap<OpenRouterMediaProvider, string>();
 
+/** Per-instance cache of model metadata (output_modalities, input_modalities). */
+const modelMetaStore = new WeakMap<
+  OpenRouterMediaProvider,
+  Map<string, { outputModalities: string[]; inputModalities: string[] }>
+>();
+
 function emptyMediaResponse(raw: unknown): MediaResponse {
   return { text: '', images: [], audio: null, files: [], videos: [], rawResponse: raw };
 }
 
 function stripPrefix(model: string): string {
   return model.startsWith('openrouter/') ? model.slice('openrouter/'.length) : model;
+}
+
+/**
+ * Wrap raw little-endian PCM16 mono bytes in a WAV (RIFF) container.
+ * OpenRouter's TTS endpoints emit PCM at 24 kHz; default to that.
+ */
+function wrapPcm16AsWav(pcm: Uint8Array, sampleRate = 24000): Uint8Array {
+  const channels = 1;
+  const bitsPerSample = 16;
+  const byteRate = (sampleRate * channels * bitsPerSample) / 8;
+  const blockAlign = (channels * bitsPerSample) / 8;
+  const dataSize = pcm.byteLength;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+  // RIFF header
+  view.setUint8(0, 0x52); view.setUint8(1, 0x49); view.setUint8(2, 0x46); view.setUint8(3, 0x46); // "RIFF"
+  view.setUint32(4, 36 + dataSize, true);
+  view.setUint8(8, 0x57); view.setUint8(9, 0x41); view.setUint8(10, 0x56); view.setUint8(11, 0x45); // "WAVE"
+  // fmt chunk
+  view.setUint8(12, 0x66); view.setUint8(13, 0x6d); view.setUint8(14, 0x74); view.setUint8(15, 0x20); // "fmt "
+  view.setUint32(16, 16, true);                 // PCM chunk size
+  view.setUint16(20, 1, true);                  // PCM format
+  view.setUint16(22, channels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+  // data chunk
+  view.setUint8(36, 0x64); view.setUint8(37, 0x61); view.setUint8(38, 0x74); view.setUint8(39, 0x61); // "data"
+  view.setUint32(40, dataSize, true);
+  new Uint8Array(buffer, 44).set(pcm);
+  return new Uint8Array(buffer);
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString('base64');
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  return new Uint8Array(Buffer.from(b64, 'base64'));
 }
 
 /**
@@ -102,6 +148,62 @@ export class OpenRouterMediaProvider implements MediaProvider {
       });
     }
     apiKeyStore.set(this, key);
+    modelMetaStore.set(this, new Map());
+  }
+
+  /**
+   * Seed the metadata cache for a model. Useful when running against test
+   * servers that don't expose `GET /models/{id}/endpoints`, or when callers
+   * already know the routing they want.
+   *
+   * Output modalities follow OpenRouter's convention — `["speech"]` for
+   * TTS-only (Kokoro etc.), `["text","audio"]` for chat-audio (gpt-audio
+   * family), `["video"]`, `["image"]`, etc.
+   */
+  seedModelMeta(model: string, outputModalities: string[], inputModalities: string[] = []): void {
+    const stripped = stripPrefix(model);
+    const cache = modelMetaStore.get(this)!;
+    cache.set(stripped, {
+      outputModalities: [...outputModalities],
+      inputModalities: [...inputModalities],
+    });
+  }
+
+  /**
+   * Fetch + cache OpenRouter model metadata so we can route requests to the
+   * right endpoint. On any error returns an empty meta object so callers can
+   * fall back to defaults.
+   */
+  private async fetchModelMeta(model: string): Promise<{
+    outputModalities: string[];
+    inputModalities: string[];
+  }> {
+    const stripped = stripPrefix(model);
+    const cache = modelMetaStore.get(this)!;
+    const cached = cache.get(stripped);
+    if (cached) return cached;
+
+    const url = `${this.baseUrl}/models/${stripped}/endpoints`;
+    try {
+      const res = await this.get(url);
+      if (!res.ok) {
+        const meta = { outputModalities: [], inputModalities: [] };
+        cache.set(stripped, meta);
+        return meta;
+      }
+      const data = (await res.json()) as { data?: { architecture?: { output_modalities?: string[]; input_modalities?: string[] } } };
+      const arch = data?.data?.architecture ?? {};
+      const meta = {
+        outputModalities: arch.output_modalities ?? [],
+        inputModalities: arch.input_modalities ?? [],
+      };
+      cache.set(stripped, meta);
+      return meta;
+    } catch {
+      const meta = { outputModalities: [], inputModalities: [] };
+      cache.set(stripped, meta);
+      return meta;
+    }
   }
 
   /** Prevent API key from leaking via JSON.stringify (CR-03). */
@@ -130,8 +232,22 @@ export class OpenRouterMediaProvider implements MediaProvider {
     if (request.aspectRatio) body.aspect_ratio = request.aspectRatio;
     if (request.generateAudio != null) body.generate_audio = request.generateAudio;
     if (request.seed != null) body.seed = request.seed;
-    if (request.frameImages) body.frame_images = request.frameImages;
-    if (request.inputReferences) body.input_references = request.inputReferences;
+    if (request.imageUrl) body.image_url = request.imageUrl;
+    if (request.frameImages) {
+      // Convert TS camelCase to OpenRouter snake_case.
+      body.frame_images = request.frameImages.map((fi) => ({
+        type: fi.type ?? 'image_url',
+        image_url: fi.imageUrl,
+        ...(fi.frameType ? { frame_type: fi.frameType } : {}),
+      }));
+    }
+    if (request.inputReferences) {
+      body.input_references = request.inputReferences.map((ref) => ({
+        type: ref.type ?? 'image_url',
+        image_url: ref.imageUrl,
+      }));
+    }
+    if (request.extra) Object.assign(body, request.extra);
 
     const submitEndpoint = `${this.baseUrl}/videos`;
 
@@ -189,16 +305,33 @@ export class OpenRouterMediaProvider implements MediaProvider {
       );
     }
 
-    // Extract video URL
+    // Extract video URL. OpenRouter returns either an array `unsigned_urls`
+    // (current API) or a single `unsigned_url` / `url` for legacy responses.
+    const unsignedUrls = jobData.unsigned_urls as string[] | undefined;
     const unsignedUrl = jobData.unsigned_url as string | undefined;
     const signedUrl = jobData.url as string | undefined;
-    const videoUrl = unsignedUrl ?? signedUrl;
+    const videoUrl = unsignedUrls?.[0] ?? unsignedUrl ?? signedUrl;
 
     // Download video bytes if URL available (CR-02: validate URL, redirect: 'error')
     let videoData: string | undefined;
     if (videoUrl) {
       assertSafeUrl(videoUrl);
+      // OpenRouter's "unsigned" URLs are served from openrouter.ai itself and
+      // require the same Bearer auth as the API; non-openrouter hosts (CDN)
+      // accept the URL bare.
+      const downloadHeaders: Record<string, string> = {};
+      try {
+        const host = new URL(videoUrl).hostname.toLowerCase();
+        if (host === 'openrouter.ai' || host.endsWith('.openrouter.ai')) {
+          const key = apiKeyStore.get(this);
+          if (key) downloadHeaders.Authorization = `Bearer ${key}`;
+        }
+      } catch {
+        /* non-URL — leave headers empty */
+      }
+
       const dlRes = await fetch(videoUrl, {
+        headers: downloadHeaders,
         signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT),
         redirect: 'error',
       });
@@ -227,15 +360,48 @@ export class OpenRouterMediaProvider implements MediaProvider {
   async generateImage(request: ImageRequest): Promise<MediaResponse> {
     const model = stripPrefix(request.model ?? 'openai/gpt-image-1');
 
-    const messages: unknown[] = [{ role: 'user', content: request.prompt }];
+    // Request only image output — works for both image-only models (e.g.
+    // x-ai/grok-imagine-image-quality) and dual-output models. Image-only
+    // models return 404 when "text" is also requested.
+    let userContent: unknown = request.prompt;
+    if (request.imageUrls && request.imageUrls.length > 0) {
+      // Multi-modal content array — text + reference images.
+      userContent = [
+        { type: 'text', text: request.prompt },
+        ...request.imageUrls.map((url) => ({
+          type: 'image_url',
+          image_url: { url },
+        })),
+      ];
+    }
+    const messages: unknown[] = [{ role: 'user', content: userContent }];
     const body: Record<string, unknown> = {
       model,
       messages,
-      modalities: ['image', 'text'],
+      modalities: ['image'],
     };
     if (request.size) body.size = request.size;
     if (request.quality) body.quality = request.quality;
-    if (request.imageConfig) body.image_config = request.imageConfig;
+    if (request.imageConfig) {
+      // Convert camelCase keys to OpenRouter snake_case.
+      const ic = request.imageConfig;
+      const out: Record<string, unknown> = {};
+      if (ic.aspectRatio) out.aspect_ratio = ic.aspectRatio;
+      if (ic.imageSize) out.image_size = ic.imageSize;
+      if (ic.strength != null) out.strength = ic.strength;
+      if (ic.style) out.style = ic.style;
+      if (ic.rgbColors) out.rgb_colors = ic.rgbColors;
+      if (ic.backgroundRgbColor) out.background_rgb_color = ic.backgroundRgbColor;
+      if (ic.superResolutionReferences) out.super_resolution_references = ic.superResolutionReferences;
+      if (ic.fontInputs) {
+        out.font_inputs = ic.fontInputs.map((fi) => ({
+          font_url: fi.fontUrl,
+          text: fi.text,
+        }));
+      }
+      body.image_config = out;
+    }
+    if (request.extra) Object.assign(body, request.extra);
 
     const endpoint = `${this.baseUrl}/chat/completions`;
     const res = await this.post(endpoint, body);
@@ -248,7 +414,19 @@ export class OpenRouterMediaProvider implements MediaProvider {
     const data = (await res.json()) as Record<string, unknown>;
     const resp = emptyMediaResponse(data);
 
-    // Extract images from choices
+    // Extract images from choices. OpenRouter places images either inline in
+    // `message.content` as multimodal parts (gpt-image-1 style) or in a
+    // dedicated `message.images` array (gemini-*-image, grok-imagine style
+    // where `content` is null).
+    const pushImageFromUrl = (url: string | undefined) => {
+      if (!url) return;
+      if (url.startsWith('data:')) {
+        const b64 = url.split(',', 2)[1];
+        resp.images.push({ url, b64Json: b64 });
+      } else {
+        resp.images.push({ url });
+      }
+    };
     const choices = data.choices as Array<Record<string, unknown>> | undefined;
     if (choices) {
       for (const choice of choices) {
@@ -258,7 +436,7 @@ export class OpenRouterMediaProvider implements MediaProvider {
         if (typeof msg.content === 'string') {
           resp.text += msg.content;
         }
-        // Content array (multimodal)
+        // Content array (gpt-image-1 multimodal style)
         if (Array.isArray(msg.content)) {
           for (const part of msg.content) {
             const p = part as Record<string, unknown>;
@@ -266,14 +444,16 @@ export class OpenRouterMediaProvider implements MediaProvider {
               resp.text += p.text as string;
             } else if (p.type === 'image_url') {
               const imgUrl = p.image_url as Record<string, unknown> | undefined;
-              const url = imgUrl?.url as string | undefined;
-              if (url?.startsWith('data:')) {
-                const b64 = url.split(',', 2)[1];
-                resp.images.push({ url, b64Json: b64 });
-              } else if (url) {
-                resp.images.push({ url });
-              }
+              pushImageFromUrl(imgUrl?.url as string | undefined);
             }
+          }
+        }
+        // Dedicated images array (gemini-*-image, grok-imagine — content is null)
+        const images = msg.images as Array<Record<string, unknown>> | undefined;
+        if (Array.isArray(images)) {
+          for (const img of images) {
+            const imgUrl = img.image_url as Record<string, unknown> | undefined;
+            pushImageFromUrl(imgUrl?.url as string | undefined);
           }
         }
       }
@@ -286,7 +466,34 @@ export class OpenRouterMediaProvider implements MediaProvider {
 
   async generateAudio(request: AudioRequest): Promise<MediaResponse> {
     const model = stripPrefix(request.model ?? 'openai/gpt-4o-mini-tts');
+    const requestedFormat = request.format ?? 'wav';
 
+    // Route based on model capability.
+    //   output_modalities=["speech"]  → POST /audio/speech (OpenAI-compat TTS,
+    //                                    e.g. hexgrad/kokoro-82m)
+    //   contains "audio"              → chat-completions SSE w/ audio modality
+    //                                    (e.g. openai/gpt-audio*)
+    //   unknown                       → try /audio/speech (broader-compat).
+    const meta = await this.fetchModelMeta(model);
+    const outMods = meta.outputModalities;
+    const useSpeechEndpoint =
+      outMods.includes('speech') ||
+      (outMods.length === 0) ||
+      !outMods.includes('audio');
+
+    if (useSpeechEndpoint) {
+      return this.generateAudioViaSpeechEndpoint(
+        model,
+        request.text,
+        request.voice ?? 'alloy',
+        requestedFormat,
+        request
+      );
+    }
+
+    // Chat-completions audio modality: openai/gpt-audio family. Streaming on
+    // OpenAI is locked to pcm16 — wire that and re-wrap to user's format below.
+    const wireFormat = requestedFormat === 'wav' ? 'pcm16' : requestedFormat;
     const messages: unknown[] = [{ role: 'user', content: request.text }];
     const body: Record<string, unknown> = {
       model,
@@ -295,7 +502,7 @@ export class OpenRouterMediaProvider implements MediaProvider {
       stream: true,
       audio: {
         voice: request.voice ?? 'alloy',
-        format: request.format ?? 'wav',
+        format: wireFormat,
       },
     };
 
@@ -399,11 +606,75 @@ export class OpenRouterMediaProvider implements MediaProvider {
     const resp = emptyMediaResponse(null);
     resp.text = textContent;
     if (audioChunks.length > 0) {
+      let b64 = audioChunks.join('');
+      // SSE chunks decode independently — concatenate raw bytes for cleaner output.
+      try {
+        const parts = audioChunks.map(base64ToBytes);
+        const total = parts.reduce((n, p) => n + p.byteLength, 0);
+        const merged = new Uint8Array(total);
+        let off = 0;
+        for (const p of parts) { merged.set(p, off); off += p.byteLength; }
+        b64 = bytesToBase64(merged);
+        if (requestedFormat === 'wav') {
+          b64 = bytesToBase64(wrapPcm16AsWav(merged));
+        }
+      } catch {
+        /* fall back to concatenated base64 strings */
+      }
       resp.audio = {
-        data: audioChunks.join(''),
-        format: request.format ?? 'wav',
+        data: b64,
+        format: requestedFormat,
       };
     }
+    return resp;
+  }
+
+  /**
+   * Call OpenRouter's OpenAI-compatible TTS endpoint (`POST /audio/speech`).
+   * Returns raw bytes for the requested format; wraps PCM → WAV when needed.
+   */
+  private async generateAudioViaSpeechEndpoint(
+    model: string,
+    text: string,
+    voice: string,
+    requestedFormat: string,
+    request?: AudioRequest
+  ): Promise<MediaResponse> {
+    // Map requested format → upstream response_format. Kokoro etc. only
+    // emit pcm/mp3; we wrap pcm into WAV ourselves when caller asked for wav.
+    const wireFormat =
+      requestedFormat === 'wav' || requestedFormat === 'pcm' || requestedFormat === 'pcm16'
+        ? 'pcm'
+        : requestedFormat;
+
+    const endpoint = `${this.baseUrl}/audio/speech`;
+    const body: Record<string, unknown> = {
+      model,
+      input: text,
+      voice,
+      response_format: wireFormat,
+    };
+    if (request?.speed != null) body.speed = request.speed;
+    if (request?.extra) Object.assign(body, request.extra);
+    const res = await this.post(endpoint, body);
+    if (!res.ok) {
+      throw new MediaProviderError(
+        `Audio generation failed [model=${model}] [endpoint=${endpoint}]: ${res.status} ${await res.text()}`,
+        { provider: 'openrouter', model, endpoint }
+      );
+    }
+    const buf = new Uint8Array(await res.arrayBuffer());
+    const finalBytes = requestedFormat === 'wav' ? wrapPcm16AsWav(buf) : buf;
+    const resp = emptyMediaResponse({
+      endpoint: 'audio/speech',
+      model,
+      mime_type: res.headers.get('content-type') ?? '',
+    });
+    resp.text = text;
+    resp.audio = {
+      data: bytesToBase64(finalBytes),
+      format: requestedFormat,
+    };
     return resp;
   }
 

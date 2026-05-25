@@ -21,16 +21,40 @@ export class MediaProviderError extends Error {
   }
 }
 
+/** Frame guidance for image-to-video models (e.g. Veo). */
+export interface VideoFrameImage {
+  /** Image content type — usually "image_url". */
+  type?: string;
+  /** Image URL or `data:` URL. */
+  imageUrl: { url: string };
+  /** Which frame this image controls. */
+  frameType?: 'first_frame' | 'last_frame';
+}
+
+/** Reference image for style / subject guidance (Veo "reference-to-video"). */
+export interface VideoInputReference {
+  type?: string;
+  imageUrl: { url: string };
+}
+
 export interface VideoRequest {
   prompt: string;
   model?: string;
+  /** Duration in seconds (model-dependent — typically 4, 6, or 8). */
   duration?: number;
   resolution?: '480p' | '720p' | '1080p' | '1K' | '2K' | '4K';
   aspectRatio?: '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '21:9' | '9:21';
+  /** Toggle synchronized audio track (when model supports it). */
   generateAudio?: boolean;
   seed?: number;
-  frameImages?: Array<{ type: string; imageUrl: { url: string }; frameType?: string }>;
-  inputReferences?: Array<{ type: string; imageUrl: { url: string } }>;
+  /** Single input image for image-to-video (legacy convenience field). */
+  imageUrl?: string;
+  /** Per-frame guidance — first_frame / last_frame. Takes precedence over `imageUrl`. */
+  frameImages?: VideoFrameImage[];
+  /** Reference images for style/subject guidance. */
+  inputReferences?: VideoInputReference[];
+  /** Model-specific passthrough parameters (e.g. Veo's `personGeneration`). */
+  extra?: Record<string, unknown>;
   pollInterval?: number; // ms, default 30000
   timeout?: number; // ms, default 600000
 }
@@ -40,12 +64,24 @@ export interface ImageRequest {
   model?: string;
   size?: string;
   quality?: string;
+  /** Reference / source image(s) for image+text→image models (e.g. grok-imagine). */
+  imageUrls?: string[];
   imageConfig?: {
     aspectRatio?: string;
     imageSize?: string;
+    /** Image-to-image blend strength (model-dependent, 0–1). */
+    strength?: number;
+    /** Style hint — Recraft V3 etc. */
+    style?: string;
+    /** RGB color palette — array of [r,g,b]. */
+    rgbColors?: number[][];
+    /** Background color hint as [r,g,b]. */
+    backgroundRgbColor?: number[];
     superResolutionReferences?: string[];
     fontInputs?: Array<{ fontUrl: string; text: string }>;
   };
+  /** Model-specific passthrough parameters. */
+  extra?: Record<string, unknown>;
 }
 
 export interface AudioRequest {
@@ -53,6 +89,10 @@ export interface AudioRequest {
   model?: string;
   voice?: string;
   format?: string;
+  /** Playback speed multiplier (OpenAI TTS only — other models ignore). */
+  speed?: number;
+  /** Model-specific passthrough parameters. */
+  extra?: Record<string, unknown>;
 }
 
 export interface MediaResponse {
