@@ -414,30 +414,6 @@ The control plane is a stateless Go service. Agents connect from anywhere - your
 <table>
   <tr>
     <td align="center" width="50%">
-      <a href="https://agentfield.ai/blog/ai-backend?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-blog-ai-backend">
-        <img src="assets/blog/ai-backend.webp" alt="The AI Backend" />
-      </a>
-      <br/>
-      <b>The AI Backend</b>
-      <br/>
-      <sub>Our thesis: in five years every serious software company will run an AI backend - a reasoning layer that makes the decisions that used to be hardcoded.</sub>
-      <br/><br/>
-      <a href="https://agentfield.ai/blog/ai-backend?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-blog-ai-backend">Read post →</a>
-    </td>
-    <td align="center" width="50%">
-      <a href="https://agentfield.ai/blog/iam-ai-backends?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-blog-iam">
-        <img src="assets/blog/iam-ai-backends.png" alt="IAM for AI Backends" />
-      </a>
-      <br/>
-      <b>IAM for AI Backends</b>
-      <br/>
-      <sub>Agents need identity, not API keys - how decentralized identifiers and verifiable credentials make agent-to-agent delegation auditable and accountable.</sub>
-      <br/><br/>
-      <a href="https://agentfield.ai/blog/iam-ai-backends?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-blog-iam">Read post →</a>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
       <a href="https://agentfield.ai/blog/what-is-harness-orchestration?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-blog-what-is-harness-orchestration">
         <img src="assets/blog/what-is-harness-orchestration.webp" alt="What is harness orchestration?" />
       </a>
@@ -471,6 +447,30 @@ The control plane is a stateless Go service. Agents connect from anywhere - your
       <sub>Shaping the boundary surface of a harness across four engineerable dimensions: workspace, drift, verifier placement, and recovery budget.</sub>
       <br/><br/>
       <a href="https://agentfield.ai/blog/harness-as-membrane?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-blog-harness-membrane">Read post →</a>
+    </td>
+    <td align="center" width="50%">
+      <a href="https://agentfield.ai/blog/ai-backend?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-blog-ai-backend">
+        <img src="assets/blog/ai-backend.webp" alt="The AI Backend" />
+      </a>
+      <br/>
+      <b>The AI Backend</b>
+      <br/>
+      <sub>Our thesis: in five years every serious software company will run an AI backend - a reasoning layer that makes the decisions that used to be hardcoded.</sub>
+      <br/><br/>
+      <a href="https://agentfield.ai/blog/ai-backend?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-blog-ai-backend">Read post →</a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <a href="https://agentfield.ai/blog/iam-ai-backends?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-blog-iam">
+        <img src="assets/blog/iam-ai-backends.png" alt="IAM for AI Backends" />
+      </a>
+      <br/>
+      <b>IAM for AI Backends</b>
+      <br/>
+      <sub>Agents need identity, not API keys - how decentralized identifiers and verifiable credentials make agent-to-agent delegation auditable and accountable.</sub>
+      <br/><br/>
+      <a href="https://agentfield.ai/blog/iam-ai-backends?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-blog-iam">Read post →</a>
     </td>
     <td align="center" width="50%">
     </td>
