@@ -1618,14 +1618,15 @@ function RunRow({
       {/* Status dot — prefer the root execution status so pause/cancel are
           reflected immediately, even when stragglers are still in-flight */}
       <TableCell className="w-44 min-w-[11rem]">
-        <div className="flex flex-col items-start gap-1">
+        <div className="flex min-w-0 max-w-full flex-col items-start gap-1">
           <StatusDot status={run.root_execution_status ?? run.status} />
           {errorMeta ? (
-            <div className="flex max-w-full flex-wrap items-center gap-1">
+            <div className="flex min-w-0 max-w-full items-center gap-1">
               <span
+                title={errorMeta.tooltip}
                 className={cn(
                   badgeVariants({ variant: "outline", size: "sm" }),
-                  "h-5 max-w-full px-1.5 text-micro-plus capitalize",
+                  "h-5 min-w-0 max-w-full truncate whitespace-nowrap px-1.5 text-micro-plus capitalize",
                   errorMeta.badgeClassName,
                 )}
               >
@@ -1634,7 +1635,7 @@ function RunRow({
               {errorMeta.diagnosticsLabel && errorMeta.diagnosticsPath ? (
                 <Link
                   to={errorMeta.diagnosticsPath}
-                  className="text-micro-plus text-sky-600 underline-offset-2 hover:underline dark:text-sky-400"
+                  className="shrink-0 text-micro-plus text-sky-600 underline-offset-2 hover:underline dark:text-sky-400"
                   onClick={(e) => e.stopPropagation()}
                 >
                   {errorMeta.diagnosticsLabel}

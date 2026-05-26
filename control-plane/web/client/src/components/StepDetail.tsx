@@ -390,8 +390,9 @@ export function StepDetail({ executionId }: { executionId: string }) {
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <Badge
                   variant="outline"
+                  title={errorCategoryMeta.tooltip}
                   className={cn(
-                    "h-5 px-1.5 text-micro-plus capitalize",
+                    "h-5 max-w-[18rem] truncate whitespace-nowrap px-1.5 text-micro-plus capitalize",
                     errorCategoryMeta.badgeClassName,
                   )}
                 >
