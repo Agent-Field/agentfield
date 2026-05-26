@@ -29,8 +29,6 @@ func waitForHTTPServer(t *testing.T, addr string) {
 }
 
 func TestAgentNodeRunnerPortEnvAndRegistry(t *testing.T) {
-	t.Parallel()
-
 	home := t.TempDir()
 	runner := &AgentNodeRunner{AgentFieldHome: home}
 
