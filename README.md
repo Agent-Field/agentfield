@@ -411,6 +411,8 @@ The control plane is a stateless Go service. Agents connect from anywhere - your
 
 ## Learn More
 
+The thinking behind AgentField - essays on AI backends, harness orchestration, and the infrastructure production agents actually need.
+
 <table>
   <tr>
     <td align="center" width="50%">
