@@ -419,6 +419,62 @@ The control plane is a stateless Go service. Agents connect from anywhere - your
 
 </div>
 
+
+## ❓ FAQ
+
+### What is AgentField?
+
+AgentField is the AI Backend - Build and scale AI agents like APIs. Deploy, observe, and prove. Backend agents need backend infrastructure, and AgentField provides the platform to run AI agents as services.
+
+### Key Features
+
+| Feature | Description |
+|---------|-------------|
+| **Agent APIs** | Deploy AI agents as API endpoints |
+| **Auto Scaling** | Scale agents based on demand |
+| **Observability** | Monitor agent performance and behavior |
+| **Provable Results** | Verify agent outputs and decisions |
+| **Multi-Language SDKs** | Python, Go, TypeScript SDKs |
+| **Backend Infrastructure** | Production-ready agent hosting |
+
+### Installation
+
+| SDK | Installation |
+|-----|-------------|
+| **Python SDK** | `pip install agentfield` |
+| **Go SDK** | See [Go SDK Docs](https://agentfield.ai/docs/reference/sdks/go) |
+| **TypeScript SDK** | See [TypeScript SDK Docs](https://agentfield.ai/docs/reference/sdks/typescript) |
+
+### Quick Start
+
+See [Quick Start Guide](https://agentfield.ai/docs/learn/quickstart) for detailed setup instructions.
+
+### Requirements
+
+- Python 3.8+ (for Python SDK)
+- Go 1.19+ (for Go SDK)
+- Node.js 18+ (for TypeScript SDK)
+
+### Use Cases
+
+- Autonomous AI services
+- API-driven AI agents
+- Production AI deployments
+- Multi-agent systems
+- Agent orchestration
+
+### License
+
+Apache 2.0 License
+
+### Help & Resources
+
+- [Documentation](https://agentfield.ai/docs/learn)
+- [Python SDK](https://agentfield.ai/docs/reference/sdks/python)
+- [Go SDK](https://agentfield.ai/docs/reference/sdks/go)
+- [TypeScript SDK](https://agentfield.ai/docs/reference/sdks/typescript)
+- [Discord](https://discord.gg/aBHaXMkpqh)
+
 ## License
 
 [Apache 2.0](LICENSE)
