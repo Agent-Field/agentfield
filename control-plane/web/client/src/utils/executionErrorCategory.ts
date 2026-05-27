@@ -14,9 +14,15 @@ export interface ExecutionErrorCategoryMeta {
   badgeClassName: string;
   diagnosticsLabel?: string;
   diagnosticsPath?: string;
+  /**
+   * Full text safe to surface on hover (`title=`). For canonical categories
+   * this mirrors `description`; for unknown categories it preserves the raw
+   * incoming string so a one-line truncated badge label doesn't drop context.
+   */
+  tooltip: string;
 }
 
-const ERROR_CATEGORY_META: Record<ExecutionErrorCategory, Omit<ExecutionErrorCategoryMeta, "category">> = {
+const ERROR_CATEGORY_META: Record<ExecutionErrorCategory, Omit<ExecutionErrorCategoryMeta, "category" | "tooltip">> = {
   llm_unavailable: {
     label: "LLM unavailable",
     description: "LLM backend circuit breaker is open.",
@@ -60,21 +66,38 @@ const ERROR_CATEGORY_META: Record<ExecutionErrorCategory, Omit<ExecutionErrorCat
   },
 };
 
+/**
+ * Max characters we let through as a badge label. The Runs table status cell
+ * is only ~11rem wide, so anything longer becomes an ellipsised pill (full
+ * text remains available via the badge's `title=tooltip`).
+ */
+const FALLBACK_LABEL_MAX_CHARS = 24;
+
 export function getExecutionErrorCategoryMeta(
   category?: string | null,
 ): ExecutionErrorCategoryMeta | null {
   if (!category) {
     return null;
   }
-  const normalized = category.trim().toLowerCase() as ExecutionErrorCategory;
+  const raw = category.trim();
+  const normalized = raw.toLowerCase() as ExecutionErrorCategory;
   const known = ERROR_CATEGORY_META[normalized];
-  if (!known) {
-    return {
-      category: normalized,
-      label: normalized.replace(/_/g, " "),
-      description: "Execution failed with an uncategorized error.",
-      badgeClassName: "bg-red-500/10 text-red-700 border-red-500/30 dark:text-red-300",
-    };
+  if (known) {
+    return { category: normalized, ...known, tooltip: known.description };
   }
-  return { category: normalized, ...known };
+  // Unknown category — likely a diagnostic message leaking through instead of
+  // a slug. Render a short fallback label so the badge stays single-line and
+  // preserve the original string on hover.
+  const slugged = raw.replace(/_/g, " ");
+  const label =
+    slugged.length > FALLBACK_LABEL_MAX_CHARS
+      ? "Unknown error"
+      : slugged;
+  return {
+    category: normalized,
+    label,
+    description: "Execution failed with an uncategorized error.",
+    badgeClassName: "bg-red-500/10 text-red-700 border-red-500/30 dark:text-red-300",
+    tooltip: raw,
+  };
 }

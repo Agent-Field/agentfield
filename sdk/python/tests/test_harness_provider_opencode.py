@@ -45,7 +45,6 @@ async def test_opencode_provider_constructs_command_and_maps_result(
         "json",
         "--dir",
         "/tmp/work",
-        "--dangerously-skip-permissions",
         "hello",
     ]
     assert captured["env"]["A"] == "1"
@@ -129,7 +128,6 @@ async def test_opencode_passes_model_flag(monkeypatch: pytest.MonkeyPatch):
         "json",
         "-m",
         "openai/gpt-5",
-        "--dangerously-skip-permissions",
         "hello",
     ]
     # Model is now passed via -m flag, not environment variable
@@ -400,8 +398,9 @@ async def test_opencode_v14_cli_shape_no_deprecated_flags(
     assert "--dir" in captured_cmd, "Must use --dir for project directory (v1.4+)"
     # Must use -m for model
     assert "-m" in captured_cmd, "Must use -m flag for model (v1.4+)"
-    # Must skip permissions for headless execution
-    assert "--dangerously-skip-permissions" in cmd_str
+    # Must NOT use --dangerously-skip-permissions: opencode v1.14 rejects it
+    # on `run` and prints help to stdout, see agentfield#582.
+    assert "--dangerously-skip-permissions" not in cmd_str
     # Prompt must be positional (last arg)
     assert captured_cmd[-1] == "build the feature"
 

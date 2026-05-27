@@ -5,6 +5,7 @@ Bounded in-memory process log capture (stdout/stderr) and HTTP NDJSON API for Ag
 from __future__ import annotations
 
 import json
+import io
 import os
 import queue
 import secrets
@@ -93,7 +94,9 @@ class ProcessLogRing:
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
         with self._lock:
             self._seq += 1
-            entry = LogEntry(seq=self._seq, ts=ts, stream=stream, line=raw, truncated=truncated)
+            entry = LogEntry(
+                seq=self._seq, ts=ts, stream=stream, line=raw, truncated=truncated
+            )
             self._entries.append(entry)
             self._approx_bytes += len(entry.line.encode("utf-8")) + 64
             while self._approx_bytes > self._max_bytes and len(self._entries) > 1:
@@ -101,7 +104,9 @@ class ProcessLogRing:
                 self._approx_bytes -= len(old.line.encode("utf-8")) + 64
         _notify_followers()
 
-    def snapshot_after(self, since_seq: int, limit: Optional[int] = None) -> List[LogEntry]:
+    def snapshot_after(
+        self, since_seq: int, limit: Optional[int] = None
+    ) -> List[LogEntry]:
         with self._lock:
             items = [e for e in self._entries if e.seq > since_seq]
             if limit is not None and limit > 0:
@@ -119,7 +124,7 @@ class ProcessLogRing:
             return self._seq
 
 
-class _TeeTextIO(TextIO):
+class _TeeTextIO(io.TextIOBase):
     """Write-through to original stream and log ring (line-buffered by \\n)."""
 
     def __init__(
@@ -146,10 +151,33 @@ class _TeeTextIO(TextIO):
                 self._ring.append(self._stream_name, line, self._max_line_bytes)
         return len(s)
 
+    def writelines(self, lines) -> None:
+        for line in lines:
+            self.write(line)
+
     def flush(self) -> None:
         self._original.flush()
 
-    # Minimal TextIO protocol for print()
+    def fileno(self) -> int:
+        return self._original.fileno()
+
+    def readable(self) -> bool:
+        return bool(self._original.readable())
+
+    def writable(self) -> bool:
+        return bool(self._original.writable())
+
+    def seekable(self) -> bool:
+        return bool(self._original.seekable())
+
+    def close(self) -> None:
+        if self.closed:
+            return
+        if self._buf:
+            self._ring.append(self._stream_name, self._buf, self._max_line_bytes)
+            self._buf = ""
+        super().close()
+
     @property
     def encoding(self) -> str:
         return getattr(self._original, "encoding", "utf-8") or "utf-8"
@@ -221,7 +249,9 @@ def iter_tail_ndjson(
     ring = get_ring()
     cap_tail = tail_lines
     if since_seq > 0:
-        entries = ring.snapshot_after(since_seq, limit=cap_tail if cap_tail > 0 else None)
+        entries = ring.snapshot_after(
+            since_seq, limit=cap_tail if cap_tail > 0 else None
+        )
     else:
         n = cap_tail if cap_tail > 0 else 200
         entries = ring.tail(n)

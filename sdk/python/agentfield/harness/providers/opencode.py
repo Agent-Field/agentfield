@@ -163,8 +163,11 @@ class OpenCodeProvider:
         if options.get("model"):
             cmd.extend(["-m", str(options["model"])])
 
-        # Skip interactive permission prompts for headless execution
-        cmd.append("--dangerously-skip-permissions")
+        # opencode v1.14 does not accept --dangerously-skip-permissions on the
+        # `run` subcommand — passing it makes yargs print the run-help screen
+        # to stdout and exit 0, which the SDK then captures as the LLM
+        # response. opencode in non-TTY mode proceeds without permission
+        # prompting, so no flag is needed. See agentfield#582.
 
         # Handle system prompt - prepend to user prompt since OpenCode
         # has no native --system-prompt flag
