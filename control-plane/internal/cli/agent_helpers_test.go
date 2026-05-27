@@ -3,8 +3,8 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,6 +12,12 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
 
 func TestAgentHelpers(t *testing.T) {
 	t.Run("output agent json supports pretty and compact", func(t *testing.T) {
@@ -41,17 +47,30 @@ func TestAgentHelpers(t *testing.T) {
 	t.Run("agent http covers success headers and failures", func(t *testing.T) {
 		var gotAPIKey string
 		var gotContentType string
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			gotAPIKey = r.Header.Get("X-API-Key")
-			gotContentType = r.Header.Get("Content-Type")
-			require.Equal(t, "/api/test", r.URL.Path)
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"ok":true}`))
-		}))
-		defer server.Close()
+		var gotMethod string
+		var gotPath string
+		var gotBody []byte
+
+		oldTransport := http.DefaultTransport
+		http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			gotMethod = req.Method
+			gotPath = req.URL.Path
+			gotAPIKey = req.Header.Get("X-API-Key")
+			gotContentType = req.Header.Get("Content-Type")
+			bodyBytes, err := io.ReadAll(req.Body)
+			require.NoError(t, err)
+			gotBody = bodyBytes
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(bytes.NewReader([]byte(`{"ok":true}`))),
+				Request:    req,
+			}, nil
+		})
+		defer func() { http.DefaultTransport = oldTransport }()
 
 		oldServer, oldKey, oldTimeout := serverURL, apiKey, requestTimeout
-		serverURL, apiKey, requestTimeout = server.URL+"/", "api-secret", 1
+		serverURL, apiKey, requestTimeout = "http://agent.test", "api-secret", 1
 		defer func() {
 			serverURL, apiKey, requestTimeout = oldServer, oldKey, oldTimeout
 		}()
@@ -60,8 +79,11 @@ func TestAgentHelpers(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, http.StatusOK, status)
 		require.JSONEq(t, `{"ok":true}`, string(body))
+		require.Equal(t, http.MethodPost, gotMethod)
+		require.Equal(t, "/api/test", gotPath)
 		require.Equal(t, "api-secret", gotAPIKey)
 		require.Equal(t, "application/json", gotContentType)
+		require.JSONEq(t, `{"name":"demo"}`, string(gotBody))
 
 		_, _, err = agentHTTP(http.MethodPost, "/api/test", map[string]func(){"bad": func() {}})
 		require.ErrorContains(t, err, "encode request body")
@@ -69,6 +91,21 @@ func TestAgentHelpers(t *testing.T) {
 		serverURL = "://bad-url"
 		_, _, err = agentHTTP(http.MethodGet, "/api/test", nil)
 		require.ErrorContains(t, err, "build request")
+	})
+
+	t.Run("agent command help path returns structured output", func(t *testing.T) {
+		oldServer := serverURL
+		serverURL = "http://example.test"
+		defer func() { serverURL = oldServer }()
+
+		cmd := NewAgentCommand()
+		cmd.SetArgs([]string{})
+		output := captureOutput(t, func() {
+			require.NoError(t, cmd.Execute())
+		})
+		require.Contains(t, output, `"ok": true`)
+		require.Contains(t, output, `"command": "af agent"`)
+		require.Contains(t, output, `"server": "http://example.test"`)
 	})
 
 	t.Run("read batch input covers stdin and files", func(t *testing.T) {
@@ -224,22 +261,29 @@ func TestAgentCommandSubcommands(t *testing.T) {
 	}
 
 	var records []requestRecord
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	oldTransport := http.DefaultTransport
+	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		var body bytes.Buffer
-		_, _ = body.ReadFrom(r.Body)
+		if req.Body != nil {
+			_, _ = body.ReadFrom(req.Body)
+		}
 		records = append(records, requestRecord{
-			Method: r.Method,
-			Path:   r.URL.Path,
-			Query:  r.URL.RawQuery,
+			Method: req.Method,
+			Path:   req.URL.Path,
+			Query:  req.URL.RawQuery,
 			Body:   body.String(),
 		})
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true,"data":{"id":"demo"}}`))
-	}))
-	defer server.Close()
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(bytes.NewReader([]byte(`{"ok":true,"data":{"id":"demo"}}`))),
+			Request:    req,
+		}, nil
+	})
+	defer func() { http.DefaultTransport = oldTransport }()
 
 	oldServer, oldFormat, oldTimeout := serverURL, outputFormat, requestTimeout
-	serverURL, outputFormat, requestTimeout = server.URL, "json", 1
+	serverURL, outputFormat, requestTimeout = "http://agent.test", "json", 1
 	defer func() {
 		serverURL, outputFormat, requestTimeout = oldServer, oldFormat, oldTimeout
 	}()
@@ -281,7 +325,7 @@ func TestAgentCommandSubcommands(t *testing.T) {
 			if tt.wantBodyPart != "" {
 				require.Contains(t, records[0].Body, tt.wantBodyPart)
 			}
-			require.Contains(t, output, `"server": "`+server.URL+`"`)
+			require.Contains(t, output, `"server": "http://agent.test"`)
 		})
 	}
 
@@ -339,14 +383,19 @@ func TestSpinnerAndPrintHelpers(t *testing.T) {
 }
 
 func TestProxyToServerArrayResponse(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`[{"id":"one"}]`))
-	}))
-	defer server.Close()
+	oldTransport := http.DefaultTransport
+	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(bytes.NewReader([]byte(`[{"id":"one"}]`))),
+			Request:    req,
+		}, nil
+	})
+	defer func() { http.DefaultTransport = oldTransport }()
 
 	oldServer, oldFormat, oldTimeout := serverURL, outputFormat, requestTimeout
-	serverURL, outputFormat, requestTimeout = server.URL, "json", 1
+	serverURL, outputFormat, requestTimeout = "http://agent.test", "json", 1
 	defer func() {
 		serverURL, outputFormat, requestTimeout = oldServer, oldFormat, oldTimeout
 	}()
@@ -355,7 +404,7 @@ func TestProxyToServerArrayResponse(t *testing.T) {
 		proxyToServer(http.MethodGet, "/array", nil)
 	})
 	require.Contains(t, output, `"ok": true`)
-	require.Contains(t, output, `"server": "`+server.URL+`"`)
+	require.Contains(t, output, `"server": "http://agent.test"`)
 }
 
 func batchFile(t *testing.T, content string) string {
