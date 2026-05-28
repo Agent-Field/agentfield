@@ -1,0 +1,609 @@
+/* DAG-specific styles that complement the foundation system */
+
+/* ReactFlow overrides for Linear.app aesthetic */
+.react-flow__node {
+  font-family: inherit;
+}
+
+.react-flow__edge-path {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.react-flow__edge.animated .react-flow__edge-path {
+  stroke-dasharray: 5;
+  animation: dashdraw 0.5s linear infinite;
+}
+
+@keyframes dashdraw {
+  to {
+    stroke-dashoffset: -10;
+  }
+}
+
+/* Enhanced edge animations */
+@keyframes dash {
+  to {
+    stroke-dashoffset: -20;
+  }
+}
+
+/* Enhanced edge styling */
+.react-flow__edge.enhanced {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 1px 2px color-mix(in srgb, var(--foreground) 12%, transparent));
+}
+
+.react-flow__edge.enhanced.animated {
+  animation: dash 2s linear infinite;
+}
+
+/* Status-based edge colors */
+.react-flow__edge[data-status="succeeded"] {
+  stroke: var(--status-success);
+  stroke-width: 2.5px;
+}
+
+.react-flow__edge[data-status="failed"] {
+  stroke: var(--status-error);
+  stroke-width: 2.5px;
+  stroke-dasharray: 8,4;
+}
+
+.react-flow__edge[data-status="running"] {
+  stroke: var(--status-running);
+  stroke-width: 3px;
+  stroke-dasharray: 12,8;
+  animation: dash 2s linear infinite;
+}
+
+.react-flow__edge[data-status="pending"] {
+  stroke: var(--status-warning);
+  stroke-width: 2px;
+  opacity: 0.7;
+}
+
+/* Enhanced edge markers */
+.react-flow__edge .react-flow__edge-path {
+  transition: all 0.2s ease;
+}
+
+.react-flow__edge:hover .react-flow__edge-path {
+  stroke-width: 3px;
+  filter: drop-shadow(0 2px 6px color-mix(in srgb, var(--foreground) 18%, transparent));
+}
+
+/* Custom handle styles - Dark theme compatible */
+.react-flow__handle {
+  border: 2px solid var(--border);
+  background: hsl(var(--card));
+  width: 8px;
+  height: 8px;
+  transition: all var(--transition-fast);
+}
+
+.react-flow__handle:hover {
+  background: hsl(var(--accent));
+  border-color: hsl(var(--muted-foreground));
+  transform: scale(1.2);
+}
+
+.react-flow__handle.react-flow__handle-left {
+  left: -4px;
+}
+
+.react-flow__handle.react-flow__handle-right {
+  right: -4px;
+}
+
+/* Minimap styling - Dark theme compatible */
+.react-flow__minimap {
+  background-color: color-mix(in oklch, hsl(var(--card)) 95%, transparent) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: var(--shadow-lg) !important;
+  backdrop-filter: blur(8px) !important;
+}
+
+.react-flow__minimap-mask {
+  fill: color-mix(in oklch, hsl(var(--secondary)) 10%, transparent) !important;
+  stroke: hsl(var(--secondary)) !important;
+  stroke-width: 2 !important;
+}
+
+/* Controls styling */
+.react-flow__controls {
+  box-shadow: none !important;
+}
+
+.react-flow__controls-button {
+  background: hsl(var(--card)) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-md) !important;
+  color: hsl(var(--foreground)) !important;
+  transition: all var(--transition-fast) !important;
+  backdrop-filter: blur(8px) !important;
+  fill: hsl(var(--foreground)) !important;
+}
+
+.react-flow__controls-button:hover {
+  background: hsl(var(--accent)) !important;
+  border-color: hsl(var(--muted-foreground)) !important;
+  transform: translateY(-1px) !important;
+  color: hsl(var(--foreground)) !important;
+  fill: hsl(var(--foreground)) !important;
+}
+
+.react-flow__controls-button svg {
+  width: 16px !important;
+  height: 16px !important;
+  fill: hsl(var(--foreground)) !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+/* Panel styling */
+.react-flow__panel {
+  margin: 12px;
+}
+
+/* Background - Linear.app precision */
+.react-flow__background {
+  background: hsl(var(--background)) !important; /* Pure black like Linear */
+}
+
+/* Remove background dots completely */
+.react-flow__background-pattern {
+  display: none !important;
+}
+
+/* Selection styling - Dark theme compatible */
+.react-flow__node.selected {
+  box-shadow: 0 0 0 2px hsl(var(--secondary)), 0 0 0 4px color-mix(in oklch, hsl(var(--secondary)) 20%, transparent) !important;
+}
+
+/* Multi-scale zoom mode specific styles */
+
+/* Overview mode - 20x12px nodes with status dots only */
+.react-flow__node[data-type="overview"] {
+  transition: all 0.15s ease;
+}
+
+.react-flow__node[data-type="overview"]:hover {
+  transform: scale(1.1);
+  z-index: 10;
+}
+
+/* Normal mode - 64x24px compact nodes */
+.react-flow__node[data-type="compact"] {
+  transition: all 0.15s ease;
+}
+
+.react-flow__node[data-type="compact"]:hover {
+  transform: scale(1.02);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--foreground) 16%, transparent);
+}
+
+/* Detail mode - 96x36px expanded nodes */
+.react-flow__node[data-type="detail"] {
+  transition: all 0.15s ease;
+}
+
+.react-flow__node[data-type="detail"]:hover {
+  transform: scale(1.02);
+  box-shadow: 0 6px 24px color-mix(in srgb, var(--foreground) 18%, transparent);
+}
+
+/* Typography system for workflow components - Linear precision */
+.workflow-name-primary {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: hsl(var(--foreground));
+}
+
+.workflow-info-secondary {
+  font-size: 11px;
+  font-weight: 400;
+  color: hsl(var(--muted-foreground));
+  font-family: var(--font-mono); /* For counts and IDs */
+}
+
+/* Node-specific typography overrides */
+.react-flow__node[data-type="overview"] .workflow-name-primary,
+.react-flow__node[data-type="overview"] .workflow-info-secondary {
+  display: none; /* Overview shows only status dots */
+}
+
+.react-flow__node[data-type="compact"] .workflow-name-primary {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.react-flow__node[data-type="compact"] .workflow-info-secondary {
+  font-size: 9px;
+}
+
+.react-flow__node[data-type="detail"] .workflow-name-primary {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.react-flow__node[data-type="detail"] .workflow-info-secondary {
+  font-size: 10px;
+}
+
+/* Smooth transitions for zoom mode changes and micro-interactions */
+.react-flow__node {
+  transition: all 0.15s ease;
+}
+
+/* Enhanced micro-interactions */
+.react-flow__node:hover {
+  transition-duration: 0.1s;
+}
+
+/* Row hover effects for workflow tables */
+.workflow-row {
+  transition: all 0.15s ease;
+}
+
+.workflow-row:hover {
+  background-color: color-mix(in oklch, var(--muted) 50%, transparent);
+  border-color: var(--border);
+}
+
+/* Status dot animations */
+.status-dot-running {
+  animation: gentle-pulse 2s ease-in-out infinite;
+}
+
+@keyframes gentle-pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.1);
+  }
+}
+
+/* Loading skeleton pulse that matches final content */
+.skeleton-pulse {
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: -200px 0;
+  }
+  100% {
+    background-position: calc(200px + 100%) 0;
+  }
+}
+
+.skeleton-pulse {
+  background: linear-gradient(90deg,
+    var(--muted) 25%,
+    color-mix(in oklch, var(--muted) 50%, transparent) 50%,
+    var(--muted) 75%
+  );
+  background-size: 200px 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+}
+
+/* Execution panel overlay */
+.execution-panel-overlay {
+  backdrop-filter: blur(2px);
+  background: color-mix(in srgb, hsl(var(--background)) 12%, transparent);
+}
+
+/* Tooltip styling */
+.dag-tooltip {
+  z-index: 1000;
+  pointer-events: none;
+  font-size: 12px;
+  line-height: 1.4;
+  max-width: 200px;
+}
+
+.dag-tooltip-arrow {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+
+/* Status-specific animations - Dark theme compatible */
+.status-running {
+  animation: pulse-blue 2s infinite;
+}
+
+@keyframes pulse-blue {
+  0%, 100% {
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--status-running) 40%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in oklch, var(--status-running) 10%, transparent);
+  }
+}
+
+.status-failed {
+  animation: pulse-red 2s infinite;
+}
+
+@keyframes pulse-red {
+  0%, 100% {
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--status-error) 40%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in oklch, var(--status-error) 10%, transparent);
+  }
+}
+
+/* Responsive adjustments for different screen sizes */
+@media (max-width: 768px) {
+  .react-flow__panel {
+    margin: 8px;
+  }
+
+  .execution-panel {
+    width: 100vw !important;
+    height: 50vh !important;
+    top: auto !important;
+    bottom: 0 !important;
+    right: 0 !important;
+    border-radius: 12px 12px 0 0 !important;
+  }
+
+  /* Mobile node size adjustments */
+  .react-flow__node[data-type="overview"] {
+    width: 16px !important;
+    height: 10px !important;
+  }
+
+  .react-flow__node[data-type="compact"] {
+    width: 70px !important;
+    height: 28px !important;
+  }
+
+  .react-flow__node[data-type="detail"] {
+    width: 100px !important;
+    height: 40px !important;
+  }
+
+  .workflow-name-primary {
+    font-size: 10px !important;
+  }
+
+  .workflow-info-secondary {
+    font-size: 8px !important;
+  }
+}
+
+/* Large screen optimizations for complex workflows */
+@media (min-width: 1920px) {
+  .react-flow__node[data-type="overview"] {
+    width: 24px !important;
+    height: 14px !important;
+  }
+
+  .react-flow__node[data-type="compact"] {
+    width: 90px !important;
+    height: 36px !important;
+  }
+
+  .react-flow__node[data-type="detail"] {
+    width: 140px !important;
+    height: 56px !important;
+  }
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  .react-flow__edge-path {
+    stroke-width: 3px !important;
+  }
+
+  .compact-node {
+    border-width: 2px !important;
+  }
+
+  .react-flow__handle {
+    border-width: 3px !important;
+  }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  .react-flow__node,
+  .react-flow__edge.animated .react-flow__edge-path,
+  .status-running,
+  .status-failed {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* Global ReactFlow dark theme overrides */
+.react-flow__pane {
+  background: transparent !important;
+}
+
+/* Fix all white text issues */
+.react-flow__node-default,
+.react-flow__node-input,
+.react-flow__node-output,
+.react-flow__node-group {
+  background: hsl(var(--card)) !important;
+  border: 1px solid var(--border) !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+/* Fix hover panels and tooltips */
+.react-flow__node:hover,
+.react-flow__node.selected {
+  background: hsl(var(--card)) !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+/* Fix any remaining white backgrounds */
+.react-flow__renderer {
+  background: transparent !important;
+}
+
+/* Override any default ReactFlow styles that might be white */
+.react-flow__attribution {
+  background: hsl(var(--card)) !important;
+  color: hsl(var(--muted-foreground)) !important;
+  border: 1px solid var(--border) !important;
+}
+
+/* Fix view mode selector and other UI elements */
+.view-mode-selector,
+.zoom-controls,
+.dag-controls {
+  background: hsl(var(--card)) !important;
+  color: hsl(var(--foreground)) !important;
+  border: 1px solid var(--border) !important;
+}
+
+.view-mode-selector button,
+.zoom-controls button,
+.dag-controls button {
+  background: hsl(var(--card)) !important;
+  color: hsl(var(--foreground)) !important;
+  border: 1px solid var(--border) !important;
+}
+
+.view-mode-selector button:hover,
+.zoom-controls button:hover,
+.dag-controls button:hover {
+  background: hsl(var(--accent)) !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+/* Enhanced Layout Controls Styling */
+.layout-controls {
+  background: color-mix(in oklch, hsl(var(--card)) 95%, transparent) !important;
+  backdrop-filter: blur(8px) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: var(--shadow-lg) !important;
+}
+
+.layout-controls button {
+  transition: all var(--transition-fast) !important;
+  font-weight: 500 !important;
+}
+
+.layout-controls button:hover {
+  transform: translateY(-1px) !important;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--foreground) 12%, transparent) !important;
+}
+
+/* Slow layout warning badge */
+.layout-slow-badge {
+  animation: gentle-pulse 2s ease-in-out infinite;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--status-warning) 86%, transparent),
+    color-mix(in srgb, var(--status-warning) 70%, transparent)
+  ) !important;
+  color: color-mix(in srgb, var(--status-warning) 85%, hsl(var(--foreground))) !important;
+  font-weight: 600 !important;
+  text-shadow: 0 1px 2px color-mix(in srgb, var(--foreground) 15%, transparent) !important;
+}
+
+/* Layout progress bar */
+.layout-progress-bar {
+  background: var(--muted) !important;
+  border-radius: var(--radius-full) !important;
+  overflow: hidden !important;
+}
+
+.layout-progress-fill {
+  background: linear-gradient(90deg, var(--primary), color-mix(in oklch, var(--primary) 80%, transparent)) !important;
+  border-radius: var(--radius-full) !important;
+  transition: width 0.3s ease-out !important;
+  box-shadow: 0 0 8px color-mix(in oklch, var(--primary) 30%, transparent) !important;
+}
+
+/* Graph size indicator */
+.graph-size-indicator {
+  font-family: var(--font-mono) !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.025em !important;
+  text-transform: uppercase !important;
+}
+
+/* Large graph mode indicator */
+.large-graph-mode {
+  color: var(--status-warning) !important;
+}
+
+.small-graph-mode {
+  color: hsl(var(--muted-foreground)) !important;
+}
+
+/* Layout loading state */
+.layout-loading {
+  position: relative !important;
+  overflow: hidden !important;
+}
+
+.layout-loading::before {
+  content: '' !important;
+  position: absolute !important;
+  top: 0 !important;
+  left: -100% !important;
+  width: 100% !important;
+  height: 100% !important;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--foreground) 10%, transparent),
+    transparent
+  ) !important;
+  animation: shimmer 1.5s infinite !important;
+}
+
+@keyframes shimmer {
+  0% {
+    left: -100%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+/* Performance warning styles */
+.performance-warning {
+  color: var(--status-warning) !important;
+  animation: gentle-pulse 2s ease-in-out infinite !important;
+}
+
+/* Hover card content for layout descriptions */
+.layout-description-card {
+  max-width: 280px !important;
+  background: hsl(var(--card)) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: var(--shadow-lg) !important;
+  backdrop-filter: blur(8px) !important;
+}
+
+.layout-description-title {
+  font-weight: 600 !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+.layout-description-text {
+  color: hsl(var(--muted-foreground)) !important;
+  line-height: 1.4 !important;
+}
+
+.layout-warning-text {
+  color: var(--status-warning) !important;
+  font-weight: 500 !important;
+}

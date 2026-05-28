@@ -1,0 +1,32 @@
+"""{{.ProjectName}} — AgentField agent node.
+
+When you build a multi-reasoner system, REWRITE this file and the reasoners
+package per the agentfield-multi-reasoner-builder skill's scaffold-recipe.
+This template ships with one minimal entry reasoner so the scaffold runs
+end-to-end on day one.
+"""
+
+import os
+
+from agentfield import Agent, AIConfig
+
+from reasoners import reasoners_router
+
+app = Agent(
+    node_id=os.getenv("AGENT_NODE_ID", "{{.NodeID}}"),
+    agentfield_server=os.getenv("AGENTFIELD_SERVER", "http://localhost:8080"),
+    version="1.0.0",
+    ai_config=AIConfig(
+        # LiteLLM auto-detects provider from the model string.
+        # Override per-request by passing model="..." to your entry reasoner.
+        model=os.getenv("AI_MODEL", "openrouter/google/gemini-2.5-flash"),
+    ),
+    dev_mode=True,
+)
+
+app.include_router(reasoners_router)
+
+if __name__ == "__main__":
+    # app.run() auto-detects CLI vs server mode (sdk/python/agentfield/agent.py:4194).
+    # auto_port=False keeps the port deterministic so the README curl works.
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8001")), auto_port=False)

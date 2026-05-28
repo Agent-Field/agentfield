@@ -1,0 +1,41 @@
+package main
+
+import (
+	"context"
+	"log"
+	"os"
+
+	"github.com/Agent-Field/agentfield/sdk/go/agent"
+	"github.com/Agent-Field/agentfield/sdk/go/ai"
+)
+
+func main() {
+	cfg := agent.Config{
+		NodeID:        "{{.NodeID}}",
+		Version:       "1.0.0",
+		AgentFieldURL:      "http://localhost:8080",
+		ListenAddress: ":0", // Auto-discover available port
+
+		// 🔧 Uncomment to enable AI features:
+		// AIConfig: &ai.Config{
+		//     Model:       "gpt-4o",
+		//     APIKey:      os.Getenv("OPENAI_API_KEY"),
+		//     BaseURL:     "https://api.openai.com/v1",  // or "https://openrouter.ai/api/v1"
+		//     Temperature: 0.7,
+		//     MaxTokens:   4096,
+		// },
+	}
+
+	app, err := agent.New(cfg)
+	if err != nil {
+		log.Fatalf("Failed to create agent: %v", err)
+	}
+
+	// Register reasoners
+	registerReasoners(app)
+
+	// Start server
+	if err := app.Run(context.Background()); err != nil {
+		log.Fatalf("Server error: %v", err)
+	}
+}

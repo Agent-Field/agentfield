@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentfield-control-plane
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: control-plane
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: control-plane
+    spec:
+      containers:
+        - name: control-plane
+          image: agentfield/control-plane:latest
+          args: ["server", "--open=false"]
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: grpc
+              containerPort: 8180
+          env:
+            - name: AGENTFIELD_PORT
+              value: "8080"
+            - name: AGENTFIELD_HOME
+              value: "/data"
+            - name: AGENTFIELD_CONFIG_FILE
+              value: "/dev/null"
+            - name: AGENTFIELD_STORAGE_MODE
+              value: "local"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: agentfield-control-plane-data

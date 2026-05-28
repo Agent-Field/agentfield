@@ -1,0 +1,189 @@
+@import "tailwindcss/base";
+@import "tailwindcss/components";
+@import "tailwindcss/utilities";
+
+/* ReactFlow styles */
+@import "@xyflow/react/dist/style.css";
+
+@layer base {
+  :root {
+    --radius: 0.5rem;
+
+    /* Figma / shadcn create kit alignment (see docs/FIGMA_SHADCN_AUDIT.md) */
+    --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.1);
+    --command-list-max-height: 18.75rem; /* 300px */
+
+    /*
+     * Theme knobs (change these to re-tint the whole app).
+     * --shell-*  = neutral slate chrome (backgrounds, borders, sidebar gray).
+     * --brand-*  = product accent (logo, focus rings, sidebar primary in dark).
+     */
+    --shell-h: 222.2;
+    --shell-s: 14%;
+    --brand-h: 224.3;
+    --brand-s: 76.3%;
+    --brand-l: 48%;
+
+    --background: 0 0% 100%;
+    --foreground: var(--shell-h) 47.4% 11.2%;
+    --card: 0 0% 100%;
+    --card-foreground: var(--shell-h) 47.4% 11.2%;
+    --popover: 0 0% 100%;
+    --popover-foreground: var(--shell-h) 47.4% 11.2%;
+    --primary: var(--shell-h) 47.4% 11.2%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: var(--shell-h) 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 210 40% 96.1%;
+    --accent-foreground: var(--shell-h) 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: var(--shell-h) 47.4% 11.2%;
+    --chart-1: 12 76% 61%;
+    --chart-2: 173 58% 39%;
+    --chart-3: 197 37% 24%;
+    --chart-4: 43 74% 66%;
+    --chart-5: 27 87% 67%;
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: var(--shell-h) 35% 26%;
+    --sidebar-primary: var(--shell-h) 47.4% 11.2%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: var(--shell-h) 40% 96.1%;
+    --sidebar-accent-foreground: var(--shell-h) 47.4% 11.2%;
+    --sidebar-border: var(--shell-h) 32% 91%;
+    --sidebar-ring: var(--brand-h) var(--brand-s) var(--brand-l);
+    --sidebar-logo: var(--brand-h) var(--brand-s) var(--brand-l);
+    --sidebar-logo-foreground: 0 0% 100%;
+    /* shadcn sidebar menu button hover/active (see ui/sidebar.tsx) */
+    --sidebar-hover: hsl(var(--sidebar-accent));
+    --sidebar-active-bg: hsl(var(--sidebar-accent));
+
+    /* Status colors (domain-specific extension) */
+    --status-success: 142 76% 36%;
+    --status-warning: 38 92% 50%;
+    --status-error: 0 84.2% 60.2%;
+    --status-info: 199 89% 48%;
+
+    /* JSON / code preview syntax (shared: runs hover preview, step detail, modals) */
+    --code-json-punctuation: 215 16% 47%;
+    --code-json-key: 221 83% 53%;
+    --code-json-string: 142 76% 30%;
+    --code-json-number: 32 95% 40%;
+    --code-json-boolean: 271 81% 48%;
+    --code-json-null: 0 72% 48%;
+  }
+
+  .dark {
+    /*
+     * Dark shell: one neutral family (--shell-h / --shell-s) for gutter + inset + cards.
+     * Inset main (--background) sits slightly above gutter (--sidebar-background) in lightness.
+     * Brand blue is only --brand-* (logo, sidebar-primary, rings) — not mixed into grays.
+     */
+    --shell-h: 222.2;
+    --shell-s: 14%;
+    --brand-h: 224.3;
+    --brand-s: 76.3%;
+    --brand-l: 48%;
+
+    --sidebar-background: var(--shell-h) var(--shell-s) 5.4%;
+    --background: var(--shell-h) var(--shell-s) 8.6%;
+    --foreground: var(--shell-h) 8% 96%;
+    --card: var(--shell-h) var(--shell-s) 8.6%;
+    --card-foreground: var(--shell-h) 8% 96%;
+    --popover: var(--shell-h) var(--shell-s) 8.6%;
+    --popover-foreground: var(--shell-h) 8% 96%;
+    --primary: var(--shell-h) 8% 96%;
+    --primary-foreground: var(--shell-h) var(--shell-s) 8.6%;
+    --secondary: var(--shell-h) var(--shell-s) 14%;
+    --secondary-foreground: var(--shell-h) 8% 96%;
+    --muted: var(--shell-h) var(--shell-s) 14%;
+    --muted-foreground: var(--shell-h) 10% 64%;
+    --accent: var(--shell-h) var(--shell-s) 14%;
+    --accent-foreground: var(--shell-h) 8% 96%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: var(--shell-h) var(--shell-s) 18%;
+    --input: var(--shell-h) var(--shell-s) 18%;
+    --ring: var(--brand-h) var(--brand-s) var(--brand-l);
+    --chart-1: 220 70% 50%;
+    --chart-2: 160 60% 45%;
+    --chart-3: 30 80% 55%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 340 75% 55%;
+    --sidebar-foreground: var(--shell-h) 6% 94%;
+    --sidebar-primary: var(--brand-h) var(--brand-s) var(--brand-l);
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: var(--shell-h) var(--shell-s) 12%;
+    --sidebar-accent-foreground: var(--shell-h) 6% 94%;
+    --sidebar-border: var(--shell-h) var(--shell-s) 16%;
+    --sidebar-ring: var(--brand-h) var(--brand-s) var(--brand-l);
+    --sidebar-logo: var(--brand-h) var(--brand-s) var(--brand-l);
+    --sidebar-logo-foreground: 0 0% 100%;
+    --sidebar-hover: hsl(var(--sidebar-accent));
+    --sidebar-active-bg: hsl(var(--sidebar-accent));
+
+    /* Status colors dark mode */
+    --status-success: 142 72% 29%;
+    --status-warning: 32 95% 44%;
+    --status-error: 0 62.8% 30.6%;
+    --status-info: 199 84% 55%;
+
+    --code-json-punctuation: 215 20% 65%;
+    --code-json-key: 199 89% 48%;
+    --code-json-string: 142 69% 58%;
+    --code-json-number: 38 92% 55%;
+    --code-json-boolean: 263 70% 75%;
+    --code-json-null: 0 91% 71%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    overscroll-behavior: none;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+@layer components {
+  .json-hl-root {
+    color: hsl(var(--foreground) / 0.92);
+  }
+
+  .json-hl-punct {
+    color: hsl(var(--code-json-punctuation));
+  }
+
+  .json-hl-key {
+    color: hsl(var(--code-json-key));
+  }
+
+  .json-hl-string {
+    color: hsl(var(--code-json-string));
+  }
+
+  .json-hl-number {
+    color: hsl(var(--code-json-number));
+  }
+
+  .json-hl-boolean {
+    color: hsl(var(--code-json-boolean));
+  }
+
+  .json-hl-null {
+    color: hsl(var(--code-json-null));
+  }
+}

@@ -1,0 +1,139 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentfield.controlPlane.fullname" . }}
+  labels:
+    {{- include "agentfield.labels" . | nindent 4 }}
+  {{- with .Values.controlPlane.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.controlPlane.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "agentfield.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: control-plane
+  template:
+    metadata:
+      labels:
+        {{- include "agentfield.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: control-plane
+      {{- with .Values.controlPlane.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.controlPlane.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: control-plane
+          image: "{{ .Values.controlPlane.image.repository }}:{{ .Values.controlPlane.image.tag }}"
+          imagePullPolicy: {{ .Values.controlPlane.image.pullPolicy }}
+          args:
+            - server
+            - --open=false
+          ports:
+            - name: http
+              containerPort: {{ .Values.controlPlane.service.port }}
+            - name: grpc
+              containerPort: {{ include "agentfield.controlPlane.grpcPort" . }}
+          env:
+            - name: AGENTFIELD_PORT
+              value: {{ .Values.controlPlane.service.port | quote }}
+            - name: AGENTFIELD_STORAGE_MODE
+              value: {{ .Values.controlPlane.storage.mode | quote }}
+            {{- if eq .Values.controlPlane.storage.mode "postgres" }}
+            {{- if .Values.postgres.enabled }}
+            - name: AGENTFIELD_STORAGE_POSTGRES_HOST
+              value: {{ include "agentfield.postgres.fullname" . | quote }}
+            - name: AGENTFIELD_STORAGE_POSTGRES_PORT
+              value: "5432"
+            - name: AGENTFIELD_STORAGE_POSTGRES_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentfield.postgres.secretName" . }}
+                  key: {{ .Values.postgres.auth.existingSecretDatabaseKey }}
+            - name: AGENTFIELD_STORAGE_POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentfield.postgres.secretName" . }}
+                  key: {{ .Values.postgres.auth.existingSecretUsernameKey }}
+            - name: AGENTFIELD_STORAGE_POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentfield.postgres.secretName" . }}
+                  key: {{ .Values.postgres.auth.existingSecretPasswordKey }}
+            - name: AGENTFIELD_STORAGE_POSTGRES_SSLMODE
+              value: "disable"
+            {{- else }}
+            {{- $postgresUrl := include "agentfield.controlPlane.postgresUrl" . }}
+            - name: AGENTFIELD_STORAGE_POSTGRES_URL
+              value: {{ required "controlPlane.storage.postgresUrl is required when controlPlane.storage.mode=postgres and postgres.enabled=false" $postgresUrl | quote }}
+            - name: AGENTFIELD_POSTGRES_URL
+              value: {{ required "controlPlane.storage.postgresUrl is required when controlPlane.storage.mode=postgres and postgres.enabled=false" $postgresUrl | quote }}
+            {{- end }}
+            {{- end }}
+            {{- range $name, $value := .Values.controlPlane.env }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- if .Values.apiAuth.enabled }}
+            - name: AGENTFIELD_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentfield.apiAuth.secretName" . }}
+                  key: {{ .Values.apiAuth.existingSecretKey }}
+            {{- end }}
+            {{- with .Values.controlPlane.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.controlPlane.env.AGENTFIELD_HOME | default "/data" | quote }}
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 6
+          {{- with .Values.controlPlane.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.controlPlane.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: data
+          {{- if .Values.controlPlane.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ default (printf "%s-data" (include "agentfield.controlPlane.fullname" .)) .Values.controlPlane.persistence.existingClaim }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.controlPlane.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controlPlane.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controlPlane.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

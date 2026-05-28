@@ -1,0 +1,118 @@
+name: Update Download Stats
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
+  workflow_dispatch:  # Manual trigger from Actions tab
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/update-download-stats.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  update-stats:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch and Update Stats
+        uses: actions/github-script@v7
+        env:
+          PEPY_API_KEY: ${{ secrets.PEPY_API_KEY }}
+          GIST_ID: ${{ secrets.GIST_ID }}
+        with:
+          github-token: ${{ secrets.GIST_TOKEN }}
+          script: |
+            // Fetch GitHub releases (handle pagination for repos with many releases)
+            let allReleases = [];
+            let page = 1;
+            while (true) {
+              const releases = await github.rest.repos.listReleases({
+                owner: 'Agent-Field',
+                repo: 'agentfield',
+                per_page: 100,
+                page: page
+              });
+              if (releases.data.length === 0) break;
+              allReleases = allReleases.concat(releases.data);
+              page++;
+            }
+
+            let githubDownloads = 0;
+            for (const release of allReleases) {
+              for (const asset of release.assets) {
+                githubDownloads += asset.download_count;
+              }
+            }
+            console.log('GitHub downloads:', githubDownloads);
+
+            // Fetch PyPI stats from pepy.tech
+            const pepyRes = await fetch('https://api.pepy.tech/api/v2/projects/agentfield', {
+              headers: { 'X-API-Key': process.env.PEPY_API_KEY }
+            });
+            if (!pepyRes.ok) {
+              console.error('pepy.tech API error:', pepyRes.status);
+            }
+            const pepyData = await pepyRes.json();
+            const pypiDownloads = pepyData.total_downloads || 0;
+            console.log('PyPI downloads:', pypiDownloads);
+
+            // Fetch NPM stats (lifetime from 2020)
+            const today = new Date().toISOString().split('T')[0];
+            const npmRes = await fetch(
+              `https://api.npmjs.org/downloads/point/2020-01-01:${today}/@agentfield/sdk`
+            );
+            if (!npmRes.ok) {
+              console.error('NPM API error:', npmRes.status);
+            }
+            const npmData = await npmRes.json();
+            const npmDownloads = npmData.downloads || 0;
+            console.log('NPM downloads:', npmDownloads);
+
+            // Calculate total
+            const total = githubDownloads + pypiDownloads + npmDownloads;
+            console.log('Total downloads:', total);
+
+            // Format number (e.g., 12500 -> "12.5k")
+            function formatNumber(num) {
+              if (num >= 1000000) return (num / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+              if (num >= 1000) return (num / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
+              return num.toString();
+            }
+
+            // Create badge object (shields.io compatible - no extra fields)
+            const badge = {
+              schemaVersion: 1,
+              label: 'downloads',
+              message: formatNumber(total),
+              color: '7c3aed'
+            };
+
+            // Create full stats object for reference
+            const stats = {
+              total: total,
+              sources: {
+                github: githubDownloads,
+                pypi: pypiDownloads,
+                npm: npmDownloads
+              },
+              lastUpdated: new Date().toISOString()
+            };
+
+            // Update Gist with both files
+            await github.rest.gists.update({
+              gist_id: process.env.GIST_ID,
+              files: {
+                'badge.json': {
+                  content: JSON.stringify(badge, null, 2)
+                },
+                'stats.json': {
+                  content: JSON.stringify(stats, null, 2)
+                }
+              }
+            });
+
+            console.log('Badge:', JSON.stringify(badge, null, 2));
+            console.log('Stats:', JSON.stringify(stats, null, 2));

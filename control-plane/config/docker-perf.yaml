@@ -1,0 +1,108 @@
+agentfield:
+  port: 8080
+  mode: "local"
+  max_concurrent_requests: 1024
+  request_timeout: 180s
+  circuit_breaker_threshold: 20
+  execution_cleanup:
+    enabled: true
+    retention_period: 72h
+    cleanup_interval: 1h
+    batch_size: 200
+    preserve_recent_duration: 1h
+  execution_queue:
+    worker_count: 32
+    request_timeout: 180s
+    agent_call_timeout: 90s
+    lease_duration: 180s
+    max_attempts: 4
+    failure_backoff: 500ms
+    max_failure_backoff: 30s
+    poll_interval: 75ms
+    result_preview_bytes: 4096
+    queue_soft_limit: 20000
+    waiter_map_limit: 4000
+    webhook_timeout: 10s
+    webhook_max_attempts: 3
+    webhook_retry_backoff: 1s
+    webhook_max_retry_backoff: 5s
+
+ui:
+  enabled: true
+  mode: "embedded"
+  dev_port: 5173
+  backend_url: ""
+
+api:
+  cors:
+    allowed_origins:
+      - "*"
+    allowed_methods:
+      - "GET"
+      - "POST"
+      - "PUT"
+      - "DELETE"
+      - "OPTIONS"
+    allowed_headers:
+      - "Origin"
+      - "Content-Type"
+      - "Accept"
+      - "Authorization"
+      - "X-Requested-With"
+    exposed_headers:
+      - "Content-Length"
+      - "X-Total-Count"
+    allow_credentials: false
+
+storage:
+  mode: "local"
+  local:
+    database_path: ""
+    kv_store_path: ""
+    cache_size: 1000
+    retention_days: 30
+    auto_vacuum: true
+  vector:
+    enabled: true
+    distance: "cosine"
+
+features:
+  did:
+    enabled: true
+    method: "did:key"
+    key_algorithm: "Ed25519"
+    derivation_method: "BIP32"
+    key_rotation_days: 90
+    vc_requirements:
+      require_vc_registration: true
+      require_vc_execution: true
+      require_vc_cross_agent: true
+      store_input_output: false
+      hash_sensitive_data: true
+    keystore:
+      type: "local"
+      path: "/var/agentfield/data/keys"
+      encryption: "AES-256-GCM"
+      backup_enabled: true
+      backup_interval: "24h"
+
+data_directories:
+  agentfield_home: "/var/agentfield"
+  database_dir: "data"
+  keys_dir: "data/keys"
+  did_registries_dir: "data/did_registries"
+  vcs_dir: "data/vcs"
+  agents_dir: "agents"
+  logs_dir: "logs"
+  config_dir: "config"
+  temp_dir: "temp"
+  payloads_dir: "data/payloads"
+
+agents:
+  discovery:
+    scan_interval: "30s"
+    health_check_interval: "15s"
+  scaling:
+    auto_scale: false
+    min_replicas: 1
+    max_replicas: 16

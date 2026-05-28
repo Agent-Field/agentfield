@@ -1,0 +1,291 @@
+name: Performance Check
+
+on:
+  pull_request:
+    paths:
+      - 'sdk/python/**'
+      - 'sdk/go/**'
+      - 'sdk/typescript/**'
+      - '.github/workflows/memory-metrics.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  detect-changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      python: ${{ steps.filter.outputs.python }}
+      go: ${{ steps.filter.outputs.go }}
+      typescript: ${{ steps.filter.outputs.typescript }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            python:
+              - 'sdk/python/**'
+            go:
+              - 'sdk/go/**'
+            typescript:
+              - 'sdk/typescript/**'
+
+  python-perf:
+    name: Python
+    needs: detect-changes
+    if: needs.detect-changes.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      memory: ${{ steps.bench.outputs.memory }}
+      latency: ${{ steps.bench.outputs.latency }}
+      tests: ${{ steps.tests.outputs.status }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install
+        working-directory: sdk/python
+        run: pip install -q .[dev]
+
+      - name: Tests
+        id: tests
+        working-directory: sdk/python
+        run: |
+          if ./scripts/run_pytest.sh tests/ --ignore=tests/integration -q 2>&1; then
+            echo "status=pass" >> $GITHUB_OUTPUT
+          else
+            echo "status=fail" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
+      - name: Benchmark
+        id: bench
+        run: |
+          python3 -c "
+          import sys
+          sys.path.insert(0, 'sdk/python')
+          import time
+          import gc
+          import tracemalloc
+
+          from agentfield import Agent
+
+          # Memory benchmark
+          gc.collect()
+          tracemalloc.start()
+
+          agent = Agent('bench', agentfield_server='http://localhost:8080', auto_register=False)
+
+          for i in range(1000):
+              idx = i
+              @agent.reasoner(f'handler-{i}')
+              async def handler(input_data: dict, _idx=idx) -> dict:
+                  return {'id': _idx}
+
+          gc.collect()
+          current, _ = tracemalloc.get_traced_memory()
+          tracemalloc.stop()
+
+          mem_kb = (current / 1024) / 1000  # KB per handler
+          print(f'memory={mem_kb:.2f}')
+
+          # Latency benchmark
+          async def test_handler(input_data: dict) -> dict:
+              return {'result': True}
+
+          handlers = [test_handler for _ in range(100)]
+          import asyncio
+
+          async def measure():
+              times = []
+              for i in range(10000):
+                  start = time.perf_counter()
+                  await handlers[i % 100]({'test': True})
+                  times.append((time.perf_counter() - start) * 1_000_000)
+              return sorted(times)[int(len(times) * 0.99)]
+
+          p99 = asyncio.run(measure())
+          print(f'latency={p99:.2f}')
+          " 2>&1 | tee bench.txt
+
+          echo "memory=$(grep 'memory=' bench.txt | cut -d= -f2)" >> $GITHUB_OUTPUT
+          echo "latency=$(grep 'latency=' bench.txt | cut -d= -f2)" >> $GITHUB_OUTPUT
+
+  go-perf:
+    name: Go
+    needs: detect-changes
+    if: needs.detect-changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      memory: ${{ steps.bench.outputs.memory }}
+      latency: ${{ steps.bench.outputs.latency }}
+      tests: ${{ steps.tests.outputs.status }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Tests
+        id: tests
+        working-directory: sdk/go
+        run: |
+          if go test ./... -short 2>&1; then
+            echo "status=pass" >> $GITHUB_OUTPUT
+          else
+            echo "status=fail" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
+      - name: Benchmark
+        id: bench
+        working-directory: sdk/go
+        run: |
+          go test -bench=BenchmarkInMemoryBackend -benchmem ./agent/... 2>&1 | tee bench.txt
+
+          # Extract ns/op and B/op
+          SET_NS=$(grep "BenchmarkInMemoryBackendSet" bench.txt | awk '{print $3}' | head -1 || echo "1000")
+          SET_ALLOC=$(grep "BenchmarkInMemoryBackendSet" bench.txt | awk '{print $5}' | head -1 || echo "280")
+
+          # Convert ns to µs
+          LATENCY_US=$(echo "scale=2; $SET_NS / 1000" | bc)
+          echo "memory=${SET_ALLOC}" >> $GITHUB_OUTPUT
+          echo "latency=${LATENCY_US}" >> $GITHUB_OUTPUT
+
+  typescript-perf:
+    name: TypeScript
+    needs: detect-changes
+    if: needs.detect-changes.outputs.typescript == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      memory: ${{ steps.bench.outputs.memory }}
+      latency: ${{ steps.bench.outputs.latency }}
+      tests: ${{ steps.tests.outputs.status }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install
+        working-directory: sdk/typescript
+        run: npm install
+
+      - name: Tests
+        id: tests
+        working-directory: sdk/typescript
+        run: |
+          if npm test 2>&1; then
+            echo "status=pass" >> $GITHUB_OUTPUT
+          else
+            echo "status=fail" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
+      - name: Build
+        working-directory: sdk/typescript
+        run: npm run build
+
+      - name: Benchmark
+        id: bench
+        working-directory: sdk/typescript
+        run: |
+          # Write benchmark script that uses the actual SDK
+          cat > bench.mjs << 'BENCHEOF'
+          import { Agent } from './dist/index.js';
+
+          // Force garbage collection if available
+          if (global.gc) global.gc();
+
+          // Memory test - measure actual SDK overhead
+          const startHeap = process.memoryUsage().heapUsed;
+
+          // Create agent (one-time overhead, not counted per-handler)
+          const agent = new Agent({
+            nodeId: 'bench',
+            agentFieldUrl: 'http://localhost:8080',
+            port: 9999,
+            didEnabled: false
+          });
+
+          const handlerCount = 1000;
+
+          // Register handlers using the actual SDK API
+          for (let i = 0; i < handlerCount; i++) {
+            const idx = i;
+            agent.reasoner(`handler-${i}`, async (ctx) => ({ id: idx }));
+          }
+
+          if (global.gc) global.gc();
+
+          const endHeap = process.memoryUsage().heapUsed;
+          const memPerHandler = (endHeap - startHeap) / handlerCount;
+          console.log('memory=' + memPerHandler.toFixed(0));
+
+          // Latency test - measure handler lookup and execution
+          const times = [];
+          for (let i = 0; i < 10000; i++) {
+            const name = `handler-${i % handlerCount}`;
+            const s = performance.now();
+            const def = agent.reasoners.get(name);
+            if (def) await def.handler({ input: {} });
+            times.push((performance.now() - s) * 1000);
+          }
+          times.sort((a, b) => a - b);
+          const p99 = times[Math.floor(times.length * 0.99)];
+          console.log('latency=' + p99.toFixed(2));
+          BENCHEOF
+
+          node --expose-gc bench.mjs 2>&1 | tee bench.txt
+
+          echo "memory=$(grep 'memory=' bench.txt | cut -d= -f2)" >> $GITHUB_OUTPUT
+          echo "latency=$(grep 'latency=' bench.txt | cut -d= -f2)" >> $GITHUB_OUTPUT
+
+  # Save results as artifact for the report workflow to pick up
+  save-results:
+    name: Save Results
+    needs: [detect-changes, python-perf, go-perf, typescript-perf]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create results file
+        run: |
+          cat > perf-results.json << 'EOF'
+          {
+            "pr_number": ${{ github.event.pull_request.number }},
+            "python": {
+              "changed": ${{ needs.detect-changes.outputs.python == 'true' }},
+              "memory": "${{ needs.python-perf.outputs.memory }}",
+              "latency": "${{ needs.python-perf.outputs.latency }}",
+              "tests": "${{ needs.python-perf.outputs.tests }}"
+            },
+            "go": {
+              "changed": ${{ needs.detect-changes.outputs.go == 'true' }},
+              "memory": "${{ needs.go-perf.outputs.memory }}",
+              "latency": "${{ needs.go-perf.outputs.latency }}",
+              "tests": "${{ needs.go-perf.outputs.tests }}"
+            },
+            "typescript": {
+              "changed": ${{ needs.detect-changes.outputs.typescript == 'true' }},
+              "memory": "${{ needs.typescript-perf.outputs.memory }}",
+              "latency": "${{ needs.typescript-perf.outputs.latency }}",
+              "tests": "${{ needs.typescript-perf.outputs.tests }}"
+            }
+          }
+          EOF
+          cat perf-results.json
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-results
+          path: perf-results.json
+          retention-days: 1

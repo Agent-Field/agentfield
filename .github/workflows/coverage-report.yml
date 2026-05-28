@@ -1,0 +1,48 @@
+name: Coverage Report
+
+# This workflow runs in the context of the base repository,
+# allowing it to post comments on PRs from forks.
+on:
+  workflow_run:
+    workflows: ["Coverage Summary"]
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  comment:
+    name: Post Coverage Comment
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.event == 'pull_request'
+    steps:
+      - name: Download coverage-summary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-summary
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: coverage
+
+      - name: Read PR number
+        id: pr
+        run: |
+          PR=$(cat coverage/pr-number.txt)
+          echo "number=$PR" >> "$GITHUB_OUTPUT"
+
+      - name: Comment coverage gate report
+        if: steps.pr.outputs.number != ''
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          number: ${{ steps.pr.outputs.number }}
+          header: coverage-gate
+          path: coverage/gate-report.md
+
+      - name: Comment patch coverage report
+        if: steps.pr.outputs.number != '' && hashFiles('coverage/patch-gate-report.md') != ''
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          number: ${{ steps.pr.outputs.number }}
+          header: patch-coverage-gate
+          path: coverage/patch-gate-report.md

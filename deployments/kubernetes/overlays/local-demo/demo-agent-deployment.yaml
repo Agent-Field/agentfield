@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentfield-demo-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: demo-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: demo-agent
+    spec:
+      initContainers:
+        - name: wait-control-plane
+          image: curlimages/curl:8.12.1
+          command:
+            - sh
+            - -c
+            - >
+              until curl -sf "http://agentfield-control-plane:8080/api/v1/health" >/dev/null;
+              do echo "waiting for control plane"; sleep 2; done
+      containers:
+        - name: demo-agent
+          image: agentfield-demo-go-agent:local
+          args: ["serve"]
+          ports:
+            - name: http
+              containerPort: 8001
+          env:
+            - name: AGENTFIELD_URL
+              value: http://agentfield-control-plane:8080
+            - name: AGENT_NODE_ID
+              value: demo-go-agent
+            - name: AGENT_LISTEN_ADDR
+              value: :8001
+            - name: AGENT_PUBLIC_URL
+              value: http://agentfield-demo-agent:8001
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5

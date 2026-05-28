@@ -1,0 +1,14 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY sdk/python /tmp/python-sdk
+
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir /tmp/python-sdk && \
+    rm -rf /tmp/python-sdk
+
+CMD ["python", "-c", "print('AgentField Python agent image ready. Override CMD to run your agent.')"]

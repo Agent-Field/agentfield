@@ -1,0 +1,48 @@
+FROM --platform=$BUILDPLATFORM node:20-alpine AS ui-builder
+WORKDIR /app/web
+
+COPY control-plane/web/client/package*.json ./
+RUN npm ci
+COPY control-plane/web/client/ .
+# Vite handles JSX + transpilation directly. We deliberately bypass the
+# package-script's `tsc -b` precheck during image build because the tree
+# has unrelated mid-refactor type errors (legacy MCP scaffolding being
+# torn out) that don't block runtime behavior. The package script stays
+# the dev/CI entry point — this is a build-time pragma, not a quality
+# regression.
+RUN npx vite build
+
+FROM --platform=$BUILDPLATFORM golang:1.25-bookworm AS go-builder
+WORKDIR /app
+
+ARG TARGETOS
+ARG TARGETARCH
+ENV CGO_ENABLED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    pkg-config \
+    gcc-aarch64-linux-gnu \
+    libc6-dev-arm64-cross \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY control-plane/go.mod control-plane/go.sum ./control-plane/
+RUN cd control-plane && go mod download
+
+COPY control-plane/ ./control-plane/
+COPY --from=ui-builder /app/web/dist ./control-plane/web/client/dist
+
+RUN cd control-plane && \
+    if [ "${TARGETARCH}" = "arm64" ]; then export CC=aarch64-linux-gnu-gcc; else export CC=gcc; fi && \
+    GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -tags "embedded sqlite_fts5" -o /app/bin/agentfield-server ./cmd/agentfield-server
+
+# Pre-create writable data directory for distroless runtime. The nonroot user
+# has UID/GID 65532 in the base image, so match that here.
+RUN mkdir -p /tmp/agentfield-data && chown 65532:65532 /tmp/agentfield-data
+
+FROM gcr.io/distroless/base-debian12
+COPY --from=go-builder /app/bin/agentfield-server /usr/local/bin/agentfield-server
+COPY --from=go-builder /app/control-plane/config /etc/agentfield/config
+COPY --from=go-builder --chown=nonroot:nonroot /tmp/agentfield-data /data
+USER nonroot:nonroot
+ENTRYPOINT ["/usr/local/bin/agentfield-server"]

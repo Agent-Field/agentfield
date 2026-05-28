@@ -1,0 +1,206 @@
+/* Workflow-specific foundation extensions */
+/* These extend the foundation system for workflow-specific needs */
+
+/* Typography system for workflow components - Linear precision */
+.workflow-name-primary {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: hsl(var(--foreground));
+}
+
+.workflow-info-secondary {
+  font-size: 11px;
+  font-weight: 400;
+  color: hsl(var(--muted-foreground));
+  font-family: 'SF Mono', Monaco, Inconsolata, monospace; /* For counts and IDs */
+}
+
+/* Enhanced Status Column - Single Line Design */
+.status-column {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px; /* Consistent row height */
+  padding: 8px 0;
+}
+
+.status-indicator-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.status-primary-text {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.status-secondary-text {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.status-separator {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  opacity: 0.6;
+}
+
+/* Status-specific colors using existing theme */
+.status-active {
+  color: var(--chart-1); /* Blue from existing theme */
+}
+
+.status-issues {
+  color: var(--destructive); /* Red from existing theme */
+}
+
+.status-completed {
+  color: var(--chart-2); /* Green from existing theme */
+}
+
+.status-neutral {
+  color: var(--muted-foreground); /* Muted from existing theme */
+}
+
+/* Ensure consistent table row heights */
+.workflow-table-row {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+}
+
+/* Workflow status dots - extends foundation status indicators */
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+/* Status indicators with Linear precision */
+.status-dot-success {
+  background-color: hsl(var(--status-success));
+}
+
+.status-dot-failed {
+  background-color: hsl(var(--status-error));
+}
+
+.status-dot-running {
+  background-color: hsl(var(--status-info));
+  animation: gentle-pulse 2s ease-in-out infinite;
+}
+
+.status-dot-pending {
+  background-color: hsl(var(--status-warning));
+}
+
+/* Gentle pulse animation for running states */
+@keyframes gentle-pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.1);
+  }
+}
+
+/* Enhanced micro-interactions - Linear precision */
+.workflow-row {
+  transition: all 150ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.workflow-row:hover {
+  background: hsl(var(--accent)); /* Linear's subtle precision */
+  border-color: var(--border);
+  transition: all 150ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+/* Table row hover states for Linear precision */
+.table-row:hover {
+  background: hsl(var(--accent)); /* Linear's subtle precision */
+  border-color: var(--border);
+  transition: all 150ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+/* Workflow hover card enhancements */
+.workflow-hover-card {
+  backdrop-filter: blur(8px);
+  background-color: color-mix(in oklch, var(--popover) 95%, transparent);
+}
+
+/* Loading states with subtle skeleton pulse that matches final content */
+.skeleton-pulse {
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: -200px 0;
+  }
+  100% {
+    background-position: calc(200px + 100%) 0;
+  }
+}
+
+.skeleton-pulse {
+  background: linear-gradient(90deg,
+    var(--muted) 25%,
+    color-mix(in oklch, var(--muted) 50%, transparent) 50%,
+    var(--muted) 75%
+  );
+  background-size: 200px 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+}
+
+/* DAG node hover effects */
+.dag-node-hover {
+  transition: all 0.15s ease;
+}
+
+.dag-node-hover:hover {
+  transform: scale(1.02);
+  box-shadow: 0 6px 20px color-mix(in oklch, var(--background) 20%, transparent);
+}
+
+/* Status-specific node styling - Dark theme compatible */
+.node-status-completed {
+  border-color: hsl(var(--status-success));
+  background-color: hsl(var(--status-success) / 0.1);
+}
+
+.node-status-failed {
+  border-color: hsl(var(--status-error));
+  background-color: hsl(var(--status-error) / 0.1);
+}
+
+.node-status-running {
+  border-color: hsl(var(--status-info));
+  background-color: hsl(var(--status-info) / 0.1);
+  animation: pulse-border 2s ease-in-out infinite;
+}
+
+.node-status-pending {
+  border-color: hsl(var(--status-warning));
+  background-color: hsl(var(--status-warning) / 0.1);
+}
+
+@keyframes pulse-border {
+  0%, 100% {
+    border-color: hsl(var(--status-info));
+    box-shadow: 0 0 0 0 hsl(var(--status-info) / 0.4);
+  }
+  50% {
+    border-color: hsl(var(--status-info));
+    box-shadow: 0 0 0 4px hsl(var(--status-info) / 0.1);
+  }
+}

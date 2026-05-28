@@ -1,0 +1,18 @@
+{{- if .Values.demoPythonAgent.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentfield.fullname" . }}-demo-python-agent
+  labels:
+    {{- include "agentfield.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.demoPythonAgent.service.type }}
+  selector:
+    {{- include "agentfield.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: demo-python-agent
+  ports:
+    - name: http
+      port: {{ .Values.demoPythonAgent.service.port }}
+      targetPort: http
+{{- end }}
+

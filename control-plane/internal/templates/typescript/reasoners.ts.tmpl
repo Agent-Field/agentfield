@@ -1,0 +1,53 @@
+import { AgentRouter } from '@agentfield/sdk';
+import { z } from 'zod';
+
+// Group related reasoners with a router
+export const reasonersRouter = new AgentRouter({ prefix: 'demo', tags: ['example'] });
+
+reasonersRouter.reasoner<{ message: string }, { original: string; echoed: string; length: number }>(
+  'echo',
+  async (ctx) => {
+    /**
+     * Simple echo reasoner - works without AI configured.
+     *
+     * Example usage:
+     * curl -X POST http://localhost:8080/api/v1/execute/{{.NodeID}}.demo_echo \
+     *   -H "Content-Type: application/json" \
+     *   -d '{"input": {"message": "Hello World"}}'
+     */
+    const message = ctx.input.message ?? '';
+    return {
+      original: message,
+      echoed: message,
+      length: message.length
+    };
+  }
+);
+
+// 🔧 Uncomment when AI is configured in main.ts:
+// const sentimentSchema = z.object({
+//   sentiment: z.enum(['positive', 'negative', 'neutral']),
+//   confidence: z.number().min(0).max(1),
+//   reasoning: z.string()
+// });
+// type SentimentResult = z.infer<typeof sentimentSchema>;
+//
+// reasonersRouter.reasoner<{ text: string }, SentimentResult & { text: string }>(
+//   'analyzeSentiment',
+//   async (ctx) => {
+//     /**
+//      * AI-powered sentiment analysis with structured output.
+//      *
+//      * Example usage:
+//      * curl -X POST http://localhost:8080/api/v1/execute/{{.NodeID}}.demo_analyzeSentiment \
+//      *   -H "Content-Type: application/json" \
+//      *   -d '{"input": {"text": "I love this product!"}}'
+//      */
+//     const sentiment = await ctx.ai(
+//       `You are a sentiment analysis expert. Analyze the sentiment of this text.`,
+//       { schema: sentimentSchema, temperature: 0.2 }
+//     );
+//
+//     return { ...sentiment, text: ctx.input.text };
+//   }
+// );

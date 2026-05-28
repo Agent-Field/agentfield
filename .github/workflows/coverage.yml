@@ -1,0 +1,241 @@
+name: Coverage Summary
+
+on:
+  merge_group:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Path detection: determine whether this PR touches coverage-relevant
+  # files. When it doesn't (e.g. docs-only or examples-only PRs) we skip
+  # the expensive per-surface jobs but still report the required
+  # coverage-summary check as passed.
+  # ---------------------------------------------------------------------
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      has_coverage_files: ${{ steps.filter.outputs.coverage }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            coverage:
+              - 'control-plane/**'
+              - 'sdk/**'
+              - 'scripts/test-all.sh'
+              - 'scripts/coverage-summary.sh'
+              - 'scripts/coverage-surface.sh'
+              - 'scripts/coverage-aggregate.py'
+              - 'scripts/coverage-gate.py'
+              - 'scripts/patch-coverage-gate.sh'
+              - '.coverage-gate.toml'
+              - 'coverage-baseline.json'
+              - '.github/workflows/coverage.yml'
+              - 'docs/COVERAGE.md'
+              - 'docs/DEVELOPMENT.md'
+              - '.github/BRANCH_PROTECTION.md'
+
+  # ---------------------------------------------------------------------
+  # Per-surface coverage producers (run in parallel). Each entry runs the
+  # test suite for a single surface with coverage enabled via
+  # scripts/coverage-surface.sh, then uploads test-reports/coverage/ as an
+  # artifact named coverage-<surface>. The aggregator job downloads all
+  # five and computes the final summary + gate.
+  #
+  # This is the "Option B" pattern: coverage runs live here and nowhere
+  # else. control-plane.yml and sdk-go.yml deliberately no longer run
+  # `go test` — they keep build + lint only, and the coverage workflow is
+  # a required status check so a test regression still blocks merge.
+  # ---------------------------------------------------------------------
+  per-surface:
+    needs: changes
+    if: github.event_name != 'merge_group' && needs.changes.outputs.has_coverage_files == 'true'
+    name: coverage (${{ matrix.surface }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        surface:
+          - control-plane
+          - sdk-go
+          - sdk-python
+          - sdk-typescript
+          - web-ui
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        if: matrix.surface == 'control-plane' || matrix.surface == 'sdk-go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+
+      - name: Set up Python
+        if: matrix.surface == 'sdk-python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: sdk/python/pyproject.toml
+
+      - name: Set up Node.js
+        if: matrix.surface == 'control-plane' || matrix.surface == 'sdk-typescript' || matrix.surface == 'web-ui'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: |
+            control-plane/web/client/package-lock.json
+            sdk/typescript/package-lock.json
+
+      - name: Run ${{ matrix.surface }} coverage
+        run: ./scripts/coverage-surface.sh ${{ matrix.surface }}
+
+      - name: Upload ${{ matrix.surface }} coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.surface }}
+          path: test-reports/coverage/
+          retention-days: 1
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------
+  # Aggregator. Waits for all per-surface jobs, downloads their artifacts,
+  # flattens them into test-reports/coverage/, then runs the aggregation
+  # + coverage gate + patch-coverage gate + sticky PR comments + badge
+  # gist update.
+  #
+  # IMPORTANT: The GitHub check produced by this job is named
+  # `coverage-summary` — matching the old single-job workflow — so any
+  # existing branch protection rule targeting that check name keeps
+  # working without changes.
+  # ---------------------------------------------------------------------
+  coverage-summary:
+    name: coverage-summary
+    # Use always() so this job runs even when per-surface is skipped
+    # (merge_group or no coverage-relevant files). This ensures the
+    # required check always reports a status instead of being stuck as
+    # "Expected".
+    if: ${{ always() }}
+    needs: [changes, per-surface]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # ---------------------------------------------------------------
+      # Fast path: skip heavy coverage work when it's not needed — either
+      # in the merge queue (coverage already passed on the PR) or when the
+      # PR doesn't touch any coverage-relevant files (e.g. docs-only,
+      # examples-only). The job still succeeds so the required check is
+      # satisfied.
+      # ---------------------------------------------------------------
+      - name: Skip coverage (no relevant changes)
+        if: github.event_name == 'merge_group' || needs.changes.outputs.has_coverage_files != 'true'
+        run: echo "Coverage check skipped — no coverage-relevant files changed or merge queue."
+
+      - name: Checkout
+        if: github.event_name != 'merge_group' && needs.changes.outputs.has_coverage_files == 'true'
+        uses: actions/checkout@v4
+        with:
+          # Full history so diff-cover can compute patch coverage against
+          # origin/main.
+          fetch-depth: 0
+
+      - name: Set up Python
+        if: github.event_name != 'merge_group' && needs.changes.outputs.has_coverage_files == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install diff-cover (for per-PR patch coverage)
+        if: github.event_name != 'merge_group' && needs.changes.outputs.has_coverage_files == 'true'
+        run: python -m pip install "diff-cover>=9.0.0"
+
+      - name: Download all per-surface artifacts
+        if: github.event_name != 'merge_group' && needs.changes.outputs.has_coverage_files == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/coverage-artifacts
+          pattern: coverage-*
+
+      - name: Stage artifacts into test-reports/coverage/
+        if: github.event_name != 'merge_group' && needs.changes.outputs.has_coverage_files == 'true'
+        run: |
+          mkdir -p test-reports/coverage
+          # Each per-surface artifact lands in its own subdirectory under
+          # /tmp/coverage-artifacts/ (coverage-control-plane/,
+          # coverage-sdk-go/, ...). Flatten them all into the single
+          # expected location.
+          find /tmp/coverage-artifacts -type f -exec cp -v {} test-reports/coverage/ \;
+          echo "--- staged files ---"
+          ls -la test-reports/coverage/
+
+      - name: Aggregate per-surface coverage
+        if: github.event_name != 'merge_group' && needs.changes.outputs.has_coverage_files == 'true'
+        run: python3 scripts/coverage-aggregate.py --report-dir test-reports/coverage
+
+      - name: Publish coverage summary
+        if: github.event_name != 'merge_group' && needs.changes.outputs.has_coverage_files == 'true'
+        run: cat test-reports/coverage/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run coverage gate
+        if: github.event_name != 'merge_group' && needs.changes.outputs.has_coverage_files == 'true'
+        id: gate
+        # Thresholds live in .coverage-gate.toml at the repo root so they
+        # stay in-version-control and are the single source of truth for
+        # both local runs and CI.
+        run: |
+          ./scripts/coverage-gate.py \
+            --summary  test-reports/coverage/summary.json \
+            --baseline coverage-baseline.json \
+            --config   .coverage-gate.toml
+        continue-on-error: true
+
+      - name: Run patch coverage gate (diff-cover)
+        id: patch_gate
+        # Enforces .coverage-gate.toml:thresholds.min_patch on lines the PR
+        # actually touches, against origin/main. This is the single most
+        # effective regression signal — aggregates drift slowly, but new
+        # untested code shows up here immediately. Output is posted as a
+        # second sticky PR comment so reviewers see exactly which files
+        # regressed patch coverage.
+        if: github.event_name == 'pull_request' && needs.changes.outputs.has_coverage_files == 'true'
+        run: |
+          ./scripts/patch-coverage-gate.sh
+        continue-on-error: true
+
+      - name: Save PR metadata for report workflow
+        if: github.event_name == 'pull_request' && needs.changes.outputs.has_coverage_files == 'true'
+        run: echo '${{ github.event.pull_request.number }}' > test-reports/coverage/pr-number.txt
+
+      - name: Upload aggregated coverage artifact
+        if: github.event_name != 'merge_group' && needs.changes.outputs.has_coverage_files == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-summary
+          path: test-reports/coverage/
+          # Retention is long enough to cover the gap between a PR's last
+          # coverage run and the eventual merge to main, so coverage-badge.yml
+          # can still find the artifact when it runs post-merge.
+          retention-days: 30
+
+      - name: Fail the job if any gate failed
+        if: github.event_name != 'merge_group' && needs.changes.outputs.has_coverage_files == 'true' && (steps.gate.outcome == 'failure' || steps.patch_gate.outcome == 'failure')
+        run: |
+          echo "::error::Coverage gate failed. See the coverage report comment(s) on the PR for details and remediation steps."
+          exit 1
+
+      # Badge gist updates on merge to main are handled by coverage-badge.yml,
+      # which reuses this workflow's coverage-summary artifact rather than
+      # recomputing coverage on every push to main.

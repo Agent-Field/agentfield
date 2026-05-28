@@ -1,0 +1,13 @@
+# ML services (optional, for hybrid mode with local embeddings)
+# These are heavy dependencies - only install if needed
+
+# Use CPU-only torch to avoid 2GB+ CUDA downloads
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.0.0
+
+sentence-transformers>=2.2.0
+transformers>=4.30.0
+spacy>=3.5.0
+
+# Download spaCy model after install:
+# python -m spacy download en_core_web_sm

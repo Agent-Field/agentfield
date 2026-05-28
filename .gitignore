@@ -1,0 +1,65 @@
+# General
+.DS_Store
+*.log
+*.tmp
+*.swp
+*.swo
+test-reports/
+.env
+
+# Go
+bin/
+dist/
+**/dist/
+coverage.out
+*.test
+tmp/
+examples/go_agent_nodes/permission_agent_*
+examples/go_agent_nodes/go_agent_nodes
+
+# Compiled binaries
+control-plane/agentfield-server
+control-plane/af
+examples/**/go_agent_node*
+!examples/**/*.go
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.mypy_cache/
+.pytest_cache/
+.hypothesis/
+*.egg-info/
+build/
+dist/
+
+# Node / Frontend
+node_modules/
+.pnpm-store/
+.yarn/
+.parcel-cache/
+*.tsbuildinfo
+**/.ui-build-hash
+
+# IDE / Tooling
+.idea/
+.vscode/
+.cursor/
+*.code-workspace
+.opencode/
+.agit/
+.claude/
+
+# Generated assets
+coverage/
+reports/
+*.coverage
+*.lcov
+
+# Docker
+.docker/
+
+# Typescript
+.env
+.plandb.db

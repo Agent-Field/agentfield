@@ -1,0 +1,114 @@
+# Stack for manually verifying agent process logs in the embedded UI.
+#
+# Usage (from repo root):
+#   docker compose -f tests/functional/docker/docker-compose.log-demo.yml up --build
+#
+# Then open http://localhost:8080/ui/agents — expand each demo node → Process logs.
+# All three agents share AGENTFIELD_AUTHORIZATION_INTERNAL_TOKEN with the control plane.
+#
+# Stop: docker compose -f tests/functional/docker/docker-compose.log-demo.yml down
+
+services:
+  control-plane:
+    build:
+      context: ../../..
+      dockerfile: deployments/docker/Dockerfile.control-plane
+    container_name: agentfield-cp-log-demo
+    environment:
+      AGENTFIELD_STORAGE_MODE: local
+      AGENTFIELD_PORT: 8080
+      AGENTFIELD_CONFIG_FILE: /etc/agentfield/agentfield-test.yaml
+      AGENTFIELD_HOME: /data/agentfield
+      AGENTFIELD_AUTHORIZATION_INTERNAL_TOKEN: log-demo-internal-token
+    ports:
+      - "8080:8080"
+    volumes:
+      - cp-log-demo-data:/data
+      - ./agentfield-test.yaml:/etc/agentfield/agentfield-test.yaml:ro
+    networks:
+      - agentfield-log-demo
+    command: ["server", "--port", "8080", "--config", "/etc/agentfield/agentfield-test.yaml", "--vc-execution"]
+
+  # Blocks demo agents until the API responds (avoids registration races on first boot).
+  wait-control-plane:
+    image: curlimages/curl:8.5.0
+    depends_on:
+      control-plane:
+        condition: service_started
+    networks:
+      - agentfield-log-demo
+    command:
+      - curl
+      - -sf
+      - --retry
+      - "60"
+      - --retry-delay
+      - "2"
+      - --retry-connrefused
+      - http://control-plane:8080/api/v1/health
+
+  demo-python:
+    build:
+      context: ../../..
+      dockerfile: deployments/docker/Dockerfile.demo-python-agent
+    environment:
+      AGENTFIELD_URL: http://control-plane:8080
+      AGENT_NODE_ID: demo-python-logs
+      PORT: "8001"
+      AGENT_CALLBACK_URL: http://demo-python:8001
+      AGENTFIELD_AUTHORIZATION_INTERNAL_TOKEN: log-demo-internal-token
+    restart: unless-stopped
+    depends_on:
+      control-plane:
+        condition: service_started
+      wait-control-plane:
+        condition: service_completed_successfully
+    networks:
+      - agentfield-log-demo
+
+  demo-go:
+    build:
+      context: ../../..
+      dockerfile: deployments/docker/Dockerfile.demo-go-agent
+    command: ["serve"]
+    environment:
+      AGENTFIELD_URL: http://control-plane:8080
+      AGENT_NODE_ID: demo-go-logs
+      AGENT_LISTEN_ADDR: :8001
+      AGENT_PUBLIC_URL: http://demo-go:8001
+      AGENTFIELD_AUTHORIZATION_INTERNAL_TOKEN: log-demo-internal-token
+    restart: unless-stopped
+    depends_on:
+      control-plane:
+        condition: service_started
+      wait-control-plane:
+        condition: service_completed_successfully
+    networks:
+      - agentfield-log-demo
+
+  demo-node:
+    build:
+      context: ../../..
+      dockerfile: tests/functional/docker/Dockerfile.log-demo-node
+    environment:
+      AGENTFIELD_SERVER: http://control-plane:8080
+      TS_AGENT_ID: demo-ts-logs
+      TS_AGENT_PORT: "8001"
+      TS_AGENT_BIND_HOST: "0.0.0.0"
+      TS_AGENT_PUBLIC_URL: http://demo-node:8001
+      AGENTFIELD_AUTHORIZATION_INTERNAL_TOKEN: log-demo-internal-token
+    restart: unless-stopped
+    depends_on:
+      control-plane:
+        condition: service_started
+      wait-control-plane:
+        condition: service_completed_successfully
+    networks:
+      - agentfield-log-demo
+
+networks:
+  agentfield-log-demo:
+    driver: bridge
+
+volumes:
+  cp-log-demo-data:
