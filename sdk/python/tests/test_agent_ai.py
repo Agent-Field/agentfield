@@ -293,3 +293,82 @@ async def test_ai_with_vision_invokes_litellm(monkeypatch, agent_with_ai):
 
     stub_module.aimage_generation.assert_awaited_once()
     assert result.images[0].url == "http://image"
+
+
+def _setup_timeout_test(monkeypatch, agent_with_ai):
+    """Common setup for per-call timeout tests. Returns (ai, stub_module, captured)."""
+    agent_with_ai.async_config.llm_call_timeout = 120.0
+    stub_module = setup_litellm_stub(monkeypatch)
+    captured = {}
+
+    async def acompletion_side_effect(**params):
+        captured["params"] = params
+        return make_chat_response("ok")
+
+    stub_module.acompletion.side_effect = acompletion_side_effect
+
+    class StubLimiter:
+        async def execute_with_retry(self, func):
+            return await func()
+
+    ai = AgentAI(agent_with_ai)
+    monkeypatch.setattr(ai, "_ensure_model_limits_cached", lambda: asyncio.sleep(0))
+    monkeypatch.setattr(ai, "_get_rate_limiter", lambda: StubLimiter())
+    monkeypatch.setattr(
+        "agentfield.agent_ai.AgentUtils.detect_input_type", lambda value: "text"
+    )
+    monkeypatch.setattr(
+        "agentfield.agent_ai.AgentUtils.serialize_result", lambda value: value
+    )
+    return ai, stub_module, captured
+
+
+@pytest.mark.asyncio
+async def test_ai_per_call_timeout_overrides_agent_default(monkeypatch, agent_with_ai):
+    ai, _stub, captured = _setup_timeout_test(monkeypatch, agent_with_ai)
+
+    await ai.ai("hello", timeout=30.0)
+
+    assert captured["params"]["timeout"] == 30.0
+
+
+@pytest.mark.asyncio
+async def test_ai_falls_back_to_agent_default_when_no_per_call_timeout(
+    monkeypatch, agent_with_ai
+):
+    ai, _stub, captured = _setup_timeout_test(monkeypatch, agent_with_ai)
+
+    await ai.ai("hello")
+
+    assert captured["params"]["timeout"] == 120.0
+
+
+@pytest.mark.asyncio
+async def test_ai_per_call_timeout_applies_to_wait_for_safety_net(
+    monkeypatch, agent_with_ai
+):
+    ai, _stub, _captured = _setup_timeout_test(monkeypatch, agent_with_ai)
+
+    wait_for_timeouts = []
+    real_wait_for = asyncio.wait_for
+
+    async def capturing_wait_for(awaitable, timeout=None):
+        wait_for_timeouts.append(timeout)
+        return await real_wait_for(awaitable, timeout=timeout)
+
+    monkeypatch.setattr("agentfield.agent_ai.asyncio.wait_for", capturing_wait_for)
+
+    await ai.ai("hi", timeout=10.0)
+
+    assert 20.0 in wait_for_timeouts
+
+
+@pytest.mark.asyncio
+async def test_ai_rejects_non_positive_timeout(monkeypatch, agent_with_ai):
+    ai, _stub, _captured = _setup_timeout_test(monkeypatch, agent_with_ai)
+
+    with pytest.raises(ValueError, match="timeout must be positive"):
+        await ai.ai("hi", timeout=0)
+
+    with pytest.raises(ValueError, match="timeout must be positive"):
+        await ai.ai("hi", timeout=-1.0)

@@ -6,6 +6,68 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.85-rc.11] - 2026-05-28
+
+
+### Fixed
+
+- Fix(sdk): review polish — validate ai() timeout, document empty-dict image_config
+
+Addresses two informational findings from PR review.
+
+- agent_ai.ai(): reject timeout <= 0 with ValueError instead of letting
+  asyncio.wait_for raise a confusing immediate TimeoutError. Defensive
+  guard against user error; cheap one-line check.
+- vision.generate_image_openrouter: add comment explaining that the
+  falsy check for image_config in the strip-and-retry branch is
+  intentional. image_config={} (user explicitly opting into provider
+  defaults per the existing docstring) produces an identical wire call
+  whether stripped or not, so skipping the useless extra attempt is
+  the right behavior. Comment prevents a future "fix" that would just
+  burn cycles.
+- One new test: test_ai_rejects_non_positive_timeout covers both
+  timeout=0 and timeout=-1.0. (fc445e9)
+
+- Fix(sdk): per-call ai() timeout + OpenRouter image retry/strip fallback
+
+Two SDK gaps surfaced by the reel-af example project under a real
+URL-to-vertical-reel workload. Both forced consumer-side workarounds
+that this PR removes.
+
+vision.generate_image_openrouter — retry on routing 404
+  OpenRouter's "No endpoints found that support the requested output
+  modalities" surfaces in two flavours:
+    1. Deterministic 404 when image_config (e.g. aspect_ratio=9:16) hits
+       a model whose upstream replicas don't expose that param.
+    2. Intermittent 1-3% 404 under load when routing momentarily lands
+       on a replica without image modality.
+  Now wraps the litellm.acompletion call in a 3-attempt backoff
+  (1s, 2s) and, if image_config was set and all retries failed, makes
+  one final attempt with image_config stripped, logging a warning. Other
+  exceptions still propagate immediately. The existing asyncio.wait_for
+  timeout still wraps every attempt. Worst-case wait: 3s without
+  image_config, 7s with.
+
+agent_ai.ai() — per-call timeout override
+  ai() now accepts timeout: Optional[float] = None. When set, it
+  overrides async_config.llm_call_timeout for that single call,
+  propagating to both litellm_params["timeout"] (httpx socket-level)
+  and the asyncio.wait_for safety net (2x). Previously the only knob
+  was the agent-wide config, which forced every call in a mixed
+  fast/slow pipeline to use the slowest expected timeout. Wired
+  through all three call paths: direct, tool-loop _make_call, and
+  non-tool _make_litellm_call.
+
+Tests
+  - 4 new tests in test_vision.py covering retry-then-success, strip-
+    image_config-after-retries, no-retry-on-other-errors, and give-up
+    after retries. Sleeps patched out.
+  - 3 new tests in test_agent_ai.py covering per-call override,
+    fallback to agent default, and 2x safety-net propagation.
+  - 112 related tests pass (full agent_ai + vision + media_providers +
+    openrouter_audio + image_config + deadlock_recovery suites).
+  - ruff check + format check clean. (f557b6f)
+
 ## [0.1.85-rc.10] - 2026-05-26
 
 

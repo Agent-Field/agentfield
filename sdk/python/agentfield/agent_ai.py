@@ -277,6 +277,7 @@ class AgentAI:
         ] = None,
         max_turns: Optional[int] = None,
         max_tool_calls: Optional[int] = None,
+        timeout: Optional[float] = None,
         **kwargs,
     ) -> Any:
         """
@@ -311,6 +312,7 @@ class AgentAI:
                 - ToolCallConfig or dict: discover with filtering/progressive options
             max_turns (int, optional): Maximum LLM turns in the tool-call loop (default: 10).
             max_tool_calls (int, optional): Maximum total tool calls allowed (default: 25).
+            timeout (float, optional): Per-call timeout in seconds. Overrides agent's async_config.llm_call_timeout for this call only.
             **kwargs: Additional provider-specific parameters to pass to the LLM.
 
         Returns:
@@ -531,10 +533,15 @@ class AgentAI:
         # then grab the stale pooled connection and hang forever — a silent
         # deadlock that py-spy reveals as 'all worker threads idle'.
         # litellm forwards `timeout` to httpx as a request-level timeout.
-        _litellm_call_timeout = getattr(
-            self.agent.async_config, "llm_call_timeout", 120.0
+        # Per-call `timeout` kwarg overrides the agent-wide async_config default.
+        if timeout is not None and timeout <= 0:
+            raise ValueError(f"timeout must be positive, got {timeout}")
+        effective_timeout = (
+            timeout
+            if timeout is not None
+            else getattr(self.agent.async_config, "llm_call_timeout", 120.0)
         )
-        litellm_params.setdefault("timeout", _litellm_call_timeout)
+        litellm_params.setdefault("timeout", effective_timeout)
 
         if schema:
             # Convert Pydantic model to JSON schema format for LiteLLM
@@ -582,19 +589,16 @@ class AgentAI:
                     )
 
                 async def _make_call():
-                    timeout = getattr(
-                        self.agent.async_config, "llm_call_timeout", 120.0
-                    )
                     # Ensure litellm/httpx itself enforces the timeout at the
                     # socket level, so cancelled requests don't poison the
                     # connection pool for subsequent calls.
-                    params.setdefault("timeout", timeout)
+                    params.setdefault("timeout", effective_timeout)
                     # asyncio.wait_for is a safety net at 2x the litellm timeout
                     # in case litellm fails to honor its own timeout.
                     try:
                         return await asyncio.wait_for(
                             litellm_module.acompletion(**params),
-                            timeout=timeout * 2,
+                            timeout=effective_timeout * 2,
                         )
                     except asyncio.TimeoutError:
                         model_name = params.get("model", "unknown")
@@ -602,7 +606,7 @@ class AgentAI:
                         # gets a fresh connection pool.
                         _reset_litellm_http_clients(litellm_module)
                         raise TimeoutError(
-                            f"LLM call to {model_name} timed out after {timeout * 2}s (asyncio safety net)"
+                            f"LLM call to {model_name} timed out after {effective_timeout * 2}s (asyncio safety net)"
                         )
 
                 async def _call_with_fallbacks():
@@ -662,14 +666,13 @@ class AgentAI:
                 raise ImportError(
                     "litellm is not installed. Please install it with `pip install litellm`."
                 )
-            timeout = getattr(self.agent.async_config, "llm_call_timeout", 120.0)
             # litellm/httpx already gets `timeout` via litellm_params (set
             # earlier). asyncio.wait_for is a safety net at 2x in case litellm
             # fails to honor its own timeout.
             try:
                 return await asyncio.wait_for(
                     litellm_module.acompletion(**litellm_params),
-                    timeout=timeout * 2,
+                    timeout=effective_timeout * 2,
                 )
             except asyncio.TimeoutError:
                 model_name = litellm_params.get("model", "unknown")
@@ -678,7 +681,7 @@ class AgentAI:
                 # holding a stuck connection that will hang forever.
                 _reset_litellm_http_clients(litellm_module)
                 raise TimeoutError(
-                    f"LLM call to {model_name} timed out after {timeout * 2}s (asyncio safety net)"
+                    f"LLM call to {model_name} timed out after {effective_timeout * 2}s (asyncio safety net)"
                 )
 
         async def _execute_with_fallbacks():

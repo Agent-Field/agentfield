@@ -12,7 +12,18 @@ Supported Providers:
 import asyncio
 import os
 from typing import Any, Dict, Optional
-from agentfield.logger import log_error
+from agentfield.logger import log_error, log_warn
+
+
+# Substring identifying OpenRouter's transient "no upstream provider" 404
+# (issues #3 and #5 in reel-af AGENTFIELD_SDK_ISSUES.md).
+_NO_ENDPOINTS_MARKER = "No endpoints found that support the requested output modalities"
+# Sleeps between the 3 in-loop attempts; index 0 is before the strip attempt.
+# Sequence: attempt 1 → sleep 1s → attempt 2 → sleep 2s → attempt 3 → (sleep 4s
+# → strip-and-retry) if image_config was set, else give up.
+_NO_ENDPOINTS_TOTAL_ATTEMPTS = 3
+_NO_ENDPOINTS_INTER_SLEEPS = (1.0, 2.0)
+_NO_ENDPOINTS_STRIP_SLEEP = 4.0
 
 
 async def generate_image_litellm(
@@ -165,13 +176,47 @@ async def generate_image_openrouter(
         completion_params["image_config"] = image_config
 
     try:
-        # Use LiteLLM's completion function (OpenRouter uses chat API)
-        # Wrap with timeout to prevent silent hangs
+        # Use LiteLLM's completion function (OpenRouter uses chat API).
+        # Wrap each attempt with timeout to prevent silent hangs.
+        # Retry OpenRouter's "No endpoints found" 404 (issues #3, #5): transient
+        # under load; if image_config caused it, drop image_config on a final
+        # attempt and warn.
         timeout = float(os.getenv("AGENTFIELD_LLM_CALL_TIMEOUT", "120.0"))
-        response = await asyncio.wait_for(
-            litellm.acompletion(**completion_params),
-            timeout=timeout,
-        )
+        response = None
+        last_exc: Optional[BaseException] = None
+        for attempt in range(_NO_ENDPOINTS_TOTAL_ATTEMPTS):
+            try:
+                response = await asyncio.wait_for(
+                    litellm.acompletion(**completion_params),
+                    timeout=timeout,
+                )
+                break
+            except Exception as e:
+                if _NO_ENDPOINTS_MARKER not in str(e):
+                    raise
+                last_exc = e
+                if attempt < len(_NO_ENDPOINTS_INTER_SLEEPS):
+                    await asyncio.sleep(_NO_ENDPOINTS_INTER_SLEEPS[attempt])
+        if response is None:
+            # All in-loop attempts exhausted. If image_config was set, try once
+            # without it before giving up. Falsy check (not `is not None`) is
+            # intentional: image_config={} produces an identical wire call
+            # whether stripped or not, so we skip the useless extra attempt.
+            if completion_params.get("image_config"):
+                log_warn(
+                    "OpenRouter returned 'No endpoints found' after retries; "
+                    "retrying once with image_config stripped (no upstream provider "
+                    "accepted the requested image_config)."
+                )
+                completion_params.pop("image_config", None)
+                await asyncio.sleep(_NO_ENDPOINTS_STRIP_SLEEP)
+                response = await asyncio.wait_for(
+                    litellm.acompletion(**completion_params),
+                    timeout=timeout,
+                )
+            else:
+                assert last_exc is not None
+                raise last_exc
 
         # Extract images from OpenRouter response
         # OpenRouter returns images in choices[0].message.images
