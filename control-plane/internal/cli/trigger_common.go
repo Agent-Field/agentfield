@@ -321,12 +321,19 @@ func makeRequest(ctx context.Context, method, path string, body interface{}, acc
 		req.Header.Set("X-API-Key", key)
 	}
 
+	client := triggerHTTPClient(accept)
+	return client.Do(req)
+}
+
+func triggerHTTPClient(accept string) *http.Client {
+	if strings.EqualFold(strings.TrimSpace(accept), "text/event-stream") {
+		return &http.Client{}
+	}
 	timeout := GetRequestTimeout()
 	if timeout <= 0 {
 		timeout = 30
 	}
-	client := &http.Client{Timeout: time.Duration(timeout) * time.Second}
-	return client.Do(req)
+	return &http.Client{Timeout: time.Duration(timeout) * time.Second}
 }
 
 func readJSONResponse(resp *http.Response, out interface{}) ([]byte, error) {

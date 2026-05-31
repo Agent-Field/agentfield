@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -97,4 +98,16 @@ func TestExitCodeMapping(t *testing.T) {
 	require.Equal(t, 0, httpExitCode(200))
 	require.Equal(t, 2, ExitCode(cliExitError{Code: 2, Err: errors.New("bad input")}))
 	require.Equal(t, 1, ExitCode(errors.New("generic")))
+}
+
+func TestTriggerHTTPClientTimeouts(t *testing.T) {
+	originalTimeout := requestTimeout
+	t.Cleanup(func() { requestTimeout = originalTimeout })
+
+	requestTimeout = 7
+	require.Equal(t, 7*time.Second, triggerHTTPClient("application/json").Timeout)
+	require.Zero(t, triggerHTTPClient("text/event-stream").Timeout)
+
+	requestTimeout = 0
+	require.Equal(t, 30*time.Second, triggerHTTPClient("application/json").Timeout)
 }
