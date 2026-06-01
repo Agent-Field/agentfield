@@ -1,0 +1,109 @@
+controlPlane:
+  replicaCount: 1
+
+  image:
+    repository: agentfield/control-plane
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 8080
+    # Admin gRPC listens on (port + 100). Set to 0 to auto-compute.
+    grpcPort: 0
+
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts: []
+    tls: []
+
+  storage:
+    # local (SQLite/Bolt under AGENTFIELD_HOME) or postgres
+    mode: local
+    # If mode=postgres and this is empty, and postgres.enabled=true, the chart will auto-wire it.
+    postgresUrl: ""
+
+  env:
+    AGENTFIELD_HOME: /data
+    # Use defaults + env vars (avoids relying on a bundled config file).
+    # You can set this to a real path if you mount your own config.
+    AGENTFIELD_CONFIG_FILE: /dev/null
+
+  extraEnv: []
+
+  persistence:
+    enabled: true
+    existingClaim: ""
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 1Gi
+
+  podAnnotations: {}
+  annotations: {}
+
+  podSecurityContext: {}
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false
+
+  resources: {}
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+apiAuth:
+  enabled: false
+  apiKey: ""
+  existingSecret: ""
+  existingSecretKey: apiKey
+
+postgres:
+  enabled: false
+  image:
+    repository: pgvector/pgvector
+    tag: pg16
+    pullPolicy: IfNotPresent
+  auth:
+    username: agentfield
+    password: agentfield
+    database: agentfield
+    existingSecret: ""
+    existingSecretUsernameKey: username
+    existingSecretPasswordKey: password
+    existingSecretDatabaseKey: database
+  persistence:
+    enabled: true
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 5Gi
+
+demoAgent:
+  enabled: false
+  image:
+    # Build locally from deployments/docker/Dockerfile.demo-go-agent and push/load into your cluster.
+    repository: agentfield-demo-go-agent
+    tag: local
+    pullPolicy: IfNotPresent
+  nodeId: demo-go-agent
+  service:
+    type: ClusterIP
+    port: 8001
+
+demoPythonAgent:
+  # Demo agent that installs the Python SDK from PyPI at startup (no custom image required).
+  # Intended for evaluation only.
+  enabled: false
+  image:
+    repository: python
+    tag: "3.11-slim"
+    pullPolicy: IfNotPresent
+  pipPackage: "agentfield"
+  nodeId: demo-python-agent
+  service:
+    type: ClusterIP
+    port: 8001

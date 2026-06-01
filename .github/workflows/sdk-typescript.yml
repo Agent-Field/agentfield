@@ -1,0 +1,68 @@
+name: TypeScript SDK CI
+
+on:
+  pull_request:
+    paths:
+      - 'sdk/typescript/**'
+      - '.github/workflows/sdk-typescript.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'sdk/typescript/**'
+      - '.github/workflows/sdk-typescript.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['18', '20']
+
+    defaults:
+      run:
+        working-directory: sdk/typescript
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+          cache-dependency-path: sdk/typescript/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          CI: true
+
+      - name: Lint
+        run: npm run lint
+        env:
+          CI: true
+
+      - name: Run tests (unit + integration)
+        run: npm test
+        env:
+          CI: true
+
+  required-checks:
+    name: All Required Checks Passed
+    runs-on: ubuntu-latest
+    needs: [build-and-test]
+    if: always()
+    steps:
+      - name: Check all jobs
+        run: |
+          if [ "${{ needs.build-and-test.result }}" != "success" ]; then
+            echo "Required checks failed"
+            exit 1
+          fi
+          echo "All required checks passed successfully"

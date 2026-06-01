@@ -1,0 +1,49 @@
+package main
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/Agent-Field/agentfield/sdk/go/agent"
+	"github.com/Agent-Field/agentfield/sdk/go/ai"
+)
+
+func registerReasoners(app *agent.Agent) {
+	// Simple echo reasoner - works without AI configured
+	//
+	// Example usage:
+	// curl -X POST http://localhost:8080/api/v1/execute/{{.NodeID}}.echo \
+	//   -H "Content-Type: application/json" \
+	//   -d '{"input": {"message": "Hello World"}}'
+	app.RegisterReasoner("echo", func(ctx context.Context, input map[string]any) (any, error) {
+		message, _ := input["message"].(string)
+		return map[string]any{
+			"original": message,
+			"echoed":   message,
+			"length":   len(message),
+		}, nil
+	})
+
+	// 🔧 Uncomment when AI is configured in main.go:
+	//
+	// AI-powered sentiment analysis
+	//
+	// Example usage:
+	// curl -X POST http://localhost:8080/api/v1/execute/{{.NodeID}}.analyze_sentiment \
+	//   -H "Content-Type: application/json" \
+	//   -d '{"input": {"text": "I love this product!"}}'
+	//
+	// app.RegisterReasoner("analyze_sentiment", func(ctx context.Context, input map[string]any) (any, error) {
+	// 	text, _ := input["text"].(string)
+	//
+	// 	result, err := app.AI(ctx,
+	// 		fmt.Sprintf("Analyze the sentiment of this text: %s", text),
+	// 		ai.WithSystem("You are a sentiment analysis expert."),
+	// 	)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	//
+	// 	return result, nil
+	// })
+}

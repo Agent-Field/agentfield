@@ -1,0 +1,29 @@
+{
+  "version": "1.2",
+  "updated": "2026-01-11",
+  "description": "Baseline performance metrics for PR regression detection (CI environment: Python 3.11, ubuntu-latest)",
+  "thresholds": {
+    "memory_warning_pct": 15,
+    "memory_fail_pct": 30,
+    "latency_warning_pct": 25,
+    "latency_fail_pct": 50
+  },
+  "metrics": {
+    "python": {
+      "memory_per_handler_kb": 9.0,
+      "latency_p99_us": 0.35,
+      "handlers_tested": 1000
+    },
+    "go": {
+      "memory_per_handler_bytes": 280,
+      "latency_p99_us": 1.0,
+      "handlers_tested": 100000
+    },
+    "typescript": {
+      "memory_per_handler_bytes": 350,
+      "latency_p99_us": 2.0,
+      "handlers_tested": 1000,
+      "note": "Tests actual SDK (Agent + ReasonerRegistry), not raw Map"
+    }
+  }
+}

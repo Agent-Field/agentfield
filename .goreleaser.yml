@@ -1,0 +1,179 @@
+# GoReleaser v2 configuration
+version: 2
+
+project_name: agentfield
+
+before:
+  hooks:
+    - npm --prefix control-plane/web/client install --silent
+    - npm --prefix control-plane/web/client run build --silent
+
+builds:
+  - id: agentfield-linux-amd64
+    dir: control-plane
+    main: ./cmd/af
+    binary: agentfield-linux-amd64
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - linux
+    goarch:
+      - amd64
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .ShortCommit }}
+      - -X main.date={{ .Date }}
+    tags:
+      - embedded
+      - sqlite_fts5
+
+  - id: agentfield-linux-arm64
+    dir: control-plane
+    main: ./cmd/af
+    binary: agentfield-linux-arm64
+    env:
+      - CGO_ENABLED=1
+      - CC=aarch64-linux-gnu-gcc
+    goos:
+      - linux
+    goarch:
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .ShortCommit }}
+      - -X main.date={{ .Date }}
+    tags:
+      - embedded
+      - sqlite_fts5
+
+  - id: agentfield-darwin-amd64
+    dir: control-plane
+    main: ./cmd/af
+    binary: agentfield-darwin-amd64
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - darwin
+    goarch:
+      - amd64
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .ShortCommit }}
+      - -X main.date={{ .Date }}
+    tags:
+      - embedded
+      - sqlite_fts5
+
+  - id: agentfield-darwin-arm64
+    dir: control-plane
+    main: ./cmd/af
+    binary: agentfield-darwin-arm64
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - darwin
+    goarch:
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .ShortCommit }}
+      - -X main.date={{ .Date }}
+    tags:
+      - embedded
+      - sqlite_fts5
+
+  # Windows build disabled - focus on Linux and macOS for now
+  # - id: agentfield-windows-amd64
+  #   dir: control-plane
+  #   main: ./cmd/af
+  #   binary: agentfield
+  #   env:
+  #     - CGO_ENABLED=1
+  #     - CC=gcc
+  #   goos:
+  #     - windows
+  #   goarch:
+  #     - amd64
+  #   ldflags:
+  #     - -s -w
+  #     - -X main.version={{ .Version }}
+  #     - -X main.commit={{ .ShortCommit }}
+  #     - -X main.date={{ .Date }}
+  #   tags:
+  #     - embedded
+  #     - sqlite_fts5
+  #   no_unique_dist_dir: true
+
+# Don't create archives - ship raw binaries
+archives:
+  - id: default
+    builds:
+      - agentfield-linux-amd64
+      - agentfield-linux-arm64
+      - agentfield-darwin-amd64
+      - agentfield-darwin-arm64
+    format: binary
+    name_template: "agentfield-{{ .Os }}-{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+release:
+  github:
+    owner: Agent-Field
+    name: agentfield
+  draft: false
+  prerelease: auto
+  name_template: "AgentField v{{ .Version }}"
+  header: |
+    ## AgentField v{{ .Version }}
+
+    ### Installation
+
+    **Installation:**
+    ```bash
+    curl -fsSL https://agentfield.ai/install.sh | bash
+    ```
+
+    ### Version Pinning
+
+    ```bash
+    VERSION={{ .Version }} curl -fsSL https://agentfield.ai/install.sh | bash
+    ```
+
+    ### Manual Download
+
+    Download the binary for your platform below, make it executable, and move it to your PATH.
+
+    ### Supported Platforms
+
+    - **macOS Intel:** `agentfield-darwin-amd64`
+    - **macOS Apple Silicon:** `agentfield-darwin-arm64`
+    - **Linux x86_64:** `agentfield-linux-amd64`
+    - **Linux ARM64:** `agentfield-linux-arm64`
+
+changelog:
+  use: git
+  sort: asc
+  abbrev: 0
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Bug Fixes
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Others
+      order: 999
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - '^ci:'
+      - '^style:'

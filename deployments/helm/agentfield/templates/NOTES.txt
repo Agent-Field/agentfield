@@ -1,0 +1,31 @@
+AgentField is installed.
+
+Control plane service:
+  {{ include "agentfield.controlPlane.fullname" . }}:{{ .Values.controlPlane.service.port }}
+
+Port-forward to access the UI locally:
+  kubectl port-forward svc/{{ include "agentfield.controlPlane.fullname" . }} {{ .Values.controlPlane.service.port }}:{{ .Values.controlPlane.service.port }}
+
+Then open:
+  http://localhost:{{ .Values.controlPlane.service.port }}/ui/
+
+{{- if .Values.demoAgent.enabled }}
+Demo agent is enabled and should auto-register.
+
+Test an execution:
+  curl -X POST http://localhost:{{ .Values.controlPlane.service.port }}/api/v1/execute/{{ .Values.demoAgent.nodeId }}.demo_echo \
+    -H "Content-Type: application/json" \
+    -d '{"input": {"message": "Hello!"}}'
+{{- end }}
+
+{{- if .Values.demoPythonAgent.enabled }}
+Demo Python agent is enabled and should auto-register.
+
+Test an execution:
+  curl -X POST http://localhost:{{ .Values.controlPlane.service.port }}/api/v1/execute/{{ .Values.demoPythonAgent.nodeId }}.hello \
+    -H "Content-Type: application/json" \
+    -d '{"input": {"name": "World"}}'
+
+Verify VC chain (copy the run_id from the execute response):
+  curl http://localhost:{{ .Values.controlPlane.service.port }}/api/v1/did/workflow/<RUN_ID>/vc-chain
+{{- end }}

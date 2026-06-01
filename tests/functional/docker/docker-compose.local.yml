@@ -1,0 +1,66 @@
+services:
+  control-plane:
+    build:
+      context: ../../..
+      dockerfile: deployments/docker/Dockerfile.control-plane
+    container_name: agentfield-control-plane-local
+    environment:
+      AGENTFIELD_STORAGE_MODE: local
+      AGENTFIELD_PORT: 8080
+      AGENTFIELD_CONFIG_FILE: /etc/agentfield/agentfield-test.yaml
+      AGENTFIELD_APPROVAL_WEBHOOK_SECRET: test-approval-webhook-secret
+      AGENTFIELD_HOME: /data/agentfield
+      # Allow webhooks to the test-runner container (RFC-1918 Docker bridge IPs).
+      AGENTFIELD_WEBHOOK_ALLOWED_HOSTS: "test-runner"
+    ports:
+      - "8080:8080"
+    volumes:
+      - control-plane-data:/data
+      - ../docker/agentfield-test.yaml:/etc/agentfield/agentfield-test.yaml:ro
+    networks:
+      - agentfield-test
+    command: ["server", "--port", "8080", "--config", "/etc/agentfield/agentfield-test.yaml", "--vc-execution"]
+
+  test-runner:
+    build:
+      context: ../../..
+      dockerfile: tests/functional/docker/Dockerfile.test-runner
+    container_name: agentfield-test-runner-local
+    environment:
+      AGENTFIELD_SERVER: http://control-plane:8080
+      APPROVAL_WEBHOOK_SECRET: test-approval-webhook-secret
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openrouter/google/gemini-2.5-flash-lite}
+      STORAGE_MODE: local
+      PYTEST_MARK_EXPR: ${PYTEST_MARK_EXPR:-}
+      PYTEST_ARGS: ${PYTEST_ARGS:--v}
+      TEST_TIMEOUT: ${TEST_TIMEOUT:-300}
+      TEST_AGENT_BIND_HOST: ${TEST_AGENT_BIND_HOST:-0.0.0.0}
+      TEST_AGENT_CALLBACK_HOST: ${TEST_AGENT_CALLBACK_HOST:-test-runner}
+      FUNCTIONAL_LOG_FILE: /tests/functional/logs/functional-tests.log
+      AGENTFIELD_HOME: /tmp/agentfield-cli
+    volumes:
+      - ../:/tests
+    depends_on:
+      - control-plane
+    networks:
+      - agentfield-test
+    working_dir: /tests
+    command: >
+      sh -c "
+      echo 'Waiting for control plane to be fully ready...' &&
+      wait-for-services.sh &&
+      RERUN_OPTS='--reruns 2 --reruns-delay 5 --only-rerun Timeout --only-rerun ConnectionError' &&
+      if [ -n \"$$PYTEST_MARK_EXPR\" ]; then
+        pytest -n auto -m \"$$PYTEST_MARK_EXPR\" $$PYTEST_ARGS $$RERUN_OPTS --junit-xml=/reports/junit-local.xml --tb=short;
+      else
+        pytest -n auto $$PYTEST_ARGS $$RERUN_OPTS --junit-xml=/reports/junit-local.xml --tb=short;
+      fi
+      "
+
+networks:
+  agentfield-test:
+    driver: bridge
+
+volumes:
+  control-plane-data:

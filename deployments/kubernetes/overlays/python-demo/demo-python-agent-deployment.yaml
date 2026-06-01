@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentfield-demo-python-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: demo-python-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: demo-python-agent
+    spec:
+      initContainers:
+        - name: wait-control-plane
+          image: curlimages/curl:8.12.1
+          command:
+            - sh
+            - -c
+            - >
+              until curl -sf "http://agentfield-control-plane:8080/api/v1/health" >/dev/null;
+              do echo "waiting for control plane"; sleep 2; done
+      containers:
+        - name: demo-python-agent
+          image: python:3.11-slim
+          command:
+            - sh
+            - -c
+            - >
+              python -m pip install --no-cache-dir --upgrade pip &&
+              python -m pip install --no-cache-dir agentfield &&
+              python /app/main.py
+          ports:
+            - name: http
+              containerPort: 8001
+          env:
+            - name: AGENTFIELD_URL
+              value: http://agentfield-control-plane:8080
+            - name: AGENT_NODE_ID
+              value: demo-python-agent
+            - name: PORT
+              value: "8001"
+            - name: AGENT_CALLBACK_URL
+              value: http://agentfield-demo-python-agent:8001
+          volumeMounts:
+            - name: app
+              mountPath: /app
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: app
+          configMap:
+            name: agentfield-demo-python-agent
+

@@ -1,0 +1,5214 @@
+import asyncio
+import inspect
+import os
+import re
+import socket
+import threading
+import time
+import urllib.parse
+import sys
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from functools import wraps
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    TYPE_CHECKING,
+    List,
+    Optional,
+    Set,
+    Union,
+    get_type_hints,
+    Type,
+    Dict,
+    Literal,
+)
+from agentfield.agent_ai import AgentAI
+from agentfield.agent_cli import AgentCLI
+from agentfield.agent_field_handler import AgentFieldHandler
+from agentfield.agent_registry import clear_current_agent, set_current_agent
+from agentfield.agent_server import AgentServer
+from agentfield.agent_workflow import AgentWorkflow
+from agentfield.client import AgentFieldClient, ApprovalResult
+from agentfield.execution_context import (
+    ExecutionContext,
+    get_current_context,
+    reset_execution_context,
+    set_execution_context,
+)
+from agentfield.execution_state import ExecuteError
+from agentfield.did_manager import DIDManager
+from agentfield.vc_generator import VCGenerator
+from agentfield.memory import MemoryClient, MemoryInterface
+from agentfield.memory_events import MemoryEventClient
+from agentfield.logger import log_debug, log_error, log_info, log_warn, set_cp_client
+from agentfield.router import AgentRouter
+from agentfield.connection_manager import ConnectionManager
+from agentfield.cost_tracker import CostTracker
+from agentfield.types import (
+    AgentStatus,
+    AIConfig,
+    DiscoveryResult,
+    HarnessConfig,
+    MemoryConfig,
+)
+from agentfield.multimodal_response import MultimodalResponse
+from agentfield.async_config import AsyncConfig
+from agentfield.async_execution_manager import AsyncExecutionManager
+from agentfield.pydantic_utils import convert_function_args, should_convert_args
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ValidationError
+from dataclasses import dataclass, field
+import weakref
+
+if TYPE_CHECKING:
+    from agentfield.harness._result import HarnessResult
+    from agentfield.harness._runner import HarnessRunner
+
+# Use slots=True for memory efficiency on Python 3.10+, fallback for older versions
+_dataclass_kwargs = {"slots": True} if sys.version_info >= (3, 10) else {}
+
+
+class _HandlerInputError(ValueError):
+    """Reasoner input-validation error with a message safe to surface to HTTP clients.
+
+    All messages produced inside the SDK's validator are constructed by us
+    (not pulled from user payloads or underlying Python exceptions), so the
+    full text is safe to include in a 422 response body. We expose that
+    text via the explicit `safe_message` attribute rather than relying on
+    `str(self)` so the request handler can read a known-safe value without
+    tripping CodeQL's `py/stack-trace-exposure` rule.
+
+    Subclasses ValueError so existing `except ValueError` call sites still
+    catch validation failures unchanged.
+    """
+
+    __slots__ = ("safe_message",)
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.safe_message = message
+
+
+# Memory-efficient handler entry classes using __slots__ (on Python 3.10+)
+@dataclass(**_dataclass_kwargs)
+class ReasonerEntry:
+    """Minimal reasoner metadata - uses __slots__ for memory efficiency.
+
+    Stores only essential data; schemas generated on-demand to reduce memory.
+    """
+
+    id: str
+    func: Callable
+    input_types: Dict[str, tuple]  # (type, default) tuples - not Pydantic model
+    output_type: type
+    tags: List[str] = field(default_factory=list)
+    vc_enabled: Optional[bool] = None
+    # Trigger bindings declared via @reasoner(triggers=[...]) or sugar
+    # decorators @on_event / @on_schedule. The control plane upserts a
+    # code-managed Trigger row per binding at registration.
+    triggers: List[Any] = field(default_factory=list)
+    # 3-state webhook flag: True (opt-in), False (opt-out), "warn" (default)
+    accepts_webhook: Union[bool, str] = "warn"
+    # Note: input_schema and output_schema are generated on-demand via _get_handler_schema()
+
+
+@dataclass(**_dataclass_kwargs)
+class SkillEntry:
+    """Minimal skill metadata - uses __slots__ for memory efficiency."""
+
+    id: str
+    func: Callable
+    input_types: Dict[str, tuple]  # (type, default) tuples
+    output_type: type
+    tags: List[str] = field(default_factory=list)
+    vc_enabled: Optional[bool] = None
+
+
+# Import aiohttp for fire-and-forget HTTP calls
+try:
+    import aiohttp
+except ImportError:
+    aiohttp = None
+
+
+def _detect_container_ip() -> Optional[str]:
+    """
+    Detect the external IP address when running in a containerized environment.
+
+    Returns:
+        External IP address if detected, None otherwise
+    """
+    try:
+        # Try to get IP from container metadata (works in many hosted environments)
+        import requests
+
+        # Try AWS metadata service
+        try:
+            response = requests.get(
+                "http://169.254.169.254/latest/meta-data/public-ipv4", timeout=2
+            )
+            if response.status_code == 200:
+                return response.text.strip()
+        except Exception:
+            pass
+
+        # Try Google metadata service
+        try:
+            response = requests.get(
+                "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip",
+                headers={"Metadata-Flavor": "Google"},
+                timeout=2,
+            )
+            if response.status_code == 200:
+                return response.text.strip()
+        except Exception:
+            pass
+
+        # Try Azure metadata service
+        try:
+            response = requests.get(
+                "http://169.254.169.254/metadata/instance/network/interface/0/ipv4/ipAddress/0/publicIpAddress?api-version=2021-02-01",
+                headers={"Metadata": "true"},
+                timeout=2,
+            )
+            if response.status_code == 200:
+                import json
+
+                data = json.loads(response.text)
+                return data
+        except Exception:
+            pass
+
+        # Fallback: try to get external IP via external service
+        try:
+            response = requests.get("https://api.ipify.org", timeout=5)
+            if response.status_code == 200:
+                return response.text.strip()
+        except Exception:
+            pass
+
+    except ImportError:
+        pass
+
+    return None
+
+
+def _detect_local_ip() -> Optional[str]:
+    """
+    Detect the local IP address of the machine.
+
+    Returns:
+        Local IP address if detected, None otherwise
+    """
+    try:
+        # Connect to a remote address to determine local IP
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception:
+        return None
+
+
+def _is_running_in_container() -> bool:
+    """
+    Detect if the application is running inside a container.
+
+    Returns:
+        True if running in a container, False otherwise
+    """
+    try:
+        # Check for Docker container indicators
+        if os.path.exists("/.dockerenv"):
+            return True
+
+        # Check cgroup for container indicators
+        try:
+            with open("/proc/1/cgroup", "r") as f:
+                content = f.read()
+                if (
+                    "docker" in content
+                    or "containerd" in content
+                    or "kubepods" in content
+                ):
+                    return True
+        except Exception:
+            pass
+
+        # Check for Kubernetes environment variables
+        if any(key.startswith("KUBERNETES_") for key in os.environ):
+            return True
+
+        # Check for common container environment variables
+        container_vars = ["CONTAINER", "DOCKER_CONTAINER", "RAILWAY_ENVIRONMENT"]
+        if any(var in os.environ for var in container_vars):
+            return True
+
+    except Exception:
+        pass
+
+    return False
+
+
+def _normalize_candidate(candidate: str, port: int) -> Optional[str]:
+    """Normalize a callback candidate into scheme://host:port form."""
+    if not candidate:
+        return None
+
+    candidate = candidate.strip()
+    if not candidate:
+        return None
+
+    # Ensure we have a scheme so urlparse behaves predictably
+    if "://" not in candidate:
+        candidate = f"http://{candidate}"
+
+    try:
+        parsed = urllib.parse.urlparse(candidate)
+    except Exception:
+        return None
+
+    scheme = parsed.scheme or "http"
+
+    host = parsed.hostname or ""
+    if not host:
+        # Some inputs might be bare hostnames found in .path
+        host = parsed.path
+
+    host = host.strip("[]")  # We'll add brackets for IPv6 later if needed
+    if not host:
+        return None
+
+    # Determine port precedence: explicit candidate port, fallback parameter
+    candidate_port = parsed.port
+    if not candidate_port and port:
+        candidate_port = port
+
+    # IPv6 addresses need brackets
+    if ":" in host and not host.startswith("[") and not host.endswith("]"):
+        host = f"[{host}]"
+
+    if candidate_port:
+        netloc = f"{host}:{candidate_port}"
+    else:
+        netloc = host
+
+    return f"{scheme}://{netloc}"
+
+
+def _build_callback_candidates(
+    callback_url: Optional[str], port: int, *, include_defaults: bool = True
+) -> List[str]:
+    """Assemble a prioritized list of callback URL candidates."""
+
+    candidates: List[str] = []
+    seen: Set[str] = set()
+
+    def add_candidate(raw: Optional[str]):
+        normalized = _normalize_candidate(raw or "", port)
+        if normalized and normalized not in seen:
+            candidates.append(normalized)
+            seen.add(normalized)
+
+    # 1. Explicit configuration
+    add_candidate(callback_url)
+
+    # 2. Environment override
+    env_callback_url = os.getenv("AGENT_CALLBACK_URL")
+    add_candidate(env_callback_url)
+
+    # 3. Container/platform-specific hints
+    if _is_running_in_container():
+        railway_service_name = os.getenv("RAILWAY_SERVICE_NAME")
+        railway_environment = os.getenv("RAILWAY_ENVIRONMENT")
+        if railway_service_name and railway_environment:
+            add_candidate(f"http://{railway_service_name}.railway.internal:{port}")
+
+        external_ip = _detect_container_ip()
+        if external_ip:
+            add_candidate(f"http://{external_ip}:{port}")
+
+    # 4. Local network hints
+    local_ip = _detect_local_ip()
+    if local_ip and local_ip not in {"127.0.0.1", "0.0.0.0"}:
+        add_candidate(f"http://{local_ip}:{port}")
+
+    hostname = socket.gethostname()
+    if hostname:
+        add_candidate(f"http://{hostname}:{port}")
+
+    # Make host.docker.internal available even on Linux once mapped via extra_hosts
+    add_candidate(f"http://host.docker.internal:{port}")
+
+    # 5. Default fallbacks
+    if include_defaults:
+        add_candidate(f"http://localhost:{port}")
+        add_candidate(f"http://127.0.0.1:{port}")
+
+    return candidates
+
+
+def _resolve_callback_url(callback_url: Optional[str], port: int) -> str:
+    """
+    Resolve the callback URL using the configuration hierarchy.
+
+    Priority:
+    1. Explicit callback_url parameter
+    2. AGENT_CALLBACK_URL environment variable
+    3. Auto-detection for containerized environments
+    4. Fallback to localhost
+
+    Args:
+        callback_url: Explicit callback URL from constructor
+        port: Port the agent will listen on
+
+    Returns:
+        Resolved callback URL
+    """
+    candidates = _build_callback_candidates(callback_url, port)
+    if candidates:
+        return candidates[0]
+    return f"http://localhost:{port}"
+
+
+class _PauseManager:
+    """Manages pending execution pause futures resolved via webhook callback.
+
+    Each call to ``Agent.pause()`` registers an ``asyncio.Future`` keyed by
+    ``approval_request_id``.  When the webhook route receives a resolution
+    callback from the control plane it resolves the matching future, unblocking
+    the caller.
+    """
+
+    def __init__(self) -> None:
+        self._pending: Dict[str, asyncio.Future] = {}
+        # Also track execution_id → approval_request_id for fallback resolution
+        self._exec_to_request: Dict[str, str] = {}
+        self._lock = asyncio.Lock()
+
+    async def register(
+        self, approval_request_id: str, execution_id: str = ""
+    ) -> asyncio.Future:
+        """Register a new pending pause and return the Future to await."""
+        async with self._lock:
+            if approval_request_id in self._pending:
+                return self._pending[approval_request_id]
+            loop = asyncio.get_running_loop()
+            future = loop.create_future()
+            self._pending[approval_request_id] = future
+            if execution_id:
+                self._exec_to_request[execution_id] = approval_request_id
+            return future
+
+    async def resolve(self, approval_request_id: str, result: "ApprovalResult") -> bool:
+        """Resolve a pending pause by approval_request_id.  Returns True if a waiter was found."""
+        async with self._lock:
+            future = self._pending.pop(approval_request_id, None)
+            # Clean up execution mapping
+            exec_id = None
+            for eid, rid in self._exec_to_request.items():
+                if rid == approval_request_id:
+                    exec_id = eid
+                    break
+            if exec_id:
+                self._exec_to_request.pop(exec_id, None)
+            if future and not future.done():
+                future.set_result(result)
+                return True
+            return False
+
+    async def resolve_by_execution_id(
+        self, execution_id: str, result: "ApprovalResult"
+    ) -> bool:
+        """Fallback: resolve by execution_id when approval_request_id is not in the callback."""
+        async with self._lock:
+            request_id = self._exec_to_request.pop(execution_id, None)
+            if request_id:
+                future = self._pending.pop(request_id, None)
+                if future and not future.done():
+                    future.set_result(result)
+                    return True
+            return False
+
+    async def cancel_all(self) -> None:
+        """Cancel all pending futures (for shutdown)."""
+        async with self._lock:
+            for future in self._pending.values():
+                if not future.done():
+                    future.cancel()
+            self._pending.clear()
+            self._exec_to_request.clear()
+
+
+class Agent(FastAPI):
+    """
+    AgentField Agent - FastAPI subclass for creating AI agent nodes.
+
+    The Agent class is the core component of the AgentField SDK that enables developers to create
+    intelligent agent nodes. It inherits from FastAPI to provide HTTP endpoints and integrates
+    with the AgentField ecosystem for distributed AI workflows.
+
+    Key Features:
+    - Decorator-based reasoner and skill registration
+    - Cross-agent communication via the AgentField execution gateway
+    - Memory interface for persistent and session-based storage
+    - Automatic workflow tracking and DAG building
+    - FastAPI-based HTTP API with automatic schema generation
+
+    Example:
+        ```python
+        from agentfield import Agent
+
+        # Create an agent instance
+        app = Agent(
+            node_id="my_agent",
+            agentfield_server="http://localhost:8080"
+        )
+
+        # Define a reasoner (AI-powered function)
+        @app.reasoner()
+        async def analyze_sentiment(text: str) -> dict:
+            result = await app.ai(
+                prompt=f"Analyze sentiment of: {text}",
+                response_model={"sentiment": "positive|negative|neutral", "confidence": "float"}
+            )
+            return result
+
+        # Define a skill (deterministic function)
+        @app.skill()
+        def format_response(sentiment: str, confidence: float) -> str:
+            return f"Sentiment: {sentiment} (confidence: {confidence:.2f})"
+
+        # Start the agent server
+        if __name__ == "__main__":
+            app.serve(port=8001)
+        ```
+    """
+
+    def __init__(
+        self,
+        node_id: str,
+        agentfield_server: Optional[str] = None,
+        version: str = "1.0.0",
+        description: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        author: Optional[Dict[str, str]] = None,
+        ai_config: Optional[AIConfig] = None,
+        harness_config: Optional["HarnessConfig"] = None,
+        memory_config: Optional[MemoryConfig] = None,
+        dev_mode: bool = False,
+        async_config: Optional[AsyncConfig] = None,
+        callback_url: Optional[str] = None,
+        auto_register: bool = True,
+        vc_enabled: Optional[bool] = True,
+        api_key: Optional[str] = None,
+        enable_did: bool = True,
+        local_verification: bool = False,
+        verification_refresh_interval: int = 300,
+        **kwargs: Any,
+    ) -> None:
+        """
+        Initialize a new AgentField Agent instance.
+
+        Creates a new agent node that can host reasoners (AI-powered functions) and skills
+        (deterministic functions) while integrating with the AgentField ecosystem for distributed
+        AI workflows and cross-agent communication.
+
+        Args:
+            node_id (str): Unique identifier for this agent node. Used for routing and
+                          cross-agent communication. Should be descriptive and unique
+                          within your AgentField ecosystem.
+            agentfield_server (str, optional): URL of the AgentField server for registration and
+                                        execution gateway. If not provided, checks AGENTFIELD_SERVER
+                                        and AGENTFIELD_SERVER_URL environment variables, then defaults
+                                        to "http://localhost:8080".
+            version (str, optional): Version string for this agent. Used for compatibility
+                                   checking and deployment tracking. Defaults to "1.0.0".
+            ai_config (AIConfig, optional): Configuration for AI/LLM integration. If not
+                                          provided, will be loaded from environment variables.
+            memory_config (MemoryConfig, optional): Configuration for memory behavior including
+                                                   auto-injection patterns and retention policies.
+                                                   Defaults to session-based memory.
+            dev_mode (bool, optional): Enable development mode with verbose logging and
+                                     debugging features. Defaults to False.
+            async_config (AsyncConfig, optional): Configuration for async execution behavior.
+            callback_url (str, optional): Explicit callback URL for AgentField server to reach this agent.
+                                         If not provided, will use AGENT_CALLBACK_URL environment variable,
+                                         auto-detection for containers, or fallback to localhost.
+            vc_enabled (bool | None, optional): Controls default VC generation policy for this agent node.
+                                         True enables VCs for all reasoners/skills (default), False disables,
+                                         and None defers entirely to platform defaults.
+            api_key (str, optional): API key for authenticating with the AgentField control plane.
+                                    When set, will be sent as X-API-Key header on all requests.
+            **kwargs: Additional keyword arguments passed to FastAPI constructor.
+
+        Example:
+            ```python
+            # Basic agent setup
+            app = Agent(node_id="sentiment_analyzer")
+
+            # Advanced configuration
+            app = Agent(
+                node_id="advanced_agent",
+                agentfield_server="https://agentfield.company.com",
+                version="2.1.0",
+                ai_config=AIConfig(
+                    provider="openai",
+                    model="gpt-4",
+                    api_key="your-key"
+                ),
+                memory_config=MemoryConfig(
+                    auto_inject=["user_context", "conversation_history"],
+                    memory_retention="persistent",
+                    cache_results=True
+                ),
+                dev_mode=True
+            )
+            ```
+
+        Note:
+            The agent automatically initializes all necessary handlers for
+            memory management, workflow tracking, and server functionality.
+        """
+        # Set logging level based on dev_mode
+        from agentfield.logger import set_log_level
+
+        set_log_level("DEBUG" if dev_mode else "INFO")
+
+        # Resolve control plane URL: explicit param > env vars > default
+        if agentfield_server is None:
+            agentfield_server = os.environ.get(
+                "AGENTFIELD_SERVER",
+                os.environ.get("AGENTFIELD_SERVER_URL", "http://localhost:8080"),
+            )
+
+        super().__init__(**kwargs)
+
+        self.node_id = node_id
+        self.agentfield_server = agentfield_server
+        self.version = version
+        self.description = description
+        self.agent_tags = tags or []
+        self.author = author
+
+        # Per-process identifier sent in registration and heartbeats. The control
+        # plane uses a change in this value across re-registrations to detect a
+        # mid-flight redeploy and fail every in-flight execution that was
+        # awaiting a result inside the previous OS process. A fresh UUID per
+        # __init__ is exactly what we want — every Python process gets a unique
+        # one, and a re-import in the same process keeps the same one (since the
+        # same Agent instance is being used).
+        import uuid as _uuid
+        self.agent_instance_id = _uuid.uuid4().hex
+
+        # Memory-efficient handler registries (replaces old list-based storage)
+        # Using Dict[str, Entry] with __slots__ dataclasses for minimal footprint
+        self._reasoner_registry: Dict[str, ReasonerEntry] = {}
+        self._skill_registry: Dict[str, SkillEntry] = {}
+
+        # VC override tracking (still needed for _effective_component_vc_setting)
+        self._reasoner_vc_overrides: Dict[str, bool] = {}
+        self._skill_vc_overrides: Dict[str, bool] = {}
+
+        self._agent_vc_enabled: Optional[bool] = vc_enabled
+        self.base_url = None
+        self.callback_candidates: List[str] = []
+        self.callback_url = callback_url  # Store the explicit callback URL
+        self._heartbeat_thread = None
+        self._heartbeat_stop_event = threading.Event()
+        self.dev_mode = dev_mode
+        self.agentfield_connected = False
+        self.auto_register = (
+            auto_register  # Auto-register on first invocation (serverless mode)
+        )
+
+        # 🔥 FIX: Resolve callback URL immediately if provided
+        # This ensures base_url is available before serve() is called
+        if self.callback_url:
+            # Use a default port for initial resolution - will be updated during serve()
+            self.base_url = _resolve_callback_url(self.callback_url, 8000)
+            if self.dev_mode:
+                log_debug(f"Early callback URL resolution: {self.base_url}")
+
+        # Initialize async configuration
+        self.async_config = async_config or AsyncConfig.from_environment()
+
+        # Store API key for authentication
+        self.api_key = api_key
+
+        # Initialize AgentFieldClient with async configuration and API key
+        self.client = AgentFieldClient(
+            base_url=agentfield_server, async_config=self.async_config, api_key=api_key
+        )
+        self.client.caller_agent_id = self.node_id
+        set_cp_client(self.client)
+        self._current_execution_context: Optional[ExecutionContext] = None
+
+        # Manages pending pause/approval futures resolved via webhook callback
+        self._pause_manager = _PauseManager()
+
+        # prevent GC of fire-and-forget async execution tasks
+        self._background_tasks: set[asyncio.Task] = set()
+
+        # Cooperative cancel registry. The control plane's cancel dispatcher
+        # POSTs /_internal/executions/{id}/cancel to signal that the user's
+        # reasoner code should stop. We track the active asyncio.Task per
+        # execution_id so the cancel handler can call task.cancel() — that
+        # raises CancelledError into the user's coroutine, which any
+        # well-behaved async I/O (httpx, anthropic, openai) honors.
+        self._cancel_tasks: Dict[str, asyncio.Task] = {}
+        self._cancel_lock = asyncio.Lock()
+
+        # Per-execution pause clock. Populated by _execute_async_with_callback
+        # before the reasoner task starts, consumed by Agent.pause() /
+        # Agent.wait_for_resume() to record paused intervals, and read by the
+        # watchdog to subtract paused time from elapsed wall-clock. Lifecycle
+        # is bounded by a single execution (single asyncio.Task), so no lock
+        # is required for the dict access.
+        from .agent_pause import PauseClock
+
+        self._pause_clocks: Dict[str, PauseClock] = {}
+
+        # Install the /_internal/executions/{execution_id}/cancel route
+        # before any user-defined reasoners are registered so the path is
+        # always available for the control-plane callback.
+        from .cancel import install_cancel_route
+        install_cancel_route(self)
+
+        # Initialize async execution manager (will be lazily created when needed)
+        self._async_execution_manager: Optional[AsyncExecutionManager] = None
+
+        # Fast lifecycle management
+        self._current_status: AgentStatus = AgentStatus.STARTING
+        self._shutdown_requested = False
+        self._start_time = time.time()  # Track start time for uptime calculation
+
+        # Initialize AI and Memory configurations
+        self.ai_config = ai_config if ai_config else AIConfig.from_env()
+        self.harness_config = harness_config
+        self.cost_tracker = CostTracker()
+        self.memory_config = (
+            memory_config
+            if memory_config
+            else MemoryConfig(
+                auto_inject=[], memory_retention="session", cache_results=False
+            )
+        )
+
+        self.memory_event_client: Optional[MemoryEventClient] = None
+
+        # Add DID management
+        self.did_manager: Optional[DIDManager] = None
+        self.vc_generator: Optional[VCGenerator] = None
+        self.did_enabled = False
+
+        # Store DID feature flags for conditional initialization
+        self._enable_did = enable_did
+
+        # Add connection management for resilient AgentField server connectivity
+        self.connection_manager: Optional[ConnectionManager] = None
+
+        # Initialize handlers (some are lazy-loaded for performance)
+        # Lazy handlers - created on first access to reduce memory footprint
+        self._ai_handler: Optional[AgentAI] = None
+        self._harness_runner: Optional["HarnessRunner"] = None
+        self._cli_handler: Optional[AgentCLI] = None
+        # Eager handlers - required for core agent functionality
+        self.agentfield_handler = AgentFieldHandler(self)
+        self.workflow_handler = AgentWorkflow(self)
+        self.server_handler = AgentServer(self)
+
+        # Register this agent instance for enhanced decorator system
+        set_current_agent(self)
+
+        # Initialize DID components (if enabled)
+        if self._enable_did:
+            self._initialize_did_system()
+
+        # Initialize local verification (decentralized verification)
+        self._local_verification_enabled = local_verification
+        self._local_verifier = None
+        self._realtime_validation_functions: Set[str] = set()
+        if local_verification:
+            from agentfield.verification import LocalVerifier
+
+            self._local_verifier = LocalVerifier(
+                agentfield_url=agentfield_server,
+                refresh_interval=verification_refresh_interval,
+                api_key=api_key,
+            )
+            log_info("Local verification enabled (decentralized mode)")
+
+        # Setup standard AgentField routes and memory event listeners
+        self.server_handler.setup_agentfield_routes()
+        self._register_memory_event_listeners()
+
+        # Add local verification middleware if enabled
+        if self._local_verifier is not None:
+            self._add_local_verification_middleware()
+
+        # Register this agent instance for automatic workflow tracking
+        set_current_agent(self)
+
+        # Limit concurrent outbound calls to avoid overloading the local runtime.
+        default_limit = max(1, min(self.async_config.connection_pool_size, 256))
+        max_calls_env = os.getenv("AGENTFIELD_AGENT_MAX_CONCURRENT_CALLS")
+        if max_calls_env:
+            try:
+                parsed_limit = int(max_calls_env)
+                self._max_concurrent_calls = max(1, parsed_limit)
+            except ValueError:
+                self._max_concurrent_calls = default_limit
+                log_warn(
+                    f"Invalid AGENTFIELD_AGENT_MAX_CONCURRENT_CALLS='{max_calls_env}', defaulting to {default_limit}"
+                )
+        else:
+            self._max_concurrent_calls = default_limit
+        self._call_semaphore: Optional[asyncio.Semaphore] = None
+        self._call_semaphore_guard = threading.Lock()
+
+    # Lazy property accessors for performance-heavy handlers
+    @property
+    def ai_handler(self) -> AgentAI:
+        """Lazy-loaded AI handler - only initialized when AI features are used."""
+        if self._ai_handler is None:
+            self._ai_handler = AgentAI(self)
+        return self._ai_handler
+
+    @property
+    def execution_cost(self) -> dict:
+        """Get the current execution's cost summary."""
+        return self.cost_tracker.summary()
+
+    @property
+    def harness_runner(self) -> "HarnessRunner":
+        if self._harness_runner is None:
+            from agentfield.harness._runner import HarnessRunner
+
+            self._harness_runner = HarnessRunner(self.harness_config)
+        return self._harness_runner
+
+    @property
+    def cli_handler(self) -> AgentCLI:
+        """Lazy-loaded CLI handler - only initialized when CLI is invoked."""
+        if self._cli_handler is None:
+            self._cli_handler = AgentCLI(self)
+        return self._cli_handler
+
+    @property
+    def reasoners(self) -> List[Dict]:
+        """Generate reasoner metadata list from registry (backward compatible).
+
+        This property generates the legacy list format on-demand from the memory-efficient
+        registry. Schemas are generated only when this property is accessed.
+        """
+        result = []
+        for entry in self._reasoner_registry.values():
+            result.append(self._entry_to_metadata(entry, "reasoner"))
+        return result
+
+    @reasoners.setter
+    def reasoners(self, value: List[Dict]) -> None:
+        """Allow setting reasoners for backward compatibility (deprecated)."""
+        self._reasoners_legacy = value
+
+    @property
+    def skills(self) -> List[Dict]:
+        """Generate skill metadata list from registry (backward compatible)."""
+        result = []
+        for entry in self._skill_registry.values():
+            result.append(self._entry_to_metadata(entry, "skill"))
+        return result
+
+    @skills.setter
+    def skills(self, value: List[Dict]) -> None:
+        """Allow setting skills for backward compatibility (deprecated)."""
+        self._skills_legacy = value
+
+    def _entry_to_metadata(
+        self, entry: Union[ReasonerEntry, SkillEntry], kind: str
+    ) -> Dict:
+        """Convert a registry entry to legacy metadata dict format with on-demand schema generation."""
+        # Generate input schema from stored types
+        input_schema = self._types_to_json_schema(entry.input_types)
+
+        # Generate output schema from stored type
+        output_schema = self._type_to_json_schema(entry.output_type)
+
+        metadata = {
+            "id": entry.id,
+            "input_schema": input_schema,
+            "output_schema": output_schema,
+            "memory_config": self.memory_config.to_dict(),
+            "return_type_hint": getattr(
+                entry.output_type, "__name__", str(entry.output_type)
+            ),
+            "tags": entry.tags,
+            "proposed_tags": entry.tags,
+            "vc_enabled": entry.vc_enabled
+            if entry.vc_enabled is not None
+            else self._agent_vc_enabled,
+        }
+        triggers = getattr(entry, "triggers", None)
+        accepts_webhook = getattr(entry, "accepts_webhook", "warn")
+        if kind == "reasoner":
+            # Normalize the 3-state value to one of "true" / "false" / "warn"
+            # before serialization. The control plane's ReasonerDefinition
+            # types AcceptsWebhook as *string and rejects bool literals.
+            if accepts_webhook is True:
+                metadata["accepts_webhook"] = "true"
+            elif accepts_webhook is False:
+                metadata["accepts_webhook"] = "false"
+            elif isinstance(accepts_webhook, str) and accepts_webhook in ("true", "false", "warn"):
+                metadata["accepts_webhook"] = accepts_webhook
+            else:
+                metadata["accepts_webhook"] = "warn"
+        if kind == "reasoner" and triggers:
+            from .triggers import trigger_to_payload  # local import to avoid cycle
+
+            metadata["triggers"] = [trigger_to_payload(t) for t in triggers]
+        return metadata
+
+    def _types_to_json_schema(self, input_types: Dict[str, tuple]) -> Dict:
+        """Convert Python types dict to JSON schema (on-demand generation)."""
+        properties = {}
+        required = []
+
+        for name, (typ, default) in input_types.items():
+            properties[name] = self._type_to_json_schema(typ)
+            if default is ...:  # Required field (no default)
+                required.append(name)
+
+        schema = {
+            "type": "object",
+            "properties": properties,
+        }
+        if required:
+            schema["required"] = required
+        return schema
+
+    def _type_to_json_schema(self, typ: type) -> Dict:
+        """Convert a Python type to JSON schema."""
+        # Handle None/NoneType
+        if typ is None or typ is type(None):
+            return {"type": "null"}
+
+        # Handle basic types
+        type_map = {
+            str: {"type": "string"},
+            int: {"type": "integer"},
+            float: {"type": "number"},
+            bool: {"type": "boolean"},
+            list: {"type": "array"},
+            dict: {"type": "object"},
+            bytes: {"type": "string", "format": "binary"},
+        }
+
+        if typ in type_map:
+            return type_map[typ]
+
+        # Handle Pydantic models
+        if hasattr(typ, "model_json_schema"):
+            return typ.model_json_schema()
+
+        # Handle typing constructs (List, Dict, Optional, etc.)
+        origin = getattr(typ, "__origin__", None)
+        if origin is list:
+            args = getattr(typ, "__args__", (Any,))
+            return {
+                "type": "array",
+                "items": self._type_to_json_schema(args[0]) if args else {},
+            }
+        if origin is dict:
+            return {"type": "object", "additionalProperties": True}
+        if origin is Union:
+            args = getattr(typ, "__args__", ())
+            # Handle Optional (Union with None)
+            non_none = [a for a in args if a is not type(None)]
+            if len(non_none) == 1:
+                return self._type_to_json_schema(non_none[0])
+            return {"anyOf": [self._type_to_json_schema(a) for a in args]}
+
+        # Default fallback
+        return {"type": "object"}
+
+    def _validate_handler_input(
+        self, data: dict, input_types: Dict[str, tuple]
+    ) -> dict:
+        """
+        Validate input data against expected types at runtime.
+
+        Replaces Pydantic model validation with lightweight runtime validation.
+        Saves ~1.5-2 KB per handler by not creating Pydantic classes.
+
+        Args:
+            data: Raw input dict from request body
+            input_types: Dict mapping field names to (type, default) tuples
+
+        Returns:
+            Validated dict with type coercion applied
+
+        Raises:
+            ValueError: If required field is missing or type conversion fails
+        """
+        result = {}
+
+        for name, (expected_type, default) in input_types.items():
+            # Check if field is present
+            if name not in data:
+                if default is ...:  # Required field (no default)
+                    raise _HandlerInputError(f"Missing required field: {name}")
+                result[name] = default
+                continue
+
+            value = data[name]
+
+            # Handle None values
+            if value is None:
+                # Check if Optional type
+                origin = getattr(expected_type, "__origin__", None)
+                if origin is Union:
+                    args = getattr(expected_type, "__args__", ())
+                    if type(None) in args:
+                        result[name] = None
+                        continue
+                # Not Optional, use default if available
+                if default is not ...:
+                    result[name] = default
+                    continue
+                raise _HandlerInputError(f"Field '{name}' cannot be None")
+
+            # Type coercion for basic types
+            try:
+                # Get the actual type (unwrap Optional)
+                actual_type = expected_type
+                origin = getattr(expected_type, "__origin__", None)
+                if origin is Union:
+                    args = getattr(expected_type, "__args__", ())
+                    non_none = [a for a in args if a is not type(None)]
+                    if len(non_none) == 1:
+                        actual_type = non_none[0]
+
+                # Basic type coercion
+                if actual_type is int:
+                    result[name] = int(value)
+                elif actual_type is float:
+                    result[name] = float(value)
+                elif actual_type is str:
+                    result[name] = str(value)
+                elif actual_type is bool:
+                    if isinstance(value, bool):
+                        result[name] = value
+                    elif isinstance(value, str):
+                        result[name] = value.lower() in ("true", "1", "yes")
+                    else:
+                        result[name] = bool(value)
+                elif (
+                    actual_type is dict
+                    or getattr(actual_type, "__origin__", None) is dict
+                ):
+                    if not isinstance(value, dict):
+                        raise _HandlerInputError(f"Field '{name}' must be a dict")
+                    result[name] = dict(value)
+                elif (
+                    actual_type is list
+                    or getattr(actual_type, "__origin__", None) is list
+                ):
+                    if not isinstance(value, list):
+                        raise _HandlerInputError(f"Field '{name}' must be a list")
+                    result[name] = list(value)
+                elif hasattr(actual_type, "model_validate"):
+                    # Pydantic model - use its validation
+                    result[name] = actual_type.model_validate(value)
+                else:
+                    # Pass through for complex/unknown types
+                    result[name] = value
+            except _HandlerInputError:
+                raise
+            except (ValueError, TypeError):
+                # Underlying coercion failure (e.g. int("not a number")). The
+                # inner exception's text can carry Python-runtime detail, so
+                # we deliberately drop it from the message we surface to the
+                # client and just say which field failed.
+                raise _HandlerInputError(f"Invalid value for field '{name}'")
+
+        return result
+
+    def handle_serverless(
+        self, event: dict, adapter: Optional[Callable] = None
+    ) -> dict:
+        """
+        Universal serverless handler for executing reasoners and skills.
+
+        This method enables agents to run in serverless environments (AWS Lambda,
+        Google Cloud Functions, Cloud Run, Kubernetes Jobs, etc.) by providing
+        a simple entry point that parses the event, executes the target function,
+        and returns the result.
+
+        Special Endpoints:
+            - /discover: Returns agent metadata for AgentField server registration
+            - /execute: Executes reasoners and skills
+
+        Args:
+            event (dict): Serverless event containing:
+                - path: Request path (/discover or /execute)
+                - action: Alternative to path (discover or execute)
+                - reasoner: Name of the reasoner to execute (for execution)
+                - input: Input parameters for the function (for execution)
+
+        Returns:
+            dict: Execution result with status and output, or discovery metadata
+
+        Example:
+            ```python
+            # AWS Lambda handler with API Gateway
+            from agentfield import Agent
+
+            app = Agent("my_agent", auto_register=False)
+
+            @app.reasoner()
+            async def analyze(text: str) -> dict:
+                return {"result": text.upper()}
+
+            def lambda_handler(event, context):
+                # Handle both discovery and execution
+                return app.handle_serverless(event)
+            ```
+        """
+        import asyncio
+
+        if adapter:
+            try:
+                event = adapter(event) or event
+            except Exception as exc:  # pragma: no cover - adapter failures
+                return {
+                    "statusCode": 400,
+                    "body": {"error": f"serverless adapter failed: {exc}"},
+                }
+
+        # Check if this is a discovery request
+        path = event.get("path") or event.get("rawPath") or ""
+        action = event.get("action", "")
+
+        if path == "/discover" or path.endswith("/discover") or action == "discover":
+            # Return agent metadata for AgentField server registration
+            return self._handle_discovery()
+
+        # Auto-register with AgentField if needed (for execution requests)
+        if self.auto_register and not self.agentfield_connected:
+            try:
+                # Attempt registration (non-blocking)
+                self.agentfield_handler._register_agent()
+                self.agentfield_connected = True
+            except Exception as e:
+                if self.dev_mode:
+                    log_warn(f"Auto-registration failed: {e}")
+
+        # Serverless invocations arrive via the control plane; mark as connected so
+        # cross-agent calls can route through the gateway without a lease loop.
+        self.agentfield_connected = True
+        # Serverless handlers should avoid async execute polling; force sync path.
+        if getattr(self.async_config, "enable_async_execution", True):
+            self.async_config.enable_async_execution = False
+
+        # Parse event format for execution
+        reasoner_name = (
+            event.get("reasoner") or event.get("target") or event.get("skill")
+        )
+        if not reasoner_name and path:
+            # Support paths like /execute/<target> or /reasoners/<name>
+            cleaned_path = path.split("?", 1)[0].strip("/")
+            parts = cleaned_path.split("/")
+            if parts and parts[0] not in ("", "discover"):
+                if len(parts) >= 2 and parts[0] in ("execute", "reasoners", "skills"):
+                    reasoner_name = parts[1]
+                elif parts[0] in ("execute", "reasoners", "skills"):
+                    reasoner_name = None
+                elif parts:
+                    reasoner_name = parts[-1]
+
+        input_data = event.get("input") or event.get("input_data", {})
+        execution_context_data = (
+            event.get("execution_context") or event.get("executionContext") or {}
+        )
+
+        if not reasoner_name:
+            return {
+                "statusCode": 400,
+                "body": {"error": "Missing 'reasoner' or 'target' in event"},
+            }
+
+        # Create execution context
+        exec_id = execution_context_data.get(
+            "execution_id", f"exec_{int(time.time() * 1000)}"
+        )
+        run_id = execution_context_data.get("run_id") or execution_context_data.get(
+            "workflow_id"
+        )
+        if not run_id:
+            run_id = f"wf_{int(time.time() * 1000)}"
+        workflow_id = execution_context_data.get("workflow_id", run_id)
+
+        execution_context = ExecutionContext(
+            run_id=run_id,
+            execution_id=exec_id,
+            agent_instance=self,
+            agent_node_id=self.node_id,
+            reasoner_name=reasoner_name,
+            parent_execution_id=execution_context_data.get("parent_execution_id"),
+            session_id=execution_context_data.get("session_id"),
+            actor_id=execution_context_data.get("actor_id"),
+            caller_did=execution_context_data.get("caller_did"),
+            target_did=execution_context_data.get("target_did"),
+            agent_node_did=execution_context_data.get(
+                "agent_node_did", execution_context_data.get("agent_did")
+            ),
+            workflow_id=workflow_id,
+            parent_workflow_id=execution_context_data.get("parent_workflow_id"),
+            root_workflow_id=execution_context_data.get("root_workflow_id"),
+        )
+
+        # Set execution context
+        self._current_execution_context = execution_context
+
+        try:
+            # Find and execute the target function
+            if hasattr(self, reasoner_name):
+                func = getattr(self, reasoner_name)
+
+                # Execute function (sync or async)
+                if asyncio.iscoroutinefunction(func):
+                    result = asyncio.run(func(**input_data))
+                else:
+                    result = func(**input_data)
+
+                return {"statusCode": 200, "body": result}
+            else:
+                return {
+                    "statusCode": 404,
+                    "body": {"error": f"Function '{reasoner_name}' not found"},
+                }
+
+        except Exception as e:
+            return {"statusCode": 500, "body": {"error": str(e)}}
+        finally:
+            # Clean up execution context
+            self._current_execution_context = None
+
+    def _handle_discovery(self) -> dict:
+        """
+        Handle discovery requests for serverless agent registration.
+
+        Returns agent metadata including reasoners, skills, and configuration
+        for automatic registration with the AgentField server.
+
+        Returns:
+            dict: Agent metadata for registration
+        """
+        return {
+            "node_id": self.node_id,
+            "version": self.version,
+            "deployment_type": "serverless",
+            "reasoners": [
+                {
+                    "id": r["id"],
+                    "input_schema": r.get("input_schema", {}),
+                    "output_schema": r.get("output_schema", {}),
+                    "memory_config": r.get("memory_config", {}),
+                    "tags": r.get("tags", []),
+                }
+                for r in self.reasoners
+            ],
+            "skills": [
+                {
+                    "id": s["id"],
+                    "input_schema": s.get("input_schema", {}),
+                    "tags": s.get("tags", []),
+                }
+                for s in self.skills
+            ],
+        }
+
+    def _initialize_did_system(self):
+        """Initialize DID and VC components."""
+        try:
+            # Initialize DID Manager
+            self.did_manager = DIDManager(
+                self.agentfield_server, self.node_id, self.api_key
+            )
+
+            # Initialize VC Generator
+            self.vc_generator = VCGenerator(self.agentfield_server, self.api_key)
+
+            if self.dev_mode:
+                log_debug("DID system initialized")
+
+        except Exception as e:
+            if self.dev_mode:
+                log_error(f"Failed to initialize DID system: {e}")
+            self.did_manager = None
+            self.vc_generator = None
+
+    def _register_memory_event_listeners(self):
+        """Scans for methods decorated with @on_change and registers them as listeners."""
+        if not self.memory_event_client:
+            self.memory_event_client = MemoryEventClient(
+                self.agentfield_server,
+                self._get_current_execution_context(),
+                self.api_key,
+            )
+
+        for name, fn in inspect.getmembers(type(self), predicate=inspect.isfunction):
+            if hasattr(fn, "_memory_event_listener"):
+                method = getattr(self, name)
+                patterns = getattr(fn, "_memory_event_patterns", [])
+
+                async def listener(event):
+                    # This is a simplified listener, a more robust implementation
+                    # would handle pattern matching on the client side as well.
+                    await method(event)
+
+                self.memory_event_client.subscribe(patterns, listener)
+
+    @property
+    def memory(self) -> Optional[MemoryInterface]:
+        """
+        Get the memory interface for the current execution context.
+
+        The memory interface provides access to persistent and session-based storage
+        that is automatically scoped to the current execution context. This enables
+        agents to store and retrieve data across function calls, workflow steps,
+        and even across different agent interactions.
+
+        Memory is automatically scoped by:
+        - Execution context (workflow instance)
+        - Agent node ID
+        - Session information
+        - User context (if available)
+
+        Returns:
+            MemoryInterface: Interface for memory operations if execution context is available.
+            None: If no execution context is available (e.g., outside of reasoner/skill execution).
+
+        Example:
+            ```python
+            @app.reasoner()
+            async def analyze_conversation(message: str) -> dict:
+                '''Analyze message with conversation history context.'''
+
+                # Store current message in conversation history
+                history = app.memory.get("conversation.history", [])
+                history.append({
+                    "message": message,
+                    "timestamp": datetime.now().isoformat(),
+                    "role": "user"
+                })
+                app.memory.set("conversation.history", history)
+
+                # Get user preferences for analysis
+                user_prefs = app.memory.get("user.analysis_preferences", {
+                    "sentiment_analysis": True,
+                    "topic_extraction": True,
+                    "language_detection": False
+                })
+
+                # Perform analysis based on preferences and history
+                analysis_prompt = f'''
+                Analyze this message: "{message}"
+
+                Previous conversation context:
+                {json.dumps(history[-5:], indent=2)}  # Last 5 messages
+
+                Analysis preferences: {user_prefs}
+                '''
+
+                result = await app.ai(
+                    system="You are a conversation analyst.",
+                    user=analysis_prompt,
+                    schema=ConversationAnalysis
+                )
+
+                # Store analysis results
+                app.memory.set("conversation.last_analysis", result.model_dump())
+
+                return result
+
+            @app.skill()
+            def get_conversation_summary() -> dict:
+                '''Get summary of current conversation.'''
+
+                history = app.memory.get("conversation.history", [])
+                last_analysis = app.memory.get("conversation.last_analysis", {})
+
+                return {
+                    "message_count": len(history),
+                    "last_analysis": last_analysis,
+                    "conversation_started": history[0]["timestamp"] if history else None
+                }
+            ```
+
+        Memory Operations:
+            - `app.memory.get(key, default=None)`: Retrieve value by key
+            - `app.memory.set(key, value)`: Store value by key
+            - `app.memory.delete(key)`: Remove value by key
+            - `app.memory.exists(key)`: Check if key exists
+            - `app.memory.keys(pattern="*")`: List keys matching pattern
+            - `app.memory.clear(pattern="*")`: Clear keys matching pattern
+
+        Memory Scopes:
+            - Session: Data persists for the duration of a user session
+            - Workflow: Data persists for the duration of a workflow execution
+            - Agent: Data persists across all executions for this agent
+            - Global: Data shared across all agents (use with caution)
+
+        Note:
+            - Memory is automatically cleaned up based on retention policies
+            - Large objects should be stored efficiently (consider serialization)
+            - Memory operations are atomic and thread-safe
+            - Memory events can trigger `@on_change` listeners
+        """
+        if not self._current_execution_context:
+            return None
+
+        memory_client = MemoryClient(
+            self.client, self._current_execution_context, agent_node_id=self.node_id
+        )
+        if not self.memory_event_client:
+            self.memory_event_client = MemoryEventClient(
+                self.agentfield_server,
+                self._get_current_execution_context(),
+                self.api_key,
+            )
+        return MemoryInterface(memory_client, self.memory_event_client)
+
+    @property
+    def ctx(self) -> Optional[ExecutionContext]:
+        """
+        Get the current execution context.
+
+        The execution context contains metadata about the current execution including:
+        - workflow_id: Unique identifier for the current workflow
+        - execution_id: Unique identifier for this specific execution
+        - run_id: Identifier for the current run
+        - session_id: Session identifier (if available)
+        - actor_id: Actor/user identifier (if available)
+        - parent_execution_id: Parent execution for nested calls
+
+        Returns:
+            ExecutionContext: The current execution context if available.
+            None: If no execution context is available (e.g., outside of reasoner/skill execution).
+
+        Example:
+            ```python
+            @app.reasoner()
+            async def handle_ticket(ticket_id: str):
+                # Access workflow ID for scoped memory
+                await app.memory.workflow(app.ctx.workflow_id).set(
+                    "ticket_status", "processing"
+                )
+
+                # Access session ID for user-scoped data
+                if app.ctx.session_id:
+                    user_history = await app.memory.session(app.ctx.session_id).get("history")
+
+                return {"ticket_id": ticket_id, "workflow": app.ctx.workflow_id}
+            ```
+        """
+        # Check thread-local context first (set during active reasoner/skill execution)
+        thread_local_ctx = get_current_context()
+        if thread_local_ctx:
+            return thread_local_ctx
+        # Only return agent-level context if it was set during an actual execution
+        # (i.e., has registered=True), not the default context created at init time
+        if (
+            self._current_execution_context
+            and self._current_execution_context.registered
+        ):
+            return self._current_execution_context
+        return None
+
+    def _populate_execution_context_with_did(
+        self, execution_context, did_execution_context
+    ):
+        """
+        Populate the execution context with DID information.
+
+        Args:
+            execution_context: The main ExecutionContext
+            did_execution_context: The DIDExecutionContext with DID info
+        """
+        if did_execution_context:
+            execution_context.session_id = did_execution_context.session_id
+            execution_context.caller_did = did_execution_context.caller_did
+            execution_context.target_did = did_execution_context.target_did
+            execution_context.agent_node_did = did_execution_context.agent_node_did
+
+    def _agent_vc_default(self) -> bool:
+        """Resolve the agent-level VC default, falling back to enabled."""
+        return True if self._agent_vc_enabled is None else self._agent_vc_enabled
+
+    def _set_reasoner_vc_override(
+        self, reasoner_id: str, value: Optional[bool]
+    ) -> None:
+        if value is None:
+            self._reasoner_vc_overrides.pop(reasoner_id, None)
+        else:
+            self._reasoner_vc_overrides[reasoner_id] = value
+
+    def _set_skill_vc_override(self, skill_id: str, value: Optional[bool]) -> None:
+        if value is None:
+            self._skill_vc_overrides.pop(skill_id, None)
+        else:
+            self._skill_vc_overrides[skill_id] = value
+
+    def _effective_component_vc_setting(
+        self, component_id: str, overrides: Dict[str, bool]
+    ) -> bool:
+        if component_id in overrides:
+            return overrides[component_id]
+        return self._agent_vc_default()
+
+    def _should_generate_vc(
+        self, component_id: str, overrides: Dict[str, bool]
+    ) -> bool:
+        if (
+            not self.did_enabled
+            or not self.vc_generator
+            or not self.vc_generator.is_enabled()
+        ):
+            return False
+        return self._effective_component_vc_setting(component_id, overrides)
+
+    def _build_agent_metadata(self) -> Optional[Dict[str, Any]]:
+        """Build agent metadata (description, tags, author) for registration payload."""
+        metadata: Dict[str, Any] = {}
+        if self.description:
+            metadata["description"] = self.description
+        if self.agent_tags:
+            metadata["tags"] = self.agent_tags
+        if self.author:
+            metadata["author"] = self.author
+        return metadata if metadata else None
+
+    def _build_vc_metadata(self) -> Dict[str, Any]:
+        """Produce a serializable VC policy snapshot for control-plane visibility."""
+        effective_reasoners = {
+            reasoner["id"]: self._effective_component_vc_setting(
+                reasoner["id"], self._reasoner_vc_overrides
+            )
+            for reasoner in self.reasoners
+            if "id" in reasoner
+        }
+        effective_skills = {
+            skill["id"]: self._effective_component_vc_setting(
+                skill["id"], self._skill_vc_overrides
+            )
+            for skill in self.skills
+            if "id" in skill
+        }
+
+        return {
+            "agent_default": self._agent_vc_default(),
+            "reasoner_overrides": dict(self._reasoner_vc_overrides),
+            "skill_overrides": dict(self._skill_vc_overrides),
+            "effective_reasoners": effective_reasoners,
+            "effective_skills": effective_skills,
+        }
+
+    async def _generate_vc_async(
+        self,
+        vc_generator,
+        did_execution_context,
+        function_name,
+        input_data,
+        output_data,
+        status="success",
+        error_message=None,
+        duration_ms=0,
+    ):
+        """
+        Generate VC asynchronously without blocking execution.
+
+        Args:
+            vc_generator: VCGenerator instance
+            did_execution_context: DID execution context
+            function_name: Name of the executed function
+            input_data: Input data for the execution
+            output_data: Output data from the execution
+            status: Execution status
+            error_message: Error message if any
+            duration_ms: Execution duration in milliseconds
+        """
+        try:
+            if vc_generator and vc_generator.is_enabled():
+                vc = vc_generator.generate_execution_vc(
+                    execution_context=did_execution_context,
+                    input_data=input_data,
+                    output_data=output_data,
+                    status=status,
+                    error_message=error_message,
+                    duration_ms=duration_ms,
+                )
+                if vc:
+                    log_info(f"Generated VC {vc.vc_id} for {function_name}")
+        except Exception as e:
+            log_warn(f"Failed to generate VC for {function_name}: {e}")
+
+    def _build_callback_discovery_payload(self) -> Optional[Dict[str, Any]]:
+        """Prepare discovery metadata for agent registration."""
+
+        if not self.callback_candidates:
+            return None
+
+        payload: Dict[str, Any] = {
+            "mode": "python-sdk:auto",
+            "preferred": self.base_url,
+            "callback_candidates": self.callback_candidates,
+            "container": _is_running_in_container(),
+            "submitted_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[
+                :-3
+            ]
+            + "Z",
+        }
+
+        return payload
+
+    def _apply_discovery_response(self, payload: Optional[Dict[str, Any]]) -> None:
+        """Update agent networking state from AgentField discovery response."""
+
+        if not payload:
+            return
+
+        discovery_section = (
+            payload.get("callback_discovery") if isinstance(payload, dict) else None
+        )
+
+        resolved = None
+        if isinstance(payload, dict):
+            resolved = payload.get("resolved_base_url")
+        if not resolved and isinstance(discovery_section, dict):
+            resolved = (
+                discovery_section.get("resolved")
+                or discovery_section.get("selected")
+                or discovery_section.get("preferred")
+            )
+
+        if resolved and resolved != self.base_url:
+            log_debug(f"Applying resolved callback URL from AgentField: {resolved}")
+            self.base_url = resolved
+
+        if isinstance(discovery_section, dict):
+            candidates = discovery_section.get("candidates")
+            if isinstance(candidates, list):
+                normalized = []
+                for candidate in candidates:
+                    if isinstance(candidate, str):
+                        normalized.append(candidate)
+                # Ensure resolved URL is first when present
+                if resolved and resolved in normalized:
+                    normalized.remove(resolved)
+                    normalized.insert(0, resolved)
+                elif resolved:
+                    normalized.insert(0, resolved)
+
+                if normalized:
+                    self.callback_candidates = normalized
+
+    def _register_agent_with_did(self) -> bool:
+        """
+        Register agent with DID system.
+
+        Returns:
+            True if registration successful, False otherwise
+        """
+        if self.dev_mode:
+            log_debug(f"Registering agent with DID system: {self.node_id}")
+
+        if not self.did_manager:
+            if self.dev_mode:
+                log_debug(f"No DID manager available for agent: {self.node_id}")
+            return False
+
+        try:
+            # Prepare reasoner and skill definitions for DID registration
+            reasoner_defs = []
+            for reasoner in self.reasoners:
+                reasoner_defs.append(
+                    {
+                        "id": reasoner["id"],
+                        "input_schema": reasoner["input_schema"],
+                        "output_schema": reasoner["output_schema"],
+                        "tags": reasoner.get("tags", []),
+                    }
+                )
+
+            skill_defs = []
+            for skill in self.skills:
+                skill_defs.append(
+                    {
+                        "id": skill["id"],
+                        "input_schema": skill["input_schema"],
+                        "tags": skill.get("tags", []),
+                    }
+                )
+
+            log_debug(
+                "Calling did_manager.register_agent() with "
+                f"{len(reasoner_defs)} reasoners and {len(skill_defs)} skills"
+            )
+
+            # Register with DID system
+            success = self.did_manager.register_agent(reasoner_defs, skill_defs)
+            if success:
+                self.did_enabled = True
+                if self.dev_mode:
+                    log_debug(f"DID registration successful for agent: {self.node_id}")
+
+                # Wire DID credentials to the HTTP client for request signing
+                agent_did = self.did_manager.get_agent_did()
+                agent_private_key = None
+                if self.did_manager.identity_package:
+                    agent_private_key = (
+                        self.did_manager.identity_package.agent_did.private_key_jwk
+                    )
+                if agent_did and agent_private_key:
+                    self.client.set_did_credentials(agent_did, agent_private_key)
+
+                # Enable VC generation
+                if self.vc_generator:
+                    self.vc_generator.set_enabled(True)
+                if self.dev_mode:
+                    log_info(f"Agent {self.node_id} registered with DID system")
+                    log_info(f"DID: {agent_did}")
+            else:
+                if self.dev_mode:
+                    log_warn(f"Failed to register agent {self.node_id} with DID system")
+
+            return success
+
+        except Exception as e:
+            if self.dev_mode:
+                log_error(f"Error registering agent with DID system: {e}")
+            return False
+
+    def _setup_agentfield_routes(self):
+        """Delegate to server handler for route setup"""
+        return self.server_handler.setup_agentfield_routes()
+
+    def reasoner(
+        self,
+        path: Optional[str] = None,
+        name: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        *,
+        vc_enabled: Optional[bool] = None,
+        require_realtime_validation: bool = False,
+        triggers: Optional[List[Any]] = None,
+        accepts_webhook: Optional[Any] = None,
+    ):
+        """
+        Decorator to register a reasoner function.
+
+        A reasoner is an AI-powered function that takes input and produces structured output using LLMs.
+        It automatically handles input/output schema generation and integrates with the AgentField's AI capabilities.
+
+        Args:
+            path (str, optional): The API endpoint path for this reasoner. Defaults to /reasoners/{function_name}.
+            name (str, optional): Explicit AgentField registration ID. Defaults to the function name.
+            tags (List[str] | None, optional): Organizational tags that travel with the reasoner metadata.
+            vc_enabled (bool | None, optional): Override VC generation for this reasoner. True forces VC creation,
+                False disables it, and None inherits the agent-level policy.
+            triggers (list, optional): EventTrigger / ScheduleTrigger declarations. Same shape as the
+                module-level @reasoner kwarg. Stamps each as a code-managed trigger at registration time.
+            accepts_webhook (bool | "warn" | None, optional): 3-state UI guardrail flag.
+        """
+
+        direct_registration: Optional[Callable] = None
+        decorator_path = path
+        decorator_name = name
+        decorator_tags = tags
+        kwarg_triggers = list(triggers) if triggers else None
+        kwarg_accepts_webhook = accepts_webhook
+
+        if decorator_path and (
+            inspect.isfunction(decorator_path) or inspect.ismethod(decorator_path)
+        ):
+            direct_registration = decorator_path
+            decorator_path = None
+
+        def decorator(func: Callable) -> Callable:
+            # Merge any sugar-staged triggers (from @on_event / @on_schedule)
+            # with the explicit `triggers=[...]` kwarg passed to @app.reasoner.
+            # Mirrors the module-level @reasoner contract so the same syntax
+            # works under either decorator entry point.
+            staged = getattr(func, "_pending_triggers", None) or []
+            merged_triggers = list(kwarg_triggers or []) + list(staged)
+            if staged:
+                try:
+                    delattr(func, "_pending_triggers")
+                except AttributeError:
+                    pass
+            if merged_triggers:
+                setattr(func, "_reasoner_triggers", merged_triggers)
+                # Auto-set accepts_webhook=True when the dev declared triggers,
+                # unless they explicitly passed something else.
+                if kwarg_accepts_webhook is None:
+                    setattr(func, "_accepts_webhook", True)
+                else:
+                    setattr(func, "_accepts_webhook", kwarg_accepts_webhook)
+            elif kwarg_accepts_webhook is not None:
+                setattr(func, "_accepts_webhook", kwarg_accepts_webhook)
+
+            # Extract function metadata
+            func_name = func.__name__
+            reasoner_id = decorator_name or func_name
+            if decorator_path:
+                endpoint_path = (
+                    decorator_path
+                    if decorator_path.startswith("/reasoners/")
+                    else f"/reasoners/{decorator_path.lstrip('/')}"
+                )
+            else:
+                endpoint_path = f"/reasoners/{reasoner_id}"
+
+            # Get type hints for input/output schemas
+            type_hints = get_type_hints(func)
+            sig = inspect.signature(func)
+
+            # Extract input types from function parameters (no Pydantic model creation)
+            input_fields = {}
+            for param_name, param in sig.parameters.items():
+                if param_name not in ["self", "execution_context"]:
+                    param_type = type_hints.get(param_name, str)
+                    default_value = (
+                        param.default
+                        if param.default is not inspect.Parameter.empty
+                        else ...
+                    )
+                    input_fields[param_name] = (param_type, default_value)
+
+            # NOTE: Removed create_model() - saves ~1.5-2 KB per handler
+            # Validation is done at runtime via _validate_handler_input()
+
+            # Persist VC override preference
+            self._set_reasoner_vc_override(reasoner_id, vc_enabled)
+            if require_realtime_validation:
+                self._realtime_validation_functions.add(reasoner_id)
+
+            # Get output schema from return type hint
+            return_type = type_hints.get("return", dict)
+
+            # Store input_fields for runtime validation (captured by closure)
+            handler_input_fields = input_fields
+
+            # Create FastAPI endpoint with generic dict input (runtime validation)
+            @self.post(endpoint_path)
+            async def endpoint(request: Request):
+                # Parse body manually
+                try:
+                    body = await request.json()
+                except Exception:
+                    return JSONResponse(
+                        status_code=400,
+                        content={"detail": "Invalid JSON body"},
+                    )
+
+                # Validate input at runtime (replaces Pydantic validation).
+                # When the body is the dispatcher's webhook envelope shape
+                # ({"event": ..., "_meta": ...}), skip field-level validation
+                # — the envelope is unwrapped further down and the reasoner's
+                # first positional gets the unwrapped (or transformed) value
+                # by way of _execute_reasoner_endpoint.
+                is_trigger_envelope = (
+                    isinstance(body, dict)
+                    and "event" in body
+                    and "_meta" in body
+                    and isinstance(body.get("_meta"), dict)
+                )
+                if is_trigger_envelope:
+                    validated_input = body
+                else:
+                    try:
+                        validated_input = self._validate_handler_input(
+                            body, handler_input_fields
+                        )
+                    except _HandlerInputError as e:
+                        # `safe_message` is a known-safe SDK-constructed
+                        # string. Reading the explicit attribute (rather
+                        # than `str(e)`) keeps the response out of CodeQL's
+                        # py/stack-trace-exposure taint flow.
+                        return JSONResponse(
+                            status_code=422,
+                            content={"detail": e.safe_message},
+                        )
+
+                async def run_reasoner() -> Any:
+                    return await self._execute_reasoner_endpoint(
+                        reasoner_id=reasoner_id,
+                        func=func,
+                        signature=sig,
+                        input_data=validated_input,
+                        request=request,
+                    )
+
+                execution_id_header = request.headers.get("X-Execution-ID")
+                if execution_id_header and self.agentfield_server:
+                    task = asyncio.create_task(
+                        self._execute_async_with_callback(
+                            reasoner_coro=run_reasoner,
+                            execution_id=execution_id_header,
+                            reasoner_name=reasoner_id,
+                        )
+                    )
+                    # prevent GC of fire-and-forget tasks
+                    self._background_tasks.add(task)
+                    task.add_done_callback(self._background_tasks.discard)
+                    # Register so the cancel callback can short-circuit
+                    # the still-running reasoner. The async path's
+                    # execute_async_with_callback handles its own
+                    # cancellation accounting on top of this.
+                    from .cancel import register_execution_task
+                    await register_execution_task(self, execution_id_header, task)
+                    return JSONResponse(
+                        status_code=202,
+                        content={
+                            "status": "processing",
+                            "execution_id": execution_id_header,
+                        },
+                    )
+
+                # Sync path: wrap the coroutine in a Task so the cancel
+                # callback can call task.cancel() and have CancelledError
+                # propagate into the reasoner. Without this wrapping the
+                # await happens inside the FastAPI request handler frame
+                # directly and there's no Task handle to cancel.
+                if execution_id_header:
+                    from .cancel import (
+                        register_execution_task,
+                        deregister_execution,
+                    )
+                    sync_task = asyncio.create_task(run_reasoner())
+                    await register_execution_task(self, execution_id_header, sync_task)
+                    try:
+                        return await sync_task
+                    except asyncio.CancelledError:
+                        return JSONResponse(
+                            status_code=499,
+                            content={
+                                "status": "cancelled",
+                                "execution_id": execution_id_header,
+                                "reason": "cancelled_by_control_plane",
+                            },
+                        )
+                    finally:
+                        await deregister_execution(self, execution_id_header)
+
+                return await run_reasoner()
+
+            # 🔥 ENHANCED: Comprehensive function replacement for unified tracking
+            # Use weakref to avoid circular reference: Agent → tracked_func → Agent
+            original_func = func
+            workflow_ref = (
+                weakref.ref(self.workflow_handler) if self.workflow_handler else None
+            )
+
+            async def tracked_func(*args, **kwargs):
+                """Enhanced tracked function with unified execution pipeline and context inheritance.
+                Uses weakref to break circular references and enable immediate GC."""
+                # 🔥 CRITICAL FIX: Always use workflow tracking for direct reasoner calls
+                # The previous logic was preventing workflow notifications for direct calls
+
+                # Check if we're in an enhanced decorator context first
+                current_context = get_current_context()
+
+                if current_context:
+                    # We're in a context managed by the enhanced decorator system
+                    # Use the enhanced decorator's tracking mechanism
+                    from agentfield.decorators import _execute_with_tracking
+
+                    return await _execute_with_tracking(original_func, *args, **kwargs)
+                else:
+                    # 🔥 FIX: Use weakref to avoid holding strong reference to agent
+                    workflow_handler = workflow_ref() if workflow_ref else None
+                    if workflow_handler is None:
+                        # Agent was garbage collected, call function directly
+                        return await original_func(*args, **kwargs)
+                    return await workflow_handler.execute_with_tracking(
+                        original_func, args, kwargs
+                    )
+
+            # 🔥 FIX: Store reference to original function for FastAPI endpoint access
+            setattr(tracked_func, "_original_func", original_func)
+            setattr(tracked_func, "_is_tracked_replacement", True)
+
+            resolved_tags: List[str] = []
+            if decorator_tags:
+                resolved_tags = list(decorator_tags)
+            else:
+                decorator_tag_attr = getattr(original_func, "_reasoner_tags", None)
+                if decorator_tag_attr:
+                    if isinstance(decorator_tag_attr, (list, tuple, set)):
+                        resolved_tags = [str(tag) for tag in decorator_tag_attr]
+                    else:
+                        resolved_tags = [str(decorator_tag_attr)]
+            setattr(tracked_func, "_reasoner_tags", resolved_tags)
+
+            # Store in memory-efficient registry (schemas generated on-demand)
+            vc_setting = self._effective_component_vc_setting(
+                reasoner_id, self._reasoner_vc_overrides
+            )
+            decorator_triggers = getattr(original_func, "_reasoner_triggers", None)
+            if not decorator_triggers:
+                decorator_triggers = getattr(tracked_func, "_reasoner_triggers", None)
+            # Resolve accepts_webhook from the decorator
+            decorator_accepts_webhook = getattr(original_func, "_accepts_webhook", "warn")
+            if not decorator_accepts_webhook:
+                decorator_accepts_webhook = getattr(tracked_func, "_accepts_webhook", "warn")
+            
+            self._reasoner_registry[reasoner_id] = ReasonerEntry(
+                id=reasoner_id,
+                func=func,
+                input_types=input_fields,  # Store (type, default) tuples, not Pydantic model
+                output_type=return_type,
+                tags=resolved_tags,
+                vc_enabled=vc_setting,
+                triggers=list(decorator_triggers or []),
+                accepts_webhook=decorator_accepts_webhook,
+            )
+
+            # NOTE: Legacy storage removed - reasoners property generates list on-demand
+            # self.reasoners.append(reasoner_metadata)  # REMOVED - use _reasoner_registry
+            # self._reasoner_return_types[reasoner_id] = return_type  # REMOVED - stored in entry
+
+            # 🔥 CRITICAL: Comprehensive function replacement (re-enabled for workflow tracking)
+            self.workflow_handler.replace_function_references(
+                original_func, tracked_func, func_name
+            )
+
+            if reasoner_id != func_name:
+                setattr(self, reasoner_id, getattr(self, func_name, tracked_func))
+
+            # The `ai` method is available via `self.ai` within the Agent class.
+            # If you need to expose it directly on the decorated function,
+            # consider a different pattern (e.g., a wrapper class or a global registry).
+            return tracked_func
+
+        if direct_registration:
+            return decorator(direct_registration)
+        if direct_registration:
+            return decorator(direct_registration)
+
+        return decorator
+
+    def _detect_and_unwrap_trigger_envelope(self, payload_dict: Dict[str, Any]) -> tuple[Dict[str, Any], Optional[Any]]:
+        """
+        Detect dispatcher webhook envelope {event: ..., _meta: ...} and unwrap it.
+        Returns (unwrapped_input, trigger_context_or_none).
+        If not an envelope, returns (payload_dict, None) for backward compat.
+        """
+        # Check if this looks like a dispatcher envelope
+        if not isinstance(payload_dict, dict):
+            return payload_dict, None
+        
+        if "event" in payload_dict and "_meta" in payload_dict:
+            # This is a dispatcher envelope
+            event_data = payload_dict.get("event", {})
+            meta_data = payload_dict.get("_meta", {})
+            
+            # Parse metadata into TriggerContext
+            try:
+                from datetime import datetime
+                from .triggers import TriggerContext
+                
+                received_at_str = meta_data.get("received_at", "")
+                if received_at_str:
+                    received_at = datetime.fromisoformat(received_at_str.replace('Z', '+00:00'))
+                else:
+                    received_at = datetime.utcnow()
+                
+                trigger_ctx = TriggerContext(
+                    trigger_id=meta_data.get("trigger_id", ""),
+                    source=meta_data.get("source", ""),
+                    event_type=meta_data.get("event_type", ""),
+                    event_id=meta_data.get("event_id", ""),
+                    idempotency_key=meta_data.get("idempotency_key", ""),
+                    received_at=received_at,
+                    vc_id=meta_data.get("vc_id"),
+                )
+                return event_data, trigger_ctx
+            except Exception:
+                # If parsing fails, return raw envelope for compatibility
+                return payload_dict, None
+        
+        # Not an envelope
+        return payload_dict, None
+
+    def _apply_trigger_transform(self, trigger_ctx, bindings: list, input_data: dict) -> dict:
+        """
+        Match trigger context against reasoner bindings and apply transform if found.
+        Returns transformed input or original input if no match.
+        
+        Matching logic:
+        1. Find bindings where binding.source == trigger_ctx.source
+        2. Check event_type: binding.types empty OR trigger_ctx.event_type matches (exact or prefix)
+        3. If multiple match, prefer most specific (non-empty types)
+        4. Apply transform if binding has one
+        """
+        from .triggers import EventTrigger
+        
+        if not bindings or not trigger_ctx:
+            return input_data
+        
+        # Find best-matching binding
+        best_match = None
+        best_specificity = -1  # -1 = no match, 0 = broad (empty types), 1+ = specific
+        
+        for binding in bindings:
+            if not isinstance(binding, EventTrigger):
+                continue
+            
+            if binding.source != trigger_ctx.source:
+                continue
+            
+            # Check event_type match
+            if binding.types:
+                # binding has specific types — check for match
+                matched = False
+                for btype in binding.types:
+                    if trigger_ctx.event_type.startswith(btype):
+                        matched = True
+                        break
+                if not matched:
+                    continue
+                specificity = 1
+            else:
+                # binding accepts all types
+                specificity = 0
+            
+            # This binding matches; is it better than current best?
+            if specificity > best_specificity:
+                best_match = binding
+                best_specificity = specificity
+        
+        # Apply transform if found
+        if best_match and best_match.transform:
+            try:
+                return best_match.transform(input_data)
+            except Exception as e:
+                if self.dev_mode:
+                    log_warn(f"Transform failed for {trigger_ctx.source}/{trigger_ctx.event_type}: {e}; using raw input")
+                return input_data
+        
+        return input_data
+
+    async def _execute_reasoner_endpoint(
+        self,
+        *,
+        reasoner_id: str,
+        func: Callable,
+        signature: inspect.Signature,
+        input_data: Dict[str, Any],
+        request: Request,
+    ) -> Any:
+        import asyncio
+        import time
+
+        execution_context = ExecutionContext.from_request(request, self.node_id)
+        payload_dict = input_data  # Already a dict from runtime validation
+        # Unwrap dispatcher envelope if present (Phase 5 webhook DX)
+        payload_dict, trigger_context = self._detect_and_unwrap_trigger_envelope(payload_dict)
+        if trigger_context:
+            execution_context.trigger = trigger_context
+
+        self._current_execution_context = execution_context
+        context_token = set_execution_context(execution_context)
+        self._set_as_current()
+
+        if hasattr(self, "workflow_handler") and self.workflow_handler:
+            execution_context.reasoner_name = reasoner_id
+            await self.workflow_handler.notify_call_start(
+                execution_context.execution_id,
+                execution_context,
+                reasoner_id,
+                payload_dict,
+                parent_execution_id=execution_context.parent_execution_id,
+            )
+
+        start_time = time.time()
+
+        did_execution_context = None
+        if self.did_enabled and self.did_manager:
+            session_identifier = (
+                execution_context.session_id or execution_context.workflow_id
+            )
+            did_execution_context = self.did_manager.create_execution_context(
+                execution_context.execution_id,
+                execution_context.workflow_id,
+                session_identifier,
+                "agent",
+                reasoner_id,
+                parent_vc_id=execution_context.parent_vc_id,
+            )
+            self._populate_execution_context_with_did(
+                execution_context, did_execution_context
+            )
+
+        try:
+            # Phase 5: Apply trigger transform if applicable
+            trigger_bindings = getattr(func, "_reasoner_triggers", [])
+            if execution_context.trigger and trigger_bindings:
+                payload_dict = self._apply_trigger_transform(
+                    execution_context.trigger,
+                    trigger_bindings,
+                    payload_dict
+                )
+
+            # When invoked via an inbound trigger, the (possibly transformed)
+            # payload IS the first positional argument — it's the provider's
+            # event itself, not a dict of named kwargs. Direct app.call()
+            # invocations keep the historical kwargs-from-dict shape.
+            if execution_context.trigger is not None:
+                args, kwargs = (payload_dict,), {}
+            else:
+                try:
+                    if should_convert_args(func):
+                        converted_args, converted_kwargs = convert_function_args(
+                            func, (), payload_dict
+                        )
+                        args = converted_args
+                        kwargs = converted_kwargs
+                    else:
+                        args, kwargs = (), payload_dict
+                except ValidationError as exc:
+                    # Convert Pydantic validation error to safe _HandlerInputError
+                    # to prevent potential stack trace exposure in 422 responses.
+                    raise _HandlerInputError(
+                        f"Pydantic validation failed for reasoner '{reasoner_id}'"
+                    ) from exc
+                except Exception as exc:  # pragma: no cover - best effort log
+                    if self.dev_mode:
+                        log_debug(
+                            f"⚠️ Warning: Failed to convert arguments for {reasoner_id}: {exc}"
+                        )
+                    args, kwargs = (), payload_dict
+
+            if "execution_context" in signature.parameters:
+                kwargs["execution_context"] = execution_context
+
+            # Phase 5: Inject trigger context (webhook metadata)
+            if "trigger" in signature.parameters:
+                kwargs["trigger"] = execution_context.trigger
+            if "webhook" in signature.parameters:
+                kwargs["webhook"] = execution_context.trigger
+
+            if asyncio.iscoroutinefunction(func):
+                result = await func(*args, **kwargs)
+            else:
+                result = func(*args, **kwargs)
+
+            if did_execution_context and self._should_generate_vc(
+                reasoner_id, self._reasoner_vc_overrides
+            ):
+                if self.dev_mode:
+                    log_debug(
+                        f"Triggering VC generation for execution: {did_execution_context.execution_id}"
+                    )
+                end_time = time.time()
+                duration_ms = int((end_time - start_time) * 1000)
+                asyncio.create_task(
+                    self._generate_vc_async(
+                        self.vc_generator,
+                        did_execution_context,
+                        reasoner_id,
+                        payload_dict,
+                        result,
+                        "success",
+                        None,
+                        duration_ms,
+                    )
+                )
+
+            if hasattr(self, "workflow_handler") and self.workflow_handler:
+                end_time = time.time()
+                await self.workflow_handler.notify_call_complete(
+                    execution_context.execution_id,
+                    execution_context.workflow_id,
+                    result,
+                    int((end_time - start_time) * 1000),
+                    execution_context,
+                    input_data=payload_dict,
+                    parent_execution_id=execution_context.parent_execution_id,
+                )
+
+            return result
+        except asyncio.CancelledError as cancel_err:
+            if hasattr(self, "workflow_handler") and self.workflow_handler:
+                end_time = time.time()
+                await self.workflow_handler.notify_call_error(
+                    execution_context.execution_id,
+                    execution_context.workflow_id,
+                    "Execution cancelled by upstream client",
+                    int((end_time - start_time) * 1000),
+                    execution_context,
+                    input_data=payload_dict,
+                    parent_execution_id=execution_context.parent_execution_id,
+                )
+            raise cancel_err
+        except ExecuteError as exec_err:
+            # Propagate upstream HTTP status codes from cross-agent calls.
+            # Without this, a 403 from the inner call would become 500
+            # (unhandled exception) and then 502 at the outer control plane.
+            if hasattr(self, "workflow_handler") and self.workflow_handler:
+                end_time = time.time()
+                await self.workflow_handler.notify_call_error(
+                    execution_context.execution_id,
+                    execution_context.workflow_id,
+                    str(exec_err),
+                    int((end_time - start_time) * 1000),
+                    execution_context,
+                    input_data=payload_dict,
+                    parent_execution_id=execution_context.parent_execution_id,
+                )
+            detail = {"error": str(exec_err)}
+            if exec_err.error_details:
+                detail["error_details"] = exec_err.error_details
+            raise HTTPException(
+                status_code=exec_err.status_code,
+                detail=detail,
+            )
+        except HTTPException as http_exc:
+            if hasattr(self, "workflow_handler") and self.workflow_handler:
+                end_time = time.time()
+                detail = getattr(http_exc, "detail", None) or str(http_exc)
+                await self.workflow_handler.notify_call_error(
+                    execution_context.execution_id,
+                    execution_context.workflow_id,
+                    detail,
+                    int((end_time - start_time) * 1000),
+                    execution_context,
+                    input_data=payload_dict,
+                    parent_execution_id=execution_context.parent_execution_id,
+                )
+            raise
+        except Exception as exc:
+            if hasattr(self, "workflow_handler") and self.workflow_handler:
+                end_time = time.time()
+                await self.workflow_handler.notify_call_error(
+                    execution_context.execution_id,
+                    execution_context.workflow_id,
+                    str(exc),
+                    int((end_time - start_time) * 1000),
+                    execution_context,
+                    input_data=payload_dict,
+                    parent_execution_id=execution_context.parent_execution_id,
+                )
+            raise
+        finally:
+            reset_execution_context(context_token)
+            self._current_execution_context = None
+            self._clear_current()
+
+    async def _execute_async_with_callback(
+        self,
+        *,
+        reasoner_coro: Callable[[], Awaitable[Any]],
+        execution_id: str,
+        reasoner_name: str,
+    ) -> None:
+        if not execution_id:
+            return
+        callback_url = self._build_execution_callback_url(execution_id)
+        if not callback_url:
+            log_warn("Unable to construct callback URL for execution updates")
+            return
+
+        # Wall-clock budget to guarantee the callback always fires.
+        # Without this, a hung reasoner blocks the execution forever and the
+        # control plane never sees a terminal status. The budget applies to
+        # *active* time only — intervals spent inside ``Agent.pause()`` or
+        # ``Agent.wait_for_resume()`` are subtracted by the watchdog so the
+        # ``expires_in_hours`` argument to ``pause()`` actually means what it
+        # says rather than being silently capped at this timeout.
+        reasoner_timeout = getattr(
+            self.async_config, "default_execution_timeout", 7200.0
+        )
+
+        from .agent_pause import PauseClock
+
+        pause_clock = PauseClock()
+        self._pause_clocks[execution_id] = pause_clock
+        log_info(
+            f"pause_cascade: registered pause_clock id={id(pause_clock)} "
+            f"for execution_id={execution_id} reasoner={reasoner_name}"
+        )
+
+        start_time = time.time()
+        reasoner_task = asyncio.create_task(reasoner_coro())
+
+        async def _watchdog() -> None:
+            # Poll active-elapsed time and cancel the reasoner if the active
+            # budget is exceeded. ``check_interval`` is a small fraction of
+            # the timeout so we don't oversleep our own deadline by much.
+            check_interval = min(5.0, max(0.1, reasoner_timeout / 4.0))
+            while not reasoner_task.done():
+                try:
+                    await asyncio.sleep(check_interval)
+                except asyncio.CancelledError:
+                    return
+                active_elapsed = (time.time() - start_time) - pause_clock.total_paused()
+                if active_elapsed > reasoner_timeout:
+                    # Capture pause_clock state at the moment of timeout so
+                    # we can tell "watchdog fired with non-zero pause time
+                    # (legitimate long-running work)" apart from "watchdog
+                    # fired with zero pause time (cascade never ran even
+                    # though a descendant was clearly paused)" — the latter
+                    # is the production bug we're hunting.
+                    log_error(
+                        f"pause_cascade: WATCHDOG_FIRING execution_id={execution_id} "
+                        f"reasoner={reasoner_name} "
+                        f"wall_elapsed={time.time() - start_time:.1f}s "
+                        f"total_paused={pause_clock.total_paused():.1f}s "
+                        f"active_elapsed={active_elapsed:.1f}s "
+                        f"budget={reasoner_timeout:.1f}s "
+                        f"pause_clock_id={id(pause_clock)}"
+                    )
+                    pause_clock.timed_out = True
+                    reasoner_task.cancel()
+                    return
+
+        watchdog_task = asyncio.create_task(_watchdog())
+
+        try:
+            result = await reasoner_task
+            payload = {
+                "status": "succeeded",
+                "result": jsonable_encoder(result),
+                "duration_ms": int((time.time() - start_time) * 1000),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "execution_id": execution_id,
+                "reasoner": reasoner_name,
+            }
+            log_info(f"Execution {execution_id} completed asynchronously")
+        except asyncio.CancelledError:
+            if pause_clock.timed_out:
+                payload = {
+                    "status": "failed",
+                    "error": (
+                        f"Reasoner '{reasoner_name}' timed out after "
+                        f"{reasoner_timeout}s of active time"
+                    ),
+                    "error_details": {"reason": "reasoner_timeout"},
+                    "duration_ms": int((time.time() - start_time) * 1000),
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                    "execution_id": execution_id,
+                    "reasoner": reasoner_name,
+                }
+                log_error(
+                    f"Execution {execution_id} timed out after "
+                    f"{reasoner_timeout}s of active time"
+                )
+            else:
+                # External cooperative cancel arrived (cancel dispatcher or
+                # outer task cancellation). Report cancelled status so the
+                # control plane sees a clean terminal transition.
+                payload = {
+                    "status": "cancelled",
+                    "error": "cancelled_by_control_plane",
+                    "error_details": {"reason": "cancelled"},
+                    "duration_ms": int((time.time() - start_time) * 1000),
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                    "execution_id": execution_id,
+                    "reasoner": reasoner_name,
+                }
+                log_info(f"Execution {execution_id} cancelled cooperatively")
+        except Exception as exc:
+            error_details = getattr(exc, "error_details", None)
+            payload = {
+                "status": "failed",
+                "error": str(exc),
+                "error_details": error_details,
+                "duration_ms": int((time.time() - start_time) * 1000),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "execution_id": execution_id,
+                "reasoner": reasoner_name,
+            }
+            log_error(f"Execution {execution_id} failed asynchronously: {exc}")
+        finally:
+            # If we landed here without the reasoner finishing (e.g. our own
+            # task was cancelled mid-await), make sure the user code stops
+            # too so it doesn't keep running detached.
+            if not reasoner_task.done():
+                reasoner_task.cancel()
+                try:
+                    await reasoner_task
+                except BaseException:
+                    pass
+            watchdog_task.cancel()
+            try:
+                await watchdog_task
+            except BaseException:
+                pass
+            self._pause_clocks.pop(execution_id, None)
+            # Deregister the cancel hook regardless of outcome.
+            from .cancel import deregister_execution
+            await deregister_execution(self, execution_id)
+        await self._post_execution_status(callback_url, payload, execution_id)
+
+    async def _post_execution_status(
+        self,
+        callback_url: str,
+        payload: Dict[str, Any],
+        execution_id: str,
+        max_retries: int = 5,
+    ) -> None:
+        if not self.client:
+            log_error("AgentField client unavailable; cannot send status updates")
+            return
+
+        safe_payload = jsonable_encoder(payload)
+        for attempt in range(max_retries):
+            try:
+                response = await self.client._async_request(
+                    "POST",
+                    callback_url,
+                    json=safe_payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=30.0,  # longer timeout for critical status callbacks
+                )
+                if 200 <= response.status_code < 300:
+                    if self.dev_mode:
+                        log_debug(
+                            f"Sent async status update for {execution_id} (attempt {attempt + 1})"
+                        )
+                    return
+                log_warn(
+                    f"Async status update failed with {response.status_code} for execution {execution_id}"
+                )
+            except Exception as exc:  # pragma: no cover - network errors
+                log_warn(
+                    f"Async status update attempt {attempt + 1} failed for {execution_id}: {exc}"
+                )
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2**attempt)
+        log_error(f"Failed to deliver async status for {execution_id} after retries")
+
+    def _build_execution_callback_url(self, execution_id: str) -> Optional[str]:
+        if not self.agentfield_server or not execution_id:
+            return None
+        return (
+            self.agentfield_server.rstrip("/")
+            + f"/api/v1/executions/{execution_id}/status"
+        )
+
+    def on_change(self, pattern: Union[str, List[str]]):
+        """
+        Decorator to mark a function as a memory event listener.
+
+        This decorator allows functions to automatically respond to changes in the agent's
+        memory system. When memory data matching the specified patterns is modified,
+        the decorated function will be called with the change event details.
+
+        Args:
+            pattern (Union[str, List[str]]): Memory path pattern(s) to listen for changes.
+                                           Supports glob-style patterns for flexible matching.
+                                           Examples: "user.*", ["session.current_user", "workflow.status"]
+
+        Returns:
+            Callable: The decorated function configured as a memory event listener.
+
+        Example:
+            ```python
+            @app.on_change("user.preferences.*")
+            async def handle_preference_change(event):
+                '''React to user preference changes.'''
+                log_info(f"User preference changed: {event.key} = {event.data}")
+
+                # Update related systems
+                if event.path.endswith("theme"):
+                    await update_ui_theme(event.data)
+                elif event.path.endswith("language"):
+                    await update_localization(event.data)
+
+            @app.on_change(["session.user_id", "session.permissions"])
+            async def handle_session_change(event):
+                '''React to session-related changes.'''
+                if event.path == "session.user_id":
+                    # User logged in/out
+                    await initialize_user_context(event.data)
+                elif event.path == "session.permissions":
+                    # Permissions updated
+                    await refresh_access_controls(event.data)
+
+            # Memory changes trigger the listeners automatically
+            app.memory.set("user.preferences.theme", "dark")  # Triggers handle_preference_change
+            app.memory.set("session.user_id", 12345)          # Triggers handle_session_change
+            ```
+
+        Note:
+            - Listeners are called asynchronously when memory changes occur
+            - Multiple patterns can be specified to listen for different memory paths
+            - Event object contains key, previous_data, data, and timestamp
+            - Listeners should be lightweight to avoid blocking memory operations
+        """
+
+        def decorator(func: Callable) -> Callable:
+            @wraps(func)
+            async def wrapper(*args, **kwargs):
+                return await func(*args, **kwargs)
+
+            # Attach metadata to the function
+            setattr(wrapper, "_memory_event_listener", True)
+            setattr(
+                wrapper,
+                "_memory_event_patterns",
+                pattern if isinstance(pattern, list) else [pattern],
+            )
+            return wrapper
+
+        return decorator
+
+    def skill(
+        self,
+        tags: Optional[List[str]] = None,
+        path: Optional[str] = None,
+        name: Optional[str] = None,
+        *,
+        vc_enabled: Optional[bool] = None,
+        require_realtime_validation: bool = False,
+    ):
+        """
+        Decorator to register a skill function.
+
+        A skill is a deterministic function designed for business logic, integrations, data processing,
+        and non-AI operations. Skills are ideal for tasks that require consistent, predictable behavior
+        such as API calls, database operations, calculations, or data transformations.
+
+        The decorator automatically:
+        - Generates input/output schemas from type hints
+        - Creates FastAPI endpoints with proper validation
+        - Integrates with workflow tracking and execution context
+        - Enables cross-agent communication via the AgentField execution gateway
+        - Provides access to execution context and memory system
+
+        Args:
+            tags (List[str], optional): A list of tags for organizing and categorizing skills.
+                                      Useful for grouping related functionality (e.g., ["database", "user_management"]).
+            path (str, optional): Custom API endpoint path for this skill.
+                                Defaults to "/skills/{function_name}".
+            name (str, optional): Explicit AgentField registration ID. Defaults to the function name.
+            vc_enabled (bool | None, optional): Override VC generation for this skill. True forces VC creation,
+                False disables it, and None inherits the agent-level policy.
+
+        Returns:
+            Callable: The decorated function with enhanced AgentField integration.
+
+        Example:
+            ```python
+            from typing import Dict, List
+            from pydantic import BaseModel
+
+            class UserData(BaseModel):
+                id: int
+                name: str
+                email: str
+                created_at: str
+
+            @app.skill(tags=["database", "user_management"])
+            def get_user_profile(user_id: int) -> "UserData":
+                '''Retrieve user profile from database.'''
+
+                # Deterministic database operation
+                user = database.get_user(user_id)
+                if not user:
+                    raise ValueError(f"User {user_id} not found")
+
+                return UserData(
+                    id=user.id,
+                    name=user.name,
+                    email=user.email,
+                    created_at=user.created_at.isoformat()
+                )
+
+            @app.skill(tags=["api", "external"])
+            async def send_notification(
+                user_id: int,
+                message: str,
+                channel: str = "email"
+            ) -> Dict[str, str]:
+                '''Send notification via external service.'''
+
+                # External API integration
+                response = await notification_service.send(
+                    user_id=user_id,
+                    message=message,
+                    channel=channel
+                )
+
+                return {
+                    "status": "sent",
+                    "notification_id": response.id,
+                    "channel": channel
+                }
+
+            # Usage in another agent:
+            user = await app.call(
+                "user_agent.get_user_profile",
+                user_id=123
+            )
+
+            await app.call(
+                "notification_agent.send_notification",
+                user_id=123,
+                message="Welcome to our platform!",
+                channel="email"
+            )
+            ```
+
+        Note:
+            - Skills should be deterministic and side-effect aware
+            - Skills can access `app.memory` for persistent storage
+            - Execution context is automatically injected if the function accepts it
+            - All skills are automatically tracked in workflow DAGs
+            - Use skills for reliable, repeatable operations
+        """
+
+        direct_registration: Optional[Callable] = None
+        decorator_tags = tags
+        decorator_path = path
+        decorator_name = name
+
+        if decorator_tags and (
+            inspect.isfunction(decorator_tags) or inspect.ismethod(decorator_tags)
+        ):
+            direct_registration = decorator_tags
+            decorator_tags = None
+
+        def decorator(func: Callable) -> Callable:
+            # Extract function metadata
+            func_name = func.__name__
+            skill_id = decorator_name or func_name
+            endpoint_path = decorator_path or f"/skills/{skill_id}"
+            self._set_skill_vc_override(skill_id, vc_enabled)
+            if require_realtime_validation:
+                self._realtime_validation_functions.add(skill_id)
+
+            # Get type hints for input schema
+            type_hints = get_type_hints(func)
+            sig = inspect.signature(func)
+
+            # Create input schema from function parameters
+            input_fields = {}
+            for param_name, param in sig.parameters.items():
+                if param_name not in ["self", "execution_context"]:
+                    param_type = type_hints.get(param_name, str)
+                    default_value = (
+                        param.default
+                        if param.default is not inspect.Parameter.empty
+                        else ...
+                    )
+                    input_fields[param_name] = (param_type, default_value)
+
+            # NOTE: Removed create_model() - saves ~1.5-2 KB per handler
+            # Store input_fields for runtime validation (captured by closure)
+            handler_input_fields = input_fields
+
+            # Get output schema from return type hint
+            return_type = type_hints.get("return", dict)
+
+            # Create FastAPI endpoint with generic dict input (runtime validation)
+            @self.post(endpoint_path)
+            async def endpoint(request: Request):
+                # Parse body manually
+                try:
+                    body = await request.json()
+                except Exception:
+                    return JSONResponse(
+                        status_code=400,
+                        content={"detail": "Invalid JSON body"},
+                    )
+
+                # Validate input at runtime (replaces Pydantic validation).
+                # When the body is the dispatcher's webhook envelope shape
+                # ({"event": ..., "_meta": ...}), skip field-level validation
+                # — the envelope is unwrapped further down and the reasoner's
+                # first positional gets the unwrapped (or transformed) value
+                # by way of _execute_reasoner_endpoint.
+                is_trigger_envelope = (
+                    isinstance(body, dict)
+                    and "event" in body
+                    and "_meta" in body
+                    and isinstance(body.get("_meta"), dict)
+                )
+                if is_trigger_envelope:
+                    validated_input = body
+                else:
+                    try:
+                        validated_input = self._validate_handler_input(
+                            body, handler_input_fields
+                        )
+                    except _HandlerInputError as e:
+                        # `safe_message` is a known-safe SDK-constructed
+                        # string. Reading the explicit attribute (rather
+                        # than `str(e)`) keeps the response out of CodeQL's
+                        # py/stack-trace-exposure taint flow.
+                        return JSONResponse(
+                            status_code=422,
+                            content={"detail": e.safe_message},
+                        )
+
+                # Extract execution context from request headers
+                execution_context = ExecutionContext.from_request(request, self.node_id)
+
+                # Store current context for use in app.call()
+                self._current_execution_context = execution_context
+                context_token = None
+                context_token = set_execution_context(execution_context)
+                self._set_as_current()
+
+                # Create DID execution context if DID system is enabled
+                did_execution_context = None
+                if self.did_enabled and self.did_manager:
+                    session_identifier = (
+                        execution_context.session_id or execution_context.workflow_id
+                    )
+                    did_execution_context = self.did_manager.create_execution_context(
+                        execution_context.execution_id,
+                        execution_context.workflow_id,
+                        session_identifier,
+                        "agent",  # caller function
+                        skill_id,  # target function
+                        parent_vc_id=execution_context.parent_vc_id,
+                    )
+                    # Populate execution context with DID information
+                    self._populate_execution_context_with_did(
+                        execution_context, did_execution_context
+                    )
+
+                # Use validated input directly (already a dict)
+                input_payload = validated_input
+
+                # 🔥 NEW: Automatic Pydantic model conversion (FastAPI-like behavior)
+                # Use the original function for type hint inspection
+                original_func = getattr(func, "_original_func", func)
+                try:
+                    if should_convert_args(original_func):
+                        _converted_args, converted_kwargs = convert_function_args(
+                            original_func, (), input_payload
+                        )
+                        kwargs = converted_kwargs
+                    else:
+                        kwargs = dict(input_payload)
+                except ValidationError as e:
+                    # Convert Pydantic validation error to safe _HandlerInputError
+                    # to prevent potential stack trace exposure in 422 responses.
+                    raise _HandlerInputError(
+                        f"Pydantic validation failed for skill '{skill_id}'"
+                    ) from e
+                except Exception as e:
+                    # Log conversion errors but continue with original args for backward compatibility
+                    if self.dev_mode:
+                        log_warn(
+                            f"Failed to convert arguments for skill '{skill_id}': {e}"
+                        )
+                    kwargs = dict(input_payload)
+
+                # Inject execution context if the function accepts it
+                if "execution_context" in sig.parameters:
+                    kwargs["execution_context"] = execution_context
+
+                # Record start time for VC generation
+                start_time = time.time()
+                handler = getattr(self, "workflow_handler", None)
+                if handler:
+                    execution_context.reasoner_name = skill_id
+                    await handler.notify_call_start(
+                        execution_context.execution_id,
+                        execution_context,
+                        skill_id,
+                        input_payload,
+                        parent_execution_id=execution_context.parent_execution_id,
+                    )
+
+                # 🔥 FIX: Call the original function directly to prevent double tracking
+                # The FastAPI endpoint already handles tracking, so we don't want the tracked wrapper
+                # (original_func already retrieved above for type hint inspection)
+                try:
+                    if asyncio.iscoroutinefunction(original_func):
+                        result = await original_func(**kwargs)
+                    else:
+                        result = original_func(**kwargs)
+
+                    duration_ms = int((time.time() - start_time) * 1000)
+
+                    # Generate VC asynchronously if DID is enabled
+                    if did_execution_context and self._should_generate_vc(
+                        skill_id, self._skill_vc_overrides
+                    ):
+                        asyncio.create_task(
+                            self._generate_vc_async(
+                                self.vc_generator,
+                                did_execution_context,
+                                skill_id,
+                                input_payload,
+                                result,
+                                "success",
+                                None,
+                                duration_ms,
+                            )
+                        )
+
+                    if handler:
+                        await handler.notify_call_complete(
+                            execution_context.execution_id,
+                            execution_context.workflow_id,
+                            result,
+                            duration_ms,
+                            execution_context,
+                            input_data=input_payload,
+                            parent_execution_id=execution_context.parent_execution_id,
+                        )
+
+                    return result
+                except asyncio.CancelledError as cancel_err:
+                    duration_ms = int((time.time() - start_time) * 1000)
+                    if handler:
+                        await handler.notify_call_error(
+                            execution_context.execution_id,
+                            execution_context.workflow_id,
+                            "Execution cancelled by upstream client",
+                            duration_ms,
+                            execution_context,
+                            input_data=input_payload,
+                            parent_execution_id=execution_context.parent_execution_id,
+                        )
+                    raise cancel_err
+                except HTTPException as http_exc:
+                    duration_ms = int((time.time() - start_time) * 1000)
+                    detail = getattr(http_exc, "detail", None) or str(http_exc)
+                    if handler:
+                        await handler.notify_call_error(
+                            execution_context.execution_id,
+                            execution_context.workflow_id,
+                            detail,
+                            duration_ms,
+                            execution_context,
+                            input_data=input_payload,
+                            parent_execution_id=execution_context.parent_execution_id,
+                        )
+                    raise
+                except Exception as exc:
+                    duration_ms = int((time.time() - start_time) * 1000)
+                    if handler:
+                        await handler.notify_call_error(
+                            execution_context.execution_id,
+                            execution_context.workflow_id,
+                            str(exc),
+                            duration_ms,
+                            execution_context,
+                            input_data=input_payload,
+                            parent_execution_id=execution_context.parent_execution_id,
+                        )
+                    raise
+                finally:
+                    if context_token is not None:
+                        reset_execution_context(context_token)
+                    self._current_execution_context = None
+                    self._clear_current()
+
+            def _build_invocation_payload(args: tuple, kwargs: dict) -> Dict[str, Any]:
+                try:
+                    bound = sig.bind_partial(*args, **kwargs)
+                    bound.apply_defaults()
+                    payload = {
+                        name: value
+                        for name, value in bound.arguments.items()
+                        if name != "self"
+                    }
+                    return payload
+                except Exception:
+                    payload = {f"arg_{idx}": value for idx, value in enumerate(args)}
+                    payload.update({k: v for k, v in kwargs.items() if k != "self"})
+                    return payload
+
+            # Store in memory-efficient registry (schemas generated on-demand)
+            resolved_tags = list(decorator_tags) if decorator_tags else []
+            vc_setting = self._effective_component_vc_setting(
+                skill_id, self._skill_vc_overrides
+            )
+            self._skill_registry[skill_id] = SkillEntry(
+                id=skill_id,
+                func=func,
+                input_types=input_fields,  # Store (type, default) tuples, not Pydantic model
+                output_type=return_type,
+                tags=resolved_tags,
+                vc_enabled=vc_setting,
+            )
+            # NOTE: Legacy self.skills.append() removed - skills property generates list on-demand
+
+            original_func = func
+            is_async = asyncio.iscoroutinefunction(original_func)
+
+            async def _run_async_skill(*args, **kwargs):
+                current_context = get_current_context()
+                if not current_context or not self.workflow_handler:
+                    return await original_func(*args, **kwargs)
+
+                child_context = current_context.create_child_context()
+                child_context.reasoner_name = skill_id
+                token = set_execution_context(child_context)
+                previous_ctx = self._current_execution_context
+                self._current_execution_context = child_context
+                input_payload = _build_invocation_payload(args, kwargs)
+
+                await self.workflow_handler.notify_call_start(
+                    child_context.execution_id,
+                    child_context,
+                    skill_id,
+                    input_payload,
+                    parent_execution_id=current_context.execution_id,
+                )
+
+                start_time = time.time()
+                try:
+                    result = await original_func(*args, **kwargs)
+                    duration_ms = int((time.time() - start_time) * 1000)
+                    await self.workflow_handler.notify_call_complete(
+                        child_context.execution_id,
+                        child_context.workflow_id,
+                        result,
+                        duration_ms,
+                        child_context,
+                        input_data=input_payload,
+                        parent_execution_id=current_context.execution_id,
+                    )
+                    return result
+                except Exception as exc:
+                    duration_ms = int((time.time() - start_time) * 1000)
+                    await self.workflow_handler.notify_call_error(
+                        child_context.execution_id,
+                        child_context.workflow_id,
+                        str(exc),
+                        duration_ms,
+                        child_context,
+                        input_data=input_payload,
+                        parent_execution_id=current_context.execution_id,
+                    )
+                    raise
+                finally:
+                    reset_execution_context(token)
+                    self._current_execution_context = previous_ctx
+
+            def _run_sync_skill(*args, **kwargs):
+                current_context = get_current_context()
+                if not current_context or not self.agentfield_server:
+                    return original_func(*args, **kwargs)
+
+                child_context = current_context.create_child_context()
+                child_context.reasoner_name = skill_id
+                token = set_execution_context(child_context)
+                previous_ctx = self._current_execution_context
+                self._current_execution_context = child_context
+
+                input_payload = _build_invocation_payload(args, kwargs)
+                start_time = time.time()
+
+                self._emit_workflow_event_sync(
+                    child_context,
+                    skill_id,
+                    status="running",
+                    input_data=input_payload,
+                    parent_execution_id=current_context.execution_id,
+                )
+
+                try:
+                    result = original_func(*args, **kwargs)
+                    duration_ms = int((time.time() - start_time) * 1000)
+                    self._emit_workflow_event_sync(
+                        child_context,
+                        skill_id,
+                        status="succeeded",
+                        input_data=input_payload,
+                        result=result,
+                        duration_ms=duration_ms,
+                        parent_execution_id=current_context.execution_id,
+                    )
+                    return result
+                except Exception as exc:
+                    duration_ms = int((time.time() - start_time) * 1000)
+                    self._emit_workflow_event_sync(
+                        child_context,
+                        skill_id,
+                        status="failed",
+                        input_data=input_payload,
+                        error=str(exc),
+                        duration_ms=duration_ms,
+                        parent_execution_id=current_context.execution_id,
+                    )
+                    raise
+                finally:
+                    reset_execution_context(token)
+                    self._current_execution_context = previous_ctx
+
+            if is_async:
+                tracked_callable = _run_async_skill
+            else:
+                tracked_callable = _run_sync_skill
+
+            setattr(tracked_callable, "_original_func", original_func)
+            setattr(tracked_callable, "_is_tracked_replacement", True)
+
+            if skill_id != func_name:
+                setattr(self, skill_id, getattr(self, func_name, tracked_callable))
+            else:
+                setattr(self, func_name, tracked_callable)
+
+            return tracked_callable
+
+        if direct_registration:
+            return decorator(direct_registration)
+
+        return decorator
+
+    def include_router(
+        self,
+        router,
+        prefix: str = "",
+        tags: Optional[List[str]] = None,
+    ) -> None:
+        """Augment FastAPI's include_router to understand AgentRouter."""
+
+        if isinstance(router, AgentRouter):
+            router._attach_agent(self)
+            normalized_prefix = prefix.rstrip("/") if prefix else ""
+
+            def _replace_module_reference(
+                original_func: Callable, tracked_func: Callable
+            ) -> None:
+                module_name = getattr(original_func, "__module__", None)
+                attr_name = getattr(original_func, "__name__", None)
+                if not module_name or not attr_name:
+                    return
+                module = sys.modules.get(module_name)
+                if module is None:
+                    return
+                current = getattr(module, attr_name, None)
+                if current is original_func:
+                    setattr(module, attr_name, tracked_func)
+
+            def _sanitize_prefix_for_id(value: Optional[str]) -> List[str]:
+                if not value:
+                    return []
+
+                cleaned = value.strip("/")
+                if not cleaned:
+                    return []
+
+                segments: List[str] = []
+                for segment in cleaned.split("/"):
+                    sanitized = re.sub(r"[^0-9a-zA-Z]+", "_", segment)
+                    sanitized = re.sub(r"_+", "_", sanitized).strip("_")
+                    if sanitized:
+                        segments.append(sanitized.lower())
+                return segments
+
+            def _build_prefixed_name(parts: List[str], base: str) -> str:
+                if not parts:
+                    return base
+                prefix_part = "_".join(parts)
+                return f"{prefix_part}_{base}"
+
+            def _normalize_component_path(
+                path_value: Optional[str], component: str, component_id: str
+            ) -> str:
+                """Ensure router-registered components map to /reasoners/{id} style paths."""
+
+                marker = f"/{component}/"
+                if not path_value:
+                    return marker + component_id
+
+                idx = path_value.find(marker)
+                if idx == -1:
+                    return path_value
+
+                # Preserve any include_router prefix (everything up to and including marker)
+                prefix_part = path_value[: idx + len(marker)]
+                if path_value.endswith(component_id) and path_value.startswith(
+                    prefix_part
+                ):
+                    # Already normalized
+                    return path_value
+
+                return f"{prefix_part}{component_id}"
+
+            namespace_segments = _sanitize_prefix_for_id(getattr(router, "prefix", ""))
+
+            for entry in router.reasoners:
+                if entry.get("registered"):
+                    continue
+
+                func = entry["func"]
+                default_path = f"/reasoners/{func.__name__}"
+                auto_path = entry.get("path") is None
+                resolved_path = router._combine_path(
+                    default=default_path,
+                    custom=entry.get("path"),
+                    override_prefix=normalized_prefix,
+                )
+
+                merged_tags: List[str] = []
+                if tags:
+                    merged_tags.extend(tags)
+                merged_tags.extend(entry.get("tags", []))
+                tag_arg: Optional[List[str]] = merged_tags if merged_tags else None
+
+                entry_kwargs = dict(entry.get("kwargs", {}))
+                explicit_reasoner_name = entry_kwargs.pop("name", None)
+                reasoner_id = explicit_reasoner_name or _build_prefixed_name(
+                    namespace_segments,
+                    func.__name__,
+                )
+
+                if auto_path:
+                    resolved_path = _normalize_component_path(
+                        resolved_path, "reasoners", reasoner_id
+                    )
+
+                decorated = self.reasoner(
+                    path=resolved_path,
+                    name=reasoner_id,
+                    tags=tag_arg,
+                    **entry_kwargs,
+                )(func)
+                _replace_module_reference(func, decorated)
+                entry["func"] = decorated
+                entry["registered"] = True
+
+                # Register tracked function for lazy-binding in router wrappers
+                # This enables direct reasoner-to-reasoner calls to go through tracking
+                router._tracked_functions[func.__name__] = decorated
+
+            for entry in router.skills:
+                if entry.get("registered"):
+                    continue
+
+                func = entry["func"]
+                default_path = f"/skills/{func.__name__}"
+                auto_path = entry.get("path") is None
+                resolved_path = router._combine_path(
+                    default=default_path,
+                    custom=entry.get("path"),
+                    override_prefix=normalized_prefix,
+                )
+
+                merged_tags: List[str] = []
+                if tags:
+                    merged_tags.extend(tags)
+                merged_tags.extend(entry.get("tags", []))
+                tag_arg: Optional[List[str]] = merged_tags if merged_tags else None
+
+                entry_kwargs = entry.get("kwargs", {})
+                explicit_skill_name = entry_kwargs.get("name")
+                skill_id = explicit_skill_name or _build_prefixed_name(
+                    namespace_segments,
+                    func.__name__,
+                )
+
+                if auto_path:
+                    resolved_path = _normalize_component_path(
+                        resolved_path, "skills", skill_id
+                    )
+
+                decorated = self.skill(
+                    tags=tag_arg,
+                    path=resolved_path,
+                    name=skill_id,
+                )(func)
+                _replace_module_reference(func, decorated)
+                entry["func"] = decorated
+                entry["registered"] = True
+
+            return
+
+        return super().include_router(router, prefix=prefix, tags=tags)
+
+    async def ai(  # pragma: no cover - relies on external LLM services
+        self,
+        *args: Any,
+        system: Optional[str] = None,
+        user: Optional[str] = None,
+        schema: Optional[Type[BaseModel]] = None,
+        model: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        stream: Optional[bool] = None,
+        response_format: Optional[Union[Literal["auto", "json", "text"], Dict]] = None,
+        context: Optional[Dict] = None,
+        memory_scope: Optional[List[str]] = None,
+        **kwargs,
+    ) -> Any:
+        """
+        AI interface for LLM interactions with direct keyword argument support.
+
+        This method provides direct access to the AI functionality, allowing users to
+        call `app.ai(...)` with keyword arguments for seamless LLM interactions.
+
+        Args:
+            *args: Flexible inputs - text, images, audio, files, or mixed content.
+                   - str: Text content, URLs, or file paths (auto-detected).
+                   - bytes: Binary data (images, audio, documents).
+                   - dict: Structured input with explicit keys (e.g., {"image": "url"}).
+                   - list: Multimodal conversation or content list.
+            system (str, optional): System prompt for AI behavior.
+            user (str, optional): User message (alternative to positional args).
+            schema (Type[BaseModel], optional): Pydantic model for structured output validation.
+            model (str, optional): Override default model (e.g., "gpt-4", "claude-3").
+            temperature (float, optional): Creativity level (0.0-2.0).
+            max_tokens (int, optional): Maximum response length.
+            stream (bool, optional): Enable streaming response.
+            response_format (str, optional): Desired response format ('auto', 'json', 'text').
+            context (Dict, optional): Additional context data to pass to the LLM.
+            memory_scope (List[str], optional): Memory scopes to inject (e.g., ['workflow', 'session', 'reasoner']).
+            **kwargs: Additional provider-specific parameters to pass to the LLM.
+
+        Returns:
+            Any: The AI response - raw text, structured object (if schema), or a stream.
+
+        Example:
+            ```python
+            # Direct usage with keyword arguments
+            response = await app.ai(
+                system="You are a helpful assistant",
+                user="What is the capital of France?",
+                model="gpt-4",
+                temperature=0.7
+            )
+
+            # Structured output
+            class SentimentResult(BaseModel):
+                sentiment: str
+                confidence: float
+
+            result = await app.ai(
+                "Analyze sentiment of: I love this!",
+                schema=SentimentResult
+            )
+
+            # Multimodal input
+            response = await app.ai(
+                "Describe this image:",
+                "https://example.com/image.jpg"
+            )
+
+            # Simple text input
+            response = await app.ai("Summarize this document.")
+            ```
+        """
+        return await self.ai_handler.ai(
+            *args,
+            system=system,
+            user=user,
+            schema=schema,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=stream,
+            response_format=response_format,
+            context=context,
+            memory_scope=memory_scope,
+            **kwargs,
+        )
+
+    async def harness(
+        self,
+        prompt: str,
+        *,
+        schema: Any = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        max_turns: Optional[int] = None,
+        max_budget_usd: Optional[float] = None,
+        tools: Optional[List[str]] = None,
+        permission_mode: Optional[str] = None,
+        system_prompt: Optional[str] = None,
+        env: Optional[Dict[str, str]] = None,
+        cwd: Optional[str] = None,
+        **kwargs,
+    ) -> "HarnessResult":
+        """
+        Dispatch a task to an external coding agent and return structured results.
+
+        Works like `.ai()` but delegates to a coding agent that can read, write, and edit
+        files with optional schema-constrained output.
+
+        Args:
+            prompt: Task description for the coding agent.
+            schema: Pydantic BaseModel class for structured output validation.
+            provider: Override provider ("claude-code", "codex", "gemini", "opencode").
+            model: Override model identifier.
+            max_turns: Maximum agent iterations.
+            max_budget_usd: Cost cap in USD.
+            tools: Allowed tools list.
+            permission_mode: Permission mode ("plan", "auto", None).
+            system_prompt: System prompt for the agent.
+            env: Environment variables for the agent.
+            cwd: Working directory for the agent.
+            **kwargs: Additional provider-specific options.
+
+        Returns:
+            HarnessResult with .result (text), .parsed (validated schema), .text property.
+        """
+        return await self.harness_runner.run(
+            prompt,
+            schema=schema,
+            provider=provider,
+            model=model,
+            max_turns=max_turns,
+            max_budget_usd=max_budget_usd,
+            tools=tools,
+            permission_mode=permission_mode,
+            system_prompt=system_prompt,
+            env=env,
+            cwd=cwd,
+            **kwargs,
+        )
+
+    def _ensure_call_semaphore(self) -> asyncio.Semaphore:
+        semaphore = getattr(self, "_call_semaphore", None)
+        if semaphore is None:
+            guard = getattr(self, "_call_semaphore_guard", None)
+            if guard is None:
+                guard = threading.Lock()
+                setattr(self, "_call_semaphore_guard", guard)
+            max_calls = max(1, getattr(self, "_max_concurrent_calls", 1))
+            with guard:
+                semaphore = getattr(self, "_call_semaphore", None)
+                if semaphore is None:
+                    semaphore = asyncio.Semaphore(max_calls)
+                    setattr(self, "_call_semaphore", semaphore)
+        return semaphore
+
+    @asynccontextmanager
+    async def _limit_outbound_calls(self):
+        semaphore = self._ensure_call_semaphore()
+        await semaphore.acquire()
+        try:
+            yield
+        finally:
+            semaphore.release()
+
+    async def ai_with_audio(  # pragma: no cover - relies on external audio services
+        self,
+        *args: Any,
+        voice: Optional[str] = None,
+        format: Optional[str] = None,
+        model: Optional[str] = None,
+        mode: Optional[str] = None,
+        **kwargs,
+    ) -> "MultimodalResponse":
+        """
+        AI interface optimized for audio generation.
+
+        This method is specifically designed for generating audio content from text prompts.
+        It automatically configures the AI request for audio output and returns a
+        MultimodalResponse with convenient audio access methods.
+
+        Args:
+            *args: Text prompts or multimodal inputs for audio generation.
+            voice (str, optional): Voice to use for audio generation.
+                                 Available options: alloy, echo, fable, onyx, nova, shimmer.
+            format (str, optional): Audio format (wav, mp3). Defaults to wav.
+            model (str, optional): Model to use for audio generation.
+                                 Defaults to gpt-4o-audio-preview.
+            **kwargs: Additional parameters passed to the AI method.
+
+        Returns:
+            MultimodalResponse: Response object with audio content and convenient access methods.
+
+        Example:
+            ```python
+            # Basic audio generation
+            response = await app.ai_with_audio("Explain quantum computing")
+            response.audio.save("explanation.wav")
+
+            # Custom voice and format
+            response = await app.ai_with_audio(
+                "Tell a bedtime story",
+                voice="nova",
+                format="mp3"
+            )
+            response.audio.play()
+            ```
+        """
+        # Only pass parameters that are not None
+        audio_kwargs = {}
+        if voice is not None:
+            audio_kwargs["voice"] = voice
+        if format is not None:
+            audio_kwargs["format"] = format
+        if model is not None:
+            audio_kwargs["model"] = model
+        if mode is not None:
+            audio_kwargs["mode"] = mode
+
+        return await self.ai_handler.ai_with_audio(*args, **audio_kwargs, **kwargs)
+
+    async def ai_with_vision(  # pragma: no cover - relies on external vision services
+        self,
+        *args: Any,
+        size: Optional[str] = None,
+        quality: Optional[str] = None,
+        style: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs,
+    ) -> "MultimodalResponse":
+        """
+        AI interface optimized for image generation and vision tasks.
+
+        This method is designed for generating images from text prompts or analyzing
+        visual content. It returns a MultimodalResponse with convenient image access methods.
+
+        Args:
+            *args: Text prompts or multimodal inputs for image generation/analysis.
+            size (str, optional): Image size (e.g., "1024x1024", "1792x1024", "1024x1792").
+            quality (str, optional): Image quality ("standard" or "hd").
+            style (str, optional): Image style ("vivid" or "natural") for DALL-E 3.
+            model (str, optional): Model to use for image generation. Defaults to dall-e-3.
+            **kwargs: Additional parameters passed to the AI method.
+
+        Returns:
+            MultimodalResponse: Response object with image content and convenient access methods.
+
+        Example:
+            ```python
+            # Basic image generation
+            response = await app.ai_with_vision("A serene mountain landscape")
+            response.images[0].save("landscape.png")
+
+            # High-quality image with custom size
+            response = await app.ai_with_vision(
+                "Futuristic cityscape",
+                size="1792x1024",
+                quality="hd",
+                style="vivid"
+            )
+            response.images[0].show()
+            ```
+        """
+        # Only pass parameters that are not None
+        vision_kwargs = {}
+        if size is not None:
+            vision_kwargs["size"] = size
+        if quality is not None:
+            vision_kwargs["quality"] = quality
+        if style is not None:
+            vision_kwargs["style"] = style
+        if model is not None:
+            vision_kwargs["model"] = model
+
+        return await self.ai_handler.ai_with_vision(*args, **vision_kwargs, **kwargs)
+
+    async def ai_with_multimodal(  # pragma: no cover - relies on external multimodal services
+        self,
+        *args: Any,
+        modalities: Optional[List[str]] = None,
+        audio_config: Optional[Dict] = None,
+        image_config: Optional[Dict] = None,
+        model: Optional[str] = None,
+        **kwargs,
+    ) -> "MultimodalResponse":
+        """
+        AI interface with explicit multimodal control.
+
+        This method provides fine-grained control over multimodal AI interactions,
+        allowing you to specify exactly which output modalities you want and
+        configure them individually.
+
+        Args:
+            *args: Multimodal inputs (text, images, audio, files).
+            modalities (List[str], optional): Desired output modalities
+                                            (e.g., ["text", "audio", "image"]).
+            audio_config (Dict, optional): Audio generation configuration
+                                         (voice, format, etc.).
+            image_config (Dict, optional): Image generation configuration
+                                         (size, quality, style, etc.).
+            model (str, optional): Model to use for multimodal generation.
+            **kwargs: Additional parameters passed to the AI method.
+
+        Returns:
+            MultimodalResponse: Response object with all requested modalities.
+
+        Example:
+            ```python
+            # Request specific modalities
+            response = await app.ai_with_multimodal(
+                "Create a presentation about AI",
+                modalities=["text", "audio"],
+                audio_config={"voice": "alloy", "format": "wav"}
+            )
+
+            # Save all generated content
+            files = response.save_all("./output", prefix="ai_presentation")
+            ```
+        """
+        return await self.ai_handler.ai_with_multimodal(
+            *args,
+            modalities=modalities,
+            audio_config=audio_config,
+            image_config=image_config,
+            model=model,
+            **kwargs,
+        )
+
+    async def ai_generate_image(  # pragma: no cover - relies on external image services
+        self,
+        prompt: str,
+        model: Optional[str] = None,
+        size: str = "1024x1024",
+        quality: str = "standard",
+        style: Optional[str] = None,
+        response_format: str = "url",
+        **kwargs,
+    ) -> "MultimodalResponse":
+        """
+        Generate an image from a text prompt.
+
+        This is a dedicated method for image generation with a clearer name.
+        Returns a MultimodalResponse containing the generated image(s).
+
+        Supported Providers:
+        - LiteLLM: DALL-E models like "dall-e-3", "dall-e-2"
+        - OpenRouter: Models like "openrouter/google/gemini-2.5-flash-image-preview"
+
+        Args:
+            prompt (str): Text description of the image to generate.
+            model (str, optional): Model to use (defaults to AIConfig.vision_model).
+            size (str): Image dimensions (e.g., "1024x1024", "1792x1024").
+            quality (str): Image quality ("standard" or "hd").
+            style (str, optional): Image style for DALL-E 3 ("vivid" or "natural").
+            response_format (str): Output format ("url" or "b64_json").
+            **kwargs: Provider-specific parameters.
+
+        Returns:
+            MultimodalResponse: Response with .images list containing ImageOutput objects.
+
+        Example:
+            ```python
+            # Basic image generation
+            result = await app.ai_generate_image("A sunset over mountains")
+            if result.has_images:
+                result.images[0].save("sunset.png")
+
+            # OpenRouter with Gemini
+            result = await app.ai_generate_image(
+                "A futuristic cityscape",
+                model="openrouter/google/gemini-2.5-flash-image-preview"
+            )
+            ```
+        """
+        return await self.ai_handler.ai_generate_image(
+            prompt=prompt,
+            model=model,
+            size=size,
+            quality=quality,
+            style=style,
+            response_format=response_format,
+            **kwargs,
+        )
+
+    async def ai_generate_audio(  # pragma: no cover - relies on external audio services
+        self,
+        text: str,
+        model: Optional[str] = None,
+        voice: str = "alloy",
+        format: str = "wav",
+        speed: float = 1.0,
+        **kwargs,
+    ) -> "MultimodalResponse":
+        """
+        Generate audio/speech from text (Text-to-Speech).
+
+        This is a dedicated method for audio generation with a clearer name.
+        Returns a MultimodalResponse containing the generated audio.
+
+        Supported Providers:
+        - OpenAI TTS: Models like "tts-1", "tts-1-hd", "gpt-4o-mini-tts"
+
+        Args:
+            text (str): Text to convert to speech.
+            model (str, optional): TTS model to use (defaults to AIConfig.audio_model).
+            voice (str): Voice to use ("alloy", "echo", "fable", "onyx", "nova", "shimmer").
+            format (str): Audio format ("wav", "mp3", "opus", "aac", "flac", "pcm").
+            speed (float): Speech speed multiplier (0.25 to 4.0).
+            **kwargs: Provider-specific parameters.
+
+        Returns:
+            MultimodalResponse: Response with .audio containing AudioOutput.
+
+        Example:
+            ```python
+            # Basic speech generation
+            result = await app.ai_generate_audio("Hello, how are you today?")
+            if result.has_audio:
+                result.audio.save("greeting.wav")
+
+            # High-quality TTS
+            result = await app.ai_generate_audio(
+                "Welcome to the presentation.",
+                model="tts-1-hd",
+                voice="nova"
+            )
+            ```
+        """
+        return await self.ai_handler.ai_generate_audio(
+            text=text,
+            model=model,
+            voice=voice,
+            format=format,
+            speed=speed,
+            **kwargs,
+        )
+
+    async def ai_generate_music(  # pragma: no cover - relies on external services
+        self,
+        prompt: str,
+        model: Optional[str] = None,
+        duration: Optional[int] = None,
+        **kwargs,
+    ) -> "MultimodalResponse":
+        """
+        Generate music from a text prompt.
+
+        Routes to a music-capable provider (OpenRouter with models like
+        google/lyria-3-pro). Returns a MultimodalResponse with audio data.
+
+        Args:
+            prompt (str): Text description of the music to generate.
+            model (str, optional): Music model to use.
+            duration (int, optional): Duration hint in seconds.
+            **kwargs: Provider-specific parameters (e.g., format="wav").
+
+        Returns:
+            MultimodalResponse: Response with .audio containing AudioOutput.
+
+        Example:
+            ```python
+            result = await app.ai_generate_music("upbeat jazz piano solo")
+            if result.has_audio:
+                result.audio.save("jazz.wav")
+            ```
+        """
+        return await self.ai_handler.ai_generate_music(
+            prompt=prompt,
+            model=model,
+            duration=duration,
+            **kwargs,
+        )
+
+    async def call(self, target: str, *args, **kwargs) -> dict:
+        """
+        Initiates a cross-agent call to another reasoner or skill via the AgentField execution gateway.
+
+        This method allows agents to seamlessly communicate and utilize reasoners/skills
+        deployed on other agent nodes within the AgentField ecosystem. It properly propagates
+        workflow tracking headers and maintains execution context for DAG building.
+
+        **Return Type**: Always returns JSON/dict objects, similar to calling any REST API.
+        No automatic schema conversion is performed - developers can convert to Pydantic
+        models manually if needed.
+
+        The method supports both positional and keyword arguments for maximum flexibility:
+        - Pure keyword arguments (recommended): call("target", param1=value1, param2=value2)
+        - Mixed positional and keyword: call("target", value1, value2, param3=value3)
+        - Pure positional (auto-mapped): call("target", value1, value2, value3)
+
+        Args:
+            target (str): The full target ID in format "node_id.reasoner_name" or "node_id.skill_name"
+                         (e.g., "classification_team.classify_ticket", "support_agent.send_email").
+            *args: Positional arguments to pass to the target reasoner/skill. These will be
+                   automatically mapped to the target function's parameter names in order.
+            **kwargs: Keyword arguments to pass to the target reasoner/skill.
+
+        Returns:
+            dict: The result from the target reasoner/skill execution as JSON/dict.
+                  Always returns dict objects, like calling any REST API.
+
+        Examples:
+            # Reasoner call - returns dict (convert to Pydantic manually if needed)
+            result: dict = await app.call("sentiment_agent.analyze_sentiment",
+                                         message="I love this product!",
+                                         customer_id="cust_123")
+            sentiment = SentimentResult(**result)  # Manual conversion if needed
+            log_info(sentiment.confidence)
+
+            # Skill call - returns dict
+            result: dict = await app.call("notification_agent.send_email",
+                                        "user@example.com",  # positional: to
+                                        "Welcome!",          # positional: subject
+                                        body="Thank you for signing up.")  # keyword
+
+            # All calls return dict - consistent behavior
+            analysis: dict = await app.call("content_agent.analyze_content",
+                                           "This is great content!",  # content
+                                           "blog_post")               # content_type
+
+            # Error handling
+            try:
+                result = await app.call("some_agent.some_reasoner", data="test")
+                # result is always a dict
+            except Exception as e:
+                log_error(f"Call failed: {e}")
+        """
+        # Handle argument mapping for flexibility
+        final_kwargs = kwargs.copy()
+
+        if args:
+            # If positional arguments are provided, we need to map them to parameter names
+            # For cross-agent calls, we don't have direct access to the target function signature,
+            # so we'll use a simple mapping strategy:
+
+            # Try to get parameter names from the target (if it's a local reasoner/skill)
+            if "." in target:
+                node_id, function_name = target.split(".", 1)
+
+                # If calling a local function (same node), try to get its signature
+                if node_id == self.node_id and hasattr(self, function_name):
+                    try:
+                        func = getattr(self, function_name)
+                        sig = inspect.signature(func)
+                        param_names = [
+                            name
+                            for name, param in sig.parameters.items()
+                            if name not in ["self", "execution_context"]
+                        ]
+
+                        # Map positional args to parameter names
+                        for i, arg in enumerate(args):
+                            if i < len(param_names):
+                                param_name = param_names[i]
+                                if (
+                                    param_name not in final_kwargs
+                                ):  # Don't override explicit kwargs
+                                    final_kwargs[param_name] = arg
+                            else:
+                                # More args than parameters - use generic names
+                                final_kwargs[f"arg_{i}"] = arg
+
+                    except Exception:
+                        # Fallback to generic parameter names if signature inspection fails
+                        for i, arg in enumerate(args):
+                            final_kwargs[f"arg_{i}"] = arg
+                else:
+                    # Cross-agent call - use generic parameter names
+                    # The receiving agent will need to handle the mapping
+                    for i, arg in enumerate(args):
+                        final_kwargs[f"arg_{i}"] = arg
+            else:
+                # Simple function name without node_id - use generic names
+                for i, arg in enumerate(args):
+                    final_kwargs[f"arg_{i}"] = arg
+
+        # Get current execution context
+        current_context = self._get_current_execution_context()
+
+        # 🔧 DEBUG: Validate context before creating child
+        if self.dev_mode:
+            from agentfield.execution_context import get_current_context
+            from agentfield.logger import log_debug
+
+            log_debug(f"🔍 CALL_DEBUG: Making cross-agent call to {target}")
+            log_debug(f"  Current execution_id: {current_context.execution_id}")
+            log_debug(
+                f"  Thread-local context exists: {get_current_context() is not None}"
+            )
+            log_debug(
+                f"  Agent-level context exists: {self._current_execution_context is not None}"
+            )
+
+        # Prepare headers with proper workflow tracking
+        headers = current_context.to_headers()
+
+        # Ensure the current execution is the parent for sub-calls (not the inherited parent)
+        # This fixes workflow graph attribution for local skill calls
+        headers["X-Parent-Execution-ID"] = current_context.execution_id
+        if current_context.parent_vc_id:
+            headers["X-Parent-VC-ID"] = current_context.parent_vc_id
+
+        # DISABLED: Same-agent call detection - Force all calls through AgentField server
+        # This ensures all app.call() requests go through the AgentField server for proper
+        # workflow tracking, execution context, and distributed processing
+        from agentfield.logger import log_debug
+
+        log_debug(f"Cross-agent call to: {target}")
+
+        # Check if AgentField server is available for cross-agent calls
+        if not self.agentfield_connected:
+            from agentfield.logger import log_warn
+
+            log_warn(
+                f"AgentField server unavailable - cannot make cross-agent call to {target}"
+            )
+            from agentfield.exceptions import AgentFieldClientError
+
+            raise AgentFieldClientError(
+                f"Cross-agent call to {target} failed: AgentField server unavailable. Agent is running in local mode."
+            )
+
+        # Use the enhanced AgentFieldClient to make the call via execution gateway
+        try:
+            async with self._limit_outbound_calls():
+                # Check for non-serializable parameters and convert them
+                serialization_issues = []
+                for key, value in final_kwargs.items():
+                    try:
+                        import json
+
+                        json.dumps(value, default=str)  # Test serialization
+                    except (TypeError, ValueError) as se:
+                        serialization_issues.append(
+                            f"{key}: {type(value).__name__} - {str(se)}"
+                        )
+
+                        # Try to convert common non-serializable types
+                        if hasattr(value, "value"):  # Enum with .value attribute
+                            final_kwargs[key] = value.value
+                        elif hasattr(value, "__dict__"):  # Object with attributes
+                            final_kwargs[key] = value.__dict__
+                        else:
+                            final_kwargs[key] = str(value)
+
+                if serialization_issues and self.dev_mode:
+                    log_debug(
+                        f"Converted {len(serialization_issues)} non-serializable parameters"
+                    )
+
+                import asyncio
+                import time
+
+                # Determine how long we're willing to wait for long-running executions.
+                max_timeout = getattr(self.async_config, "max_execution_timeout", None)
+                default_timeout = getattr(
+                    self.async_config, "default_execution_timeout", None
+                )
+                execution_timeout = max_timeout or default_timeout or 600.0
+                # Guard against misconfiguration resulting in non-positive values.
+                if execution_timeout <= 0:
+                    execution_timeout = 600.0
+
+                start_time = time.time()
+
+                # Check if async execution is enabled and available
+                use_async_execution = (
+                    self.async_config.enable_async_execution
+                    and self.agentfield_connected
+                )
+
+                if use_async_execution:
+                    try:
+                        if self.dev_mode:
+                            log_debug(f"Using async execution for target: {target}")
+
+                        execution_id = await self.client.execute_async(
+                            target=target,
+                            input_data=final_kwargs,
+                            headers=headers,
+                            timeout=execution_timeout,
+                        )
+
+                        # Cross-reasoner pause propagation: when this call is
+                        # made from inside a reasoner that has a tracked
+                        # pause-clock, hand it to ``wait_for_execution_result``
+                        # so the wait loop can pause the clock while the awaited
+                        # child sits in ``WAITING`` (e.g. on a hax-sdk human
+                        # approval). Without this, the parent's active-time
+                        # budget would burn through the child's wait and
+                        # spuriously trip the watchdog at the wallclock budget.
+                        parent_execution_id = (
+                            current_context.execution_id if current_context else None
+                        )
+                        # ``_pause_clocks`` is set in __init__; getattr keeps
+                        # bypass-init test fixtures from AttributeErroring here.
+                        _all_pause_clocks = getattr(self, "_pause_clocks", None) or {}
+                        parent_pause_clock = (
+                            _all_pause_clocks.get(parent_execution_id)
+                            if parent_execution_id
+                            else None
+                        )
+                        # INFO-level so this fires in production (dev_mode-gated
+                        # logs were silent during the run that motivated this
+                        # diagnostic). The three values together pinpoint the
+                        # cascade-disabled case: a missing parent_execution_id
+                        # (no current_context) vs. a missing _pause_clocks entry
+                        # (reasoner not invoked via _execute_async_with_callback)
+                        # are different failure modes that need different fixes.
+                        log_info(
+                            f"pause_cascade: target={target} "
+                            f"parent_execution_id={parent_execution_id} "
+                            f"parent_pause_clock_id="
+                            f"{id(parent_pause_clock) if parent_pause_clock else 'None'} "
+                            f"pause_clocks_keys="
+                            f"{list(_all_pause_clocks.keys())[:5]}"
+                            f"{'...' if len(_all_pause_clocks) > 5 else ''}"
+                        )
+
+                        # Only pass the pause_clock kwarg when we actually have
+                        # one — keeps the call shape backward-compatible with
+                        # mocks / older clients that don't yet accept the kwarg.
+                        _wait_kwargs: Dict[str, Any] = {
+                            "execution_id": execution_id,
+                            "timeout": execution_timeout,
+                        }
+                        if parent_pause_clock is not None:
+                            _wait_kwargs["pause_clock"] = parent_pause_clock
+
+                            # Multi-hop pause propagation: when our awaited
+                            # child enters WAITING, push OUR OWN execution
+                            # status to WAITING so anyone awaiting us sees
+                            # WAITING too (and transitively up the chain).
+                            # Fire-and-forget; the wait loop swallows
+                            # exceptions so a transient control-plane blip
+                            # can't break the call graph. See run
+                            # run_1778429268006_76e417b7 — implement_from_issue
+                            # timed out at 7200s wallclock because two-or-more
+                            # hops up from a paused descendant, no clock pause
+                            # ever fired without this.
+                            _self_exec_id = parent_execution_id
+                            _client = self.client
+                            if _self_exec_id and _client is not None:
+                                _waiting_reason = f"awaiting child {execution_id}"
+
+                                async def _push_self_waiting() -> None:
+                                    try:
+                                        await _client.notify_awaiter_status(
+                                            execution_id=_self_exec_id,
+                                            status="waiting",
+                                            reason=_waiting_reason,
+                                        )
+                                    except Exception as exc:
+                                        if self.dev_mode:
+                                            log_debug(
+                                                f"notify_awaiter_status(waiting) "
+                                                f"failed (swallowed): {exc}"
+                                            )
+
+                                async def _push_self_running() -> None:
+                                    try:
+                                        await _client.notify_awaiter_status(
+                                            execution_id=_self_exec_id,
+                                            status="running",
+                                            reason=_waiting_reason,
+                                        )
+                                    except Exception as exc:
+                                        if self.dev_mode:
+                                            log_debug(
+                                                f"notify_awaiter_status(running) "
+                                                f"failed (swallowed): {exc}"
+                                            )
+
+                                _wait_kwargs["on_child_waiting"] = _push_self_waiting
+                                _wait_kwargs["on_child_running"] = _push_self_running
+
+                        result = await self.client.wait_for_execution_result(
+                            **_wait_kwargs
+                        )
+
+                        elapsed_time = time.time() - start_time
+                        if self.dev_mode:
+                            log_debug(
+                                f"Async execute call completed in {elapsed_time:.2f} seconds"
+                            )
+
+                        if isinstance(result, dict) and "result" in result:
+                            return result["result"]
+                        return result
+
+                    except Exception as async_error:
+                        if self.dev_mode:
+                            log_debug(
+                                f"Async execution failed: {type(async_error).__name__}: {str(async_error)}"
+                            )
+
+                        # Never fall back on authorization errors (401/403) —
+                        # these are permanent failures that retrying won't fix.
+                        _err_status = getattr(async_error, "status", None)
+                        if _err_status in (401, 403):
+                            raise async_error
+
+                        # Never fall back when the failure happened AFTER the
+                        # reasoner already ran, OR when the user explicitly
+                        # cancelled. ExecutionFailedError means the call
+                        # reached the reasoner, the work executed, and the
+                        # reasoner returned an error — retrying via sync
+                        # would burn the same budget for the same outcome.
+                        # ExecutionTimeoutError means the work has already
+                        # used (or exceeded) its timeout budget on the agent
+                        # side; firing the same call again wastes another
+                        # full budget. ExecutionCancelledError means the user
+                        # told us to stop — silently re-issuing the call via
+                        # sync fallback would defeat the cancellation.
+                        from agentfield.exceptions import (
+                            ExecutionCancelledError,
+                            ExecutionFailedError,
+                            ExecutionTimeoutError,
+                        )
+                        if isinstance(
+                            async_error,
+                            (
+                                ExecutionFailedError,
+                                ExecutionTimeoutError,
+                                ExecutionCancelledError,
+                            ),
+                        ):
+                            if self.dev_mode:
+                                log_debug(
+                                    f"Skipping sync fallback for {type(async_error).__name__}: "
+                                    f"reasoner already ran or was cancelled by user"
+                                )
+                            raise async_error
+
+                        if not self.async_config.fallback_to_sync:
+                            raise async_error
+
+                        if self.dev_mode:
+                            log_debug(
+                                f"Falling back to sync execution for target: {target}"
+                            )
+
+            # Sync execution path (either by choice or as fallback)
+            if self.dev_mode and use_async_execution:
+                log_debug(f"Using sync execution as fallback for target: {target}")
+            elif self.dev_mode:
+                log_debug(f"Using sync execution for target: {target}")
+
+            # Wrap the execute call with timeout and progress monitoring
+            async def execute_with_monitoring():
+                try:
+                    result = await self.client.execute(
+                        target=target, input_data=final_kwargs, headers=headers
+                    )
+                    return result
+                except Exception as exec_error:
+                    if self.dev_mode:
+                        log_debug(
+                            f"Client execute failed: {type(exec_error).__name__}: {str(exec_error)}"
+                        )
+                    raise
+
+            # Add a timeout to prevent infinite hangs using configured allowance for long workflows
+            try:
+                result = await asyncio.wait_for(
+                    execute_with_monitoring(), timeout=execution_timeout
+                )
+                elapsed_time = time.time() - start_time
+                if self.dev_mode:
+                    log_debug(
+                        f"Sync execute call completed in {elapsed_time:.2f} seconds"
+                    )
+            except asyncio.TimeoutError:
+                elapsed_time = time.time() - start_time
+                log_debug(
+                    f"Execute call timed out after {elapsed_time:.2f} seconds (limit {execution_timeout:.0f}s)"
+                )
+                from agentfield.exceptions import ExecutionTimeoutError
+
+                raise ExecutionTimeoutError(
+                    f"Cross-agent call to {target} timed out after {int(execution_timeout)} seconds"
+                )
+
+            # Extract the actual result from the response and return as dict
+            if isinstance(result, dict):
+                if result.get("result") is not None:
+                    extracted_result = result["result"]
+                elif "body" in result:
+                    extracted_result = result["body"]
+                else:
+                    extracted_result = result
+            else:
+                extracted_result = result
+
+            # Always return dict/JSON - no schema conversion
+            return extracted_result
+
+        except Exception as e:
+            if self.dev_mode:
+                log_debug(
+                    f"Cross-agent call failed: {target} - {type(e).__name__}: {str(e)}"
+                )
+            raise
+
+    async def _get_async_execution_manager(self) -> AsyncExecutionManager:
+        """
+        Get or create the async execution manager instance.
+
+        Returns:
+            AsyncExecutionManager: The async execution manager instance
+        """
+        if self._async_execution_manager is None:
+            # Create async execution manager with the same base URL as the client
+            auth_headers = {"X-API-Key": self.api_key} if self.api_key else {}
+            self._async_execution_manager = AsyncExecutionManager(
+                base_url=self.agentfield_server,
+                config=self.async_config,
+                auth_headers=auth_headers,
+            )
+            # Start the manager
+            await self._async_execution_manager.start()
+
+            if self.dev_mode:
+                log_debug("AsyncExecutionManager initialized and started")
+
+        return self._async_execution_manager
+
+    async def _cleanup_async_resources(self) -> None:
+        """
+        Clean up async execution manager resources.
+
+        This method should be called during agent shutdown to properly
+        clean up async execution resources.
+        """
+        if self._async_execution_manager is not None:
+            try:
+                await self._async_execution_manager.stop()
+                self._async_execution_manager = None
+                if self.dev_mode:
+                    log_debug("AsyncExecutionManager stopped and cleaned up")
+            except Exception as e:
+                if self.dev_mode:
+                    log_debug(f"Error cleaning up AsyncExecutionManager: {e}")
+
+        if getattr(self, "client", None) is not None:
+            try:
+                await self.client.aclose()
+                if self.dev_mode:
+                    log_debug("AgentFieldClient resources closed")
+            except Exception as e:
+                if self.dev_mode:
+                    log_debug(f"Error closing AgentFieldClient resources: {e}")
+
+    def note(self, message: str, tags: List[str] = None) -> None:
+        """
+        Add a note to the current execution for debugging and tracking purposes.
+
+        This method sends a note to the AgentField server asynchronously without blocking
+        the current execution. The note is automatically associated with the current
+        execution context and can be viewed in the AgentField UI for debugging and monitoring.
+
+        Args:
+            message (str): The note message to log
+            tags (List[str], optional): Optional tags to categorize the note
+
+        Example:
+            ```python
+            @app.reasoner()
+            async def process_data(data: str) -> dict:
+                app.note("Starting data processing", ["debug", "processing"])
+
+                # Process data...
+                result = await some_processing(data)
+
+                app.note(f"Processing completed with {len(result)} items", ["info"])
+                return result
+            ```
+
+        Note:
+            This method is fire-and-forget and runs asynchronously in the background.
+            It will not block the current execution or raise exceptions that would
+            interrupt the workflow.
+        """
+        if tags is None:
+            tags = []
+
+        # Fire-and-forget async task
+        import asyncio
+
+        async def _send_note():
+            try:
+                # Get current execution context
+                current_context = self._get_current_execution_context()
+
+                # Prepare headers with execution context + auth
+                headers = current_context.to_headers()
+                headers.update(self.client._get_auth_headers())
+                headers["Content-Type"] = "application/json"
+
+                # Prepare payload
+                payload = {
+                    "message": message,
+                    "tags": tags,
+                    "timestamp": time.time(),
+                    "agent_node_id": self.node_id,
+                }
+
+                # Make async HTTP request to backend - use UI API endpoint to match frontend
+                try:
+                    import aiohttp
+
+                    timeout = aiohttp.ClientTimeout(total=5.0)  # 5 second timeout
+                    # Use UI API base URL to match where frontend fetches notes from
+                    # Replace the last occurrence of /api/v1 with /api/ui/v1
+                    ui_api_base = self.client.api_base.replace("/api/v1", "/api/ui/v1")
+
+                    if self.dev_mode:
+                        from agentfield.logger import log_debug
+
+                        log_debug(
+                            f"NOTE DEBUG: Original api_base: {self.client.api_base}"
+                        )
+                        log_debug(f"NOTE DEBUG: UI api_base: {ui_api_base}")
+                        log_debug(
+                            f"NOTE DEBUG: Full URL: {ui_api_base}/executions/note"
+                        )
+                        log_debug(f"NOTE DEBUG: Payload: {payload}")
+                        log_debug(f"NOTE DEBUG: Headers: {headers}")
+
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        async with session.post(
+                            f"{ui_api_base}/executions/note",
+                            json=payload,
+                            headers=headers,
+                        ) as response:
+                            if self.dev_mode:
+                                from agentfield.logger import log_debug
+
+                                response_text = await response.text()
+                                log_debug(
+                                    f"NOTE DEBUG: Response status: {response.status}"
+                                )
+                                log_debug(f"NOTE DEBUG: Response text: {response_text}")
+                                if response.status == 200:
+                                    log_debug(
+                                        f"✅ Note successfully sent to {ui_api_base}/executions/note"
+                                    )
+                                else:
+                                    log_debug(
+                                        f"❌ Note failed with status {response.status}: {response_text}"
+                                    )
+                except ImportError:
+                    # Fallback to requests if aiohttp not available
+                    import requests
+
+                    try:
+                        # Use UI API base URL to match where frontend fetches notes from
+                        ui_api_base = self.client.api_base.replace(
+                            "/api/v1", "/api/ui/v1"
+                        )
+
+                        if self.dev_mode:
+                            from agentfield.logger import log_debug
+
+                            log_debug(
+                                f"NOTE DEBUG (requests): Original api_base: {self.client.api_base}"
+                            )
+                            log_debug(
+                                f"NOTE DEBUG (requests): UI api_base: {ui_api_base}"
+                            )
+                            log_debug(
+                                f"NOTE DEBUG (requests): Full URL: {ui_api_base}/executions/note"
+                            )
+
+                        response = requests.post(
+                            f"{ui_api_base}/executions/note",
+                            json=payload,
+                            headers=headers,
+                            timeout=5.0,
+                        )
+                        if self.dev_mode:
+                            from agentfield.logger import log_debug
+
+                            log_debug(
+                                f"NOTE DEBUG (requests): Response status: {response.status_code}"
+                            )
+                            log_debug(
+                                f"NOTE DEBUG (requests): Response text: {response.text}"
+                            )
+                            if response.status_code == 200:
+                                log_debug(
+                                    f"✅ Note successfully sent to {ui_api_base}/executions/note"
+                                )
+                            else:
+                                log_debug(
+                                    f"❌ Note failed with status {response.status_code}: {response.text}"
+                                )
+                    except Exception as e:
+                        if self.dev_mode:
+                            from agentfield.logger import log_debug
+
+                            log_debug(f"Note request failed: {type(e).__name__}: {e}")
+
+            except Exception as e:
+                # Silently handle errors to avoid interrupting main workflow
+                if self.dev_mode:
+                    from agentfield.logger import log_debug
+
+                    log_debug(f"Failed to send note: {type(e).__name__}: {e}")
+
+        # Create task without awaiting (fire-and-forget)
+        try:
+            # Try to get current event loop
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # If we're in an async context, create a task
+                loop.create_task(_send_note())
+            else:
+                # If no loop is running, run in a new thread
+                import threading
+
+                thread = threading.Thread(target=lambda: asyncio.run(_send_note()))
+                thread.daemon = True
+                thread.start()
+        except RuntimeError:
+            # No event loop available, run in a new thread
+            import threading
+
+            thread = threading.Thread(target=lambda: asyncio.run(_send_note()))
+            thread.daemon = True
+            thread.start()
+
+    async def pause(
+        self,
+        approval_request_id: str,
+        approval_request_url: str = "",
+        expires_in_hours: int = 72,
+        timeout: Optional[float] = None,
+        execution_id: Optional[str] = None,
+    ) -> ApprovalResult:
+        """Pause the current execution for external approval.
+
+        Transitions the execution to "waiting" on the control plane, then
+        blocks until the approval webhook callback resolves it or the timeout
+        is reached.
+
+        The agent is responsible for creating the approval request on an
+        external service (e.g. hax-sdk) *before* calling this method and
+        passing the resulting ``approval_request_id``.
+
+        Args:
+            approval_request_id: ID of the approval request on the external service.
+            approval_request_url: URL where the human can review the request.
+            expires_in_hours: Expiry passed to the control plane.
+            timeout: Max seconds to wait.  ``None`` defaults to ``expires_in_hours``.
+            execution_id: Override the current execution.  Defaults to active context.
+
+        Returns:
+            ApprovalResult with the human's decision and feedback.
+            If the timeout elapses without resolution, returns
+            ``ApprovalResult(decision="expired")``.
+
+        Raises:
+            AgentFieldClientError: If the control plane request fails or the agent is not serving.
+        """
+        from agentfield.exceptions import AgentFieldClientError
+
+        # Resolve execution_id from context if not provided
+        if not execution_id:
+            ctx = self._get_current_execution_context()
+            execution_id = ctx.execution_id
+
+        if not execution_id:
+            raise AgentFieldClientError("No execution_id available — cannot pause")
+
+        # Build the callback URL from the agent's base URL
+        if not self.base_url:
+            raise AgentFieldClientError(
+                "Agent is not serving — call app.serve() before app.pause(). "
+                "The callback URL is required for the control plane to notify "
+                "the agent when the approval resolves."
+            )
+        callback_url = f"{self.base_url}/webhooks/approval"
+
+        # Register a future *before* telling the CP, so we don't miss a fast callback
+        future = await self._pause_manager.register(approval_request_id, execution_id)
+
+        # Tell the CP to transition to "waiting"
+        try:
+            await self.client.request_approval(
+                execution_id=execution_id,
+                approval_request_id=approval_request_id,
+                approval_request_url=approval_request_url,
+                callback_url=callback_url,
+                expires_in_hours=expires_in_hours,
+            )
+        except Exception:
+            # Clean up the future if we couldn't even tell the CP
+            await self._pause_manager.resolve(
+                approval_request_id,
+                ApprovalResult(
+                    decision="error",
+                    feedback="failed to notify control plane",
+                    execution_id=execution_id,
+                    approval_request_id=approval_request_id,
+                ),
+            )
+            raise
+
+        self.note(
+            f"Execution paused — waiting for approval {approval_request_id}",
+            tags=["approval", "waiting"],
+        )
+
+        effective_timeout = (
+            timeout if timeout is not None else expires_in_hours * 3600.0
+        )
+        # Tell the reasoner-level watchdog to discount this wait from the
+        # active-time budget. ``end_pause`` runs on every exit path (including
+        # the timeout branch) so the clock never gets stuck open.
+        pause_clock = self._pause_clocks.get(execution_id)
+        if pause_clock is not None:
+            pause_clock.start_pause()
+        try:
+            result = await asyncio.wait_for(future, timeout=effective_timeout)
+        except asyncio.TimeoutError:
+            # Timeout is a normal outcome — return an "expired" result instead of raising.
+            expired_result = ApprovalResult(
+                decision="expired",
+                feedback="timed out waiting for approval",
+                execution_id=execution_id,
+                approval_request_id=approval_request_id,
+            )
+            await self._pause_manager.resolve(approval_request_id, expired_result)
+            return expired_result
+        finally:
+            if pause_clock is not None:
+                pause_clock.end_pause()
+
+        return result
+
+    async def wait_for_resume(
+        self,
+        approval_request_id: str,
+        execution_id: Optional[str] = None,
+        timeout: Optional[float] = None,
+    ) -> ApprovalResult:
+        """Wait for a previously-initiated pause to resolve.
+
+        Use for crash recovery: the approval was already requested (the
+        execution is already ``waiting`` on the CP) and we just need to wait
+        for the callback.  Does *not* call the CP again.
+
+        If the webhook callback does not arrive within *timeout*, falls back to
+        a single status poll via the control plane.
+
+        Args:
+            approval_request_id: The known approval request ID to wait for.
+            execution_id: Execution ID.  Defaults to active context.
+            timeout: Max seconds to wait.
+
+        Returns:
+            ApprovalResult with the resolution.
+        """
+        from agentfield.exceptions import AgentFieldClientError
+
+        if not execution_id:
+            ctx = self._get_current_execution_context()
+            execution_id = ctx.execution_id
+
+        future = await self._pause_manager.register(
+            approval_request_id, execution_id or ""
+        )
+
+        effective_timeout = timeout if timeout is not None else 72 * 3600.0
+        pause_clock = self._pause_clocks.get(execution_id or "")
+        if pause_clock is not None:
+            pause_clock.start_pause()
+        try:
+            result = await asyncio.wait_for(future, timeout=effective_timeout)
+            return result
+        except asyncio.TimeoutError:
+            pass
+        finally:
+            if pause_clock is not None:
+                pause_clock.end_pause()
+
+        # Fallback: poll CP once
+        try:
+            status_resp = await self.client.get_approval_status(execution_id or "")
+            if status_resp.status != "pending":
+                return ApprovalResult(
+                    decision=status_resp.status,
+                    execution_id=execution_id or "",
+                    approval_request_id=approval_request_id,
+                    raw_response=status_resp.response,
+                )
+        except AgentFieldClientError:
+            pass
+
+        return ApprovalResult(
+            decision="expired",
+            feedback="approval timed out without response",
+            execution_id=execution_id or "",
+            approval_request_id=approval_request_id,
+        )
+
+    def _get_current_execution_context(self) -> ExecutionContext:
+        """
+        Get the current execution context, creating a new one if none exists.
+
+        This method checks thread-local context first (most reliable) and falls back
+        to agent-level context for proper parent-child relationship tracking.
+
+        Returns:
+            ExecutionContext: Current or new execution context
+        """
+        # Check thread-local context first (most reliable)
+        from agentfield.execution_context import get_current_context
+
+        thread_local_context = get_current_context()
+
+        if thread_local_context:
+            # Sync agent-level with thread-local
+            self._current_execution_context = thread_local_context
+            return thread_local_context
+
+        # Fall back to agent-level context
+        if self._current_execution_context:
+            return self._current_execution_context
+
+        # Create new context if none exists and cache it
+        new_context = ExecutionContext.create_new(
+            agent_node_id=self.node_id, workflow_name=f"{self.node_id}_workflow"
+        )
+        self._current_execution_context = new_context
+        return new_context
+
+    def _get_target_return_type(self, target: str) -> Optional[Type]:
+        """
+        Get the return type for a target reasoner.
+
+        Args:
+            target: Target in format 'node_id.reasoner_name'
+
+        Returns:
+            The return type class if found, None otherwise
+        """
+        function_name = target.split(".", 1)[-1] if "." in target else target
+
+        # Prefer the dedicated mapping populated during decorator registration
+        return_type_map = getattr(self, "_reasoner_return_types", None)
+        if return_type_map:
+            return_type = return_type_map.get(function_name)
+            if return_type is not None:
+                return return_type
+
+        # Fallback for legacy metadata that may still include return_type directly
+        for reasoner in self.reasoners:
+            if reasoner.get("id") == function_name:
+                stored_type = reasoner.get("return_type")
+                if stored_type is not None:
+                    return stored_type
+
+        return None
+
+    def _convert_response_to_schema(self, response_data: Any, return_type: Type) -> Any:
+        """
+        Convert JSON response data back to the original Pydantic schema.
+
+        Args:
+            response_data: The JSON response data (usually a dict)
+            return_type: The target return type to convert to
+
+        Returns:
+            The converted response in the original schema format
+        """
+        try:
+            # Import here to avoid circular imports
+            from pydantic import BaseModel
+
+            # If return_type is a Pydantic model, convert the dict to the model
+            if (
+                isinstance(return_type, type)
+                and issubclass(return_type, BaseModel)
+                and isinstance(response_data, dict)
+            ):
+                return return_type(**response_data)
+
+            # If it's not a Pydantic model or not a dict, return as-is
+            return response_data
+
+        except Exception as e:
+            # If conversion fails, log the error and return the original data
+            if self.dev_mode:
+                log_error(f"Schema conversion failed for {return_type}: {e}")
+                log_debug(f"Schema conversion response data: {response_data}")
+            return response_data
+
+    @classmethod
+    def get_current(cls) -> Optional["Agent"]:
+        """
+        Get the current agent instance.
+
+        This method is used to access the current agent's execution context.
+        It uses a thread-local storage pattern to track the current agent instance.
+
+        Returns:
+            Current Agent instance or None if no agent is active
+        """
+        # For now, we'll use a simple class variable approach
+        # In a more complex implementation, this could use thread-local storage
+        return getattr(cls, "_current_agent", None)
+
+    def _set_as_current(self) -> None:
+        """Set this agent as the current agent instance."""
+        Agent._current_agent = self
+        set_current_agent(self)
+
+    def _clear_current(self) -> None:
+        """Clear the current agent instance."""
+        if hasattr(Agent, "_current_agent"):
+            delattr(Agent, "_current_agent")
+        # Also clear from thread-local storage
+        clear_current_agent()
+
+    async def stop(self) -> None:
+        """
+        Programmatically stop the agent and clean up resources.
+
+        This method performs a graceful shutdown by:
+        1. Marking the agent as shutting down and its status as OFFLINE.
+        2. Stopping the heartbeat background worker.
+        3. Notifying the AgentField control plane that the agent is shutting down.
+        4. Cleaning up resources and event subscriptions.
+
+        The method is idempotent; calling it multiple times has no additional effect.
+
+        Example:
+            ```python
+            app = Agent("my_agent")
+            # ... start agent in a background task or loop ...
+
+            # Later, shut down cleanly
+            await app.stop()
+            ```
+        """
+        if getattr(self, "_shutdown_requested", False):
+            # Already shutting down or stopped
+            return
+
+        self._shutdown_requested = True
+
+        from agentfield.types import AgentStatus
+
+        self._current_status = AgentStatus.OFFLINE
+
+        if hasattr(self, "agentfield_handler") and self.agentfield_handler:
+            try:
+                self.agentfield_handler.stop_heartbeat()
+            except Exception as e:
+                if self.dev_mode:
+                    from agentfield.logger import log_error
+
+                    log_error(f"Heartbeat stop error during stop(): {e}")
+
+        try:
+            if (
+                getattr(self, "agentfield_connected", False)
+                and hasattr(self, "client")
+                and self.client
+            ):
+                success = await self.client.notify_graceful_shutdown(self.node_id)
+                if self.dev_mode:
+                    from agentfield.logger import log_info
+
+                    state = "sent" if success else "failed"
+                    log_info(f"Shutdown notification {state}")
+        except Exception as e:
+            if self.dev_mode:
+                from agentfield.logger import log_error
+
+                log_error(f"Shutdown notification error during stop(): {e}")
+
+        try:
+            if getattr(self, "connection_manager", None):
+                await self.connection_manager.stop()
+        except Exception as e:
+            if self.dev_mode:
+                from agentfield.logger import log_error
+
+                log_error(f"Connection manager stop error during stop(): {e}")
+
+        try:
+            if getattr(self, "memory_event_client", None):
+                await self.memory_event_client.close()
+        except Exception as e:
+            if self.dev_mode:
+                from agentfield.logger import log_error
+
+                log_error(f"Memory event client close error during stop(): {e}")
+
+        try:
+            await self._cleanup_async_resources()
+        except Exception as e:
+            if self.dev_mode:
+                from agentfield.logger import log_error
+
+                log_error(f"Resource cleanup error during stop(): {e}")
+
+        try:
+            self._clear_current()
+        except Exception as e:
+            if self.dev_mode:
+                from agentfield.logger import log_error
+
+                log_error(f"Registry clear error during stop(): {e}")
+
+        if self.dev_mode:
+            from agentfield.logger import log_success
+
+            log_success("Agent programmatically stopped")
+
+    def _emit_workflow_event_sync(
+        self,
+        context: ExecutionContext,
+        component_id: str,
+        status: str,
+        *,
+        input_data: Optional[Dict[str, Any]] = None,
+        result: Optional[Any] = None,
+        error: Optional[str] = None,
+        duration_ms: Optional[int] = None,
+        parent_execution_id: Optional[str] = None,
+    ) -> None:
+        """Best-effort synchronous workflow event emitter for local skill calls."""
+
+        if not self.agentfield_server:
+            return
+
+        try:
+            import requests
+        except ImportError:
+            if self.dev_mode:
+                log_warn(
+                    "requests library unavailable, skipping workflow event emission"
+                )
+            return
+
+        payload: Dict[str, Any] = {
+            "execution_id": context.execution_id,
+            "workflow_id": context.workflow_id,
+            "run_id": context.run_id,
+            "reasoner_id": component_id,
+            "type": component_id,
+            "agent_node_id": self.node_id,
+            "status": status,
+            "parent_execution_id": parent_execution_id,
+            "parent_workflow_id": context.parent_workflow_id or context.workflow_id,
+        }
+
+        if input_data is not None:
+            payload["input_data"] = jsonable_encoder(input_data)
+        if result is not None:
+            payload["result"] = jsonable_encoder(result)
+        if error is not None:
+            payload["error"] = error
+        if duration_ms is not None:
+            payload["duration_ms"] = duration_ms
+
+        url = self.agentfield_server.rstrip("/") + "/api/v1/workflow/executions/events"
+        try:
+            headers = {"Content-Type": "application/json"}
+            if self.api_key:
+                headers["X-API-Key"] = self.api_key
+            response = requests.post(url, json=payload, headers=headers, timeout=5)
+            if response.status_code >= 400 and self.dev_mode:
+                log_warn(
+                    f"Workflow event ({status}) for {component_id} failed: {response.status_code} {response.text}"
+                )
+        except Exception as exc:
+            if self.dev_mode:
+                log_warn(f"Failed to emit workflow event for {component_id}: {exc}")
+
+    def _setup_signal_handlers(
+        self,
+    ) -> None:  # pragma: no cover - requires signal integration
+        """Delegate to server handler for signal setup"""
+        return self.server_handler.setup_signal_handlers()
+
+    def _signal_handler(
+        self, signum: int, frame
+    ) -> None:  # pragma: no cover - runtime signal handling
+        """Delegate to server handler for signal handling"""
+        return self.server_handler.signal_handler(signum, frame)
+
+    def __del__(self) -> None:  # pragma: no cover - destructor best effort
+        """
+        Destructor to ensure cleanup happens even if signals are missed.
+
+        This serves as a fallback cleanup mechanism.
+        """
+        try:
+            # Cleanup async execution manager if it exists
+            if (
+                hasattr(self, "_async_execution_manager")
+                and self._async_execution_manager
+            ):
+                try:
+                    # Try to cleanup async resources in a new event loop
+                    import asyncio
+
+                    asyncio.run(self._cleanup_async_resources())
+                except Exception:
+                    # Ignore async cleanup errors in destructor
+                    pass
+
+            # Clear agent from thread-local storage as final cleanup
+            clear_current_agent()
+        except Exception:
+            # Ignore errors in destructor to prevent warnings during garbage collection
+            pass
+
+    def discover(
+        self,
+        agent: Optional[str] = None,
+        node_id: Optional[str] = None,
+        agent_ids: Optional[List[str]] = None,
+        node_ids: Optional[List[str]] = None,
+        reasoner: Optional[str] = None,
+        skill: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        include_input_schema: bool = False,
+        include_output_schema: bool = False,
+        include_descriptions: bool = True,
+        include_examples: bool = False,
+        format: str = "json",
+        health_status: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+    ) -> "DiscoveryResult":
+        """
+        Discover available agent capabilities from the control plane.
+        """
+
+        if not self.client:
+            from agentfield.exceptions import AgentFieldClientError
+
+            raise AgentFieldClientError("AgentField client is not configured")
+
+        return self.client.discover_capabilities(
+            agent=agent,
+            node_id=node_id,
+            agent_ids=agent_ids,
+            node_ids=node_ids,
+            reasoner=reasoner,
+            skill=skill,
+            tags=tags,
+            include_input_schema=include_input_schema,
+            include_output_schema=include_output_schema,
+            include_descriptions=include_descriptions,
+            include_examples=include_examples,
+            format=format,
+            health_status=health_status,
+            limit=limit,
+            offset=offset,
+        )
+
+    def run(self, **serve_kwargs):
+        """
+        Universal entry point - auto-detects CLI vs server mode.
+
+        This method intelligently determines whether to run in CLI mode or server mode
+        based on command-line arguments. It provides a seamless developer experience
+        where the same code can be used for both interactive CLI usage and production
+        server deployment.
+
+        CLI mode is activated when sys.argv contains commands like:
+        - 'call': Execute a specific function
+        - 'list': List all available functions
+        - 'shell': Launch interactive IPython shell
+        - 'help': Show help for a specific function
+
+        Server mode is activated otherwise, starting the FastAPI server.
+
+        Args:
+            **serve_kwargs: Keyword arguments passed to serve() method in server mode.
+                          Common options include:
+                          - port: Server port (default: auto-detected)
+                          - host: Server host (default: "0.0.0.0")
+                          - dev: Enable development mode (default: False)
+                          - auto_port: Auto-find available port (default: False)
+
+        Example:
+            ```python
+            from agentfield import Agent
+
+            app = Agent(node_id="my_agent")
+
+            @app.reasoner()
+            async def analyze(text: str) -> dict:
+                return {"result": text.upper()}
+
+            @app.skill()
+            def get_status() -> dict:
+                return {"status": "active"}
+
+            if __name__ == "__main__":
+                # Single entry point for both CLI and server
+                app.run()
+
+            # CLI usage:
+            # python main.py list
+            # python main.py call analyze --text "hello world"
+            # python main.py shell
+            # python main.py help analyze
+
+            # Server usage:
+            # python main.py
+            # python main.py --port 8080 --dev
+            ```
+
+        Note:
+            - CLI mode runs functions directly without starting a server
+            - Server mode starts the FastAPI server for production use
+            - The mode is automatically detected from command-line arguments
+            - No code changes needed to switch between modes
+        """
+        import sys
+
+        # Check if CLI mode is requested
+        if len(sys.argv) > 1 and sys.argv[1] in ["call", "list", "shell", "help"]:
+            # Run in CLI mode
+            self.cli_handler.run_cli()
+        else:
+            # Run in server mode
+            self.serve(**serve_kwargs)
+
+    def _add_local_verification_middleware(self):
+        """Add FastAPI middleware for local DID signature verification."""
+        from starlette.middleware.base import BaseHTTPMiddleware
+        from starlette.responses import JSONResponse as StarletteJSONResponse
+
+        agent = self
+
+        class LocalVerificationMiddleware(BaseHTTPMiddleware):
+            async def dispatch(self, request, call_next):
+                path = request.url.path
+
+                # Only verify execution endpoints (reasoners and skills)
+                if not (path.startswith("/reasoners/") or path.startswith("/skills/")):
+                    return await call_next(request)
+
+                verifier = agent._local_verifier
+                if verifier is None:
+                    return await call_next(request)
+
+                # Extract function name from path
+                parts = path.strip("/").split("/")
+                function_name = parts[-1] if len(parts) >= 2 else ""
+
+                # Check if function requires realtime validation (skip local)
+                if function_name in agent._realtime_validation_functions:
+                    return await call_next(request)
+
+                # Refresh cache if stale
+                if verifier.needs_refresh:
+                    try:
+                        await verifier.refresh()
+                    except Exception as e:
+                        log_warn(f"Failed to refresh local verifier cache: {e}")
+
+                # Extract DID auth headers
+                caller_did = request.headers.get("X-Caller-DID", "")
+                signature = request.headers.get("X-DID-Signature", "")
+                timestamp = request.headers.get("X-DID-Timestamp", "")
+                nonce = request.headers.get("X-DID-Nonce", "")
+
+                # C4: DID authentication is required for all execution endpoints
+                if not caller_did:
+                    return StarletteJSONResponse(
+                        status_code=401,
+                        content={
+                            "error": "did_auth_required",
+                            "message": "DID authentication required for this endpoint",
+                        },
+                    )
+
+                # C5: Signature is required when caller DID is provided
+                if not signature:
+                    return StarletteJSONResponse(
+                        status_code=401,
+                        content={
+                            "error": "signature_required",
+                            "message": "DID signature required when caller DID is provided",
+                        },
+                    )
+
+                # Check revocation
+                if verifier.check_revocation(caller_did):
+                    return StarletteJSONResponse(
+                        status_code=403,
+                        content={
+                            "error": "did_revoked",
+                            "message": f"Caller DID {caller_did} has been revoked",
+                        },
+                    )
+
+                # Check registration — reject DIDs not registered with the control plane
+                if not verifier.check_registration(caller_did):
+                    return StarletteJSONResponse(
+                        status_code=403,
+                        content={
+                            "error": "did_not_registered",
+                            "message": f"Caller DID {caller_did} is not registered with the control plane",
+                        },
+                    )
+
+                # Verify signature
+                body = await request.body()
+                if not verifier.verify_signature(
+                    caller_did, signature, timestamp, body, nonce
+                ):
+                    return StarletteJSONResponse(
+                        status_code=401,
+                        content={
+                            "error": "signature_invalid",
+                            "message": "DID signature verification failed",
+                        },
+                    )
+
+                # C6: Evaluate access policies
+                # Caller tags cannot be resolved at agent-side middleware level
+                # (would require a control plane lookup). Pass empty array — policies
+                # that require specific caller tags will not match, which is correct
+                # fail-open behavior. The control plane remains the primary policy
+                # enforcement point with full caller context.
+                agent_tags = getattr(agent, "agent_tags", []) or []
+                func_name = (
+                    request.url.path.rstrip("/").split("/")[-1]
+                    if request.url.path
+                    else ""
+                )
+                if not verifier.evaluate_policy([], agent_tags, func_name, {}):
+                    return StarletteJSONResponse(
+                        status_code=403,
+                        content={
+                            "error": "policy_denied",
+                            "message": "Access denied by cached policy",
+                        },
+                    )
+
+                return await call_next(request)
+
+        self.add_middleware(LocalVerificationMiddleware)
+
+    def serve(  # pragma: no cover - requires full server runtime integration
+        self,
+        port: Optional[int] = None,
+        host: str = "0.0.0.0",
+        dev: bool = False,
+        heartbeat_interval: int = 2,
+        auto_port: bool = False,
+        **kwargs,
+    ):
+        """
+        Start the agent node server with intelligent port management and AgentField integration.
+
+        This method launches the agent as a FastAPI server that can receive reasoner and skill
+        requests from other agents via the AgentField execution gateway. It handles automatic
+        registration with the AgentField server, heartbeat management, and graceful shutdown.
+
+        The server provides:
+        - RESTful endpoints for all registered reasoners and skills
+        - Health check endpoints for monitoring
+        - Automatic AgentField server registration and heartbeat
+        - Graceful shutdown with proper cleanup
+
+        Args:
+            port (int, optional): The port on which the agent server will listen.
+                                If None, uses the port from agent configuration or auto-discovers.
+                                Common ports: 8000, 8001, 8080, etc.
+            host (str): The host address for the agent server. Defaults to "0.0.0.0".
+                       Use "127.0.0.1" for localhost-only access.
+            dev (bool): If True, enables development mode features including:
+                       - Enhanced logging and debug output
+                       - Auto-reload on code changes (if supported)
+                       - Detailed error messages
+                       - Additional debugging information
+            heartbeat_interval (int): The interval in seconds for sending heartbeats to the AgentField server.
+                                    Defaults to 2 seconds. Lower values provide faster failure detection
+                                    but increase network overhead.
+            auto_port (bool): If True, automatically find an available port starting from the
+                            specified port (or default). Useful for development environments
+                            where multiple agents may be running.
+            **kwargs: Additional keyword arguments to pass to `uvicorn.run`, such as:
+                     - reload: Enable auto-reload on code changes
+                     - workers: Number of worker processes
+                     - log_level: Logging level ("debug", "info", "warning", "error")
+                     - ssl_keyfile: Path to SSL key file for HTTPS
+                     - ssl_certfile: Path to SSL certificate file for HTTPS
+
+        Example:
+            ```python
+            # Basic agent server
+            app = Agent("my_agent")
+
+            @app.reasoner()
+            async def process_data(data: str) -> dict:
+                '''Process incoming data and return results.'''
+                return {"processed": data.upper(), "length": len(data)}
+
+            @app.skill()
+            def get_status() -> dict:
+                '''Get current agent status.'''
+                return {"status": "active", "timestamp": datetime.now().isoformat()}
+
+            # Start server on default port
+            app.serve()
+
+            # Start server with custom configuration
+            app.serve(
+                port=8080,
+                host="127.0.0.1",
+                dev=True,
+                heartbeat_interval=5,
+                auto_port=True,
+                reload=True,
+                log_level="debug"
+            )
+
+            # Production server with SSL
+            app.serve(
+                port=443,
+                host="0.0.0.0",
+                ssl_keyfile="/path/to/key.pem",
+                ssl_certfile="/path/to/cert.pem",
+                workers=4
+            )
+            ```
+
+        Server Endpoints:
+            Once running, the agent exposes these endpoints:
+            - `POST /reasoners/{reasoner_name}`: Execute reasoner functions
+            - `POST /skills/{skill_name}`: Execute skill functions
+            - `GET /health`: Health check endpoint
+            - `GET /docs`: Interactive API documentation (Swagger UI)
+            - `GET /redoc`: Alternative API documentation
+
+        Integration with AgentField:
+            - Automatically registers with AgentField server on startup
+            - Sends periodic heartbeats to maintain connection
+            - Receives execution requests via AgentField's routing system
+            - Participates in workflow tracking and DAG building
+            - Handles cross-agent communication seamlessly
+
+        Lifecycle:
+            1. Server initialization and route setup
+            2. AgentField server registration
+            4. Heartbeat loop starts
+            5. Ready to receive requests
+            6. Graceful shutdown on SIGINT/SIGTERM
+            7. AgentField server deregistration
+
+        Note:
+            - The server runs indefinitely until interrupted (Ctrl+C)
+            - All registered reasoners and skills become available as REST endpoints
+            - Memory and execution context are automatically managed
+            - Use `dev=True` for development, `dev=False` for production
+        """
+        return self.server_handler.serve(
+            port=port,
+            host=host,
+            dev=dev,
+            heartbeat_interval=heartbeat_interval,
+            auto_port=auto_port,
+            **kwargs,
+        )

@@ -1,0 +1,12 @@
+FROM golang:1.25-alpine
+
+WORKDIR /workspace
+
+COPY sdk/go /tmp/go-sdk
+
+RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/go/pkg/mod \
+    cd /tmp/go-sdk && go mod download && go test ./...
+
+ENV GO111MODULE=on
+
+CMD ["sh", "-c", "echo 'AgentField Go agent image ready. Mount or COPY your agent source and override CMD to run it.' && tail -f /dev/null"]

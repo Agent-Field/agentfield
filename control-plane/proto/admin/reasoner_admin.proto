@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package admin.v1;
+
+option go_package = "github.com/Agent-Field/agentfield/control-plane/pkg/adminpb;adminpb";
+
+// AdminReasonerService exposes control-surface operations for reasoning components.
+service AdminReasonerService {
+  // ListReasoners returns the set of registered reasoners and their parent nodes.
+  rpc ListReasoners(ListReasonersRequest) returns (ListReasonersResponse);
+}
+
+message ListReasonersRequest {}
+
+message Reasoner {
+  string reasoner_id = 1;
+  string agent_node_id = 2;
+  string name = 3;
+  string description = 4;
+  string status = 5;
+  string node_version = 6;
+  string last_heartbeat = 7;
+}
+
+message ListReasonersResponse {
+  repeated Reasoner reasoners = 1;
+}

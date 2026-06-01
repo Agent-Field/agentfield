@@ -1,0 +1,182 @@
+name: Functional Tests
+
+on:
+  push:
+    branches:
+      - testing
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      storage_mode:
+        description: 'Storage mode to test'
+        required: false
+        default: 'both'
+        type: choice
+        options:
+          - both
+          - local
+          - postgres
+      openrouter_model:
+        description: 'OpenRouter model to use'
+        required: false
+        default: 'openrouter/google/gemini-2.5-flash-lite'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  functional-tests:
+    name: Functional Tests (${{ matrix.storage_mode }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        storage_mode:
+          - local
+          - postgres
+    
+    env:
+      # Only provide OpenRouter API key for push events and internal PRs (not from forks)
+      OPENROUTER_API_KEY: ${{ ((github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false)) && secrets.OPENROUTER_API_KEY) || '' }}
+      OPENROUTER_MODEL: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.openrouter_model) || 'openrouter/google/gemini-2.5-flash-lite' }}
+      # For fork PRs, skip OpenRouter-dependent tests via a quoted marker expression.
+      # NOTE: quotes inside a single env var like PYTEST_ARGS do NOT survive shell word-splitting.
+      PYTEST_MARK_EXPR: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true && 'not openrouter') || '' }}
+      PYTEST_ARGS: -v
+      DOCKER_BUILDKIT: 1
+      COMPOSE_DOCKER_CLI_BUILD: 1
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Prepare artifact directories
+        run: |
+          mkdir -p test-reports tests/functional/logs
+          chmod -R 777 test-reports tests/functional/logs
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Cache Docker layers
+        uses: actions/cache@v3
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+      
+      - name: Verify test configuration
+        run: |
+          EVENT_NAME="${{ github.event_name }}"
+          IS_FORK="${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork) || 'false' }}"
+
+          if [ "$IS_FORK" = "true" ]; then
+            echo "ℹ️  External contributor PR detected"
+            echo "✓ Running 24/26 functional tests (skipping 2 OpenRouter-dependent tests)"
+            echo "✓ Tests requiring OpenRouter will be skipped: -m \"not openrouter\""
+          elif [ "$EVENT_NAME" = "push" ] || [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ -z "$OPENROUTER_API_KEY" ]; then
+              echo "::error::OPENROUTER_API_KEY secret is not set"
+              echo "Please add your OpenRouter API key as a repository secret"
+              exit 1
+            fi
+            echo "ℹ️  Push event or manual workflow dispatch detected"
+            echo "✓ Running all 26 functional tests (including OpenRouter tests)"
+            echo "✓ OPENROUTER_API_KEY is configured"
+            echo "✓ OPENROUTER_MODEL: $OPENROUTER_MODEL"
+          else
+            if [ -z "$OPENROUTER_API_KEY" ]; then
+              echo "ℹ️  Pull request without OpenRouter secret detected"
+              echo "✓ Running 24/26 functional tests (skipping 2 OpenRouter-dependent tests)"
+              echo "✓ Tests requiring OpenRouter will be skipped: -m \"not openrouter\""
+              echo "PYTEST_MARK_EXPR=not openrouter" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            echo "ℹ️  Internal PR detected"
+            echo "✓ Running all 26 functional tests (including OpenRouter tests)"
+            echo "✓ OPENROUTER_API_KEY is configured"
+            echo "✓ OPENROUTER_MODEL: $OPENROUTER_MODEL"
+          fi
+
+      - name: Run functional tests (${{ matrix.storage_mode }})
+        run: |
+          cd tests/functional
+          if [ "${{ matrix.storage_mode }}" = "local" ]; then
+            docker compose -f docker/docker-compose.local.yml up \
+              --build \
+              --abort-on-container-exit \
+              --exit-code-from test-runner
+          else
+            docker compose -f docker/docker-compose.postgres.yml up \
+              --build \
+              --abort-on-container-exit \
+              --exit-code-from test-runner
+          fi
+      
+      - name: Collect functional logs and reports
+        if: always()
+        run: |
+          mkdir -p test-reports
+          # Copy logs from mounted volume
+          if [ -f tests/functional/logs/functional-tests.log ]; then
+            cp tests/functional/logs/functional-tests.log test-reports/functional-tests-${{ matrix.storage_mode }}.log
+          fi
+          # Extract JUnit XML from container
+          cd tests/functional
+          CONTAINER_NAME="agentfield-test-runner-${{ matrix.storage_mode }}"
+          docker cp ${CONTAINER_NAME}:/reports/junit-${{ matrix.storage_mode }}.xml ../../test-reports/ 2>/dev/null || echo "No JUnit report found in container"
+      
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ matrix.storage_mode }}
+          path: test-reports/
+          retention-days: 1
+      
+      - name: Upload logs
+        if: failure()
+        run: |
+          mkdir -p logs
+          cd tests/functional
+          docker compose -f docker/docker-compose.${{ matrix.storage_mode }}.yml logs > ../../logs/docker-${{ matrix.storage_mode }}.log || true
+      
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.storage_mode }}
+          path: logs/
+          retention-days: 1
+      
+      - name: Cleanup
+        if: always()
+        run: |
+          cd tests/functional
+          docker compose -f docker/docker-compose.${{ matrix.storage_mode }}.yml down -v || true
+  
+  test-summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: functional-tests
+    if: always()
+    
+    steps:
+      - name: Check test results
+        run: |
+          if [ "${{ needs.functional-tests.result }}" = "failure" ]; then
+            echo "::error::Functional tests failed"
+            exit 1
+          elif [ "${{ needs.functional-tests.result }}" = "cancelled" ]; then
+            echo "::warning::Functional tests were cancelled"
+            exit 1
+          else
+            echo "✅ All functional tests passed"
+          fi

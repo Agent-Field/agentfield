@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentfield-control-plane
+spec:
+  template:
+    spec:
+      containers:
+        - name: control-plane
+          env:
+            - name: AGENTFIELD_STORAGE_MODE
+              value: "postgres"
+            - name: AGENTFIELD_STORAGE_POSTGRES_HOST
+              value: agentfield-postgres
+            - name: AGENTFIELD_STORAGE_POSTGRES_PORT
+              value: "5432"
+            - name: AGENTFIELD_STORAGE_POSTGRES_SSLMODE
+              value: "disable"
+            - name: AGENTFIELD_STORAGE_POSTGRES_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: agentfield-postgres-auth
+                  key: database
+            - name: AGENTFIELD_STORAGE_POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: agentfield-postgres-auth
+                  key: username
+            - name: AGENTFIELD_STORAGE_POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: agentfield-postgres-auth
+                  key: password
+

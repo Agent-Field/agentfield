@@ -1,0 +1,19 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Install the local AgentField Python SDK (from this repo) + deps.
+COPY sdk/python /tmp/python-sdk
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir /tmp/python-sdk && \
+    rm -rf /tmp/python-sdk
+
+# Copy the demo agent source.
+COPY examples/python_agent_nodes/docker_hello_world /app
+
+EXPOSE 8001
+CMD ["python", "main.py"]
+

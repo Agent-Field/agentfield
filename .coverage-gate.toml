@@ -1,0 +1,61 @@
+# Coverage gate configuration for AgentField.
+#
+# This file is read by scripts/coverage-gate.py and by the Coverage Summary
+# GitHub Actions workflow (.github/workflows/coverage.yml). Update it in the
+# same PR as any deliberate coverage regression so reviewers see *why* the
+# floor changed.
+#
+# Thresholds follow the convention used by most top-tier open source Python/
+# Go/JS libraries:
+#
+#   * per-surface floor  — absolute minimum any tracked surface may hit
+#   * aggregate floor    — absolute minimum for the weighted repo total
+#   * max drop           — maximum per-surface regression vs baseline, in pp
+#
+# The gate is intentionally strict on the *aggregate* and more forgiving
+# per-surface, because individual surfaces can legitimately fluctuate as
+# code is deleted or refactored.
+
+[thresholds]
+# Any single surface below this number hard-fails the gate.
+# Current baseline (see coverage-baseline.json): lowest surface is
+# control-plane at 87.30%. This floor gives ~1.3 pp of headroom.
+# Raise this value in its own PR as surfaces improve.
+min_surface      = 86.0
+
+# The weighted aggregate across all tracked surfaces must stay at or above
+# this number. This is the value that backs the README coverage badge.
+# Current aggregate is 89.01%; 88.5 gives ~0.5 pp of headroom.
+min_aggregate    = 88.5
+
+# A PR may not regress any surface by more than this many percentage points
+# against the baseline without explicitly updating coverage-baseline.json.
+max_surface_drop = 1.0
+
+# A PR may not regress the aggregate by more than this many percentage points.
+max_aggregate_drop = 0.5
+
+# Minimum coverage required on lines the PR actually touches (patch coverage).
+# Enforced in CI by `diff-cover` against origin/main, see
+# .github/workflows/coverage.yml → "Run patch coverage gate". Patch coverage
+# is the most effective regression signal in top-tier OSS projects (codecov,
+# vitest, rust-lang): aggregates drift slowly, but untested new code shows up
+# here immediately.
+min_patch = 80.0
+
+[weights]
+# Weights used to compute the aggregate. These match the relative source size
+# of each surface (lines / statements), so a tiny helper package hitting 100%
+# can't move the needle.
+#
+# Regenerate via: ./scripts/coverage-summary.sh && jq -r '.surfaces[] | [.name, .coverage_percent] | @tsv' test-reports/coverage/summary.json
+control-plane  = 24326   # Go statements, control-plane/internal/...
+sdk-go         = 3527    # Go statements, sdk/go/...
+sdk-python     = 1884    # Python lines, sdk/python/agentfield/...
+sdk-typescript = 5540    # TS lines, sdk/typescript/src/...
+web-ui         = 41693   # TS lines, control-plane/web/client/src/...
+
+[report]
+# Files the gate writes under test-reports/coverage/ for humans and agents.
+markdown = "gate-report.md"
+json     = "gate-status.json"

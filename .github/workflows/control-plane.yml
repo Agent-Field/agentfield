@@ -1,0 +1,134 @@
+name: Control Plane CI
+
+on:
+  pull_request:
+    paths:
+      - 'control-plane/**'
+      - '.github/workflows/control-plane.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'control-plane/**'
+      - '.github/workflows/control-plane.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: control-plane/web/client/package-lock.json
+
+      - name: Build control plane UI
+        working-directory: control-plane/web/client
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build control plane
+        working-directory: control-plane
+        run: GOFLAGS=-buildvcs=false go build ./...
+
+      # NOTE: `go test` lives in .github/workflows/coverage.yml so we only
+      # run the control-plane suite once per PR. The coverage workflow is a
+      # required status check on main, so a test regression still blocks
+      # merge. This job continues to validate that the code *builds*, which
+      # is the contract the downstream compile-matrix job depends on.
+
+      - name: Lint
+        working-directory: control-plane
+        run: |
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+          golangci-lint run
+        continue-on-error: true
+
+  compile-matrix:
+    runs-on: ubuntu-latest
+    needs: linux-tests
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64]
+    env:
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      CGO_ENABLED: 0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ matrix.goos }}-${{ matrix.goarch }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-${{ matrix.goos }}-${{ matrix.goarch }}-
+            ${{ runner.os }}-go-
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: control-plane/web/client/package-lock.json
+
+      - name: Build control plane UI
+        working-directory: control-plane/web/client
+        run: |
+          npm ci
+          npm run build
+
+      - name: Compile control plane binary
+        working-directory: control-plane
+        run: |
+          echo "Building for ${GOOS}/${GOARCH}"
+          go build -o /tmp/agentfield-server-${GOOS}-${GOARCH} ./cmd/agentfield-server
+
+  # Summary job that depends on all critical checks
+  required-checks:
+    name: All Required Checks Passed
+    runs-on: ubuntu-latest
+    needs: [linux-tests, compile-matrix]
+    if: always()
+    steps:
+      - name: Check all jobs
+        run: |
+          if [ "${{ needs.linux-tests.result }}" != "success" ] || [ "${{ needs.compile-matrix.result }}" != "success" ]; then
+            echo "One or more required checks failed"
+            exit 1
+          fi
+          echo "All required checks passed successfully"

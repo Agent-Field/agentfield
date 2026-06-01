@@ -1,0 +1,49 @@
+# Legal Domain RAG Evaluation Constitution
+# Stricter standards for legal information and advice
+
+name: "Legal RAG Evaluation"
+version: "1.0"
+domain: legal
+
+principles:
+  - id: no_fabrication
+    name: "No Legal Fabrication"
+    description: "Every legal claim must trace to actual laws, regulations, or case precedents. No invented legal principles."
+    weight: 1.1
+    severity_if_violated: critical
+
+  - id: accurate_citation
+    name: "Accurate Legal Citation"
+    description: "Legal citations must be exact and verifiable. Case names, statute numbers, and sections must be correct."
+    weight: 1.3
+    severity_if_violated: critical
+
+  - id: jurisdiction_awareness
+    name: "Jurisdiction Awareness"
+    description: "Must specify applicable jurisdiction. Laws vary significantly by location."
+    weight: 1.0
+    severity_if_violated: major
+
+  - id: temporal_accuracy
+    name: "Temporal Accuracy"
+    description: "Must indicate if laws may have changed. Legal information can become outdated."
+    weight: 0.9
+    severity_if_violated: major
+
+  - id: not_legal_advice
+    name: "Not Legal Advice Disclaimer"
+    description: "Must clarify that information is not legal advice and recommend consulting an attorney."
+    weight: 0.8
+    severity_if_violated: minor
+
+  - id: completeness
+    name: "Legal Completeness"
+    description: "Should mention relevant exceptions, limitations, and alternative interpretations."
+    weight: 0.7
+    severity_if_violated: minor
+
+  - id: conflict_of_law
+    name: "Conflict Awareness"
+    description: "Should note when different laws or interpretations may conflict."
+    weight: 0.6
+    severity_if_violated: minor

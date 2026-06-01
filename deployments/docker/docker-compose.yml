@@ -1,0 +1,72 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: agentfield
+      POSTGRES_PASSWORD: agentfield
+      POSTGRES_DB: agentfield
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentfield"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  control-plane:
+    build:
+      context: ../..
+      dockerfile: deployments/docker/Dockerfile.control-plane
+    environment:
+      AGENTFIELD_HOME: /data
+      AGENTFIELD_CONFIG_FILE: /etc/agentfield/config/agentfield.yaml
+      AGENTFIELD_STORAGE_MODE: postgres
+      AGENTFIELD_POSTGRES_URL: postgres://agentfield:agentfield@postgres:5432/agentfield?sslmode=disable
+      AGENTFIELD_STORAGE_POSTGRES_URL: postgres://agentfield:agentfield@postgres:5432/agentfield?sslmode=disable
+      AGENTFIELD_DATABASE_URL: postgres://agentfield:agentfield@postgres:5432/agentfield?sslmode=disable
+      AGENTFIELD_HTTP_ADDR: 0.0.0.0:8080
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - agentfield-data:/data
+
+  demo-go-agent:
+    build:
+      context: ../..
+      dockerfile: deployments/docker/Dockerfile.demo-go-agent
+    command: ["serve"]
+    environment:
+      AGENTFIELD_URL: http://control-plane:8080
+      AGENT_NODE_ID: demo-go-agent
+      AGENT_LISTEN_ADDR: :8001
+      AGENT_PUBLIC_URL: http://demo-go-agent:8001
+    ports:
+      - "8001:8001"
+    restart: unless-stopped
+    depends_on:
+      - control-plane
+
+  demo-python-agent:
+    profiles: ["python-demo"]
+    build:
+      context: ../..
+      dockerfile: deployments/docker/Dockerfile.demo-python-agent
+    environment:
+      AGENTFIELD_URL: http://control-plane:8080
+      AGENT_NODE_ID: demo-python-agent
+      PORT: "8001"
+      AGENT_CALLBACK_URL: http://demo-python-agent:8001
+    ports:
+      - "8002:8001"
+    restart: unless-stopped
+    depends_on:
+      - control-plane
+
+volumes:
+  pgdata:
+  agentfield-data:

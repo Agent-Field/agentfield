@@ -1,0 +1,6 @@
+# Core dependencies
+agentfield>=0.1.22
+pydantic>=2.0.0
+pyyaml>=6.0
+httpx>=0.24.0
+python-dotenv>=1.0.0

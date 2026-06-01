@@ -1,0 +1,17 @@
+{
+  "name": "tool-calling-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "worker": "tsx worker.ts",
+    "orchestrator": "tsx orchestrator.ts",
+    "test": "tsx test_orchestrator.ts"
+  },
+  "dependencies": {
+    "@agentfield/sdk": "file:../../../sdk/typescript"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}

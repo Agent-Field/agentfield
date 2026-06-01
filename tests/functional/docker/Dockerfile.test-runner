@@ -1,0 +1,109 @@
+FROM node:20-alpine AS ui-builder
+WORKDIR /app/web
+
+COPY control-plane/web/client/package*.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+COPY control-plane/web/client/ .
+RUN npm run build
+
+FROM node:20-bookworm AS ts-sdk-builder
+WORKDIR /build/ts-sdk
+
+COPY sdk/typescript/package*.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --ignore-scripts
+COPY sdk/typescript .
+RUN npm run build
+# Package the SDK so it can be installed in the final test image
+RUN PACK_FILE=$(npm pack | tail -n 1) && mv "$PACK_FILE" /tmp/ts-sdk.tgz
+
+FROM golang:1.25-bookworm AS af-cli-builder
+WORKDIR /build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pre-download Go modules for caching
+COPY control-plane/go.mod control-plane/go.sum ./control-plane/
+RUN cd control-plane && go mod download
+
+# Build the AgentField CLI (af)
+COPY control-plane ./control-plane
+COPY --from=ui-builder /app/web/dist ./control-plane/web/client/dist
+RUN mkdir -p /build/bin && \
+    cd control-plane && \
+    go build -tags "embedded sqlite_fts5" -o /build/bin/af ./cmd/af
+
+# Build Go functional agent binaries
+COPY sdk/go ./sdk/go
+COPY tests/functional/go_agents ./tests/functional/go_agents
+RUN cd tests/functional/go_agents && \
+    go mod tidy && \
+    for dir in cmd/*; do \
+        if [ -d "$dir" ]; then \
+            name=$(basename "$dir"); \
+            go build -o /build/bin/go-agent-$name "./cmd/$name"; \
+        fi; \
+    done
+
+FROM python:3.11-slim
+
+# Prevent Python from writing pyc files and buffering stdout/stderr
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    wget \
+    netcat-openbsd \
+    nodejs \
+    npm \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install the AgentField CLI built in the previous stage
+COPY --from=af-cli-builder /build/bin/af /usr/local/bin/af
+RUN ln -s /usr/local/bin/af /usr/local/bin/agentfield
+
+# Install the packaged TypeScript SDK globally for Node-based agents
+COPY --from=ts-sdk-builder /tmp/ts-sdk.tgz /tmp/ts-sdk.tgz
+RUN npm install -g /tmp/ts-sdk.tgz
+ENV NODE_PATH=/usr/local/lib/node_modules
+
+WORKDIR /app
+
+# Copy and install AgentField Python SDK
+COPY sdk/python /tmp/agentfield-sdk
+RUN pip install --no-cache-dir /tmp/agentfield-sdk && \
+    rm -rf /tmp/agentfield-sdk
+
+# Copy test requirements and install
+COPY tests/functional/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt && \
+    rm /tmp/requirements.txt
+
+# Copy wait script
+COPY tests/functional/docker/wait-for-services.sh /usr/local/bin/wait-for-services.sh
+RUN chmod +x /usr/local/bin/wait-for-services.sh
+
+# Copy Go agent binaries
+COPY --from=af-cli-builder /build/bin/go-agent-* /usr/local/bin/
+
+# Create non-root user for security
+RUN groupadd -r testuser && useradd -r -g testuser testuser
+
+# Create directories, install the TS SDK locally for tests, and fix ownership
+RUN mkdir -p /reports /tests && \
+    npm install --prefix /tests /tmp/ts-sdk.tgz && \
+    chown -R testuser:testuser /reports /tests
+
+# Switch to non-root user
+USER testuser
+
+WORKDIR /tests
+
+# Default command (will be overridden by docker-compose)
+CMD ["pytest", "-v"]
