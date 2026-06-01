@@ -450,14 +450,13 @@ func validateSchemaType(name string, value interface{}, schemaType string) error
 		if _, ok := value.(bool); !ok {
 			return fmt.Errorf("field %q must be a boolean", name)
 		}
-	case "object":
-		if _, ok := value.(map[string]interface{}); !ok {
-			return fmt.Errorf("field %q must be an object", name)
-		}
-	case "array":
-		if _, ok := value.([]interface{}); !ok {
-			return fmt.Errorf("field %q must be an array", name)
-		}
+	case "object", "array":
+		// The Python SDK serializes every Optional[...] parameter as
+		// {"type": "object"} (e.g. `pr_url: str | None` becomes an object), so
+		// enforcing the declared type here would wrongly reject a concrete scalar
+		// passed to an optional field. The control plane validates structured
+		// input itself and is the source of truth, so skip the client-side check
+		// for object/array rather than reject input the server would accept.
 	}
 	return nil
 }

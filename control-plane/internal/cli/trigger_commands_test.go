@@ -320,8 +320,11 @@ func TestCallResultPromptAndValidationHelpers(t *testing.T) {
 	require.ErrorContains(t, validateSchemaType("count", 1.5, "integer"), "must be an integer")
 	require.ErrorContains(t, validateSchemaType("score", "x", "number"), "must be a number")
 	require.ErrorContains(t, validateSchemaType("ok", "true", "boolean"), "must be a boolean")
-	require.ErrorContains(t, validateSchemaType("obj", "x", "object"), "must be an object")
-	require.ErrorContains(t, validateSchemaType("arr", "x", "array"), "must be an array")
+	// object/array types are not enforced client-side: the SDK emits
+	// {"type": "object"} for Optional[...] params, so enforcing it would reject
+	// valid scalars passed to optional fields. The control plane is authoritative.
+	require.NoError(t, validateSchemaType("obj", "x", "object"))
+	require.NoError(t, validateSchemaType("arr", "x", "array"))
 }
 
 func TestRunReasonerListFormats(t *testing.T) {

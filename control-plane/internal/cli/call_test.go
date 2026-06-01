@@ -91,6 +91,38 @@ func TestValidateInputAgainstSchema(t *testing.T) {
 	require.ErrorContains(t, err, `field "count" must be an integer`)
 }
 
+// TestValidateInputAcceptsOptionalFieldValues guards the regression where the
+// CLI rejected valid input for optional parameters. The Python SDK serializes
+// every Optional[...] parameter (e.g. `pr_url: str | None`) as {"type": "object"},
+// so passing a concrete scalar to such a field must be accepted — the control
+// plane validates types itself and is the source of truth.
+func TestValidateInputAcceptsOptionalFieldValues(t *testing.T) {
+	schema := map[string]interface{}{
+		"properties": map[string]interface{}{
+			// Optional[str] / Optional[list] both collapse to "object" in the schema.
+			"pr_url":   map[string]interface{}{"type": "object"},
+			"ignore":   map[string]interface{}{"type": "object"},
+			"depth":    map[string]interface{}{"type": "string"},
+			"required": map[string]interface{}{"type": "object"},
+		},
+		"required": []interface{}{"pr_url"},
+	}
+
+	require.NoError(t, validateInputAgainstSchema(map[string]interface{}{
+		"pr_url": "https://github.com/owner/repo/pull/123",
+		"ignore": []interface{}{"vendor/"},
+		"depth":  "quick",
+	}, schema))
+
+	// Required-field presence is still enforced, and scalar types still caught.
+	require.ErrorContains(t,
+		validateInputAgainstSchema(map[string]interface{}{"depth": "quick"}, schema),
+		`missing required field "pr_url"`)
+	require.ErrorContains(t,
+		validateInputAgainstSchema(map[string]interface{}{"pr_url": "x", "depth": 1}, schema),
+		`field "depth" must be a string`)
+}
+
 func TestExitCodeMapping(t *testing.T) {
 	require.Equal(t, 3, httpExitCode(500))
 	require.Equal(t, 3, httpExitCode(401))
