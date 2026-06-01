@@ -1826,18 +1826,36 @@ func (a *Agent) AIWithTools(ctx context.Context, prompt string, config ai.ToolCa
 		},
 	}
 
+	allowedTargets := make(map[string]struct{}, len(tools))
+	for _, tool := range tools {
+		allowedTargets[normalizeToolInvocationTarget(agentToolNameToInvocationTarget(tool.Function.Name))] = struct{}{}
+	}
+
 	callFn := func(ctx context.Context, target string, input map[string]interface{}) (map[string]interface{}, error) {
-		if strings.Contains(target, ":skill:") {
-			parts := strings.SplitN(target, ":skill:", 2)
-			target = parts[0] + "." + parts[1]
-		} else if strings.Contains(target, ":") {
-			parts := strings.SplitN(target, ":", 2)
-			target = parts[0] + "." + parts[1]
+		target = normalizeToolInvocationTarget(target)
+		if _, ok := allowedTargets[target]; !ok {
+			return nil, fmt.Errorf("tool call target %q is not a discovered capability", target)
 		}
 		return a.Call(ctx, target, input)
 	}
 
 	return a.aiClient.ExecuteToolCallLoop(ctx, messages, tools, config, callFn)
+}
+
+func normalizeToolInvocationTarget(target string) string {
+	if strings.Contains(target, ":skill:") {
+		parts := strings.SplitN(target, ":skill:", 2)
+		return parts[0] + "." + parts[1]
+	}
+	if strings.Contains(target, ":") {
+		parts := strings.SplitN(target, ":", 2)
+		return parts[0] + "." + parts[1]
+	}
+	return target
+}
+
+func agentToolNameToInvocationTarget(name string) string {
+	return strings.ReplaceAll(name, "__", ":")
 }
 
 // AIStream makes a streaming AI/LLM call.

@@ -75,8 +75,11 @@ func (p *OpenCodeProvider) Execute(ctx context.Context, prompt string, options O
 		cmd = append(cmd, "-m", options.Model)
 	}
 
-	// Skip the interactive permission prompt for headless execution.
-	cmd = append(cmd, "--dangerously-skip-permissions")
+	// opencode v1.14 does not accept --dangerously-skip-permissions on the
+	// `run` subcommand — passing it makes yargs print the run-help screen
+	// to stdout and exit 0, which the SDK then captures as the LLM
+	// response. opencode in non-TTY mode proceeds without permission
+	// prompting, so no flag is needed. See agentfield#582.
 
 	// Prepend system prompt if provided. OpenCode has no native
 	// --system-prompt flag, so inline it ahead of the user prompt.

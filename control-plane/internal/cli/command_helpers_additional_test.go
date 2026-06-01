@@ -2,8 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -131,17 +131,22 @@ installed:
 		require.NoError(t, err)
 		require.JSONEq(t, `{"operations":[{"id":"1"}]}`, string(data))
 
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			require.Equal(t, "application/json", r.Header.Get("Accept"))
-			require.Equal(t, "secret", r.Header.Get("X-API-Key"))
-			require.Equal(t, "/api/test", r.URL.Path)
-			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"ok":true}`))
-		}))
-		defer server.Close()
+		oldTransport := http.DefaultTransport
+		http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			require.Equal(t, "application/json", req.Header.Get("Accept"))
+			require.Equal(t, "secret", req.Header.Get("X-API-Key"))
+			require.Equal(t, "/api/test", req.URL.Path)
+			return &http.Response{
+				StatusCode: http.StatusCreated,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(bytes.NewReader([]byte(`{"ok":true}`))),
+				Request:    req,
+			}, nil
+		})
+		defer func() { http.DefaultTransport = oldTransport }()
 
 		oldServer, oldAPIKey, oldTimeout := serverURL, apiKey, requestTimeout
-		serverURL, apiKey, requestTimeout = server.URL, "secret", 1
+		serverURL, apiKey, requestTimeout = "http://agent.test", "secret", 1
 		defer func() {
 			serverURL, apiKey, requestTimeout = oldServer, oldAPIKey, oldTimeout
 		}()

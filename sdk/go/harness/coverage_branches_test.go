@@ -205,13 +205,15 @@ fi
 		assert.False(t, raw.IsError)
 		// $PWD reflects the subprocess working directory (Options.Cwd).
 		assert.Contains(t, raw.Result, dir)
-		// opencode 1.14+ surface: `run` subcommand, --dir for project, -m for
-		// model, --dangerously-skip-permissions for headless, prompt is
-		// positional. -c, -q, -p are deprecated/rebound (see issue #517).
+		// opencode 1.14+ surface: `run` subcommand, --dir for project, -m
+		// for model, prompt is positional. -c, -q, -p are
+		// deprecated/rebound (see issue #517). --dangerously-skip-permissions
+		// is rejected by `run` on v1.14 — opencode prints help and exits 0,
+		// see agentfield#582 — so it must NOT be on the command line.
 		assert.Contains(t, raw.Result, "run")
 		assert.Contains(t, raw.Result, "--dir /ignored/project")
 		assert.Contains(t, raw.Result, "-m stub-model")
-		assert.Contains(t, raw.Result, "--dangerously-skip-permissions")
+		assert.NotContains(t, raw.Result, "--dangerously-skip-permissions")
 		// Prompt is the last positional argument (no -p flag in front).
 		assert.Regexp(t, `\sprompt$`, strings.TrimSpace(raw.Result))
 		assert.NotContains(t, raw.Result, "-q ")

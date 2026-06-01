@@ -207,7 +207,11 @@ func TestAgentConcurrencyLimiter_MaxPerAgentNilAndConfigured(t *testing.T) {
 }
 
 func TestExecutionCleanupService_StartStopBranches(t *testing.T) {
-	t.Parallel()
+	// NOT t.Parallel(): this test swaps the process-global logger.Logger via
+	// setupExecutionCleanupTestLogger. Running it in parallel let a sibling test
+	// reassign the global logger mid-run, contaminating log buffers and flaking
+	// the coverage CI job. Keep it in the serial phase, like the other
+	// logger-swapping tests in execution_cleanup_test.go.
 
 	t.Run("disabled start is no-op", func(t *testing.T) {
 		service := NewExecutionCleanupService(&cleanupStoreMock{}, config.ExecutionCleanupConfig{Enabled: false})
@@ -341,7 +345,10 @@ func TestIsLightweightRequestQueryVariants(t *testing.T) {
 }
 
 func TestDiscoveryLoggingIncludesOptionalRequestID(t *testing.T) {
-	t.Parallel()
+	// NOT t.Parallel(): this test swaps the process-global logger.Logger via
+	// setupExecutionCleanupTestLogger and then asserts on the captured buffer.
+	// In parallel, a sibling test reassigning the global logger emptied this
+	// buffer and flaked the coverage CI job. Keep it in the serial phase.
 	gin.SetMode(gin.TestMode)
 
 	logBuffer := setupExecutionCleanupTestLogger(t)

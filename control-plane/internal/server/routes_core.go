@@ -33,6 +33,7 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	{
 		discovery.GET("/capabilities", handlers.DiscoveryCapabilitiesHandler(s.storage))
 	}
+	agentAPI.GET("/reasoners", handlers.ListReasonersHandler(s.storage))
 
 	// Node management endpoints
 	agentAPI.POST("/nodes/register", handlers.RegisterNodeHandler(s.storage, s.uiService, s.didService, s.presenceManager, s.didWebService, s.tagApprovalService))
@@ -110,6 +111,7 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 		executeGroup.POST("/async/:target", handlers.ExecuteAsyncHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout, s.config.Features.DID.Authorization.InternalToken))
 	}
 	agentAPI.GET("/executions/:execution_id", handlers.GetExecutionStatusHandler(s.storage))
+	agentAPI.GET("/executions/:execution_id/events", handlers.StreamExecutionEventsHandler(s.storage))
 	agentAPI.POST("/executions/batch-status", handlers.BatchExecutionStatusHandler(s.storage))
 	agentAPI.POST("/executions/:execution_id/status", handlers.UpdateExecutionStatusHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout))
 	agentAPI.POST("/executions/:execution_id/logs", handlers.StructuredExecutionLogsHandler(s.storage, func() config.ExecutionLogsConfig {

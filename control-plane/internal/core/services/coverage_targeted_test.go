@@ -62,6 +62,10 @@ func TestRunDevHelperProcess(t *testing.T) {
 	}
 }
 
+func runDevPythonHelperMain() string {
+	return "import os\nimport sys\nimport threading\nimport time\nfrom http.server import BaseHTTPRequestHandler, HTTPServer\n\nport = int(os.environ['PORT'])\nmode = os.environ.get('AF_TEST_HELPER_MODE', 'serve-success')\n\nclass Handler(BaseHTTPRequestHandler):\n    def log_message(self, fmt, *args):\n        pass\n\n    def do_GET(self):\n        if self.path == '/health':\n            self.send_response(200)\n            self.end_headers()\n        elif self.path == '/reasoners':\n            self.send_response(200)\n            self.end_headers()\n            if mode == 'serve-capabilities-error':\n                self.wfile.write(b'{\\\"reasoners\\\":[')\n            else:\n                self.wfile.write(b'{\\\"reasoners\\\":[{\\\"id\\\":\\\"helper-reasoner\\\"}]}')\n        elif self.path == '/skills':\n            self.send_response(200)\n            self.end_headers()\n            self.wfile.write(b'{\\\"skills\\\":[{\\\"id\\\":\\\"helper-skill\\\"}]}')\n        else:\n            self.send_response(404)\n            self.end_headers()\n\nserver = HTTPServer(('127.0.0.1', port), Handler)\nthread = threading.Thread(target=server.serve_forever)\nthread.daemon = True\nthread.start()\ntime.sleep(10)\nserver.shutdown()\nserver.server_close()\nsys.exit(3 if mode == 'serve-exit-error' else 0)\n"
+}
+
 func TestDevServiceRunDev(t *testing.T) {
 	// These subtests spawn a real python3 subprocess that serves HTTP on a
 	// port in the 8001-8999 range. discoverAgentPort scans that range with a
@@ -82,8 +86,8 @@ func TestDevServiceRunDev(t *testing.T) {
 
 		port := findPortInAgentRange(t)
 		t.Setenv("AF_TEST_HELPER_MODE", "serve-success")
-		script := "#!/bin/sh\npython3 - <<'PY'\nimport os, sys, threading, time\nfrom http.server import BaseHTTPRequestHandler, HTTPServer\nport = int(os.environ['PORT'])\nmode = os.environ.get('AF_TEST_HELPER_MODE', 'serve-success')\nclass Handler(BaseHTTPRequestHandler):\n    def log_message(self, fmt, *args):\n        pass\n    def do_GET(self):\n        if self.path == '/health':\n            self.send_response(200)\n            self.end_headers()\n        elif self.path == '/reasoners':\n            self.send_response(200)\n            self.end_headers()\n            if mode == 'serve-capabilities-error':\n                self.wfile.write(b'{\"reasoners\":[')\n            else:\n                self.wfile.write(b'{\"reasoners\":[{\"id\":\"helper-reasoner\"}]}')\n        elif self.path == '/skills':\n            self.send_response(200)\n            self.end_headers()\n            self.wfile.write(b'{\"skills\":[{\"id\":\"helper-skill\"}]}')\n        else:\n            self.send_response(404)\n            self.end_headers()\nserver = HTTPServer(('127.0.0.1', port), Handler)\nthread = threading.Thread(target=server.serve_forever)\nthread.daemon = True\nthread.start()\ntime.sleep(1.2)\nserver.shutdown()\nserver.server_close()\nsys.exit(3 if mode == 'serve-exit-error' else 0)\nPY\n"
-		require.NoError(t, os.WriteFile(filepath.Join(venvBin, "python"), []byte(script), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "main.py"), []byte(runDevPythonHelperMain()), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(venvBin, "python"), []byte("#!/bin/sh\nexec python3 \"$@\"\n"), 0o755))
 
 		service := &DefaultDevService{}
 		err := service.runDev(dir, domain.DevOptions{Port: port})
@@ -97,8 +101,8 @@ func TestDevServiceRunDev(t *testing.T) {
 
 		port := findPortInAgentRange(t)
 		t.Setenv("AF_TEST_HELPER_MODE", "serve-exit-error")
-		script := "#!/bin/sh\npython3 - <<'PY'\nimport os, sys, threading, time\nfrom http.server import BaseHTTPRequestHandler, HTTPServer\nport = int(os.environ['PORT'])\nmode = os.environ.get('AF_TEST_HELPER_MODE', 'serve-success')\nclass Handler(BaseHTTPRequestHandler):\n    def log_message(self, fmt, *args):\n        pass\n    def do_GET(self):\n        if self.path == '/health':\n            self.send_response(200)\n            self.end_headers()\n        elif self.path == '/reasoners':\n            self.send_response(200)\n            self.end_headers()\n            if mode == 'serve-capabilities-error':\n                self.wfile.write(b'{\"reasoners\":[')\n            else:\n                self.wfile.write(b'{\"reasoners\":[{\"id\":\"helper-reasoner\"}]}')\n        elif self.path == '/skills':\n            self.send_response(200)\n            self.end_headers()\n            self.wfile.write(b'{\"skills\":[{\"id\":\"helper-skill\"}]}')\n        else:\n            self.send_response(404)\n            self.end_headers()\nserver = HTTPServer(('127.0.0.1', port), Handler)\nthread = threading.Thread(target=server.serve_forever)\nthread.daemon = True\nthread.start()\ntime.sleep(1.2)\nserver.shutdown()\nserver.server_close()\nsys.exit(3 if mode == 'serve-exit-error' else 0)\nPY\n"
-		require.NoError(t, os.WriteFile(filepath.Join(venvBin, "python"), []byte(script), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "main.py"), []byte(runDevPythonHelperMain()), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(venvBin, "python"), []byte("#!/bin/sh\nexec python3 \"$@\"\n"), 0o755))
 
 		service := &DefaultDevService{}
 		err := service.runDev(dir, domain.DevOptions{Port: port})
@@ -124,8 +128,8 @@ func TestDevServiceRunDev(t *testing.T) {
 
 		port := findPortInAgentRange(t)
 		t.Setenv("AF_TEST_HELPER_MODE", "serve-capabilities-error")
-		script := "#!/bin/sh\npython3 - <<'PY'\nimport os, sys, threading, time\nfrom http.server import BaseHTTPRequestHandler, HTTPServer\nport = int(os.environ['PORT'])\nmode = os.environ.get('AF_TEST_HELPER_MODE', 'serve-success')\nclass Handler(BaseHTTPRequestHandler):\n    def log_message(self, fmt, *args):\n        pass\n    def do_GET(self):\n        if self.path == '/health':\n            self.send_response(200)\n            self.end_headers()\n        elif self.path == '/reasoners':\n            self.send_response(200)\n            self.end_headers()\n            if mode == 'serve-capabilities-error':\n                self.wfile.write(b'{\"reasoners\":[')\n            else:\n                self.wfile.write(b'{\"reasoners\":[{\"id\":\"helper-reasoner\"}]}')\n        elif self.path == '/skills':\n            self.send_response(200)\n            self.end_headers()\n            self.wfile.write(b'{\"skills\":[{\"id\":\"helper-skill\"}]}')\n        else:\n            self.send_response(404)\n            self.end_headers()\nserver = HTTPServer(('127.0.0.1', port), Handler)\nthread = threading.Thread(target=server.serve_forever)\nthread.daemon = True\nthread.start()\ntime.sleep(1.2)\nserver.shutdown()\nserver.server_close()\nsys.exit(3 if mode == 'serve-exit-error' else 0)\nPY\n"
-		require.NoError(t, os.WriteFile(filepath.Join(venvBin, "python"), []byte(script), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "main.py"), []byte(runDevPythonHelperMain()), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(venvBin, "python"), []byte("#!/bin/sh\nexec python3 \"$@\"\n"), 0o755))
 
 		service := &DefaultDevService{}
 		err := service.runDev(dir, domain.DevOptions{Port: port})

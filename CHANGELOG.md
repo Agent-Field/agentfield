@@ -6,6 +6,395 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.86] - 2026-06-01
+
+## [0.1.86-rc.2] - 2026-06-01
+
+
+### Added
+
+- Feat(cli): add minimal trigger surface (#605)
+
+* feat(cli): add reasoner trigger commands
+
+* fix(cli): keep trigger streams open
+
+* test(cli): cover trigger command flows
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (4d4cf02)
+
+
+
+### Documentation
+
+- Docs: add Agentic PR Reviewer (pr-af) to Built With AgentField (#607) (15016d4)
+
+## [0.1.86-rc.1] - 2026-05-29
+
+
+### Fixed
+
+- Fix(sdk/go): strip credential headers on cross-host redirect (#602)
+
+* fix(sdk/go): strip credential headers on cross-host redirect
+
+The control-plane client attaches X-API-Key (and, when DID auth is
+configured, the X-Caller-DID / X-DID-Signature / X-DID-Timestamp /
+X-DID-Nonce headers) as custom request headers on an http.Client with no
+CheckRedirect. Go's net/http strips Authorization/Cookie on a cross-host
+redirect but not arbitrary application headers, so a redirect from the
+configured baseURL to another host would replay the operator's
+credentials to that host.
+
+Add a CheckRedirect hook that drops every credential header the client
+attaches when a redirect targets a host other than the originally
+configured one (compared against via[0], so credentials only reach the
+operator-configured host across a multi-hop chain). Same-host redirects
+keep the headers, so ordinary redirect following is unaffected. The
+credential list is sourced from the did_auth header constants so it
+cannot drift. Also applied to clients supplied via WithHTTPClient that
+define no redirect policy.
+
+Refs GHSA-jp8j-g39q-qxwx.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* fix(handlers): stop flaky coverage CI from global-logger race in parallel tests
+
+TestDiscoveryLoggingIncludesOptionalRequestID and
+TestExecutionCleanupService_StartStopBranches both call
+setupExecutionCleanupTestLogger, which swaps the process-global
+logger.Logger, while also calling t.Parallel(). When they ran alongside
+another parallel test, a sibling reassigned the global logger mid-run, so
+the discovery test's captured buffer came back empty and its assertions
+("discovery request failed", `"request_id":"req-123"`, `"format":"compact"`)
+failed. This broke the `coverage (control-plane)` job and cascaded into
+`coverage-summary` (missing control-plane.total.txt).
+
+The non-test build is unaffected, so it slipped past the required gates
+and only showed up in the coverage job's full parallel run.
+
+Drop t.Parallel() from both tests so they run in the serial phase, where
+nothing else mutates the global logger concurrently -- matching the
+existing non-parallel logger-swapping tests in execution_cleanup_test.go.
+Verified by running the previously-failing command 20x clean.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (6b74c63)
+
+## [0.1.85] - 2026-05-29
+
+## [0.1.85-rc.13] - 2026-05-29
+
+
+### Chores
+
+- Chore(deps): bump tmp (#596)
+
+Bumps the npm_and_yarn group with 1 update in the /control-plane/web/client directory: [tmp](https://github.com/raszi/node-tmp).
+
+
+Updates `tmp` from 0.2.5 to 0.2.7
+- [Changelog](https://github.com/raszi/node-tmp/blob/master/CHANGELOG.md)
+- [Commits](https://github.com/raszi/node-tmp/compare/v0.2.5...v0.2.7)
+
+---
+updated-dependencies:
+- dependency-name: tmp
+  dependency-version: 0.2.7
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (08cf645)
+
+- Chore(ci): track Docker Hub pulls in download stats gist (#592)
+
+The Update Download Stats workflow runs every 6 hours and snapshots
+binary / PyPI / npm cumulative counts into the badge gist. Docker Hub
+pulls were not captured, so the gist's `docker` field was always 0 and
+none of our analytics could reconstruct Docker history.
+
+Docker Hub only exposes a cumulative `pull_count` (no daily/historical
+endpoint on free tier), so the only way to build a daily series is to
+snapshot it ourselves. This change adds a Docker Hub fetch alongside
+the existing sources, includes it in `stats.json.sources.docker`, and
+rolls it into the displayed total. Failures are non-fatal — the
+workflow still updates with `docker: 0` if Docker Hub is unreachable.
+
+Verified the JS body end-to-end against a mock github SDK and a live
+Docker Hub call (11,298 pulls returned at time of validation). (e8afb67)
+
+## [0.1.85-rc.12] - 2026-05-29
+
+
+### Other
+
+- Harden generated output handling (#581)
+
+* Harden generated output handling
+
+Keep generated output behind the intended trust boundary while preserving the normal safe workflow.
+
+Add regression coverage for the unsafe flow and the expected safe behavior.
+
+* Add coverage for generated tool target handling
+
+* test: avoid parallel port contention in package runner tests
+
+* Stabilize control-plane coverage tests
+
+---------
+
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (e96c3fd)
+
+## [0.1.85-rc.11] - 2026-05-28
+
+
+### Fixed
+
+- Fix(sdk): review polish — validate ai() timeout, document empty-dict image_config
+
+Addresses two informational findings from PR review.
+
+- agent_ai.ai(): reject timeout <= 0 with ValueError instead of letting
+  asyncio.wait_for raise a confusing immediate TimeoutError. Defensive
+  guard against user error; cheap one-line check.
+- vision.generate_image_openrouter: add comment explaining that the
+  falsy check for image_config in the strip-and-retry branch is
+  intentional. image_config={} (user explicitly opting into provider
+  defaults per the existing docstring) produces an identical wire call
+  whether stripped or not, so skipping the useless extra attempt is
+  the right behavior. Comment prevents a future "fix" that would just
+  burn cycles.
+- One new test: test_ai_rejects_non_positive_timeout covers both
+  timeout=0 and timeout=-1.0. (fc445e9)
+
+- Fix(sdk): per-call ai() timeout + OpenRouter image retry/strip fallback
+
+Two SDK gaps surfaced by the reel-af example project under a real
+URL-to-vertical-reel workload. Both forced consumer-side workarounds
+that this PR removes.
+
+vision.generate_image_openrouter — retry on routing 404
+  OpenRouter's "No endpoints found that support the requested output
+  modalities" surfaces in two flavours:
+    1. Deterministic 404 when image_config (e.g. aspect_ratio=9:16) hits
+       a model whose upstream replicas don't expose that param.
+    2. Intermittent 1-3% 404 under load when routing momentarily lands
+       on a replica without image modality.
+  Now wraps the litellm.acompletion call in a 3-attempt backoff
+  (1s, 2s) and, if image_config was set and all retries failed, makes
+  one final attempt with image_config stripped, logging a warning. Other
+  exceptions still propagate immediately. The existing asyncio.wait_for
+  timeout still wraps every attempt. Worst-case wait: 3s without
+  image_config, 7s with.
+
+agent_ai.ai() — per-call timeout override
+  ai() now accepts timeout: Optional[float] = None. When set, it
+  overrides async_config.llm_call_timeout for that single call,
+  propagating to both litellm_params["timeout"] (httpx socket-level)
+  and the asyncio.wait_for safety net (2x). Previously the only knob
+  was the agent-wide config, which forced every call in a mixed
+  fast/slow pipeline to use the slowest expected timeout. Wired
+  through all three call paths: direct, tool-loop _make_call, and
+  non-tool _make_litellm_call.
+
+Tests
+  - 4 new tests in test_vision.py covering retry-then-success, strip-
+    image_config-after-retries, no-retry-on-other-errors, and give-up
+    after retries. Sleeps patched out.
+  - 3 new tests in test_agent_ai.py covering per-call override,
+    fallback to agent default, and 2x safety-net propagation.
+  - 112 related tests pass (full agent_ai + vision + media_providers +
+    openrouter_audio + image_config + deadlock_recovery suites).
+  - ruff check + format check clean. (f557b6f)
+
+## [0.1.85-rc.10] - 2026-05-26
+
+
+### Chores
+
+- Chore(github): remove duplicate uppercase PR template (#591)
+
+`.github/` contained two PR-template files differing only by case:
+
+  - PULL_REQUEST_TEMPLATE.md (467B, minimal, older)
+  - pull_request_template.md (2393B, detailed template added in #368,
+    includes coverage-gate guidance referenced by all current PRs)
+
+Git tracks both as separate blobs because it's case-sensitive, but
+case-insensitive filesystems (macOS/Windows, default) can only
+materialize one of them. Symptoms on those platforms:
+
+  - `git status` reports a permanent phantom "modified" file that
+    cannot be cleaned; `git checkout` just flips which casing is dirty.
+  - GitHub's template resolution is case-insensitive, so with two
+    candidates the rendered PR template is ambiguous.
+
+Linux/CI is unaffected (both files materialize fine), which is why
+this slipped past review when #368 landed.
+
+Keep the lowercase, detailed template; remove the uppercase stub.
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (3c750ac)
+
+
+
+### Documentation
+
+- Docs: redesign README Learn More as a visual blog showcase (#593)
+
+* docs: turn README Learn More into a visual blog showcase
+
+Replace the plain bulleted Learn More list with a card grid mirroring the
+Built With AgentField pattern: five blog posts (The AI Backend, IAM for AI
+Backends, and the three-part harness orchestration series) as clickable
+image cards with title + abstract + CTA. Docs links move to a Documentation
+subsection under the same heading to avoid duplicate-H2 anchors.
+
+Commits hero images locally under assets/blog/ and adds the three new harness
+posts to assets/utm-links.csv (existing blog/IAM UTM ids reused).
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* docs: reorder Learn More cards - harness series first, foundational posts last
+
+Move The AI Backend and IAM for AI Backends to the bottom of the grid so the
+three-part harness orchestration series leads.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* docs: add intro blurb under Learn More heading
+
+Add a one-line description above the blog card grid to soften the transition
+from heading to table and clarify the section's purpose.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: OG <oktaygoktas@users.noreply.github.com>
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com> (155c2f3)
+
+
+
+### Fixed
+
+- Fix(ui/runs): truncate long error-category badges so they don't overflow the status cell (#594)
+
+* fix(ui/runs): cap error-category fallback label so it stays single-line
+
+When `root_error_category` is something other than the canonical seven
+slugs (e.g. a diagnostic message like "Agent Restart Orphaned: Tier2-Test
+Re-Registered With New Instance (was 38ffec8279...)"), the previous
+fallback echoed the raw string verbatim as the badge label. In a fixed-
+width status cell that meant multi-line wrapping that overflowed into
+adjacent rows.
+
+The fallback now produces a fixed "Unknown error" label whenever the raw
+category exceeds 24 chars, and surfaces the original string via a new
+`tooltip` field on `ExecutionErrorCategoryMeta` (`description` for known
+categories). Consumers can attach this to `title=` so hover still gives
+full detail.
+
+Adds four unit tests pinning the new behavior — nullish handling, known
+canonical category, short unknown category, and long free-form category.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* fix(ui/runs): truncate error badge so it never overflows the status cell
+
+Both the Runs table status cell (w-44 = 11rem) and the StepDetail error
+box render the error-category badge with a fixed h-5 height. When the
+label runs long, the previous flex-wrap layout caused the badge to wrap
+across multiple lines and visually overflow into the row below — see
+screenshot on PR #N.
+
+Make the badge a single-line truncated pill in both places:
+- whitespace-nowrap + truncate + min-w-0 + a max-width bound
+- title={errorMeta.tooltip} so the full text is still discoverable
+- diagnostics link gets shrink-0 so the badge takes the slack first
+
+Combined with the parent commit's label cap, even a pathological 100+
+char `root_error_category` now renders as a single ellipsised pill that
+fits inside the 11rem column.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (208205e)
+
+## [0.1.85-rc.9] - 2026-05-25
+
+
+### Testing
+
+- Test(python): cover CLI harness log helpers (#574)
+
+* test(python): cover CLI harness log helpers
+
+* Address AgentField harness review coverage
+
+* Fix tee close ownership
+
+---------
+
+Co-authored-by: akmhatey-ai <260399619+akmhatey-ai@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (c160e86)
+
+## [0.1.85-rc.8] - 2026-05-25
+
+
+### Fixed
+
+- Fix(sdk): drop --dangerously-skip-permissions + finish v1.4 migration in opencode harness (#583)
+
+Closes #582.
+
+opencode v1.14 does not accept `--dangerously-skip-permissions` on the `run`
+subcommand. yargs prints the run-help screen to stdout and exits 0, so every
+SDK on top of OpenCodeProvider was silently capturing CLI help text as the LLM
+response — APPROVE'd reviews with 0 findings, empty turns, zero cost. The
+failure is fully silent (no stderr, no error, no non-zero exit).
+
+This PR:
+
+- Python (sdk/python/agentfield/harness/providers/opencode.py): drop the bad
+  flag. opencode in non-TTY mode proceeds without permission prompting.
+- TypeScript (sdk/typescript/src/harness/providers/opencode.ts): switch from
+  deprecated `opencode -c <dir> -p <prompt>` (pre-v1.4) to
+  `opencode run --dir <dir> -m <model> <prompt>`. The deprecated form is
+  broken on v1.14: `-c` rebound to `--continue` (boolean), no top-level `-p`.
+- Go (sdk/go/harness/opencode.go): drop the bad flag (the file already used
+  the `run` subcommand otherwise).
+- Tests updated across all three SDKs to assert the new canonical invocation
+  and to assert `--dangerously-skip-permissions` is NOT present.
+
+Reproduced end-to-end on Agent-Field/pr-af reviewing agentfield#575 with
+HARNESS_PROVIDER=opencode HARNESS_MODEL=openrouter/deepseek/deepseek-v4-pro:
+every cluster_scout returned the `opencode run [message..]` USAGE screen
+verbatim as its findings, meta_strategist saw garbage, pipeline early-exited
+with APPROVE / 0 findings in 5 min / $0.
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (c4f0d5f)
+
+## [0.1.85-rc.7] - 2026-05-25
+
+
+### Added
+
+- Feat(sdk): support OpenRouter audio system prompts (#590) (a11b5cf)
+
 ## [0.1.85-rc.6] - 2026-05-23
 
 

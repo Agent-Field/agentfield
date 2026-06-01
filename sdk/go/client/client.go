@@ -28,10 +28,16 @@ type Client struct {
 // Option mutates Client configuration.
 type Option func(*Client)
 
-// WithHTTPClient allows custom HTTP transport configuration.
+// WithHTTPClient allows custom HTTP transport configuration. If the supplied
+// client does not define its own redirect policy, the credential-stripping
+// policy (stripSensitiveHeadersOnRedirect) is applied so a custom client does
+// not silently reintroduce the cross-host credential leak (GHSA-jp8j-g39q-qxwx).
 func WithHTTPClient(h *http.Client) Option {
 	return func(c *Client) {
 		if h != nil {
+			if h.CheckRedirect == nil {
+				h.CheckRedirect = stripSensitiveHeadersOnRedirect
+			}
 			c.httpClient = h
 		}
 	}
@@ -65,6 +71,42 @@ func WithDIDAuth(did, privateKeyJWK string) Option {
 	}
 }
 
+// sensitiveCrossHostHeaders are every credential-bearing request header this
+// client attaches in do(): the static control-plane credentials plus the
+// per-request DID signature headers. None of them may be replayed to a host
+// other than the one the operator configured. Go's net/http already strips
+// Authorization, Cookie, Cookie2 and WWW-Authenticate on a cross-host redirect,
+// but it does NOT strip arbitrary application headers such as X-API-Key or our
+// DID headers, so we strip the full set explicitly. The DID entries reference
+// the did_auth constants so this list cannot drift if a header is renamed.
+// See GHSA-jp8j-g39q-qxwx.
+var sensitiveCrossHostHeaders = []string{
+	"Authorization",
+	"X-API-Key",
+	HeaderCallerDID,
+	HeaderDIDSignature,
+	HeaderDIDTimestamp,
+	HeaderDIDNonce,
+}
+
+// stripSensitiveHeadersOnRedirect is an http.Client.CheckRedirect hook that
+// removes credential headers when a redirect targets a host other than the
+// originally configured one. The comparison is against via[0] (the first
+// request) so credentials only ever reach the operator-configured host, even
+// across a multi-hop redirect chain. Same-host redirects keep the headers so
+// ordinary redirect following (e.g. a trailing-slash or path redirect on the
+// same host) still works, while a redirect to an attacker-controlled host can
+// no longer exfiltrate the operator's control-plane credentials.
+func stripSensitiveHeadersOnRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) == 0 || req.URL.Host == via[0].URL.Host {
+		return nil
+	}
+	for _, h := range sensitiveCrossHostHeaders {
+		req.Header.Del(h)
+	}
+	return nil
+}
+
 // New creates a new Client instance.
 func New(baseURL string, opts ...Option) (*Client, error) {
 	if baseURL == "" {
@@ -79,7 +121,8 @@ func New(baseURL string, opts ...Option) (*Client, error) {
 	c := &Client{
 		baseURL: parsed,
 		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout:       10 * time.Second,
+			CheckRedirect: stripSensitiveHeadersOnRedirect,
 		},
 	}
 
