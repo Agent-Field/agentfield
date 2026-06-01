@@ -66,13 +66,14 @@ func TestAddExecutionNoteHandler_AppendsNoteAndPublishesEvent(t *testing.T) {
 	router := gin.New()
 	router.POST("/api/v1/executions/note", func(c *gin.Context) {
 		c.Set("execution_id", executionID)
-		AddExecutionNoteHandler(storage)(c)
+		// Simulate APIKeyAuth having captured the authenticated caller identity.
+		c.Set(string(middleware.CallerAgentIDKey), agentID)
+		AddExecutionNoteHandler(storage, true)(c)
 	})
 
 	reqBody := `{"message":"This is a note","tags":["debug"]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/executions/note", strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Agent-Node-ID", agentID)
 
 	resp := httptest.NewRecorder()
 	router.ServeHTTP(resp, req)
@@ -116,11 +117,14 @@ func TestAddExecutionNoteHandler_RejectsNonOwnerAPIKeyCaller(t *testing.T) {
 	}))
 
 	router := gin.New()
-	router.POST("/api/v1/executions/note", AddExecutionNoteHandler(storage))
+	router.POST("/api/v1/executions/note", func(c *gin.Context) {
+		// APIKeyAuth would have validated the key and recorded the caller identity.
+		c.Set(string(middleware.CallerAgentIDKey), "agent-a")
+		AddExecutionNoteHandler(storage, true)(c)
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/executions/note", strings.NewReader(`{"message":"poisoned note"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Agent-Node-ID", "agent-a")
 	req.Header.Set("X-Execution-ID", executionID)
 
 	resp := httptest.NewRecorder()
@@ -173,14 +177,16 @@ func TestAddExecutionNoteHandler_RejectsMissingOwnerOrCaller(t *testing.T) {
 			}))
 
 			router := gin.New()
-			router.POST("/api/v1/executions/note", AddExecutionNoteHandler(storage))
+			router.POST("/api/v1/executions/note", func(c *gin.Context) {
+				if tt.callerID != "" {
+					c.Set(string(middleware.CallerAgentIDKey), tt.callerID)
+				}
+				AddExecutionNoteHandler(storage, true)(c)
+			})
 
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/executions/note", strings.NewReader(`{"message":"should be rejected"}`))
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("X-Execution-ID", executionID)
-			if tt.callerID != "" {
-				req.Header.Set("X-Agent-Node-ID", tt.callerID)
-			}
 
 			resp := httptest.NewRecorder()
 			router.ServeHTTP(resp, req)
@@ -243,7 +249,7 @@ func TestAddExecutionNoteHandler_DIDCallerOwnership(t *testing.T) {
 			router := gin.New()
 			router.POST("/api/v1/executions/note", func(c *gin.Context) {
 				c.Set(string(middleware.VerifiedCallerDIDKey), callerDID)
-				AddExecutionNoteHandler(storage)(c)
+				AddExecutionNoteHandler(storage, true)(c)
 			})
 
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/executions/note", strings.NewReader(`{"message":"did note"}`))
@@ -312,7 +318,7 @@ func TestAddExecutionNoteHandler_DIDResolutionFailure(t *testing.T) {
 			router := gin.New()
 			router.POST("/api/v1/executions/note", func(c *gin.Context) {
 				c.Set(string(middleware.VerifiedCallerDIDKey), callerDID)
-				AddExecutionNoteHandler(tt.storage)(c)
+				AddExecutionNoteHandler(tt.storage, true)(c)
 			})
 
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/executions/note", strings.NewReader(`{"message":"did note"}`))
@@ -330,6 +336,77 @@ func TestAddExecutionNoteHandler_DIDResolutionFailure(t *testing.T) {
 			require.Empty(t, updated.Notes)
 		})
 	}
+}
+
+func TestAddExecutionNoteHandler_SpoofedHeaderRejectedWhenEnforced(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	executionID := "exec-owned-by-victim"
+	storage := newTestExecutionStorage(nil)
+	require.NoError(t, storage.CreateExecutionRecord(context.Background(), &types.Execution{
+		ExecutionID: executionID,
+		RunID:       "run-1",
+		AgentNodeID: "victim-agent",
+		Notes:       []types.ExecutionNote{},
+		UpdatedAt:   time.Now(),
+	}))
+
+	router := gin.New()
+	// No verified DID, no authenticated context — only raw headers, as an
+	// unauthenticated attacker would send while ownership enforcement is on.
+	router.POST("/api/v1/executions/note", AddExecutionNoteHandler(storage, true))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/executions/note", strings.NewReader(`{"message":"spoofed"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Execution-ID", executionID)
+	req.Header.Set("X-Agent-Node-ID", "victim-agent")   // spoofed owner id
+	req.Header.Set("X-Caller-Agent-ID", "victim-agent") // spoofed owner id
+
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusForbidden, resp.Code)
+	require.Contains(t, resp.Body.String(), "caller agent identity is required to add notes to this execution")
+
+	updated, err := storage.GetExecutionRecord(context.Background(), executionID)
+	require.NoError(t, err)
+	require.Empty(t, updated.Notes)
+}
+
+func TestAddExecutionNoteHandler_NoAuthModeSkipsOwnership(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	executionID := "exec-noauth"
+	storage := newTestExecutionStorage(nil)
+	require.NoError(t, storage.CreateExecutionRecord(context.Background(), &types.Execution{
+		ExecutionID: executionID,
+		RunID:       "run-1",
+		AgentNodeID: "agent-owner",
+		Notes:       []types.ExecutionNote{},
+		UpdatedAt:   time.Now(),
+	}))
+
+	router := gin.New()
+	// ownershipEnforced=false models a fully unauthenticated deployment: app.note()
+	// must keep working even though no trusted caller identity exists.
+	router.POST("/api/v1/executions/note", AddExecutionNoteHandler(storage, false))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/executions/note", strings.NewReader(`{"message":"local note"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Execution-ID", executionID)
+	// Header identity differs from the owner; with no auth configured the
+	// ownership check is intentionally skipped, so the write still succeeds.
+	req.Header.Set("X-Agent-Node-ID", "someone-else")
+
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	updated, err := storage.GetExecutionRecord(context.Background(), executionID)
+	require.NoError(t, err)
+	require.Len(t, updated.Notes, 1)
+	require.Equal(t, "local note", updated.Notes[0].Message)
 }
 
 func TestExecutionNoteCallerAgentIDResolution(t *testing.T) {
@@ -357,25 +434,31 @@ func TestExecutionNoteCallerAgentIDResolution(t *testing.T) {
 		require.Equal(t, "agent-from-context", got)
 	})
 
-	t.Run("caller header fallback", func(t *testing.T) {
+	t.Run("raw caller/node headers are not trusted", func(t *testing.T) {
+		// Without a verified DID or an authenticated middleware context value,
+		// attacker-controlled X-Caller-Agent-ID / X-Agent-Node-ID headers must NOT
+		// resolve to an identity — they would otherwise allow ownership spoofing.
 		c := newContext()
-		c.Request.Header.Set("X-Caller-Agent-ID", " agent-from-caller ")
-		c.Request.Header.Set("X-Agent-Node-ID", "agent-from-node")
+		c.Request.Header.Set("X-Caller-Agent-ID", "spoofed-caller")
+		c.Request.Header.Set("X-Agent-Node-ID", "spoofed-node")
 
 		got, err := executionNoteCallerAgentID(context.Background(), c, newTestExecutionStorage(nil))
 
 		require.NoError(t, err)
-		require.Equal(t, "agent-from-caller", got)
+		require.Empty(t, got)
 	})
 
-	t.Run("agent node header fallback", func(t *testing.T) {
+	t.Run("non-string context value falls through to empty, not raw headers", func(t *testing.T) {
+		// A non-string value on the caller-id key must not silently revert to
+		// reading attacker-controlled headers.
 		c := newContext()
-		c.Request.Header.Set("X-Agent-Node-ID", " agent-from-node ")
+		c.Set(string(middleware.CallerAgentIDKey), 42)
+		c.Request.Header.Set("X-Agent-Node-ID", "spoofed-node")
 
 		got, err := executionNoteCallerAgentID(context.Background(), c, newTestExecutionStorage(nil))
 
 		require.NoError(t, err)
-		require.Equal(t, "agent-from-node", got)
+		require.Empty(t, got)
 	})
 
 	t.Run("DID list fallback skips nil entries", func(t *testing.T) {

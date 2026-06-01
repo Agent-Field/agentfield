@@ -167,7 +167,7 @@ func (s *AgentFieldServer) registerUIAPI() {
 			executions.POST("/:execution_id/resume", handlers.ResumeExecutionHandler(s.storage))
 
 			// Execution notes endpoints for UI
-			executions.POST("/note", handlers.AddExecutionNoteHandler(s.storage))
+			executions.POST("/note", handlers.AddExecutionNoteHandler(s.storage, s.noteOwnershipEnforced()))
 			executions.GET("/:execution_id/notes", handlers.GetExecutionNotesHandler(s.storage))
 
 			// Structured execution logs for the execution detail page

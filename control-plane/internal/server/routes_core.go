@@ -140,7 +140,7 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	agentAPI.POST("/webhooks/approval-response", handlers.ApprovalWebhookHandler(s.storage, s.config.AgentField.Approval.WebhookSecret))
 
 	// Execution notes endpoints for app.note() feature
-	agentAPI.POST("/executions/note", handlers.AddExecutionNoteHandler(s.storage))
+	agentAPI.POST("/executions/note", handlers.AddExecutionNoteHandler(s.storage, s.noteOwnershipEnforced()))
 	agentAPI.GET("/executions/:execution_id/notes", handlers.GetExecutionNotesHandler(s.storage))
 	agentAPI.POST("/workflow/executions/events", handlers.WorkflowExecutionEventHandler(s.storage))
 

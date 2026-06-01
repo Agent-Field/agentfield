@@ -87,6 +87,25 @@ func (s *AgentFieldServer) applyGlobalMiddleware() {
 		s.Router.Use(middleware.DIDAuthMiddleware(s.didWebService, didAuthConfig))
 		logger.Logger.Info().Msg("🆔 DID authentication middleware enabled")
 	}
+
+	// Warn loudly when the server runs without any authentication: execution-note
+	// ownership (and any other identity-dependent guard) cannot be enforced
+	// because no trusted caller identity is established for incoming requests.
+	if !s.noteOwnershipEnforced() {
+		logger.Logger.Warn().Msg("⚠️  No authentication configured (API key and DID auth both disabled): execution-note ownership is NOT enforced. Enable API key or DID auth to protect execution notes from cross-agent writes.")
+	}
+}
+
+// noteOwnershipEnforced reports whether the server runs with an authentication
+// method that establishes a trusted caller identity (API key or DID auth).
+// Execution-note ownership can only be enforced when this is true; in a fully
+// unauthenticated deployment there is no trustworthy caller identity to compare
+// against, so the ownership guard is skipped.
+func (s *AgentFieldServer) noteOwnershipEnforced() bool {
+	if s.config.API.Auth.APIKey != "" {
+		return true
+	}
+	return s.config.Features.DID.Enabled && s.config.Features.DID.Authorization.DIDAuthEnabled && s.didWebService != nil
 }
 
 func uniqueStrings(in []string) []string {
