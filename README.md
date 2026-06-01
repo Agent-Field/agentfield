@@ -379,6 +379,15 @@ docker run -p 8080:8080 agentfield/control-plane:latest
       <a href="https://agentfield.ai/github/cloudsecurity/?utm_source=github-readme&utm_campaign=github-readme&utm_content=cloudsec&utm_id=github-readme-cloudsec-repo">View project →</a>
     </td>
     <td align="center" width="50%">
+      <a href="https://agentfield.ai/pr-af/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-pr-af-repo">
+        <img src="assets/examples/agentic-pr-reviewer.png" alt="Agentic PR Reviewer" />
+      </a>
+      <br/>
+      <b>Agentic PR Reviewer</b>
+      <br/>
+      <sub>Builds a custom review strategy for every PR - spawns parallel reviewer agents with runtime-crafted prompts, adversarially challenges its own findings, and posts evidence-grounded inline comments.</sub>
+      <br/><br/>
+      <a href="https://agentfield.ai/pr-af/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-pr-af-repo">View project →</a>
     </td>
   </tr>
 </table>
