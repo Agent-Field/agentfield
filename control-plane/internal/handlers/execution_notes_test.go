@@ -409,6 +409,54 @@ func TestAddExecutionNoteHandler_NoAuthModeSkipsOwnership(t *testing.T) {
 	require.Equal(t, "local note", updated.Notes[0].Message)
 }
 
+func TestResolveExecutionNoteAgentIDByDID_RevokedEntriesFailClosed(t *testing.T) {
+	const callerDID = "did:web:example.com:agents:agent-a"
+	revokedAt := time.Now()
+
+	t.Run("revoked DID document is not used for resolution", func(t *testing.T) {
+		storage := &executionNoteDIDAuthStorage{
+			testExecutionStorage: newTestExecutionStorage(nil),
+			didDocuments: map[string]*types.DIDDocumentRecord{
+				callerDID: {DID: callerDID, AgentID: "agent-a", RevokedAt: &revokedAt},
+			},
+			// No active agent_dids entry to fall back to.
+		}
+
+		got, err := resolveExecutionNoteAgentIDByDID(context.Background(), storage, callerDID)
+
+		require.NoError(t, err)
+		require.Empty(t, got)
+	})
+
+	t.Run("revoked agent_dids entry is skipped", func(t *testing.T) {
+		storage := &executionNoteDIDAuthStorage{
+			testExecutionStorage: newTestExecutionStorage(nil),
+			agentDIDs: []*types.AgentDIDInfo{
+				{DID: callerDID, AgentNodeID: "agent-a", Status: types.AgentDIDStatusRevoked},
+			},
+		}
+
+		got, err := resolveExecutionNoteAgentIDByDID(context.Background(), storage, callerDID)
+
+		require.NoError(t, err)
+		require.Empty(t, got)
+	})
+
+	t.Run("active entry still resolves", func(t *testing.T) {
+		storage := &executionNoteDIDAuthStorage{
+			testExecutionStorage: newTestExecutionStorage(nil),
+			agentDIDs: []*types.AgentDIDInfo{
+				{DID: callerDID, AgentNodeID: "agent-a", Status: types.AgentDIDStatusActive},
+			},
+		}
+
+		got, err := resolveExecutionNoteAgentIDByDID(context.Background(), storage, callerDID)
+
+		require.NoError(t, err)
+		require.Equal(t, "agent-a", got)
+	})
+}
+
 func TestExecutionNoteCallerAgentIDResolution(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

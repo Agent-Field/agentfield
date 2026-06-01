@@ -220,9 +220,22 @@ func executionNoteCallerAgentID(ctx context.Context, c *gin.Context, storageProv
 	return "", nil
 }
 
+// resolveExecutionNoteAgentIDByDID maps a verified caller DID to its owning agent
+// node ID, consulting the did:web document table first and falling back to the
+// agent_dids registry.
+//
+// The two sources expose the same value under differently-named fields —
+// DIDDocumentRecord.AgentID (did_documents.agent_id) and AgentDIDInfo.AgentNodeID
+// (agent_dids.agent_node_id). They are kept equivalent at registration time
+// (services/nodes_register.go populates both from the same agent node ID), so
+// either is a valid owner identifier for the ownership comparison.
+//
+// Revoked entries are treated as unresolved (fail closed): a revoked DID must not
+// resolve to an agent identity even if the surrounding auth layer admitted the
+// request (e.g. a self-verifying did:key whose registry entry was later revoked).
 func resolveExecutionNoteAgentIDByDID(ctx context.Context, storageProvider ExecutionNoteStorage, callerDID string) (string, error) {
 	if lookup, ok := storageProvider.(executionNoteDIDDocumentLookup); ok {
-		if record, err := lookup.GetDIDDocument(ctx, callerDID); err == nil && record != nil {
+		if record, err := lookup.GetDIDDocument(ctx, callerDID); err == nil && record != nil && !record.IsRevoked() {
 			return strings.TrimSpace(record.AgentID), nil
 		}
 	}
@@ -237,6 +250,9 @@ func resolveExecutionNoteAgentIDByDID(ctx context.Context, storageProvider Execu
 	}
 	for _, info := range agentDIDs {
 		if info == nil {
+			continue
+		}
+		if info.Status == types.AgentDIDStatusRevoked {
 			continue
 		}
 		if strings.TrimSpace(info.DID) == callerDID {
