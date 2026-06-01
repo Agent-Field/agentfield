@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"
+	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 	"github.com/gin-gonic/gin"
@@ -208,7 +209,7 @@ func TestExecutionNotesCoverageAdditional(t *testing.T) {
 	t.Run("add note validation and update failure", func(t *testing.T) {
 		router := gin.New()
 		stub := &executionNoteStorageStub{record: &types.Execution{ExecutionID: "exec-1"}, updateErr: errors.New("boom")}
-		router.POST("/notes", AddExecutionNoteHandler(stub))
+		router.POST("/notes", AddExecutionNoteHandler(stub, false))
 
 		req := httptest.NewRequest(http.MethodPost, "/notes", strings.NewReader(`{"message":"ok"}`))
 		req.Header.Set("Content-Type", "application/json")
@@ -229,13 +230,17 @@ func TestExecutionNotesCoverageAdditional(t *testing.T) {
 		require.Equal(t, http.StatusInternalServerError, rec.Code)
 	})
 
-	t.Run("add note initializes nil tags and uses header id", func(t *testing.T) {
+	t.Run("add note initializes nil tags with matching caller identity", func(t *testing.T) {
 		stub := &executionNoteStorageStub{
 			record:   &types.Execution{ExecutionID: "exec-2", RunID: "run-2", AgentNodeID: "node-2"},
 			eventBus: events.NewExecutionEventBus(),
 		}
 		router := gin.New()
-		router.POST("/notes", AddExecutionNoteHandler(stub))
+		router.POST("/notes", func(c *gin.Context) {
+			// Authenticated caller identity matching the execution owner.
+			c.Set(string(middleware.CallerAgentIDKey), "node-2")
+			AddExecutionNoteHandler(stub, true)(c)
+		})
 
 		req := httptest.NewRequest(http.MethodPost, "/notes", strings.NewReader(`{"message":" kept "}`))
 		req.Header.Set("Content-Type", "application/json")

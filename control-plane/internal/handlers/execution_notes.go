@@ -2,12 +2,14 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"
+	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
@@ -18,6 +20,22 @@ type ExecutionNoteStorage interface {
 	GetExecutionRecord(ctx context.Context, executionID string) (*types.Execution, error)
 	UpdateExecutionRecord(ctx context.Context, executionID string, updateFunc func(*types.Execution) (*types.Execution, error)) (*types.Execution, error)
 	GetExecutionEventBus() *events.ExecutionEventBus
+}
+
+type executionNoteDIDDocumentLookup interface {
+	GetDIDDocument(ctx context.Context, did string) (*types.DIDDocumentRecord, error)
+}
+
+type executionNoteAgentDIDLister interface {
+	ListAgentDIDs(ctx context.Context) ([]*types.AgentDIDInfo, error)
+}
+
+type executionNoteAuthorizationError struct {
+	message string
+}
+
+func (e *executionNoteAuthorizationError) Error() string {
+	return e.message
 }
 
 // AddNoteRequest represents the request body for adding a note to an execution
@@ -41,8 +59,15 @@ type GetNotesResponse struct {
 }
 
 // AddExecutionNoteHandler handles POST /api/v1/executions/note
-// Adds a note to the current execution context
-func AddExecutionNoteHandler(storageProvider ExecutionNoteStorage) gin.HandlerFunc {
+// Adds a note to the current execution context.
+//
+// ownershipEnforced reports whether the server runs with an authentication
+// method (API key or DID auth) that yields a trusted caller identity. When true,
+// the caller must own the target execution or the write is rejected with 403.
+// When false the server is fully unauthenticated, there is no trustworthy
+// identity to check against, and the ownership guard is skipped (the route wiring
+// logs a startup warning in that mode).
+func AddExecutionNoteHandler(storageProvider ExecutionNoteStorage, ownershipEnforced bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req AddNoteRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -75,12 +100,29 @@ func AddExecutionNoteHandler(storageProvider ExecutionNoteStorage) gin.HandlerFu
 			note.Tags = []string{}
 		}
 
-		// Update the execution with the new note
-		ctx := context.Background()
+		// Update the execution with the new note. Resolve the caller identity and
+		// enforce execution ownership only when an auth method is active; otherwise
+		// there is no trusted identity to compare against (see ownershipEnforced).
+		ctx := c.Request.Context()
+		var callerAgentID string
+		if ownershipEnforced {
+			var resolveErr error
+			callerAgentID, resolveErr = executionNoteCallerAgentID(ctx, c, storageProvider)
+			if resolveErr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to resolve caller identity: %v", resolveErr)})
+				return
+			}
+		}
+
 		var runID string
 		updated, err := storageProvider.UpdateExecutionRecord(ctx, executionID, func(execution *types.Execution) (*types.Execution, error) {
 			if execution == nil {
 				return nil, fmt.Errorf("execution with ID %s not found", executionID)
+			}
+			if ownershipEnforced {
+				if err := ensureExecutionNoteOwnership(callerAgentID, execution); err != nil {
+					return nil, err
+				}
 			}
 
 			// Store run ID for SSE event (run_id is the workflow ID equivalent)
@@ -99,6 +141,14 @@ func AddExecutionNoteHandler(storageProvider ExecutionNoteStorage) gin.HandlerFu
 		})
 
 		if err != nil {
+			var authzErr *executionNoteAuthorizationError
+			if errors.As(err, &authzErr) {
+				c.JSON(http.StatusForbidden, gin.H{
+					"error":   "execution_ownership_mismatch",
+					"message": authzErr.message,
+				})
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to add note: %v", err)})
 			return
 		}
@@ -128,6 +178,89 @@ func AddExecutionNoteHandler(storageProvider ExecutionNoteStorage) gin.HandlerFu
 			Message: "Note added successfully",
 		})
 	}
+}
+
+func ensureExecutionNoteOwnership(callerAgentID string, execution *types.Execution) error {
+	ownerAgentID := strings.TrimSpace(execution.AgentNodeID)
+	if ownerAgentID == "" {
+		return &executionNoteAuthorizationError{message: "execution owner is required to add notes"}
+	}
+
+	if callerAgentID == "" {
+		return &executionNoteAuthorizationError{message: "caller agent identity is required to add notes to this execution"}
+	}
+	if callerAgentID != ownerAgentID {
+		return &executionNoteAuthorizationError{message: "this execution does not belong to the requesting agent"}
+	}
+
+	return nil
+}
+
+// executionNoteCallerAgentID resolves the caller's owning agent node ID from a
+// trusted source only: a cryptographically verified DID (set by DIDAuthMiddleware)
+// or the authenticated middleware context populated by APIKeyAuth after a
+// successful key check. Raw X-Caller-Agent-ID / X-Agent-Node-ID request headers
+// are deliberately NOT consulted here — without an auth layer validating the
+// request they are attacker-controlled, so trusting them would let any caller
+// spoof execution ownership. Returns "" when no trusted identity is present,
+// which fails the ownership check closed.
+func executionNoteCallerAgentID(ctx context.Context, c *gin.Context, storageProvider ExecutionNoteStorage) (string, error) {
+	if callerDID := strings.TrimSpace(middleware.GetVerifiedCallerDID(c)); callerDID != "" {
+		return resolveExecutionNoteAgentIDByDID(ctx, storageProvider, callerDID)
+	}
+
+	if callerID, exists := c.Get(string(middleware.CallerAgentIDKey)); exists {
+		if id, ok := callerID.(string); ok {
+			if id = strings.TrimSpace(id); id != "" {
+				return id, nil
+			}
+		}
+	}
+
+	return "", nil
+}
+
+// resolveExecutionNoteAgentIDByDID maps a verified caller DID to its owning agent
+// node ID, consulting the did:web document table first and falling back to the
+// agent_dids registry.
+//
+// The two sources expose the same value under differently-named fields —
+// DIDDocumentRecord.AgentID (did_documents.agent_id) and AgentDIDInfo.AgentNodeID
+// (agent_dids.agent_node_id). They are kept equivalent at registration time
+// (services/nodes_register.go populates both from the same agent node ID), so
+// either is a valid owner identifier for the ownership comparison.
+//
+// Revoked entries are treated as unresolved (fail closed): a revoked DID must not
+// resolve to an agent identity even if the surrounding auth layer admitted the
+// request (e.g. a self-verifying did:key whose registry entry was later revoked).
+func resolveExecutionNoteAgentIDByDID(ctx context.Context, storageProvider ExecutionNoteStorage, callerDID string) (string, error) {
+	if lookup, ok := storageProvider.(executionNoteDIDDocumentLookup); ok {
+		if record, err := lookup.GetDIDDocument(ctx, callerDID); err == nil && record != nil && !record.IsRevoked() {
+			return strings.TrimSpace(record.AgentID), nil
+		}
+	}
+
+	lister, ok := storageProvider.(executionNoteAgentDIDLister)
+	if !ok {
+		return "", nil
+	}
+	agentDIDs, err := lister.ListAgentDIDs(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve caller DID: %w", err)
+	}
+	for _, info := range agentDIDs {
+		if info == nil {
+			continue
+		}
+		if info.Status == types.AgentDIDStatusRevoked {
+			continue
+		}
+		if strings.TrimSpace(info.DID) == callerDID {
+			return strings.TrimSpace(info.AgentNodeID), nil
+		}
+	}
+
+	return "", nil
 }
 
 // GetExecutionNotesHandler handles GET /api/v1/executions/:execution_id/notes

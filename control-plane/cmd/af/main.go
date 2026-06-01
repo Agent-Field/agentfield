@@ -39,9 +39,13 @@ func main() {
 
 	rootCmd := cli.NewRootCommand(runServer, versionInfo)
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, cli.AgentHintJSON(err.Error()))
+		if cli.IsCLIExitError(err) {
+			fmt.Fprintln(os.Stderr, err.Error())
+		} else {
+			fmt.Fprintln(os.Stderr, cli.AgentHintJSON(err.Error()))
+		}
 		logger.Logger.Error().Err(err).Msg("Error executing root command")
-		os.Exit(1)
+		os.Exit(cli.ExitCode(err))
 	}
 }
 
