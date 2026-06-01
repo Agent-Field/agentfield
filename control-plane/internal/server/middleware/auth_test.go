@@ -91,6 +91,55 @@ func TestAPIKeyAuth_ValidQueryParam(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
+func TestAPIKeyAuth_SetsCallerAgentIDContext(t *testing.T) {
+	tests := []struct {
+		name     string
+		headers  map[string]string
+		expected string
+	}{
+		{
+			name: "caller header takes precedence",
+			headers: map[string]string{
+				"X-Caller-Agent-ID": "agent-from-caller",
+				"X-Agent-Node-ID":   "agent-from-node",
+			},
+			expected: "agent-from-caller",
+		},
+		{
+			name: "agent node header fallback",
+			headers: map[string]string{
+				"X-Agent-Node-ID": "agent-from-node",
+			},
+			expected: "agent-from-node",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			router := gin.New()
+			router.Use(APIKeyAuth(AuthConfig{APIKey: "secret-key"}))
+			router.GET("/api/v1/test", func(c *gin.Context) {
+				callerID, _ := c.Get(string(CallerAgentIDKey))
+				c.JSON(http.StatusOK, gin.H{"caller_agent_id": callerID})
+			})
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
+			req.Header.Set("X-API-Key", "secret-key")
+			for key, value := range tt.headers {
+				req.Header.Set(key, value)
+			}
+			w := httptest.NewRecorder()
+
+			router.ServeHTTP(w, req)
+
+			require.Equal(t, http.StatusOK, w.Code)
+			var resp map[string]string
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+			assert.Equal(t, tt.expected, resp["caller_agent_id"])
+		})
+	}
+}
+
 func TestAPIKeyAuth_InvalidKey(t *testing.T) {
 	router := setupRouter(AuthConfig{APIKey: "secret-key"})
 

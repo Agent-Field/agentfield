@@ -106,9 +106,9 @@ func APIKeyAuth(config AuthConfig) gin.HandlerFunc {
 				"error":   "unauthorized",
 				"message": "invalid or missing API key. Provide via X-API-Key header, Authorization: Bearer <token>, or ?api_key= query param",
 				"help": map[string]string{
-					"kb":             "GET /api/v1/agentic/kb/topics (public, no auth required)",
-					"guide":          "GET /api/v1/agentic/kb/guide?goal=<your goal> (public)",
-					"api_discovery":  "GET /api/v1/agentic/discover (requires auth)",
+					"kb":              "GET /api/v1/agentic/kb/topics (public, no auth required)",
+					"guide":           "GET /api/v1/agentic/kb/guide?goal=<your goal> (public)",
+					"api_discovery":   "GET /api/v1/agentic/discover (requires auth)",
 					"agent_discovery": "GET /api/v1/discovery/capabilities (requires auth — lists live agents, reasoners, skills)",
 				},
 			})
@@ -117,6 +117,11 @@ func APIKeyAuth(config AuthConfig) gin.HandlerFunc {
 
 		// Set auth level for downstream handlers (used by agentic API for filtering)
 		c.Set("auth_level", "api_key")
+		if callerAgentID := strings.TrimSpace(c.GetHeader("X-Caller-Agent-ID")); callerAgentID != "" {
+			c.Set(string(CallerAgentIDKey), callerAgentID)
+		} else if callerAgentID := strings.TrimSpace(c.GetHeader("X-Agent-Node-ID")); callerAgentID != "" {
+			c.Set(string(CallerAgentIDKey), callerAgentID)
+		}
 		c.Next()
 	}
 }

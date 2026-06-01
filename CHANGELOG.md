@@ -6,6 +6,82 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.87-rc.1] - 2026-06-01
+
+
+### Fixed
+
+- Fix(control-plane): authorize execution note writes(#420) (#575)
+
+* fix(control-plane): authorize execution note writes(#420)
+
+* fix(control-plane): require trusted identity for execution-note writes
+
+Closes the no-auth IDOR bypass flagged in PR #575 review. The execution
+note write handler resolved caller identity from raw X-Caller-Agent-ID /
+X-Agent-Node-ID request headers as a last resort. Under the default config
+(no API key, DID auth off) that header read was the *sole* identity source,
+so any caller could spoof ownership and append notes to another agent's
+execution.
+
+- executionNoteCallerAgentID now trusts only a verified DID (DIDAuthMiddleware)
+  or the authenticated middleware context populated by APIKeyAuth after a
+  successful key check. The raw-header fallback is removed.
+- AddExecutionNoteHandler takes an ownershipEnforced flag. Ownership is
+  enforced whenever an auth method is active; when the server is fully
+  unauthenticated there is no trustworthy identity, so the guard is skipped
+  (app.note() keeps working in local/dev) and a startup warning is logged.
+- noteOwnershipEnforced() derives the flag from API-key / DID-auth config and
+  drives the warning in applyGlobalMiddleware.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* fix(control-plane): fail closed on revoked DIDs in execution-note resolver
+
+Defense-in-depth for the DID->agent resolution used by execution-note
+ownership (PR #575 review). The resolver accepted any non-error DID document
+and any matching agent_dids row regardless of revocation status, so a revoked
+did:key whose registry entry was marked revoked (auth still passes, it is
+self-verifying) could resolve to an agent identity.
+
+- Skip DIDDocumentRecord results where IsRevoked() is true.
+- Skip AgentDIDInfo entries with status "revoked".
+- Document that DIDDocumentRecord.AgentID and AgentDIDInfo.AgentNodeID are the
+  same value under differently-named fields, kept equivalent at registration.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (4df64a1)
+
+## [0.1.86] - 2026-06-01
+
+## [0.1.86-rc.2] - 2026-06-01
+
+
+### Added
+
+- Feat(cli): add minimal trigger surface (#605)
+
+* feat(cli): add reasoner trigger commands
+
+* fix(cli): keep trigger streams open
+
+* test(cli): cover trigger command flows
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (4d4cf02)
+
+
+
+### Documentation
+
+- Docs: add Agentic PR Reviewer (pr-af) to Built With AgentField (#607) (15016d4)
+
 ## [0.1.86-rc.1] - 2026-05-29
 
 
