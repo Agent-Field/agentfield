@@ -30,7 +30,7 @@ AgentField is an open-source control plane that lets you build AI agents callabl
 
 https://github.com/user-attachments/assets/61fb5081-e39e-46a2-8b66-160b31fa7d71
 
-<sub><b>One prompt → a running multi-agent backend.</b> Scaffold, register, route, audit. No glue code.</sub>
+<sub><b>One prompt → a running containerized production ready multi-agent backend.</b> No glue code, start using the agent API!</sub>
 
 </div>
 
@@ -135,6 +135,29 @@ docker run -p 8080:8080 agentfield/control-plane:latest
 [Deployment guide →](https://agentfield.ai/docs/reference/deploy?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-deploy) for Docker Compose, Kubernetes, and production setups.
 
 </details>
+
+## How AgentField fits in your stack
+
+Most agent tools help you **write** agent logic. AgentField is what **runs** it in production — the operating layer that makes agents callable by software, durable across failures, governed by policy, and provable by audit.
+
+|  | **Frameworks**<br><sub>LangChain · CrewAI · PydanticAI · OpenAI Agents SDK</sub> | **Workflow engines**<br><sub>Temporal · Airflow</sub> | **Visual builders**<br><sub>n8n · Zapier</sub> | **AgentField** |
+|---|:-:|:-:|:-:|:-:|
+| Build agent logic (prompts, tools, structured output) | ● | — | — | ● |
+| Callable REST APIs out-of-box | — | ◐ | ● | ● |
+| Async + retries + webhooks | — | ● | ◐ | ● |
+| Multi-language SDKs (Python · Go · TypeScript) | ◐ | ● | — | ● |
+| Memory scopes (global · agent · session · run) | ◐ | — | — | ● |
+| Service discovery + cross-agent calls | — | — | — | **●** |
+| Cryptographic identity per agent | — | — | — | **●** |
+| Tamper-proof, verifiable audit per execution | — | — | — | **●** |
+| Harness orchestration (Claude Code · Codex · CLI) | — | — | — | **●** |
+| Fleet observability (DAGs · metrics · traces) | — | ◐ | — | ● |
+
+<sub>● full · ◐ partial · — not the focus</sub>
+
+**Use a framework when you're proving behavior.** Use AgentField when agents need to be production systems — callable by software, coordinating across services, surviving failures, and governed under audit.
+
+[Full comparison & decision guide →](https://agentfield.ai/docs/learn/vs-frameworks?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-vs-frameworks)
 
 ## What You Get
 
@@ -401,23 +424,6 @@ Built something with AgentField? [Submit your project to be featured on the exam
 </div>
 
 The control plane is a stateless Go service. Agents connect from anywhere - your laptop, Docker, Kubernetes. They register capabilities, the control plane routes calls between them, tracks execution as DAGs, and enforces policies. [Full architecture docs →](https://agentfield.ai/docs/learn/architecture?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-architecture)
-
-## How does AgentField compare?
-
-Agent frameworks help you author agent behavior. AgentField is the runtime around them — the layer that makes agents callable, scalable, governed, and provable in production.
-
-| If you're using... | Reach for AgentField when... |
-|---|---|
-| **LangChain / LangGraph** — chains, tools, agents | You need callable APIs, async execution, identity, audit |
-| **CrewAI** — multi-agent teams, roles, flows | You need fleet scale, governance, production resilience |
-| **PydanticAI / OpenAI Agents SDK** — typed agents, native LLM features | You need a portable backend with discovery and policy |
-| **Temporal / workflow engines** — durable execution, retries, history | You need agent-native: memory scopes, harnesses, model-aware obs, identity |
-| **n8n / Zapier-style builders** — visual workflows, connectors | You need developer-first code, testable units, scalable agent services |
-| **A custom platform** — full control | You don't want to rebuild queues, workers, retries, discovery, audit |
-
-Still proving behavior? LangChain or CrewAI are great for prototyping. AgentField is what you reach for when agents become production systems — callable by software, running asynchronously, coordinating across services, touching business workflows, or needing enterprise controls.
-
-[Full comparison & decision guide →](https://agentfield.ai/docs/learn/vs-frameworks?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-vs-frameworks)
 
 ## Learn More
 
