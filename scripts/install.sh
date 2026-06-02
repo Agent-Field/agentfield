@@ -18,7 +18,7 @@ STAGING="${STAGING:-0}"
 
 # Skill install mode (all | all-targets | interactive | none)
 #
-# Defaults to "all" — installs the agentfield-multi-reasoner-builder skill
+# Defaults to "all" — installs the agentfield skill
 # into every coding agent the binary detects on the user's machine, without
 # any prompts. This is the right default for `curl … | bash` because there
 # is no TTY for an interactive picker to read from, and the whole point of
@@ -88,8 +88,8 @@ parse_args() {
         echo "Options:"
         echo "  --staging              Install latest prerelease/staging version"
         echo "  --verbose              Enable verbose output"
-        echo "  --no-skill             Skip the agentfield-multi-reasoner-builder"
-        echo "                         skill install step (binary only)"
+        echo "  --no-skill             Skip the agentfield skill install step"
+        echo "                         (binary only)"
         echo "  --all-skills           Install the skill into every detected coding"
         echo "                         agent (default behaviour — flag kept for"
         echo "                         backwards compatibility with older docs)"
@@ -529,10 +529,10 @@ verify_installation() {
   fi
 }
 
-# Install the agentfield-multi-reasoner-builder skill into coding-agent
-# integrations (Claude Code, Codex, Gemini, OpenCode, Aider, Windsurf, Cursor).
-# Delegated to the freshly-installed `af` binary so the install logic stays
-# in one place. Honors $SKILL_MODE: all (default) | all-targets | interactive | none.
+# Install the agentfield skill into coding-agent integrations (Claude Code,
+# Codex, Gemini, OpenCode, Aider, Windsurf, Cursor). Delegated to the
+# freshly-installed `af` binary so the install logic stays in one place.
+# Honors $SKILL_MODE: all (default) | all-targets | interactive | none.
 install_skill() {
   local install_dir="$1"
   local af_bin="$install_dir/agentfield"
@@ -707,10 +707,10 @@ main() {
   # Verify installation
   verify_installation "$INSTALL_DIR"
 
-  # Install the agentfield-multi-reasoner-builder skill into coding agents.
-  # Default mode is `all` — installs into every detected coding agent without
-  # any prompts (the right behaviour for `curl … | bash`). Override via
-  # --no-skill / --all-skill-targets / --interactive-skill or SKILL_MODE.
+  # Install the agentfield skill into coding agents. Default mode is `all` —
+  # installs into every detected coding agent without any prompts (the right
+  # behaviour for `curl … | bash`). Override via --no-skill /
+  # --all-skill-targets / --interactive-skill or SKILL_MODE.
   install_skill "$INSTALL_DIR"
 
   # Print success message
