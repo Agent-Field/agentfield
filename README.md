@@ -6,12 +6,12 @@
 
 *AI has outgrown chatbots and prompt orchestrators. Backend agents need backend infrastructure.*
 
-[![Stars](https://img.shields.io/github/stars/Agent-Field/agentfield?style=flat&logo=github&logoColor=white&color=d4a24a&labelColor=0c0b09)](https://github.com/Agent-Field/agentfield/stargazers)
-[![License](https://img.shields.io/badge/license-Apache%202.0-d4a24a.svg?style=flat&labelColor=0c0b09)](LICENSE)
-[![Downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fgist.githubusercontent.com%2Fsantoshkumarradha%2Fd98e2ad73502b4075f6a5f0ae4f5cae5%2Fraw%2Fbadge.json&style=flat&logo=download&logoColor=white&labelColor=0c0b09&cacheSeconds=3600)](https://github.com/Agent-Field/agentfield)
-[![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fgist.githubusercontent.com%2Fsantoshkumarradha%2F433fb09c2d54c3c2589125cfd3eb14a2%2Fraw%2Fbadge.json&style=flat&logo=github&logoColor=white&labelColor=0c0b09&cacheSeconds=3600)](https://github.com/Agent-Field/agentfield/actions/workflows/coverage.yml)
-[![Last Commit](https://img.shields.io/github/last-commit/Agent-Field/agentfield?style=flat&logo=git&logoColor=white&color=d4a24a&labelColor=0c0b09)](https://github.com/Agent-Field/agentfield/commits/main)
-[![Discord](https://img.shields.io/badge/discord-join%20us-d4a24a.svg?style=flat&labelColor=0c0b09&logo=discord&logoColor=white)](https://discord.gg/aBHaXMkpqh)
+[![Stars](https://img.shields.io/github/stars/Agent-Field/agentfield?style=flat&logo=github&logoColor=e8e5dc&color=0c0b09&labelColor=8b7355)](https://github.com/Agent-Field/agentfield/stargazers)
+[![License](https://img.shields.io/badge/license-Apache%202.0-0c0b09.svg?style=flat&labelColor=8b7355)](LICENSE)
+[![Downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fgist.githubusercontent.com%2Fsantoshkumarradha%2Fd98e2ad73502b4075f6a5f0ae4f5cae5%2Fraw%2Fbadge.json&style=flat&logo=download&logoColor=e8e5dc&color=0c0b09&labelColor=8b7355&cacheSeconds=3600)](https://github.com/Agent-Field/agentfield)
+[![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fgist.githubusercontent.com%2Fsantoshkumarradha%2F433fb09c2d54c3c2589125cfd3eb14a2%2Fraw%2Fbadge.json&style=flat&logo=github&logoColor=e8e5dc&color=0c0b09&labelColor=8b7355&cacheSeconds=3600)](https://github.com/Agent-Field/agentfield/actions/workflows/coverage.yml)
+[![Last Commit](https://img.shields.io/github/last-commit/Agent-Field/agentfield?style=flat&logo=git&logoColor=e8e5dc&color=0c0b09&labelColor=8b7355)](https://github.com/Agent-Field/agentfield/commits/main)
+[![Discord](https://img.shields.io/badge/discord-join%20us-0c0b09.svg?style=flat&labelColor=8b7355&logo=discord&logoColor=e8e5dc)](https://discord.gg/aBHaXMkpqh)
 
 <!-- All outbound agentfield.ai links must use UTM parameters, not direct URLs. See assets/utm-links.csv for the full list — target URLs there are for verification and reference only, always use the UTM version in the README. Update both the README and the CSV when adding or changing links. -->
 **[Docs](https://agentfield.ai/docs/learn?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-docs)** · **[Quick Start](https://agentfield.ai/docs/learn/quickstart?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-quickstart)** · **[Python SDK](https://agentfield.ai/docs/reference/sdks/python?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-python-sdk)** · **[Go SDK](https://agentfield.ai/docs/reference/sdks/go?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-go-sdk)** · **[TypeScript SDK](https://agentfield.ai/docs/reference/sdks/typescript?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-typescript-sdk)** · **[REST API](https://agentfield.ai/docs/reference/sdks/rest-api?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-rest-api)** · **[Examples](#built-with-agentfield)** · **[Discord](https://discord.gg/aBHaXMkpqh)**
@@ -23,8 +23,6 @@
 <img src="assets/harness-banner.png" alt="Now includes Harness Orchestration — multi-turn coding agents with Claude Code, Codex, Gemini CLI, and OpenCode" width="100%" />
 </a>
 </div>
-
----
 
 AgentField is an open-source control plane that lets you build AI agents callable by any service in your stack - frontends, backends, other agents, cron jobs - just like any other API. You write agent logic in Python, Go, or TypeScript. AgentField turns it into production infrastructure: routing, coordination, memory, async execution, and cryptographic audit trails. Every function becomes a REST endpoint. Every agent gets a cryptographic identity. Every decision is traceable.
 
@@ -404,11 +402,22 @@ Built something with AgentField? [Submit your project to be featured on the exam
 
 The control plane is a stateless Go service. Agents connect from anywhere - your laptop, Docker, Kubernetes. They register capabilities, the control plane routes calls between them, tracks execution as DAGs, and enforces policies. [Full architecture docs →](https://agentfield.ai/docs/learn/architecture?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-architecture)
 
-## Is AgentField for you?
+## How does AgentField compare?
 
-**Yes if** you’re building beyond chatbots or small multi-agent workflows. If your agents are making decisions inside backend systems like approving refunds, processing claims, coordinating research, or running code, and you need routing, async execution, tracing, and audit trails.
+Agent frameworks help you author agent behavior. AgentField is the runtime around them — the layer that makes agents callable, scalable, governed, and provable in production.
 
-**Not yet if** you’re still in the chatbot or early workflow stage, tools like LangChain or CrewAI are a great fit to explore and iterate. When you start pushing toward larger, production-grade agent systems, that’s where we come in.
+| If you're using... | Reach for AgentField when... |
+|---|---|
+| **LangChain / LangGraph** — chains, tools, agents | You need callable APIs, async execution, identity, audit |
+| **CrewAI** — multi-agent teams, roles, flows | You need fleet scale, governance, production resilience |
+| **PydanticAI / OpenAI Agents SDK** — typed agents, native LLM features | You need a portable backend with discovery and policy |
+| **Temporal / workflow engines** — durable execution, retries, history | You need agent-native: memory scopes, harnesses, model-aware obs, identity |
+| **n8n / Zapier-style builders** — visual workflows, connectors | You need developer-first code, testable units, scalable agent services |
+| **A custom platform** — full control | You don't want to rebuild queues, workers, retries, discovery, audit |
+
+Still proving behavior? LangChain or CrewAI are great for prototyping. AgentField is what you reach for when agents become production systems — callable by software, running asynchronously, coordinating across services, touching business workflows, or needing enterprise controls.
+
+[Full comparison & decision guide →](https://agentfield.ai/docs/learn/vs-frameworks?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-vs-frameworks)
 
 ## Learn More
 
