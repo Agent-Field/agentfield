@@ -143,15 +143,16 @@ Most agent tools help you **write** agent logic. AgentField is what **runs** it 
 |  | **Frameworks**<br><sub>LangChain · CrewAI · PydanticAI · OpenAI Agents SDK</sub> | **Workflow engines**<br><sub>Temporal · Airflow</sub> | **Visual builders**<br><sub>n8n · Zapier</sub> | **AgentField** |
 |---|:-:|:-:|:-:|:-:|
 | Build agent logic (prompts, tools, structured output) | ● | — | — | ● |
-| Callable REST APIs out-of-box | — | ◐ | ● | ● |
+| Callable production ready REST APIs out-of-box | — | ◐ | ● | ● |
 | Async + retries + webhooks | — | ● | ◐ | ● |
-| Multi-language SDKs (Python · Go · TypeScript) | ◐ | ● | — | ● |
 | Memory scopes (global · agent · session · run) | ◐ | — | — | ● |
 | Service discovery + cross-agent calls | — | — | — | **●** |
-| Cryptographic identity per agent | — | — | — | **●** |
+| Distributed agents | — | — | — | **●** |
 | Tamper-proof, verifiable audit per execution | — | — | — | **●** |
 | Harness orchestration (Claude Code · Codex · CLI) | — | — | — | **●** |
+| Identity and Access Management (IAM) for agents | — | — | — | ● |
 | Fleet observability (DAGs · metrics · traces) | — | ◐ | — | ● |
+| Multi-language SDKs (Python · Go · TypeScript) | ◐ | ● | — | ● |
 
 <sub>● full · ◐ partial · — not the focus</sub>
 
