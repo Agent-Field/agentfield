@@ -63,12 +63,13 @@ vi.mock('ai', () => ({
 }));
 
 vi.mock('../src/ai/RateLimiter.js', () => ({
-  StatelessRateLimiter: vi.fn().mockImplementation((config: object) => {
-    rateLimiterCtorMock(config);
-    return {
-      executeWithRetry: executeWithRetryMock
-    };
-  })
+  StatelessRateLimiter: class MockStatelessRateLimiter {
+    constructor(config: object) {
+      rateLimiterCtorMock(config);
+    }
+
+    executeWithRetry = executeWithRetryMock;
+  }
 }));
 
 vi.mock('@ai-sdk/openai', () => ({
