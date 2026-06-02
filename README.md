@@ -28,7 +28,7 @@ AgentField is an open-source control plane that lets you build AI agents callabl
 
 <div align="center">
 
-https://github.com/user-attachments/assets/21c9fcd9-b6d6-402b-8857-962252b13ac3
+https://github.com/user-attachments/assets/f2fc3173-1b42-4973-91c3-173f014bbe44
 
 <sub><b>One prompt → a running multi-agent backend.</b> Scaffold, register, route, audit. No glue code.</sub>
 
