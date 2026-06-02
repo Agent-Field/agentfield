@@ -34,7 +34,7 @@ https://github.com/user-attachments/assets/9fb7b1cf-26de-4b9b-9ba2-917252cc26ec
 
 </div>
 
-## Build it with a prompt
+## Build production agents with a prompt.
 
 **Describe the system in one line. Get a production-ready multi-agent backend.** Works in Claude Code, Codex, Gemini CLI, OpenCode, Aider, Windsurf, and Cursor.
 
