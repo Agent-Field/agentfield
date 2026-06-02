@@ -85,10 +85,10 @@ func GetSupportedLanguages() []string {
 // to customize: Dockerfile, docker-compose.yml, .env.example, .dockerignore.
 //
 // CLAUDE.md and README.md are NOT generated here — those are produced by the
-// agentfield-multi-reasoner-builder skill AFTER the agent has written the real
-// reasoner architecture in main.py, so they can contain real reasoner names,
-// real curl examples, and a real architectural justification instead of
-// placeholders that ship with TODO markers.
+// agentfield skill AFTER the agent has written the real reasoner architecture
+// in main.py, so they can contain real reasoner names, real curl examples,
+// and a real architectural justification instead of placeholders that ship
+// with TODO markers.
 func GetDockerTemplateFiles(language string) map[string]string {
 	files := map[string]string{
 		"docker/docker-compose.yml.tmpl": "docker-compose.yml",

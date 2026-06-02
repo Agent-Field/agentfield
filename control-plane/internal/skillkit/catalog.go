@@ -11,11 +11,12 @@ import (
 // is the only place new skills get registered. Bump Version on every change
 // so `af skill update` knows there's a new build.
 type Skill struct {
-	Name        string // canonical skill name (kebab-case, used as directory name)
-	Version     string // semver-ish version string baked into the binary
-	Description string // one-line description for `af skill list`
-	EmbedRoot   string // root path inside SkillData where this skill's files live
-	EntryFile   string // relative path to the skill's main file (usually SKILL.md)
+	Name        string   // canonical skill name (kebab-case, used as directory name)
+	Aliases     []string // legacy names that should resolve to this skill (back-compat)
+	Version     string   // semver-ish version string baked into the binary
+	Description string   // one-line description for `af skill list`
+	EmbedRoot   string   // root path inside SkillData where this skill's files live
+	EntryFile   string   // relative path to the skill's main file (usually SKILL.md)
 }
 
 // Catalog is the registry of every skill the binary ships. Add a new entry
@@ -23,20 +24,27 @@ type Skill struct {
 // skill_data/<name>/ so the embed picks them up.
 var Catalog = []Skill{
 	{
-		Name:        "agentfield-multi-reasoner-builder",
-		Version:     "0.3.0",
-		Description: "Architect and ship complete multi-agent backends on AgentField — composite intelligence from five foundational principles, deep dynamic call graphs, async-first smoke tests, and hard runtime-contract rules.",
-		EmbedRoot:   "skill_data/agentfield-multi-reasoner-builder",
+		Name:        "agentfield",
+		Aliases:     []string{"agentfield-multi-reasoner-builder"},
+		Version:     "0.4.0",
+		Description: "Design and ship a multi-agent system on AgentField — composite intelligence from five foundational principles, deep dynamic call graphs, live SDK docs from agentfield.ai, async-first smoke tests.",
+		EmbedRoot:   "skill_data/agentfield",
 		EntryFile:   "SKILL.md",
 	},
 }
 
 // CatalogByName returns the skill with the given name, or an error if it
-// is not in the registry.
+// is not in the registry. Aliases are resolved transparently — a query for a
+// legacy name returns the current canonical skill.
 func CatalogByName(name string) (Skill, error) {
 	for _, s := range Catalog {
 		if s.Name == name {
 			return s, nil
+		}
+		for _, alias := range s.Aliases {
+			if alias == name {
+				return s, nil
+			}
 		}
 	}
 	available := make([]string, len(Catalog))

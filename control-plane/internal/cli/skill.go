@@ -29,9 +29,9 @@ func NewSkillCommand() *cobra.Command {
 A skill is a self-contained instruction packet (a SKILL.md file plus
 reference markdown) that teaches a coding agent (Claude Code, Codex,
 Gemini, etc.) how to use AgentField properly. The af binary ships with
-the agentfield-multi-reasoner-builder skill embedded — install it once
-into every agent you use and they will know how to architect, scaffold,
-and ship multi-reasoner systems on AgentField.
+the agentfield skill embedded — install it once into every agent you use
+and they will know how to architect, scaffold, and ship multi-agent
+systems on AgentField.
 
 Examples:
   af skill install                       # Interactive picker (default)
@@ -277,13 +277,12 @@ func runInteractivePicker() ([]string, error) {
 	dim := color.New(color.Faint)
 	green := color.New(color.FgGreen)
 
-	bold.Println("\nInstall agentfield-multi-reasoner-builder skill")
+	bold.Println("\nInstall agentfield skill")
 	fmt.Println()
-	fmt.Println("  This skill teaches any coding agent how to architect and ship")
-	fmt.Println("  multi-reasoner systems on AgentField. It uses composite-")
-	fmt.Println("  intelligence patterns: parallel reasoner hunters, dynamic")
-	fmt.Println("  routing, deep DAG composition, safe-default fallbacks, and")
-	fmt.Println("  the canonical scaffold-to-curl workflow.")
+	fmt.Println("  This skill teaches any coding agent how to design and ship")
+	fmt.Println("  multi-agent systems on AgentField. It composes reasoners into")
+	fmt.Println("  deep, dynamic, parallel call graphs, fetches live SDK docs from")
+	fmt.Println("  agentfield.ai, and ends with a live async smoke test.")
 	fmt.Println()
 	bold.Println("  Targets")
 	fmt.Println()

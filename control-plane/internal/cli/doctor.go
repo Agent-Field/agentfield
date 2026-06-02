@@ -16,8 +16,8 @@ import (
 )
 
 // DoctorReport is the JSON structure returned by `af doctor --json`.
-// Coding agents (and skills like agentfield-multi-reasoner-builder) call this once
-// to learn what's actually available in the environment instead of probing manually.
+// Coding agents (and skills like agentfield) call this once to learn
+// what's actually available in the environment instead of probing manually.
 type DoctorReport struct {
 	OS              string                  `json:"os"`
 	Arch            string                  `json:"arch"`
@@ -104,9 +104,9 @@ building AgentField multi-reasoner systems:
   • Whether a local control plane is reachable
   • A recommended default provider, model, and whether app.harness() is usable
 
-Coding agents and skills (e.g. agentfield-multi-reasoner-builder) should call
-this once at the start of a build to learn ground truth instead of probing
-each tool by hand.
+Coding agents and skills (e.g. agentfield) should call this once at the
+start of a build to learn ground truth instead of probing each tool
+by hand.
 
 Examples:
   af doctor                  # Pretty human-readable output

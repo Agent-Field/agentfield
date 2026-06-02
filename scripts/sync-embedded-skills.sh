@@ -24,7 +24,7 @@ EMBED_DIR="${REPO_ROOT}/control-plane/internal/skillkit/skill_data"
 
 # Skills to mirror. Add new skills here when they're added to the catalog.
 SKILLS=(
-  "agentfield-multi-reasoner-builder"
+  "agentfield"
 )
 
 CHECK_ONLY=0

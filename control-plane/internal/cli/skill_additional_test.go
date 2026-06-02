@@ -72,10 +72,10 @@ func TestSkillRenderingAndCommands(t *testing.T) {
 
 		state := &skillkit.State{
 			Skills: map[string]skillkit.InstalledSkill{
-				"agentfield-multi-reasoner-builder": {
-					CurrentVersion:    "0.2.0",
+				"agentfield": {
+					CurrentVersion:    "0.4.0",
 					InstalledAt:       time.Date(2026, 4, 8, 12, 0, 0, 0, time.UTC),
-					AvailableVersions: []string{"0.1.0", "0.2.0"},
+					AvailableVersions: []string{"0.3.0", "0.4.0"},
 					Targets: map[string]skillkit.InstalledTarget{
 						"codex": {Version: "0.2.0", Method: "marker-block", Path: "/tmp/AGENTS.md"},
 					},
