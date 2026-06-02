@@ -1,8 +1,6 @@
 <div align="center">
 
-<img src="assets/github hero.png" alt="AgentField - The AI Backend" width="100%" />
-
-# The AI Backend
+# AgentField — The AI Backend
 
 ### **Build and scale AI agents like APIs. Deploy, observe, and prove.**
 
@@ -29,6 +27,35 @@
 ---
 
 AgentField is an open-source control plane that lets you build AI agents callable by any service in your stack - frontends, backends, other agents, cron jobs - just like any other API. You write agent logic in Python, Go, or TypeScript. AgentField turns it into production infrastructure: routing, coordination, memory, async execution, and cryptographic audit trails. Every function becomes a REST endpoint. Every agent gets a cryptographic identity. Every decision is traceable.
+
+<div align="center">
+
+https://github.com/user-attachments/assets/21c9fcd9-b6d6-402b-8857-962252b13ac3
+
+<sub><b>One prompt → a running multi-agent backend.</b> Scaffold, register, route, audit. No glue code.</sub>
+
+</div>
+
+## Build it with a prompt
+
+**Describe the system in one line. Get a production-ready multi-agent backend.** Works in Claude Code, Codex, Gemini CLI, OpenCode, Aider, Windsurf, and Cursor.
+
+```bash
+curl -fsSL https://agentfield.ai/install.sh | bash
+```
+
+Then in your coding agent, paste any spec with /agentfield :
+
+```text
+/agentfield Build a claims processor with risk scoring, pattern detection,
+and human approval for low-confidence decisions.
+```
+
+You get a Docker Compose stack wired up end-to-end — the agent, the control plane, and a production ready REST API endpoint you can paste and `curl` into a terminal to try it. [See it in action →](https://agentfield.ai/docs/learn/build-with-claude-code?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-prompt-to-production)
+
+## The DX you get
+
+*Best in class Python (or Go / TypeScript) DX. With least intrusive abstraction. No DSL, no YAML, no graph wiring.*
 
 ```python
 from agentfield import Agent, AIConfig
@@ -79,40 +106,8 @@ app.run()
 
 > **What you just saw:** `app.ai()` calls an LLM and returns structured output. `app.pause()` suspends for [human approval](https://agentfield.ai/docs/build/execution/human-in-the-loop?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-human-in-the-loop). `app.call()` routes to other agents through the control plane. `app.run()` auto-exposes everything as REST. [Read the full docs →](https://agentfield.ai/docs/learn?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-read-full-docs)
 
-## Prompt to production (recommended)
-
-**Describe the system in one line. Get a production-ready multi-agent backend.**
-
-Works in Claude Code, Codex, Gemini CLI, OpenCode, Aider, Windsurf, and Cursor.
-
-```bash
-curl -fsSL https://agentfield.ai/install.sh | bash
-```
-
-In Claude Code, fire it with the shipped slash command:
-
-```text
-/agentfield a claims processor with risk scoring and human approval
-```
-
-Or paste any of these directly — the skill auto-matches, no slash command needed:
-
-```text
-Build a claims-processor agent with risk scoring, pattern detection,
-and human approval for low-confidence decisions.
-
-Build a research agent that spawns parallel investigators and recurses
-into deeper sub-questions until the answer has citation-grade provenance.
-
-Build a compliance reviewer for support transcripts — extract claims,
-check each against policy, flag violations, emit a signed audit trail.
-```
-
-You get a Docker Compose stack already wired up — the agent, the control plane, and a local `curl` you paste into a terminal to try it.
-
-[See it in action →](https://agentfield.ai/docs/learn/build-with-claude-code?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-prompt-to-production)
-
-## Prefer to write it yourself?
+<details>
+<summary><b>Prefer to scaffold by hand? (Python / Go / TypeScript / Docker)</b></summary>
 
 ```bash
 af init my-agent --defaults                            # Scaffold agent
@@ -127,9 +122,6 @@ curl -X POST http://localhost:8080/api/v1/execute/my-agent.demo_echo \
   -H "Content-Type: application/json" \
   -d '{"input": {"message": "Hello!"}}'
 ```
-
-<details>
-<summary><b>Go / TypeScript / Docker</b></summary>
 
 ```bash
 # Go
