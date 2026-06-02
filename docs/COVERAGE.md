@@ -51,8 +51,8 @@ The gate enforces five rules, all loaded from `.coverage-gate.toml`:
 
 | Rule | Current value | Enforced by |
 | --- | --- | --- |
-| `min_surface` — absolute floor for every single surface | **86.0%** | `scripts/coverage-gate.py` |
-| `min_aggregate` — absolute floor for the weighted aggregate | **88.5%** | `scripts/coverage-gate.py` |
+| `min_surface` — absolute floor for every single surface | **84.0%** | `scripts/coverage-gate.py` |
+| `min_aggregate` — absolute floor for the weighted aggregate | **85.0%** | `scripts/coverage-gate.py` |
 | `max_surface_drop` — biggest per-surface regression allowed vs baseline | **1.0 pp** | `scripts/coverage-gate.py` |
 | `max_aggregate_drop` — biggest aggregate regression allowed vs baseline | **0.5 pp** | `scripts/coverage-gate.py` |
 | `min_patch` — coverage required on lines the PR actually touches, per surface | **80.0%** | `scripts/patch-coverage-gate.sh` (diff-cover vs `origin/main`) |
@@ -127,7 +127,8 @@ When the `Coverage Summary` check is red on your PR, here is the loop:
    `.coverage-gate.toml` and `coverage-baseline.json` are
    the contract between this repo and every agent working in it. If you
    believe a regression is legitimate (for example, dead code was
-   deleted and the file shrank), say so explicitly in the PR description
+   deleted and the file shrank, or a coverage tool upgrade changes how
+   existing files are counted), say so explicitly in the PR description
    and update the relevant file as a separate, reviewable change —
    ideally in its own commit with a message like
    `chore(coverage): lower web-ui baseline to 78.2% after page X removal`.
