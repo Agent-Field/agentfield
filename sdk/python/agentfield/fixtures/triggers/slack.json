@@ -1,0 +1,17 @@
+{
+  "token": "verification_token_example",
+  "team_id": "T01EXAMPLE",
+  "api_app_id": "A01EXAMPLE",
+  "event": {
+    "type": "app_mention",
+    "user": "U01EXAMPLE",
+    "text": "<@U02BOT> what's the status?",
+    "ts": "1735395600.000100",
+    "channel": "C01EXAMPLE",
+    "event_ts": "1735395600.000100"
+  },
+  "type": "event_callback",
+  "event_id": "Ev01EXAMPLE",
+  "event_time": 1735395600,
+  "authed_users": ["U02BOT"]
+}

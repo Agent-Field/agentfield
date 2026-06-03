@@ -1,0 +1,32 @@
+# Environment variables
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Test artifacts
+.pytest_cache/
+htmlcov/
+.coverage
+*.cover
+.hypothesis/
+junit-*.xml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+
+
+
+

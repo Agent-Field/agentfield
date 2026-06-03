@@ -1,0 +1,16 @@
+.git
+.github
+.gitignore
+.vscode
+.idea
+node_modules
+**/node_modules
+**/dist
+**/build
+**/.cache
+**/.turbo
+**/.next
+**/.DS_Store
+control-plane/web/client/.vite
+control-plane/web/client/dist
+control-plane/web/client/node_modules

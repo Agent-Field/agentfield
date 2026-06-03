@@ -1,0 +1,9 @@
+include README.md
+include LICENSE
+include requirements.txt
+recursive-include agentfield *.py
+exclude examples/*
+exclude tests/*
+global-exclude *.pyc
+global-exclude __pycache__
+global-exclude .DS_Store

@@ -1,0 +1,15 @@
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+WORKDIR /workspace
+
+COPY sdk/go ./sdk/go
+COPY examples/go_agent_nodes ./examples/go_agent_nodes
+
+RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/go/pkg/mod \
+    cd examples/go_agent_nodes && go mod download && \
+    CGO_ENABLED=0 go build -o /out/agentfield-demo-go-agent ./main.go
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=builder /out/agentfield-demo-go-agent /usr/local/bin/agentfield-demo-go-agent
+EXPOSE 8001
+ENTRYPOINT ["/usr/local/bin/agentfield-demo-go-agent"]
+

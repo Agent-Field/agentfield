@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "controlPlane": {
+      "type": "object",
+      "properties": {
+        "replicaCount": { "type": "integer", "minimum": 1 },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string" },
+            "tag": { "type": "string" },
+            "pullPolicy": { "type": "string" }
+          }
+        },
+        "service": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string" },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "grpcPort": { "type": "integer", "minimum": 0, "maximum": 65535 }
+          }
+        },
+        "storage": {
+          "type": "object",
+          "properties": {
+            "mode": { "type": "string", "enum": ["local", "postgres"] },
+            "postgresUrl": { "type": "string" }
+          }
+        },
+        "persistence": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "existingClaim": { "type": "string" },
+            "storageClass": { "type": "string" },
+            "size": { "type": "string" }
+          }
+        }
+      }
+    },
+    "apiAuth": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "apiKey": { "type": "string" },
+        "existingSecret": { "type": "string" },
+        "existingSecretKey": { "type": "string" }
+      }
+    },
+    "postgres": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string" },
+            "tag": { "type": "string" },
+            "pullPolicy": { "type": "string" }
+          }
+        },
+        "auth": {
+          "type": "object",
+          "properties": {
+            "username": { "type": "string" },
+            "password": { "type": "string" },
+            "database": { "type": "string" },
+            "existingSecret": { "type": "string" }
+          }
+        }
+      }
+    },
+    "demoAgent": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "nodeId": { "type": "string" }
+      }
+    },
+    "demoPythonAgent": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "pipPackage": { "type": "string" },
+        "nodeId": { "type": "string" }
+      }
+    }
+  }
+}

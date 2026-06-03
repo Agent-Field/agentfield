@@ -1,0 +1,65 @@
+name: Go SDK CI
+
+on:
+  pull_request:
+    paths:
+      - 'sdk/go/**'
+      - '.github/workflows/sdk-go.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'sdk/go/**'
+      - '.github/workflows/sdk-go.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-sdk-${{ hashFiles('sdk/go/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-sdk-
+
+      - name: Tidy
+        working-directory: sdk/go
+        run: go mod tidy
+
+      - name: Build
+        working-directory: sdk/go
+        run: go build ./...
+
+      # NOTE: `go test` lives in .github/workflows/coverage.yml so the sdk/go
+      # suite runs only once per PR. The coverage workflow is a required
+      # status check on main, so regressions still block merge.
+
+  # Summary job that depends on all critical checks
+  required-checks:
+    name: All Required Checks Passed
+    runs-on: ubuntu-latest
+    needs: [build-and-test]
+    if: always()
+    steps:
+      - name: Check all jobs
+        run: |
+          if [ "${{ needs.build-and-test.result }}" != "success" ]; then
+            echo "Required checks failed"
+            exit 1
+          fi
+          echo "All required checks passed successfully"

@@ -1,0 +1,1 @@
+export { VerifiableCredentialBadge } from "./VerifiableCredentialBadge";

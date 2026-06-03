@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: agentfield-dev-postgres
+    environment:
+      POSTGRES_USER: agentfield
+      POSTGRES_PASSWORD: agentfield
+      POSTGRES_DB: agentfield_dev
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentfield -d agentfield_dev"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+
+volumes:
+  pgdata:

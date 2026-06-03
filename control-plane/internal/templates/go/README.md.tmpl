@@ -1,0 +1,62 @@
+# {{.ProjectName}}
+
+A AgentField agent created with `af init`.
+
+## Quick Start
+
+1. **Install dependencies:**
+   ```bash
+   go mod download
+   ```
+
+2. **Start the AgentField server** (in another terminal):
+   ```bash
+   af server
+   ```
+
+3. **Run the agent:**
+   ```bash
+   go run .
+   ```
+
+   The agent will auto-discover an available port and register with AgentField.
+
+## Test the Agent
+
+### Echo Reasoner (No AI Required)
+```bash
+curl -X POST http://localhost:8080/api/v1/execute/{{.NodeID}}.echo \
+  -H "Content-Type: application/json" \
+  -d '{"input": {"message": "Hello World"}}'
+```
+
+### Enable AI Features
+
+1. Uncomment the `AIConfig` in `main.go`
+2. Set your API key: `export OPENAI_API_KEY=sk-...`
+   - Or use `OPENROUTER_API_KEY` for OpenRouter
+   - Update `BaseURL` if using a different provider
+3. Uncomment the `analyze_sentiment` reasoner in `reasoners.go`
+4. Restart the agent
+
+```bash
+curl -X POST http://localhost:8080/api/v1/execute/{{.NodeID}}.analyze_sentiment \
+  -H "Content-Type: application/json" \
+  -d '{"input": {"text": "I love this product!"}}'
+```
+
+## Project Structure
+
+- `main.go` - Agent configuration and startup
+- `reasoners.go` - Reasoner definitions (AI-powered functions)
+- `go.mod` - Go module dependencies
+- `.env.example` - Environment variable examples
+
+## Learn More
+
+- [AgentField Documentation](https://agentfield.ai/docs/learn)
+- [SDK Reference](https://agentfield.ai/docs/reference/sdks/go)
+
+---
+
+Created by {{.AuthorName}} ({{.AuthorEmail}}) on {{.CreatedAt}}

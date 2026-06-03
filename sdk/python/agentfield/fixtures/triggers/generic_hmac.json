@@ -1,0 +1,14 @@
+{
+  "event": "order.created",
+  "order_id": "ord_demo_42",
+  "amount_cents": 5000,
+  "currency": "usd",
+  "customer": {
+    "id": "cust_demo_99",
+    "email": "demo@example.com"
+  },
+  "items": [
+    {"sku": "SKU-001", "qty": 1, "price_cents": 5000}
+  ],
+  "created_at": "2026-04-28T12:00:00Z"
+}

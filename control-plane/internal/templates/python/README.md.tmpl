@@ -1,0 +1,62 @@
+# {{.ProjectName}}
+
+A AgentField agent created with `af init`.
+
+## Quick Start
+
+1. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. **Start the AgentField server** (in another terminal):
+   ```bash
+   af server
+   ```
+
+3. **Run the agent:**
+   ```bash
+   python main.py
+   ```
+
+   The agent will auto-discover an available port and register with AgentField.
+
+## Test the Agent
+
+### Echo Reasoner (No AI Required)
+```bash
+curl -X POST http://localhost:8080/api/v1/execute/{{.NodeID}}.demo_echo \
+  -H "Content-Type: application/json" \
+  -d '{"input": {"message": "Hello World"}}'
+```
+
+### Enable AI Features
+
+1. Uncomment the `ai_config` in `main.py`
+2. Set your API key: `export OPENAI_API_KEY=sk-...`
+   - Or use `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, etc. for other providers
+   - LiteLLM auto-detects the provider from the model name
+3. Uncomment the `analyze_sentiment` reasoner in `reasoners.py`
+4. Restart the agent
+
+```bash
+curl -X POST http://localhost:8080/api/v1/execute/{{.NodeID}}.demo_analyze_sentiment \
+  -H "Content-Type: application/json" \
+  -d '{"input": {"text": "I love this product!"}}'
+```
+
+## Project Structure
+
+- `main.py` - Agent configuration and startup
+- `reasoners.py` - Reasoner definitions (AI-powered functions)
+- `requirements.txt` - Python dependencies
+- `.env.example` - Environment variable examples
+
+## Learn More
+
+- [AgentField Documentation](https://agentfield.ai/docs/learn)
+- [SDK Reference](https://agentfield.ai/docs/reference/sdks/python)
+
+---
+
+Created by {{.AuthorName}} ({{.AuthorEmail}}) on {{.CreatedAt}}

@@ -1,0 +1,151 @@
+name: AI Assistance Label
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  detect-ai:
+    # Disabled: GITHUB_TOKEN lacks write permissions on PRs from forked repos,
+    # causing label addition to fail. Re-enable when a PAT or GitHub App is configured.
+    if: false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect AI assistance in commits
+        id: detect
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          echo "Checking commits for AI assistance signatures..."
+
+          # Get all commit messages and bodies
+          COMMIT_LOG=$(git log --format='%s%n%b' origin/${{ github.base_ref }}..HEAD 2>/dev/null || echo "")
+
+          # PR_BODY is passed via environment variable to avoid shell injection
+
+          # Combine for searching
+          SEARCH_TEXT="$COMMIT_LOG"$'\n'"$PR_BODY"
+
+          AI_DETECTED=false
+          DETECTION_REASON=""
+
+          # ============================================
+          # AI Tools List (comprehensive)
+          # ============================================
+          # Chat/Assistant: Claude, ChatGPT, Gemini, Perplexity, Phind, Pi
+          # IDE/Editor: Copilot, Cursor, Codeium, Tabnine, Windsurf, Supermaven, Continue
+          # Agents: Devin, Aider, OpenHands, SWE-agent, AutoGPT, AgentGPT
+          # Platforms: Replit AI, v0, Bolt, Lovable, Rork, Vercel AI
+          # Enterprise: Amazon Q, CodeWhisperer, Sourcegraph Cody, JetBrains AI
+
+          # ============================================
+          # Pattern 1: Co-Authored-By with AI assistants
+          # ============================================
+          AI_TOOLS="Claude|Copilot|GitHub Copilot|Cursor|Codeium|Tabnine|Amazon Q|CodeWhisperer|Gemini|GPT|ChatGPT|OpenAI|Anthropic|Codex|Aider|Cody|Sourcegraph|Windsurf|Supermaven|Devin|Cognition|Replit|Phind|Perplexity|Continue|OpenHands|SWE-agent|AutoGPT|AgentGPT|JetBrains AI|v0|Bolt|Lovable|Rork|Vercel AI|Ghostwriter|Blackbox|Safurai|AskCodi|Bito|Mintlify"
+
+          AI_COAUTHOR_PATTERN="[Cc]o-[Aa]uthored-[Bb]y:[[:space:]]*($AI_TOOLS)"
+
+          if echo "$SEARCH_TEXT" | grep -qiE "$AI_COAUTHOR_PATTERN"; then
+            AI_DETECTED=true
+            DETECTION_REASON="Co-authored-by AI assistant"
+          fi
+
+          # ============================================
+          # Pattern 2: Generated/Created by AI tools
+          # ============================================
+          GENERATED_PATTERN="(Generated|Created|Built|Made|Written|Assisted|Powered|Coded)[[:space:]]+(with|by|using|via)[[:space:]]+($AI_TOOLS|Claude Code|AI|LLM|artificial intelligence)"
+
+          if [ "$AI_DETECTED" = false ] && echo "$SEARCH_TEXT" | grep -qiE "$GENERATED_PATTERN"; then
+            AI_DETECTED=true
+            DETECTION_REASON="Generated/created by AI tool"
+          fi
+
+          # ============================================
+          # Pattern 3: AI tool URLs and signatures
+          # ============================================
+          AI_URL_PATTERN="(claude\.ai|anthropic\.com|chat\.openai\.com|openai\.com|github\.com/features/copilot|cursor\.com|cursor\.sh|codeium\.com|tabnine\.com|amazon\.com/q|aws\.amazon\.com/codewhisperer|gemini\.google\.com|ai\.google|aider\.chat|sourcegraph\.com/cody|cognition\.ai|devin\.ai|replit\.com|phind\.com|perplexity\.ai|continue\.dev|windsurf\.ai|supermaven\.com|v0\.dev|bolt\.new|lovable\.dev|rork\.app|jetbrains\.com/ai|blackbox\.ai|safurai\.com|askcodi\.com|bito\.ai|mintlify\.com)"
+
+          if [ "$AI_DETECTED" = false ] && echo "$SEARCH_TEXT" | grep -qiE "$AI_URL_PATTERN"; then
+            AI_DETECTED=true
+            DETECTION_REASON="AI tool URL reference"
+          fi
+
+          # ============================================
+          # Pattern 4: AI email domains in co-author
+          # ============================================
+          AI_EMAIL_PATTERN="[Cc]o-[Aa]uthored-[Bb]y:.*@(anthropic\.com|openai\.com|cursor\.sh|cursor\.com|codeium\.com|tabnine\.com|cognition\.ai|replit\.com|sourcegraph\.com|jetbrains\.com|google\.com.*gemini)"
+
+          if [ "$AI_DETECTED" = false ] && echo "$SEARCH_TEXT" | grep -qiE "$AI_EMAIL_PATTERN"; then
+            AI_DETECTED=true
+            DETECTION_REASON="AI service email in co-author"
+          fi
+
+          # ============================================
+          # Pattern 5: Common AI commit message patterns
+          # ============================================
+          AI_COMMIT_PATTERN="(\[AI\]|\[Claude\]|\[Copilot\]|\[GPT\]|\[Cursor\]|\[Gemini\]|\[Devin\]|\[Aider\]|🤖[[:space:]]*(Generated|Created|Built)|via[[:space:]]+(Claude|Copilot|Cursor|Gemini|Devin|AI))"
+
+          if [ "$AI_DETECTED" = false ] && echo "$SEARCH_TEXT" | grep -qiE "$AI_COMMIT_PATTERN"; then
+            AI_DETECTED=true
+            DETECTION_REASON="AI marker in commit message"
+          fi
+
+          # ============================================
+          # Pattern 6: noreply email patterns from AI services
+          # ============================================
+          NOREPLY_PATTERN="[Cc]o-[Aa]uthored-[Bb]y:.*<noreply@(anthropic|openai|cursor|codeium|tabnine|cognition|replit)\.com>|<.*copilot.*@github\.com>"
+
+          if [ "$AI_DETECTED" = false ] && echo "$SEARCH_TEXT" | grep -qiE "$NOREPLY_PATTERN"; then
+            AI_DETECTED=true
+            DETECTION_REASON="AI service noreply email"
+          fi
+
+          # ============================================
+          # Pattern 7: AI agent/tool specific signatures
+          # ============================================
+          AI_SIGNATURE_PATTERN="(Devin|Aider|OpenHands|SWE-agent)[[:space:]]+(commit|change|fix|update|implement)|(\[bot\]|\[agent\])[[:space:]]*$"
+
+          if [ "$AI_DETECTED" = false ] && echo "$SEARCH_TEXT" | grep -qiE "$AI_SIGNATURE_PATTERN"; then
+            AI_DETECTED=true
+            DETECTION_REASON="AI agent signature detected"
+          fi
+
+          # Output results
+          echo "ai_detected=$AI_DETECTED" >> $GITHUB_OUTPUT
+          echo "detection_reason=$DETECTION_REASON" >> $GITHUB_OUTPUT
+
+          if [ "$AI_DETECTED" = true ]; then
+            echo "✅ AI assistance detected: $DETECTION_REASON"
+          else
+            echo "ℹ️ No AI assistance signatures detected"
+          fi
+
+      - name: Add ai-assisted label
+        if: steps.detect.outputs.ai_detected == 'true'
+        run: |
+          echo "Adding ai-assisted label (reason: ${{ steps.detect.outputs.detection_reason }})"
+          gh pr edit ${{ github.event.pull_request.number }} --add-label "ai-assisted"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log detection summary
+        run: |
+          echo "## AI Detection Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.detect.outputs.ai_detected }}" = "true" ]; then
+            echo "✅ **AI assistance detected**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Reason: ${{ steps.detect.outputs.detection_reason }}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "The \`ai-assisted\` label has been added to this PR." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "ℹ️ No AI assistance signatures detected in commits or PR body." >> $GITHUB_STEP_SUMMARY
+          fi

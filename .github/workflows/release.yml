@@ -1,0 +1,509 @@
+name: Release
+
+on:
+  # Automatic staging releases on push to main
+  push:
+    branches:
+      - main
+    paths:
+      - 'control-plane/**'
+      - 'sdk/**'
+      - 'VERSION'
+      - '.github/workflows/release.yml'
+
+  # Manual releases (production or staging)
+  workflow_dispatch:
+    inputs:
+      release_environment:
+        description: 'Target environment (staging=prerelease, production=stable release)'
+        type: choice
+        options:
+          - staging
+          - production
+        default: production
+      release_component:
+        description: 'Which part of the SemVer to bump (for new release lines)'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
+      prerelease_label:
+        description: 'Label for staging releases (e.g., rc, beta, alpha)'
+        type: string
+        default: 'rc'
+      existing_version:
+        description: 'Optional explicit version to reuse (skips bumping/pushing)'
+        type: string
+        required: false
+      publish_pypi:
+        description: 'Publish Python SDK to PyPI'
+        type: boolean
+        default: true
+      publish_npm:
+        description: 'Publish TypeScript SDK (staging=@next, production=@latest)'
+        type: boolean
+        default: true
+      publish_docker:
+        description: 'Push Docker image (staging=staging-X.Y.Z, production=vX.Y.Z+latest)'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+env:
+  GO_VERSION: '1.25.x'
+  PYTHON_VERSION: '3.11'
+  NODE_VERSION: '20'
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag_name: ${{ steps.version.outputs.tag_name }}
+      release_sha: ${{ steps.version.outputs.release_sha }}
+      environment: ${{ steps.version.outputs.environment }}
+      publish_pypi: ${{ steps.flags.outputs.publish_pypi }}
+      publish_npm: ${{ steps.flags.outputs.publish_npm }}
+      publish_docker: ${{ steps.flags.outputs.publish_docker }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
+
+      - name: Set up Python for tooling
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install git-cliff
+        uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
+
+      - name: Determine publish flags
+        id: flags
+        env:
+          # For push events, default to publishing everything
+          # For workflow_dispatch, use the provided inputs
+          INPUT_PUBLISH_PYPI: ${{ github.event.inputs.publish_pypi }}
+          INPUT_PUBLISH_NPM: ${{ github.event.inputs.publish_npm }}
+          INPUT_PUBLISH_DOCKER: ${{ github.event.inputs.publish_docker }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+
+          # Default to true for push events (automatic staging releases)
+          if [ "${EVENT_NAME}" = "push" ]; then
+            echo "publish_pypi=true" >> "$GITHUB_OUTPUT"
+            echo "publish_npm=true" >> "$GITHUB_OUTPUT"
+            echo "publish_docker=true" >> "$GITHUB_OUTPUT"
+          else
+            # Use inputs for workflow_dispatch
+            if [ "${INPUT_PUBLISH_PYPI}" = "true" ]; then
+              echo "publish_pypi=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "publish_pypi=false" >> "$GITHUB_OUTPUT"
+            fi
+            if [ "${INPUT_PUBLISH_NPM}" = "true" ]; then
+              echo "publish_npm=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "publish_npm=false" >> "$GITHUB_OUTPUT"
+            fi
+            if [ "${INPUT_PUBLISH_DOCKER}" = "true" ]; then
+              echo "publish_docker=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "publish_docker=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Prepare release version
+        id: version
+        env:
+          # For push events: default to staging with patch bump
+          # For workflow_dispatch: use provided inputs
+          INPUT_ENVIRONMENT: ${{ github.event.inputs.release_environment }}
+          INPUT_COMPONENT: ${{ github.event.inputs.release_component }}
+          INPUT_PRERELEASE_LABEL: ${{ github.event.inputs.prerelease_label }}
+          INPUT_EXISTING_VERSION: ${{ github.event.inputs.existing_version }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          # Determine environment and component based on trigger type
+          if [ "${EVENT_NAME}" = "push" ]; then
+            # Automatic staging release on push to main
+            ENVIRONMENT="staging"
+            COMPONENT="patch"
+            PRERELEASE_LABEL="rc"
+            EXISTING_VERSION=""
+            echo "Automatic staging release triggered by push to main"
+          else
+            # Manual workflow_dispatch
+            ENVIRONMENT="${INPUT_ENVIRONMENT:-production}"
+            COMPONENT="${INPUT_COMPONENT:-patch}"
+            PRERELEASE_LABEL="${INPUT_PRERELEASE_LABEL:-rc}"
+            EXISTING_VERSION="${INPUT_EXISTING_VERSION:-}"
+          fi
+
+          if [ -n "${EXISTING_VERSION}" ]; then
+            version="${EXISTING_VERSION}"
+            tag="v${version}"
+            git fetch --tags origin "refs/tags/${tag}:refs/tags/${tag}" --depth=1
+            release_sha="$(git rev-parse "${tag}")"
+          else
+            if [ "${ENVIRONMENT}" = "staging" ]; then
+              # Staging: Always create prerelease version
+              CHANNEL="prerelease"
+              LABEL="${PRERELEASE_LABEL:-rc}"
+              cmd=(python scripts/bump_version.py --channel "${CHANNEL}" --component "${COMPONENT}" --prerelease-label "${LABEL}")
+            else
+              # Production: Create stable version (finalizes from prerelease if exists)
+              CHANNEL="stable"
+              cmd=(python scripts/bump_version.py --channel "${CHANNEL}" --component "${COMPONENT}")
+            fi
+            version="$("${cmd[@]}")"
+            tag="v${version}"
+            python scripts/update_changelog.py --version "${version}"
+            git status --short
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "chore(release): ${tag} [skip ci]"
+            git tag -a "${tag}" -m "Release ${tag}"
+            git push origin "HEAD:${REF_NAME}"
+            git push origin "${tag}"
+            release_sha="$(git rev-parse HEAD)"
+          fi
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag_name=${tag}" >> "$GITHUB_OUTPUT"
+          echo "release_sha=${release_sha}" >> "$GITHUB_OUTPUT"
+          echo "environment=${ENVIRONMENT}" >> "$GITHUB_OUTPUT"
+
+  build-binaries:
+    needs: prepare
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux
+            goreleaser_ids: '--id agentfield-linux-amd64 --id agentfield-linux-arm64'
+          - os: macos-14
+            label: darwin
+            goreleaser_ids: '--id agentfield-darwin-amd64 --id agentfield-darwin-arm64'
+    runs-on: ${{ matrix.os }}
+    env:
+      GORELEASER_CURRENT_TAG: ${{ needs.prepare.outputs.tag_name }}
+      GORELEASER_CURRENT_COMMIT: ${{ needs.prepare.outputs.release_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.release_sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: control-plane/go.sum
+
+      - name: Install cross-compilers
+        if: matrix.label == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: control-plane/web/client/package-lock.json
+
+      - name: Build Web UI
+        working-directory: control-plane/web/client
+        run: |
+          npm install
+          npm run build
+
+      - name: Run GoReleaser build
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          args: build --clean --skip=validate --skip=before ${{ matrix.goreleaser_ids }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Flatten binaries to dist root
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== Original dist/ structure ==="
+          ls -lah dist/
+
+          # Move binaries from subdirectories to dist root
+          find dist/ -type f -name "agentfield-*" -exec mv {} dist/ \; 2>/dev/null || true
+
+          # Remove empty subdirectories
+          find dist/ -mindepth 1 -type d -empty -delete 2>/dev/null || true
+
+          echo ""
+          echo "=== Flattened dist/ directory ==="
+          ls -lah dist/agentfield-* 2>/dev/null || echo "No binaries found"
+
+      - name: Rename artifact metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f dist/artifacts.json ]; then mv dist/artifacts.json dist/artifacts-${{ matrix.label }}.json; fi
+          if [ -f dist/metadata.json ]; then mv dist/metadata.json dist/metadata-${{ matrix.label }}.json; fi
+          if [ -f dist/config.yaml ]; then mv dist/config.yaml dist/config-${{ matrix.label }}.yaml; fi
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.label }}
+          path: dist
+
+  publish:
+    needs:
+      - prepare
+      - build-binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+    env:
+      GORELEASER_CURRENT_TAG: ${{ needs.prepare.outputs.tag_name }}
+      GORELEASER_CURRENT_COMMIT: ${{ needs.prepare.outputs.release_sha }}
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.release_sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: control-plane/web/client/package-lock.json
+
+      - name: Build Web UI
+        working-directory: control-plane/web/client
+        run: |
+          npm install
+          npm run build
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Download linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-linux
+          path: dist
+
+      - name: Download darwin artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-darwin
+          path: dist
+
+      - name: Merge binaries and create checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Downloaded binaries:"
+          ls -lah dist/
+
+          cd dist
+          sha256sum agentfield-* > checksums.txt
+          cat checksums.txt
+          cd ..
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag_name }}
+          draft: false
+          prerelease: ${{ needs.prepare.outputs.environment == 'staging' }}
+          generate_release_notes: true
+          body: |
+            ${{ needs.prepare.outputs.environment == 'staging' && '> ⚠️ **This is a staging/pre-release version for testing. Not recommended for production use.**' || '' }}
+
+            ## AgentField ${{ needs.prepare.outputs.version }}
+
+            ### Installation
+
+            ${{ needs.prepare.outputs.environment == 'staging' && '```bash
+            # Staging binary (use --staging flag)
+            curl -fsSL https://agentfield.ai/install.sh | bash -s -- --staging
+
+            # Python SDK (prerelease - requires --pre flag)
+            pip install --pre agentfield
+
+            # TypeScript SDK
+            npm install @agentfield/sdk@next
+            ```' || '```bash
+            curl -fsSL https://agentfield.ai/install.sh | bash
+            ```' }}
+
+            ### Version Pinning
+
+            ```bash
+            VERSION=${{ needs.prepare.outputs.tag_name }} curl -fsSL https://agentfield.ai/install.sh | bash
+            ```
+
+            ### Manual Download
+
+            Download the binary for your platform below, make it executable, and move it to your PATH.
+
+            ### Supported Platforms
+
+            - **macOS Intel:** `agentfield-darwin-amd64`
+            - **macOS Apple Silicon:** `agentfield-darwin-arm64`
+            - **Linux x86_64:** `agentfield-linux-amd64`
+            - **Linux ARM64:** `agentfield-linux-arm64`
+          files: |
+            dist/agentfield-*
+            dist/checksums.txt
+
+      - name: Upload binary artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-dist
+          path: dist/
+
+      - name: Build Python package
+        working-directory: sdk/python
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - name: Upload Python package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-sdk-dist
+          path: sdk/python/dist
+
+      - name: Publish to PyPI
+        if: needs.prepare.outputs.publish_pypi == 'true'
+        working-directory: sdk/python
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          python -m pip install --upgrade twine
+          twine upload --skip-existing dist/*
+
+      - name: Set up Node.js for npm publish
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Build TypeScript SDK
+        working-directory: sdk/typescript
+        run: |
+          npm ci
+          npm run build
+
+      - name: Upload TypeScript SDK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: typescript-sdk-dist
+          path: sdk/typescript/dist
+
+      - name: Publish to npm (staging with @next tag)
+        if: |
+          needs.prepare.outputs.environment == 'staging' &&
+          needs.prepare.outputs.publish_npm == 'true'
+        working-directory: sdk/typescript
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public --tag next
+
+      - name: Publish to npm (production with @latest tag)
+        if: |
+          needs.prepare.outputs.environment == 'production' &&
+          needs.prepare.outputs.publish_npm == 'true'
+        working-directory: sdk/typescript
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
+
+      - name: Compute Docker metadata
+        if: needs.prepare.outputs.publish_docker == 'true'
+        id: docker_meta
+        env:
+          TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
+        run: |
+          set -euo pipefail
+          image="agentfield/control-plane"
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+
+          if [ "${ENVIRONMENT}" = "staging" ]; then
+            # Staging: use staging-X.Y.Z-rc.N prefix
+            echo "tags=${image}:staging-${VERSION}" >> "$GITHUB_OUTPUT"
+          else
+            # Production: version tag + latest
+            echo "tags=${image}:${TAG_NAME},${image}:latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        if: needs.prepare.outputs.publish_docker == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        if: needs.prepare.outputs.publish_docker == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push control plane image
+        if: needs.prepare.outputs.publish_docker == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: deployments/docker/Dockerfile.control-plane
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.docker_meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Attach Python artifacts to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag_name }}
+          files: |
+            sdk/python/dist/*.whl
+            sdk/python/dist/*.tar.gz

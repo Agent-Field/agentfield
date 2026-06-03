@@ -1,0 +1,56 @@
+name: Sync Rulesets
+
+# Applies the checked-in rulesets under .github/rulesets/ to the repo whenever
+# they change on main. This is the bridge between the version-controlled JSON
+# and the live GitHub configuration — the JSON is the source of truth, this
+# workflow just pushes it into place.
+#
+# Bootstrap: the first time you add a ruleset file, run
+# `./scripts/sync-rulesets.sh` manually with a PAT that has `repo` scope, or
+# trigger this workflow via workflow_dispatch after merging the first PR.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/rulesets/**"
+      - ".github/workflows/sync-rulesets.yml"
+      - "scripts/sync-rulesets.sh"
+  workflow_dispatch:
+
+# Only one sync at a time — rulesets are a shared resource.
+concurrency:
+  group: sync-rulesets
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # Note: GITHUB_TOKEN cannot manage rulesets even with `administration: write`.
+  # We need a PAT in the `RULESETS_TOKEN` secret with `repo` scope (or a
+  # fine-grained token with "Administration: read and write"). The workflow
+  # gracefully no-ops if the secret isn't set, so forks don't fail.
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for RULESETS_TOKEN
+        id: check_token
+        env:
+          RULESETS_TOKEN: ${{ secrets.RULESETS_TOKEN }}
+        run: |
+          if [[ -z "${RULESETS_TOKEN}" ]]; then
+            echo "::warning::RULESETS_TOKEN secret is not configured. Skipping ruleset sync."
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_token=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sync rulesets to repository
+        if: steps.check_token.outputs.has_token == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RULESETS_TOKEN }}
+        run: ./scripts/sync-rulesets.sh "${{ github.repository }}"

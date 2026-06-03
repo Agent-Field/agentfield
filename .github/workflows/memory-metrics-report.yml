@@ -1,0 +1,165 @@
+name: Performance Report
+
+# This workflow runs in the context of the base repository,
+# allowing it to post comments on PRs from forks.
+on:
+  workflow_run:
+    workflows: ["Performance Check"]
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  report:
+    name: Post Report
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.event == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download results
+        uses: actions/download-artifact@v4
+        with:
+          name: perf-results
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Post comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            // Load benchmark results
+            const results = JSON.parse(fs.readFileSync('perf-results.json', 'utf8'));
+            const baseline = JSON.parse(fs.readFileSync('examples/benchmarks/baseline.json', 'utf8'));
+            const thresholds = baseline.thresholds;
+
+            const prNumber = results.pr_number;
+            const rows = [];
+            const warnings = [];
+
+            // Python
+            if (results.python.changed) {
+              const mem = parseFloat(results.python.memory) || 0;
+              const lat = parseFloat(results.python.latency) || 0;
+              const tests = results.python.tests;
+              const baseMem = baseline.metrics.python.memory_per_handler_kb;
+              const baseLat = baseline.metrics.python.latency_p99_us;
+
+              const memDelta = baseMem > 0 ? ((mem - baseMem) / baseMem * 100) : 0;
+              const latDelta = baseLat > 0 ? ((lat - baseLat) / baseLat * 100) : 0;
+
+              let status = '✓';
+              if (tests === 'fail') status = '✗';
+              else if (memDelta > thresholds.memory_fail_pct || latDelta > thresholds.latency_fail_pct) status = '✗';
+              else if (memDelta > thresholds.memory_warning_pct || latDelta > thresholds.latency_warning_pct) status = '⚠';
+
+              const memStr = memDelta > 1 ? `+${memDelta.toFixed(0)}%` : (memDelta < -1 ? `${memDelta.toFixed(0)}%` : '-');
+              const latStr = latDelta > 1 ? `+${latDelta.toFixed(0)}%` : (latDelta < -1 ? `${latDelta.toFixed(0)}%` : '-');
+
+              rows.push(`| Python | ${mem.toFixed(1)} KB | ${memStr} | ${lat.toFixed(2)} µs | ${latStr} | ${tests === 'pass' ? '✓' : '✗'} | ${status} |`);
+
+              if (memDelta > thresholds.memory_warning_pct) {
+                warnings.push(`Python memory: ${baseMem.toFixed(1)} KB → ${mem.toFixed(1)} KB (+${memDelta.toFixed(0)}%)`);
+              }
+            }
+
+            // Go
+            if (results.go.changed) {
+              const mem = parseFloat(results.go.memory) || 0;
+              const lat = parseFloat(results.go.latency) || 0;
+              const tests = results.go.tests;
+              const baseMem = baseline.metrics.go.memory_per_handler_bytes;
+              const baseLat = baseline.metrics.go.latency_p99_us;
+
+              const memDelta = baseMem > 0 ? ((mem - baseMem) / baseMem * 100) : 0;
+              const latDelta = baseLat > 0 ? ((lat - baseLat) / baseLat * 100) : 0;
+
+              let status = '✓';
+              if (tests === 'fail') status = '✗';
+              else if (memDelta > thresholds.memory_fail_pct || latDelta > thresholds.latency_fail_pct) status = '✗';
+              else if (memDelta > thresholds.memory_warning_pct || latDelta > thresholds.latency_warning_pct) status = '⚠';
+
+              const memStr = memDelta > 1 ? `+${memDelta.toFixed(0)}%` : (memDelta < -1 ? `${memDelta.toFixed(0)}%` : '-');
+              const latStr = latDelta > 1 ? `+${latDelta.toFixed(0)}%` : (latDelta < -1 ? `${latDelta.toFixed(0)}%` : '-');
+
+              rows.push(`| Go | ${mem} B | ${memStr} | ${lat.toFixed(2)} µs | ${latStr} | ${tests === 'pass' ? '✓' : '✗'} | ${status} |`);
+
+              if (memDelta > thresholds.memory_warning_pct) {
+                warnings.push(`Go memory: ${baseMem} B → ${mem} B (+${memDelta.toFixed(0)}%)`);
+              }
+            }
+
+            // TypeScript
+            if (results.typescript.changed) {
+              const mem = parseFloat(results.typescript.memory) || 0;
+              const lat = parseFloat(results.typescript.latency) || 0;
+              const tests = results.typescript.tests;
+              const baseMem = baseline.metrics.typescript.memory_per_handler_bytes;
+              const baseLat = baseline.metrics.typescript.latency_p99_us;
+
+              const memDelta = baseMem > 0 ? ((mem - baseMem) / baseMem * 100) : 0;
+              const latDelta = baseLat > 0 ? ((lat - baseLat) / baseLat * 100) : 0;
+
+              let status = '✓';
+              if (tests === 'fail') status = '✗';
+              else if (memDelta > thresholds.memory_fail_pct || latDelta > thresholds.latency_fail_pct) status = '✗';
+              else if (memDelta > thresholds.memory_warning_pct || latDelta > thresholds.latency_warning_pct) status = '⚠';
+
+              const memStr = memDelta > 1 ? `+${memDelta.toFixed(0)}%` : (memDelta < -1 ? `${memDelta.toFixed(0)}%` : '-');
+              const latStr = latDelta > 1 ? `+${latDelta.toFixed(0)}%` : (latDelta < -1 ? `${latDelta.toFixed(0)}%` : '-');
+
+              rows.push(`| TS | ${mem} B | ${memStr} | ${lat.toFixed(2)} µs | ${latStr} | ${tests === 'pass' ? '✓' : '✗'} | ${status} |`);
+
+              if (memDelta > thresholds.memory_warning_pct) {
+                warnings.push(`TypeScript memory: ${baseMem} B → ${mem} B (+${memDelta.toFixed(0)}%)`);
+              }
+            }
+
+            // Build comment body
+            let body = `## Performance\n\n`;
+
+            if (rows.length === 0) {
+              body += `No SDK changes detected.\n`;
+            } else {
+              body += `| SDK | Memory | Δ | Latency | Δ | Tests | Status |\n`;
+              body += `|-----|--------|---|---------|---|-------|--------|\n`;
+              body += rows.join('\n') + '\n\n';
+
+              if (warnings.length > 0) {
+                body += `⚠ **Regression detected:**\n`;
+                warnings.forEach(w => body += `- ${w}\n`);
+              } else {
+                body += `✓ No regressions detected\n`;
+              }
+            }
+
+            // Find existing comment or create new one
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber
+            });
+
+            const existing = comments.find(c => c.user.type === 'Bot' && c.body.includes('## Performance'));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body
+              });
+            }
+
+            console.log(`Posted performance report to PR #${prNumber}`);

@@ -1,0 +1,13 @@
+{
+  "updated_at": "2026-06-02",
+  "method": "reset from Coverage Summary CI on PR #609 after upgrading @vitest/coverage-v8 from 3.x to 4.x; Vitest 4 changed V8 coverage accounting for existing TypeScript files while patch coverage stayed clean",
+  "note": "This baseline is the contract the coverage gate in .github/workflows/coverage.yml enforces on every PR. Update it in the same PR as any deliberate regression or coverage tool accounting reset and explain why in the PR description. See .coverage-gate.toml for thresholds and docs/COVERAGE.md#for-ai-coding-agents for the remediation loop.",
+  "surfaces": {
+    "control-plane":  87.40,
+    "sdk-go":         92.00,
+    "sdk-python":     93.73,
+    "sdk-typescript": 90.42,
+    "web-ui":         84.79
+  },
+  "aggregate": 85.75
+}

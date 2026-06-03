@@ -1,0 +1,11 @@
+{
+  "kind": "internal.notification",
+  "notification_id": "notif_demo_77",
+  "subject": "Daily reconciliation",
+  "body": "All transactions reconciled successfully.",
+  "metadata": {
+    "source_system": "reconciliation-svc",
+    "severity": "info"
+  },
+  "created_at": "2026-04-28T12:00:00Z"
+}
