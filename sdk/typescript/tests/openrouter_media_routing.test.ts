@@ -161,6 +161,19 @@ describe('OpenRouterMediaProvider.generateVideo: param translation', () => {
 });
 
 describe('OpenRouterMediaProvider.generateImage: imageUrls + imageConfig', () => {
+  it('uses the current live Gemini image model by default', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ choices: [] }),
+    });
+
+    const provider = new OpenRouterMediaProvider({ apiKey: 'k' });
+    await provider.generateImage({ prompt: 'fox in watercolor' });
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+    expect(body.model).toBe('google/gemini-3.1-flash-image-preview');
+  });
+
   it('builds multi-part user content and snake_cases imageConfig', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
@@ -225,6 +238,23 @@ describe('OpenRouterMediaProvider.generateImage: imageUrls + imageConfig', () =>
 });
 
 describe('OpenRouterMediaProvider.generateAudio: /audio/speech extras', () => {
+  it('uses the current live Kokoro model and voice by default', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: { get: () => 'audio/mpeg' },
+      arrayBuffer: async () => new Uint8Array([1, 2]).buffer,
+      text: async () => '',
+    });
+
+    const provider = new OpenRouterMediaProvider({ apiKey: 'k' });
+    provider.seedModelMeta('hexgrad/kokoro-82m', ['speech'], ['text']);
+    await provider.generateAudio({ text: 'hello', format: 'mp3' });
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+    expect(body.model).toBe('hexgrad/kokoro-82m');
+    expect(body.voice).toBe('af_alloy');
+  });
+
   it('passes speed and extra through to the speech body', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,

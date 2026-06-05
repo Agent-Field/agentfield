@@ -22,6 +22,8 @@ class AgentUtils:
                 return "image_base64"
             elif input_data.startswith("data:audio"):
                 return "audio_base64"
+            elif input_data.startswith("data:video"):
+                return "video_base64"
             elif os.path.isfile(input_data):
                 ext = os.path.splitext(input_data)[1].lower()
                 if ext in [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff"]:
@@ -120,6 +122,14 @@ class AgentUtils:
             ".ogg": "audio/ogg",
             ".flac": "audio/flac",
             ".aac": "audio/aac",
+            ".mp4": "video/mp4",
+            ".mpeg": "video/mpeg",
+            ".mpg": "video/mpeg",
+            ".mov": "video/quicktime",
+            ".webm": "video/webm",
+            ".avi": "video/x-msvideo",
+            ".wmv": "video/x-ms-wmv",
+            ".flv": "video/x-flv",
             ".pdf": "application/pdf",
             ".doc": "application/msword",
             ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",

@@ -3580,7 +3580,7 @@ class Agent(FastAPI):
 
         Supported Providers:
         - LiteLLM: DALL-E models like "dall-e-3", "dall-e-2"
-        - OpenRouter: Models like "openrouter/google/gemini-2.5-flash-image-preview"
+        - OpenRouter: Models like "openrouter/google/gemini-3.1-flash-image-preview"
 
         Args:
             prompt (str): Text description of the image to generate.
@@ -3604,7 +3604,7 @@ class Agent(FastAPI):
             # OpenRouter with Gemini
             result = await app.ai_generate_image(
                 "A futuristic cityscape",
-                model="openrouter/google/gemini-2.5-flash-image-preview"
+                model="openrouter/google/gemini-3.1-flash-image-preview"
             )
             ```
         """

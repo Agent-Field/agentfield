@@ -493,16 +493,34 @@ class AgentAI:
         if safe_input_limit < 1000:
             safe_input_limit = 1000
 
-        # Count actual prompt tokens using LiteLLM's token counter
+        def has_untrimmable_media(messages_to_check: List[dict]) -> bool:
+            for message in messages_to_check:
+                content = message.get("content")
+                if not isinstance(content, list):
+                    continue
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") in {
+                        "input_audio",
+                        "file",
+                    }:
+                        return True
+            return False
+
+        skip_trimming = has_untrimmable_media(messages)
+
+        # Count actual prompt tokens using LiteLLM's token counter. LiteLLM's
+        # trimming utilities do not currently handle all media parts and can
+        # dump base64 payloads in their error logs, so media payloads pass
+        # through unchanged.
         try:
-            actual_prompt_tokens = token_counter(
-                model=final_config.model, messages=messages
+            actual_prompt_tokens = (
+                0
+                if skip_trimming
+                else token_counter(model=final_config.model, messages=messages)
             )
         except Exception as e:
-            log_debug(f"Could not count prompt tokens, proceeding with trimming: {e}")
-            actual_prompt_tokens = (
-                safe_input_limit + 1
-            )  # Force trimming if we can't count
+            log_debug(f"Could not count prompt tokens; skipping trimming: {e}")
+            actual_prompt_tokens = 0
 
         # Only trim if necessary based on actual token count
         if actual_prompt_tokens > safe_input_limit:
@@ -829,7 +847,7 @@ class AgentAI:
 
     def _process_multimodal_args(self, args: tuple) -> List[Dict[str, Any]]:
         """Process multimodal arguments into LiteLLM-compatible message format"""
-        from agentfield.multimodal import Audio, File, Image, Text
+        from agentfield.multimodal import Audio, File, Image, Text, Video
 
         messages = []
         user_content = []
@@ -857,6 +875,9 @@ class AgentAI:
                 user_content.append(
                     {"type": "input_audio", "input_audio": arg.input_audio}
                 )
+
+            elif isinstance(arg, Video):
+                user_content.append({"type": "video_url", "video_url": arg.video_url})
 
             elif isinstance(arg, File):
                 # For now, treat files as text references
@@ -984,6 +1005,32 @@ class AgentAI:
                             {"type": "text", "text": "[Audio data provided]"}
                         )
 
+                elif detected_type == "video_file":
+                    try:
+                        import base64
+
+                        with open(arg, "rb") as f:
+                            video_data = base64.b64encode(f.read()).decode()
+                        ext = os.path.splitext(arg)[1].lower()
+                        mime_type = AgentUtils.get_mime_type(ext)
+                        data_url = f"data:{mime_type};base64,{video_data}"
+                        user_content.append(
+                            {"type": "video_url", "video_url": {"url": data_url}}
+                        )
+                    except Exception as e:
+                        log_warn(f"Could not read video file {arg}: {e}")
+                        user_content.append(
+                            {
+                                "type": "text",
+                                "text": f"[Video file: {os.path.basename(arg)}]",
+                            }
+                        )
+
+                elif detected_type == "video_base64":
+                    user_content.append(
+                        {"type": "video_url", "video_url": {"url": arg}}
+                    )
+
                 elif detected_type == "image_bytes":
                     # Convert bytes to base64 data URL
                     try:
@@ -1054,6 +1101,8 @@ class AgentAI:
                         "image",
                         "image_url",
                         "audio",
+                        "video",
+                        "video_url",
                     ]:
                         if key in arg:
                             if key == "text":
@@ -1082,6 +1131,18 @@ class AgentAI:
                                     # Assume it's a file path or URL
                                     user_content.append(
                                         {"type": "text", "text": f"[Audio: {arg[key]}]"}
+                                    )
+                            elif key in ["video", "video_url"]:
+                                if isinstance(arg[key], dict):
+                                    user_content.append(
+                                        {"type": "video_url", "video_url": arg[key]}
+                                    )
+                                else:
+                                    user_content.append(
+                                        {
+                                            "type": "video_url",
+                                            "video_url": {"url": arg[key]},
+                                        }
                                     )
 
                 elif detected_type == "message_dict":
@@ -1413,7 +1474,7 @@ class AgentAI:
 
         Supports both LiteLLM and OpenRouter providers:
         - LiteLLM: Use model names like "dall-e-3", "azure/dall-e-3", "bedrock/stability.stable-diffusion-xl"
-        - OpenRouter: Use model names with "openrouter/" prefix like "openrouter/google/gemini-2.5-flash-image-preview"
+        - OpenRouter: Use model names with "openrouter/" prefix like "openrouter/google/gemini-3.1-flash-image-preview"
 
         Args:
             prompt: Text prompt for image generation
@@ -1435,7 +1496,7 @@ class AgentAI:
             # OpenRouter (Gemini)
             result = await agent.ai_with_vision(
                 "A futuristic city",
-                model="openrouter/google/gemini-2.5-flash-image-preview",
+                model="openrouter/google/gemini-3.1-flash-image-preview",
                 image_config={"aspect_ratio": "16:9"}
             )
 
@@ -1528,7 +1589,7 @@ class AgentAI:
 
         Supported Providers:
         - LiteLLM: DALL-E models like "dall-e-3", "dall-e-2"
-        - OpenRouter: Models like "openrouter/google/gemini-2.5-flash-image-preview"
+        - OpenRouter: Models like "openrouter/google/gemini-3.1-flash-image-preview"
         - Fal.ai: Models like "fal-ai/flux/dev", "fal-ai/flux/schnell", "fal-ai/recraft-v3"
 
         Args:
@@ -1556,7 +1617,7 @@ class AgentAI:
             # OpenRouter with Gemini
             result = await app.ai_generate_image(
                 "A futuristic cityscape at night",
-                model="openrouter/google/gemini-2.5-flash-image-preview",
+                model="openrouter/google/gemini-3.1-flash-image-preview",
                 image_config={"aspect_ratio": "16:9"}
             )
 
@@ -1722,7 +1783,8 @@ class AgentAI:
 
         Supported Providers:
         - Fal.ai: Models like "fal-ai/minimax-video/image-to-video",
-          "fal-ai/kling-video/v1/standard", "fal-ai/luma-dream-machine"
+          "fal-ai/kling-video/v1/standard/text-to-video",
+          "fal-ai/luma-dream-machine"
 
         Args:
             prompt: Text description for the video
@@ -1748,7 +1810,7 @@ class AgentAI:
             # Text to video
             result = await app.ai_generate_video(
                 "A cat playing with yarn",
-                model="fal-ai/kling-video/v1/standard"
+                model="fal-ai/kling-video/v1/standard/text-to-video"
             )
 
             # Luma Dream Machine

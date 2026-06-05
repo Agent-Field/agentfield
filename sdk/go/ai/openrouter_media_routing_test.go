@@ -168,6 +168,25 @@ func TestGenerateAudioSpeechDefaultsVoiceToAlloy(t *testing.T) {
 	assert.Equal(t, "alloy", seen["voice"])
 }
 
+func TestGenerateAudioDefaultsToLiveKokoroModelAndVoice(t *testing.T) {
+	var seen map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&seen))
+		w.Header().Set("Content-Type", "audio/mpeg")
+		_, _ = w.Write([]byte("x"))
+	}))
+	defer srv.Close()
+
+	p := &OpenRouterMediaProvider{APIKey: "k", BaseURL: srv.URL, Client: srv.Client()}
+	p.SeedModelMeta("hexgrad/kokoro-82m", []string{"speech"}, []string{"text"})
+	_, err := p.GenerateAudio(context.Background(), AudioRequest{
+		Text: "hi", Format: "mp3",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "hexgrad/kokoro-82m", seen["model"])
+	assert.Equal(t, "af_alloy", seen["voice"])
+}
+
 // =============================================================================
 // Video — first/last frame + auth-aware download
 // =============================================================================
