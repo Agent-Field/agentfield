@@ -25,6 +25,16 @@ type executionNoteDIDAuthStorage struct {
 	listErr      error
 }
 
+type getCountingExecutionNoteStorage struct {
+	*testExecutionStorage
+	getCalls int
+}
+
+func (s *getCountingExecutionNoteStorage) GetExecutionRecord(ctx context.Context, executionID string) (*types.Execution, error) {
+	s.getCalls++
+	return s.testExecutionStorage.GetExecutionRecord(ctx, executionID)
+}
+
 func (s *executionNoteDIDAuthStorage) GetDIDDocument(ctx context.Context, did string) (*types.DIDDocumentRecord, error) {
 	if s.didLookupErr != nil {
 		return nil, s.didLookupErr
@@ -572,7 +582,7 @@ func TestGetExecutionNotesHandler_ReturnsFilteredNotes(t *testing.T) {
 	require.NoError(t, storage.CreateExecutionRecord(context.Background(), exec))
 
 	router := gin.New()
-	router.GET("/api/v1/executions/:execution_id/notes", GetExecutionNotesHandler(storage))
+	router.GET("/api/v1/executions/:execution_id/notes", GetExecutionNotesHandler(storage, false))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/executions/exec-2/notes?tags=debug", nil)
 	resp := httptest.NewRecorder()
@@ -585,4 +595,189 @@ func TestGetExecutionNotesHandler_ReturnsFilteredNotes(t *testing.T) {
 	require.Equal(t, executionID, payload.ExecutionID)
 	require.Equal(t, 1, payload.Total)
 	require.Equal(t, "note-one", payload.Notes[0].Message)
+}
+
+func TestGetExecutionNotesHandler_AuthorizesOwnerRead(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	executionID := "exec-owned-by-a"
+	storage := newTestExecutionStorage(nil)
+	require.NoError(t, storage.CreateExecutionRecord(context.Background(), &types.Execution{
+		ExecutionID: executionID,
+		AgentNodeID: "agent-a",
+		Notes: []types.ExecutionNote{
+			{Message: "owner-visible", Tags: []string{"debug"}},
+		},
+		UpdatedAt: time.Now(),
+	}))
+
+	router := gin.New()
+	router.Use(middleware.APIKeyAuth(middleware.AuthConfig{APIKey: "secret-key"}))
+	router.GET("/api/v1/executions/:execution_id/notes", GetExecutionNotesHandler(storage, true))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/executions/exec-owned-by-a/notes", nil)
+	req.Header.Set("X-API-Key", "secret-key")
+	req.Header.Set("X-Caller-Agent-ID", "agent-a")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	var payload GetNotesResponse
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &payload))
+	require.Equal(t, executionID, payload.ExecutionID)
+	require.Equal(t, 1, payload.Total)
+	require.Equal(t, "owner-visible", payload.Notes[0].Message)
+}
+
+func TestGetExecutionNotesHandler_RejectsCrossAgentRead(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	storage := newTestExecutionStorage(nil)
+	require.NoError(t, storage.CreateExecutionRecord(context.Background(), &types.Execution{
+		ExecutionID: "exec-owned-by-b",
+		AgentNodeID: "agent-b",
+		Notes: []types.ExecutionNote{
+			{Message: "sensitive reasoning trace", Tags: []string{"private"}},
+		},
+		UpdatedAt: time.Now(),
+	}))
+
+	router := gin.New()
+	router.Use(middleware.APIKeyAuth(middleware.AuthConfig{APIKey: "secret-key"}))
+	router.GET("/api/v1/executions/:execution_id/notes", GetExecutionNotesHandler(storage, true))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/executions/exec-owned-by-b/notes", nil)
+	req.Header.Set("X-API-Key", "secret-key")
+	req.Header.Set("X-Caller-Agent-ID", "agent-a")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusForbidden, resp.Code)
+	require.Contains(t, resp.Body.String(), "this execution does not belong to the requesting agent")
+	require.NotContains(t, resp.Body.String(), "sensitive reasoning trace")
+}
+
+func TestGetExecutionNotesHandler_DIDCallerOwnership(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const callerDID = "did:web:example.com:agents:agent-a"
+
+	tests := []struct {
+		name           string
+		executionOwner string
+		wantStatus     int
+		wantTotal      int
+	}{
+		{
+			name:           "owner read succeeds",
+			executionOwner: "agent-a",
+			wantStatus:     http.StatusOK,
+			wantTotal:      1,
+		},
+		{
+			name:           "non owner read forbidden",
+			executionOwner: "agent-b",
+			wantStatus:     http.StatusForbidden,
+			wantTotal:      0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			executionID := "exec-did-read-" + strings.ReplaceAll(tt.name, " ", "-")
+			storage := &executionNoteDIDAuthStorage{
+				testExecutionStorage: newTestExecutionStorage(nil),
+				didDocuments: map[string]*types.DIDDocumentRecord{
+					callerDID: {
+						DID:     callerDID,
+						AgentID: "agent-a",
+					},
+				},
+			}
+			require.NoError(t, storage.CreateExecutionRecord(context.Background(), &types.Execution{
+				ExecutionID: executionID,
+				AgentNodeID: tt.executionOwner,
+				Notes: []types.ExecutionNote{
+					{Message: "did-visible-note", Tags: []string{"debug"}},
+				},
+				UpdatedAt: time.Now(),
+			}))
+
+			router := gin.New()
+			router.GET("/api/v1/executions/:execution_id/notes", func(c *gin.Context) {
+				c.Set(string(middleware.VerifiedCallerDIDKey), callerDID)
+				GetExecutionNotesHandler(storage, true)(c)
+			})
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/executions/"+executionID+"/notes", nil)
+			resp := httptest.NewRecorder()
+			router.ServeHTTP(resp, req)
+
+			require.Equal(t, tt.wantStatus, resp.Code)
+			if tt.wantStatus == http.StatusOK {
+				var payload GetNotesResponse
+				require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &payload))
+				require.Equal(t, tt.wantTotal, payload.Total)
+				require.Equal(t, "did-visible-note", payload.Notes[0].Message)
+			} else {
+				require.Contains(t, resp.Body.String(), "this execution does not belong to the requesting agent")
+				require.NotContains(t, resp.Body.String(), "did-visible-note")
+			}
+		})
+	}
+}
+
+func TestGetExecutionNotesHandler_SpoofedHeaderRejectedWhenEnforced(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	executionID := "exec-owned-by-victim"
+	storage := &getCountingExecutionNoteStorage{testExecutionStorage: newTestExecutionStorage(nil)}
+	require.NoError(t, storage.CreateExecutionRecord(context.Background(), &types.Execution{
+		ExecutionID: executionID,
+		AgentNodeID: "victim-agent",
+		Notes: []types.ExecutionNote{
+			{Message: "must not leak", Tags: []string{"private"}},
+		},
+		UpdatedAt: time.Now(),
+	}))
+
+	router := gin.New()
+	router.GET("/api/v1/executions/:execution_id/notes", GetExecutionNotesHandler(storage, true))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/executions/exec-owned-by-victim/notes", nil)
+	req.Header.Set("X-Agent-Node-ID", "victim-agent")
+	req.Header.Set("X-Caller-Agent-ID", "victim-agent")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusForbidden, resp.Code)
+	require.Contains(t, resp.Body.String(), "caller agent identity is required to read notes for this execution")
+	require.NotContains(t, resp.Body.String(), "must not leak")
+	require.Equal(t, 0, storage.getCalls)
+}
+
+func TestGetExecutionNotesHandler_UnauthenticatedRequestRejectedBeforeFetch(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	storage := &getCountingExecutionNoteStorage{testExecutionStorage: newTestExecutionStorage(nil)}
+	require.NoError(t, storage.CreateExecutionRecord(context.Background(), &types.Execution{
+		ExecutionID: "exec-owned-by-a",
+		AgentNodeID: "agent-a",
+		Notes: []types.ExecutionNote{
+			{Message: "must not be fetched", Tags: []string{"private"}},
+		},
+		UpdatedAt: time.Now(),
+	}))
+
+	router := gin.New()
+	router.Use(middleware.APIKeyAuth(middleware.AuthConfig{APIKey: "secret-key"}))
+	router.GET("/api/v1/executions/:execution_id/notes", GetExecutionNotesHandler(storage, true))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/executions/exec-owned-by-a/notes", nil)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusUnauthorized, resp.Code)
+	require.Equal(t, 0, storage.getCalls)
 }

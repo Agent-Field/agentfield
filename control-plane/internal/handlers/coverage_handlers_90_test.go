@@ -256,8 +256,8 @@ func TestExecutionNotesCoverageAdditional(t *testing.T) {
 
 	t.Run("get notes errors and empty results", func(t *testing.T) {
 		router := gin.New()
-		router.GET("/notes/:execution_id", GetExecutionNotesHandler(&executionNoteStorageStub{getErr: errors.New("load failed")}))
-		router.GET("/missing", GetExecutionNotesHandler(&executionNoteStorageStub{}))
+		router.GET("/notes/:execution_id", GetExecutionNotesHandler(&executionNoteStorageStub{getErr: errors.New("load failed")}, false))
+		router.GET("/missing", GetExecutionNotesHandler(&executionNoteStorageStub{}, false))
 
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/missing", nil)
@@ -271,14 +271,14 @@ func TestExecutionNotesCoverageAdditional(t *testing.T) {
 
 		rec = httptest.NewRecorder()
 		router = gin.New()
-		router.GET("/notes/:execution_id", GetExecutionNotesHandler(&executionNoteStorageStub{record: nil}))
+		router.GET("/notes/:execution_id", GetExecutionNotesHandler(&executionNoteStorageStub{record: nil}, false))
 		req = httptest.NewRequest(http.MethodGet, "/notes/exec-404", nil)
 		router.ServeHTTP(rec, req)
 		require.Equal(t, http.StatusNotFound, rec.Code)
 
 		rec = httptest.NewRecorder()
 		router = gin.New()
-		router.GET("/notes/:execution_id", GetExecutionNotesHandler(&executionNoteStorageStub{record: &types.Execution{ExecutionID: "exec-3"}}))
+		router.GET("/notes/:execution_id", GetExecutionNotesHandler(&executionNoteStorageStub{record: &types.Execution{ExecutionID: "exec-3"}}, false))
 		req = httptest.NewRequest(http.MethodGet, "/notes/exec-3?tags=debug,%20info%20", nil)
 		router.ServeHTTP(rec, req)
 		require.Equal(t, http.StatusOK, rec.Code)

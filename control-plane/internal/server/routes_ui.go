@@ -168,7 +168,7 @@ func (s *AgentFieldServer) registerUIAPI() {
 
 			// Execution notes endpoints for UI
 			executions.POST("/note", handlers.AddExecutionNoteHandler(s.storage, s.noteOwnershipEnforced()))
-			executions.GET("/:execution_id/notes", handlers.GetExecutionNotesHandler(s.storage))
+			executions.GET("/:execution_id/notes", handlers.GetExecutionNotesHandler(s.storage, s.noteOwnershipEnforced()))
 
 			// Structured execution logs for the execution detail page
 			execLogsHandler := ui.NewExecutionLogsHandler(s.storage, s.llmHealthMonitor, func() config.ExecutionLogsConfig {

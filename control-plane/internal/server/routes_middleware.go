@@ -92,7 +92,7 @@ func (s *AgentFieldServer) applyGlobalMiddleware() {
 	// ownership (and any other identity-dependent guard) cannot be enforced
 	// because no trusted caller identity is established for incoming requests.
 	if !s.noteOwnershipEnforced() {
-		logger.Logger.Warn().Msg("⚠️  No authentication configured (API key and DID auth both disabled): execution-note ownership is NOT enforced. Enable API key or DID auth to protect execution notes from cross-agent writes.")
+		logger.Logger.Warn().Msg("⚠️  No authentication configured (API key and DID auth both disabled): execution-note ownership is NOT enforced. Enable API key or DID auth to protect execution notes from cross-agent reads and writes.")
 	}
 }
 
