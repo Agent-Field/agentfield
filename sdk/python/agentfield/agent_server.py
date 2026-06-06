@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
 import asyncio
 import importlib.util
 import os
@@ -48,7 +50,10 @@ class AgentServer:
             if not node_logs.logs_enabled():
                 return JSONResponse(
                     status_code=404,
-                    content={"error": "logs_disabled", "message": "Process logs API is disabled"},
+                    content={
+                        "error": "logs_disabled",
+                        "message": "Process logs API is disabled",
+                    },
                 )
             auth = request.headers.get("authorization") or request.headers.get(
                 "Authorization"
@@ -56,7 +61,10 @@ class AgentServer:
             if not node_logs.verify_internal_bearer(auth):
                 return JSONResponse(
                     status_code=401,
-                    content={"error": "unauthorized", "message": "Valid Authorization Bearer required"},
+                    content={
+                        "error": "unauthorized",
+                        "message": "Valid Authorization Bearer required",
+                    },
                 )
             qp = request.query_params
             try:
@@ -107,7 +115,9 @@ class AgentServer:
                     name = t.get_name()
                 except Exception:
                     name = "?"
-                buf.write(f"=== Task {name} done={t.done()} cancelled={t.cancelled()} ===\n")
+                buf.write(
+                    f"=== Task {name} done={t.done()} cancelled={t.cancelled()} ===\n"
+                )
                 try:
                     coro = t.get_coro()
                     buf.write(f"coro: {coro!r}\n")
@@ -121,7 +131,9 @@ class AgentServer:
                                 f"  {frame.f_code.co_filename}:{frame.f_lineno} in {frame.f_code.co_name}\n"
                             )
                     else:
-                        buf.write("  <no stack — task is suspended on a Future/awaitable>\n")
+                        buf.write(
+                            "  <no stack — task is suspended on a Future/awaitable>\n"
+                        )
                 except Exception as e:
                     buf.write(f"  <stack error: {e}>\n")
                 out.append(buf.getvalue())
@@ -315,7 +327,10 @@ class AgentServer:
             approval_request_id = body.get("approval_request_id", "")
 
             if not execution_id or not decision:
-                return {"error": "execution_id and decision are required", "status": 400}
+                return {
+                    "error": "execution_id and decision are required",
+                    "status": 400,
+                }
 
             # Parse the raw response field (may be a JSON string or dict)
             raw_response = None
@@ -340,9 +355,13 @@ class AgentServer:
             # Try to resolve by approval_request_id first, then by execution_id
             resolved = False
             if approval_request_id:
-                resolved = await self.agent._pause_manager.resolve(approval_request_id, result)
+                resolved = await self.agent._pause_manager.resolve(
+                    approval_request_id, result
+                )
             if not resolved and execution_id:
-                resolved = await self.agent._pause_manager.resolve_by_execution_id(execution_id, result)
+                resolved = await self.agent._pause_manager.resolve_by_execution_id(
+                    execution_id, result
+                )
 
             if self.agent.dev_mode:
                 log_debug(
@@ -766,8 +785,18 @@ class AgentServer:
         # Setup fast lifecycle signal handlers
         self.agent.agentfield_handler.setup_fast_lifecycle_signal_handlers()
 
-        # Add startup event handler for resilient lifecycle
-        @self.agent.on_event("startup")
+        @asynccontextmanager
+        async def lifespan(app: FastAPI):
+            # Add startup event handler for resilient lifecycle
+            await startup_resilient_lifecycle()
+            try:
+                yield
+            finally:
+                # Add shutdown event handler for cleanup
+                await shutdown_cleanup()
+
+        self.agent.router.lifespan_context = lifespan
+
         async def startup_resilient_lifecycle():
             """Resilient lifecycle startup: connection manager handles AgentField server connectivity"""
 
@@ -848,8 +877,6 @@ class AgentServer:
                         "Agent started in local mode - will connect to AgentField server when available"
                     )
 
-        # Add shutdown event handler for cleanup
-        @self.agent.on_event("shutdown")
         async def shutdown_cleanup():
             """Cleanup all resources when FastAPI shuts down"""
 
