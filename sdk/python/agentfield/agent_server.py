@@ -1,3 +1,4 @@
+from contextlib import AsyncExitStack
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 import asyncio
@@ -786,7 +787,7 @@ class AgentServer:
         self.agent.agentfield_handler.setup_fast_lifecycle_signal_handlers()
 
         @asynccontextmanager
-        async def lifespan(app: FastAPI):
+        async def internal_lifespan(app: FastAPI):
             # Add startup event handler for resilient lifecycle
             await startup_resilient_lifecycle()
             try:
@@ -795,7 +796,16 @@ class AgentServer:
                 # Add shutdown event handler for cleanup
                 await shutdown_cleanup()
 
-        self.agent.router.lifespan_context = lifespan
+        existing_lifespan = self.agent.router.lifespan_context
+
+        @asynccontextmanager
+        async def merged_lifespan(app: FastAPI):
+            async with AsyncExitStack() as stack:
+                await stack.enter_async_context(internal_lifespan(app))
+                await stack.enter_async_context(existing_lifespan(app))
+            yield
+
+        self.agent.router.lifespan_context = merged_lifespan
 
         async def startup_resilient_lifecycle():
             """Resilient lifecycle startup: connection manager handles AgentField server connectivity"""
