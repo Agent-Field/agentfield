@@ -443,6 +443,49 @@ class _PauseManager:
             self._exec_to_request.clear()
 
 
+# Parameters the runtime injects by name into trigger/webhook-invoked reasoners.
+# They must never receive the event payload positionally — see
+# _bind_trigger_payload.
+_INJECTED_TRIGGER_PARAMS = frozenset({"trigger", "webhook", "execution_context"})
+
+
+def _bind_trigger_payload(
+    signature: inspect.Signature, payload: Any
+) -> tuple[tuple, dict]:
+    """Build (args, kwargs) for the event payload of a trigger-invoked reasoner.
+
+    For trigger/webhook invocations the event payload is the event object, and
+    the framework separately injects the ``trigger`` / ``webhook`` /
+    ``execution_context`` parameters by name (see _execute_reasoner_endpoint).
+    The payload therefore binds to the first parameter that is *not* one of
+    those injected slots.
+
+    When that parameter is an ordinary positional-or-keyword parameter we bind
+    it by **keyword**, so a leading injected parameter (e.g. ``def r(trigger,
+    event)``) can never shift the payload onto the wrong slot positionally. This
+    mirrors the test harness' ``_bind_reasoner_args`` so the runtime and
+    ``simulate_trigger`` invoke a reasoner identically.
+
+    A reasoner whose only parameter is an injected slot (e.g.
+    ``def r(trigger=None)``) has no home for the payload, so it is dropped and
+    the trigger context is delivered by keyword — instead of crashing with
+    "got multiple values for argument 'trigger'".
+    """
+    for name, param in signature.parameters.items():
+        if name in _INJECTED_TRIGGER_PARAMS:
+            continue
+        if param.kind in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.VAR_POSITIONAL,
+        ):
+            return (payload,), {}
+        if param.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD:
+            return (), {name: payload}
+        # KEYWORD_ONLY / VAR_KEYWORD have no positional home; the payload falls
+        # through to the parameter's default, matching _bind_reasoner_args.
+    return (), {}
+
+
 class Agent(FastAPI):
     """
     AgentField Agent - FastAPI subclass for creating AI agent nodes.
@@ -2167,11 +2210,16 @@ class Agent(FastAPI):
                 )
 
             # When invoked via an inbound trigger, the (possibly transformed)
-            # payload IS the first positional argument — it's the provider's
-            # event itself, not a dict of named kwargs. Direct app.call()
-            # invocations keep the historical kwargs-from-dict shape.
+            # payload IS the event object — it binds to the first parameter that
+            # the framework does not itself inject (trigger / webhook /
+            # execution_context). Binding through _bind_trigger_payload (rather
+            # than blindly passing it as the first positional) is what prevents
+            # `def r(trigger=None)` from receiving the payload positionally AND
+            # the trigger by keyword — the "got multiple values for argument
+            # 'trigger'" crash. Direct app.call() invocations keep the
+            # historical kwargs-from-dict shape.
             if execution_context.trigger is not None:
-                args, kwargs = (payload_dict,), {}
+                args, kwargs = _bind_trigger_payload(signature, payload_dict)
             else:
                 try:
                     if should_convert_args(func):
