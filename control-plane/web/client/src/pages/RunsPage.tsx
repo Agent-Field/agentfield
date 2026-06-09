@@ -1067,7 +1067,7 @@ export function RunsPage() {
               type="button"
               variant={showGoldenOnly ? "secondary" : "outline"}
               size="sm"
-              className="h-8 gap-1.5 text-xs"
+              className="h-8 gap-1.5"
               onClick={() => {
                 setShowGoldenOnly((value) => !value);
                 setPage(1);
@@ -1852,7 +1852,7 @@ function RunRow({
             <span
               className={cn(
                 badgeVariants({ variant: "outline", size: "sm" }),
-                "h-5 gap-1 px-1.5 text-micro-plus",
+                "h-5 gap-1",
                 statusTone.warning.fg,
                 statusTone.warning.border,
               )}
@@ -1867,7 +1867,7 @@ function RunRow({
               to={`/runs/${encodeURIComponent(run.lineage.source_run_id)}`}
               className={cn(
                 badgeVariants({ variant: "metadata", size: "sm" }),
-                "h-5 gap-1 px-1.5 text-micro-plus transition-colors",
+                "h-5 gap-1 transition-colors",
                 "hover:bg-muted/70 hover:text-foreground",
                 statusTone.info.border,
               )}

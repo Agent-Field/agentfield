@@ -62,6 +62,7 @@ import {
   useErrorNotification,
   useSuccessNotification,
 } from "../ui/notification";
+import { statusTone } from "../../lib/theme";
 
 /* ═══════════════════════════════════════════════════════════════
    Types
@@ -496,13 +497,14 @@ export function CompactExecutionHeader({
                       size="icon-sm"
                       onClick={handleRestart}
                       disabled={isMutating}
-                      className="hover:bg-sky-500/10 hover:text-sky-600"
                       aria-label="Restart workflow from this point"
                     >
                       {isRestarting ? (
                         <Activity className="w-4 h-4 animate-spin" />
                       ) : (
-                        <GitBranch className="w-4 h-4" />
+                        <GitBranch
+                          className={cn("w-4 h-4", statusTone.info.accent)}
+                        />
                       )}
                     </Button>
                   </TooltipTrigger>

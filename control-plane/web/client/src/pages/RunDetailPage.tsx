@@ -931,7 +931,7 @@ export function RunDetailPage() {
         <div className="min-w-0 flex-1 space-y-1.5">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-2">
             <h1
-              className="min-w-0 text-lg font-semibold leading-snug tracking-tight text-foreground sm:text-xl"
+              className="min-w-0 text-base font-semibold leading-snug tracking-tight text-foreground sm:text-lg"
               title={runTitle !== runTitleDisplay ? runTitle : undefined}
             >
               {runTitleDisplay}
@@ -970,9 +970,9 @@ export function RunDetailPage() {
             {golden ? (
               <Badge
                 variant="metadata"
-                size="md"
+                size="sm"
                 className={cn(
-                  "shrink-0 gap-1 text-micro-plus",
+                  "shrink-0 gap-1",
                   statusTone.warning.fg,
                   statusTone.warning.border,
                 )}
@@ -990,7 +990,7 @@ export function RunDetailPage() {
               <Link
                 to={`/runs/${encodeURIComponent(lineage.source_run_id)}`}
                 className={cn(
-                  "inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-0.5 text-micro-plus font-medium transition-colors",
+                  "inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0 text-micro font-medium transition-colors",
                   "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
                   statusTone.info.border,
                 )}
@@ -1050,7 +1050,7 @@ export function RunDetailPage() {
               <Button
                 variant="outline"
                 size="sm"
-                className="h-8 gap-1.5 text-xs"
+                className="h-8 gap-1.5"
                 disabled={lifecycleBusy !== null}
                 onClick={() => void handleRestartFromRoot()}
               >

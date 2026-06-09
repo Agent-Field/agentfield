@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { statusTone } from "@/lib/theme";
 import { getStatusTheme, normalizeExecutionStatus } from "@/utils/status";
 import { StatusDot } from "@/components/ui/status-pill";
+import { GitBranch } from "@/components/ui/icon-bridge";
 import type { WorkflowDAGLightweightNode } from "@/types/workflows";
 
 // ─── Tree node type (runtime-constructed) ────────────────────────────────────
@@ -278,13 +279,14 @@ function TraceRow({
         {node.reuse?.hit ? (
           <span
             className={cn(
-              "hidden shrink-0 rounded px-1 text-nano font-medium sm:inline-flex",
-              "bg-muted/40 text-muted-foreground",
-              statusTone.info.border,
+              "hidden size-3.5 shrink-0 items-center justify-center rounded-sm sm:inline-flex",
+              "text-muted-foreground/70",
+              statusTone.info.bg,
             )}
+            aria-label="Reused output"
             title={`Reused from ${node.reuse.source_execution_id}`}
           >
-            reused
+            <GitBranch className="size-2.5" aria-hidden />
           </span>
         ) : null}
 

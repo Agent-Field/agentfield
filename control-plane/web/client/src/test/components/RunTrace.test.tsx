@@ -134,7 +134,7 @@ describe("RunTrace", () => {
     expect(screen.getAllByText("worker")).toHaveLength(2);
     expect(screen.getByText("review")).toBeInTheDocument();
     expect(screen.getByText("×2")).toBeInTheDocument();
-    expect(screen.getByText("reused")).toHaveAttribute(
+    expect(screen.getByLabelText("Reused output")).toHaveAttribute(
       "title",
       "Reused from exec-source-worker",
     );

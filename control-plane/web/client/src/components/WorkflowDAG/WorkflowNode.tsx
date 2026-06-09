@@ -3,6 +3,7 @@ import { Handle, Position, useStore } from "@xyflow/react";
 import {
   Calendar,
   CheckmarkFilled,
+  GitBranch,
   Time,
   User,
 } from "@/components/ui/icon-bridge";
@@ -408,10 +409,11 @@ export const WorkflowNode = memo(
           </div>
           {data.reuse?.hit ? (
             <div
-              className="absolute right-2 top-7 rounded-sm border border-border bg-muted px-1.5 py-0.5 text-micro font-medium text-muted-foreground"
+              className="absolute right-2 top-7 flex size-4 items-center justify-center rounded-sm bg-muted/80 text-muted-foreground"
+              aria-label="Reused output"
               title={`Reused from ${data.reuse.source_execution_id}`}
             >
-              reused
+              <GitBranch className="size-2.5" aria-hidden />
             </div>
           ) : null}
 

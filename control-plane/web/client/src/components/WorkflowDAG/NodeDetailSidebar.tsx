@@ -159,7 +159,7 @@ export function NodeDetailSidebar({
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-8 gap-1.5 text-xs"
+                    className="h-8 gap-1.5"
                     onClick={() => onRestartWorkflowFromNode(node)}
                   >
                     <RotateCcw className="size-3.5" aria-hidden />
@@ -170,7 +170,7 @@ export function NodeDetailSidebar({
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-8 gap-1.5 text-xs"
+                    className="h-8 gap-1.5"
                     onClick={() => onRerunNodeOnly(node)}
                   >
                     <RotateCcw className="size-3.5" aria-hidden />
@@ -181,7 +181,7 @@ export function NodeDetailSidebar({
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-8 gap-1.5 text-xs"
+                    className="h-8 gap-1.5"
                     onClick={() => onForkFromNode(node)}
                   >
                     <GitBranch className="size-3.5" aria-hidden />
