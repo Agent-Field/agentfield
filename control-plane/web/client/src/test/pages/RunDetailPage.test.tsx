@@ -18,6 +18,8 @@ const state = vi.hoisted(() => ({
   cancelTreeMutateAsync: vi.fn<(args: { workflowId: string; reason?: string }) => Promise<unknown>>(),
   pauseMutateAsync: vi.fn<(executionId: string) => Promise<void>>(),
   resumeMutateAsync: vi.fn<(executionId: string) => Promise<void>>(),
+  restartMutateAsync: vi.fn<(args: unknown) => Promise<unknown>>(),
+  saveGoldenMutateAsync: vi.fn<(args: unknown) => Promise<unknown>>(),
   showRunNotification: vi.fn<(message: string) => void>(),
   getExecutionDetails: vi.fn<(executionId: string) => Promise<{ input_data: unknown }>>(),
   retryExecutionWebhook: vi.fn<(executionId: string) => Promise<void>>(),
@@ -51,6 +53,8 @@ vi.mock("@/hooks/queries", () => ({
   useCancelWorkflowTree: () => ({ mutateAsync: state.cancelTreeMutateAsync, isPending: false }),
   usePauseExecution: () => ({ mutateAsync: state.pauseMutateAsync, isPending: false }),
   useResumeExecution: () => ({ mutateAsync: state.resumeMutateAsync, isPending: false }),
+  useRestartExecution: () => ({ mutateAsync: state.restartMutateAsync, isPending: false }),
+  useSaveGoldenRun: () => ({ mutateAsync: state.saveGoldenMutateAsync, isPending: false }),
 }));
 
 vi.mock("@/components/ui/notification", () => ({
