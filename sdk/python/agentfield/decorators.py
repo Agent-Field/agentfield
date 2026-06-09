@@ -138,7 +138,7 @@ def reasoner(
         **kwargs: Additional metadata stored on the function.
     """
 
-def decorator(f: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T]]:
+    def decorator(f: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T]]:
         @functools.wraps(f)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
             if track_workflow:
@@ -229,7 +229,7 @@ def on_event(
     config in a single place.
     """
 
-def decorator(func: Callable[P, T]) -> Callable[P, T]:
+    def decorator(func: Callable[P, T]) -> Callable[P, T]:
         binding = EventTrigger(
             source=source,
             types=list(types or []),
@@ -255,7 +255,7 @@ def on_schedule(cron: str, *, timezone: str = "UTC") -> Callable[[Callable[P, T]
     Equivalent to ``triggers=[ScheduleTrigger(cron=cron, timezone=timezone)]``.
     """
 
-def decorator(func: Callable[P, T]) -> Callable[P, T]:
+    def decorator(func: Callable[P, T]) -> Callable[P, T]:
         binding = ScheduleTrigger(cron=cron, timezone=timezone)
         # Capture code origin automatically
         if not binding.code_origin:
