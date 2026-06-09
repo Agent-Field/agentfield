@@ -43,6 +43,7 @@ _PENDING_TRIGGERS_ATTR = "_pending_triggers"
 # Type variables for decorator signature preservation
 F = TypeVar("F", bound=Callable[..., Any])
 P = ParamSpec("P")
+T = TypeVar("T")
 R = TypeVar("R")
 
 
@@ -152,13 +153,13 @@ def reasoner(
                     return f(*args, **kwargs)
 
         # Store comprehensive metadata on the function
-        wrapper._is_reasoner = True
-        wrapper._track_workflow = track_workflow
-        wrapper._reasoner_name = f.__name__
-        wrapper._original_func = f
-        wrapper._reasoner_path = path
-        wrapper._reasoner_tags = tags or []
-        wrapper._reasoner_description = (
+        wrapper._is_reasoner = True  # type: ignore[attr-defined]
+        wrapper._track_workflow = track_workflow  # type: ignore[attr-defined]
+        wrapper._reasoner_name = f.__name__  # type: ignore[attr-defined]
+        wrapper._original_func = f  # type: ignore[attr-defined]
+        wrapper._reasoner_path = path  # type: ignore[attr-defined]
+        wrapper._reasoner_tags = tags or []  # type: ignore[attr-defined]
+        wrapper._reasoner_description = (  # type: ignore[attr-defined]
             description or f.__doc__ or f"Reasoner: {f.__name__}"
         )
 
@@ -184,7 +185,7 @@ def reasoner(
                 if not getattr(trigger, "code_origin", None):
                     trigger.code_origin = origin
 
-        wrapper._reasoner_triggers = merged
+        wrapper._reasoner_triggers = merged  # type: ignore[attr-defined]
 
         # Resolve accepts_webhook value:
         # - If explicitly passed (True/False/str), use that
@@ -197,7 +198,7 @@ def reasoner(
             resolved_accepts_webhook = True
         else:
             resolved_accepts_webhook = "warn"
-        wrapper._accepts_webhook = resolved_accepts_webhook
+        wrapper._accepts_webhook = resolved_accepts_webhook  # type: ignore[attr-defined]
 
         # Store any additional metadata
         for key, value in kwargs.items():
@@ -557,14 +558,14 @@ def on_change(pattern: Union[str, List[str]]) -> Callable[[Callable[P, Awaitable
         Decorated function with memory event listener metadata
     """
 
-    def decorator(func: Callable[P, T]) -> Callable[P, T]:
+    def decorator(func: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T]]:
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
             return await func(*args, **kwargs)
 
         # Attach metadata to the function
-        wrapper._memory_event_listener = True
-        wrapper._memory_event_patterns = (
+        wrapper._memory_event_listener = True  # type: ignore[attr-defined]
+        wrapper._memory_event_patterns = (  # type: ignore[attr-defined]
             pattern if isinstance(pattern, list) else [pattern]
         )
         return wrapper
@@ -705,9 +706,9 @@ def legacy_reasoner(reasoner_id: str, input_schema: dict, output_schema: dict) -
             return func(*args, **kwargs)
 
         # Attach metadata to the function
-        wrapper._reasoner_def = ReasonerDefinition(
+        wrapper._reasoner_def = ReasonerDefinition(  # type: ignore[attr-defined]
             id=reasoner_id, input_schema=input_schema, output_schema=output_schema
         )
-        return wrapper
+        return wrapper  # type: ignore[return-value]
 
     return decorator
