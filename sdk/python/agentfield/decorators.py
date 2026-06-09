@@ -7,7 +7,17 @@ import asyncio
 import functools
 import inspect
 import time
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    ParamSpec,
+    TypeVar,
+    Union,
+    overload,
+)
 
 from agentfield.logger import log_warn
 
@@ -30,7 +40,13 @@ from pydantic import ValidationError
 _PENDING_TRIGGERS_ATTR = "_pending_triggers"
 
 
-def _code_origin(fn) -> Optional[str]:
+# Type variables for decorator signature preservation
+F = TypeVar("F", bound=Callable[..., Any])
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+def _code_origin(fn: Callable[..., Any]) -> Optional[str]:
     """Capture the source code location (file:line) of a function.
 
     Returns the fully qualified path to the file and the line number where the
@@ -46,8 +62,9 @@ def _code_origin(fn) -> Optional[str]:
     return None
 
 
+@overload
 def reasoner(
-    func=None,
+    func: F,
     *,
     path: Optional[str] = None,
     tags: Optional[List[str]] = None,
@@ -55,8 +72,35 @@ def reasoner(
     track_workflow: bool = True,
     triggers: Optional[List[Trigger]] = None,
     accepts_webhook: Optional[Union[bool, str]] = None,
-    **kwargs,
-):
+    **kwargs: Any,
+) -> F: ...
+
+
+@overload
+def reasoner(
+    func: None = None,
+    *,
+    path: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    description: Optional[str] = None,
+    track_workflow: bool = True,
+    triggers: Optional[List[Trigger]] = None,
+    accepts_webhook: Optional[Union[bool, str]] = None,
+    **kwargs: Any,
+) -> Callable[[F], F]: ...
+
+
+def reasoner(
+    func: Optional[F] = None,
+    *,
+    path: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    description: Optional[str] = None,
+    track_workflow: bool = True,
+    triggers: Optional[List[Trigger]] = None,
+    accepts_webhook: Optional[Union[bool, str]] = None,
+    **kwargs: Any,
+) -> Union[F, Callable[[F], F]]:
     """Enhanced reasoner decorator with automatic workflow tracking and triggers.
 
     Examples:
@@ -94,9 +138,9 @@ def reasoner(
         **kwargs: Additional metadata stored on the function.
     """
 
-    def decorator(f: Callable) -> Callable:
+    def decorator(f: F) -> F:
         @functools.wraps(f)
-        async def wrapper(*args, **kwargs):
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
             if track_workflow:
                 # Execute with automatic workflow tracking
                 return await _execute_with_tracking(f, *args, **kwargs)
@@ -176,7 +220,7 @@ def on_event(
     types: Optional[List[str]] = None,
     secret_env: Optional[str] = None,
     config: Optional[Dict[str, Any]] = None,
-):
+) -> Callable[[F], F]:
     """Sugar that stages an :class:`EventTrigger` for the next outer ``@reasoner``.
 
     Equivalent to passing ``triggers=[EventTrigger(...)]`` on ``@reasoner``.
@@ -185,7 +229,7 @@ def on_event(
     config in a single place.
     """
 
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: F) -> F:
         binding = EventTrigger(
             source=source,
             types=list(types or []),
@@ -205,13 +249,13 @@ def on_event(
     return decorator
 
 
-def on_schedule(cron: str, *, timezone: str = "UTC"):
+def on_schedule(cron: str, *, timezone: str = "UTC") -> Callable[[F], F]:
     """Sugar that stages a :class:`ScheduleTrigger` for the next outer ``@reasoner``.
 
     Equivalent to ``triggers=[ScheduleTrigger(cron=cron, timezone=timezone)]``.
     """
 
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: F) -> F:
         binding = ScheduleTrigger(cron=cron, timezone=timezone)
         # Capture code origin automatically
         if not binding.code_origin:
@@ -226,7 +270,9 @@ def on_schedule(cron: str, *, timezone: str = "UTC"):
     return decorator
 
 
-async def _execute_with_tracking(func: Callable, *args, **kwargs) -> Any:
+async def _execute_with_tracking(
+    func: Callable[P, R], *args: P.args, **kwargs: P.kwargs
+) -> R:
     """
     Core function that handles automatic workflow tracking for reasoner calls.
 
@@ -500,7 +546,7 @@ def _compose_event_payload(
     return event
 
 
-def on_change(pattern: Union[str, List[str]]):
+def on_change(pattern: Union[str, List[str]]) -> Callable[[F], F]:
     """
     Decorator to mark a function as a memory event listener.
 
@@ -511,9 +557,9 @@ def on_change(pattern: Union[str, List[str]]):
         Decorated function with memory event listener metadata
     """
 
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: F) -> F:
         @functools.wraps(func)
-        async def wrapper(*args, **kwargs):
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
             return await func(*args, **kwargs)
 
         # Attach metadata to the function
@@ -645,7 +691,7 @@ async def _send_workflow_error(
             log_warn(f"Failed to emit workflow error: {exc}")
 
 
-def legacy_reasoner(reasoner_id: str, input_schema: dict, output_schema: dict):
+def legacy_reasoner(reasoner_id: str, input_schema: dict, output_schema: dict) -> Callable[[F], F]:
     """
     Legacy reasoner decorator for backward compatibility.
 
@@ -653,7 +699,7 @@ def legacy_reasoner(reasoner_id: str, input_schema: dict, output_schema: dict):
     New code should use the enhanced @reasoner decorator.
     """
 
-    def decorator(func):
+    def decorator(func: F) -> F:
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             return func(*args, **kwargs)
