@@ -23,11 +23,11 @@ class DemoSchema(BaseModel):
 
 
 class MockProvider:
-    def __init__(self, results=None):
-        self.results = results or []
-        self.call_count = 0
-        self.last_prompt = None
-        self.last_options = None
+    def __init__(self, results: list[RawResult] | None = None) -> None:
+        self.results: list[RawResult] = results or []
+        self.call_count: int = 0
+        self.last_prompt: str | None = None
+        self.last_options: dict[str, object] | None = None
 
     async def execute(self, prompt: str, options: dict) -> RawResult:
         self.call_count += 1

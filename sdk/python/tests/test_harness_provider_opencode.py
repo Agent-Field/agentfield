@@ -209,9 +209,9 @@ async def test_opencode_command_does_not_use_attach_pattern(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """Verify the provider uses direct CLI pattern, NOT serve+attach workaround."""
-    captured_cmd = None
+    captured_cmd: list[str] | None = None
 
-    async def capture_cmd(cmd, *, env=None, cwd=None, timeout=None):
+    async def capture_cmd(cmd: list[str], *, env=None, cwd=None, timeout=None):
         nonlocal captured_cmd
         captured_cmd = cmd
         return "result", "", 0
@@ -221,6 +221,7 @@ async def test_opencode_command_does_not_use_attach_pattern(
     provider = OpenCodeProvider(bin_path="opencode")
     await provider.execute("test prompt", {"model": "gpt-4"})
 
+    assert captured_cmd is not None
     cmd_str = " ".join(captured_cmd)
     assert "--attach" not in cmd_str
     assert "http://" not in cmd_str
@@ -234,9 +235,9 @@ async def test_opencode_uses_project_dir_when_no_cwd(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """Verify project_dir is used as --dir argument when cwd is not provided."""
-    captured_cmd = None
+    captured_cmd: list[str] | None = None
 
-    async def capture_cmd(cmd, *, env=None, cwd=None, timeout=None):
+    async def capture_cmd(cmd: list[str], *, env=None, cwd=None, timeout=None):
         nonlocal captured_cmd
         captured_cmd = cmd
         return "result", "", 0
@@ -246,6 +247,7 @@ async def test_opencode_uses_project_dir_when_no_cwd(
     provider = OpenCodeProvider()
     await provider.execute("test", {"project_dir": "/my/project"})
 
+    assert captured_cmd is not None
     assert "--dir" in captured_cmd
     assert "/my/project" in captured_cmd
 
@@ -373,9 +375,9 @@ async def test_opencode_v14_cli_shape_no_deprecated_flags(
     and exits with no output, which surfaces as 'Product manager failed to
     produce a valid PRD'.
     """
-    captured_cmd = None
+    captured_cmd: list[str] | None = None
 
-    async def capture_cmd(cmd, *, env=None, cwd=None, timeout=None):
+    async def capture_cmd(cmd: list[str], *, env=None, cwd=None, timeout=None):
         nonlocal captured_cmd
         captured_cmd = cmd
         return "result", "", 0
@@ -385,6 +387,7 @@ async def test_opencode_v14_cli_shape_no_deprecated_flags(
     provider = OpenCodeProvider(bin_path="opencode")
     await provider.execute("build the feature", {"cwd": "/repo", "model": "gpt-4o"})
 
+    assert captured_cmd is not None
     cmd_str = " ".join(captured_cmd)
     # Must use `run` subcommand
     assert captured_cmd[1] == "run", "Must use 'opencode run' subcommand (v1.4+)"

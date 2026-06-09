@@ -38,7 +38,7 @@ import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, Optional, Union
+from typing import Any, Awaitable, Callable, Coroutine, Dict, Optional, Union, cast
 
 from .triggers import EventTrigger, ScheduleTrigger, TriggerContext
 
@@ -256,5 +256,5 @@ def _run_coro(coro: Awaitable[Any]) -> Any:
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(coro)
+        return asyncio.run(cast(Coroutine[Any, Any, Any], coro))
     return loop.run_until_complete(coro)
