@@ -7,7 +7,7 @@ import asyncio
 import functools
 import inspect
 import time
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional, ParamSpec, TypeVar, Union, overload
 
 from agentfield.logger import log_warn
 
@@ -29,6 +29,9 @@ from pydantic import ValidationError
 # stacked sugar without either form leaking into the other.
 _PENDING_TRIGGERS_ATTR = "_pending_triggers"
 
+P = ParamSpec("P")
+T = TypeVar("T")
+
 
 def _code_origin(fn) -> Optional[str]:
     """Capture the source code location (file:line) of a function.
@@ -46,8 +49,9 @@ def _code_origin(fn) -> Optional[str]:
     return None
 
 
+@overload
 def reasoner(
-    func=None,
+    func: Callable[P, Awaitable[T]],
     *,
     path: Optional[str] = None,
     tags: Optional[List[str]] = None,
@@ -55,7 +59,34 @@ def reasoner(
     track_workflow: bool = True,
     triggers: Optional[List[Trigger]] = None,
     accepts_webhook: Optional[Union[bool, str]] = None,
-    **kwargs,
+    **kwargs: Any,
+) -> Callable[P, Awaitable[T]]: ...
+
+
+@overload
+def reasoner(
+    func: None = None,
+    *,
+    path: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    description: Optional[str] = None,
+    track_workflow: bool = True,
+    triggers: Optional[List[Trigger]] = None,
+    accepts_webhook: Optional[Union[bool, str]] = None,
+    **kwargs: Any,
+) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Awaitable[T]]]: ...
+
+
+def reasoner(
+    func: Any = None,
+    *,
+    path: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    description: Optional[str] = None,
+    track_workflow: bool = True,
+    triggers: Optional[List[Trigger]] = None,
+    accepts_webhook: Optional[Union[bool, str]] = None,
+    **kwargs: Any,
 ):
     """Enhanced reasoner decorator with automatic workflow tracking and triggers.
 
@@ -94,7 +125,7 @@ def reasoner(
         **kwargs: Additional metadata stored on the function.
     """
 
-    def decorator(f: Callable) -> Callable:
+    def decorator(f: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T]]:
         @functools.wraps(f)
         async def wrapper(*args, **kwargs):
             if track_workflow:
@@ -176,7 +207,7 @@ def on_event(
     types: Optional[List[str]] = None,
     secret_env: Optional[str] = None,
     config: Optional[Dict[str, Any]] = None,
-):
+) -> Callable[[Callable[P, T]], Callable[P, T]]:
     """Sugar that stages an :class:`EventTrigger` for the next outer ``@reasoner``.
 
     Equivalent to passing ``triggers=[EventTrigger(...)]`` on ``@reasoner``.
@@ -185,7 +216,7 @@ def on_event(
     config in a single place.
     """
 
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: Callable[P, T]) -> Callable[P, T]:
         binding = EventTrigger(
             source=source,
             types=list(types or []),
@@ -205,13 +236,13 @@ def on_event(
     return decorator
 
 
-def on_schedule(cron: str, *, timezone: str = "UTC"):
+def on_schedule(cron: str, *, timezone: str = "UTC") -> Callable[[Callable[P, T]], Callable[P, T]]:
     """Sugar that stages a :class:`ScheduleTrigger` for the next outer ``@reasoner``.
 
     Equivalent to ``triggers=[ScheduleTrigger(cron=cron, timezone=timezone)]``.
     """
 
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: Callable[P, T]) -> Callable[P, T]:
         binding = ScheduleTrigger(cron=cron, timezone=timezone)
         # Capture code origin automatically
         if not binding.code_origin:
@@ -500,7 +531,7 @@ def _compose_event_payload(
     return event
 
 
-def on_change(pattern: Union[str, List[str]]):
+def on_change(pattern: Union[str, List[str]]) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Awaitable[T]]]:
     """
     Decorator to mark a function as a memory event listener.
 
@@ -511,7 +542,7 @@ def on_change(pattern: Union[str, List[str]]):
         Decorated function with memory event listener metadata
     """
 
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T]]:
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):
             return await func(*args, **kwargs)
