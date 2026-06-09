@@ -1,5 +1,4 @@
 import { Close } from "@/components/ui/icon-bridge";
-import { GitBranch, RotateCcw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { statusTone } from "../../lib/theme";
@@ -27,33 +26,22 @@ interface WorkflowNodeData {
   workflow_depth: number;
   task_name?: string;
   agent_name?: string;
-  reuse?: {
-    hit: boolean;
-    source_execution_id: string;
-    source_run_id?: string;
-  };
 }
 
 interface NodeDetailSidebarProps {
   node: WorkflowNodeData | null;
   isOpen: boolean;
   onClose: () => void;
-  onRestartWorkflowFromNode?: (node: WorkflowNodeData) => void;
-  onRerunNodeOnly?: (node: WorkflowNodeData) => void;
-  onForkFromNode?: (node: WorkflowNodeData) => void;
 }
 
 export function NodeDetailSidebar({
   node,
   isOpen,
   onClose,
-  onRestartWorkflowFromNode,
-  onRerunNodeOnly,
-  onForkFromNode,
 }: NodeDetailSidebarProps) {
   const [copySuccess, setCopySuccess] = useState<string | null>(null);
   const { nodeDetails, loading, error, refetch } = useNodeDetails(
-    node?.execution_id,
+    node?.execution_id
   );
 
   // Handle copy to clipboard
@@ -84,7 +72,7 @@ export function NodeDetailSidebar({
     if (isOpen) {
       // Focus the close button when sidebar opens
       const closeButton = document.querySelector(
-        "[data-sidebar-close]",
+        "[data-sidebar-close]"
       ) as HTMLElement;
       closeButton?.focus();
     }
@@ -107,7 +95,7 @@ export function NodeDetailSidebar({
       <div
         className={cn(
           "fixed inset-0 z-[70] bg-background/80 backdrop-blur-sm transition-opacity duration-300",
-          isOpen ? "opacity-100" : "opacity-0 pointer-events-none",
+          isOpen ? "opacity-100" : "opacity-0 pointer-events-none"
         )}
         onClick={onClose}
       />
@@ -118,7 +106,7 @@ export function NodeDetailSidebar({
           "fixed top-0 right-0 z-[80] flex h-full w-full max-w-full flex-col transition-transform duration-300 ease-out",
           "border-l border-border bg-card/95 backdrop-blur-xl",
           "shadow-[0px_24px_60px_-28px_color-mix(in_srgb,_var(--foreground)_18%,_transparent)]",
-          isOpen ? "translate-x-0" : "translate-x-full",
+          isOpen ? "translate-x-0" : "translate-x-full"
         )}
         role="dialog"
         aria-modal="true"
@@ -153,44 +141,6 @@ export function NodeDetailSidebar({
         {/* Content - Scrollable */}
         <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
           <div className="space-y-5 px-5 py-5 md:space-y-6 md:px-6 md:py-6">
-            {onRestartWorkflowFromNode || onRerunNodeOnly || onForkFromNode ? (
-              <div className="flex flex-wrap gap-2">
-                {onRestartWorkflowFromNode ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 gap-1.5 text-xs"
-                    onClick={() => onRestartWorkflowFromNode(node)}
-                  >
-                    <RotateCcw className="size-3.5" aria-hidden />
-                    Restart from here
-                  </Button>
-                ) : null}
-                {onRerunNodeOnly ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 gap-1.5 text-xs"
-                    onClick={() => onRerunNodeOnly(node)}
-                  >
-                    <RotateCcw className="size-3.5" aria-hidden />
-                    Rerun node only
-                  </Button>
-                ) : null}
-                {onForkFromNode ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 gap-1.5 text-xs"
-                    onClick={() => onForkFromNode(node)}
-                  >
-                    <GitBranch className="size-3.5" aria-hidden />
-                    Fork with changes
-                  </Button>
-                ) : null}
-              </div>
-            ) : null}
-            {node.reuse?.hit ? <ReuseNotice node={node} /> : null}
             {loading ? (
               <SidebarSkeleton />
             ) : error ? (
@@ -246,45 +196,15 @@ export function NodeDetailSidebar({
   return createPortal(sidebarContent, document.body);
 }
 
-function ReuseNotice({ node }: { node: WorkflowNodeData }) {
-  return (
-    <div
-      className={cn(
-        "rounded-lg px-3 py-2 text-xs",
-        "bg-muted/30 text-muted-foreground",
-        statusTone.info.border,
-      )}
-    >
-      <div className="flex items-center gap-1.5 font-medium text-foreground">
-        <RotateCcw className={cn("size-3.5", statusTone.info.accent)} aria-hidden />
-        <span>Reused output</span>
-      </div>
-      <p className="mt-1">
-        Output came from{" "}
-        <span className="font-mono text-foreground">
-          {node.reuse?.source_execution_id}
-        </span>
-        {node.reuse?.source_run_id ? (
-          <>
-            {" "}
-            in{" "}
-            <span className="font-mono text-foreground">
-              {node.reuse.source_run_id}
-            </span>
-          </>
-        ) : null}
-        .
-      </p>
-    </div>
-  );
-}
-
 // Loading skeleton
 function SidebarSkeleton() {
   return (
     <div className="space-y-6">
       {[...Array(5)].map((_, i) => (
-        <Card key={i} className="border border-border bg-card">
+        <Card
+          key={i}
+          className="border border-border bg-card"
+        >
           <CardHeader className="pb-2">
             <Skeleton className="h-4 w-24 bg-muted/50" />
           </CardHeader>
@@ -312,12 +232,7 @@ function ErrorState({
   return (
     <Card className={cn(errorTone.bg, errorTone.border)}>
       <CardContent className="py-8 text-center">
-        <div
-          className={cn(
-            "mb-4 text-2xl font-semibold tracking-tight",
-            errorTone.accent,
-          )}
-        >
+        <div className={cn("mb-4 text-2xl font-semibold tracking-tight", errorTone.accent)}>
           <Close size={24} className="mx-auto" />
         </div>
         <h3 className="mb-2 text-base font-semibold">
@@ -337,6 +252,7 @@ function ErrorState({
   );
 }
 
+
 // ─── Triggers Section ──────────────────────────────────────────────────────
 
 interface BoundTrigger {
@@ -345,6 +261,7 @@ interface BoundTrigger {
   enabled: boolean;
   public_url: string;
 }
+
 
 function TriggersSection({ nodeId }: { nodeId: string }) {
   const { data: triggers, isLoading } = useQuery({
@@ -356,7 +273,7 @@ function TriggersSection({ nodeId }: { nodeId: string }) {
           headers: {
             "X-API-Key": sessionStorage.getItem("apiKey") || "",
           },
-        },
+        }
       );
       if (!response.ok) throw new Error("Failed to fetch triggers");
       return response.json();
@@ -391,8 +308,8 @@ function TriggersSection({ nodeId }: { nodeId: string }) {
         </CardHeader>
         <CardContent>
           <div className="py-6 text-center text-sm text-muted-foreground">
-            No triggers bound to this node yet. Triggers route inbound webhook
-            events into this node's reasoners.
+            No triggers bound to this node yet. Triggers route inbound
+            webhook events into this node's reasoners.
           </div>
         </CardContent>
       </Card>

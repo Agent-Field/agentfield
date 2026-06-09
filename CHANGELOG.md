@@ -6,15 +6,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
-## [0.1.92-rc.1] - 2026-06-09
-
-
-### Other
-
-- Add OpenRouter attribution defaults
-
-Add OpenRouter attribution request metadata defaults across the SDKs and harness paths without changing provider credentials or AgentField control-plane auth. (7362ceb)
-
 ## [0.1.91] - 2026-06-09
 
 ## [0.1.91-rc.3] - 2026-06-09

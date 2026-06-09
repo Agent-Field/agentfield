@@ -489,9 +489,6 @@ class AsyncExecutionManager:
                         self.metrics.active_executions
                     )
 
-            if execution_state.is_terminal:
-                await self._poll_single_execution(execution_state)
-
             # Reset circuit breaker on success
             self._circuit_breaker_failures = 0
 
@@ -632,7 +629,7 @@ class AsyncExecutionManager:
                     is_waiting = execution.status == ExecutionStatus.WAITING
 
                     if execution.is_terminal:
-                        if execution.status == ExecutionStatus.SUCCEEDED:
+                        if execution.is_successful:
                             # Cache successful result
                             if execution.result is not None:
                                 self.result_cache.set_execution_result(
@@ -1302,24 +1299,15 @@ class AsyncExecutionManager:
 
         old_status = execution.status
 
-        should_apply_terminal_payload = new_status != old_status or (
-            new_status == ExecutionStatus.SUCCEEDED and execution.result is None
-        ) or (
-            new_status == ExecutionStatus.FAILED and not execution.error_message
-        )
-
-        # Update status and terminal payloads. Replay-hit executions can be
-        # submitted as already-succeeded, so the poll that fetches their result
-        # may observe "succeeded -> succeeded"; still store the result.
-        if new_status != old_status or should_apply_terminal_payload:
+        # Update status
+        if new_status != old_status:
             if new_status == ExecutionStatus.SUCCEEDED:
                 result = status_data.get("result")
                 execution.set_result(result)
 
-                if not getattr(execution, "_capacity_released", False):
-                    async with self._execution_lock:
-                        self.metrics.completed_executions += 1
-                        self.metrics.active_executions -= 1
+                async with self._execution_lock:
+                    self.metrics.completed_executions += 1
+                    self.metrics.active_executions -= 1
                 self._release_capacity_for_execution(execution)
 
             elif new_status == ExecutionStatus.FAILED:
@@ -1327,27 +1315,24 @@ class AsyncExecutionManager:
                 error_details = status_data.get("error_details")
                 execution.set_error(error_msg, error_details)
 
-                if not getattr(execution, "_capacity_released", False):
-                    async with self._execution_lock:
-                        self.metrics.failed_executions += 1
-                        self.metrics.active_executions -= 1
+                async with self._execution_lock:
+                    self.metrics.failed_executions += 1
+                    self.metrics.active_executions -= 1
                 self._release_capacity_for_execution(execution)
             elif new_status == ExecutionStatus.CANCELLED:
                 execution.update_status(new_status)
 
-                if not getattr(execution, "_capacity_released", False):
-                    async with self._execution_lock:
-                        self.metrics.cancelled_executions += 1
-                        self.metrics.active_executions -= 1
+                async with self._execution_lock:
+                    self.metrics.cancelled_executions += 1
+                    self.metrics.active_executions -= 1
                 self._release_capacity_for_execution(execution)
 
             elif new_status == ExecutionStatus.TIMEOUT:
                 execution.update_status(new_status)
 
-                if not getattr(execution, "_capacity_released", False):
-                    async with self._execution_lock:
-                        self.metrics.timeout_executions += 1
-                        self.metrics.active_executions -= 1
+                async with self._execution_lock:
+                    self.metrics.timeout_executions += 1
+                    self.metrics.active_executions -= 1
                 self._release_capacity_for_execution(execution)
 
             else:

@@ -1,12 +1,6 @@
 // @ts-nocheck
 import * as React from "react";
-import {
-  act,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -16,7 +10,6 @@ const {
   useRunsMock,
   cancelTreeMutationMock,
   pauseMutationMock,
-  restartMutationMock,
   resumeMutationMock,
   useQueryMock,
   showSuccessMock,
@@ -24,14 +17,12 @@ const {
   showWarningMock,
   showRunNotificationMock,
   clipboardWriteTextMock,
-  getWorkflowDAGLightweightMock,
 } = vi.hoisted(() => ({
   navigateMock: vi.fn(),
   searchParamsState: { value: new URLSearchParams() },
   useRunsMock: vi.fn(),
   cancelTreeMutationMock: vi.fn(),
   pauseMutationMock: vi.fn(),
-  restartMutationMock: vi.fn(),
   resumeMutationMock: vi.fn(),
   useQueryMock: vi.fn(),
   showSuccessMock: vi.fn(),
@@ -39,7 +30,6 @@ const {
   showWarningMock: vi.fn(),
   showRunNotificationMock: vi.fn(),
   clipboardWriteTextMock: vi.fn(),
-  getWorkflowDAGLightweightMock: vi.fn(),
 }));
 
 vi.mock("react-router-dom", () => ({
@@ -49,9 +39,7 @@ vi.mock("react-router-dom", () => ({
     to,
     children,
     ...props
-  }: React.PropsWithChildren<
-    { to: string } & React.AnchorHTMLAttributes<HTMLAnchorElement>
-  >) => (
+  }: React.PropsWithChildren<{ to: string } & React.AnchorHTMLAttributes<HTMLAnchorElement>>) => (
     <a href={to} {...props}>
       {children}
     </a>
@@ -66,15 +54,10 @@ vi.mock("@/services/executionsApi", () => ({
   getExecutionDetails: vi.fn(),
 }));
 
-vi.mock("@/services/workflowsApi", () => ({
-  getWorkflowDAGLightweight: getWorkflowDAGLightweightMock,
-}));
-
 vi.mock("@/hooks/queries", () => ({
   useRuns: useRunsMock,
   useCancelWorkflowTree: () => ({ mutateAsync: cancelTreeMutationMock }),
   usePauseExecution: () => ({ mutateAsync: pauseMutationMock }),
-  useRestartExecution: () => ({ mutateAsync: restartMutationMock }),
   useResumeExecution: () => ({ mutateAsync: resumeMutationMock }),
 }));
 
@@ -93,9 +76,9 @@ vi.mock("lucide-react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("lucide-react")>();
   const ReactModule = await vi.importActual<typeof import("react")>("react");
   const makeIcon = (name: string) =>
-    ReactModule.forwardRef<SVGSVGElement, { className?: string }>(
-      (props, ref) => <svg ref={ref} data-testid={name} {...props} />,
-    );
+    ReactModule.forwardRef<SVGSVGElement, { className?: string }>((props, ref) => (
+      <svg ref={ref} data-testid={name} {...props} />
+    ));
 
   return {
     ...actual,
@@ -109,20 +92,10 @@ vi.mock("lucide-react", async (importOriginal) => {
 });
 
 vi.mock("@/components/ui/alert-dialog", () => ({
-  AlertDialog: ({
-    open,
-    children,
-  }: {
-    open?: boolean;
-    children: React.ReactNode;
-  }) => (open ? <div data-testid="alert-dialog">{children}</div> : null),
+  AlertDialog: ({ open, children }: { open?: boolean; children: React.ReactNode }) =>
+    open ? <div data-testid="alert-dialog">{children}</div> : null,
   AlertDialogAction: ({ children, onClick, disabled, className }: any) => (
-    <button
-      type="button"
-      className={className}
-      disabled={disabled}
-      onClick={onClick}
-    >
+    <button type="button" className={className} disabled={disabled} onClick={onClick}>
       {children}
     </button>
   ),
@@ -131,31 +104,19 @@ vi.mock("@/components/ui/alert-dialog", () => ({
       {children}
     </button>
   ),
-  AlertDialogContent: ({ children }: { children: React.ReactNode }) => (
-    <div>{children}</div>
-  ),
-  AlertDialogDescription: ({ children }: { children: React.ReactNode }) => (
-    <div>{children}</div>
-  ),
-  AlertDialogFooter: ({ children }: { children: React.ReactNode }) => (
-    <div>{children}</div>
-  ),
-  AlertDialogHeader: ({ children }: { children: React.ReactNode }) => (
-    <div>{children}</div>
-  ),
-  AlertDialogTitle: ({ children }: { children: React.ReactNode }) => (
-    <div>{children}</div>
-  ),
+  AlertDialogContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  AlertDialogDescription: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  AlertDialogFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  AlertDialogHeader: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  AlertDialogTitle: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
 vi.mock("@/components/runs/RunLifecycleMenu", () => ({
   CANCEL_RUN_COPY: {
-    title: (count: number) =>
-      count > 1 ? `Cancel ${count} runs?` : "Cancel this run?",
+    title: (count: number) => (count > 1 ? `Cancel ${count} runs?` : "Cancel this run?"),
     description:
       "Nodes currently executing will finish their current step — only pending nodes will be stopped. Any in-flight work will be discarded. This cannot be undone.",
-    confirmLabel: (count: number) =>
-      count > 1 ? `Cancel ${count} runs` : "Cancel run",
+    confirmLabel: (count: number) => (count > 1 ? `Cancel ${count} runs` : "Cancel run"),
     keepLabel: "Keep running",
   },
   RunLifecycleMenu: ({
@@ -163,13 +124,11 @@ vi.mock("@/components/runs/RunLifecycleMenu", () => ({
     onPause,
     onResume,
     onCancel,
-    onRestart,
   }: {
     run: (typeof baseRuns)[number];
     onPause: (run: (typeof baseRuns)[number]) => void;
     onResume: (run: (typeof baseRuns)[number]) => void;
     onCancel: (run: (typeof baseRuns)[number]) => void;
-    onRestart?: (run: (typeof baseRuns)[number]) => void;
   }) => (
     <div data-testid={`run-lifecycle-menu-${run.run_id}`}>
       <button type="button" onClick={() => onPause(run)}>
@@ -181,11 +140,6 @@ vi.mock("@/components/runs/RunLifecycleMenu", () => ({
       <button type="button" onClick={() => onCancel(run)}>
         Cancel {run.run_id}
       </button>
-      {onRestart ? (
-        <button type="button" onClick={() => onRestart(run)}>
-          Restart {run.run_id}
-        </button>
-      ) : null}
     </div>
   ),
 }));
@@ -195,17 +149,11 @@ vi.mock("@/components/ui/status-pill", () => ({
 }));
 
 vi.mock("@/components/ui/table", () => ({
-  Table: ({ children }: { children: React.ReactNode }) => (
-    <table>{children}</table>
-  ),
-  TableBody: ({ children }: { children: React.ReactNode }) => (
-    <tbody>{children}</tbody>
-  ),
+  Table: ({ children }: { children: React.ReactNode }) => <table>{children}</table>,
+  TableBody: ({ children }: { children: React.ReactNode }) => <tbody>{children}</tbody>,
   TableCell: ({ children, ...props }: any) => <td {...props}>{children}</td>,
   TableHead: ({ children, ...props }: any) => <th {...props}>{children}</th>,
-  TableHeader: ({ children }: { children: React.ReactNode }) => (
-    <thead>{children}</thead>
-  ),
+  TableHeader: ({ children }: { children: React.ReactNode }) => <thead>{children}</thead>,
   TableRow: ({ children, ...props }: any) => <tr {...props}>{children}</tr>,
 }));
 
@@ -233,12 +181,9 @@ vi.mock("@/components/ui/checkbox", () => ({
 }));
 
 vi.mock("@/components/ui/card", () => ({
-  Card: ({
-    children,
-    variant: _variant,
-    interactive: _interactive,
-    ...props
-  }: any) => <div {...props}>{children}</div>,
+  Card: ({ children, variant: _variant, interactive: _interactive, ...props }: any) => (
+    <div {...props}>{children}</div>
+  ),
 }));
 
 vi.mock("@/components/ui/filter-combobox", () => ({
@@ -261,12 +206,7 @@ vi.mock("@/components/ui/filter-combobox", () => ({
 }));
 
 vi.mock("@/components/ui/filter-multi-combobox", () => ({
-  FilterMultiCombobox: ({
-    label,
-    options,
-    selected,
-    onSelectedChange,
-  }: any) => (
+  FilterMultiCombobox: ({ label, options, selected, onSelectedChange }: any) => (
     <div aria-label={label} role="group">
       {options.map((option: { value: string; label: string }) => (
         <button
@@ -293,12 +233,7 @@ vi.mock("@/components/ui/filter-multi-combobox", () => ({
 }));
 
 vi.mock("@/components/ui/SearchBar", () => ({
-  SearchBar: ({
-    value,
-    onChange,
-    placeholder,
-    "aria-label": ariaLabel,
-  }: any) => (
+  SearchBar: ({ value, onChange, placeholder, "aria-label": ariaLabel }: any) => (
     <input
       value={value}
       placeholder={placeholder}
@@ -314,25 +249,15 @@ vi.mock("@/components/ui/separator", () => ({
 
 vi.mock("@/components/ui/hover-card", () => ({
   HoverCard: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  HoverCardContent: ({ children }: { children: React.ReactNode }) => (
-    <div>{children}</div>
-  ),
-  HoverCardTrigger: ({ children }: { children: React.ReactNode }) => (
-    <>{children}</>
-  ),
+  HoverCardContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  HoverCardTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  TooltipContent: ({ children }: { children: React.ReactNode }) => (
-    <div>{children}</div>
-  ),
-  TooltipProvider: ({ children }: { children: React.ReactNode }) => (
-    <>{children}</>
-  ),
-  TooltipTrigger: ({ children }: { children: React.ReactNode }) => (
-    <>{children}</>
-  ),
+  TooltipContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
 vi.mock("@/components/ui/skeleton", () => ({
@@ -341,20 +266,11 @@ vi.mock("@/components/ui/skeleton", () => ({
 
 vi.mock("@/components/ui/pagination", () => ({
   Pagination: ({ children, ...props }: any) => <nav {...props}>{children}</nav>,
-  PaginationContent: ({ children, ...props }: any) => (
-    <div {...props}>{children}</div>
-  ),
+  PaginationContent: ({ children, ...props }: any) => <div {...props}>{children}</div>,
   PaginationEllipsis: () => <span>…</span>,
-  PaginationItem: ({ children }: { children: React.ReactNode }) => (
-    <span>{children}</span>
-  ),
+  PaginationItem: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
   PaginationLink: ({ children, onClick, ...props }: any) => (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={props["aria-label"]}
-      disabled={props.disabled}
-    >
+    <button type="button" onClick={onClick} aria-label={props["aria-label"]} disabled={props.disabled}>
       {children}
     </button>
   ),
@@ -371,15 +287,9 @@ vi.mock("@/components/ui/pagination", () => ({
 }));
 
 vi.mock("@/components/ui/select", () => ({
-  Select: ({ children }: { children: React.ReactNode }) => (
-    <div>{children}</div>
-  ),
-  SelectContent: ({ children }: { children: React.ReactNode }) => (
-    <div>{children}</div>
-  ),
-  SelectItem: ({ children }: { children: React.ReactNode }) => (
-    <div>{children}</div>
-  ),
+  Select: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  SelectContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  SelectItem: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   SelectTrigger: ({ children, className, "aria-label": ariaLabel }: any) => (
     <button type="button" className={className} aria-label={ariaLabel}>
       {children}
@@ -467,30 +377,18 @@ const baseRuns = [
 ];
 
 function buildRunsResult(filters?: Record<string, unknown>) {
-  const search = String(filters?.search ?? "")
-    .trim()
-    .toLowerCase();
-  const status = String(filters?.status ?? "")
-    .trim()
-    .toLowerCase();
+  const search = String(filters?.search ?? "").trim().toLowerCase();
+  const status = String(filters?.status ?? "").trim().toLowerCase();
 
   let workflows = [...baseRuns];
 
   if (status) {
-    workflows = workflows.filter(
-      (run) => (run.root_execution_status ?? run.status) === status,
-    );
+    workflows = workflows.filter((run) => (run.root_execution_status ?? run.status) === status);
   }
 
   if (search) {
     workflows = workflows.filter((run) =>
-      [
-        run.run_id,
-        run.root_reasoner,
-        run.display_name,
-        run.agent_id,
-        run.agent_name,
-      ]
+      [run.run_id, run.root_reasoner, run.display_name, run.agent_id, run.agent_name]
         .filter(Boolean)
         .join(" ")
         .toLowerCase()
@@ -512,7 +410,6 @@ describe("RunsPage", () => {
     useRunsMock.mockReset();
     cancelTreeMutationMock.mockReset();
     pauseMutationMock.mockReset();
-    restartMutationMock.mockReset();
     resumeMutationMock.mockReset();
     useQueryMock.mockReset();
     showSuccessMock.mockReset();
@@ -520,7 +417,6 @@ describe("RunsPage", () => {
     showWarningMock.mockReset();
     showRunNotificationMock.mockReset();
     clipboardWriteTextMock.mockReset();
-    getWorkflowDAGLightweightMock.mockReset();
     searchParamsState.value = new URLSearchParams();
 
     useQueryMock.mockReturnValue({ data: undefined, isLoading: false });
@@ -534,31 +430,7 @@ describe("RunsPage", () => {
       cancelled_at: new Date().toISOString(),
     });
     pauseMutationMock.mockResolvedValue(undefined);
-    restartMutationMock.mockResolvedValue({
-      execution_id: "exec-restart",
-      run_id: "run-restart",
-      workflow_id: "run-restart",
-      status: "queued",
-      target: "agent.reasoner",
-      type: "reasoner",
-      created_at: new Date().toISOString(),
-      source_execution_id: "exec-1",
-      source_run_id: "run-1",
-      restarted_execution_id: "exec-1",
-      replay_mode: "succeeded-before",
-      scope: "workflow",
-      webhook_registered: false,
-    });
     resumeMutationMock.mockResolvedValue(undefined);
-    getWorkflowDAGLightweightMock.mockResolvedValue({
-      timeline: [
-        {
-          execution_id: "exec-1",
-          status: "running",
-          workflow_depth: 0,
-        },
-      ],
-    });
     useRunsMock.mockImplementation((filters?: Record<string, unknown>) => ({
       data: buildRunsResult(filters),
       isLoading: false,
@@ -592,9 +464,7 @@ describe("RunsPage", () => {
     render(<RunsPage />);
 
     expect(screen.getByText("No runs found")).toBeInTheDocument();
-    expect(
-      screen.getByText("Execute a reasoner to create your first run"),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Execute a reasoner to create your first run")).toBeInTheDocument();
   });
 
   it("renders rows, debounces search, filters by status, navigates on row click, and copies a run id", async () => {
@@ -607,19 +477,13 @@ describe("RunsPage", () => {
     expect(screen.getByText("beta")).toBeInTheDocument();
     expect(screen.getByText("gamma")).toBeInTheDocument();
 
-    await user.click(
-      screen.getByRole("button", { name: "Copy run ID run-001-alpha" }),
-    );
-    expect(
-      await screen.findByRole("button", { name: "Copied!" }),
-    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Copy run ID run-001-alpha" }));
+    expect(await screen.findByRole("button", { name: "Copied!" })).toBeInTheDocument();
 
     await user.click(screen.getByText("alpha"));
     expect(navigateMock).toHaveBeenCalledWith("/runs/run-001-alpha");
 
-    const searchInput = screen.getByPlaceholderText(
-      "Search runs, reasoners, agents…",
-    );
+    const searchInput = screen.getByPlaceholderText("Search runs, reasoners, agents…");
     await user.clear(searchInput);
     await user.type(searchInput, "beta");
 
@@ -651,25 +515,17 @@ describe("RunsPage", () => {
 
     render(<RunsPage />);
 
-    await user.click(
-      screen.getByLabelText("Select run run-001-alpha").closest("td")!,
-    );
-    await user.click(
-      screen.getByLabelText("Select run run-002-beta").closest("td")!,
-    );
+    await user.click(screen.getByLabelText("Select run run-001-alpha").closest("td")!);
+    await user.click(screen.getByLabelText("Select run run-002-beta").closest("td")!);
 
     expect(
       screen.getByRole("toolbar", { name: "Bulk actions for selected runs" }),
     ).toBeInTheDocument();
-    const compareButton = screen.getByRole("button", {
-      name: "Compare selected (2)",
-    });
+    const compareButton = screen.getByRole("button", { name: "Compare selected (2)" });
     expect(compareButton).toBeEnabled();
 
     await user.click(compareButton);
-    expect(navigateMock).toHaveBeenCalledWith(
-      "/runs/compare?a=run-001-alpha&b=run-002-beta",
-    );
+    expect(navigateMock).toHaveBeenCalledWith("/runs/compare?a=run-001-alpha&b=run-002-beta");
 
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.getByText("Cancel 2 runs?")).toBeInTheDocument();
@@ -705,71 +561,6 @@ describe("RunsPage", () => {
     expect(screen.getByText("runs query failed")).toBeInTheDocument();
   });
 
-  it("restarts a run row from the first failed DAG node", async () => {
-    const user = userEvent.setup();
-    const failedRun = {
-      ...baseRuns[2],
-      run_id: "run-failed-child",
-      workflow_id: "wf-failed-child",
-      root_execution_id: "exec-root",
-      root_execution_status: "failed",
-      status: "failed",
-      root_reasoner: "delta",
-      display_name: "Delta",
-      terminal: true,
-    };
-
-    useRunsMock.mockReturnValue({
-      data: {
-        workflows: [failedRun],
-        total_count: 1,
-        total_pages: 1,
-      },
-      isLoading: false,
-      isFetching: false,
-      isError: false,
-      error: null,
-    });
-    getWorkflowDAGLightweightMock.mockResolvedValueOnce({
-      timeline: [
-        {
-          execution_id: "exec-root",
-          status: "succeeded",
-          workflow_depth: 0,
-        },
-        {
-          execution_id: "exec-successful-child",
-          status: "succeeded",
-          workflow_depth: 1,
-        },
-        {
-          execution_id: "exec-failed-child",
-          status: "failed",
-          workflow_depth: 1,
-        },
-      ],
-    });
-
-    render(<RunsPage />);
-
-    await user.click(
-      screen.getByRole("button", { name: "Restart run-failed-child" }),
-    );
-
-    await waitFor(() => {
-      expect(getWorkflowDAGLightweightMock).toHaveBeenCalledWith(
-        "run-failed-child",
-      );
-      expect(restartMutationMock).toHaveBeenCalledWith("exec-failed-child");
-    });
-    expect(showRunNotificationMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        title: "Restarted",
-        runId: "run-restart",
-      }),
-    );
-  });
-
   it("applies multi-status filtering client-side without sending a single API status", async () => {
     const user = userEvent.setup();
 
@@ -794,9 +585,7 @@ describe("RunsPage", () => {
 
     render(<RunsPage />);
 
-    const searchInput = screen.getByPlaceholderText(
-      "Search runs, reasoners, agents…",
-    );
+    const searchInput = screen.getByPlaceholderText("Search runs, reasoners, agents…");
     fireEvent.change(searchInput, { target: { value: "beta" } });
 
     expect(useRunsMock).toHaveBeenLastCalledWith(
@@ -826,9 +615,7 @@ describe("RunsPage", () => {
       row?.focus();
     });
     act(() => {
-      row?.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
-      );
+      row?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     });
 
     expect(navigateMock).toHaveBeenCalledWith("/runs/run-001-alpha");
@@ -839,18 +626,12 @@ describe("RunsPage", () => {
 
     render(<RunsPage />);
 
-    await user.click(
-      screen.getByLabelText("Select run run-001-alpha").closest("td")!,
-    );
-    await user.click(
-      screen.getByLabelText("Select run run-003-gamma").closest("td")!,
-    );
+    await user.click(screen.getByLabelText("Select run run-001-alpha").closest("td")!);
+    await user.click(screen.getByLabelText("Select run run-003-gamma").closest("td")!);
     await user.click(screen.getByRole("button", { name: "Cancel" }));
 
     expect(screen.getByText("Cancel this run?")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Cancel run" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel run" })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Cancel run" }));
 
@@ -902,28 +683,16 @@ describe("RunsPage", () => {
 
     render(<RunsPage />);
 
-    expect(
-      screen.getByRole("region", { name: "Input and output preview" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("region", { name: "Input preview" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("region", { name: "Output preview" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("Open run for full JSON and trace."),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("Open run for output and full trace."),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Input and output preview" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Input preview" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Output preview" })).toBeInTheDocument();
+    expect(screen.getByText("Open run for full JSON and trace.")).toBeInTheDocument();
+    expect(screen.getByText("Open run for output and full trace.")).toBeInTheDocument();
     expect(screen.getByText("Open run for full trace.")).toBeInTheDocument();
 
     await user.click(screen.getAllByRole("button", { name: "Copy Input" })[0]);
 
-    await user.click(
-      screen.getByRole("button", { name: "Pause run-001-alpha" }),
-    );
+    await user.click(screen.getByRole("button", { name: "Pause run-001-alpha" }));
     await waitFor(() => {
       expect(showRunNotificationMock).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -934,9 +703,7 @@ describe("RunsPage", () => {
       );
     });
 
-    await user.click(
-      screen.getByRole("button", { name: "Resume run-002-beta" }),
-    );
+    await user.click(screen.getByRole("button", { name: "Resume run-002-beta" }));
     await waitFor(() => {
       expect(showRunNotificationMock).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -946,9 +713,7 @@ describe("RunsPage", () => {
       );
     });
 
-    await user.click(
-      screen.getByRole("button", { name: "Cancel run-001-alpha" }),
-    );
+    await user.click(screen.getByRole("button", { name: "Cancel run-001-alpha" }));
     await waitFor(() => {
       expect(showRunNotificationMock).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -974,9 +739,7 @@ describe("RunsPage", () => {
 
     render(<RunsPage />);
 
-    await user.click(
-      screen.getByRole("button", { name: "Cancel run-001-alpha" }),
-    );
+    await user.click(screen.getByRole("button", { name: "Cancel run-001-alpha" }));
     await waitFor(() => {
       expect(showRunNotificationMock).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -994,9 +757,7 @@ describe("RunsPage", () => {
 
     render(<RunsPage />);
 
-    await user.click(
-      screen.getByRole("button", { name: "Cancel run-001-alpha" }),
-    );
+    await user.click(screen.getByRole("button", { name: "Cancel run-001-alpha" }));
     await waitFor(() => {
       expect(showRunNotificationMock).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1012,21 +773,15 @@ describe("RunsPage", () => {
 
     render(<RunsPage />);
 
-    await user.click(
-      screen.getByLabelText("Select run run-001-alpha").closest("td")!,
-    );
+    await user.click(screen.getByLabelText("Select run run-001-alpha").closest("td")!);
     await user.click(screen.getByRole("button", { name: "Pause" }));
     await waitFor(() => {
       expect(pauseMutationMock).toHaveBeenCalledWith("exec-1");
     });
     expect(showSuccessMock).toHaveBeenCalledWith("1 run paused", undefined);
 
-    await user.click(
-      screen.getByLabelText("Select run run-001-alpha").closest("td")!,
-    );
-    await user.click(
-      screen.getByLabelText("Select run run-002-beta").closest("td")!,
-    );
+    await user.click(screen.getByLabelText("Select run run-001-alpha").closest("td")!);
+    await user.click(screen.getByLabelText("Select run run-002-beta").closest("td")!);
     await user.click(screen.getByRole("button", { name: "Resume" }));
     await waitFor(() => {
       expect(resumeMutationMock).toHaveBeenCalledWith("exec-2");
@@ -1092,10 +847,7 @@ describe("RunsPage", () => {
 
     expect(screen.getByText("LLM unavailable")).toBeInTheDocument();
     expect(screen.getByText("Agent unreachable")).toBeInTheDocument();
-    expect(screen.getByText("LLM health")).toHaveAttribute(
-      "href",
-      "/dashboard",
-    );
+    expect(screen.getByText("LLM health")).toHaveAttribute("href", "/dashboard");
     expect(screen.getByText("Node status")).toHaveAttribute("href", "/agents");
   });
 });

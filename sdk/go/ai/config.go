@@ -3,7 +3,6 @@ package ai
 import (
 	"errors"
 	"os"
-	"strings"
 	"time"
 )
 
@@ -61,7 +60,7 @@ func DefaultConfig() *Config {
 		model = "gpt-4o"
 	}
 
-	cfg := &Config{
+	return &Config{
 		APIKey:      apiKey,
 		BaseURL:     baseURL,
 		Model:       model,
@@ -69,10 +68,6 @@ func DefaultConfig() *Config {
 		MaxTokens:   4096,
 		Timeout:     30 * time.Second,
 	}
-	if cfg.IsOpenRouter() {
-		cfg.SiteURL, cfg.SiteName, _ = resolveOpenRouterAttribution("", "")
-	}
-	return cfg
 }
 
 // Validate ensures the configuration is valid.
@@ -91,6 +86,7 @@ func (c *Config) Validate() error {
 
 // IsOpenRouter returns true if the base URL is for OpenRouter.
 func (c *Config) IsOpenRouter() bool {
-	return strings.Contains(strings.ToLower(c.BaseURL), "openrouter.ai") ||
-		strings.HasPrefix(strings.ToLower(c.Model), "openrouter/")
+	return c.BaseURL == "https://openrouter.ai/api/v1" ||
+		c.BaseURL == "https://openrouter.ai/api/v1/"
 }
+

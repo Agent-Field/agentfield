@@ -38,26 +38,6 @@ def test_to_headers_includes_optional_fields():
 
 
 @pytest.mark.unit
-def test_to_headers_includes_replay_fields():
-    ctx = ExecutionContext(
-        workflow_id="wf-1",
-        execution_id="exec-1",
-        agent_instance=None,
-        reasoner_name="reasoner",
-        run_id="run-1",
-        replay_source_run_id="run-source",
-        replay_before_execution_id="exec-before",
-        replay_mode="succeeded-before",
-    )
-
-    headers = ctx.to_headers()
-
-    assert headers["X-AgentField-Replay-Source-Run-ID"] == "run-source"
-    assert headers["X-AgentField-Replay-Before-Execution-ID"] == "exec-before"
-    assert headers["X-AgentField-Replay-Mode"] == "succeeded-before"
-
-
-@pytest.mark.unit
 def test_child_context_derives_from_parent():
     root = ExecutionContext(
         workflow_id="wf-1",
@@ -78,51 +58,6 @@ def test_child_context_derives_from_parent():
     assert child.execution_id != root.execution_id
     assert child.run_id == root.run_id
     assert not child.registered
-
-
-@pytest.mark.unit
-def test_child_context_preserves_replay_metadata():
-    root = ExecutionContext(
-        workflow_id="wf-1",
-        execution_id="exec-1",
-        agent_instance=None,
-        reasoner_name="root",
-        run_id="run-1",
-        replay_source_run_id="run-source",
-        replay_before_execution_id="exec-before",
-        replay_mode="succeeded-before",
-    )
-
-    child = root.create_child_context()
-
-    assert child.replay_source_run_id == "run-source"
-    assert child.replay_before_execution_id == "exec-before"
-    assert child.replay_mode == "succeeded-before"
-
-
-@pytest.mark.unit
-def test_nested_child_context_preserves_replay_headers():
-    root = ExecutionContext(
-        workflow_id="wf-1",
-        execution_id="exec-root",
-        agent_instance=None,
-        reasoner_name="root",
-        run_id="run-1",
-        replay_source_run_id="run-source",
-        replay_before_execution_id="exec-before",
-        replay_mode="succeeded-before",
-    )
-
-    child = root.create_child_context()
-    grandchild = child.create_child_context()
-    headers = grandchild.to_headers()
-
-    assert grandchild.parent_execution_id == child.execution_id
-    assert grandchild.parent_workflow_id == root.workflow_id
-    assert grandchild.depth == 2
-    assert headers["X-AgentField-Replay-Source-Run-ID"] == "run-source"
-    assert headers["X-AgentField-Replay-Before-Execution-ID"] == "exec-before"
-    assert headers["X-AgentField-Replay-Mode"] == "succeeded-before"
 
 
 @pytest.mark.unit

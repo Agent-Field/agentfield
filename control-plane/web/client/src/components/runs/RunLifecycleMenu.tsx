@@ -5,11 +5,9 @@ import {
   Play,
   XCircle,
   Activity,
-  GitBranch,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import { statusTone } from "@/lib/theme";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -61,7 +59,6 @@ interface RunLifecycleMenuProps {
   onPause: (run: WorkflowSummary) => void;
   onResume: (run: WorkflowSummary) => void;
   onCancel: (run: WorkflowSummary) => void;
-  onRestart?: (run: WorkflowSummary) => void;
 }
 
 /**
@@ -77,7 +74,6 @@ export function RunLifecycleMenu({
   onPause,
   onResume,
   onCancel,
-  onRestart,
 }: RunLifecycleMenuProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -95,10 +91,7 @@ export function RunLifecycleMenu({
   const canPause = isRunning && Boolean(run.root_execution_id);
   const canResume = isPaused && Boolean(run.root_execution_id);
   const canCancel = !isTerminalStatus(run.status);
-  const canRestart = Boolean(
-    onRestart && run.root_execution_id && isTerminalStatus(run.status),
-  );
-  const hasAnyAction = canPause || canResume || canCancel || canRestart;
+  const hasAnyAction = canPause || canResume || canCancel;
 
   // Render an inert placeholder with the same footprint so the column
   // stays aligned across rows even when no action is available.
@@ -167,43 +160,17 @@ export function RunLifecycleMenu({
               Resume run
             </DropdownMenuItem>
           ) : null}
-          {canRestart ? (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-                Recovery
-              </DropdownMenuLabel>
-            </>
-          ) : null}
-          {canRestart ? (
+          {canCancel ? (
             <DropdownMenuItem
-              className="gap-2 text-xs"
+              className="gap-2 text-xs text-destructive focus:text-destructive"
               onClick={() => {
                 setMenuOpen(false);
-                onRestart?.(run);
+                setConfirmOpen(true);
               }}
             >
-              <GitBranch
-                className={cn("size-3.5", statusTone.info.accent)}
-                aria-hidden
-              />
-              Restart run
+              <XCircle className="size-3.5" aria-hidden />
+              Cancel run
             </DropdownMenuItem>
-          ) : null}
-          {canCancel ? (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                className="gap-2 text-xs text-destructive focus:text-destructive"
-                onClick={() => {
-                  setMenuOpen(false);
-                  setConfirmOpen(true);
-                }}
-              >
-                <XCircle className="size-3.5" aria-hidden />
-                Cancel run
-              </DropdownMenuItem>
-            </>
           ) : null}
         </DropdownMenuContent>
       </DropdownMenu>

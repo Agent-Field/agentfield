@@ -5,11 +5,12 @@ import {
   useRunDAG,
   useCancelWorkflowTree,
   usePauseExecution,
-  useRestartExecution,
   useResumeExecution,
-  useSaveGoldenRun,
 } from "@/hooks/queries";
-import { Card, CardContent } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+} from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -19,14 +20,12 @@ import {
   ChevronDown,
   FileJson,
   FileCheck2,
-  GitBranch,
   Info,
   Link2,
   PauseCircle,
   Play,
   RefreshCw,
   RotateCcw,
-  Star,
   XCircle,
 } from "lucide-react";
 import {
@@ -49,21 +48,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CopyIdentifierChip } from "@/components/ui/copy-identifier-chip";
 import {
@@ -73,17 +57,12 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { statusTone } from "@/lib/theme";
-import {
-  RunTrace,
-  buildTraceTree,
-  formatDuration,
-} from "@/components/RunTrace";
+import { RunTrace, buildTraceTree, formatDuration } from "@/components/RunTrace";
 import { SourceIcon } from "@/components/triggers/SourceIcon";
 import { ArrowUpRight } from "@/components/ui/icon-bridge";
 import { StepDetail } from "@/components/StepDetail";
 import { WorkflowDAGViewer } from "@/components/WorkflowDAG";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { ExecutionObservabilityPanel } from "@/components/execution";
 import { normalizeExecutionStatus, isTerminalStatus } from "@/utils/status";
 import { StatusPill } from "@/components/ui/status-pill";
@@ -95,10 +74,7 @@ import type {
   WorkflowDAGLightweightResponse,
 } from "@/types/workflows";
 import type { WorkflowExecution } from "@/types/executions";
-import {
-  retryExecutionWebhook,
-  getExecutionDetails,
-} from "@/services/executionsApi";
+import { retryExecutionWebhook, getExecutionDetails } from "@/services/executionsApi";
 import {
   downloadWorkflowVCAuditFile,
   getWorkflowVCChain,
@@ -106,7 +82,9 @@ import {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function computeMaxDuration(timeline: WorkflowDAGLightweightNode[]): number {
+function computeMaxDuration(
+  timeline: WorkflowDAGLightweightNode[],
+): number {
   if (!timeline || timeline.length === 0) return 1;
   const max = Math.max(...timeline.map((n) => n.duration_ms ?? 0));
   return Math.max(max, 1);
@@ -125,21 +103,6 @@ const ZERO_WEBHOOK_SUMMARY: WebhookRunSummary = {
   total_deliveries: 0,
   failed_deliveries: 0,
 };
-
-function pickRestartNode(
-  timeline: WorkflowDAGLightweightNode[] | undefined,
-): WorkflowDAGLightweightNode | undefined {
-  return (
-    timeline?.find((node) => {
-      const status = normalizeExecutionStatus(node.status);
-      return (
-        status === "failed" || status === "timeout" || status === "cancelled"
-      );
-    }) ??
-    timeline?.find((node) => node.workflow_depth === 0) ??
-    timeline?.[0]
-  );
-}
 
 function RunContextHint({
   label,
@@ -176,9 +139,7 @@ function deriveRunParticipants(dag: WorkflowDAGLightweightResponse): {
   ids: string[];
   source: RunParticipantsSource;
 } {
-  const api = (dag.unique_agent_node_ids ?? [])
-    .map((id) => id.trim())
-    .filter(Boolean);
+  const api = (dag.unique_agent_node_ids ?? []).map((id) => id.trim()).filter(Boolean);
   if (api.length > 0) {
     return { ids: [...new Set(api)].sort(), source: "api_agent" };
   }
@@ -197,6 +158,8 @@ function deriveRunParticipants(dag: WorkflowDAGLightweightResponse): {
   }
   return { ids: [...reasoners].sort(), source: "reasoner" };
 }
+
+
 
 function RunContextNodesCard({
   participantIds,
@@ -330,17 +293,15 @@ function RunContextWebhooksCard({
       )}
     >
       <CardContent className={cn("p-3", empty && "py-2.5")}>
-        <div
-          className={cn("flex items-center gap-0.5", empty ? "mb-0.5" : "mb-2")}
-        >
+        <div className={cn("flex items-center gap-0.5", empty ? "mb-0.5" : "mb-2")}>
           <p className="text-micro font-medium uppercase tracking-wide text-muted-foreground">
             Webhooks
           </p>
           <RunContextHint label="About run-level webhook summary">
             Inbound: the trigger that dispatched this run, if any. Outbound:
-            HTTP callbacks registered on steps in this run and delivery attempts
-            recorded by the control plane. Failed deliveries listed below can be
-            retried here.
+            HTTP callbacks registered on steps in this run and delivery
+            attempts recorded by the control plane. Failed deliveries listed
+            below can be retried here.
           </RunContextHint>
         </div>
 
@@ -379,19 +340,13 @@ function RunContextWebhooksCard({
             </button>
           ) : (
             <p className="text-micro-plus leading-tight text-muted-foreground">
-              Not triggered by a webhook — invoked directly or by another
-              reasoner.
+              Not triggered by a webhook — invoked directly or by another reasoner.
             </p>
           )}
         </div>
 
         {/* OUTBOUND */}
-        <div
-          className={cn(
-            "border-t border-border/40 pt-2",
-            outboundEmpty && "border-dashed",
-          )}
-        >
+        <div className={cn("border-t border-border/40 pt-2", outboundEmpty && "border-dashed")}>
           <p className="mb-1 text-micro uppercase tracking-wider text-muted-foreground/75">
             Outbound
           </p>
@@ -407,8 +362,7 @@ function RunContextWebhooksCard({
             </p>
           ) : (
             <p className="text-xs text-foreground">
-              {steps} step{steps === 1 ? "" : "s"} with callbacks · {total}{" "}
-              delivery
+              {steps} step{steps === 1 ? "" : "s"} with callbacks · {total} delivery
               {total === 1 ? "" : "ies"}
               {succeeded > 0 ? ` · ${succeeded} succeeded` : ""}
               {failed > 0 ? ` · ${failed} failed` : ""}
@@ -453,17 +407,12 @@ function RunContextWebhooksCard({
                     className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-muted/40 px-2 py-1.5 text-micro-plus"
                   >
                     <div className="min-w-0 flex-1">
-                      <p
-                        className="truncate font-medium text-foreground"
-                        title={label}
-                      >
+                      <p className="truncate font-medium text-foreground" title={label}>
                         {label}
                       </p>
                       <p className="truncate font-mono text-micro text-muted-foreground">
                         {f.event_type}
-                        {f.http_status != null
-                          ? ` · HTTP ${f.http_status}`
-                          : ""}
+                        {f.http_status != null ? ` · HTTP ${f.http_status}` : ""}
                       </p>
                     </div>
                     <div className="flex shrink-0 items-center gap-1">
@@ -529,27 +478,16 @@ export function RunDetailPage() {
   const { data: dag, isLoading, isError, error } = useRunDAG(runId);
   const cancelTreeMutation = useCancelWorkflowTree();
   const pauseMutation = usePauseExecution();
-  const restartMutation = useRestartExecution();
   const resumeMutation = useResumeExecution();
-  const saveGoldenMutation = useSaveGoldenRun();
   const showRunNotification = useRunNotification();
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
-  const [forkDialogOpen, setForkDialogOpen] = useState(false);
-  const [forkExecutionId, setForkExecutionId] = useState<string | null>(null);
-  const [forkReuse, setForkReuse] = useState<
-    "succeeded-before" | "all-succeeded" | "none"
-  >("succeeded-before");
-  const [forkModel, setForkModel] = useState("");
-  const [forkReason, setForkReason] = useState("");
   const [lifecycleBusy, setLifecycleBusy] = useState<
-    null | "pause" | "resume" | "cancel" | "restart" | "fork" | "golden"
+    null | "pause" | "resume" | "cancel"
   >(null);
 
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"trace" | "graph">("trace");
-  const [surfaceTab, setSurfaceTab] = useState<"execution" | "logs">(
-    "execution",
-  );
+  const [surfaceTab, setSurfaceTab] = useState<"execution" | "logs">("execution");
 
   const participants = useMemo(() => {
     if (!dag) {
@@ -589,205 +527,6 @@ export function RunDetailPage() {
   const isSingleStep = (dag?.total_nodes ?? 0) <= 1;
   const shortId = runId ? runId.substring(0, 12) : "—";
 
-  const rootNodeForActions =
-    dag?.timeline.find((n) => n.workflow_depth === 0) ?? dag?.timeline[0];
-  const restartNodeForActions = pickRestartNode(dag?.timeline);
-  const actionRunLabel =
-    dag?.workflow_name?.trim() ||
-    (rootNodeForActions?.agent_node_id && rootNodeForActions?.reasoner_id
-      ? `${rootNodeForActions.agent_node_id}.${rootNodeForActions.reasoner_id}`
-      : (rootNodeForActions?.reasoner_id ?? "run"));
-  const actionRootExecutionId = rootNodeForActions?.execution_id;
-  const actionRestartExecutionId =
-    restartNodeForActions?.execution_id ?? actionRootExecutionId;
-  const lineage = dag?.lineage;
-  const golden = dag?.golden;
-
-  const handleRestartFromRoot = async (
-    reuse: "succeeded-before" | "all-succeeded" | "none" = "succeeded-before",
-  ) => {
-    if (!actionRestartExecutionId || !runId) return;
-    setLifecycleBusy(reuse === "none" ? "fork" : "restart");
-    try {
-      const targetExecutionId = forkExecutionId ?? actionRestartExecutionId;
-      const restarted = await restartMutation.mutateAsync({
-        executionId: targetExecutionId,
-        request: {
-          scope: "workflow",
-          reuse,
-          fork: reuse === "none",
-        },
-      });
-      showRunNotification({
-        type: "success",
-        eventKind: "resume",
-        title: reuse === "none" ? "Fresh run started" : "Restarted",
-        message: `${actionRunLabel} started as ${restarted.run_id.slice(0, 8)}.`,
-        runId: restarted.run_id,
-        runLabel: actionRunLabel,
-      });
-      navigate(`/runs/${restarted.run_id}`);
-    } catch (err) {
-      showRunNotification({
-        type: "error",
-        eventKind: "error",
-        title: "Restart failed",
-        message: err instanceof Error ? err.message : "Unable to restart run.",
-        runId,
-        runLabel: actionRunLabel,
-      });
-    } finally {
-      setLifecycleBusy(null);
-    }
-  };
-
-  const handleStartFork = async () => {
-    if (!actionRestartExecutionId || !runId) return;
-    setLifecycleBusy("fork");
-    try {
-      const context = forkModel.trim()
-        ? { model: forkModel.trim() }
-        : undefined;
-      const restarted = await restartMutation.mutateAsync({
-        executionId: forkExecutionId ?? actionRestartExecutionId,
-        request: {
-          scope: "workflow",
-          reuse: forkReuse,
-          fork: true,
-          reason: forkReason.trim() || undefined,
-          context,
-        },
-      });
-      setForkDialogOpen(false);
-      setForkExecutionId(null);
-      showRunNotification({
-        type: "success",
-        eventKind: "resume",
-        title: "Fork started",
-        message: `${actionRunLabel} forked as ${restarted.run_id.slice(0, 8)}.`,
-        runId: restarted.run_id,
-        runLabel: actionRunLabel,
-      });
-      navigate(`/runs/${restarted.run_id}`);
-    } catch (err) {
-      showRunNotification({
-        type: "error",
-        eventKind: "error",
-        title: "Fork failed",
-        message: err instanceof Error ? err.message : "Unable to start fork.",
-        runId,
-        runLabel: actionRunLabel,
-      });
-    } finally {
-      setLifecycleBusy(null);
-    }
-  };
-
-  const handleRestartWorkflowFromNode = async (node: {
-    execution_id: string;
-    reasoner_id: string;
-  }) => {
-    if (!runId) return;
-    setLifecycleBusy("restart");
-    try {
-      const restarted = await restartMutation.mutateAsync({
-        executionId: node.execution_id,
-        request: { scope: "workflow", reuse: "succeeded-before" },
-      });
-      showRunNotification({
-        type: "success",
-        eventKind: "resume",
-        title: "Restarted",
-        message: `${node.reasoner_id} started as ${restarted.run_id.slice(0, 8)}.`,
-        runId: restarted.run_id,
-        runLabel: node.reasoner_id,
-      });
-      navigate(`/runs/${restarted.run_id}`);
-    } catch (err) {
-      showRunNotification({
-        type: "error",
-        eventKind: "error",
-        title: "Restart failed",
-        message:
-          err instanceof Error
-            ? err.message
-            : "Unable to restart from this node.",
-        runId,
-        runLabel: node.reasoner_id,
-      });
-    } finally {
-      setLifecycleBusy(null);
-    }
-  };
-
-  const handleRerunNodeOnly = async (node: {
-    execution_id: string;
-    reasoner_id: string;
-  }) => {
-    if (!runId) return;
-    setLifecycleBusy("restart");
-    try {
-      const restarted = await restartMutation.mutateAsync({
-        executionId: node.execution_id,
-        request: { scope: "execution", reuse: "succeeded-before" },
-      });
-      showRunNotification({
-        type: "success",
-        eventKind: "resume",
-        title: "Node rerun started",
-        message: `${node.reasoner_id} started as ${restarted.run_id.slice(0, 8)}.`,
-        runId: restarted.run_id,
-        runLabel: node.reasoner_id,
-      });
-      navigate(`/runs/${restarted.run_id}`);
-    } catch (err) {
-      showRunNotification({
-        type: "error",
-        eventKind: "error",
-        title: "Rerun failed",
-        message:
-          err instanceof Error ? err.message : "Unable to rerun this node.",
-        runId,
-        runLabel: node.reasoner_id,
-      });
-    } finally {
-      setLifecycleBusy(null);
-    }
-  };
-
-  const handleSaveGolden = async () => {
-    if (!runId) return;
-    setLifecycleBusy("golden");
-    try {
-      await saveGoldenMutation.mutateAsync({
-        runId,
-        name: dag?.workflow_name || actionRunLabel,
-        tags: ["regression"],
-      });
-      showRunNotification({
-        type: "success",
-        eventKind: "resume",
-        title: "Golden run saved",
-        message: `${actionRunLabel} is available for future forks.`,
-        runId,
-        runLabel: actionRunLabel,
-      });
-      void queryClient.invalidateQueries({ queryKey: ["run-dag", runId] });
-    } catch (err) {
-      showRunNotification({
-        type: "error",
-        eventKind: "error",
-        title: "Save failed",
-        message:
-          err instanceof Error ? err.message : "Unable to save golden run.",
-        runId,
-        runLabel: actionRunLabel,
-      });
-    } finally {
-      setLifecycleBusy(null);
-    }
-  };
-
   // ─── Loading state ──────────────────────────────────────────────────────────
   if (isLoading) {
     return (
@@ -818,7 +557,9 @@ export function RunDetailPage() {
   if (isError) {
     return (
       <div className="flex min-w-0 flex-col gap-4">
-        <h1 className="text-2xl font-semibold tracking-tight">Run {shortId}</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          Run {shortId}
+        </h1>
         <div className="rounded-md bg-destructive/10 border border-destructive/20 p-4 text-sm text-destructive">
           {error instanceof Error ? error.message : "Failed to load run"}
         </div>
@@ -830,16 +571,15 @@ export function RunDetailPage() {
   if (!dag) {
     return (
       <div className="flex min-w-0 flex-col gap-4">
-        <h1 className="text-2xl font-semibold tracking-tight">Run {shortId}</h1>
-        <p className="text-sm text-muted-foreground">
-          No data available for this run.
-        </p>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          Run {shortId}
+        </h1>
+        <p className="text-sm text-muted-foreground">No data available for this run.</p>
       </div>
     );
   }
 
-  const rootNode =
-    dag.timeline.find((n) => n.workflow_depth === 0) ?? dag.timeline[0];
+  const rootNode = dag.timeline.find((n) => n.workflow_depth === 0) ?? dag.timeline[0];
   const rootExecution: WorkflowExecution = {
     id: 0,
     workflow_id: workflowIdForVc,
@@ -865,36 +605,26 @@ export function RunDetailPage() {
     error_message: undefined,
     retry_count: 0,
     created_at: rootNode?.started_at ?? dag.timeline[0]?.started_at ?? "",
-    updated_at:
-      rootNode?.completed_at ??
-      rootNode?.started_at ??
-      dag.timeline[0]?.started_at ??
-      "",
+    updated_at: rootNode?.completed_at ?? rootNode?.started_at ?? dag.timeline[0]?.started_at ?? "",
     notes: [],
     webhook_registered: false,
     webhook_events: [],
   };
   const selectedNode =
-    dag.timeline.find((node) => node.execution_id === selectedStepId) ??
-    rootNode;
+    dag.timeline.find((node) => node.execution_id === selectedStepId) ?? rootNode;
   const selectedExecution: WorkflowExecution = {
     ...rootExecution,
     execution_id: selectedNode?.execution_id ?? rootExecution.execution_id,
     agent_node_id: selectedNode?.agent_node_id ?? rootExecution.agent_node_id,
-    workflow_depth:
-      selectedNode?.workflow_depth ?? rootExecution.workflow_depth,
+    workflow_depth: selectedNode?.workflow_depth ?? rootExecution.workflow_depth,
     reasoner_id: selectedNode?.reasoner_id ?? rootExecution.reasoner_id,
-    status: normalizeExecutionStatus(
-      selectedNode?.status ?? dag.workflow_status,
-    ),
+    status: normalizeExecutionStatus(selectedNode?.status ?? dag.workflow_status),
     started_at: selectedNode?.started_at ?? rootExecution.started_at,
     completed_at: selectedNode?.completed_at ?? rootExecution.completed_at,
     duration_ms: selectedNode?.duration_ms ?? rootExecution.duration_ms,
     created_at: selectedNode?.started_at ?? rootExecution.created_at,
     updated_at:
-      selectedNode?.completed_at ??
-      selectedNode?.started_at ??
-      rootExecution.updated_at,
+      selectedNode?.completed_at ?? selectedNode?.started_at ?? rootExecution.updated_at,
   };
 
   const workflowId = dag.root_workflow_id || runId || "";
@@ -904,7 +634,10 @@ export function RunDetailPage() {
     vcChain?.workflow_vc?.issuer_did?.trim() ||
     "";
 
-  const runTitle = dag.workflow_name?.trim() || rootNode?.reasoner_id || "Run";
+  const runTitle =
+    dag.workflow_name?.trim() ||
+    rootNode?.reasoner_id ||
+    "Run";
   const runTitleDisplay = truncateEnd(runTitle, RUN_DETAIL_TITLE_MAX_CHARS);
 
   const metaParts: string[] = [];
@@ -960,49 +693,9 @@ export function RunDetailPage() {
                 rootNodeForBadge?.status ?? dag.workflow_status,
               );
               return (
-                <StatusPill
-                  status={effective}
-                  size="md"
-                  className="shrink-0 shadow-xs"
-                />
+                <StatusPill status={effective} size="md" className="shrink-0 shadow-xs" />
               );
             })()}
-            {golden ? (
-              <Badge
-                variant="metadata"
-                size="md"
-                className={cn(
-                  "shrink-0 gap-1 text-micro-plus",
-                  statusTone.warning.fg,
-                  statusTone.warning.border,
-                )}
-                title={golden.name || "Golden run"}
-                showIcon={false}
-              >
-                <Star
-                  className={cn("size-3", statusTone.warning.accent)}
-                  aria-hidden
-                />
-                Golden
-              </Badge>
-            ) : null}
-            {lineage?.source_run_id ? (
-              <Link
-                to={`/runs/${encodeURIComponent(lineage.source_run_id)}`}
-                className={cn(
-                  "inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-0.5 text-micro-plus font-medium transition-colors",
-                  "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
-                  statusTone.info.border,
-                )}
-                title={`Source run ${lineage.source_run_id}`}
-              >
-                <GitBranch
-                  className={cn("size-3", statusTone.info.accent)}
-                  aria-hidden
-                />
-                {lineage.kind === "fork" ? "Forked" : "Restarted"}
-              </Link>
-            ) : null}
           </div>
 
           <div className="flex min-w-0 flex-col gap-1.5 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-3 sm:gap-y-1">
@@ -1045,90 +738,6 @@ export function RunDetailPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 shrink-0 sm:pt-0.5 sm:justify-end">
-          {actionRootExecutionId && isTerminalStatus(dag.workflow_status) ? (
-            <>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 gap-1.5 text-xs"
-                disabled={lifecycleBusy !== null}
-                onClick={() => void handleRestartFromRoot()}
-              >
-                {lifecycleBusy === "restart" ? (
-                  <Activity className="size-3.5 animate-spin" aria-hidden />
-                ) : (
-                  <RotateCcw className="size-3.5" aria-hidden />
-                )}
-                Restart run
-              </Button>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className="size-8"
-                    disabled={lifecycleBusy !== null}
-                    aria-label="More restart actions"
-                  >
-                    <ChevronDown className="size-3.5" aria-hidden />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-52">
-                  <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-                    Recovery
-                  </DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    className="gap-2 text-xs"
-                    onClick={() => setForkDialogOpen(true)}
-                  >
-                    <GitBranch
-                      className={cn("size-3.5", statusTone.info.accent)}
-                      aria-hidden
-                    />
-                    Fork with changes
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    className="gap-2 text-xs"
-                    onClick={() => void handleRestartFromRoot("none")}
-                  >
-                    <RefreshCw className="size-3.5" aria-hidden />
-                    Fresh rerun
-                  </DropdownMenuItem>
-                  {lineage?.source_run_id ? (
-                    <DropdownMenuItem
-                      className="gap-2 text-xs"
-                      onClick={() =>
-                        navigate(
-                          `/runs/compare?a=${lineage.source_run_id}&b=${runId}`,
-                        )
-                      }
-                    >
-                      <GitBranch className="size-3.5" aria-hidden />
-                      Compare with source
-                    </DropdownMenuItem>
-                  ) : null}
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    className="gap-2 text-xs"
-                    disabled={
-                      Boolean(golden) ||
-                      normalizeExecutionStatus(dag.workflow_status) !==
-                        "succeeded"
-                    }
-                    onClick={() => void handleSaveGolden()}
-                  >
-                    <Star
-                      className={cn("size-3.5", statusTone.warning.accent)}
-                      aria-hidden
-                    />
-                    {golden ? "Golden run saved" : "Save as golden run"}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </>
-          ) : null}
-
           {/* Replay */}
           <Button
             variant="outline"
@@ -1137,20 +746,17 @@ export function RunDetailPage() {
             onClick={async () => {
               const agentNodeId = rootNode?.agent_node_id;
               const reasonerId = rootNode?.reasoner_id;
-              const execId =
-                rootNode?.execution_id ?? selectedExecution.execution_id;
+              const execId = rootNode?.execution_id ?? selectedExecution.execution_id;
               const target =
                 agentNodeId && reasonerId
                   ? `${agentNodeId}.${reasonerId}`
-                  : (agentNodeId ?? reasonerId ?? "");
+                  : agentNodeId ?? reasonerId ?? "";
               let replayInput: unknown = null;
               if (execId) {
                 try {
                   const details = await getExecutionDetails(execId);
                   replayInput = details.input_data;
-                } catch {
-                  /* best effort */
-                }
+                } catch { /* best effort */ }
               }
               navigate(`/playground${target ? `/${target}` : ""}`, {
                 state: { replayInput },
@@ -1263,9 +869,7 @@ export function RunDetailPage() {
             const rootStatus = normalizeExecutionStatus(
               rootNodeForStatus?.status ?? dag.workflow_status,
             );
-            const aggregateStatus = normalizeExecutionStatus(
-              dag.workflow_status,
-            );
+            const aggregateStatus = normalizeExecutionStatus(dag.workflow_status);
             const isRunning = rootStatus === "running";
             const isPaused = rootStatus === "paused";
             // Cancel is allowed whenever there is anything left to cancel —
@@ -1281,10 +885,9 @@ export function RunDetailPage() {
 
             const runLabelForNotif =
               dag.workflow_name?.trim() ||
-              (rootNodeForStatus?.agent_node_id &&
-              rootNodeForStatus?.reasoner_id
+              (rootNodeForStatus?.agent_node_id && rootNodeForStatus?.reasoner_id
                 ? `${rootNodeForStatus.agent_node_id}.${rootNodeForStatus.reasoner_id}`
-                : (rootNodeForStatus?.reasoner_id ?? "run"));
+                : rootNodeForStatus?.reasoner_id ?? "run");
             const runIdForNotif = runId ?? "";
 
             const handlePause = async () => {
@@ -1356,7 +959,10 @@ export function RunDetailPage() {
                     onClick={handlePause}
                   >
                     {lifecycleBusy === "pause" ? (
-                      <Activity className="size-3.5 animate-spin" aria-hidden />
+                      <Activity
+                        className="size-3.5 animate-spin"
+                        aria-hidden
+                      />
                     ) : (
                       <PauseCircle className="size-3.5" aria-hidden />
                     )}
@@ -1372,7 +978,10 @@ export function RunDetailPage() {
                     onClick={handleResume}
                   >
                     {lifecycleBusy === "resume" ? (
-                      <Activity className="size-3.5 animate-spin" aria-hidden />
+                      <Activity
+                        className="size-3.5 animate-spin"
+                        aria-hidden
+                      />
                     ) : (
                       <Play className="size-3.5" aria-hidden />
                     )}
@@ -1421,12 +1030,10 @@ export function RunDetailPage() {
                           setCancelDialogOpen(false);
                           setLifecycleBusy("cancel");
                           try {
-                            const result = await cancelTreeMutation.mutateAsync(
-                              {
-                                workflowId: runId,
-                                reason: "user clicked cancel",
-                              },
-                            );
+                            const result = await cancelTreeMutation.mutateAsync({
+                              workflowId: runId,
+                              reason: "user clicked cancel",
+                            });
                             showRunNotification({
                               type: "success",
                               eventKind: "cancel",
@@ -1463,96 +1070,9 @@ export function RunDetailPage() {
               </>
             );
           })()}
+
         </div>
       </div>
-
-      <Dialog
-        open={forkDialogOpen}
-        onOpenChange={(open) => {
-          setForkDialogOpen(open);
-          if (!open) setForkExecutionId(null);
-        }}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Fork with changes</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">
-                Reuse mode
-              </label>
-              <Select
-                value={forkReuse}
-                onValueChange={(value) =>
-                  setForkReuse(
-                    value as "succeeded-before" | "all-succeeded" | "none",
-                  )
-                }
-              >
-                <SelectTrigger className="h-9">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="succeeded-before">
-                    Reuse previous work
-                  </SelectItem>
-                  <SelectItem value="all-succeeded">
-                    Reuse all matches
-                  </SelectItem>
-                  <SelectItem value="none">Fresh run</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">
-                Model override
-              </label>
-              <Input
-                value={forkModel}
-                onChange={(event) => setForkModel(event.target.value)}
-                placeholder="openrouter/openai/gpt-oss-120b"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">
-                Reason
-              </label>
-              <Input
-                value={forkReason}
-                onChange={(event) => setForkReason(event.target.value)}
-                placeholder="Compare model behavior"
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setForkDialogOpen(false);
-                setForkExecutionId(null);
-              }}
-              disabled={lifecycleBusy === "fork"}
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={() => void handleStartFork()}
-              disabled={lifecycleBusy === "fork"}
-            >
-              {lifecycleBusy === "fork" ? (
-                <Activity
-                  className="mr-1.5 size-3.5 animate-spin"
-                  aria-hidden
-                />
-              ) : (
-                <GitBranch className="mr-1.5 size-3.5" aria-hidden />
-              )}
-              Start fork
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Cancellation / pause registered strip — shown when the root
           execution is cancelled or paused by the user but at least one
@@ -1562,7 +1082,8 @@ export function RunDetailPage() {
           cannot be killed mid-dispatch and will finish naturally. */}
       {(() => {
         const rootNodeForStrip =
-          dag.timeline.find((n) => n.workflow_depth === 0) ?? dag.timeline[0];
+          dag.timeline.find((n) => n.workflow_depth === 0) ??
+          dag.timeline[0];
         const rootStatus = normalizeExecutionStatus(rootNodeForStrip?.status);
         if (rootStatus !== "cancelled" && rootStatus !== "paused") return null;
         const stillRunning = dag.timeline.filter(
@@ -1606,9 +1127,7 @@ export function RunDetailPage() {
             failures={dag.webhook_failures ?? []}
             onSelectStep={setSelectedStepId}
             onRefetchDag={() => {
-              void queryClient.invalidateQueries({
-                queryKey: ["run-dag", runId],
-              });
+              void queryClient.invalidateQueries({ queryKey: ["run-dag", runId] });
               void queryClient.invalidateQueries({ queryKey: ["step-detail"] });
             }}
           />
@@ -1705,20 +1224,10 @@ export function RunDetailPage() {
                           className="h-full min-h-0 flex-1"
                           workflowId={dag.root_workflow_id || runId || ""}
                           dagData={dag}
-                          selectedNodeIds={
-                            selectedStepId ? [selectedStepId] : undefined
-                          }
+                          selectedNodeIds={selectedStepId ? [selectedStepId] : undefined}
                           onExecutionClick={(execution) =>
                             setSelectedStepId(execution.execution_id)
                           }
-                          onRestartWorkflowFromNode={
-                            handleRestartWorkflowFromNode
-                          }
-                          onRerunNodeOnly={handleRerunNodeOnly}
-                          onForkFromNode={(execution) => {
-                            setForkExecutionId(execution.execution_id);
-                            setForkDialogOpen(true);
-                          }}
                         />
                       </ErrorBoundary>
                     </div>
