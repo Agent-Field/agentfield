@@ -465,8 +465,16 @@ _logger_cache: Dict[str, AgentFieldLogger] = {}
 # Global log level override (set via set_log_level)
 _global_log_level: Optional[str] = None
 
-# Guards _logger_cache and _global_log_level against concurrent access. Reentrant
-# so a future helper holding the lock can still call get_logger() safely.
+# Global control-plane client (set via set_cp_client). Stored at module scope so
+# loggers created *after* set_cp_client() still forward structured logs — mirrors
+# the _global_log_level pattern. Without this, a logger created late (e.g. the
+# lazily-imported agentfield.verification logger) would keep the class default
+# _cp_client=None and silently drop telemetry in _dispatch_to_cp().
+_global_cp_client: Optional["AgentFieldClient"] = None
+
+# Guards _logger_cache, _global_log_level and _global_cp_client against concurrent
+# access. Reentrant so a future helper holding the lock can still call get_logger()
+# safely.
 _logger_cache_lock = threading.RLock()
 
 
@@ -478,6 +486,8 @@ def get_logger(name: str = "agentfield") -> AgentFieldLogger:
             logger = AgentFieldLogger(name)
             if _global_log_level is not None:
                 logger.set_level(_global_log_level)
+            if _global_cp_client is not None:
+                logger._cp_client = _global_cp_client
             _logger_cache[name] = logger
         return _logger_cache[name]
 
@@ -502,8 +512,18 @@ def set_log_level(level: str):
 
 
 def set_cp_client(client: Optional["AgentFieldClient"]) -> None:
-    """Attach a control-plane client so structured logs are forwarded to all loggers."""
+    """Attach a control-plane client so structured logs are forwarded to all loggers.
+
+    Records the client at module scope and applies it to every *cached* logger.
+    Loggers created later via ``get_logger()`` pick up the stored client on
+    creation, so forwarding works regardless of import/creation order (e.g. the
+    lazily-imported ``agentfield.verification`` logger).
+    """
+    global _global_cp_client
+    # Snapshot under the lock so a concurrent get_logger() can't mutate the dict
+    # mid-iteration; apply to existing loggers outside the lock.
     with _logger_cache_lock:
+        _global_cp_client = client
         loggers = list(_logger_cache.values())
     for logger in loggers:
         logger._cp_client = client
