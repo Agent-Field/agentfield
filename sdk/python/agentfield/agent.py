@@ -3825,7 +3825,12 @@ class Agent(FastAPI):
                 if node_id == self.node_id and hasattr(self, function_name):
                     try:
                         func = getattr(self, function_name)
-                        sig = inspect.signature(func)
+                        # Unwrap tracked wrappers (e.g. _run_async_skill,
+                        # tracked_func) to recover the original function's
+                        # typed signature instead of the generic (*args, **kwargs)
+                        # that the wrapper carries.
+                        raw_func = getattr(func, "_original_func", func)
+                        sig = inspect.signature(raw_func)
                         param_names = [
                             name
                             for name, param in sig.parameters.items()
