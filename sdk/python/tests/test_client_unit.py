@@ -1,9 +1,13 @@
+import asyncio
 import re
+from unittest.mock import AsyncMock
 
 import pytest
 import responses as responses_lib
 
 from agentfield.client import AgentFieldClient
+from agentfield.exceptions import ValidationError
+from agentfield.execution_state import ExecuteError
 from agentfield.types import DiscoveryResponse
 
 
@@ -21,6 +25,18 @@ class DummyManager:
 
     def set_event_stream_headers(self, headers):
         self.last_headers = dict(headers)
+
+
+class DummyResponse:
+    def __init__(self, status_code, payload=None, json_error=None):
+        self.status_code = status_code
+        self._payload = payload
+        self._json_error = json_error
+
+    def json(self):
+        if self._json_error:
+            raise self._json_error
+        return self._payload
 
 
 def test_generate_id_prefix_and_uniqueness():
@@ -101,6 +117,90 @@ def test_maybe_update_event_stream_headers_without_manager(source_headers, expec
     client._maybe_update_event_stream_headers(source_headers)
 
     assert client._latest_event_stream_headers == expected
+
+
+def test_restart_execution_posts_payload_and_headers():
+    client = AgentFieldClient(base_url="http://example.com", api_key="key-1")
+    client._async_request = AsyncMock(
+        return_value=DummyResponse(202, {"execution_id": "exec-new", "run_id": "run-new"})
+    )
+
+    result = asyncio.run(
+        client.restart_execution(
+            "exec-source",
+            scope="execution",
+            reuse="none",
+            fork=True,
+            reason="try safer prompt",
+            input_data={"prompt": "v2"},
+            context={"trace": "manual"},
+            headers={"X-Custom": "value", "X-Number": 7},
+        )
+    )
+
+    assert result == {"execution_id": "exec-new", "run_id": "run-new"}
+    client._async_request.assert_awaited_once()
+    method, url = client._async_request.await_args.args
+    kwargs = client._async_request.await_args.kwargs
+    assert method == "POST"
+    assert url == "http://example.com/api/v1/executions/exec-source/restart"
+    assert kwargs["json"] == {
+        "scope": "execution",
+        "reuse": "none",
+        "fork": True,
+        "reason": "try safer prompt",
+        "input": {"prompt": "v2"},
+        "context": {"trace": "manual"},
+    }
+    assert kwargs["headers"]["X-API-Key"] == "key-1"
+    assert kwargs["headers"]["X-Custom"] == "value"
+    assert kwargs["headers"]["X-Number"] == "7"
+    assert kwargs["headers"]["Content-Type"] == "application/json"
+
+
+def test_restart_execution_omits_optional_payload_fields():
+    client = AgentFieldClient(base_url="http://example.com")
+    client._async_request = AsyncMock(return_value=DummyResponse(200, {"ok": True}))
+
+    asyncio.run(client.restart_execution("exec-source"))
+
+    kwargs = client._async_request.await_args.kwargs
+    assert kwargs["json"] == {"scope": "workflow", "reuse": "succeeded-before"}
+
+
+def test_restart_execution_rejects_empty_execution_id():
+    client = AgentFieldClient(base_url="http://example.com")
+
+    with pytest.raises(ValidationError, match="execution_id is required"):
+        asyncio.run(client.restart_execution(""))
+
+
+def test_restart_execution_raises_execute_error_with_body():
+    client = AgentFieldClient(base_url="http://example.com")
+    client._async_request = AsyncMock(
+        return_value=DummyResponse(409, {"error": "source run is still running"})
+    )
+
+    with pytest.raises(ExecuteError) as exc_info:
+        asyncio.run(client.restart_execution("exec-source"))
+
+    assert exc_info.value.status_code == 409
+    assert "source run is still running" in str(exc_info.value)
+    assert exc_info.value.error_details == {"error": "source run is still running"}
+
+
+def test_restart_execution_raises_execute_error_without_json_body():
+    client = AgentFieldClient(base_url="http://example.com")
+    client._async_request = AsyncMock(
+        return_value=DummyResponse(502, json_error=ValueError("not json"))
+    )
+
+    with pytest.raises(ExecuteError) as exc_info:
+        asyncio.run(client.restart_execution("exec-source"))
+
+    assert exc_info.value.status_code == 502
+    assert str(exc_info.value) == "502"
+    assert exc_info.value.error_details is None
 
 
 def test_discover_capabilities_json(responses):
