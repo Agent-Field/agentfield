@@ -63,5 +63,4 @@ reports/
 .docker/
 
 # Typescript
-.env
 .plandb.db
