@@ -139,6 +139,9 @@ describe("NodeDetailSidebar", () => {
   it("renders loaded content, refetches on open, and closes from interactions", async () => {
     const refetch = vi.fn();
     const onClose = vi.fn();
+    const onRestartWorkflowFromNode = vi.fn();
+    const onRerunNodeOnly = vi.fn();
+    const onForkFromNode = vi.fn();
     const user = userEvent.setup();
 
     mockUseNodeDetails.mockReturnValue({
@@ -148,15 +151,41 @@ describe("NodeDetailSidebar", () => {
       refetch,
     });
 
-    render(<NodeDetailSidebar node={node} isOpen onClose={onClose} />);
+    render(
+      <NodeDetailSidebar
+        node={{
+          ...node,
+          reuse: {
+            hit: true,
+            source_execution_id: "exec-source",
+            source_run_id: "run-source",
+          },
+        }}
+        isOpen
+        onClose={onClose}
+        onRestartWorkflowFromNode={onRestartWorkflowFromNode}
+        onRerunNodeOnly={onRerunNodeOnly}
+        onForkFromNode={onForkFromNode}
+      />
+    );
 
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(screen.getByText("Execution Details")).toBeInTheDocument();
     expect(screen.getByText("My Task")).toBeInTheDocument();
+    expect(screen.getByText("Reused output")).toBeInTheDocument();
+    expect(screen.getByText("exec-source")).toBeInTheDocument();
+    expect(screen.getByText("run-source")).toBeInTheDocument();
     expect(screen.getByText("Data section")).toBeInTheDocument();
     expect(screen.getByText("Timing section")).toBeInTheDocument();
     expect(screen.getByText("Technical section")).toBeInTheDocument();
     expect(refetch).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: /restart from here/i }));
+    await user.click(screen.getByRole("button", { name: /rerun node only/i }));
+    await user.click(screen.getByRole("button", { name: /fork with changes/i }));
+    expect(onRestartWorkflowFromNode).toHaveBeenCalledWith(expect.objectContaining({ execution_id: "exec-1" }));
+    expect(onRerunNodeOnly).toHaveBeenCalledWith(expect.objectContaining({ execution_id: "exec-1" }));
+    expect(onForkFromNode).toHaveBeenCalledWith(expect.objectContaining({ execution_id: "exec-1" }));
 
     fireEvent.keyDown(document, { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(1);

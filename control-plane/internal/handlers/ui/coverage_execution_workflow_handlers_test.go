@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -121,20 +122,20 @@ func seedWorkflowExecutions(t *testing.T, ls *storage.LocalStorage, ctx context.
 		},
 	}))
 	require.NoError(t, ls.CreateExecutionRecord(ctx, &types.Execution{
-		ExecutionID:  rootExecID,
-		RunID:        runID,
-		AgentNodeID:  "agent-alpha",
-		ReasonerID:   "planner",
-		NodeID:       "agent-alpha",
-		InputPayload: json.RawMessage(`{"error":"corrupted_json_data","preview":"partial"}`),
+		ExecutionID:   rootExecID,
+		RunID:         runID,
+		AgentNodeID:   "agent-alpha",
+		ReasonerID:    "planner",
+		NodeID:        "agent-alpha",
+		InputPayload:  json.RawMessage(`{"error":"corrupted_json_data","preview":"partial"}`),
 		ResultPayload: json.RawMessage(`{"result":"ok"}`),
-		Status:       string(types.ExecutionStatusWaiting),
-		StatusReason: &waitReason,
-		StartedAt:    now,
-		CompletedAt:  &rootCompleted,
-		DurationMS:   &rootDuration,
-		SessionID:    &sessionID,
-		ActorID:      &actorID,
+		Status:        string(types.ExecutionStatusWaiting),
+		StatusReason:  &waitReason,
+		StartedAt:     now,
+		CompletedAt:   &rootCompleted,
+		DurationMS:    &rootDuration,
+		SessionID:     &sessionID,
+		ActorID:       &actorID,
 		Notes: []types.ExecutionNote{
 			{Message: "queued", Timestamp: now.Add(10 * time.Second)},
 			{Message: "awaiting approval", Timestamp: now.Add(20 * time.Second)},
@@ -409,6 +410,168 @@ func TestWorkflowRunHandlerRealStorageCoverage(t *testing.T) {
 		resp := httptest.NewRecorder()
 		router.ServeHTTP(resp, req)
 		require.Equal(t, http.StatusNotFound, resp.Code)
+	})
+}
+
+func TestWorkflowRunHandlerSaveGoldenRunPreservesLineageMetadata(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	ls, ctx := setupUIHandlerStorage(t)
+	runID := "run-golden"
+	rootExecutionID := "exec-golden-root"
+	childExecutionID := "exec-golden-child"
+	now := time.Date(2026, 4, 9, 15, 0, 0, 0, time.UTC)
+	completed := now.Add(3 * time.Second)
+	durationMS := int64(3000)
+
+	require.NoError(t, ls.StoreWorkflowRun(ctx, &types.WorkflowRun{
+		RunID:           runID,
+		RootExecutionID: &rootExecutionID,
+		Status:          string(types.ExecutionStatusSucceeded),
+		Metadata: json.RawMessage(`{
+			"lineage": {
+				"kind": "fork",
+				"source_run_id": "run-source",
+				"source_execution_id": "exec-source",
+				"restarted_execution_id": "exec-source-root",
+				"reuse": "succeeded-before",
+				"scope": "workflow"
+			}
+		}`),
+		CreatedAt: now,
+		UpdatedAt: completed,
+	}))
+	require.NoError(t, ls.CreateExecutionRecord(ctx, &types.Execution{
+		ExecutionID:   rootExecutionID,
+		RunID:         runID,
+		AgentNodeID:   "agent-alpha",
+		ReasonerID:    "planner",
+		NodeID:        "agent-alpha",
+		Status:        types.ExecutionStatusSucceeded,
+		InputPayload:  json.RawMessage(`{"input":{"topic":"restart"}}`),
+		ResultPayload: json.RawMessage(`{"plan":"ok"}`),
+		StartedAt:     now,
+		CompletedAt:   &completed,
+		DurationMS:    &durationMS,
+		CreatedAt:     now,
+		UpdatedAt:     completed,
+	}))
+	require.NoError(t, ls.CreateExecutionRecord(ctx, &types.Execution{
+		ExecutionID:       childExecutionID,
+		ParentExecutionID: &rootExecutionID,
+		RunID:             runID,
+		AgentNodeID:       "agent-alpha",
+		ReasonerID:        "writer",
+		NodeID:            "agent-alpha",
+		Status:            types.ExecutionStatusSucceeded,
+		InputPayload:      json.RawMessage(`{"input":{"plan":"ok"}}`),
+		ResultPayload:     json.RawMessage(`{"draft":"ok"}`),
+		StartedAt:         now.Add(time.Second),
+		CompletedAt:       &completed,
+		DurationMS:        &durationMS,
+		CreatedAt:         now.Add(time.Second),
+		UpdatedAt:         completed,
+	}))
+
+	handler := NewWorkflowRunHandler(ls)
+	router := gin.New()
+	router.POST("/api/ui/v1/workflow-runs/:run_id/golden", handler.SaveGoldenRunHandler)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/ui/v1/workflow-runs/run-golden/golden",
+		strings.NewReader(`{"name":"Release baseline","tags":[" smoke ","smoke","","restart"]}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusOK, resp.Code)
+	var summary WorkflowRunSummary
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &summary))
+	require.NotNil(t, summary.Lineage)
+	require.Equal(t, "run-source", summary.Lineage.SourceRunID)
+	require.NotNil(t, summary.Golden)
+	require.Equal(t, "Release baseline", summary.Golden.Name)
+	require.Equal(t, []string{"smoke", "restart"}, summary.Golden.Tags)
+
+	run, err := ls.GetWorkflowRun(ctx, runID)
+	require.NoError(t, err)
+	require.NotNil(t, run)
+	metadata := decodeWorkflowRunMetadata(run.Metadata)
+	require.Contains(t, metadata, "lineage")
+	require.Contains(t, metadata, "golden")
+}
+
+func TestWorkflowRunHandlerSaveGoldenRunErrors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	ls, ctx := setupUIHandlerStorage(t)
+	handler := NewWorkflowRunHandler(ls)
+	router := gin.New()
+	router.POST("/api/ui/v1/workflow-runs/:run_id/golden", handler.SaveGoldenRunHandler)
+
+	t.Run("missing run id", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		ginCtx, _ := gin.CreateTestContext(rec)
+		ginCtx.Request = httptest.NewRequest(http.MethodPost, "/golden", strings.NewReader(`{}`))
+		handler.SaveGoldenRunHandler(ginCtx)
+		require.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+
+	t.Run("invalid json", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/ui/v1/workflow-runs/run-missing/golden", strings.NewReader(`{"name":`))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+
+	t.Run("missing run", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/ui/v1/workflow-runs/run-missing/golden", strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusNotFound, rec.Code)
+	})
+
+	t.Run("failed run cannot be golden", func(t *testing.T) {
+		now := time.Date(2026, 4, 9, 16, 0, 0, 0, time.UTC)
+		require.NoError(t, ls.CreateExecutionRecord(ctx, &types.Execution{
+			ExecutionID:  "exec-failed-golden",
+			RunID:        "run-failed-golden",
+			AgentNodeID:  "agent-alpha",
+			NodeID:       "agent-alpha",
+			ReasonerID:   "planner",
+			Status:       types.ExecutionStatusFailed,
+			InputPayload: json.RawMessage(`{"input":{}}`),
+			StartedAt:    now,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		}))
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/ui/v1/workflow-runs/run-failed-golden/golden", strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusConflict, rec.Code)
+	})
+
+	t.Run("query error", func(t *testing.T) {
+		errorHandler := NewWorkflowRunHandler(&workflowRunOverrideStorage{
+			StorageProvider: ls,
+			queryExecutionRecordsFn: func(context.Context, types.ExecutionFilter) ([]*types.Execution, error) {
+				return nil, errors.New("query failed")
+			},
+		})
+		errorRouter := gin.New()
+		errorRouter.POST("/api/ui/v1/workflow-runs/:run_id/golden", errorHandler.SaveGoldenRunHandler)
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/ui/v1/workflow-runs/run-any/golden", strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		errorRouter.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusInternalServerError, rec.Code)
 	})
 }
 

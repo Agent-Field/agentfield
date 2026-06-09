@@ -109,14 +109,29 @@ vi.mock("@/components/WorkflowDAG", () => ({
   WorkflowDAGViewer: ({
     selectedNodeIds,
     onExecutionClick,
+    onRestartWorkflowFromNode,
+    onRerunNodeOnly,
+    onForkFromNode,
   }: {
     selectedNodeIds?: string[];
-    onExecutionClick?: (execution: { execution_id: string }) => void;
+    onExecutionClick?: (execution: { execution_id: string; reasoner_id?: string }) => void;
+    onRestartWorkflowFromNode?: (execution: { execution_id: string; reasoner_id: string }) => void;
+    onRerunNodeOnly?: (execution: { execution_id: string; reasoner_id: string }) => void;
+    onForkFromNode?: (execution: { execution_id: string; reasoner_id: string }) => void;
   }) => (
     <div>
       <div>Graph {selectedNodeIds?.join(",") ?? "none"}</div>
       <button type="button" onClick={() => onExecutionClick?.({ execution_id: "exec-2" })}>
         Graph select exec-2
+      </button>
+      <button type="button" onClick={() => onRestartWorkflowFromNode?.({ execution_id: "exec-2", reasoner_id: "worker" })}>
+        Graph restart worker
+      </button>
+      <button type="button" onClick={() => onRerunNodeOnly?.({ execution_id: "exec-2", reasoner_id: "worker" })}>
+        Graph rerun worker
+      </button>
+      <button type="button" onClick={() => onForkFromNode?.({ execution_id: "exec-2", reasoner_id: "worker" })}>
+        Graph fork worker
       </button>
     </div>
   ),
@@ -206,6 +221,29 @@ vi.mock("@/components/ui/alert-dialog", () => ({
   AlertDialogFooter: ({ children }: React.PropsWithChildren) => <div>{children}</div>,
   AlertDialogHeader: ({ children }: React.PropsWithChildren) => <div>{children}</div>,
   AlertDialogTitle: ({ children }: React.PropsWithChildren) => <div>{children}</div>,
+}));
+
+vi.mock("@/components/ui/dialog", () => ({
+  Dialog: ({ children, open }: React.PropsWithChildren<{ open?: boolean }>) =>
+    open ? <div>{children}</div> : null,
+  DialogContent: ({ children }: React.PropsWithChildren) => <div>{children}</div>,
+  DialogFooter: ({ children }: React.PropsWithChildren) => <div>{children}</div>,
+  DialogHeader: ({ children }: React.PropsWithChildren) => <div>{children}</div>,
+  DialogTitle: ({ children }: React.PropsWithChildren) => <div>{children}</div>,
+}));
+
+vi.mock("@/components/ui/input", () => ({
+  Input: (props: React.InputHTMLAttributes<HTMLInputElement>) => <input {...props} />,
+}));
+
+vi.mock("@/components/ui/select", () => ({
+  Select: ({ children }: React.PropsWithChildren<{ value?: string; onValueChange?: (value: string) => void }>) => (
+    <div>{children}</div>
+  ),
+  SelectContent: ({ children }: React.PropsWithChildren) => <div>{children}</div>,
+  SelectItem: ({ children }: React.PropsWithChildren<{ value: string }>) => <div>{children}</div>,
+  SelectTrigger: ({ children }: React.PropsWithChildren) => <div>{children}</div>,
+  SelectValue: () => <span>select value</span>,
 }));
 
 vi.mock("@/components/ui/dropdown-menu", () => ({
@@ -346,6 +384,8 @@ describe("RunDetailPage", () => {
     });
     state.pauseMutateAsync.mockReset();
     state.resumeMutateAsync.mockReset();
+    state.restartMutateAsync.mockReset();
+    state.saveGoldenMutateAsync.mockReset();
     state.showRunNotification.mockReset();
     state.getExecutionDetails.mockReset();
     state.retryExecutionWebhook.mockReset();
@@ -596,6 +636,134 @@ describe("RunDetailPage", () => {
     expect(state.showRunNotification).toHaveBeenCalledWith(
       expect.objectContaining({ title: "Resumed" }),
     );
+  });
+
+  it("runs restart, fresh rerun, and fork lifecycle actions", async () => {
+    state.runDag = {
+      data: {
+        ...buildDag(),
+        workflow_status: "failed",
+        timeline: [
+          { ...buildDag().timeline[0], status: "succeeded" },
+          { ...buildDag().timeline[1], status: "failed" },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+    };
+    state.restartMutateAsync.mockResolvedValue({ run_id: "run-new-123456", execution_id: "exec-new" });
+
+    renderPage();
+    expect(await screen.findByText("Run Alpha")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Restart run"));
+    await waitFor(() => {
+      expect(state.restartMutateAsync).toHaveBeenCalledWith({
+        executionId: "exec-2",
+        request: {
+          scope: "workflow",
+          reuse: "succeeded-before",
+          fork: false,
+        },
+      });
+    });
+    expect(state.showRunNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Restarted", runId: "run-new-123456" }),
+    );
+    expect(state.navigateSpy).toHaveBeenCalledWith("/runs/run-new-123456");
+
+    fireEvent.click(screen.getByText("Fresh rerun"));
+    await waitFor(() => {
+      expect(state.restartMutateAsync).toHaveBeenCalledWith({
+        executionId: "exec-2",
+        request: {
+          scope: "workflow",
+          reuse: "none",
+          fork: true,
+        },
+      });
+    });
+
+    fireEvent.click(screen.getByText("Fork with changes"));
+    fireEvent.change(screen.getByPlaceholderText("openrouter/openai/gpt-oss-120b"), {
+      target: { value: "google/gemini-3.1-flash-lite" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Compare model behavior"), {
+      target: { value: "compare flash lite" },
+    });
+    fireEvent.click(screen.getByText("Start fork"));
+    await waitFor(() => {
+      expect(state.restartMutateAsync).toHaveBeenCalledWith({
+        executionId: "exec-2",
+        request: {
+          scope: "workflow",
+          reuse: "succeeded-before",
+          fork: true,
+          reason: "compare flash lite",
+          context: { model: "google/gemini-3.1-flash-lite" },
+        },
+      });
+    });
+    expect(state.showRunNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Fork started", runId: "run-new-123456" }),
+    );
+  });
+
+  it("runs restart actions from graph node callbacks", async () => {
+    state.runDag = {
+      data: {
+        ...buildDag(),
+        workflow_status: "failed",
+        timeline: [
+          { ...buildDag().timeline[0], status: "succeeded" },
+          { ...buildDag().timeline[1], status: "failed" },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+    };
+    state.restartMutateAsync
+      .mockResolvedValueOnce({ run_id: "run-node-restart", execution_id: "exec-new" })
+      .mockResolvedValueOnce({ run_id: "run-node-rerun", execution_id: "exec-new-2" })
+      .mockRejectedValueOnce(new Error("node restart failed"));
+
+    renderPage();
+    expect(await screen.findByText("Run Alpha")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Graph"));
+    fireEvent.click(await screen.findByText("Graph restart worker"));
+    await waitFor(() => {
+      expect(state.restartMutateAsync).toHaveBeenCalledWith({
+        executionId: "exec-2",
+        request: { scope: "workflow", reuse: "succeeded-before" },
+      });
+    });
+    expect(state.showRunNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Restarted", runId: "run-node-restart" }),
+    );
+
+    fireEvent.click(screen.getByText("Graph rerun worker"));
+    await waitFor(() => {
+      expect(state.restartMutateAsync).toHaveBeenCalledWith({
+        executionId: "exec-2",
+        request: { scope: "execution", reuse: "succeeded-before" },
+      });
+    });
+    expect(state.showRunNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Node rerun started", runId: "run-node-rerun" }),
+    );
+
+    fireEvent.click(screen.getByText("Graph restart worker"));
+    await waitFor(() => {
+      expect(state.showRunNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Restart failed", message: "node restart failed" }),
+      );
+    });
+
+    fireEvent.click(screen.getByText("Graph fork worker"));
+    expect(screen.getAllByText("Fork with changes").length).toBeGreaterThan(0);
   });
 
   it("notifies with steps-cancelled message when cancel-tree succeeds with cancelled_count > 0", async () => {

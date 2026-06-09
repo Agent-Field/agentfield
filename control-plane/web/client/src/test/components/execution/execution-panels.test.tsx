@@ -11,6 +11,7 @@ import { EnhancedNotesSection } from "@/components/execution/EnhancedNotesSectio
 import {
   cancelExecution,
   pauseExecution,
+  restartExecution,
   resumeExecution,
 } from "@/services/executionsApi";
 import { downloadExecutionVCBundle } from "@/services/vcApi";
@@ -210,6 +211,7 @@ vi.mock("@/utils/status", () => ({
 vi.mock("@/services/executionsApi", () => ({
   cancelExecution: vi.fn(),
   pauseExecution: vi.fn(),
+  restartExecution: vi.fn(),
   resumeExecution: vi.fn(),
 }));
 
@@ -273,6 +275,7 @@ vi.mock("@/components/ui/json-syntax-highlight", () => ({
 const mockedPauseExecution = vi.mocked(pauseExecution);
 const mockedResumeExecution = vi.mocked(resumeExecution);
 const mockedCancelExecution = vi.mocked(cancelExecution);
+const mockedRestartExecution = vi.mocked(restartExecution);
 const mockedDownloadExecutionVCBundle = vi.mocked(downloadExecutionVCBundle);
 
 function buildExecution(overrides: Record<string, unknown> = {}) {
@@ -309,6 +312,7 @@ describe("CompactExecutionHeader", () => {
     mockedPauseExecution.mockReset();
     mockedResumeExecution.mockReset();
     mockedCancelExecution.mockReset();
+    mockedRestartExecution.mockReset();
   });
 
   it("renders execution controls, switches tabs, and handles pause/cancel actions", async () => {
@@ -397,6 +401,44 @@ describe("CompactExecutionHeader", () => {
 
     await user.click(screen.getAllByRole("button", { name: "Back to executions" })[0]);
     expect(navigate).toHaveBeenCalledWith("/executions");
+  });
+
+  it("restarts a failed execution and navigates to the new execution", async () => {
+    const user = userEvent.setup();
+    mockedRestartExecution.mockResolvedValue({
+      execution_id: "exec-new",
+      run_id: "run-new",
+    } as never);
+
+    render(
+      <CompactExecutionHeader
+        execution={buildExecution({ status: "failed" }) as never}
+        activeTab="summary"
+        onTabChange={vi.fn()}
+        navigationTabs={[
+          {
+            id: "summary",
+            label: "Summary",
+            icon: () => <span>icon</span>,
+            description: "Summary",
+            shortcut: "1",
+          },
+        ]}
+      />
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "Restart workflow" })[0]);
+    await waitFor(() => {
+      expect(mockedRestartExecution).toHaveBeenCalledWith("exec-1234567890", {
+        scope: "workflow",
+        reuse: "succeeded-before",
+      });
+    });
+    expect(successNotification).toHaveBeenCalledWith(
+      "Workflow restarted",
+      "New run run-new started from this point.",
+    );
+    expect(navigate).toHaveBeenCalledWith("/executions/exec-new");
   });
 });
 

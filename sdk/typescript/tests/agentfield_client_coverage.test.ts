@@ -480,4 +480,78 @@ describe('AgentFieldClient additional coverage', () => {
       })
     );
   });
+
+  it('restartExecution() posts a signed restart request and returns the control plane response', async () => {
+    const client = new AgentFieldClient({
+      nodeId: 'node-1',
+      agentFieldUrl: 'http://control-plane.local'
+    });
+    client.setDIDCredentials(TEST_DID, TEST_JWK);
+    const http = getHttp();
+    http.post.mockResolvedValue({
+      data: {
+        execution_id: 'new-root',
+        run_id: 'new-run',
+        source_execution_id: 'old-child',
+        scope: 'workflow',
+        replay_mode: 'succeeded-before'
+      }
+    });
+
+    await expect(
+      client.restartExecution('old/child', {
+        fork: true,
+        reason: 'retry after model outage',
+        input: { topic: 'coverage' },
+        context: { priority: 'high' }
+      })
+    ).resolves.toMatchObject({
+      execution_id: 'new-root',
+      run_id: 'new-run',
+      source_execution_id: 'old-child'
+    });
+
+    const [url, body, config] = http.post.mock.calls[0] as [string, string, { headers: Record<string, string> }];
+    expect(url).toBe('/api/v1/executions/old%2Fchild/restart');
+    expect(JSON.parse(body)).toEqual({
+      scope: 'workflow',
+      reuse: 'succeeded-before',
+      fork: true,
+      reason: 'retry after model outage',
+      input: { topic: 'coverage' },
+      context: { priority: 'high' }
+    });
+    expect(config.headers).toEqual(
+      expect.objectContaining({
+        'Content-Type': 'application/json',
+        [HEADER_CALLER_DID]: TEST_DID,
+        [HEADER_DID_SIGNATURE]: expect.any(String),
+        [HEADER_DID_TIMESTAMP]: expect.any(String),
+        [HEADER_DID_NONCE]: expect.any(String)
+      })
+    );
+  });
+
+  it('restartExecution() validates ids and enriches structured errors', async () => {
+    const client = new AgentFieldClient({
+      nodeId: 'node-1',
+      agentFieldUrl: 'http://control-plane.local'
+    });
+    const http = getHttp();
+
+    await expect(client.restartExecution('')).rejects.toThrow('executionId is required');
+
+    http.post.mockRejectedValue({
+      response: {
+        status: 409,
+        data: { error: 'only failed executions can be restarted' }
+      }
+    });
+
+    await expect(client.restartExecution('exec-1')).rejects.toMatchObject({
+      message: 'restart execution exec-1 failed (409): only failed executions can be restarted',
+      status: 409,
+      responseData: { error: 'only failed executions can be restarted' }
+    });
+  });
 });

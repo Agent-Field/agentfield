@@ -6,10 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const workflowsApiState = vi.hoisted(() => ({
   cancelWorkflowTree: vi.fn(),
+  saveGoldenRun: vi.fn(),
 }));
 const executionsApiState = vi.hoisted(() => ({
   cancelExecution: vi.fn(),
   pauseExecution: vi.fn(),
+  restartExecution: vi.fn(),
   resumeExecution: vi.fn(),
 }));
 
@@ -26,7 +28,9 @@ import {
   useCancelExecution,
   useCancelWorkflowTree,
   usePauseExecution,
+  useRestartExecution,
   useResumeExecution,
+  useSaveGoldenRun,
 } from "@/hooks/queries/useExecutionMutations";
 
 function makeWrapper(client: QueryClient) {
@@ -121,5 +125,74 @@ describe("useExecutionMutations", () => {
     );
     expect(runsCalls.length).toBe(3);
     expect(dagCalls.length).toBe(3);
+  });
+
+  it("useRestartExecution supports default and explicit restart requests", async () => {
+    executionsApiState.restartExecution.mockResolvedValue({
+      execution_id: "new-root",
+      run_id: "new-run",
+      workflow_id: "new-run",
+      status: "queued",
+      target: "agent.reasoner",
+      type: "async",
+      created_at: "2026-04-08T12:00:00Z",
+      source_execution_id: "old-child",
+      source_run_id: "old-run",
+      restarted_execution_id: "old-root",
+      replay_mode: "succeeded-before",
+      scope: "workflow",
+      webhook_registered: false,
+    });
+    const invalidateSpy = vi.spyOn(client, "invalidateQueries");
+
+    const restart = renderHook(() => useRestartExecution(), { wrapper: makeWrapper(client) });
+
+    await act(async () => {
+      await restart.result.current.mutateAsync("exec-1");
+      await restart.result.current.mutateAsync({
+        executionId: "exec-2",
+        request: {
+          scope: "node",
+          reuse: "none",
+          fork: true,
+          reason: "inspect alternate prompt",
+        },
+      });
+    });
+
+    expect(executionsApiState.restartExecution).toHaveBeenNthCalledWith(1, "exec-1");
+    expect(executionsApiState.restartExecution).toHaveBeenNthCalledWith(2, "exec-2", {
+      scope: "node",
+      reuse: "none",
+      fork: true,
+      reason: "inspect alternate prompt",
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["runs"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["run-dag"] });
+  });
+
+  it("useSaveGoldenRun saves metadata and invalidates run queries", async () => {
+    workflowsApiState.saveGoldenRun.mockResolvedValue({
+      run_id: "run-1",
+      golden: { name: "Release baseline", tags: ["regression"] },
+    });
+    const invalidateSpy = vi.spyOn(client, "invalidateQueries");
+
+    const saveGolden = renderHook(() => useSaveGoldenRun(), { wrapper: makeWrapper(client) });
+
+    await act(async () => {
+      await saveGolden.result.current.mutateAsync({
+        runId: "run-1",
+        name: "Release baseline",
+        tags: ["regression"],
+      });
+    });
+
+    expect(workflowsApiState.saveGoldenRun).toHaveBeenCalledWith("run-1", {
+      name: "Release baseline",
+      tags: ["regression"],
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["runs"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["run-dag"] });
   });
 });

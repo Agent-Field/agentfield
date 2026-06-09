@@ -26,9 +26,9 @@ import (
 
 type workflowRunOverrideStorage struct {
 	storage.StorageProvider
-	queryRunSummariesFn func(context.Context, types.ExecutionFilter) ([]*storage.RunSummaryAggregation, int, error)
+	queryRunSummariesFn     func(context.Context, types.ExecutionFilter) ([]*storage.RunSummaryAggregation, int, error)
 	queryExecutionRecordsFn func(context.Context, types.ExecutionFilter) ([]*types.Execution, error)
-	getWorkflowExecutionFn func(context.Context, string) (*types.WorkflowExecution, error)
+	getWorkflowExecutionFn  func(context.Context, string) (*types.WorkflowExecution, error)
 }
 
 func (s *workflowRunOverrideStorage) QueryRunSummaries(ctx context.Context, filter types.ExecutionFilter) ([]*storage.RunSummaryAggregation, int, error) {
@@ -50,6 +50,18 @@ func (s *workflowRunOverrideStorage) GetWorkflowExecution(ctx context.Context, e
 		return s.getWorkflowExecutionFn(ctx, executionID)
 	}
 	return s.StorageProvider.GetWorkflowExecution(ctx, executionID)
+}
+
+func (s *workflowRunOverrideStorage) StoreWorkflowRun(ctx context.Context, run *types.WorkflowRun) error {
+	return s.StorageProvider.(interface {
+		StoreWorkflowRun(context.Context, *types.WorkflowRun) error
+	}).StoreWorkflowRun(ctx, run)
+}
+
+func (s *workflowRunOverrideStorage) GetWorkflowRun(ctx context.Context, runID string) (*types.WorkflowRun, error) {
+	return s.StorageProvider.(interface {
+		GetWorkflowRun(context.Context, string) (*types.WorkflowRun, error)
+	}).GetWorkflowRun(ctx, runID)
 }
 
 type executionRecordOverrideStore struct {
@@ -630,10 +642,10 @@ func TestReasonersAndObservabilityLowCoveragePaths(t *testing.T) {
 
 		storage.listAgentsFn = func(context.Context, types.AgentFilters) ([]*types.AgentNode, error) {
 			return []*types.AgentNode{{
-				ID:           "agent-offline",
-				Version:      "v1",
-				HealthStatus: types.HealthStatusInactive,
-				Reasoners:    []types.ReasonerDefinition{{ID: "plan"}},
+				ID:            "agent-offline",
+				Version:       "v1",
+				HealthStatus:  types.HealthStatusInactive,
+				Reasoners:     []types.ReasonerDefinition{{ID: "plan"}},
 				LastHeartbeat: time.Now().UTC(),
 			}}, nil
 		}

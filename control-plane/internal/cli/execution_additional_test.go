@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -219,4 +220,55 @@ func TestResumeExecutionCommand(t *testing.T) {
 		require.NoError(t, cmd.Execute())
 	})
 	require.Contains(t, output, "Execution ex-9 resumed")
+}
+
+func TestRestartExecutionCommandPostsRestartBody(t *testing.T) {
+	inputFile := filepath.Join(t.TempDir(), "input.json")
+	require.NoError(t, os.WriteFile(inputFile, []byte(`{"topic":"restart"}`), 0o644))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/executions/ex-10/restart", r.URL.Path)
+		require.Equal(t, "Bearer restart-token", r.Header.Get("Authorization"))
+		require.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		require.Equal(t, "workflow", body["scope"])
+		require.Equal(t, "none", body["reuse"])
+		require.Equal(t, true, body["fork"])
+		require.Equal(t, "try another model", body["reason"])
+		require.Equal(t, map[string]any{"model": "google/gemini-3.1-flash-lite"}, body["context"])
+		require.Equal(t, map[string]any{"topic": "restart"}, body["input"])
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"execution_id":"new-root",
+			"run_id":"run-new",
+			"source_run_id":"run-old",
+			"source_execution_id":"ex-10",
+			"replay_mode":"none"
+		}`))
+	}))
+	defer server.Close()
+
+	cmd := newRestartExecutionCommand()
+	cmd.SetArgs([]string{
+		"ex-10",
+		"--server", server.URL,
+		"--token", "restart-token",
+		"--reuse", "none",
+		"--fork",
+		"--model", "google/gemini-3.1-flash-lite",
+		"--reason", "try another model",
+		"--input", "@" + inputFile,
+	})
+
+	output := captureOutput(t, func() {
+		require.NoError(t, cmd.Execute())
+	})
+	require.Contains(t, output, "Restarted run run-old from ex-10")
+	require.Contains(t, output, "New run: run-new")
+	require.Contains(t, output, "Reuse: none")
+
+	cmd = newRestartExecutionCommand()
+	cmd.SetArgs([]string{"ex-10", "--input", "@"})
+	require.ErrorContains(t, cmd.Execute(), "--input @path requires a file path")
 }
