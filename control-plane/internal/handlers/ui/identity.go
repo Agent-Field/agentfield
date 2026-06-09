@@ -561,7 +561,7 @@ func (h *IdentityHandlers) resolveAgentDIDWeb(c *gin.Context, agentID string) st
 }
 
 // RegisterRoutes registers all identity UI routes
-func (h *IdentityHandlers) RegisterRoutes(router *gin.RouterGroup) {
+func (h *IdentityHandlers) RegisterRoutes(router gin.IRouter) {
 	identity := router.Group("/identity")
 	{
 		// DID Explorer endpoints

@@ -534,7 +534,7 @@ func (h *DIDHandlers) GetDIDDocument(c *gin.Context) {
 }
 
 // RegisterRoutes registers all DID-related routes.
-func (h *DIDHandlers) RegisterRoutes(router *gin.RouterGroup) {
+func (h *DIDHandlers) RegisterRoutes(router gin.IRouter) {
 	didGroup := router.Group("/did")
 	{
 		didGroup.POST("/register", h.RegisterAgent)
