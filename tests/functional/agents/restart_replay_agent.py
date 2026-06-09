@@ -21,6 +21,7 @@ from collections import defaultdict
 from typing import Any, Dict, Optional
 
 from agentfield import AIConfig, Agent
+from agentfield.async_config import AsyncConfig
 from pydantic import BaseModel, Field
 
 from agents import AgentSpec
@@ -57,18 +58,6 @@ class PlanDecision(BaseModel):
     confident: bool = Field(
         default=True,
         description="Whether the model is confident enough to proceed.",
-    )
-
-
-class DimensionAssessment(BaseModel):
-    finding: str = Field(
-        default="restart behavior needs verification",
-        description="One concise finding for this dimension.",
-    )
-    severity: int = Field(default=3, description="Severity from 1 to 5.")
-    confident: bool = Field(
-        default=True,
-        description="Whether the model is confident enough to use.",
     )
 
 
@@ -119,6 +108,14 @@ def create_agent(
     agent_kwargs.setdefault("callback_url", callback_url or "http://test-agent")
     agent_kwargs.setdefault(
         "agentfield_server", os.environ.get("AGENTFIELD_SERVER", "http://localhost:8080")
+    )
+    agent_kwargs.setdefault(
+        "async_config",
+        AsyncConfig(
+            completed_execution_retention_seconds=300.0,
+            result_cache_ttl=300.0,
+            cleanup_interval=30.0,
+        ),
     )
 
     agent = Agent(
@@ -216,29 +213,16 @@ def create_agent(
         model: Optional[str] = None,
     ) -> Dict[str, Any]:
         _bump(f"assess_dimension:{dimension}")
-        result = await agent.ai(
-            system=(
-                "You assess exactly one dimension of an AgentField restart. "
-                "Return one finding, severity 1-5, and confidence."
+        return {
+            "scenario_id": scenario_id,
+            "dimension": dimension,
+            "finding": (
+                f"{dimension} checkpoint can be reused before rerunning synthesis"
             ),
-            user=(
-                f"Scenario: {scenario_id}\n"
-                f"Dimension: {dimension}\n"
-                f"Question: {question}\n"
-                f"Plan focus: {plan.get('focus')}"
-            ),
-            schema=DimensionAssessment,
-            model=model,
-            temperature=0,
-            max_tokens=120,
-        )
-        assessment = _as_dict(result)
-        if not str(assessment.get("finding") or "").strip():
-            assessment["finding"] = "restart behavior needs verification"
-        if not assessment.get("severity"):
-            assessment["severity"] = 3
-        assessment["dimension"] = dimension
-        return assessment
+            "severity": 3 if dimension == "technical" else 2,
+            "confident": bool(plan.get("confident", True)),
+            "question": question,
+        }
 
     @agent.reasoner(name="synthesize")
     async def synthesize(
