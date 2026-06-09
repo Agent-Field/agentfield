@@ -1,5 +1,3 @@
-// @ts-nocheck
-import React from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -82,6 +80,11 @@ describe("RunTrace", () => {
             execution_id: "exec-worker-1",
             reasoner_id: "worker",
             status: "running",
+            reuse: {
+              hit: true,
+              source_execution_id: "exec-source-worker",
+              source_run_id: "run-source",
+            },
             started_at: "2026-04-08T10:00:01Z",
             duration_ms: 2000,
             parent_execution_id: "exec-root",
@@ -107,7 +110,7 @@ describe("RunTrace", () => {
             reasoner_id: "review",
             status: "cancelled",
             started_at: "2026-04-08T11:02:03Z",
-            duration_ms: null,
+            duration_ms: undefined,
             parent_execution_id: "exec-root",
             workflow_depth: 1,
           }),
@@ -131,6 +134,10 @@ describe("RunTrace", () => {
     expect(screen.getAllByText("worker")).toHaveLength(2);
     expect(screen.getByText("review")).toBeInTheDocument();
     expect(screen.getByText("×2")).toBeInTheDocument();
+    expect(screen.getByText("reused")).toHaveAttribute(
+      "title",
+      "Reused from exec-source-worker",
+    );
     expect(screen.getByText("+0:01")).toBeInTheDocument();
     expect(screen.getByText("+1:02:03")).toBeInTheDocument();
     expect(screen.getByText("10m 0s")).toBeInTheDocument();

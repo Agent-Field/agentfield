@@ -27,6 +27,11 @@ interface WorkflowNodeData {
   workflow_depth: number;
   task_name?: string;
   agent_name?: string;
+  reuse?: {
+    hit: boolean;
+    source_execution_id: string;
+    source_run_id?: string;
+  };
 }
 
 interface NodeDetailSidebarProps {
@@ -185,6 +190,7 @@ export function NodeDetailSidebar({
                 ) : null}
               </div>
             ) : null}
+            {node.reuse?.hit ? <ReuseNotice node={node} /> : null}
             {loading ? (
               <SidebarSkeleton />
             ) : error ? (
@@ -238,6 +244,39 @@ export function NodeDetailSidebar({
 
   // Render using portal to escape parent stacking context
   return createPortal(sidebarContent, document.body);
+}
+
+function ReuseNotice({ node }: { node: WorkflowNodeData }) {
+  return (
+    <div
+      className={cn(
+        "rounded-lg px-3 py-2 text-xs",
+        "bg-muted/30 text-muted-foreground",
+        statusTone.info.border,
+      )}
+    >
+      <div className="flex items-center gap-1.5 font-medium text-foreground">
+        <RotateCcw className={cn("size-3.5", statusTone.info.accent)} aria-hidden />
+        <span>Reused output</span>
+      </div>
+      <p className="mt-1">
+        Output came from{" "}
+        <span className="font-mono text-foreground">
+          {node.reuse?.source_execution_id}
+        </span>
+        {node.reuse?.source_run_id ? (
+          <>
+            {" "}
+            in{" "}
+            <span className="font-mono text-foreground">
+              {node.reuse.source_run_id}
+            </span>
+          </>
+        ) : null}
+        .
+      </p>
+    </div>
+  );
 }
 
 // Loading skeleton

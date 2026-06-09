@@ -1,6 +1,7 @@
 import { useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { cn } from "@/lib/utils";
+import { statusTone } from "@/lib/theme";
 import { getStatusTheme, normalizeExecutionStatus } from "@/utils/status";
 import { StatusDot } from "@/components/ui/status-pill";
 import type { WorkflowDAGLightweightNode } from "@/types/workflows";
@@ -273,6 +274,19 @@ function TraceRow({
             ×{effectiveGroupCount}
           </span>
         )}
+
+        {node.reuse?.hit ? (
+          <span
+            className={cn(
+              "hidden shrink-0 rounded px-1 text-nano font-medium sm:inline-flex",
+              "bg-muted/40 text-muted-foreground",
+              statusTone.info.border,
+            )}
+            title={`Reused from ${node.reuse.source_execution_id}`}
+          >
+            reused
+          </span>
+        ) : null}
 
         {/* Duration bar */}
         <div className="w-12 flex items-center shrink-0 sm:w-16">
