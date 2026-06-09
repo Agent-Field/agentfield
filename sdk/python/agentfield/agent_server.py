@@ -1,11 +1,9 @@
-from contextlib import AsyncExitStack
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
 import asyncio
 import importlib.util
 import os
 import signal
 import urllib.parse
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import datetime
 from typing import Optional
 
@@ -13,7 +11,7 @@ import uvicorn
 from agentfield.agent_utils import AgentUtils
 from agentfield.logger import log_debug, log_error, log_info, log_success, log_warn
 from agentfield.utils import get_free_port
-from fastapi import Request
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.routing import APIRoute
 
@@ -803,7 +801,7 @@ class AgentServer:
             async with AsyncExitStack() as stack:
                 await stack.enter_async_context(internal_lifespan(app))
                 await stack.enter_async_context(existing_lifespan(app))
-            yield
+                yield
 
         self.agent.router.lifespan_context = merged_lifespan
 
