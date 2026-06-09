@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { statusTone } from "@/lib/theme";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -182,7 +183,10 @@ export function RunLifecycleMenu({
                 onRestart?.(run);
               }}
             >
-              <GitBranch className="size-3.5 text-sky-500" aria-hidden />
+              <GitBranch
+                className={cn("size-3.5", statusTone.info.accent)}
+                aria-hidden
+              />
               Restart run
             </DropdownMenuItem>
           ) : null}

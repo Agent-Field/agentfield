@@ -73,6 +73,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { statusTone } from "@/lib/theme";
 import {
   RunTrace,
   buildTraceTree,
@@ -966,6 +967,42 @@ export function RunDetailPage() {
                 />
               );
             })()}
+            {golden ? (
+              <Badge
+                variant="metadata"
+                size="md"
+                className={cn(
+                  "shrink-0 gap-1 text-micro-plus",
+                  statusTone.warning.fg,
+                  statusTone.warning.border,
+                )}
+                title={golden.name || "Golden run"}
+                showIcon={false}
+              >
+                <Star
+                  className={cn("size-3", statusTone.warning.accent)}
+                  aria-hidden
+                />
+                Golden
+              </Badge>
+            ) : null}
+            {lineage?.source_run_id ? (
+              <Link
+                to={`/runs/${encodeURIComponent(lineage.source_run_id)}`}
+                className={cn(
+                  "inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-0.5 text-micro-plus font-medium transition-colors",
+                  "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
+                  statusTone.info.border,
+                )}
+                title={`Source run ${lineage.source_run_id}`}
+              >
+                <GitBranch
+                  className={cn("size-3", statusTone.info.accent)}
+                  aria-hidden
+                />
+                {lineage.kind === "fork" ? "Forked" : "Restarted"}
+              </Link>
+            ) : null}
           </div>
 
           <div className="flex min-w-0 flex-col gap-1.5 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-3 sm:gap-y-1">
@@ -1045,7 +1082,10 @@ export function RunDetailPage() {
                     className="gap-2 text-xs"
                     onClick={() => setForkDialogOpen(true)}
                   >
-                    <GitBranch className="size-3.5 text-sky-500" aria-hidden />
+                    <GitBranch
+                      className={cn("size-3.5", statusTone.info.accent)}
+                      aria-hidden
+                    />
                     Fork with changes
                   </DropdownMenuItem>
                   <DropdownMenuItem
@@ -1078,7 +1118,10 @@ export function RunDetailPage() {
                     }
                     onClick={() => void handleSaveGolden()}
                   >
-                    <Star className="size-3.5 text-amber-500" aria-hidden />
+                    <Star
+                      className={cn("size-3.5", statusTone.warning.accent)}
+                      aria-hidden
+                    />
                     {golden ? "Golden run saved" : "Save as golden run"}
                   </DropdownMenuItem>
                 </DropdownMenuContent>

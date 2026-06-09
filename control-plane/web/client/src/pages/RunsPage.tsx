@@ -6,6 +6,7 @@ import {
   ArrowUp,
   Check,
   Copy,
+  GitBranch,
   Play,
   Star,
 } from "lucide-react";
@@ -49,6 +50,7 @@ import {
 } from "@/components/runs/RunLifecycleMenu";
 import { StatusDot } from "@/components/ui/status-pill";
 import { cn } from "@/lib/utils";
+import { statusTone } from "@/lib/theme";
 import {
   Table,
   TableBody,
@@ -997,6 +999,14 @@ export function RunsPage() {
   const allSelected =
     filteredRuns.length > 0 && selected.size === filteredRuns.length;
   const someSelected = selected.size > 0 && !allSelected;
+  const hasClientSideRowFilter = showGoldenOnly || selectedStatuses.size > 1;
+  const visibleTotalCount = hasClientSideRowFilter
+    ? filteredRuns.length
+    : totalCount;
+  const visibleTotalPages = hasClientSideRowFilter ? 1 : totalPages;
+  const visiblePageRowCount = hasClientSideRowFilter
+    ? filteredRuns.length
+    : pageRows.length;
 
   const handleFilterChange = useCallback(
     (setter: (v: string) => void) => (value: string) => {
@@ -1063,7 +1073,10 @@ export function RunsPage() {
                 setPage(1);
               }}
             >
-              <Star className="size-3.5 text-amber-500" aria-hidden />
+              <Star
+                className={cn("size-3.5", statusTone.warning.accent)}
+                aria-hidden
+              />
               Golden
             </Button>
           </div>
@@ -1100,11 +1113,11 @@ export function RunsPage() {
 
       <RunsPaginationBar
         placement="top"
-        totalCount={totalCount}
-        totalPages={totalPages}
+        totalCount={visibleTotalCount}
+        totalPages={visibleTotalPages}
         page={page}
         pageSize={pageSize}
-        pageRowCount={pageRows.length}
+        pageRowCount={visiblePageRowCount}
         isFetching={isFetching}
         setPage={setPage}
         setPageSize={setPageSize}
@@ -1256,11 +1269,11 @@ export function RunsPage() {
 
       <RunsPaginationBar
         placement="bottom"
-        totalCount={totalCount}
-        totalPages={totalPages}
+        totalCount={visibleTotalCount}
+        totalPages={visibleTotalPages}
         page={page}
         pageSize={pageSize}
-        pageRowCount={pageRows.length}
+        pageRowCount={visiblePageRowCount}
         isFetching={isFetching}
         setPage={setPage}
         setPageSize={setPageSize}
@@ -1839,13 +1852,34 @@ function RunRow({
             <span
               className={cn(
                 badgeVariants({ variant: "outline", size: "sm" }),
-                "h-5 gap-1 px-1.5 text-micro-plus text-amber-700 dark:text-amber-300",
+                "h-5 gap-1 px-1.5 text-micro-plus",
+                statusTone.warning.fg,
+                statusTone.warning.border,
               )}
               title={run.golden.name || "Golden run"}
             >
               <Star className="size-3" aria-hidden />
               Golden
             </span>
+          ) : null}
+          {run.lineage?.source_run_id ? (
+            <Link
+              to={`/runs/${encodeURIComponent(run.lineage.source_run_id)}`}
+              className={cn(
+                badgeVariants({ variant: "metadata", size: "sm" }),
+                "h-5 gap-1 px-1.5 text-micro-plus transition-colors",
+                "hover:bg-muted/70 hover:text-foreground",
+                statusTone.info.border,
+              )}
+              title={`Source run ${run.lineage.source_run_id}`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <GitBranch
+                className={cn("size-3", statusTone.info.accent)}
+                aria-hidden
+              />
+              {run.lineage.kind === "fork" ? "Forked" : "Restarted"}
+            </Link>
           ) : null}
           <button
             type="button"
@@ -1855,7 +1889,7 @@ function RunRow({
               "text-muted-foreground transition-colors hover:border-border hover:bg-muted/70 hover:text-foreground",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
               copied &&
-                "border-green-500/50 text-green-600 dark:text-green-400",
+                `${statusTone.success.border} ${statusTone.success.fg}`,
             )}
             title={copied ? "Copied!" : run.run_id}
             aria-label={copied ? "Copied!" : `Copy run ID ${run.run_id}`}
