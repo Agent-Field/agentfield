@@ -9,6 +9,7 @@ import inspect
 import time
 from typing import (
     Any,
+    Awaitable,
     Callable,
     Dict,
     List,
@@ -39,7 +40,6 @@ from pydantic import ValidationError
 # stacked sugar without either form leaking into the other.
 _PENDING_TRIGGERS_ATTR = "_pending_triggers"
 
-
 # Type variables for decorator signature preservation
 F = TypeVar("F", bound=Callable[..., Any])
 P = ParamSpec("P")
@@ -64,7 +64,7 @@ def _code_origin(fn: Callable[..., Any]) -> Optional[str]:
 
 @overload
 def reasoner(
-    func: F,
+    func: Callable[P, Awaitable[T]],
     *,
     path: Optional[str] = None,
     tags: Optional[List[str]] = None,
@@ -73,7 +73,7 @@ def reasoner(
     triggers: Optional[List[Trigger]] = None,
     accepts_webhook: Optional[Union[bool, str]] = None,
     **kwargs: Any,
-) -> F: ...
+) -> Callable[P, Awaitable[T]]: ...
 
 
 @overload
@@ -87,11 +87,11 @@ def reasoner(
     triggers: Optional[List[Trigger]] = None,
     accepts_webhook: Optional[Union[bool, str]] = None,
     **kwargs: Any,
-) -> Callable[[F], F]: ...
+) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Awaitable[T]]]: ...
 
 
 def reasoner(
-    func: Optional[F] = None,
+    func: Any = None,
     *,
     path: Optional[str] = None,
     tags: Optional[List[str]] = None,
@@ -100,7 +100,7 @@ def reasoner(
     triggers: Optional[List[Trigger]] = None,
     accepts_webhook: Optional[Union[bool, str]] = None,
     **kwargs: Any,
-) -> Union[F, Callable[[F], F]]:
+):
     """Enhanced reasoner decorator with automatic workflow tracking and triggers.
 
     Examples:
@@ -138,7 +138,7 @@ def reasoner(
         **kwargs: Additional metadata stored on the function.
     """
 
-    def decorator(f: F) -> F:
+def decorator(f: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T]]:
         @functools.wraps(f)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
             if track_workflow:
@@ -220,7 +220,7 @@ def on_event(
     types: Optional[List[str]] = None,
     secret_env: Optional[str] = None,
     config: Optional[Dict[str, Any]] = None,
-) -> Callable[[F], F]:
+) -> Callable[[Callable[P, T]], Callable[P, T]]:
     """Sugar that stages an :class:`EventTrigger` for the next outer ``@reasoner``.
 
     Equivalent to passing ``triggers=[EventTrigger(...)]`` on ``@reasoner``.
@@ -229,7 +229,7 @@ def on_event(
     config in a single place.
     """
 
-    def decorator(func: F) -> F:
+def decorator(func: Callable[P, T]) -> Callable[P, T]:
         binding = EventTrigger(
             source=source,
             types=list(types or []),
@@ -249,13 +249,13 @@ def on_event(
     return decorator
 
 
-def on_schedule(cron: str, *, timezone: str = "UTC") -> Callable[[F], F]:
+def on_schedule(cron: str, *, timezone: str = "UTC") -> Callable[[Callable[P, T]], Callable[P, T]]:
     """Sugar that stages a :class:`ScheduleTrigger` for the next outer ``@reasoner``.
 
     Equivalent to ``triggers=[ScheduleTrigger(cron=cron, timezone=timezone)]``.
     """
 
-    def decorator(func: F) -> F:
+def decorator(func: Callable[P, T]) -> Callable[P, T]:
         binding = ScheduleTrigger(cron=cron, timezone=timezone)
         # Capture code origin automatically
         if not binding.code_origin:
@@ -546,7 +546,7 @@ def _compose_event_payload(
     return event
 
 
-def on_change(pattern: Union[str, List[str]]) -> Callable[[F], F]:
+def on_change(pattern: Union[str, List[str]]) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Awaitable[T]]]:
     """
     Decorator to mark a function as a memory event listener.
 
@@ -557,7 +557,7 @@ def on_change(pattern: Union[str, List[str]]) -> Callable[[F], F]:
         Decorated function with memory event listener metadata
     """
 
-    def decorator(func: F) -> F:
+    def decorator(func: Callable[P, T]) -> Callable[P, T]:
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
             return await func(*args, **kwargs)

@@ -23,6 +23,9 @@ from typing import (
     Type,
     Dict,
     Literal,
+    ParamSpec,
+    TypeVar,
+    overload,
 )
 from agentfield.agent_ai import AgentAI
 from agentfield.agent_cli import AgentCLI
@@ -67,6 +70,9 @@ import weakref
 if TYPE_CHECKING:
     from agentfield.harness._result import HarnessResult
     from agentfield.harness._runner import HarnessRunner
+
+P = ParamSpec("P")
+T = TypeVar("T")
 
 # Use slots=True for memory efficiency on Python 3.10+, fallback for older versions
 _dataclass_kwargs = {"slots": True} if sys.version_info >= (3, 10) else {}
@@ -1741,9 +1747,35 @@ class Agent(FastAPI):
         """Delegate to server handler for route setup"""
         return self.server_handler.setup_agentfield_routes()
 
+    @overload
+    def reasoner(
+        self,
+        path: Callable[P, Awaitable[T]],
+        name: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        *,
+        vc_enabled: Optional[bool] = None,
+        require_realtime_validation: bool = False,
+        triggers: Optional[List[Any]] = None,
+        accepts_webhook: Optional[Any] = None,
+    ) -> Callable[P, Awaitable[T]]: ...
+
+    @overload
     def reasoner(
         self,
         path: Optional[str] = None,
+        name: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        *,
+        vc_enabled: Optional[bool] = None,
+        require_realtime_validation: bool = False,
+        triggers: Optional[List[Any]] = None,
+        accepts_webhook: Optional[Any] = None,
+    ) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Awaitable[T]]]: ...
+
+    def reasoner(
+        self,
+        path: Any = None,
         name: Optional[str] = None,
         tags: Optional[List[str]] = None,
         *,
@@ -2551,7 +2583,7 @@ class Agent(FastAPI):
             + f"/api/v1/executions/{execution_id}/status"
         )
 
-    def on_change(self, pattern: Union[str, List[str]]):
+    def on_change(self, pattern: Union[str, List[str]]) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Awaitable[T]]]:
         """
         Decorator to mark a function as a memory event listener.
 
@@ -2618,9 +2650,31 @@ class Agent(FastAPI):
 
         return decorator
 
+    @overload
+    def skill(
+        self,
+        tags: Callable[P, T],
+        path: Optional[str] = None,
+        name: Optional[str] = None,
+        *,
+        vc_enabled: Optional[bool] = None,
+        require_realtime_validation: bool = False,
+    ) -> Callable[P, T]: ...
+
+    @overload
     def skill(
         self,
         tags: Optional[List[str]] = None,
+        path: Optional[str] = None,
+        name: Optional[str] = None,
+        *,
+        vc_enabled: Optional[bool] = None,
+        require_realtime_validation: bool = False,
+    ) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
+
+    def skill(
+        self,
+        tags: Any = None,
         path: Optional[str] = None,
         name: Optional[str] = None,
         *,
@@ -3825,7 +3879,12 @@ class Agent(FastAPI):
                 if node_id == self.node_id and hasattr(self, function_name):
                     try:
                         func = getattr(self, function_name)
-                        sig = inspect.signature(func)
+                        # Unwrap tracked wrappers (e.g. _run_async_skill,
+                        # tracked_func) to recover the original function's
+                        # typed signature instead of the generic (*args, **kwargs)
+                        # that the wrapper carries.
+                        raw_func = getattr(func, "_original_func", func)
+                        sig = inspect.signature(raw_func)
                         param_names = [
                             name
                             for name, param in sig.parameters.items()
