@@ -81,3 +81,27 @@ func TestExecutionGraphServiceLoadRunMetadata(t *testing.T) {
 	require.Nil(t, lineage)
 	require.Nil(t, golden)
 }
+
+func TestFillReuseSourceRun(t *testing.T) {
+	reused := "replayed_from_execution:src-exec"
+	child := &types.Execution{ExecutionID: "child", StatusReason: &reused}
+	root := WorkflowDAGNode{
+		ExecutionID: "root",
+		Children:    []WorkflowDAGNode{executionToDAGNode(child, 1)},
+	}
+
+	// Per-node reuse info only carries the source execution id until back-filled.
+	require.NotNil(t, root.Children[0].Reuse)
+	require.Equal(t, "src-exec", root.Children[0].Reuse.SourceExecutionID)
+	require.Empty(t, root.Children[0].Reuse.SourceRunID)
+
+	fillReuseSourceRunDAG(&root, "old-run")
+	require.Equal(t, "old-run", root.Children[0].Reuse.SourceRunID)
+	require.Nil(t, root.Reuse, "non-reused nodes must not gain a reuse marker")
+
+	// Existing source run ids are preserved, and nil markers are a no-op.
+	preset := &ExecutionReuseInfo{Hit: true, SourceExecutionID: "e", SourceRunID: "keep"}
+	fillReuseSourceRunNode(preset, "other-run")
+	require.Equal(t, "keep", preset.SourceRunID)
+	fillReuseSourceRunNode(nil, "old-run")
+}

@@ -266,6 +266,12 @@ func (c *executionController) persistRestartRunMetadata(ctx context.Context, pla
 		logger.Logger.Warn().Err(err).Str("run_id", plan.exec.RunID).Msg("failed to encode restart run metadata")
 		return
 	}
+	// This workflow_runs row exists only to carry lineage/golden metadata for the
+	// new run; it is the sole writer of this row for restart runs. Status and
+	// TotalSteps are seeded at enqueue time and are NOT kept current as the run
+	// progresses — every UI read path (run list, run detail, DAG) derives live
+	// status and step counts from execution aggregation and only reads the
+	// lineage/golden fields here. Do not treat these columns as authoritative.
 	if err := store.StoreWorkflowRun(ctx, &types.WorkflowRun{
 		RunID:           plan.exec.RunID,
 		RootWorkflowID:  plan.exec.RunID,

@@ -1274,6 +1274,17 @@ func (c *executionController) prepareExecutionForTarget(ctx context.Context, tar
 	}, nil
 }
 
+// findReplayHit returns a previously-succeeded child output to reuse for the
+// current app.call, or nil to run it normally. Only child executions (those with
+// a parent) are eligible — the restarted root always re-runs.
+//
+// Matching is keyed solely on (node id, reasoner id, canonical input+context);
+// among matches the earliest-started succeeded source execution wins. This is
+// intentionally position- and ordering-agnostic, so two calls to the same
+// reasoner with identical input+context within a run will both reuse the first
+// source result. That is correct for deterministic graphs; callers that need a
+// distinct result per identical call should vary the input/context or restart
+// with reuse=none.
 func (c *executionController) findReplayHit(ctx context.Context, headers executionHeaders, target *parsedTarget, storedPayload []byte) (*replayHit, error) {
 	if target == nil || headers.parentExecutionID == nil {
 		return nil, nil

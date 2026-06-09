@@ -180,6 +180,11 @@ func (s *executionGraphService) handleGetWorkflowDAG(c *gin.Context) {
 
 	if isLightweightRequest(c) {
 		timeline, workflowStatus, workflowName, sessionID, actorID, maxDepth := buildLightweightExecutionDAG(executions)
+		if lineage != nil && lineage.SourceRunID != "" {
+			for i := range timeline {
+				fillReuseSourceRunNode(timeline[i].Reuse, lineage.SourceRunID)
+			}
+		}
 
 		wh := aggregateWebhookRunData(ctx, s.store, executions)
 		response := WorkflowDAGLightweightResponse{
@@ -206,6 +211,12 @@ func (s *executionGraphService) handleGetWorkflowDAG(c *gin.Context) {
 	}
 
 	dag, timeline, workflowStatus, workflowName, sessionID, actorID, maxDepth := buildExecutionDAG(executions)
+	if lineage != nil && lineage.SourceRunID != "" {
+		fillReuseSourceRunDAG(&dag, lineage.SourceRunID)
+		for i := range timeline {
+			fillReuseSourceRunNode(timeline[i].Reuse, lineage.SourceRunID)
+		}
+	}
 
 	response := WorkflowDAGResponse{
 		RootWorkflowID: runID,
@@ -841,6 +852,30 @@ func executionReuseInfo(exec *types.Execution) *ExecutionReuseInfo {
 	return &ExecutionReuseInfo{
 		Hit:               true,
 		SourceExecutionID: sourceExecutionID,
+	}
+}
+
+// fillReuseSourceRunDAG back-fills the source run id on a node's reuse marker and
+// its descendants. The per-node reuse info is derived from the execution status
+// reason, which only records the source execution id; every reused node in a
+// restarted run shares the run's single replay source, so the run id is taken
+// from the run lineage rather than re-queried per node.
+func fillReuseSourceRunDAG(node *WorkflowDAGNode, sourceRunID string) {
+	if node == nil {
+		return
+	}
+	if node.Reuse != nil && node.Reuse.Hit && node.Reuse.SourceRunID == "" {
+		node.Reuse.SourceRunID = sourceRunID
+	}
+	for i := range node.Children {
+		fillReuseSourceRunDAG(&node.Children[i], sourceRunID)
+	}
+}
+
+// fillReuseSourceRunNode back-fills the source run id on a single reuse marker.
+func fillReuseSourceRunNode(reuse *ExecutionReuseInfo, sourceRunID string) {
+	if reuse != nil && reuse.Hit && reuse.SourceRunID == "" {
+		reuse.SourceRunID = sourceRunID
 	}
 }
 
