@@ -66,6 +66,27 @@ printf '%s\n' "KEEP_ME=$KEEP_ME"
 		assert.Contains(t, result.Stdout, "KEEP_ME=set")
 	})
 
+	t.Run("adds OpenRouter attribution env defaults", func(t *testing.T) {
+		dir := t.TempDir()
+		script := writeTestScript(t, dir, "print-openrouter-env", `#!/bin/sh
+printf '%s\n' "AF_SITE=$AGENTFIELD_OPENROUTER_SITE_URL"
+printf '%s\n' "AF_APP=$AGENTFIELD_OPENROUTER_APP_NAME"
+printf '%s\n' "OR_SITE=$OR_SITE_URL"
+printf '%s\n' "OR_APP=$OR_APP_NAME"
+`)
+
+		result, err := RunCLI(context.Background(), []string{script}, map[string]string{
+			"OR_APP_NAME": "Caller App",
+		}, dir, 0)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.Equal(t, 0, result.ReturnCode)
+		assert.Contains(t, result.Stdout, "AF_SITE=https://agentfield.ai")
+		assert.Contains(t, result.Stdout, "AF_APP=Caller App")
+		assert.Contains(t, result.Stdout, "OR_SITE=https://agentfield.ai")
+		assert.Contains(t, result.Stdout, "OR_APP=Caller App")
+	})
+
 	t.Run("context cancellation returns a killed-process result with partial stdout", func(t *testing.T) {
 		dir := t.TempDir()
 		script := writeTestScript(t, dir, "sleepy", "#!/bin/sh\nprintf 'before-timeout'\nsleep 5\n")

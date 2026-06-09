@@ -5,6 +5,10 @@ services:
       AGENTFIELD_STORAGE_MODE: local
       AGENTFIELD_HTTP_ADDR: 0.0.0.0:8080
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      AGENTFIELD_OPENROUTER_SITE_URL: ${AGENTFIELD_OPENROUTER_SITE_URL:-https://agentfield.ai}
+      AGENTFIELD_OPENROUTER_APP_NAME: ${AGENTFIELD_OPENROUTER_APP_NAME:-AgentField AI}
+      OR_SITE_URL: ${OR_SITE_URL:-https://agentfield.ai}
+      OR_APP_NAME: ${OR_APP_NAME:-AgentField AI}
     ports:
       - "8080:8080"
     volumes:
@@ -21,6 +25,10 @@ services:
       AGENTFIELD_SERVER: http://control-plane:8080
       AGENT_CALLBACK_URL: http://rag-agent:8001
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      AGENTFIELD_OPENROUTER_SITE_URL: ${AGENTFIELD_OPENROUTER_SITE_URL:-https://agentfield.ai}
+      AGENTFIELD_OPENROUTER_APP_NAME: ${AGENTFIELD_OPENROUTER_APP_NAME:-AgentField AI}
+      OR_SITE_URL: ${OR_SITE_URL:-https://agentfield.ai}
+      OR_APP_NAME: ${OR_APP_NAME:-AgentField AI}
       PORT: 8001
     ports:
       - "8001:8001"
