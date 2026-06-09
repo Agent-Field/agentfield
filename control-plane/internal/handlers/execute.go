@@ -123,6 +123,12 @@ type executionStatusUpdateRequest struct {
 	Progress     *int                   `json:"progress,omitempty"`
 }
 
+type replayHit struct {
+	SourceExecutionID string
+	SourceRunID       string
+	Result            json.RawMessage
+}
+
 type executionController struct {
 	store         ExecutionStore
 	httpClient    *http.Client
@@ -218,6 +224,26 @@ func (c *executionController) handleSync(ctx *gin.Context) {
 	plan, err := c.prepareExecution(reqCtx, ctx)
 	if err != nil {
 		writeExecutionError(ctx, err)
+		return
+	}
+
+	if plan.replayHit != nil {
+		if err := c.completeReplayHit(reqCtx, plan); err != nil {
+			writeExecutionError(ctx, err)
+			return
+		}
+		ctx.Header("X-Execution-ID", plan.exec.ExecutionID)
+		ctx.Header("X-Run-ID", plan.exec.RunID)
+		ctx.Header("X-AgentField-Replay-Hit", plan.replayHit.SourceExecutionID)
+		ctx.JSON(http.StatusOK, ExecuteResponse{
+			ExecutionID:       plan.exec.ExecutionID,
+			RunID:             plan.exec.RunID,
+			Status:            types.ExecutionStatusSucceeded,
+			Result:            decodeJSON(plan.replayHit.Result),
+			DurationMS:        0,
+			FinishedAt:        time.Now().UTC().Format(time.RFC3339),
+			WebhookRegistered: plan.webhookRegistered,
+		})
 		return
 	}
 
@@ -360,6 +386,35 @@ func (c *executionController) handleAsync(ctx *gin.Context) {
 	plan, err := c.prepareExecution(reqCtx, ctx)
 	if err != nil {
 		writeExecutionError(ctx, err)
+		return
+	}
+
+	if plan.replayHit != nil {
+		if err := c.completeReplayHit(reqCtx, plan); err != nil {
+			writeExecutionError(ctx, err)
+			return
+		}
+
+		createdAt := plan.exec.CreatedAt.UTC().Format(time.RFC3339)
+		targetLabel := fmt.Sprintf("%s.%s", plan.target.NodeID, plan.target.TargetName)
+		response := AsyncExecuteResponse{
+			ExecutionID:       plan.exec.ExecutionID,
+			RunID:             plan.exec.RunID,
+			WorkflowID:        plan.exec.RunID,
+			Status:            string(types.ExecutionStatusSucceeded),
+			Target:            targetLabel,
+			Type:              plan.targetType,
+			CreatedAt:         createdAt,
+			EnqueuedAt:        createdAt,
+			WebhookRegistered: plan.webhookRegistered,
+		}
+		if plan.webhookError != nil {
+			response.WebhookError = plan.webhookError
+		}
+		ctx.Header("X-Execution-ID", plan.exec.ExecutionID)
+		ctx.Header("X-Run-ID", plan.exec.RunID)
+		ctx.Header("X-AgentField-Replay-Hit", plan.replayHit.SourceExecutionID)
+		ctx.JSON(http.StatusAccepted, response)
 		return
 	}
 
@@ -1004,20 +1059,35 @@ type preparedExecution struct {
 	callerDID string
 	targetDID string
 	// Version that was selected during routing (empty if default/unversioned agent)
-	routedVersion string
+	routedVersion           string
+	replaySourceRunID       string
+	replayBeforeExecutionID string
+	replayMode              string
+	replayHit               *replayHit
 }
 
 func (c *executionController) prepareExecution(ctx context.Context, ginCtx *gin.Context) (*preparedExecution, error) {
 	targetParam := ginCtx.Param("target")
+	var req ExecuteRequest
+	if err := ginCtx.ShouldBindJSON(&req); err != nil {
+		return nil, fmt.Errorf("invalid request body: %w", err)
+	}
+	return c.prepareExecutionForTarget(
+		ctx,
+		targetParam,
+		req,
+		readExecutionHeaders(ginCtx),
+		middleware.GetVerifiedCallerDID(ginCtx),
+		middleware.GetTargetDID(ginCtx),
+	)
+}
+
+func (c *executionController) prepareExecutionForTarget(ctx context.Context, targetParam string, req ExecuteRequest, headers executionHeaders, callerDID, targetDID string) (*preparedExecution, error) {
 	target, err := parseTarget(targetParam)
 	if err != nil {
 		return nil, fmt.Errorf("invalid target: %w", err)
 	}
 
-	var req ExecuteRequest
-	if err := ginCtx.ShouldBindJSON(&req); err != nil {
-		return nil, fmt.Errorf("invalid request body: %w", err)
-	}
 	// Allow empty input for skills/reasoners that take no parameters (issue #196).
 	if req.Input == nil {
 		req.Input = map[string]interface{}{}
@@ -1088,7 +1158,6 @@ func (c *executionController) prepareExecution(ctx context.Context, ginCtx *gin.
 	}
 	target.TargetType = targetType
 
-	headers := readExecutionHeaders(ginCtx)
 	runID := headers.runID
 	if runID == "" {
 		runID = utils.GenerateRunID()
@@ -1181,19 +1250,169 @@ func (c *executionController) prepareExecution(ctx context.Context, ginCtx *gin.
 
 	c.ensureWorkflowExecutionRecord(ctx, exec, target, storedPayload)
 
+	hit, err := c.findReplayHit(ctx, headers, target, storedPayload)
+	if err != nil {
+		return nil, err
+	}
+
 	return &preparedExecution{
-		exec:              exec,
-		requestBody:       agentPayloadBytes,
-		agent:             agent,
-		target:            target,
-		targetType:        targetType,
-		llmEndpoint:       extractRequestedLLMEndpoint(req),
-		webhookRegistered: webhookRegistered,
-		webhookError:      webhookError,
-		callerDID:         middleware.GetVerifiedCallerDID(ginCtx),
-		targetDID:         middleware.GetTargetDID(ginCtx),
-		routedVersion:     routedVersion,
+		exec:                    exec,
+		requestBody:             agentPayloadBytes,
+		agent:                   agent,
+		target:                  target,
+		targetType:              targetType,
+		llmEndpoint:             extractRequestedLLMEndpoint(req),
+		webhookRegistered:       webhookRegistered,
+		webhookError:            webhookError,
+		callerDID:               callerDID,
+		targetDID:               targetDID,
+		routedVersion:           routedVersion,
+		replaySourceRunID:       headers.replaySourceRunID,
+		replayBeforeExecutionID: headers.replayBeforeExecutionID,
+		replayMode:              headers.replayMode,
+		replayHit:               hit,
 	}, nil
+}
+
+func (c *executionController) findReplayHit(ctx context.Context, headers executionHeaders, target *parsedTarget, storedPayload []byte) (*replayHit, error) {
+	if target == nil || headers.parentExecutionID == nil {
+		return nil, nil
+	}
+	sourceRunID := strings.TrimSpace(headers.replaySourceRunID)
+	if sourceRunID == "" {
+		return nil, nil
+	}
+	mode := strings.TrimSpace(headers.replayMode)
+	if mode == "" {
+		mode = "succeeded-before"
+	}
+	if mode == "none" {
+		return nil, nil
+	}
+	if mode != "succeeded-before" && mode != "all-succeeded" {
+		return nil, fmt.Errorf("unsupported replay mode %q", mode)
+	}
+
+	executions, err := c.store.QueryExecutionRecords(ctx, types.ExecutionFilter{
+		RunID:          &sourceRunID,
+		SortBy:         "started_at",
+		SortDescending: false,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("query replay source run: %w", err)
+	}
+	if len(executions) == 0 {
+		return nil, nil
+	}
+
+	var beforeTime *time.Time
+	if mode == "succeeded-before" && strings.TrimSpace(headers.replayBeforeExecutionID) != "" {
+		for _, exec := range executions {
+			if exec != nil && exec.ExecutionID == headers.replayBeforeExecutionID {
+				t := exec.StartedAt
+				beforeTime = &t
+				break
+			}
+		}
+		if beforeTime == nil {
+			return nil, nil
+		}
+	}
+
+	newKey, ok := canonicalReplayPayload(storedPayload)
+	if !ok {
+		return nil, nil
+	}
+	for _, exec := range executions {
+		if exec == nil {
+			continue
+		}
+		if beforeTime != nil && !exec.StartedAt.Before(*beforeTime) {
+			continue
+		}
+		if exec.Status != types.ExecutionStatusSucceeded {
+			continue
+		}
+		if exec.NodeID != target.NodeID || exec.ReasonerID != target.TargetName {
+			continue
+		}
+		if len(exec.ResultPayload) == 0 {
+			continue
+		}
+		oldKey, oldOK := canonicalReplayPayload(exec.InputPayload)
+		if !oldOK || oldKey != newKey {
+			continue
+		}
+		return &replayHit{
+			SourceExecutionID: exec.ExecutionID,
+			SourceRunID:       exec.RunID,
+			Result:            json.RawMessage(cloneBytes(exec.ResultPayload)),
+		}, nil
+	}
+	return nil, nil
+}
+
+func canonicalReplayPayload(raw []byte) (string, bool) {
+	if len(raw) == 0 {
+		return "", false
+	}
+	var v interface{}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return "", false
+	}
+	encoded, err := json.Marshal(v)
+	if err != nil {
+		return "", false
+	}
+	return string(encoded), true
+}
+
+func (c *executionController) completeReplayHit(ctx context.Context, plan *preparedExecution) error {
+	if plan == nil || plan.exec == nil || plan.replayHit == nil {
+		return fmt.Errorf("missing replay execution plan")
+	}
+	reason := "replayed_from_execution:" + plan.replayHit.SourceExecutionID
+	now := time.Now().UTC()
+	duration := int64(0)
+	result := cloneBytes(plan.replayHit.Result)
+	resultURI := c.savePayload(ctx, result)
+
+	updated, err := c.store.UpdateExecutionRecord(ctx, plan.exec.ExecutionID, func(current *types.Execution) (*types.Execution, error) {
+		if current == nil {
+			return nil, fmt.Errorf("execution %s not found", plan.exec.ExecutionID)
+		}
+		current.Status = types.ExecutionStatusSucceeded
+		current.StatusReason = &reason
+		current.ResultPayload = json.RawMessage(result)
+		current.ResultURI = resultURI
+		current.ErrorMessage = nil
+		current.CompletedAt = &now
+		current.DurationMS = &duration
+		current.UpdatedAt = now
+		return current, nil
+	})
+	if err != nil {
+		return err
+	}
+
+	c.updateWorkflowExecutionFinalState(ctx, plan.exec.ExecutionID, types.ExecutionStatusSucceeded, result, 0, nil)
+	c.updateWorkflowExecutionStatus(ctx, plan.exec.ExecutionID, types.ExecutionStatusSucceeded, &reason)
+	if plan.webhookRegistered || (updated != nil && updated.WebhookRegistered) {
+		c.triggerWebhook(plan.exec.ExecutionID)
+	}
+
+	eventData := map[string]interface{}{
+		"replay": map[string]interface{}{
+			"source_execution_id": plan.replayHit.SourceExecutionID,
+			"source_run_id":       plan.replayHit.SourceRunID,
+		},
+		"result": decodeJSON(result),
+	}
+	if inputPayload := decodeJSON(plan.exec.InputPayload); inputPayload != nil {
+		eventData["input"] = inputPayload
+	}
+	c.publishExecutionEventWithReasonerInfo(updated, string(types.ExecutionStatusSucceeded), eventData, plan.agent, &plan.target.TargetName)
+	return nil
 }
 
 func extractRequestedLLMEndpoint(req ExecuteRequest) string {
@@ -1259,6 +1478,15 @@ func (c *executionController) callAgent(ctx context.Context, plan *preparedExecu
 	}
 	if plan.targetDID != "" {
 		req.Header.Set("X-Target-DID", plan.targetDID)
+	}
+	if plan.replaySourceRunID != "" {
+		req.Header.Set("X-AgentField-Replay-Source-Run-ID", plan.replaySourceRunID)
+	}
+	if plan.replayBeforeExecutionID != "" {
+		req.Header.Set("X-AgentField-Replay-Before-Execution-ID", plan.replayBeforeExecutionID)
+	}
+	if plan.replayMode != "" {
+		req.Header.Set("X-AgentField-Replay-Mode", plan.replayMode)
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -1468,10 +1696,13 @@ func (c *executionController) triggerWebhook(executionID string) {
 }
 
 type executionHeaders struct {
-	runID             string
-	parentExecutionID *string
-	sessionID         *string
-	actorID           *string
+	runID                   string
+	parentExecutionID       *string
+	sessionID               *string
+	actorID                 *string
+	replaySourceRunID       string
+	replayBeforeExecutionID string
+	replayMode              string
 }
 
 func readExecutionHeaders(ctx *gin.Context) executionHeaders {
@@ -1479,6 +1710,9 @@ func readExecutionHeaders(ctx *gin.Context) executionHeaders {
 	parent := strings.TrimSpace(ctx.GetHeader("X-Parent-Execution-ID"))
 	session := strings.TrimSpace(ctx.GetHeader("X-Session-ID"))
 	actor := strings.TrimSpace(ctx.GetHeader("X-Actor-ID"))
+	replaySourceRunID := strings.TrimSpace(ctx.GetHeader("X-AgentField-Replay-Source-Run-ID"))
+	replayBeforeExecutionID := strings.TrimSpace(ctx.GetHeader("X-AgentField-Replay-Before-Execution-ID"))
+	replayMode := strings.TrimSpace(ctx.GetHeader("X-AgentField-Replay-Mode"))
 
 	var parentPtr *string
 	if parent != "" {
@@ -1496,10 +1730,13 @@ func readExecutionHeaders(ctx *gin.Context) executionHeaders {
 	}
 
 	return executionHeaders{
-		runID:             runID,
-		parentExecutionID: parentPtr,
-		sessionID:         sessionPtr,
-		actorID:           actorPtr,
+		runID:                   runID,
+		parentExecutionID:       parentPtr,
+		sessionID:               sessionPtr,
+		actorID:                 actorPtr,
+		replaySourceRunID:       replaySourceRunID,
+		replayBeforeExecutionID: replayBeforeExecutionID,
+		replayMode:              replayMode,
 	}
 }
 

@@ -15,6 +15,9 @@ export interface ExecutionMetadata {
   callerDid?: string;
   targetDid?: string;
   agentNodeDid?: string;
+  replaySourceRunId?: string;
+  replayBeforeExecutionId?: string;
+  replayMode?: string;
 }
 
 const store = new AsyncLocalStorage<ExecutionContext>();

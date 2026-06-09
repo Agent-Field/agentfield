@@ -2,27 +2,35 @@ import type {
   WorkflowsResponse,
   EnhancedExecutionsResponse,
   ExecutionViewFilters,
+  GoldenRunMetadata,
+  RunLineageMetadata,
   WorkflowSummary,
   WorkflowDAGLightweightResponse,
-} from '../types/workflows';
-import { normalizeExecutionStatus } from '../utils/status';
-import { getGlobalApiKey } from './api';
+} from "../types/workflows";
+import { normalizeExecutionStatus } from "../utils/status";
+import { getGlobalApiKey } from "./api";
 
-const API_V1_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/ui/v1';
-const API_V2_BASE_URL = import.meta.env.VITE_API_V2_BASE_URL || '/api/ui/v2';
+const API_V1_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api/ui/v1";
+const API_V2_BASE_URL = import.meta.env.VITE_API_V2_BASE_URL || "/api/ui/v2";
 
-async function fetchWrapper<T>(url: string, options?: RequestInit, baseUrl: string = API_V1_BASE_URL): Promise<T> {
+async function fetchWrapper<T>(
+  url: string,
+  options?: RequestInit,
+  baseUrl: string = API_V1_BASE_URL,
+): Promise<T> {
   const headers = new Headers(options?.headers || {});
   const apiKey = getGlobalApiKey();
   if (apiKey) {
-    headers.set('X-API-Key', apiKey);
+    headers.set("X-API-Key", apiKey);
   }
   const response = await fetch(`${baseUrl}${url}`, { ...options, headers });
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({
-      message: 'Request failed with status ' + response.status
+      message: "Request failed with status " + response.status,
     }));
-    throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    throw new Error(
+      errorData.message || `HTTP error! status: ${response.status}`,
+    );
   }
   return response.json() as Promise<T>;
 }
@@ -31,9 +39,9 @@ function buildQueryString(params: Record<string, any>): string {
   const searchParams = new URLSearchParams();
 
   Object.entries(params).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && value !== '') {
+    if (value !== undefined && value !== null && value !== "") {
       if (Array.isArray(value)) {
-        value.forEach(v => searchParams.append(key, v.toString()));
+        value.forEach((v) => searchParams.append(key, v.toString()));
       } else {
         searchParams.append(key, value.toString());
       }
@@ -46,7 +54,7 @@ function buildQueryString(params: Record<string, any>): string {
 function normalizeFilters(filters: ExecutionViewFilters = {}) {
   const params: Record<string, unknown> = { ...filters };
 
-  if (params.status === 'all') {
+  if (params.status === "all") {
     delete params.status;
   }
 
@@ -54,13 +62,13 @@ function normalizeFilters(filters: ExecutionViewFilters = {}) {
   delete params.agent;
 
   const workflowValue = params.workflow;
-  if (typeof workflowValue === 'string' && workflowValue.length > 0) {
+  if (typeof workflowValue === "string" && workflowValue.length > 0) {
     params.workflow_id = workflowValue;
   }
   delete params.workflow;
 
   const sessionValue = params.session;
-  if (typeof sessionValue === 'string' && sessionValue.length > 0) {
+  if (typeof sessionValue === "string" && sessionValue.length > 0) {
     params.session_id = sessionValue;
   }
   delete params.session;
@@ -110,6 +118,8 @@ interface ApiWorkflowRunSummary {
   duration_ms?: number | null;
   terminal: boolean;
   trigger?: ApiTriggerInfo | null;
+  lineage?: RunLineageMetadata | null;
+  golden?: GoldenRunMetadata | null;
 }
 
 interface ApiWorkflowExecution {
@@ -141,6 +151,8 @@ export interface WorkflowRunDetailResponse {
     created_at: string;
     updated_at: string;
     completed_at?: string | null;
+    lineage?: RunLineageMetadata | null;
+    golden?: GoldenRunMetadata | null;
   };
   executions: ApiWorkflowExecution[];
 }
@@ -150,9 +162,9 @@ export async function getWorkflowsSummary(
   filters: ExecutionViewFilters = {},
   page: number = 1,
   pageSize: number = 20,
-  sortBy: string = 'latest_activity',
-  sortOrder: 'asc' | 'desc' = 'desc',
-  signal?: AbortSignal
+  sortBy: string = "latest_activity",
+  sortOrder: "asc" | "desc" = "desc",
+  signal?: AbortSignal,
 ): Promise<WorkflowsResponse> {
   const normalizedFilters = normalizeFilters(filters);
 
@@ -168,39 +180,46 @@ export async function getWorkflowsSummary(
   if (filters.timeRange) {
     const since = resolveSinceTimestamp(filters.timeRange);
     if (since) {
-      queryParams['since'] = since;
+      queryParams["since"] = since;
     }
   }
 
-  if (normalizedFilters.status && normalizedFilters.status !== 'all') {
-    queryParams['status'] = normalizeExecutionStatus(normalizedFilters.status as string);
+  if (normalizedFilters.status && normalizedFilters.status !== "all") {
+    queryParams["status"] = normalizeExecutionStatus(
+      normalizedFilters.status as string,
+    );
   }
 
   if (normalizedFilters.session_id) {
-    queryParams['session_id'] = normalizedFilters.session_id;
+    queryParams["session_id"] = normalizedFilters.session_id;
   }
 
   if (normalizedFilters.actor_id) {
-    queryParams['actor_id'] = normalizedFilters.actor_id;
+    queryParams["actor_id"] = normalizedFilters.actor_id;
   }
 
   if (normalizedFilters.workflow_id) {
-    queryParams['workflow_id'] = normalizedFilters.workflow_id;
+    queryParams["workflow_id"] = normalizedFilters.workflow_id;
   }
 
   if (normalizedFilters.search) {
-    queryParams['search'] = normalizedFilters.search;
+    queryParams["search"] = normalizedFilters.search;
   }
 
   const queryString = buildQueryString(queryParams);
-  const url = `/workflow-runs${queryString ? `?${queryString}` : ''}`;
+  const url = `/workflow-runs${queryString ? `?${queryString}` : ""}`;
 
-  const response = await fetchWrapper<WorkflowRunListResponse>(url, { signal }, API_V2_BASE_URL);
+  const response = await fetchWrapper<WorkflowRunListResponse>(
+    url,
+    { signal },
+    API_V2_BASE_URL,
+  );
 
   const workflows = response.runs.map(mapApiRunToWorkflowSummary);
-  const totalPages = response.page_size > 0
-    ? Math.ceil(response.total_count / response.page_size)
-    : 0;
+  const totalPages =
+    response.page_size > 0
+      ? Math.ceil(response.total_count / response.page_size)
+      : 0;
 
   return {
     workflows,
@@ -212,10 +231,13 @@ export async function getWorkflowsSummary(
   };
 }
 
-function mapApiRunToWorkflowSummary(run: ApiWorkflowRunSummary): WorkflowSummary {
-  const normalizedStatus = normalizeExecutionStatus(run.status ?? 'unknown');
+function mapApiRunToWorkflowSummary(
+  run: ApiWorkflowRunSummary,
+): WorkflowSummary {
+  const normalizedStatus = normalizeExecutionStatus(run.status ?? "unknown");
   const statusCounts = run.status_counts ?? {};
-  const activeExecutions = typeof run.active_executions === 'number' ? run.active_executions : 0;
+  const activeExecutions =
+    typeof run.active_executions === "number" ? run.active_executions : 0;
 
   return {
     run_id: run.run_id,
@@ -253,11 +275,13 @@ function mapApiRunToWorkflowSummary(run: ApiWorkflowRunSummary): WorkflowSummary
           idempotency_key: run.trigger.idempotency_key,
         }
       : undefined,
+    lineage: run.lineage ?? undefined,
+    golden: run.golden ?? undefined,
   };
 }
 
 function resolveSinceTimestamp(timeRange?: string): string | undefined {
-  if (!timeRange || timeRange === 'all') {
+  if (!timeRange || timeRange === "all") {
     return undefined;
   }
 
@@ -273,9 +297,9 @@ function resolveSinceTimestamp(timeRange?: string): string | undefined {
 
   let milliseconds = 0;
   const unit = match[2].toLowerCase();
-  if (unit === 'h') {
+  if (unit === "h") {
     milliseconds = value * 60 * 60 * 1000;
-  } else if (unit === 'd') {
+  } else if (unit === "d") {
     milliseconds = value * 24 * 60 * 60 * 1000;
   }
 
@@ -289,21 +313,21 @@ function resolveSinceTimestamp(timeRange?: string): string | undefined {
 
 export function mapWorkflowSortKeyToApi(sortKey: string): string {
   switch (sortKey) {
-    case 'status':
-      return 'status';
-    case 'total_executions':
-    case 'nodes':
-      return 'total_steps';
-    case 'failed':
-    case 'issues':
-      return 'failed_steps';
-    case 'started':
-    case 'started_at':
-      return 'created_at';
-    case 'latest_activity':
-    case 'updated_at':
+    case "status":
+      return "status";
+    case "total_executions":
+    case "nodes":
+      return "total_steps";
+    case "failed":
+    case "issues":
+      return "failed_steps";
+    case "started":
+    case "started_at":
+      return "created_at";
+    case "latest_activity":
+    case "updated_at":
     default:
-      return 'updated_at';
+      return "updated_at";
   }
 }
 
@@ -312,9 +336,9 @@ export async function getEnhancedExecutions(
   filters: ExecutionViewFilters = {},
   page: number = 1,
   pageSize: number = 20,
-  sortBy: string = 'started_at',
-  sortOrder: 'asc' | 'desc' = 'desc',
-  signal?: AbortSignal
+  sortBy: string = "started_at",
+  sortOrder: "asc" | "desc" = "desc",
+  signal?: AbortSignal,
 ): Promise<EnhancedExecutionsResponse> {
   const normalizedFilters = normalizeFilters(filters);
 
@@ -327,7 +351,7 @@ export async function getEnhancedExecutions(
   };
 
   const queryString = buildQueryString(queryParams);
-  const url = `/executions/enhanced${queryString ? `?${queryString}` : ''}`;
+  const url = `/executions/enhanced${queryString ? `?${queryString}` : ""}`;
 
   return fetchWrapper<EnhancedExecutionsResponse>(url, { signal });
 }
@@ -345,16 +369,16 @@ export interface WorkflowDAGRequestOptions {
 // Get workflow DAG data
 export async function getWorkflowDAG<T = any>(
   workflowId: string,
-  options: WorkflowDAGRequestOptions = {}
+  options: WorkflowDAGRequestOptions = {},
 ): Promise<T> {
   const { lightweight = false, signal } = options;
-  const query = lightweight ? '?mode=lightweight' : '';
+  const query = lightweight ? "?mode=lightweight" : "";
   return fetchWrapper<T>(`/workflows/${workflowId}/dag${query}`, { signal });
 }
 
 export async function getWorkflowDAGLightweight(
   workflowId: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<WorkflowDAGLightweightResponse> {
   return getWorkflowDAG<WorkflowDAGLightweightResponse>(workflowId, {
     lightweight: true,
@@ -402,24 +426,24 @@ export async function cancelWorkflowTree(
 
 export async function getWorkflowRunDetail(
   runId: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<WorkflowRunDetailResponse> {
   return fetchWrapper<WorkflowRunDetailResponse>(
     `/workflow-runs/${runId}`,
     { signal },
-    API_V2_BASE_URL
+    API_V2_BASE_URL,
   );
 }
 
 export async function getWorkflowRunSummary(
   runId: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<WorkflowSummary | null> {
   const query = buildQueryString({ run_id: runId, page: 1, page_size: 1 });
   const response = await fetchWrapper<WorkflowRunListResponse>(
     `/workflow-runs?${query}`,
     { signal },
-    API_V2_BASE_URL
+    API_V2_BASE_URL,
   );
 
   const [run] = response.runs;
@@ -430,38 +454,72 @@ export async function getWorkflowRunSummary(
   return mapApiRunToWorkflowSummary(run);
 }
 
+export async function saveGoldenRun(
+  runId: string,
+  request: { name?: string; tags?: string[] } = {},
+): Promise<WorkflowSummary> {
+  const response = await fetchWrapper<ApiWorkflowRunSummary>(
+    `/workflow-runs/${encodeURIComponent(runId)}/golden`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    },
+    API_V2_BASE_URL,
+  );
+  return mapApiRunToWorkflowSummary(response);
+}
+
 // Helper functions for specific view modes
 export async function getExecutionsByViewMode(
-  viewMode: 'executions' | 'workflows' | 'sessions' | 'agents',
+  viewMode: "executions" | "workflows" | "sessions" | "agents",
   filters: ExecutionViewFilters = {},
   page: number = 1,
   pageSize: number = 20,
   sortBy?: string,
-  sortOrder: 'asc' | 'desc' = 'desc'
+  sortOrder: "asc" | "desc" = "desc",
 ): Promise<WorkflowsResponse | EnhancedExecutionsResponse> {
   switch (viewMode) {
-    case 'workflows':
-      return getWorkflowsSummary(filters, page, pageSize, sortBy || 'latest_activity', sortOrder);
-    case 'executions':
-    case 'sessions':
-    case 'agents':
-      return getEnhancedExecutions(filters, page, pageSize, sortBy || 'when', sortOrder);
+    case "workflows":
+      return getWorkflowsSummary(
+        filters,
+        page,
+        pageSize,
+        sortBy || "latest_activity",
+        sortOrder,
+      );
+    case "executions":
+    case "sessions":
+    case "agents":
+      return getEnhancedExecutions(
+        filters,
+        page,
+        pageSize,
+        sortBy || "when",
+        sortOrder,
+      );
     default:
-      return getEnhancedExecutions(filters, page, pageSize, sortBy || 'when', sortOrder);
+      return getEnhancedExecutions(
+        filters,
+        page,
+        pageSize,
+        sortBy || "when",
+        sortOrder,
+      );
   }
 }
 
 // Search across all view modes
 export async function searchExecutionData(
   searchTerm: string,
-  viewMode: 'executions' | 'workflows' | 'sessions' | 'agents',
+  viewMode: "executions" | "workflows" | "sessions" | "agents",
   filters: ExecutionViewFilters = {},
   page: number = 1,
-  pageSize: number = 20
+  pageSize: number = 20,
 ): Promise<WorkflowsResponse | EnhancedExecutionsResponse> {
   const searchFilters = {
     ...filters,
-    search: searchTerm
+    search: searchTerm,
   };
 
   return getExecutionsByViewMode(viewMode, searchFilters, page, pageSize);
@@ -474,13 +532,13 @@ export async function getFilterOptions(): Promise<{
   sessions: string[];
   statuses: string[];
 }> {
-  return fetchWrapper<any>('/executions/filter-options');
+  return fetchWrapper<any>("/executions/filter-options");
 }
 
 // Get execution statistics for the current view
 export async function getExecutionViewStats(
-  viewMode: 'executions' | 'workflows' | 'sessions' | 'agents',
-  filters: ExecutionViewFilters = {}
+  viewMode: "executions" | "workflows" | "sessions" | "agents",
+  filters: ExecutionViewFilters = {},
 ): Promise<{
   total_count: number;
   status_breakdown: Record<string, number>;
@@ -488,11 +546,11 @@ export async function getExecutionViewStats(
 }> {
   const queryParams = {
     ...filters,
-    view_mode: viewMode
+    view_mode: viewMode,
   };
 
   const queryString = buildQueryString(queryParams);
-  const url = `/executions/view-stats${queryString ? `?${queryString}` : ''}`;
+  const url = `/executions/view-stats${queryString ? `?${queryString}` : ""}`;
 
   return fetchWrapper<any>(url);
 }
@@ -511,25 +569,28 @@ export interface WorkflowCleanupResult {
 // Delete a single workflow (cleanup all related data)
 export async function deleteWorkflow(
   workflowId: string,
-  dryRun: boolean = false
+  dryRun: boolean = false,
 ): Promise<WorkflowCleanupResult> {
-  const queryParams = dryRun ? '?dry_run=true&confirm=true' : '?confirm=true';
-  return fetchWrapper<WorkflowCleanupResult>(`/workflows/${workflowId}/cleanup${queryParams}`, {
-    method: 'DELETE'
-  });
+  const queryParams = dryRun ? "?dry_run=true&confirm=true" : "?confirm=true";
+  return fetchWrapper<WorkflowCleanupResult>(
+    `/workflows/${workflowId}/cleanup${queryParams}`,
+    {
+      method: "DELETE",
+    },
+  );
 }
 
 // Delete multiple workflows (batch cleanup)
 export async function deleteWorkflows(
   workflowIds: string[],
-  dryRun: boolean = false
+  dryRun: boolean = false,
 ): Promise<WorkflowCleanupResult[]> {
   const uniqueIds = Array.from(
     new Set(
       workflowIds
         .map((id) => id?.trim())
-        .filter((id): id is string => Boolean(id && id.length))
-    )
+        .filter((id): id is string => Boolean(id && id.length)),
+    ),
   );
 
   if (uniqueIds.length === 0) {
@@ -552,7 +613,7 @@ export async function deleteWorkflows(
         freed_space_bytes: 0,
         duration_ms: 0,
         success: false,
-        error_message: error instanceof Error ? error.message : 'Unknown error'
+        error_message: error instanceof Error ? error.message : "Unknown error",
       });
     }
   }

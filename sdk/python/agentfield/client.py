@@ -747,6 +747,63 @@ class AgentFieldClient:
             submission, status_payload, result_value, metadata
         )
 
+    async def restart_execution(
+        self,
+        execution_id: str,
+        *,
+        scope: str = "workflow",
+        reuse: str = "succeeded-before",
+        fork: bool = False,
+        reason: Optional[str] = None,
+        input_data: Optional[Dict[str, Any]] = None,
+        context: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """Start a new run from an existing execution point.
+
+        The restarted workflow runs normally; matching successful downstream
+        app.call outputs from the source run are replayed by the control plane.
+        """
+
+        if not execution_id:
+            raise ValidationError("execution_id is required")
+
+        payload: Dict[str, Any] = {
+            "scope": scope,
+            "reuse": reuse,
+        }
+        if fork:
+            payload["fork"] = True
+        if reason:
+            payload["reason"] = reason
+        if input_data is not None:
+            payload["input"] = input_data
+        if context is not None:
+            payload["context"] = context
+
+        request_headers = self._get_headers_with_context(headers)
+        request_headers["Content-Type"] = "application/json"
+        sanitized_headers = self._sanitize_header_values(request_headers)
+
+        response = await self._async_request(
+            "POST",
+            f"{self.api_base}/executions/{execution_id}/restart",
+            json=payload,
+            headers=sanitized_headers,
+            timeout=self.async_config.polling_timeout,
+        )
+        if response.status_code >= 400:
+            try:
+                error_body = response.json()
+            except Exception:
+                error_body = None
+            body_msg = ""
+            if isinstance(error_body, dict):
+                body_msg = error_body.get("message") or error_body.get("error") or ""
+            msg = f"{response.status_code}, {body_msg}" if body_msg else str(response.status_code)
+            raise ExecuteError(response.status_code, msg, error_body)
+        return response.json()
+
     def execute_sync(
         self,
         target: str,

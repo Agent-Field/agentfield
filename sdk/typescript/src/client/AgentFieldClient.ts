@@ -24,6 +24,15 @@ export interface ExecutionStatusUpdate {
   statusReason?: string;
 }
 
+export interface RestartExecutionOptions {
+  scope?: 'workflow' | 'execution';
+  reuse?: 'succeeded-before' | 'all-succeeded' | 'none';
+  fork?: boolean;
+  reason?: string;
+  input?: Record<string, unknown>;
+  context?: Record<string, unknown>;
+}
+
 // Raw discovery payload from API (snake_case)
 interface RawDiscoveryPayload {
   discovered_at?: string;
@@ -152,6 +161,9 @@ this.http = axios.create({
       targetDid?: string;
       agentNodeDid?: string;
       agentNodeId?: string;
+      replaySourceRunId?: string;
+      replayBeforeExecutionId?: string;
+      replayMode?: string;
     }
   ): Promise<T> {
     const headers: Record<string, string> = {};
@@ -166,6 +178,9 @@ this.http = axios.create({
     if (metadata?.targetDid) headers['X-Target-DID'] = metadata.targetDid;
     if (metadata?.agentNodeDid) headers['X-Agent-Node-DID'] = metadata.agentNodeDid;
     if (metadata?.agentNodeId) headers['X-Agent-Node-ID'] = metadata.agentNodeId;
+    if (metadata?.replaySourceRunId) headers['X-AgentField-Replay-Source-Run-ID'] = metadata.replaySourceRunId;
+    if (metadata?.replayBeforeExecutionId) headers['X-AgentField-Replay-Before-Execution-ID'] = metadata.replayBeforeExecutionId;
+    if (metadata?.replayMode) headers['X-AgentField-Replay-Mode'] = metadata.replayMode;
 
     const bodyStr = JSON.stringify({ input });
     const authHeaders = this.didAuthenticator.signRequest(Buffer.from(bodyStr));
@@ -184,6 +199,45 @@ this.http = axios.create({
         const msg = respData.message || respData.error || JSON.stringify(respData);
         const enriched: ExecutionError = Object.assign(
           new Error(`execute ${target} failed (${status}): ${msg}`),
+          {
+            status,
+            responseData: respData
+          }
+        );
+        throw enriched;
+      }
+      throw err;
+    }
+  }
+
+  async restartExecution(executionId: string, options: RestartExecutionOptions = {}): Promise<any> {
+    if (!executionId) {
+      throw new Error('executionId is required');
+    }
+    const body = {
+      scope: options.scope ?? 'workflow',
+      reuse: options.reuse ?? 'succeeded-before',
+      fork: options.fork,
+      reason: options.reason,
+      input: options.input,
+      context: options.context
+    };
+    const bodyStr = JSON.stringify(body);
+    const authHeaders = this.didAuthenticator.signRequest(Buffer.from(bodyStr));
+    try {
+      const res = await this.http.post(
+        `/api/v1/executions/${encodeURIComponent(executionId)}/restart`,
+        bodyStr,
+        { headers: this.mergeHeaders({ 'Content-Type': 'application/json', ...authHeaders }) }
+      );
+      return res.data;
+    } catch (err: any) {
+      const respData = err?.response?.data;
+      if (respData) {
+        const status = err.response.status;
+        const msg = respData.message || respData.error || JSON.stringify(respData);
+        const enriched: ExecutionError = Object.assign(
+          new Error(`restart execution ${executionId} failed (${status}): ${msg}`),
           {
             status,
             responseData: respData
@@ -440,6 +494,9 @@ this.http = axios.create({
     targetDid?: string;
     agentNodeDid?: string;
     agentNodeId?: string;
+    replaySourceRunId?: string;
+    replayBeforeExecutionId?: string;
+    replayMode?: string;
   }): Record<string, string> {
     const headers: Record<string, string> = {};
     if (metadata.runId) headers['x-run-id'] = metadata.runId;
@@ -454,6 +511,9 @@ this.http = axios.create({
     if (metadata.targetDid) headers['x-target-did'] = metadata.targetDid;
     if (metadata.agentNodeDid) headers['x-agent-node-did'] = metadata.agentNodeDid;
     if (metadata.agentNodeId) headers['x-agent-node-id'] = metadata.agentNodeId;
+    if (metadata.replaySourceRunId) headers['x-agentfield-replay-source-run-id'] = metadata.replaySourceRunId;
+    if (metadata.replayBeforeExecutionId) headers['x-agentfield-replay-before-execution-id'] = metadata.replayBeforeExecutionId;
+    if (metadata.replayMode) headers['x-agentfield-replay-mode'] = metadata.replayMode;
     return headers;
   }
 

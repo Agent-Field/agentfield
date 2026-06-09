@@ -165,6 +165,7 @@ func (s *AgentFieldServer) registerUIAPI() {
 			executions.POST("/:execution_id/cancel", handlers.CancelExecutionHandler(s.storage))
 			executions.POST("/:execution_id/pause", handlers.PauseExecutionHandler(s.storage))
 			executions.POST("/:execution_id/resume", handlers.ResumeExecutionHandler(s.storage))
+			executions.POST("/:execution_id/restart", handlers.RestartExecutionHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout, s.config.Features.DID.Authorization.InternalToken))
 
 			// Execution notes endpoints for UI
 			executions.POST("/note", handlers.AddExecutionNoteHandler(s.storage, s.noteOwnershipEnforced()))
@@ -265,6 +266,7 @@ func (s *AgentFieldServer) registerUIAPI() {
 		workflowRunsHandler := ui.NewWorkflowRunHandler(s.storage)
 		uiAPIV2.GET("/workflow-runs", workflowRunsHandler.ListWorkflowRunsHandler)
 		uiAPIV2.GET("/workflow-runs/:run_id", workflowRunsHandler.GetWorkflowRunDetailHandler)
+		uiAPIV2.POST("/workflow-runs/:run_id/golden", workflowRunsHandler.SaveGoldenRunHandler)
 	}
 }
 

@@ -31,11 +31,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "../ui/alert-dialog";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "../ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -59,6 +55,7 @@ import {
 import {
   cancelExecution,
   pauseExecution,
+  restartExecution,
   resumeExecution,
 } from "../../services/executionsApi";
 import {
@@ -102,8 +99,7 @@ const formatDuration = formatDurationHumanReadable;
 function useLiveElapsed(startedAt?: string, status?: string): number | null {
   const normalized = normalizeExecutionStatus(status);
   const isActive = normalized === "running";
-  const isNonTerminal =
-    !isTerminalStatus(status) && normalized !== "unknown";
+  const isNonTerminal = !isTerminalStatus(status) && normalized !== "unknown";
 
   const [elapsed, setElapsed] = useState<number | null>(() => {
     if (!startedAt) return null;
@@ -155,13 +151,15 @@ export function CompactExecutionHeader({
   const isTerminal = isTerminalStatus(execution.status);
   const showLifecycleControls = isRunning || isPaused;
   const hasError = !!execution.error_message;
+  const canRestart = isTerminal || hasError;
 
   /* ── Mutation state ── */
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [isPausing, setIsPausing] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
-  const isMutating = isCancelling || isPausing || isResuming;
+  const [isRestarting, setIsRestarting] = useState(false);
+  const isMutating = isCancelling || isPausing || isResuming || isRestarting;
 
   const showSuccess = useSuccessNotification();
   const showError = useErrorNotification();
@@ -214,9 +212,7 @@ export function CompactExecutionHeader({
     } catch (error) {
       showError(
         "Resume failed",
-        error instanceof Error
-          ? error.message
-          : "Unable to resume execution.",
+        error instanceof Error ? error.message : "Unable to resume execution.",
       );
     } finally {
       setIsResuming(false);
@@ -237,12 +233,33 @@ export function CompactExecutionHeader({
     } catch (error) {
       showError(
         "Stop failed",
-        error instanceof Error
-          ? error.message
-          : "Unable to stop execution.",
+        error instanceof Error ? error.message : "Unable to stop execution.",
       );
     } finally {
       setIsCancelling(false);
+    }
+  };
+
+  const handleRestart = async () => {
+    if (isMutating) return;
+    try {
+      setIsRestarting(true);
+      const restarted = await restartExecution(execution.execution_id, {
+        scope: "workflow",
+        reuse: "succeeded-before",
+      });
+      showSuccess(
+        "Workflow restarted",
+        `New run ${restarted.run_id.slice(0, 8)} started from this point.`,
+      );
+      navigate(`/executions/${restarted.execution_id}`);
+    } catch (error) {
+      showError(
+        "Restart failed",
+        error instanceof Error ? error.message : "Unable to restart workflow.",
+      );
+    } finally {
+      setIsRestarting(false);
     }
   };
 
@@ -380,8 +397,7 @@ export function CompactExecutionHeader({
                     </span>
                   </TooltipTrigger>
                   <TooltipContent>
-                    Started{" "}
-                    {new Date(execution.started_at).toLocaleString()}
+                    Started {new Date(execution.started_at).toLocaleString()}
                   </TooltipContent>
                 </Tooltip>
               )}
@@ -472,6 +488,30 @@ export function CompactExecutionHeader({
                 </>
               )}
 
+              {canRestart && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={handleRestart}
+                      disabled={isMutating}
+                      className="hover:bg-sky-500/10 hover:text-sky-600"
+                      aria-label="Restart workflow from this point"
+                    >
+                      {isRestarting ? (
+                        <Activity className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <GitBranch className="w-4 h-4" />
+                      )}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    Restart workflow from this point
+                  </TooltipContent>
+                </Tooltip>
+              )}
+
               {/* Refresh with live indicator */}
               {onRefresh && (
                 <Tooltip>
@@ -482,9 +522,7 @@ export function CompactExecutionHeader({
                       onClick={onRefresh}
                       disabled={isRefreshing}
                       className="relative"
-                      aria-label={
-                        isRunning ? "Live \u00B7 Refresh" : "Refresh"
-                      }
+                      aria-label={isRunning ? "Live \u00B7 Refresh" : "Refresh"}
                     >
                       <RotateCcw
                         className={cn(
@@ -552,10 +590,7 @@ export function CompactExecutionHeader({
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-48">
                 {isRunning && (
-                  <DropdownMenuItem
-                    onClick={handlePause}
-                    disabled={isMutating}
-                  >
+                  <DropdownMenuItem onClick={handlePause} disabled={isMutating}>
                     <PauseCircle className="w-4 h-4" />
                     Pause execution
                   </DropdownMenuItem>
@@ -580,11 +615,17 @@ export function CompactExecutionHeader({
                   </DropdownMenuItem>
                 )}
                 {showLifecycleControls && <DropdownMenuSeparator />}
-                {onRefresh && (
+                {canRestart && (
                   <DropdownMenuItem
-                    onClick={onRefresh}
-                    disabled={isRefreshing}
+                    onClick={handleRestart}
+                    disabled={isMutating}
                   >
+                    <GitBranch className="w-4 h-4" />
+                    Restart workflow
+                  </DropdownMenuItem>
+                )}
+                {onRefresh && (
+                  <DropdownMenuItem onClick={onRefresh} disabled={isRefreshing}>
                     <RotateCcw className="w-4 h-4" />
                     Refresh
                   </DropdownMenuItem>
@@ -707,10 +748,7 @@ export function CompactExecutionHeader({
             <AlertDialogCancel disabled={isCancelling}>
               Keep running
             </AlertDialogCancel>
-            <AlertDialogAction
-              disabled={isCancelling}
-              onClick={handleCancel}
-            >
+            <AlertDialogAction disabled={isCancelling} onClick={handleCancel}>
               {isCancelling ? "Stopping\u2026" : "Stop execution"}
             </AlertDialogAction>
           </AlertDialogFooter>

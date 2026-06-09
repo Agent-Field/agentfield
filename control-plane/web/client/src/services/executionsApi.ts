@@ -28,13 +28,14 @@ async function fetchWrapper<T>(url: string, options?: RequestInit): Promise<T> {
     headers.set("X-API-Key", apiKey);
   }
 
-  const response = await fetch(`${API_BASE_URL}${url}`, { ...options, headers });
+  const response = await fetch(`${API_BASE_URL}${url}`, {
+    ...options,
+    headers,
+  });
   if (!response.ok) {
-    const errorData = await response
-      .json()
-      .catch(() => ({
-        message: "Request failed with status " + response.status,
-      }));
+    const errorData = await response.json().catch(() => ({
+      message: "Request failed with status " + response.status,
+    }));
     throw new Error(
       errorData.message || `HTTP error! status: ${response.status}`,
     );
@@ -388,11 +389,14 @@ export async function pauseExecution(
   executionId: string,
   reason?: string,
 ): Promise<PauseExecutionResponse> {
-  return fetchWrapper<PauseExecutionResponse>(`/executions/${executionId}/pause`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ reason: reason || "" }),
-  });
+  return fetchWrapper<PauseExecutionResponse>(
+    `/executions/${executionId}/pause`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: reason || "" }),
+    },
+  );
 }
 
 export async function resumeExecution(
@@ -404,6 +408,56 @@ export async function resumeExecution(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
+    },
+  );
+}
+
+export interface RestartExecutionRequest {
+  scope?: "workflow" | "execution";
+  reuse?: "succeeded-before" | "all-succeeded" | "none";
+  fork?: boolean;
+  reason?: string;
+  input?: Record<string, unknown>;
+  context?: Record<string, unknown>;
+}
+
+export interface RestartExecutionResponse {
+  execution_id: string;
+  run_id: string;
+  workflow_id: string;
+  status: string;
+  target: string;
+  type: string;
+  created_at: string;
+  enqueued_at?: string;
+  source_execution_id: string;
+  source_run_id: string;
+  restarted_execution_id: string;
+  replay_before_execution_id?: string;
+  replay_mode: string;
+  scope: string;
+  kind?: string;
+  webhook_registered: boolean;
+  webhook_error?: string;
+}
+
+export async function restartExecution(
+  executionId: string,
+  request: RestartExecutionRequest = {},
+): Promise<RestartExecutionResponse> {
+  return fetchWrapper<RestartExecutionResponse>(
+    `/executions/${executionId}/restart`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        scope: request.scope ?? "workflow",
+        reuse: request.reuse ?? "succeeded-before",
+        fork: request.fork,
+        reason: request.reason ?? "",
+        input: request.input,
+        context: request.context,
+      }),
     },
   );
 }
@@ -663,6 +717,8 @@ export async function getExecutionNoteTags(
 export function streamExecutionNotes(executionId: string): EventSource {
   const apiKey = getGlobalApiKey();
   const baseUrl = `${API_BASE_URL}/executions/${executionId}/notes/stream`;
-  const url = apiKey ? `${baseUrl}?api_key=${encodeURIComponent(apiKey)}` : baseUrl;
+  const url = apiKey
+    ? `${baseUrl}?api_key=${encodeURIComponent(apiKey)}`
+    : baseUrl;
   return new EventSource(url);
 }
