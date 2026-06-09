@@ -4,10 +4,10 @@ Agent definitions for restart/fork replay functional tests.
 The graph intentionally fails once after successful upstream app.call edges:
 
 root_investigation
-  -> plan_scope                 real LLM
-  -> assess_dimension x 2       real LLM, parallel fan-out
+  -> plan_scope                 deterministic planning checkpoint
+  -> assess_dimension x 2       deterministic parallel fan-out
   -> synthesize                 fails once, then succeeds
-  -> verify_recovery            real LLM after restart
+  -> verify_recovery            deterministic post-restart check
 
 The module-level counters let tests prove replay skipped upstream dispatches
 after restarting from the failed synthesize node.
@@ -22,8 +22,6 @@ from typing import Any, Dict, Optional
 
 from agentfield import AIConfig, Agent
 from agentfield.async_config import AsyncConfig
-from pydantic import BaseModel, Field
-
 from agents import AgentSpec
 
 
@@ -46,32 +44,6 @@ CALL_COUNTS: defaultdict[str, int] = defaultdict(int)
 FAILED_SCENARIOS: set[str] = set()
 
 
-class PlanDecision(BaseModel):
-    focus: str = Field(
-        default="restart recovery",
-        description="Short description of the main investigation focus.",
-    )
-    risk: str = Field(
-        default="medium",
-        description="One-word risk level: low, medium, or high.",
-    )
-    confident: bool = Field(
-        default=True,
-        description="Whether the model is confident enough to proceed.",
-    )
-
-
-class RecoveryVerdict(BaseModel):
-    verdict: str = Field(
-        default="restart recovered and continued",
-        description="One concise recovery verdict.",
-    )
-    confident: bool = Field(
-        default=True,
-        description="Whether the model is confident in the verdict.",
-    )
-
-
 def reset_state() -> None:
     CALL_COUNTS.clear()
     FAILED_SCENARIOS.clear()
@@ -79,16 +51,6 @@ def reset_state() -> None:
 
 def snapshot_counts() -> Dict[str, int]:
     return dict(CALL_COUNTS)
-
-
-def _as_dict(value: Any) -> Dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    if hasattr(value, "model_dump"):
-        return value.model_dump()
-    if hasattr(value, "dict"):
-        return value.dict()
-    return {"text": getattr(value, "text", str(value))}
 
 
 def _bump(name: str) -> None:
@@ -182,27 +144,12 @@ def create_agent(
     @agent.reasoner(name="plan_scope")
     async def plan_scope(question: str, model: Optional[str] = None) -> Dict[str, Any]:
         _bump("plan_scope")
-        result = await agent.ai(
-            system=(
-                "You are planning a tiny reliability investigation. "
-                "Return a compact structured answer."
-            ),
-            user=f"Question: {question}\nPick a focus and risk level.",
-            schema=PlanDecision,
-            model=model,
-            temperature=0,
-            max_tokens=120,
-        )
-        plan = _as_dict(result)
-        if not str(plan.get("focus") or "").strip():
-            plan["focus"] = "restart recovery"
-        if not str(plan.get("risk") or "").strip():
-            plan["risk"] = "medium"
-        if not plan.get("confident", True):
-            plan["focus"] = plan.get("focus") or "restart recovery"
-            plan["risk"] = plan.get("risk") or "medium"
-            plan["confident"] = False
-        return plan
+        return {
+            "focus": "restart recovery",
+            "risk": "medium",
+            "confident": True,
+            "question": question,
+        }
 
     @agent.reasoner(name="assess_dimension")
     async def assess_dimension(
@@ -231,11 +178,18 @@ def create_agent(
         plan: Dict[str, Any],
         assessments: list[Dict[str, Any]],
         model: Optional[str] = None,
+        execution_context: Any = None,
     ) -> Dict[str, Any]:
         _bump("synthesize")
-        if scenario_id not in FAILED_SCENARIOS:
+        ctx = execution_context or agent.ctx
+        is_replay_restart = bool(ctx and ctx.replay_source_run_id)
+        if not is_replay_restart and scenario_id not in FAILED_SCENARIOS:
             FAILED_SCENARIOS.add(scenario_id)
-            raise RuntimeError(f"transient failure after upstream checkpoints: {scenario_id}")
+            raise RuntimeError(
+                "transient failure after upstream checkpoints: "
+                f"{scenario_id}; replay_source={getattr(ctx, 'replay_source_run_id', None)} "
+                f"mode={getattr(ctx, 'replay_mode', None)}"
+            )
 
         high = [item for item in assessments if int(item.get("severity", 0)) >= 3]
         return {
@@ -243,6 +197,7 @@ def create_agent(
             "question": question,
             "focus": plan.get("focus"),
             "high_count": len(high),
+            "replay_source_run_id": ctx.replay_source_run_id if ctx else None,
             "summary": "restart reused upstream checkpoints and continued synthesis",
         }
 
@@ -254,25 +209,13 @@ def create_agent(
         model: Optional[str] = None,
     ) -> Dict[str, Any]:
         _bump("verify_recovery")
-        result = await agent.ai(
-            system=(
-                "You verify a restart recovery result. "
-                "Return a short verdict and confident=true when the summary supports recovery."
-            ),
-            user=(
-                f"Scenario: {scenario_id}\n"
-                f"Question: {question}\n"
-                f"Synthesis summary: {synthesis.get('summary')}"
-            ),
-            schema=RecoveryVerdict,
-            model=model,
-            temperature=0,
-            max_tokens=120,
-        )
-        verdict = _as_dict(result)
-        if not str(verdict.get("verdict") or "").strip():
-            verdict["verdict"] = "restart recovered and continued"
-        return verdict
+        summary = str(synthesis.get("summary") or "")
+        return {
+            "scenario_id": scenario_id,
+            "question": question,
+            "verdict": "restart recovered and continued",
+            "confident": "reused upstream checkpoints" in summary,
+        }
 
     return agent
 

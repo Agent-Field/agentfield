@@ -112,6 +112,7 @@ async def test_restart_reuses_successful_calls_and_continues_complex_openrouter_
         result = restarted.get("result") or {}
         assert result.get("scenario_id") == scenario_id
         assert "verdict" in result
+        assert result["synthesis"]["replay_source_run_id"] == source_run_id
 
         final_counts = snapshot_counts()
         assert final_counts["root_investigation"] == 2

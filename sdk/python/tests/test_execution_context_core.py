@@ -101,6 +101,31 @@ def test_child_context_preserves_replay_metadata():
 
 
 @pytest.mark.unit
+def test_nested_child_context_preserves_replay_headers():
+    root = ExecutionContext(
+        workflow_id="wf-1",
+        execution_id="exec-root",
+        agent_instance=None,
+        reasoner_name="root",
+        run_id="run-1",
+        replay_source_run_id="run-source",
+        replay_before_execution_id="exec-before",
+        replay_mode="succeeded-before",
+    )
+
+    child = root.create_child_context()
+    grandchild = child.create_child_context()
+    headers = grandchild.to_headers()
+
+    assert grandchild.parent_execution_id == child.execution_id
+    assert grandchild.parent_workflow_id == root.workflow_id
+    assert grandchild.depth == 2
+    assert headers["X-AgentField-Replay-Source-Run-ID"] == "run-source"
+    assert headers["X-AgentField-Replay-Before-Execution-ID"] == "exec-before"
+    assert headers["X-AgentField-Replay-Mode"] == "succeeded-before"
+
+
+@pytest.mark.unit
 def test_execution_context_log_fields_default_root_workflow():
     ctx = ExecutionContext(
         workflow_id="wf-1",

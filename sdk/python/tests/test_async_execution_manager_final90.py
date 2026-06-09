@@ -150,6 +150,30 @@ async def test_wait_for_result_handles_success_failure_cancel_timeout(manager, m
     assert pending.status == ExecutionStatus.TIMEOUT
 
 
+def test_update_execution_from_status_populates_same_status_success(manager):
+    async def run():
+        replayed = ExecutionState(
+            "replayed",
+            "node.skill",
+            {},
+            status=ExecutionStatus.SUCCEEDED,
+        )
+
+        async with manager._execution_lock:
+            manager._executions["replayed"] = replayed
+            manager.metrics.active_executions = 1
+
+        await manager._update_execution_from_status(
+            replayed,
+            {"status": "succeeded", "result": {"reused": True}},
+        )
+
+        assert replayed.result == {"reused": True}
+        assert await manager.wait_for_result("replayed") == {"reused": True}
+
+    asyncio.run(run())
+
+
 @pytest.mark.asyncio
 async def test_cleanup_polling_and_event_payload_paths(manager, monkeypatch):
     old_success = ExecutionState("old-success", "node.skill", {})
