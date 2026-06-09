@@ -22,11 +22,13 @@ import (
 var validJobID = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 const (
-	defaultOpenRouterBaseURL  = "https://openrouter.ai/api/v1"
-	defaultVideoPollInterval  = 30 * time.Second
-	defaultVideoTimeout       = 10 * time.Minute
-	defaultTTSSampleRate      = 24000
-	openRouterModelMetaTTL    = 30 * time.Minute
+	defaultOpenRouterBaseURL    = "https://openrouter.ai/api/v1"
+	defaultVideoPollInterval    = 30 * time.Second
+	defaultVideoTimeout         = 10 * time.Minute
+	defaultTTSSampleRate        = 24000
+	defaultOpenRouterImageModel = "google/gemini-3.1-flash-image-preview"
+	defaultOpenRouterTTSModel   = "hexgrad/kokoro-82m"
+	openRouterModelMetaTTL      = 30 * time.Minute
 )
 
 // modelMeta holds the architecture metadata for an OpenRouter model.
@@ -79,6 +81,13 @@ func (p *OpenRouterMediaProvider) baseURL() string {
 // stripPrefix removes the "openrouter/" prefix from model names.
 func stripPrefix(model string) string {
 	return strings.TrimPrefix(model, "openrouter/")
+}
+
+func defaultVoiceForModel(model string) string {
+	if stripPrefix(model) == defaultOpenRouterTTSModel {
+		return "af_alloy"
+	}
+	return "alloy"
 }
 
 // SeedModelMeta lets callers (or tests) pre-populate the metadata cache for a
@@ -166,8 +175,8 @@ func wrapPCM16AsWAV(pcm []byte, sampleRate int) []byte {
 	_ = binary.Write(buf, binary.LittleEndian, uint32(36+dataSize))
 	buf.WriteString("WAVE")
 	buf.WriteString("fmt ")
-	_ = binary.Write(buf, binary.LittleEndian, uint32(16))           // PCM fmt chunk size
-	_ = binary.Write(buf, binary.LittleEndian, uint16(1))            // PCM format
+	_ = binary.Write(buf, binary.LittleEndian, uint32(16)) // PCM fmt chunk size
+	_ = binary.Write(buf, binary.LittleEndian, uint16(1))  // PCM format
 	_ = binary.Write(buf, binary.LittleEndian, channels)
 	_ = binary.Write(buf, binary.LittleEndian, uint32(sampleRate))
 	_ = binary.Write(buf, binary.LittleEndian, byteRate)
@@ -417,7 +426,7 @@ func (p *OpenRouterMediaProvider) buildVideoResponse(ctx context.Context, status
 func (p *OpenRouterMediaProvider) GenerateImage(ctx context.Context, req ImageRequest) (*MediaResponse, error) {
 	model := req.Model
 	if model == "" {
-		model = "openai/gpt-image-1"
+		model = defaultOpenRouterImageModel
 	}
 	model = stripPrefix(model)
 
@@ -575,9 +584,13 @@ func (p *OpenRouterMediaProvider) GenerateAudio(ctx context.Context, req AudioRe
 
 	model := req.Model
 	if model == "" {
-		model = "openai/gpt-4o-mini-tts"
+		model = defaultOpenRouterTTSModel
 	}
 	model = stripPrefix(model)
+	voice := req.Voice
+	if voice == "" {
+		voice = defaultVoiceForModel(model)
+	}
 
 	requestedFormat := req.Format
 	if requestedFormat == "" {
@@ -590,7 +603,7 @@ func (p *OpenRouterMediaProvider) GenerateAudio(ctx context.Context, req AudioRe
 		!containsString(meta.OutputModalities, "audio")
 
 	if useSpeech {
-		return p.generateAudioViaSpeechEndpoint(ctx, model, req.Text, req.Voice, requestedFormat, &req)
+		return p.generateAudioViaSpeechEndpoint(ctx, model, req.Text, voice, requestedFormat, &req)
 	}
 
 	// Chat-completions audio modality (gpt-audio family). Streaming on OpenAI
@@ -600,11 +613,7 @@ func (p *OpenRouterMediaProvider) GenerateAudio(ctx context.Context, req AudioRe
 		wireFormat = "pcm16"
 	}
 	audioConfig := map[string]string{"format": wireFormat}
-	if req.Voice != "" {
-		audioConfig["voice"] = req.Voice
-	} else {
-		audioConfig["voice"] = "alloy"
-	}
+	audioConfig["voice"] = voice
 	payload := map[string]any{
 		"model": model,
 		"messages": []map[string]any{

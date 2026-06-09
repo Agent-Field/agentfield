@@ -429,7 +429,12 @@ class HarnessRunner:
                 )
             else:
                 error_detail = diagnose_output_failure(output_path, schema)
-                retry_prompt = build_followup_prompt(error_detail, cwd, schema)
+                _orig = options.get("_original_prompt", "")
+                _followup = build_followup_prompt(error_detail, cwd, schema)
+                # Keep the original goal/task on non-crash retries. Without this
+                # the agent retries with only the schema-correction text and loses
+                # the goal (e.g. PM emits a placeholder PRD that poisons the run).
+                retry_prompt = (_orig + "\n\n" + _followup) if _orig else _followup
 
             detail_for_log = diagnose_output_failure(output_path, schema)
 

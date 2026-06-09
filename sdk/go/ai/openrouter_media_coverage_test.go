@@ -161,6 +161,7 @@ func TestGenerateImageWithImageConfig(t *testing.T) {
 		ImageConfig: &ImageConfig{AspectRatio: "1:1", ImageSize: "512"},
 	})
 	require.NoError(t, err)
+	assert.Equal(t, defaultOpenRouterImageModel, got["model"])
 	assert.NotNil(t, got["image_config"])
 }
 

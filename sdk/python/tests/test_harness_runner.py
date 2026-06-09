@@ -384,3 +384,44 @@ async def test_schema_retry_accumulates_cost(tmp_path, monkeypatch):
     assert result.parsed.name == "ok"
     assert result.cost_usd == pytest.approx(0.03)  # 0.01 + 0.02
     assert result.num_turns == 2
+
+
+@pytest.mark.asyncio
+async def test_schema_retry_preserves_original_goal_in_prompt(tmp_path, monkeypatch):
+    """Regression for the data-flow bug: on a non-crash schema retry the retry
+    prompt MUST still carry the original goal, not only the schema-correction
+    followup. Previously the PM lost its goal on retry and emitted a placeholder
+    PRD that poisoned every downstream reasoner (architect/sprint/merger)."""
+    GOAL = "IMPLEMENT_24_ENDPOINTS_SENTINEL_GOAL"
+    prompts: list[str] = []
+
+    class BadJsonCapturingProvider(MockProvider):
+        async def execute(self, prompt, options):
+            prompts.append(prompt)
+            output_path = get_output_path(str(options.get("cwd", ".")))
+            with open(output_path, "w", encoding="utf-8") as file_obj:
+                file_obj.write('{"name": "ok"}')  # missing 'count' -> invalid, non-crash
+            return await super().execute(prompt, options)
+
+    async def _no_repair(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr("agentfield.harness._runner._ai_schema_repair", _no_repair)
+
+    provider = BadJsonCapturingProvider()
+    runner = HarnessRunner()
+    with patch("agentfield.harness._runner.build_provider", return_value=provider):
+        await runner.run(
+            GOAL,
+            provider="codex",
+            schema=DemoSchema,
+            cwd=str(tmp_path),
+            schema_max_retries=2,
+        )
+
+    assert len(prompts) >= 2, f"expected a retry; got {len(prompts)} call(s)"
+    retry_prompt = prompts[1]
+    assert GOAL in retry_prompt, (
+        "retry prompt dropped the original goal -- the agent retries blind. "
+        "First 400 chars:\n" + retry_prompt[:400]
+    )

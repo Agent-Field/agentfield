@@ -25,6 +25,14 @@ const AUDIO_MIME_TYPES: Record<string, string> = {
   '.ogg': 'audio/ogg',
 };
 
+const VIDEO_MIME_TYPES: Record<string, string> = {
+  '.mp4': 'video/mp4',
+  '.mpeg': 'video/mpeg',
+  '.mpg': 'video/mpeg',
+  '.mov': 'video/quicktime',
+  '.webm': 'video/webm',
+};
+
 /**
  * Represents text content in a multimodal prompt.
  */
@@ -184,6 +192,58 @@ export class Audio {
 }
 
 /**
+ * Represents video content in a multimodal prompt.
+ */
+export class Video {
+  readonly type: 'video_url' = 'video_url';
+  readonly videoUrl: { url: string };
+
+  private constructor(videoUrl: { url: string }) {
+    this.videoUrl = videoUrl;
+  }
+
+  /**
+   * Create Video from a local file by converting to a base64 data URL.
+   */
+  static async fromFile(filePath: string): Promise<Video> {
+    const absolutePath = resolve(filePath);
+    const buffer = await readFile(absolutePath);
+    const base64Data = buffer.toString('base64');
+    const ext = getExtension(absolutePath).toLowerCase();
+    const mimeType = VIDEO_MIME_TYPES[ext] || 'video/mp4';
+    return new Video({ url: `data:${mimeType};base64,${base64Data}` });
+  }
+
+  /**
+   * Create Video from a URL.
+   */
+  static fromUrl(url: string): Video {
+    return new Video({ url });
+  }
+
+  /**
+   * Create Video from a buffer.
+   */
+  static async fromBuffer(
+    buffer: Buffer | Uint8Array,
+    mimeType: string = 'video/mp4'
+  ): Promise<Video> {
+    const base64Data = Buffer.from(buffer).toString('base64');
+    return new Video({ url: `data:${mimeType};base64,${base64Data}` });
+  }
+
+  /**
+   * Create Video from a base64 string.
+   */
+  static async fromBase64(
+    base64Data: string,
+    mimeType: string = 'video/mp4'
+  ): Promise<Video> {
+    return new Video({ url: `data:${mimeType};base64,${base64Data}` });
+  }
+}
+
+/**
  * Represents a generic file content in a multimodal prompt.
  */
 export class File {
@@ -264,6 +324,10 @@ function guessMimeType(filePath: string): string | null {
   // Check audio types
   if (ext in AUDIO_MIME_TYPES) {
     return AUDIO_MIME_TYPES[ext];
+  }
+
+  if (ext in VIDEO_MIME_TYPES) {
+    return VIDEO_MIME_TYPES[ext];
   }
 
   // Common document types
@@ -376,6 +440,40 @@ export async function audioFromBase64(
 }
 
 /**
+ * Create video content from a local file.
+ */
+export async function videoFromFile(filePath: string): Promise<Video> {
+  return Video.fromFile(filePath);
+}
+
+/**
+ * Create video content from a URL.
+ */
+export function videoFromUrl(url: string): Video {
+  return Video.fromUrl(url);
+}
+
+/**
+ * Create video content from a buffer.
+ */
+export async function videoFromBuffer(
+  buffer: Buffer | Uint8Array,
+  mimeType: string = 'video/mp4'
+): Promise<Video> {
+  return Video.fromBuffer(buffer, mimeType);
+}
+
+/**
+ * Create video content from a base64 string.
+ */
+export async function videoFromBase64(
+  base64Data: string,
+  mimeType: string = 'video/mp4'
+): Promise<Video> {
+  return Video.fromBase64(base64Data, mimeType);
+}
+
+/**
  * Create file content from a local file.
  */
 export async function fileFromPath(filePath: string, mimeType?: string): Promise<File> {
@@ -404,4 +502,4 @@ export async function fileFromBase64(base64Data: string, mimeType: string): Prom
 }
 
 // Type for all multimodal content types
-export type MultimodalContent = Text | Image | Audio | File;
+export type MultimodalContent = Text | Image | Audio | Video | File;

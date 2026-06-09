@@ -226,6 +226,28 @@ class TestFalProvider:
         assert result.files[0].url == "https://fal.media/video.mp4"
 
     @pytest.mark.asyncio
+    async def test_fal_provider_generate_audio_uses_output_format(
+        self, fal_provider, monkeypatch
+    ):
+        """FalProvider.generate_audio should label model-specific output_format."""
+        mock_result = {"audio": {"url": "https://fal.media/audio.mp3"}}
+
+        mock_client = MagicMock()
+        mock_client.subscribe_async = AsyncMock(return_value=mock_result)
+        monkeypatch.setattr(fal_provider, "_client", mock_client)
+
+        result = await fal_provider.generate_audio(
+            text="Say hello",
+            model="fal-ai/gemini-tts",
+            prompt="Say hello",
+            output_format="mp3",
+        )
+
+        assert result.has_audio
+        assert result.audio.url == "https://fal.media/audio.mp3"
+        assert result.audio.format == "mp3"
+
+    @pytest.mark.asyncio
     async def test_fal_provider_transcribe_audio(self, fal_provider, monkeypatch):
         """FalProvider.transcribe_audio should return transcription."""
         mock_result = {"text": "Hello world, this is a test."}

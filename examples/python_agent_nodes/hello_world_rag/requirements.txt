@@ -1,2 +1,2 @@
-agentfield>=0.1.88
+agentfield>=0.1.91
 fastembed>=0.2.0

@@ -6,6 +6,8 @@
 *.swo
 test-reports/
 .env
+.worktrees/
+.artifacts/
 
 # Go
 bin/

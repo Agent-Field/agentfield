@@ -21,6 +21,8 @@ const API_TIMEOUT = 30_000; // 30s for API calls
 const DOWNLOAD_TIMEOUT = 120_000; // 120s for video download
 
 const MAX_CONSECUTIVE_PARSE_ERRORS = 50;
+const DEFAULT_IMAGE_MODEL = 'google/gemini-3.1-flash-image-preview';
+const DEFAULT_TTS_MODEL = 'hexgrad/kokoro-82m';
 
 /** Module-level WeakMap to keep API key off the instance (CR-03). */
 const apiKeyStore = new WeakMap<OpenRouterMediaProvider, string>();
@@ -37,6 +39,10 @@ function emptyMediaResponse(raw: unknown): MediaResponse {
 
 function stripPrefix(model: string): string {
   return model.startsWith('openrouter/') ? model.slice('openrouter/'.length) : model;
+}
+
+function defaultVoiceForModel(model: string): string {
+  return stripPrefix(model) === 'hexgrad/kokoro-82m' ? 'af_alloy' : 'alloy';
 }
 
 /**
@@ -358,7 +364,7 @@ export class OpenRouterMediaProvider implements MediaProvider {
   // ── Image ──────────────────────────────────────────────────────────
 
   async generateImage(request: ImageRequest): Promise<MediaResponse> {
-    const model = stripPrefix(request.model ?? 'openai/gpt-image-1');
+    const model = stripPrefix(request.model ?? DEFAULT_IMAGE_MODEL);
 
     // Request only image output — works for both image-only models (e.g.
     // x-ai/grok-imagine-image-quality) and dual-output models. Image-only
@@ -465,7 +471,8 @@ export class OpenRouterMediaProvider implements MediaProvider {
   // ── Audio ──────────────────────────────────────────────────────────
 
   async generateAudio(request: AudioRequest): Promise<MediaResponse> {
-    const model = stripPrefix(request.model ?? 'openai/gpt-4o-mini-tts');
+    const model = stripPrefix(request.model ?? DEFAULT_TTS_MODEL);
+    const voice = request.voice ?? defaultVoiceForModel(model);
     const requestedFormat = request.format ?? 'wav';
 
     // Route based on model capability.
@@ -485,7 +492,7 @@ export class OpenRouterMediaProvider implements MediaProvider {
       return this.generateAudioViaSpeechEndpoint(
         model,
         request.text,
-        request.voice ?? 'alloy',
+        voice,
         requestedFormat,
         request
       );
@@ -501,7 +508,7 @@ export class OpenRouterMediaProvider implements MediaProvider {
       modalities: ['text', 'audio'],
       stream: true,
       audio: {
-        voice: request.voice ?? 'alloy',
+        voice,
         format: wireFormat,
       },
     };

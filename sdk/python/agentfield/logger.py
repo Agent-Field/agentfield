@@ -75,8 +75,9 @@ class AgentFieldLogger:
 
     def set_level(self, level: str):
         """Set log level at runtime (e.g., 'DEBUG', 'INFO', 'WARN', 'ERROR')"""
-
-        self.logger.setLevel(_LEVEL_TO_LOGGING.get(level.upper(), logging.INFO))
+        level_upper = level.upper()
+        self.log_level = level_upper
+        self.logger.setLevel(_LEVEL_TO_LOGGING.get(level_upper, logging.INFO))
 
     def _setup_logger(self):
         """Setup logger with console handler if not already configured"""
@@ -113,8 +114,10 @@ class AgentFieldLogger:
 
     @staticmethod
     def _now_iso() -> str:
-        return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace(
-            "+00:00", "Z"
+        return (
+            datetime.now(timezone.utc)
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z")
         )
 
     @staticmethod
@@ -174,7 +177,9 @@ class AgentFieldLogger:
         }
 
     def _emit_structured_record(self, record: Dict[str, Any]) -> Dict[str, Any]:
-        line = json.dumps(record, ensure_ascii=False, separators=(",", ":"), default=str)
+        line = json.dumps(
+            record, ensure_ascii=False, separators=(",", ":"), default=str
+        )
         print(line, file=sys.stdout, flush=True)
         self._dispatch_to_cp(record)
         return record
@@ -454,28 +459,74 @@ class AgentFieldLogger:
         return self._emit_structured_record(record)
 
 
-# Global logger instance
-_global_logger = None
+# Global logger cache: name -> AgentFieldLogger instance
+_logger_cache: Dict[str, AgentFieldLogger] = {}
+
+# Global log level override (set via set_log_level)
+_global_log_level: Optional[str] = None
+
+# Global control-plane client (set via set_cp_client). Stored at module scope so
+# loggers created *after* set_cp_client() still forward structured logs — mirrors
+# the _global_log_level pattern. Without this, a logger created late (e.g. the
+# lazily-imported agentfield.verification logger) would keep the class default
+# _cp_client=None and silently drop telemetry in _dispatch_to_cp().
+_global_cp_client: Optional["AgentFieldClient"] = None
+
+# Guards _logger_cache, _global_log_level and _global_cp_client against concurrent
+# access. Reentrant so a future helper holding the lock can still call get_logger()
+# safely.
+_logger_cache_lock = threading.RLock()
 
 
 def get_logger(name: str = "agentfield") -> AgentFieldLogger:
     """Get or create a AgentField SDK logger instance"""
 
-    global _global_logger
-    if _global_logger is None:
-        _global_logger = AgentFieldLogger(name)
-    return _global_logger
+    with _logger_cache_lock:
+        if name not in _logger_cache:
+            logger = AgentFieldLogger(name)
+            if _global_log_level is not None:
+                logger.set_level(_global_log_level)
+            if _global_cp_client is not None:
+                logger._cp_client = _global_cp_client
+            _logger_cache[name] = logger
+        return _logger_cache[name]
 
 
 def set_log_level(level: str):
-    """Set log level for the global logger at runtime (e.g., 'DEBUG', 'INFO', 'WARN', 'ERROR')"""
+    """Set log level for all logger instances at runtime (e.g., 'DEBUG', 'INFO', 'WARN', 'ERROR').
 
-    get_logger().set_level(level)
+    Behavior note: this records the level and applies it to every *cached*
+    logger; it does not create a logger when the cache is empty. Loggers
+    created later via ``get_logger()`` pick up the stored level on creation.
+    (Previously this implicitly created the default logger as a side effect.)
+    """
+
+    global _global_log_level
+    # Snapshot under the lock so a concurrent get_logger() can't mutate the dict
+    # mid-iteration; apply levels outside the lock to avoid holding it during I/O.
+    with _logger_cache_lock:
+        _global_log_level = level
+        loggers = list(_logger_cache.values())
+    for logger in loggers:
+        logger.set_level(level)
 
 
 def set_cp_client(client: Optional["AgentFieldClient"]) -> None:
-    """Attach a control-plane client so structured logs are forwarded."""
-    get_logger()._cp_client = client
+    """Attach a control-plane client so structured logs are forwarded to all loggers.
+
+    Records the client at module scope and applies it to every *cached* logger.
+    Loggers created later via ``get_logger()`` pick up the stored client on
+    creation, so forwarding works regardless of import/creation order (e.g. the
+    lazily-imported ``agentfield.verification`` logger).
+    """
+    global _global_cp_client
+    # Snapshot under the lock so a concurrent get_logger() can't mutate the dict
+    # mid-iteration; apply to existing loggers outside the lock.
+    with _logger_cache_lock:
+        _global_cp_client = client
+        loggers = list(_logger_cache.values())
+    for logger in loggers:
+        logger._cp_client = client
 
 
 # Convenience functions for common logging patterns

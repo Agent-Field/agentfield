@@ -6,6 +6,275 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.91] - 2026-06-09
+
+## [0.1.91-rc.3] - 2026-06-09
+
+
+### Other
+
+- Fix get_logger returning agentfield.result_cache for all loggers (#635)
+
+* issue/fix-get-logger-name-bug: fix get_logger to respect name parameter using dictionary cache
+
+* chore: finalize repo for handoff
+
+* fix(logger): guard logger cache with a lock for thread-safe access
+
+The per-name logger cache introduced in this PR is shared mutable module
+state. `get_logger()` could insert into `_logger_cache` while
+`set_log_level()`/`set_cp_client()` iterate `.values()`, raising
+`RuntimeError: dictionary changed size during iteration`.
+
+Add a reentrant lock around all cache access. set_log_level/set_cp_client
+snapshot the values under the lock and apply outside it, so we never hold
+the lock during the loggers' own work. Addresses the thread-safety findings
+from the PR review.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* test(logger): fix lint, isolate global logging state, cover concurrency
+
+Three issues in the new logger test:
+
+- Removed unused imports (`AgentFieldLogger`, `_global_log_level`) that
+  failed `ruff check` (F401) and broke CI lint on 3.10/3.11/3.12.
+- The fixture's `global _global_log_level = None` only rebound this
+  module's copy, never the real `agentfield.logger` global, so the level
+  reset silently did nothing. Reference the module so the reset bites.
+- `AgentFieldLogger` mutates the stdlib logging registry (adds a handler,
+  sets `propagate=False`). Those mutations outlived each test and leaked
+  across the session. The fixture now snapshots and restores the registry
+  so this file is order-independent and can't mute unrelated loggers.
+
+Also add a concurrency test exercising get_logger()/set_log_level() from
+several threads, locking in the thread-safety fix.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* test(cancel): capture cancel log directly, not via caplog/root
+
+Fixing get_logger() to honour the requested name means get_logger()
+now creates the real "agentfield" logger, on which the SDK sets
+propagate=False. That stops every "agentfield.*" child (including the
+plain "agentfield.cancel" logger) from reaching the root logger — where
+pytest's `caplog` handler lives. The assertion only ever passed because
+the old singleton bug meant the real "agentfield" logger was usually
+never created, so this was silently order-dependent and failed once
+test_logger ran first.
+
+Attach a handler directly to the "agentfield.cancel" logger instead.
+It asserts the identical contract (an INFO "cancel-callback fired"
+record is emitted) but is independent of namespace propagation and
+suite ordering. Use getMessage() since no formatter runs to set
+record.message on a bare handler.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* docs(logger): note set_log_level no longer implicitly creates a logger
+
+Document the behavior change flagged in review: set_log_level() now only
+records the level and updates cached loggers; it no longer creates the
+default logger as a side effect. New loggers pick up the stored level
+when created via get_logger().
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* test(conftest): isolate execution-context state and drain leaked tasks
+
+A pre-existing flake surfaced on Python 3.12 CI: tests that rely on the
+agent / execution-context ContextVars (e.g.
+test_execute_with_tracking_registers_child_context) intermittently saw
+get_current_agent_instance() return None mid-test, skipping workflow
+registration (assert 0 == 1). The suite also leaked many fire-and-forget
+asyncio tasks across tests ("Task was destroyed but it is pending!").
+
+Add an autouse fixture that resets the agent/execution-context ContextVars
+around every test and best-effort drains tasks the test left pending, so
+ordering and stray tasks can't pollute later tests. All teardown work is
+guarded to never raise. Verified locally on 3.10 and 3.12: full suite
+green and the leaked-task warnings drop from dozens to zero.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* fix(logger): forward structured logs to loggers created after set_cp_client
+
+set_cp_client() only mutated loggers already in the cache, so any logger
+created afterward kept the class default _cp_client=None and silently
+dropped all structured telemetry in _dispatch_to_cp(). The concrete victim
+is the agentfield.verification logger: it is created at module import time
+inside Agent.__init__ (lazy `from agentfield.verification import LocalVerifier`)
+which runs *after* set_cp_client(self.client), so under local_verification=True
+none of its execution logs ever reached the control plane.
+
+Mirror the existing _global_log_level pattern: record the client in a
+module-level _global_cp_client under the cache lock, and apply it to new
+loggers in get_logger(). Forwarding now works regardless of import/creation
+order. set_cp_client(None) detaches globally as well.
+
+Add regression tests covering loggers created after set_cp_client, the
+existing already-cached path, and the None reset; extend reset_logger_state
+to isolate the new global.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: SWE-AF <eng@agentfield.ai>
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (ccfde97)
+
+## [0.1.91-rc.2] - 2026-06-09
+
+
+### Fixed
+
+- Fix(sdk): attribute app.call parent from task-local context, not shared agent state (#638)
+
+`Agent.call()` resolved the parent execution via
+`_get_current_execution_context()`, which falls back to the process-global
+`self._current_execution_context` when no task-local context is set. That
+attribute is a single slot overwritten at the top of every reasoner
+invocation, so in a server running overlapping executions it holds whichever
+reasoner was most recently dispatched.
+
+When a call originates OUTSIDE any execution — e.g. a webhook handler's
+fire-and-forget asyncio task — it has no task-local context, so the fallback
+attributed it to an unrelated, possibly still-in-flight execution (one paused
+on a human-in-the-loop approval for hours). The control plane then recorded
+that bystander as the new run's parent, chaining independent webhook-triggered
+runs into one bogus workflow DAG and cross-wiring the pause-clock / budget
+cascades that key off parent_execution_id.
+
+Resolve the parent in `call()` from the task-local contextvar only
+(`get_current_context()`). asyncio.create_task copies the contextvar, so
+genuine sub-calls made from within a reasoner still nest correctly; when the
+contextvar is absent we mint a fresh root so the call starts its own workflow
+(matching cold-process behavior). `_get_current_execution_context()` is left
+unchanged for its other consumers (pause/note/vc), which run within an
+execution where the contextvar is set.
+
+Tests: a call with a stale bystander on the shared attr but no task-local
+context must start a fresh root (not inherit it); a call from within an
+execution still nests under that execution.
+
+Co-authored-by: Claude Opus 4.8 <noreply@anthropic.com> (db4d2b1)
+
+## [0.1.91-rc.1] - 2026-06-09
+
+
+### Fixed
+
+- Fix(harness): preserve original goal on non-crash schema retries (#637)
+
+_handle_schema_with_retry rebuilt the retry prompt from
+build_followup_prompt() alone on the non-crash branch, dropping the
+original goal/task. The agent then retried blind and could emit
+placeholder output (e.g. a "no goal supplied" PRD) that poisoned every
+downstream reasoner. Prepend options["_original_prompt"] (already
+populated in run()) so retries carry both the goal and the schema
+correction. The crash branch already preserved the goal.
+
+Adds test_schema_retry_preserves_original_goal_in_prompt which drives a
+non-crash schema-invalid first attempt and asserts the retry prompt
+still contains the original goal.
+
+Fixes #636
+
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (a7a68da)
+
+## [0.1.90] - 2026-06-09
+
+
+### Chores
+
+- Chore: add .github/github-buddy.yml with CLA sweep config (#633)
+
+Pins the CLA status context to "license/cla" so github-buddy's
+cla_reminder_sweep reads this repo's hosted cla-assistant.io commit
+status correctly. This differs from github-buddy's own repo, which uses
+the self-hosted contributor-assistant action (a check-run named "cla").
+
+Only takes effect once the repo is added to the GITHUB_BUDDY_CLA_REPOS
+roster on the github-buddy deployment.
+
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (49f9a21)
+
+## [0.1.90-rc.3] - 2026-06-08
+
+
+### Fixed
+
+- Fix(sdk/python): bind trigger payload to first non-injected param (#634)
+
+Trigger/webhook-invoked reasoners that declare the documented `trigger`
+(or `webhook`) parameter crashed on every invocation:
+
+    cla_reminder_sweep() got multiple values for argument 'trigger'
+
+On the trigger path, _execute_reasoner_endpoint passed the event payload
+as the first POSITIONAL argument *and* separately injected `trigger=` /
+`webhook=` as a keyword. When the reasoner's first positional parameter
+IS one of those injected names (e.g. `def r(trigger=None)`), both fill the
+same slot -> TypeError. The test harness (_bind_reasoner_args /
+simulate_trigger) already skipped injected params when assigning the
+positional payload, so the bug was invisible to unit tests: runtime and
+harness disagreed.
+
+New _bind_trigger_payload() binds the payload to the first parameter that
+is NOT a framework-injected slot (trigger / webhook / execution_context),
+by keyword for positional-or-keyword params so a leading injected param
+can't shift it onto the wrong slot. This mirrors the harness so the
+runtime and simulate_trigger invoke a reasoner identically. A reasoner
+whose only parameter is an injected slot now receives the context by
+keyword and the payload is dropped, instead of crashing.
+
+Adds tests/test_trigger_param_binding.py: 4 end-to-end tests through the
+real runtime path (HTTP route -> envelope unwrap -> _execute_reasoner_endpoint),
+including the exact cla_reminder_sweep shape that failed in production, plus
+9 unit tests pinning the binding across signature shapes.
+
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (2a93140)
+
+## [0.1.90-rc.2] - 2026-06-06
+
+
+### Fixed
+
+- Fix(control-plane): authorize execution note reads(#421) (#630) (04dc06a)
+
+## [0.1.90-rc.1] - 2026-06-05
+
+
+### Chores
+
+- Chore(deps): bump hono (#617)
+
+Bumps the npm_and_yarn group with 1 update in the /examples/benchmarks/100k-scale/mastra-bench directory: [hono](https://github.com/honojs/hono).
+
+
+Updates `hono` from 4.12.18 to 4.12.23
+- [Release notes](https://github.com/honojs/hono/releases)
+- [Commits](https://github.com/honojs/hono/compare/v4.12.18...v4.12.23)
+
+---
+updated-dependencies:
+- dependency-name: hono
+  dependency-version: 4.12.23
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (9af26cb)
+
+
+
+### Other
+
+- Fix multimedia provider DX (#619) (6b72438)
+
+## [0.1.89] - 2026-06-04
+
 ## [0.1.89-rc.4] - 2026-06-04
 
 

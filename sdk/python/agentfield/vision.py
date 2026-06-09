@@ -114,7 +114,7 @@ async def generate_image_openrouter(
     LiteLLM's dedicated image generation API.
 
     Supported models:
-    - google/gemini-2.5-flash-image-preview
+    - google/gemini-3.1-flash-image-preview
     - And other OpenRouter models with image generation capabilities
 
     Args:
@@ -162,7 +162,7 @@ async def generate_image_openrouter(
     # OpenRouter uses chat completions with modalities parameter
     # Request only image output — works for both image-only models (e.g.
     # x-ai/grok-imagine-image-quality) and dual-output models (e.g.
-    # google/gemini-2.5-flash-image). Image-only models 404 when "text" is
+    # google/gemini-3.1-flash-image-preview). Image-only models 404 when "text" is
     # also requested.
     completion_params = {
         "model": model,

@@ -166,7 +166,7 @@ class FalProvider(MediaProvider):
     Video Models:
     - fal-ai/minimax-video/image-to-video - Image to video
     - fal-ai/luma-dream-machine - Luma Dream Machine
-    - fal-ai/kling-video/v1/standard - Kling 1.0
+    - fal-ai/kling-video/v1/standard/text-to-video - Kling 1.0 text to video
 
     Audio Models:
     - fal-ai/whisper - Speech to text
@@ -429,6 +429,10 @@ class FalProvider(MediaProvider):
 
         # Merge additional kwargs
         fal_args.update(kwargs)
+        response_format = kwargs.get("output_format") or kwargs.get(
+            "response_format"
+        )
+        output_format = response_format if isinstance(response_format, str) else format
 
         try:
             result = await client.subscribe_async(
@@ -455,7 +459,7 @@ class FalProvider(MediaProvider):
                 audio = AudioOutput(
                     url=audio_url,
                     data=None,
-                    format=format,
+                    format=output_format,
                 )
 
             return MultimodalResponse(
@@ -504,7 +508,7 @@ class FalProvider(MediaProvider):
             # Text to video
             result = await provider.generate_video(
                 "A cat playing with yarn",
-                model="fal-ai/kling-video/v1/standard"
+                model="fal-ai/kling-video/v1/standard/text-to-video"
             )
         """
         client = self._get_client()
@@ -818,7 +822,7 @@ class OpenRouterProvider(MediaProvider):
     Uses the modalities parameter with chat completions API for image generation.
 
     Supports models like:
-    - google/gemini-2.5-flash-image-preview
+    - google/gemini-3.1-flash-image-preview
     - Other OpenRouter models with image generation capabilities
     """
 
@@ -905,7 +909,8 @@ class OpenRouterProvider(MediaProvider):
 
         Args:
             prompt: Text description for image generation.
-            model: OpenRouter model (defaults to ``google/gemini-2.5-flash-image``).
+            model: OpenRouter model (defaults to
+                ``google/gemini-3.1-flash-image-preview``).
             size: Image dimensions (model-specific).
             quality: Quality hint (model-specific).
             image_urls: Optional reference / source images for image+text→image
@@ -918,28 +923,105 @@ class OpenRouterProvider(MediaProvider):
             extra: Arbitrary passthrough fields merged into the completion
                 request (e.g. model-specific switches).
         """
-        from agentfield import vision
+        import os
 
-        model = model or "openrouter/google/gemini-2.5-flash-image"
+        import aiohttp
 
-        # Ensure model has openrouter prefix
-        if not model.startswith("openrouter/"):
-            model = f"openrouter/{model}"
+        api_key = self._api_key or os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "OpenRouter API key required. Set OPENROUTER_API_KEY env var "
+                "or pass api_key to OpenRouterProvider."
+            )
 
+        model = model or "openrouter/google/gemini-3.1-flash-image-preview"
+
+        send_model = self._strip_or_prefix(model)
+
+        user_content: Any = prompt
         if image_urls:
-            kwargs["image_urls"] = image_urls
-        if extra:
-            kwargs.update(extra)
+            user_content = [{"type": "text", "text": prompt}] + [
+                {"type": "image_url", "image_url": {"url": url}}
+                for url in image_urls
+            ]
 
-        return await vision.generate_image_openrouter(
-            prompt=prompt,
-            model=model,
-            size=size,
-            quality=quality,
-            style=None,
-            response_format="url",
-            image_config=image_config,
-            **kwargs,
+        body: Dict[str, Any] = {
+            "model": send_model,
+            "messages": [{"role": "user", "content": user_content}],
+            "modalities": ["image"],
+        }
+        if size:
+            body["size"] = size
+        if quality:
+            body["quality"] = quality
+        if image_config is not None:
+            body["image_config"] = image_config
+        if extra:
+            body.update(extra)
+        if kwargs:
+            body.update(kwargs)
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        timeout = aiohttp.ClientTimeout(total=120.0)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers=headers,
+                json=body,
+            ) as resp:
+                if resp.status >= 400:
+                    detail = await resp.text()
+                    raise RuntimeError(
+                        f"OpenRouter image generation failed ({resp.status}): "
+                        f"{detail[:500]}"
+                    )
+                payload = await resp.json()
+
+        images: List[ImageOutput] = []
+        text_content = ""
+
+        def add_image_url(url: Optional[str]) -> None:
+            if not url:
+                return
+            b64_json = None
+            if url.startswith("data:image/") and "base64," in url:
+                b64_json = url.split("base64,", 1)[1]
+            images.append(
+                ImageOutput(url=url, b64_json=b64_json, revised_prompt=None)
+            )
+
+        for choice in payload.get("choices", []) or []:
+            message = choice.get("message", {}) or {}
+            content = message.get("content")
+            if isinstance(content, str):
+                text_content += content
+            elif isinstance(content, list):
+                for part in content:
+                    if not isinstance(part, dict):
+                        continue
+                    if part.get("type") == "text":
+                        text_content += str(part.get("text") or "")
+                    elif part.get("type") in ("image_url", "image"):
+                        image_url = part.get("image_url") or {}
+                        if isinstance(image_url, dict):
+                            add_image_url(image_url.get("url"))
+            for img in message.get("images", []) or []:
+                if not isinstance(img, dict):
+                    continue
+                image_url = img.get("image_url") or {}
+                if isinstance(image_url, dict):
+                    add_image_url(image_url.get("url"))
+
+        return MultimodalResponse(
+            text=text_content or prompt,
+            audio=None,
+            images=images,
+            files=[],
+            raw_response=payload,
         )
 
     async def generate_video(
@@ -1312,7 +1394,7 @@ class OpenRouterProvider(MediaProvider):
         Args:
             text: Text to convert to speech
             model: OpenRouter model ID (e.g., "openai/gpt-audio-mini",
-                "hexgrad/kokoro-82m"). Default: ``openai/gpt-4o-mini-tts``.
+                "hexgrad/kokoro-82m"). Default: ``hexgrad/kokoro-82m``.
             voice: Voice identifier (model-specific — e.g. ``alloy`` for
                 OpenAI, ``af_bella`` for Kokoro)
             format: Audio format (wav, mp3, flac, opus, pcm16). ``wav`` is
@@ -1335,7 +1417,9 @@ class OpenRouterProvider(MediaProvider):
                 "OpenRouter API key required. Set OPENROUTER_API_KEY env var or pass api_key."
             )
 
-        send_model = self._strip_or_prefix(model or "openai/gpt-4o-mini-tts")
+        send_model = self._strip_or_prefix(model or "hexgrad/kokoro-82m")
+        if send_model == "hexgrad/kokoro-82m" and voice == "alloy":
+            voice = "af_alloy"
 
         audio_format = format
         supported_formats = {"wav", "mp3", "flac", "opus", "pcm16", "pcm"}

@@ -263,9 +263,30 @@ func resolveExecutionNoteAgentIDByDID(ctx context.Context, storageProvider Execu
 	return "", nil
 }
 
-// GetExecutionNotesHandler handles GET /api/v1/executions/:execution_id/notes
-// Retrieves notes for a specific execution with optional tag filtering
-func GetExecutionNotesHandler(storageProvider ExecutionNoteStorage) gin.HandlerFunc {
+func ensureExecutionNoteReadOwnership(callerAgentID string, execution *types.Execution) error {
+	ownerAgentID := strings.TrimSpace(execution.AgentNodeID)
+	if ownerAgentID == "" {
+		return &executionNoteAuthorizationError{message: "execution owner is required to read notes"}
+	}
+
+	if callerAgentID == "" {
+		return &executionNoteAuthorizationError{message: "caller agent identity is required to read notes for this execution"}
+	}
+	if callerAgentID != ownerAgentID {
+		return &executionNoteAuthorizationError{message: "this execution does not belong to the requesting agent"}
+	}
+
+	return nil
+}
+
+// GetExecutionNotesHandler handles GET /api/v1/executions/:execution_id/notes.
+// Retrieves notes for a specific execution with optional tag filtering.
+//
+// ownershipEnforced reports whether the server runs with an authentication
+// method that yields a trusted caller identity. When true, the caller must own
+// the target execution or the read is rejected with 403. When false the server
+// is fully unauthenticated, matching the write endpoint's S2 behavior.
+func GetExecutionNotesHandler(storageProvider ExecutionNoteStorage, ownershipEnforced bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		executionID := c.Param("execution_id")
 		if executionID == "" {
@@ -284,8 +305,25 @@ func GetExecutionNotesHandler(storageProvider ExecutionNoteStorage) gin.HandlerF
 			}
 		}
 
+		ctx := c.Request.Context()
+		var callerAgentID string
+		if ownershipEnforced {
+			var resolveErr error
+			callerAgentID, resolveErr = executionNoteCallerAgentID(ctx, c, storageProvider)
+			if resolveErr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to resolve caller identity: %v", resolveErr)})
+				return
+			}
+			if callerAgentID == "" {
+				c.JSON(http.StatusForbidden, gin.H{
+					"error":   "execution_ownership_mismatch",
+					"message": "caller agent identity is required to read notes for this execution",
+				})
+				return
+			}
+		}
+
 		// Get the execution
-		ctx := context.Background()
 		execution, err := storageProvider.GetExecutionRecord(ctx, executionID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get execution: %v", err)})
@@ -295,6 +333,19 @@ func GetExecutionNotesHandler(storageProvider ExecutionNoteStorage) gin.HandlerF
 		if execution == nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "execution not found"})
 			return
+		}
+
+		if ownershipEnforced {
+			if err := ensureExecutionNoteReadOwnership(callerAgentID, execution); err != nil {
+				var authzErr *executionNoteAuthorizationError
+				if errors.As(err, &authzErr) {
+					c.JSON(http.StatusForbidden, gin.H{
+						"error":   "execution_ownership_mismatch",
+						"message": authzErr.message,
+					})
+					return
+				}
+			}
 		}
 
 		// Filter notes by tags if specified
