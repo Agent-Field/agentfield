@@ -20,6 +20,36 @@ func TestBaseURLEmptyUsesDefault(t *testing.T) {
 	assert.Equal(t, defaultOpenRouterBaseURL, p.baseURL())
 }
 
+func TestOpenRouterMediaProviderHeadersIncludeAttribution(t *testing.T) {
+	var received http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received = r.Header
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"architecture": map[string]any{
+					"output_modalities": []string{"image"},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	p := &OpenRouterMediaProvider{
+		APIKey:   "k",
+		BaseURL:  srv.URL,
+		Client:   srv.Client(),
+		SiteURL:  "https://media.example",
+		SiteName: "Media App",
+	}
+	meta := p.fetchModelMeta(context.Background(), "openrouter/example/model")
+
+	require.Equal(t, []string{"image"}, meta.OutputModalities)
+	assert.Equal(t, "https://media.example", received.Get("HTTP-Referer"))
+	assert.Equal(t, "Media App", received.Get("X-OpenRouter-Title"))
+	assert.Equal(t, "Media App", received.Get("X-Title"))
+}
+
 // GenerateVideo exercises every optional payload field.
 func TestGenerateVideoAllOptionalFields(t *testing.T) {
 	var captured map[string]any

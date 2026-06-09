@@ -39,9 +39,11 @@ type modelMeta struct {
 
 // OpenRouterMediaProvider implements MediaProvider for OpenRouter's media APIs.
 type OpenRouterMediaProvider struct {
-	APIKey  string
-	BaseURL string
-	Client  *http.Client
+	APIKey   string
+	BaseURL  string
+	Client   *http.Client
+	SiteURL  string
+	SiteName string
 
 	metaMu    sync.Mutex
 	metaCache map[string]modelMeta
@@ -56,10 +58,13 @@ func NewOpenRouterMediaProvider(apiKey string) (*OpenRouterMediaProvider, error)
 	if apiKey == "" {
 		return nil, fmt.Errorf("OpenRouter API key required: pass apiKey or set OPENROUTER_API_KEY")
 	}
+	siteURL, siteName, _ := resolveOpenRouterAttribution("", "")
 	return &OpenRouterMediaProvider{
-		APIKey:  apiKey,
-		BaseURL: defaultOpenRouterBaseURL,
-		Client:  &http.Client{Timeout: 60 * time.Second},
+		APIKey:   apiKey,
+		BaseURL:  defaultOpenRouterBaseURL,
+		Client:   &http.Client{Timeout: 60 * time.Second},
+		SiteURL:  siteURL,
+		SiteName: siteName,
 	}, nil
 }
 
@@ -728,6 +733,7 @@ func (p *OpenRouterMediaProvider) GenerateAudio(ctx context.Context, req AudioRe
 func (p *OpenRouterMediaProvider) setHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+p.APIKey)
+	applyOpenRouterAttributionHeaders(req.Header, p.SiteURL, p.SiteName)
 }
 
 // generateAudioViaSpeechEndpoint calls POST /api/v1/audio/speech (OpenAI-compat

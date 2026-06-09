@@ -41,9 +41,9 @@ func TestDefaultConfig(t *testing.T) {
 	}()
 
 	tests := []struct {
-		name           string
-		setupEnv       func()
-		checkConfig    func(t *testing.T, cfg *Config)
+		name        string
+		setupEnv    func()
+		checkConfig func(t *testing.T, cfg *Config)
 	}{
 		{
 			name: "default OpenAI config",
@@ -74,6 +74,8 @@ func TestDefaultConfig(t *testing.T) {
 			checkConfig: func(t *testing.T, cfg *Config) {
 				assert.Equal(t, "openrouter-key", cfg.APIKey)
 				assert.Equal(t, "https://openrouter.ai/api/v1", cfg.BaseURL)
+				assert.Equal(t, "https://agentfield.ai", cfg.SiteURL)
+				assert.Equal(t, "AgentField AI", cfg.SiteName)
 			},
 		},
 		{
@@ -115,6 +117,20 @@ func TestDefaultConfig(t *testing.T) {
 			tt.checkConfig(t, cfg)
 		})
 	}
+}
+
+func TestDefaultConfigOpenRouterAttributionEnvOverrides(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OPENROUTER_API_KEY", "openrouter-key")
+	t.Setenv("AI_BASE_URL", "")
+	t.Setenv("AI_MODEL", "")
+	t.Setenv("AGENTFIELD_OPENROUTER_SITE_URL", "https://custom.example")
+	t.Setenv("AGENTFIELD_OPENROUTER_APP_NAME", "Custom App")
+
+	cfg := DefaultConfig()
+
+	assert.Equal(t, "https://custom.example", cfg.SiteURL)
+	assert.Equal(t, "Custom App", cfg.SiteName)
 }
 
 func TestValidate(t *testing.T) {
@@ -186,6 +202,7 @@ func TestIsOpenRouter(t *testing.T) {
 	tests := []struct {
 		name     string
 		baseURL  string
+		model    string
 		expected bool
 	}{
 		{
@@ -213,11 +230,17 @@ func TestIsOpenRouter(t *testing.T) {
 			baseURL:  "",
 			expected: false,
 		},
+		{
+			name:     "OpenRouter model prefix",
+			baseURL:  "https://api.openai.com/v1",
+			model:    "openrouter/openai/gpt-4o",
+			expected: true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &Config{BaseURL: tt.baseURL}
+			cfg := &Config{BaseURL: tt.baseURL, Model: tt.model}
 			assert.Equal(t, tt.expected, cfg.IsOpenRouter())
 		})
 	}

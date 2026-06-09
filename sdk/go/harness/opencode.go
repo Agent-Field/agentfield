@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -100,6 +101,28 @@ func (p *OpenCodeProvider) Execute(ctx context.Context, prompt string, options O
 		env[k] = v
 	}
 
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(options.Model)), "openrouter/") {
+		if _, callerSet := env["OPENCODE_CONFIG_CONTENT"]; !callerSet && os.Getenv("OPENCODE_CONFIG_CONTENT") == "" {
+			attributionEnv := mergedProcessEnv(env)
+			headers := openRouterAttributionHeaders(attributionEnv)
+			modelSlug := strings.TrimPrefix(options.Model, "openrouter/")
+			if modelSlug != "" && len(headers) > 0 {
+				content := map[string]any{
+					"provider": map[string]any{
+						"openrouter": map[string]any{
+							"models": map[string]any{
+								modelSlug: map[string]any{"headers": headers},
+							},
+						},
+					},
+				}
+				if encoded, err := json.Marshal(content); err == nil {
+					env["OPENCODE_CONFIG_CONTENT"] = string(encoded)
+				}
+			}
+		}
+	}
+
 	sem := getSemaphore()
 	select {
 	case sem <- struct{}{}:
@@ -184,4 +207,22 @@ func (p *OpenCodeProvider) Execute(ctx context.Context, prompt string, options O
 	}
 
 	return raw, nil
+}
+
+func mergedProcessEnv(overrides map[string]string) map[string]string {
+	merged := make(map[string]string)
+	for _, entry := range os.Environ() {
+		key, value, found := strings.Cut(entry, "=")
+		if found {
+			merged[key] = value
+		}
+	}
+	for k, v := range overrides {
+		if v == "" {
+			delete(merged, k)
+		} else {
+			merged[k] = v
+		}
+	}
+	return merged
 }

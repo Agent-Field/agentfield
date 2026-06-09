@@ -74,6 +74,40 @@ describe('opencode provider', () => {
     );
     expect(result.isError).toBe(false);
   });
+
+  it('adds OpenCode header overlay for explicit OpenRouter model', async () => {
+    vi.spyOn(cli, 'runCli').mockResolvedValue({
+      stdout: 'ok\n',
+      stderr: '',
+      exitCode: 0,
+    });
+
+    const provider = new OpenCodeProvider();
+    await provider.execute('hello', { model: 'openrouter/openai/gpt-4o' });
+
+    const call = vi.mocked(cli.runCli).mock.calls[0];
+    const env = call[1]?.env ?? {};
+    const overlay = JSON.parse(env.OPENCODE_CONFIG_CONTENT);
+
+    expect(overlay.provider.openrouter.models['openai/gpt-4o'].headers).toEqual({
+      'HTTP-Referer': 'https://agentfield.ai',
+      'X-OpenRouter-Title': 'AgentField AI',
+      'X-Title': 'AgentField AI',
+    });
+  });
+
+  it('does not add OpenCode overlay for non-OpenRouter model', async () => {
+    vi.spyOn(cli, 'runCli').mockResolvedValue({
+      stdout: 'ok\n',
+      stderr: '',
+      exitCode: 0,
+    });
+
+    const provider = new OpenCodeProvider();
+    await provider.execute('hello', { model: 'openai/gpt-5' });
+
+    expect(vi.mocked(cli.runCli).mock.calls[0][1]?.env).toEqual({});
+  });
 });
 
 describe('provider factory', () => {

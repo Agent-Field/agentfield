@@ -3,6 +3,8 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, computed_field
 from enum import Enum
 
+from agentfield.openrouter_attribution import apply_litellm_attribution
+
 
 class AgentStatus(str, Enum):
     """Agent lifecycle status enum matching the Go backend"""
@@ -473,6 +475,14 @@ class AIConfig(BaseModel):
     organization: Optional[str] = Field(
         default=None, description="Organization ID (for OpenAI)"
     )
+    openrouter_site_url: Optional[str] = Field(
+        default=None,
+        description="OpenRouter attribution site URL. Defaults to https://agentfield.ai.",
+    )
+    openrouter_app_name: Optional[str] = Field(
+        default=None,
+        description="OpenRouter attribution app title. Defaults to AgentField AI.",
+    )
 
     # Additional LiteLLM parameters that can be overridden
     litellm_params: Dict[str, Any] = Field(
@@ -678,6 +688,12 @@ class AIConfig(BaseModel):
         )
         if provider == "openai" and "max_tokens" in params:
             params["max_completion_tokens"] = params.pop("max_tokens")
+
+        apply_litellm_attribution(
+            params,
+            site_url=self.openrouter_site_url,
+            app_name=self.openrouter_app_name,
+        )
 
         return params
 

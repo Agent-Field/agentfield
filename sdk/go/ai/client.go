@@ -107,12 +107,7 @@ func (c *Client) doRequest(ctx context.Context, req *Request) (*Response, error)
 
 	// Add OpenRouter-specific headers if applicable
 	if c.config.IsOpenRouter() {
-		if c.config.SiteURL != "" {
-			httpReq.Header.Set("HTTP-Referer", c.config.SiteURL)
-		}
-		if c.config.SiteName != "" {
-			httpReq.Header.Set("X-Title", c.config.SiteName)
-		}
+		applyOpenRouterAttributionHeaders(httpReq.Header, c.config.SiteURL, c.config.SiteName)
 	}
 
 	// Execute request
@@ -209,12 +204,7 @@ func (c *Client) StreamComplete(ctx context.Context, prompt string, opts ...Opti
 
 		// Add OpenRouter-specific headers if applicable
 		if c.config.IsOpenRouter() {
-			if c.config.SiteURL != "" {
-				httpReq.Header.Set("HTTP-Referer", c.config.SiteURL)
-			}
-			if c.config.SiteName != "" {
-				httpReq.Header.Set("X-Title", c.config.SiteName)
-			}
+			applyOpenRouterAttributionHeaders(httpReq.Header, c.config.SiteURL, c.config.SiteName)
 		}
 
 		// Execute request
