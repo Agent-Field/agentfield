@@ -38,13 +38,15 @@ import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, Optional, Union
+from typing import Any, Awaitable, Callable, Coroutine, Dict, Optional, TypeVar, Union, cast
+
+R = TypeVar("R")
 
 from .triggers import EventTrigger, ScheduleTrigger, TriggerContext
 
 
 def simulate_trigger(
-    reasoner: Callable[..., Any],
+    reasoner: Callable[..., R],
     *,
     source: str,
     body: Optional[Dict[str, Any]] = None,
@@ -54,7 +56,7 @@ def simulate_trigger(
     trigger_id: Optional[str] = None,
     received_at: Optional[datetime] = None,
     vc_id: Optional[str] = None,
-) -> Any:
+) -> R:
     """Run ``reasoner`` as if a trigger of ``source`` had fired with ``body``.
 
     Looks up the matching ``EventTrigger`` declared on the reasoner (by
@@ -106,11 +108,11 @@ def simulate_trigger(
 
 
 def simulate_schedule(
-    reasoner: Callable[..., Any],
+    reasoner: Callable[..., R],
     *,
     cron: Optional[str] = None,
     received_at: Optional[datetime] = None,
-) -> Any:
+) -> R:
     """Run a schedule-triggered reasoner with an empty body and ``source='cron'``.
 
     Convenience wrapper around ``simulate_trigger`` for ``@on_schedule``-decorated
@@ -256,5 +258,5 @@ def _run_coro(coro: Awaitable[Any]) -> Any:
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(coro)
+        return asyncio.run(cast(Coroutine[Any, Any, Any], coro))
     return loop.run_until_complete(coro)

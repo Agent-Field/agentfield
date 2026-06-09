@@ -14,7 +14,7 @@ import threading
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Deque, Iterator, List, Optional, TextIO
+from typing import Deque, Iterable, Iterator, List, Optional, TextIO, cast
 
 # Optional: follow subscribers wake on new lines
 _follow_queues: List["queue.Queue[None]"] = []
@@ -151,7 +151,7 @@ class _TeeTextIO(io.TextIOBase):
                 self._ring.append(self._stream_name, line, self._max_line_bytes)
         return len(s)
 
-    def writelines(self, lines) -> None:
+    def writelines(self, lines: Iterable[str]) -> None:  # type: ignore[override]
         for line in lines:
             self.write(line)
 
@@ -179,7 +179,7 @@ class _TeeTextIO(io.TextIOBase):
         super().close()
 
     @property
-    def encoding(self) -> str:
+    def encoding(self) -> str:  # type: ignore[override]
         return getattr(self._original, "encoding", "utf-8") or "utf-8"
 
     def isatty(self) -> bool:
@@ -225,8 +225,8 @@ def install_stdio_tee() -> None:
         return
     ring = get_ring()
     ml = max_line_bytes()
-    sys.stdout = _TeeTextIO("stdout", sys.__stdout__, ring, ml)
-    sys.stderr = _TeeTextIO("stderr", sys.__stderr__, ring, ml)
+    sys.stdout = _TeeTextIO("stdout", cast(TextIO, sys.__stdout__), ring, ml)
+    sys.stderr = _TeeTextIO("stderr", cast(TextIO, sys.__stderr__), ring, ml)
     _tee_installed = True
 
 

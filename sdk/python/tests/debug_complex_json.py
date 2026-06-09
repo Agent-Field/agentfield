@@ -429,10 +429,10 @@ async def run_single_test(
     print(f"{'=' * 80}")
 
     # Show the schema being tested
-    schema_json = json.dumps(schema_cls.model_json_schema(), indent=2)
+    schema_json = json.dumps(schema_cls.model_json_schema(), indent=2)  # type: ignore[attr-defined]
     token_est = len(schema_json) // 4
     print(f"Schema tokens (est): {token_est}")
-    print(f"Schema fields: {list(schema_cls.model_fields.keys())}")
+    print(f"Schema fields: {list(schema_cls.model_fields.keys())}")  # type: ignore[attr-defined]
 
     if verbose:
         print(
