@@ -71,8 +71,8 @@ class AgentRouter:
                 return func(*args, **kw)
 
             # Store metadata on the wrapper
-            wrapper._is_router_reasoner = True
-            wrapper._original_func = func
+            wrapper._is_router_reasoner = True  # type: ignore[attr-defined]
+            wrapper._original_func = func  # type: ignore[attr-defined]
 
             router_ref.reasoners.append(
                 {
