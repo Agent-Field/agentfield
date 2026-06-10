@@ -250,7 +250,9 @@ def on_event(
     return decorator
 
 
-def on_schedule(cron: str, *, timezone: str = "UTC") -> Callable[[Callable[P, T]], Callable[P, T]]:
+def on_schedule(
+    cron: str, *, timezone: str = "UTC"
+) -> Callable[[Callable[P, T]], Callable[P, T]]:
     """Sugar that stages a :class:`ScheduleTrigger` for the next outer ``@reasoner``.
 
     Equivalent to ``triggers=[ScheduleTrigger(cron=cron, timezone=timezone)]``.
@@ -424,7 +426,7 @@ async def _execute_with_tracking(
                 converted_args, converted_kwargs = convert_function_args(
                     func, args, call_kwargs
                 )
-                args = converted_args
+                args = converted_args  # type: ignore[assignment]
                 call_kwargs = converted_kwargs
         except ValidationError as e:
             # Re-raise validation errors with context
@@ -455,9 +457,9 @@ async def _execute_with_tracking(
         )
 
         if asyncio.iscoroutinefunction(func):
-            result = await func(*args, **call_kwargs)
+            result = await func(*args, **call_kwargs)  # type: ignore[arg-type]
         else:
-            result = func(*args, **call_kwargs)
+            result = func(*args, **call_kwargs)  # type: ignore[arg-type]
 
         duration_ms = int((time.time() - start_time) * 1000)
         completion_payload = {
@@ -547,7 +549,9 @@ def _compose_event_payload(
     return event
 
 
-def on_change(pattern: Union[str, List[str]]) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Awaitable[T]]]:
+def on_change(
+    pattern: Union[str, List[str]],
+) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Awaitable[T]]]:
     """
     Decorator to mark a function as a memory event listener.
 
@@ -692,7 +696,9 @@ async def _send_workflow_error(
             log_warn(f"Failed to emit workflow error: {exc}")
 
 
-def legacy_reasoner(reasoner_id: str, input_schema: dict, output_schema: dict) -> Callable[[F], F]:
+def legacy_reasoner(
+    reasoner_id: str, input_schema: dict, output_schema: dict
+) -> Callable[[F], F]:
     """
     Legacy reasoner decorator for backward compatibility.
 
