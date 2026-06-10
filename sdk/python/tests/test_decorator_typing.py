@@ -168,8 +168,6 @@ async def test_execute_with_tracking_type_preservation(monkeypatch):
         lambda *a, **k: asyncio.sleep(0),
     )
 
-    from agentfield.decorators import _execute_with_tracking
-
     async def typed_fn(x: int, label: str) -> str:
         return f"{label}: {x * 2}"
 

@@ -1,5 +1,4 @@
 from types import MethodType, SimpleNamespace
-import inspect
 
 import pytest
 
@@ -234,9 +233,7 @@ async def test_call_skips_sync_fallback_on_execution_cancelled_error():
         return "exec_xyz"
 
     async def fake_wait_for_execution_result(execution_id, timeout=None):
-        raise ExecutionCancelledError(
-            "Execution was cancelled: user clicked cancel"
-        )
+        raise ExecutionCancelledError("Execution was cancelled: user clicked cancel")
 
     async def fake_execute(target, input_data, headers):
         nonlocal sync_calls
