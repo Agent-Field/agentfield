@@ -39,7 +39,7 @@ func TestNote_Basic(t *testing.T) {
 	cfg := Config{
 		NodeID:        "test-node",
 		Version:       "1.0.0",
-		AgentFieldURL: server.URL + "/api/v1", // Will be converted to /api/ui/v1
+		AgentFieldURL: server.URL + "/api/v1", // Will be used directly
 		Logger:        log.New(io.Discard, "", 0),
 	}
 
@@ -228,12 +228,12 @@ func TestNote_URLConversion(t *testing.T) {
 		{
 			name:          "Standard /api/v1 URL",
 			agentFieldURL: server.URL + "/api/v1",
-			expectedPath:  "/api/ui/v1/executions/note",
+			expectedPath:  "/api/v1/executions/note",
 		},
 		{
 			name:          "URL without /api/v1",
 			agentFieldURL: server.URL,
-			expectedPath:  "/api/ui/v1/executions/note",
+			expectedPath:  "/executions/note",
 		},
 	}
 
