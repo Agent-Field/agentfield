@@ -38,13 +38,40 @@ import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Coroutine, Dict, Optional, TypeVar, Union, cast
-
-R = TypeVar("R")
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Dict,
+    Optional,
+    TypeVar,
+    Union,
+    cast,
+    overload,
+)
 
 from .triggers import EventTrigger, ScheduleTrigger, TriggerContext
 
+R = TypeVar("R")
 
+
+@overload
+def simulate_trigger(
+    reasoner: Callable[..., Awaitable[R]],
+    *,
+    source: str,
+    body: Optional[Dict[str, Any]] = None,
+    event_type: str = "",
+    event_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    trigger_id: Optional[str] = None,
+    received_at: Optional[datetime] = None,
+    vc_id: Optional[str] = None,
+) -> R: ...
+
+
+@overload
 def simulate_trigger(
     reasoner: Callable[..., R],
     *,
@@ -56,7 +83,21 @@ def simulate_trigger(
     trigger_id: Optional[str] = None,
     received_at: Optional[datetime] = None,
     vc_id: Optional[str] = None,
-) -> R:
+) -> R: ...
+
+
+def simulate_trigger(
+    reasoner: Callable[..., Any],
+    *,
+    source: str,
+    body: Optional[Dict[str, Any]] = None,
+    event_type: str = "",
+    event_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    trigger_id: Optional[str] = None,
+    received_at: Optional[datetime] = None,
+    vc_id: Optional[str] = None,
+) -> Any:
     """Run ``reasoner`` as if a trigger of ``source`` had fired with ``body``.
 
     Looks up the matching ``EventTrigger`` declared on the reasoner (by
@@ -84,7 +125,11 @@ def simulate_trigger(
     matched = _match_binding(bindings, source, event_type)
 
     transformed_input = payload
-    if matched is not None and isinstance(matched, EventTrigger) and matched.transform is not None:
+    if (
+        matched is not None
+        and isinstance(matched, EventTrigger)
+        and matched.transform is not None
+    ):
         transformed_input = matched.transform(payload)
 
     trigger_ctx = TriggerContext(
@@ -107,12 +152,30 @@ def simulate_trigger(
     return result
 
 
+@overload
+def simulate_schedule(
+    reasoner: Callable[..., Awaitable[R]],
+    *,
+    cron: Optional[str] = None,
+    received_at: Optional[datetime] = None,
+) -> R: ...
+
+
+@overload
 def simulate_schedule(
     reasoner: Callable[..., R],
     *,
     cron: Optional[str] = None,
     received_at: Optional[datetime] = None,
-) -> R:
+) -> R: ...
+
+
+def simulate_schedule(
+    reasoner: Callable[..., Any],
+    *,
+    cron: Optional[str] = None,
+    received_at: Optional[datetime] = None,
+) -> Any:
     """Run a schedule-triggered reasoner with an empty body and ``source='cron'``.
 
     Convenience wrapper around ``simulate_trigger`` for ``@on_schedule``-decorated
@@ -142,7 +205,9 @@ def load_fixture(source: str, name: str = "default") -> Dict[str, Any]:
     re-reads from disk.
     """
     base = Path(__file__).parent / "fixtures" / "triggers"
-    candidate = base / (f"{source}_{name}.json" if name != "default" else f"{source}.json")
+    candidate = base / (
+        f"{source}_{name}.json" if name != "default" else f"{source}.json"
+    )
     if not candidate.exists():
         raise FileNotFoundError(
             f"No fixture for source={source!r} name={name!r}. Looked at {candidate}."
