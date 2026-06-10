@@ -6,7 +6,6 @@ import inspect
 import pytest
 
 from agentfield.decorators import (
-    _execute_with_tracking,
     legacy_reasoner,
     on_change,
     on_event,
@@ -167,6 +166,8 @@ async def test_execute_with_tracking_type_preservation(monkeypatch):
         "agentfield.decorators._send_workflow_completion",
         lambda *a, **k: asyncio.sleep(0),
     )
+
+    from agentfield.decorators import _execute_with_tracking
 
     async def typed_fn(x: int, label: str) -> str:
         return f"{label}: {x * 2}"

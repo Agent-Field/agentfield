@@ -18,7 +18,6 @@ def handler(input: object) -> str:
 async def async_handler(input: object) -> str:
     return "hello"
 
-
 handler._reasoner_triggers = []  # type: ignore[attr-defined]
 async_handler._reasoner_triggers = []  # type: ignore[attr-defined]
 
