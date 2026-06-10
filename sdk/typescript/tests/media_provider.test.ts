@@ -114,6 +114,26 @@ describe('OpenRouterMediaProvider', () => {
     expect(p.supportedModalities).toContain('video');
   });
 
+  it('includes OpenRouter attribution headers in fetch calls', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ choices: [] }),
+    });
+
+    const provider = new OpenRouterMediaProvider({ apiKey: 'test-key' });
+    await provider.generateImage({ prompt: 'test' });
+
+    const init = mockFetch.mock.calls[0][1];
+    expect(init.headers).toEqual(
+      expect.objectContaining({
+        Authorization: 'Bearer test-key',
+        'HTTP-Referer': 'https://agentfield.ai',
+        'X-OpenRouter-Title': 'AgentField AI',
+        'X-Title': 'AgentField AI',
+      })
+    );
+  });
+
   it('toJSON excludes API key (CR-03)', () => {
     const p = new OpenRouterMediaProvider({ apiKey: 'secret-key-123' });
     const json = JSON.parse(JSON.stringify(p));

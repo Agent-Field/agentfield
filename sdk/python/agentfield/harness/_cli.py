@@ -8,6 +8,8 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from agentfield.openrouter_attribution import apply_subprocess_env
+
 _ANSI_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 
 
@@ -26,6 +28,7 @@ async def run_cli(
     merged_env = {**os.environ}
     if env:
         merged_env.update(env)
+    apply_subprocess_env(merged_env)
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,

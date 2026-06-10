@@ -297,7 +297,15 @@ describe("trigger management pages", () => {
     expect(await screen.findByText(/This trigger is paused/i)).toBeInTheDocument();
     expect(screen.getByText("Code-managed")).toBeInTheDocument();
     expect(screen.getAllByText("All events").length).toBeGreaterThan(0);
-    expect(screen.getByText("No events received yet. Events appear here after the first inbound delivery.")).toBeInTheDocument();
+    // The events list is fetched asynchronously after the sheet opens
+    // (TriggerSheet useEffect → refreshEvents). The empty-state copy only
+    // renders once `loadingEvents` flips back to false, so this must wait
+    // for the fetch to resolve — use findByText, not getByText.
+    expect(
+      await screen.findByText(
+        "No events received yet. Events appear here after the first inbound delivery.",
+      ),
+    ).toBeInTheDocument();
 
     const destructiveButtons = screen.getAllByRole("button").filter((button) =>
       button.getAttribute("title")?.includes("Code-managed triggers"),

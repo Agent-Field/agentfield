@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -276,14 +277,45 @@ func TestComplete_WithOpenRouterHeaders(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
 
-	// Verify headers were set (note: IsOpenRouter() checks the original config, not the overridden one)
-	// So we need to restore and check the logic differently
 	client.config.BaseURL = originalBaseURL
 
-	// The headers would be set if IsOpenRouter() returns true
-	// Since we're using a test server, we verify the request succeeded
-	// In a real scenario with OpenRouter URL, the headers would be present
 	assert.NotNil(t, receivedHeaders)
+	assert.Equal(t, "https://example.com", receivedHeaders.Get("HTTP-Referer"))
+	assert.Equal(t, "MyApp", receivedHeaders.Get("X-OpenRouter-Title"))
+	assert.Equal(t, "MyApp", receivedHeaders.Get("X-Title"))
+}
+
+func TestStreamComplete_WithOpenRouterHeaders(t *testing.T) {
+	var receivedHeaders http.Header
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedHeaders = r.Header
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintln(w, `data: {"choices":[{"delta":{"content":[{"type":"text","text":"hello"}]}}]}`)
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "data: [DONE]")
+		fmt.Fprintln(w)
+	}))
+	defer server.Close()
+
+	config := &Config{
+		APIKey:   "test-key",
+		BaseURL:  server.URL,
+		Model:    "openrouter/gpt-4o",
+		SiteURL:  "https://stream.example",
+		SiteName: "Stream App",
+		Timeout:  5 * time.Second,
+	}
+	client, err := NewClient(config)
+	require.NoError(t, err)
+
+	chunks, errs := client.StreamComplete(context.Background(), "Hello")
+	for range chunks {
+	}
+	require.NoError(t, <-errs)
+
+	assert.Equal(t, "https://stream.example", receivedHeaders.Get("HTTP-Referer"))
+	assert.Equal(t, "Stream App", receivedHeaders.Get("X-OpenRouter-Title"))
+	assert.Equal(t, "Stream App", receivedHeaders.Get("X-Title"))
 }
 
 func TestComplete_ErrorHandling(t *testing.T) {

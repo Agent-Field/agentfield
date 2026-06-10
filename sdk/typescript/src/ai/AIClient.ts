@@ -16,6 +16,10 @@ import { createCohere } from '@ai-sdk/cohere';
 import type { z } from 'zod';
 import type { AIConfig } from '../types/agent.js';
 import { StatelessRateLimiter } from './RateLimiter.js';
+import {
+  isOpenRouterRequest,
+  mergeOpenRouterAttributionHeaders,
+} from './openrouterAttribution.js';
 
 export type ZodSchema<T> = z.Schema<T, z.ZodTypeDef, any>;
 
@@ -172,6 +176,7 @@ export class AIClient {
   private buildModel(options: AIRequestOptions) {
     const provider = options.provider ?? this.config.provider ?? 'openai';
     const modelName = options.model ?? this.config.model ?? 'gpt-4o';
+    const openRouterHeaders = this.openRouterHeaders(provider, modelName);
 
     switch (provider) {
       case 'anthropic': {
@@ -234,7 +239,8 @@ export class AIClient {
         // OpenRouter is OpenAI-compatible but doesn't support Responses API
         const openrouter = createOpenAI({
           apiKey: this.config.apiKey,
-          baseURL: this.config.baseUrl ?? 'https://openrouter.ai/api/v1'
+          baseURL: this.config.baseUrl ?? 'https://openrouter.ai/api/v1',
+          headers: openRouterHeaders,
         });
         return openrouter.chat(modelName);
       }
@@ -252,7 +258,8 @@ export class AIClient {
       default: {
         const openai = createOpenAI({
           apiKey: this.config.apiKey,
-          baseURL: this.config.baseUrl
+          baseURL: this.config.baseUrl,
+          ...(openRouterHeaders ? { headers: openRouterHeaders } : {})
         });
         return openai(modelName);
       }
@@ -262,6 +269,7 @@ export class AIClient {
   private buildEmbeddingModel(options: AIEmbeddingOptions) {
     const provider = options.provider ?? this.config.provider ?? 'openai';
     const modelName = options.model ?? this.config.embeddingModel ?? 'text-embedding-3-small';
+    const openRouterHeaders = this.openRouterHeaders(provider, modelName);
 
     // Providers without embedding support
     const noEmbeddingProviders = ['anthropic', 'xai', 'deepseek', 'groq'];
@@ -306,11 +314,22 @@ export class AIClient {
               ? 'https://openrouter.ai/api/v1'
               : provider === 'ollama'
                 ? 'http://localhost:11434/v1'
-                : undefined)
+                : undefined),
+          ...(openRouterHeaders ? { headers: openRouterHeaders } : {})
         });
         return openai.embedding(modelName);
       }
     }
+  }
+
+  private openRouterHeaders(provider: AIConfig['provider'], model: string): Record<string, string> | undefined {
+    if (!isOpenRouterRequest({ provider, model, baseUrl: this.config.baseUrl })) {
+      return undefined;
+    }
+    return mergeOpenRouterAttributionHeaders(this.config.openRouterHeaders, {
+      siteUrl: this.config.openRouterSiteUrl,
+      appName: this.config.openRouterAppName,
+    });
   }
 
   private getRateLimiter() {

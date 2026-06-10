@@ -29,7 +29,7 @@ from fastapi.responses import JSONResponse
 
 from utils import run_go_agent, unique_node_id
 
-TEST_BIND_HOST = os.environ.get("TEST_AGENT_BIND_HOST", "0.0.0.0")
+TEST_BIND_HOST = os.environ.get("TEST_AGENT_BIND_HOST", "127.0.0.1")
 TEST_CALLBACK_HOST = os.environ.get("TEST_AGENT_CALLBACK_HOST", "test-runner")
 
 

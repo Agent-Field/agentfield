@@ -17,6 +17,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Literal, Optional, Union
 from urllib.parse import urlparse
 
+from agentfield.openrouter_attribution import merge_attribution_headers
 from agentfield.multimodal_response import (
     AudioOutput,
     FileOutput,
@@ -873,7 +874,7 @@ class OpenRouterProvider(MediaProvider):
             return {}
 
         url = f"https://openrouter.ai/api/v1/models/{stripped}/endpoints"
-        headers = {"Authorization": f"Bearer {api_key}"}
+        headers = merge_attribution_headers({"Authorization": f"Bearer {api_key}"})
         try:
             timeout = aiohttp.ClientTimeout(total=10.0)
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -965,6 +966,7 @@ class OpenRouterProvider(MediaProvider):
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
+        headers = merge_attribution_headers(headers)
 
         timeout = aiohttp.ClientTimeout(total=120.0)
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -1083,6 +1085,7 @@ class OpenRouterProvider(MediaProvider):
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
+        headers = merge_attribution_headers(headers)
 
         # Strip openrouter/ prefix from model name
         video_model = model or "openrouter/google/veo-2.0-generate-001"
@@ -1431,6 +1434,7 @@ class OpenRouterProvider(MediaProvider):
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
+        headers = merge_attribution_headers(headers)
 
         meta = await self._fetch_model_meta(send_model)
         output_mods = meta.get("output_modalities") or []
@@ -1624,6 +1628,7 @@ class OpenRouterProvider(MediaProvider):
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
+        headers = merge_attribution_headers(headers)
 
         b64_full, transcript = await self._stream_openrouter_audio(
             payload, headers, timeout=timeout, label="music"

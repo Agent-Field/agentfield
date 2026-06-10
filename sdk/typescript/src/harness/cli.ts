@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { applyOpenRouterAttributionEnv } from '../ai/openrouterAttribution.js';
 
 export interface CliResult {
   stdout: string;
@@ -12,8 +13,10 @@ export function runCli(
 ): Promise<CliResult> {
   return new Promise((resolve, reject) => {
     const [bin, ...args] = cmd;
+    const env = { ...process.env, ...options?.env };
+    applyOpenRouterAttributionEnv(env);
     const proc = spawn(bin, args, {
-      env: { ...process.env, ...options?.env },
+      env,
       cwd: options?.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
     });

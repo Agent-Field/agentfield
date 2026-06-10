@@ -67,6 +67,29 @@ describe('harness cli utilities', () => {
     });
   });
 
+  it('adds OpenRouter attribution env defaults and preserves caller overrides', async () => {
+    const proc = createProcess();
+    spawnMock.mockReturnValueOnce(proc as unknown as ReturnType<SpawnImpl>);
+
+    const pending = runCli(['node', 'script.js'], {
+      env: { OR_APP_NAME: 'Caller App' }
+    });
+
+    expect(spawnMock).toHaveBeenCalledWith('node', ['script.js'], {
+      env: expect.objectContaining({
+        AGENTFIELD_OPENROUTER_SITE_URL: 'https://agentfield.ai',
+        AGENTFIELD_OPENROUTER_APP_NAME: 'Caller App',
+        OR_SITE_URL: 'https://agentfield.ai',
+        OR_APP_NAME: 'Caller App'
+      }),
+      cwd: undefined,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+
+    proc.emit('close', 0);
+    await expect(pending).resolves.toMatchObject({ exitCode: 0 });
+  });
+
   it('rejects on child process errors and on timeouts', async () => {
     const errorProc = createProcess();
     spawnMock.mockReturnValueOnce(errorProc as unknown as ReturnType<SpawnImpl>);
