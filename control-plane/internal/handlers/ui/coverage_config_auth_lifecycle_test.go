@@ -370,9 +370,18 @@ func TestAuthorizationHandlerCoverage(t *testing.T) {
 		now := time.Date(2026, 4, 8, 12, 0, 0, 0, time.UTC)
 		storage.listAgentsFn = func(ctx context.Context, filters types.AgentFilters) ([]*types.AgentNode, error) {
 			return []*types.AgentNode{
-			{ID: "agent-a", LifecycleStatus: types.AgentStatusReady, RegisteredAt: now},
-			{ID: "agent-b", ProposedTags: []string{"finance"}, ApprovedTags: []string{"approved"}, LifecycleStatus: types.AgentStatusOffline, RegisteredAt: now},
-		}, nil
+				{ID: "agent-a", LifecycleStatus: types.AgentStatusReady, RegisteredAt: now},
+				{
+					ID:              "agent-b",
+					ProposedTags:    []string{"finance"},
+					ApprovedTags:    []string{"approved"},
+					LifecycleStatus: types.AgentStatusOffline,
+					RegisteredAt:    now,
+					Reasoners:       []types.ReasonerDefinition{{ID: "planner", Tags: []string{"analysis"}}},
+					Skills:          []types.SkillDefinition{{ID: "lookup", ProposedTags: []string{"search"}, ApprovedTags: []string{"search"}}},
+					Sessions:        []types.SessionDefinition{{Name: "voice", Tags: []string{"support"}, ApprovedTags: []string{"support"}}},
+				},
+			}, nil
 		}
 
 		rec := performJSONRequest(router, http.MethodGet, "/api/ui/v1/authorization/agents", nil)
@@ -387,6 +396,13 @@ func TestAuthorizationHandlerCoverage(t *testing.T) {
 		require.Empty(t, body.Agents[0].ProposedTags)
 		require.Empty(t, body.Agents[0].ApprovedTags)
 		require.Equal(t, "2026-04-08T12:00:00Z", body.Agents[0].RegisteredAt)
+		require.Len(t, body.Agents[1].Components.Reasoners, 1)
+		require.Equal(t, []string{"analysis"}, body.Agents[1].Components.Reasoners[0].ProposedTags)
+		require.Len(t, body.Agents[1].Components.Skills, 1)
+		require.Equal(t, []string{"search"}, body.Agents[1].Components.Skills[0].ApprovedTags)
+		require.Len(t, body.Agents[1].Components.Sessions, 1)
+		require.Equal(t, "voice", body.Agents[1].Components.Sessions[0].ID)
+		require.Equal(t, []string{"support"}, body.Agents[1].Components.Sessions[0].ApprovedTags)
 	})
 }
 
