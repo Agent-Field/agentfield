@@ -82,7 +82,7 @@ func runSessionStart(ctx context.Context, target string, opts *sessionStartOptio
 		"model":     opts.model,
 		"voice":     opts.voice,
 	}
-	resp, err := makeRequest(ctx, http.MethodPost, "/api/v1/sessions/"+target+"/start", payload, "application/json")
+	resp, err := makeRequest(ctx, http.MethodPost, "/api/v1/session-targets/"+target+"/start", payload, "application/json")
 	if err != nil {
 		return cliExitError{Code: 3, Err: err}
 	}
@@ -133,7 +133,7 @@ func runSessionOffer(ctx context.Context, sessionID string, opts *sessionOfferOp
 	if strings.TrimSpace(opts.transport) != "" {
 		values.Set("transport", opts.transport)
 	}
-	path := "/api/v1/sessions/" + url.PathEscape(sessionID) + "/realtime-offer"
+	path := "/api/v1/session-instances/" + url.PathEscape(sessionID) + "/realtime-offer"
 	if encoded := values.Encode(); encoded != "" {
 		path += "?" + encoded
 	}
@@ -255,7 +255,7 @@ func runSessionTool(ctx context.Context, sessionID string, tool string, opts *se
 		}
 	}
 	payload := map[string]interface{}{"target": opts.target, "input": input}
-	resp, err := makeRequest(ctx, http.MethodPost, "/api/v1/sessions/"+sessionID+"/tools/"+tool, payload, "application/json")
+	resp, err := makeRequest(ctx, http.MethodPost, "/api/v1/session-instances/"+sessionID+"/tools/"+tool, payload, "application/json")
 	if err != nil {
 		return cliExitError{Code: 3, Err: err}
 	}

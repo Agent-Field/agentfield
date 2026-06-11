@@ -8,6 +8,9 @@ export interface SessionDefinition {
   modalities: string[];
   voice?: string;
   tools: string[];
+  tags: string[];
+  proposed_tags: string[];
+  approved_tags: string[];
   metadata: Record<string, unknown>;
 }
 
@@ -18,6 +21,7 @@ export interface SessionOptions {
   modalities?: string[];
   voice?: string;
   tools?: string[];
+  tags?: string[];
   metadata?: Record<string, unknown>;
 }
 
@@ -54,6 +58,9 @@ export function buildSessionDefinition(name: string, options: SessionOptions): S
     modalities: options.modalities ?? ['audio', 'text'],
     voice: options.voice,
     tools: options.tools ?? [],
+    tags: options.tags ?? [],
+    proposed_tags: options.tags ?? [],
+    approved_tags: [],
     metadata: options.metadata ?? {}
   };
 }

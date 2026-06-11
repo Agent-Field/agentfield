@@ -20,6 +20,9 @@ class SessionDefinition:
     modalities: List[str] = field(default_factory=lambda: ["audio", "text"])
     voice: Optional[str] = None
     tools: List[str] = field(default_factory=list)
+    tags: List[str] = field(default_factory=list)
+    proposed_tags: List[str] = field(default_factory=list)
+    approved_tags: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -31,6 +34,9 @@ class SessionDefinition:
             "modalities": list(self.modalities),
             "voice": self.voice,
             "tools": list(self.tools),
+            "tags": list(self.tags),
+            "proposed_tags": list(self.proposed_tags or self.tags),
+            "approved_tags": list(self.approved_tags),
             "metadata": dict(self.metadata),
         }
 
@@ -85,6 +91,7 @@ def build_session_definition(
     modalities: Optional[List[str]] = None,
     voice: Optional[str] = None,
     tools: Optional[List[str]] = None,
+    tags: Optional[List[str]] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> SessionDefinition:
     capability = validate_session_transport(provider, transport)
@@ -96,5 +103,7 @@ def build_session_definition(
         modalities=list(modalities or ["audio", "text"]),
         voice=voice,
         tools=list(tools or []),
+        tags=list(tags or []),
+        proposed_tags=list(tags or []),
         metadata=dict(metadata or {}),
     )

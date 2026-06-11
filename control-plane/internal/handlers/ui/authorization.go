@@ -21,11 +21,25 @@ func NewAuthorizationHandler(storage storage.StorageProvider) *AuthorizationHand
 
 // AgentTagSummaryResponse is the per-agent response for the authorization agents list.
 type AgentTagSummaryResponse struct {
-	AgentID         string   `json:"agent_id"`
-	ProposedTags    []string `json:"proposed_tags"`
-	ApprovedTags    []string `json:"approved_tags"`
-	LifecycleStatus string   `json:"lifecycle_status"`
-	RegisteredAt    string   `json:"registered_at"`
+	AgentID         string              `json:"agent_id"`
+	ProposedTags    []string            `json:"proposed_tags"`
+	ApprovedTags    []string            `json:"approved_tags"`
+	Components      ComponentTagSummary `json:"components"`
+	LifecycleStatus string              `json:"lifecycle_status"`
+	RegisteredAt    string              `json:"registered_at"`
+}
+
+type ComponentTagSummary struct {
+	Reasoners []ComponentTagRow `json:"reasoners"`
+	Skills    []ComponentTagRow `json:"skills"`
+	Sessions  []ComponentTagRow `json:"sessions"`
+}
+
+type ComponentTagRow struct {
+	ID           string   `json:"id"`
+	Kind         string   `json:"kind"`
+	ProposedTags []string `json:"proposed_tags"`
+	ApprovedTags []string `json:"approved_tags"`
 }
 
 // GetAgentsWithTagsHandler returns all agents with their tag data.
@@ -43,6 +57,7 @@ func (h *AuthorizationHandler) GetAgentsWithTagsHandler(c *gin.Context) {
 
 	responses := make([]AgentTagSummaryResponse, 0, len(agents))
 	for _, agent := range agents {
+		types.HydrateAgentSessions(agent)
 		proposed := agent.ProposedTags
 		if proposed == nil {
 			proposed = []string{}
@@ -56,6 +71,7 @@ func (h *AuthorizationHandler) GetAgentsWithTagsHandler(c *gin.Context) {
 			AgentID:         agent.ID,
 			ProposedTags:    proposed,
 			ApprovedTags:    approved,
+			Components:      buildComponentTagSummary(agent),
 			LifecycleStatus: string(agent.LifecycleStatus),
 			RegisteredAt:    agent.RegisteredAt.Format("2006-01-02T15:04:05Z"),
 		})
@@ -65,4 +81,51 @@ func (h *AuthorizationHandler) GetAgentsWithTagsHandler(c *gin.Context) {
 		"agents": responses,
 		"total":  len(responses),
 	})
+}
+
+func buildComponentTagSummary(agent *types.AgentNode) ComponentTagSummary {
+	summary := ComponentTagSummary{
+		Reasoners: []ComponentTagRow{},
+		Skills:    []ComponentTagRow{},
+		Sessions:  []ComponentTagRow{},
+	}
+	for _, reasoner := range agent.Reasoners {
+		summary.Reasoners = append(summary.Reasoners, ComponentTagRow{
+			ID:           reasoner.ID,
+			Kind:         "reasoner",
+			ProposedTags: nonNilTags(firstTagList(reasoner.ProposedTags, reasoner.Tags)),
+			ApprovedTags: nonNilTags(reasoner.ApprovedTags),
+		})
+	}
+	for _, skill := range agent.Skills {
+		summary.Skills = append(summary.Skills, ComponentTagRow{
+			ID:           skill.ID,
+			Kind:         "skill",
+			ProposedTags: nonNilTags(firstTagList(skill.ProposedTags, skill.Tags)),
+			ApprovedTags: nonNilTags(skill.ApprovedTags),
+		})
+	}
+	for _, session := range agent.Sessions {
+		summary.Sessions = append(summary.Sessions, ComponentTagRow{
+			ID:           session.Name,
+			Kind:         "session",
+			ProposedTags: nonNilTags(firstTagList(session.ProposedTags, session.Tags)),
+			ApprovedTags: nonNilTags(session.ApprovedTags),
+		})
+	}
+	return summary
+}
+
+func firstTagList(primary []string, fallback []string) []string {
+	if len(primary) > 0 {
+		return primary
+	}
+	return fallback
+}
+
+func nonNilTags(tags []string) []string {
+	if tags == nil {
+		return []string{}
+	}
+	return tags
 }

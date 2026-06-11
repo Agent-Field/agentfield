@@ -15,7 +15,7 @@ func TestRunSessionOfferPostsSDPAndWritesRawAnswer(t *testing.T) {
 	var gotBody string
 	var gotContentType string
 	withTriggerTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/sessions/sess-1/realtime-offer", r.URL.Path)
+		require.Equal(t, "/api/v1/session-instances/sess-1/realtime-offer", r.URL.Path)
 		require.Equal(t, "openai", r.URL.Query().Get("provider"))
 		require.Equal(t, "webrtc", r.URL.Query().Get("transport"))
 		gotContentType = r.Header.Get("Content-Type")

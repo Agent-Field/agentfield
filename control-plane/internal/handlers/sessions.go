@@ -33,17 +33,6 @@ type ToolSessionRequest struct {
 	Input  map[string]interface{} `json:"input,omitempty"`
 }
 
-type sessionDefinition struct {
-	Name       string                 `json:"name"`
-	Provider   string                 `json:"provider"`
-	Transport  string                 `json:"transport"`
-	Model      string                 `json:"model,omitempty"`
-	Modalities []string               `json:"modalities,omitempty"`
-	Voice      string                 `json:"voice,omitempty"`
-	Tools      []string               `json:"tools,omitempty"`
-	Metadata   map[string]interface{} `json:"metadata,omitempty"`
-}
-
 func StartSessionHandler(store storage.StorageProvider) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		nodeID, sessionName, ok := splitSessionTarget(c.Param("target"))
@@ -99,9 +88,10 @@ func StartSessionHandler(store storage.StorageProvider) gin.HandlerFunc {
 			"model":        model,
 			"voice":        voice,
 			"modalities":   definition.Modalities,
+			"tags":         definition.ApprovedTags,
 			"tool_targets": sessionToolTargets(nodeID, definition.Tools),
-			"offer_url":    fmt.Sprintf("/api/v1/sessions/%s/realtime-offer", url.PathEscape(sessionID)),
-			"tool_url":     fmt.Sprintf("/api/v1/sessions/%s/tools/{tool}", url.PathEscape(sessionID)),
+			"offer_url":    fmt.Sprintf("/api/v1/session-instances/%s/realtime-offer", url.PathEscape(sessionID)),
+			"tool_url":     fmt.Sprintf("/api/v1/session-instances/%s/tools/{tool}", url.PathEscape(sessionID)),
 			"created_at":   time.Now().UTC().Format(time.RFC3339Nano),
 		})
 	}
@@ -187,6 +177,7 @@ func SessionToolHandler(store storage.StorageProvider, timeout time.Duration, in
 		}
 		forwardReq.Header.Set("Content-Type", "application/json")
 		forwardReq.Header.Set("X-Session-ID", sessionID)
+		copyForwardedSessionAuthHeaders(c, forwardReq)
 		if internalToken != "" {
 			forwardReq.Header.Set("Authorization", "Bearer "+internalToken)
 		}
@@ -203,30 +194,40 @@ func SessionToolHandler(store storage.StorageProvider, timeout time.Duration, in
 	}
 }
 
-func lookupSessionDefinition(c *gin.Context, store storage.StorageProvider, nodeID string, sessionName string) (sessionDefinition, bool) {
+func lookupSessionDefinition(c *gin.Context, store storage.StorageProvider, nodeID string, sessionName string) (types.SessionDefinition, bool) {
 	agent, err := store.GetAgent(c.Request.Context(), nodeID)
 	if err != nil || agent == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "agent not found"})
-		return sessionDefinition{}, false
+		return types.SessionDefinition{}, false
 	}
-	if agent.Metadata.Custom == nil {
+	types.HydrateAgentSessions(agent)
+	if len(agent.Sessions) == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "agent has no registered sessions"})
-		return sessionDefinition{}, false
+		return types.SessionDefinition{}, false
 	}
-	rawSessions, ok := agent.Metadata.Custom["sessions"].([]interface{})
-	if !ok {
-		c.JSON(http.StatusNotFound, gin.H{"error": "agent has no registered sessions"})
-		return sessionDefinition{}, false
-	}
-	for _, raw := range rawSessions {
-		bytes, _ := json.Marshal(raw)
-		var definition sessionDefinition
-		if json.Unmarshal(bytes, &definition) == nil && definition.Name == sessionName {
+	for _, definition := range agent.Sessions {
+		if definition.Name == sessionName {
 			return definition, true
 		}
 	}
 	c.JSON(http.StatusNotFound, gin.H{"error": "session not registered"})
-	return sessionDefinition{}, false
+	return types.SessionDefinition{}, false
+}
+
+func copyForwardedSessionAuthHeaders(c *gin.Context, req *http.Request) {
+	for _, header := range []string{
+		"X-Caller-Agent-ID",
+		"X-Caller-DID",
+		"X-Actor-ID",
+		"X-API-Key",
+		"X-Run-ID",
+		"X-Parent-Execution-ID",
+		"X-Parent-VC-ID",
+	} {
+		if value := strings.TrimSpace(c.GetHeader(header)); value != "" {
+			req.Header.Set(header, value)
+		}
+	}
 }
 
 func splitSessionTarget(target string) (string, string, bool) {
