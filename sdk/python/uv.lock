@@ -4,7 +4,7 @@ requires-python = ">=3.10, <3.14"
 
 [[package]]
 name = "agentfield"
-version = "0.1.89rc2"
+version = "0.1.92-rc.2"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },

@@ -877,6 +877,11 @@ type Session struct {
 	SessionName *string `json:"session_name,omitempty" db:"session_name"`
 
 	// DAG Relationship Fields
+	// TODO(session-linking): Define explicit session edge semantics before exposing
+	// session-to-session APIs. Parent/root IDs should support lifecycle edges such
+	// as transfer, bridge, companion, and escalation, while agent work inside each
+	// session continues to use app.call/session.call so reasoner executions remain
+	// normal workflow DAG nodes under the session.
 	ParentSessionID *string `json:"parent_session_id,omitempty" db:"parent_session_id"`
 	RootSessionID   *string `json:"root_session_id,omitempty" db:"root_session_id"`
 

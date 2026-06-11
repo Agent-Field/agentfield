@@ -161,10 +161,13 @@ func (a *Agent) registerNode(ctx context.Context) error {
 				"environment": "development",
 				"platform":    "go",
 			},
-			"sdk": map[string]any{
-				"language": "go",
+			"custom": map[string]any{
+				"sdk": map[string]any{
+					"language": "go",
+				},
+				"sessions": a.SessionDefinitions(),
+				"tags":     a.cfg.Tags,
 			},
-			"tags": a.cfg.Tags,
 		},
 		Features:       map[string]any{},
 		DeploymentType: a.cfg.DeploymentType,

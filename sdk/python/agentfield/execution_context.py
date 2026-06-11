@@ -67,12 +67,10 @@ class ExecutionContext:
         The AgentField backend issues fresh execution IDs for child nodes.
         """
 
-        parent_execution = self.parent_execution_id or self.execution_id
-
         headers: Dict[str, str] = {
             _RUN_HEADER: self.run_id,
             "X-Workflow-ID": self.workflow_id or self.run_id,
-            _PARENT_EXECUTION_HEADER: parent_execution,
+            _PARENT_EXECUTION_HEADER: self.execution_id,
             _EXECUTION_HEADER: self.execution_id,
             "X-Workflow-Run-ID": self.run_id,
         }
