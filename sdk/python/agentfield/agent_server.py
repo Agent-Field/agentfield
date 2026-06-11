@@ -803,7 +803,7 @@ class AgentServer:
             async with AsyncExitStack() as stack:
                 await stack.enter_async_context(internal_lifespan(app))
                 await stack.enter_async_context(existing_lifespan(app))
-            yield
+                yield
 
         self.agent.router.lifespan_context = merged_lifespan
 
