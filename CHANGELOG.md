@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.92-rc.3] - 2026-06-11
+
+
+### Fixed
+
+- Fix: ignore caller identity headers for tag policy(#422) (#653) (7ac732f)
+
+
+
+### Other
+
+- Fix: Remove /api/ui/v1 URL substitution from Python & Go SDK note endpoints (#650)
+
+* issue/go-sdk-note-url-fix: Remove /api/ui/v1 URL substitution from sendNote(), update test expectedPath
+
+* issue/python-sdk-note-url-fix: remove /api/ui/v1 URL substitution from note() and update test assertion
+
+* chore: remove tracked build artifacts and fortify .gitignore
+
+- Remove compiled binary examples/go_agent_nodes/multi_version (~10MB)
+- Remove coverage artifacts: coverage_handlers.out, coverage-func.txt,
+  ts_cov.txt, py_cov.txt
+- Remove .DS_Store files (4) from control-plane tree
+- Remove tooling leftover sdk/go/harness/.codex
+- Remove local debris dirs: .artifacts/, .worktrees/
+- Fortify .gitignore with patterns for coverage files, .codex markers,
+  and the multi_version binary
+
+---------
+
+Co-authored-by: SWE-AF <eng@agentfield.ai> (9038969)
+
 ## [0.1.92-rc.2] - 2026-06-10
 
 

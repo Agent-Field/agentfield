@@ -4428,31 +4428,26 @@ class Agent(FastAPI):
                     "agent_node_id": self.node_id,
                 }
 
-                # Make async HTTP request to backend - use UI API endpoint to match frontend
                 try:
                     import aiohttp
 
                     timeout = aiohttp.ClientTimeout(total=5.0)  # 5 second timeout
-                    # Use UI API base URL to match where frontend fetches notes from
-                    # Replace the last occurrence of /api/v1 with /api/ui/v1
-                    ui_api_base = self.client.api_base.replace("/api/v1", "/api/ui/v1")
 
                     if self.dev_mode:
                         from agentfield.logger import log_debug
 
                         log_debug(
-                            f"NOTE DEBUG: Original api_base: {self.client.api_base}"
+                            f"NOTE DEBUG: api_base: {self.client.api_base}"
                         )
-                        log_debug(f"NOTE DEBUG: UI api_base: {ui_api_base}")
                         log_debug(
-                            f"NOTE DEBUG: Full URL: {ui_api_base}/executions/note"
+                            f"NOTE DEBUG: Full URL: {self.client.api_base}/executions/note"
                         )
                         log_debug(f"NOTE DEBUG: Payload: {payload}")
                         log_debug(f"NOTE DEBUG: Headers: {headers}")
 
                     async with aiohttp.ClientSession(timeout=timeout) as session:
                         async with session.post(
-                            f"{ui_api_base}/executions/note",
+                            f"{self.client.api_base}/executions/note",
                             json=payload,
                             headers=headers,
                         ) as response:
@@ -4466,7 +4461,7 @@ class Agent(FastAPI):
                                 log_debug(f"NOTE DEBUG: Response text: {response_text}")
                                 if response.status == 200:
                                     log_debug(
-                                        f"✅ Note successfully sent to {ui_api_base}/executions/note"
+                                        f"✅ Note successfully sent to {self.client.api_base}/executions/note"
                                     )
                                 else:
                                     log_debug(
@@ -4477,26 +4472,18 @@ class Agent(FastAPI):
                     import requests
 
                     try:
-                        # Use UI API base URL to match where frontend fetches notes from
-                        ui_api_base = self.client.api_base.replace(
-                            "/api/v1", "/api/ui/v1"
-                        )
-
                         if self.dev_mode:
                             from agentfield.logger import log_debug
 
                             log_debug(
-                                f"NOTE DEBUG (requests): Original api_base: {self.client.api_base}"
+                                f"NOTE DEBUG (requests): api_base: {self.client.api_base}"
                             )
                             log_debug(
-                                f"NOTE DEBUG (requests): UI api_base: {ui_api_base}"
-                            )
-                            log_debug(
-                                f"NOTE DEBUG (requests): Full URL: {ui_api_base}/executions/note"
+                                f"NOTE DEBUG (requests): Full URL: {self.client.api_base}/executions/note"
                             )
 
                         response = requests.post(
-                            f"{ui_api_base}/executions/note",
+                            f"{self.client.api_base}/executions/note",
                             json=payload,
                             headers=headers,
                             timeout=5.0,
@@ -4512,7 +4499,7 @@ class Agent(FastAPI):
                             )
                             if response.status_code == 200:
                                 log_debug(
-                                    f"✅ Note successfully sent to {ui_api_base}/executions/note"
+                                    f"✅ Note successfully sent to {self.client.api_base}/executions/note"
                                 )
                             else:
                                 log_debug(
