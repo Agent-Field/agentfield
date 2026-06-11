@@ -425,6 +425,8 @@ export function PlaygroundPage() {
     try {
       const data = await sessionsApi.startSession(selectedSessionTarget);
       setStartedSession(data);
+      const toolNames = Object.keys(data.tool_targets ?? {});
+      setSelectedTool((current) => (current && toolNames.includes(current) ? current : toolNames[0] ?? ""));
     } catch (err) {
       setSessionStartError(err instanceof Error ? err.message : "Failed to start session.");
     } finally {
