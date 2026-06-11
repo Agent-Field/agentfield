@@ -149,8 +149,8 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	sessionGroup := agentAPI.Group("/sessions")
 	{
 		sessionGroup.POST("/:target/start", handlers.StartSessionHandler(s.storage))
-		sessionGroup.POST("/:session_id/realtime-offer", handlers.SessionRealtimeOfferHandler(s.storage))
-		sessionGroup.POST("/:session_id/tools/:tool", handlers.SessionToolHandler(s.storage, s.config.AgentField.ExecutionQueue.AgentCallTimeout, s.config.Features.DID.Authorization.InternalToken))
+		sessionGroup.POST("/:target/realtime-offer", handlers.SessionRealtimeOfferHandler(s.storage))
+		sessionGroup.POST("/:target/tools/:tool", handlers.SessionToolHandler(s.storage, s.config.AgentField.ExecutionQueue.AgentCallTimeout, s.config.Features.DID.Authorization.InternalToken))
 	}
 
 	// Workflow endpoints will be reintroduced once the simplified execution pipeline lands.

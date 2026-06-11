@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 	"github.com/gin-gonic/gin"
@@ -45,6 +46,19 @@ func TestStartSessionHandlerRejectsUnsupportedTransport(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	require.Contains(t, rec.Body.String(), "does not infer or switch providers")
+}
+
+func TestSessionRoutesRegisterTogether(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := &nodeRESTStorageStub{agent: sessionTestAgent()}
+
+	require.NotPanics(t, func() {
+		router := gin.New()
+		group := router.Group("/api/v1/sessions")
+		group.POST("/:target/start", StartSessionHandler(store))
+		group.POST("/:target/realtime-offer", SessionRealtimeOfferHandler(store))
+		group.POST("/:target/tools/:tool", SessionToolHandler(store, time.Second, ""))
+	})
 }
 
 func sessionTestAgent() *types.AgentNode {
