@@ -131,7 +131,7 @@ func SessionRealtimeOfferHandler(store storage.StorageProvider) gin.HandlerFunc 
 		}
 		answer, err := createOpenAIRealtimeCall(
 			c.Request.Context(),
-			c.Param("session_id"),
+			sessionPathID(c),
 			string(sdp),
 			firstNonEmptySession(c.Query("model"), "gpt-realtime-2"),
 			firstNonEmptySession(c.Query("voice"), "marin"),
@@ -151,7 +151,7 @@ func SessionRealtimeOfferHandler(store storage.StorageProvider) gin.HandlerFunc 
 func SessionToolHandler(store storage.StorageProvider, timeout time.Duration, internalToken string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		_ = store
-		sessionID := strings.TrimSpace(c.Param("session_id"))
+		sessionID := sessionPathID(c)
 		toolName := strings.TrimSpace(c.Param("tool"))
 		var req ToolSessionRequest
 		if err := c.ShouldBindJSON(&req); err != nil && err != io.EOF {
@@ -192,6 +192,10 @@ func SessionToolHandler(store storage.StorageProvider, timeout time.Duration, in
 		respBody, _ := io.ReadAll(resp.Body)
 		c.Data(resp.StatusCode, resp.Header.Get("Content-Type"), respBody)
 	}
+}
+
+func sessionPathID(c *gin.Context) string {
+	return firstNonEmptySession(c.Param("session_id"), c.Param("target"))
 }
 
 func lookupSessionDefinition(c *gin.Context, store storage.StorageProvider, nodeID string, sessionName string) (types.SessionDefinition, bool) {

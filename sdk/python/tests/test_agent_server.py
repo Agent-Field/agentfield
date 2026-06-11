@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -66,6 +67,21 @@ async def _post(app, path, **kwargs):
         return await client.post(path, **kwargs)
 
 
+class _FakeConnectionManager:
+    def __init__(self, agent, config):
+        self.agent = agent
+        self.config = config
+        self.on_connected = None
+        self.on_disconnected = None
+
+    async def start(self):
+        self.agent.lifecycle_events.append("agentfield-start")
+        return False
+
+    async def stop(self):
+        self.agent.lifecycle_events.append("agentfield-stop")
+
+
 # ---------------------------------------------------------------------------
 # Route registration and health endpoint
 # ---------------------------------------------------------------------------
@@ -118,6 +134,58 @@ async def test_info_endpoint():
     assert data["node_id"] == "agent-1"
     assert data["version"] == "1.0.0"
     assert "registered_at" in data
+
+
+def test_serve_preserves_existing_lifespan_until_shutdown(monkeypatch):
+    events = []
+
+    @asynccontextmanager
+    async def existing_lifespan(app):
+        app.lifecycle_events.append("caller-start")
+        try:
+            yield
+        finally:
+            app.lifecycle_events.append("caller-stop")
+
+    app = make_agent_app()
+    app.router.lifespan_context = existing_lifespan
+    app.lifecycle_events = events
+    app.agentfield_handler = SimpleNamespace(
+        start_heartbeat=lambda interval: events.append("heartbeat-start"),
+        setup_fast_lifecycle_signal_handlers=lambda: events.append(
+            "signal-handlers"
+        ),
+        stop_heartbeat=lambda: events.append("heartbeat-stop"),
+        send_enhanced_heartbeat=AsyncMock(return_value=True),
+        enhanced_heartbeat_loop=AsyncMock(),
+    )
+    app.connection_manager = None
+    app.memory_event_client = None
+    app.client = SimpleNamespace(aclose=AsyncMock())
+
+    def fake_uvicorn_run(served_app, **config):
+        async def exercise_lifespan():
+            async with served_app.router.lifespan_context(served_app):
+                events.append("serving")
+
+        asyncio.run(exercise_lifespan())
+
+    monkeypatch.setattr("agentfield.connection_manager.ConnectionManager", _FakeConnectionManager)
+    monkeypatch.setattr("agentfield.agent_server.uvicorn.run", fake_uvicorn_run)
+
+    AgentServer(app).serve(port=8001)
+
+    assert events == [
+        "heartbeat-start",
+        "signal-handlers",
+        "agentfield-start",
+        "caller-start",
+        "serving",
+        "caller-stop",
+        "agentfield-stop",
+        "heartbeat-stop",
+    ]
+    app.client.aclose.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

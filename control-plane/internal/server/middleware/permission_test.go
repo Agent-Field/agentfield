@@ -134,7 +134,7 @@ func TestPermissionCallerDIDResolutionPrecedence(t *testing.T) {
 		expectedTags      []string
 	}{
 		{
-			name:              "vc tags win over registration tags and header fallback",
+			name:              "vc tags win over registration tags and caller identity header",
 			verifiedCallerDID: "did:caller:vc",
 			didMappings:       map[string]string{"did:caller:vc": "caller-vc"},
 			headerCallerID:    "caller-header",
@@ -160,11 +160,17 @@ func TestPermissionCallerDIDResolutionPrecedence(t *testing.T) {
 			expectedTags:      []string{"registration-tag"},
 		},
 		{
-			name:           "header caller id is final fallback",
+			name:           "caller identity header ignored without verified did",
 			didMappings:    map[string]string{},
 			headerCallerID: "caller-header",
 			tagVerifier:    &permissionTagVCVerifierStub{},
-			expectedTags:   []string{"header-tag"},
+		},
+		{
+			name:              "caller identity header ignored when verified did is unresolved",
+			verifiedCallerDID: "did:caller:missing",
+			didMappings:       map[string]string{},
+			headerCallerID:    "caller-header",
+			tagVerifier:       &permissionTagVCVerifierStub{},
 		},
 	}
 
@@ -217,6 +223,97 @@ func TestPermissionCallerDIDResolutionPrecedence(t *testing.T) {
 			require.Equal(t, "run", policy.lastFunction)
 		})
 	}
+}
+
+func TestPermissionCallerNodeHeaderWithoutVerifiedDIDIsAnonymous(t *testing.T) {
+	policy := &permissionPolicyCapture{}
+	router := setupPermissionRouter(
+		"",
+		policy,
+		&permissionTagVCVerifierStub{},
+		&permissionAgentResolverStub{
+			agents: map[string]*types.AgentNode{
+				"target-agent": {
+					ID:           "target-agent",
+					ApprovedTags: []string{"target-tag"},
+				},
+				"caller-node": {
+					ID:           "caller-node",
+					ApprovedTags: []string{"node-header-tag"},
+				},
+			},
+		},
+		&permissionDIDResolverStub{dids: map[string]string{}},
+		func(c *gin.Context) {
+			c.Status(http.StatusOK)
+		},
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/execute/target-agent.run", bytes.NewBufferString(`{"input":{"limit":5}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agent-Node-ID", "caller-node")
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Empty(t, policy.lastCallerTags)
+	require.Equal(t, []string{"target-tag"}, policy.lastTargetTags)
+	require.Equal(t, "run", policy.lastFunction)
+}
+
+func TestPermissionSpoofedCallerHeaderWithoutVerifiedDIDIsAnonymous(t *testing.T) {
+	policy := &permissionPolicyCapture{
+		evaluate: func(callerTags, _ []string, _ string, _ map[string]any) *types.PolicyEvaluationResult {
+			for _, tag := range callerTags {
+				if tag == "privileged" {
+					return &types.PolicyEvaluationResult{
+						Matched: true,
+						Allowed: true,
+					}
+				}
+			}
+			return &types.PolicyEvaluationResult{
+				Matched: true,
+				Allowed: false,
+			}
+		},
+	}
+	router := setupPermissionRouter(
+		"",
+		policy,
+		&permissionTagVCVerifierStub{},
+		&permissionAgentResolverStub{
+			agents: map[string]*types.AgentNode{
+				"target-agent": {
+					ID:           "target-agent",
+					ApprovedTags: []string{"target-tag"},
+				},
+				"privileged-agent": {
+					ID:           "privileged-agent",
+					ApprovedTags: []string{"privileged"},
+				},
+			},
+		},
+		&permissionDIDResolverStub{dids: map[string]string{}},
+		func(c *gin.Context) {
+			t.Fatal("handler should not be reached when only caller identity headers are present")
+		},
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/execute/target-agent.run", bytes.NewBufferString(`{"input":{"limit":5}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Caller-Agent-ID", "privileged-agent")
+	req.Header.Set("X-Agent-Node-ID", "privileged-agent")
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusForbidden, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "access_denied")
+	require.Empty(t, policy.lastCallerTags)
+	require.Equal(t, []string{"target-tag"}, policy.lastTargetTags)
+	require.Equal(t, "run", policy.lastFunction)
 }
 
 func TestPermissionRequestBodyReadAndRestored(t *testing.T) {

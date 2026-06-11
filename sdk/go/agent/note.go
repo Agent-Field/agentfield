@@ -61,13 +61,8 @@ func (a *Agent) sendNote(ctx context.Context, message string, tags []string) {
 	// Get execution context from the provided context
 	execCtx := ExecutionContextFrom(ctx)
 
-	// Build UI API URL (notes go to /api/ui/v1, not /api/v1)
-	uiAPIURL := strings.Replace(baseURL, "/api/v1", "/api/ui/v1", 1)
-	if !strings.Contains(uiAPIURL, "/api/ui/v1") {
-		// If no /api/v1 was found, append /api/ui/v1
-		uiAPIURL = strings.TrimSuffix(baseURL, "/") + "/api/ui/v1"
-	}
-	noteURL := uiAPIURL + "/executions/note"
+	// Build note URL (canonical endpoint: /api/v1/executions/note)
+	noteURL := strings.TrimSuffix(baseURL, "/") + "/executions/note"
 
 	// Build payload
 	payload := notePayload{
