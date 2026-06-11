@@ -151,16 +151,21 @@ func PermissionCheckMiddleware(
 		// Parse function name from target param for policy evaluation.
 		_, functionName, _ := parseTargetParam(target)
 
-		// Resolve caller agent identity (used by both policy evaluation and anonymous check).
+		// Resolve caller agent identity from the verified DID only. Caller identity
+		// headers are client-controlled and must not influence authorization.
 		var callerAgentID string
 		if callerDID != "" {
 			callerAgentID = didResolver.ResolveAgentIDByDID(ctx, callerDID)
-		}
-		if callerAgentID == "" {
-			callerAgentID = c.GetHeader("X-Caller-Agent-ID")
 			if callerAgentID == "" {
-				callerAgentID = c.GetHeader("X-Agent-Node-ID")
+				logger.Logger.Warn().
+					Str("caller_did", callerDID).
+					Msg("Permission middleware: verified caller DID did not resolve to an agent ID, treating caller as anonymous")
 			}
+		} else if c.GetHeader("X-Caller-Agent-ID") != "" || c.GetHeader("X-Agent-Node-ID") != "" {
+			logger.Logger.Warn().
+				Bool("x_caller_agent_id_present", c.GetHeader("X-Caller-Agent-ID") != "").
+				Bool("x_agent_node_id_present", c.GetHeader("X-Agent-Node-ID") != "").
+				Msg("Permission middleware: caller identity headers ignored without a verified DID, treating caller as anonymous")
 		}
 
 		// --- Tag-based policy evaluation ---
