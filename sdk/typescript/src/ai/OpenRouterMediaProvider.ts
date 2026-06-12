@@ -11,6 +11,7 @@ import type {
   AudioRequest,
 } from './MediaProvider.js';
 import { MediaProviderError } from './MediaProvider.js';
+import { mergeOpenRouterAttributionHeaders } from './openrouterAttribution.js';
 
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 
@@ -137,6 +138,9 @@ function assertSafeUrl(urlStr: string): void {
 export interface OpenRouterMediaProviderOptions {
   apiKey?: string;
   baseUrl?: string;
+  openRouterSiteUrl?: string;
+  openRouterAppName?: string;
+  openRouterHeaders?: Record<string, string>;
 }
 
 export class OpenRouterMediaProvider implements MediaProvider {
@@ -144,10 +148,15 @@ export class OpenRouterMediaProvider implements MediaProvider {
   readonly supportedModalities = ['image', 'audio', 'video'];
 
   private readonly baseUrl: string;
+  private readonly attributionHeaders: Record<string, string>;
 
   constructor(options: OpenRouterMediaProviderOptions = {}) {
     const key = options.apiKey ?? process.env.OPENROUTER_API_KEY ?? '';
     this.baseUrl = options.baseUrl ?? OPENROUTER_BASE;
+    this.attributionHeaders = mergeOpenRouterAttributionHeaders(options.openRouterHeaders, {
+      siteUrl: options.openRouterSiteUrl,
+      appName: options.openRouterAppName,
+    });
     if (!key) {
       throw new MediaProviderError('OpenRouter API key required: pass apiKey or set OPENROUTER_API_KEY', {
         provider: 'openrouter',
@@ -337,7 +346,10 @@ export class OpenRouterMediaProvider implements MediaProvider {
       }
 
       const dlRes = await fetch(videoUrl, {
-        headers: downloadHeaders,
+        headers: mergeOpenRouterAttributionHeaders({
+          ...this.attributionHeaders,
+          ...downloadHeaders,
+        }),
         signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT),
         redirect: 'error',
       });
@@ -691,10 +703,11 @@ export class OpenRouterMediaProvider implements MediaProvider {
     const key = apiKeyStore.get(this);
     return fetch(url, {
       method: 'POST',
-      headers: {
+      headers: mergeOpenRouterAttributionHeaders({
+        ...this.attributionHeaders,
         'Content-Type': 'application/json',
         Authorization: `Bearer ${key}`,
-      },
+      }),
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(API_TIMEOUT),
     });
@@ -704,9 +717,10 @@ export class OpenRouterMediaProvider implements MediaProvider {
     const key = apiKeyStore.get(this);
     return fetch(url, {
       method: 'GET',
-      headers: {
+      headers: mergeOpenRouterAttributionHeaders({
+        ...this.attributionHeaders,
         Authorization: `Bearer ${key}`,
-      },
+      }),
       signal: AbortSignal.timeout(API_TIMEOUT),
     });
   }

@@ -233,9 +233,7 @@ async def test_call_skips_sync_fallback_on_execution_cancelled_error():
         return "exec_xyz"
 
     async def fake_wait_for_execution_result(execution_id, timeout=None):
-        raise ExecutionCancelledError(
-            "Execution was cancelled: user clicked cancel"
-        )
+        raise ExecutionCancelledError("Execution was cancelled: user clicked cancel")
 
     async def fake_execute(target, input_data, headers):
         nonlocal sync_calls
@@ -408,3 +406,168 @@ async def test_call_still_falls_back_on_transport_errors():
         "blips and 502/503s."
     )
     assert result == {"recovered": True}
+
+
+@pytest.mark.asyncio
+async def test_call_does_not_inherit_stale_agent_level_context():
+    """A call made with NO task-local execution context must not be parented
+    to whatever execution happens to be cached on the shared agent-level
+    attribute.
+
+    Regression for the parent-attribution bug: in a process running multiple
+    concurrent executions, ``self._current_execution_context`` holds whichever
+    reasoner was most recently dispatched — an unrelated, possibly in-flight
+    execution. A fire-and-forget ``app.call`` (e.g. from a webhook handler)
+    that has no contextvar of its own must start a FRESH ROOT, not chain
+    itself under that bystander execution.
+    """
+    from agentfield.execution_context import ExecutionContext
+
+    agent = object.__new__(Agent)
+    agent.node_id = "node"
+    agent.agentfield_connected = True
+    agent.dev_mode = False
+    agent.async_config = SimpleNamespace(
+        enable_async_execution=False, fallback_to_sync=False
+    )
+    agent._async_execution_manager = None
+
+    # Simulate an unrelated, still-registered concurrent execution having
+    # stamped its context onto the shared instance attribute.
+    agent._current_execution_context = ExecutionContext(
+        run_id="run_OTHER",
+        execution_id="exec_OTHER",
+        agent_instance=agent,
+        reasoner_name="unrelated_reasoner",
+        registered=True,
+    )
+
+    recorded = {}
+
+    async def fake_execute(target, input_data, headers):
+        recorded["headers"] = headers
+        return {"result": {"ok": True}}
+
+    agent.client = SimpleNamespace(execute=fake_execute)
+
+    set_current_agent(agent)
+    try:
+        # No set_execution_context(...) → no task-local context for this call.
+        result = await agent.call("other.remote_reasoner", 1)
+    finally:
+        clear_current_agent()
+
+    assert result == {"ok": True}
+    assert recorded["headers"]["X-Parent-Execution-ID"] != "exec_OTHER", (
+        "call inherited the stale, unrelated concurrent execution as its parent"
+    )
+    assert recorded["headers"]["X-Run-ID"] != "run_OTHER", (
+        "call was bundled into the stale execution's workflow run"
+    )
+
+
+@pytest.mark.asyncio
+async def test_call_uses_task_local_context_as_parent():
+    """When a call IS made from inside an executing reasoner (task-local
+    contextvar set), the parent must be that execution — no regression to the
+    normal nesting that builds the workflow DAG."""
+    from agentfield.execution_context import (
+        ExecutionContext,
+        reset_execution_context,
+        set_execution_context,
+    )
+
+    agent = object.__new__(Agent)
+    agent.node_id = "node"
+    agent.agentfield_connected = True
+    agent.dev_mode = False
+    agent.async_config = SimpleNamespace(
+        enable_async_execution=False, fallback_to_sync=False
+    )
+    agent._async_execution_manager = None
+    # A stale bystander on the shared attribute must be ignored in favor of the
+    # task-local context.
+    agent._current_execution_context = ExecutionContext(
+        run_id="run_OTHER",
+        execution_id="exec_OTHER",
+        agent_instance=agent,
+        reasoner_name="unrelated_reasoner",
+        registered=True,
+    )
+
+    recorded = {}
+
+    async def fake_execute(target, input_data, headers):
+        recorded["headers"] = headers
+        return {"result": {"ok": True}}
+
+    agent.client = SimpleNamespace(execute=fake_execute)
+
+    ctx_a = ExecutionContext(
+        run_id="run_A",
+        execution_id="exec_A",
+        agent_instance=agent,
+        reasoner_name="reasoner_a",
+        registered=True,
+    )
+
+    set_current_agent(agent)
+    token = set_execution_context(ctx_a)
+    try:
+        result = await agent.call("other.remote_reasoner", 1)
+    finally:
+        reset_execution_context(token)
+        clear_current_agent()
+
+    assert result == {"ok": True}
+    assert recorded["headers"]["X-Parent-Execution-ID"] == "exec_A"
+    assert recorded["headers"]["X-Run-ID"] == "run_A"
+
+
+@pytest.mark.asyncio
+async def test_call_local_reasoner_unwraps_tracked_wrapper_for_signature():
+    """When the local function attrs are tracked wrappers (as set by
+    @app.reasoner() / @app.skill()), app.call must unwrap _original_func
+    before inspecting the signature so positional args get mapped to the
+    original parameter names, not the wrapper's (*args, **kwargs)."""
+    agent = object.__new__(Agent)
+    agent.node_id = "node"
+    agent.agentfield_connected = True
+    agent.dev_mode = False
+    agent.async_config = SimpleNamespace(
+        enable_async_execution=False, fallback_to_sync=False
+    )
+    agent._async_execution_manager = None
+    agent._current_execution_context = None
+
+    recorded = {}
+
+    async def fake_execute(target, input_data, headers):
+        recorded["target"] = target
+        recorded["input_data"] = input_data
+        return {"result": {"ok": True}}
+
+    agent.client = SimpleNamespace(execute=fake_execute)
+
+    # Original function with typed parameters
+    def original_reasoner(a: int, b: str, execution_context=None):
+        return a + int(b)
+
+    # Simulate a tracked wrapper that *loses* type info (like _run_async_skill)
+    async def tracked_wrapper(*args, **kwargs):
+        return await original_reasoner(*args, **kwargs)
+
+    setattr(tracked_wrapper, "_original_func", original_reasoner)
+
+    agent.local_reasoner = tracked_wrapper
+
+    set_current_agent(agent)
+    try:
+        result = await agent.call("node.local_reasoner", 42, "10")
+    finally:
+        clear_current_agent()
+
+    assert result == {"ok": True}
+    assert recorded["target"] == "node.local_reasoner"
+    # Without unwrapping, positional args would map to arg_0 / arg_1
+    assert recorded["input_data"] == {"a": 42, "b": "10"}

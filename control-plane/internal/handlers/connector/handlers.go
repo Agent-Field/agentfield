@@ -49,7 +49,7 @@ func NewHandlers(
 // sole authority for what the connector token is allowed to access.
 // The /manifest endpoint is always accessible so the connector can learn
 // its granted capabilities on startup.
-func (h *Handlers) RegisterRoutes(group *gin.RouterGroup) {
+func (h *Handlers) RegisterRoutes(group gin.IRouter) {
 	caps := h.connectorConfig.Capabilities
 
 	// Manifest endpoint — always accessible (connector needs this to learn capabilities)

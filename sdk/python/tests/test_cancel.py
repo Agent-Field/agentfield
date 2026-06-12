@@ -136,12 +136,20 @@ def test_cancel_route_returns_200_for_unknown_execution():
 
 
 @pytest.mark.asyncio
-async def test_cancel_route_emits_info_log_on_active_cancel(caplog):
+async def test_cancel_route_emits_info_log_on_active_cancel():
     """The route logs a structured info line when it actually cancelled
     something. We register the task and call the route handler directly
     rather than via TestClient because TestClient creates a fresh event
     loop per request, so a task registered in one request isn't visible
     from the next.
+
+    We capture with a handler attached directly to the ``agentfield.cancel``
+    logger rather than pytest's ``caplog``. The SDK deliberately sets
+    ``propagate=False`` on the ``agentfield`` parent logger (see logger.py), so
+    once any AgentField logger is created, ``agentfield.cancel`` records no
+    longer reach the root logger where ``caplog``'s handler lives — which made
+    this assertion silently order-dependent. A direct handler asserts the same
+    contract independent of namespace propagation and suite ordering.
     """
     agent = _FakeAgent()
     install_cancel_route(agent)
@@ -155,10 +163,7 @@ async def test_cancel_route_emits_info_log_on_active_cancel(caplog):
     # Find the route handler we just installed.
     handler = None
     for route in agent.router.routes:
-        if (
-            getattr(route, "path", "")
-            == "/_internal/executions/{execution_id}/cancel"
-        ):
+        if getattr(route, "path", "") == "/_internal/executions/{execution_id}/cancel":
             handler = route.endpoint
             break
     assert handler is not None, "cancel route was not installed"
@@ -175,11 +180,25 @@ async def test_cancel_route_emits_info_log_on_active_cancel(caplog):
         def __init__(self, headers):
             self.headers = _Headers(headers)
 
-    with caplog.at_level(logging.INFO, logger="agentfield.cancel"):
+    records: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    cancel_logger = logging.getLogger("agentfield.cancel")
+    capture = _Capture(level=logging.INFO)
+    prev_level = cancel_logger.level
+    cancel_logger.addHandler(capture)
+    cancel_logger.setLevel(logging.INFO)
+    try:
         resp = await handler(
             execution_id="exec-active",
             request=_Request({"X-AgentField-Source": "cancel-dispatcher"}),
         )
+    finally:
+        cancel_logger.removeHandler(capture)
+        cancel_logger.setLevel(prev_level)
 
     # FastAPI JSONResponse — body is bytes, status is on the object.
     import json as _json
@@ -187,7 +206,8 @@ async def test_cancel_route_emits_info_log_on_active_cancel(caplog):
     assert resp.status_code == 200
     body = _json.loads(resp.body.decode())
     assert body == {"cancelled": True, "execution_id": "exec-active"}
-    assert any("cancel-callback fired" in rec.message for rec in caplog.records)
+    # getMessage() applies the %-args; rec.message is only set once a formatter runs.
+    assert any("cancel-callback fired" in rec.getMessage() for rec in records)
 
     with pytest.raises(asyncio.CancelledError):
         await task

@@ -290,7 +290,7 @@ func (h *TagApprovalHandlers) ListKnownTags(c *gin.Context) {
 }
 
 // RegisterRoutes registers the tag approval admin routes.
-func (h *TagApprovalHandlers) RegisterRoutes(router *gin.RouterGroup) {
+func (h *TagApprovalHandlers) RegisterRoutes(router gin.IRouter) {
 	adminGroup := router.Group("/admin")
 	{
 		agentsGroup := adminGroup.Group("/agents")

@@ -50,6 +50,9 @@ export interface AIConfig {
   embeddingModel?: string;
   apiKey?: string;
   baseUrl?: string;
+  openRouterSiteUrl?: string;
+  openRouterAppName?: string;
+  openRouterHeaders?: Record<string, string>;
   temperature?: number;
   maxTokens?: number;
   enableRateLimitRetry?: boolean;

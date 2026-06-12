@@ -45,28 +45,27 @@ func RunCLI(ctx context.Context, cmd []string, env map[string]string, cwd string
 	c := exec.CommandContext(ctx, cmd[0], cmd[1:]...)
 
 	// Merge environment: empty values unset the variable.
-	unset := make(map[string]bool)
+	merged := make(map[string]string)
+	for _, entry := range os.Environ() {
+		key, value, found := strings.Cut(entry, "=")
+		if !found {
+			continue
+		}
+		merged[key] = value
+	}
 	for k, v := range env {
 		if v == "" {
-			unset[k] = true
+			delete(merged, k)
+		} else {
+			merged[k] = v
 		}
 	}
+
+	applyOpenRouterAttributionEnv(merged)
+
 	var mergedEnv []string
-	for _, entry := range os.Environ() {
-		key, _, found := strings.Cut(entry, "=")
-		if !found {
-			mergedEnv = append(mergedEnv, entry)
-			continue
-		}
-		if unset[key] {
-			continue
-		}
-		mergedEnv = append(mergedEnv, entry)
-	}
-	for k, v := range env {
-		if v != "" {
-			mergedEnv = append(mergedEnv, k+"="+v)
-		}
+	for k, v := range merged {
+		mergedEnv = append(mergedEnv, k+"="+v)
 	}
 	c.Env = mergedEnv
 

@@ -50,9 +50,7 @@ except Exception:  # pragma: no cover
 
 
 def _network_allowed(node: "pytest.Node") -> bool:
-    return bool(
-        node.get_closest_marker("integration")
-    )
+    return bool(node.get_closest_marker("integration"))
 
 
 @pytest.fixture(autouse=True)
@@ -61,12 +59,60 @@ def _ensure_event_loop():
     raises RuntimeError in non-async contexts. Agent() constructor and
     handle_serverless() depend on asyncio internally."""
     import asyncio
+
     try:
         asyncio.get_event_loop()
     except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_execution_context():
+    """Keep per-test agent/execution-context state from bleeding across tests.
+
+    The SDK tracks the active agent and execution context in module-level
+    ContextVars and spawns best-effort fire-and-forget tasks (note/log
+    forwarding). Under loaded CI on Python 3.12 these have intermittently
+    polluted a later test's view of the context (observed flake:
+    get_current_agent_instance() returning None mid-test, so workflow
+    registration is skipped). Reset the vars and drain any tasks the test
+    left pending around every test. Everything here is best-effort and must
+    never raise — a teardown hiccup must not fail an otherwise-green test.
+    """
+    import asyncio
+    from agentfield import agent_registry
+    from agentfield.execution_context import _context_manager
+
+    def _reset_vars():
+        try:
+            agent_registry._current_agent.set(None)
+        except Exception:
+            pass
+        try:
+            _context_manager._context_var.set(None)
+        except Exception:
+            pass
+
+    _reset_vars()
+    try:
+        yield
+    finally:
+        # Drain fire-and-forget tasks so none can resume during a later test.
+        try:
+            loop = asyncio.get_event_loop_policy().get_event_loop()
+            if loop is not None and not loop.is_closed() and not loop.is_running():
+                pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+                for t in pending:
+                    t.cancel()
+                if pending:
+                    loop.run_until_complete(
+                        asyncio.gather(*pending, return_exceptions=True)
+                    )
+        except Exception:
+            pass
+        _reset_vars()
 
 
 @pytest.fixture(autouse=True)

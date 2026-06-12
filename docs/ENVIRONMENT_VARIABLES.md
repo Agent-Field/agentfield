@@ -121,3 +121,14 @@ The same concept applies to **Docker**:
 - `AGENT_CALLBACK_URL` (recommended in Docker/Kubernetes): URL the control plane will call back to (examples: `http://my-agent:8001`, or for host-run agents with Dockerized control plane: `http://host.docker.internal:8001`).
 
 Many Python examples also require model provider credentials (for example `OPENAI_API_KEY`), depending on the `AIConfig` you choose.
+
+### OpenRouter attribution
+
+OpenRouter attribution is request metadata, not authentication. AgentField SDKs send these as `HTTP-Referer`, `X-OpenRouter-Title`, and `X-Title` for OpenRouter requests.
+
+- `AGENTFIELD_OPENROUTER_SITE_URL` (default: `https://agentfield.ai`)
+- `AGENTFIELD_OPENROUTER_APP_NAME` (default: `AgentField AI`)
+- `OR_SITE_URL`, `OR_APP_NAME`: LiteLLM-compatible attribution env vars.
+- `AGENTFIELD_OPENROUTER_ATTRIBUTION=false`: Disable OpenRouter attribution headers/env propagation.
+
+Explicit SDK config or explicit request headers win over env defaults. `AGENTFIELD_API_KEY`, SDK `api_key` / `apiKey`, Go `WithAPIKey`, and the `X-API-Key` header are only for AgentField control-plane authentication and are not used for OpenRouter attribution.

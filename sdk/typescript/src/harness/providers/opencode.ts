@@ -2,6 +2,10 @@ import type { HarnessProvider } from './base.js';
 import type { RawResult } from '../types.js';
 import { createRawResult, createMetrics } from '../types.js';
 import { runCli } from '../cli.js';
+import {
+  isOpenRouterRequest,
+  openRouterAttributionHeaders,
+} from '../../ai/openrouterAttribution.js';
 
 export class OpenCodeProvider implements HarnessProvider {
   private readonly bin: string;
@@ -41,6 +45,28 @@ export class OpenCodeProvider implements HarnessProvider {
 
     // Prompt is the positional `message` arg to `opencode run`.
     cmd.push(effectivePrompt);
+
+    const explicitModel = typeof options.model === 'string' ? options.model : undefined;
+    if (
+      explicitModel &&
+      isOpenRouterRequest({ model: explicitModel }) &&
+      !env.OPENCODE_CONFIG_CONTENT &&
+      !process.env.OPENCODE_CONFIG_CONTENT
+    ) {
+      const modelSlug = explicitModel.slice('openrouter/'.length);
+      const headers = openRouterAttributionHeaders({ env: { ...process.env, ...env } });
+      if (modelSlug && Object.keys(headers).length > 0) {
+        env.OPENCODE_CONFIG_CONTENT = JSON.stringify({
+          provider: {
+            openrouter: {
+              models: {
+                [modelSlug]: { headers },
+              },
+            },
+          },
+        });
+      }
+    }
 
     const startApi = Date.now();
     try {

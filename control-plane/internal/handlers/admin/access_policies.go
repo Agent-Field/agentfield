@@ -168,7 +168,7 @@ func (h *AccessPolicyHandlers) DeletePolicy(c *gin.Context) {
 }
 
 // RegisterRoutes registers the access policy admin routes.
-func (h *AccessPolicyHandlers) RegisterRoutes(router *gin.RouterGroup) {
+func (h *AccessPolicyHandlers) RegisterRoutes(router gin.IRouter) {
 	adminGroup := router.Group("/admin")
 	{
 		policiesGroup := adminGroup.Group("/policies")

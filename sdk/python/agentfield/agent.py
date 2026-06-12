@@ -23,6 +23,9 @@ from typing import (
     Type,
     Dict,
     Literal,
+    ParamSpec,
+    TypeVar,
+    overload,
 )
 from agentfield.agent_ai import AgentAI
 from agentfield.agent_cli import AgentCLI
@@ -67,6 +70,9 @@ import weakref
 if TYPE_CHECKING:
     from agentfield.harness._result import HarnessResult
     from agentfield.harness._runner import HarnessRunner
+
+P = ParamSpec("P")
+T = TypeVar("T")
 
 # Use slots=True for memory efficiency on Python 3.10+, fallback for older versions
 _dataclass_kwargs = {"slots": True} if sys.version_info >= (3, 10) else {}
@@ -441,6 +447,49 @@ class _PauseManager:
                     future.cancel()
             self._pending.clear()
             self._exec_to_request.clear()
+
+
+# Parameters the runtime injects by name into trigger/webhook-invoked reasoners.
+# They must never receive the event payload positionally — see
+# _bind_trigger_payload.
+_INJECTED_TRIGGER_PARAMS = frozenset({"trigger", "webhook", "execution_context"})
+
+
+def _bind_trigger_payload(
+    signature: inspect.Signature, payload: Any
+) -> tuple[tuple, dict]:
+    """Build (args, kwargs) for the event payload of a trigger-invoked reasoner.
+
+    For trigger/webhook invocations the event payload is the event object, and
+    the framework separately injects the ``trigger`` / ``webhook`` /
+    ``execution_context`` parameters by name (see _execute_reasoner_endpoint).
+    The payload therefore binds to the first parameter that is *not* one of
+    those injected slots.
+
+    When that parameter is an ordinary positional-or-keyword parameter we bind
+    it by **keyword**, so a leading injected parameter (e.g. ``def r(trigger,
+    event)``) can never shift the payload onto the wrong slot positionally. This
+    mirrors the test harness' ``_bind_reasoner_args`` so the runtime and
+    ``simulate_trigger`` invoke a reasoner identically.
+
+    A reasoner whose only parameter is an injected slot (e.g.
+    ``def r(trigger=None)``) has no home for the payload, so it is dropped and
+    the trigger context is delivered by keyword — instead of crashing with
+    "got multiple values for argument 'trigger'".
+    """
+    for name, param in signature.parameters.items():
+        if name in _INJECTED_TRIGGER_PARAMS:
+            continue
+        if param.kind in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.VAR_POSITIONAL,
+        ):
+            return (payload,), {}
+        if param.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD:
+            return (), {name: payload}
+        # KEYWORD_ONLY / VAR_KEYWORD have no positional home; the payload falls
+        # through to the parameter's default, matching _bind_reasoner_args.
+    return (), {}
 
 
 class Agent(FastAPI):
@@ -1698,9 +1747,35 @@ class Agent(FastAPI):
         """Delegate to server handler for route setup"""
         return self.server_handler.setup_agentfield_routes()
 
+    @overload
+    def reasoner(
+        self,
+        path: Callable[P, Awaitable[T]],
+        name: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        *,
+        vc_enabled: Optional[bool] = None,
+        require_realtime_validation: bool = False,
+        triggers: Optional[List[Any]] = None,
+        accepts_webhook: Optional[Any] = None,
+    ) -> Callable[P, Awaitable[T]]: ...
+
+    @overload
     def reasoner(
         self,
         path: Optional[str] = None,
+        name: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        *,
+        vc_enabled: Optional[bool] = None,
+        require_realtime_validation: bool = False,
+        triggers: Optional[List[Any]] = None,
+        accepts_webhook: Optional[Any] = None,
+    ) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Awaitable[T]]]: ...
+
+    def reasoner(
+        self,
+        path: Any = None,
         name: Optional[str] = None,
         tags: Optional[List[str]] = None,
         *,
@@ -2167,11 +2242,16 @@ class Agent(FastAPI):
                 )
 
             # When invoked via an inbound trigger, the (possibly transformed)
-            # payload IS the first positional argument — it's the provider's
-            # event itself, not a dict of named kwargs. Direct app.call()
-            # invocations keep the historical kwargs-from-dict shape.
+            # payload IS the event object — it binds to the first parameter that
+            # the framework does not itself inject (trigger / webhook /
+            # execution_context). Binding through _bind_trigger_payload (rather
+            # than blindly passing it as the first positional) is what prevents
+            # `def r(trigger=None)` from receiving the payload positionally AND
+            # the trigger by keyword — the "got multiple values for argument
+            # 'trigger'" crash. Direct app.call() invocations keep the
+            # historical kwargs-from-dict shape.
             if execution_context.trigger is not None:
-                args, kwargs = (payload_dict,), {}
+                args, kwargs = _bind_trigger_payload(signature, payload_dict)
             else:
                 try:
                     if should_convert_args(func):
@@ -2503,7 +2583,7 @@ class Agent(FastAPI):
             + f"/api/v1/executions/{execution_id}/status"
         )
 
-    def on_change(self, pattern: Union[str, List[str]]):
+    def on_change(self, pattern: Union[str, List[str]]) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Awaitable[T]]]:
         """
         Decorator to mark a function as a memory event listener.
 
@@ -2570,9 +2650,31 @@ class Agent(FastAPI):
 
         return decorator
 
+    @overload
+    def skill(
+        self,
+        tags: Callable[P, T],
+        path: Optional[str] = None,
+        name: Optional[str] = None,
+        *,
+        vc_enabled: Optional[bool] = None,
+        require_realtime_validation: bool = False,
+    ) -> Callable[P, T]: ...
+
+    @overload
     def skill(
         self,
         tags: Optional[List[str]] = None,
+        path: Optional[str] = None,
+        name: Optional[str] = None,
+        *,
+        vc_enabled: Optional[bool] = None,
+        require_realtime_validation: bool = False,
+    ) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
+
+    def skill(
+        self,
+        tags: Any = None,
         path: Optional[str] = None,
         name: Optional[str] = None,
         *,
@@ -3777,7 +3879,12 @@ class Agent(FastAPI):
                 if node_id == self.node_id and hasattr(self, function_name):
                     try:
                         func = getattr(self, function_name)
-                        sig = inspect.signature(func)
+                        # Unwrap tracked wrappers (e.g. _run_async_skill,
+                        # tracked_func) to recover the original function's
+                        # typed signature instead of the generic (*args, **kwargs)
+                        # that the wrapper carries.
+                        raw_func = getattr(func, "_original_func", func)
+                        sig = inspect.signature(raw_func)
                         param_names = [
                             name
                             for name, param in sig.parameters.items()
@@ -3810,8 +3917,32 @@ class Agent(FastAPI):
                 for i, arg in enumerate(args):
                     final_kwargs[f"arg_{i}"] = arg
 
-        # Get current execution context
-        current_context = self._get_current_execution_context()
+        # Resolve the parent execution for this call from the TASK-LOCAL
+        # context ONLY — not via _get_current_execution_context(), which falls
+        # back to the process-global self._current_execution_context.
+        #
+        # That shared attribute holds whichever reasoner was most recently
+        # dispatched in this process. When a call originates OUTSIDE any
+        # execution — e.g. a webhook handler's fire-and-forget asyncio task,
+        # which has no task-local context of its own — the fallback would
+        # attribute this independent call to whatever unrelated reasoner
+        # happens to be in flight (possibly paused on a human-in-the-loop
+        # approval for hours). That chains unrelated runs into one bogus
+        # workflow DAG and cross-wires the pause-clock / budget cascades that
+        # key off parent_execution_id.
+        #
+        # The contextvar is the only concurrency-safe source: asyncio.create_task
+        # copies it, so genuine sub-calls made from within a reasoner still
+        # nest correctly. When it is absent we mint a fresh root so the call
+        # starts its own workflow (matching cold-process behavior).
+        from agentfield.execution_context import get_current_context
+
+        current_context = get_current_context()
+        if current_context is None:
+            current_context = ExecutionContext.create_new(
+                agent_node_id=self.node_id,
+                workflow_name=f"{self.node_id}_workflow",
+            )
 
         # 🔧 DEBUG: Validate context before creating child
         if self.dev_mode:
@@ -4241,31 +4372,26 @@ class Agent(FastAPI):
                     "agent_node_id": self.node_id,
                 }
 
-                # Make async HTTP request to backend - use UI API endpoint to match frontend
                 try:
                     import aiohttp
 
                     timeout = aiohttp.ClientTimeout(total=5.0)  # 5 second timeout
-                    # Use UI API base URL to match where frontend fetches notes from
-                    # Replace the last occurrence of /api/v1 with /api/ui/v1
-                    ui_api_base = self.client.api_base.replace("/api/v1", "/api/ui/v1")
 
                     if self.dev_mode:
                         from agentfield.logger import log_debug
 
                         log_debug(
-                            f"NOTE DEBUG: Original api_base: {self.client.api_base}"
+                            f"NOTE DEBUG: api_base: {self.client.api_base}"
                         )
-                        log_debug(f"NOTE DEBUG: UI api_base: {ui_api_base}")
                         log_debug(
-                            f"NOTE DEBUG: Full URL: {ui_api_base}/executions/note"
+                            f"NOTE DEBUG: Full URL: {self.client.api_base}/executions/note"
                         )
                         log_debug(f"NOTE DEBUG: Payload: {payload}")
                         log_debug(f"NOTE DEBUG: Headers: {headers}")
 
                     async with aiohttp.ClientSession(timeout=timeout) as session:
                         async with session.post(
-                            f"{ui_api_base}/executions/note",
+                            f"{self.client.api_base}/executions/note",
                             json=payload,
                             headers=headers,
                         ) as response:
@@ -4279,7 +4405,7 @@ class Agent(FastAPI):
                                 log_debug(f"NOTE DEBUG: Response text: {response_text}")
                                 if response.status == 200:
                                     log_debug(
-                                        f"✅ Note successfully sent to {ui_api_base}/executions/note"
+                                        f"✅ Note successfully sent to {self.client.api_base}/executions/note"
                                     )
                                 else:
                                     log_debug(
@@ -4290,26 +4416,18 @@ class Agent(FastAPI):
                     import requests
 
                     try:
-                        # Use UI API base URL to match where frontend fetches notes from
-                        ui_api_base = self.client.api_base.replace(
-                            "/api/v1", "/api/ui/v1"
-                        )
-
                         if self.dev_mode:
                             from agentfield.logger import log_debug
 
                             log_debug(
-                                f"NOTE DEBUG (requests): Original api_base: {self.client.api_base}"
+                                f"NOTE DEBUG (requests): api_base: {self.client.api_base}"
                             )
                             log_debug(
-                                f"NOTE DEBUG (requests): UI api_base: {ui_api_base}"
-                            )
-                            log_debug(
-                                f"NOTE DEBUG (requests): Full URL: {ui_api_base}/executions/note"
+                                f"NOTE DEBUG (requests): Full URL: {self.client.api_base}/executions/note"
                             )
 
                         response = requests.post(
-                            f"{ui_api_base}/executions/note",
+                            f"{self.client.api_base}/executions/note",
                             json=payload,
                             headers=headers,
                             timeout=5.0,
@@ -4325,7 +4443,7 @@ class Agent(FastAPI):
                             )
                             if response.status_code == 200:
                                 log_debug(
-                                    f"✅ Note successfully sent to {ui_api_base}/executions/note"
+                                    f"✅ Note successfully sent to {self.client.api_base}/executions/note"
                                 )
                             else:
                                 log_debug(
