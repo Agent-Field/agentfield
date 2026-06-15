@@ -69,7 +69,7 @@ func TestIngestProviderWebhookFixtures_LinearAndSentry(t *testing.T) {
 			headers: map[string]string{
 				"Request-ID":             "sentry-request-1",
 				"Sentry-Hook-Resource":   "issue",
-				"Sentry-Hook-Timestamp":  "2026-06-15T12:00:00Z",
+				"Sentry-Hook-Timestamp":  time.Now().UTC().Format(time.RFC3339),
 				"Sentry-Hook-Signature":  "",
 				"X-Unused-Provider-Test": "kept",
 			},

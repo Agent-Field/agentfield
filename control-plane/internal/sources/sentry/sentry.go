@@ -13,10 +13,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/sources"
 )
+
+const defaultToleranceSeconds = 300
 
 type source struct{}
 
@@ -31,12 +35,28 @@ func (s *source) SecretRequired() bool { return true }
 func (s *source) ConfigSchema() json.RawMessage {
 	return json.RawMessage(`{
         "type":"object",
-        "properties":{},
+        "properties":{
+          "tolerance_seconds":{"type":"integer","minimum":0,"default":300,"description":"Max age of Sentry-Hook-Timestamp before rejection. Set to 0 to disable."}
+        },
         "additionalProperties": false
     }`)
 }
 
-func (s *source) Validate(cfg json.RawMessage) error { return nil }
+func (s *source) Validate(cfg json.RawMessage) error {
+	if len(cfg) == 0 {
+		return nil
+	}
+	var parsed struct {
+		ToleranceSeconds *int `json:"tolerance_seconds"`
+	}
+	if err := json.Unmarshal(cfg, &parsed); err != nil {
+		return fmt.Errorf("invalid sentry config: %w", err)
+	}
+	if parsed.ToleranceSeconds != nil && *parsed.ToleranceSeconds < 0 {
+		return errors.New("tolerance_seconds must be >= 0")
+	}
+	return nil
+}
 
 func (s *source) HandleRequest(ctx context.Context, req *sources.RawRequest, cfg json.RawMessage, secret string) ([]sources.Event, error) {
 	if secret == "" {
@@ -48,6 +68,29 @@ func (s *source) HandleRequest(ctx context.Context, req *sources.RawRequest, cfg
 	}
 	if err := verifySignature(req.Body, signature, secret); err != nil {
 		return nil, err
+	}
+
+	tolerance := defaultToleranceSeconds
+	if len(cfg) > 0 {
+		var parsed struct {
+			ToleranceSeconds *int `json:"tolerance_seconds"`
+		}
+		if err := json.Unmarshal(cfg, &parsed); err == nil && parsed.ToleranceSeconds != nil {
+			tolerance = *parsed.ToleranceSeconds
+		}
+	}
+	if tolerance > 0 {
+		timestamp := req.Headers.Get("Sentry-Hook-Timestamp")
+		if timestamp == "" {
+			return nil, errors.New("sentry: missing or invalid Sentry-Hook-Timestamp")
+		}
+		parsedTime, err := parseTimestamp(timestamp)
+		if err != nil {
+			return nil, errors.New("sentry: missing or invalid Sentry-Hook-Timestamp")
+		}
+		if diff := time.Since(parsedTime); diff > time.Duration(tolerance)*time.Second || diff < -time.Duration(tolerance)*time.Second {
+			return nil, errors.New("sentry: Sentry-Hook-Timestamp outside tolerance window")
+		}
 	}
 
 	var payload struct {
@@ -104,6 +147,24 @@ func verifySignature(body []byte, header, secret string) error {
 		return errors.New("sentry: signature mismatch")
 	}
 	return nil
+}
+
+func parseTimestamp(ts string) (time.Time, error) {
+	// Try RFC3339 first
+	if t, err := time.Parse(time.RFC3339, ts); err == nil {
+		return t, nil
+	}
+
+	// Try Unix seconds/milliseconds as string
+	if secs, err := strconv.ParseInt(ts, 10, 64); err == nil {
+		// Check if it's milliseconds (> 10^12)
+		if secs > 1e12 {
+			return time.UnixMilli(secs), nil
+		}
+		return time.Unix(secs, 0), nil
+	}
+
+	return time.Time{}, errors.New("invalid timestamp format")
 }
 
 func bodyDigest(resource string, body []byte) string {
