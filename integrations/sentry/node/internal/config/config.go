@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Agent-Field/agentfield/integrations/sentry/node/internal/sentry"
+	"github.com/Agent-Field/agentfield/sdk/go/inputs"
 	afagent "github.com/Agent-Field/agentfield/sdk/go/agent"
 )
 
@@ -30,7 +31,7 @@ func Load() Config {
 		Sentry: sentry.Config{
 			BaseURL:        env("SENTRY_BASE_URL", "https://sentry.io"),
 			Organization:   os.Getenv("SENTRY_ORG"),
-			Token:          firstNonBlank(os.Getenv("SENTRY_AUTH_TOKEN"), os.Getenv("SENTRY_TOKEN")),
+			Token:          inputs.FirstNonBlank(os.Getenv("SENTRY_AUTH_TOKEN"), os.Getenv("SENTRY_TOKEN")),
 			TimeoutSeconds: envInt("SENTRY_TIMEOUT_SECONDS", 20),
 		},
 	}
@@ -65,13 +66,4 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return parsed
-}
-
-func firstNonBlank(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
 }

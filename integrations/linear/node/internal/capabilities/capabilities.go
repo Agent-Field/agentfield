@@ -2,13 +2,10 @@ package capabilities
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"strings"
 
 	"github.com/Agent-Field/agentfield/integrations/linear/node/internal/config"
 	"github.com/Agent-Field/agentfield/integrations/linear/node/internal/linear"
+	"github.com/Agent-Field/agentfield/sdk/go/inputs"
 	afagent "github.com/Agent-Field/agentfield/sdk/go/agent"
 )
 
@@ -37,7 +34,7 @@ func (rt Runtime) health(ctx context.Context, _ map[string]any) (any, error) {
 }
 
 func (rt Runtime) getIssue(ctx context.Context, input map[string]any) (any, error) {
-	id, err := requiredString(input, "id")
+	id, err := inputs.RequiredString(input, "id")
 	if err != nil {
 		return nil, err
 	}
@@ -45,11 +42,11 @@ func (rt Runtime) getIssue(ctx context.Context, input map[string]any) (any, erro
 }
 
 func (rt Runtime) listIssues(ctx context.Context, input map[string]any) (any, error) {
-	return rt.Linear.ListIssues(ctx, intInput(input, "limit"))
+	return rt.Linear.ListIssues(ctx, inputs.Int(input, "limit"))
 }
 
 func (rt Runtime) createIssue(ctx context.Context, input map[string]any) (any, error) {
-	fields, err := objectInput(input, "input")
+	fields, err := inputs.Object(input, "input")
 	if err != nil {
 		return nil, err
 	}
@@ -57,11 +54,11 @@ func (rt Runtime) createIssue(ctx context.Context, input map[string]any) (any, e
 }
 
 func (rt Runtime) updateIssue(ctx context.Context, input map[string]any) (any, error) {
-	id, err := requiredString(input, "id")
+	id, err := inputs.RequiredString(input, "id")
 	if err != nil {
 		return nil, err
 	}
-	fields, err := objectInput(input, "input")
+	fields, err := inputs.Object(input, "input")
 	if err != nil {
 		return nil, err
 	}
@@ -69,11 +66,11 @@ func (rt Runtime) updateIssue(ctx context.Context, input map[string]any) (any, e
 }
 
 func (rt Runtime) commentIssue(ctx context.Context, input map[string]any) (any, error) {
-	issueID, err := requiredString(input, "issue_id")
+	issueID, err := inputs.RequiredString(input, "issue_id")
 	if err != nil {
 		return nil, err
 	}
-	body, err := requiredString(input, "body")
+	body, err := inputs.RequiredString(input, "body")
 	if err != nil {
 		return nil, err
 	}
@@ -81,56 +78,9 @@ func (rt Runtime) commentIssue(ctx context.Context, input map[string]any) (any, 
 }
 
 func (rt Runtime) listTeams(ctx context.Context, input map[string]any) (any, error) {
-	return rt.Linear.ListTeams(ctx, intInput(input, "limit"))
+	return rt.Linear.ListTeams(ctx, inputs.Int(input, "limit"))
 }
 
 func (rt Runtime) listProjects(ctx context.Context, input map[string]any) (any, error) {
-	return rt.Linear.ListProjects(ctx, intInput(input, "limit"))
-}
-
-func requiredString(input map[string]any, key string) (string, error) {
-	value := stringInput(input, key)
-	if value == "" {
-		return "", fmt.Errorf("%s is required", key)
-	}
-	return value, nil
-}
-
-func stringInput(input map[string]any, key string) string {
-	if input == nil {
-		return ""
-	}
-	value, ok := input[key].(string)
-	if !ok {
-		return ""
-	}
-	return strings.TrimSpace(value)
-}
-
-func intInput(input map[string]any, key string) int {
-	if input == nil {
-		return 0
-	}
-	switch value := input[key].(type) {
-	case int:
-		return value
-	case float64:
-		return int(value)
-	case json.Number:
-		n, _ := value.Int64()
-		return int(n)
-	default:
-		return 0
-	}
-}
-
-func objectInput(input map[string]any, key string) (map[string]any, error) {
-	if input == nil {
-		return nil, errors.New(key + " is required")
-	}
-	value, ok := input[key].(map[string]any)
-	if !ok || len(value) == 0 {
-		return nil, errors.New(key + " is required")
-	}
-	return value, nil
+	return rt.Linear.ListProjects(ctx, inputs.Int(input, "limit"))
 }

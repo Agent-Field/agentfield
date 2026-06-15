@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Agent-Field/agentfield/integrations/linear/node/internal/linear"
+	"github.com/Agent-Field/agentfield/sdk/go/inputs"
 	afagent "github.com/Agent-Field/agentfield/sdk/go/agent"
 )
 
@@ -29,7 +30,7 @@ func Load() Config {
 		Token:         os.Getenv("AGENTFIELD_TOKEN"),
 		Linear: linear.Config{
 			APIURL:         env("LINEAR_API_URL", "https://api.linear.app/graphql"),
-			Token:          firstNonBlank(os.Getenv("LINEAR_API_KEY"), os.Getenv("LINEAR_TOKEN")),
+			Token:          inputs.FirstNonBlank(os.Getenv("LINEAR_API_KEY"), os.Getenv("LINEAR_TOKEN")),
 			TimeoutSeconds: envInt("LINEAR_TIMEOUT_SECONDS", 20),
 		},
 	}
@@ -64,13 +65,4 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return parsed
-}
-
-func firstNonBlank(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
 }
