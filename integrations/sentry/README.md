@@ -12,6 +12,7 @@ Use the source when Sentry should start an AgentField run from issue, alert, err
 - Signature: `Sentry-Hook-Signature` HMAC-SHA256
 - Idempotency: `Request-ID`, with a body hash fallback
 - Event type: `<resource>.<action>`, lowercased, for example `issue.created`
+- Timestamp validation: `Sentry-Hook-Timestamp` (300s tolerance by default, configurable)
 
 ## Capability Node
 
@@ -30,3 +31,16 @@ Useful capabilities:
 - `resolve_issue`, `assign_issue`, and `update_issue`: explicit issue mutations.
 
 These are provider API calls. They only wrap explicit Sentry issue and event operations.
+
+## Region
+
+Sentry's API base URL depends on your organization's data-storage region. Set `SENTRY_BASE_URL` accordingly:
+
+| Region | Value |
+|--------|-------|
+| Legacy US-only | `https://sentry.io` |
+| US region | `https://us.sentry.io` |
+| **EU region** | `https://de.sentry.io` |
+| Self-hosted | Your install's hostname |
+
+**EU customers must set `SENTRY_BASE_URL` explicitly.** The default `https://sentry.io` will fail for EU-region orgs.

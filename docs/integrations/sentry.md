@@ -8,6 +8,19 @@ Use source `sentry` for Sentry webhooks. Configure the Sentry integration webhoo
 
 AgentField verifies `Sentry-Hook-Signature` and emits event types such as `issue.created`, `event_alert.triggered`, `metric_alert.triggered`, and `error.created`.
 
+## Region / Base URL
+
+Sentry's API base URL depends on your organization's data-storage region:
+
+| Region | `SENTRY_BASE_URL` |
+|--------|-------------------|
+| Legacy US-only (default) | `https://sentry.io` |
+| US region | `https://us.sentry.io` |
+| **EU region (mandatory)** | `https://de.sentry.io` |
+| Self-hosted Sentry | Your install's hostname |
+
+**EU customers must set `SENTRY_BASE_URL` explicitly.** The default `https://sentry.io` will return 401/403 for EU-region orgs with no clear hint that the region is the cause. See [Sentry data storage location](https://docs.sentry.io/organization/data-storage-location/).
+
 ## UI
 
 ![Sentry connect dialog](../screenshots/sentry-connect-dialog.png)

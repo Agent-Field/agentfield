@@ -51,7 +51,7 @@ user_environment:
       type: string
   optional:
     - name: SENTRY_BASE_URL
-      description: Override for self-hosted Sentry or tests.
+      description: Sentry API base URL. Use https://de.sentry.io for EU orgs (mandatory), https://us.sentry.io for US-region, https://sentry.io for legacy US-only.
       type: string
       default: https://sentry.io
     - name: SENTRY_CLIENT_SECRET
