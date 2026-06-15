@@ -50,6 +50,8 @@ func storeDispatchFixture(t *testing.T, node *types.AgentNode, trig *types.Trigg
 	CreateTrigger(context.Context, *types.Trigger) error
 	InsertInboundEvent(context.Context, *types.InboundEvent) error
 	GetInboundEvent(context.Context, string) (*types.InboundEvent, error)
+	GetExecutionRecord(context.Context, string) (*types.Execution, error)
+	GetWorkflowExecution(context.Context, string) (*types.WorkflowExecution, error)
 }, *TriggerDispatcher) {
 	t.Helper()
 	provider, ctx := setupTestStorage(t)
@@ -115,7 +117,9 @@ func TestTriggerDispatcherFailureBranches(t *testing.T) {
 
 func TestTriggerDispatcherHTTPStatusAndSuccessBranches(t *testing.T) {
 	t.Run("agent error response marks event failed", func(t *testing.T) {
-		target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		var executionID string
+		target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			executionID = r.Header.Get("X-Execution-ID")
 			http.Error(w, "nope", http.StatusBadGateway)
 		}))
 		defer target.Close()
@@ -127,17 +131,23 @@ func TestTriggerDispatcherHTTPStatusAndSuccessBranches(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, types.InboundEventStatusFailed, stored.Status)
 		require.Contains(t, stored.ErrorMessage, "502")
+		exec, err := provider.GetExecutionRecord(ctx, executionID)
+		require.NoError(t, err)
+		require.Equal(t, types.ExecutionStatusFailed, exec.Status)
 	})
 
 	t.Run("successful dispatch records workflow and preserves parent VC", func(t *testing.T) {
 		var got map[string]any
 		var workflowID string
+		var executionID string
 		target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			workflowID = r.Header.Get("X-Workflow-ID")
+			executionID = r.Header.Get("X-Execution-ID")
 			require.Equal(t, "parent-vc", r.Header.Get("X-Parent-VC-ID"))
 			require.Equal(t, "dispatch-trigger", r.Header.Get("X-Trigger-ID"))
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
 			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"accepted":true}`))
 		}))
 		defer target.Close()
 
@@ -152,5 +162,15 @@ func TestTriggerDispatcherHTTPStatusAndSuccessBranches(t *testing.T) {
 		require.Equal(t, workflowID, stored.DispatchedWorkflowID)
 		require.Equal(t, map[string]any{"normalized": true}, got["event"])
 		require.Contains(t, got, "_meta")
+		exec, err := provider.GetExecutionRecord(ctx, executionID)
+		require.NoError(t, err)
+		require.Equal(t, workflowID, exec.RunID)
+		require.Equal(t, types.ExecutionStatusSucceeded, exec.Status)
+		require.JSONEq(t, `{"accepted":true}`, string(exec.ResultPayload))
+		wfExec, err := provider.GetWorkflowExecution(ctx, executionID)
+		require.NoError(t, err)
+		require.Equal(t, workflowID, wfExec.WorkflowID)
+		require.Equal(t, executionID, wfExec.ExecutionID)
+		require.Equal(t, []string{"trigger", "generic_bearer"}, wfExec.WorkflowTags)
 	})
 }

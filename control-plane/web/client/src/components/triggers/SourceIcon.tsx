@@ -62,11 +62,31 @@ function SnowflakeGlyph({ className }: { className?: string }) {
   );
 }
 
+function DatabricksGlyph({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      className={className}
+      aria-hidden
+    >
+      <path d="m12 3 8 4-8 4-8-4 8-4Z" />
+      <path d="m20 11-8 4-8-4" />
+      <path d="m20 15-8 4-8-4" />
+    </svg>
+  );
+}
+
 const SOURCE_ICON_MAP: Record<string, IconLike> = {
   stripe: StripeGlyph as IconLike,
   github: GithubLogo as IconLike,
   slack: SlackGlyph as IconLike,
   snowflake: SnowflakeGlyph as IconLike,
+  databricks: DatabricksGlyph as IconLike,
   cron: Clock as IconLike,
   generic_hmac: Lock as IconLike,
   generic_bearer: Key as IconLike,

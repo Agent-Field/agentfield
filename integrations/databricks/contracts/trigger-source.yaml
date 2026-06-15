@@ -1,0 +1,65 @@
+version: 2026-06-15-v1
+source:
+  name: databricks
+  kind: http
+  default_mode: webhook_notification
+  secret_required: true
+
+modes:
+  webhook_notification:
+    description: Receive Databricks notification destination webhooks for Jobs, SQL alerts, and workspace notification events.
+    auth:
+      basic:
+        description: Databricks webhook destination credentials use the configured username and the AgentField trigger secret as password.
+      bearer:
+        description: Internal or proxy deployments can send Authorization Bearer with the AgentField trigger secret.
+    config_schema:
+      auth_mode: optional string
+      basic_username: optional string
+      event_type_path: optional string
+      event_id_path: optional string
+      workspace_path: optional string
+    normalized_event:
+      event_id: string
+      event_type: string
+      payload: object
+      databricks:
+        source: notification_destination
+        auth_mode: string
+        workspace: optional string
+        received_at: string
+        request_path: string
+
+future_modes:
+  delta_event_table_poll:
+    description: Poll a customer-owned Delta event table with standard event_id, event_type, payload, and occurred_at columns.
+    status: planned
+  system_table_poll:
+    description: Poll Databricks system tables for query, job, cost, or lineage events when customers prefer pull-based triggers.
+    status: planned
+
+setup_notes:
+  notification_destination: |
+    In Databricks, create a workspace notification destination of type Webhook.
+    Point it at the AgentField trigger URL for the databricks source. Use Basic
+    credentials when configuring the destination: username from basic_username
+    and password from the AgentField trigger secret.
+  jobs_and_alerts: |
+    Attach the notification destination to Lakeflow Jobs or Databricks SQL
+    alerts. Databricks sends events on configured job run or alert transitions.
+
+event_contract:
+  dispatch_input:
+    event: normalized_event
+    _meta:
+      trigger_id: string
+      source: databricks
+      event_type: string
+      event_id: string
+      idempotency_key: string
+      received_at: string
+  idempotency:
+    key: event_id
+    scope: source_name
+  replay:
+    behavior: Replay clones the inbound event and redispatches it to the target reasoner without calling Databricks again.

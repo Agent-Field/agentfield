@@ -86,6 +86,18 @@ const SOURCE_META: Record<string, SourceMeta> = {
       "Cortex-ready",
     ],
   },
+  databricks: {
+    display: "Databricks",
+    category: "Provider",
+    description:
+      "Receive Databricks notifications and route lakehouse events into nodes that can call SQL Warehouses, AI Functions, and Model Serving.",
+    highlights: [
+      "notification webhooks",
+      "SQL Warehouses",
+      "ai_query",
+      "Model Serving",
+    ],
+  },
   generic_hmac: {
     display: "Generic HMAC",
     category: "Generic",

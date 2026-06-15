@@ -1,0 +1,121 @@
+version: 2026-06-15-v1
+node:
+  default_id: databricks-prod
+  tags:
+    - databricks
+    - data
+    - lakehouse
+    - ai-functions
+    - model-serving
+
+principles:
+  - Capability IDs are stable contracts. Implementation may use Databricks SQL
+    Statement Execution, Unity Catalog metadata, Model Serving, or AI Functions
+    behind the same callable surface.
+  - The node exposes Databricks-native capabilities. It does not wrap
+    AgentField .ai calls as Databricks behavior.
+  - All raw SQL capabilities are read-only unless a separate write capability
+    is added and explicitly enabled.
+  - AI-backed operations use Databricks AI Functions or Model Serving endpoints.
+    Prompt templates are config-loaded so operators can override them without
+    rebuilding the Go binary.
+  - Every response includes provenance for downstream reasoners to cite
+    workspace, warehouse, catalog, schema, statement ID, endpoint, or table.
+
+skills:
+  query_readonly:
+    tags: [databricks, sql, warehouse, read]
+    input:
+      sql: string
+      warehouse_id: optional string
+      catalog: optional string
+      schema: optional string
+      parameters: optional list
+      max_rows: optional integer
+      timeout_seconds: optional integer
+    output:
+      statement_id: string
+      columns: list
+      rows: list
+      row_count: integer
+      truncated: boolean
+      provenance: object
+    guardrails:
+      - one statement only
+      - allow SELECT, WITH, SHOW, DESCRIBE, EXPLAIN
+      - deny DDL, DML, COPY INTO, INSERT, UPDATE, DELETE, MERGE, CALL
+      - enforce max rows and timeout
+
+  describe_table:
+    tags: [databricks, unity-catalog, read]
+    input:
+      object: string
+    output:
+      statement_id: string
+      columns: list
+      rows: list
+      provenance: object
+
+  search_columns:
+    tags: [databricks, unity-catalog, search]
+    input:
+      query: string
+      catalog: optional string
+      schema: optional string
+      limit: optional integer
+    output:
+      matches: list
+      provenance: object
+
+  ai_query:
+    tags: [databricks, ai-functions, ai]
+    input:
+      endpoint: optional string
+      prompt: string
+      return_type: optional string
+      fail_on_error: optional boolean
+    output:
+      statement_id: string
+      rows: list
+      provenance: object
+
+  invoke_serving_endpoint:
+    tags: [databricks, model-serving, ai]
+    input:
+      endpoint: string
+      body: object
+    output:
+      raw: object
+
+reasoners:
+  explain_result:
+    tags: [databricks, ai-functions, explanation]
+    prompt_keys:
+      - explain_result.ai_query_prompt
+    calls:
+      - ai_query
+    behavior:
+      - Render a configured prompt over a result preview.
+      - Invoke Databricks ai_query so reasoning runs through Databricks-native
+        AI Functions, not AgentField .ai.
+
+  investigate_metric_change:
+    tags: [databricks, data, investigation]
+    prompt_keys:
+      - investigate_metric_change.planning_prompt
+    calls:
+      - search_columns
+      - query_readonly
+      - ai_query
+      - explain_result
+    behavior:
+      - Return a bounded investigation plan and recommended AgentField calls.
+      - Downstream nodes decide which Databricks calls to execute.
+
+  handle_databricks_event:
+    tags: [databricks, trigger, webhook]
+    accepts_webhook: true
+    behavior:
+      - Thin trigger entrypoint for Databricks notification destination events.
+      - Validates and summarizes event metadata, then points downstream
+        orchestrators at the Databricks capabilities they should call.

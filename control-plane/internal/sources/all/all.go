@@ -5,6 +5,7 @@ package all
 
 import (
 	_ "github.com/Agent-Field/agentfield/control-plane/internal/sources/cron"
+	_ "github.com/Agent-Field/agentfield/control-plane/internal/sources/databricks"
 	_ "github.com/Agent-Field/agentfield/control-plane/internal/sources/genericbearer"
 	_ "github.com/Agent-Field/agentfield/control-plane/internal/sources/generichmac"
 	_ "github.com/Agent-Field/agentfield/control-plane/internal/sources/github"

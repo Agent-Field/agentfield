@@ -1,0 +1,78 @@
+name: databricks
+version: 0.1.0
+description: Databricks capability node for governed SQL, Unity Catalog, AI Functions, Model Serving, and lakehouse events.
+author: AgentField
+type: agent_node
+main: node/databricks-node
+
+agent_node:
+  node_id: databricks-prod
+  default_port: 8013
+
+dependencies:
+  python: []
+  system: []
+
+capabilities:
+  reasoners:
+    - name: explain_result
+      description: Explain a Databricks query result using Databricks AI Functions.
+    - name: investigate_metric_change
+      description: Plan a bounded Databricks metric investigation with Unity Catalog context and read-only SQL.
+    - name: handle_databricks_event
+      description: Receive Databricks webhook events from the control-plane source.
+  skills:
+    - name: query_readonly
+      description: Execute one read-only SQL statement through a Databricks SQL warehouse.
+    - name: describe_table
+      description: Return table and column metadata for a Unity Catalog object.
+    - name: search_columns
+      description: Search Unity Catalog information_schema columns.
+    - name: ai_query
+      description: Invoke Databricks AI Functions from SQL.
+    - name: invoke_serving_endpoint
+      description: Invoke a Databricks Model Serving endpoint.
+
+runtime:
+  auto_port: true
+  heartbeat_interval: 30
+  dev_mode: false
+
+environment:
+  AGENTFIELD_NODE_ID: databricks-prod
+  AGENTFIELD_SERVER: http://localhost:8080
+  DATABRICKS_DEFAULT_PROMPTS_FILE: ../prompts/default-prompts.yaml
+
+user_environment:
+  required:
+    - name: DATABRICKS_HOST
+      description: Databricks workspace URL, for example https://dbc-xxxx.cloud.databricks.com.
+      type: string
+    - name: DATABRICKS_TOKEN
+      description: Databricks workspace PAT or OAuth bearer token with SQL warehouse access.
+      type: secret
+    - name: DATABRICKS_WAREHOUSE_ID
+      description: SQL warehouse ID used by query_readonly and ai_query.
+      type: string
+  optional:
+    - name: DATABRICKS_CATALOG
+      description: Default Unity Catalog catalog.
+      type: string
+    - name: DATABRICKS_SCHEMA
+      description: Default schema.
+      type: string
+    - name: DATABRICKS_AI_ENDPOINT
+      description: Default AI Function or Model Serving endpoint for ai_query-backed reasoners.
+      type: string
+    - name: DATABRICKS_PROMPTS_FILE
+      description: Path to YAML prompt overrides for Databricks AI Function prompts.
+      type: string
+      default: ../prompts/default-prompts.yaml
+
+metadata:
+  created_at: "2026-06-15"
+  sdk_version: ">=0.1.92"
+  language: go
+  platform: databricks
+  integration_kind: capability_node
+  control_plane_source: built_in

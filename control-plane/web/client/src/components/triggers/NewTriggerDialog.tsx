@@ -92,6 +92,23 @@ const SOURCE_HINTS: Record<string, SourceHints> = {
       2,
     ),
   },
+  databricks: {
+    reasoner: "handle_databricks_event",
+    eventTypes: "TERMINATED, FAILED",
+    secretEnv: "DATABRICKS_TRIGGER_SECRET",
+    configJson: JSON.stringify(
+      {
+        mode: "webhook_notification",
+        auth_mode: "basic",
+        basic_username: "agentfield",
+        event_type_path: "run_state.life_cycle_state",
+        event_id_path: "run_id",
+        workspace_path: "workspace_id",
+      },
+      null,
+      2,
+    ),
+  },
   generic_hmac: {
     reasoner: "handle_event",
     eventTypes: "",
@@ -113,6 +130,9 @@ function hintsFor(sourceName: string): SourceHints {
 function descriptionFor(sourceName: string, isLoopSource: boolean) {
   if (sourceName === "snowflake") {
     return "Bind a Snowflake event table poller to a reasoner. The control plane reads the PAT from the named env var and dispatches each new Snowflake row as an AgentField event.";
+  }
+  if (sourceName === "databricks") {
+    return "Bind a Databricks notification destination to a reasoner. The control plane verifies the webhook secret and dispatches each normalized Databricks event to the selected node.";
   }
   if (isLoopSource) {
     return "Bind a control-plane loop source to a reasoner. The source emits events from the schedule or polling config below.";
@@ -322,6 +342,12 @@ export function NewTriggerDialog({
                   the event table and the configured warehouse.
                 </p>
               ) : null}
+              {sourceName === "databricks" ? (
+                <p className="text-xs text-muted-foreground">
+                  Use this value as the Databricks notification destination
+                  basic-auth password or bearer token.
+                </p>
+              ) : null}
             </div>
           ) : null}
 
@@ -330,7 +356,13 @@ export function NewTriggerDialog({
             <textarea
               value={configJson}
               onChange={(e) => setConfigJson(e.target.value)}
-              rows={sourceName === "snowflake" ? 10 : isLoopSource ? 4 : 4}
+              rows={
+                sourceName === "snowflake" || sourceName === "databricks"
+                  ? 10
+                  : isLoopSource
+                    ? 4
+                    : 4
+              }
               className="w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs text-foreground shadow-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
             />
             {selectedSource ? (
