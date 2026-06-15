@@ -132,17 +132,29 @@ async function start() {
     const cp = $("cp").value.replace(/\/$/, "");
     const model = encodeURIComponent($("model").value.trim());
     const sid = "demo_" + Math.random().toString(36).slice(2, 10);
-    const url = `${cp}/api/v1/sessions/${sid}/realtime-offer?provider=openai&transport=webrtc&model=${model}`;
 
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/sdp" },
-      body: offer.sdp,
-    });
-    const body = await resp.text();
-    if (!resp.ok) throw new Error(`control plane ${resp.status}: ${body}`);
+    // The realtime-offer route was renamed in #655 (/sessions -> /session-instances).
+    // Try the newer route first, fall back to the original so this page works
+    // against #654 alone and #654+#655.
+    const routes = [
+      `/api/v1/session-instances/${sid}/realtime-offer`,  // #655+
+      `/api/v1/sessions/${sid}/realtime-offer`,            // #654
+    ];
+    let answer = null, lastErr = "";
+    for (const path of routes) {
+      const resp = await fetch(`${cp}${path}?provider=openai&transport=webrtc&model=${model}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/sdp" },
+        body: offer.sdp,
+      });
+      const body = await resp.text();
+      if (resp.status === 404) { lastErr = `404 at ${path}`; continue; } // route not present, try next
+      if (!resp.ok) throw new Error(`control plane ${resp.status}: ${body}`);
+      answer = body; break;
+    }
+    if (answer === null) throw new Error(`no session route found (${lastErr})`);
 
-    await pc.setRemoteDescription({ type: "answer", sdp: body });
+    await pc.setRemoteDescription({ type: "answer", sdp: answer });
     $("stop").disabled = false;
   } catch (e) {
     setStatus(String(e.message || e), "err");
