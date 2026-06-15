@@ -151,7 +151,7 @@ func (c *Client) graphql(ctx context.Context, query string, variables map[string
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", c.cfg.Token)
+	req.Header.Set("Authorization", authHeader(c.cfg.Token))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	resp, err := c.httpClient.Do(req)
@@ -171,4 +171,14 @@ func (c *Client) graphql(ctx context.Context, query string, variables map[string
 		return nil, fmt.Errorf("linear GraphQL errors: %v", rawErrors)
 	}
 	return out, nil
+}
+
+// authHeader returns the Authorization header value for the given token.
+// OAuth tokens (starting with "lin_oauth_") are prefixed with "Bearer ",
+// while personal API keys are returned raw.
+func authHeader(token string) string {
+	if strings.HasPrefix(token, "lin_oauth_") {
+		return "Bearer " + token
+	}
+	return token
 }

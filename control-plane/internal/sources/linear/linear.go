@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -120,9 +121,15 @@ func (s *source) HandleRequest(ctx context.Context, req *sources.RawRequest, cfg
 		},
 	})
 
+	// Determine idempotency key: use Linear-Delivery if present, otherwise compute hash
+	idempotencyKey := req.Headers.Get("Linear-Delivery")
+	if idempotencyKey == "" {
+		idempotencyKey = deliveryHash(payload.WebhookID, payload.WebhookTimestamp, payload.Type, payload.Action)
+	}
+
 	return []sources.Event{{
 		Type:           eventType,
-		IdempotencyKey: firstNonBlank(req.Headers.Get("Linear-Delivery"), payload.WebhookID),
+		IdempotencyKey: idempotencyKey,
 		Raw:            req.Body,
 		Normalized:     normalized,
 	}}, nil
@@ -139,6 +146,18 @@ func verifySignature(body []byte, header, secret string) error {
 		return errors.New("linear: signature mismatch")
 	}
 	return nil
+}
+
+func deliveryHash(webhookID string, ts int64, entityType, action string) string {
+	h := sha256.New()
+	h.Write([]byte(webhookID))
+	h.Write([]byte{0})
+	h.Write([]byte(strconv.FormatInt(ts, 10)))
+	h.Write([]byte{0})
+	h.Write([]byte(entityType))
+	h.Write([]byte{0})
+	h.Write([]byte(action))
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func normalizedEventType(entityType, action string) string {

@@ -73,3 +73,25 @@ func TestGraphQLErrorsFailCall(t *testing.T) {
 		t.Fatalf("expected GraphQL error, got %v", err)
 	}
 }
+
+func TestGraphQLClientUsesBearerForOAuthTokens(t *testing.T) {
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"viewer":{"id":"user-1","name":"Test User"}}}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{APIURL: server.URL, Token: "lin_oauth_example_token_xyz", HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	_, err = client.Health(context.Background())
+	if err != nil {
+		t.Fatalf("Health: %v", err)
+	}
+	if gotAuth != "Bearer lin_oauth_example_token_xyz" {
+		t.Fatalf("auth=%q, want Bearer lin_oauth_example_token_xyz", gotAuth)
+	}
+}
