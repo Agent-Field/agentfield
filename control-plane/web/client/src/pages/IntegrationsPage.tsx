@@ -98,6 +98,20 @@ const SOURCE_META: Record<string, SourceMeta> = {
       "Model Serving",
     ],
   },
+  linear: {
+    display: "Linear",
+    category: "Provider",
+    description:
+      "Issue, comment, project, and team events signed with Linear-Signature HMAC.",
+    highlights: ["issue.create", "issue.update", "comment.create"],
+  },
+  sentry: {
+    display: "Sentry",
+    category: "Provider",
+    description:
+      "Issue, alert, error, and comment webhooks signed with the Sentry integration client secret.",
+    highlights: ["issue.created", "event_alert.triggered", "error.created"],
+  },
   generic_hmac: {
     display: "Generic HMAC",
     category: "Generic",

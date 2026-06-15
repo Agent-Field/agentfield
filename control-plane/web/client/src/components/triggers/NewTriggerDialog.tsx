@@ -109,6 +109,18 @@ const SOURCE_HINTS: Record<string, SourceHints> = {
       2,
     ),
   },
+  linear: {
+    reasoner: "handle_linear_event",
+    eventTypes: "issue.create, issue.update, comment.create",
+    secretEnv: "LINEAR_WEBHOOK_SECRET",
+    configJson: '{"tolerance_seconds": 60}',
+  },
+  sentry: {
+    reasoner: "handle_sentry_event",
+    eventTypes: "issue.created, event_alert.triggered, error.created",
+    secretEnv: "SENTRY_CLIENT_SECRET",
+    configJson: '{"tolerance_seconds": 300}',
+  },
   generic_hmac: {
     reasoner: "handle_event",
     eventTypes: "",
@@ -133,6 +145,12 @@ function descriptionFor(sourceName: string, isLoopSource: boolean) {
   }
   if (sourceName === "databricks") {
     return "Bind a Databricks notification destination to a reasoner. The control plane verifies the webhook secret and dispatches each normalized Databricks event to the selected node.";
+  }
+  if (sourceName === "linear") {
+    return "Bind Linear webhooks to a reasoner. The control plane verifies Linear-Signature with the signing secret before dispatching issue, comment, project, and team events.";
+  }
+  if (sourceName === "sentry") {
+    return "Bind Sentry integration-platform webhooks to a reasoner. The control plane verifies Sentry-Hook-Signature with the integration client secret before dispatching events.";
   }
   if (isLoopSource) {
     return "Bind a control-plane loop source to a reasoner. The source emits events from the schedule or polling config below.";
@@ -315,12 +333,17 @@ export function NewTriggerDialog({
 
           {showEventTypes ? (
             <div className="grid gap-1.5">
-              <Label>Event types (comma-separated, blank = all)</Label>
+              <Label>Event filters (optional)</Label>
               <Input
                 value={eventTypes}
                 onChange={(e) => setEventTypes(e.target.value)}
                 placeholder={hints.eventTypes || "(blank for all events)"}
               />
+              <p className="text-xs text-muted-foreground">
+                Leave blank to accept every event this source emits. Add a
+                comma-separated list only when this trigger should narrow to
+                specific event types; examples are not exhaustive.
+              </p>
             </div>
           ) : null}
 

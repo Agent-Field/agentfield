@@ -1,6 +1,5 @@
-// @ts-nocheck
 import * as React from "react";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -26,6 +25,18 @@ const sources = [
     kind: "loop",
     secret_required: true,
     config_schema: { mode: "string", account_url: "string" },
+  },
+  {
+    name: "linear",
+    kind: "http",
+    secret_required: true,
+    config_schema: { tolerance_seconds: "integer" },
+  },
+  {
+    name: "sentry",
+    kind: "http",
+    secret_required: true,
+    config_schema: { type: "object" },
   },
   {
     name: "generic_bearer",
@@ -202,7 +213,7 @@ describe("trigger management pages", () => {
       const createCall = fetchMock.mock.calls.find(
         ([url, init]) => String(url).endsWith("/api/v1/triggers") && init?.method === "POST",
       );
-      expect(createCall).toBeTruthy();
+      if (!createCall) throw new Error("expected create trigger call");
       expect(JSON.parse(createCall[1].body as string)).toMatchObject({
         source_name: "generic_bearer",
         target_node_id: "ops-agent",
@@ -236,6 +247,37 @@ describe("trigger management pages", () => {
     expect(screen.getByPlaceholderText("handle_snowflake_event")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("SNOWFLAKE_PAT")).toBeInTheDocument();
     expect(screen.getByDisplayValue(/"mode": "event_table_poll"/i)).toBeInTheDocument();
+  });
+
+  it("opens Linear and Sentry create flows with provider defaults", async () => {
+    const user = userEvent.setup();
+    renderWithRouter(null, "/integrations");
+
+    expect(await screen.findByText("Linear")).toBeInTheDocument();
+    expect(screen.getByText("Sentry")).toBeInTheDocument();
+    expect(screen.getByText("issue.create")).toBeInTheDocument();
+    expect(screen.getByText("issue.created")).toBeInTheDocument();
+
+    const linearConnect = screen
+      .getAllByRole("button", { name: /Connect/i })
+      .find((button) => button.closest(".group")?.textContent?.includes("Linear"));
+    expect(linearConnect).toBeTruthy();
+    await user.click(linearConnect!);
+    expect((await screen.findAllByText(/Linear-Signature/i)).length).toBeGreaterThan(0);
+    expect(screen.getByPlaceholderText("handle_linear_event")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("LINEAR_WEBHOOK_SECRET")).toBeInTheDocument();
+    expect(screen.getByDisplayValue(/"tolerance_seconds": 60/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    const sentryConnect = screen
+      .getAllByRole("button", { name: /Connect/i })
+      .find((button) => button.closest(".group")?.textContent?.includes("Sentry"));
+    expect(sentryConnect).toBeTruthy();
+    await user.click(sentryConnect!);
+    expect((await screen.findAllByText(/Sentry-Hook-Signature/i)).length).toBeGreaterThan(0);
+    expect(screen.getByPlaceholderText("handle_sentry_event")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("SENTRY_CLIENT_SECRET")).toBeInTheDocument();
   });
 
   it("filters active triggers, opens event evidence, and exercises update/copy/replay paths", async () => {
@@ -295,6 +337,7 @@ describe("trigger management pages", () => {
       const updateCall = fetchMock.mock.calls.find(
         ([url, init]) => String(url).includes("/api/v1/triggers/trig_stripe_123456") && init?.method === "PUT",
       );
+      if (!updateCall) throw new Error("expected update trigger call");
       expect(JSON.parse(updateCall[1].body as string)).toEqual({ enabled: false });
     });
   });

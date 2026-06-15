@@ -1,0 +1,40 @@
+version: 2026-06-15-v1
+source:
+  name: sentry
+  kind: http
+  secret_required: true
+
+signature:
+  header: Sentry-Hook-Signature
+  algorithm: HMAC-SHA256 over JSON webhook payload
+  secret: Sentry integration Client Secret
+
+headers:
+  request_id: Request-ID
+  resource: Sentry-Hook-Resource
+  timestamp: Sentry-Hook-Timestamp
+
+normalized_event:
+  event_type: lower(Sentry-Hook-Resource) + "." + lower(action)
+  idempotency_key: Request-ID, falling back to SHA-256(resource + body)
+  fields:
+    action: string
+    resource: string
+    installation: object
+    data: object
+    actor: object
+    sentry:
+      request_id: string
+      timestamp: string
+      resource: string
+
+event_contract:
+  examples:
+    - issue.created
+    - issue.resolved
+    - event_alert.triggered
+    - metric_alert.triggered
+    - comment.created
+    - error.created
+  replay:
+    behavior: Replays reuse the persisted normalized event and do not call Sentry.

@@ -1,0 +1,47 @@
+version: 2026-06-15-v1
+source:
+  name: linear
+  kind: http
+  secret_required: true
+
+signature:
+  header: Linear-Signature
+  algorithm: HMAC-SHA256 over raw request body
+  secret: Linear webhook signing secret
+
+headers:
+  delivery_id: Linear-Delivery
+  event_family: Linear-Event
+
+config_schema:
+  tolerance_seconds:
+    type: integer
+    default: 60
+    minimum: 0
+
+normalized_event:
+  event_type: lower(type) + "." + lower(action)
+  idempotency_key: Linear-Delivery, falling back to webhookId
+  fields:
+    action: string
+    type: string
+    actor: object
+    created_at: string
+    data: object
+    url: string
+    updated_from: object
+    webhook_id: string
+    webhook_timestamp: integer
+    linear:
+      delivery: string
+      event: string
+
+event_contract:
+  examples:
+    - issue.create
+    - issue.update
+    - comment.create
+    - project.update
+    - cycle.update
+  replay:
+    behavior: Replays reuse the persisted normalized event and do not re-check Linear.
