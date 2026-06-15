@@ -243,7 +243,7 @@ describe("trigger management pages", () => {
     expect(await screen.findByRole("heading", { name: "New trigger" })).toBeInTheDocument();
     expect(screen.getByText(/Snowflake event table poller/i)).toBeInTheDocument();
     expect(screen.getAllByText(/programmatic access token/i).length).toBeGreaterThan(0);
-    expect(screen.queryByText(/Event types/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Event filters/i)).not.toBeInTheDocument();
     expect(screen.getByPlaceholderText("handle_snowflake_event")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("SNOWFLAKE_PAT")).toBeInTheDocument();
     expect(screen.getByDisplayValue(/"mode": "event_table_poll"/i)).toBeInTheDocument();
@@ -264,6 +264,8 @@ describe("trigger management pages", () => {
     expect(linearConnect).toBeTruthy();
     await user.click(linearConnect!);
     expect((await screen.findAllByText(/Linear-Signature/i)).length).toBeGreaterThan(0);
+    expect(screen.getByText("Event filters (optional)")).toBeInTheDocument();
+    expect(screen.getByText(/Leave blank to accept every event/i)).toBeInTheDocument();
     expect(screen.getByPlaceholderText("handle_linear_event")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("LINEAR_WEBHOOK_SECRET")).toBeInTheDocument();
     expect(screen.getByDisplayValue(/"tolerance_seconds": 60/)).toBeInTheDocument();

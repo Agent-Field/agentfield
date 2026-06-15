@@ -12,7 +12,7 @@ AgentField verifies `Sentry-Hook-Signature` and emits event types such as `issue
 
 ![Sentry connect dialog](../screenshots/sentry-connect-dialog.png)
 
-The dialog pre-fills common issue, alert, and error event filters plus the client-secret env var. Leave event types blank when one trigger should accept every Sentry webhook resource.
+The dialog shows common issue, alert, and error event-type examples plus the client-secret env var. Event filters are optional; leave them blank when one trigger should accept every Sentry webhook resource, including future event types Sentry may add.
 
 ## Capability Node
 

@@ -12,7 +12,7 @@ AgentField verifies `Linear-Signature`, rejects stale `webhookTimestamp` values 
 
 ![Linear connect dialog](../screenshots/linear-connect-dialog.png)
 
-The dialog pre-fills the common event filters, the signing-secret env var, and the timestamp tolerance config. Leave event types blank when one trigger should accept every Linear event.
+The dialog shows common event-type examples, the signing-secret env var, and the timestamp tolerance config. Event filters are optional; leave them blank when one trigger should accept every Linear event, including future event types Linear may add.
 
 ## Capability Node
 
