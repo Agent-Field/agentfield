@@ -83,5 +83,13 @@
         "typescript-eslint": "^8.30.1",
         "vite": "^8.0.5",
         "vitest": "^4.1.8"
+    },
+    "overrides": {
+        "esbuild": "0.28.1"
+    },
+    "pnpm": {
+        "overrides": {
+            "esbuild": "0.28.1"
+        }
     }
 }

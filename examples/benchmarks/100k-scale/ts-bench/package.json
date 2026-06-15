@@ -10,7 +10,10 @@
     "@agent-field/sdk": "file:../../../../sdk/typescript"
   },
   "devDependencies": {
-    "tsx": "^4.7.0",
-    "@types/node": "^20.0.0"
+    "@types/node": "^20.0.0",
+    "tsx": "^4.7.0"
+  },
+  "overrides": {
+    "esbuild": "0.28.1"
   }
 }

@@ -22,6 +22,12 @@ const sources = [
     config_schema: { expression: "string", timezone: "string" },
   },
   {
+    name: "snowflake",
+    kind: "loop",
+    secret_required: true,
+    config_schema: { mode: "string", account_url: "string" },
+  },
+  {
     name: "generic_bearer",
     kind: "http",
     secret_required: true,
@@ -207,6 +213,29 @@ describe("trigger management pages", () => {
         enabled: true,
       });
     });
+  });
+
+  it("opens the Snowflake create flow with poller defaults", async () => {
+    const user = userEvent.setup();
+    renderWithRouter(null, "/integrations");
+
+    expect(await screen.findByText("Snowflake")).toBeInTheDocument();
+    expect(screen.getByText("SQL API")).toBeInTheDocument();
+
+    const connectButtons = screen.getAllByRole("button", { name: /Connect/i });
+    const snowflakeConnect = connectButtons.find((button) =>
+      button.closest(".group")?.textContent?.includes("Snowflake"),
+    );
+    expect(snowflakeConnect).toBeTruthy();
+    await user.click(snowflakeConnect!);
+
+    expect(await screen.findByRole("heading", { name: "New trigger" })).toBeInTheDocument();
+    expect(screen.getByText(/Snowflake event table poller/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/programmatic access token/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Event types/i)).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText("handle_snowflake_event")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("SNOWFLAKE_PAT")).toBeInTheDocument();
+    expect(screen.getByDisplayValue(/"mode": "event_table_poll"/i)).toBeInTheDocument();
   });
 
   it("filters active triggers, opens event evidence, and exercises update/copy/replay paths", async () => {

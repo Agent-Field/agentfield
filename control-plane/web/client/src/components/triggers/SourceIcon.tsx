@@ -36,10 +36,37 @@ function SlackGlyph({ className }: { className?: string }) {
   );
 }
 
+function SnowflakeGlyph({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      className={className}
+      aria-hidden
+    >
+      <path d="M12 3v18" />
+      <path d="m6.5 5.5 11 13" />
+      <path d="m17.5 5.5-11 13" />
+      <path d="M4 12h16" />
+      <path d="m8.5 3 3.5 3 3.5-3" />
+      <path d="m8.5 21 3.5-3 3.5 3" />
+      <path d="m3 8.5 4 1-1-4" />
+      <path d="m21 15.5-4-1 1 4" />
+      <path d="m21 8.5-4 1 1-4" />
+      <path d="m3 15.5 4-1-1 4" />
+    </svg>
+  );
+}
+
 const SOURCE_ICON_MAP: Record<string, IconLike> = {
   stripe: StripeGlyph as IconLike,
   github: GithubLogo as IconLike,
   slack: SlackGlyph as IconLike,
+  snowflake: SnowflakeGlyph as IconLike,
   cron: Clock as IconLike,
   generic_hmac: Lock as IconLike,
   generic_bearer: Key as IconLike,

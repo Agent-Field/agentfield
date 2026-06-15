@@ -72,6 +72,26 @@ const SOURCE_HINTS: Record<string, SourceHints> = {
     secretEnv: "",
     configJson: '{"expression": "* * * * *", "timezone": "UTC"}',
   },
+  snowflake: {
+    reasoner: "handle_snowflake_event",
+    eventTypes: "",
+    secretEnv: "SNOWFLAKE_PAT",
+    configJson: JSON.stringify(
+      {
+        mode: "event_table_poll",
+        account_url: "https://<account>.snowflakecomputing.com",
+        database: "OBSERVABILITY",
+        schema: "AGENTFIELD",
+        table: "AGENTFIELD_EVENTS",
+        warehouse: "<warehouse>",
+        role: "<role>",
+        interval_seconds: 30,
+        max_batch_size: 100,
+      },
+      null,
+      2,
+    ),
+  },
   generic_hmac: {
     reasoner: "handle_event",
     eventTypes: "",
@@ -88,6 +108,16 @@ const SOURCE_HINTS: Record<string, SourceHints> = {
 
 function hintsFor(sourceName: string): SourceHints {
   return SOURCE_HINTS[sourceName] ?? DEFAULT_HINTS;
+}
+
+function descriptionFor(sourceName: string, isLoopSource: boolean) {
+  if (sourceName === "snowflake") {
+    return "Bind a Snowflake event table poller to a reasoner. The control plane reads the PAT from the named env var and dispatches each new Snowflake row as an AgentField event.";
+  }
+  if (isLoopSource) {
+    return "Bind a control-plane loop source to a reasoner. The source emits events from the schedule or polling config below.";
+  }
+  return "Bind an inbound event source to a reasoner. The control plane verifies provider signatures using the env-var-named secret before dispatching.";
 }
 
 const serverUrl =
@@ -219,13 +249,11 @@ export function NewTriggerDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="max-h-[calc(100vh-4rem)] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>New trigger</DialogTitle>
           <DialogDescription>
-            {isLoopSource
-              ? "Bind a recurring schedule to a reasoner. The control plane fires the trigger on the schedule defined in the config below."
-              : "Bind an inbound event source to a reasoner. The control plane verifies provider signatures using the env-var-named secret before dispatching."}
+            {descriptionFor(sourceName, isLoopSource)}
           </DialogDescription>
         </DialogHeader>
 
@@ -288,6 +316,12 @@ export function NewTriggerDialog({
                 The control plane reads this env var at request time — the
                 secret value never leaves the server.
               </p>
+              {sourceName === "snowflake" ? (
+                <p className="text-xs text-muted-foreground">
+                  Use a Snowflake programmatic access token with read access to
+                  the event table and the configured warehouse.
+                </p>
+              ) : null}
             </div>
           ) : null}
 
@@ -296,11 +330,11 @@ export function NewTriggerDialog({
             <textarea
               value={configJson}
               onChange={(e) => setConfigJson(e.target.value)}
-              rows={isLoopSource ? 3 : 4}
-              className="rounded-md border border-input bg-background px-3 py-2 font-mono text-xs"
+              rows={sourceName === "snowflake" ? 10 : isLoopSource ? 4 : 4}
+              className="w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs text-foreground shadow-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
             />
             {selectedSource ? (
-              <p className="text-xs text-muted-foreground">
+              <p className="max-h-36 overflow-auto text-xs text-muted-foreground">
                 Schema:{" "}
                 <code>{JSON.stringify(selectedSource.config_schema)}</code>
               </p>

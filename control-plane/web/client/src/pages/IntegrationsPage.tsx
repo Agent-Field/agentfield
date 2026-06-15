@@ -74,6 +74,18 @@ const SOURCE_META: Record<string, SourceMeta> = {
       "Run a reasoner on a recurring cron schedule. No inbound auth — schedules are server-side.",
     highlights: ["* * * * *"],
   },
+  snowflake: {
+    display: "Snowflake",
+    category: "Provider",
+    description:
+      "Poll Snowflake event tables or read-only SQL with the Snowflake SQL API and a server-side programmatic access token.",
+    highlights: [
+      "event_table_poll",
+      "custom_query_poll",
+      "SQL API",
+      "Cortex-ready",
+    ],
+  },
   generic_hmac: {
     display: "Generic HMAC",
     category: "Generic",

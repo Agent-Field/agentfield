@@ -11,7 +11,7 @@
     "@agentfield/sdk": "file:../../../sdk/typescript"
   },
   "devDependencies": {
-    "tsx": "^4.0.0",
+    "tsx": "^4.22.4",
     "typescript": "^5.0.0"
   }
 }
