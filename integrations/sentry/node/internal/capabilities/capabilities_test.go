@@ -31,7 +31,7 @@ func TestRuntimeCapabilitiesUseSentryAPI(t *testing.T) {
 				t.Fatalf("query=%q", r.URL.RawQuery)
 			}
 			_, _ = w.Write([]byte(`[{"id":"issue-1"}]`))
-		case r.Method == http.MethodPut && r.URL.Path == "/api/0/issues/issue-1/":
+		case r.Method == http.MethodPut && r.URL.Path == "/api/0/organizations/agentfield/issues/issue-1/":
 			calls = append(calls, "assign_issue")
 			if err := json.NewDecoder(r.Body).Decode(&gotAssignBody); err != nil {
 				t.Fatalf("decode assign body: %v", err)

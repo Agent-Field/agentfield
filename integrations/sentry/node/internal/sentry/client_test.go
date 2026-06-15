@@ -59,14 +59,14 @@ func TestUpdateIssueSendsBody(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewClient(Config{BaseURL: server.URL, Token: "tok", HTTPClient: server.Client()})
+	client, err := NewClient(Config{BaseURL: server.URL, Organization: "agentfield", Token: "tok", HTTPClient: server.Client()})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
 	if _, err := client.ResolveIssue(context.Background(), "123"); err != nil {
 		t.Fatalf("ResolveIssue: %v", err)
 	}
-	if gotMethod != http.MethodPut || gotPath != "/api/0/issues/123/" {
+	if gotMethod != http.MethodPut || gotPath != "/api/0/organizations/agentfield/issues/123/" {
 		t.Fatalf("method/path=%s %s", gotMethod, gotPath)
 	}
 	if gotBody["status"] != "resolved" {

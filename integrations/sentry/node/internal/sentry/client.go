@@ -52,6 +52,7 @@ func (c *Client) Health(ctx context.Context) (any, error) {
 	return c.get(ctx, fmt.Sprintf("/api/0/organizations/%s/projects/", url.PathEscape(c.cfg.Organization)), nil)
 }
 
+// TODO: surface the Link header for cursor-based pagination — current callers only get the first page.
 func (c *Client) ListIssues(ctx context.Context, project string, query string, limit int) (any, error) {
 	if c.cfg.Organization == "" {
 		return nil, errors.New("organization is required")
@@ -64,18 +65,23 @@ func (c *Client) ListIssues(ctx context.Context, project string, query string, l
 		params.Set("query", query)
 	}
 	if limit > 0 {
-		params.Set("limit", fmt.Sprintf("%d", limit))
+		params.Set("per_page", fmt.Sprintf("%d", limit))
 	}
+	// TODO: migrate to /api/0/organizations/{org}/issues/?project=<id> once we resolve slug→id
 	return c.get(ctx, fmt.Sprintf("/api/0/projects/%s/%s/issues/", url.PathEscape(c.cfg.Organization), url.PathEscape(project)), params)
 }
 
 func (c *Client) GetIssue(ctx context.Context, issueID string) (any, error) {
+	if c.cfg.Organization == "" {
+		return nil, errors.New("organization is required")
+	}
 	if strings.TrimSpace(issueID) == "" {
 		return nil, errors.New("issue_id is required")
 	}
-	return c.get(ctx, fmt.Sprintf("/api/0/issues/%s/", url.PathEscape(issueID)), nil)
+	return c.get(ctx, fmt.Sprintf("/api/0/organizations/%s/issues/%s/", url.PathEscape(c.cfg.Organization), url.PathEscape(issueID)), nil)
 }
 
+// TODO: surface the Link header for cursor-based pagination — current callers only get the first page.
 func (c *Client) ListIssueEvents(ctx context.Context, issueID string, query string, limit int) (any, error) {
 	if c.cfg.Organization == "" {
 		return nil, errors.New("organization is required")
@@ -107,13 +113,16 @@ func (c *Client) GetEvent(ctx context.Context, issueID, eventID string) (any, er
 }
 
 func (c *Client) UpdateIssue(ctx context.Context, issueID string, fields map[string]any) (any, error) {
+	if c.cfg.Organization == "" {
+		return nil, errors.New("organization is required")
+	}
 	if strings.TrimSpace(issueID) == "" {
 		return nil, errors.New("issue_id is required")
 	}
 	if len(fields) == 0 {
 		return nil, errors.New("input is required")
 	}
-	return c.requestJSON(ctx, http.MethodPut, fmt.Sprintf("/api/0/issues/%s/", url.PathEscape(issueID)), nil, fields)
+	return c.requestJSON(ctx, http.MethodPut, fmt.Sprintf("/api/0/organizations/%s/issues/%s/", url.PathEscape(c.cfg.Organization), url.PathEscape(issueID)), nil, fields)
 }
 
 func (c *Client) ResolveIssue(ctx context.Context, issueID string) (any, error) {
