@@ -175,6 +175,17 @@ func CollectAllProposedTags(agent *types.AgentNode) []string {
 		}
 	}
 
+	types.HydrateAgentSessions(agent)
+	for _, session := range agent.Sessions {
+		proposed := session.ProposedTags
+		if len(proposed) == 0 {
+			proposed = session.Tags
+		}
+		for _, t := range proposed {
+			add(t)
+		}
+	}
+
 	return tags
 }
 
@@ -226,6 +237,21 @@ func (s *TagApprovalService) ApproveAgentTags(ctx context.Context, agentID strin
 		}
 		agent.Skills[i].ApprovedTags = approved
 	}
+	types.HydrateAgentSessions(agent)
+	for i := range agent.Sessions {
+		var approved []string
+		proposed := agent.Sessions[i].ProposedTags
+		if len(proposed) == 0 {
+			proposed = agent.Sessions[i].Tags
+		}
+		for _, t := range proposed {
+			if _, ok := approvedSet[strings.ToLower(strings.TrimSpace(t))]; ok {
+				approved = append(approved, t)
+			}
+		}
+		agent.Sessions[i].ApprovedTags = approved
+	}
+	types.SyncAgentSessionsToMetadata(agent)
 
 	if err := s.storage.RegisterAgent(ctx, agent); err != nil {
 		return err
@@ -243,8 +269,8 @@ func (s *TagApprovalService) ApproveAgentTags(ctx context.Context, agentID strin
 	return nil
 }
 
-// ApproveAgentTagsPerSkill approves tags at per-skill/per-reasoner granularity.
-func (s *TagApprovalService) ApproveAgentTagsPerSkill(ctx context.Context, agentID string, skillTags map[string][]string, reasonerTags map[string][]string, approvedBy string) error {
+// ApproveAgentTagsPerSkill approves tags at per-skill/per-reasoner/per-session granularity.
+func (s *TagApprovalService) ApproveAgentTagsPerSkill(ctx context.Context, agentID string, skillTags map[string][]string, reasonerTags map[string][]string, sessionTags map[string][]string, approvedBy string) error {
 	agent, err := s.storage.GetAgent(ctx, agentID)
 	if err != nil {
 		return err
@@ -265,6 +291,13 @@ func (s *TagApprovalService) ApproveAgentTagsPerSkill(ctx context.Context, agent
 			agent.Skills[i].ApprovedTags = tags
 		}
 	}
+	types.HydrateAgentSessions(agent)
+	for i := range agent.Sessions {
+		if tags, ok := sessionTags[agent.Sessions[i].Name]; ok {
+			agent.Sessions[i].ApprovedTags = tags
+		}
+	}
+	types.SyncAgentSessionsToMetadata(agent)
 
 	// Collect all approved tags for the agent-level field
 	seen := make(map[string]struct{})
@@ -280,6 +313,15 @@ func (s *TagApprovalService) ApproveAgentTagsPerSkill(ctx context.Context, agent
 	}
 	for _, sk := range agent.Skills {
 		for _, t := range sk.ApprovedTags {
+			normalized := strings.ToLower(strings.TrimSpace(t))
+			if _, exists := seen[normalized]; !exists {
+				seen[normalized] = struct{}{}
+				allApproved = append(allApproved, normalized)
+			}
+		}
+	}
+	for _, session := range agent.Sessions {
+		for _, t := range session.ApprovedTags {
 			normalized := strings.ToLower(strings.TrimSpace(t))
 			if _, exists := seen[normalized]; !exists {
 				seen[normalized] = struct{}{}
@@ -327,6 +369,11 @@ func (s *TagApprovalService) RejectAgentTags(ctx context.Context, agentID string
 	for i := range agent.Skills {
 		agent.Skills[i].ApprovedTags = nil
 	}
+	types.HydrateAgentSessions(agent)
+	for i := range agent.Sessions {
+		agent.Sessions[i].ApprovedTags = nil
+	}
+	types.SyncAgentSessionsToMetadata(agent)
 
 	if err := s.storage.RegisterAgent(ctx, agent); err != nil {
 		return err
@@ -367,6 +414,11 @@ func (s *TagApprovalService) RevokeAgentTags(ctx context.Context, agentID string
 	for i := range agent.Skills {
 		agent.Skills[i].ApprovedTags = nil
 	}
+	types.HydrateAgentSessions(agent)
+	for i := range agent.Sessions {
+		agent.Sessions[i].ApprovedTags = nil
+	}
+	types.SyncAgentSessionsToMetadata(agent)
 	agent.LifecycleStatus = types.AgentStatusPendingApproval
 
 	if err := s.storage.RegisterAgent(ctx, agent); err != nil {
@@ -456,6 +508,14 @@ func (s *TagApprovalService) ProcessRegistrationTags(agent *types.AgentNode) Tag
 				agent.Skills[i].ApprovedTags = agent.Skills[i].ProposedTags
 			}
 		}
+		types.HydrateAgentSessions(agent)
+		for i := range agent.Sessions {
+			agent.Sessions[i].ApprovedTags = agent.Sessions[i].Tags
+			if len(agent.Sessions[i].ApprovedTags) == 0 {
+				agent.Sessions[i].ApprovedTags = agent.Sessions[i].ProposedTags
+			}
+		}
+		types.SyncAgentSessionsToMetadata(agent)
 	} else {
 		// Needs approval: only auto-approved tags are set
 		agent.ApprovedTags = result.AutoApproved
@@ -565,4 +625,3 @@ func (s *TagApprovalService) issueTagVC(ctx context.Context, agentID string, app
 		Str("proof_type", proofType).
 		Msg("Agent tag VC issued")
 }
-

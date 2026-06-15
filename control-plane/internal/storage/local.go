@@ -4501,6 +4501,7 @@ func (ls *LocalStorage) executeRegisterAgent(ctx context.Context, q DBTX, agent 
 	if err != nil {
 		return fmt.Errorf("failed to marshal agent features: %w", err)
 	}
+	types.SyncAgentSessionsToMetadata(agent)
 	metadataJSON, err := json.Marshal(agent.Metadata)
 	if err != nil {
 		return fmt.Errorf("failed to marshal agent metadata: %w", err)
@@ -4612,6 +4613,7 @@ func (ls *LocalStorage) GetAgent(ctx context.Context, id string) (*types.AgentNo
 			return nil, fmt.Errorf("failed to unmarshal agent metadata: %w", err)
 		}
 	}
+	types.HydrateAgentSessions(agent)
 	if len(proposedTagsJSON) > 0 {
 		if err := json.Unmarshal(proposedTagsJSON, &agent.ProposedTags); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal agent proposed tags: %w", err)
@@ -4802,6 +4804,7 @@ func (ls *LocalStorage) postProcessAgentNode(agent *types.AgentNode, healthStatu
 	if len(metadataJSON) > 0 {
 		_ = json.Unmarshal(metadataJSON, &agent.Metadata)
 	}
+	types.HydrateAgentSessions(agent)
 	if len(proposedTagsJSON) > 0 {
 		_ = json.Unmarshal(proposedTagsJSON, &agent.ProposedTags)
 	}
@@ -8485,6 +8488,15 @@ func reconstructAgentLevelTags(agent *types.AgentNode) {
 				}
 			}
 		}
+		types.HydrateAgentSessions(agent)
+		for _, session := range agent.Sessions {
+			for _, t := range session.ApprovedTags {
+				if _, exists := seen[t]; !exists {
+					seen[t] = struct{}{}
+					agent.ApprovedTags = append(agent.ApprovedTags, t)
+				}
+			}
+		}
 	}
 
 	if len(agent.ProposedTags) == 0 {
@@ -8505,6 +8517,19 @@ func reconstructAgentLevelTags(agent *types.AgentNode) {
 			source := sk.ProposedTags
 			if len(source) == 0 {
 				source = sk.Tags
+			}
+			for _, t := range source {
+				if _, exists := proposedSeen[t]; !exists {
+					proposedSeen[t] = struct{}{}
+					agent.ProposedTags = append(agent.ProposedTags, t)
+				}
+			}
+		}
+		types.HydrateAgentSessions(agent)
+		for _, session := range agent.Sessions {
+			source := session.ProposedTags
+			if len(source) == 0 {
+				source = session.Tags
 			}
 			for _, t := range source {
 				if _, exists := proposedSeen[t]; !exists {

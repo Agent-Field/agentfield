@@ -15,6 +15,7 @@ func TestAgentRegisterSessionStoresExplicitDefinition(t *testing.T) {
 		WithSessionModel("gpt-realtime-2"),
 		WithSessionVoice("marin"),
 		WithSessionTools("support.resolve_voice_turn"),
+		WithSessionTags("voice", "pii"),
 	); err != nil {
 		t.Fatalf("RegisterSession returned error: %v", err)
 	}
@@ -28,6 +29,9 @@ func TestAgentRegisterSessionStoresExplicitDefinition(t *testing.T) {
 	}
 	if sessions[0].Tools[0] != "support.resolve_voice_turn" {
 		t.Fatalf("tool target = %q", sessions[0].Tools[0])
+	}
+	if len(sessions[0].Tags) != 2 || sessions[0].Tags[0] != "voice" || sessions[0].ProposedTags[1] != "pii" {
+		t.Fatalf("session tags = %#v proposed=%#v", sessions[0].Tags, sessions[0].ProposedTags)
 	}
 }
 

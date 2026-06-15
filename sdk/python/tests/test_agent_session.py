@@ -14,6 +14,7 @@ def test_app_session_registers_voice_metadata():
         modalities=["audio", "text"],
         voice="marin",
         tools=["launch_support_workflow"],
+        tags=["voice", "pii"],
     )
     async def voice(session):
         return session
@@ -27,6 +28,9 @@ def test_app_session_registers_voice_metadata():
             "modalities": ["audio", "text"],
             "voice": "marin",
             "tools": ["launch_support_workflow"],
+            "tags": ["voice", "pii"],
+            "proposed_tags": ["voice", "pii"],
+            "approved_tags": [],
             "metadata": {},
         }
     ]

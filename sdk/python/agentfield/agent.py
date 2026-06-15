@@ -1569,6 +1569,7 @@ class Agent(FastAPI):
         modalities: Optional[List[str]] = None,
         voice: Optional[str] = None,
         tools: Optional[List[str]] = None,
+        tags: Optional[List[str]] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Callable[[Callable[[RealtimeSession], Awaitable[Any]]], Callable[[RealtimeSession], Awaitable[Any]]]:
         """Register a realtime/voice session endpoint.
@@ -1586,6 +1587,7 @@ class Agent(FastAPI):
             modalities=modalities,
             voice=voice,
             tools=tools,
+            tags=tags,
             metadata=metadata,
         )
 

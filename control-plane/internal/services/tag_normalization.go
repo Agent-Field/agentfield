@@ -56,6 +56,18 @@ func CanonicalAgentTags(agent *types.AgentNode) []string {
 		}
 	}
 
+	types.HydrateAgentSessions(agent)
+	for _, session := range agent.Sessions {
+		// Prefer approved tags over raw tags for canonical matching.
+		sourceTags := session.Tags
+		if len(session.ApprovedTags) > 0 {
+			sourceTags = session.ApprovedTags
+		}
+		for _, tag := range sourceTags {
+			add(tag)
+		}
+	}
+
 	// Include agent-level approved tags
 	for _, tag := range agent.ApprovedTags {
 		add(tag)

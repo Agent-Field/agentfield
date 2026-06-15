@@ -59,7 +59,7 @@ import {
 import { cn } from "@/lib/utils";
 import { RunTrace, buildTraceTree, formatDuration } from "@/components/RunTrace";
 import { SourceIcon } from "@/components/triggers/SourceIcon";
-import { ArrowUpRight } from "@/components/ui/icon-bridge";
+import { ArrowUpRight, RadioTower } from "@/components/ui/icon-bridge";
 import { StepDetail } from "@/components/StepDetail";
 import { WorkflowDAGViewer } from "@/components/WorkflowDAG";
 import { ErrorBoundary } from '@/components/ErrorBoundary';
@@ -697,6 +697,27 @@ export function RunDetailPage() {
               );
             })()}
           </div>
+
+          {sessionTrim ? (
+            <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+              <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-background text-muted-foreground">
+                <RadioTower className="size-3.5" aria-hidden />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                  <Badge variant="outline" size="sm" showIcon={false}>
+                    Session ingress
+                  </Badge>
+                  <span className="font-mono text-micro-plus text-foreground" title={sessionTrim}>
+                    {truncateEnd(sessionTrim, 42)}
+                  </span>
+                </div>
+                <p className="mt-0.5 text-micro-plus text-muted-foreground">
+                  Realtime session parent · child workflow trace
+                </p>
+              </div>
+            </div>
+          ) : null}
 
           <div className="flex min-w-0 flex-col gap-1.5 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-3 sm:gap-y-1">
             <p className="m-0 min-w-0 flex-1 text-xs leading-snug text-muted-foreground">

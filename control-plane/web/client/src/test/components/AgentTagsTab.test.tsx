@@ -248,6 +248,33 @@ describe("AgentTagsTab", () => {
     expect(screen.queryByRole("button", { name: "Revoke" })).not.toBeInTheDocument();
   });
 
+  it("renders component summaries for reasoners, skills, and sessions", () => {
+    render(
+      <AgentTagsTab
+        policies={[]}
+        agents={[
+          makeAgent({
+            agent_id: "agent-components",
+            components: {
+              reasoners: [{ id: "planner", kind: "reasoner", proposed_tags: ["analysis"], approved_tags: [] }],
+              skills: [{ id: "lookup", kind: "skill", proposed_tags: ["search"], approved_tags: ["search"] }],
+              sessions: [{ id: "voice", kind: "session", proposed_tags: ["support"], approved_tags: ["support"] }],
+            },
+          }),
+        ]}
+        agentsLoading={false}
+        agentsError={null}
+        canMutate
+        onRefresh={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Reasoners 1")).toBeInTheDocument();
+    expect(screen.getByText("Skills 1")).toBeInTheDocument();
+    expect(screen.getByText("Sessions 1")).toBeInTheDocument();
+    expect(screen.getByText("tag list")).toBeInTheDocument();
+  });
+
   it("filters agents and handles approve, reject, and revoke flows", async () => {
     const onRefresh = vi.fn();
     const agents = [

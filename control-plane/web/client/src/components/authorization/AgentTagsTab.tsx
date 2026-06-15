@@ -79,6 +79,56 @@ function renderTagCell(tags: string[]) {
   return content;
 }
 
+function renderComponentCell(summary: AgentTagSummary["components"]) {
+  if (!summary) {
+    return <span className="text-xs italic text-muted-foreground">—</span>;
+  }
+  const groups = [
+    { label: "Reasoners", value: summary.reasoners?.length ?? 0 },
+    { label: "Skills", value: summary.skills?.length ?? 0 },
+    { label: "Sessions", value: summary.sessions?.length ?? 0 },
+  ].filter((group) => group.value > 0);
+  if (groups.length === 0) {
+    return <span className="text-xs italic text-muted-foreground">—</span>;
+  }
+  const tooltipGroups = [
+    ...(summary.reasoners ?? []).map((item) => ({
+      label: `Reasoner ${item.id}`,
+      tags: item.approved_tags.length ? item.approved_tags : item.proposed_tags,
+    })),
+    ...(summary.skills ?? []).map((item) => ({
+      label: `Skill ${item.id}`,
+      tags: item.approved_tags.length ? item.approved_tags : item.proposed_tags,
+    })),
+    ...(summary.sessions ?? []).map((item) => ({
+      label: `Session ${item.id}`,
+      tags: item.approved_tags.length ? item.approved_tags : item.proposed_tags,
+    })),
+  ].filter((group) => group.tags.length > 0);
+  const content = (
+    <div className="flex flex-wrap items-center gap-1">
+      {groups.map((group) => (
+        <Badge key={group.label} variant="outline" size="sm" showIcon={false} className="text-micro">
+          {group.label} {group.value}
+        </Badge>
+      ))}
+    </div>
+  );
+  if (tooltipGroups.length === 0) {
+    return content;
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div className="cursor-default">{content}</div>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-sm">
+        <TooltipTagList groups={tooltipGroups} />
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function SortableHead({
   label,
   column,
@@ -320,6 +370,9 @@ export function AgentTagsTab({
                 <TableHead className="h-9 px-3 text-micro-plus font-medium text-muted-foreground">
                   Granted
                 </TableHead>
+                <TableHead className="h-9 px-3 text-micro-plus font-medium text-muted-foreground">
+                  Components
+                </TableHead>
                 <TableHead className="h-9 w-28 px-3 text-center text-micro-plus font-medium text-muted-foreground">
                   Status
                 </TableHead>
@@ -341,7 +394,7 @@ export function AgentTagsTab({
               {agentsLoading ? (
                 <TableRow>
                   <TableCell
-                    colSpan={readOnly ? 5 : 6}
+                    colSpan={readOnly ? 6 : 7}
                     className="p-8 text-center text-muted-foreground"
                   >
                     Loading agents…
@@ -349,7 +402,7 @@ export function AgentTagsTab({
                 </TableRow>
               ) : filteredAgents.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={readOnly ? 5 : 6} className="p-8">
+                  <TableCell colSpan={readOnly ? 6 : 7} className="p-8">
                     <div className="flex flex-col items-center justify-center py-6 text-center">
                       <p className="text-sm font-medium text-muted-foreground">No agents</p>
                       <p className="mt-1 max-w-sm text-xs text-muted-foreground">
@@ -373,6 +426,9 @@ export function AgentTagsTab({
                       </TableCell>
                       <TableCell className="min-w-0 px-3 py-2 align-top">
                         {renderTagCell(item.approved_tags || [])}
+                      </TableCell>
+                      <TableCell className="min-w-0 px-3 py-2 align-top">
+                        {renderComponentCell(item.components)}
                       </TableCell>
                       <TableCell className="px-3 py-2 text-center align-top">
                         {status === "pending_approval" && (

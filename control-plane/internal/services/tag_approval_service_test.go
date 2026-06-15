@@ -221,6 +221,9 @@ func TestCollectAllProposedTags_FromReasonersAndSkills(t *testing.T) {
 		Skills: []types.SkillDefinition{
 			{ID: "s1", Tags: []string{"payment"}, ProposedTags: []string{"payment"}},
 		},
+		Sessions: []types.SessionDefinition{
+			{Name: "voice", Tags: []string{"voice"}, ProposedTags: []string{"voice", "pii"}},
+		},
 	}
 
 	tags := CollectAllProposedTags(agent)
@@ -229,6 +232,8 @@ func TestCollectAllProposedTags_FromReasonersAndSkills(t *testing.T) {
 	assert.Contains(t, tags, "internal")
 	assert.Contains(t, tags, "billing")
 	assert.Contains(t, tags, "payment")
+	assert.Contains(t, tags, "voice")
+	assert.Contains(t, tags, "pii")
 }
 
 func TestCollectAllProposedTags_DeduplicatesAndNormalizes(t *testing.T) {
@@ -262,27 +267,31 @@ func TestApproveAgentTags_HappyPath(t *testing.T) {
 	storage.agents["agent-1"] = &types.AgentNode{
 		ID:              "agent-1",
 		LifecycleStatus: types.AgentStatusPendingApproval,
-		ProposedTags:    []string{"finance", "payment"},
+		ProposedTags:    []string{"finance", "payment", "voice"},
 		Reasoners: []types.ReasonerDefinition{
 			{ID: "r1", ProposedTags: []string{"finance"}},
 		},
 		Skills: []types.SkillDefinition{
 			{ID: "s1", ProposedTags: []string{"finance", "payment"}},
 		},
+		Sessions: []types.SessionDefinition{
+			{Name: "voice", ProposedTags: []string{"voice", "payment"}},
+		},
 	}
 
 	svc := NewTagApprovalService(testApprovalConfig(), storage)
 
-	err := svc.ApproveAgentTags(context.Background(), "agent-1", []string{"finance", "payment"}, "admin-user")
+	err := svc.ApproveAgentTags(context.Background(), "agent-1", []string{"finance", "payment", "voice"}, "admin-user")
 	require.NoError(t, err)
 
 	agent := storage.agents["agent-1"]
 	assert.Equal(t, types.AgentStatusStarting, agent.LifecycleStatus)
-	assert.Equal(t, []string{"finance", "payment"}, agent.ApprovedTags)
+	assert.Equal(t, []string{"finance", "payment", "voice"}, agent.ApprovedTags)
 	// Per-skill: reasoner r1 proposed ["finance"], approved set has "finance" → approved
 	assert.Equal(t, []string{"finance"}, agent.Reasoners[0].ApprovedTags)
 	// Skill s1 proposed ["finance", "payment"], both in approved set
 	assert.Equal(t, []string{"finance", "payment"}, agent.Skills[0].ApprovedTags)
+	assert.Equal(t, []string{"voice", "payment"}, agent.Sessions[0].ApprovedTags)
 }
 
 func TestApproveAgentTags_PartialApproval(t *testing.T) {
@@ -344,6 +353,9 @@ func TestApproveAgentTagsPerSkill_HappyPath(t *testing.T) {
 			{ID: "s1", ProposedTags: []string{"payment"}},
 			{ID: "s2", ProposedTags: []string{"billing"}},
 		},
+		Sessions: []types.SessionDefinition{
+			{Name: "voice", ProposedTags: []string{"voice", "pii"}},
+		},
 	}
 
 	svc := NewTagApprovalService(testApprovalConfig(), storage)
@@ -356,6 +368,9 @@ func TestApproveAgentTagsPerSkill_HappyPath(t *testing.T) {
 		map[string][]string{
 			"r1": {"finance"}, // internal not approved
 		},
+		map[string][]string{
+			"voice": {"voice"},
+		},
 		"admin-user",
 	)
 	require.NoError(t, err)
@@ -365,10 +380,12 @@ func TestApproveAgentTagsPerSkill_HappyPath(t *testing.T) {
 	assert.Equal(t, []string{"finance"}, agent.Reasoners[0].ApprovedTags)
 	assert.Equal(t, []string{"payment"}, agent.Skills[0].ApprovedTags)
 	assert.Nil(t, agent.Skills[1].ApprovedTags) // s2 not in approval map
+	assert.Equal(t, []string{"voice"}, agent.Sessions[0].ApprovedTags)
 
 	// Agent-level approved tags = union of all per-skill approved tags
 	assert.Contains(t, agent.ApprovedTags, "finance")
 	assert.Contains(t, agent.ApprovedTags, "payment")
+	assert.Contains(t, agent.ApprovedTags, "voice")
 }
 
 func TestApproveAgentTagsPerSkill_NonPendingFails(t *testing.T) {
@@ -379,7 +396,7 @@ func TestApproveAgentTagsPerSkill_NonPendingFails(t *testing.T) {
 	}
 
 	svc := NewTagApprovalService(testApprovalConfig(), storage)
-	err := svc.ApproveAgentTagsPerSkill(context.Background(), "agent-1", nil, nil, "admin")
+	err := svc.ApproveAgentTagsPerSkill(context.Background(), "agent-1", nil, nil, nil, "admin")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not pending approval")
 }

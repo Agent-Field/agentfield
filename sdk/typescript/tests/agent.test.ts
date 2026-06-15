@@ -33,6 +33,9 @@ describe('Agent', () => {
         modalities: ['audio', 'text'],
         voice: 'marin',
         tools: ['support.resolve_voice_turn'],
+        tags: [],
+        proposed_tags: [],
+        approved_tags: [],
         metadata: {}
       }
     ]);

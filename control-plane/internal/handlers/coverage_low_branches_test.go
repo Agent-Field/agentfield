@@ -569,7 +569,8 @@ func TestRegisterNodeHandler_AdditionalCoverage(t *testing.T) {
 			"id":"node-1",
 			"base_url":"https://example.com",
 			"reasoners":[{"id":"reasoner-1","proposed_tags":["alpha","beta"]}],
-			"skills":[{"id":"skill-1","tags":["ops"]}]
+			"skills":[{"id":"skill-1","tags":["ops"]}],
+			"sessions":[{"name":"voice","provider":"openai","transport":"webrtc","tags":["support"]}]
 		}`
 		req := httptest.NewRequest(http.MethodPost, "/nodes/register", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -587,6 +588,9 @@ func TestRegisterNodeHandler_AdditionalCoverage(t *testing.T) {
 		assert.Equal(t, "https://example.com", store.registeredAgent.CallbackDiscovery.Resolved)
 		assert.Equal(t, []string{"alpha", "beta"}, store.registeredAgent.Reasoners[0].Tags)
 		assert.Equal(t, []string{"ops"}, store.registeredAgent.Skills[0].ProposedTags)
+		assert.Equal(t, []string{"support"}, store.registeredAgent.Sessions[0].ProposedTags)
+		require.NotNil(t, store.registeredAgent.Metadata.Custom)
+		assert.NotNil(t, store.registeredAgent.Metadata.Custom["sessions"])
 	})
 
 	t.Run("re-registration preserves approved tags and lifts offline status to starting", func(t *testing.T) {
@@ -604,7 +608,8 @@ func TestRegisterNodeHandler_AdditionalCoverage(t *testing.T) {
 			"id":"node-1",
 			"base_url":"https://example.com",
 			"reasoners":[{"id":"reasoner-1","tags":["alpha","beta"]}],
-			"skills":[{"id":"skill-1","proposed_tags":["alpha","gamma"]}]
+			"skills":[{"id":"skill-1","proposed_tags":["alpha","gamma"]}],
+			"sessions":[{"name":"voice","provider":"openai","transport":"webrtc","proposed_tags":["alpha","support"]}]
 		}`))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
@@ -616,6 +621,9 @@ func TestRegisterNodeHandler_AdditionalCoverage(t *testing.T) {
 		assert.Equal(t, types.AgentStatusStarting, store.registeredAgent.LifecycleStatus)
 		assert.Equal(t, []string{"alpha"}, store.registeredAgent.Reasoners[0].ApprovedTags)
 		assert.Equal(t, []string{"alpha"}, store.registeredAgent.Skills[0].ApprovedTags)
+		assert.Equal(t, []string{"alpha"}, store.registeredAgent.Sessions[0].ApprovedTags)
+		require.NotNil(t, store.registeredAgent.Metadata.Custom)
+		assert.NotNil(t, store.registeredAgent.Metadata.Custom["sessions"])
 	})
 
 	t.Run("admin revoked re-registration remains pending approval", func(t *testing.T) {

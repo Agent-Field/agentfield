@@ -112,9 +112,9 @@ func (h *TagApprovalHandlers) ApproveAgentTags(c *gin.Context) {
 		return
 	}
 
-	// If per-skill/per-reasoner tags are provided, use per-skill approval
-	if len(req.SkillTags) > 0 || len(req.ReasonerTags) > 0 {
-		if err := h.tagApprovalService.ApproveAgentTagsPerSkill(c.Request.Context(), agentID, req.SkillTags, req.ReasonerTags, "admin"); err != nil {
+	// If per-component tags are provided, use granular component approval.
+	if len(req.SkillTags) > 0 || len(req.ReasonerTags) > 0 || len(req.SessionTags) > 0 {
+		if err := h.tagApprovalService.ApproveAgentTagsPerSkill(c.Request.Context(), agentID, req.SkillTags, req.ReasonerTags, req.SessionTags, "admin"); err != nil {
 			if errors.Is(err, services.ErrNotPendingApproval) {
 				c.JSON(http.StatusConflict, gin.H{
 					"error":   "not_pending_approval",

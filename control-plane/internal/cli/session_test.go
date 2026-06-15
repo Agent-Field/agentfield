@@ -31,12 +31,12 @@ func TestNewSessionCommandRegistersSubcommands(t *testing.T) {
 func TestRunSessionStartPostsPayloadAndWritesResponse(t *testing.T) {
 	var gotBody map[string]interface{}
 	withTriggerTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/sessions/support.voice/start", r.URL.Path)
+		require.Equal(t, "/api/v1/session-targets/support.voice/start", r.URL.Path)
 		require.Equal(t, http.MethodPost, r.Method)
 		require.Equal(t, "application/json", r.Header.Get("Content-Type"))
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"session_id":"sess-1","offer_url":"/api/v1/sessions/sess-1/realtime-offer"}`))
+		_, _ = w.Write([]byte(`{"session_id":"sess-1","offer_url":"/api/v1/session-instances/sess-1/realtime-offer"}`))
 	})
 
 	var stdout bytes.Buffer
@@ -56,7 +56,7 @@ func TestRunSessionStartPostsPayloadAndWritesResponse(t *testing.T) {
 		"model":     "gpt-realtime-2",
 		"voice":     "marin",
 	}, gotBody)
-	require.JSONEq(t, `{"session_id":"sess-1","offer_url":"/api/v1/sessions/sess-1/realtime-offer"}`, stdout.String())
+	require.JSONEq(t, `{"session_id":"sess-1","offer_url":"/api/v1/session-instances/sess-1/realtime-offer"}`, stdout.String())
 }
 
 func TestRunSessionStartReturnsStatusErrors(t *testing.T) {
@@ -74,7 +74,7 @@ func TestRunSessionOfferPostsSDPAndWritesRawAnswer(t *testing.T) {
 	var gotContentType string
 	var gotAPIKey string
 	withTriggerTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/sessions/sess-1/realtime-offer", r.URL.Path)
+		require.Equal(t, "/api/v1/session-instances/sess-1/realtime-offer", r.URL.Path)
 		require.Equal(t, "openai", r.URL.Query().Get("provider"))
 		require.Equal(t, "webrtc", r.URL.Query().Get("transport"))
 		gotContentType = r.Header.Get("Content-Type")
@@ -184,7 +184,7 @@ func TestReadSessionSDPRejectsBadSources(t *testing.T) {
 func TestRunSessionToolPostsPayloadAndWritesResponse(t *testing.T) {
 	var gotBody map[string]interface{}
 	withTriggerTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/sessions/sess-1/tools/resolve", r.URL.Path)
+		require.Equal(t, "/api/v1/session-instances/sess-1/tools/resolve", r.URL.Path)
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"execution_id":"exec-1","status":"queued"}`))

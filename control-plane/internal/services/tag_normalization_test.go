@@ -104,6 +104,21 @@ func TestCanonicalAgentTags_SkillApprovedTagsTakePrecedence(t *testing.T) {
 	assert.NotContains(t, result, "raw-skill")
 }
 
+func TestCanonicalAgentTags_SessionApprovedTagsTakePrecedence(t *testing.T) {
+	agent := &types.AgentNode{
+		Sessions: []types.SessionDefinition{
+			{
+				Name:         "voice",
+				Tags:         []string{"raw-session"},
+				ApprovedTags: []string{"approved-session"},
+			},
+		},
+	}
+	result := CanonicalAgentTags(agent)
+	assert.Equal(t, []string{"approved-session"}, result)
+	assert.NotContains(t, result, "raw-session")
+}
+
 func TestCanonicalAgentTags_AgentApprovedTags(t *testing.T) {
 	agent := &types.AgentNode{
 		ApprovedTags: []string{"agent-approved"},
