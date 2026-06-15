@@ -187,6 +187,11 @@ func (d *TriggerDispatcher) DispatchEvent(ctx context.Context, trig *types.Trigg
 		d.markFailed(ctx, ev.ID, msg)
 		return
 	}
+	// 2xx other than 202 means the node handled the work synchronously, so
+	// we can close the execution out now. 202 Accepted means the node took
+	// the work and will report final status via a later async callback (the
+	// reasoner-result/event ingestion path), so we leave the execution in
+	// Running and let that path complete it.
 	if resp.StatusCode != http.StatusAccepted {
 		d.completeDispatchExecution(ctx, dispatchExecutionID, respBody)
 	}
@@ -245,6 +250,10 @@ func (d *TriggerDispatcher) createDispatchRecords(ctx context.Context, node *typ
 		}},
 	}
 	if err := d.storage.StoreWorkflowExecution(ctx, workflowExec); err != nil {
+		// The Execution row was already inserted; without this cleanup it would
+		// stay in Running forever as a zombie row. Fail it so the partial state
+		// is observable and consistent with the returned error.
+		d.failDispatchExecution(ctx, executionID, fmt.Sprintf("store workflow execution: %v", err))
 		return err
 	}
 
