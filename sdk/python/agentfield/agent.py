@@ -60,6 +60,10 @@ from agentfield.multimodal_response import MultimodalResponse
 from agentfield.async_config import AsyncConfig
 from agentfield.async_execution_manager import AsyncExecutionManager
 from agentfield.pydantic_utils import convert_function_args, should_convert_args
+from agentfield.sessions import (
+    RealtimeSession,
+    build_session_definition,
+)
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
@@ -657,6 +661,7 @@ class Agent(FastAPI):
         # Using Dict[str, Entry] with __slots__ dataclasses for minimal footprint
         self._reasoner_registry: Dict[str, ReasonerEntry] = {}
         self._skill_registry: Dict[str, SkillEntry] = {}
+        self._session_registry: Dict[str, Dict[str, Any]] = {}
 
         # VC override tracking (still needed for _effective_component_vc_setting)
         self._reasoner_vc_overrides: Dict[str, bool] = {}
@@ -1540,7 +1545,60 @@ class Agent(FastAPI):
             metadata["tags"] = self.agent_tags
         if self.author:
             metadata["author"] = self.author
+        if self._session_registry:
+            metadata["sessions"] = [
+                entry["definition"].to_dict()
+                for entry in self._session_registry.values()
+            ]
         return metadata if metadata else None
+
+    @property
+    def sessions(self) -> List[Dict[str, Any]]:
+        return [
+            entry["definition"].to_dict()
+            for entry in self._session_registry.values()
+        ]
+
+    def session(
+        self,
+        name: str,
+        *,
+        provider: str,
+        transport: str,
+        model: Optional[str] = None,
+        modalities: Optional[List[str]] = None,
+        voice: Optional[str] = None,
+        tools: Optional[List[str]] = None,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Callable[[Callable[[RealtimeSession], Awaitable[Any]]], Callable[[RealtimeSession], Awaitable[Any]]]:
+        """Register a realtime/voice session endpoint.
+
+        Provider and transport are both explicit; AgentField does not infer or
+        switch them. Unsupported combinations fail at declaration time and again
+        at control-plane session start.
+        """
+
+        definition = build_session_definition(
+            name,
+            provider=provider,
+            transport=transport,
+            model=model,
+            modalities=modalities,
+            voice=voice,
+            tools=tools,
+            tags=tags,
+            metadata=metadata,
+        )
+
+        def decorator(
+            func: Callable[[RealtimeSession], Awaitable[Any]]
+        ) -> Callable[[RealtimeSession], Awaitable[Any]]:
+            self._session_registry[name] = {"definition": definition, "handler": func}
+            setattr(func, "_agentfield_session", definition)
+            return func
+
+        return decorator
 
     def _build_vc_metadata(self) -> Dict[str, Any]:
         """Produce a serializable VC policy snapshot for control-plane visibility."""

@@ -26,3 +26,5 @@ export * from './types/skill.js';
 export * from './harness/index.js';
 export * from './status/ExecutionStatus.js';
 export * from './approval/ApprovalClient.js';
+export * from './sessionTransport.js';
+export * from './session.js';

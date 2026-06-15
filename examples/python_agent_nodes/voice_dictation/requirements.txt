@@ -1,0 +1,6 @@
+# The realtime `@app.session(...)` DX is introduced in PR #654 and is not in a
+# released SDK yet. Until it ships, install the SDK from the PR branch, e.g.:
+#   pip install -e /path/to/agentfield/sdk/python
+# After #654 is released, pin the first version that includes it here.
+agentfield  # >= <first release with sessions>
+pydantic>=2.0

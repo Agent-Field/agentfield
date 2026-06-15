@@ -12,8 +12,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strings"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -153,10 +153,10 @@ type Reasoner struct {
 // Use it as a typed argument to WithTriggers — the control plane registers
 // the binding and minting of the public ingest URL happens server-side.
 type EventTrigger struct {
-	Source       string
-	Types        []string
-	SecretEnv    string
-	Config       map[string]any
+	Source    string
+	Types     []string
+	SecretEnv string
+	Config    map[string]any
 }
 
 // ScheduleTrigger describes a cron-style schedule binding for a reasoner.
@@ -468,6 +468,7 @@ type Agent struct {
 	client     *client.Client
 	httpClient *http.Client
 	reasoners  map[string]*Reasoner
+	sessions   map[string]SessionDefinition
 	aiClient   *ai.Client // AI/LLM client
 	memory     *Memory    // Memory system for state management
 
@@ -554,6 +555,7 @@ func New(cfg Config) (*Agent, error) {
 		cfg:                         cfg,
 		httpClient:                  httpClient,
 		reasoners:                   make(map[string]*Reasoner),
+		sessions:                    make(map[string]SessionDefinition),
 		aiClient:                    aiClient,
 		memory:                      NewMemory(cfg.MemoryBackend),
 		stopLease:                   make(chan struct{}),
@@ -1013,6 +1015,7 @@ func (a *Agent) discoveryPayload() map[string]any {
 		"deployment_type": deployment,
 		"reasoners":       reasoners,
 		"skills":          []map[string]any{},
+		"sessions":        a.SessionDefinitions(),
 	}
 }
 

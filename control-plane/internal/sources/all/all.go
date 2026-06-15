@@ -5,9 +5,13 @@ package all
 
 import (
 	_ "github.com/Agent-Field/agentfield/control-plane/internal/sources/cron"
+	_ "github.com/Agent-Field/agentfield/control-plane/internal/sources/databricks"
 	_ "github.com/Agent-Field/agentfield/control-plane/internal/sources/genericbearer"
 	_ "github.com/Agent-Field/agentfield/control-plane/internal/sources/generichmac"
 	_ "github.com/Agent-Field/agentfield/control-plane/internal/sources/github"
+	_ "github.com/Agent-Field/agentfield/control-plane/internal/sources/linear"
+	_ "github.com/Agent-Field/agentfield/control-plane/internal/sources/sentry"
 	_ "github.com/Agent-Field/agentfield/control-plane/internal/sources/slack"
+	_ "github.com/Agent-Field/agentfield/control-plane/internal/sources/snowflake"
 	_ "github.com/Agent-Field/agentfield/control-plane/internal/sources/stripe"
 )

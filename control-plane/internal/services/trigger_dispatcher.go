@@ -87,12 +87,12 @@ func (d *TriggerDispatcher) DispatchEvent(ctx context.Context, trig *types.Trigg
 	parentVCID := ev.VCID
 	if parentVCID == "" && d.vcService != nil {
 		triggerVC, err := d.vcService.GenerateTriggerEventVC(ctx, TriggerEventInput{
-			TriggerID:   trig.ID,
-			SourceName:  trig.SourceName,
-			EventType:   ev.EventType,
-			EventID:     ev.ID,
-			Payload:     ev.RawPayload,
-			ReceivedAt:  ev.ReceivedAt,
+			TriggerID:  trig.ID,
+			SourceName: trig.SourceName,
+			EventType:  ev.EventType,
+			EventID:    ev.ID,
+			Payload:    ev.RawPayload,
+			ReceivedAt: ev.ReceivedAt,
 			Verification: types.VCTriggerVerification{
 				Passed:    true,
 				Algorithm: trig.SourceName,
@@ -134,16 +134,23 @@ func (d *TriggerDispatcher) DispatchEvent(ctx context.Context, trig *types.Trigg
 		return
 	}
 
+	dispatchWorkflowID := utils.GenerateWorkflowID()
+	dispatchExecutionID := utils.GenerateExecutionID()
+	requestID := utils.GenerateAgentFieldRequestID()
+
 	url := fmt.Sprintf("%s/reasoners/%s", node.BaseURL, trig.TargetReasoner)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		d.markFailed(ctx, ev.ID, fmt.Sprintf("build request: %v", err))
 		return
 	}
-	dispatchWorkflowID := utils.GenerateWorkflowID()
+	if err := d.createDispatchRecords(ctx, node, trig, ev, dispatchWorkflowID, dispatchExecutionID, requestID, body); err != nil {
+		d.markFailed(ctx, ev.ID, fmt.Sprintf("create dispatch execution record: %v", err))
+		return
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Workflow-ID", dispatchWorkflowID)
-	req.Header.Set("X-Execution-ID", utils.GenerateExecutionID())
+	req.Header.Set("X-Execution-ID", dispatchExecutionID)
 	// Record the workflow ID against the inbound event so the runs-list
 	// and run-dag handlers can correlate a triggered run back to this
 	// event without walking the DID/VC chain (which only exists when DID
@@ -155,7 +162,7 @@ func (d *TriggerDispatcher) DispatchEvent(ctx context.Context, trig *types.Trigg
 			Str("workflow_id", dispatchWorkflowID).
 			Msg("failed to record dispatched workflow id on inbound event")
 	}
-	req.Header.Set("X-AgentField-Request-ID", utils.GenerateAgentFieldRequestID())
+	req.Header.Set("X-AgentField-Request-ID", requestID)
 	req.Header.Set("X-Trigger-ID", trig.ID)
 	req.Header.Set("X-Source-Name", trig.SourceName)
 	req.Header.Set("X-Event-Type", ev.EventType)
@@ -166,15 +173,27 @@ func (d *TriggerDispatcher) DispatchEvent(ctx context.Context, trig *types.Trigg
 
 	resp, err := d.httpClient.Do(req)
 	if err != nil {
-		d.markFailed(ctx, ev.ID, fmt.Sprintf("dispatch request failed: %v", err))
+		msg := fmt.Sprintf("dispatch request failed: %v", err)
+		d.failDispatchExecution(ctx, dispatchExecutionID, msg)
+		d.markFailed(ctx, ev.ID, msg)
 		return
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode >= 400 {
-		d.markFailed(ctx, ev.ID, fmt.Sprintf("agent returned %d: %s", resp.StatusCode, truncate(respBody, 256)))
+		msg := fmt.Sprintf("agent returned %d: %s", resp.StatusCode, truncate(respBody, 256))
+		d.failDispatchExecution(ctx, dispatchExecutionID, msg)
+		d.markFailed(ctx, ev.ID, msg)
 		return
+	}
+	// 2xx other than 202 means the node handled the work synchronously, so
+	// we can close the execution out now. 202 Accepted means the node took
+	// the work and will report final status via a later async callback (the
+	// reasoner-result/event ingestion path), so we leave the execution in
+	// Running and let that path complete it.
+	if resp.StatusCode != http.StatusAccepted {
+		d.completeDispatchExecution(ctx, dispatchExecutionID, respBody)
 	}
 
 	if err := d.storage.MarkInboundEventProcessed(ctx, ev.ID, types.InboundEventStatusDispatched, "", parentVCID); err != nil {
@@ -182,6 +201,142 @@ func (d *TriggerDispatcher) DispatchEvent(ctx context.Context, trig *types.Trigg
 			Err(err).
 			Str("event_id", ev.ID).
 			Msg("failed to mark inbound event dispatched")
+	}
+}
+
+func (d *TriggerDispatcher) createDispatchRecords(ctx context.Context, node *types.AgentNode, trig *types.Trigger, ev *types.InboundEvent, workflowID, executionID, requestID string, input []byte) error {
+	now := time.Now().UTC()
+	runID := workflowID
+	workflowName := fmt.Sprintf("%s.%s", node.ID, trig.TargetReasoner)
+	rootWorkflowID := workflowID
+
+	exec := &types.Execution{
+		ExecutionID:  executionID,
+		RunID:        runID,
+		AgentNodeID:  node.ID,
+		ReasonerID:   trig.TargetReasoner,
+		NodeID:       node.ID,
+		Status:       types.ExecutionStatusRunning,
+		InputPayload: json.RawMessage(cloneBytes(input)),
+		StartedAt:    now,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if err := d.storage.CreateExecutionRecord(ctx, exec); err != nil {
+		return err
+	}
+
+	workflowExec := &types.WorkflowExecution{
+		WorkflowID:          workflowID,
+		ExecutionID:         executionID,
+		AgentFieldRequestID: requestID,
+		RunID:               &runID,
+		AgentNodeID:         node.ID,
+		RootWorkflowID:      &rootWorkflowID,
+		WorkflowDepth:       0,
+		ReasonerID:          trig.TargetReasoner,
+		InputData:           json.RawMessage(cloneBytes(input)),
+		InputSize:           len(input),
+		WorkflowName:        &workflowName,
+		WorkflowTags:        []string{"trigger", trig.SourceName},
+		Status:              string(types.ExecutionStatusRunning),
+		StartedAt:           now,
+		CreatedAt:           now,
+		UpdatedAt:           now,
+		Notes: []types.ExecutionNote{{
+			Message:   fmt.Sprintf("Dispatched %s event %s from trigger %s", trig.SourceName, ev.EventType, trig.ID),
+			Tags:      []string{"trigger", trig.SourceName},
+			Timestamp: now,
+		}},
+	}
+	if err := d.storage.StoreWorkflowExecution(ctx, workflowExec); err != nil {
+		// The Execution row was already inserted; without this cleanup it would
+		// stay in Running forever as a zombie row. Fail it so the partial state
+		// is observable and consistent with the returned error.
+		d.failDispatchExecution(ctx, executionID, fmt.Sprintf("store workflow execution: %v", err))
+		return err
+	}
+
+	return nil
+}
+
+func (d *TriggerDispatcher) completeDispatchExecution(ctx context.Context, executionID string, result []byte) {
+	now := time.Now().UTC()
+	var resultPayload json.RawMessage
+	if len(result) > 0 {
+		resultPayload = json.RawMessage(cloneBytes(result))
+	}
+	_, err := d.storage.UpdateExecutionRecord(ctx, executionID, func(current *types.Execution) (*types.Execution, error) {
+		if current == nil {
+			return nil, fmt.Errorf("execution %s not found", executionID)
+		}
+		current.Status = types.ExecutionStatusSucceeded
+		current.ErrorMessage = nil
+		current.ResultPayload = resultPayload
+		current.CompletedAt = &now
+		if current.DurationMS == nil && !current.StartedAt.IsZero() {
+			duration := now.Sub(current.StartedAt).Milliseconds()
+			current.DurationMS = &duration
+		}
+		return current, nil
+	})
+	if err != nil {
+		logger.Logger.Warn().
+			Err(err).
+			Str("execution_id", executionID).
+			Msg("failed to mark trigger dispatch execution succeeded")
+	}
+	d.updateDispatchWorkflowExecution(ctx, executionID, string(types.ExecutionStatusSucceeded), resultPayload, nil, now)
+}
+
+func (d *TriggerDispatcher) failDispatchExecution(ctx context.Context, executionID, msg string) {
+	now := time.Now().UTC()
+	_, err := d.storage.UpdateExecutionRecord(ctx, executionID, func(current *types.Execution) (*types.Execution, error) {
+		if current == nil {
+			return nil, fmt.Errorf("execution %s not found", executionID)
+		}
+		current.Status = types.ExecutionStatusFailed
+		current.ErrorMessage = &msg
+		current.CompletedAt = &now
+		if current.DurationMS == nil && !current.StartedAt.IsZero() {
+			duration := now.Sub(current.StartedAt).Milliseconds()
+			current.DurationMS = &duration
+		}
+		return current, nil
+	})
+	if err != nil {
+		logger.Logger.Warn().
+			Err(err).
+			Str("execution_id", executionID).
+			Msg("failed to mark trigger dispatch execution failed")
+	}
+	d.updateDispatchWorkflowExecution(ctx, executionID, string(types.ExecutionStatusFailed), nil, &msg, now)
+}
+
+func (d *TriggerDispatcher) updateDispatchWorkflowExecution(ctx context.Context, executionID, status string, result json.RawMessage, errorMessage *string, completedAt time.Time) {
+	err := d.storage.UpdateWorkflowExecution(ctx, executionID, func(current *types.WorkflowExecution) (*types.WorkflowExecution, error) {
+		if current == nil {
+			return nil, fmt.Errorf("workflow execution %s not found", executionID)
+		}
+		current.Status = status
+		current.CompletedAt = &completedAt
+		current.UpdatedAt = completedAt
+		if len(result) > 0 {
+			current.OutputData = result
+			current.OutputSize = len(result)
+		}
+		current.ErrorMessage = errorMessage
+		if current.DurationMS == nil && !current.StartedAt.IsZero() {
+			duration := completedAt.Sub(current.StartedAt).Milliseconds()
+			current.DurationMS = &duration
+		}
+		return current, nil
+	})
+	if err != nil {
+		logger.Logger.Warn().
+			Err(err).
+			Str("execution_id", executionID).
+			Msg("failed to update trigger dispatch workflow execution")
 	}
 }
 
@@ -199,4 +354,13 @@ func truncate(b []byte, n int) string {
 		return string(b)
 	}
 	return string(b[:n]) + "...[truncated]"
+}
+
+func cloneBytes(in []byte) []byte {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]byte, len(in))
+	copy(out, in)
+	return out
 }

@@ -1,0 +1,66 @@
+version: 2026-06-15-v1
+node:
+  default_id: linear-prod
+  tags:
+    - linear
+    - issue-tracking
+    - project-management
+
+principles:
+  - Capabilities are deterministic Linear API operations, not triage or planning workflows.
+  - Writes require explicit input objects that map to Linear GraphQL mutation inputs.
+  - Responses preserve provider IDs, URLs, and timestamps so downstream reasoners can cite the source object.
+
+skills:
+  health:
+    input: {}
+    output:
+      status: string
+      viewer: object
+
+  get_issue:
+    input:
+      id: string
+    output:
+      issue: object
+
+  list_issues:
+    input:
+      limit: optional integer
+    output:
+      issues: list
+
+  create_issue:
+    input:
+      input: object
+    output:
+      success: boolean
+      issue: object
+
+  update_issue:
+    input:
+      id: string
+      input: object
+    output:
+      success: boolean
+      issue: object
+
+  comment_issue:
+    input:
+      issue_id: string
+      body: string
+    output:
+      success: boolean
+      comment: object
+
+  list_teams:
+    input:
+      limit: optional integer
+    output:
+      teams: list
+
+  list_projects:
+    input:
+      limit: optional integer
+    output:
+      projects: list

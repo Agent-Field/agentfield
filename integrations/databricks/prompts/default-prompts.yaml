@@ -1,0 +1,47 @@
+version: 2026-06-15-v1
+description: Default prompt templates for Databricks AI Function backed reasoners.
+
+loading:
+  default_path: prompts/default-prompts.yaml
+  override_env: DATABRICKS_PROMPTS_FILE
+  future_config_key: integrations/databricks/prompts
+  merge_strategy: override_by_key
+
+prompts:
+  explain_result.ai_query_prompt:
+    required_variables:
+      - question
+      - result_preview
+    text: |
+      You are answering from Databricks-governed data.
+
+      Question:
+      {{question}}
+
+      Query result preview:
+      {{result_preview}}
+
+      Separate observed facts from interpretation. Mention truncation, missing
+      dimensions, stale data, and ambiguous metric definitions only when they
+      are visible in the evidence. Return a concise operator-facing answer.
+
+  investigate_metric_change.planning_prompt:
+    required_variables:
+      - metric_name
+      - time_window
+    text: |
+      Plan a Databricks investigation for metric "{{metric_name}}" over
+      "{{time_window}}".
+
+      Use Unity Catalog metadata, small read-only SQL statements, and
+      Databricks AI Functions when model reasoning is needed near the data.
+      Suggest only bounded follow-up queries and state what evidence each query
+      would confirm or refute.
+
+outputs:
+  low_confidence_action: NEEDS_REVIEW
+  required_sections:
+    - observed_facts
+    - interpretation
+    - caveats
+    - follow_up

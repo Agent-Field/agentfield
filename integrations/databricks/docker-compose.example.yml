@@ -1,0 +1,10 @@
+services:
+  databricks-node:
+    build:
+      context: ../..
+      dockerfile: integrations/databricks/node/Dockerfile
+    env_file:
+      - node/.env
+    ports:
+      - "8013:8013"
+    restart: unless-stopped

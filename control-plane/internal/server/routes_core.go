@@ -146,6 +146,30 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	agentAPI.GET("/executions/:execution_id/notes", handlers.GetExecutionNotesHandler(s.storage, s.noteOwnershipEnforced()))
 	agentAPI.POST("/workflow/executions/events", handlers.WorkflowExecutionEventHandler(s.storage))
 
+	sessionTargetGroup := agentAPI.Group("/session-targets")
+	{
+		if s.config.Features.DID.Authorization.Enabled && s.accessPolicyService != nil && s.didWebService != nil {
+			permConfig := middleware.PermissionConfig{
+				Enabled:     true,
+				DefaultDeny: s.config.Features.DID.Authorization.DefaultDeny,
+			}
+			sessionTargetGroup.Use(middleware.PermissionCheckMiddleware(
+				s.accessPolicyService,
+				s.tagVCVerifier,
+				s.storage,
+				s.didWebService,
+				permConfig,
+			))
+			logger.Logger.Info().Msg("🔒 Permission checking enabled on session target endpoints")
+		}
+		sessionTargetGroup.POST("/:target/start", handlers.StartSessionHandler(s.storage))
+	}
+	sessionInstanceGroup := agentAPI.Group("/session-instances")
+	{
+		sessionInstanceGroup.POST("/:session_id/realtime-offer", handlers.SessionRealtimeOfferHandler(s.storage))
+		sessionInstanceGroup.POST("/:session_id/tools/:tool", handlers.SessionToolHandler(s.storage, s.config.AgentField.ExecutionQueue.AgentCallTimeout, s.config.Features.DID.Authorization.InternalToken))
+	}
+
 	// Workflow endpoints will be reintroduced once the simplified execution pipeline lands.
 }
 

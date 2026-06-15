@@ -1,0 +1,67 @@
+name: sentry
+version: 0.1.0
+description: Sentry trigger source and deterministic capability node for issue and event workflows.
+author: AgentField
+type: agent_node
+main: node/sentry-node
+
+agent_node:
+  node_id: sentry-prod
+  default_port: 8014
+
+dependencies:
+  python: []
+  system: []
+
+capabilities:
+  skills:
+    - name: health
+      description: Confirm Sentry API connectivity for the configured token.
+    - name: list_issues
+      description: List issues for a Sentry project.
+    - name: get_issue
+      description: Read one Sentry issue by issue ID.
+    - name: list_issue_events
+      description: List events captured for an issue.
+    - name: get_event
+      description: Read one captured issue event.
+    - name: update_issue
+      description: Update issue fields through the Sentry API.
+    - name: resolve_issue
+      description: Mark an issue resolved.
+    - name: assign_issue
+      description: Assign an issue to a Sentry user or team identifier.
+
+runtime:
+  auto_port: true
+  heartbeat_interval: 30
+  dev_mode: false
+
+environment:
+  AGENTFIELD_NODE_ID: sentry-prod
+  AGENTFIELD_SERVER: http://localhost:8080
+
+user_environment:
+  required:
+    - name: SENTRY_AUTH_TOKEN
+      description: Sentry API auth token.
+      type: secret
+    - name: SENTRY_ORG
+      description: Sentry organization slug.
+      type: string
+  optional:
+    - name: SENTRY_BASE_URL
+      description: Sentry API base URL. Use https://de.sentry.io for EU orgs (mandatory), https://us.sentry.io for US-region, https://sentry.io for legacy US-only.
+      type: string
+      default: https://sentry.io
+    - name: SENTRY_CLIENT_SECRET
+      description: Integration client secret used by the control-plane sentry source.
+      type: secret
+
+metadata:
+  created_at: "2026-06-15"
+  sdk_version: ">=0.1.92"
+  language: go
+  platform: sentry
+  integration_kind: trigger_source_and_capability_node
+  control_plane_source: built_in

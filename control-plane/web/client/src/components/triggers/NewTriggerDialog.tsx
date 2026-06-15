@@ -72,6 +72,55 @@ const SOURCE_HINTS: Record<string, SourceHints> = {
     secretEnv: "",
     configJson: '{"expression": "* * * * *", "timezone": "UTC"}',
   },
+  snowflake: {
+    reasoner: "handle_snowflake_event",
+    eventTypes: "",
+    secretEnv: "SNOWFLAKE_PAT",
+    configJson: JSON.stringify(
+      {
+        mode: "event_table_poll",
+        account_url: "https://<account>.snowflakecomputing.com",
+        database: "OBSERVABILITY",
+        schema: "AGENTFIELD",
+        table: "AGENTFIELD_EVENTS",
+        warehouse: "<warehouse>",
+        role: "<role>",
+        interval_seconds: 30,
+        max_batch_size: 100,
+      },
+      null,
+      2,
+    ),
+  },
+  databricks: {
+    reasoner: "handle_databricks_event",
+    eventTypes: "TERMINATED, FAILED",
+    secretEnv: "DATABRICKS_TRIGGER_SECRET",
+    configJson: JSON.stringify(
+      {
+        mode: "webhook_notification",
+        auth_mode: "basic",
+        basic_username: "agentfield",
+        event_type_path: "run_state.life_cycle_state",
+        event_id_path: "run_id",
+        workspace_path: "workspace_id",
+      },
+      null,
+      2,
+    ),
+  },
+  linear: {
+    reasoner: "handle_linear_event",
+    eventTypes: "issue.create, issue.update, comment.create",
+    secretEnv: "LINEAR_WEBHOOK_SECRET",
+    configJson: '{"tolerance_seconds": 60}',
+  },
+  sentry: {
+    reasoner: "handle_sentry_event",
+    eventTypes: "issue.created, event_alert.triggered, error.created",
+    secretEnv: "SENTRY_CLIENT_SECRET",
+    configJson: '{"tolerance_seconds": 300}',
+  },
   generic_hmac: {
     reasoner: "handle_event",
     eventTypes: "",
@@ -88,6 +137,25 @@ const SOURCE_HINTS: Record<string, SourceHints> = {
 
 function hintsFor(sourceName: string): SourceHints {
   return SOURCE_HINTS[sourceName] ?? DEFAULT_HINTS;
+}
+
+function descriptionFor(sourceName: string, isLoopSource: boolean) {
+  if (sourceName === "snowflake") {
+    return "Bind a Snowflake event table poller to a reasoner. The control plane reads the PAT from the named env var and dispatches each new Snowflake row as an AgentField event.";
+  }
+  if (sourceName === "databricks") {
+    return "Bind a Databricks notification destination to a reasoner. The control plane verifies the webhook secret and dispatches each normalized Databricks event to the selected node.";
+  }
+  if (sourceName === "linear") {
+    return "Bind Linear webhooks to a reasoner. The control plane verifies Linear-Signature with the signing secret before dispatching issue, comment, project, and team events.";
+  }
+  if (sourceName === "sentry") {
+    return "Bind Sentry integration-platform webhooks to a reasoner. The control plane verifies Sentry-Hook-Signature with the integration client secret before dispatching events.";
+  }
+  if (isLoopSource) {
+    return "Bind a control-plane loop source to a reasoner. The source emits events from the schedule or polling config below.";
+  }
+  return "Bind an inbound event source to a reasoner. The control plane verifies provider signatures using the env-var-named secret before dispatching.";
 }
 
 const serverUrl =
@@ -219,13 +287,11 @@ export function NewTriggerDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="max-h-[calc(100vh-4rem)] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>New trigger</DialogTitle>
           <DialogDescription>
-            {isLoopSource
-              ? "Bind a recurring schedule to a reasoner. The control plane fires the trigger on the schedule defined in the config below."
-              : "Bind an inbound event source to a reasoner. The control plane verifies provider signatures using the env-var-named secret before dispatching."}
+            {descriptionFor(sourceName, isLoopSource)}
           </DialogDescription>
         </DialogHeader>
 
@@ -267,12 +333,17 @@ export function NewTriggerDialog({
 
           {showEventTypes ? (
             <div className="grid gap-1.5">
-              <Label>Event types (comma-separated, blank = all)</Label>
+              <Label>Event filters (optional)</Label>
               <Input
                 value={eventTypes}
                 onChange={(e) => setEventTypes(e.target.value)}
                 placeholder={hints.eventTypes || "(blank for all events)"}
               />
+              <p className="text-xs text-muted-foreground">
+                Leave blank to accept every event this source emits. Add a
+                comma-separated list only when this trigger should narrow to
+                specific event types; examples are not exhaustive.
+              </p>
             </div>
           ) : null}
 
@@ -288,6 +359,18 @@ export function NewTriggerDialog({
                 The control plane reads this env var at request time — the
                 secret value never leaves the server.
               </p>
+              {sourceName === "snowflake" ? (
+                <p className="text-xs text-muted-foreground">
+                  Use a Snowflake programmatic access token with read access to
+                  the event table and the configured warehouse.
+                </p>
+              ) : null}
+              {sourceName === "databricks" ? (
+                <p className="text-xs text-muted-foreground">
+                  Use this value as the Databricks notification destination
+                  basic-auth password or bearer token.
+                </p>
+              ) : null}
             </div>
           ) : null}
 
@@ -296,11 +379,17 @@ export function NewTriggerDialog({
             <textarea
               value={configJson}
               onChange={(e) => setConfigJson(e.target.value)}
-              rows={isLoopSource ? 3 : 4}
-              className="rounded-md border border-input bg-background px-3 py-2 font-mono text-xs"
+              rows={
+                sourceName === "snowflake" || sourceName === "databricks"
+                  ? 10
+                  : isLoopSource
+                    ? 4
+                    : 4
+              }
+              className="w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs text-foreground shadow-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
             />
             {selectedSource ? (
-              <p className="text-xs text-muted-foreground">
+              <p className="max-h-36 overflow-auto text-xs text-muted-foreground">
                 Schema:{" "}
                 <code>{JSON.stringify(selectedSource.config_schema)}</code>
               </p>

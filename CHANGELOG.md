@@ -6,6 +6,231 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.92-rc.10] - 2026-06-15
+
+
+### Other
+
+- Add Linear and Sentry integrations (#661)
+
+* feat: add linear and sentry integrations
+
+* docs: clarify integration event filters
+
+* test: cover linear and sentry capability runtimes
+
+* fix(linear): bearer prefix for OAuth tokens; hash idempotency fallback
+
+- GraphQL client detects `lin_oauth_` prefix and sends `Authorization:
+  Bearer <token>` for OAuth access tokens. Personal API keys (`lin_api_`
+  and other prefixes) continue sending the token raw per Linear's docs.
+- Webhook idempotency: when `Linear-Delivery` header is absent, fall
+  back to sha256(webhookId || timestamp || type || action) instead of
+  the body's `webhookId` alone — webhookId identifies the subscription,
+  not the delivery, so the old fallback would collapse distinct events.
+
+* fix(sentry): org-scoped issue paths; per_page pagination
+
+- Migrate GetIssue, UpdateIssue, ResolveIssue, AssignIssue from legacy
+  /api/0/issues/{id}/ to documented /api/0/organizations/{org}/issues/{id}/.
+  All four now require Config.Organization, matching the existing pattern
+  in ListIssueEvents and GetEvent.
+- ListIssues: rename undocumented `limit` param to `per_page` so
+  pagination shape matches ListIssueEvents and Sentry's de-facto API.
+  Keep the deprecated project-scoped issues endpoint with a TODO to
+  migrate once we can resolve project slug → id.
+- TODO comments added pointing to Link-header cursor pagination as a
+  follow-up.
+
+* fix(sentry): validate Sentry-Hook-Timestamp against tolerance window
+
+Mirrors the Linear source's replay-protection pattern. Default tolerance
+is 300s (Sentry doesn't document a recommended window, so this matches
+Stripe's). Set `tolerance_seconds: 0` in the trigger config to disable.
+
+Parses Sentry-Hook-Timestamp as RFC3339, unix seconds, or unix
+milliseconds — Sentry's docs only show 'a timestamp', so accept the
+common formats. Missing or unparseable headers fail closed when
+tolerance > 0.
+
+* docs(sentry): document EU/US region base URL requirement
+
+EU-region Sentry orgs MUST use https://de.sentry.io. US-region orgs
+should use https://us.sentry.io. The default https://sentry.io only
+works for legacy US-only orgs and returns 401/403 for everyone else
+with no clear hint about region. Surface this in:
+
+- docs/integrations/sentry.md: new 'Region / Base URL' section with
+  the full table
+- integrations/sentry/README.md: same table for the package readme
+- integrations/sentry/agentfield-package.yaml: SENTRY_BASE_URL
+  description spells out the three valid values
+
+Ref https://docs.sentry.io/organization/data-storage-location/.
+
+* refactor(sdk): extract shared input helpers to sdk/go/inputs
+
+The Linear and Sentry capability runtimes shipped byte-identical
+requiredString/stringInput/intInput/objectInput helpers plus a duplicated
+firstNonBlank in each node's config. Hoist them to a new sdk/go/inputs
+package with capitalized public names and migrate both nodes.
+
+Databricks and Snowflake nodes still have their own copies — they carry
+extra helpers (boolInput, compactJSON) that aren't shared yet. A
+follow-up can pull those in once the helper surface stabilizes.
+
+* test(ui): databricks icon test asserts svg presence, not path count
+
+PR #661 swapped the inline DatabricksGlyph for SiDatabricks from
+react-icons (consistent with how Stripe/GitHub/etc. now render).
+The Databricks UI test hard-coded an expectation of 3 `<path>`
+elements from the old hand-drawn glyph. Relax the assertion to 'at
+least one path' so the test pins icon presence without coupling to
+the exact SVG markup of whichever icon library renders it. (edee822)
+
+## [0.1.92-rc.9] - 2026-06-15
+
+
+### Other
+
+- Add Databricks integration pack (#667)
+
+* Add Databricks integration pack
+
+* Remove Databricks docs page from integration PR
+
+* Cover Databricks trigger UI defaults
+
+* fix(trigger-dispatcher): clean up orphan Execution + document 202 path
+
+If StoreWorkflowExecution fails after CreateExecutionRecord succeeds,
+the Execution row was previously stranded in Running. Now fail it so
+the partial state is observable.
+
+Also document why we deliberately skip completeDispatchExecution on a
+202 Accepted response: the node owns async completion via the
+reasoner-result callback path. (81e464d)
+
+## [0.1.92-rc.8] - 2026-06-15
+
+
+### Other
+
+- Add AgentField realtime sessions for WebRTC voice ingress (#654)
+
+* Add explicit realtime session DX
+
+* fix: align session route wildcards
+
+* test: cover session control-plane paths
+
+* docs(examples): add voice dictation example for realtime sessions
+
+Runnable demo of the @app.session WebRTC voice flow: browser mic ->
+control-plane SDP proxy -> OpenAI Realtime, with live transcription and
+the tools=[...] allowlist routing through execute/async. Includes WSL
+setup notes and the GA session.update shape (session.type + audio.input
+nesting) required for input transcription + server VAD.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* Add session access tags and UI surfaces (#655)
+
+* Add session access tags and UI surfaces
+
+* test: update session access UI expectations
+
+* test: align session access CLI coverage
+
+* test: cover session playground tools
+
+* test: cover session access UI paths
+
+* fix(examples): make voice dictation example resilient to the session route rename
+
+#655 renamed the realtime-offer route (/sessions -> /session-instances). The
+page now tries the /session-instances route first and falls back to /sessions,
+so it works against #654 alone and against #654+#655.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (e776f3f)
+
+## [0.1.92-rc.7] - 2026-06-15
+
+
+### Chores
+
+- Chore: annotate snowflake SQL API request validation (338a9ae)
+
+
+
+### Fixed
+
+- Fix: harden snowflake trigger polling (2e1be49)
+
+- Fix: avoid tainted snowflake request URLs (35e1e32)
+
+- Fix: constrain snowflake sql api URLs (66069b1)
+
+- Fix: validate snowflake account URLs (d14ebe9)
+
+
+
+### Other
+
+- Add Snowflake integration pack (bbd9968)
+
+
+
+### Testing
+
+- Test: cover snowflake error branches (7214d0c)
+
+- Test: exercise snowflake validation branches (5eec124)
+
+- Test: cover snowflake URL validation (d9ceba8)
+
+- Test: raise snowflake integration coverage (56aa6c0)
+
+## [0.1.92-rc.6] - 2026-06-13
+
+
+### Fixed
+
+- Fix esbuild dependabot alerts (#660) (ebd7ecb)
+
+## [0.1.92-rc.5] - 2026-06-13
+
+
+### Chores
+
+- Chore(deps): patch remaining esbuild alerts (4647c47)
+
+- Chore(deps-dev): bump esbuild (#657)
+
+Bumps the npm_and_yarn group with 1 update in the /examples/benchmarks/100k-scale/mastra-bench directory: [esbuild](https://github.com/evanw/esbuild).
+
+
+Updates `esbuild` from 0.28.0 to 0.28.1
+- [Release notes](https://github.com/evanw/esbuild/releases)
+- [Changelog](https://github.com/evanw/esbuild/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/evanw/esbuild/compare/v0.28.0...v0.28.1)
+
+---
+updated-dependencies:
+- dependency-name: esbuild
+  dependency-version: 0.28.1
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (46a9b70)
+
 ## [0.1.92-rc.4] - 2026-06-11
 
 

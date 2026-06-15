@@ -1,0 +1,83 @@
+name: snowflake
+version: 0.1.0
+description: Snowflake capability node for governed SQL, Cortex, catalog, and data-event workflows.
+author: AgentField
+type: agent_node
+main: node/snowflake-node
+
+agent_node:
+  node_id: snowflake-prod
+  default_port: 8012
+
+dependencies:
+  python: []
+  system: []
+
+capabilities:
+  reasoners:
+    - name: semantic_ask
+      description: Answer a business-data question using configured Snowflake semantic context and Cortex where available.
+    - name: explain_result
+      description: Explain a query result with caveats, cited fields, and suggested follow-up questions.
+    - name: investigate_metric_change
+      description: Inspect metric movement by combining catalog context, read-only SQL, and configured explanation prompts.
+  skills:
+    - name: query_readonly
+      description: Execute one read-only SQL statement with row, timeout, and warehouse guardrails.
+    - name: describe_table
+      description: Return table, column, and comment metadata for a Snowflake object.
+    - name: search_columns
+      description: Search table and column metadata by name, comment, and configured tags.
+    - name: cortex_analyst_message
+      description: Send a natural-language question to Cortex Analyst.
+    - name: cortex_search_query
+      description: Query a configured Cortex Search service.
+    - name: cortex_complete
+      description: Invoke Snowflake Cortex model inference inside the Snowflake perimeter.
+
+runtime:
+  auto_port: true
+  heartbeat_interval: 30
+  dev_mode: false
+
+environment:
+  AGENTFIELD_NODE_ID: snowflake-prod
+  AGENTFIELD_SERVER: http://localhost:8080
+  SNOWFLAKE_DEFAULT_PROMPTS_FILE: ../prompts/default-prompts.yaml
+
+user_environment:
+  required:
+    - name: SNOWFLAKE_ACCOUNT_URL
+      description: Snowflake account URL, for example https://org-account.snowflakecomputing.com.
+      type: string
+      validation: '^https://[A-Za-z0-9_.-]+\.snowflakecomputing\.com/?$'
+    - name: SNOWFLAKE_PAT
+      description: Programmatic access token for the Snowflake SQL API and Cortex APIs.
+      type: secret
+    - name: SNOWFLAKE_ROLE
+      description: Snowflake role used by the node. Prefer a dedicated read-only role.
+      type: string
+    - name: SNOWFLAKE_WAREHOUSE
+      description: Default warehouse for read-only SQL and metadata queries.
+      type: string
+  optional:
+    - name: SNOWFLAKE_DATABASE
+      description: Default database used when requests omit one.
+      type: string
+    - name: SNOWFLAKE_SCHEMA
+      description: Default schema used when requests omit one.
+      type: string
+    - name: SNOWFLAKE_PROMPTS_FILE
+      description: Path to YAML prompt overrides for .ai based reasoners.
+      type: string
+      default: ../prompts/default-prompts.yaml
+    - name: SNOWFLAKE_CORTEX_MODEL
+      description: Default Cortex model for prompt-backed reasoners when the request omits model.
+      type: string
+metadata:
+  created_at: "2026-06-11"
+  sdk_version: ">=0.1.92"
+  language: go
+  platform: snowflake
+  integration_kind: capability_node
+  control_plane_source: built_in

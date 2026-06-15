@@ -52,6 +52,12 @@ import {
   ProcessLogRing,
   registerAgentfieldLogsRoute
 } from './processLogs.js';
+import {
+  buildSessionDefinition,
+  type RealtimeSession,
+  type SessionDefinition,
+  type SessionOptions
+} from '../session.js';
 
 interface WildcardParams extends ParamsDictionary {
   0: string;
@@ -96,6 +102,7 @@ export class Agent {
   private readonly memoryWatchers: Array<{ pattern: string; handler: MemoryWatchHandler; scope?: string; scopeId?: string }> = [];
   private readonly localVerifier?: LocalVerifier;
   private readonly realtimeValidationFunctions = new Set<string>();
+  private readonly sessions = new Map<string, { definition: SessionDefinition; handler: (session: RealtimeSession) => Promise<unknown> | unknown }>();
   private readonly processLogRing = new ProcessLogRing();
   private readonly executionLogger: ExecutionLogger;
   /** Tracks an AbortController per in-flight execution_id so the
@@ -181,6 +188,19 @@ export class Agent {
   includeRouter(router: AgentRouter) {
     this.reasoners.includeRouter(router);
     this.skills.includeRouter(router);
+  }
+
+  session(
+    name: string,
+    options: SessionOptions,
+    handler: (session: RealtimeSession) => Promise<unknown> | unknown
+  ) {
+    this.sessions.set(name, { definition: buildSessionDefinition(name, options), handler });
+    return this;
+  }
+
+  sessionDefinitions(): SessionDefinition[] {
+    return Array.from(this.sessions.values()).map((entry) => entry.definition);
   }
 
   handler(adapter?: (event: any, context?: any) => ServerlessEvent): AgentHandler {
@@ -1148,7 +1168,8 @@ export class Agent {
       version: this.config.version,
       deployment_type: deploymentType,
       reasoners: this.reasonerDefinitions(),
-      skills: this.skillDefinitions()
+      skills: this.skillDefinitions(),
+      sessions: this.sessionDefinitions()
     };
   }
 
@@ -1490,7 +1511,8 @@ export class Agent {
             sdk: {
               language: 'typescript',
               version: AGENTFIELD_TS_SDK_VERSION
-            }
+            },
+            sessions: this.sessionDefinitions()
           }
         }
       });

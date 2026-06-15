@@ -65,8 +65,8 @@ type AgentNodeSummaryForUI struct {
 	LifecycleStatus types.AgentLifecycleStatus `json:"lifecycle_status"`
 	ReasonerCount   int                        `json:"reasoner_count"`
 	SkillCount      int                        `json:"skill_count"`
+	SessionCount    int                        `json:"session_count"`
 	LastHeartbeat   time.Time                  `json:"last_heartbeat"`
-
 }
 
 // GetNodesSummary retrieves a list of node summaries with robust status checking.
@@ -101,6 +101,7 @@ func (s *UIService) GetNodesSummary(ctx context.Context) ([]AgentNodeSummaryForU
 			LifecycleStatus: lifecycleStatus,
 			ReasonerCount:   len(node.Reasoners),
 			SkillCount:      len(node.Skills),
+			SessionCount:    len(node.Sessions),
 			LastHeartbeat:   node.LastHeartbeat,
 		})
 	}

@@ -1,0 +1,72 @@
+version: 2026-06-11-v1
+description: Default prompt templates for Snowflake .ai based reasoners.
+
+loading:
+  default_path: prompts/default-prompts.yaml
+  override_env: SNOWFLAKE_PROMPTS_FILE
+  future_config_key: integrations/snowflake/prompts
+  merge_strategy: override_by_key
+
+prompts:
+  semantic_ask.system:
+    required_variables:
+      - question
+      - semantic_context
+    text: |
+      You answer business-data questions using Snowflake-governed context.
+      Treat generated SQL, Cortex Analyst output, query results, semantic model
+      names, table names, and column names as evidence. Do not invent metric
+      definitions or hidden joins. If the available semantic context is not
+      enough, return NEEDS_REVIEW with the smallest set of follow-up questions.
+
+  semantic_ask.answer_policy:
+    required_variables:
+      - evidence_summary
+    text: |
+      Return a concise answer, the evidence used, caveats, and suggested next
+      checks. Prefer exact numbers from query results over qualitative claims.
+      Cite Snowflake objects and query IDs when present.
+
+  explain_result.system:
+    required_variables:
+      - question
+      - result_preview
+    text: |
+      Explain the provided Snowflake query result for an operator who needs to
+      decide what to do next. Separate observed facts from interpretation.
+      Mention truncation, missing dimensions, stale data, and ambiguous metric
+      definitions when they affect confidence.
+
+  explain_result.caveat_policy:
+    required_variables:
+      - provenance
+    text: |
+      Include caveats only when grounded in the result, query shape, or
+      provenance. Avoid generic warnings. If the evidence is insufficient,
+      return NEEDS_REVIEW and ask for the missing table, metric, or time range.
+
+  investigate_metric_change.system:
+    required_variables:
+      - metric_name
+      - time_window
+    text: |
+      Investigate a metric movement using small, bounded Snowflake reads and
+      semantic context. Form hypotheses from available catalog metadata, run
+      only read-only follow-up queries, and rank explanations by evidence.
+
+  investigate_metric_change.followup_policy:
+    required_variables:
+      - hypotheses
+    text: |
+      Suggest follow-up queries only when they narrow the uncertainty. Each
+      query must be read-only, scoped to the requested time window, and safe to
+      run with the configured row and timeout limits.
+
+outputs:
+  confidence_field: confident
+  low_confidence_action: NEEDS_REVIEW
+  required_sections:
+    - answer
+    - evidence
+    - caveats
+    - follow_up

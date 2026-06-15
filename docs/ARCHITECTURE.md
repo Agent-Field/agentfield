@@ -1,6 +1,6 @@
 # AgentField Architecture
 
-AgentField provides a modular platform for orchestrating AI agents. The system is composed of a Go-based control plane, SDKs for client languages, and optional runtime services.
+AgentField provides a modular platform for orchestrating AI agents. The system is composed of a Go-based control plane, SDKs for client languages, optional runtime services, and modular integration packs.
 
 ## High-Level Overview
 
@@ -65,6 +65,19 @@ The control plane orchestrates agent workflows, provides API endpoints, manages 
 - Idiomatic Go client with `agent`, `client`, `types`, and `ai` packages.
 - Implements interfaces shared by the control plane.
 - Ready for consumption via `go get`.
+
+## Integrations
+
+First-party integration packs live under `integrations/`. A pack can include
+control-plane trigger source contracts, installable capability node manifests,
+node capability contracts, and prompt configuration defaults for `.ai` based
+reasoners.
+
+The control plane owns durable trigger ingestion, dispatch, event history,
+replay, policy, and audit. Integration nodes own provider API calls and expose
+typed capabilities that every SDK can call through AgentField's agent mesh.
+
+See `docs/integrations/README.md` for the integration index.
 
 ## Deployment
 

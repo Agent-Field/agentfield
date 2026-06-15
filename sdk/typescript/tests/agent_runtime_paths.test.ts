@@ -222,6 +222,7 @@ describe('Agent runtime paths', () => {
         version: '1.0.0',
         deployment_type: 'serverless',
         reasoners: [],
+        sessions: [],
         skills: []
       }
     });
