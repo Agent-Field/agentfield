@@ -7,12 +7,11 @@ Each pack can include:
 - control-plane trigger source contracts,
 - installable capability node manifests,
 - node capability contracts,
-- prompt configuration defaults for prompt-backed reasoners,
+- prompt configuration defaults for `.ai` based reasoners,
 - implementation notes for provider-specific runtime code.
 
 Current first-party integration design:
 
 - [Snowflake](snowflake.md)
-- [Databricks](databricks.md)
 
 The canonical pack files live under `integrations/<provider>/`.
