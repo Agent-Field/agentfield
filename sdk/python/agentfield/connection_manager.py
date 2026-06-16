@@ -5,6 +5,7 @@ Provides resilient connection handling for AgentField server connectivity.
 Handles automatic reconnection, graceful degradation, and connection health monitoring.
 """
 
+from agentfield.types import AgentStatus
 import asyncio
 import time
 from enum import Enum
@@ -246,6 +247,7 @@ class ConnectionManager:
         self.state = ConnectionState.CONNECTED
         self.last_successful_connection = time.time()
         self.agent.agentfield_connected = True
+        self.agent._current_status = AgentStatus.READY
 
         log_info("Connected to AgentField server")
 
@@ -259,6 +261,7 @@ class ConnectionManager:
         """Handle connection failure"""
         self.state = ConnectionState.DEGRADED
         self.agent.agentfield_connected = False
+        self.agent._current_status = AgentStatus.DEGRADED
 
         log_warn("AgentField server unavailable - running in degraded mode")
 
