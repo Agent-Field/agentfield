@@ -86,10 +86,12 @@
         "vitest": "^4.1.8"
     },
     "overrides": {
+        "js-yaml": "4.2.0",
         "esbuild": "0.28.1"
     },
     "pnpm": {
         "overrides": {
+            "js-yaml": "4.2.0",
             "esbuild": "0.28.1"
         }
     }
