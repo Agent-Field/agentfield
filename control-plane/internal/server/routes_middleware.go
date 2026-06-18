@@ -61,13 +61,16 @@ func (s *AgentFieldServer) applyGlobalMiddleware() {
 		c.Next()
 	})
 
-	// API key authentication (supports headers + api_key query param)
+	// API key authentication. Header auth is supported for every protected
+	// route; query-string auth is restricted to browser streaming endpoints
+	// because EventSource and WebSocket clients cannot set custom headers.
 	// Note: The approval webhook callback is authenticated via HMAC signature,
 	// not the global API key. Always bypass API-key auth on that endpoint.
 	skipPaths := uniqueStrings(append(append([]string{}, s.config.API.Auth.SkipPaths...), "/api/v1/webhooks/approval-response"))
 	s.Router.Use(middleware.APIKeyAuth(middleware.AuthConfig{
-		APIKey:    s.config.API.Auth.APIKey,
-		SkipPaths: skipPaths,
+		APIKey:                  s.config.API.Auth.APIKey,
+		SkipPaths:               skipPaths,
+		QueryAPIKeyAllowedPaths: streamingQueryAPIKeyAllowedPaths(),
 	}))
 	if s.config.API.Auth.APIKey != "" {
 		logger.Logger.Info().Msg("🔐 API key authentication enabled")
@@ -106,6 +109,20 @@ func (s *AgentFieldServer) noteOwnershipEnforced() bool {
 		return true
 	}
 	return s.config.Features.DID.Enabled && s.config.Features.DID.Authorization.DIDAuthEnabled && s.didWebService != nil
+}
+
+func streamingQueryAPIKeyAllowedPaths() []string {
+	return []string{
+		"/api/ui/v1/nodes/events",
+		"/api/ui/v1/executions/events",
+		"/api/ui/v1/executions/:execution_id/logs/stream",
+		"/api/ui/v1/workflows/:workflowId/notes/events",
+		"/api/ui/v1/reasoners/events",
+		"/api/v1/executions/:execution_id/events",
+		"/api/v1/memory/events/ws",
+		"/api/v1/memory/events/sse",
+		"/api/v1/triggers/:trigger_id/events/stream",
+	}
 }
 
 func uniqueStrings(in []string) []string {

@@ -80,7 +80,7 @@ func TestAPIKeyAuth_ValidBearerToken(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
-func TestAPIKeyAuth_ValidQueryParam(t *testing.T) {
+func TestAPIKeyAuth_QueryParamRejectedOnStandardRESTRoute(t *testing.T) {
 	router := setupRouter(AuthConfig{APIKey: "secret-key"})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/test?api_key=secret-key", nil)
@@ -88,7 +88,67 @@ func TestAPIKeyAuth_ValidQueryParam(t *testing.T) {
 
 	router.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	msg, _ := resp["message"].(string)
+	assert.NotContains(t, msg, "?api_key=", "standard REST 401s must not advertise query-string auth")
+}
+
+func TestAPIKeyAuth_QueryParamAllowedOnConfiguredStreamingRoutes(t *testing.T) {
+	router := gin.New()
+	router.Use(APIKeyAuth(AuthConfig{
+		APIKey: "secret-key",
+		QueryAPIKeyAllowedPaths: []string{
+			"/api/v1/stream/events",
+			"/api/v1/executions/:execution_id/events",
+		},
+	}))
+	router.GET("/api/v1/stream/events", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"message": "stream"})
+	})
+	router.GET("/api/v1/executions/:execution_id/events", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"message": "dynamic stream"})
+	})
+
+	for _, url := range []string{
+		"/api/v1/stream/events?api_key=secret-key",
+		"/api/v1/executions/exec-1/events?api_key=secret-key",
+	} {
+		req := httptest.NewRequest(http.MethodGet, url, nil)
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code, "url %s should accept query auth because the streaming route is allowlisted", url)
+	}
+}
+
+func TestAPIKeyAuth_QueryParamRejectedWhenRouteNotAllowlisted(t *testing.T) {
+	router := gin.New()
+	router.Use(APIKeyAuth(AuthConfig{
+		APIKey:                  "secret-key",
+		QueryAPIKeyAllowedPaths: []string{"/api/v1/stream/events"},
+	}))
+	router.GET("/api/v1/test", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"message": "success"})
+	})
+	router.GET("/api/v1/stream/events/history", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"message": "history"})
+	})
+
+	for _, url := range []string{
+		"/api/v1/test?api_key=secret-key",
+		"/api/v1/stream/events/history?api_key=secret-key",
+	} {
+		req := httptest.NewRequest(http.MethodGet, url, nil)
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusUnauthorized, w.Code, "url %s should reject query auth because the route is not allowlisted", url)
+	}
 }
 
 func TestAPIKeyAuth_SetsCallerAgentIDContext(t *testing.T) {
@@ -160,7 +220,7 @@ func TestAPIKeyAuth_InvalidKey(t *testing.T) {
 			headerValue: "Bearer wrong-key",
 		},
 		{
-			name:       "wrong query param",
+			name:       "query param on standard route",
 			queryParam: "wrong-key",
 		},
 		{

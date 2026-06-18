@@ -10,15 +10,20 @@ import (
 
 // AuthConfig mirrors server configuration for HTTP authentication.
 type AuthConfig struct {
-	APIKey    string
-	SkipPaths []string
+	APIKey                  string
+	SkipPaths               []string
+	QueryAPIKeyAllowedPaths []string
 }
 
-// APIKeyAuth enforces API key authentication via header, bearer token, or query param.
+// APIKeyAuth enforces API key authentication via header or bearer token.
 func APIKeyAuth(config AuthConfig) gin.HandlerFunc {
 	skipPathSet := make(map[string]struct{}, len(config.SkipPaths))
 	for _, p := range config.SkipPaths {
 		skipPathSet[p] = struct{}{}
+	}
+	queryAPIKeyAllowedPathSet := make(map[string]struct{}, len(config.QueryAPIKeyAllowedPaths))
+	for _, p := range config.QueryAPIKeyAllowedPaths {
+		queryAPIKeyAllowedPathSet[p] = struct{}{}
 	}
 
 	return func(c *gin.Context) {
@@ -94,8 +99,10 @@ func APIKeyAuth(config AuthConfig) gin.HandlerFunc {
 			}
 		}
 
-		// SSE/WebSocket friendly: api_key query parameter
-		if apiKey == "" {
+		// Browser EventSource and WebSocket clients cannot set custom
+		// authentication headers, so query-string API key auth is restricted
+		// to an explicit streaming route allowlist.
+		if apiKey == "" && queryAPIKeyAllowed(c, queryAPIKeyAllowedPathSet) {
 			apiKey = c.Query("api_key")
 		}
 
@@ -104,7 +111,7 @@ func APIKeyAuth(config AuthConfig) gin.HandlerFunc {
 			c.Set("auth_level", "public")
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error":   "unauthorized",
-				"message": "invalid or missing API key. Provide via X-API-Key header, Authorization: Bearer <token>, or ?api_key= query param",
+				"message": "invalid or missing API key. Provide via X-API-Key header or Authorization: Bearer <token>",
 				"help": map[string]string{
 					"kb":              "GET /api/v1/agentic/kb/topics (public, no auth required)",
 					"guide":           "GET /api/v1/agentic/kb/guide?goal=<your goal> (public)",
@@ -124,6 +131,20 @@ func APIKeyAuth(config AuthConfig) gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+func queryAPIKeyAllowed(c *gin.Context, allowedPaths map[string]struct{}) bool {
+	if len(allowedPaths) == 0 {
+		return false
+	}
+	if _, ok := allowedPaths[c.Request.URL.Path]; ok {
+		return true
+	}
+	if fullPath := c.FullPath(); fullPath != "" {
+		_, ok := allowedPaths[fullPath]
+		return ok
+	}
+	return false
 }
 
 // AdminTokenAuth enforces a separate admin token for admin routes.

@@ -70,7 +70,7 @@ func getAuthLevel(c *gin.Context) string {
 	level, exists := c.Get("auth_level")
 	if !exists {
 		// Check if API key header is present as a fallback
-		if c.GetHeader("X-API-Key") != "" || strings.HasPrefix(c.GetHeader("Authorization"), "Bearer ") || c.Query("api_key") != "" {
+		if c.GetHeader("X-API-Key") != "" || strings.HasPrefix(c.GetHeader("Authorization"), "Bearer ") {
 			return "api_key"
 		}
 		return "public"
