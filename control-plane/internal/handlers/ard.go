@@ -186,6 +186,25 @@ func (h *ARDHandler) SaveExternalBinding(c *gin.Context) {
 	if binding.Adapter == "" {
 		binding.Adapter = "openapi"
 	}
+	binding.LocalTarget = strings.TrimSpace(binding.LocalTarget)
+	binding.Adapter = strings.TrimSpace(binding.Adapter)
+	binding.AuthRef = strings.TrimSpace(binding.AuthRef)
+	binding.AllowedOperations = nonEmptyStrings(binding.AllowedOperations)
+	if binding.Callable && !strings.HasPrefix(binding.LocalTarget, "external.") {
+		RespondBadRequest(c, "callable ARD bindings require a local_target that starts with external.")
+		return
+	}
+	if binding.Callable {
+		for existingEntryID, existing := range state.Bindings {
+			if existingEntryID == entryID || existing.ExternalEntryID == entryID {
+				continue
+			}
+			if existing.Callable && strings.TrimSpace(existing.LocalTarget) == binding.LocalTarget {
+				RespondBadRequest(c, "callable ARD binding local_target is already in use.")
+				return
+			}
+		}
+	}
 	binding.UpdatedAt = time.Now().UTC()
 	state.Bindings[entryID] = binding
 	if err := ard.SaveState(c.Request.Context(), h.Store, state, requestActor(c)); err != nil {
@@ -450,4 +469,21 @@ func hasImport(state ard.State, id string) bool {
 		}
 	}
 	return false
+}
+
+func nonEmptyStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
 }

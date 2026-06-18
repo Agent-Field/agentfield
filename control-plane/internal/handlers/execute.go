@@ -414,7 +414,7 @@ func (c *executionController) tryHandleExternalARDCall(ctx *gin.Context) bool {
 		return true
 	}
 	if err := validateExternalARDOperation(req, binding); err != nil {
-		RespondError(ctx, http.StatusForbidden, err.Error())
+		writeExecutionError(ctx, err)
 		return true
 	}
 
@@ -424,10 +424,55 @@ func (c *executionController) tryHandleExternalARDCall(ctx *gin.Context) bool {
 		runID = utils.GenerateRunID()
 	}
 	executionID := utils.GenerateExecutionID()
-	start := time.Now()
+	start := time.Now().UTC()
+	clientPayload := map[string]interface{}{"input": req.Input}
+	if len(req.Context) > 0 {
+		clientPayload["context"] = req.Context
+	}
+	storedPayload, err := json.Marshal(clientPayload)
+	if err != nil {
+		writeExecutionError(ctx, fmt.Errorf("encode execution payload: %w", err))
+		return true
+	}
+	externalReasonerID := strings.TrimPrefix(targetParam, "external.")
+	exec := &types.Execution{
+		ExecutionID:       executionID,
+		RunID:             runID,
+		ParentExecutionID: headers.parentExecutionID,
+		AgentNodeID:       "external",
+		ReasonerID:        externalReasonerID,
+		NodeID:            "external",
+		Status:            types.ExecutionStatusRunning,
+		InputPayload:      json.RawMessage(storedPayload),
+		InputURI:          c.savePayload(ctx.Request.Context(), storedPayload),
+		StartedAt:         start,
+		CreatedAt:         start,
+		UpdatedAt:         start,
+	}
+	if headers.sessionID != nil {
+		exec.SessionID = headers.sessionID
+	}
+	if headers.actorID != nil {
+		exec.ActorID = headers.actorID
+	}
+	if err := c.store.CreateExecutionRecord(ctx.Request.Context(), exec); err != nil {
+		writeExecutionError(ctx, fmt.Errorf("create external ARD execution record: %w", err))
+		return true
+	}
 
 	result, err := c.callExternalARD(ctx.Request.Context(), req, entry, binding, runID, executionID)
 	if err != nil {
+		_ = c.finishExternalARDExecution(ctx.Request.Context(), executionID, types.ExecutionStatusFailed, time.Since(start), nil, err)
+		writeExecutionError(ctx, err)
+		return true
+	}
+	resultBytes, err := json.Marshal(result)
+	if err != nil {
+		_ = c.finishExternalARDExecution(ctx.Request.Context(), executionID, types.ExecutionStatusFailed, time.Since(start), nil, err)
+		writeExecutionError(ctx, fmt.Errorf("encode external ARD result: %w", err))
+		return true
+	}
+	if err := c.finishExternalARDExecution(ctx.Request.Context(), executionID, types.ExecutionStatusSucceeded, time.Since(start), resultBytes, nil); err != nil {
 		writeExecutionError(ctx, err)
 		return true
 	}
@@ -508,6 +553,39 @@ func (c *executionController) callExternalARD(ctx context.Context, req ExecuteRe
 	return decoded, nil
 }
 
+func (c *executionController) finishExternalARDExecution(ctx context.Context, executionID string, status string, elapsed time.Duration, result []byte, callErr error) error {
+	resultURI := c.savePayload(ctx, result)
+	_, err := c.store.UpdateExecutionRecord(ctx, executionID, func(current *types.Execution) (*types.Execution, error) {
+		if current == nil {
+			return nil, fmt.Errorf("execution %s not found", executionID)
+		}
+		now := time.Now().UTC()
+		current.Status = status
+		current.CompletedAt = pointerTime(now)
+		duration := elapsed.Milliseconds()
+		current.DurationMS = &duration
+		current.UpdatedAt = now
+		if len(result) > 0 {
+			current.ResultPayload = json.RawMessage(result)
+			current.ResultURI = resultURI
+		}
+		if callErr != nil {
+			errMsg := callErr.Error()
+			current.ErrorMessage = &errMsg
+			category := string(classifyExecutionError(callErr))
+			current.StatusReason = &category
+		} else {
+			current.ErrorMessage = nil
+			current.StatusReason = nil
+		}
+		return current, nil
+	})
+	if err != nil {
+		return fmt.Errorf("update external ARD execution record: %w", err)
+	}
+	return nil
+}
+
 func externalARDBindingForTarget(state ard.State, target string) (*ard.ExternalEntry, *ard.ExternalBinding, bool) {
 	for entryID, binding := range state.Bindings {
 		if !binding.Callable || strings.TrimSpace(binding.LocalTarget) != target {
@@ -526,19 +604,21 @@ func validateExternalARDOperation(req ExecuteRequest, binding *ard.ExternalBindi
 	if len(binding.AllowedOperations) == 0 {
 		return nil
 	}
-	operation := stringValue(req.Context["operation"])
-	if operation == "" {
-		operation = stringValue(req.Input["operation"])
+	contextOperation := stringValue(req.Context["operation"])
+	inputOperation := stringValue(req.Input["operation"])
+	if contextOperation != "" && inputOperation != "" && !strings.EqualFold(contextOperation, inputOperation) {
+		return &callError{statusCode: http.StatusBadRequest, message: "external ARD operation is ambiguous between input.operation and context.operation"}
 	}
+	operation := firstNonEmpty(contextOperation, inputOperation)
 	if operation == "" {
-		return errors.New("external ARD operation is required by binding policy")
+		return &callError{statusCode: http.StatusForbidden, message: "external ARD operation is required by binding policy"}
 	}
 	for _, allowed := range binding.AllowedOperations {
 		if strings.EqualFold(strings.TrimSpace(allowed), operation) {
 			return nil
 		}
 	}
-	return fmt.Errorf("external ARD operation %q is not allowed by binding policy", operation)
+	return &callError{statusCode: http.StatusForbidden, message: fmt.Sprintf("external ARD operation %q is not allowed by binding policy", operation)}
 }
 
 func stringValue(value interface{}) string {

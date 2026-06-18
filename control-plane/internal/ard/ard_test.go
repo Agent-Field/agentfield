@@ -218,6 +218,22 @@ func TestValidatePublicationRepresentativeQueries(t *testing.T) {
 	if len(errs) == 0 {
 		t.Fatal("expected representative query validation error")
 	}
+	pub.RepresentativeQueries = []string{"review this MSA", "find risky indemnity clauses"}
+	pub.ArtifactType = "application/a2a-agent-card+json"
+	errs = ValidatePublication(pub, cfg)
+	var hasArtifactURLError bool
+	for _, err := range errs {
+		if err == "artifact URL override is required for non-OpenAPI artifact types" {
+			hasArtifactURLError = true
+		}
+	}
+	if !hasArtifactURLError {
+		t.Fatalf("expected non-OpenAPI generated artifact validation error, got %#v", errs)
+	}
+	pub.ArtifactURLOverride = "https://vendor.example/agent-card.json"
+	if errs := ValidatePublication(pub, cfg); len(errs) != 0 {
+		t.Fatalf("expected explicit non-OpenAPI artifact URL to validate, got %#v", errs)
+	}
 }
 
 func TestBuildArtifactHonorsCatalogVisibility(t *testing.T) {
@@ -516,7 +532,7 @@ func TestARDSearchExploreAndExternalBranches(t *testing.T) {
 			t.Fatalf("decode forwarded request: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"results":[{"identifier":"urn:ai:vendor.example:agent:review","displayName":"Vendor Review","type":"application/openapi+json","url":"https://vendor.example/openapi.json","score":88}]}`))
+		_, _ = w.Write([]byte(`{"results":[{"identifier":"urn:ai:vendor.example:agent:review","displayName":"Vendor Review","type":"application/openapi+json","url":"https://vendor.example/openapi.json","score":0.92}]}`))
 	}))
 	defer okRegistry.Close()
 	badRegistry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -535,6 +551,9 @@ func TestARDSearchExploreAndExternalBranches(t *testing.T) {
 	})
 	if len(external.Results) != 1 || external.Results[0].Source != okRegistry.URL {
 		t.Fatalf("expected one result from ok registry, got %#v", external)
+	}
+	if external.Results[0].Score != 0.92 {
+		t.Fatalf("expected fractional external score to decode, got %#v", external.Results[0].Score)
 	}
 	statuses := map[string]string{}
 	for _, source := range external.Sources {
@@ -601,6 +620,7 @@ func TestARDDefaultPublicationsValidationAndSearchBranches(t *testing.T) {
 		PublisherDomain: "example.com",
 		Publish: config.ARDPublishConfig{
 			Enabled:               true,
+			DefaultType:           "application/mcp-server+json",
 			IncludeHealthStatuses: []string{"active"},
 		},
 	}, State{})
@@ -613,6 +633,9 @@ func TestARDDefaultPublicationsValidationAndSearchBranches(t *testing.T) {
 	}
 	if publications[0].TargetKind == "" || publications[0].NodeID == "" || publications[0].ArtifactType == "" {
 		t.Fatalf("default publication fields were not filled: %#v", publications[0])
+	}
+	if publications[0].ArtifactType != "application/mcp-server+json" || publications[1].ArtifactType != "application/mcp-server+json" {
+		t.Fatalf("default publication artifact type did not honor config: %#v", publications)
 	}
 	disabledCfg := Effective(config.ARDConfig{}, State{})
 	errs := ValidatePublication(Publication{Published: true, RepresentativeQueries: []string{"one", "two", "three", "four", "five", "six"}}, disabledCfg)

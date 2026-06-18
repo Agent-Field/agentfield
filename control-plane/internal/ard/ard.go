@@ -186,6 +186,7 @@ type EffectiveConfig struct {
 	DocumentationURL          string          `json:"documentation_url"`
 	LogoURL                   string          `json:"logo_url"`
 	Identifier                string          `json:"identifier,omitempty"`
+	DefaultType               string          `json:"default_type"`
 	AllowedRegistries         []string        `json:"allowed_registries"`
 	IncludeHealthStatuses     []string        `json:"include_health_statuses"`
 	Locked                    map[string]bool `json:"locked"`
@@ -290,8 +291,8 @@ type SearchSource struct {
 
 type SearchResult struct {
 	CatalogEntry
-	Score  int    `json:"score"`
-	Source string `json:"source"`
+	Score  float64 `json:"score"`
+	Source string  `json:"source"`
 }
 
 type ExploreRequest struct {
@@ -450,6 +451,7 @@ func Effective(cfg config.ARDConfig, state State) EffectiveConfig {
 		DocumentationURL:          firstNonEmpty(cfg.Host.DocumentationURL, state.Settings.DocumentationURL),
 		LogoURL:                   firstNonEmpty(cfg.Host.LogoURL, state.Settings.LogoURL),
 		Identifier:                cfg.Host.Identifier,
+		DefaultType:               firstNonEmpty(cfg.Publish.DefaultType, "application/openapi+json"),
 		AllowedRegistries:         append([]string{}, cfg.External.AllowedRegistries...),
 		IncludeHealthStatuses:     append([]string{}, cfg.Publish.IncludeHealthStatuses...),
 		Locked: map[string]bool{
@@ -485,6 +487,7 @@ func BuildCatalog(ctx context.Context, st Store, cfg EffectiveConfig, state Stat
 			pub, ok := state.Publications[key]
 			if !ok {
 				pub = defaultPublication("reasoner", agent.ID, reasoner.ID, reasoner.Tags, "")
+				pub.ArtifactType = firstNonEmpty(cfg.DefaultType, pub.ArtifactType)
 			}
 			view := buildPublicationView(cfg, agent, "reasoner", reasoner.ID, reasoner.InputSchema, reasoner.OutputSchema, pub, didAvailable)
 			publications = append(publications, view)
@@ -497,6 +500,7 @@ func BuildCatalog(ctx context.Context, st Store, cfg EffectiveConfig, state Stat
 			pub, ok := state.Publications[key]
 			if !ok {
 				pub = defaultPublication("skill", agent.ID, skill.ID, skill.Tags, "")
+				pub.ArtifactType = firstNonEmpty(cfg.DefaultType, pub.ArtifactType)
 			}
 			view := buildPublicationView(cfg, agent, "skill", skill.ID, skill.InputSchema, nil, pub, didAvailable)
 			publications = append(publications, view)
@@ -538,6 +542,11 @@ func ValidatePublication(pub Publication, cfg EffectiveConfig) []string {
 	}
 	if strings.TrimSpace(pub.ArtifactType) == "" {
 		errs = append(errs, "artifact type is required")
+	}
+	if strings.TrimSpace(pub.ArtifactType) != "" &&
+		strings.TrimSpace(pub.ArtifactType) != "application/openapi+json" &&
+		strings.TrimSpace(pub.ArtifactURLOverride) == "" {
+		errs = append(errs, "artifact URL override is required for non-OpenAPI artifact types")
 	}
 	return errs
 }
@@ -607,7 +616,7 @@ func LocalSearch(entries []CatalogEntry, req SearchRequest, source string) []Sea
 		}
 		score := scoreEntry(entry, query)
 		if query == "" || score > 0 {
-			results = append(results, SearchResult{CatalogEntry: entry, Score: score, Source: source})
+			results = append(results, SearchResult{CatalogEntry: entry, Score: float64(score), Source: source})
 		}
 	}
 	sort.Slice(results, func(i, j int) bool { return results[i].Score > results[j].Score })
@@ -784,7 +793,7 @@ func buildPublicationView(cfg EffectiveConfig, agent *types.AgentNode, kind, tar
 		pub.TargetID = targetID
 	}
 	if pub.ArtifactType == "" {
-		pub.ArtifactType = "application/openapi+json"
+		pub.ArtifactType = firstNonEmpty(cfg.DefaultType, "application/openapi+json")
 	}
 	pub.Tags = nonEmpty(pub.Tags)
 	pub.Capabilities = nonEmpty(pub.Capabilities)

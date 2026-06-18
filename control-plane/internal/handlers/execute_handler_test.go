@@ -139,6 +139,14 @@ func TestExecuteHandlerWithARD_ExternalCallableBinding(t *testing.T) {
 	require.Equal(t, types.ExecutionStatusSucceeded, envelope.Status)
 	require.Equal(t, map[string]interface{}{"decision": "approved"}, envelope.Result)
 	require.NotEmpty(t, resp.Header().Get("X-Execution-ID"))
+	record, err := store.GetExecutionRecord(context.Background(), envelope.ExecutionID)
+	require.NoError(t, err)
+	require.NotNil(t, record)
+	require.Equal(t, "external", record.AgentNodeID)
+	require.Equal(t, "vendor.review_contract", record.ReasonerID)
+	require.Equal(t, types.ExecutionStatusSucceeded, record.Status)
+	require.NotNil(t, record.CompletedAt)
+	require.NotNil(t, record.ResultPayload)
 }
 
 func TestExecuteHandlerWithARD_ExternalCallableBindingGates(t *testing.T) {
@@ -184,6 +192,12 @@ func TestExecuteHandlerWithARD_ExternalCallableBindingGates(t *testing.T) {
 			cfg:        config.ARDConfig{External: config.ARDExternalConfig{InvocationEnabled: true}},
 			body:       `{"input":{"operation":"delete"}}`,
 			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "conflicting operation fields",
+			cfg:        config.ARDConfig{External: config.ARDExternalConfig{InvocationEnabled: true}},
+			body:       `{"input":{"operation":"delete"},"context":{"operation":"review"}}`,
+			wantStatus: http.StatusBadRequest,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

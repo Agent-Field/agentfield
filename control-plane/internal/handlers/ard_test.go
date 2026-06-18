@@ -283,6 +283,34 @@ func TestARDUIHandlersPersistRuntimeState(t *testing.T) {
 	if binding := state.Bindings[externalID]; binding.Adapter != "openapi" || binding.TimeoutMS != 30000 || !binding.Callable {
 		t.Fatalf("binding defaults not applied: %#v", binding)
 	}
+	rec = serveARD(router, http.MethodPut, "/api/ui/v1/ard/imports/"+externalID+"/binding", map[string]any{
+		"callable":     true,
+		"local_target": "vendor.review",
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("callable binding without external target should fail: %d %s", rec.Code, rec.Body.String())
+	}
+	secondImportPayload := map[string]any{
+		"source_registry": "https://registry.example.com/api/v1/ard",
+		"entry": map[string]any{
+			"identifier":  "urn:ai:vendor.example:agent:review-secondary",
+			"displayName": "Vendor Review Secondary",
+			"type":        "application/a2a-agent-card+json",
+			"url":         "https://vendor.example/agent-card-secondary.json",
+		},
+	}
+	rec = serveARD(router, http.MethodPost, "/api/ui/v1/ard/imports", secondImportPayload)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("second import failed: %d %s", rec.Code, rec.Body.String())
+	}
+	secondExternalID := ard.ImportID("urn:ai:vendor.example:agent:review-secondary")
+	rec = serveARD(router, http.MethodPut, "/api/ui/v1/ard/imports/"+secondExternalID+"/binding", map[string]any{
+		"callable":     true,
+		"local_target": "external.vendor.review",
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("duplicate callable target should fail: %d %s", rec.Code, rec.Body.String())
+	}
 
 	rec = serveARD(router, http.MethodPut, "/api/ui/v1/ard/registries", map[string]any{
 		"registries": []map[string]any{{"url": "https://registry.example.com/api/v1/ard", "name": "Registry"}},

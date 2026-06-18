@@ -469,11 +469,16 @@ function PublicationEditor({ publication }: { publication: ARDPublicationView })
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="application/openapi+json">OpenAPI</SelectItem>
-              <SelectItem value="application/mcp+json">MCP</SelectItem>
-              <SelectItem value="application/a2a+json">A2A</SelectItem>
+              <SelectItem value="application/mcp-server+json">MCP server</SelectItem>
+              <SelectItem value="application/a2a-agent-card+json">A2A agent card</SelectItem>
             </SelectContent>
           </Select>
         </div>
+        <SettingsInput
+          label="Artifact URL override"
+          value={draft.artifact_url_override || ""}
+          onChange={(artifact_url_override) => setDraft((current) => ({ ...current, artifact_url_override }))}
+        />
         {publication.validation_errors && publication.validation_errors.length > 0 && (
           <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-muted-foreground">
             {publication.validation_errors.map((item) => (
