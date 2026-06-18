@@ -151,6 +151,29 @@ func TestAPIKeyAuth_QueryParamRejectedWhenRouteNotAllowlisted(t *testing.T) {
 	}
 }
 
+func TestAPIKeyAuth_SkipPrefixes(t *testing.T) {
+	router := gin.New()
+	router.Use(APIKeyAuth(AuthConfig{
+		APIKey:       "secret-key",
+		SkipPrefixes: []string{"/.well-known/", "/api/v1/ard/artifacts/"},
+	}))
+	router.GET("/.well-known/ai-catalog.json", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"catalog": true})
+	})
+	router.GET("/api/v1/ard/artifacts/node-1.review", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"artifact": true})
+	})
+
+	for _, path := range []string{"/.well-known/ai-catalog.json", "/api/v1/ard/artifacts/node-1.review"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code, "path %s should be skipped by prefix", path)
+	}
+}
+
 func TestAPIKeyAuth_SetsCallerAgentIDContext(t *testing.T) {
 	tests := []struct {
 		name     string

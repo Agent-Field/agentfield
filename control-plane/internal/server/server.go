@@ -781,6 +781,7 @@ func (s *AgentFieldServer) setupRoutes() {
 
 	s.registerPublicRoutes()
 	s.registerDIDWellKnownRoutes()
+	s.registerARDPublicRoutes()
 
 	s.registerUIStatic()
 	s.registerUIAPI()
@@ -795,6 +796,7 @@ func (s *AgentFieldServer) setupRoutes() {
 		s.registerConnectorRoutes(agentAPI)
 		s.registerAgenticRoutes(agentAPI)
 		s.registerTriggerRoutes(agentAPI)
+		s.registerARDRoutes(agentAPI)
 	}
 
 	s.registerKBRoutes()

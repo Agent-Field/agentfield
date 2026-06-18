@@ -52,6 +52,7 @@ type UIConfig struct {
 // AgentFieldConfig holds the core AgentField server configuration.
 type AgentFieldConfig struct {
 	Port             int                    `yaml:"port"`
+	ARD              ARDConfig              `yaml:"ard" mapstructure:"ard"`
 	Registration     RegistrationConfig     `yaml:"registration" mapstructure:"registration"`
 	NodeHealth       NodeHealthConfig       `yaml:"node_health" mapstructure:"node_health"`
 	LLMHealth        LLMHealthConfig        `yaml:"llm_health" mapstructure:"llm_health"`
@@ -60,6 +61,43 @@ type AgentFieldConfig struct {
 	Approval         ApprovalConfig         `yaml:"approval" mapstructure:"approval"`
 	NodeLogProxy     NodeLogProxyConfig     `yaml:"node_log_proxy" mapstructure:"node_log_proxy"`
 	ExecutionLogs    ExecutionLogsConfig    `yaml:"execution_logs" mapstructure:"execution_logs"`
+}
+
+// ARDConfig controls Agentic Resource Discovery exposure. Config/env values are
+// deployment guardrails; runtime publish/import state is stored in the DB.
+type ARDConfig struct {
+	Enabled         bool              `yaml:"enabled" mapstructure:"enabled"`
+	PublicBaseURL   string            `yaml:"public_base_url" mapstructure:"public_base_url"`
+	PublisherDomain string            `yaml:"publisher_domain" mapstructure:"publisher_domain"`
+	Host            ARDHostConfig     `yaml:"host" mapstructure:"host"`
+	Publish         ARDPublishConfig  `yaml:"publish" mapstructure:"publish"`
+	Registry        ARDRegistryConfig `yaml:"registry" mapstructure:"registry"`
+	External        ARDExternalConfig `yaml:"external" mapstructure:"external"`
+}
+
+type ARDHostConfig struct {
+	DisplayName      string `yaml:"display_name" mapstructure:"display_name"`
+	Identifier       string `yaml:"identifier" mapstructure:"identifier"`
+	DocumentationURL string `yaml:"documentation_url" mapstructure:"documentation_url"`
+	LogoURL          string `yaml:"logo_url" mapstructure:"logo_url"`
+}
+
+type ARDPublishConfig struct {
+	Enabled               bool     `yaml:"enabled" mapstructure:"enabled"`
+	IncludeHealthStatuses []string `yaml:"include_health_statuses" mapstructure:"include_health_statuses"`
+	DefaultType           string   `yaml:"default_type" mapstructure:"default_type"`
+}
+
+type ARDRegistryConfig struct {
+	Enabled bool `yaml:"enabled" mapstructure:"enabled"`
+	Public  bool `yaml:"public" mapstructure:"public"`
+}
+
+type ARDExternalConfig struct {
+	SearchEnabled      bool     `yaml:"search_enabled" mapstructure:"search_enabled"`
+	InvocationEnabled  bool     `yaml:"invocation_enabled" mapstructure:"invocation_enabled"`
+	AllowedRegistries  []string `yaml:"allowed_registries" mapstructure:"allowed_registries"`
+	DefaultSearchLimit int      `yaml:"default_search_limit" mapstructure:"default_search_limit"`
 }
 
 // RegistrationConfig governs validation of agent-supplied registration endpoints.
@@ -384,6 +422,15 @@ func LoadConfig(configPath string) (*Config, error) {
 
 // ApplyDefaults fills values that should be stable across config loaders.
 func ApplyDefaults(cfg *Config) {
+	if cfg.AgentField.ARD.Publish.DefaultType == "" {
+		cfg.AgentField.ARD.Publish.DefaultType = "application/openapi+json"
+	}
+	if len(cfg.AgentField.ARD.Publish.IncludeHealthStatuses) == 0 {
+		cfg.AgentField.ARD.Publish.IncludeHealthStatuses = []string{"active", "unknown"}
+	}
+	if cfg.AgentField.ARD.External.DefaultSearchLimit <= 0 {
+		cfg.AgentField.ARD.External.DefaultSearchLimit = 10
+	}
 	if cfg.Telemetry.Mode == "" {
 		cfg.Telemetry.Mode = "anonymous"
 	}
@@ -400,6 +447,34 @@ func ApplyDefaults(cfg *Config) {
 // Exported so the main server startup (which uses Viper for file loading)
 // can call it after Viper unmarshal to apply the shorter env var names.
 func ApplyEnvOverrides(cfg *Config) {
+	if val := os.Getenv("AGENTFIELD_ARD_ENABLED"); val != "" {
+		cfg.AgentField.ARD.Enabled = parseEnvBool(val)
+	}
+	if val := os.Getenv("AGENTFIELD_ARD_PUBLIC_BASE_URL"); val != "" {
+		cfg.AgentField.ARD.PublicBaseURL = strings.TrimRight(strings.TrimSpace(val), "/")
+	}
+	if val := os.Getenv("AGENTFIELD_ARD_PUBLISHER_DOMAIN"); val != "" {
+		cfg.AgentField.ARD.PublisherDomain = strings.TrimSpace(val)
+	}
+	if val := os.Getenv("AGENTFIELD_ARD_PUBLISH_ENABLED"); val != "" {
+		cfg.AgentField.ARD.Publish.Enabled = parseEnvBool(val)
+	}
+	if val := os.Getenv("AGENTFIELD_ARD_REGISTRY_ENABLED"); val != "" {
+		cfg.AgentField.ARD.Registry.Enabled = parseEnvBool(val)
+	}
+	if val := os.Getenv("AGENTFIELD_ARD_REGISTRY_PUBLIC"); val != "" {
+		cfg.AgentField.ARD.Registry.Public = parseEnvBool(val)
+	}
+	if val := os.Getenv("AGENTFIELD_ARD_EXTERNAL_SEARCH_ENABLED"); val != "" {
+		cfg.AgentField.ARD.External.SearchEnabled = parseEnvBool(val)
+	}
+	if val := os.Getenv("AGENTFIELD_ARD_EXTERNAL_INVOCATION_ENABLED"); val != "" {
+		cfg.AgentField.ARD.External.InvocationEnabled = parseEnvBool(val)
+	}
+	if val := os.Getenv("AGENTFIELD_ARD_EXTERNAL_ALLOWED_REGISTRIES"); val != "" {
+		cfg.AgentField.ARD.External.AllowedRegistries = splitEnvCSV(val)
+	}
+
 	// API Authentication
 	if apiKey := os.Getenv("AGENTFIELD_API_KEY"); apiKey != "" {
 		cfg.API.Auth.APIKey = apiKey
@@ -659,4 +734,25 @@ func ApplyEnvOverrides(cfg *Config) {
 			}
 		}
 	}
+}
+
+func parseEnvBool(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "on", "enabled":
+		return true
+	default:
+		return false
+	}
+}
+
+func splitEnvCSV(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }

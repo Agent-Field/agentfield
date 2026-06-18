@@ -59,6 +59,8 @@ func mergeDBConfig(target, dbCfg *config.Config) {
 	if dbCfg.AgentField.NodeHealth.CheckInterval != 0 {
 		target.AgentField.NodeHealth = dbCfg.AgentField.NodeHealth
 	}
+	// ARD exposure is intentionally not merged from DB config. File/env config
+	// defines the deployment guardrails; runtime opt-in state lives in ard.state.
 	// Merge execution cleanup field-by-field to avoid zeroing out unset fields
 	if dbCfg.AgentField.ExecutionCleanup.RetentionPeriod != 0 {
 		target.AgentField.ExecutionCleanup.RetentionPeriod = dbCfg.AgentField.ExecutionCleanup.RetentionPeriod

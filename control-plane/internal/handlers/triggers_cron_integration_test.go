@@ -150,14 +150,14 @@ func TestCronIngest_FiresAndDispatches(t *testing.T) {
 		t.Logf("cron fire not observed within 75s window; testing lifecycle only")
 	}
 
+	if eventFound {
+		require.Eventually(t, func() bool {
+			return dispatchCount.Load() > 0
+		}, 5*time.Second, 100*time.Millisecond, "dispatch should have been called at least once")
+	}
+
 	// Verify the manager can stop cleanly without goroutine leaks.
 	manager.Stop(trig.ID)
-
-	// Give async dispatch time to complete if an event was found.
-	if eventFound {
-		time.Sleep(100 * time.Millisecond)
-		assert.Greater(t, dispatchCount.Load(), int32(0), "dispatch should have been called at least once")
-	}
 }
 
 // TestCronIngest_StartAndStopCleanly verifies the source manager can start,

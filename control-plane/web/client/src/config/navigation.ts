@@ -11,6 +11,7 @@ import {
   Github,
   Webhook,
   Plug,
+  Network,
   type LucideIcon,
 } from "lucide-react";
 
@@ -52,6 +53,7 @@ export const navigation: NavGroup[] = [
       { title: "Playground", icon: FlaskConical, path: "/playground" },
       { title: "Runs", icon: Play, path: "/runs" },
       { title: "Agent nodes", icon: Server, path: "/agents" },
+      { title: "Discovery", icon: Network, path: "/discovery" },
       {
         title: "Triggers",
         icon: Webhook,

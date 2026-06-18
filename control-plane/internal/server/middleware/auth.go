@@ -12,6 +12,7 @@ import (
 type AuthConfig struct {
 	APIKey                  string
 	SkipPaths               []string
+	SkipPrefixes            []string
 	QueryAPIKeyAllowedPaths []string
 }
 
@@ -37,6 +38,12 @@ func APIKeyAuth(config AuthConfig) gin.HandlerFunc {
 		if _, ok := skipPathSet[c.Request.URL.Path]; ok {
 			c.Next()
 			return
+		}
+		for _, prefix := range config.SkipPrefixes {
+			if strings.HasPrefix(c.Request.URL.Path, prefix) {
+				c.Next()
+				return
+			}
 		}
 
 		// Always allow health and metrics by default
