@@ -507,9 +507,13 @@ func TestARDSearchExploreAndExternalBranches(t *testing.T) {
 		t.Fatalf("default explore should include four facets, got %#v", defaults.Facets)
 	}
 
+	var okRegistryRequest SearchRequest
 	okRegistry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/search" {
 			t.Fatalf("unexpected search path %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&okRegistryRequest); err != nil {
+			t.Fatalf("decode forwarded request: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"results":[{"identifier":"urn:ai:vendor.example:agent:review","displayName":"Vendor Review","type":"application/openapi+json","url":"https://vendor.example/openapi.json","score":88}]}`))
@@ -538,6 +542,9 @@ func TestARDSearchExploreAndExternalBranches(t *testing.T) {
 	}
 	if statuses[okRegistry.URL] != "ok" || statuses[badRegistry.URL] != "error" || statuses[malformedRegistry.URL] != "error" || statuses["https://blocked.example.com/api/v1/ard"] != "blocked" {
 		t.Fatalf("unexpected source statuses: %#v", external.Sources)
+	}
+	if okRegistryRequest.Federation != "none" || len(okRegistryRequest.Registries) != 0 {
+		t.Fatalf("forwarded request should suppress federation and caller registry list, got %#v", okRegistryRequest)
 	}
 }
 

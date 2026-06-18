@@ -1,18 +1,21 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AlertCircle,
   Braces,
   CheckCircle2,
   Copy,
   Database,
   ExternalLink,
+  Loader2,
   Network,
   Plus,
   RefreshCw,
   Search,
   Share2,
   ShieldCheck,
+  Trash,
 } from "@/components/ui/icon-bridge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -289,6 +292,23 @@ function CatalogTab({ dashboard }: { dashboard: ARDDashboard }) {
     setSelected((current) => dashboard.publications.find((item) => item.key === current?.key) ?? initialSelection);
   }, [dashboard.publications, initialSelection, targetKey]);
 
+  if (dashboard.publications.length === 0) {
+    return (
+      <Card interactive={false}>
+        <CardContent className="grid gap-2 p-6 text-sm text-muted-foreground">
+          <div className="font-medium text-foreground">No publishable resources yet</div>
+          <p>
+            Register an agent node with reasoners or skills, then return here to opt each resource into ARD exposure.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const selectPublication = (publication: ARDPublicationView) => {
+    setSelected(publication);
+  };
+
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(360px,500px)]">
       <Card interactive={false} className="min-w-0">
@@ -313,7 +333,16 @@ function CatalogTab({ dashboard }: { dashboard: ARDDashboard }) {
                   <tr
                     key={publication.key}
                     className={cn("cursor-pointer hover:bg-muted/30", selected?.key === publication.key && "bg-muted/40")}
-                    onClick={() => setSelected(publication)}
+                    onClick={() => selectPublication(publication)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        selectPublication(publication);
+                      }
+                    }}
+                    tabIndex={0}
+                    role="button"
+                    aria-selected={selected?.key === publication.key}
                   >
                     <td className="px-4 py-3">
                       <div className="font-medium">{publication.display_name}</div>
@@ -361,6 +390,8 @@ function CatalogTab({ dashboard }: { dashboard: ARDDashboard }) {
 function PublicationEditor({ publication }: { publication: ARDPublicationView }) {
   const savePublication = useDashboardMutation(saveARDPublication);
   const [draft, setDraft] = useState<ARDPublicationView>(publication);
+  const descriptionId = useId();
+  const queriesId = useId();
   useEffect(() => {
     setDraft(publication);
   }, [publication]);
@@ -374,6 +405,26 @@ function PublicationEditor({ publication }: { publication: ARDPublicationView })
         </CardTitle>
       </CardHeader>
       <CardContent className="grid gap-3 p-4 pt-0">
+        <div className="grid gap-2 rounded-md border border-border bg-muted/20 p-3 text-xs">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-muted-foreground">AgentField target</span>
+            <code className="truncate font-mono">{draft.agentfield.invocationTarget}</code>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <div>
+              <div className="text-muted-foreground">Target ID</div>
+              <code className="font-mono">{draft.agentfield.targetId}</code>
+            </div>
+            <div>
+              <div className="text-muted-foreground">Health</div>
+              <span>{draft.agentfield.healthStatus || "unknown"}</span>
+            </div>
+            <div>
+              <div className="text-muted-foreground">Version</div>
+              <span>{draft.agentfield.version || "unknown"}</span>
+            </div>
+          </div>
+        </div>
         <ToggleRow
           label="Expose through ARD"
           checked={draft.published}
@@ -385,8 +436,9 @@ function PublicationEditor({ publication }: { publication: ARDPublicationView })
           onChange={(display_name) => setDraft((current) => ({ ...current, display_name }))}
         />
         <div className="grid gap-1.5">
-          <Label>Description</Label>
+          <Label htmlFor={descriptionId}>Description</Label>
           <AutoExpandingTextarea
+            id={descriptionId}
             value={draft.description}
             onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))}
             maxHeight={160}
@@ -398,8 +450,9 @@ function PublicationEditor({ publication }: { publication: ARDPublicationView })
           onChange={(value) => setDraft((current) => ({ ...current, tags: splitList(value) }))}
         />
         <div className="grid gap-1.5">
-          <Label>Representative queries</Label>
+          <Label htmlFor={queriesId}>Representative queries</Label>
           <AutoExpandingTextarea
+            id={queriesId}
             value={(draft.representative_queries || []).join("\n")}
             onChange={(event) => setDraft((current) => ({ ...current, representative_queries: splitLines(event.target.value) }))}
             maxHeight={120}
@@ -461,14 +514,21 @@ function ExternalSearchTab({ dashboard }: { dashboard: ARDDashboard }) {
             onClick={() => searchMutation.mutate({ query: { text: query }, pageSize: 20, federation: "none" })}
             disabled={!dashboard.config.external_search_enabled || searchMutation.isPending}
           >
-            <Search className="size-4" />
-            Search
+            {searchMutation.isPending ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
+            {searchMutation.isPending ? "Searching" : "Search"}
           </Button>
         </CardContent>
       </Card>
 
       {!dashboard.config.external_search_enabled && (
         <p className="text-sm text-muted-foreground">External search is disabled by deployment config.</p>
+      )}
+
+      {searchMutation.isError && (
+        <div className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+          <AlertCircle className="size-4" />
+          {searchMutation.error instanceof Error ? searchMutation.error.message : "External ARD search failed"}
+        </div>
       )}
 
       {searchMutation.data?.sources && (
@@ -479,6 +539,14 @@ function ExternalSearchTab({ dashboard }: { dashboard: ARDDashboard }) {
             </Badge>
           ))}
         </div>
+      )}
+
+      {searchMutation.data && searchMutation.data.results.length === 0 && (
+        <Card interactive={false}>
+          <CardContent className="p-6 text-sm text-muted-foreground">
+            No external ARD resources matched this search.
+          </CardContent>
+        </Card>
       )}
 
       <div className="grid gap-3">
@@ -578,7 +646,10 @@ function BindingEditor({
   onSave: (binding: ARDExternalBinding) => void;
   saving: boolean;
 }) {
+  const policyId = useId();
   const [draft, setDraft] = useState(binding);
+  const [timeoutValue, setTimeoutValue] = useState(String(binding.timeout_ms || 30000));
+  const [allowedOperationsValue, setAllowedOperationsValue] = useState((binding.allowed_operations || []).join(", "));
   return (
     <div className="grid gap-3 rounded-md border border-border bg-background p-3">
       <ToggleRow
@@ -612,9 +683,29 @@ function BindingEditor({
       />
       <SettingsInput
         label="Timeout ms"
-        value={String(draft.timeout_ms || 30000)}
-        onChange={(value) => setDraft((current) => ({ ...current, timeout_ms: Number(value) || 30000 }))}
+        value={timeoutValue}
+        onChange={(value) => {
+          setTimeoutValue(value);
+          setDraft((current) => ({ ...current, timeout_ms: Number(value) || 30000 }));
+        }}
       />
+      <SettingsInput
+        label="Allowed operations"
+        value={allowedOperationsValue}
+        onChange={(value) => {
+          setAllowedOperationsValue(value);
+          setDraft((current) => ({ ...current, allowed_operations: splitList(value) }));
+        }}
+      />
+      <div className="grid gap-1.5">
+        <Label htmlFor={policyId}>Policy</Label>
+        <AutoExpandingTextarea
+          id={policyId}
+          value={draft.policy || ""}
+          onChange={(event) => setDraft((current) => ({ ...current, policy: event.target.value }))}
+          maxHeight={120}
+        />
+      </div>
       {!invocationEnabled && (
         <p className="text-xs text-muted-foreground">External invocation is disabled by deployment config.</p>
       )}
@@ -629,6 +720,7 @@ function BindingEditor({
 function RegistryTab({ dashboard }: { dashboard: ARDDashboard }) {
   const saveRegistries = useDashboardMutation(saveARDRegistries);
   const [rows, setRows] = useState<ARDRegistryRecord[]>(dashboard.registries || []);
+  const hasInvalidRows = rows.some((row) => row.url.trim() === "");
 
   return (
     <div className="grid gap-4">
@@ -637,34 +729,67 @@ function RegistryTab({ dashboard }: { dashboard: ARDDashboard }) {
           <CardTitle className="text-base">Known ARD registries</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-3 p-4 pt-0">
+          {!dashboard.config.registry_enabled && (
+            <div className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-muted-foreground">
+              <AlertCircle className="size-4 text-amber-600" />
+              Registry endpoints are disabled by deployment config.
+            </div>
+          )}
           {rows.map((row, index) => (
-            <div key={index} className="grid gap-2 rounded-md border border-border p-3 md:grid-cols-[1fr_1fr_180px]">
-              <Input
-                value={row.name || ""}
-                placeholder="Registry name"
-                onChange={(event) => updateRow(rows, setRows, index, { ...row, name: event.target.value })}
-              />
-              <Input
-                value={row.url}
-                placeholder="https://registry.example/api/v1/ard"
-                onChange={(event) => updateRow(rows, setRows, index, { ...row, url: event.target.value })}
-              />
-              <Select
-                value={row.submission_state || "manual"}
-                onValueChange={(submission_state) => updateRow(rows, setRows, index, { ...row, submission_state })}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="manual">Manual</SelectItem>
-                  <SelectItem value="submitted">Submitted</SelectItem>
-                  <SelectItem value="indexed">Indexed</SelectItem>
-                  <SelectItem value="failed">Failed</SelectItem>
-                </SelectContent>
-              </Select>
+            <div key={index} className="grid gap-2 rounded-md border border-border p-3">
+              <div className="grid gap-2 md:grid-cols-[1fr_1fr_180px_40px]">
+                <Input
+                  value={row.name || ""}
+                  placeholder="Registry name"
+                  onChange={(event) => updateRow(rows, setRows, index, { ...row, name: event.target.value })}
+                />
+                <div className="grid gap-1">
+                  <Input
+                    value={row.url}
+                    placeholder="https://registry.example/api/v1/ard"
+                    aria-invalid={row.url.trim() === ""}
+                    onChange={(event) => updateRow(rows, setRows, index, { ...row, url: event.target.value })}
+                  />
+                  {row.url.trim() === "" && (
+                    <span className="text-xs text-destructive">Registry URL is required.</span>
+                  )}
+                </div>
+                <Select
+                  value={row.submission_state || "manual"}
+                  onValueChange={(submission_state) => updateRow(rows, setRows, index, { ...row, submission_state })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="manual">Manual</SelectItem>
+                    <SelectItem value="submitted">Submitted</SelectItem>
+                    <SelectItem value="indexed">Indexed</SelectItem>
+                    <SelectItem value="failed">Failed</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`Remove registry ${row.name || row.url || index + 1}`}
+                  onClick={() => setRows((current) => current.filter((_, rowIndex) => rowIndex !== index))}
+                >
+                  <Trash className="size-4" />
+                </Button>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <Badge variant="outline" size="sm" showIcon={false}>
+                  {row.submission_state || "manual"}
+                </Badge>
+                <span>Last checked: {formatDate(row.last_checked_at)}</span>
+              </div>
             </div>
           ))}
+          {rows.length === 0 && (
+            <div className="rounded-md border border-border bg-muted/20 p-4 text-sm text-muted-foreground">
+              No ARD registries configured.
+            </div>
+          )}
           <div className="flex flex-wrap gap-2">
             <Button
               variant="outline"
@@ -673,7 +798,7 @@ function RegistryTab({ dashboard }: { dashboard: ARDDashboard }) {
               <Plus className="size-4" />
               Add registry
             </Button>
-            <Button onClick={() => saveRegistries.mutate(rows)} disabled={saveRegistries.isPending}>
+            <Button onClick={() => saveRegistries.mutate(rows)} disabled={saveRegistries.isPending || hasInvalidRows}>
               <ShieldCheck className="size-4" />
               Save registries
             </Button>
@@ -743,13 +868,14 @@ function SettingsInput({
   locked?: boolean;
   onChange: (value: string) => void;
 }) {
+  const id = useId();
   return (
     <div className="grid gap-1.5">
       <div className="flex items-center justify-between gap-2">
-        <Label>{label}</Label>
+        <Label htmlFor={id}>{label}</Label>
         {locked && <Badge variant="metadata" showIcon={false}>config</Badge>}
       </div>
-      <Input value={value} disabled={locked} onChange={(event) => onChange(event.target.value)} />
+      <Input id={id} value={value} disabled={locked} onChange={(event) => onChange(event.target.value)} />
     </div>
   );
 }

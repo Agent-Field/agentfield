@@ -44,6 +44,10 @@ type Store interface {
 	SetConfig(ctx context.Context, key string, value string, updatedBy string) error
 }
 
+type StateReader interface {
+	GetConfig(ctx context.Context, key string) (*storage.ConfigEntry, error)
+}
+
 type State struct {
 	Settings      RuntimeSettings            `json:"settings"`
 	Publications  map[string]Publication     `json:"publications"`
@@ -327,6 +331,10 @@ type AgentListResponse struct {
 }
 
 func LoadState(ctx context.Context, st Store) (State, error) {
+	return LoadStateReadOnly(ctx, st)
+}
+
+func LoadStateReadOnly(ctx context.Context, st StateReader) (State, error) {
 	state := defaultState()
 	entry, err := st.GetConfig(ctx, StateConfigKey)
 	if err != nil {
@@ -632,7 +640,10 @@ func SearchExternal(ctx context.Context, registries []string, req SearchRequest)
 			resp.Sources = append(resp.Sources, SearchSource{URL: rawURL, Status: "blocked", Error: "registry is not allowlisted"})
 			continue
 		}
-		body, _ := json.Marshal(req)
+		outboundReq := req
+		outboundReq.Federation = "none"
+		outboundReq.Registries = nil
+		body, _ := json.Marshal(outboundReq)
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/search", bytes.NewReader(body))
 		if err != nil {
 			resp.Sources = append(resp.Sources, SearchSource{URL: base, Status: "error", Error: err.Error()})

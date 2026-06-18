@@ -17,6 +17,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/ard"
+	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
@@ -131,6 +133,7 @@ type executionController struct {
 	eventBus      *events.ExecutionEventBus
 	timeout       time.Duration
 	internalToken string // sent as Authorization header when forwarding to agents
+	readARDConfig func() config.ARDConfig
 }
 
 type asyncExecutionJob struct {
@@ -167,38 +170,49 @@ const (
 
 // ExecuteHandler handles synchronous execution requests.
 func ExecuteHandler(store ExecutionStore, payloads services.PayloadStore, webhooks services.WebhookDispatcher, timeout time.Duration, internalToken string) gin.HandlerFunc {
-	controller := newExecutionController(store, payloads, webhooks, timeout, internalToken)
+	controller := newExecutionController(store, payloads, webhooks, timeout, internalToken, nil)
+	return controller.handleSync
+}
+
+// ExecuteHandlerWithARD handles synchronous execution requests and can route
+// explicitly-callable imported ARD resources through the same SDK app.call path.
+func ExecuteHandlerWithARD(store ExecutionStore, payloads services.PayloadStore, webhooks services.WebhookDispatcher, timeout time.Duration, internalToken string, readARDConfig func() config.ARDConfig) gin.HandlerFunc {
+	controller := newExecutionController(store, payloads, webhooks, timeout, internalToken, readARDConfig)
 	return controller.handleSync
 }
 
 // ExecuteAsyncHandler handles asynchronous execution requests.
 func ExecuteAsyncHandler(store ExecutionStore, payloads services.PayloadStore, webhooks services.WebhookDispatcher, timeout time.Duration, internalToken string) gin.HandlerFunc {
-	controller := newExecutionController(store, payloads, webhooks, timeout, internalToken)
+	controller := newExecutionController(store, payloads, webhooks, timeout, internalToken, nil)
 	return controller.handleAsync
 }
 
 // GetExecutionStatusHandler resolves a single execution record.
 func GetExecutionStatusHandler(store ExecutionStore) gin.HandlerFunc {
-	controller := newExecutionController(store, nil, nil, 0, "")
+	controller := newExecutionController(store, nil, nil, 0, "", nil)
 	return controller.handleStatus
 }
 
 // BatchExecutionStatusHandler resolves multiple execution records.
 func BatchExecutionStatusHandler(store ExecutionStore) gin.HandlerFunc {
-	controller := newExecutionController(store, nil, nil, 0, "")
+	controller := newExecutionController(store, nil, nil, 0, "", nil)
 	return controller.handleBatchStatus
 }
 
 // UpdateExecutionStatusHandler ingests status callbacks from agent nodes.
 func UpdateExecutionStatusHandler(store ExecutionStore, payloads services.PayloadStore, webhooks services.WebhookDispatcher, timeout time.Duration) gin.HandlerFunc {
-	controller := newExecutionController(store, payloads, webhooks, timeout, "")
+	controller := newExecutionController(store, payloads, webhooks, timeout, "", nil)
 	return controller.handleStatusUpdate
 }
 
-func newExecutionController(store ExecutionStore, payloads services.PayloadStore, webhooks services.WebhookDispatcher, timeout time.Duration, internalToken string) *executionController {
+func newExecutionController(store ExecutionStore, payloads services.PayloadStore, webhooks services.WebhookDispatcher, timeout time.Duration, internalToken string, readARDConfig ...func() config.ARDConfig) *executionController {
 	// Use default timeout if not provided (0 or negative)
 	if timeout <= 0 {
 		timeout = 90 * time.Second
+	}
+	var ardConfigReader func() config.ARDConfig
+	if len(readARDConfig) > 0 {
+		ardConfigReader = readARDConfig[0]
 	}
 	return &executionController{
 		store: store,
@@ -210,10 +224,15 @@ func newExecutionController(store ExecutionStore, payloads services.PayloadStore
 		eventBus:      store.GetExecutionEventBus(),
 		timeout:       timeout,
 		internalToken: internalToken,
+		readARDConfig: ardConfigReader,
 	}
 }
 
 func (c *executionController) handleSync(ctx *gin.Context) {
+	if c.tryHandleExternalARDCall(ctx) {
+		return
+	}
+
 	reqCtx := ctx.Request.Context()
 	plan, err := c.prepareExecution(reqCtx, ctx)
 	if err != nil {
@@ -353,6 +372,184 @@ func (c *executionController) handleSync(ctx *gin.Context) {
 		ctx.Header("X-Routed-Version", plan.routedVersion)
 	}
 	ctx.JSON(http.StatusOK, response)
+}
+
+func (c *executionController) tryHandleExternalARDCall(ctx *gin.Context) bool {
+	if c.readARDConfig == nil {
+		return false
+	}
+	targetParam := strings.TrimSpace(ctx.Param("target"))
+	if !strings.HasPrefix(targetParam, "external.") {
+		return false
+	}
+
+	var req ExecuteRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		RespondBadRequest(ctx, "invalid request body: "+err.Error())
+		return true
+	}
+	if req.Input == nil {
+		req.Input = map[string]interface{}{}
+	}
+
+	reader, ok := c.store.(ard.StateReader)
+	if !ok {
+		RespondInternalError(ctx, "external ARD invocation state is unavailable")
+		return true
+	}
+	state, err := ard.LoadStateReadOnly(ctx.Request.Context(), reader)
+	if err != nil {
+		RespondInternalError(ctx, err.Error())
+		return true
+	}
+	effective := ard.Effective(c.readARDConfig(), state)
+	if !effective.ExternalInvocationEnabled {
+		RespondError(ctx, http.StatusForbidden, "external ARD invocation is disabled by config")
+		return true
+	}
+
+	entry, binding, ok := externalARDBindingForTarget(state, targetParam)
+	if !ok {
+		RespondNotFound(ctx, "external ARD target is not imported and callable")
+		return true
+	}
+	if err := validateExternalARDOperation(req, binding); err != nil {
+		RespondError(ctx, http.StatusForbidden, err.Error())
+		return true
+	}
+
+	headers := readExecutionHeaders(ctx)
+	runID := headers.runID
+	if runID == "" {
+		runID = utils.GenerateRunID()
+	}
+	executionID := utils.GenerateExecutionID()
+	start := time.Now()
+
+	result, err := c.callExternalARD(ctx.Request.Context(), req, entry, binding, runID, executionID)
+	if err != nil {
+		writeExecutionError(ctx, err)
+		return true
+	}
+
+	ctx.Header("X-Execution-ID", executionID)
+	ctx.Header("X-Run-ID", runID)
+	ctx.JSON(http.StatusOK, ExecuteResponse{
+		ExecutionID: executionID,
+		RunID:       runID,
+		Status:      types.ExecutionStatusSucceeded,
+		Result:      result,
+		DurationMS:  time.Since(start).Milliseconds(),
+		FinishedAt:  time.Now().UTC().Format(time.RFC3339),
+	})
+	return true
+}
+
+func (c *executionController) callExternalARD(ctx context.Context, req ExecuteRequest, entry *ard.ExternalEntry, binding *ard.ExternalBinding, runID string, executionID string) (interface{}, error) {
+	endpoint := strings.TrimSpace(entry.URL)
+	if endpoint == "" {
+		return nil, &callError{statusCode: http.StatusNotImplemented, message: "external ARD entry has no URL-backed adapter"}
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil {
+		return nil, &callError{statusCode: http.StatusBadGateway, message: "external ARD entry URL is invalid"}
+	}
+	if err := services.ValidateWebhookURL(endpoint); err != nil {
+		return nil, &callError{statusCode: http.StatusBadGateway, message: "external ARD entry URL rejected: " + err.Error()}
+	}
+
+	payload := map[string]interface{}{"input": req.Input}
+	if len(req.Context) > 0 {
+		payload["context"] = req.Context
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("encode external ARD request: %w", err)
+	}
+
+	timeout := time.Duration(binding.TimeoutMS) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	client := services.NewSSRFSafeClient(timeout)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, parsed.String(), bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create external ARD request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-Run-ID", runID)
+	httpReq.Header.Set("X-Execution-ID", executionID)
+	httpReq.Header.Set("X-AgentField-ARD-Target", binding.LocalTarget)
+	httpReq.Header.Set("X-AgentField-ARD-Adapter", binding.Adapter)
+
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("external ARD call failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read external ARD response: %w", err)
+	}
+	if resp.StatusCode >= http.StatusBadRequest {
+		return nil, &callError{
+			statusCode: resp.StatusCode,
+			message:    fmt.Sprintf("external ARD error (%d): %s", resp.StatusCode, truncateForLog(respBody)),
+			body:       respBody,
+		}
+	}
+	decoded := decodeJSON(respBody)
+	if envelope, ok := decoded.(map[string]interface{}); ok {
+		if result, ok := envelope["result"]; ok {
+			return result, nil
+		}
+	}
+	return decoded, nil
+}
+
+func externalARDBindingForTarget(state ard.State, target string) (*ard.ExternalEntry, *ard.ExternalBinding, bool) {
+	for entryID, binding := range state.Bindings {
+		if !binding.Callable || strings.TrimSpace(binding.LocalTarget) != target {
+			continue
+		}
+		for i := range state.Imports {
+			if state.Imports[i].ID == entryID || state.Imports[i].ID == binding.ExternalEntryID {
+				return &state.Imports[i], &binding, true
+			}
+		}
+	}
+	return nil, nil, false
+}
+
+func validateExternalARDOperation(req ExecuteRequest, binding *ard.ExternalBinding) error {
+	if len(binding.AllowedOperations) == 0 {
+		return nil
+	}
+	operation := stringValue(req.Context["operation"])
+	if operation == "" {
+		operation = stringValue(req.Input["operation"])
+	}
+	if operation == "" {
+		return errors.New("external ARD operation is required by binding policy")
+	}
+	for _, allowed := range binding.AllowedOperations {
+		if strings.EqualFold(strings.TrimSpace(allowed), operation) {
+			return nil
+		}
+	}
+	return fmt.Errorf("external ARD operation %q is not allowed by binding policy", operation)
+}
+
+func stringValue(value interface{}) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(typed)
+	default:
+		return strings.TrimSpace(fmt.Sprint(typed))
+	}
 }
 
 func (c *executionController) handleAsync(ctx *gin.Context) {

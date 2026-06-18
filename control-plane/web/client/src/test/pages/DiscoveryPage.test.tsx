@@ -231,6 +231,30 @@ describe("DiscoveryPage", () => {
     expect(screen.getByRole("button", { name: "Save exposure" })).toBeInTheDocument();
   });
 
+  it("supports keyboard selection and empty state in the public catalog", async () => {
+    const user = userEvent.setup();
+    renderDiscovery();
+
+    await user.click(await screen.findByRole("tab", { name: "Public Catalog" }));
+    const summarizeRow = screen.getByRole("button", { name: /Summarize/ });
+    summarizeRow.focus();
+    await user.keyboard("{Enter}");
+
+    expect(screen.getByDisplayValue("Summarize")).toBeInTheDocument();
+    expect(screen.getByText("AgentField target")).toBeInTheDocument();
+    expect(screen.getByText("node-1:skill:summarize")).toBeInTheDocument();
+    cleanup();
+
+    const empty = dashboardFixture();
+    empty.publications = [];
+    empty.catalog.entries = [];
+    api.getARDDashboard.mockResolvedValue(empty);
+    renderDiscovery();
+
+    await user.click(await screen.findByRole("tab", { name: "Public Catalog" }));
+    expect(screen.getByText("No publishable resources yet")).toBeInTheDocument();
+  });
+
   it("edits publication exposure fields before saving", async () => {
     const user = userEvent.setup();
     const fixture = dashboardFixture();
@@ -262,7 +286,11 @@ describe("DiscoveryPage", () => {
 
   it("uses the ARD query model for external search and imports top-level result entries", async () => {
     const user = userEvent.setup();
-    api.searchExternalARD.mockResolvedValue({
+    let resolveSearch!: (response: ARDSearchResponse) => void;
+    api.searchExternalARD.mockImplementation(() => new Promise((resolve) => {
+      resolveSearch = resolve;
+    }));
+    const searchResponse: ARDSearchResponse = {
       sources: [{ url: "https://registry.example.com/api/v1/ard", status: "ok" }],
       results: [
         {
@@ -276,13 +304,14 @@ describe("DiscoveryPage", () => {
           source: "https://registry.example.com/api/v1/ard",
         },
       ],
-    });
+    };
 
     renderDiscovery();
 
     await user.click(await screen.findByRole("tab", { name: "External Search" }));
     await user.type(screen.getByPlaceholderText("review contracts, summarize filings, generate tests"), "review contracts");
     await user.click(screen.getByRole("button", { name: "Search" }));
+    expect(screen.getByRole("button", { name: "Searching" })).toBeDisabled();
 
     await waitFor(() => {
       expect(api.searchExternalARD.mock.calls[0][0]).toEqual({
@@ -291,6 +320,7 @@ describe("DiscoveryPage", () => {
         federation: "none",
       });
     });
+    resolveSearch(searchResponse);
 
     expect(await screen.findByText("Vendor Contract Reviewer")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Import" }));
@@ -304,6 +334,25 @@ describe("DiscoveryPage", () => {
         "https://registry.example.com/api/v1/ard",
       );
     });
+  });
+
+  it("shows external search no-results and error states", async () => {
+    const user = userEvent.setup();
+    api.searchExternalARD.mockResolvedValueOnce({
+      sources: [{ url: "https://registry.example.com/api/v1/ard", status: "ok" }],
+      results: [],
+    });
+
+    renderDiscovery();
+    await user.click(await screen.findByRole("tab", { name: "External Search" }));
+    await user.type(screen.getByPlaceholderText("review contracts, summarize filings, generate tests"), "missing");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+
+    expect(await screen.findByText("No external ARD resources matched this search.")).toBeInTheDocument();
+
+    api.searchExternalARD.mockRejectedValueOnce(new Error("registry unavailable"));
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    expect(await screen.findByText("registry unavailable")).toBeInTheDocument();
   });
 
   it("shows empty imports and saves callable bindings for imported resources", async () => {
@@ -340,6 +389,8 @@ describe("DiscoveryPage", () => {
     const timeoutInput = screen.getByDisplayValue("30000");
     await user.clear(timeoutInput);
     await user.type(timeoutInput, "45000");
+    await user.type(screen.getByLabelText("Allowed operations"), "review, summarize");
+    await user.type(screen.getByLabelText("Policy"), "legal-only");
     await user.click(screen.getByRole("button", { name: "Save callable binding" }));
 
     await waitFor(() => {
@@ -350,27 +401,30 @@ describe("DiscoveryPage", () => {
       expect.objectContaining({
         external_entry_id: "ext_123",
         local_target: "external.vendor.review_contract",
+        allowed_operations: ["review", "summarize"],
+        policy: "legal-only",
       }),
     );
   });
 
-  it("adds and saves registry rows", async () => {
+  it("adds, validates, removes, and saves registry rows", async () => {
     const user = userEvent.setup();
     renderDiscovery();
 
     await user.click(await screen.findByRole("tab", { name: "Registry" }));
     await user.click(screen.getByRole("button", { name: "Add registry" }));
+    expect(screen.getByText("Registry URL is required.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save registries" })).toBeDisabled();
     const urlInputs = screen.getAllByPlaceholderText("https://registry.example/api/v1/ard");
     await user.type(urlInputs[urlInputs.length - 1], "https://new-registry.example/api/v1/ard");
+    await user.click(screen.getByRole("button", { name: "Remove registry Example Registry" }));
     await user.click(screen.getByRole("button", { name: "Save registries" }));
 
     await waitFor(() => {
       expect(api.saveARDRegistries).toHaveBeenCalled();
     });
     expect(api.saveARDRegistries.mock.calls[0][0]).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ url: "https://new-registry.example/api/v1/ard" }),
-      ]),
+      [expect.objectContaining({ url: "https://new-registry.example/api/v1/ard" })],
     );
   });
 });

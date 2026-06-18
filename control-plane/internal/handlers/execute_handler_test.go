@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/ard"
+	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
@@ -79,6 +81,123 @@ func TestExecuteHandler_Success(t *testing.T) {
 	require.Greater(t, len(record.ResultPayload), 0)
 
 	require.Equal(t, int32(1), atomic.LoadInt32(&requestCount))
+}
+
+func TestExecuteHandlerWithARD_ExternalCallableBinding(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	services.SetWebhookAllowedHosts([]string{"127.0.0.1"})
+	t.Cleanup(func() { services.SetWebhookAllowedHosts(nil) })
+
+	externalServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/invoke", r.URL.Path)
+		require.Equal(t, "external.vendor.review_contract", r.Header.Get("X-AgentField-ARD-Target"))
+		var payload map[string]map[string]interface{}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+		require.Equal(t, "review", payload["input"]["operation"])
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"result":{"decision":"approved"}}`))
+	}))
+	defer externalServer.Close()
+
+	store := newTestExecutionStorage(nil)
+	state := ard.State{
+		Imports: []ard.ExternalEntry{{
+			ID:          "ext_1",
+			Identifier:  "urn:ai:vendor.example:agent:review",
+			Type:        "application/a2a-agent-card+json",
+			DisplayName: "Vendor Review",
+			URL:         externalServer.URL + "/invoke",
+		}},
+		Bindings: map[string]ard.ExternalBinding{
+			"ext_1": {
+				ExternalEntryID:   "ext_1",
+				Callable:          true,
+				LocalTarget:       "external.vendor.review_contract",
+				Adapter:           "a2a",
+				TimeoutMS:         30000,
+				AllowedOperations: []string{"review"},
+			},
+		},
+	}
+	rawState, err := json.Marshal(state)
+	require.NoError(t, err)
+	store.config[ard.StateConfigKey] = string(rawState)
+
+	router := gin.New()
+	router.POST("/api/v1/execute/:target", ExecuteHandlerWithARD(store, nil, nil, 90*time.Second, "", func() config.ARDConfig {
+		return config.ARDConfig{External: config.ARDExternalConfig{InvocationEnabled: true}}
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/external.vendor.review_contract", strings.NewReader(`{"input":{"operation":"review","text":"msa"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+	var envelope ExecuteResponse
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &envelope))
+	require.Equal(t, types.ExecutionStatusSucceeded, envelope.Status)
+	require.Equal(t, map[string]interface{}{"decision": "approved"}, envelope.Result)
+	require.NotEmpty(t, resp.Header().Get("X-Execution-ID"))
+}
+
+func TestExecuteHandlerWithARD_ExternalCallableBindingGates(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := newTestExecutionStorage(nil)
+	state := ard.State{
+		Imports: []ard.ExternalEntry{{
+			ID:          "ext_1",
+			Identifier:  "urn:ai:vendor.example:agent:review",
+			Type:        "application/a2a-agent-card+json",
+			DisplayName: "Vendor Review",
+			URL:         "https://vendor.example/invoke",
+		}},
+		Bindings: map[string]ard.ExternalBinding{
+			"ext_1": {
+				ExternalEntryID:   "ext_1",
+				Callable:          true,
+				LocalTarget:       "external.vendor.review_contract",
+				Adapter:           "a2a",
+				TimeoutMS:         30000,
+				AllowedOperations: []string{"review"},
+			},
+		},
+	}
+	rawState, err := json.Marshal(state)
+	require.NoError(t, err)
+	store.config[ard.StateConfigKey] = string(rawState)
+
+	for _, tc := range []struct {
+		name       string
+		cfg        config.ARDConfig
+		body       string
+		wantStatus int
+	}{
+		{
+			name:       "external invocation disabled",
+			cfg:        config.ARDConfig{External: config.ARDExternalConfig{InvocationEnabled: false}},
+			body:       `{"input":{"operation":"review"}}`,
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "operation not allowed",
+			cfg:        config.ARDConfig{External: config.ARDExternalConfig{InvocationEnabled: true}},
+			body:       `{"input":{"operation":"delete"}}`,
+			wantStatus: http.StatusForbidden,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			router := gin.New()
+			router.POST("/api/v1/execute/:target", ExecuteHandlerWithARD(store, nil, nil, 90*time.Second, "", func() config.ARDConfig {
+				return tc.cfg
+			}))
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/external.vendor.review_contract", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			resp := httptest.NewRecorder()
+			router.ServeHTTP(resp, req)
+			require.Equal(t, tc.wantStatus, resp.Code, resp.Body.String())
+		})
+	}
 }
 
 func TestExecuteHandler_AgentError(t *testing.T) {
