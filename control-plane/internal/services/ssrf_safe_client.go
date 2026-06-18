@@ -87,6 +87,10 @@ func init() {
 		"::1/128",        // IPv6 loopback
 		"fe80::/10",      // IPv6 link-local
 		"fc00::/7",       // IPv6 unique local (ULA)
+		"64:ff9b::/96",   // RFC-6052 NAT64 well-known prefix (embeds an IPv4 dst)
+		"64:ff9b:1::/48", // RFC-8215 NAT64 local-use prefix
+		"2002::/16",      // RFC-3056 6to4 (embeds an IPv4 dst in bits 16-47)
+		"2001::/32",      // RFC-4380 Teredo (embeds an IPv4 server/client)
 	}
 	for _, cidr := range cidrs {
 		_, network, err := net.ParseCIDR(cidr)
@@ -102,6 +106,12 @@ func init() {
 func isPrivateIP(ip net.IP) bool {
 	if ip == nil {
 		return true // treat unparseable as private (deny by default)
+	}
+	// Normalize IPv4-in-IPv6 forms (e.g. "::ffff:127.0.0.1") to their 4-byte
+	// representation so the IPv4 CIDR checks below apply regardless of how the
+	// net.IP was constructed.
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4
 	}
 	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
 		return true
