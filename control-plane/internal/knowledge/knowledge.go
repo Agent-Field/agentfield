@@ -4,11 +4,14 @@
 // store, and answers scoped semantic search queries.
 //
 // Scoping (mirrors the design's tiered inheritance):
-//   - Every chunk is stored under a scope namespace string: "ws:<workspaceID>"
-//     for workspace-tier knowledge, "proj:<projectID>" for project-tier.
-//   - A workspace-tier search matches ONLY "ws:<workspaceID>" chunks.
-//   - A project-tier search matches "proj:<projectID>" chunks AND the parent
-//     "ws:<workspaceID>" chunks (a project inherits its workspace's knowledge).
+//   - Every chunk is stored under the MOST SPECIFIC scope namespace string:
+//     "sender:<senderID>" for sender-tier, "proj:<projectID>" for project-tier,
+//     "ws:<workspaceID>" for workspace-tier.
+//   - A search reads the ADDITIVE set of namespaces driven by which ids are
+//     present in the query scope: always "ws:<workspaceID>", plus
+//     "proj:<projectID>" when a project_id is present, plus "sender:<senderID>"
+//     when a sender_id is present. So a query in a project owned by a sender
+//     sees workspace + project + sender chunks.
 //
 // Defense in depth: the scope is applied in the vector query (namespace +
 // metadata filter) AND every returned chunk's workspace_id/namespace is
@@ -40,6 +43,8 @@ const (
 	TierWorkspace Tier = "workspace"
 	// TierProject scopes to a project's knowledge plus its parent workspace's.
 	TierProject Tier = "project"
+	// TierSender scopes to a sender's knowledge plus its project + workspace.
+	TierSender Tier = "sender"
 )
 
 // Scope identifies the tenant scope of a knowledge operation.
@@ -47,11 +52,12 @@ type Scope struct {
 	Tier        Tier   `json:"tier"`
 	WorkspaceID string `json:"workspace_id"`
 	ProjectID   string `json:"project_id,omitempty"`
+	SenderID    string `json:"sender_id,omitempty"`
 }
 
 // Validate enforces the scope invariants. An empty workspace_id is always
 // rejected (no unscoped operations); project tier additionally requires a
-// project_id.
+// project_id, and sender tier additionally requires a sender_id.
 func (s Scope) Validate() error {
 	if strings.TrimSpace(s.WorkspaceID) == "" {
 		return errors.New("workspace_id is required")
@@ -64,8 +70,13 @@ func (s Scope) Validate() error {
 			return errors.New("project_id is required when tier is project")
 		}
 		return nil
+	case TierSender:
+		if strings.TrimSpace(s.SenderID) == "" {
+			return errors.New("sender_id is required when tier is sender")
+		}
+		return nil
 	default:
-		return fmt.Errorf("invalid tier %q (must be workspace or project)", s.Tier)
+		return fmt.Errorf("invalid tier %q (must be workspace, project or sender)", s.Tier)
 	}
 }
 
@@ -75,22 +86,35 @@ func (s Scope) workspaceNamespace() string { return "ws:" + s.WorkspaceID }
 // projectNamespace returns the namespace string for the scope's project.
 func (s Scope) projectNamespace() string { return "proj:" + s.ProjectID }
 
-// writeNamespace returns the namespace a chunk is stored under for this scope.
+// senderNamespace returns the namespace string for the scope's sender.
+func (s Scope) senderNamespace() string { return "sender:" + s.SenderID }
+
+// writeNamespace returns the namespace a chunk is stored under for this scope:
+// the most specific namespace by tier (sender > project > workspace).
 func (s Scope) writeNamespace() string {
-	if s.Tier == TierProject {
+	switch s.Tier {
+	case TierSender:
+		return s.senderNamespace()
+	case TierProject:
 		return s.projectNamespace()
+	default:
+		return s.workspaceNamespace()
 	}
-	return s.workspaceNamespace()
 }
 
-// searchNamespaces returns the namespaces a search for this scope reads from.
-// Workspace tier reads its own namespace; project tier reads the project
-// namespace plus the parent workspace namespace (inheritance).
+// searchNamespaces returns the ADDITIVE set of namespaces a search for this
+// scope reads from, driven by which ids are present (tier is informational):
+// always the workspace namespace, plus the project namespace when a project_id
+// is present, plus the sender namespace when a sender_id is present.
 func (s Scope) searchNamespaces() []string {
-	if s.Tier == TierProject {
-		return []string{s.projectNamespace(), s.workspaceNamespace()}
+	ns := []string{s.workspaceNamespace()}
+	if strings.TrimSpace(s.ProjectID) != "" {
+		ns = append(ns, s.projectNamespace())
 	}
-	return []string{s.workspaceNamespace()}
+	if strings.TrimSpace(s.SenderID) != "" {
+		ns = append(ns, s.senderNamespace())
+	}
+	return ns
 }
 
 // Chunk is a single unit of text to embed and store.
@@ -183,8 +207,11 @@ func (s *Service) Upsert(ctx context.Context, scope Scope, sourceID string, chun
 		meta["namespace"] = namespace
 		meta["text"] = ch.Text
 		meta["ordinal"] = ordinal
-		if scope.Tier == TierProject {
+		if strings.TrimSpace(scope.ProjectID) != "" {
 			meta["project_id"] = scope.ProjectID
+		}
+		if strings.TrimSpace(scope.SenderID) != "" {
+			meta["sender_id"] = scope.SenderID
 		}
 		if ch.Page != nil {
 			meta["page"] = *ch.Page
@@ -206,8 +233,8 @@ func (s *Service) Upsert(ctx context.Context, scope Scope, sourceID string, chun
 }
 
 // Search embeds the query and runs a scoped vector search, returning hits in
-// descending score order. Project-tier searches merge results from the project
-// namespace and the parent workspace namespace.
+// descending score order. Results are merged from the additive set of allowed
+// namespaces (workspace, plus project and/or sender when those ids are present).
 func (s *Service) Search(ctx context.Context, scope Scope, query string, topK int) ([]SearchHit, error) {
 	if err := scope.Validate(); err != nil {
 		return nil, err

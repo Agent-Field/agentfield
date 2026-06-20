@@ -13,6 +13,7 @@ type knowledgeScopeBody struct {
 	Tier        string `json:"tier" binding:"required"`
 	WorkspaceID string `json:"workspace_id" binding:"required"`
 	ProjectID   string `json:"project_id,omitempty"`
+	SenderID    string `json:"sender_id,omitempty"`
 }
 
 func (b knowledgeScopeBody) toScope() knowledge.Scope {
@@ -20,6 +21,7 @@ func (b knowledgeScopeBody) toScope() knowledge.Scope {
 		Tier:        knowledge.Tier(b.Tier),
 		WorkspaceID: b.WorkspaceID,
 		ProjectID:   b.ProjectID,
+		SenderID:    b.SenderID,
 	}
 }
 
@@ -146,6 +148,7 @@ func isKnowledgeValidationError(err error) bool {
 	for _, frag := range []string{
 		"workspace_id is required",
 		"project_id is required",
+		"sender_id is required",
 		"invalid tier",
 		"source_id is required",
 		"query is required",
