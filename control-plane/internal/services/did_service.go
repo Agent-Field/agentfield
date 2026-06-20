@@ -682,14 +682,6 @@ func (s *DIDService) regeneratePrivateKeyJWK(masterSeed []byte, derivationPath s
 	return privateKeyJWK, nil
 }
 
-// deriveX25519PrivateKey derives an X25519 keyAgreement private key from the
-// master seed at the default rotation epoch (0). It delegates to
-// deriveX25519PrivateKeyAtEpoch so the epoch-less and epoch-aware call sites
-// share a single derivation implementation.
-func (s *DIDService) deriveX25519PrivateKey(masterSeed []byte, derivationPath string) (*ecdh.PrivateKey, error) {
-	return s.deriveX25519PrivateKeyAtEpoch(masterSeed, derivationPath, 0)
-}
-
 // deriveX25519PrivateKeyAtEpoch derives an X25519 keyAgreement private key from
 // the master seed using HKDF (RFC 5869). It uses a DISTINCT salt from the
 // Ed25519 signing-key derivation so the encryption key is cryptographically
