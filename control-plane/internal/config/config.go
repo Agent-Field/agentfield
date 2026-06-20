@@ -230,6 +230,34 @@ type FeatureConfig struct {
 	DID       DIDConfig       `yaml:"did" mapstructure:"did"`
 	Connector ConnectorConfig `yaml:"connector" mapstructure:"connector"`
 	Tracing   TracingConfig   `yaml:"tracing" mapstructure:"tracing"`
+	Knowledge KnowledgeConfig `yaml:"knowledge" mapstructure:"knowledge"`
+}
+
+// KnowledgeConfig configures the native, scope-aware RAG knowledge store and its
+// embedding provider. The embedding dimension is pinned in code (see
+// internal/embedding) and is intentionally NOT configurable per-caller — the
+// shared vector index is fixed-dimension.
+type KnowledgeConfig struct {
+	// Enabled turns the /api/v1/knowledge endpoints on. Default: true.
+	Enabled *bool `yaml:"enabled" mapstructure:"enabled"`
+	// Provider selects the embedder: "openai", "fake", or "" (auto: openai when
+	// an API key is present, otherwise fake).
+	Provider string `yaml:"provider" mapstructure:"provider"`
+	// OpenAI holds OpenAI embedding-provider settings.
+	OpenAI OpenAIEmbeddingConfig `yaml:"openai" mapstructure:"openai"`
+}
+
+// IsEnabled reports whether the knowledge store is enabled (default true).
+func (c KnowledgeConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
+// OpenAIEmbeddingConfig holds OpenAI embedding-provider settings. When APIKey is
+// empty the knowledge store falls back to the deterministic FakeEmbedder so it
+// works locally with zero external dependencies.
+type OpenAIEmbeddingConfig struct {
+	APIKey string `yaml:"api_key" mapstructure:"api_key"`
+	Model  string `yaml:"model" mapstructure:"model"`
 }
 
 // TracingConfig holds configuration for OpenTelemetry distributed tracing.
@@ -447,6 +475,25 @@ func ApplyDefaults(cfg *Config) {
 // Exported so the main server startup (which uses Viper for file loading)
 // can call it after Viper unmarshal to apply the shorter env var names.
 func ApplyEnvOverrides(cfg *Config) {
+	// Knowledge / embedding overrides. OPENAI_API_KEY is the standard OpenAI env
+	// var; AGENTFIELD_KNOWLEDGE_* allow explicit control.
+	if val := os.Getenv("OPENAI_API_KEY"); val != "" && cfg.Features.Knowledge.OpenAI.APIKey == "" {
+		cfg.Features.Knowledge.OpenAI.APIKey = strings.TrimSpace(val)
+	}
+	if val := os.Getenv("AGENTFIELD_KNOWLEDGE_OPENAI_API_KEY"); val != "" {
+		cfg.Features.Knowledge.OpenAI.APIKey = strings.TrimSpace(val)
+	}
+	if val := os.Getenv("AGENTFIELD_KNOWLEDGE_PROVIDER"); val != "" {
+		cfg.Features.Knowledge.Provider = strings.TrimSpace(val)
+	}
+	if val := os.Getenv("AGENTFIELD_KNOWLEDGE_OPENAI_MODEL"); val != "" {
+		cfg.Features.Knowledge.OpenAI.Model = strings.TrimSpace(val)
+	}
+	if val := os.Getenv("AGENTFIELD_KNOWLEDGE_ENABLED"); val != "" {
+		enabled := parseEnvBool(val)
+		cfg.Features.Knowledge.Enabled = &enabled
+	}
+
 	if val := os.Getenv("AGENTFIELD_ARD_ENABLED"); val != "" {
 		cfg.AgentField.ARD.Enabled = parseEnvBool(val)
 	}

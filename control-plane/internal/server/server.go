@@ -16,12 +16,14 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
 	coreservices "github.com/Agent-Field/agentfield/control-plane/internal/core/services"
+	"github.com/Agent-Field/agentfield/control-plane/internal/embedding"
 	"github.com/Agent-Field/agentfield/control-plane/internal/encryption"
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"
 	"github.com/Agent-Field/agentfield/control-plane/internal/handlers"
 	"github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/communication"
 	"github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/process"
 	infrastorage "github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/storage"
+	"github.com/Agent-Field/agentfield/control-plane/internal/knowledge"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/observability"
 	"github.com/Agent-Field/agentfield/control-plane/internal/server/apicatalog"
@@ -92,6 +94,8 @@ type AgentFieldServer struct {
 	// Agentic API
 	apiCatalog *apicatalog.Catalog
 	kb         *knowledgebase.KB
+	// Native scope-aware RAG knowledge store (embed-on-write/search).
+	knowledgeService *knowledge.Service
 }
 
 // NewAgentFieldServer creates a new instance of the AgentFieldServer.
@@ -472,6 +476,19 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		InternalToken: cfg.Features.DID.Authorization.InternalToken,
 	})
 
+	// Native RAG knowledge store: pick the embedding provider from config,
+	// falling back to the deterministic FakeEmbedder when no OpenAI key is set.
+	embedder, isOpenAI := embedding.NewFromConfig(embedding.ProviderConfig{
+		Provider: cfg.Features.Knowledge.Provider,
+		APIKey:   cfg.Features.Knowledge.OpenAI.APIKey,
+		Model:    cfg.Features.Knowledge.OpenAI.Model,
+	})
+	logger.Logger.Info().
+		Bool("openai", isOpenAI).
+		Int("dimensions", embedder.Dimensions()).
+		Msg("knowledge store embedding provider initialized")
+	knowledgeService := knowledge.NewService(storageProvider, embedder)
+
 	return &AgentFieldServer{
 		storage:                storageProvider,
 		cache:                  cacheProvider,
@@ -509,6 +526,7 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		cancelDispatcher:       cancelDispatcher,
 		apiCatalog:             initAPICatalog(),
 		kb:                     initKnowledgeBase(),
+		knowledgeService:       knowledgeService,
 	}, nil
 }
 
@@ -790,6 +808,7 @@ func (s *AgentFieldServer) setupRoutes() {
 	{
 		s.registerCoreRoutes(agentAPI)
 		s.registerMemoryRoutes(agentAPI)
+		s.registerKnowledgeRoutes(agentAPI)
 		s.registerDIDRoutes(agentAPI)
 		s.registerObservabilityRoutes(agentAPI)
 		s.registerAdminRoutes(agentAPI)
