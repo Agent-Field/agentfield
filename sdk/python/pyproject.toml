@@ -35,7 +35,8 @@ dependencies = [
     "aiohttp>=3.8",
     "websockets",
     "fal-client>=0.5.0",
-    "cryptography>=41.0"
+    "cryptography>=41.0",
+    "joserfc>=1.0"
 ]
 keywords = ["agentfield", "sdk", "agents"]
 
