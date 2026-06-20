@@ -25,12 +25,16 @@ type AgentDIDInfo struct {
 	// X25519PublicKeyJWK is the agent's keyAgreement (encryption) public key,
 	// derived from the same master seed as PublicKeyJWK but with a distinct HKDF
 	// salt. Additive/omitempty so existing JSON-serialized registries stay valid.
-	X25519PublicKeyJWK json.RawMessage            `json:"x25519_public_key_jwk,omitempty" db:"x25519_public_key_jwk"`
-	DerivationPath     string                     `json:"derivation_path" db:"derivation_path"`
-	Reasoners          map[string]ReasonerDIDInfo `json:"reasoners" db:"reasoners"`
-	Skills             map[string]SkillDIDInfo    `json:"skills" db:"skills"`
-	Status             AgentDIDStatus             `json:"status" db:"status"`
-	RegisteredAt       time.Time                  `json:"registered_at" db:"registered_at"`
+	X25519PublicKeyJWK json.RawMessage `json:"x25519_public_key_jwk,omitempty" db:"x25519_public_key_jwk"`
+	// X25519Epoch is the agent's keyAgreement rotation epoch. It is folded into
+	// the X25519 HKDF derivation so incrementing it (via RotateAgentX25519Key)
+	// retires the prior encryption key. Zero/omitted = epoch 0 (the original key).
+	X25519Epoch    int                        `json:"x25519_epoch,omitempty" db:"x25519_epoch"`
+	DerivationPath string                     `json:"derivation_path" db:"derivation_path"`
+	Reasoners      map[string]ReasonerDIDInfo `json:"reasoners" db:"reasoners"`
+	Skills         map[string]SkillDIDInfo    `json:"skills" db:"skills"`
+	Status         AgentDIDStatus             `json:"status" db:"status"`
+	RegisteredAt   time.Time                  `json:"registered_at" db:"registered_at"`
 }
 
 // ReasonerDIDInfo represents DID information for a reasoner.
@@ -147,9 +151,12 @@ type DIDIdentity struct {
 	// the agent at registration so it can decrypt payloads encrypted to its DID.
 	X25519PublicKeyJWK  string `json:"x25519_public_key_jwk,omitempty"`
 	X25519PrivateKeyJWK string `json:"x25519_private_key_jwk,omitempty"`
-	DerivationPath      string `json:"derivation_path"`
-	ComponentType       string `json:"component_type"`
-	FunctionName        string `json:"function_name,omitempty"`
+	// X25519Epoch surfaces the keyAgreement rotation epoch the returned keypair
+	// was derived at, so callers can observe the current rotation generation.
+	X25519Epoch    int    `json:"x25519_epoch,omitempty"`
+	DerivationPath string `json:"derivation_path"`
+	ComponentType  string `json:"component_type"`
+	FunctionName   string `json:"function_name,omitempty"`
 }
 
 // ExecutionContext represents the context for DID-enabled execution.

@@ -48,6 +48,7 @@ type DIDService interface {
 	RegisterAgent(req *types.DIDRegistrationRequest) (*types.DIDRegistrationResponse, error)
 	ResolveDID(did string) (*types.DIDIdentity, error)
 	ListAllAgentDIDs() ([]string, error)
+	RotateAgentX25519Key(did string) (newPubJWK string, newEpoch int, err error)
 }
 
 // VCService defines the VC operations required by handlers.
@@ -163,6 +164,50 @@ func (h *DIDHandlers) ResolveDID(c *gin.Context) {
 		} else {
 			logger.Logger.Warn().Err(err).Str("did", identity.DID).Msg("Failed to parse X25519 keyAgreement JWK for resolve response")
 		}
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
+// RotateX25519Key rotates an agent's X25519 keyAgreement (encryption) key.
+// POST /api/v1/did/key-agreement/rotate  body: {"did": "<did>"}
+//
+// On success it returns the NEW keyAgreement public key as a parsed JSON object
+// (mirroring the `key_agreement` shape of the resolve response) plus the new
+// rotation epoch. The private scalar is never returned.
+func (h *DIDHandlers) RotateX25519Key(c *gin.Context) {
+	var req struct {
+		DID string `json:"did"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+	if req.DID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "did is required"})
+		return
+	}
+
+	newPubJWK, newEpoch, err := h.didService.RotateAgentX25519Key(req.DID)
+	if err != nil {
+		logger.Logger.Warn().Err(err).Str("did", req.DID).Msg("Failed to rotate X25519 keyAgreement key")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to rotate keyAgreement key", "details": err.Error()})
+		return
+	}
+
+	resp := gin.H{
+		"did":   req.DID,
+		"epoch": newEpoch,
+	}
+
+	// Surface the new public key as a parsed JSON object, matching how the
+	// resolve handler emits `key_agreement`.
+	var keyAgreementJWK map[string]interface{}
+	if err := json.Unmarshal([]byte(newPubJWK), &keyAgreementJWK); err == nil {
+		resp["x25519_public_key_jwk"] = keyAgreementJWK
+	} else {
+		logger.Logger.Warn().Err(err).Str("did", req.DID).Msg("Failed to parse rotated X25519 keyAgreement JWK for response")
+		resp["x25519_public_key_jwk"] = newPubJWK
 	}
 
 	c.JSON(http.StatusOK, resp)
@@ -577,6 +622,7 @@ func (h *DIDHandlers) RegisterRoutes(router gin.IRouter) {
 	{
 		didGroup.POST("/register", h.RegisterAgent)
 		didGroup.GET("/resolve/:did", h.ResolveDID)
+		didGroup.POST("/key-agreement/rotate", h.RotateX25519Key)
 		didGroup.POST("/verify", h.VerifyVC)
 		didGroup.POST("/verify-audit", h.VerifyAuditBundle)
 		didGroup.GET("/workflow/:workflow_id/vc-chain", h.GetWorkflowVCChain)
