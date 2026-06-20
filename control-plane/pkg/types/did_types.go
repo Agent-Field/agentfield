@@ -18,10 +18,14 @@ type DIDRegistry struct {
 
 // AgentDIDInfo represents DID information for an agent node.
 type AgentDIDInfo struct {
-	DID                string                     `json:"did" db:"did"`
-	AgentNodeID        string                     `json:"agent_node_id" db:"agent_node_id"`
-	AgentFieldServerID string                     `json:"agentfield_server_id" db:"agentfield_server_id"`
-	PublicKeyJWK       json.RawMessage            `json:"public_key_jwk" db:"public_key_jwk"`
+	DID                string          `json:"did" db:"did"`
+	AgentNodeID        string          `json:"agent_node_id" db:"agent_node_id"`
+	AgentFieldServerID string          `json:"agentfield_server_id" db:"agentfield_server_id"`
+	PublicKeyJWK       json.RawMessage `json:"public_key_jwk" db:"public_key_jwk"`
+	// X25519PublicKeyJWK is the agent's keyAgreement (encryption) public key,
+	// derived from the same master seed as PublicKeyJWK but with a distinct HKDF
+	// salt. Additive/omitempty so existing JSON-serialized registries stay valid.
+	X25519PublicKeyJWK json.RawMessage            `json:"x25519_public_key_jwk,omitempty" db:"x25519_public_key_jwk"`
 	DerivationPath     string                     `json:"derivation_path" db:"derivation_path"`
 	Reasoners          map[string]ReasonerDIDInfo `json:"reasoners" db:"reasoners"`
 	Skills             map[string]SkillDIDInfo    `json:"skills" db:"skills"`
@@ -135,12 +139,17 @@ type DIDIdentityPackage struct {
 
 // DIDIdentity represents a single DID identity with keys.
 type DIDIdentity struct {
-	DID            string `json:"did"`
-	PrivateKeyJWK  string `json:"private_key_jwk,omitempty"`
-	PublicKeyJWK   string `json:"public_key_jwk"`
-	DerivationPath string `json:"derivation_path"`
-	ComponentType  string `json:"component_type"`
-	FunctionName   string `json:"function_name,omitempty"`
+	DID           string `json:"did"`
+	PrivateKeyJWK string `json:"private_key_jwk,omitempty"`
+	PublicKeyJWK  string `json:"public_key_jwk"`
+	// X25519PublicKeyJWK / X25519PrivateKeyJWK carry the keyAgreement (encryption)
+	// keypair alongside the Ed25519 signing keys. The private key is returned to
+	// the agent at registration so it can decrypt payloads encrypted to its DID.
+	X25519PublicKeyJWK  string `json:"x25519_public_key_jwk,omitempty"`
+	X25519PrivateKeyJWK string `json:"x25519_private_key_jwk,omitempty"`
+	DerivationPath      string `json:"derivation_path"`
+	ComponentType       string `json:"component_type"`
+	FunctionName        string `json:"function_name,omitempty"`
 }
 
 // ExecutionContext represents the context for DID-enabled execution.

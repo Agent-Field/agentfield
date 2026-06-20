@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -241,6 +242,16 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 		}, nil
 	}
 
+	// Derive the agent's X25519 keyAgreement (encryption) keypair from the same
+	// master seed and derivation path (distinct HKDF salt => independent key).
+	agentX25519PubKey, agentX25519PrivKey, err := s.regenerateX25519KeyPairJWK(registry.MasterSeed, agentPath)
+	if err != nil {
+		return &types.DIDRegistrationResponse{
+			Success: false,
+			Error:   fmt.Sprintf("failed to generate agent X25519 keyAgreement key: %v", err),
+		}, nil
+	}
+
 	// Generate reasoner DIDs
 	reasonerDIDs := make(map[string]types.DIDIdentity)
 	reasonerInfos := make(map[string]types.ReasonerDIDInfo)
@@ -337,14 +348,15 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 
 	// Create agent DID info
 	agentDIDInfo := types.AgentDIDInfo{
-		DID:            agentDID,
-		AgentNodeID:    req.AgentNodeID,
-		PublicKeyJWK:   json.RawMessage(agentPubKey),
-		DerivationPath: agentPath,
-		Reasoners:      reasonerInfos,
-		Skills:         skillInfos,
-		Status:         types.AgentDIDStatusActive,
-		RegisteredAt:   time.Now(),
+		DID:                agentDID,
+		AgentNodeID:        req.AgentNodeID,
+		PublicKeyJWK:       json.RawMessage(agentPubKey),
+		X25519PublicKeyJWK: json.RawMessage(agentX25519PubKey),
+		DerivationPath:     agentPath,
+		Reasoners:          reasonerInfos,
+		Skills:             skillInfos,
+		Status:             types.AgentDIDStatusActive,
+		RegisteredAt:       time.Now(),
 	}
 
 	// Update registry
@@ -362,11 +374,13 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 	// Create identity package
 	identityPackage := types.DIDIdentityPackage{
 		AgentDID: types.DIDIdentity{
-			DID:            agentDID,
-			PrivateKeyJWK:  agentPrivKey,
-			PublicKeyJWK:   agentPubKey,
-			DerivationPath: agentPath,
-			ComponentType:  "agent",
+			DID:                 agentDID,
+			PrivateKeyJWK:       agentPrivKey,
+			PublicKeyJWK:        agentPubKey,
+			X25519PublicKeyJWK:  agentX25519PubKey,
+			X25519PrivateKeyJWK: agentX25519PrivKey,
+			DerivationPath:      agentPath,
+			ComponentType:       "agent",
 		},
 		ReasonerDIDs:       reasonerDIDs,
 		SkillDIDs:          skillDIDs,
@@ -442,12 +456,26 @@ func (s *DIDService) ResolveDID(did string) (*types.DIDIdentity, error) {
 				return nil, fmt.Errorf("failed to regenerate private key for agent DID %s: %w", did, err)
 			}
 
+			// Regenerate the X25519 keyAgreement keypair so resolution exposes the
+			// public encryption key and re-derives the private key for the owner.
+			x25519PubKey, x25519PrivKey, err := s.regenerateX25519KeyPairJWK(registry.MasterSeed, agentInfo.DerivationPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to regenerate X25519 keyAgreement key for agent DID %s: %w", did, err)
+			}
+			// Prefer the stored public key when present (covers any future
+			// derivation changes); fall back to the freshly derived one.
+			if len(agentInfo.X25519PublicKeyJWK) > 0 {
+				x25519PubKey = string(agentInfo.X25519PublicKeyJWK)
+			}
+
 			return &types.DIDIdentity{
-				DID:            agentInfo.DID,
-				PrivateKeyJWK:  privateKeyJWK,
-				PublicKeyJWK:   string(agentInfo.PublicKeyJWK),
-				DerivationPath: agentInfo.DerivationPath,
-				ComponentType:  "agent",
+				DID:                 agentInfo.DID,
+				PrivateKeyJWK:       privateKeyJWK,
+				PublicKeyJWK:        string(agentInfo.PublicKeyJWK),
+				X25519PublicKeyJWK:  x25519PubKey,
+				X25519PrivateKeyJWK: x25519PrivKey,
+				DerivationPath:      agentInfo.DerivationPath,
+				ComponentType:       "agent",
 			}, nil
 		}
 
@@ -645,6 +673,86 @@ func (s *DIDService) regeneratePrivateKeyJWK(masterSeed []byte, derivationPath s
 	}
 
 	return privateKeyJWK, nil
+}
+
+// deriveX25519PrivateKey derives an X25519 keyAgreement private key from the
+// master seed using HKDF (RFC 5869). It uses a DISTINCT salt from the Ed25519
+// signing-key derivation so the encryption key is cryptographically independent
+// of the signing key, while sharing the same derivation path as info.
+func (s *DIDService) deriveX25519PrivateKey(masterSeed []byte, derivationPath string) (*ecdh.PrivateKey, error) {
+	salt := []byte("agentfield-did-keyagreement-v1")
+	info := []byte(derivationPath)
+
+	hkdfReader := hkdf.New(sha256.New, masterSeed, salt, info)
+	derivedSeed := make([]byte, 32)
+	if _, err := io.ReadFull(hkdfReader, derivedSeed); err != nil {
+		return nil, fmt.Errorf("HKDF X25519 key derivation failed: %w", err)
+	}
+
+	privateKey, err := ecdh.X25519().NewPrivateKey(derivedSeed)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create X25519 private key: %w", err)
+	}
+	return privateKey, nil
+}
+
+// x25519PublicKeyToJWK converts an X25519 public key to JWK format (RFC 8037).
+func (s *DIDService) x25519PublicKeyToJWK(pub *ecdh.PublicKey) (string, error) {
+	jwk := map[string]interface{}{
+		"kty": "OKP",
+		"crv": "X25519",
+		"x":   base64.RawURLEncoding.EncodeToString(pub.Bytes()),
+		"use": "enc",
+		"alg": "ECDH-ES",
+	}
+
+	jwkBytes, err := json.Marshal(jwk)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal X25519 public JWK: %w", err)
+	}
+
+	return string(jwkBytes), nil
+}
+
+// x25519PrivateKeyToJWK converts an X25519 private key to JWK format (RFC 8037),
+// including the private `d` component.
+func (s *DIDService) x25519PrivateKeyToJWK(priv *ecdh.PrivateKey) (string, error) {
+	jwk := map[string]interface{}{
+		"kty": "OKP",
+		"crv": "X25519",
+		"x":   base64.RawURLEncoding.EncodeToString(priv.PublicKey().Bytes()),
+		"d":   base64.RawURLEncoding.EncodeToString(priv.Bytes()),
+		"use": "enc",
+		"alg": "ECDH-ES",
+	}
+
+	jwkBytes, err := json.Marshal(jwk)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal X25519 private JWK: %w", err)
+	}
+
+	return string(jwkBytes), nil
+}
+
+// regenerateX25519KeyPairJWK derives the X25519 keyAgreement keypair from the
+// master seed and derivation path and returns both the public and private JWKs.
+func (s *DIDService) regenerateX25519KeyPairJWK(masterSeed []byte, derivationPath string) (pubJWK string, privJWK string, err error) {
+	priv, err := s.deriveX25519PrivateKey(masterSeed, derivationPath)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to derive X25519 private key: %w", err)
+	}
+
+	pubJWK, err = s.x25519PublicKeyToJWK(priv.PublicKey())
+	if err != nil {
+		return "", "", fmt.Errorf("failed to convert X25519 public key to JWK: %w", err)
+	}
+
+	privJWK, err = s.x25519PrivateKeyToJWK(priv)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to convert X25519 private key to JWK: %w", err)
+	}
+
+	return pubJWK, privJWK, nil
 }
 
 // regeneratePublicKeyJWK regenerates a public key JWK from master seed and derivation path.
@@ -1043,13 +1151,31 @@ func (s *DIDService) buildExistingIdentityPackage(existingAgent *types.AgentDIDI
 		}
 	}
 
+	// Re-derive the agent's X25519 keyAgreement keypair so re-registering agents
+	// still receive their encryption keys. Best-effort: empty if the seed is
+	// unavailable, mirroring the Ed25519 re-derivation above.
+	var agentX25519PubKey, agentX25519PrivKey string
+	if masterSeed != nil && existingAgent.DerivationPath != "" {
+		pubJWK, privJWK, err := s.regenerateX25519KeyPairJWK(masterSeed, existingAgent.DerivationPath)
+		if err != nil {
+			logger.Logger.Error().Err(err).Str("path", existingAgent.DerivationPath).Msg("Failed to re-derive X25519 keyAgreement key")
+		} else {
+			agentX25519PubKey, agentX25519PrivKey = pubJWK, privJWK
+		}
+	}
+	if len(existingAgent.X25519PublicKeyJWK) > 0 {
+		agentX25519PubKey = string(existingAgent.X25519PublicKeyJWK)
+	}
+
 	return types.DIDIdentityPackage{
 		AgentDID: types.DIDIdentity{
-			DID:            existingAgent.DID,
-			PrivateKeyJWK:  rederivePrivKey(existingAgent.DerivationPath),
-			PublicKeyJWK:   string(existingAgent.PublicKeyJWK),
-			DerivationPath: existingAgent.DerivationPath,
-			ComponentType:  "agent",
+			DID:                 existingAgent.DID,
+			PrivateKeyJWK:       rederivePrivKey(existingAgent.DerivationPath),
+			PublicKeyJWK:        string(existingAgent.PublicKeyJWK),
+			X25519PublicKeyJWK:  agentX25519PubKey,
+			X25519PrivateKeyJWK: agentX25519PrivKey,
+			DerivationPath:      existingAgent.DerivationPath,
+			ComponentType:       "agent",
 		},
 		ReasonerDIDs:       reasonerDIDs,
 		SkillDIDs:          skillDIDs,
@@ -1272,6 +1398,22 @@ func (s *DIDService) PartialRegisterAgent(req *types.PartialDIDRegistrationReque
 		existingAgent.Skills[id] = info
 	}
 
+	// Derive the agent's X25519 keyAgreement keypair from the same master seed +
+	// derivation path. Backfill the stored public key for agents registered before
+	// keyAgreement support so resolution and the returned package stay consistent.
+	agentX25519PubKey, agentX25519PrivKey, err := s.regenerateX25519KeyPairJWK(registry.MasterSeed, existingAgent.DerivationPath)
+	if err != nil {
+		return &types.DIDRegistrationResponse{
+			Success: false,
+			Error:   fmt.Sprintf("failed to generate agent X25519 keyAgreement key: %v", err),
+		}, nil
+	}
+	if len(existingAgent.X25519PublicKeyJWK) == 0 {
+		existingAgent.X25519PublicKeyJWK = json.RawMessage(agentX25519PubKey)
+	} else {
+		agentX25519PubKey = string(existingAgent.X25519PublicKeyJWK)
+	}
+
 	// Update registry
 	registry.AgentNodes[req.AgentNodeID] = existingAgent
 	registry.TotalDIDs += len(newReasonerDIDs) + len(newSkillDIDs)
@@ -1286,11 +1428,13 @@ func (s *DIDService) PartialRegisterAgent(req *types.PartialDIDRegistrationReque
 	// Build response with only new DIDs
 	identityPackage := types.DIDIdentityPackage{
 		AgentDID: types.DIDIdentity{
-			DID:            existingAgent.DID,
-			PrivateKeyJWK:  "", // Don't regenerate existing agent key
-			PublicKeyJWK:   string(existingAgent.PublicKeyJWK),
-			DerivationPath: existingAgent.DerivationPath,
-			ComponentType:  "agent",
+			DID:                 existingAgent.DID,
+			PrivateKeyJWK:       "", // Don't regenerate existing agent signing key
+			PublicKeyJWK:        string(existingAgent.PublicKeyJWK),
+			X25519PublicKeyJWK:  agentX25519PubKey,
+			X25519PrivateKeyJWK: agentX25519PrivKey,
+			DerivationPath:      existingAgent.DerivationPath,
+			ComponentType:       "agent",
 		},
 		ReasonerDIDs:       newReasonerDIDs,
 		SkillDIDs:          newSkillDIDs,

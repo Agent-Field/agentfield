@@ -145,13 +145,27 @@ func (h *DIDHandlers) ResolveDID(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"did":             identity.DID,
 		"public_key_jwk":  identity.PublicKeyJWK,
 		"component_type":  identity.ComponentType,
 		"function_name":   identity.FunctionName,
 		"derivation_path": identity.DerivationPath,
-	})
+	}
+
+	// Expose the X25519 keyAgreement public key as a parsed JSON object so callers
+	// can encrypt payloads to this DID (mirrors how did:key resolve responses are
+	// consumed by the SDK crypto layer).
+	if identity.X25519PublicKeyJWK != "" {
+		var keyAgreementJWK map[string]interface{}
+		if err := json.Unmarshal([]byte(identity.X25519PublicKeyJWK), &keyAgreementJWK); err == nil {
+			resp["key_agreement"] = keyAgreementJWK
+		} else {
+			logger.Logger.Warn().Err(err).Str("did", identity.DID).Msg("Failed to parse X25519 keyAgreement JWK for resolve response")
+		}
+	}
+
+	c.JSON(http.StatusOK, resp)
 }
 
 // VerifyVC handles VC verification requests.
@@ -446,11 +460,11 @@ func (h *DIDHandlers) ExportVCs(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"agent_dids":    agentDIDs,
-		"execution_vcs": executionVCsExport,
-		"workflow_vcs":  workflowVCs,
-		"agent_tag_vcs": agentTagVCs,
-		"total_count":   len(executionVCs) + len(workflowVCs) + len(agentTagVCs),
+		"agent_dids":      agentDIDs,
+		"execution_vcs":   executionVCsExport,
+		"workflow_vcs":    workflowVCs,
+		"agent_tag_vcs":   agentTagVCs,
+		"total_count":     len(executionVCs) + len(workflowVCs) + len(agentTagVCs),
 		"filters_applied": filters,
 	})
 }
@@ -499,12 +513,15 @@ func (h *DIDHandlers) GetDIDDocument(c *gin.Context) {
 		return
 	}
 
+	// W3C contexts. Add the X25519-2020 suite context only when the document
+	// actually carries a keyAgreement key.
+	contexts := []string{
+		"https://www.w3.org/ns/did/v1",
+		"https://w3id.org/security/suites/ed25519-2020/v1",
+	}
+
 	// Create W3C DID Document
 	didDocument := map[string]interface{}{
-		"@context": []string{
-			"https://www.w3.org/ns/did/v1",
-			"https://w3id.org/security/suites/ed25519-2020/v1",
-		},
 		"id": did,
 		"verificationMethod": []map[string]interface{}{
 			{
@@ -529,6 +546,27 @@ func (h *DIDHandlers) GetDIDDocument(c *gin.Context) {
 			},
 		},
 	}
+
+	// Add the X25519 keyAgreement verification method when present so callers can
+	// encrypt payloads to this DID.
+	if identity.X25519PublicKeyJWK != "" {
+		var keyAgreementJWK map[string]interface{}
+		if err := json.Unmarshal([]byte(identity.X25519PublicKeyJWK), &keyAgreementJWK); err == nil {
+			contexts = append(contexts, "https://w3id.org/security/suites/x25519-2020/v1")
+			didDocument["keyAgreement"] = []map[string]interface{}{
+				{
+					"id":           did + "#key-agreement-1",
+					"type":         "X25519KeyAgreementKey2020",
+					"controller":   did,
+					"publicKeyJwk": keyAgreementJWK,
+				},
+			}
+		} else {
+			logger.Logger.Warn().Err(err).Str("did", did).Msg("Failed to parse X25519 keyAgreement JWK for DID document")
+		}
+	}
+
+	didDocument["@context"] = contexts
 
 	c.JSON(http.StatusOK, didDocument)
 }
