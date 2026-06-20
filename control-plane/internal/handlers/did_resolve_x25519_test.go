@@ -151,6 +151,78 @@ func TestRotateX25519KeyHandler_RoundTrip(t *testing.T) {
 		"resolve after rotation must return the rotated public key")
 }
 
+// TestGetDIDDocumentHandler_X25519KeyAgreement exercises GET
+// /api/v1/did/document/:did against a REAL DIDService: the returned W3C DID
+// document must carry a keyAgreement verification method of type
+// X25519KeyAgreementKey2020 whose publicKeyJwk is a valid X25519 OKP key (no
+// private `d`), and the @context must include the x25519-2020 suite.
+func TestGetDIDDocumentHandler_X25519KeyAgreement(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	provider, _ := setupTestStorage(t)
+	registry := services.NewDIDRegistryWithStorage(provider)
+	require.NoError(t, registry.Initialize())
+
+	keystoreDir := filepath.Join(t.TempDir(), "keys")
+	ks, err := services.NewKeystoreService(&config.KeystoreConfig{Path: keystoreDir, Type: "local"})
+	require.NoError(t, err)
+
+	cfg := &config.DIDConfig{Enabled: true, Keystore: config.KeystoreConfig{Path: keystoreDir, Type: "local"}}
+	didService := services.NewDIDService(cfg, ks, registry)
+	require.NoError(t, didService.Initialize("agentfield-handler-doc-x25519"))
+
+	regResp, err := didService.RegisterAgent(&types.DIDRegistrationRequest{
+		AgentNodeID: "agent-doc-x25519",
+		Reasoners:   []types.ReasonerDefinition{},
+		Skills:      []types.SkillDefinition{},
+	})
+	require.NoError(t, err)
+	require.True(t, regResp.Success)
+	agentDID := regResp.IdentityPackage.AgentDID.DID
+
+	handler := NewDIDHandlers(didService, &fakeVCService{})
+	router := gin.New()
+	router.GET("/api/v1/did/document/:did", handler.GetDIDDocument)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/did/document/"+agentDID, nil)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &doc))
+	require.Equal(t, agentDID, doc["id"])
+
+	// @context must include the X25519-2020 suite when a keyAgreement key exists.
+	ctxRaw, ok := doc["@context"].([]any)
+	require.True(t, ok, "@context must be an array")
+	var hasX25519Ctx bool
+	for _, c := range ctxRaw {
+		if s, _ := c.(string); s == "https://w3id.org/security/suites/x25519-2020/v1" {
+			hasX25519Ctx = true
+		}
+	}
+	require.True(t, hasX25519Ctx, "@context must include the x25519-2020 suite")
+
+	// keyAgreement verification method must be present and well-formed.
+	kaRaw, ok := doc["keyAgreement"].([]any)
+	require.True(t, ok, "DID document must carry a keyAgreement array")
+	require.Len(t, kaRaw, 1)
+	ka, ok := kaRaw[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "X25519KeyAgreementKey2020", ka["type"])
+	require.Equal(t, agentDID, ka["controller"])
+
+	pubJWK, ok := ka["publicKeyJwk"].(map[string]any)
+	require.True(t, ok, "keyAgreement must carry a publicKeyJwk object")
+	require.Equal(t, "X25519", pubJWK["crv"])
+	x, ok := pubJWK["x"].(string)
+	require.True(t, ok)
+	require.NotEmpty(t, x)
+	_, hasD := pubJWK["d"]
+	require.False(t, hasD, "DID document keyAgreement must NOT leak the private `d`")
+}
+
 // resolveKeyAgreementX GETs the resolve endpoint for did and returns the
 // base64url `x` of its key_agreement public JWK.
 func resolveKeyAgreementX(t *testing.T, router *gin.Engine, did string) string {
