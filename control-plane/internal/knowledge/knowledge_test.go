@@ -221,6 +221,144 @@ func TestProjectInheritsWorkspace(t *testing.T) {
 	}
 }
 
+// Contract: a sender-scoped upsert then a sender-scoped search returns the chunk.
+func TestSenderUpsertThenSearchReturnsChunk(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService()
+	scope := Scope{Tier: TierSender, WorkspaceID: "wsA", ProjectID: "projX", SenderID: "sndA"}
+
+	if _, err := svc.Upsert(ctx, scope, "snd-src", chunksOf("sender private note")); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	hits, err := svc.Search(ctx, scope, "sender private note", 5)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if !sourceIDs(hits)["snd-src"] {
+		t.Fatal("sender search did not return its own chunk")
+	}
+}
+
+// Contract: a search carrying workspace_id + project_id + sender_id sees
+// workspace, project, and sender chunks additively.
+func TestSenderSearchIsAdditive(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService()
+
+	wsScope := Scope{Tier: TierWorkspace, WorkspaceID: "wsA"}
+	projScope := Scope{Tier: TierProject, WorkspaceID: "wsA", ProjectID: "projX"}
+	sndScope := Scope{Tier: TierSender, WorkspaceID: "wsA", ProjectID: "projX", SenderID: "sndA"}
+
+	if _, err := svc.Upsert(ctx, wsScope, "ws-src", chunksOf("workspace level policy")); err != nil {
+		t.Fatalf("upsert ws: %v", err)
+	}
+	if _, err := svc.Upsert(ctx, projScope, "proj-src", chunksOf("project specific note")); err != nil {
+		t.Fatalf("upsert proj: %v", err)
+	}
+	if _, err := svc.Upsert(ctx, sndScope, "snd-src", chunksOf("sender private note")); err != nil {
+		t.Fatalf("upsert snd: %v", err)
+	}
+
+	// A query in the sender's scope (ws + proj + sender ids present) must see
+	// all three tiers' chunks.
+	for _, want := range []struct {
+		query  string
+		source string
+	}{
+		{"workspace level policy", "ws-src"},
+		{"project specific note", "proj-src"},
+		{"sender private note", "snd-src"},
+	} {
+		hits, err := svc.Search(ctx, sndScope, want.query, 10)
+		if err != nil {
+			t.Fatalf("search %q: %v", want.query, err)
+		}
+		if !sourceIDs(hits)[want.source] {
+			t.Fatalf("sender-scoped search for %q did not return %q (additive set failed)", want.query, want.source)
+		}
+	}
+}
+
+// Contract: cross-sender isolation. A query for sender A never returns sender
+// B's chunks; and a workspace-only query does NOT see sender-scoped chunks.
+func TestCrossSenderIsolation(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService()
+
+	sndA := Scope{Tier: TierSender, WorkspaceID: "wsA", ProjectID: "projX", SenderID: "sndA"}
+	sndB := Scope{Tier: TierSender, WorkspaceID: "wsA", ProjectID: "projX", SenderID: "sndB"}
+	wsOnly := Scope{Tier: TierWorkspace, WorkspaceID: "wsA"}
+
+	if _, err := svc.Upsert(ctx, sndA, "a1", chunksOf("shared sender text")); err != nil {
+		t.Fatalf("upsert A: %v", err)
+	}
+	if _, err := svc.Upsert(ctx, sndB, "b1", chunksOf("shared sender text")); err != nil {
+		t.Fatalf("upsert B: %v", err)
+	}
+
+	// Sender A search must not leak sender B's chunk.
+	hits, err := svc.Search(ctx, sndA, "shared sender text", 10)
+	if err != nil {
+		t.Fatalf("search A: %v", err)
+	}
+	if !sourceIDs(hits)["a1"] {
+		t.Fatal("sender A search did not return its own chunk")
+	}
+	if sourceIDs(hits)["b1"] {
+		t.Fatal("sender A search leaked sender B's chunk")
+	}
+
+	// A workspace-only query (no sender_id) must not see any sender-scoped chunk.
+	hits, err = svc.Search(ctx, wsOnly, "shared sender text", 10)
+	if err != nil {
+		t.Fatalf("search ws-only: %v", err)
+	}
+	if sourceIDs(hits)["a1"] || sourceIDs(hits)["b1"] {
+		t.Fatal("workspace-only search leaked a sender-scoped chunk")
+	}
+}
+
+// Contract: deleting a sender source removes its chunks.
+func TestDeleteSenderSourceRemovesChunks(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService()
+	scope := Scope{Tier: TierSender, WorkspaceID: "wsA", ProjectID: "projX", SenderID: "sndA"}
+
+	if _, err := svc.Upsert(ctx, scope, "snd-src", chunksOf("alpha", "beta", "gamma")); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	deleted, err := svc.DeleteSource(ctx, scope, "snd-src")
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if deleted != 3 {
+		t.Fatalf("deleted = %d, want 3", deleted)
+	}
+
+	hits, err := svc.Search(ctx, scope, "alpha", 10)
+	if err != nil {
+		t.Fatalf("search after delete: %v", err)
+	}
+	if sourceIDs(hits)["snd-src"] {
+		t.Fatal("expected no sender chunks after delete")
+	}
+}
+
+// Contract: sender tier without a sender_id is rejected.
+func TestScopeValidationRejectsSenderWithoutSenderID(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService()
+
+	if _, err := svc.Search(ctx, Scope{Tier: TierSender, WorkspaceID: "wsA", ProjectID: "projX"}, "q", 5); err == nil {
+		t.Fatal("expected error for sender tier without sender_id")
+	}
+	if _, err := svc.Upsert(ctx, Scope{Tier: TierSender, WorkspaceID: "wsA"}, "s", chunksOf("x")); err == nil {
+		t.Fatal("expected error for sender tier without sender_id on upsert")
+	}
+}
+
 // Contract: project of a DIFFERENT workspace cannot see workspace A's chunks.
 func TestProjectCrossWorkspaceIsolation(t *testing.T) {
 	ctx := context.Background()
