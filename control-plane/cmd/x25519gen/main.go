@@ -13,15 +13,17 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 
 	"golang.org/x/crypto/hkdf"
 )
 
-// deriveX25519PrivateKey mirrors DIDService.deriveX25519PrivateKey: HKDF-SHA256
-// with the keyAgreement-specific salt and the derivation path as info.
-func deriveX25519PrivateKey(masterSeed []byte, derivationPath string) (*ecdh.PrivateKey, error) {
+// deriveX25519PrivateKeyAtEpoch mirrors DIDService.deriveX25519PrivateKeyAtEpoch:
+// HKDF-SHA256 with the keyAgreement-specific salt and `<path>/enc/<epoch>` as
+// info, so the derived key changes per rotation epoch.
+func deriveX25519PrivateKeyAtEpoch(masterSeed []byte, derivationPath string, epoch int) (*ecdh.PrivateKey, error) {
 	salt := []byte("agentfield-did-keyagreement-v1")
-	info := []byte(derivationPath)
+	info := []byte(derivationPath + "/enc/" + strconv.Itoa(epoch))
 
 	hkdfReader := hkdf.New(sha256.New, masterSeed, salt, info)
 	derivedSeed := make([]byte, 32)
@@ -29,6 +31,18 @@ func deriveX25519PrivateKey(masterSeed []byte, derivationPath string) (*ecdh.Pri
 		return nil, fmt.Errorf("HKDF X25519 key derivation failed: %w", err)
 	}
 	return ecdh.X25519().NewPrivateKey(derivedSeed)
+}
+
+// keypairAtEpoch derives the keypair at epoch and returns its JWK pair as a map.
+func keypairAtEpoch(masterSeed []byte, derivationPath string, epoch int) (map[string]interface{}, error) {
+	priv, err := deriveX25519PrivateKeyAtEpoch(masterSeed, derivationPath, epoch)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"privateJwk": privateJWK(priv),
+		"publicJwk":  publicJWK(priv.PublicKey()),
+	}, nil
 }
 
 func publicJWK(pub *ecdh.PublicKey) map[string]interface{} {
@@ -57,15 +71,26 @@ func main() {
 	masterSeed := []byte("0123456789abcdef0123456789abcdef")
 	derivationPath := "m/44'/12345'/0'"
 
-	priv, err := deriveX25519PrivateKey(masterSeed, derivationPath)
+	epoch0, err := keypairAtEpoch(masterSeed, derivationPath, 0)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "derive error:", err)
+		fmt.Fprintln(os.Stderr, "derive epoch0 error:", err)
+		os.Exit(1)
+	}
+	epoch1, err := keypairAtEpoch(masterSeed, derivationPath, 1)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "derive epoch1 error:", err)
 		os.Exit(1)
 	}
 
+	// Emit both epochs so the rotation acceptance gate can encrypt to epoch0 and
+	// confirm epoch1's private key cannot decrypt it. Epoch-0 keys are also
+	// surfaced at the top level for backwards compatibility with the original
+	// single-epoch fixture consumer.
 	out := map[string]interface{}{
-		"privateJwk": privateJWK(priv),
-		"publicJwk":  publicJWK(priv.PublicKey()),
+		"privateJwk": epoch0["privateJwk"],
+		"publicJwk":  epoch0["publicJwk"],
+		"epoch0":     epoch0,
+		"epoch1":     epoch1,
 	}
 
 	enc := json.NewEncoder(os.Stdout)
