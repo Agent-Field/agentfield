@@ -201,7 +201,7 @@ func TestControlPlaneMemoryBackend_ErrorPathsAndHelpers(t *testing.T) {
 		assert.Contains(t, err.Error(), "vector memory search failed")
 	})
 
-	t.Run("scope helpers and mustJSONReader", func(t *testing.T) {
+	t.Run("scope helpers and jsonReader", func(t *testing.T) {
 		b := NewControlPlaneMemoryBackend("http://example.com///", "token-123", "agent-1")
 		assert.Equal(t, "http://example.com", b.baseURL)
 		assert.Equal(t, "workflow", b.apiScope(ScopeWorkflow))
@@ -210,8 +210,18 @@ func TestControlPlaneMemoryBackend_ErrorPathsAndHelpers(t *testing.T) {
 		assert.Equal(t, "global", b.apiScope(ScopeGlobal))
 		assert.Equal(t, "global", b.apiScope(MemoryScope("unexpected")))
 
-		body, err := io.ReadAll(mustJSONReader(map[string]any{"ok": true}))
+		reader, err := jsonReader(map[string]any{"ok": true})
+		require.NoError(t, err)
+		body, err := io.ReadAll(reader)
 		require.NoError(t, err)
 		assert.JSONEq(t, `{"ok":true}`, string(body))
+	})
+
+	t.Run("jsonReader surfaces marshal errors", func(t *testing.T) {
+		// Values that cannot be serialized (e.g. a channel) must return an
+		// error instead of silently yielding an empty reader. See issue #434.
+		reader, err := jsonReader(map[string]any{"bad": make(chan int)})
+		require.Error(t, err)
+		assert.Nil(t, reader)
 	})
 }

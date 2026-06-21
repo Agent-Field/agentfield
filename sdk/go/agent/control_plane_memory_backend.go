@@ -56,7 +56,11 @@ func (b *ControlPlaneMemoryBackend) Set(scope MemoryScope, scopeID, key string, 
 		"data":  value,
 		"scope": b.apiScope(scope),
 	}
-	req, err := http.NewRequest(http.MethodPost, endpoint, mustJSONReader(body))
+	reader, err := jsonReader(body)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, endpoint, reader)
 	if err != nil {
 		return err
 	}
@@ -85,7 +89,11 @@ func (b *ControlPlaneMemoryBackend) Get(scope MemoryScope, scopeID, key string) 
 		"key":   key,
 		"scope": b.apiScope(scope),
 	}
-	req, err := http.NewRequest(http.MethodPost, endpoint, mustJSONReader(body))
+	reader, err := jsonReader(body)
+	if err != nil {
+		return nil, false, err
+	}
+	req, err := http.NewRequest(http.MethodPost, endpoint, reader)
 	if err != nil {
 		return nil, false, err
 	}
@@ -122,7 +130,11 @@ func (b *ControlPlaneMemoryBackend) Delete(scope MemoryScope, scopeID, key strin
 		"key":   key,
 		"scope": b.apiScope(scope),
 	}
-	req, err := http.NewRequest(http.MethodPost, endpoint, mustJSONReader(body))
+	reader, err := jsonReader(body)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, endpoint, reader)
 	if err != nil {
 		return err
 	}
@@ -200,7 +212,11 @@ func (b *ControlPlaneMemoryBackend) SetVector(scope MemoryScope, scopeID, key st
 		"metadata":  metadata,
 		"scope":     b.apiScope(scope),
 	}
-	req, err := http.NewRequest(http.MethodPost, endpoint, mustJSONReader(body))
+	reader, err := jsonReader(body)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, endpoint, reader)
 	if err != nil {
 		return err
 	}
@@ -285,7 +301,11 @@ func (b *ControlPlaneMemoryBackend) SearchVector(scope MemoryScope, scopeID stri
 		body["scope"] = b.apiScope(opts.Scope)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, endpoint, mustJSONReader(body))
+	reader, err := jsonReader(body)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequest(http.MethodPost, endpoint, reader)
 	if err != nil {
 		return nil, err
 	}
@@ -399,7 +419,10 @@ func (b *ControlPlaneMemoryBackend) apiScope(scope MemoryScope) string {
 	}
 }
 
-func mustJSONReader(v any) io.Reader {
-	data, _ := json.Marshal(v)
-	return bytes.NewReader(data)
+func jsonReader(v any) (io.Reader, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	return bytes.NewReader(data), nil
 }
