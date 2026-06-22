@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
@@ -20,6 +21,7 @@ type testExecutionStorage struct {
 	runs                      map[string]*types.WorkflowRun
 	steps                     map[string]*types.WorkflowStep
 	webhooks                  map[string]*types.ExecutionWebhook
+	config                    map[string]string
 	eventBus                  *events.ExecutionEventBus
 	workflowExecutionEventBus *events.EventBus[*types.WorkflowExecutionEvent]
 	executionLogEventBus      *events.EventBus[*types.ExecutionLogEntry]
@@ -36,12 +38,30 @@ func newTestExecutionStorage(agent *types.AgentNode) *testExecutionStorage {
 		runs:                      make(map[string]*types.WorkflowRun),
 		steps:                     make(map[string]*types.WorkflowStep),
 		webhooks:                  make(map[string]*types.ExecutionWebhook),
+		config:                    make(map[string]string),
 		eventBus:                  events.NewExecutionEventBus(),
 		workflowExecutionEventBus: events.NewEventBus[*types.WorkflowExecutionEvent](),
 		executionLogEventBus:      events.NewEventBus[*types.ExecutionLogEntry](),
 		workflowRunEventBus:       events.NewEventBus[*types.WorkflowRunEvent](),
 		updateCh:                  make(chan string, 10),
 	}
+}
+
+func (s *testExecutionStorage) GetConfig(_ context.Context, key string) (*storage.ConfigEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	value, ok := s.config[key]
+	if !ok {
+		return nil, nil
+	}
+	return &storage.ConfigEntry{Key: key, Value: value}, nil
+}
+
+func (s *testExecutionStorage) SetConfig(_ context.Context, key string, value string, _ string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.config[key] = value
+	return nil
 }
 
 func (s *testExecutionStorage) GetAgent(ctx context.Context, id string) (*types.AgentNode, error) {

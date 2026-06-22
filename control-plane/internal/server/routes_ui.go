@@ -191,6 +191,19 @@ func (s *AgentFieldServer) registerUIAPI() {
 		uiAPI.GET("/llm/health", llmHandler.GetLLMHealthHandler)
 		uiAPI.GET("/queue/status", llmHandler.GetExecutionQueueStatusHandler)
 
+		// ARD discovery publishing, external search, imports, and callable bindings.
+		ardHandler := s.newARDHandler()
+		ardAPI := uiAPI.Group("/ard")
+		{
+			ardAPI.GET("", ardHandler.GetDashboard)
+			ardAPI.PUT("/settings", ardHandler.UpdateSettings)
+			ardAPI.PUT("/publications", ardHandler.SavePublication)
+			ardAPI.POST("/external/search", ardHandler.SearchExternal)
+			ardAPI.POST("/imports", ardHandler.ImportExternal)
+			ardAPI.PUT("/imports/:entryID/binding", ardHandler.SaveExternalBinding)
+			ardAPI.PUT("/registries", ardHandler.SaveRegistries)
+		}
+
 		// Workflows management group
 		workflows := uiAPI.Group("/workflows")
 		{

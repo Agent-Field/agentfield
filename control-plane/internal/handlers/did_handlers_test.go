@@ -20,6 +20,7 @@ type fakeDIDService struct {
 	registerFn func(*types.DIDRegistrationRequest) (*types.DIDRegistrationResponse, error)
 	resolveFn  func(string) (*types.DIDIdentity, error)
 	listFn     func() ([]string, error)
+	rotateFn   func(string) (string, int, error)
 }
 
 func (f *fakeDIDService) RegisterAgent(req *types.DIDRegistrationRequest) (*types.DIDRegistrationResponse, error) {
@@ -47,6 +48,13 @@ func (f *fakeDIDService) ListAllAgentDIDs() ([]string, error) {
 		return f.listFn()
 	}
 	return []string{"did:example:agent"}, nil
+}
+
+func (f *fakeDIDService) RotateAgentX25519Key(did string) (string, int, error) {
+	if f.rotateFn != nil {
+		return f.rotateFn(did)
+	}
+	return "{\"kty\":\"OKP\",\"crv\":\"X25519\",\"x\":\"abc\"}", 1, nil
 }
 
 type fakeVCService struct {

@@ -15,6 +15,7 @@ export * from './client/DIDAuthenticator.js';
 export * from './did/DidClient.js';
 export * from './did/DidInterface.js';
 export * from './did/DidManager.js';
+export * from './crypto/didEncryption.js';
 export * from './ai/RateLimiter.js';
 export * from './ai/multimodal.js';
 export * from './ai/MultimodalResponse.js';

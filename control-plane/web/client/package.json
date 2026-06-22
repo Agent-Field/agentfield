@@ -82,14 +82,16 @@
         "tailwindcss-cli": "^0.1.2",
         "typescript": "~5.8.3",
         "typescript-eslint": "^8.30.1",
-        "vite": "^8.0.5",
+        "vite": "^8.0.16",
         "vitest": "^4.1.8"
     },
     "overrides": {
+        "js-yaml": "4.2.0",
         "esbuild": "0.28.1"
     },
     "pnpm": {
         "overrides": {
+            "js-yaml": "4.2.0",
             "esbuild": "0.28.1"
         }
     }

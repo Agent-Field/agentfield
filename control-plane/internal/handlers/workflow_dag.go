@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -38,6 +39,7 @@ type WorkflowDAGNode struct {
 	Notes             []types.ExecutionNote `json:"notes"`
 	NotesCount        int                   `json:"notes_count"`
 	LatestNote        *types.ExecutionNote  `json:"latest_note,omitempty"`
+	External          *WorkflowDAGExternal  `json:"external,omitempty"`
 }
 
 type WorkflowDAGResponse struct {
@@ -65,15 +67,34 @@ type SessionWorkflowsResponse struct {
 }
 
 type WorkflowDAGLightweightNode struct {
-	ExecutionID       string  `json:"execution_id"`
-	ParentExecutionID *string `json:"parent_execution_id,omitempty"`
-	AgentNodeID       string  `json:"agent_node_id"`
-	ReasonerID        string  `json:"reasoner_id"`
-	Status            string  `json:"status"`
-	StartedAt         string  `json:"started_at"`
-	CompletedAt       *string `json:"completed_at,omitempty"`
-	DurationMS        *int64  `json:"duration_ms,omitempty"`
-	WorkflowDepth     int     `json:"workflow_depth"`
+	ExecutionID       string               `json:"execution_id"`
+	ParentExecutionID *string              `json:"parent_execution_id,omitempty"`
+	AgentNodeID       string               `json:"agent_node_id"`
+	ReasonerID        string               `json:"reasoner_id"`
+	Status            string               `json:"status"`
+	StartedAt         string               `json:"started_at"`
+	CompletedAt       *string              `json:"completed_at,omitempty"`
+	DurationMS        *int64               `json:"duration_ms,omitempty"`
+	WorkflowDepth     int                  `json:"workflow_depth"`
+	External          *WorkflowDAGExternal `json:"external,omitempty"`
+}
+
+// WorkflowDAGExternal marks a local execution as a call through an external
+// discovery binding, such as an ARD-imported capability. The local execution
+// remains the source of truth for this control plane; remote run IDs are links
+// into the provider plane when the caller captured them.
+type WorkflowDAGExternal struct {
+	Kind                  string `json:"kind"`
+	LocalTarget           string `json:"local_target,omitempty"`
+	Provider              string `json:"provider,omitempty"`
+	EntryIdentifier       string `json:"entry_identifier,omitempty"`
+	Adapter               string `json:"adapter,omitempty"`
+	Policy                string `json:"policy,omitempty"`
+	Transport             string `json:"transport,omitempty"`
+	Mode                  string `json:"mode,omitempty"`
+	RemoteRunID           string `json:"remote_run_id,omitempty"`
+	RemoteExecutionID     string `json:"remote_execution_id,omitempty"`
+	RemoteControlPlaneURL string `json:"remote_control_plane_url,omitempty"`
 }
 
 // WebhookRunSummary aggregates callback delivery attempts for a workflow run (UI strip).
@@ -106,7 +127,7 @@ type WorkflowDAGLightweightResponse struct {
 	// UniqueAgentNodeIDs lists distinct agent node IDs participating in this run (nodes strip).
 	UniqueAgentNodeIDs []string `json:"unique_agent_node_ids,omitempty"`
 	// WorkflowIssuerDID is the issuer DID from the newest execution VC for this workflow, when VC data exists.
-	WorkflowIssuerDID *string `json:"workflow_issuer_did,omitempty"`
+	WorkflowIssuerDID *string            `json:"workflow_issuer_did,omitempty"`
 	WebhookSummary    *WebhookRunSummary `json:"webhook_summary,omitempty"`
 	// WebhookFailures lists executions with a failed delivery (latest failure per execution), capped for the run strip.
 	WebhookFailures []WebhookFailurePreview `json:"webhook_failures,omitempty"`
@@ -158,7 +179,7 @@ func (s *executionGraphService) handleGetWorkflowDAG(c *gin.Context) {
 			Timeline:           timeline,
 			Mode:               "lightweight",
 			UniqueAgentNodeIDs: collectUniqueAgentNodeIDs(executions),
-			WorkflowIssuerDID: lookupWorkflowIssuerDID(ctx, s.store, runID),
+			WorkflowIssuerDID:  lookupWorkflowIssuerDID(ctx, s.store, runID),
 			WebhookSummary:     wh.summary,
 			WebhookFailures:    wh.failures,
 			Trigger:            TriggerForRun(ctx, s.store, runID, rootExecID),
@@ -690,6 +711,7 @@ func executionToDAGNode(exec *types.Execution, depth int) WorkflowDAGNode {
 		WorkflowDepth:     depth,
 		Notes:             []types.ExecutionNote{},
 		NotesCount:        0,
+		External:          externalAnnotationFromExecution(exec),
 	}
 }
 
@@ -750,7 +772,90 @@ func executionToLightweightNode(exec *types.Execution, depth int) WorkflowDAGLig
 		CompletedAt:       completed,
 		DurationMS:        exec.DurationMS,
 		WorkflowDepth:     depth,
+		External:          externalAnnotationFromExecution(exec),
 	}
+}
+
+func externalAnnotationFromExecution(exec *types.Execution) *WorkflowDAGExternal {
+	if exec == nil || len(exec.ResultPayload) == 0 {
+		return nil
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(exec.ResultPayload, &payload); err != nil {
+		return nil
+	}
+
+	for _, key := range []string{"external", "external_capability", "borrowed_capability", "ard_external"} {
+		if candidate, ok := payload[key]; ok {
+			if key == "borrowed_capability" && !externalBoundaryOptIn(payload) {
+				continue
+			}
+			if annotation := externalAnnotationFromValue(candidate); annotation != nil {
+				return annotation
+			}
+		}
+	}
+
+	return nil
+}
+
+func externalBoundaryOptIn(payload map[string]any) bool {
+	for _, key := range []string{"external_call_boundary", "external_boundary", "ard_external_boundary"} {
+		if value, ok := payload[key].(bool); ok && value {
+			return true
+		}
+	}
+	return false
+}
+
+func externalAnnotationFromValue(value any) *WorkflowDAGExternal {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	kind := firstString(object, "kind")
+	if kind == "" {
+		kind = "ard"
+	}
+
+	annotation := &WorkflowDAGExternal{
+		Kind:                  kind,
+		LocalTarget:           firstString(object, "local_target", "logical_id", "target", "callable"),
+		Provider:              firstString(object, "provider", "publisher", "provider_name"),
+		EntryIdentifier:       firstString(object, "entry_identifier", "identifier", "ard_identifier"),
+		Adapter:               firstString(object, "adapter"),
+		Policy:                firstString(object, "policy"),
+		Transport:             firstString(object, "transport"),
+		Mode:                  firstString(object, "mode"),
+		RemoteRunID:           firstString(object, "remote_run_id", "provider_run_id", "run_id"),
+		RemoteExecutionID:     firstString(object, "remote_execution_id", "provider_execution_id", "execution_id"),
+		RemoteControlPlaneURL: firstString(object, "remote_control_plane_url", "provider_control_plane_url", "control_plane_url"),
+	}
+
+	if annotation.LocalTarget == "" &&
+		annotation.Provider == "" &&
+		annotation.EntryIdentifier == "" &&
+		annotation.RemoteRunID == "" &&
+		annotation.RemoteExecutionID == "" {
+		return nil
+	}
+
+	return annotation
+}
+
+func firstString(object map[string]any, keys ...string) string {
+	for _, key := range keys {
+		value, ok := object[key]
+		if !ok {
+			continue
+		}
+		if s, ok := value.(string); ok {
+			return strings.TrimSpace(s)
+		}
+	}
+	return ""
 }
 
 func isLightweightRequest(c *gin.Context) bool {

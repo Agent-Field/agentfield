@@ -136,6 +136,20 @@ export interface WorkflowTimelineNode {
   }[];
 }
 
+export interface WorkflowDAGExternal {
+  kind: "ard" | string;
+  local_target?: string;
+  provider?: string;
+  entry_identifier?: string;
+  adapter?: string;
+  policy?: string;
+  transport?: string;
+  mode?: string;
+  remote_run_id?: string;
+  remote_execution_id?: string;
+  remote_control_plane_url?: string;
+}
+
 export interface WorkflowDAGLightweightNode {
   execution_id: string;
   parent_execution_id?: string;
@@ -147,6 +161,7 @@ export interface WorkflowDAGLightweightNode {
   completed_at?: string;
   duration_ms?: number;
   workflow_depth: number;
+  external?: WorkflowDAGExternal;
 }
 
 /** Aggregated webhook deliveries for a run (from lightweight DAG). */

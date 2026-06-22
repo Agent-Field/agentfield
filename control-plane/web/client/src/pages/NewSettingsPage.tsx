@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   Tabs,
   TabsList,
@@ -39,6 +40,7 @@ import {
   Eye,
   EyeOff,
   Copy,
+  Network,
 } from "@/components/ui/icon-bridge";
 import {
   getObservabilityWebhook,
@@ -1201,6 +1203,48 @@ function NodeLogProxyTab() {
 }
 
 // ---------------------------------------------------------------------------
+// Tab: Discovery
+// ---------------------------------------------------------------------------
+
+function DiscoverySettingsTab() {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Network className="size-4" />
+          ARD deployment status
+        </CardTitle>
+        <CardDescription>
+          ARD feature gates, public base URL, publisher domain, DID trust, and CORS are deployment-level settings. Publishing individual reasoners and importing external resources happens in Discovery.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        <div className="grid gap-2 md:grid-cols-2">
+          {[
+            "agentfield.ard.enabled",
+            "agentfield.ard.public_base_url",
+            "agentfield.ard.publisher_domain",
+            "agentfield.ard.publish.enabled",
+            "agentfield.ard.external.search_enabled",
+            "agentfield.ard.external.invocation_enabled",
+          ].map((item) => (
+            <div key={item} className="rounded-md border border-border bg-muted/20 p-3 font-mono text-xs">
+              {item}
+            </div>
+          ))}
+        </div>
+        <Button asChild className="justify-self-start">
+          <Link to="/discovery">
+            <Network className="size-4" />
+            Open Discovery
+          </Link>
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Page root
 // ---------------------------------------------------------------------------
 
@@ -1216,7 +1260,7 @@ export function NewSettingsPage() {
       </div>
 
       <Tabs defaultValue="general">
-        <TabsList variant="underline">
+        <TabsList variant="underline" className="w-full justify-start overflow-x-auto">
           <TabsTrigger value="general" variant="underline">
             General
           </TabsTrigger>
@@ -1228,6 +1272,9 @@ export function NewSettingsPage() {
           </TabsTrigger>
           <TabsTrigger value="identity" variant="underline">
             Identity
+          </TabsTrigger>
+          <TabsTrigger value="discovery" variant="underline">
+            Discovery
           </TabsTrigger>
           <TabsTrigger value="about" variant="underline">
             About
@@ -1248,6 +1295,10 @@ export function NewSettingsPage() {
 
         <TabsContent value="identity" className="mt-6">
           <IdentityTab />
+        </TabsContent>
+
+        <TabsContent value="discovery" className="mt-6">
+          <DiscoverySettingsTab />
         </TabsContent>
 
         <TabsContent value="about" className="mt-6">

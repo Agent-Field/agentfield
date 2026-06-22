@@ -224,6 +224,7 @@ vi.mock("@/components/ui/icon-bridge", () => {
     ReasonerIcon: Icon,
     RefreshCw: Icon,
     Search: Icon,
+    Share2: Icon,
     SkillIcon: Icon,
     Terminal: Icon,
   };

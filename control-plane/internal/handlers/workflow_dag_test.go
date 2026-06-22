@@ -702,6 +702,68 @@ func TestExecutionToLightweightNode(t *testing.T) {
 	require.Equal(t, duration, *node.DurationMS)
 }
 
+func TestExternalAnnotationFromExecutionUsesBoundaryContract(t *testing.T) {
+	exec := &types.Execution{
+		ExecutionID: "exec-external",
+		ResultPayload: []byte(`{
+			"external": {
+				"kind": "ard",
+				"local_target": "external.market_data.pricing_benchmark",
+				"provider": "MarketDataCo",
+				"entry_identifier": "urn:ai:marketdata.local:agentfield:market-data:reasoner:pricing_benchmark",
+				"adapter": "agentfield",
+				"policy": "aggregate-only",
+				"remote_run_id": "run-provider"
+			},
+			"market_context": {"answer": {"sample_size": 12}}
+		}`),
+	}
+
+	annotation := externalAnnotationFromExecution(exec)
+
+	require.NotNil(t, annotation)
+	require.Equal(t, "ard", annotation.Kind)
+	require.Equal(t, "external.market_data.pricing_benchmark", annotation.LocalTarget)
+	require.Equal(t, "MarketDataCo", annotation.Provider)
+	require.Equal(t, "run-provider", annotation.RemoteRunID)
+}
+
+func TestExternalAnnotationFromExecutionDoesNotMarkSummaryBorrowedCapability(t *testing.T) {
+	exec := &types.Execution{
+		ExecutionID: "exec-summary",
+		ResultPayload: []byte(`{
+			"borrowed_capability": {
+				"kind": "ard",
+				"local_target": "external.market_data.pricing_benchmark",
+				"provider": "MarketDataCo"
+			},
+			"recommendation": {"risk_decision": "proceed"}
+		}`),
+	}
+
+	require.Nil(t, externalAnnotationFromExecution(exec))
+}
+
+func TestExternalAnnotationFromExecutionAllowsLegacyBorrowedCapabilityOptIn(t *testing.T) {
+	exec := &types.Execution{
+		ExecutionID: "exec-legacy-boundary",
+		ResultPayload: []byte(`{
+			"external_call_boundary": true,
+			"borrowed_capability": {
+				"kind": "ard",
+				"local_target": "external.market_data.pricing_benchmark",
+				"provider": "MarketDataCo"
+			}
+		}`),
+	}
+
+	annotation := externalAnnotationFromExecution(exec)
+
+	require.NotNil(t, annotation)
+	require.Equal(t, "external.market_data.pricing_benchmark", annotation.LocalTarget)
+	require.Equal(t, "MarketDataCo", annotation.Provider)
+}
+
 func TestIsLightweightRequest(t *testing.T) {
 	// This would require gin.Context, so we'll test the logic conceptually
 	// The function checks for query params "mode=lightweight" or "lightweight=true/1"

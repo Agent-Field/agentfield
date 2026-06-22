@@ -86,6 +86,10 @@ vi.mock("@/pages/AgentsPage", () => ({
   AgentsPage: () => <div>AgentsPage</div>,
 }));
 
+vi.mock("@/pages/DiscoveryPage", () => ({
+  DiscoveryPage: () => <div>DiscoveryPage</div>,
+}));
+
 vi.mock("@/pages/RunsPage", () => ({
   RunsPage: () => <div>RunsPage</div>,
 }));
@@ -128,6 +132,7 @@ describe("App", () => {
     expect(screen.getByText("NewDashboardPage")).toBeInTheDocument();
     expect(screen.getByText("NewSettingsPage")).toBeInTheDocument();
     expect(screen.getByText("AgentsPage")).toBeInTheDocument();
+    expect(screen.getByText("DiscoveryPage")).toBeInTheDocument();
     expect(screen.getByText("RunsPage")).toBeInTheDocument();
     expect(screen.getByText("RunDetailPage")).toBeInTheDocument();
     expect(screen.getByText("VerifyProvenancePage")).toBeInTheDocument();

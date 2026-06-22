@@ -107,7 +107,11 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 			logger.Logger.Info().Msg("🔒 Permission checking enabled on execute endpoints")
 		}
 
-		executeGroup.POST("/:target", handlers.ExecuteHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout, s.config.Features.DID.Authorization.InternalToken))
+		executeGroup.POST("/:target", handlers.ExecuteHandlerWithARD(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout, s.config.Features.DID.Authorization.InternalToken, func() config.ARDConfig {
+			s.configMu.RLock()
+			defer s.configMu.RUnlock()
+			return s.config.AgentField.ARD
+		}))
 		executeGroup.POST("/async/:target", handlers.ExecuteAsyncHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout, s.config.Features.DID.Authorization.InternalToken))
 	}
 	agentAPI.GET("/executions/:execution_id", handlers.GetExecutionStatusHandler(s.storage))

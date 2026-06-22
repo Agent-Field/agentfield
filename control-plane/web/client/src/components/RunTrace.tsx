@@ -3,6 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { cn } from "@/lib/utils";
 import { getStatusTheme, normalizeExecutionStatus } from "@/utils/status";
 import { StatusDot } from "@/components/ui/status-pill";
+import { Network } from "@/components/ui/icon-bridge";
 import type { WorkflowDAGLightweightNode } from "@/types/workflows";
 
 // ─── Tree node type (runtime-constructed) ────────────────────────────────────
@@ -198,6 +199,10 @@ function TraceRow({
       ? Math.max(4, (node.duration_ms / Math.max(maxDuration, 1)) * 100)
       : 4;
   const isSelected = node.execution_id === selectedId;
+  const external = node.external;
+  const externalLabel = external?.provider
+    ? `External: ${external.provider}`
+    : "External capability";
 
   // Bar color derives from this row's own canonical status — covers
   // cancelled/paused/timeout via the theme. Motion comes from the theme
@@ -262,10 +267,22 @@ function TraceRow({
           className={cn(
             "flex-1 truncate font-mono text-xs min-w-0",
             isCancelled && "line-through opacity-60",
+            external && "text-sky-700 dark:text-sky-300",
           )}
+          title={external ? `${node.reasoner_id} · ${externalLabel} · ${external.local_target ?? ""}` : node.reasoner_id}
         >
           {node.reasoner_id}
         </span>
+
+        {external && (
+          <span
+            className="inline-flex shrink-0 items-center gap-1 rounded border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 text-nano font-medium uppercase tracking-wide text-sky-700 dark:text-sky-300"
+            title={externalLabel}
+          >
+            <Network className="size-2.5" />
+            {external.provider || "External"}
+          </span>
+        )}
 
         {/* Group count badge */}
         {isFirstOfGroup && effectiveGroupCount > 1 && (

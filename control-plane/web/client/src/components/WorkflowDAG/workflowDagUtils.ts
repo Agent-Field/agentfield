@@ -1,6 +1,7 @@
 import type { Edge, Node } from "@xyflow/react";
 
 import type {
+  WorkflowDAGExternal,
   WorkflowDAGLightweightNode,
   WorkflowDAGLightweightResponse,
 } from "../../types/workflows";
@@ -20,6 +21,7 @@ export interface WorkflowDAGNode {
   agent_name?: string;
   task_name?: string;
   children?: WorkflowDAGNode[];
+  external?: WorkflowDAGExternal;
 }
 
 export interface WorkflowDAGResponse {
@@ -68,6 +70,7 @@ export function mapLightweightNode(
     duration_ms: node.duration_ms,
     parent_execution_id: node.parent_execution_id,
     workflow_depth: node.workflow_depth,
+    external: node.external,
   };
 }
 

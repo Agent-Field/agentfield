@@ -184,6 +184,58 @@ func TestMergeDBConfigAppliesNonZeroDBValues(t *testing.T) {
 	require.Equal(t, "file-api-key", cfg.API.Auth.APIKey)
 }
 
+func TestMergeDBConfigDoesNotOverrideARDGuardrails(t *testing.T) {
+	cfg := baseConfigForDBTests()
+	cfg.AgentField.ARD = config.ARDConfig{
+		Enabled:         false,
+		PublicBaseURL:   "https://file.example",
+		PublisherDomain: "file.example",
+		Publish: config.ARDPublishConfig{
+			Enabled:               false,
+			IncludeHealthStatuses: []string{"active"},
+		},
+		Registry: config.ARDRegistryConfig{
+			Enabled: false,
+			Public:  false,
+		},
+		External: config.ARDExternalConfig{
+			SearchEnabled:      false,
+			InvocationEnabled:  false,
+			AllowedRegistries:  []string{"https://registry.file.example/api/v1/ard"},
+			DefaultSearchLimit: 10,
+		},
+	}
+	originalARD := cfg.AgentField.ARD
+
+	dbCfg := &config.Config{
+		AgentField: config.AgentFieldConfig{
+			ARD: config.ARDConfig{
+				Enabled:         true,
+				PublicBaseURL:   "https://db.example",
+				PublisherDomain: "db.example",
+				Publish: config.ARDPublishConfig{
+					Enabled:               true,
+					IncludeHealthStatuses: []string{"active", "inactive"},
+				},
+				Registry: config.ARDRegistryConfig{
+					Enabled: true,
+					Public:  true,
+				},
+				External: config.ARDExternalConfig{
+					SearchEnabled:      true,
+					InvocationEnabled:  true,
+					AllowedRegistries:  []string{"http://169.254.169.254/api/v1/ard"},
+					DefaultSearchLimit: 100,
+				},
+			},
+		},
+	}
+
+	mergeDBConfig(&cfg, dbCfg)
+
+	require.Equal(t, originalARD, cfg.AgentField.ARD)
+}
+
 func TestOverlayDBConfigMissingEntryReturnsGracefully(t *testing.T) {
 	cfg := baseConfigForDBTests()
 	original := cfg

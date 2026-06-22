@@ -6,6 +6,442 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.92-rc.19] - 2026-06-22
+
+
+### Chores
+
+- Chore(deps): bump the uv group across 1 directory with 2 updates (#678)
+
+Bumps the uv group with 2 updates in the /sdk/python directory: [msgpack](https://github.com/msgpack/msgpack-python) and [pydantic-settings](https://github.com/pydantic/pydantic-settings).
+
+
+Updates `msgpack` from 1.1.2 to 1.2.1
+- [Release notes](https://github.com/msgpack/msgpack-python/releases)
+- [Changelog](https://github.com/msgpack/msgpack-python/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/msgpack/msgpack-python/compare/v1.1.2...v1.2.1)
+
+Updates `pydantic-settings` from 2.13.1 to 2.14.2
+- [Release notes](https://github.com/pydantic/pydantic-settings/releases)
+- [Commits](https://github.com/pydantic/pydantic-settings/compare/v2.13.1...v2.14.2)
+
+---
+updated-dependencies:
+- dependency-name: msgpack
+  dependency-version: 1.2.1
+  dependency-type: indirect
+  dependency-group: uv
+- dependency-name: pydantic-settings
+  dependency-version: 2.14.2
+  dependency-type: indirect
+  dependency-group: uv
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (fbc2fc2)
+
+## [0.1.92-rc.18] - 2026-06-21
+
+
+### Added
+
+- Feat(did+cp): DID-encrypted payloads + control-plane knowledge store (discuss/aggregator foundation) (#677)
+
+* feat(did): derive X25519 keyAgreement key for agent DIDs
+
+Each agent DID now gets an X25519 encryption key derived from the master
+seed (distinct HKDF salt from the Ed25519 signing key, so signing and
+encryption keys are independent). The public key is exposed in DID
+resolution — as a flat `key_agreement` JWK on the did:key resolve response
+and as a W3C `keyAgreement` (X25519KeyAgreementKey2020) entry in the DID
+document — and the private key is returned to the agent at registration.
+
+This enables encrypting a payload *to* an agent's DID (JWE ECDH-ES+A256GCM)
+that only that agent can decrypt, underpinning the discuss/aggregator split.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* feat(py-sdk): DID-based payload encryption (JWE over X25519)
+
+Add agentfield.crypto: encrypt_for_did/decrypt/encrypt_to_jwk,
+generate_x25519_keypair and load_private_key. Encrypts a payload to an
+agent's published X25519 keyAgreement key using standard JWE compact
+(ECDH-ES + A256GCM) via joserfc, decryptable only by the holder of the
+matching private key. Interoperable with the TypeScript SDK.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* feat(ts-sdk): DID-based payload encryption (JWE over X25519)
+
+Add crypto/didEncryption: encryptForDid/decrypt/encryptToJwk,
+generateX25519KeyPair. Mirrors the Python SDK using jose; a ciphertext
+produced here decrypts in Python and vice-versa. Used by hax-sdk to
+encrypt a scoped payload to the aggregator's DID.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* test(sdk): cross-language JWE interop harness
+
+run_interop.sh exercises the real TypeScript and Python SDK crypto in both
+directions (TS<->Python) to guard the wire-format contract.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* feat(cp): add pinned-dimension embedding provider package
+
+Introduce internal/embedding with an Embedder interface (Embed/Dimensions),
+an OpenAIEmbedder (text-embedding-3-small, 1536 dims) and a deterministic,
+network-free FakeEmbedder at the same pinned dimension. The dimension is
+pinned centrally because the shared vector index is fixed-dimension; callers
+must not embed with mismatched models. NewFromConfig falls back to the
+FakeEmbedder when no OpenAI key is set so the store works locally with zero
+external deps.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* feat(cp): scope-aware RAG knowledge service + HTTP handlers
+
+Add internal/knowledge: a Service that embeds caller-supplied TEXT and stores
+it in the existing scoped vector store, reusing the SetVector/SimilaritySearch/
+DeleteVectorsByPrefix surface. Chunks are namespaced ws:<workspaceID> or
+proj:<projectID>; a workspace search matches only its namespace, a project
+search matches its own namespace AND the parent workspace's (inheritance).
+
+Defense in depth: the scope is applied in the vector query (namespace scopeID +
+workspace_id metadata filter) AND every returned chunk is re-verified in Go
+before returning; mismatches are dropped and logged. Empty workspace_id is
+rejected so an unscoped query is structurally impossible.
+
+Handlers wire POST /knowledge/upsert, POST /knowledge/search, and
+DELETE /knowledge/source/:id, mapping scope/argument errors to 400 and
+embed/store failures to 500.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* feat(cp): wire knowledge store config, provider, and routes
+
+Add a features.knowledge config section (enabled, provider, openai key/model)
+with OPENAI_API_KEY (and AGENTFIELD_KNOWLEDGE_*) env overrides. Build the
+embedder from config at server startup (FakeEmbedder fallback when no key),
+construct the knowledge Service over the storage provider, and register the
+/api/v1/knowledge routes (skipped when the feature is disabled).
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* feat(did): X25519 keyAgreement key rotation via per-agent epoch
+
+Fold a per-agent rotation epoch into the X25519 HKDF derivation
+(info = <path>/enc/<epoch>) so each epoch yields an independent
+keyAgreement keypair. Adds deriveX25519PrivateKeyAtEpoch and
+regenerateX25519KeyPairJWKAtEpoch; the existing epoch-less helpers
+delegate to epoch 0.
+
+Store X25519Epoch on AgentDIDInfo (and surface it on DIDIdentity).
+RegisterAgent starts new agents at epoch 0; ResolveDID, the
+re-registration path, and PartialRegisterAgent all derive at the
+agent's CURRENT stored epoch and preserve it across re-registration.
+
+RotateAgentX25519Key(did) increments the agent-node's epoch,
+re-derives + persists the new public key, and returns (newPub, epoch).
+Reasoner/skill/root DIDs error clearly. Exposed over
+POST /api/v1/did/key-agreement/rotate, returning the new
+x25519_public_key_jwk object + epoch.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* test(did): cover X25519 key rotation + epoch-aware interop fixture
+
+Service tests: RotateAgentX25519Key changes the stored pub + increments
+epoch; ResolveDID after rotation returns the new pub with a matching
+priv; same (seed,path,epoch) derives identically while distinct epochs
+diverge. HTTP test: POST /api/v1/did/key-agreement/rotate returns a new
+X25519 public JWK (no private d) and a subsequent resolve returns the
+same rotated key. Update the DIDService interface stubs for the new
+RotateAgentX25519Key method.
+
+Extend cmd/x25519gen to emit epoch0/epoch1 keypairs so the SDK crypto
+cross-check can confirm an epoch1 private key cannot decrypt a payload
+encrypted to the epoch0 public key.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* knowledge: add sender scope tier to control-plane knowledge store
+
+Extend the scope-aware knowledge store with a third tier, "sender", in
+addition to workspace/project.
+
+- Scope gains an optional sender_id; tier "sender" requires it.
+- Upsert stores a source under the most specific namespace by tier:
+  sender:<id> > proj:<id> > ws:<id>. workspace_id/project_id/sender_id
+  are all kept in chunk payload metadata when present.
+- Search reads the additive set of namespaces driven by the ids present
+  in the query scope: always ws, plus proj when project_id is set, plus
+  sender when sender_id is set (a query in a project owned by a sender
+  sees ws + proj + sender chunks).
+- Defense in depth unchanged: namespace filter in-query plus in-Go
+  re-verification of namespace membership and workspace_id match; empty
+  workspace_id rejected. Behavior with no sender_id is unchanged.
+- Handler scope body carries sender_id and surfaces the sender_id
+  validation error as a 400.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* knowledge: test sender-scope upsert/search/delete and isolation
+
+Service-level tests: sender-scoped upsert+search, additive ws+proj+sender
+visibility, cross-sender isolation (sender A never sees sender B, and a
+workspace-only query never sees sender chunks), sender source delete, and
+rejection of sender tier without sender_id.
+
+Handler-level tests (new knowledge_test.go in handlers): drive the gin
+upsert/search/delete handlers over an in-memory vector store to assert
+the additive set, cross-sender isolation, empty workspace_id -> 400, and
+sender tier without sender_id -> 400.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* refactor(did): drop unused epoch-less deriveX25519PrivateKey wrapper
+
+The rotation work made deriveX25519PrivateKeyAtEpoch the sole derivation
+path; the epoch-less wrapper had no remaining callers. Removing it clears
+the golangci-lint `unused` finding introduced by this branch.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* test(embedding): cover OpenAI embedder HTTP client
+
+Adds httptest-server tests for OpenAIEmbedder.Embed: happy path (request
+shape, model/input, bearer auth, index-ordered parsing), plus the
+empty-input short-circuit, missing-API-key, non-200 (with and without an
+error body), malformed body, vector-count mismatch, dimension mismatch and
+transport-failure paths. Also covers the WithModel/WithEndpoint/WithHTTPClient
+option setters and their empty-value no-ops.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* test(config): cover knowledge/embedding env overrides
+
+Covers ApplyEnvOverrides for the knowledge block: OPENAI_API_KEY adopted
+only when the knowledge key is empty (and not overriding an existing key),
+the explicit AGENTFIELD_KNOWLEDGE_OPENAI_API_KEY winning, and the
+provider/model/enabled overrides (with trimming). Also covers
+KnowledgeConfig.IsEnabled defaulting (nil => true) and explicit true/false.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* test(x25519gen): cover X25519 interop fixture derivation
+
+Tests the standalone x25519gen interop command: deterministic HKDF
+derivation for a fixed (seed, path, epoch), epoch divergence (rotation
+retires the prior key), JWK shape (public has no private d, private carries
+a non-empty d, x components agree and round-trip a 32-byte X25519 key), and
+an end-to-end main() invocation.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* test(knowledge): cover service + handler error paths
+
+Service: validation errors (empty source_id/chunks/chunk-text, empty query),
+embedder failure and vector-count mismatch on upsert/search, store failures
+(SetVector/SimilaritySearch/DeleteVectorsByPrefix), and the topK<=0 default.
+
+Handlers: malformed-JSON 400s for upsert/search/delete, missing path id,
+the internal-error (500) mapping via a failing store, the validation->400
+mapping, and isKnowledgeValidationError classification across its fragments
+including the internal-error fall-through.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* test(did): cover X25519 rotation error paths + DID-document keyAgreement
+
+Service RotateAgentX25519Key: rejects empty DID, unknown DID, the root DID,
+and reasoner/skill component DIDs with precise errors; plus the rotation
+invariant that the epoch-N+1 private key differs from the retired epoch-N key.
+
+Handlers: RotateX25519Key invalid-body/missing-did/service-error/malformed-key
+fallback, ResolveDID's warn-and-omit branch for a malformed X25519 JWK, and a
+new GetDIDDocument test asserting the W3C keyAgreement verification method,
+x25519-2020 @context, and that the private d is never leaked.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* ci: force fresh coverage run (prior run used a stale pull-request merge ref)
+
+No code change. The previous coverage workflow checked out a merge ref that
+predated the added Go coverage tests (ran the embedding package in 0.004s,
+i.e. without openai_test.go), reporting a stale 64% patch coverage. The tests
+are present on the branch and bring control-plane patch coverage to ~85%
+locally; this empty commit forces GitHub to recompute the merge ref.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.8 <noreply@anthropic.com> (9e613cd)
+
+## [0.1.92-rc.17] - 2026-06-19
+
+
+### Other
+
+- Show external ARD boundaries in workflow traces (eacae13)
+
+## [0.1.92-rc.16] - 2026-06-18
+
+
+### Other
+
+- Add ARD discovery workspace (#675)
+
+* Add ARD discovery workspace
+
+* Complete ARD discovery UX and callable imports
+
+* Fix ARD review blockers
+
+* Add ARD PR screenshots (7336b9b)
+
+## [0.1.92-rc.15] - 2026-06-18
+
+
+### Fixed
+
+- Fix(security): restrict query API key auth to streaming routes (#423) (#674) (e6e5931)
+
+## [0.1.92-rc.14] - 2026-06-17
+
+
+### Chores
+
+- Chore(deps): patch js-yaml lockfiles (#672) (bfe4015)
+
+## [0.1.92-rc.13] - 2026-06-16
+
+
+### Fixed
+
+- Fix: Fixed the stale `_current_status` issue where status stuck on `STARTING` mode. (#673) (6a7ce08)
+
+## [0.1.92-rc.12] - 2026-06-15
+
+
+### Chores
+
+- Chore(deps): bump the uv group across 1 directory with 4 updates (#671)
+
+---
+updated-dependencies:
+- dependency-name: aiohttp
+  dependency-version: 3.14.1
+  dependency-type: direct:production
+  dependency-group: uv
+- dependency-name: cryptography
+  dependency-version: 48.0.1
+  dependency-type: direct:production
+  dependency-group: uv
+- dependency-name: python-multipart
+  dependency-version: 0.0.31
+  dependency-type: indirect
+  dependency-group: uv
+- dependency-name: starlette
+  dependency-version: 1.3.1
+  dependency-type: indirect
+  dependency-group: uv
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (af60fca)
+
+## [0.1.92-rc.11] - 2026-06-15
+
+
+### Chores
+
+- Chore(deps): bump the npm_and_yarn group across 2 directories with 4 updates (#670)
+
+Bumps the npm_and_yarn group with 3 updates in the /control-plane/web/client directory: [vite](https://github.com/vitejs/vite/tree/HEAD/packages/vite), [js-yaml](https://github.com/nodeca/js-yaml) and [ws](https://github.com/websockets/ws).
+Bumps the npm_and_yarn group with 3 updates in the /sdk/typescript directory: [vite](https://github.com/vitejs/vite/tree/HEAD/packages/vite), [ws](https://github.com/websockets/ws) and [form-data](https://github.com/form-data/form-data).
+
+
+Updates `vite` from 8.0.5 to 8.0.16
+- [Release notes](https://github.com/vitejs/vite/releases)
+- [Changelog](https://github.com/vitejs/vite/blob/main/packages/vite/CHANGELOG.md)
+- [Commits](https://github.com/vitejs/vite/commits/v8.0.16/packages/vite)
+
+Updates `js-yaml` from 4.1.1 to 4.2.0
+- [Changelog](https://github.com/nodeca/js-yaml/blob/master/CHANGELOG.md)
+- [Commits](https://github.com/nodeca/js-yaml/commits)
+
+Updates `ws` from 8.19.0 to 8.20.0
+- [Release notes](https://github.com/websockets/ws/releases)
+- [Commits](https://github.com/websockets/ws/compare/8.19.0...8.20.0)
+
+Updates `vite` from 6.4.2 to 8.0.16
+- [Release notes](https://github.com/vitejs/vite/releases)
+- [Changelog](https://github.com/vitejs/vite/blob/main/packages/vite/CHANGELOG.md)
+- [Commits](https://github.com/vitejs/vite/commits/v8.0.16/packages/vite)
+
+Updates `ws` from 8.20.1 to 8.21.0
+- [Release notes](https://github.com/websockets/ws/releases)
+- [Commits](https://github.com/websockets/ws/compare/8.19.0...8.20.0)
+
+Updates `form-data` from 4.0.5 to 4.0.6
+- [Release notes](https://github.com/form-data/form-data/releases)
+- [Changelog](https://github.com/form-data/form-data/blob/master/CHANGELOG.md)
+- [Commits](https://github.com/form-data/form-data/compare/v4.0.5...v4.0.6)
+
+---
+updated-dependencies:
+- dependency-name: vite
+  dependency-version: 8.0.16
+  dependency-type: direct:development
+  dependency-group: npm_and_yarn
+- dependency-name: js-yaml
+  dependency-version: 4.2.0
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+- dependency-name: ws
+  dependency-version: 8.20.0
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+- dependency-name: vite
+  dependency-version: 8.0.16
+  dependency-type: direct:development
+  dependency-group: npm_and_yarn
+- dependency-name: ws
+  dependency-version: 8.21.0
+  dependency-type: direct:production
+  dependency-group: npm_and_yarn
+- dependency-name: form-data
+  dependency-version: 4.0.6
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (ffd0717)
+
+- Chore(deps): bump pyjwt (#669)
+
+Bumps the uv group with 1 update in the /sdk/python directory: [pyjwt](https://github.com/jpadilla/pyjwt).
+
+
+Updates `pyjwt` from 2.12.1 to 2.13.0
+- [Release notes](https://github.com/jpadilla/pyjwt/releases)
+- [Changelog](https://github.com/jpadilla/pyjwt/blob/master/CHANGELOG.rst)
+- [Commits](https://github.com/jpadilla/pyjwt/compare/2.12.1...2.13.0)
+
+---
+updated-dependencies:
+- dependency-name: pyjwt
+  dependency-version: 2.13.0
+  dependency-type: indirect
+  dependency-group: uv
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (2cb06f0)
+
 ## [0.1.92-rc.10] - 2026-06-15
 
 
