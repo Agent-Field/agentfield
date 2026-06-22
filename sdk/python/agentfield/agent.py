@@ -23,6 +23,9 @@ from typing import (
     Type,
     Dict,
     Literal,
+    ParamSpec,
+    TypeVar,
+    overload,
 )
 from agentfield.agent_ai import AgentAI
 from agentfield.agent_cli import AgentCLI
@@ -57,6 +60,10 @@ from agentfield.multimodal_response import MultimodalResponse
 from agentfield.async_config import AsyncConfig
 from agentfield.async_execution_manager import AsyncExecutionManager
 from agentfield.pydantic_utils import convert_function_args, should_convert_args
+from agentfield.sessions import (
+    RealtimeSession,
+    build_session_definition,
+)
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
@@ -67,6 +74,9 @@ import weakref
 if TYPE_CHECKING:
     from agentfield.harness._result import HarnessResult
     from agentfield.harness._runner import HarnessRunner
+
+P = ParamSpec("P")
+T = TypeVar("T")
 
 # Use slots=True for memory efficiency on Python 3.10+, fallback for older versions
 _dataclass_kwargs = {"slots": True} if sys.version_info >= (3, 10) else {}
@@ -651,6 +661,7 @@ class Agent(FastAPI):
         # Using Dict[str, Entry] with __slots__ dataclasses for minimal footprint
         self._reasoner_registry: Dict[str, ReasonerEntry] = {}
         self._skill_registry: Dict[str, SkillEntry] = {}
+        self._session_registry: Dict[str, Dict[str, Any]] = {}
 
         # VC override tracking (still needed for _effective_component_vc_setting)
         self._reasoner_vc_overrides: Dict[str, bool] = {}
@@ -1534,7 +1545,60 @@ class Agent(FastAPI):
             metadata["tags"] = self.agent_tags
         if self.author:
             metadata["author"] = self.author
+        if self._session_registry:
+            metadata["sessions"] = [
+                entry["definition"].to_dict()
+                for entry in self._session_registry.values()
+            ]
         return metadata if metadata else None
+
+    @property
+    def sessions(self) -> List[Dict[str, Any]]:
+        return [
+            entry["definition"].to_dict()
+            for entry in self._session_registry.values()
+        ]
+
+    def session(
+        self,
+        name: str,
+        *,
+        provider: str,
+        transport: str,
+        model: Optional[str] = None,
+        modalities: Optional[List[str]] = None,
+        voice: Optional[str] = None,
+        tools: Optional[List[str]] = None,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Callable[[Callable[[RealtimeSession], Awaitable[Any]]], Callable[[RealtimeSession], Awaitable[Any]]]:
+        """Register a realtime/voice session endpoint.
+
+        Provider and transport are both explicit; AgentField does not infer or
+        switch them. Unsupported combinations fail at declaration time and again
+        at control-plane session start.
+        """
+
+        definition = build_session_definition(
+            name,
+            provider=provider,
+            transport=transport,
+            model=model,
+            modalities=modalities,
+            voice=voice,
+            tools=tools,
+            tags=tags,
+            metadata=metadata,
+        )
+
+        def decorator(
+            func: Callable[[RealtimeSession], Awaitable[Any]]
+        ) -> Callable[[RealtimeSession], Awaitable[Any]]:
+            self._session_registry[name] = {"definition": definition, "handler": func}
+            setattr(func, "_agentfield_session", definition)
+            return func
+
+        return decorator
 
     def _build_vc_metadata(self) -> Dict[str, Any]:
         """Produce a serializable VC policy snapshot for control-plane visibility."""
@@ -1741,9 +1805,35 @@ class Agent(FastAPI):
         """Delegate to server handler for route setup"""
         return self.server_handler.setup_agentfield_routes()
 
+    @overload
+    def reasoner(
+        self,
+        path: Callable[P, Awaitable[T]],
+        name: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        *,
+        vc_enabled: Optional[bool] = None,
+        require_realtime_validation: bool = False,
+        triggers: Optional[List[Any]] = None,
+        accepts_webhook: Optional[Any] = None,
+    ) -> Callable[P, Awaitable[T]]: ...
+
+    @overload
     def reasoner(
         self,
         path: Optional[str] = None,
+        name: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        *,
+        vc_enabled: Optional[bool] = None,
+        require_realtime_validation: bool = False,
+        triggers: Optional[List[Any]] = None,
+        accepts_webhook: Optional[Any] = None,
+    ) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Awaitable[T]]]: ...
+
+    def reasoner(
+        self,
+        path: Any = None,
         name: Optional[str] = None,
         tags: Optional[List[str]] = None,
         *,
@@ -2551,7 +2641,7 @@ class Agent(FastAPI):
             + f"/api/v1/executions/{execution_id}/status"
         )
 
-    def on_change(self, pattern: Union[str, List[str]]):
+    def on_change(self, pattern: Union[str, List[str]]) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Awaitable[T]]]:
         """
         Decorator to mark a function as a memory event listener.
 
@@ -2618,9 +2708,31 @@ class Agent(FastAPI):
 
         return decorator
 
+    @overload
+    def skill(
+        self,
+        tags: Callable[P, T],
+        path: Optional[str] = None,
+        name: Optional[str] = None,
+        *,
+        vc_enabled: Optional[bool] = None,
+        require_realtime_validation: bool = False,
+    ) -> Callable[P, T]: ...
+
+    @overload
     def skill(
         self,
         tags: Optional[List[str]] = None,
+        path: Optional[str] = None,
+        name: Optional[str] = None,
+        *,
+        vc_enabled: Optional[bool] = None,
+        require_realtime_validation: bool = False,
+    ) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
+
+    def skill(
+        self,
+        tags: Any = None,
         path: Optional[str] = None,
         name: Optional[str] = None,
         *,
@@ -3825,7 +3937,12 @@ class Agent(FastAPI):
                 if node_id == self.node_id and hasattr(self, function_name):
                     try:
                         func = getattr(self, function_name)
-                        sig = inspect.signature(func)
+                        # Unwrap tracked wrappers (e.g. _run_async_skill,
+                        # tracked_func) to recover the original function's
+                        # typed signature instead of the generic (*args, **kwargs)
+                        # that the wrapper carries.
+                        raw_func = getattr(func, "_original_func", func)
+                        sig = inspect.signature(raw_func)
                         param_names = [
                             name
                             for name, param in sig.parameters.items()
@@ -4313,31 +4430,26 @@ class Agent(FastAPI):
                     "agent_node_id": self.node_id,
                 }
 
-                # Make async HTTP request to backend - use UI API endpoint to match frontend
                 try:
                     import aiohttp
 
                     timeout = aiohttp.ClientTimeout(total=5.0)  # 5 second timeout
-                    # Use UI API base URL to match where frontend fetches notes from
-                    # Replace the last occurrence of /api/v1 with /api/ui/v1
-                    ui_api_base = self.client.api_base.replace("/api/v1", "/api/ui/v1")
 
                     if self.dev_mode:
                         from agentfield.logger import log_debug
 
                         log_debug(
-                            f"NOTE DEBUG: Original api_base: {self.client.api_base}"
+                            f"NOTE DEBUG: api_base: {self.client.api_base}"
                         )
-                        log_debug(f"NOTE DEBUG: UI api_base: {ui_api_base}")
                         log_debug(
-                            f"NOTE DEBUG: Full URL: {ui_api_base}/executions/note"
+                            f"NOTE DEBUG: Full URL: {self.client.api_base}/executions/note"
                         )
                         log_debug(f"NOTE DEBUG: Payload: {payload}")
                         log_debug(f"NOTE DEBUG: Headers: {headers}")
 
                     async with aiohttp.ClientSession(timeout=timeout) as session:
                         async with session.post(
-                            f"{ui_api_base}/executions/note",
+                            f"{self.client.api_base}/executions/note",
                             json=payload,
                             headers=headers,
                         ) as response:
@@ -4351,7 +4463,7 @@ class Agent(FastAPI):
                                 log_debug(f"NOTE DEBUG: Response text: {response_text}")
                                 if response.status == 200:
                                     log_debug(
-                                        f"✅ Note successfully sent to {ui_api_base}/executions/note"
+                                        f"✅ Note successfully sent to {self.client.api_base}/executions/note"
                                     )
                                 else:
                                     log_debug(
@@ -4362,26 +4474,18 @@ class Agent(FastAPI):
                     import requests
 
                     try:
-                        # Use UI API base URL to match where frontend fetches notes from
-                        ui_api_base = self.client.api_base.replace(
-                            "/api/v1", "/api/ui/v1"
-                        )
-
                         if self.dev_mode:
                             from agentfield.logger import log_debug
 
                             log_debug(
-                                f"NOTE DEBUG (requests): Original api_base: {self.client.api_base}"
+                                f"NOTE DEBUG (requests): api_base: {self.client.api_base}"
                             )
                             log_debug(
-                                f"NOTE DEBUG (requests): UI api_base: {ui_api_base}"
-                            )
-                            log_debug(
-                                f"NOTE DEBUG (requests): Full URL: {ui_api_base}/executions/note"
+                                f"NOTE DEBUG (requests): Full URL: {self.client.api_base}/executions/note"
                             )
 
                         response = requests.post(
-                            f"{ui_api_base}/executions/note",
+                            f"{self.client.api_base}/executions/note",
                             json=payload,
                             headers=headers,
                             timeout=5.0,
@@ -4397,7 +4501,7 @@ class Agent(FastAPI):
                             )
                             if response.status_code == 200:
                                 log_debug(
-                                    f"✅ Note successfully sent to {ui_api_base}/executions/note"
+                                    f"✅ Note successfully sent to {self.client.api_base}/executions/note"
                                 )
                             else:
                                 log_debug(

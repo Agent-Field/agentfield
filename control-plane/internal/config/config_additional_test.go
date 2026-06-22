@@ -314,6 +314,15 @@ func TestApplyEnvOverrides(t *testing.T) {
 		"AGENTFIELD_CONNECTOR_CAP_POLICY_MANAGEMENT":                 "true",
 		"AGENTFIELD_CONNECTOR_CAP_TAG_MANAGEMENT":                    "readonly",
 		"AGENTFIELD_CONNECTOR_CAP_DID_MANAGEMENT":                    "false",
+		"AGENTFIELD_ARD_ENABLED":                                     "true",
+		"AGENTFIELD_ARD_PUBLIC_BASE_URL":                             " https://cp.example.com/ ",
+		"AGENTFIELD_ARD_PUBLISHER_DOMAIN":                            " example.com ",
+		"AGENTFIELD_ARD_PUBLISH_ENABLED":                             "true",
+		"AGENTFIELD_ARD_REGISTRY_ENABLED":                            "true",
+		"AGENTFIELD_ARD_REGISTRY_PUBLIC":                             "false",
+		"AGENTFIELD_ARD_EXTERNAL_SEARCH_ENABLED":                     "true",
+		"AGENTFIELD_ARD_EXTERNAL_INVOCATION_ENABLED":                 "true",
+		"AGENTFIELD_ARD_EXTERNAL_ALLOWED_REGISTRIES":                 " https://registry.example.com/api/v1/ard, ,https://other.example.com/ard ",
 	}
 	for k, v := range env {
 		t.Setenv(k, v)
@@ -326,6 +335,19 @@ func TestApplyEnvOverrides(t *testing.T) {
 	}
 	if got := cfg.AgentField.Registration.ServerlessDiscoveryAllowedHosts; len(got) != 2 || got[0] != "a.example.com" || got[1] != "b.example.com" {
 		t.Fatalf("unexpected allowed hosts: %#v", got)
+	}
+	if !cfg.AgentField.ARD.Enabled ||
+		cfg.AgentField.ARD.PublicBaseURL != "https://cp.example.com" ||
+		cfg.AgentField.ARD.PublisherDomain != "example.com" ||
+		!cfg.AgentField.ARD.Publish.Enabled ||
+		!cfg.AgentField.ARD.Registry.Enabled ||
+		cfg.AgentField.ARD.Registry.Public ||
+		!cfg.AgentField.ARD.External.SearchEnabled ||
+		!cfg.AgentField.ARD.External.InvocationEnabled {
+		t.Fatalf("unexpected ARD env overrides: %+v", cfg.AgentField.ARD)
+	}
+	if got := cfg.AgentField.ARD.External.AllowedRegistries; len(got) != 2 || got[0] != "https://registry.example.com/api/v1/ard" || got[1] != "https://other.example.com/ard" {
+		t.Fatalf("unexpected ARD registries: %#v", got)
 	}
 	if cfg.AgentField.NodeHealth.CheckInterval != 45*time.Second ||
 		cfg.AgentField.NodeHealth.CheckTimeout != 7*time.Second ||

@@ -64,6 +64,10 @@ services:
       # routes "openrouter/<model>" prefixed model strings to OpenRouter
       # using this env var.
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      AGENTFIELD_OPENROUTER_SITE_URL: ${AGENTFIELD_OPENROUTER_SITE_URL:-https://agentfield.ai}
+      AGENTFIELD_OPENROUTER_APP_NAME: ${AGENTFIELD_OPENROUTER_APP_NAME:-AgentField AI}
+      OR_SITE_URL: ${OR_SITE_URL:-https://agentfield.ai}
+      OR_APP_NAME: ${OR_APP_NAME:-AgentField AI}
     ports:
       - "8001:8001"
     restart: unless-stopped

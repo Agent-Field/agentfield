@@ -1,5 +1,6 @@
 import json
-import importlib
+
+from pydantic import BaseModel
 
 from agentfield.harness._schema import (
     LARGE_SCHEMA_TOKEN_THRESHOLD,
@@ -16,8 +17,6 @@ from agentfield.harness._schema import (
     schema_to_json_schema,
     validate_against_schema,
 )
-
-BaseModel = importlib.import_module("pydantic").BaseModel
 
 
 class TestSchema(BaseModel):

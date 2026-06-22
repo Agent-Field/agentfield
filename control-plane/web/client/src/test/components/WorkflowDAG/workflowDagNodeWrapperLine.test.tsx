@@ -29,6 +29,7 @@ vi.mock("@/components/ui/icon-bridge", () => {
   return {
     Calendar: Icon,
     CheckmarkFilled: Icon,
+    Network: Icon,
     Time: Icon,
     User: Icon,
   };
@@ -164,6 +165,30 @@ describe("WorkflowNode, wrapper, and floating connection line", () => {
     expect(screen.getByText("ID: exec-1")).toBeInTheDocument();
     expect(screen.getByText("Parent: parent-1…")).toBeInTheDocument();
     expect(screen.getAllByText("CANCELLED").length).toBeGreaterThan(0);
+  });
+
+  it("renders attached external capability badge without replacing node identity", async () => {
+    const { WorkflowNode } = await import("@/components/WorkflowDAG/WorkflowNode");
+
+    render(
+      <WorkflowNode
+        data={makeNodeData({
+          reasoner_id: "get_market_context",
+          task_name: "get_market_context",
+          status: "succeeded",
+          external: {
+            kind: "ard",
+            provider: "MarketDataCo",
+            local_target: "external.market_data.pricing_benchmark",
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText("Get Market")).toBeInTheDocument();
+    expect(screen.getByText("Context")).toBeInTheDocument();
+    expect(screen.getByText("External · MarketDataCo")).toBeInTheDocument();
+    expect(screen.getByTitle("External capability · MarketDataCo · external.market_data.pricing_benchmark")).toBeInTheDocument();
   });
 
   it("renders and closes the sidebar wrapper and example usage", async () => {

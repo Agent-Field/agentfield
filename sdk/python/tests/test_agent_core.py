@@ -145,6 +145,6 @@ async def test_note_sends_async_request(monkeypatch):
     agent.note("hello", tags=["debug"])
     await asyncio.gather(*tasks)
 
-    assert called["url"].startswith("http://agentfield/api/ui/v1")
+    assert called["url"].startswith("http://agentfield/api/v1")
     assert called["json"]["message"] == "hello"
     assert called["json"]["tags"] == ["debug"]

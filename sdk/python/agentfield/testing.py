@@ -38,9 +38,52 @@ import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, Optional, Union
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Dict,
+    Optional,
+    TypeVar,
+    Union,
+    cast,
+    overload,
+)
 
 from .triggers import EventTrigger, ScheduleTrigger, TriggerContext
+
+R = TypeVar("R")
+
+
+@overload
+def simulate_trigger(
+    reasoner: Callable[..., Awaitable[R]],
+    *,
+    source: str,
+    body: Optional[Dict[str, Any]] = None,
+    event_type: str = "",
+    event_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    trigger_id: Optional[str] = None,
+    received_at: Optional[datetime] = None,
+    vc_id: Optional[str] = None,
+) -> R: ...
+
+
+@overload
+def simulate_trigger(
+    reasoner: Callable[..., R],
+    *,
+    source: str,
+    body: Optional[Dict[str, Any]] = None,
+    event_type: str = "",
+    event_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    trigger_id: Optional[str] = None,
+    received_at: Optional[datetime] = None,
+    vc_id: Optional[str] = None,
+) -> R: ...
 
 
 def simulate_trigger(
@@ -82,7 +125,11 @@ def simulate_trigger(
     matched = _match_binding(bindings, source, event_type)
 
     transformed_input = payload
-    if matched is not None and isinstance(matched, EventTrigger) and matched.transform is not None:
+    if (
+        matched is not None
+        and isinstance(matched, EventTrigger)
+        and matched.transform is not None
+    ):
         transformed_input = matched.transform(payload)
 
     trigger_ctx = TriggerContext(
@@ -103,6 +150,24 @@ def simulate_trigger(
     if asyncio.iscoroutine(result):
         return _run_coro(result)
     return result
+
+
+@overload
+def simulate_schedule(
+    reasoner: Callable[..., Awaitable[R]],
+    *,
+    cron: Optional[str] = None,
+    received_at: Optional[datetime] = None,
+) -> R: ...
+
+
+@overload
+def simulate_schedule(
+    reasoner: Callable[..., R],
+    *,
+    cron: Optional[str] = None,
+    received_at: Optional[datetime] = None,
+) -> R: ...
 
 
 def simulate_schedule(
@@ -140,7 +205,9 @@ def load_fixture(source: str, name: str = "default") -> Dict[str, Any]:
     re-reads from disk.
     """
     base = Path(__file__).parent / "fixtures" / "triggers"
-    candidate = base / (f"{source}_{name}.json" if name != "default" else f"{source}.json")
+    candidate = base / (
+        f"{source}_{name}.json" if name != "default" else f"{source}.json"
+    )
     if not candidate.exists():
         raise FileNotFoundError(
             f"No fixture for source={source!r} name={name!r}. Looked at {candidate}."
@@ -256,5 +323,5 @@ def _run_coro(coro: Awaitable[Any]) -> Any:
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(coro)
+        return asyncio.run(cast(Coroutine[Any, Any, Any], coro))
     return loop.run_until_complete(coro)

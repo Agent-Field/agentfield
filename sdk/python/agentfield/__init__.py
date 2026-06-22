@@ -50,6 +50,15 @@ from .did_auth import (
     HEADER_DID_SIGNATURE,
     HEADER_DID_TIMESTAMP,
 )
+from .crypto import (
+    PayloadEncryptionError,
+    decrypt,
+    encrypt_for_did,
+    encrypt_to_jwk,
+    extract_key_agreement_jwk,
+    generate_x25519_keypair,
+    load_private_key,
+)
 from .exceptions import (
     AgentFieldError,
     AgentFieldClientError,
@@ -60,6 +69,13 @@ from .exceptions import (
 )
 from .client import ApprovalRequestResponse, ApprovalResult, ApprovalStatusResponse
 from .triggers import EventTrigger, ScheduleTrigger, TriggerContext
+from .session_transport import (
+    SessionTransportCapability,
+    SessionTransportError,
+    SUPPORTED_SESSION_TRANSPORTS,
+    validate_session_transport,
+)
+from .sessions import RealtimeSession, SessionDefinition, SessionTurn
 from .decorators import on_event, on_schedule, reasoner
 from .tool_calling import (
     ToolCallConfig,
@@ -118,6 +134,14 @@ __all__ = [
     "HEADER_CALLER_DID",
     "HEADER_DID_SIGNATURE",
     "HEADER_DID_TIMESTAMP",
+    # DID-based payload encryption
+    "encrypt_for_did",
+    "encrypt_to_jwk",
+    "decrypt",
+    "generate_x25519_keypair",
+    "load_private_key",
+    "extract_key_agreement_jwk",
+    "PayloadEncryptionError",
     # Approval response types
     "ApprovalRequestResponse",
     "ApprovalResult",
@@ -140,9 +164,17 @@ __all__ = [
     "EventTrigger",
     "ScheduleTrigger",
     "TriggerContext",
+    # Session transport validation
+    "SessionTransportCapability",
+    "SessionTransportError",
+    "SUPPORTED_SESSION_TRANSPORTS",
+    "validate_session_transport",
+    "RealtimeSession",
+    "SessionDefinition",
+    "SessionTurn",
     "on_event",
     "on_schedule",
     "reasoner",
 ]
 
-__version__ = "0.1.91"
+__version__ = "0.1.92-rc.19"

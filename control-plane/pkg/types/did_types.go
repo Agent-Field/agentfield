@@ -18,15 +18,23 @@ type DIDRegistry struct {
 
 // AgentDIDInfo represents DID information for an agent node.
 type AgentDIDInfo struct {
-	DID                string                     `json:"did" db:"did"`
-	AgentNodeID        string                     `json:"agent_node_id" db:"agent_node_id"`
-	AgentFieldServerID string                     `json:"agentfield_server_id" db:"agentfield_server_id"`
-	PublicKeyJWK       json.RawMessage            `json:"public_key_jwk" db:"public_key_jwk"`
-	DerivationPath     string                     `json:"derivation_path" db:"derivation_path"`
-	Reasoners          map[string]ReasonerDIDInfo `json:"reasoners" db:"reasoners"`
-	Skills             map[string]SkillDIDInfo    `json:"skills" db:"skills"`
-	Status             AgentDIDStatus             `json:"status" db:"status"`
-	RegisteredAt       time.Time                  `json:"registered_at" db:"registered_at"`
+	DID                string          `json:"did" db:"did"`
+	AgentNodeID        string          `json:"agent_node_id" db:"agent_node_id"`
+	AgentFieldServerID string          `json:"agentfield_server_id" db:"agentfield_server_id"`
+	PublicKeyJWK       json.RawMessage `json:"public_key_jwk" db:"public_key_jwk"`
+	// X25519PublicKeyJWK is the agent's keyAgreement (encryption) public key,
+	// derived from the same master seed as PublicKeyJWK but with a distinct HKDF
+	// salt. Additive/omitempty so existing JSON-serialized registries stay valid.
+	X25519PublicKeyJWK json.RawMessage `json:"x25519_public_key_jwk,omitempty" db:"x25519_public_key_jwk"`
+	// X25519Epoch is the agent's keyAgreement rotation epoch. It is folded into
+	// the X25519 HKDF derivation so incrementing it (via RotateAgentX25519Key)
+	// retires the prior encryption key. Zero/omitted = epoch 0 (the original key).
+	X25519Epoch    int                        `json:"x25519_epoch,omitempty" db:"x25519_epoch"`
+	DerivationPath string                     `json:"derivation_path" db:"derivation_path"`
+	Reasoners      map[string]ReasonerDIDInfo `json:"reasoners" db:"reasoners"`
+	Skills         map[string]SkillDIDInfo    `json:"skills" db:"skills"`
+	Status         AgentDIDStatus             `json:"status" db:"status"`
+	RegisteredAt   time.Time                  `json:"registered_at" db:"registered_at"`
 }
 
 // ReasonerDIDInfo represents DID information for a reasoner.
@@ -135,9 +143,17 @@ type DIDIdentityPackage struct {
 
 // DIDIdentity represents a single DID identity with keys.
 type DIDIdentity struct {
-	DID            string `json:"did"`
-	PrivateKeyJWK  string `json:"private_key_jwk,omitempty"`
-	PublicKeyJWK   string `json:"public_key_jwk"`
+	DID           string `json:"did"`
+	PrivateKeyJWK string `json:"private_key_jwk,omitempty"`
+	PublicKeyJWK  string `json:"public_key_jwk"`
+	// X25519PublicKeyJWK / X25519PrivateKeyJWK carry the keyAgreement (encryption)
+	// keypair alongside the Ed25519 signing keys. The private key is returned to
+	// the agent at registration so it can decrypt payloads encrypted to its DID.
+	X25519PublicKeyJWK  string `json:"x25519_public_key_jwk,omitempty"`
+	X25519PrivateKeyJWK string `json:"x25519_private_key_jwk,omitempty"`
+	// X25519Epoch surfaces the keyAgreement rotation epoch the returned keypair
+	// was derived at, so callers can observe the current rotation generation.
+	X25519Epoch    int    `json:"x25519_epoch,omitempty"`
 	DerivationPath string `json:"derivation_path"`
 	ComponentType  string `json:"component_type"`
 	FunctionName   string `json:"function_name,omitempty"`

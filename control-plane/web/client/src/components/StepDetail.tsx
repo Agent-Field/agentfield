@@ -17,7 +17,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { ChevronDown } from "@/components/ui/icon-bridge";
+import { ChevronDown, Network } from "@/components/ui/icon-bridge";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -38,6 +38,7 @@ import { formatDuration } from "./RunTrace";
 import { JsonHighlightedPre } from "@/components/ui/json-syntax-highlight";
 import { StepProvenanceCard } from "@/components/StepProvenanceCard";
 import { getExecutionErrorCategoryMeta } from "@/utils/executionErrorCategory";
+import type { WorkflowDAGExternal } from "@/types/workflows";
 
 // ─── cURL snippet: copy + minimal info (hover) ────────────────────────────────
 
@@ -176,6 +177,64 @@ function CopyJsonHeaderButton({
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
+function externalFromPayload(payload: unknown): WorkflowDAGExternal | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+
+  const record = payload as Record<string, unknown>;
+  const hasBoundaryOptIn =
+    record.external_call_boundary === true ||
+    record.external_boundary === true ||
+    record.ard_external_boundary === true;
+  const source =
+    record.external ??
+    record.external_capability ??
+    record.ard_external ??
+    (hasBoundaryOptIn ? record.borrowed_capability : undefined);
+
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    return null;
+  }
+
+  const external = source as Record<string, unknown>;
+  const pick = (...keys: string[]) => {
+    for (const key of keys) {
+      const value = external[key];
+      if (typeof value === "string" && value.trim()) {
+        return value.trim();
+      }
+    }
+    return undefined;
+  };
+
+  const annotation: WorkflowDAGExternal = {
+    kind: pick("kind") ?? "ard",
+    local_target: pick("local_target", "logical_id", "target", "callable"),
+    provider: pick("provider", "publisher", "provider_name"),
+    entry_identifier: pick("entry_identifier", "identifier", "ard_identifier"),
+    adapter: pick("adapter"),
+    policy: pick("policy"),
+    transport: pick("transport"),
+    mode: pick("mode"),
+    remote_run_id: pick("remote_run_id", "provider_run_id", "run_id"),
+    remote_execution_id: pick("remote_execution_id", "provider_execution_id", "execution_id"),
+    remote_control_plane_url: pick("remote_control_plane_url", "provider_control_plane_url", "control_plane_url"),
+  };
+
+  if (
+    !annotation.local_target &&
+    !annotation.provider &&
+    !annotation.entry_identifier &&
+    !annotation.remote_run_id &&
+    !annotation.remote_execution_id
+  ) {
+    return null;
+  }
+
+  return annotation;
+}
+
 export function StepDetail({ executionId }: { executionId: string }) {
   const { data: execution, isLoading } = useStepDetail(executionId);
   const queryClient = useQueryClient();
@@ -235,6 +294,7 @@ export function StepDetail({ executionId }: { executionId: string }) {
   const hasOutput = execution.output_data != null;
   const hasInput = execution.input_data != null;
   const notes = execution.notes ?? [];
+  const external = externalFromPayload(execution.output_data);
 
   const apiUiBase =
     (import.meta.env.VITE_API_BASE_URL as string | undefined) || "/api/ui/v1";
@@ -381,6 +441,68 @@ export function StepDetail({ executionId }: { executionId: string }) {
             </div>
           </TooltipProvider>
         </div>
+
+        {external && (
+          <Card className="border-sky-500/25 bg-sky-500/[0.04] shadow-none">
+            <CardHeader className="px-3 py-2">
+              <CardTitle className="flex items-center gap-2 text-xs font-semibold text-sky-700 dark:text-sky-300">
+                <Network className="size-3.5" />
+                External capability
+                {external.provider && (
+                  <Badge
+                    variant="outline"
+                    className="h-5 max-w-[12rem] truncate border-sky-500/30 bg-sky-500/10 px-1.5 text-micro uppercase tracking-wide text-sky-700 dark:text-sky-300"
+                    title={external.provider}
+                  >
+                    {external.provider}
+                  </Badge>
+                )}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-2 px-3 pb-3 pt-0 text-micro-plus">
+              {external.local_target && (
+                <div className="flex min-w-0 justify-between gap-3">
+                  <span className="shrink-0 text-muted-foreground">Local target</span>
+                  <span className="min-w-0 truncate font-mono text-foreground" title={external.local_target}>
+                    {external.local_target}
+                  </span>
+                </div>
+              )}
+              {external.entry_identifier && (
+                <div className="flex min-w-0 justify-between gap-3">
+                  <span className="shrink-0 text-muted-foreground">ARD entry</span>
+                  <span className="min-w-0 truncate font-mono text-foreground" title={external.entry_identifier}>
+                    {external.entry_identifier}
+                  </span>
+                </div>
+              )}
+              {(external.mode || external.transport) && (
+                <div className="flex min-w-0 justify-between gap-3">
+                  <span className="shrink-0 text-muted-foreground">Call path</span>
+                  <span className="min-w-0 truncate text-foreground">
+                    {[external.mode, external.transport].filter(Boolean).join(" · ")}
+                  </span>
+                </div>
+              )}
+              {external.remote_run_id && (
+                <div className="flex min-w-0 justify-between gap-3">
+                  <span className="shrink-0 text-muted-foreground">Remote run</span>
+                  <span className="min-w-0 truncate font-mono text-foreground" title={external.remote_run_id}>
+                    {external.remote_run_id}
+                  </span>
+                </div>
+              )}
+              {external.remote_control_plane_url && (
+                <div className="flex min-w-0 justify-between gap-3">
+                  <span className="shrink-0 text-muted-foreground">Provider plane</span>
+                  <span className="min-w-0 truncate font-mono text-foreground" title={external.remote_control_plane_url}>
+                    {external.remote_control_plane_url}
+                  </span>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {/* Error above input so failures are visible before scrolling past payload */}
         {hasError ? (

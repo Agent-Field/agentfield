@@ -4,9 +4,11 @@ import {
   Calendar,
   CheckmarkFilled,
   GitBranch,
+  Network,
   Time,
   User,
 } from "@/components/ui/icon-bridge";
+import type { WorkflowDAGExternal } from "@/types/workflows";
 import { cn } from "../../lib/utils";
 import { type StatusTone as StatusToneKey } from "../../lib/theme";
 import { agentColorManager } from "../../utils/agentColorManager";
@@ -46,6 +48,7 @@ interface WorkflowNodeData {
   performanceIntensity?: number;
   minPerformance?: number;
   maxPerformance?: number;
+  external?: WorkflowDAGExternal;
 }
 
 interface WorkflowNodeProps {
@@ -102,6 +105,7 @@ export const WorkflowNode = memo(
       Math.max(data.performanceIntensity ?? 0, 0),
       1,
     );
+    const external = data.external;
 
     const formatDuration = (durationMs?: number) => {
       if (!durationMs) return "-";
@@ -307,6 +311,11 @@ export const WorkflowNode = memo(
         "color-mix(in srgb, var(--muted-foreground) 45%, transparent)";
     }
 
+    if (external && !hasHighlight && viewMode !== "performance") {
+      borderColor = "color-mix(in srgb, rgb(14 165 233) 68%, transparent)";
+      glowColor = "color-mix(in srgb, rgb(14 165 233) 48%, transparent)";
+    }
+
     const baseShadow =
       "0 1px 2px color-mix(in srgb, var(--foreground) 6%, transparent), 0 1px 3px color-mix(in srgb, var(--foreground) 4%, transparent)";
     const accentShadow = `0 0 0 1px ${borderColor}`;
@@ -319,7 +328,9 @@ export const WorkflowNode = memo(
     let background = baseBackground;
 
     if (!hasHighlight) {
-      if (viewMode === "performance") {
+      if (external && viewMode !== "performance") {
+        background = "linear-gradient(145deg, color-mix(in srgb, rgb(14 165 233) 10%, var(--card)), var(--card))";
+      } else if (viewMode === "performance") {
         const heat = Math.min(65, 25 + performanceIntensity * 45);
         background = `linear-gradient(135deg, color-mix(in srgb, var(--status-warning) ${heat}%, transparent), var(--card))`;
       } else if (viewMode === "debug") {
@@ -360,7 +371,7 @@ export const WorkflowNode = memo(
     return (
       <div
         className={cn(
-          "group relative h-[100px] cursor-pointer overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-sm backdrop-blur-sm transition-all duration-300 animate-fade-in",
+          "group relative h-[100px] cursor-pointer overflow-visible rounded-xl border border-border bg-card text-card-foreground shadow-sm backdrop-blur-sm transition-all duration-300 animate-fade-in",
           !isDimmed && "hover:scale-[1.01] hover:shadow-md",
         )}
         style={{
@@ -379,6 +390,24 @@ export const WorkflowNode = memo(
             background: `linear-gradient(to bottom, ${agentColor.primary}, ${agentColor.border})`,
           }}
         />
+
+        {external && (
+          <div
+            className="pointer-events-none absolute -top-3 left-9 z-20 inline-flex h-5 max-w-[calc(100%-3rem)] items-center gap-1 rounded-full border border-sky-400/45 bg-background/95 px-2 text-[10px] font-semibold uppercase leading-none tracking-wide text-sky-700 shadow-sm shadow-sky-950/10 backdrop-blur dark:bg-card/95 dark:text-sky-300"
+            title={[
+              "External capability",
+              external.provider,
+              external.local_target,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          >
+            <Network className="size-2.5 shrink-0" />
+            <span className="truncate">
+              {external.provider ? `External · ${external.provider}` : "External"}
+            </span>
+          </div>
+        )}
 
         {/* Agent Badge - positioned in top-left */}
         <div className="absolute top-2 left-2 z-10">
@@ -665,6 +694,7 @@ export const WorkflowNode = memo(
       prevProps.data.agent_name === nextProps.data.agent_name &&
       prevProps.data.started_at === nextProps.data.started_at &&
       prevProps.data.completed_at === nextProps.data.completed_at &&
+      prevProps.data.external === nextProps.data.external &&
       prevProps.data.reuse?.source_execution_id ===
         nextProps.data.reuse?.source_execution_id &&
       prevProps.data.isSearchMatch === nextProps.data.isSearchMatch &&

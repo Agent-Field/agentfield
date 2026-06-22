@@ -56,6 +56,46 @@ def test_ai_config_get_litellm_params_uses_overrides_and_prunes_none():
     assert "api_key" not in params
 
 
+def test_ai_config_get_litellm_params_adds_openrouter_attribution(monkeypatch):
+    monkeypatch.delenv("AGENTFIELD_OPENROUTER_SITE_URL", raising=False)
+    monkeypatch.delenv("AGENTFIELD_OPENROUTER_APP_NAME", raising=False)
+    monkeypatch.delenv("OR_SITE_URL", raising=False)
+    monkeypatch.delenv("OR_APP_NAME", raising=False)
+
+    params = AIConfig(model="openrouter/openai/gpt-4o").get_litellm_params()
+
+    assert params["headers"]["HTTP-Referer"] == "https://agentfield.ai"
+    assert params["headers"]["X-OpenRouter-Title"] == "AgentField AI"
+    assert params["headers"]["X-Title"] == "AgentField AI"
+    assert params["extra_headers"]["HTTP-Referer"] == "https://agentfield.ai"
+
+
+def test_ai_config_openrouter_attribution_preserves_explicit_headers():
+    cfg = AIConfig(
+        model="openrouter/openai/gpt-4o",
+        openrouter_site_url="https://override.example",
+        openrouter_app_name="Override App",
+        litellm_params={
+            "headers": {"HTTP-Referer": "https://caller.example"},
+            "extra_headers": {"x-openrouter-title": "Caller Title"},
+        },
+    )
+
+    params = cfg.get_litellm_params()
+
+    assert params["headers"]["HTTP-Referer"] == "https://caller.example"
+    assert params["headers"]["X-OpenRouter-Title"] == "Override App"
+    assert params["extra_headers"]["x-openrouter-title"] == "Caller Title"
+    assert params["extra_headers"]["HTTP-Referer"] == "https://override.example"
+
+
+def test_ai_config_get_litellm_params_skips_non_openrouter():
+    params = AIConfig(model="gpt-4o").get_litellm_params()
+
+    assert "headers" not in params
+    assert "extra_headers" not in params
+
+
 def test_ai_config_safe_prompt_chars_uses_cache():
     cfg = AIConfig()
     cfg.model_limits_cache["gpt-4o"] = {

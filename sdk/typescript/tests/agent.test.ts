@@ -13,6 +13,34 @@ describe('Agent', () => {
     expect(agent.skills.all().map((s) => s.name)).toContain('format');
   });
 
+  it('registers explicit realtime session definitions', () => {
+    const agent = new Agent({ nodeId: 'support-agent', devMode: true });
+    agent.session('voice', {
+      provider: 'openai',
+      transport: 'webrtc',
+      model: 'gpt-realtime-2',
+      modalities: ['audio', 'text'],
+      voice: 'marin',
+      tools: ['support.resolve_voice_turn']
+    }, async () => ({}));
+
+    expect(agent.sessionDefinitions()).toEqual([
+      {
+        name: 'voice',
+        provider: 'openai',
+        transport: 'webrtc',
+        model: 'gpt-realtime-2',
+        modalities: ['audio', 'text'],
+        voice: 'marin',
+        tools: ['support.resolve_voice_turn'],
+        tags: [],
+        proposed_tags: [],
+        approved_tags: [],
+        metadata: {}
+      }
+    ]);
+  });
+
   it('includes routers with prefixes', () => {
     const router = new AgentRouter({ prefix: 'simulation' });
     router.reasoner('run', async () => ({}));

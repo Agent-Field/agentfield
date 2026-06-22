@@ -21,6 +21,14 @@ const pageState = vi.hoisted(() => ({
   fetch: vi.fn(),
 }));
 
+vi.mock("react-router-dom", () => ({
+  Link: ({ children, to, ...props }: React.PropsWithChildren<{ to: string } & React.AnchorHTMLAttributes<HTMLAnchorElement>>) => (
+    <a href={to} {...props}>
+      {children}
+    </a>
+  ),
+}));
+
 vi.mock("@/components/ui/tabs", () => ({
   Tabs: ({ children }: React.PropsWithChildren) => <div>{children}</div>,
   TabsList: ({ children }: React.PropsWithChildren) => <div>{children}</div>,
@@ -176,6 +184,7 @@ vi.mock("@/components/ui/icon-bridge", () => {
     Eye: Icon,
     EyeOff: Icon,
     Copy: Icon,
+    Network: Icon,
   };
 });
 

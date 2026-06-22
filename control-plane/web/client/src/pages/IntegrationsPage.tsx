@@ -74,6 +74,44 @@ const SOURCE_META: Record<string, SourceMeta> = {
       "Run a reasoner on a recurring cron schedule. No inbound auth — schedules are server-side.",
     highlights: ["* * * * *"],
   },
+  snowflake: {
+    display: "Snowflake",
+    category: "Provider",
+    description:
+      "Poll Snowflake event tables or read-only SQL with the Snowflake SQL API and a server-side programmatic access token.",
+    highlights: [
+      "event_table_poll",
+      "custom_query_poll",
+      "SQL API",
+      "Cortex-ready",
+    ],
+  },
+  databricks: {
+    display: "Databricks",
+    category: "Provider",
+    description:
+      "Receive Databricks notifications and route lakehouse events into nodes that can call SQL Warehouses, AI Functions, and Model Serving.",
+    highlights: [
+      "notification webhooks",
+      "SQL Warehouses",
+      "ai_query",
+      "Model Serving",
+    ],
+  },
+  linear: {
+    display: "Linear",
+    category: "Provider",
+    description:
+      "Issue, comment, project, and team events signed with Linear-Signature HMAC.",
+    highlights: ["issue.create", "issue.update", "comment.create"],
+  },
+  sentry: {
+    display: "Sentry",
+    category: "Provider",
+    description:
+      "Issue, alert, error, and comment webhooks signed with the Sentry integration client secret.",
+    highlights: ["issue.created", "event_alert.triggered", "error.created"],
+  },
   generic_hmac: {
     display: "Generic HMAC",
     category: "Generic",

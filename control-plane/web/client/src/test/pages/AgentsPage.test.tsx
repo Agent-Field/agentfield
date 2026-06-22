@@ -224,6 +224,7 @@ vi.mock("@/components/ui/icon-bridge", () => {
     ReasonerIcon: Icon,
     RefreshCw: Icon,
     Search: Icon,
+    Share2: Icon,
     SkillIcon: Icon,
     Terminal: Icon,
   };
@@ -330,7 +331,7 @@ describe("AgentsPage", () => {
     expect(screen.getByText("Reasoners")).toBeInTheDocument();
     expect(screen.getByText("Skills")).toBeInTheDocument();
 
-    const endpointFilter = screen.getByLabelText("Filter reasoners and skills");
+    const endpointFilter = screen.getByLabelText("Filter reasoners, skills, and sessions");
     fireEvent.change(endpointFilter, { target: { value: "deploy" } });
     expect(screen.getByRole("button", { name: /Open skill Deploy in playground/i })).toBeInTheDocument();
     expect(screen.queryByText("Summarizer")).not.toBeInTheDocument();

@@ -1,0 +1,98 @@
+version: 2026-06-11-v1
+source:
+  name: snowflake
+  kind: loop
+  default_mode: event_table_poll
+  secret_required: true
+
+modes:
+  event_table_poll:
+    description: Poll an AgentField-owned event table in Snowflake and dispatch each unconsumed row.
+    config_schema:
+      connection_ref: string
+      database: string
+      schema: string
+      table: string
+      event_id_column: optional string
+      event_type_column: optional string
+      payload_column: optional string
+      watermark_column: optional string
+      consumed_at_column: optional string
+      interval_seconds: optional integer
+      max_batch_size: optional integer
+    normalized_event:
+      event_id: string
+      event_type: string
+      occurred_at: string
+      payload: object
+      snowflake:
+        account_url: string
+        database: string
+        schema: string
+        table: string
+        query_id: optional string
+
+  custom_query_poll:
+    description: Poll a user-provided read-only query that returns the standard event columns.
+    config_schema:
+      connection_ref: string
+      sql: string
+      interval_seconds: optional integer
+      max_batch_size: optional integer
+      watermark_strategy: optional string
+    required_result_columns:
+      - event_id
+      - event_type
+      - payload
+      - occurred_at
+
+future_modes:
+  task_error_queue:
+    description: Consume Snowflake task and Snowpipe error notifications from cloud queue sources.
+    status: planned
+  webhook:
+    description: Receive Snowflake-originated webhook payloads where customer infrastructure can support a direct HTTPS target.
+    status: planned
+
+setup_sql:
+  event_table: |
+    CREATE TABLE IF NOT EXISTS AGENTFIELD_EVENTS (
+      EVENT_ID STRING DEFAULT UUID_STRING(),
+      EVENT_TYPE STRING NOT NULL,
+      PAYLOAD VARIANT NOT NULL,
+      OCCURRED_AT TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP(),
+      CONSUMED_AT TIMESTAMP_LTZ
+    );
+  example_alert: |
+    CREATE OR REPLACE ALERT AGENTFIELD_EXAMPLE_ALERT
+      WAREHOUSE = <warehouse>
+      SCHEDULE = '5 minute'
+      IF (EXISTS(
+        SELECT 1
+        FROM <database>.<schema>.<source_table>
+        WHERE <condition>
+      ))
+      THEN
+        INSERT INTO AGENTFIELD_EVENTS(EVENT_TYPE, PAYLOAD)
+        SELECT
+          'snowflake.alert.example',
+          OBJECT_CONSTRUCT(
+            'source_table', '<database>.<schema>.<source_table>',
+            'matched_at', CURRENT_TIMESTAMP()
+          );
+
+event_contract:
+  dispatch_input:
+    event: normalized_event
+    _meta:
+      trigger_id: string
+      source: snowflake
+      event_type: string
+      event_id: string
+      idempotency_key: string
+      received_at: string
+  idempotency:
+    key: event_id
+    scope: source_name
+  replay:
+    behavior: Replay clones the inbound event and redispatches without advancing the Snowflake watermark.

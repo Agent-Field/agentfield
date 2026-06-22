@@ -4,6 +4,7 @@ import {
   CheckmarkFilled,
   ErrorFilled,
   InProgress,
+  Network,
   PauseFilled,
   Time,
 } from "@/components/ui/icon-bridge";
@@ -153,6 +154,7 @@ export const HoverDetailPanel = memo(({ node, position, visible }: HoverDetailPa
 
   const taskName = humanizeText(taskNameField || node.reasoner_id || "Unknown Task");
   const agentName = humanizeText(agentNameField || node.agent_node_id || "Unknown Agent");
+  const external = node.external;
 
   return (
     <div
@@ -186,6 +188,14 @@ export const HoverDetailPanel = memo(({ node, position, visible }: HoverDetailPa
               size="sm"
               showTooltip={false}
             />
+            {external && (
+              <div className="mt-2 inline-flex max-w-full items-center gap-1 rounded border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 text-nano font-semibold uppercase tracking-wide text-sky-700 dark:text-sky-300">
+                <Network className="size-2.5 shrink-0" />
+                <span className="truncate">
+                  {external.provider ? `External · ${external.provider}` : "External capability"}
+                </span>
+              </div>
+            )}
           </div>
           <div className="flex-shrink-0">
             {getStatusIcon(normalizedStatus)}
@@ -240,6 +250,37 @@ export const HoverDetailPanel = memo(({ node, position, visible }: HoverDetailPa
             </div>
           )}
         </div>
+
+        {external && (
+          <div className="space-y-1.5 rounded-md border border-sky-500/20 bg-sky-500/5 p-2">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-sky-700 dark:text-sky-300">
+              <Network className="size-3" />
+              External capability
+            </div>
+            {external.local_target && (
+              <div className="flex justify-between gap-4 text-micro">
+                <span className="text-muted-foreground">Local target:</span>
+                <span className="max-w-[12rem] truncate font-mono text-foreground">
+                  {external.local_target}
+                </span>
+              </div>
+            )}
+            {external.provider && (
+              <div className="flex justify-between gap-4 text-micro">
+                <span className="text-muted-foreground">Provider:</span>
+                <span className="font-medium text-foreground">{external.provider}</span>
+              </div>
+            )}
+            {external.remote_run_id && (
+              <div className="flex justify-between gap-4 text-micro">
+                <span className="text-muted-foreground">Remote run:</span>
+                <span className="max-w-[12rem] truncate font-mono text-foreground">
+                  {external.remote_run_id}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Technical Details */}
         <div className="space-y-1.5 border-t border-border/60 pt-3">

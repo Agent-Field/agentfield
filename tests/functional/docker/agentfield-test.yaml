@@ -34,6 +34,29 @@ agentfield:
     webhook_max_attempts: 3
     webhook_retry_backoff: 1s
     webhook_max_retry_backoff: 5s
+  ard:
+    enabled: true
+    public_base_url: "http://control-plane:8080"
+    publisher_domain: "functional.agentfield.local"
+    host:
+      display_name: "AgentField Functional Control Plane"
+      identifier: "did:web:functional.agentfield.local"
+      documentation_url: "https://agentfield.ai/docs"
+    publish:
+      enabled: true
+      include_health_statuses:
+        - "active"
+        - "unknown"
+      default_type: "application/openapi+json"
+    registry:
+      enabled: true
+      public: true
+    external:
+      search_enabled: true
+      invocation_enabled: true
+      allowed_registries:
+        - "http://test-runner:9777/api/v1/ard"
+      default_search_limit: 20
 
 ui:
   enabled: true

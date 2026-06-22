@@ -159,15 +159,15 @@ func (s *cleanupStorageStub) CleanupWorkflow(ctx context.Context, workflowID str
 
 type nodeRESTStorageStub struct {
 	storage.StorageProvider
-	agent           *types.AgentNode
-	versionedAgent  *types.AgentNode
-	listAgents      []*types.AgentNode
-	getAgentErr     error
-	getVersionErr   error
-	listAgentsErr   error
-	heartbeats      []time.Time
-	lastHeartbeatID string
-	lastVersion     string
+	agent            *types.AgentNode
+	versionedAgent   *types.AgentNode
+	listAgents       []*types.AgentNode
+	getAgentErr      error
+	getVersionErr    error
+	listAgentsErr    error
+	heartbeats       []time.Time
+	lastHeartbeatID  string
+	lastVersion      string
 	updatedLifecycle *types.AgentLifecycleStatus
 	registeredAgent  *types.AgentNode
 }
@@ -241,7 +241,10 @@ func (didServiceStub) RegisterAgent(req *types.DIDRegistrationRequest) (*types.D
 }
 
 func (didServiceStub) ResolveDID(did string) (*types.DIDIdentity, error) { return nil, nil }
-func (didServiceStub) ListAllAgentDIDs() ([]string, error)                { return nil, nil }
+func (didServiceStub) ListAllAgentDIDs() ([]string, error)               { return nil, nil }
+func (didServiceStub) RotateAgentX25519Key(did string) (string, int, error) {
+	return "", 0, nil
+}
 
 type vcServiceStub struct{}
 

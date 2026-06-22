@@ -8,6 +8,7 @@ import {
   CardHeader,
   CardTitle,
 } from "../components/ui/card";
+import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
 import {
   Collapsible,
   CollapsibleContent,
@@ -38,11 +39,15 @@ import {
   Check,
   ChevronRight,
   ChevronDown,
+  RadioTower,
 } from "../components/ui/icon-bridge";
 import { reasonersApi } from "../services/reasonersApi";
 import type { ReasonerWithNode, ReasonersResponse } from "../types/reasoners";
 import { normalizeExecutionStatus } from "../utils/status";
 import { JsonHighlightedPre } from "../components/ui/json-syntax-highlight";
+import { getNodeDetails, getNodesSummary } from "../services/api";
+import { sessionsApi, type StartSessionResponse } from "../services/sessionsApi";
+import type { SessionDefinition } from "../types/agentfield";
 
 interface RecentRun {
   id: string;
@@ -52,6 +57,12 @@ interface RecentRun {
   output_preview: string;
   created_at: string;
   input_data?: unknown;
+}
+
+interface RegisteredSession {
+  target: string;
+  nodeId: string;
+  definition: SessionDefinition;
 }
 
 function formatDuration(ms?: number): string {
@@ -104,10 +115,34 @@ function buildAsyncCurlCommand(
   -d '{"input": ${escapedInput}}'`;
 }
 
+function buildSessionStartCurlCommand(target: string, baseUrl: string = window.location.origin): string {
+  return `curl -X POST '${baseUrl}/api/v1/session-targets/${target}/start' \\
+  -H 'Content-Type: application/json' \\
+  -H 'X-API-Key: YOUR_API_KEY' \\
+  -d '{}'`;
+}
+
+function buildSessionToolCurlCommand(
+  sessionId: string,
+  tool: string,
+  input: string,
+  baseUrl: string = window.location.origin
+): string {
+  const escapedInput = input.replace(/'/g, "'\\''");
+  return `curl -X POST '${baseUrl}/api/v1/session-instances/${sessionId}/tools/${tool}' \\
+  -H 'Content-Type: application/json' \\
+  -H 'X-API-Key: YOUR_API_KEY' \\
+  -d '{"input": ${escapedInput}}'`;
+}
+
 export function PlaygroundPage() {
   const { reasonerId: paramReasonerId } = useParams<{ reasonerId?: string }>();
   const navigate = useNavigate();
   const location = useLocation();
+  const sessionParam = new URLSearchParams(location.search).get("session");
+  const [mode, setMode] = useState<"reasoner" | "session">(
+    sessionParam ? "session" : "reasoner"
+  );
   const replayInput = (location.state as { replayInput?: unknown } | null)?.replayInput;
   const hasReplayInput = replayInput != null && replayInput !== "" && JSON.stringify(replayInput) !== "{}" && JSON.stringify(replayInput) !== "null";
 
@@ -155,6 +190,24 @@ export function PlaygroundPage() {
   const [recentRuns, setRecentRuns] = useState<RecentRun[]>([]);
   const [loadingRuns, setLoadingRuns] = useState(false);
 
+  // ── sessions mode ────────────────────────────────────────────────────────
+  const [sessions, setSessions] = useState<RegisteredSession[]>([]);
+  const [loadingSessions, setLoadingSessions] = useState(false);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const [selectedSessionTarget, setSelectedSessionTarget] = useState<string | null>(
+    sessionParam ?? null
+  );
+  const [startingSession, setStartingSession] = useState(false);
+  const [startedSession, setStartedSession] = useState<StartSessionResponse | null>(null);
+  const [sessionStartError, setSessionStartError] = useState<string | null>(null);
+  const [copiedSessionStart, setCopiedSessionStart] = useState(false);
+  const [copiedSessionTool, setCopiedSessionTool] = useState(false);
+  const [selectedTool, setSelectedTool] = useState<string>("");
+  const [sessionToolInput, setSessionToolInput] = useState("{}");
+  const [sessionToolResult, setSessionToolResult] = useState<unknown>(null);
+  const [sessionToolError, setSessionToolError] = useState<string | null>(null);
+  const [invokingSessionTool, setInvokingSessionTool] = useState(false);
+
   // ── load reasoners ────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
@@ -172,6 +225,58 @@ export function PlaygroundPage() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingSessions(true);
+    setSessionsError(null);
+    getNodesSummary()
+      .then(async (summary) => {
+        const details = await Promise.all(
+          (summary.nodes ?? []).map((node) =>
+            getNodeDetails(node.id).catch(() => null)
+          )
+        );
+        const rows: RegisteredSession[] = [];
+        for (const detail of details) {
+          if (!detail?.id) continue;
+          for (const session of detail.sessions ?? []) {
+            rows.push({
+              target: `${detail.id}.${session.name}`,
+              nodeId: detail.id,
+              definition: session,
+            });
+          }
+        }
+        if (!cancelled) {
+          setSessions(rows);
+          if (!selectedSessionTarget && rows.length > 0) {
+            setSelectedSessionTarget(rows[0].target);
+          }
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setSessionsError(err instanceof Error ? err.message : "Failed to load sessions.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingSessions(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const selectedSession = useMemo(
+    () => sessions.find((session) => session.target === selectedSessionTarget) ?? null,
+    [sessions, selectedSessionTarget]
+  );
+
+  useEffect(() => {
+    const tools = selectedSession?.definition.tools ?? [];
+    setSelectedTool((current) => current || tools[0] || "");
+  }, [selectedSession]);
 
   // ── load selected reasoner details ───────────────────────────────────────
   useEffect(() => {
@@ -310,10 +415,78 @@ export function PlaygroundPage() {
     setTimeout(() => setCopiedAsync(false), 2000);
   }
 
+  async function handleStartSession() {
+    if (!selectedSessionTarget) return;
+    setStartingSession(true);
+    setStartedSession(null);
+    setSessionStartError(null);
+    setSessionToolResult(null);
+    setSessionToolError(null);
+    try {
+      const data = await sessionsApi.startSession(selectedSessionTarget);
+      setStartedSession(data);
+      const toolNames = Object.keys(data.tool_targets ?? {});
+      setSelectedTool((current) => (current && toolNames.includes(current) ? current : toolNames[0] ?? ""));
+    } catch (err) {
+      setSessionStartError(err instanceof Error ? err.message : "Failed to start session.");
+    } finally {
+      setStartingSession(false);
+    }
+  }
+
+  async function handleInvokeSessionTool() {
+    if (!startedSession?.session_id || !selectedTool) return;
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(sessionToolInput) as Record<string, unknown>;
+    } catch {
+      setSessionToolError("Invalid JSON input.");
+      return;
+    }
+    setInvokingSessionTool(true);
+    setSessionToolResult(null);
+    setSessionToolError(null);
+    try {
+      const target = startedSession.tool_targets?.[selectedTool] ?? selectedTool;
+      const data = await sessionsApi.invokeTool(startedSession.session_id, selectedTool, {
+        target,
+        input: parsed,
+      });
+      setSessionToolResult(data);
+    } catch (err) {
+      setSessionToolError(err instanceof Error ? err.message : "Session tool call failed.");
+    } finally {
+      setInvokingSessionTool(false);
+    }
+  }
+
+  function handleCopySessionStart() {
+    if (!selectedSessionTarget) return;
+    navigator.clipboard.writeText(buildSessionStartCurlCommand(selectedSessionTarget));
+    setCopiedSessionStart(true);
+    setTimeout(() => setCopiedSessionStart(false), 2000);
+  }
+
+  function handleCopySessionTool() {
+    if (!startedSession?.session_id || !selectedTool) return;
+    navigator.clipboard.writeText(
+      buildSessionToolCurlCommand(startedSession.session_id, selectedTool, sessionToolInput)
+    );
+    setCopiedSessionTool(true);
+    setTimeout(() => setCopiedSessionTool(false), 2000);
+  }
+
   // ── route sync ────────────────────────────────────────────────────────────
   function handleReasonerChange(value: string) {
     setSelectedId(value);
     navigate(`/playground/${encodeURIComponent(value)}`, { replace: true });
+  }
+
+  function handleSessionChange(value: string) {
+    setSelectedSessionTarget(value);
+    setStartedSession(null);
+    setSessionStartError(null);
+    navigate(`/playground?session=${encodeURIComponent(value)}`, { replace: true });
   }
 
   // ── load input from recent run ────────────────────────────────────────────
@@ -346,13 +519,217 @@ export function PlaygroundPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Playground</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Pick an agent node (service), then a reasoner (thinking endpoint) or
-            skill (deterministic API), provide input, execute, and inspect the result.
-          </p>
         </div>
       </div>
 
+      <Tabs value={mode} onValueChange={(value) => setMode(value as "reasoner" | "session")}>
+        <TabsList variant="segmented" density="cosy" className="h-9">
+          <TabsTrigger variant="segmented" size="sm" value="reasoner" className="gap-1.5">
+            <Play className="size-3.5" />
+            Reasoners
+          </TabsTrigger>
+          <TabsTrigger variant="segmented" size="sm" value="session" className="gap-1.5">
+            <RadioTower className="size-3.5" />
+            Sessions
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      {mode === "session" ? (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <Card className="flex flex-col">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                Session
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground" htmlFor="session-target">
+                  Target
+                </label>
+                <select
+                  id="session-target"
+                  value={selectedSessionTarget ?? ""}
+                  onChange={(event) => handleSessionChange(event.target.value)}
+                  disabled={loadingSessions || sessions.length === 0}
+                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {loadingSessions ? (
+                    <option value="">Loading sessions…</option>
+                  ) : sessions.length === 0 ? (
+                    <option value="">No sessions registered</option>
+                  ) : (
+                    sessions.map((session) => (
+                      <option key={session.target} value={session.target}>
+                        {session.target}
+                      </option>
+                    ))
+                  )}
+                </select>
+              </div>
+
+              {sessionsError && (
+                <p className="text-xs text-destructive">{sessionsError}</p>
+              )}
+
+              {selectedSession && (
+                <div className="rounded-md border border-border bg-muted/20 p-3">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Badge variant="outline" className="font-mono text-xs">
+                      {selectedSession.definition.provider}
+                    </Badge>
+                    <Badge variant="secondary" className="font-mono text-xs">
+                      {selectedSession.definition.transport}
+                    </Badge>
+                    {(selectedSession.definition.modalities ?? []).map((modality) => (
+                      <Badge key={modality} variant="secondary" className="text-xs">
+                        {modality}
+                      </Badge>
+                    ))}
+                  </div>
+                  {selectedSession.definition.tools?.length ? (
+                    <p className="mt-2 font-mono text-xs text-muted-foreground">
+                      tools: {selectedSession.definition.tools.join(", ")}
+                    </p>
+                  ) : null}
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <Button
+                  onClick={handleStartSession}
+                  disabled={startingSession || !selectedSessionTarget}
+                  className="flex-1"
+                >
+                  {startingSession ? (
+                    <>
+                      <InProgress className="mr-2 size-4 animate-spin" />
+                      Starting…
+                    </>
+                  ) : (
+                    <>
+                      <RadioTower className="mr-2 size-4" />
+                      Start Session
+                    </>
+                  )}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleCopySessionStart}
+                  disabled={!selectedSessionTarget}
+                  className="gap-1.5"
+                >
+                  {copiedSessionStart ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+                  {copiedSessionStart ? "Copied!" : "cURL"}
+                </Button>
+              </div>
+
+              {sessionStartError && (
+                <p className="text-xs text-destructive">{sessionStartError}</p>
+              )}
+
+              {startedSession && (
+                <JsonHighlightedPre
+                  data={startedSession}
+                  className="max-h-64 rounded-md bg-muted p-3 text-xs"
+                />
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="flex flex-col">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                Tool Call
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground" htmlFor="session-tool">
+                  Tool
+                </label>
+                <select
+                  id="session-tool"
+                  value={selectedTool}
+                  onChange={(event) => setSelectedTool(event.target.value)}
+                  disabled={!startedSession || Object.keys(startedSession.tool_targets ?? {}).length === 0}
+                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {Object.keys(startedSession?.tool_targets ?? {}).length === 0 ? (
+                    <option value="">No tools exposed</option>
+                  ) : (
+                    Object.keys(startedSession?.tool_targets ?? {}).map((tool) => (
+                      <option key={tool} value={tool}>
+                        {tool}
+                      </option>
+                    ))
+                  )}
+                </select>
+              </div>
+
+              <textarea
+                className="min-h-[180px] w-full resize-vertical rounded-md border border-input bg-background px-3 py-2 font-mono text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                value={sessionToolInput}
+                onChange={(event) => {
+                  setSessionToolInput(event.target.value);
+                  if (sessionToolError) setSessionToolError(null);
+                }}
+                spellCheck={false}
+              />
+
+              <div className="flex gap-2">
+                <Button
+                  onClick={handleInvokeSessionTool}
+                  disabled={invokingSessionTool || !startedSession || !selectedTool}
+                  className="flex-1"
+                >
+                  {invokingSessionTool ? (
+                    <>
+                      <InProgress className="mr-2 size-4 animate-spin" />
+                      Calling…
+                    </>
+                  ) : (
+                    <>
+                      <Play className="mr-2 size-4" />
+                      Invoke Tool
+                    </>
+                  )}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleCopySessionTool}
+                  disabled={!startedSession || !selectedTool}
+                  className="gap-1.5"
+                >
+                  {copiedSessionTool ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+                  {copiedSessionTool ? "Copied!" : "cURL"}
+                </Button>
+              </div>
+
+              {sessionToolError && (
+                <p className="text-xs text-destructive">{sessionToolError}</p>
+              )}
+
+              <div className="min-h-[160px] rounded-md border border-border bg-muted/30 p-3 text-sm">
+                {invokingSessionTool ? (
+                  <span className="flex items-center gap-2 text-muted-foreground">
+                    <InProgress className="size-4 animate-spin" />
+                    Running…
+                  </span>
+                ) : sessionToolResult ? (
+                  <JsonHighlightedPre data={sessionToolResult} className="text-sm" />
+                ) : (
+                  <span className="text-muted-foreground">(waiting for tool call…)</span>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      ) : (
+        <>
       {/* ── Agent node · skill selector ─────────────────────────────────── */}
       <div className="flex min-w-0 flex-wrap items-center gap-3">
         <span className="text-sm font-medium text-muted-foreground whitespace-nowrap">
@@ -679,6 +1056,8 @@ export function PlaygroundPage() {
               </div>
             )}
           </div>
+        </>
+      )}
         </>
       )}
     </div>

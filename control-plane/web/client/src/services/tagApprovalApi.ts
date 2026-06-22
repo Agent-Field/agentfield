@@ -19,6 +19,7 @@ export interface TagApprovalRequest {
   approved_tags: string[];
   skill_tags?: Record<string, string[]>;
   reasoner_tags?: Record<string, string[]>;
+  session_tags?: Record<string, string[]>;
   reason?: string;
 }
 
@@ -81,8 +82,20 @@ export interface AgentTagSummary {
   agent_id: string;
   proposed_tags: string[];
   approved_tags: string[];
+  components?: {
+    reasoners: ComponentTagSummary[];
+    skills: ComponentTagSummary[];
+    sessions: ComponentTagSummary[];
+  };
   lifecycle_status: string;
   registered_at: string;
+}
+
+export interface ComponentTagSummary {
+  id: string;
+  kind: "reasoner" | "skill" | "session";
+  proposed_tags: string[];
+  approved_tags: string[];
 }
 
 // List ALL agents with tag data (uses UI-optimized endpoint)

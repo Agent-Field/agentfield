@@ -12,6 +12,10 @@ const state = vi.hoisted(() => ({
   getReasonerDetails: vi.fn<(reasonerId: string) => Promise<ReasonerWithNode>>(),
   getExecutionHistory: vi.fn<(reasonerId: string, page: number, limit: number) => Promise<any>>(),
   executeReasoner: vi.fn<(reasonerId: string, body: unknown) => Promise<any>>(),
+  getNodesSummary: vi.fn<() => Promise<any>>(),
+  getNodeDetails: vi.fn<(nodeId: string) => Promise<any>>(),
+  startSession: vi.fn<(target: string, request?: unknown) => Promise<any>>(),
+  invokeTool: vi.fn<(sessionId: string, tool: string, request: unknown) => Promise<any>>(),
   writeText: vi.fn<(value: string) => Promise<void>>(),
 }));
 
@@ -22,6 +26,19 @@ vi.mock("@/services/reasonersApi", () => ({
     getExecutionHistory: (reasonerId: string, page: number, limit: number) =>
       state.getExecutionHistory(reasonerId, page, limit),
     executeReasoner: (reasonerId: string, body: unknown) => state.executeReasoner(reasonerId, body),
+  },
+}));
+
+vi.mock("@/services/api", () => ({
+  getNodesSummary: () => state.getNodesSummary(),
+  getNodeDetails: (nodeId: string) => state.getNodeDetails(nodeId),
+}));
+
+vi.mock("@/services/sessionsApi", () => ({
+  sessionsApi: {
+    startSession: (target: string, request?: unknown) => state.startSession(target, request),
+    invokeTool: (sessionId: string, tool: string, request: unknown) =>
+      state.invokeTool(sessionId, tool, request),
   },
 }));
 
@@ -135,6 +152,7 @@ vi.mock("@/components/ui/icon-bridge", () => {
     Check: Icon,
     ChevronRight: Icon,
     ChevronDown: Icon,
+    RadioTower: Icon,
   };
 });
 
@@ -176,7 +194,13 @@ describe("PlaygroundPage coverage paths", () => {
     state.getReasonerDetails.mockReset();
     state.getExecutionHistory.mockReset();
     state.executeReasoner.mockReset();
+    state.getNodesSummary.mockReset();
+    state.getNodeDetails.mockReset();
+    state.startSession.mockReset();
+    state.invokeTool.mockReset();
     state.writeText.mockReset();
+    state.getNodesSummary.mockResolvedValue({ nodes: [], count: 0 });
+    state.getNodeDetails.mockResolvedValue(null);
     vi.stubGlobal("navigator", {
       ...navigator,
       clipboard: {
@@ -262,5 +286,79 @@ describe("PlaygroundPage coverage paths", () => {
     expect(errorSpy).toHaveBeenCalledWith("Failed to load recent runs:", expect.any(Error));
 
     errorSpy.mockRestore();
+  });
+
+  it("starts a registered session, invokes a tool, and copies session curl commands", async () => {
+    state.getAllReasoners.mockResolvedValue({
+      reasoners: [],
+      total: 0,
+      online_count: 0,
+      offline_count: 0,
+      nodes_count: 0,
+    });
+    state.getExecutionHistory.mockResolvedValue({ executions: [] });
+    state.getNodesSummary.mockResolvedValue({
+      nodes: [{ id: "support" }],
+      count: 1,
+    });
+    state.getNodeDetails.mockResolvedValue({
+      id: "support",
+      sessions: [
+        {
+          name: "voice",
+          provider: "openai",
+          transport: "webrtc",
+          modalities: ["audio", "text"],
+          tools: ["support.resolve_voice_turn"],
+        },
+      ],
+    });
+    state.startSession.mockResolvedValue({
+      session_id: "sess-1",
+      target: "support.voice",
+      provider: "openai",
+      transport: "webrtc",
+      tool_targets: { resolve_voice_turn: "support.resolve_voice_turn" },
+    });
+    state.invokeTool.mockResolvedValue({
+      run_id: "run-1",
+      status: "queued",
+    });
+
+    renderPage("/playground?session=support.voice");
+
+    expect(await screen.findByText("support.voice")).toBeInTheDocument();
+    expect(screen.getByText("openai")).toBeInTheDocument();
+    expect(screen.getByText("webrtc")).toBeInTheDocument();
+    expect(screen.getByText("tools: support.resolve_voice_turn")).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole("button", { name: /cURL/i })[0]);
+    expect(state.writeText).toHaveBeenCalledWith(
+      expect.stringContaining("/api/v1/session-targets/support.voice/start"),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /start session/i }));
+    expect(await screen.findByText(/"session_id": "sess-1"/)).toBeInTheDocument();
+    expect(state.startSession).toHaveBeenCalledWith("support.voice", undefined);
+
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: '{"text":"hello"}' },
+    });
+    expect(screen.getByDisplayValue("resolve_voice_turn")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /invoke tool/i }));
+
+    await waitFor(() => {
+      expect(state.invokeTool).toHaveBeenCalledWith("sess-1", "resolve_voice_turn", {
+        target: "support.resolve_voice_turn",
+        input: { text: "hello" },
+      });
+    });
+    expect(await screen.findByText(/"run_id": "run-1"/)).toBeInTheDocument();
+
+    const curlButtons = screen.getAllByRole("button", { name: /cURL/i });
+    fireEvent.click(curlButtons[curlButtons.length - 1]);
+    expect(state.writeText).toHaveBeenLastCalledWith(
+      expect.stringContaining("/api/v1/session-instances/sess-1/tools/resolve_voice_turn"),
+    );
   });
 });

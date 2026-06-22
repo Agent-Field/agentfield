@@ -6,6 +6,885 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.92-rc.19] - 2026-06-22
+
+
+### Chores
+
+- Chore(deps): bump the uv group across 1 directory with 2 updates (#678)
+
+Bumps the uv group with 2 updates in the /sdk/python directory: [msgpack](https://github.com/msgpack/msgpack-python) and [pydantic-settings](https://github.com/pydantic/pydantic-settings).
+
+
+Updates `msgpack` from 1.1.2 to 1.2.1
+- [Release notes](https://github.com/msgpack/msgpack-python/releases)
+- [Changelog](https://github.com/msgpack/msgpack-python/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/msgpack/msgpack-python/compare/v1.1.2...v1.2.1)
+
+Updates `pydantic-settings` from 2.13.1 to 2.14.2
+- [Release notes](https://github.com/pydantic/pydantic-settings/releases)
+- [Commits](https://github.com/pydantic/pydantic-settings/compare/v2.13.1...v2.14.2)
+
+---
+updated-dependencies:
+- dependency-name: msgpack
+  dependency-version: 1.2.1
+  dependency-type: indirect
+  dependency-group: uv
+- dependency-name: pydantic-settings
+  dependency-version: 2.14.2
+  dependency-type: indirect
+  dependency-group: uv
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (fbc2fc2)
+
+## [0.1.92-rc.18] - 2026-06-21
+
+
+### Added
+
+- Feat(did+cp): DID-encrypted payloads + control-plane knowledge store (discuss/aggregator foundation) (#677)
+
+* feat(did): derive X25519 keyAgreement key for agent DIDs
+
+Each agent DID now gets an X25519 encryption key derived from the master
+seed (distinct HKDF salt from the Ed25519 signing key, so signing and
+encryption keys are independent). The public key is exposed in DID
+resolution — as a flat `key_agreement` JWK on the did:key resolve response
+and as a W3C `keyAgreement` (X25519KeyAgreementKey2020) entry in the DID
+document — and the private key is returned to the agent at registration.
+
+This enables encrypting a payload *to* an agent's DID (JWE ECDH-ES+A256GCM)
+that only that agent can decrypt, underpinning the discuss/aggregator split.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* feat(py-sdk): DID-based payload encryption (JWE over X25519)
+
+Add agentfield.crypto: encrypt_for_did/decrypt/encrypt_to_jwk,
+generate_x25519_keypair and load_private_key. Encrypts a payload to an
+agent's published X25519 keyAgreement key using standard JWE compact
+(ECDH-ES + A256GCM) via joserfc, decryptable only by the holder of the
+matching private key. Interoperable with the TypeScript SDK.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* feat(ts-sdk): DID-based payload encryption (JWE over X25519)
+
+Add crypto/didEncryption: encryptForDid/decrypt/encryptToJwk,
+generateX25519KeyPair. Mirrors the Python SDK using jose; a ciphertext
+produced here decrypts in Python and vice-versa. Used by hax-sdk to
+encrypt a scoped payload to the aggregator's DID.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* test(sdk): cross-language JWE interop harness
+
+run_interop.sh exercises the real TypeScript and Python SDK crypto in both
+directions (TS<->Python) to guard the wire-format contract.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* feat(cp): add pinned-dimension embedding provider package
+
+Introduce internal/embedding with an Embedder interface (Embed/Dimensions),
+an OpenAIEmbedder (text-embedding-3-small, 1536 dims) and a deterministic,
+network-free FakeEmbedder at the same pinned dimension. The dimension is
+pinned centrally because the shared vector index is fixed-dimension; callers
+must not embed with mismatched models. NewFromConfig falls back to the
+FakeEmbedder when no OpenAI key is set so the store works locally with zero
+external deps.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* feat(cp): scope-aware RAG knowledge service + HTTP handlers
+
+Add internal/knowledge: a Service that embeds caller-supplied TEXT and stores
+it in the existing scoped vector store, reusing the SetVector/SimilaritySearch/
+DeleteVectorsByPrefix surface. Chunks are namespaced ws:<workspaceID> or
+proj:<projectID>; a workspace search matches only its namespace, a project
+search matches its own namespace AND the parent workspace's (inheritance).
+
+Defense in depth: the scope is applied in the vector query (namespace scopeID +
+workspace_id metadata filter) AND every returned chunk is re-verified in Go
+before returning; mismatches are dropped and logged. Empty workspace_id is
+rejected so an unscoped query is structurally impossible.
+
+Handlers wire POST /knowledge/upsert, POST /knowledge/search, and
+DELETE /knowledge/source/:id, mapping scope/argument errors to 400 and
+embed/store failures to 500.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* feat(cp): wire knowledge store config, provider, and routes
+
+Add a features.knowledge config section (enabled, provider, openai key/model)
+with OPENAI_API_KEY (and AGENTFIELD_KNOWLEDGE_*) env overrides. Build the
+embedder from config at server startup (FakeEmbedder fallback when no key),
+construct the knowledge Service over the storage provider, and register the
+/api/v1/knowledge routes (skipped when the feature is disabled).
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* feat(did): X25519 keyAgreement key rotation via per-agent epoch
+
+Fold a per-agent rotation epoch into the X25519 HKDF derivation
+(info = <path>/enc/<epoch>) so each epoch yields an independent
+keyAgreement keypair. Adds deriveX25519PrivateKeyAtEpoch and
+regenerateX25519KeyPairJWKAtEpoch; the existing epoch-less helpers
+delegate to epoch 0.
+
+Store X25519Epoch on AgentDIDInfo (and surface it on DIDIdentity).
+RegisterAgent starts new agents at epoch 0; ResolveDID, the
+re-registration path, and PartialRegisterAgent all derive at the
+agent's CURRENT stored epoch and preserve it across re-registration.
+
+RotateAgentX25519Key(did) increments the agent-node's epoch,
+re-derives + persists the new public key, and returns (newPub, epoch).
+Reasoner/skill/root DIDs error clearly. Exposed over
+POST /api/v1/did/key-agreement/rotate, returning the new
+x25519_public_key_jwk object + epoch.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* test(did): cover X25519 key rotation + epoch-aware interop fixture
+
+Service tests: RotateAgentX25519Key changes the stored pub + increments
+epoch; ResolveDID after rotation returns the new pub with a matching
+priv; same (seed,path,epoch) derives identically while distinct epochs
+diverge. HTTP test: POST /api/v1/did/key-agreement/rotate returns a new
+X25519 public JWK (no private d) and a subsequent resolve returns the
+same rotated key. Update the DIDService interface stubs for the new
+RotateAgentX25519Key method.
+
+Extend cmd/x25519gen to emit epoch0/epoch1 keypairs so the SDK crypto
+cross-check can confirm an epoch1 private key cannot decrypt a payload
+encrypted to the epoch0 public key.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* knowledge: add sender scope tier to control-plane knowledge store
+
+Extend the scope-aware knowledge store with a third tier, "sender", in
+addition to workspace/project.
+
+- Scope gains an optional sender_id; tier "sender" requires it.
+- Upsert stores a source under the most specific namespace by tier:
+  sender:<id> > proj:<id> > ws:<id>. workspace_id/project_id/sender_id
+  are all kept in chunk payload metadata when present.
+- Search reads the additive set of namespaces driven by the ids present
+  in the query scope: always ws, plus proj when project_id is set, plus
+  sender when sender_id is set (a query in a project owned by a sender
+  sees ws + proj + sender chunks).
+- Defense in depth unchanged: namespace filter in-query plus in-Go
+  re-verification of namespace membership and workspace_id match; empty
+  workspace_id rejected. Behavior with no sender_id is unchanged.
+- Handler scope body carries sender_id and surfaces the sender_id
+  validation error as a 400.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* knowledge: test sender-scope upsert/search/delete and isolation
+
+Service-level tests: sender-scoped upsert+search, additive ws+proj+sender
+visibility, cross-sender isolation (sender A never sees sender B, and a
+workspace-only query never sees sender chunks), sender source delete, and
+rejection of sender tier without sender_id.
+
+Handler-level tests (new knowledge_test.go in handlers): drive the gin
+upsert/search/delete handlers over an in-memory vector store to assert
+the additive set, cross-sender isolation, empty workspace_id -> 400, and
+sender tier without sender_id -> 400.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* refactor(did): drop unused epoch-less deriveX25519PrivateKey wrapper
+
+The rotation work made deriveX25519PrivateKeyAtEpoch the sole derivation
+path; the epoch-less wrapper had no remaining callers. Removing it clears
+the golangci-lint `unused` finding introduced by this branch.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* test(embedding): cover OpenAI embedder HTTP client
+
+Adds httptest-server tests for OpenAIEmbedder.Embed: happy path (request
+shape, model/input, bearer auth, index-ordered parsing), plus the
+empty-input short-circuit, missing-API-key, non-200 (with and without an
+error body), malformed body, vector-count mismatch, dimension mismatch and
+transport-failure paths. Also covers the WithModel/WithEndpoint/WithHTTPClient
+option setters and their empty-value no-ops.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* test(config): cover knowledge/embedding env overrides
+
+Covers ApplyEnvOverrides for the knowledge block: OPENAI_API_KEY adopted
+only when the knowledge key is empty (and not overriding an existing key),
+the explicit AGENTFIELD_KNOWLEDGE_OPENAI_API_KEY winning, and the
+provider/model/enabled overrides (with trimming). Also covers
+KnowledgeConfig.IsEnabled defaulting (nil => true) and explicit true/false.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* test(x25519gen): cover X25519 interop fixture derivation
+
+Tests the standalone x25519gen interop command: deterministic HKDF
+derivation for a fixed (seed, path, epoch), epoch divergence (rotation
+retires the prior key), JWK shape (public has no private d, private carries
+a non-empty d, x components agree and round-trip a 32-byte X25519 key), and
+an end-to-end main() invocation.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* test(knowledge): cover service + handler error paths
+
+Service: validation errors (empty source_id/chunks/chunk-text, empty query),
+embedder failure and vector-count mismatch on upsert/search, store failures
+(SetVector/SimilaritySearch/DeleteVectorsByPrefix), and the topK<=0 default.
+
+Handlers: malformed-JSON 400s for upsert/search/delete, missing path id,
+the internal-error (500) mapping via a failing store, the validation->400
+mapping, and isKnowledgeValidationError classification across its fragments
+including the internal-error fall-through.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* test(did): cover X25519 rotation error paths + DID-document keyAgreement
+
+Service RotateAgentX25519Key: rejects empty DID, unknown DID, the root DID,
+and reasoner/skill component DIDs with precise errors; plus the rotation
+invariant that the epoch-N+1 private key differs from the retired epoch-N key.
+
+Handlers: RotateX25519Key invalid-body/missing-did/service-error/malformed-key
+fallback, ResolveDID's warn-and-omit branch for a malformed X25519 JWK, and a
+new GetDIDDocument test asserting the W3C keyAgreement verification method,
+x25519-2020 @context, and that the private d is never leaked.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* ci: force fresh coverage run (prior run used a stale pull-request merge ref)
+
+No code change. The previous coverage workflow checked out a merge ref that
+predated the added Go coverage tests (ran the embedding package in 0.004s,
+i.e. without openai_test.go), reporting a stale 64% patch coverage. The tests
+are present on the branch and bring control-plane patch coverage to ~85%
+locally; this empty commit forces GitHub to recompute the merge ref.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.8 <noreply@anthropic.com> (9e613cd)
+
+## [0.1.92-rc.17] - 2026-06-19
+
+
+### Other
+
+- Show external ARD boundaries in workflow traces (eacae13)
+
+## [0.1.92-rc.16] - 2026-06-18
+
+
+### Other
+
+- Add ARD discovery workspace (#675)
+
+* Add ARD discovery workspace
+
+* Complete ARD discovery UX and callable imports
+
+* Fix ARD review blockers
+
+* Add ARD PR screenshots (7336b9b)
+
+## [0.1.92-rc.15] - 2026-06-18
+
+
+### Fixed
+
+- Fix(security): restrict query API key auth to streaming routes (#423) (#674) (e6e5931)
+
+## [0.1.92-rc.14] - 2026-06-17
+
+
+### Chores
+
+- Chore(deps): patch js-yaml lockfiles (#672) (bfe4015)
+
+## [0.1.92-rc.13] - 2026-06-16
+
+
+### Fixed
+
+- Fix: Fixed the stale `_current_status` issue where status stuck on `STARTING` mode. (#673) (6a7ce08)
+
+## [0.1.92-rc.12] - 2026-06-15
+
+
+### Chores
+
+- Chore(deps): bump the uv group across 1 directory with 4 updates (#671)
+
+---
+updated-dependencies:
+- dependency-name: aiohttp
+  dependency-version: 3.14.1
+  dependency-type: direct:production
+  dependency-group: uv
+- dependency-name: cryptography
+  dependency-version: 48.0.1
+  dependency-type: direct:production
+  dependency-group: uv
+- dependency-name: python-multipart
+  dependency-version: 0.0.31
+  dependency-type: indirect
+  dependency-group: uv
+- dependency-name: starlette
+  dependency-version: 1.3.1
+  dependency-type: indirect
+  dependency-group: uv
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (af60fca)
+
+## [0.1.92-rc.11] - 2026-06-15
+
+
+### Chores
+
+- Chore(deps): bump the npm_and_yarn group across 2 directories with 4 updates (#670)
+
+Bumps the npm_and_yarn group with 3 updates in the /control-plane/web/client directory: [vite](https://github.com/vitejs/vite/tree/HEAD/packages/vite), [js-yaml](https://github.com/nodeca/js-yaml) and [ws](https://github.com/websockets/ws).
+Bumps the npm_and_yarn group with 3 updates in the /sdk/typescript directory: [vite](https://github.com/vitejs/vite/tree/HEAD/packages/vite), [ws](https://github.com/websockets/ws) and [form-data](https://github.com/form-data/form-data).
+
+
+Updates `vite` from 8.0.5 to 8.0.16
+- [Release notes](https://github.com/vitejs/vite/releases)
+- [Changelog](https://github.com/vitejs/vite/blob/main/packages/vite/CHANGELOG.md)
+- [Commits](https://github.com/vitejs/vite/commits/v8.0.16/packages/vite)
+
+Updates `js-yaml` from 4.1.1 to 4.2.0
+- [Changelog](https://github.com/nodeca/js-yaml/blob/master/CHANGELOG.md)
+- [Commits](https://github.com/nodeca/js-yaml/commits)
+
+Updates `ws` from 8.19.0 to 8.20.0
+- [Release notes](https://github.com/websockets/ws/releases)
+- [Commits](https://github.com/websockets/ws/compare/8.19.0...8.20.0)
+
+Updates `vite` from 6.4.2 to 8.0.16
+- [Release notes](https://github.com/vitejs/vite/releases)
+- [Changelog](https://github.com/vitejs/vite/blob/main/packages/vite/CHANGELOG.md)
+- [Commits](https://github.com/vitejs/vite/commits/v8.0.16/packages/vite)
+
+Updates `ws` from 8.20.1 to 8.21.0
+- [Release notes](https://github.com/websockets/ws/releases)
+- [Commits](https://github.com/websockets/ws/compare/8.19.0...8.20.0)
+
+Updates `form-data` from 4.0.5 to 4.0.6
+- [Release notes](https://github.com/form-data/form-data/releases)
+- [Changelog](https://github.com/form-data/form-data/blob/master/CHANGELOG.md)
+- [Commits](https://github.com/form-data/form-data/compare/v4.0.5...v4.0.6)
+
+---
+updated-dependencies:
+- dependency-name: vite
+  dependency-version: 8.0.16
+  dependency-type: direct:development
+  dependency-group: npm_and_yarn
+- dependency-name: js-yaml
+  dependency-version: 4.2.0
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+- dependency-name: ws
+  dependency-version: 8.20.0
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+- dependency-name: vite
+  dependency-version: 8.0.16
+  dependency-type: direct:development
+  dependency-group: npm_and_yarn
+- dependency-name: ws
+  dependency-version: 8.21.0
+  dependency-type: direct:production
+  dependency-group: npm_and_yarn
+- dependency-name: form-data
+  dependency-version: 4.0.6
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (ffd0717)
+
+- Chore(deps): bump pyjwt (#669)
+
+Bumps the uv group with 1 update in the /sdk/python directory: [pyjwt](https://github.com/jpadilla/pyjwt).
+
+
+Updates `pyjwt` from 2.12.1 to 2.13.0
+- [Release notes](https://github.com/jpadilla/pyjwt/releases)
+- [Changelog](https://github.com/jpadilla/pyjwt/blob/master/CHANGELOG.rst)
+- [Commits](https://github.com/jpadilla/pyjwt/compare/2.12.1...2.13.0)
+
+---
+updated-dependencies:
+- dependency-name: pyjwt
+  dependency-version: 2.13.0
+  dependency-type: indirect
+  dependency-group: uv
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (2cb06f0)
+
+## [0.1.92-rc.10] - 2026-06-15
+
+
+### Other
+
+- Add Linear and Sentry integrations (#661)
+
+* feat: add linear and sentry integrations
+
+* docs: clarify integration event filters
+
+* test: cover linear and sentry capability runtimes
+
+* fix(linear): bearer prefix for OAuth tokens; hash idempotency fallback
+
+- GraphQL client detects `lin_oauth_` prefix and sends `Authorization:
+  Bearer <token>` for OAuth access tokens. Personal API keys (`lin_api_`
+  and other prefixes) continue sending the token raw per Linear's docs.
+- Webhook idempotency: when `Linear-Delivery` header is absent, fall
+  back to sha256(webhookId || timestamp || type || action) instead of
+  the body's `webhookId` alone — webhookId identifies the subscription,
+  not the delivery, so the old fallback would collapse distinct events.
+
+* fix(sentry): org-scoped issue paths; per_page pagination
+
+- Migrate GetIssue, UpdateIssue, ResolveIssue, AssignIssue from legacy
+  /api/0/issues/{id}/ to documented /api/0/organizations/{org}/issues/{id}/.
+  All four now require Config.Organization, matching the existing pattern
+  in ListIssueEvents and GetEvent.
+- ListIssues: rename undocumented `limit` param to `per_page` so
+  pagination shape matches ListIssueEvents and Sentry's de-facto API.
+  Keep the deprecated project-scoped issues endpoint with a TODO to
+  migrate once we can resolve project slug → id.
+- TODO comments added pointing to Link-header cursor pagination as a
+  follow-up.
+
+* fix(sentry): validate Sentry-Hook-Timestamp against tolerance window
+
+Mirrors the Linear source's replay-protection pattern. Default tolerance
+is 300s (Sentry doesn't document a recommended window, so this matches
+Stripe's). Set `tolerance_seconds: 0` in the trigger config to disable.
+
+Parses Sentry-Hook-Timestamp as RFC3339, unix seconds, or unix
+milliseconds — Sentry's docs only show 'a timestamp', so accept the
+common formats. Missing or unparseable headers fail closed when
+tolerance > 0.
+
+* docs(sentry): document EU/US region base URL requirement
+
+EU-region Sentry orgs MUST use https://de.sentry.io. US-region orgs
+should use https://us.sentry.io. The default https://sentry.io only
+works for legacy US-only orgs and returns 401/403 for everyone else
+with no clear hint about region. Surface this in:
+
+- docs/integrations/sentry.md: new 'Region / Base URL' section with
+  the full table
+- integrations/sentry/README.md: same table for the package readme
+- integrations/sentry/agentfield-package.yaml: SENTRY_BASE_URL
+  description spells out the three valid values
+
+Ref https://docs.sentry.io/organization/data-storage-location/.
+
+* refactor(sdk): extract shared input helpers to sdk/go/inputs
+
+The Linear and Sentry capability runtimes shipped byte-identical
+requiredString/stringInput/intInput/objectInput helpers plus a duplicated
+firstNonBlank in each node's config. Hoist them to a new sdk/go/inputs
+package with capitalized public names and migrate both nodes.
+
+Databricks and Snowflake nodes still have their own copies — they carry
+extra helpers (boolInput, compactJSON) that aren't shared yet. A
+follow-up can pull those in once the helper surface stabilizes.
+
+* test(ui): databricks icon test asserts svg presence, not path count
+
+PR #661 swapped the inline DatabricksGlyph for SiDatabricks from
+react-icons (consistent with how Stripe/GitHub/etc. now render).
+The Databricks UI test hard-coded an expectation of 3 `<path>`
+elements from the old hand-drawn glyph. Relax the assertion to 'at
+least one path' so the test pins icon presence without coupling to
+the exact SVG markup of whichever icon library renders it. (edee822)
+
+## [0.1.92-rc.9] - 2026-06-15
+
+
+### Other
+
+- Add Databricks integration pack (#667)
+
+* Add Databricks integration pack
+
+* Remove Databricks docs page from integration PR
+
+* Cover Databricks trigger UI defaults
+
+* fix(trigger-dispatcher): clean up orphan Execution + document 202 path
+
+If StoreWorkflowExecution fails after CreateExecutionRecord succeeds,
+the Execution row was previously stranded in Running. Now fail it so
+the partial state is observable.
+
+Also document why we deliberately skip completeDispatchExecution on a
+202 Accepted response: the node owns async completion via the
+reasoner-result callback path. (81e464d)
+
+## [0.1.92-rc.8] - 2026-06-15
+
+
+### Other
+
+- Add AgentField realtime sessions for WebRTC voice ingress (#654)
+
+* Add explicit realtime session DX
+
+* fix: align session route wildcards
+
+* test: cover session control-plane paths
+
+* docs(examples): add voice dictation example for realtime sessions
+
+Runnable demo of the @app.session WebRTC voice flow: browser mic ->
+control-plane SDP proxy -> OpenAI Realtime, with live transcription and
+the tools=[...] allowlist routing through execute/async. Includes WSL
+setup notes and the GA session.update shape (session.type + audio.input
+nesting) required for input transcription + server VAD.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* Add session access tags and UI surfaces (#655)
+
+* Add session access tags and UI surfaces
+
+* test: update session access UI expectations
+
+* test: align session access CLI coverage
+
+* test: cover session playground tools
+
+* test: cover session access UI paths
+
+* fix(examples): make voice dictation example resilient to the session route rename
+
+#655 renamed the realtime-offer route (/sessions -> /session-instances). The
+page now tries the /session-instances route first and falls back to /sessions,
+so it works against #654 alone and against #654+#655.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (e776f3f)
+
+## [0.1.92-rc.7] - 2026-06-15
+
+
+### Chores
+
+- Chore: annotate snowflake SQL API request validation (338a9ae)
+
+
+
+### Fixed
+
+- Fix: harden snowflake trigger polling (2e1be49)
+
+- Fix: avoid tainted snowflake request URLs (35e1e32)
+
+- Fix: constrain snowflake sql api URLs (66069b1)
+
+- Fix: validate snowflake account URLs (d14ebe9)
+
+
+
+### Other
+
+- Add Snowflake integration pack (bbd9968)
+
+
+
+### Testing
+
+- Test: cover snowflake error branches (7214d0c)
+
+- Test: exercise snowflake validation branches (5eec124)
+
+- Test: cover snowflake URL validation (d9ceba8)
+
+- Test: raise snowflake integration coverage (56aa6c0)
+
+## [0.1.92-rc.6] - 2026-06-13
+
+
+### Fixed
+
+- Fix esbuild dependabot alerts (#660) (ebd7ecb)
+
+## [0.1.92-rc.5] - 2026-06-13
+
+
+### Chores
+
+- Chore(deps): patch remaining esbuild alerts (4647c47)
+
+- Chore(deps-dev): bump esbuild (#657)
+
+Bumps the npm_and_yarn group with 1 update in the /examples/benchmarks/100k-scale/mastra-bench directory: [esbuild](https://github.com/evanw/esbuild).
+
+
+Updates `esbuild` from 0.28.0 to 0.28.1
+- [Release notes](https://github.com/evanw/esbuild/releases)
+- [Changelog](https://github.com/evanw/esbuild/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/evanw/esbuild/compare/v0.28.0...v0.28.1)
+
+---
+updated-dependencies:
+- dependency-name: esbuild
+  dependency-version: 0.28.1
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (46a9b70)
+
+## [0.1.92-rc.4] - 2026-06-11
+
+
+### Fixed
+
+- Fix: Updated the startup and shutdown events, now they are using life… (#631)
+
+* fix: Updated the startup and shutdown events, now they are using lifespan.
+
+* fix: solved the lifespan override issue.
+
+* fix: `yield` was outside of the context block of `AsyncExitStack()`, pull it back to inside.
+
+* test(sdk-python): cover merged agent lifespan
+
+---------
+
+Co-authored-by: Santosh <santosh@agentfield.ai> (bdd016d)
+
+## [0.1.92-rc.3] - 2026-06-11
+
+
+### Fixed
+
+- Fix: ignore caller identity headers for tag policy(#422) (#653) (7ac732f)
+
+
+
+### Other
+
+- Fix: Remove /api/ui/v1 URL substitution from Python & Go SDK note endpoints (#650)
+
+* issue/go-sdk-note-url-fix: Remove /api/ui/v1 URL substitution from sendNote(), update test expectedPath
+
+* issue/python-sdk-note-url-fix: remove /api/ui/v1 URL substitution from note() and update test assertion
+
+* chore: remove tracked build artifacts and fortify .gitignore
+
+- Remove compiled binary examples/go_agent_nodes/multi_version (~10MB)
+- Remove coverage artifacts: coverage_handlers.out, coverage-func.txt,
+  ts_cov.txt, py_cov.txt
+- Remove .DS_Store files (4) from control-plane tree
+- Remove tooling leftover sdk/go/harness/.codex
+- Remove local debris dirs: .artifacts/, .worktrees/
+- Fortify .gitignore with patterns for coverage files, .codex markers,
+  and the multi_version binary
+
+---------
+
+Co-authored-by: SWE-AF <eng@agentfield.ai> (9038969)
+
+## [0.1.92-rc.2] - 2026-06-10
+
+
+### Fixed
+
+- Fix(release): skip prerelease counters already taken on origin (#649)
+
+The Release workflow auto-bumps a staging rc on every push to main by
+calling `scripts/bump_version.py --channel prerelease ...`. The bump
+logic computed the next counter purely from VERSION, with no awareness
+of which tags already existed on the remote. When VERSION lagged behind
+the latest prerelease tag (e.g. VERSION=0.1.91 while v0.1.92-rc.1 was
+already pushed by an earlier run), the script kept emitting the same
+0.1.92-rc.1 and `git tag -a` failed with "tag already exists", killing
+every subsequent run.
+
+This change:
+
+- Queries origin via `git ls-remote --tags` and skips counters that
+  already exist there, so the script returns the first free counter
+  (0.1.92-rc.2 in the failure case above).
+- Falls back to the legacy behaviour on any git failure (no network,
+  missing binary, timeout) with a warning to stderr, so the script
+  remains usable offline / in tests.
+- Adds a `--skip-tag-check` opt-out for tests and offline use.
+- Adds unit tests covering both the regression and the existing paths
+  (stable bumps, same-label increments, label filtering, lookup base
+  selection).
+
+No release workflow changes are required; the existing call site
+already passes the same flags. (88cb1af)
+
+- Fix(tests): default serverless test bind host to 127.0.0.1 (#647)
+
+Aligns test_serverless_agents.py with the rest of the functional suite, which
+already defaults TEST_AGENT_BIND_HOST to 127.0.0.1 (see tests/functional/
+conftest.py and test_quick_start.py). Docker Compose overrides set the env
+variable explicitly when 0.0.0.0 is required. Closes CodeQL alert #35
+(py/bind-socket-all-network-interfaces). (c93b884)
+
+- Fix(deps): force @ai-sdk/provider-utils >3.0.97 in mastra-bench (#646)
+
+Adds npm "overrides" entries to upgrade the top-level @ai-sdk/provider-utils
+and the @ai-sdk/provider-utils-v5 alias used by @mastra/core to 4.0.27,
+removing the vulnerable 2.2.8 and 3.0.20 copies from the lockfile.
+Closes Dependabot alert #191 (CVE-2026-8769, GHSA-866g-f22w-33x8). (f5a341b)
+
+- Fix(deps): force postcss >=8.5.10 to resolve XSS advisory (#645)
+
+Adds npm "overrides" entry pinning all transitive copies of postcss to the
+direct dependency version (8.5.15), removing the nested 8.4.31 bundled inside
+Next.js. Closes Dependabot alert #136 (GHSA for PostCSS \</style\> XSS). (69f086e)
+
+
+
+### Other
+
+- Generic strong-type the consumer-facing API in Python SDK (#640)
+
+* issue/03-router-typing: define RouteRegistrar interface and use gin.IRouter for RegisterRoutes
+
+Introduce a RouteRegistrar interface in the handlers package that all
+handler types implement, and change their RegisterRoutes parameter from
+the concrete *gin.RouterGroup to the gin.IRouter interface. This enables
+polymorphic route composition and allows testing with lightweight router
+mocks.
+
+Affected handler types:
+- ConfigStorageHandlers
+- DIDHandlers
+- IdentityHandlers (ui)
+- TagApprovalHandlers (admin)
+- AccessPolicyHandlers (admin)
+- ConnectorHandlers
+
+* issue/agent-methods-typing: unwrap tracked wrapper in app.call() to preserve original function signature
+
+* issue/core-decorators-typing: add overloads, ParamSpec, and TypeVar annotations to core decorators
+
+* issue/537b5155-04-testing-typing: add mypy configuration and fix type annotations in test files
+
+* issue/537b5155-04-testing-typing: add generic TypeVar R to simulate_trigger and simulate_schedule
+
+* issue/agent-methods-typing: preserve type signatures on Agent.reasoner(), skill(), on_change() and module-level decorators
+
+* fixup: correct indentation of nested decorator functions inside reasoner, on_event, on_schedule
+
+* issue/537b5155-05-typing-verification: fix mypy errors in decorators and router
+
+- Add missing TypeVar T to decorators.py (was undefined but used in overloads)
+- Add type: ignore[attr-defined] for dynamically-set attributes on _Wrapped wrappers
+- Fix on_change inner decorator type signature (Callable[P, T] -> Callable[P, Awaitable[T]])
+- Fix legacy_reasoner return type compatibility
+- Add type: ignore[attr-defined] for router.py wrapper attributes
+- Verify mypy reveals correct types: simulate_schedule(str), simulate_trigger(str)
+
+* chore: finalize repo for handoff
+
+- Remove artifact directories (.artifacts/, .worktrees/)
+- Remove cache directories (.pytest_cache/, .mypy_cache/)
+- Deduplicate .env entry in .gitignore
+
+* fix(sdk-python): resolve ruff failures in new typing tests
+
+Remove unused imports (inspect, cast), drop the shadowed local re-import
+of _execute_with_tracking, and apply ruff format to the touched test
+files so 'ruff check .' passes again.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk-python): infer awaited type for async reasoners in simulate_trigger
+
+simulate_trigger/simulate_schedule await coroutines transparently, so a
+single Callable[..., R] -> R signature bound R to the coroutine for
+async handlers while the function actually returns the awaited value.
+Add an Awaitable[R] overload ahead of the plain R one so both sync and
+async reasoners reveal the awaited type.
+
+Also move the TypeVar below the imports (E402) and make the mypy reveal
+fixtures runtime-importable via typing_extensions.reveal_type (F821),
+extending them to cover the async case.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk-python): suppress mypy errors from ParamSpec on _execute_with_tracking
+
+The body intentionally rewrites args (Pydantic conversion) and injects
+kwargs (execution_context, trigger) beyond what the caller passed, which
+mypy rejects against P.args/P.kwargs. Keep the ParamSpec signature for
+caller-side inference and ignore the three body mutation sites; also
+apply ruff format to the new long annotations.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* Fix Python SDK lint failures in strong typing PR
+
+---------
+
+Co-authored-by: SWE-AF <eng@agentfield.ai>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+Co-authored-by: Santosh <santosh@agentfield.ai> (9108f75)
+
+- Add OpenRouter attribution defaults
+
+Add OpenRouter attribution request metadata defaults across the SDKs and harness paths without changing provider credentials or AgentField control-plane auth. (9b59ecd)
+
+- Revert PR #641 over-merge
+
+Reverts the accidental over-merge from PR #641, including the generated release bump that followed it. (546aacf)
+
+
+
+### Testing
+
+- Test(web-ui): wait for empty events state in triggers test (#648)
+
+Fixes #644
+
+The "No events received yet..." copy in TriggerSheet only renders after
+the async refreshEvents() fetch resolves and loadingEvents flips back
+to false. The test used a synchronous getByText, which raced the fetch
+under CI load and intermittently failed with TestingLibraryElementError.
+
+Switch to findByText so the assertion waits for the loading state to
+clear, matching the pattern already used elsewhere in the file for
+async-mounted UI. (074c65e)
+
 ## [0.1.91] - 2026-06-09
 
 ## [0.1.91-rc.3] - 2026-06-09

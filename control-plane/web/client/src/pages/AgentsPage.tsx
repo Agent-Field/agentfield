@@ -3,6 +3,7 @@ import { formatCompactRelativeTime } from "@/utils/dateFormat";
 import { Link, useNavigate } from "react-router-dom";
 import { useAgents, useAgentTagSummaries } from "@/hooks/queries";
 import { getNodeDetails } from "@/services/api";
+import { getARDDashboard } from "@/services/ardApi";
 import { startAgent } from "@/services/configurationApi";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -19,13 +20,16 @@ import {
   AgentNodeIcon,
   ChevronRight,
   Play,
+  RadioTower,
+  Share2,
   ReasonerIcon,
   RefreshCw,
   Search,
   SkillIcon,
   Terminal,
 } from "@/components/ui/icon-bridge";
-import type { AgentNodeSummary, ReasonerDefinition, SkillDefinition } from "@/types/agentfield";
+import type { AgentNodeSummary, ReasonerDefinition, SessionDefinition, SkillDefinition } from "@/types/agentfield";
+import type { ARDPublicationView } from "@/types/ard";
 import type { AgentTagSummary } from "@/services/tagApprovalApi";
 import { useQuery } from "@tanstack/react-query";
 
@@ -63,13 +67,18 @@ type NodeEndpointRow = {
   id: string;
   name: string;
   description?: string;
-  kind: "reasoner" | "skill";
+  kind: "reasoner" | "skill" | "session";
+  provider?: string;
+  transport?: string;
+  modalities?: string[];
 };
 
 interface NodeReasonerListProps {
   nodeId: string;
   reasonerCount: number;
   skillCount: number;
+  sessionCount?: number;
+  ardPublications?: Map<string, ARDPublicationView>;
 }
 
 function matchesFilter(q: string, row: NodeEndpointRow): boolean {
@@ -78,11 +87,13 @@ function matchesFilter(q: string, row: NodeEndpointRow): boolean {
   return (
     row.id.toLowerCase().includes(n) ||
     row.name.toLowerCase().includes(n) ||
-    (row.description?.toLowerCase().includes(n) ?? false)
+    (row.description?.toLowerCase().includes(n) ?? false) ||
+    (row.provider?.toLowerCase().includes(n) ?? false) ||
+    (row.transport?.toLowerCase().includes(n) ?? false)
   );
 }
 
-function NodeReasonerList({ nodeId, reasonerCount, skillCount }: NodeReasonerListProps) {
+function NodeReasonerList({ nodeId, reasonerCount, skillCount, sessionCount, ardPublications }: NodeReasonerListProps) {
   const navigate = useNavigate();
   const [filter, setFilter] = useState("");
 
@@ -112,6 +123,19 @@ function NodeReasonerList({ nodeId, reasonerCount, skillCount }: NodeReasonerLis
     }));
   }, [nodeDetails?.skills]);
 
+  const sessionRows: NodeEndpointRow[] = useMemo(() => {
+    const list = nodeDetails?.sessions ?? [];
+    return list.map((s: SessionDefinition) => ({
+      id: s.name,
+      name: s.name,
+      description: [s.provider, s.transport].filter(Boolean).join(" / "),
+      kind: "session" as const,
+      provider: s.provider,
+      transport: s.transport,
+      modalities: s.modalities,
+    }));
+  }, [nodeDetails?.sessions]);
+
   const filteredReasoners = useMemo(
     () => reasonerRows.filter((r) => matchesFilter(filter, r)),
     [reasonerRows, filter]
@@ -120,12 +144,16 @@ function NodeReasonerList({ nodeId, reasonerCount, skillCount }: NodeReasonerLis
     () => skillRows.filter((s) => matchesFilter(filter, s)),
     [skillRows, filter]
   );
+  const filteredSessions = useMemo(
+    () => sessionRows.filter((s) => matchesFilter(filter, s)),
+    [sessionRows, filter]
+  );
 
-  const totalLoaded = reasonerRows.length + skillRows.length;
-  const totalExpected = reasonerCount + skillCount;
+  const totalLoaded = reasonerRows.length + skillRows.length + sessionRows.length;
+  const totalExpected = reasonerCount + skillCount + (sessionCount ?? 0);
   const showSearch = totalLoaded >= 10;
   const useScroll = totalLoaded > SCROLL_AFTER;
-  const showSectionLabels = reasonerRows.length > 0 && skillRows.length > 0;
+  const showSectionLabels = [reasonerRows.length, skillRows.length, sessionRows.length].filter(Boolean).length > 1;
 
   if (isLoading) {
     return (
@@ -156,14 +184,14 @@ function NodeReasonerList({ nodeId, reasonerCount, skillCount }: NodeReasonerLis
   if (totalLoaded === 0) {
     return (
       <div className="border-t border-border bg-muted/15 pl-10 pr-4 py-2.5">
-        <p className="text-xs text-muted-foreground">No reasoners or skills registered on this node.</p>
+        <p className="text-xs text-muted-foreground">No reasoners, skills, or sessions registered on this node.</p>
       </div>
     );
   }
 
   const listBody = (
     <div className="divide-y divide-border/70">
-      {filteredReasoners.length === 0 && filteredSkills.length === 0 ? (
+      {filteredReasoners.length === 0 && filteredSkills.length === 0 && filteredSessions.length === 0 ? (
         <div className="px-3 py-3 text-center text-xs text-muted-foreground">
           No matches for &quot;{filter.trim()}&quot;
         </div>
@@ -184,7 +212,13 @@ function NodeReasonerList({ nodeId, reasonerCount, skillCount }: NodeReasonerLis
                 </div>
               )}
               {filteredReasoners.map((row) => (
-                <EndpointRow key={`r-${row.id}`} nodeId={nodeId} row={row} onOpen={navigate} />
+                <EndpointRow
+                  key={`r-${row.id}`}
+                  nodeId={nodeId}
+                  row={row}
+                  publication={ardPublications?.get(ardTargetKey("reasoner", nodeId, row.id))}
+                  onOpen={navigate}
+                />
               ))}
             </>
           )}
@@ -203,7 +237,32 @@ function NodeReasonerList({ nodeId, reasonerCount, skillCount }: NodeReasonerLis
                 </div>
               )}
               {filteredSkills.map((row) => (
-                <EndpointRow key={`s-${row.id}`} nodeId={nodeId} row={row} onOpen={navigate} />
+                <EndpointRow
+                  key={`s-${row.id}`}
+                  nodeId={nodeId}
+                  row={row}
+                  publication={ardPublications?.get(ardTargetKey("skill", nodeId, row.id))}
+                  onOpen={navigate}
+                />
+              ))}
+            </>
+          )}
+          {filteredSessions.length > 0 && (
+            <>
+              {showSectionLabels && (
+                <div
+                  className="sticky top-0 z-[1] flex items-center gap-2 bg-muted/30 px-3 py-1.5 text-micro-plus font-medium uppercase tracking-wide text-muted-foreground backdrop-blur-sm"
+                  role="presentation"
+                >
+                  <RadioTower className="size-3.5 opacity-80" aria-hidden />
+                  Sessions
+                  <span className="font-mono text-micro normal-case tracking-normal text-muted-foreground/80">
+                    ({filteredSessions.length})
+                  </span>
+                </div>
+              )}
+              {filteredSessions.map((row) => (
+                <EndpointRow key={`session-${row.id}`} nodeId={nodeId} row={row} onOpen={navigate} />
               ))}
             </>
           )}
@@ -226,7 +285,7 @@ function NodeReasonerList({ nodeId, reasonerCount, skillCount }: NodeReasonerLis
               onChange={(e) => setFilter(e.target.value)}
               placeholder="Filter by name or id…"
               className="h-8 border-border/80 bg-background/80 pl-8 text-xs shadow-none"
-              aria-label="Filter reasoners and skills"
+              aria-label="Filter reasoners, skills, and sessions"
             />
           </div>
         </div>
@@ -247,59 +306,98 @@ function NodeReasonerList({ nodeId, reasonerCount, skillCount }: NodeReasonerLis
 interface EndpointRowProps {
   nodeId: string;
   row: NodeEndpointRow;
+  publication?: ARDPublicationView;
   onOpen: (path: string) => void;
 }
 
-function EndpointRow({ nodeId, row, onOpen }: EndpointRowProps) {
+function EndpointRow({ nodeId, row, publication, onOpen }: EndpointRowProps) {
   const isSkill = row.kind === "skill";
-  const label = isSkill ? "skill" : "reasoner";
+  const isSession = row.kind === "session";
+  const label = isSession ? "session" : isSkill ? "skill" : "reasoner";
+  const published = publication?.published && publication.validation_status === "valid";
 
   return (
-    <button
-      type="button"
-      className={cn(
-        "flex w-full items-start gap-3 px-3 py-2 pl-4 text-left transition-colors",
-        "hover:bg-accent/40",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-      )}
-      onClick={() => onOpen(`/playground/${nodeId}.${row.id}`)}
-      aria-label={`Open ${label} ${row.name} in playground`}
-    >
-      <EndpointKindIconBox
-        kind={isSkill ? "skill" : "reasoner"}
-        className="mt-0.5"
-      />
-      <span className="min-w-0 flex-1 pt-0.5">
-        <span className="block font-mono text-xs font-medium leading-snug text-foreground">
-          {row.name}
-        </span>
-        <span className="mt-0.5 flex flex-wrap items-baseline gap-x-1 gap-y-0.5">
-          <EntityTag tone={isSkill ? "neutral" : "accent"}>
-            {isSkill ? "Skill" : "Reasoner"}
-          </EntityTag>
-          <span
-            className="select-none text-[0.625rem] leading-none text-muted-foreground/30"
-            aria-hidden
-          >
-            ·
+    <div className="flex items-stretch">
+      <button
+        type="button"
+        className={cn(
+          "flex min-w-0 flex-1 items-start gap-3 px-3 py-2 pl-4 text-left transition-colors",
+          "hover:bg-accent/40",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+        )}
+        onClick={() => onOpen(isSession ? `/playground?session=${encodeURIComponent(`${nodeId}.${row.id}`)}` : `/playground/${nodeId}.${row.id}`)}
+        aria-label={`Open ${label} ${row.name} in playground`}
+      >
+        {isSession ? (
+          <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md border border-border bg-muted/30 text-muted-foreground">
+            <RadioTower className="size-4" aria-hidden />
           </span>
-          {row.description ? (
-            <span className="min-w-0 max-w-full text-micro-plus leading-snug text-muted-foreground line-clamp-2">
-              {row.description}
+        ) : (
+          <EndpointKindIconBox
+            kind={isSkill ? "skill" : "reasoner"}
+            className="mt-0.5"
+          />
+        )}
+        <span className="min-w-0 flex-1 pt-0.5">
+          <span className="block font-mono text-xs font-medium leading-snug text-foreground">
+            {row.name}
+          </span>
+          <span className="mt-0.5 flex flex-wrap items-baseline gap-x-1 gap-y-0.5">
+            <EntityTag tone={isSkill || isSession ? "neutral" : "accent"}>
+              {isSession ? "Session" : isSkill ? "Skill" : "Reasoner"}
+            </EntityTag>
+            {!isSession ? (
+              <Badge
+                variant={published ? "success" : "secondary"}
+                size="sm"
+                className="text-micro"
+              >
+                ARD {published ? "published" : "private"}
+              </Badge>
+            ) : null}
+            <span
+              className="select-none text-micro leading-none text-muted-foreground/30"
+              aria-hidden
+            >
+              ·
             </span>
-          ) : (
-            <span className="min-w-0 font-mono text-micro leading-snug text-muted-foreground/80">
-              {row.id}
-            </span>
-          )}
+            {row.description ? (
+              <span className="min-w-0 max-w-full text-micro-plus leading-snug text-muted-foreground line-clamp-2">
+                {isSession && row.modalities?.length ? `${row.description} · ${row.modalities.join(", ")}` : row.description}
+              </span>
+            ) : (
+              <span className="min-w-0 font-mono text-micro leading-snug text-muted-foreground/80">
+                {row.id}
+              </span>
+            )}
+          </span>
         </span>
-      </span>
-      <span className="flex shrink-0 items-center gap-1.5 self-center text-muted-foreground">
-        <span className="hidden text-micro-plus sm:inline">Playground</span>
-        <Play className="size-3.5 opacity-70" aria-hidden />
-      </span>
-    </button>
+        <span className="hidden shrink-0 items-center gap-1.5 self-center text-muted-foreground sm:flex">
+          <span className="text-micro-plus">{isSession ? "Start" : "Playground"}</span>
+          <Play className="size-3.5 opacity-70" aria-hidden />
+        </span>
+      </button>
+      {!isSession ? (
+        <Link
+          to={`/discovery?target=${encodeURIComponent(ardTargetKey(isSkill ? "skill" : "reasoner", nodeId, row.id))}`}
+          className="flex shrink-0 items-center gap-1.5 border-l border-border/60 px-3 text-micro-plus text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground"
+          aria-label={`${published ? "Edit" : "Publish"} ${label} ${row.name} in Discovery`}
+        >
+          <Share2 className="size-3.5" aria-hidden />
+          <span className="hidden md:inline">
+            {published ? "Edit ARD" : "Publish"}
+          </span>
+        </Link>
+      ) : null}
+    </div>
   );
+}
+
+function ardTargetKey(kind: "reasoner" | "skill", nodeId: string, targetId: string): string {
+  if (kind === "skill") {
+    return `${nodeId}:skill:${targetId}`;
+  }
+  return `${nodeId}.${targetId}`;
 }
 
 // ─── AgentRow ────────────────────────────────────────────────────────────────
@@ -368,9 +466,10 @@ function AgentAuthTagStrip({ summary }: { summary: AgentTagSummary }) {
 interface AgentRowProps {
   node: AgentNodeSummary;
   tagSummary?: AgentTagSummary;
+  ardPublications?: Map<string, ARDPublicationView>;
 }
 
-function AgentRow({ node, tagSummary }: AgentRowProps) {
+function AgentRow({ node, tagSummary, ardPublications }: AgentRowProps) {
   const [open, setOpen] = useState(false);
   const [detailTab, setDetailTab] = useState<"endpoints" | "logs">(
     "endpoints"
@@ -387,7 +486,7 @@ function AgentRow({ node, tagSummary }: AgentRowProps) {
     setOpen(true);
   };
 
-  const totalItems = node.reasoner_count + node.skill_count;
+  const totalItems = node.reasoner_count + node.skill_count + (node.session_count ?? 0);
 
   const handleRestart = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -431,9 +530,9 @@ function AgentRow({ node, tagSummary }: AgentRowProps) {
           <LifecycleDot status={node.lifecycle_status} size="sm" />
         </div>
 
-        {/* Reasoner / skill counts */}
+        {/* Capability counts */}
         {totalItems > 0 && (
-          <span className="text-xs text-muted-foreground flex-shrink-0 text-right tabular-nums max-sm:max-w-[5.5rem] max-sm:truncate sm:w-36">
+          <span className="text-xs text-muted-foreground flex-shrink-0 text-right tabular-nums max-sm:max-w-[6.5rem] max-sm:truncate sm:w-44">
             {node.reasoner_count > 0 && (
               <>
                 {node.reasoner_count} reasoner{node.reasoner_count !== 1 ? "s" : ""}
@@ -443,6 +542,12 @@ function AgentRow({ node, tagSummary }: AgentRowProps) {
             {node.skill_count > 0 && (
               <>
                 {node.skill_count} skill{node.skill_count !== 1 ? "s" : ""}
+              </>
+            )}
+            {(node.reasoner_count > 0 || node.skill_count > 0) && (node.session_count ?? 0) > 0 && " · "}
+            {(node.session_count ?? 0) > 0 && (
+              <>
+                {node.session_count} session{node.session_count !== 1 ? "s" : ""}
               </>
             )}
           </span>
@@ -531,6 +636,8 @@ function AgentRow({ node, tagSummary }: AgentRowProps) {
                 nodeId={node.id}
                 reasonerCount={node.reasoner_count}
                 skillCount={node.skill_count}
+                sessionCount={node.session_count}
+                ardPublications={ardPublications}
               />
             </TabsContent>
             <TabsContent value="logs" className="mt-0 border-t border-border/40 bg-card/30 px-4 pb-4 pt-3 focus-visible:outline-none">
@@ -548,6 +655,11 @@ function AgentRow({ node, tagSummary }: AgentRowProps) {
 export function AgentsPage() {
   const { data, isLoading, isError, error } = useAgents();
   const { data: tagAgents } = useAgentTagSummaries();
+  const { data: ardDashboard } = useQuery({
+    queryKey: ["ard-dashboard"],
+    queryFn: getARDDashboard,
+    staleTime: 30_000,
+  });
   const tagsByAgentId = useMemo(() => {
     const m = new Map<string, AgentTagSummary>();
     for (const a of tagAgents ?? []) {
@@ -555,6 +667,13 @@ export function AgentsPage() {
     }
     return m;
   }, [tagAgents]);
+  const ardPublications = useMemo(() => {
+    const map = new Map<string, ARDPublicationView>();
+    for (const publication of ardDashboard?.publications ?? []) {
+      map.set(publication.key, publication);
+    }
+    return map;
+  }, [ardDashboard?.publications]);
 
   const agentsFromApi = data?.nodes;
   const nodes = agentsFromApi ?? [];
@@ -756,6 +875,7 @@ export function AgentsPage() {
                 key={node.id}
                 node={node}
                 tagSummary={tagsByAgentId.get(node.id)}
+                ardPublications={ardPublications}
               />
             ))}
           </div>

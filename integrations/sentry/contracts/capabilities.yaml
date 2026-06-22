@@ -1,0 +1,68 @@
+version: 2026-06-15-v1
+node:
+  default_id: sentry-prod
+  tags:
+    - sentry
+    - observability
+    - errors
+
+principles:
+  - Capabilities are deterministic Sentry API operations, not investigation workflows.
+  - Reads preserve issue IDs, event IDs, tags, project IDs, and timestamps from Sentry responses.
+  - Writes are explicit issue mutations only.
+
+skills:
+  health:
+    input: {}
+    output:
+      status: string
+      projects: list
+
+  list_issues:
+    input:
+      project: string
+      query: optional string
+      limit: optional integer
+    output:
+      issues: list
+
+  get_issue:
+    input:
+      issue_id: string
+    output:
+      issue: object
+
+  list_issue_events:
+    input:
+      issue_id: string
+      query: optional string
+      limit: optional integer
+    output:
+      events: list
+
+  get_event:
+    input:
+      issue_id: string
+      event_id: string
+    output:
+      event: object
+
+  update_issue:
+    input:
+      issue_id: string
+      input: object
+    output:
+      issue: object
+
+  resolve_issue:
+    input:
+      issue_id: string
+    output:
+      issue: object
+
+  assign_issue:
+    input:
+      issue_id: string
+      assignee: string
+    output:
+      issue: object

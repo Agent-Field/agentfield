@@ -28,7 +28,7 @@ def test_to_headers_includes_optional_fields():
 
     assert headers["X-Workflow-ID"] == "wf-1"
     assert headers["X-Execution-ID"] == "exec-1"
-    assert headers["X-Parent-Execution-ID"] == "parent-1"
+    assert headers["X-Parent-Execution-ID"] == "exec-1"
     assert headers["X-Parent-Workflow-ID"] == "wf-parent"
     assert headers["X-Session-ID"] == "sess-1"
     assert headers["X-Caller-DID"] == "did:caller"

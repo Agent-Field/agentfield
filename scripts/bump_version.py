@@ -7,9 +7,10 @@ import argparse
 import dataclasses
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Iterable, Optional, Tuple
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -86,7 +87,11 @@ class SemVer:
 
 
 def determine_next_version(
-    current: SemVer, channel: str, component: str, label: Optional[str]
+    current: SemVer,
+    channel: str,
+    component: str,
+    label: Optional[str],
+    taken_counters: Iterable[int] = (),
 ) -> SemVer:
     base = current.without_prerelease()
     if channel == "stable":
@@ -101,10 +106,81 @@ def determine_next_version(
 
     current_label, current_counter = current.prerelease_parts()
     if current.prerelease and current_label == label and current_counter:
-        return base.with_prerelease(label, current_counter + 1)
+        target_base = base
+        next_counter = current_counter + 1
+    else:
+        target_base = base.bump(component)
+        next_counter = 1
 
-    target_base = base.bump(component)
-    return target_base.with_prerelease(label, 1)
+    taken = set(taken_counters)
+    while next_counter in taken:
+        next_counter += 1
+    return target_base.with_prerelease(label, next_counter)
+
+
+def _remote_tag_names() -> list[str]:
+    """Return tag names known to the 'origin' remote.
+
+    Returns an empty list on any git failure (missing binary, network, etc.) so
+    callers can fall back to the legacy behaviour rather than aborting.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "ls-remote", "--tags", "origin"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+    except (
+        subprocess.CalledProcessError,
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+    ) as exc:
+        print(
+            f"warning: failed to query remote tags ({exc}); skipping collision check",
+            file=sys.stderr,
+        )
+        return []
+
+    tags: list[str] = []
+    for line in result.stdout.splitlines():
+        _, _, ref = line.partition("refs/tags/")
+        if not ref:
+            continue
+        # Strip "^{}" suffix used for annotated-tag peels.
+        if ref.endswith("^{}"):
+            ref = ref[:-3]
+        ref = ref.strip()
+        if ref:
+            tags.append(ref)
+    return tags
+
+
+def _taken_prerelease_counters(
+    target_base: SemVer, label: str, tags: Iterable[str]
+) -> set[int]:
+    """Counters already assigned to ``v{target_base}-{label}.<n>`` tags."""
+    prefix = f"v{target_base}-{label}."
+    counters: set[int] = set()
+    for tag in tags:
+        if not tag.startswith(prefix):
+            continue
+        suffix = tag[len(prefix) :]
+        if suffix.isdigit():
+            counters.add(int(suffix))
+    return counters
+
+
+def _target_base_for_lookup(
+    current: SemVer, label: str, component: str
+) -> SemVer:
+    """Replicate the base-selection rule in ``determine_next_version``."""
+    current_label, _ = current.prerelease_parts()
+    if current.prerelease and current_label == label:
+        return current.without_prerelease()
+    return current.without_prerelease().bump(component)
 
 
 def write_file(path: Path, content: str) -> None:
@@ -230,16 +306,36 @@ def main(argv: Optional[list[str]] = None) -> int:
         action="store_true",
         help="Compute the next version but do not modify any files.",
     )
+    parser.add_argument(
+        "--skip-tag-check",
+        action="store_true",
+        help=(
+            "Do not query 'origin' for existing prerelease tags. By default the "
+            "next prerelease counter is advanced past any colliding remote tag."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.new_version:
         target = SemVer.parse(args.new_version)
     else:
+        current = SemVer.parse(VERSION_FILE.read_text(encoding="utf-8").strip())
+        taken: tuple[int, ...] = ()
+        if (
+            args.channel == "prerelease"
+            and args.label
+            and not args.skip_tag_check
+        ):
+            target_base = _target_base_for_lookup(current, args.label, args.component)
+            taken = tuple(
+                _taken_prerelease_counters(target_base, args.label, _remote_tag_names())
+            )
         target = determine_next_version(
-            SemVer.parse(VERSION_FILE.read_text(encoding="utf-8").strip()),
+            current,
             args.channel,
             args.component,
             args.label,
+            taken_counters=taken,
         )
     if not args.dry_run:
         apply_version(target)

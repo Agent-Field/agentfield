@@ -13,6 +13,8 @@ test catches that regression early.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from agentfield.harness._cli import run_cli
@@ -81,3 +83,48 @@ async def test_run_cli_works_without_explicit_env(monkeypatch):
 
     assert returncode == 0
     assert stdout.strip() == "still_there"
+
+
+def test_run_cli_merges_openrouter_attribution_defaults(monkeypatch):
+    monkeypatch.delenv("AGENTFIELD_OPENROUTER_SITE_URL", raising=False)
+    monkeypatch.delenv("AGENTFIELD_OPENROUTER_APP_NAME", raising=False)
+    monkeypatch.delenv("OR_SITE_URL", raising=False)
+    monkeypatch.delenv("OR_APP_NAME", raising=False)
+
+    stdout, _stderr, returncode = asyncio.run(
+        run_cli(
+            [
+                "bash",
+                "-c",
+                "echo $AGENTFIELD_OPENROUTER_SITE_URL:$AGENTFIELD_OPENROUTER_APP_NAME:$OR_SITE_URL:$OR_APP_NAME",
+            ],
+            timeout=10.0,
+        )
+    )
+
+    assert returncode == 0
+    assert stdout.strip() == (
+        "https://agentfield.ai:AgentField AI:https://agentfield.ai:AgentField AI"
+    )
+
+
+def test_run_cli_openrouter_attribution_caller_env_wins(monkeypatch):
+    monkeypatch.setenv("AGENTFIELD_OPENROUTER_SITE_URL", "https://parent.example")
+
+    stdout, _stderr, returncode = asyncio.run(
+        run_cli(
+            [
+                "bash",
+                "-c",
+                "echo $AGENTFIELD_OPENROUTER_SITE_URL:$OR_SITE_URL",
+            ],
+            env={
+                "AGENTFIELD_OPENROUTER_SITE_URL": "https://caller.example",
+                "OR_SITE_URL": "https://or-caller.example",
+            },
+            timeout=10.0,
+        )
+    )
+
+    assert returncode == 0
+    assert stdout.strip() == "https://caller.example:https://or-caller.example"

@@ -105,7 +105,7 @@ func TestGetAuthLevel_AdditionalFallbacks(t *testing.T) {
 		{
 			name:     "api key query parameter",
 			url:      "/test?api_key=abc",
-			expected: "api_key",
+			expected: "public",
 		},
 		{
 			name:     "non string context falls back to public",

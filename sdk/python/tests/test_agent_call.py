@@ -233,9 +233,7 @@ async def test_call_skips_sync_fallback_on_execution_cancelled_error():
         return "exec_xyz"
 
     async def fake_wait_for_execution_result(execution_id, timeout=None):
-        raise ExecutionCancelledError(
-            "Execution was cancelled: user clicked cancel"
-        )
+        raise ExecutionCancelledError("Execution was cancelled: user clicked cancel")
 
     async def fake_execute(target, input_data, headers):
         nonlocal sync_calls
@@ -524,3 +522,52 @@ async def test_call_uses_task_local_context_as_parent():
     assert result == {"ok": True}
     assert recorded["headers"]["X-Parent-Execution-ID"] == "exec_A"
     assert recorded["headers"]["X-Run-ID"] == "run_A"
+
+
+@pytest.mark.asyncio
+async def test_call_local_reasoner_unwraps_tracked_wrapper_for_signature():
+    """When the local function attrs are tracked wrappers (as set by
+    @app.reasoner() / @app.skill()), app.call must unwrap _original_func
+    before inspecting the signature so positional args get mapped to the
+    original parameter names, not the wrapper's (*args, **kwargs)."""
+    agent = object.__new__(Agent)
+    agent.node_id = "node"
+    agent.agentfield_connected = True
+    agent.dev_mode = False
+    agent.async_config = SimpleNamespace(
+        enable_async_execution=False, fallback_to_sync=False
+    )
+    agent._async_execution_manager = None
+    agent._current_execution_context = None
+
+    recorded = {}
+
+    async def fake_execute(target, input_data, headers):
+        recorded["target"] = target
+        recorded["input_data"] = input_data
+        return {"result": {"ok": True}}
+
+    agent.client = SimpleNamespace(execute=fake_execute)
+
+    # Original function with typed parameters
+    def original_reasoner(a: int, b: str, execution_context=None):
+        return a + int(b)
+
+    # Simulate a tracked wrapper that *loses* type info (like _run_async_skill)
+    async def tracked_wrapper(*args, **kwargs):
+        return await original_reasoner(*args, **kwargs)
+
+    setattr(tracked_wrapper, "_original_func", original_reasoner)
+
+    agent.local_reasoner = tracked_wrapper
+
+    set_current_agent(agent)
+    try:
+        result = await agent.call("node.local_reasoner", 42, "10")
+    finally:
+        clear_current_agent()
+
+    assert result == {"ok": True}
+    assert recorded["target"] == "node.local_reasoner"
+    # Without unwrapping, positional args would map to arg_0 / arg_1
+    assert recorded["input_data"] == {"a": 42, "b": "10"}

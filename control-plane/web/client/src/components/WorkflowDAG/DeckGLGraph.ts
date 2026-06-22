@@ -127,6 +127,8 @@ const STATUS_COLORS: Record<string, [number, number, number]> = {
   unknown: [148, 163, 184],
 };
 
+const EXTERNAL_RGB: [number, number, number] = [14, 165, 233];
+
 function normalizeStatus(status: string): string {
   const normalized = status.toLowerCase();
   if (normalized.includes("success") || normalized.includes("complete")) return "succeeded";
@@ -345,17 +347,23 @@ export function buildDeckGraph(
   layoutInfo.forEach((info, nodeId) => {
     const node = nodeById.get(nodeId)!;
     const statusColor = getStatusColor(node.status);
-    const mixedColor = mixColor(info.color, statusColor, 0.7);
+    const baseVisualColor = node.external ? mixColor(info.color, EXTERNAL_RGB, 0.35) : info.color;
+    const mixedColor = mixColor(baseVisualColor, statusColor, 0.7);
     const depthFactor = maxDepth > 0 ? info.layer / maxDepth : 0;
     const opacity = Math.round(240 - depthFactor * 40);
     const fill = [...mixedColor, opacity] as [number, number, number, number];
-    const border = [...mixColor(info.color, BACKGROUND_RGB, 0.35), 255] as [
+    const border = [
+      ...(node.external ? mixColor(EXTERNAL_RGB, [255, 255, 255], 0.7) : mixColor(info.color, BACKGROUND_RGB, 0.35)),
+      255,
+    ] as [
       number,
       number,
       number,
       number,
     ];
-    const glow = [...mixColor(statusColor, [255, 255, 255], 0.25), 90] as [
+    const glowBase = node.external ? EXTERNAL_RGB : statusColor;
+    const glowOpacity = node.external ? 150 : 90;
+    const glow = [...mixColor(glowBase, [255, 255, 255], 0.25), glowOpacity] as [
       number,
       number,
       number,
@@ -366,7 +374,7 @@ export function buildDeckGraph(
       id: nodeId,
       position: info.position,
       depth: info.layer,
-      radius: info.radius,
+      radius: node.external ? info.radius * 1.2 : info.radius,
       fillColor: fill,
       borderColor: border,
       glowColor: glow,

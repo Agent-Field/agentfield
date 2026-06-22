@@ -27,7 +27,7 @@ func NewConfigStorageHandlers(store storage.StorageProvider, reloadFn ConfigRelo
 }
 
 // RegisterRoutes registers config storage routes on the given router group.
-func (h *ConfigStorageHandlers) RegisterRoutes(group *gin.RouterGroup) {
+func (h *ConfigStorageHandlers) RegisterRoutes(group gin.IRouter) {
 	group.GET("/configs", h.ListConfigs)
 	group.GET("/configs/:key", h.GetConfig)
 	group.PUT("/configs/:key", h.SetConfig)

@@ -131,6 +131,7 @@ vi.mock("@/components/ui/icon-bridge", () => {
     Check: Icon,
     ChevronRight: Icon,
     ChevronDown: Icon,
+    RadioTower: Icon,
   };
 });
 

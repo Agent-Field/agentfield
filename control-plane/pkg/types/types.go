@@ -171,6 +171,7 @@ type AgentNode struct {
 
 	Reasoners           []ReasonerDefinition `json:"reasoners" db:"reasoners"`
 	Skills              []SkillDefinition    `json:"skills" db:"skills"`
+	Sessions            []SessionDefinition  `json:"sessions,omitempty" db:"-"`
 	CommunicationConfig CommunicationConfig  `json:"communication_config" db:"communication_config"`
 
 	HealthStatus    HealthStatus         `json:"health_status" db:"health_status"`
@@ -235,6 +236,57 @@ type SkillDefinition struct {
 	Tags         []string        `json:"tags"`
 	ProposedTags []string        `json:"proposed_tags,omitempty"`
 	ApprovedTags []string        `json:"approved_tags,omitempty"`
+}
+
+// SessionDefinition defines a realtime session ingress provided by an agent node.
+type SessionDefinition struct {
+	Name         string                 `json:"name"`
+	Provider     string                 `json:"provider"`
+	Transport    string                 `json:"transport"`
+	Model        string                 `json:"model,omitempty"`
+	Modalities   []string               `json:"modalities,omitempty"`
+	Voice        string                 `json:"voice,omitempty"`
+	Tools        []string               `json:"tools,omitempty"`
+	Metadata     map[string]interface{} `json:"metadata,omitempty"`
+	Tags         []string               `json:"tags,omitempty"`
+	ProposedTags []string               `json:"proposed_tags,omitempty"`
+	ApprovedTags []string               `json:"approved_tags,omitempty"`
+}
+
+// HydrateAgentSessions copies session definitions from metadata.custom.sessions
+// into the typed AgentNode.Sessions field. SDKs currently register sessions in
+// metadata for storage compatibility, while the control plane and UI consume a
+// first-class field.
+func HydrateAgentSessions(agent *AgentNode) {
+	if agent == nil || len(agent.Sessions) > 0 || agent.Metadata.Custom == nil {
+		return
+	}
+	raw, ok := agent.Metadata.Custom["sessions"]
+	if !ok || raw == nil {
+		return
+	}
+	bytes, err := json.Marshal(raw)
+	if err != nil {
+		return
+	}
+	var sessions []SessionDefinition
+	if err := json.Unmarshal(bytes, &sessions); err != nil {
+		return
+	}
+	agent.Sessions = sessions
+}
+
+// SyncAgentSessionsToMetadata stores the typed session list back under
+// metadata.custom.sessions so existing storage rows and older SDK payloads keep
+// working without an agent_nodes schema migration.
+func SyncAgentSessionsToMetadata(agent *AgentNode) {
+	if agent == nil || len(agent.Sessions) == 0 {
+		return
+	}
+	if agent.Metadata.Custom == nil {
+		agent.Metadata.Custom = map[string]interface{}{}
+	}
+	agent.Metadata.Custom["sessions"] = agent.Sessions
 }
 
 // MemoryConfig defines memory configuration for a reasoner.
@@ -327,7 +379,7 @@ type AgentStatusUpdate struct {
 	State           *AgentState           `json:"state,omitempty"`
 	HealthScore     *int                  `json:"health_score,omitempty"`
 	LifecycleStatus *AgentLifecycleStatus `json:"lifecycle_status,omitempty"`
-	Source StatusSource `json:"source"`
+	Source          StatusSource          `json:"source"`
 	Reason          string                `json:"reason,omitempty"`
 	Version         string                `json:"version,omitempty"`
 }
@@ -718,28 +770,28 @@ type WorkflowExecutionEvent struct {
 
 // ExecutionLogEntry captures structured execution-correlated logs emitted by SDK runtimes.
 type ExecutionLogEntry struct {
-	EventID             int64           `json:"event_id" db:"event_id"`
-	ExecutionID         string          `json:"execution_id" db:"execution_id"`
-	WorkflowID          string          `json:"workflow_id" db:"workflow_id"`
-	RunID               *string         `json:"run_id,omitempty" db:"run_id"`
-	RootWorkflowID      *string         `json:"root_workflow_id,omitempty" db:"root_workflow_id"`
-	ParentExecutionID   *string         `json:"parent_execution_id,omitempty" db:"parent_execution_id"`
-	Sequence            int64           `json:"seq" db:"sequence"`
-	AgentNodeID         string          `json:"agent_node_id" db:"agent_node_id"`
-	ReasonerID          *string         `json:"reasoner_id,omitempty" db:"reasoner_id"`
-	Level               string          `json:"level" db:"level"`
-	Source              string          `json:"source" db:"source"`
-	EventType           *string         `json:"event_type,omitempty" db:"event_type"`
-	Message             string          `json:"message" db:"message"`
-	Attributes          json.RawMessage `json:"attributes,omitempty" db:"attributes"`
-	SystemGenerated     bool            `json:"system_generated,omitempty" db:"system_generated"`
-	SDKLanguage         *string         `json:"sdk_language,omitempty" db:"sdk_language"`
-	Attempt             *int            `json:"attempt,omitempty" db:"attempt"`
-	SpanID              *string         `json:"span_id,omitempty" db:"span_id"`
-	StepID              *string         `json:"step_id,omitempty" db:"step_id"`
-	ErrorCategory       *string         `json:"error_category,omitempty" db:"error_category"`
-	EmittedAt           time.Time       `json:"ts" db:"emitted_at"`
-	RecordedAt          time.Time       `json:"recorded_at" db:"recorded_at"`
+	EventID           int64           `json:"event_id" db:"event_id"`
+	ExecutionID       string          `json:"execution_id" db:"execution_id"`
+	WorkflowID        string          `json:"workflow_id" db:"workflow_id"`
+	RunID             *string         `json:"run_id,omitempty" db:"run_id"`
+	RootWorkflowID    *string         `json:"root_workflow_id,omitempty" db:"root_workflow_id"`
+	ParentExecutionID *string         `json:"parent_execution_id,omitempty" db:"parent_execution_id"`
+	Sequence          int64           `json:"seq" db:"sequence"`
+	AgentNodeID       string          `json:"agent_node_id" db:"agent_node_id"`
+	ReasonerID        *string         `json:"reasoner_id,omitempty" db:"reasoner_id"`
+	Level             string          `json:"level" db:"level"`
+	Source            string          `json:"source" db:"source"`
+	EventType         *string         `json:"event_type,omitempty" db:"event_type"`
+	Message           string          `json:"message" db:"message"`
+	Attributes        json.RawMessage `json:"attributes,omitempty" db:"attributes"`
+	SystemGenerated   bool            `json:"system_generated,omitempty" db:"system_generated"`
+	SDKLanguage       *string         `json:"sdk_language,omitempty" db:"sdk_language"`
+	Attempt           *int            `json:"attempt,omitempty" db:"attempt"`
+	SpanID            *string         `json:"span_id,omitempty" db:"span_id"`
+	StepID            *string         `json:"step_id,omitempty" db:"step_id"`
+	ErrorCategory     *string         `json:"error_category,omitempty" db:"error_category"`
+	EmittedAt         time.Time       `json:"ts" db:"emitted_at"`
+	RecordedAt        time.Time       `json:"recorded_at" db:"recorded_at"`
 }
 
 // WorkflowRunEvent mirrors execution events at the workflow-run level.
@@ -877,6 +929,11 @@ type Session struct {
 	SessionName *string `json:"session_name,omitempty" db:"session_name"`
 
 	// DAG Relationship Fields
+	// TODO(session-linking): Define explicit session edge semantics before exposing
+	// session-to-session APIs. Parent/root IDs should support lifecycle edges such
+	// as transfer, bridge, companion, and escalation, while agent work inside each
+	// session continues to use app.call/session.call so reasoner executions remain
+	// normal workflow DAG nodes under the session.
 	ParentSessionID *string `json:"parent_session_id,omitempty" db:"parent_session_id"`
 	RootSessionID   *string `json:"root_session_id,omitempty" db:"root_session_id"`
 

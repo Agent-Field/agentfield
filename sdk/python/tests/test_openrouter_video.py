@@ -1,5 +1,6 @@
 """Tests for OpenRouterProvider.generate_video() — async polling video API."""
 
+import asyncio
 import base64
 import json
 from unittest.mock import AsyncMock, patch
@@ -57,6 +58,27 @@ class FakeSession:
         # Return async context manager
         cm = AsyncMock()
         cm.__aenter__ = AsyncMock(return_value=resp)
+        cm.__aexit__ = AsyncMock(return_value=False)
+        return cm
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        pass
+
+
+class CaptureSession:
+    """Capture request kwargs from OpenRouter media calls."""
+
+    def __init__(self, response):
+        self.response = response
+        self.calls = []
+
+    def post(self, url, **kwargs):
+        self.calls.append(("post", url, kwargs))
+        cm = AsyncMock()
+        cm.__aenter__ = AsyncMock(return_value=self.response)
         cm.__aexit__ = AsyncMock(return_value=False)
         return cm
 
@@ -149,6 +171,25 @@ class TestOpenRouterVideoHappyPath:
 
         assert result.has_videos
         assert result.cost_usd == 0.10
+
+    def test_media_requests_include_openrouter_attribution(self, monkeypatch):
+        monkeypatch.delenv("AGENTFIELD_OPENROUTER_SITE_URL", raising=False)
+        monkeypatch.delenv("AGENTFIELD_OPENROUTER_APP_NAME", raising=False)
+        monkeypatch.delenv("OR_SITE_URL", raising=False)
+        monkeypatch.delenv("OR_APP_NAME", raising=False)
+
+        resp = _make_response(200, {"choices": []})
+        session = CaptureSession(resp)
+        provider = OpenRouterProvider(api_key="sk-test-key")
+
+        with patch("aiohttp.ClientSession", return_value=session):
+            asyncio.run(provider.generate_image(prompt="test"))
+
+        headers = session.calls[0][2]["headers"]
+        assert headers["Authorization"] == "Bearer sk-test-key"
+        assert headers["HTTP-Referer"] == "https://agentfield.ai"
+        assert headers["X-OpenRouter-Title"] == "AgentField AI"
+        assert headers["X-Title"] == "AgentField AI"
 
 
 class TestOpenRouterVideoDownloadSafety:
