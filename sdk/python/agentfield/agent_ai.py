@@ -140,6 +140,42 @@ litellm = _LazyModule(_get_litellm)
 openai = _LazyModule(_get_openai)
 
 
+def _strictify_openai_schema(schema: Any) -> Any:
+    """Make a Pydantic-generated JSON schema satisfy OpenAI's strict
+    structured-output rules.
+
+    OpenAI's ``response_format`` with ``strict: True`` requires every object to
+    (a) set ``additionalProperties: false`` and (b) list ALL of its properties in
+    ``required``. Pydantic's ``model_json_schema()`` emits neither, so OpenAI
+    rejects the request with::
+
+        BadRequestError: Invalid schema ... 'additionalProperties' is required
+        to be supplied and to be false.
+
+    This walks the entire schema — including ``$defs``/``definitions`` and nested
+    ``properties``/``items``/``anyOf`` — and returns a corrected copy. Forcing
+    every property into ``required`` is OpenAI's documented requirement for strict
+    mode (truly-optional fields should be modelled as nullable); it never makes a
+    previously-valid schema invalid.
+    """
+
+    def walk(node: Any) -> Any:
+        if isinstance(node, dict):
+            node = {key: walk(value) for key, value in node.items()}
+            props = node.get("properties")
+            if isinstance(props, dict) and (
+                node.get("type") == "object" or "type" not in node
+            ):
+                node["additionalProperties"] = False
+                node["required"] = list(props.keys())
+            return node
+        if isinstance(node, list):
+            return [walk(item) for item in node]
+        return node
+
+    return walk(schema)
+
+
 class AgentAI:
     """AI/LLM Integration functionality for AgentField Agent"""
 
@@ -568,7 +604,10 @@ class AgentAI:
             litellm_params["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {
-                    "schema": schema.model_json_schema(),
+                    # OpenAI strict mode requires additionalProperties:false +
+                    # all-properties-required on every object; Pydantic emits
+                    # neither, so sanitize before sending (else BadRequestError).
+                    "schema": _strictify_openai_schema(schema.model_json_schema()),
                     "name": schema.__name__,
                     "strict": True,
                 },
