@@ -40,9 +40,25 @@ func setupRouter(config AuthConfig) *gin.Engine {
 	return router
 }
 
-func TestAPIKeyAuth_NoAuthConfigured(t *testing.T) {
-	// When no API key is configured, all requests should be allowed
-	router := setupRouter(AuthConfig{APIKey: ""})
+func TestValidateAPIKeyAuth_RejectsImplicitDisable(t *testing.T) {
+	err := ValidateAPIKeyAuth(AuthConfig{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "AGENTFIELD_INSECURE_DISABLE_AUTH=true")
+}
+
+func TestAPIKeyAuth_EmptyKeyFailsClosed(t *testing.T) {
+	router := setupRouter(AuthConfig{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestAPIKeyAuth_ExplicitInsecureDisable(t *testing.T) {
+	router := setupRouter(AuthConfig{InsecureDisableAuth: true})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
 	w := httptest.NewRecorder()

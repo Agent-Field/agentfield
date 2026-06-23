@@ -100,6 +100,10 @@ type AgentFieldServer struct {
 
 // NewAgentFieldServer creates a new instance of the AgentFieldServer.
 func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
+	if err := validateAPIAuthConfig(cfg.API.Auth); err != nil {
+		return nil, fmt.Errorf("invalid API authentication configuration: %w", err)
+	}
+
 	// Define agentfieldHome at the very top
 	agentfieldHome := os.Getenv("AGENTFIELD_HOME")
 	if agentfieldHome == "" {
@@ -528,6 +532,22 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		kb:                     initKnowledgeBase(),
 		knowledgeService:       knowledgeService,
 	}, nil
+}
+
+func validateAPIAuthConfig(auth config.AuthConfig) error {
+	middlewareConfig := middleware.AuthConfig{
+		APIKey:              auth.APIKey,
+		InsecureDisableAuth: auth.InsecureDisableAuth,
+	}
+	if err := middleware.ValidateAPIKeyAuth(middlewareConfig); err != nil {
+		return err
+	}
+	if auth.APIKey == "" {
+		logger.Logger.Warn().
+			Bool("insecure_disable_auth", true).
+			Msg("SECURITY WARNING: API key authentication is explicitly disabled; all API routes relying on API-key authentication are unauthenticated")
+	}
+	return nil
 }
 
 // configReloadFn returns a function that reloads config from the database,

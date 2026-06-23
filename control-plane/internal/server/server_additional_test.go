@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -14,11 +15,13 @@ import (
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/adminpb"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 	"github.com/gin-gonic/gin"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -69,6 +72,15 @@ func TestConfigReloadFn(t *testing.T) {
 }
 
 func TestNewAgentFieldServer(t *testing.T) {
+	t.Run("rejects an empty API key without explicit insecure mode", func(t *testing.T) {
+		cfg := baseConfigForDBTests()
+		cfg.API.Auth.APIKey = ""
+
+		srv, err := NewAgentFieldServer(&cfg)
+		require.Nil(t, srv)
+		require.ErrorContains(t, err, "AGENTFIELD_INSECURE_DISABLE_AUTH=true")
+	})
+
 	t.Run("uses env home and explicit admin port", func(t *testing.T) {
 		cfg := baseConfigForDBTests()
 		cfg.UI.Enabled = false
@@ -120,6 +132,7 @@ func TestNewAgentFieldServer(t *testing.T) {
 		cfg := baseConfigForDBTests()
 		cfg.UI.Enabled = false
 		cfg.API.Auth.APIKey = ""
+		cfg.API.Auth.InsecureDisableAuth = true
 		cfg.Features.DID.Enabled = true
 		cfg.Features.DID.KeyAlgorithm = "Ed25519"
 		cfg.Features.DID.Authorization.Enabled = true
@@ -171,6 +184,18 @@ func TestStartAdminGRPCServer(t *testing.T) {
 	if err != nil && !errors.Is(err, net.ErrClosed) {
 		require.NoError(t, err)
 	}
+}
+
+func TestValidateAPIAuthConfigWarnsWhenExplicitlyDisabled(t *testing.T) {
+	previousLogger := logger.Logger
+	var output bytes.Buffer
+	logger.Logger = zerolog.New(&output)
+	t.Cleanup(func() { logger.Logger = previousLogger })
+
+	err := validateAPIAuthConfig(config.AuthConfig{InsecureDisableAuth: true})
+	require.NoError(t, err)
+	require.Contains(t, output.String(), `"level":"warn"`)
+	require.Contains(t, output.String(), "API key authentication is explicitly disabled")
 }
 
 func TestStartAndStop(t *testing.T) {
@@ -251,6 +276,7 @@ func TestSetupRoutesFilesystemUIAndNoRouteFallback(t *testing.T) {
 	cfg.UI.Mode = "filesystem"
 	cfg.UI.DistPath = distDir
 	cfg.API.Auth.APIKey = ""
+	cfg.API.Auth.InsecureDisableAuth = true
 	cfg.API.Auth.SkipPaths = nil
 	cfg.API.CORS = config.CORSConfig{}
 	cfg.Features.DID.Enabled = false
@@ -299,6 +325,7 @@ func TestSetupRoutesRegistersAuthorizationAndConnectorBranches(t *testing.T) {
 	cfg := baseConfigForDBTests()
 	cfg.UI.Enabled = false
 	cfg.API.Auth.APIKey = ""
+	cfg.API.Auth.InsecureDisableAuth = true
 	cfg.Features.DID.Enabled = true
 	cfg.Features.DID.Authorization.Enabled = true
 	cfg.Features.DID.Authorization.DIDAuthEnabled = true
@@ -326,6 +353,7 @@ func TestSetupRoutesWithDIDServices(t *testing.T) {
 	cfg := baseConfigForDBTests()
 	cfg.UI.Enabled = false
 	cfg.API.Auth.APIKey = ""
+	cfg.API.Auth.InsecureDisableAuth = true
 	cfg.Features.DID.Enabled = true
 	cfg.Features.DID.KeyAlgorithm = "Ed25519"
 	cfg.Features.DID.Authorization.Enabled = true

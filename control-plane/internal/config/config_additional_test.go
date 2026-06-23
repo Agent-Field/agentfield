@@ -103,7 +103,7 @@ func TestLoadConfig(t *testing.T) {
 	t.Run("loads explicit config path", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "custom.yaml")
-		if err := os.WriteFile(path, []byte("agentfield:\n  port: 7777\n"), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte("agentfield:\n  port: 7777\napi:\n  auth:\n    insecure_disable_auth: true\n"), 0o644); err != nil {
 			t.Fatalf("write config: %v", err)
 		}
 
@@ -113,6 +113,9 @@ func TestLoadConfig(t *testing.T) {
 		}
 		if cfg.AgentField.Port != 7777 {
 			t.Fatalf("expected port 7777, got %d", cfg.AgentField.Port)
+		}
+		if !cfg.API.Auth.InsecureDisableAuth {
+			t.Fatal("expected insecure_disable_auth to load from YAML")
 		}
 	})
 
@@ -414,6 +417,31 @@ func TestApplyEnvOverrides(t *testing.T) {
 	if got := cfg.Features.Connector.Capabilities["did_management"]; got.Enabled {
 		t.Fatalf("unexpected did_management capability: %+v", got)
 	}
+}
+
+func TestApplyEnvOverridesAPIAuthInsecureDisable(t *testing.T) {
+	t.Run("short environment name", func(t *testing.T) {
+		cfg := &Config{}
+		t.Setenv("AGENTFIELD_INSECURE_DISABLE_AUTH", "true")
+
+		ApplyEnvOverrides(cfg)
+
+		if !cfg.API.Auth.InsecureDisableAuth {
+			t.Fatal("expected insecure API auth disable from environment")
+		}
+	})
+
+	t.Run("nested environment name takes precedence", func(t *testing.T) {
+		cfg := &Config{}
+		t.Setenv("AGENTFIELD_INSECURE_DISABLE_AUTH", "true")
+		t.Setenv("AGENTFIELD_API_AUTH_INSECURE_DISABLE_AUTH", "false")
+
+		ApplyEnvOverrides(cfg)
+
+		if cfg.API.Auth.InsecureDisableAuth {
+			t.Fatal("expected nested insecure API auth setting to take precedence")
+		}
+	})
 }
 
 func TestApplyEnvOverridesIgnoresInvalidValues(t *testing.T) {
