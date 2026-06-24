@@ -2,6 +2,15 @@
 
 # AgentField — The AI Backend
 
+<p align="center">
+  <a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=agentfield">
+    <img src="assets/atlas-cloud-logo.png" alt="Atlas Cloud" width="140" />
+  </a>
+  <br />
+  <sub><strong>Atlas Cloud</strong> Atlas Cloud provides OpenAI-compatible LLM APIs and async image/video generation APIs for agent workflows, media generation, and multimodal automation.</sub>
+</p>
+
+
 ### **Build and scale AI agents like APIs. Deploy, observe, and prove.**
 
 *AI has outgrown chatbots and prompt orchestrators. Backend agents need backend infrastructure.*
