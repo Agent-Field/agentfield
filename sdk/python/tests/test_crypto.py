@@ -1,5 +1,6 @@
 """Unit tests for DID-based payload encryption (agentfield.crypto)."""
 
+import base64
 import json
 
 import pytest
@@ -120,3 +121,82 @@ def test_load_private_key_missing_env(monkeypatch):
     monkeypatch.delenv(crypto.DEFAULT_PRIVATE_KEY_ENV, raising=False)
     with pytest.raises(PayloadEncryptionError, match="no X25519 private key"):
         crypto.load_private_key()
+
+
+# --- JWS signing: payload authenticity (Ed25519 / EdDSA) --------------------
+
+# A compact JWS produced by the TypeScript SDK (jose CompactSign, alg=EdDSA) over
+# {"scope":{"tier":"workspace","workspace_id":"ws_demo"}}, signed with the Ed25519
+# key whose public half is _ED25519_PUB. Frozen here so cross-language interop
+# (TS sign -> Python verify) is asserted without a node toolchain at test time.
+_ED25519_PUB = {
+    "crv": "Ed25519",
+    "x": "LZG6OR6azeoR7_cVXjZOTY1wBIpFp-loce90N1_XOiY",
+    "kty": "OKP",
+}
+_TS_JWS_VECTOR = (
+    "eyJhbGciOiJFZERTQSJ9"
+    ".eyJzY29wZSI6eyJ0aWVyIjoid29ya3NwYWNlIiwid29ya3NwYWNlX2lkIjoid3NfZGVtbyJ9fQ"
+    ".xNm_F_9qbMP4QFbFEHD5WRj-7CcIXPz5uNz3JoXddktyYWPXCC5Y0xgfms41h50aJem4fiPjqv-zaUeoFhPyDw"
+)
+
+
+def test_sign_verify_roundtrip_dict():
+    priv, pub = crypto.generate_ed25519_keypair()
+    payload = {"scope": {"tier": "project", "workspace_id": "ws_1", "project_id": "p_2"}}
+    assert json.loads(crypto.verify(crypto.sign(payload, priv), pub)) == payload
+
+
+def test_sign_verify_str_and_bytes():
+    priv, pub = crypto.generate_ed25519_keypair()
+    assert crypto.verify(crypto.sign("hello", priv), pub) == b"hello"
+    assert crypto.verify(crypto.sign(b"raw", priv), pub) == b"raw"
+
+
+def test_ts_signed_jws_verifies_in_python():
+    """A jose (TypeScript) compact JWS must verify here — cross-language interop."""
+    assert json.loads(crypto.verify(_TS_JWS_VECTOR, _ED25519_PUB)) == {
+        "scope": {"tier": "workspace", "workspace_id": "ws_demo"}
+    }
+
+
+def test_verify_rejects_wrong_key():
+    _priv, other_pub = crypto.generate_ed25519_keypair()
+    with pytest.raises(PayloadEncryptionError, match="signature verification failed"):
+        crypto.verify(_TS_JWS_VECTOR, other_pub)
+
+
+def test_verify_rejects_tampered_payload():
+    head, body, sig = _TS_JWS_VECTOR.split(".")
+    forged = f"{head}.{body[:-2]}AA.{sig}"
+    with pytest.raises(PayloadEncryptionError):
+        crypto.verify(forged, _ED25519_PUB)
+
+
+def test_verify_rejects_alg_none():
+    """An unsigned 'alg: none' token (empty signature) must not bypass verification."""
+    _head, body, _sig = _TS_JWS_VECTOR.split(".")
+    header = base64.urlsafe_b64encode(b'{"alg":"none"}').rstrip(b"=").decode()
+    # Real 'none' tokens carry an empty signature segment -> rejected as malformed;
+    # a 'none' header kept with a non-empty signature is rejected at the alg gate
+    # (see test_verify_rejects_non_eddsa_alg). Either way it never verifies.
+    with pytest.raises(PayloadEncryptionError):
+        crypto.verify(f"{header}.{body}.", _ED25519_PUB)
+
+
+def test_verify_rejects_non_eddsa_alg():
+    _head, body, sig = _TS_JWS_VECTOR.split(".")
+    header = base64.urlsafe_b64encode(b'{"alg":"HS256"}').rstrip(b"=").decode()
+    with pytest.raises(PayloadEncryptionError, match="alg"):
+        crypto.verify(f"{header}.{body}.{sig}", _ED25519_PUB)
+
+
+def test_verify_rejects_malformed():
+    with pytest.raises(PayloadEncryptionError, match="3 parts"):
+        crypto.verify("only.two", _ED25519_PUB)
+
+
+def test_sign_requires_private_key():
+    _priv, pub = crypto.generate_ed25519_keypair()
+    with pytest.raises(PayloadEncryptionError, match="private key"):
+        crypto.sign("x", pub)  # a public-only JWK cannot sign
