@@ -3495,6 +3495,8 @@ class Agent(FastAPI):
         system_prompt: Optional[str] = None,
         env: Optional[Dict[str, str]] = None,
         cwd: Optional[str] = None,
+        project_dir: Optional[str] = None,
+        schema_mode: Optional[str] = None,
         **kwargs,
     ) -> "HarnessResult":
         """
@@ -3514,7 +3516,21 @@ class Agent(FastAPI):
             permission_mode: Permission mode ("plan", "auto", None).
             system_prompt: System prompt for the agent.
             env: Environment variables for the agent.
-            cwd: Working directory for the agent.
+            cwd: Working directory for the agent process. When ``project_dir`` is
+                not set, this is also the agent's root and where the schema output
+                file is placed.
+            project_dir: Root directory the agent may read and write (maps to the
+                provider's project-root flag, e.g. opencode ``--dir``, codex
+                ``-C``, or the process cwd for gemini/claude). Set this when the
+                agent must read files across a shared repo while ``cwd`` points at
+                a nested task directory. The schema output file is then placed in
+                an isolated temp dir *under* ``project_dir`` so the provider never
+                rejects it as an external-directory write.
+            schema_mode: How schema output is produced. "single" (default) asks
+                for one Write of the whole object. "incremental" builds it one
+                top-level field at a time and recovers by patching only the
+                failing fields — more robust for large or deeply nested schemas.
+                "auto" uses incremental only when the schema is large.
             **kwargs: Additional provider-specific options.
 
         Returns:
@@ -3532,6 +3548,8 @@ class Agent(FastAPI):
             system_prompt=system_prompt,
             env=env,
             cwd=cwd,
+            project_dir=project_dir,
+            schema_mode=schema_mode,
             **kwargs,
         )
 

@@ -5,17 +5,24 @@ import json
 import logging
 import os
 import random
+import shutil
+import tempfile
 import time
 from typing import Any, Dict, List, Optional
 
 from agentfield.harness._result import FailureType, HarnessResult, RawResult
 from agentfield.harness._schema import (
     build_followup_prompt,
+    build_incremental_followup,
+    build_incremental_prompt_suffix,
     build_prompt_suffix,
     cleanup_temp_files,
+    diagnose_field_failures,
     diagnose_output_failure,
     get_output_path,
+    is_large_schema,
     parse_and_validate,
+    schema_to_json_schema,
     try_parse_from_text,
 )
 from agentfield.harness.providers._base import HarnessProvider
@@ -132,7 +139,10 @@ async def _ai_schema_repair(
         )
         content = response.choices[0].message.content  # type: ignore[union-attr]
     except Exception as exc:
-        logger.info("AI schema repair: LLM call failed (%s); falling through to harness retry", exc)
+        logger.info(
+            "AI schema repair: LLM call failed (%s); falling through to harness retry",
+            exc,
+        )
         return None
 
     if not content:
@@ -165,6 +175,7 @@ def _resolve_options(
             "gemini_bin",
             "opencode_bin",
             "schema_max_retries",
+            "schema_mode",
         ]:
             val = getattr(config, field_name, None)
             if val is not None:
@@ -213,6 +224,7 @@ class HarnessRunner:
         system_prompt: Optional[str] = None,
         env: Optional[Dict[str, str]] = None,
         cwd: Optional[str] = None,
+        project_dir: Optional[str] = None,
         **kwargs: Any,
     ) -> HarnessResult:
         overrides = {
@@ -225,6 +237,7 @@ class HarnessRunner:
             "system_prompt": system_prompt,
             "env": env,
             "cwd": cwd,
+            "project_dir": project_dir,
             **kwargs,
         }
         options = _resolve_options(self._config, overrides)
@@ -236,14 +249,45 @@ class HarnessRunner:
                 "or pass it to .harness() call."
             )
 
-        resolved_cwd = str(options.get("cwd", "."))
+        resolved_cwd = str(options.get("cwd") or ".")
         provider_instance = self._build_provider(str(resolved_provider), options)
 
-        output_dir = resolved_cwd
+        # Where the schema output file (.agentfield_output.json) is written and
+        # read back. It MUST sit inside the agent's allowed root, or providers
+        # like OpenCode reject the write as an external-directory access
+        # (agentfield#684). When project_dir is set, the agent's root is
+        # project_dir (see each provider's --dir / -C handling), which may differ
+        # from cwd — so the output file goes in an isolated temp dir *under*
+        # project_dir, never in a sibling/nested cwd. When project_dir is unset,
+        # cwd is the root and the output file goes directly in cwd (unchanged).
+        # This mirrors the Go SDK runner.
+        resolved_project_dir = options.get("project_dir")
+        temp_output_dir: Optional[str] = None
+        if isinstance(resolved_project_dir, str) and resolved_project_dir:
+            os.makedirs(resolved_project_dir, exist_ok=True)
+            temp_output_dir = tempfile.mkdtemp(
+                prefix=".agentfield-out-", dir=resolved_project_dir
+            )
+            output_dir = temp_output_dir
+        else:
+            output_dir = resolved_cwd
+
+        # schema_mode selects how the agent is asked to produce the output:
+        #   "single"      — one Write of the whole object (default, cheapest)
+        #   "incremental" — build the object one top-level field at a time, with
+        #                   field-level recovery (robust for large/deep schemas)
+        #   "auto"        — incremental only when the schema is large, else single
+        use_incremental = self._resolve_incremental(schema, options)
+        options["_use_incremental"] = use_incremental
 
         effective_prompt = prompt
         if schema is not None:
-            effective_prompt = prompt + build_prompt_suffix(schema, output_dir)
+            suffix = (
+                build_incremental_prompt_suffix(schema, output_dir)
+                if use_incremental
+                else build_prompt_suffix(schema, output_dir)
+            )
+            effective_prompt = prompt + suffix
         options["_original_prompt"] = effective_prompt
 
         start_time = time.monotonic()
@@ -278,6 +322,24 @@ class HarnessRunner:
         finally:
             if schema is not None:
                 cleanup_temp_files(output_dir)
+            if temp_output_dir is not None:
+                shutil.rmtree(temp_output_dir, ignore_errors=True)
+
+    @staticmethod
+    def _resolve_incremental(schema: Any, options: Dict[str, Any]) -> bool:
+        """Decide whether to use the incremental field-by-field schema build."""
+        if schema is None:
+            return False
+        mode = str(options.get("schema_mode") or "single").lower()
+        if mode == "incremental":
+            return True
+        if mode == "auto":
+            try:
+                schema_json = json.dumps(schema_to_json_schema(schema))
+            except Exception:
+                return False
+            return is_large_schema(schema_json)
+        return False
 
     def _build_provider(
         self, provider_name: str, options: Dict[str, Any]
@@ -343,6 +405,16 @@ class HarnessRunner:
             options.get("schema_max_retries", DEFAULT_SCHEMA_RETRIES)
         )
 
+        # Surfaced on every terminal schema failure so callers can immediately
+        # see which directory the agent was rooted at vs. where the output file
+        # was expected — the two most common causes of "output not created"
+        # (agentfield#684, issue ask #5).
+        dir_context = (
+            f" [provider={options.get('provider')!r}, "
+            f"project_dir={options.get('project_dir')!r}, "
+            f"cwd={options.get('cwd')!r}, output_path={output_path!r}]"
+        )
+
         all_raws: List[RawResult] = [initial_raw]
 
         validated = parse_and_validate(output_path, schema)
@@ -399,7 +471,8 @@ class HarnessRunner:
                 parsed=None,
                 is_error=True,
                 error_message=(
-                    f"{provider_error} Output file was not created at {output_path}."
+                    f"{provider_error} Output file was not created at "
+                    f"{output_path}.{dir_context}"
                 ),
                 failure_type=initial_raw.failure_type,
                 cost_usd=cost,
@@ -428,9 +501,17 @@ class HarnessRunner:
                     )
                 )
             else:
-                error_detail = diagnose_output_failure(output_path, schema)
                 _orig = options.get("_original_prompt", "")
-                _followup = build_followup_prompt(error_detail, cwd, schema)
+                if options.get("_use_incremental"):
+                    # Incremental mode: patch only the fields that are missing or
+                    # invalid, one at a time, instead of regenerating the whole
+                    # object. The partial output file persists on disk between
+                    # attempts, so the agent edits it in place.
+                    field_errors = diagnose_field_failures(output_path, schema)
+                    _followup = build_incremental_followup(field_errors, cwd, schema)
+                else:
+                    error_detail = diagnose_output_failure(output_path, schema)
+                    _followup = build_followup_prompt(error_detail, cwd, schema)
                 # Keep the original goal/task on non-crash retries. Without this
                 # the agent retries with only the schema-correction text and loses
                 # the goal (e.g. PM emits a placeholder PRD that poisons the run).
@@ -499,7 +580,7 @@ class HarnessRunner:
             is_error=True,
             error_message=(
                 f"Schema validation failed after {schema_max_retries} "
-                f"retry attempt(s). Last error: {final_diagnosis}"
+                f"retry attempt(s). Last error: {final_diagnosis}{dir_context}"
             ),
             failure_type=FailureType.SCHEMA,
             cost_usd=cost,

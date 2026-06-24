@@ -120,7 +120,9 @@ class OpenCodeProvider:
     # (~6–8 review_dimension phases + 3 meta-lenses); OpenRouter handles
     # this comfortably on Kimi K2.6. Lower via OPENCODE_MAX_CONCURRENT if
     # your provider has tighter per-key rate limits.
-    _MAX_CONCURRENT: ClassVar[int] = int(os.environ.get("OPENCODE_MAX_CONCURRENT", "10"))
+    _MAX_CONCURRENT: ClassVar[int] = int(
+        os.environ.get("OPENCODE_MAX_CONCURRENT", "10")
+    )
     _concurrency_sem: ClassVar[Optional[asyncio.Semaphore]] = None
 
     # Shared XDG_DATA_HOME across calls when opt-in is enabled. SQLite
@@ -152,12 +154,15 @@ class OpenCodeProvider:
         cmd = [self._bin, "run"]
         cmd.extend(["--format", "json"])
 
-        # Use --dir for project directory (replaces deprecated -c which now means --continue)
-        cwd_value = options.get("cwd")
-        if isinstance(cwd_value, str):
-            cmd.extend(["--dir", cwd_value])
-        elif isinstance(options.get("project_dir"), str):
-            cmd.extend(["--dir", str(options["project_dir"])])
+        # --dir is the project root the agent may read and write. project_dir is
+        # the canonical field; fall back to cwd when it is unset. Previously cwd
+        # took precedence, so a nested cwd under a shared project_dir made
+        # opencode treat the rest of the root as an external directory and
+        # auto-reject reads/writes of sibling paths — see agentfield#684. This
+        # now matches the Go SDK's opencode provider precedence.
+        dir_value = options.get("project_dir") or options.get("cwd")
+        if isinstance(dir_value, str):
+            cmd.extend(["--dir", dir_value])
 
         # Pass model via -m flag on the run subcommand
         if options.get("model"):
@@ -293,10 +298,7 @@ class OpenCodeProvider:
                 if clean_stderr
                 else (f"Process exited with code {returncode} and produced no output.")
             )
-        elif (
-            event_error is not None
-            and result_text is None
-        ):
+        elif event_error is not None and result_text is None:
             failure_type = FailureType.CRASH
             is_error = True
             error_message = event_error

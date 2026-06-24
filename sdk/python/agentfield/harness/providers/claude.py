@@ -41,8 +41,13 @@ class ClaudeCodeProvider:
         agent_options: dict[str, object] = {}
         if options.get("model") is not None:
             agent_options["model"] = options["model"]
-        if options.get("cwd") is not None:
-            agent_options["cwd"] = options["cwd"]
+        # Agent root: project_dir is the canonical field, fall back to cwd
+        # (agentfield#686). The SDK's cwd is both the process dir and the root
+        # the agent operates in; the runner places the schema output file under
+        # this same root.
+        root = options.get("project_dir") or options.get("cwd")
+        if root is not None:
+            agent_options["cwd"] = root
         if options.get("max_turns") is not None:
             agent_options["max_turns"] = options["max_turns"]
         if options.get("tools") is not None:

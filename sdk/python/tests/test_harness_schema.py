@@ -5,11 +5,15 @@ from pydantic import BaseModel
 from agentfield.harness._schema import (
     LARGE_SCHEMA_TOKEN_THRESHOLD,
     build_followup_prompt,
+    build_incremental_followup,
+    build_incremental_prompt_suffix,
     build_prompt_suffix,
     cleanup_temp_files,
     cosmetic_repair,
+    diagnose_field_failures,
     get_output_path,
     get_schema_path,
+    get_top_level_fields,
     is_large_schema,
     parse_and_validate,
     read_and_parse,
@@ -22,6 +26,11 @@ from agentfield.harness._schema import (
 class TestSchema(BaseModel):
     name: str
     count: int
+
+
+class OptionalFieldSchema(BaseModel):
+    name: str
+    note: str = ""
 
 
 def test_get_output_path_returns_deterministic_path(tmp_path):
@@ -159,3 +168,57 @@ def test_build_followup_prompt_includes_error_and_output_path(tmp_path):
     prompt = build_followup_prompt("count is required", str(tmp_path))
     assert "count is required" in prompt
     assert str(tmp_path / ".agentfield_output.json") in prompt
+
+
+def test_get_top_level_fields_reports_names_and_required():
+    fields = get_top_level_fields(TestSchema)
+    assert ("name", True) in fields
+    assert ("count", True) in fields
+
+    optional_fields = dict(get_top_level_fields(OptionalFieldSchema))
+    assert optional_fields["name"] is True
+    assert optional_fields["note"] is False
+
+
+def test_build_incremental_prompt_suffix_lists_fields_and_instructions(tmp_path):
+    suffix = build_incremental_prompt_suffix(TestSchema, str(tmp_path))
+    assert "incremental build" in suffix.lower()
+    assert "one field at a time" in suffix.lower() or "one at a time" in suffix.lower()
+    assert "name" in suffix
+    assert "count" in suffix
+    assert str(tmp_path / ".agentfield_output.json") in suffix
+
+
+def test_diagnose_field_failures_flags_missing_required_field(tmp_path):
+    path = tmp_path / ".agentfield_output.json"
+    path.write_text(json.dumps({"name": "ok"}))  # missing 'count'
+    failures = diagnose_field_failures(str(path), TestSchema)
+    assert "count" in failures
+
+
+def test_diagnose_field_failures_flags_invalid_field_type(tmp_path):
+    path = tmp_path / ".agentfield_output.json"
+    path.write_text(json.dumps({"name": "ok", "count": "not-an-int"}))
+    failures = diagnose_field_failures(str(path), TestSchema)
+    assert "count" in failures
+
+
+def test_diagnose_field_failures_empty_when_valid(tmp_path):
+    path = tmp_path / ".agentfield_output.json"
+    path.write_text(json.dumps({"name": "ok", "count": 3}))
+    assert diagnose_field_failures(str(path), TestSchema) == {}
+
+
+def test_diagnose_field_failures_missing_file_reports_required(tmp_path):
+    path = tmp_path / ".agentfield_output.json"  # never created
+    failures = diagnose_field_failures(str(path), TestSchema)
+    assert "name" in failures and "count" in failures
+
+
+def test_build_incremental_followup_lists_only_failing_fields(tmp_path):
+    followup = build_incremental_followup(
+        {"count": "missing required field"}, str(tmp_path), TestSchema
+    )
+    assert "count" in followup
+    assert "patch only" in followup.lower()
+    assert str(tmp_path / ".agentfield_output.json") in followup

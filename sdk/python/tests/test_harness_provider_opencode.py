@@ -253,6 +253,37 @@ async def test_opencode_uses_project_dir_when_no_cwd(
 
 
 @pytest.mark.asyncio
+async def test_opencode_project_dir_takes_precedence_over_cwd(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Regression for agentfield#684: when BOTH cwd and project_dir are set,
+    --dir must be project_dir (the agent's root), not the nested cwd. Otherwise
+    reading a sibling path under the shared root looks external to opencode and
+    gets auto-rejected, so the schema output file is never written.
+    """
+    captured_cmd: list[str] | None = None
+
+    async def capture_cmd(cmd: list[str], *, env=None, cwd=None, timeout=None):
+        nonlocal captured_cmd
+        captured_cmd = cmd
+        return "result", "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", capture_cmd)
+
+    provider = OpenCodeProvider()
+    await provider.execute(
+        "read a sibling file",
+        {"cwd": "/research-lab/tasks/a", "project_dir": "/research-lab"},
+    )
+
+    assert captured_cmd is not None
+    dir_idx = captured_cmd.index("--dir")
+    assert captured_cmd[dir_idx + 1] == "/research-lab"
+    # The nested cwd must NOT be used as the project root.
+    assert "/research-lab/tasks/a" not in captured_cmd
+
+
+@pytest.mark.asyncio
 async def test_opencode_exit0_with_error_stderr_is_treated_as_failure(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -345,7 +376,7 @@ async def test_opencode_exit_nonzero_uses_extracted_error_not_truncated_prelude(
 ):
     """Non-zero exit + long migration prelude in stderr should still surface
     the real Error: line, not just the first 1000 chars of the prelude."""
-    long_prelude = ("Performing one time database migration line\n" * 30)
+    long_prelude = "Performing one time database migration line\n" * 30
     stderr = long_prelude + "Error: AuthenticationError: bad key\n"
 
     async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):

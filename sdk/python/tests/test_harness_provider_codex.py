@@ -147,9 +147,11 @@ async def test_codex_provider_constructs_command_and_maps_result(
         "/usr/local/bin/codex",
         "exec",
         "--json",
+        "--skip-git-repo-check",
         "-C",
         "/tmp/work",
-        "--full-auto",
+        "--sandbox",
+        "workspace-write",
         "hello",
     ]
     assert captured["env"] == {"A": "1"}
@@ -240,3 +242,39 @@ def test_factory_builds_codex_provider_with_config_bin() -> None:
 
     assert isinstance(provider, CodexProvider)
     assert provider._bin == "/opt/codex"
+
+
+@pytest.mark.asyncio
+async def test_codex_project_dir_is_root_and_plan_maps_to_read_only(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """agentfield#686/#687: project_dir wins as -C root; plan -> read-only sandbox."""
+    captured: dict[str, Any] = {}
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+        _ = (env, timeout)
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        return '{"type":"turn.completed","text":"x"}\n', "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.codex.run_cli", fake_run_cli)
+
+    provider = CodexProvider()
+    await provider.execute(
+        "hi",
+        {
+            "cwd": "/root/tasks/a",
+            "project_dir": "/root",
+            "permission_mode": "plan",
+        },
+    )
+
+    cmd = captured["cmd"]
+    dir_idx = cmd.index("-C")
+    assert cmd[dir_idx + 1] == "/root"  # project_dir wins over nested cwd
+    assert "/root/tasks/a" not in cmd
+    sb_idx = cmd.index("--sandbox")
+    assert cmd[sb_idx + 1] == "read-only"
+    assert "--full-auto" not in cmd
+    assert "--skip-git-repo-check" in cmd
+    assert captured["cwd"] == "/root"

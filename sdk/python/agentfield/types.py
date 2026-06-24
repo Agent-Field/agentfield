@@ -318,6 +318,15 @@ class HarnessConfig(BaseModel):
     opencode_bin: str = Field(
         default="opencode", description="Path to opencode binary."
     )
+    schema_mode: str = Field(
+        default="single",
+        description=(
+            'How schema output is produced: "single" (one Write of the whole '
+            'object, default), "incremental" (build it one top-level field at a '
+            "time with field-level recovery — robust for large/deep schemas), or "
+            '"auto" (incremental only when the schema is large).'
+        ),
+    )
 
 
 class AIConfig(BaseModel):

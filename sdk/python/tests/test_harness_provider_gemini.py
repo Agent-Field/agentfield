@@ -37,11 +37,12 @@ async def test_gemini_provider_constructs_command_and_maps_result(
         },
     )
 
+    # gemini has no -C flag (it crashes on unknown args); the working dir is set
+    # via the process cwd. --yolo is the auto-approve flag (not --sandbox, which
+    # restricts execution). See agentfield#686, #687.
     assert captured["cmd"] == [
         "/usr/local/bin/gemini",
-        "-C",
-        "/tmp/work",
-        "--sandbox",
+        "--yolo",
         "-p",
         "hello",
     ]
@@ -148,3 +149,55 @@ async def test_gemini_cost_none_without_model(monkeypatch: pytest.MonkeyPatch):
     raw = await provider.execute("hello", {})
 
     assert raw.metrics.total_cost_usd is None
+
+
+@pytest.mark.asyncio
+async def test_gemini_never_uses_dash_C_and_project_dir_is_cwd(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """agentfield#686/#687: gemini has no -C (it crashes); project_dir is the
+    process cwd; plan -> --approval-mode plan; never --sandbox for permissions."""
+    captured: dict[str, Any] = {}
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+        _ = (env, timeout)
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        return "ok\n", "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.gemini.run_cli", fake_run_cli)
+
+    provider = GeminiProvider()
+    await provider.execute(
+        "hi",
+        {
+            "cwd": "/root/tasks/a",
+            "project_dir": "/root",
+            "permission_mode": "plan",
+        },
+    )
+
+    cmd = captured["cmd"]
+    assert "-C" not in cmd  # gemini rejects -C ("Unknown argument: C")
+    assert captured["cwd"] == "/root"  # project_dir is the process root
+    am_idx = cmd.index("--approval-mode")
+    assert cmd[am_idx + 1] == "plan"
+    assert "--sandbox" not in cmd
+
+
+@pytest.mark.asyncio
+async def test_gemini_auto_uses_yolo_not_sandbox(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, Any] = {}
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+        _ = (env, cwd, timeout)
+        captured["cmd"] = cmd
+        return "ok\n", "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.gemini.run_cli", fake_run_cli)
+
+    provider = GeminiProvider()
+    await provider.execute("hi", {"permission_mode": "auto"})
+
+    assert "--yolo" in captured["cmd"]
+    assert "--sandbox" not in captured["cmd"]

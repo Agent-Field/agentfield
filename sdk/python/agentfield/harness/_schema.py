@@ -313,6 +313,140 @@ def diagnose_output_failure(file_path: str, schema: Any) -> str:
         )
 
 
+def get_top_level_fields(schema: Any) -> list[tuple[str, bool]]:
+    """Return [(field_name, is_required), ...] for the schema's top-level keys.
+
+    Used by incremental mode to drive a field-by-field build. Works for Pydantic
+    models (via JSON Schema) and plain dict schemas.
+    """
+    json_schema = schema_to_json_schema(schema)
+    props = json_schema.get("properties", {})
+    required = set(json_schema.get("required", []))
+    return [(name, name in required) for name in props]
+
+
+def build_incremental_prompt_suffix(schema: Any, cwd: str) -> str:
+    """OUTPUT REQUIREMENTS suffix that instructs a field-by-field build.
+
+    Unlike the single-shot suffix, this tells the agent to initialize an empty
+    object and add one top-level field at a time, re-reading the file after each
+    edit. This avoids truncation/drift on large or deeply nested schemas where
+    emitting the whole object in one Write is unreliable.
+    """
+    json_schema = schema_to_json_schema(schema)
+    schema_json = json.dumps(json_schema, indent=2)
+    output_path = get_output_path(cwd)
+
+    fields = get_top_level_fields(schema)
+    field_lines = "\n".join(
+        f"  - {name} ({'required' if req else 'optional'})" for name, req in fields
+    )
+
+    if is_large_schema(schema_json):
+        schema_path = get_schema_path(cwd)
+        write_schema_file(schema_json, cwd)
+        schema_ref = (
+            f"The full JSON Schema is at: {schema_path}\n"
+            "Read it for each field's exact shape.\n"
+        )
+    else:
+        schema_ref = f"Full JSON Schema:\n{schema_json}\n"
+
+    return (
+        "\n\n---\n"
+        "CRITICAL OUTPUT REQUIREMENTS (incremental build):\n"
+        f"Produce a single JSON object in this file using your Write/Edit tools: "
+        f"{output_path}\n"
+        "Build it ONE FIELD AT A TIME so nothing gets truncated:\n"
+        "  1. First create the file with an empty object: {}\n"
+        "  2. Then add each field listed below one at a time using Edit, and after\n"
+        "     each edit re-read the file to confirm it is still valid JSON.\n"
+        "  3. Each field's value MUST conform to its shape in the schema.\n"
+        "  4. Do not finish until every required field is present.\n\n"
+        f"Top-level fields to add:\n{field_lines}\n\n"
+        f"{schema_ref}\n"
+        f"The final file at {output_path} MUST contain ONLY the complete valid JSON "
+        "object — no markdown fences, no commentary, no extra text."
+    )
+
+
+def diagnose_field_failures(file_path: str, schema: Any) -> Dict[str, str]:
+    """Map each missing/invalid top-level field to a short reason.
+
+    Returns an empty dict when the file validates cleanly. Used by incremental
+    mode to drive targeted "patch only these fields" follow-ups instead of a
+    full re-run. Tolerant: cosmetically repairs the file before inspecting it.
+    """
+    if isinstance(schema, dict):
+        return {}
+
+    json_schema = schema_to_json_schema(schema)
+    props = list(json_schema.get("properties", {}).keys())
+    required = set(json_schema.get("required", []))
+
+    data = read_and_parse(file_path)
+    if data is None:
+        data = read_repair_and_parse(file_path)
+
+    if not isinstance(data, dict):
+        # Whole file unusable — report every required field (or all fields if
+        # none are required) as needing to be written.
+        targets = list(required) or props
+        return {name: "output file missing or not a JSON object" for name in targets}
+
+    failures: Dict[str, str] = {}
+    for name in required:
+        if name not in data:
+            failures[name] = "missing required field"
+
+    try:
+        validate_against_schema(data, schema)
+    except Exception as exc:
+        errors_fn = getattr(exc, "errors", None)
+        if callable(errors_fn):
+            try:
+                for err in errors_fn():
+                    loc = err.get("loc", ())
+                    if loc:
+                        failures.setdefault(str(loc[0]), err.get("msg", "invalid"))
+            except Exception:
+                failures.setdefault("_root", str(exc)[:200])
+        else:
+            failures.setdefault("_root", str(exc)[:200])
+
+    return failures
+
+
+def build_incremental_followup(
+    field_errors: Dict[str, str], cwd: str, schema: Any
+) -> str:
+    """Follow-up prompt that asks the agent to patch only the failing fields."""
+    output_path = get_output_path(cwd)
+    field_lines = "\n".join(
+        f"  - {name}: {reason}" for name, reason in field_errors.items()
+    )
+
+    json_schema = schema_to_json_schema(schema)
+    schema_json = json.dumps(json_schema, indent=2)
+    if is_large_schema(schema_json):
+        schema_path = get_schema_path(cwd)
+        if not os.path.exists(schema_path):
+            write_schema_file(schema_json, cwd)
+        schema_ref = f"Full schema is at: {schema_path}\n"
+    else:
+        schema_ref = f"Full schema:\n{schema_json}\n"
+
+    return (
+        f"PARTIAL OUTPUT NEEDS FIXES. The JSON at {output_path} is incomplete or "
+        "invalid.\n"
+        "Patch ONLY these fields, one at a time, using Edit, keeping the file valid "
+        "JSON after each change:\n"
+        f"{field_lines}\n\n"
+        f"{schema_ref}"
+        "Leave every already-correct field unchanged. Do NOT rewrite the whole file."
+    )
+
+
 def build_followup_prompt(error_message: str, cwd: str, schema: Any = None) -> str:
     output_path = get_output_path(cwd)
     schema_path = get_schema_path(cwd)

@@ -22,12 +22,25 @@ class CodexProvider:
         self._bin = bin_path
 
     async def execute(self, prompt: str, options: dict[str, object]) -> RawResult:
-        cmd = [self._bin, "exec", "--json"]
+        # --skip-git-repo-check lets the harness run in arbitrary working dirs
+        # (temp dirs, non-repo project roots); codex exec otherwise refuses to
+        # start outside a git repo.
+        cmd = [self._bin, "exec", "--json", "--skip-git-repo-check"]
 
-        if options.get("cwd"):
-            cmd.extend(["-C", str(options["cwd"])])
-        if options.get("permission_mode") == "auto":
-            cmd.append("--full-auto")
+        # Agent root: project_dir is the canonical field, fall back to cwd. -C is
+        # codex's single working-root flag (agentfield#686).
+        root = options.get("project_dir") or options.get("cwd")
+        if isinstance(root, str):
+            cmd.extend(["-C", root])
+
+        # permission_mode → sandbox policy (agentfield#687). codex exec never
+        # prompts (approval policy is always Never); the sandbox controls what it
+        # may write. --full-auto is deprecated in favour of --sandbox.
+        permission_mode = options.get("permission_mode")
+        if permission_mode == "auto":
+            cmd.extend(["--sandbox", "workspace-write"])
+        elif permission_mode == "plan":
+            cmd.extend(["--sandbox", "read-only"])
 
         cmd.append(prompt)
 
@@ -40,10 +53,7 @@ class CodexProvider:
                 if isinstance(key, str) and isinstance(value, str)
             }
 
-        cwd: Optional[str] = None
-        cwd_value = options.get("cwd")
-        if isinstance(cwd_value, str):
-            cwd = cwd_value
+        cwd: Optional[str] = root if isinstance(root, str) else None
         start_api = time.monotonic()
 
         try:
