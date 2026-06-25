@@ -85,15 +85,7 @@ func (b *ControlPlaneMemoryBackend) Get(scope MemoryScope, scopeID, key string) 
 		return nil, false, err
 	}
 
-	body := map[string]any{
-		"key":   key,
-		"scope": b.apiScope(scope),
-	}
-	reader, err := jsonReader(body)
-	if err != nil {
-		return nil, false, err
-	}
-	req, err := http.NewRequest(http.MethodPost, endpoint, reader)
+	req, err := http.NewRequest(http.MethodPost, endpoint, keyScopeReader(key, b.apiScope(scope)))
 	if err != nil {
 		return nil, false, err
 	}
@@ -126,15 +118,7 @@ func (b *ControlPlaneMemoryBackend) Delete(scope MemoryScope, scopeID, key strin
 		return err
 	}
 
-	body := map[string]any{
-		"key":   key,
-		"scope": b.apiScope(scope),
-	}
-	reader, err := jsonReader(body)
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequest(http.MethodPost, endpoint, reader)
+	req, err := http.NewRequest(http.MethodPost, endpoint, keyScopeReader(key, b.apiScope(scope)))
 	if err != nil {
 		return err
 	}
@@ -425,4 +409,16 @@ func jsonReader(v any) (io.Reader, error) {
 		return nil, err
 	}
 	return bytes.NewReader(data), nil
+}
+
+func keyScopeReader(key, scope string) io.Reader {
+	var body bytes.Buffer
+	_ = json.NewEncoder(&body).Encode(struct {
+		Key   string `json:"key"`
+		Scope string `json:"scope"`
+	}{
+		Key:   key,
+		Scope: scope,
+	})
+	return &body
 }
