@@ -139,6 +139,7 @@ func TestNewAgentFieldServer(t *testing.T) {
 		cfg.Features.DID.Authorization.DIDAuthEnabled = true
 		cfg.Features.DID.Authorization.Domain = "example.com"
 		cfg.Features.DID.Authorization.InternalToken = "internal-token"
+		cfg.Features.DID.Authorization.InsecureDisableAdminAuth = true
 		cfg.Features.DID.Authorization.TagApprovalRules.DefaultMode = "manual"
 		cfg.Features.Connector.Enabled = false
 
@@ -196,6 +197,31 @@ func TestValidateAPIAuthConfigWarnsWhenExplicitlyDisabled(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, output.String(), `"level":"warn"`)
 	require.Contains(t, output.String(), "API key authentication is explicitly disabled")
+}
+
+func TestValidateAdminAuthConfigWarnsWhenExplicitlyDisabled(t *testing.T) {
+	previousLogger := logger.Logger
+	var output bytes.Buffer
+	logger.Logger = zerolog.New(&output)
+	t.Cleanup(func() { logger.Logger = previousLogger })
+
+	err := validateAdminAuthConfig(config.AuthorizationConfig{InsecureDisableAdminAuth: true})
+	require.NoError(t, err)
+	require.Contains(t, output.String(), `"level":"warn"`)
+	require.Contains(t, output.String(), "Admin token authentication is explicitly disabled")
+}
+
+func TestNewAgentFieldServerRejectsEmptyAdminToken(t *testing.T) {
+	cfg := baseConfigForDBTests()
+	cfg.API.Auth.APIKey = ""
+	cfg.API.Auth.InsecureDisableAuth = true
+	cfg.Features.DID.Enabled = false
+	cfg.Features.DID.Authorization.Enabled = true
+	cfg.Features.DID.Authorization.AdminToken = ""
+
+	srv, err := NewAgentFieldServer(&cfg)
+	require.Nil(t, srv)
+	require.ErrorContains(t, err, "AGENTFIELD_INSECURE_ADMIN_NO_TOKEN=true")
 }
 
 func TestStartAndStop(t *testing.T) {
@@ -360,6 +386,7 @@ func TestSetupRoutesWithDIDServices(t *testing.T) {
 	cfg.Features.DID.Authorization.DIDAuthEnabled = true
 	cfg.Features.DID.Authorization.Domain = "example.com"
 	cfg.Features.DID.Authorization.InternalToken = "internal-token"
+	cfg.Features.DID.Authorization.InsecureDisableAdminAuth = true
 	cfg.Features.DID.Authorization.TagApprovalRules.DefaultMode = "manual"
 	cfg.Features.Connector.Enabled = false
 

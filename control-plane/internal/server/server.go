@@ -104,6 +104,12 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		return nil, fmt.Errorf("invalid API authentication configuration: %w", err)
 	}
 
+	if cfg.Features.DID.Authorization.Enabled {
+		if err := validateAdminAuthConfig(cfg.Features.DID.Authorization); err != nil {
+			return nil, fmt.Errorf("invalid admin authentication configuration: %w", err)
+		}
+	}
+
 	// Define agentfieldHome at the very top
 	agentfieldHome := os.Getenv("AGENTFIELD_HOME")
 	if agentfieldHome == "" {
@@ -285,9 +291,6 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		didWebService = services.NewDIDWebService(domain, didService, storageProvider)
 
 		if cfg.Features.DID.Authorization.Enabled {
-			if cfg.Features.DID.Authorization.AdminToken == "" {
-				logger.Logger.Error().Msg("⚠️  SECURITY WARNING: Authorization is enabled but no admin_token is configured! Admin routes (tag approval, policy management) are unprotected. Set AGENTFIELD_AUTHORIZATION_ADMIN_TOKEN for production use.")
-			}
 			if cfg.Features.DID.Authorization.TagApprovalRules.DefaultMode == "" || cfg.Features.DID.Authorization.TagApprovalRules.DefaultMode == "auto" {
 				logger.Logger.Warn().Msg("⚠️  Tag approval default_mode is 'auto' — all agent tags will be auto-approved. Set tag_approval_rules.default_mode to 'manual' for production.")
 			}
@@ -546,6 +549,22 @@ func validateAPIAuthConfig(auth config.AuthConfig) error {
 		logger.Logger.Warn().
 			Bool("insecure_disable_auth", true).
 			Msg("SECURITY WARNING: API key authentication is explicitly disabled; all API routes relying on API-key authentication are unauthenticated")
+	}
+	return nil
+}
+
+func validateAdminAuthConfig(authz config.AuthorizationConfig) error {
+	adminConfig := middleware.AdminAuthConfig{
+		AdminToken:               authz.AdminToken,
+		InsecureDisableAdminAuth: authz.InsecureDisableAdminAuth,
+	}
+	if err := middleware.ValidateAdminTokenAuth(adminConfig); err != nil {
+		return err
+	}
+	if authz.AdminToken == "" {
+		logger.Logger.Warn().
+			Bool("insecure_disable_admin_auth", true).
+			Msg("SECURITY WARNING: Admin token authentication is explicitly disabled; admin routes (tag approval, policy management) are unauthenticated")
 	}
 	return nil
 }

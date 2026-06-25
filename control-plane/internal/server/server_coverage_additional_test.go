@@ -45,6 +45,7 @@ func TestNewAgentFieldServerCoversFallbacksAndOptionalServices(t *testing.T) {
 	cfg.Features.DID.Enabled = true
 	cfg.Features.DID.KeyAlgorithm = "Ed25519"
 	cfg.Features.DID.Authorization.Enabled = true
+	cfg.Features.DID.Authorization.InsecureDisableAdminAuth = true
 	cfg.Features.DID.Authorization.Domain = ""
 	cfg.Features.DID.Authorization.TagApprovalRules.DefaultMode = "auto"
 	cfg.Features.DID.Authorization.AccessPolicies = []config.AccessPolicyConfig{

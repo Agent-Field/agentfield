@@ -307,8 +307,12 @@ type AuthorizationConfig struct {
 	// DefaultApprovalDurationHours is the default duration for permission approvals
 	DefaultApprovalDurationHours int `yaml:"default_approval_duration_hours" mapstructure:"default_approval_duration_hours" default:"720"`
 	// AdminToken is a separate token required for admin operations (tag approval,
-	// policy management). If empty, admin routes fall back to the standard API key.
+	// policy management). When empty and InsecureDisableAdminAuth is false, admin
+	// routes will reject requests at startup or return 401.
 	AdminToken string `yaml:"admin_token" mapstructure:"admin_token"`
+	// InsecureDisableAdminAuth explicitly permits running admin routes without
+	// an admin token. This should only be enabled for trusted local development.
+	InsecureDisableAdminAuth bool `yaml:"insecure_disable_admin_auth" mapstructure:"insecure_disable_admin_auth"`
 	// InternalToken is sent as Authorization: Bearer header when the control plane
 	// forwards execution requests to agents. Agents with RequireOriginAuth enabled
 	// validate this token, preventing direct access to their HTTP ports.
@@ -657,6 +661,13 @@ func ApplyEnvOverrides(cfg *Config) {
 	}
 	if val := os.Getenv("AGENTFIELD_AUTHORIZATION_ADMIN_TOKEN"); val != "" {
 		cfg.Features.DID.Authorization.AdminToken = val
+	}
+	if val, ok := os.LookupEnv("AGENTFIELD_INSECURE_ADMIN_NO_TOKEN"); ok {
+		cfg.Features.DID.Authorization.InsecureDisableAdminAuth = parseEnvBool(val)
+	}
+	// Also support the nested path format for consistency.
+	if val, ok := os.LookupEnv("AGENTFIELD_AUTHORIZATION_INSECURE_DISABLE_ADMIN_AUTH"); ok {
+		cfg.Features.DID.Authorization.InsecureDisableAdminAuth = parseEnvBool(val)
 	}
 	if val := os.Getenv("AGENTFIELD_AUTHORIZATION_INTERNAL_TOKEN"); val != "" {
 		cfg.Features.DID.Authorization.InternalToken = val

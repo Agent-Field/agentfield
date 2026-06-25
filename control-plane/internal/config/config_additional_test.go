@@ -295,6 +295,7 @@ func TestApplyEnvOverrides(t *testing.T) {
 		"AGENTFIELD_AUTHORIZATION_DID_AUTH_ENABLED":                  "1",
 		"AGENTFIELD_AUTHORIZATION_DOMAIN":                            "auth.local",
 		"AGENTFIELD_AUTHORIZATION_ADMIN_TOKEN":                       "admin-token",
+		"AGENTFIELD_INSECURE_ADMIN_NO_TOKEN":                         "true",
 		"AGENTFIELD_AUTHORIZATION_INTERNAL_TOKEN":                    "internal-token",
 		"AGENTFIELD_AUTHORIZATION_DEFAULT_DENY":                      "true",
 		"AGENTFIELD_NODE_LOG_PROXY_CONNECT_TIMEOUT":                  "21s",
@@ -379,6 +380,7 @@ func TestApplyEnvOverrides(t *testing.T) {
 		!cfg.Features.DID.Authorization.DIDAuthEnabled ||
 		cfg.Features.DID.Authorization.Domain != "auth.local" ||
 		cfg.Features.DID.Authorization.AdminToken != "admin-token" ||
+		!cfg.Features.DID.Authorization.InsecureDisableAdminAuth ||
 		cfg.Features.DID.Authorization.InternalToken != "internal-token" ||
 		!cfg.Features.DID.Authorization.DefaultDeny {
 		t.Fatalf("unexpected authorization overrides: %+v", cfg.Features.DID.Authorization)
@@ -440,6 +442,31 @@ func TestApplyEnvOverridesAPIAuthInsecureDisable(t *testing.T) {
 
 		if cfg.API.Auth.InsecureDisableAuth {
 			t.Fatal("expected nested insecure API auth setting to take precedence")
+		}
+	})
+}
+
+func TestApplyEnvOverridesInsecureAdminNoToken(t *testing.T) {
+	t.Run("short environment name", func(t *testing.T) {
+		cfg := &Config{}
+		t.Setenv("AGENTFIELD_INSECURE_ADMIN_NO_TOKEN", "true")
+
+		ApplyEnvOverrides(cfg)
+
+		if !cfg.Features.DID.Authorization.InsecureDisableAdminAuth {
+			t.Fatal("expected insecure admin auth disable from environment")
+		}
+	})
+
+	t.Run("nested environment name takes precedence", func(t *testing.T) {
+		cfg := &Config{}
+		t.Setenv("AGENTFIELD_INSECURE_ADMIN_NO_TOKEN", "true")
+		t.Setenv("AGENTFIELD_AUTHORIZATION_INSECURE_DISABLE_ADMIN_AUTH", "false")
+
+		ApplyEnvOverrides(cfg)
+
+		if cfg.Features.DID.Authorization.InsecureDisableAdminAuth {
+			t.Fatal("expected nested insecure admin auth setting to take precedence")
 		}
 	})
 }

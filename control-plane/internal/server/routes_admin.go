@@ -17,7 +17,10 @@ func (s *AgentFieldServer) registerAdminRoutes(agentAPI *gin.RouterGroup) {
 	// Admin routes for tag approval and access policy management (VC-based authorization)
 	if s.config.Features.DID.Authorization.Enabled {
 		adminGroup := agentAPI.Group("")
-		adminGroup.Use(middleware.AdminTokenAuth(s.config.Features.DID.Authorization.AdminToken))
+		adminGroup.Use(middleware.AdminTokenAuth(middleware.AdminAuthConfig{
+			AdminToken:               s.config.Features.DID.Authorization.AdminToken,
+			InsecureDisableAdminAuth: s.config.Features.DID.Authorization.InsecureDisableAdminAuth,
+		}))
 
 		// Tag approval admin routes
 		if s.tagApprovalService != nil {

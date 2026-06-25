@@ -173,20 +173,44 @@ func queryAPIKeyAllowed(c *gin.Context, allowedPaths map[string]struct{}) bool {
 	return false
 }
 
+// AdminAuthConfig mirrors server configuration for admin token authentication.
+type AdminAuthConfig struct {
+	AdminToken               string
+	InsecureDisableAdminAuth bool
+}
+
+// ValidateAdminTokenAuth rejects an implicit unauthenticated admin configuration.
+func ValidateAdminTokenAuth(config AdminAuthConfig) error {
+	if config.AdminToken == "" && !config.InsecureDisableAdminAuth {
+		return errors.New("admin token is required when authorization is enabled; set AGENTFIELD_AUTHORIZATION_ADMIN_TOKEN or explicitly set AGENTFIELD_INSECURE_ADMIN_NO_TOKEN=true")
+	}
+	return nil
+}
+
 // AdminTokenAuth enforces a separate admin token for admin routes.
-// If adminToken is empty, the middleware is a no-op (falls back to global API key auth).
 // Admin tokens must be sent via the X-Admin-Token header only (not Bearer) to avoid
 // collision with the API key Bearer token namespace.
-func AdminTokenAuth(adminToken string) gin.HandlerFunc {
+func AdminTokenAuth(config AdminAuthConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if adminToken == "" {
+		// Unauthenticated admin operation must be explicitly enabled at startup.
+		if config.AdminToken == "" && config.InsecureDisableAdminAuth {
 			c.Next()
+			return
+		}
+
+		// Fail-closed: if the admin token is not configured and insecure mode
+		// was not explicitly enabled, reject all requests.
+		if config.AdminToken == "" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error":   "unauthorized",
+				"message": "admin authentication required but admin token is not configured on the server",
+			})
 			return
 		}
 
 		token := c.GetHeader("X-Admin-Token")
 
-		if subtle.ConstantTimeCompare([]byte(token), []byte(adminToken)) != 1 {
+		if subtle.ConstantTimeCompare([]byte(token), []byte(config.AdminToken)) != 1 {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 				"error":   "forbidden",
 				"message": "admin token required for this operation (use X-Admin-Token header)",
