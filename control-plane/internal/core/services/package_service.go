@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -548,60 +547,7 @@ func (ps *DefaultPackageService) copyFile(src, dst string) error {
 
 // installDependencies installs package dependencies
 func (ps *DefaultPackageService) installDependencies(packagePath string, metadata *packages.PackageMetadata) error {
-	// Install Python dependencies in a virtual environment
-	if len(metadata.Dependencies.Python) > 0 || ps.hasRequirementsFile(packagePath) {
-		// Create virtual environment
-		venvPath := filepath.Join(packagePath, "venv")
-
-		cmd := exec.Command("python3", "-m", "venv", venvPath)
-		if _, err := cmd.CombinedOutput(); err != nil {
-			// Try with python if python3 fails
-			cmd = exec.Command("python", "-m", "venv", venvPath)
-			if output, err := cmd.CombinedOutput(); err != nil {
-				return fmt.Errorf("failed to create virtual environment: %w\nOutput: %s", err, output)
-			}
-		}
-
-		// Determine pip path
-		var pipPath string
-		if _, err := os.Stat(filepath.Join(venvPath, "bin", "pip")); err == nil {
-			pipPath = filepath.Join(venvPath, "bin", "pip")
-		} else {
-			pipPath = filepath.Join(venvPath, "Scripts", "pip.exe") // Windows
-		}
-
-		// Upgrade pip first (ignore failures)
-		cmd = exec.Command(pipPath, "install", "--upgrade", "pip")
-		_, _ = cmd.CombinedOutput()
-
-		// Install from requirements.txt if it exists
-		requirementsPath := filepath.Join(packagePath, "requirements.txt")
-		if _, err := os.Stat(requirementsPath); err == nil {
-			cmd = exec.Command(pipPath, "install", "-r", requirementsPath)
-			cmd.Dir = packagePath
-			if output, err := cmd.CombinedOutput(); err != nil {
-				return fmt.Errorf("failed to install requirements.txt dependencies: %w\nOutput: %s", err, output)
-			}
-		}
-
-		// Install dependencies from agentfield-package.yaml
-		if len(metadata.Dependencies.Python) > 0 {
-			for _, dep := range metadata.Dependencies.Python {
-				cmd = exec.Command(pipPath, "install", dep)
-				cmd.Dir = packagePath
-				if output, err := cmd.CombinedOutput(); err != nil {
-					return fmt.Errorf("failed to install dependency %s: %w\nOutput: %s", dep, err, output)
-				}
-			}
-		}
-	}
-
-	// Install system dependencies (if any)
-	for _, dep := range metadata.Dependencies.System {
-		fmt.Printf("System dependency required: %s (please install manually)\n", dep)
-	}
-
-	return nil
+	return packages.InstallPythonDependencies(packagePath, metadata.Dependencies.Python, metadata.Dependencies.System)
 }
 
 // hasRequirementsFile checks if requirements.txt exists

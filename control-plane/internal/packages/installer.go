@@ -633,60 +633,76 @@ func (pi *PackageInstaller) copyFile(src, dst string) error {
 
 // installDependencies installs package dependencies
 func (pi *PackageInstaller) installDependencies(packagePath string, metadata *PackageMetadata) error {
-	// Install Python dependencies in a virtual environment
-	if len(metadata.Dependencies.Python) > 0 || pi.hasRequirementsFile(packagePath) {
-		// Create virtual environment
+	return InstallPythonDependencies(packagePath, metadata.Dependencies.Python, metadata.Dependencies.System)
+}
+
+// InstallPythonDependencies sets up a per-package virtual environment and
+// installs the node's Python dependencies. A venv is created when the package
+// has a requirements.txt, a pyproject.toml, or manifest-declared Python deps.
+// Install sources, in order: requirements.txt, `pip install .` for a
+// pyproject.toml/setup.py project, then any manifest-declared packages.
+func InstallPythonDependencies(packagePath string, pyDeps, systemDeps []string) error {
+	hasReq := fileExistsAt(packagePath, "requirements.txt")
+	hasProject := fileExistsAt(packagePath, "pyproject.toml") || fileExistsAt(packagePath, "setup.py")
+
+	if hasReq || hasProject || len(pyDeps) > 0 {
 		venvPath := filepath.Join(packagePath, "venv")
 
 		cmd := exec.Command("python3", "-m", "venv", venvPath)
 		if _, err := cmd.CombinedOutput(); err != nil {
-			// Try with python if python3 fails
 			cmd = exec.Command("python", "-m", "venv", venvPath)
 			if output, err := cmd.CombinedOutput(); err != nil {
 				return fmt.Errorf("failed to create virtual environment: %w\nOutput: %s", err, output)
 			}
 		}
 
-		// Determine pip path
-		var pipPath string
-		if _, err := os.Stat(filepath.Join(venvPath, "bin", "pip")); err == nil {
-			pipPath = filepath.Join(venvPath, "bin", "pip")
-		} else {
+		pipPath := filepath.Join(venvPath, "bin", "pip")
+		if _, err := os.Stat(pipPath); err != nil {
 			pipPath = filepath.Join(venvPath, "Scripts", "pip.exe") // Windows
 		}
 
 		// Upgrade pip first (ignore failures)
-		cmd = exec.Command(pipPath, "install", "--upgrade", "pip")
-		_, _ = cmd.CombinedOutput()
+		_, _ = exec.Command(pipPath, "install", "--upgrade", "pip").CombinedOutput()
 
-		// Install from requirements.txt if it exists
-		requirementsPath := filepath.Join(packagePath, "requirements.txt")
-		if _, err := os.Stat(requirementsPath); err == nil {
-			cmd = exec.Command(pipPath, "install", "-r", requirementsPath)
+		// requirements.txt
+		if hasReq {
+			cmd = exec.Command(pipPath, "install", "-r", "requirements.txt")
 			cmd.Dir = packagePath
 			if output, err := cmd.CombinedOutput(); err != nil {
 				return fmt.Errorf("failed to install requirements.txt dependencies: %w\nOutput: %s", err, output)
 			}
 		}
 
-		// Install dependencies from agentfield-package.yaml
-		if len(metadata.Dependencies.Python) > 0 {
-			for _, dep := range metadata.Dependencies.Python {
-				cmd = exec.Command(pipPath, "install", dep)
-				cmd.Dir = packagePath
-				if output, err := cmd.CombinedOutput(); err != nil {
-					return fmt.Errorf("failed to install dependency %s: %w\nOutput: %s", dep, err, output)
-				}
+		// pyproject.toml / setup.py project (installs the project and its deps)
+		if hasProject {
+			cmd = exec.Command(pipPath, "install", ".")
+			cmd.Dir = packagePath
+			if output, err := cmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("failed to install project (pip install .): %w\nOutput: %s", err, output)
+			}
+		}
+
+		// Manifest-declared Python packages
+		for _, dep := range pyDeps {
+			cmd = exec.Command(pipPath, "install", dep)
+			cmd.Dir = packagePath
+			if output, err := cmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("failed to install dependency %s: %w\nOutput: %s", dep, err, output)
 			}
 		}
 	}
 
-	// Install system dependencies (if any)
-	for _, dep := range metadata.Dependencies.System {
+	for _, dep := range systemDeps {
 		fmt.Printf("System dependency required: %s (please install manually)\n", dep)
 	}
 
 	return nil
+}
+
+// fileExistsAt reports whether name exists directly under dir.
+func fileExistsAt(dir, name string) bool {
+	_, err := os.Stat(filepath.Join(dir, name))
+	return err == nil
 }
 
 // hasRequirementsFile checks if requirements.txt exists

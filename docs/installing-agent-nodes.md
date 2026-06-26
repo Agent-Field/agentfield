@@ -69,6 +69,19 @@ user_environment:
       default: openrouter/moonshotai/kimi-k2
 ```
 
+### Python dependencies
+
+On install, a node's Python dependencies are installed into a per-node virtual
+environment under `~/.agentfield/packages/<node>/venv`. Sources are honored in
+order: `requirements.txt`, then `pip install .` for a `pyproject.toml`/`setup.py`
+project, then any packages listed under `dependencies.python` in the manifest.
+`af run` uses this venv automatically.
+
+The venv is built with the `python3`/`python` on your `PATH`. If a node declares
+`requires-python` (e.g. `>=3.11`) that your interpreter doesn't satisfy, `pip`
+reports it and install fails — point `af` at a compatible interpreter (e.g. via
+`pyenv`/`PATH`) and reinstall.
+
 ### Node dependencies
 
 `dependencies.nodes` lets one node declare that it needs others. Each entry is
