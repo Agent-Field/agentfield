@@ -453,6 +453,26 @@ func (m *PackageMetadata) StartCommand() []string {
 	return []string{"python", main}
 }
 
+// NodeDepName extracts the installed package name from a node dependency
+// reference such as "af://registry/<name>@v" or a git URL. Returns "" when the
+// name cannot be derived from the reference alone.
+func NodeDepName(ref string) string {
+	const afPrefix = "af://registry/"
+	if strings.HasPrefix(ref, afPrefix) {
+		spec := strings.TrimPrefix(ref, afPrefix)
+		if at := strings.Index(spec, "@"); at >= 0 {
+			spec = spec[:at]
+		}
+		return strings.Trim(spec, "/")
+	}
+	// Git URL: derive the repo name (last path segment, sans .git).
+	trimmed := strings.TrimSuffix(strings.TrimSuffix(ref, "/"), ".git")
+	if idx := strings.LastIndexAny(trimmed, "/:"); idx >= 0 {
+		return trimmed[idx+1:]
+	}
+	return ""
+}
+
 // HealthcheckPath returns the readiness path, defaulting to "/health".
 func (m *PackageMetadata) HealthcheckPath() string {
 	if p := strings.TrimSpace(m.Entrypoint.Healthcheck); p != "" {

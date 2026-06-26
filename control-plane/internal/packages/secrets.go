@@ -30,6 +30,9 @@ const (
 	keyDirPerm     = 0o700
 )
 
+// GlobalScope is the exported name of the shared (cross-node) secret scope.
+const GlobalScope = globalScope
+
 // KeyProvider supplies the passphrase used to derive the at-rest encryption key.
 // It is an interface so we can add OS-keychain / passphrase providers later
 // without touching the SecretStore.

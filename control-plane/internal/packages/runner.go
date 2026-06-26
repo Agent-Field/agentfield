@@ -22,9 +22,17 @@ type AgentNodeRunner struct {
 	Detach         bool
 }
 
-// RunAgentNode starts an installed agent node
+// RunAgentNode starts an installed agent node, bringing up its declared node
+// dependencies first.
 func (ar *AgentNodeRunner) RunAgentNode(agentNodeName string) error {
+	return ar.runAgentNode(agentNodeName, map[string]bool{})
+}
+
+// runAgentNode starts a node; inProgress tracks nodes already being started in
+// this dependency chain to break cycles.
+func (ar *AgentNodeRunner) runAgentNode(agentNodeName string, inProgress map[string]bool) error {
 	fmt.Printf("🚀 Launching agent node: %s\n", agentNodeName)
+	inProgress[agentNodeName] = true
 
 	// 1. Check if agent node is installed
 	registry, err := ar.loadRegistry()
@@ -41,6 +49,9 @@ func (ar *AgentNodeRunner) RunAgentNode(agentNodeName string) error {
 	if agentNode.Status == "running" {
 		return fmt.Errorf("agent node %s is already running on port %d", agentNodeName, *agentNode.Runtime.Port)
 	}
+
+	// 2b. Start declared node dependencies first (best-effort, in dep order).
+	ar.startNodeDependencies(agentNode, inProgress)
 
 	// 3. Allocate port
 	fmt.Printf("🔍 Searching for available port...\n")
@@ -177,6 +188,38 @@ func (ar *AgentNodeRunner) startAgentNodeProcess(agentNode InstalledPackage, por
 	}
 
 	return cmd, nil
+}
+
+// startNodeDependencies starts any installed, not-yet-running node dependencies
+// of the given node before the node itself. `inProgress` guards against cycles.
+func (ar *AgentNodeRunner) startNodeDependencies(node InstalledPackage, inProgress map[string]bool) {
+	metadata, err := ParsePackageMetadata(node.Path)
+	if err != nil {
+		return
+	}
+	for _, ref := range metadata.Dependencies.Nodes {
+		depName := NodeDepName(ref)
+		if depName == "" || inProgress[depName] {
+			continue
+		}
+		registry, err := ar.loadRegistry()
+		if err != nil {
+			return
+		}
+		dep, exists := registry.Installed[depName]
+		if !exists {
+			fmt.Printf("⚠️  Node dependency %s is declared but not installed (run: af install %s)\n", depName, ref)
+			continue
+		}
+		if dep.Status == "running" {
+			continue
+		}
+		fmt.Printf("🔗 Starting node dependency: %s\n", depName)
+		depRunner := &AgentNodeRunner{AgentFieldHome: ar.AgentFieldHome}
+		if err := depRunner.runAgentNode(depName, inProgress); err != nil {
+			fmt.Printf("⚠️  Failed to start node dependency %s: %v\n", depName, err)
+		}
+	}
 }
 
 // venvPython returns the venv python interpreter path, or "" if no venv exists.

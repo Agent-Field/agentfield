@@ -112,6 +112,7 @@ AI Agent? Run "af agent help" for structured JSON output optimized for programma
 
 	// Add remaining old commands (not yet migrated)
 	RootCmd.AddCommand(NewUninstallCommand())
+	RootCmd.AddCommand(NewSecretsCommand())
 	RootCmd.AddCommand(NewListCommand())
 	RootCmd.AddCommand(NewStopCommand())
 	RootCmd.AddCommand(NewLogsCommand())

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,6 +40,19 @@ func NewPackageService(
 
 // InstallPackage installs a package from the given source
 func (ps *DefaultPackageService) InstallPackage(source string, options domain.InstallOptions) error {
+	// Snapshot installed packages so we can discover what this install adds and
+	// recursively pull in any node-to-node dependencies it declares.
+	before := ps.installedNames()
+
+	if err := ps.installOne(source, options); err != nil {
+		return err
+	}
+
+	return ps.installNodeDependencies(before, options)
+}
+
+// installOne installs a single package from a git URL or local path.
+func (ps *DefaultPackageService) installOne(source string, options domain.InstallOptions) error {
 	// Check if it's a Git URL (GitHub, GitLab, Bitbucket, etc.)
 	if packages.IsGitURL(source) {
 		installer := &packages.GitInstaller{
@@ -50,6 +64,75 @@ func (ps *DefaultPackageService) InstallPackage(source string, options domain.In
 
 	// Handle local package installation
 	return ps.installLocalPackage(source, options.Force, options.Verbose)
+}
+
+// installedNames returns the set of currently-installed package names.
+func (ps *DefaultPackageService) installedNames() map[string]bool {
+	names := map[string]bool{}
+	registry, err := ps.loadRegistryDirect()
+	if err != nil {
+		return names
+	}
+	for name := range registry.Installed {
+		names[name] = true
+	}
+	return names
+}
+
+// installNodeDependencies installs the node-to-node dependencies declared by any
+// packages added since `before`, recursively. Already-installed nodes are
+// skipped, which also breaks dependency cycles.
+func (ps *DefaultPackageService) installNodeDependencies(before map[string]bool, options domain.InstallOptions) error {
+	registry, err := ps.loadRegistryDirect()
+	if err != nil {
+		return nil // base install already succeeded; don't fail on dep discovery
+	}
+
+	for name, pkg := range registry.Installed {
+		if before[name] {
+			continue // not newly installed in this pass
+		}
+		metadata, err := packages.ParsePackageMetadata(pkg.Path)
+		if err != nil {
+			continue
+		}
+		for _, dep := range metadata.Dependencies.Nodes {
+			depSource, depName := resolveNodeRef(dep)
+			if depName != "" && ps.isPackageInstalled(depName) {
+				continue // already present — also handles cycles
+			}
+			fmt.Printf("\n%s Installing node dependency: %s\n", ps.blue("→"), dep)
+			snapshot := ps.installedNames()
+			if err := ps.installOne(depSource, options); err != nil {
+				fmt.Printf("%s Failed to install node dependency %s: %v\n", ps.statusError(), dep, err)
+				continue
+			}
+			// Recurse for the dependency's own node deps.
+			if err := ps.installNodeDependencies(snapshot, options); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// resolveNodeRef maps a node dependency reference to an installable source and,
+// when known, the resulting package name. Supported forms:
+//
+//	af://registry/<name>[@version]  -> https://github.com/Agent-Field/<name>
+//	https://github.com/org/repo      -> used as-is
+//	<git url> / <local path>         -> used as-is
+func resolveNodeRef(ref string) (source string, name string) {
+	const afPrefix = "af://registry/"
+	if strings.HasPrefix(ref, afPrefix) {
+		spec := strings.TrimPrefix(ref, afPrefix)
+		if at := strings.Index(spec, "@"); at >= 0 {
+			spec = spec[:at] // drop version constraint (not yet enforced)
+		}
+		spec = strings.TrimSuffix(spec, "/")
+		return "https://github.com/Agent-Field/" + spec, spec
+	}
+	return ref, ""
 }
 
 // installLocalPackage installs a package from a local source path
