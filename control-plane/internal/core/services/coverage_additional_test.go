@@ -61,45 +61,23 @@ func TestAgentServiceFindAgentInRegistry(t *testing.T) {
 	})
 }
 
-func TestAgentServiceLoadPackageEnvFile(t *testing.T) {
-	dir := t.TempDir()
-	envPath := filepath.Join(dir, ".env")
-	require.NoError(t, os.WriteFile(envPath, []byte(strings.Join([]string{
-		"# comment",
-		"FOO=bar",
-		`QUOTED="value with spaces"`,
-		"SINGLE='quoted'",
-		"INVALID_LINE",
-		"",
-	}, "\n")), 0o644))
-
-	service := &DefaultAgentService{}
-	envVars, err := service.loadPackageEnvFile(dir)
-	require.NoError(t, err)
-	assert.Equal(t, map[string]string{
-		"FOO":    "bar",
-		"QUOTED": "value with spaces",
-		"SINGLE": "quoted",
-	}, envVars)
-}
-
 func TestAgentServiceBuildProcessConfig(t *testing.T) {
 	dir := t.TempDir()
 	venvBin := filepath.Join(dir, "venv", "bin")
 	require.NoError(t, os.MkdirAll(venvBin, 0o755))
 	pythonPath := filepath.Join(venvBin, "python")
 	require.NoError(t, os.WriteFile(pythonPath, []byte("#!/bin/sh\nexit 0\n"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte("TOKEN=secret\n"), 0o644))
 
 	logFile := filepath.Join(dir, "agent.log")
 	service := &DefaultAgentService{}
-	cfg := service.buildProcessConfig(packages.InstalledPackage{
+	cfg, err := service.buildProcessConfig(packages.InstalledPackage{
 		Name: "agent",
 		Path: dir,
 		Runtime: packages.RuntimeInfo{
 			LogFile: logFile,
 		},
 	}, 8123)
+	require.NoError(t, err)
 
 	assert.Equal(t, pythonPath, cfg.Command)
 	assert.Equal(t, []string{"main.py"}, cfg.Args)
@@ -107,7 +85,7 @@ func TestAgentServiceBuildProcessConfig(t *testing.T) {
 	assert.Equal(t, logFile, cfg.LogFile)
 	assert.Contains(t, cfg.Env, "PORT=8123")
 	assert.Contains(t, cfg.Env, "AGENTFIELD_SERVER_URL=http://localhost:8080")
-	assert.Contains(t, cfg.Env, "TOKEN=secret")
+	assert.Contains(t, cfg.Env, "AGENTFIELD_SERVER=http://localhost:8080")
 	assert.Contains(t, cfg.Env, "VIRTUAL_ENV="+filepath.Join(dir, "venv"))
 	assertEnvWithPrefix(t, cfg.Env, "PATH=", venvBin)
 	assert.Contains(t, cfg.Env, "PYTHONHOME=")
@@ -126,13 +104,13 @@ func TestAgentServiceWaitForAgentNode(t *testing.T) {
 		defer server.Close()
 
 		service := &DefaultAgentService{}
-		require.NoError(t, service.waitForAgentNode(port, 2*time.Second))
+		require.NoError(t, service.waitForAgentNode(port, "/health", 2*time.Second))
 	})
 
 	t.Run("timeout", func(t *testing.T) {
 		port := findFreePortInRange(t)
 		service := &DefaultAgentService{}
-		err := service.waitForAgentNode(port, 750*time.Millisecond)
+		err := service.waitForAgentNode(port, "/health", 750*time.Millisecond)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "did not become ready")
 	})
@@ -207,7 +185,7 @@ func TestPackageServiceHelpers(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "agentfield-package.yaml"), []byte("name: sample\nversion: 1.0.0\nmain: main.py\n"), 0o644))
 		err := service.validatePackage(dir)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "main.py not found")
+		assert.Contains(t, err.Error(), "main.py")
 
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "main.py"), []byte("print('ok')\n"), 0o644))
 		require.NoError(t, service.validatePackage(dir))
@@ -433,7 +411,13 @@ func TestAgentServiceRunStopAndStatusWithLiveProcess(t *testing.T) {
 		venvBin := filepath.Join(agentPath, "venv", "bin")
 		require.NoError(t, os.MkdirAll(venvBin, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(venvBin, "python"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
-		require.NoError(t, os.WriteFile(filepath.Join(agentPath, ".env"), []byte("TOKEN=run-secret\n"), 0o644))
+		// Declare TOKEN in the manifest and seed it into the encrypted secret
+		// store; af run injects it into the process env at start time.
+		require.NoError(t, os.WriteFile(filepath.Join(agentPath, "agentfield-package.yaml"),
+			[]byte("name: run-agent\nversion: 1.0.0\nuser_environment:\n  optional:\n    - name: TOKEN\n      type: secret\n"), 0o644))
+		store, err := packages.NewSecretStore(home)
+		require.NoError(t, err)
+		require.NoError(t, store.Set("run-agent", "TOKEN", "run-secret"))
 
 		registry := &packages.InstallationRegistry{
 			Installed: map[string]packages.InstalledPackage{

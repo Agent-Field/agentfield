@@ -414,17 +414,21 @@ func (pu *PackageUninstaller) saveRegistry(registry *InstallationRegistry) error
 	return nil
 }
 
-// validatePackage checks if the package has required files
+// validatePackage checks if the package has required files.
 func (pi *PackageInstaller) validatePackage(sourcePath string) error {
-	// Check if agentfield-package.yaml exists
+	return ValidatePackage(sourcePath)
+}
+
+// ValidatePackage checks that a directory is an installable agent node: it must
+// have an agentfield-package.yaml and declare how to start — either a manifest
+// entrypoint.start (e.g. "python -m pr_af.app") or a top-level main.py. Real
+// nodes use a module entrypoint and have no main.py, so main.py is not required.
+func ValidatePackage(sourcePath string) error {
 	packageYamlPath := filepath.Join(sourcePath, "agentfield-package.yaml")
 	if _, err := os.Stat(packageYamlPath); os.IsNotExist(err) {
 		return fmt.Errorf("agentfield-package.yaml not found in %s", sourcePath)
 	}
 
-	// A node must declare how to start: either a manifest entrypoint.start
-	// (e.g. "python -m pr_af.app") or a top-level main.py. Real nodes use a
-	// module entrypoint and have no main.py, so we no longer require it.
 	metadata, err := ParsePackageMetadata(sourcePath)
 	if err != nil {
 		return err
@@ -585,6 +589,12 @@ var copyExcludedNames = map[string]bool{
 	"node_modules":  true,
 	".mypy_cache":   true,
 	".pytest_cache": true,
+}
+
+// ShouldSkipCopy reports whether a walked path should be excluded when copying
+// a package into ~/.agentfield/packages (VCS, venvs, caches, plaintext secrets).
+func ShouldSkipCopy(relPath string, info os.FileInfo) bool {
+	return shouldSkipCopy(relPath, info)
 }
 
 // shouldSkipCopy reports whether a walked path should be excluded from the copy.

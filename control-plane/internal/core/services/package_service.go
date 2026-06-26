@@ -460,47 +460,12 @@ func (s *Spinner) Error(message string) {
 
 // validatePackage checks if the package has required files
 func (ps *DefaultPackageService) validatePackage(sourcePath string) error {
-	// Check if agentfield-package.yaml exists
-	packageYamlPath := filepath.Join(sourcePath, "agentfield-package.yaml")
-	if _, err := os.Stat(packageYamlPath); os.IsNotExist(err) {
-		return fmt.Errorf("agentfield-package.yaml not found in %s", sourcePath)
-	}
-
-	// Check if main.py exists
-	mainPyPath := filepath.Join(sourcePath, "main.py")
-	if _, err := os.Stat(mainPyPath); os.IsNotExist(err) {
-		return fmt.Errorf("main.py not found in %s", sourcePath)
-	}
-
-	return nil
+	return packages.ValidatePackage(sourcePath)
 }
 
 // parsePackageMetadata parses the agentfield-package.yaml file
 func (ps *DefaultPackageService) parsePackageMetadata(sourcePath string) (*packages.PackageMetadata, error) {
-	packageYamlPath := filepath.Join(sourcePath, "agentfield-package.yaml")
-
-	data, err := os.ReadFile(packageYamlPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read agentfield-package.yaml: %w", err)
-	}
-
-	var metadata packages.PackageMetadata
-	if err := yaml.Unmarshal(data, &metadata); err != nil {
-		return nil, fmt.Errorf("failed to parse agentfield-package.yaml: %w", err)
-	}
-
-	// Validate required fields
-	if metadata.Name == "" {
-		return nil, fmt.Errorf("package name is required in agentfield-package.yaml")
-	}
-	if metadata.Version == "" {
-		return nil, fmt.Errorf("package version is required in agentfield-package.yaml")
-	}
-	if metadata.Main == "" {
-		metadata.Main = "main.py" // Default
-	}
-
-	return &metadata, nil
+	return packages.ParsePackageMetadata(sourcePath)
 }
 
 // isPackageInstalled checks if a package is already installed
@@ -542,6 +507,14 @@ func (ps *DefaultPackageService) copyPackage(sourcePath, destPath string) error 
 		relPath, err := filepath.Rel(sourcePath, path)
 		if err != nil {
 			return err
+		}
+
+		// Skip VCS, build artifacts, local venvs and plaintext secrets.
+		if packages.ShouldSkipCopy(relPath, info) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 
 		destFilePath := filepath.Join(destPath, relPath)
@@ -706,8 +679,9 @@ func (ps *DefaultPackageService) checkEnvironmentVariables(metadata *packages.Pa
 	if len(missingRequired) > 0 {
 		fmt.Printf("\n%s %s\n", ps.yellow("⚠"), ps.bold("Missing required environment variables:"))
 		for _, envVar := range missingRequired {
-			fmt.Printf("  %s\n", ps.cyan(fmt.Sprintf("af config %s --set %s=your-value-here", metadata.Name, envVar.Name)))
+			fmt.Printf("  %s\n", ps.cyan(fmt.Sprintf("af secrets set %s", envVar.Name)))
 		}
+		fmt.Printf("  %s\n", ps.gray("(or you'll be prompted on first 'af run')"))
 	}
 
 	// Show optional environment variables if any

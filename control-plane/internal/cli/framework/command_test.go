@@ -59,12 +59,12 @@ func TestCommandRegistryRegisterAndGetCommands(t *testing.T) {
 
 func TestCommandRegistryBuildCobraCommands(t *testing.T) {
 	tests := []struct {
-		name      string
-		commands   []Command
-		wantUses   []string
+		name     string
+		commands []Command
+		wantUses []string
 	}{
 		{
-			name:    "empty registry",
+			name:     "empty registry",
 			wantUses: nil,
 		},
 		{

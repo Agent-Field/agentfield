@@ -60,33 +60,33 @@ func TestOutputFormatterPrintMethods(t *testing.T) {
 		wantOut string
 	}{
 		{
-			name: "success",
-			print: func(o *OutputFormatter) { o.PrintSuccess("done") },
+			name:    "success",
+			print:   func(o *OutputFormatter) { o.PrintSuccess("done") },
 			wantOut: "✅ done\n",
 		},
 		{
-			name: "error",
-			print: func(o *OutputFormatter) { o.PrintError("failed") },
+			name:    "error",
+			print:   func(o *OutputFormatter) { o.PrintError("failed") },
 			wantOut: "❌ failed\n",
 		},
 		{
-			name: "info",
-			print: func(o *OutputFormatter) { o.PrintInfo("details") },
+			name:    "info",
+			print:   func(o *OutputFormatter) { o.PrintInfo("details") },
 			wantOut: "ℹ️  details\n",
 		},
 		{
-			name: "warning",
-			print: func(o *OutputFormatter) { o.PrintWarning("careful") },
+			name:    "warning",
+			print:   func(o *OutputFormatter) { o.PrintWarning("careful") },
 			wantOut: "⚠️  careful\n",
 		},
 		{
-			name: "header",
-			print: func(o *OutputFormatter) { o.PrintHeader("title") },
+			name:    "header",
+			print:   func(o *OutputFormatter) { o.PrintHeader("title") },
 			wantOut: "\n🧠 title\n",
 		},
 		{
-			name: "progress",
-			print: func(o *OutputFormatter) { o.PrintProgress("working") },
+			name:    "progress",
+			print:   func(o *OutputFormatter) { o.PrintProgress("working") },
 			wantOut: "⏳ working\n",
 		},
 		{
@@ -98,8 +98,8 @@ func TestOutputFormatterPrintMethods(t *testing.T) {
 			wantOut: "🔍 trace\n",
 		},
 		{
-			name: "verbose disabled",
-			print: func(o *OutputFormatter) { o.PrintVerbose("hidden") },
+			name:    "verbose disabled",
+			print:   func(o *OutputFormatter) { o.PrintVerbose("hidden") },
 			wantOut: "",
 		},
 	}
