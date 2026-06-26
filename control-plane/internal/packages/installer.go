@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +22,16 @@ type UserEnvironmentVar struct {
 	Default     string `yaml:"default"`
 	Optional    bool   `yaml:"optional"`
 	Validation  string `yaml:"validation"` // regex pattern
+	Scope       string `yaml:"scope"`      // "global" (shared across nodes, default) or "node"
+}
+
+// SecretScope returns the secret store scope for this variable given the node
+// name. Variables default to global so shared keys (API tokens) are entered once.
+func (v UserEnvironmentVar) SecretScope(nodeName string) string {
+	if v.Scope == "node" {
+		return nodeName
+	}
+	return globalScope
 }
 
 // UserEnvironmentConfig represents user-configurable environment variables
@@ -37,11 +48,22 @@ type PackageMetadata struct {
 	Author          string                 `yaml:"author"`
 	Type            string                 `yaml:"type"`
 	Main            string                 `yaml:"main"`
+	Entrypoint      EntrypointConfig       `yaml:"entrypoint"`
 	AgentNode       AgentNodeConfig        `yaml:"agent_node"`
 	Dependencies    DependencyConfig       `yaml:"dependencies"`
 	Capabilities    CapabilityConfig       `yaml:"capabilities"`
 	UserEnvironment UserEnvironmentConfig  `yaml:"user_environment"`
 	Metadata        map[string]interface{} `yaml:"metadata"`
+}
+
+// EntrypointConfig describes how to start the agent node process.
+type EntrypointConfig struct {
+	// Start is the shell-free command used to launch the node, e.g.
+	// "python -m pr_af.app". The first token is resolved against the package
+	// venv when it is "python"/"python3". Empty falls back to "python main.py".
+	Start string `yaml:"start"`
+	// Healthcheck is the HTTP path polled to confirm readiness (default "/health").
+	Healthcheck string `yaml:"healthcheck"`
 }
 
 // AgentNodeConfig represents agent node specific configuration
@@ -54,6 +76,10 @@ type AgentNodeConfig struct {
 type DependencyConfig struct {
 	Python []string `yaml:"python"`
 	System []string `yaml:"system"`
+	// Nodes lists other agent nodes this node depends on. Each entry is an
+	// installable source: an "af://registry/<name>[@version]" ref or a git URL.
+	// Installing this node installs its node dependencies recursively.
+	Nodes []string `yaml:"nodes"`
 }
 
 // CapabilityConfig represents agent node capabilities
@@ -396,18 +422,48 @@ func (pi *PackageInstaller) validatePackage(sourcePath string) error {
 		return fmt.Errorf("agentfield-package.yaml not found in %s", sourcePath)
 	}
 
-	// Check if main.py exists
+	// A node must declare how to start: either a manifest entrypoint.start
+	// (e.g. "python -m pr_af.app") or a top-level main.py. Real nodes use a
+	// module entrypoint and have no main.py, so we no longer require it.
+	metadata, err := ParsePackageMetadata(sourcePath)
+	if err != nil {
+		return err
+	}
+	if metadata.Entrypoint.Start != "" {
+		return nil
+	}
 	mainPyPath := filepath.Join(sourcePath, "main.py")
 	if _, err := os.Stat(mainPyPath); os.IsNotExist(err) {
-		return fmt.Errorf("main.py not found in %s", sourcePath)
+		return fmt.Errorf("package must declare entrypoint.start in agentfield-package.yaml or contain a main.py")
 	}
 
 	return nil
 }
 
-// parsePackageMetadata parses the agentfield-package.yaml file
-func (pi *PackageInstaller) parsePackageMetadata(sourcePath string) (*PackageMetadata, error) {
-	packageYamlPath := filepath.Join(sourcePath, "agentfield-package.yaml")
+// StartCommand returns the tokens used to launch the node. It prefers the
+// manifest entrypoint.start and falls back to "python <main>" (default main.py).
+func (m *PackageMetadata) StartCommand() []string {
+	if strings.TrimSpace(m.Entrypoint.Start) != "" {
+		return strings.Fields(m.Entrypoint.Start)
+	}
+	main := m.Main
+	if main == "" {
+		main = "main.py"
+	}
+	return []string{"python", main}
+}
+
+// HealthcheckPath returns the readiness path, defaulting to "/health".
+func (m *PackageMetadata) HealthcheckPath() string {
+	if p := strings.TrimSpace(m.Entrypoint.Healthcheck); p != "" {
+		return p
+	}
+	return "/health"
+}
+
+// ParsePackageMetadata parses agentfield-package.yaml from a package directory.
+func ParsePackageMetadata(dir string) (*PackageMetadata, error) {
+	packageYamlPath := filepath.Join(dir, "agentfield-package.yaml")
 
 	data, err := os.ReadFile(packageYamlPath)
 	if err != nil {
@@ -431,6 +487,11 @@ func (pi *PackageInstaller) parsePackageMetadata(sourcePath string) (*PackageMet
 	}
 
 	return &metadata, nil
+}
+
+// parsePackageMetadata parses the agentfield-package.yaml file.
+func (pi *PackageInstaller) parsePackageMetadata(sourcePath string) (*PackageMetadata, error) {
+	return ParsePackageMetadata(sourcePath)
 }
 
 // isPackageInstalled checks if a package is already installed
@@ -474,6 +535,15 @@ func (pi *PackageInstaller) copyPackage(sourcePath, destPath string) error {
 			return err
 		}
 
+		// Skip VCS, build artifacts, local venvs and plaintext secrets so they
+		// never get copied into ~/.agentfield/packages.
+		if shouldSkipCopy(relPath, info) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
 		destFilePath := filepath.Join(destPath, relPath)
 
 		if info.IsDir() {
@@ -483,6 +553,34 @@ func (pi *PackageInstaller) copyPackage(sourcePath, destPath string) error {
 		// Copy file
 		return pi.copyFile(path, destFilePath)
 	})
+}
+
+// copyExcludedNames are directory/file names skipped during package copy.
+var copyExcludedNames = map[string]bool{
+	".git":          true,
+	"venv":          true,
+	".venv":         true,
+	"__pycache__":   true,
+	".env":          true,
+	"node_modules":  true,
+	".mypy_cache":   true,
+	".pytest_cache": true,
+}
+
+// shouldSkipCopy reports whether a walked path should be excluded from the copy.
+func shouldSkipCopy(relPath string, info os.FileInfo) bool {
+	if relPath == "." {
+		return false
+	}
+	base := filepath.Base(relPath)
+	if copyExcludedNames[base] {
+		return true
+	}
+	// Skip stray .env.* local overrides but keep .env.example.
+	if strings.HasPrefix(base, ".env.") && base != ".env.example" {
+		return true
+	}
+	return false
 }
 
 // copyFile copies a single file from src to dst

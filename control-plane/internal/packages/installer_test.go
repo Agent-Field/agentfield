@@ -78,6 +78,35 @@ user_environment:
       default: us
 `) + "\n"
 
+	t.Run("validate package with entrypoint and no main.py", func(t *testing.T) {
+		// Real nodes start via a module entrypoint and have no top-level main.py.
+		pkg := filepath.Join(base, "entrypoint-only")
+		_ = os.MkdirAll(pkg, 0755)
+		yaml := strings.TrimSpace(`
+name: pr-af
+version: 0.1.0
+entrypoint:
+  start: python -m pr_af.app
+  healthcheck: /health
+`) + "\n"
+		if err := os.WriteFile(filepath.Join(pkg, "agentfield-package.yaml"), []byte(yaml), 0644); err != nil {
+			t.Fatalf("write manifest: %v", err)
+		}
+		if err := installer.validatePackage(pkg); err != nil {
+			t.Fatalf("validatePackage with entrypoint should pass: %v", err)
+		}
+		meta, err := installer.parsePackageMetadata(pkg)
+		if err != nil {
+			t.Fatalf("parsePackageMetadata: %v", err)
+		}
+		if got := meta.StartCommand(); len(got) != 3 || got[0] != "python" || got[2] != "pr_af.app" {
+			t.Fatalf("StartCommand = %v, want [python -m pr_af.app]", got)
+		}
+		if meta.HealthcheckPath() != "/health" {
+			t.Fatalf("HealthcheckPath = %q", meta.HealthcheckPath())
+		}
+	})
+
 	t.Run("validate package", func(t *testing.T) {
 		pkg := filepath.Join(base, "valid")
 		writeTestPackage(t, pkg, validYAML)
@@ -112,12 +141,12 @@ user_environment:
 			wantErr: "agentfield-package.yaml not found",
 		},
 		{
-			name: "missing main",
+			name: "missing main and entrypoint",
 			setup: func(dir string) {
 				_ = os.MkdirAll(dir, 0755)
 				_ = os.WriteFile(filepath.Join(dir, "agentfield-package.yaml"), []byte(validYAML), 0644)
 			},
-			wantErr: "main.py not found",
+			wantErr: "entrypoint.start",
 		},
 		{
 			name: "missing name",

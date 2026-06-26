@@ -62,7 +62,11 @@ func (ar *AgentNodeRunner) RunAgentNode(agentNodeName string) error {
 	}
 
 	// 5. Wait for agent node to be ready
-	if err := ar.waitForAgentNode(port, 10*time.Second); err != nil {
+	healthPath := "/health"
+	if metadata, err := ParsePackageMetadata(agentNode.Path); err == nil {
+		healthPath = metadata.HealthcheckPath()
+	}
+	if err := ar.waitForAgentNode(port, healthPath, 10*time.Second); err != nil {
 		if killErr := cmd.Process.Kill(); killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
 			fmt.Printf("⚠️  Failed to kill agent node process: %v\n", killErr)
 		}
@@ -110,37 +114,51 @@ func (ar *AgentNodeRunner) isPortAvailable(port int) bool {
 
 // startAgentNodeProcess starts the agent node process
 func (ar *AgentNodeRunner) startAgentNodeProcess(agentNode InstalledPackage, port int) (*exec.Cmd, error) {
-	// Prepare environment variables
+	// Read the package manifest for the entrypoint and declared environment.
+	// Fall back to defaults (python main.py, /health, no declared env) if a
+	// manifest is missing so legacy installs still start.
+	metadata, err := ParsePackageMetadata(agentNode.Path)
+	if err != nil {
+		fmt.Printf("⚠️  No usable manifest (%v); falling back to python main.py\n", err)
+		metadata = &PackageMetadata{}
+	}
+
+	// Prepare environment variables. Export both AGENTFIELD_SERVER (what the
+	// SDK reads) and the legacy AGENTFIELD_SERVER_URL for back-compat.
+	serverURL := resolveServerURL()
 	env := os.Environ()
 	env = append(env, fmt.Sprintf("PORT=%d", port))
-	env = append(env, fmt.Sprintf("AGENTFIELD_SERVER_URL=%s", resolveServerURL()))
+	env = append(env, fmt.Sprintf("AGENTFIELD_SERVER=%s", serverURL))
+	env = append(env, fmt.Sprintf("AGENTFIELD_SERVER_URL=%s", serverURL))
 
-	// Load environment variables from package .env file
-	if envVars, err := ar.loadPackageEnvFile(agentNode.Path); err == nil {
-		for key, value := range envVars {
-			env = append(env, fmt.Sprintf("%s=%s", key, value))
-		}
-		fmt.Printf("🔧 Loaded %d environment variables from .env file\n", len(envVars))
+	// Resolve declared variables from the encrypted secret store, prompting for
+	// missing required ones and persisting them. Secrets are only ever injected
+	// into this child process — never written to disk in plaintext.
+	resolvedEnv, err := ar.resolveEnvironment(agentNode.Name, metadata)
+	if err != nil {
+		return nil, err
+	}
+	for key, value := range resolvedEnv {
+		env = append(env, fmt.Sprintf("%s=%s", key, value))
 	}
 
 	// Prepare command - use virtual environment if available
-	var pythonPath string
-	venvPath := filepath.Join(agentNode.Path, "venv")
+	startArgs := metadata.StartCommand()
+	program := startArgs[0]
+	args := startArgs[1:]
 
-	// Check if virtual environment exists
-	if _, err := os.Stat(filepath.Join(venvPath, "bin", "python")); err == nil {
-		pythonPath = filepath.Join(venvPath, "bin", "python")
-		fmt.Printf("🐍 Using virtual environment: %s\n", venvPath)
-	} else if _, err := os.Stat(filepath.Join(venvPath, "Scripts", "python.exe")); err == nil {
-		pythonPath = filepath.Join(venvPath, "Scripts", "python.exe") // Windows
-		fmt.Printf("🐍 Using virtual environment: %s\n", venvPath)
-	} else {
-		// Fallback to system python
-		pythonPath = "python"
-		fmt.Printf("⚠️  Virtual environment not found, using system Python\n")
+	venvPath := filepath.Join(agentNode.Path, "venv")
+	if program == "python" || program == "python3" {
+		if p := venvPython(venvPath); p != "" {
+			program = p
+			fmt.Printf("🐍 Using virtual environment: %s\n", venvPath)
+		} else {
+			program = "python"
+			fmt.Printf("⚠️  Virtual environment not found, using system Python\n")
+		}
 	}
 
-	cmd := exec.Command(pythonPath, "main.py")
+	cmd := exec.Command(program, args...)
 	cmd.Dir = agentNode.Path
 	cmd.Env = env
 
@@ -161,13 +179,47 @@ func (ar *AgentNodeRunner) startAgentNodeProcess(agentNode InstalledPackage, por
 	return cmd, nil
 }
 
+// venvPython returns the venv python interpreter path, or "" if no venv exists.
+func venvPython(venvPath string) string {
+	if p := filepath.Join(venvPath, "bin", "python"); fileExists(p) {
+		return p
+	}
+	if p := filepath.Join(venvPath, "Scripts", "python.exe"); fileExists(p) { // Windows
+		return p
+	}
+	return ""
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// resolveEnvironment resolves the node's declared variables via the encrypted
+// secret store, prompting for missing required ones.
+func (ar *AgentNodeRunner) resolveEnvironment(nodeName string, metadata *PackageMetadata) (map[string]string, error) {
+	env := metadata.UserEnvironment
+	if len(env.Required) == 0 && len(env.Optional) == 0 {
+		return map[string]string{}, nil
+	}
+	store, err := NewSecretStore(ar.AgentFieldHome)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open secret store: %w", err)
+	}
+	resolver := &EnvResolver{Store: store, NodeName: nodeName, Prompter: TTYPrompter{}}
+	return resolver.Resolve(env)
+}
+
 // waitForAgentNode waits for the agent node to become ready
-func (ar *AgentNodeRunner) waitForAgentNode(port int, timeout time.Duration) error {
+func (ar *AgentNodeRunner) waitForAgentNode(port int, healthPath string, timeout time.Duration) error {
+	if healthPath == "" {
+		healthPath = "/health"
+	}
 	client := &http.Client{Timeout: 1 * time.Second}
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
-		resp, err := client.Get(fmt.Sprintf("http://localhost:%d/health", port))
+		resp, err := client.Get(fmt.Sprintf("http://localhost:%d%s", port, healthPath))
 		if err == nil && resp.StatusCode == 200 {
 			resp.Body.Close()
 			return nil
@@ -289,40 +341,4 @@ func (ar *AgentNodeRunner) loadRegistry() (*InstallationRegistry, error) {
 	}
 
 	return registry, nil
-}
-
-// loadPackageEnvFile loads environment variables from package .env file
-func (ar *AgentNodeRunner) loadPackageEnvFile(packagePath string) (map[string]string, error) {
-	envPath := filepath.Join(packagePath, ".env")
-
-	data, err := os.ReadFile(envPath)
-	if err != nil {
-		return nil, err
-	}
-
-	envVars := make(map[string]string)
-	lines := strings.Split(string(data), "\n")
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) == 2 {
-			key := strings.TrimSpace(parts[0])
-			value := strings.TrimSpace(parts[1])
-
-			// Remove quotes if present
-			if (strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"")) ||
-				(strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'")) {
-				value = value[1 : len(value)-1]
-			}
-
-			envVars[key] = value
-		}
-	}
-
-	return envVars, nil
 }
