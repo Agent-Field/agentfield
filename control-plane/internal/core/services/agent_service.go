@@ -88,6 +88,10 @@ func (as *DefaultAgentService) runAgentGuarded(name string, options domain.RunOp
 		return nil, fmt.Errorf("agent node %s is already running on port %d", name, *agentNode.Runtime.Port)
 	}
 
+	// 2b. Start declared node dependencies first, before allocating this node's
+	// port — each dependency fully binds its own port, avoiding collisions.
+	as.startNodeDependencies(agentNode, inProgress, options)
+
 	// 3. Allocate port
 	fmt.Printf("🔍 Searching for available port...\n")
 	port := options.Port
@@ -99,9 +103,6 @@ func (as *DefaultAgentService) runAgentGuarded(name string, options domain.RunOp
 	}
 
 	fmt.Printf("✅ Assigned port: %d\n", port)
-
-	// 3b. Start declared node dependencies first (best-effort, dependency order).
-	as.startNodeDependencies(agentNode, inProgress, options)
 
 	// 4. Start agent node process
 	fmt.Printf("📡 Starting agent node process...\n")
