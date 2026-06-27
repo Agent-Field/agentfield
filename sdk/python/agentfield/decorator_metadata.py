@@ -12,8 +12,9 @@ PENDING_TRIGGERS_ATTR = "_pending_triggers"
 def code_origin(fn: Callable[..., Any]) -> Optional[str]:
     """Capture the source file and declaration line for a function."""
     try:
-        src = inspect.getsourcefile(fn)
-        line = fn.__code__.co_firstlineno
+        target = inspect.unwrap(fn)
+        src = inspect.getsourcefile(target)
+        line = target.__code__.co_firstlineno
         if src and line:
             return f"{src}:{line}"
     except Exception:

@@ -54,6 +54,25 @@ class TestReasonerTriggersCodeOrigin:
         assert origin_file.endswith("test_decorator_code_origin.py")
         assert origin_line.isdigit()
 
+    def test_agent_reasoner_trigger_metadata_unwraps_inner_reasoner(self, monkeypatch):
+        """@app.reasoner should stamp code_origin from the user handler."""
+        app, _ = create_test_agent(monkeypatch)
+
+        @app.reasoner(triggers=[EventTrigger(source="stripe")])
+        @reasoner()
+        async def wrapped_agent_payment(payload: dict) -> dict:
+            return payload
+
+        metadata = next(
+            r for r in app.reasoners if r["id"] == "wrapped_agent_payment"
+        )
+
+        code_origin = metadata["triggers"][0]["code_origin"]
+        assert code_origin is not None
+        origin_file, origin_line = code_origin.rsplit(":", 1)
+        assert origin_file.endswith("test_decorator_code_origin.py")
+        assert origin_line.isdigit()
+
     def test_reasoner_preserves_user_supplied_code_origin(self):
         """If user passes code_origin explicitly, don't overwrite it."""
 
