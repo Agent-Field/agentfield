@@ -49,6 +49,10 @@ from agentfield.logger import log_debug, log_error, log_info, log_warn, set_cp_c
 from agentfield.router import AgentRouter
 from agentfield.connection_manager import ConnectionManager
 from agentfield.cost_tracker import CostTracker
+from agentfield.decorator_metadata import (
+    resolve_reasoner_metadata,
+    split_direct_registration_arg,
+)
 from agentfield.types import (
     AgentStatus,
     AIConfig,
@@ -1859,41 +1863,20 @@ class Agent(FastAPI):
             accepts_webhook (bool | "warn" | None, optional): 3-state UI guardrail flag.
         """
 
-        direct_registration: Optional[Callable] = None
-        decorator_path = path
+        direct_registration, decorator_path = split_direct_registration_arg(path)
         decorator_name = name
         decorator_tags = tags
         kwarg_triggers = list(triggers) if triggers else None
         kwarg_accepts_webhook = accepts_webhook
 
-        if decorator_path and (
-            inspect.isfunction(decorator_path) or inspect.ismethod(decorator_path)
-        ):
-            direct_registration = decorator_path
-            decorator_path = None
-
         def decorator(func: Callable) -> Callable:
-            # Merge any sugar-staged triggers (from @on_event / @on_schedule)
-            # with the explicit `triggers=[...]` kwarg passed to @app.reasoner.
-            # Mirrors the module-level @reasoner contract so the same syntax
-            # works under either decorator entry point.
-            staged = getattr(func, "_pending_triggers", None) or []
-            merged_triggers = list(kwarg_triggers or []) + list(staged)
-            if staged:
-                try:
-                    delattr(func, "_pending_triggers")
-                except AttributeError:
-                    pass
-            if merged_triggers:
-                setattr(func, "_reasoner_triggers", merged_triggers)
-                # Auto-set accepts_webhook=True when the dev declared triggers,
-                # unless they explicitly passed something else.
-                if kwarg_accepts_webhook is None:
-                    setattr(func, "_accepts_webhook", True)
-                else:
-                    setattr(func, "_accepts_webhook", kwarg_accepts_webhook)
-            elif kwarg_accepts_webhook is not None:
-                setattr(func, "_accepts_webhook", kwarg_accepts_webhook)
+            merged_triggers, resolved_accepts_webhook = resolve_reasoner_metadata(
+                func,
+                triggers=kwarg_triggers,
+                accepts_webhook=kwarg_accepts_webhook,
+            )
+            setattr(func, "_reasoner_triggers", merged_triggers)
+            setattr(func, "_accepts_webhook", resolved_accepts_webhook)
 
             # Extract function metadata
             func_name = func.__name__
@@ -2097,8 +2080,8 @@ class Agent(FastAPI):
             if not decorator_triggers:
                 decorator_triggers = getattr(tracked_func, "_reasoner_triggers", None)
             # Resolve accepts_webhook from the decorator
-            decorator_accepts_webhook = getattr(original_func, "_accepts_webhook", "warn")
-            if not decorator_accepts_webhook:
+            decorator_accepts_webhook = getattr(original_func, "_accepts_webhook", None)
+            if decorator_accepts_webhook is None:
                 decorator_accepts_webhook = getattr(tracked_func, "_accepts_webhook", "warn")
             
             self._reasoner_registry[reasoner_id] = ReasonerEntry(
@@ -2129,8 +2112,6 @@ class Agent(FastAPI):
             # consider a different pattern (e.g., a wrapper class or a global registry).
             return tracked_func
 
-        if direct_registration:
-            return decorator(direct_registration)
         if direct_registration:
             return decorator(direct_registration)
 
@@ -2835,16 +2816,9 @@ class Agent(FastAPI):
             - Use skills for reliable, repeatable operations
         """
 
-        direct_registration: Optional[Callable] = None
-        decorator_tags = tags
+        direct_registration, decorator_tags = split_direct_registration_arg(tags)
         decorator_path = path
         decorator_name = name
-
-        if decorator_tags and (
-            inspect.isfunction(decorator_tags) or inspect.ismethod(decorator_tags)
-        ):
-            direct_registration = decorator_tags
-            decorator_tags = None
 
         def decorator(func: Callable) -> Callable:
             # Extract function metadata

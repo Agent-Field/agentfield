@@ -119,3 +119,19 @@ def test_accepts_webhook_in_agent_registration():
     assert webhook_disabled_entry is not None
     assert hasattr(webhook_disabled_entry, "accepts_webhook")
     assert webhook_disabled_entry.accepts_webhook == "warn"
+
+
+def test_agent_reasoner_explicit_false_overrides_trigger_metadata():
+    """@app.reasoner should preserve accepts_webhook=False with trigger bindings."""
+    app = Agent(node_id="test_agent", agentfield_server="http://localhost:8080")
+
+    @app.reasoner(
+        accepts_webhook=False,
+        triggers=[EventTrigger(source="github")],
+    )
+    async def no_webhook_trigger(x: str) -> dict:
+        return {"x": x}
+
+    metadata = next(r for r in app.reasoners if r["id"] == "no_webhook_trigger")
+
+    assert metadata["accepts_webhook"] == "false"
