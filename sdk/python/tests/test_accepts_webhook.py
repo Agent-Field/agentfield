@@ -135,3 +135,20 @@ def test_agent_reasoner_explicit_false_overrides_trigger_metadata():
     metadata = next(r for r in app.reasoners if r["id"] == "no_webhook_trigger")
 
     assert metadata["accepts_webhook"] == "false"
+
+
+def test_agent_reasoner_preserves_inner_reasoner_trigger_metadata():
+    """@app.reasoner should preserve metadata from stacked module-level @reasoner."""
+    app = Agent(node_id="test_agent", agentfield_server="http://localhost:8080")
+
+    @app.reasoner()
+    @reasoner(accepts_webhook=False, triggers=[EventTrigger(source="github")])
+    async def stacked_no_webhook_trigger(x: str) -> dict:
+        return {"x": x}
+
+    metadata = next(
+        r for r in app.reasoners if r["id"] == "stacked_no_webhook_trigger"
+    )
+
+    assert metadata["accepts_webhook"] == "false"
+    assert metadata["triggers"][0]["source"] == "github"

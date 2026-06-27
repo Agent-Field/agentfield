@@ -44,7 +44,8 @@ def resolve_reasoner_metadata(
     accepts_webhook: Optional[Union[bool, str]] = None,
 ) -> tuple[List[Any], Union[bool, str]]:
     """Merge staged and explicit trigger metadata for a reasoner function."""
-    merged = list(triggers or [])
+    merged = list(getattr(func, "_reasoner_triggers", None) or [])
+    merged.extend(triggers or [])
     pending = getattr(func, PENDING_TRIGGERS_ATTR, None)
     if pending:
         merged.extend(pending)
@@ -59,8 +60,11 @@ def resolve_reasoner_metadata(
             if not getattr(trigger, "code_origin", None):
                 trigger.code_origin = origin
 
+    existing_accepts_webhook = getattr(func, "_accepts_webhook", None)
     if accepts_webhook is not None:
         resolved_accepts_webhook: Union[bool, str] = accepts_webhook
+    elif existing_accepts_webhook is not None:
+        resolved_accepts_webhook = existing_accepts_webhook
     elif merged:
         resolved_accepts_webhook = True
     else:
