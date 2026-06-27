@@ -152,3 +152,18 @@ def test_agent_reasoner_preserves_inner_reasoner_trigger_metadata():
 
     assert metadata["accepts_webhook"] == "false"
     assert metadata["triggers"][0]["source"] == "github"
+
+
+def test_agent_reasoner_outer_triggers_override_inner_warn_default():
+    """Outer @app.reasoner triggers should imply webhook opt-in when inner is default."""
+    app = Agent(node_id="test_agent", agentfield_server="http://localhost:8080")
+
+    @app.reasoner(triggers=[EventTrigger(source="github")])
+    @reasoner()
+    async def stacked_trigger_opt_in(x: str) -> dict:
+        return {"x": x}
+
+    metadata = next(r for r in app.reasoners if r["id"] == "stacked_trigger_opt_in")
+
+    assert metadata["accepts_webhook"] == "true"
+    assert metadata["triggers"][0]["source"] == "github"
