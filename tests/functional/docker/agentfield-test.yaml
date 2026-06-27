@@ -63,9 +63,6 @@ ui:
   mode: "embedded"
 
 api:
-  auth:
-    # Functional tests run on an isolated Docker network.
-    insecure_disable_auth: true
   cors:
     allowed_origins:
       - "*"

@@ -395,11 +395,8 @@ type CORSConfig struct {
 
 // AuthConfig holds API authentication configuration.
 type AuthConfig struct {
-	// APIKey is checked against headers or query params.
+	// APIKey is checked against headers or query params. Empty disables auth.
 	APIKey string `yaml:"api_key" mapstructure:"api_key"`
-	// InsecureDisableAuth explicitly permits running without API-key authentication.
-	// This should only be enabled for trusted local development environments.
-	InsecureDisableAuth bool `yaml:"insecure_disable_auth" mapstructure:"insecure_disable_auth"`
 	// SkipPaths allows bypassing auth for specific endpoints (e.g., health).
 	SkipPaths []string `yaml:"skip_paths" mapstructure:"skip_paths"`
 }
@@ -532,13 +529,6 @@ func ApplyEnvOverrides(cfg *Config) {
 	// Also support the nested path format for consistency
 	if apiKey := os.Getenv("AGENTFIELD_API_AUTH_API_KEY"); apiKey != "" {
 		cfg.API.Auth.APIKey = apiKey
-	}
-	if val, ok := os.LookupEnv("AGENTFIELD_INSECURE_DISABLE_AUTH"); ok {
-		cfg.API.Auth.InsecureDisableAuth = parseEnvBool(val)
-	}
-	// Also support the nested path format for consistency.
-	if val, ok := os.LookupEnv("AGENTFIELD_API_AUTH_INSECURE_DISABLE_AUTH"); ok {
-		cfg.API.Auth.InsecureDisableAuth = parseEnvBool(val)
 	}
 
 	if val := os.Getenv("AGENTFIELD_REGISTRATION_SERVERLESS_DISCOVERY_ALLOWED_HOSTS"); val != "" {

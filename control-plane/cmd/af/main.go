@@ -216,7 +216,6 @@ func loadConfig(configFile string) (*config.Config, error) {
 	// This is needed because Viper's AutomaticEnv only works for keys that exist in config
 	_ = viper.BindEnv("api.auth.api_key", "AGENTFIELD_API_KEY")
 	_ = viper.BindEnv("api.auth.api_key", "AGENTFIELD_API_AUTH_API_KEY")
-	_ = viper.BindEnv("api.auth.insecure_disable_auth", "AGENTFIELD_INSECURE_DISABLE_AUTH", "AGENTFIELD_API_AUTH_INSECURE_DISABLE_AUTH")
 
 	// Get the directory where the binary is located for UI paths
 	execPath, err := os.Executable()

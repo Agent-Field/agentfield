@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"crypto/subtle"
-	"errors"
 	"net/http"
 	"strings"
 
@@ -12,18 +11,9 @@ import (
 // AuthConfig mirrors server configuration for HTTP authentication.
 type AuthConfig struct {
 	APIKey                  string
-	InsecureDisableAuth     bool
 	SkipPaths               []string
 	SkipPrefixes            []string
 	QueryAPIKeyAllowedPaths []string
-}
-
-// ValidateAPIKeyAuth rejects an implicit unauthenticated configuration.
-func ValidateAPIKeyAuth(config AuthConfig) error {
-	if config.APIKey == "" && !config.InsecureDisableAuth {
-		return errors.New("API key is required; set AGENTFIELD_API_KEY or explicitly set AGENTFIELD_INSECURE_DISABLE_AUTH=true")
-	}
-	return nil
 }
 
 // APIKeyAuth enforces API key authentication via header or bearer token.
@@ -38,8 +28,8 @@ func APIKeyAuth(config AuthConfig) gin.HandlerFunc {
 	}
 
 	return func(c *gin.Context) {
-		// Unauthenticated operation must be explicitly enabled at startup.
-		if config.APIKey == "" && config.InsecureDisableAuth {
+		// No auth configured, allow everything.
+		if config.APIKey == "" {
 			c.Next()
 			return
 		}
@@ -100,15 +90,6 @@ func APIKeyAuth(config AuthConfig) gin.HandlerFunc {
 		// handler before any payload work happens.
 		if strings.HasPrefix(c.Request.URL.Path, "/sources/") {
 			c.Next()
-			return
-		}
-
-		if config.APIKey == "" {
-			c.Set("auth_level", "public")
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"error":   "unauthorized",
-				"message": "authentication required but API key is not configured on the server",
-			})
 			return
 		}
 

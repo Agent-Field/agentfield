@@ -34,9 +34,6 @@ ui:
   backend_url: ""
 
 api:
-  auth:
-    # This benchmark configuration runs in an isolated local environment.
-    insecure_disable_auth: true
   cors:
     allowed_origins:
       - "*"

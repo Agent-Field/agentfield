@@ -78,7 +78,6 @@ func (s *AgentFieldServer) applyGlobalMiddleware() {
 	skipPaths = uniqueStrings(skipPaths)
 	s.Router.Use(middleware.APIKeyAuth(middleware.AuthConfig{
 		APIKey:                  s.config.API.Auth.APIKey,
-		InsecureDisableAuth:     s.config.API.Auth.InsecureDisableAuth,
 		SkipPaths:               skipPaths,
 		SkipPrefixes:            uniqueStrings(skipPrefixes),
 		QueryAPIKeyAllowedPaths: streamingQueryAPIKeyAllowedPaths(),
