@@ -784,3 +784,71 @@ async def test_timeout_retry_exhausts_then_raises(monkeypatch, fast_timeout_agen
     # 1 initial attempt + 1 retry = 2 acompletion calls.
     assert call_count["n"] == 2
     never_set.set()
+
+
+@pytest.mark.asyncio
+async def test_transient_api_error_is_retried(monkeypatch, fast_timeout_agent):
+    """A transient provider glitch (a malformed 'Unable to get json response'
+    error) must be retried on a fresh pool and recover, not fail the call."""
+    monkeypatch.setenv("AGENTFIELD_AI_TIMEOUT_RETRIES", "2")
+    call_count = {"n": 0}
+
+    class _ProviderError(Exception):
+        pass
+
+    async def acompletion_side_effect(**params):
+        call_count["n"] += 1
+        if call_count["n"] < 2:
+            raise _ProviderError(
+                "OpenrouterException - Unable to get json response"
+            )
+        return _make_chat_response("recovered-after-glitch")
+
+    _install_litellm_stub(monkeypatch, acompletion_side_effect)
+    ai = AgentAI(fast_timeout_agent)
+    monkeypatch.setattr(ai, "_ensure_model_limits_cached", lambda: asyncio.sleep(0))
+    monkeypatch.setattr(
+        "agentfield.agent_ai.AgentUtils.detect_input_type", lambda value: "text"
+    )
+    monkeypatch.setattr(
+        "agentfield.agent_ai.AgentUtils.serialize_result", lambda value: value
+    )
+
+    result = await asyncio.wait_for(ai.ai("hello"), timeout=5.0)
+    assert hasattr(result, "text")
+    assert result.text == "recovered-after-glitch"
+    assert call_count["n"] == 2
+
+
+@pytest.mark.asyncio
+async def test_permanent_client_error_is_not_retried(monkeypatch, fast_timeout_agent):
+    """A permanent client error (bad request / unsupported schema) must NOT be
+    retried — a retry can never fix it, so it should surface immediately."""
+    monkeypatch.setenv("AGENTFIELD_AI_TIMEOUT_RETRIES", "2")
+    call_count = {"n": 0}
+
+    class _BadRequest(Exception):
+        def __init__(self, msg):
+            super().__init__(msg)
+            self.status_code = 400
+
+    async def acompletion_side_effect(**params):
+        call_count["n"] += 1
+        raise _BadRequest(
+            "invalid_request_error: For 'integer' type, minimum not supported"
+        )
+
+    _install_litellm_stub(monkeypatch, acompletion_side_effect)
+    ai = AgentAI(fast_timeout_agent)
+    monkeypatch.setattr(ai, "_ensure_model_limits_cached", lambda: asyncio.sleep(0))
+    monkeypatch.setattr(
+        "agentfield.agent_ai.AgentUtils.detect_input_type", lambda value: "text"
+    )
+    monkeypatch.setattr(
+        "agentfield.agent_ai.AgentUtils.serialize_result", lambda value: value
+    )
+
+    with pytest.raises(Exception):
+        await asyncio.wait_for(ai.ai("hello"), timeout=5.0)
+    # No retry on a permanent error: exactly one acompletion attempt.
+    assert call_count["n"] == 1

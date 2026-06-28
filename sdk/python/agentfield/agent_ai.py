@@ -123,13 +123,64 @@ def _resolve_timeout_retries() -> int:
     return _AI_TIMEOUT_RETRIES_DEFAULT
 
 
+_PERMANENT_LLM_ERROR_MARKERS = (
+    "invalid_request_error",
+    "not supported",
+    "authentication",
+    "unauthorized",
+    "invalid api key",
+    "permission",
+    "no such model",
+    "model_not_found",
+    "context_length",
+    "maximum context",
+)
+_TRANSIENT_LLM_ERROR_MARKERS = (
+    "unable to get json response",
+    "internal server error",
+    "internalservererror",
+    "service unavailable",
+    "serviceunavailable",
+    "overloaded",
+    "bad gateway",
+    "gateway timeout",
+    "connection",
+    "econnreset",
+    "temporarily",
+    "try again",
+    "provider returned error",
+)
+
+
+def _is_transient_llm_error(exc: Exception) -> bool:
+    """Whether an LLM-call exception is a transient provider glitch worth
+    retrying (a malformed/garbage response, a 5xx, a dropped connection) versus
+    a permanent client error (bad request, auth, model-not-found, schema) that a
+    retry can never fix. Conservative: a clear permanent marker always wins."""
+    code = getattr(exc, "status_code", None)
+    if code is None:
+        resp = getattr(exc, "response", None)
+        code = getattr(resp, "status_code", None)
+    msg = str(exc).lower()
+    if any(p in msg for p in _PERMANENT_LLM_ERROR_MARKERS):
+        return False
+    if isinstance(code, int):
+        if code in (408, 409, 425, 429) or code >= 500:
+            return True
+        if 400 <= code < 500:
+            return False
+    return any(t in msg for t in _TRANSIENT_LLM_ERROR_MARKERS)
+
+
 async def _acompletion_with_timeout_retry(
     litellm_module: Any, params: Dict[str, Any], timeout: float
 ) -> Any:
     """Run ``litellm.acompletion`` under an asyncio.wait_for safety net, retrying
-    on timeout. On each timeout the cached HTTP clients are reset so the next
-    attempt opens a fresh connection pool (a stuck pooled connection is the usual
-    cause). Raises ``TimeoutError`` only after the retries are exhausted."""
+    on timeout AND on transient provider errors (malformed response, 5xx, dropped
+    connection). On each retry the cached HTTP clients are reset so the next
+    attempt opens a fresh connection pool. Permanent client errors (bad request,
+    auth, model-not-found) are NOT retried. Raises after the retries are
+    exhausted."""
     retries = _resolve_timeout_retries()
     for attempt in range(retries + 1):
         try:
@@ -153,6 +204,21 @@ async def _acompletion_with_timeout_retry(
                 f"LLM call to {model_name} timed out after {timeout}s "
                 f"(asyncio safety net) after {retries} retries"
             )
+        except Exception as exc:
+            # Transient provider glitch (malformed/garbage response, 5xx, dropped
+            # connection): retry on a fresh pool. Permanent client errors (bad
+            # request, auth, model-not-found) propagate immediately.
+            if attempt < retries and _is_transient_llm_error(exc):
+                model_name = params.get("model", "unknown")
+                _reset_litellm_http_clients(litellm_module)
+                log_warn(
+                    f"LLM call to {model_name} hit a transient error "
+                    f"({type(exc).__name__}: {str(exc)[:80]}); retry "
+                    f"{attempt + 1}/{retries} on a fresh connection pool"
+                )
+                await asyncio.sleep(min(2.0 * (attempt + 1), 8.0))
+                continue
+            raise
 
 
 def _get_openai():
