@@ -25,9 +25,6 @@ ui:
   dev_port: 5173
 
 api:
-  auth:
-    # Local development only. Production deployments should configure api_key.
-    insecure_disable_auth: true
   cors:
     allowed_origins:
       - "http://localhost:3000"

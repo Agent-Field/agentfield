@@ -39,17 +39,11 @@ Example DSNs:
 - `postgres://agentfield:agentfield@postgres:5432/agentfield?sslmode=disable`
 - `postgresql://agentfield:agentfield@postgres:5432/agentfield?sslmode=disable`
 
-### API Authentication
+### API Authentication (optional)
 
-The control plane requires an API key for most endpoints. To run without API-key
-authentication, insecure mode must be explicitly enabled and should only be used
-in trusted local development environments.
+If set, the control plane requires an API key for most endpoints.
 
 - `AGENTFIELD_API_KEY` or `AGENTFIELD_API_AUTH_API_KEY`: API key checked by the control plane.
-- `AGENTFIELD_INSECURE_DISABLE_AUTH` or `AGENTFIELD_API_AUTH_INSECURE_DISABLE_AUTH`: explicitly allow startup without an API key.
-
-The equivalent YAML configuration is `api.auth.api_key` or
-`api.auth.insecure_disable_auth: true`.
 
 ### UI
 

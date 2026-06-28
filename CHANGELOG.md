@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.95] - 2026-06-27
+
+## [0.1.95-rc.3] - 2026-06-27
+
+
+### Other
+
+- Revert fail-closed auth: #682 (API key) + #691 (admin token) (#694)
+
+* Revert "fix(security): Enforce fail-closed for empty admin token (#425) (#691)"
+
+This reverts commit bc0f7c78171353ed82b3b1da7fed2677d538aa2d.
+
+* Revert "fix(#424): fail closed on empty API key unless insecure mode is explicitly enabled (#682)"
+
+This reverts commit 8ff2bc7ada89168ba6206a83a9dd573387d340c4. (bee7eb5)
+
+## [0.1.95-rc.2] - 2026-06-27
+
+
+### Fixed
+
+- Fix(security): Enforce fail-closed for empty admin token (#425) (#691) (bc0f7c7)
+
 ## [0.1.95-rc.1] - 2026-06-25
 
 

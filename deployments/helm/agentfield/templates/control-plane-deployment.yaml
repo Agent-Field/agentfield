@@ -86,9 +86,6 @@ spec:
                 secretKeyRef:
                   name: {{ include "agentfield.apiAuth.secretName" . }}
                   key: {{ .Values.apiAuth.existingSecretKey }}
-            {{- else }}
-            - name: AGENTFIELD_INSECURE_DISABLE_AUTH
-              value: "true"
             {{- end }}
             {{- with .Values.controlPlane.extraEnv }}
             {{- toYaml . | nindent 12 }}

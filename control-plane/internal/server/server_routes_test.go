@@ -508,7 +508,7 @@ func TestSetupRoutesRegistersMetricsAndUI(t *testing.T) {
 		webhookDispatcher: &stubWebhookDispatcher{},
 		config: &config.Config{
 			UI:  config.UIConfig{Enabled: true, Mode: "embedded"},
-			API: config.APIConfig{Auth: config.AuthConfig{InsecureDisableAuth: true}},
+			API: config.APIConfig{},
 		},
 	}
 
@@ -544,7 +544,7 @@ func TestSetupRoutesRegistersWorkflowCleanupUIRoute(t *testing.T) {
 		webhookDispatcher: &stubWebhookDispatcher{},
 		config: &config.Config{
 			UI:  config.UIConfig{Enabled: true, Mode: "embedded"},
-			API: config.APIConfig{Auth: config.AuthConfig{InsecureDisableAuth: true}},
+			API: config.APIConfig{},
 		},
 	}
 
@@ -572,7 +572,7 @@ func TestSetupRoutesRegistersHealthEndpoint(t *testing.T) {
 			webhookDispatcher: &stubWebhookDispatcher{},
 			config: &config.Config{
 				UI:  config.UIConfig{Enabled: false},
-				API: config.APIConfig{Auth: config.AuthConfig{InsecureDisableAuth: true}},
+				API: config.APIConfig{},
 			},
 			storageHealthOverride: func(context.Context) gin.H { return gin.H{"status": "healthy"} },
 		}
@@ -622,7 +622,7 @@ func TestSetupRoutesRegistersHealthEndpoint(t *testing.T) {
 			webhookDispatcher: &stubWebhookDispatcher{},
 			config: &config.Config{
 				UI:  config.UIConfig{Enabled: false},
-				API: config.APIConfig{Auth: config.AuthConfig{InsecureDisableAuth: true}},
+				API: config.APIConfig{},
 			},
 			storageHealthOverride: func(context.Context) gin.H { return gin.H{"status": "healthy"} },
 		}
