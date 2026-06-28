@@ -167,3 +167,19 @@ def test_agent_reasoner_outer_triggers_override_inner_warn_default():
 
     assert metadata["accepts_webhook"] == "true"
     assert metadata["triggers"][0]["source"] == "github"
+
+
+def test_agent_reasoner_staged_triggers_override_inner_warn_default():
+    """Staged trigger sugar should imply webhook opt-in when inner is default."""
+    app = Agent(node_id="test_agent", agentfield_server="http://localhost:8080")
+
+    @app.reasoner()
+    @on_schedule("*/5 * * * *")
+    @reasoner()
+    async def stacked_schedule_opt_in(x: str) -> dict:
+        return {"x": x}
+
+    metadata = next(r for r in app.reasoners if r["id"] == "stacked_schedule_opt_in")
+
+    assert metadata["accepts_webhook"] == "true"
+    assert metadata["triggers"][0]["source"] == "cron"

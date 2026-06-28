@@ -49,8 +49,9 @@ def resolve_reasoner_metadata(
     explicit_triggers = list(triggers or [])
     merged.extend(explicit_triggers)
     pending = getattr(func, PENDING_TRIGGERS_ATTR, None)
+    staged_triggers = list(pending or [])
     if pending:
-        merged.extend(pending)
+        merged.extend(staged_triggers)
         try:
             delattr(func, PENDING_TRIGGERS_ATTR)
         except AttributeError:
@@ -65,7 +66,7 @@ def resolve_reasoner_metadata(
     existing_accepts_webhook = getattr(func, "_accepts_webhook", None)
     if accepts_webhook is not None:
         resolved_accepts_webhook: Union[bool, str] = accepts_webhook
-    elif explicit_triggers and existing_accepts_webhook == "warn":
+    elif (explicit_triggers or staged_triggers) and existing_accepts_webhook == "warn":
         resolved_accepts_webhook = True
     elif existing_accepts_webhook is not None:
         resolved_accepts_webhook = existing_accepts_webhook
