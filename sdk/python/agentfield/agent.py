@@ -1875,8 +1875,6 @@ class Agent(FastAPI):
                 triggers=kwarg_triggers,
                 accepts_webhook=kwarg_accepts_webhook,
             )
-            setattr(func, "_reasoner_triggers", merged_triggers)
-            setattr(func, "_accepts_webhook", resolved_accepts_webhook)
 
             # Extract function metadata
             func_name = func.__name__
@@ -2076,13 +2074,6 @@ class Agent(FastAPI):
             vc_setting = self._effective_component_vc_setting(
                 reasoner_id, self._reasoner_vc_overrides
             )
-            decorator_triggers = getattr(original_func, "_reasoner_triggers", None)
-            if not decorator_triggers:
-                decorator_triggers = getattr(tracked_func, "_reasoner_triggers", None)
-            # Resolve accepts_webhook from the decorator
-            decorator_accepts_webhook = getattr(original_func, "_accepts_webhook", None)
-            if decorator_accepts_webhook is None:
-                decorator_accepts_webhook = getattr(tracked_func, "_accepts_webhook", "warn")
             
             self._reasoner_registry[reasoner_id] = ReasonerEntry(
                 id=reasoner_id,
@@ -2091,8 +2082,8 @@ class Agent(FastAPI):
                 output_type=return_type,
                 tags=resolved_tags,
                 vc_enabled=vc_setting,
-                triggers=list(decorator_triggers or []),
-                accepts_webhook=decorator_accepts_webhook,
+                triggers=list(merged_triggers or []),
+                accepts_webhook=resolved_accepts_webhook,
             )
 
             # NOTE: Legacy storage removed - reasoners property generates list on-demand
