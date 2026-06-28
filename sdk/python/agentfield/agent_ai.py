@@ -104,6 +104,57 @@ def _reset_litellm_http_clients(litellm_module: Any) -> None:
         log_debug(f"litellm client reset failed: {exc}")
 
 
+_AI_TIMEOUT_RETRIES_DEFAULT = 2
+
+
+def _resolve_timeout_retries() -> int:
+    """How many times to retry an LLM call that hit the wall-clock safety-net
+    timeout. Precedence: env ``AGENTFIELD_AI_TIMEOUT_RETRIES``, then default (2).
+    These timeouts are usually a stalled connection rather than the model
+    genuinely needing the full window, so a retry on a fresh pool usually
+    succeeds. Set to 0 to disable."""
+    raw = os.environ.get("AGENTFIELD_AI_TIMEOUT_RETRIES")
+    if raw is not None:
+        try:
+            n = int(raw)
+            return n if n >= 0 else 0
+        except ValueError:
+            pass
+    return _AI_TIMEOUT_RETRIES_DEFAULT
+
+
+async def _acompletion_with_timeout_retry(
+    litellm_module: Any, params: Dict[str, Any], timeout: float
+) -> Any:
+    """Run ``litellm.acompletion`` under an asyncio.wait_for safety net, retrying
+    on timeout. On each timeout the cached HTTP clients are reset so the next
+    attempt opens a fresh connection pool (a stuck pooled connection is the usual
+    cause). Raises ``TimeoutError`` only after the retries are exhausted."""
+    retries = _resolve_timeout_retries()
+    for attempt in range(retries + 1):
+        try:
+            return await asyncio.wait_for(
+                litellm_module.acompletion(**params), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            model_name = params.get("model", "unknown")
+            # Reset litellm's cached HTTP clients so the next call gets a fresh
+            # connection pool — the previous client likely holds a stuck
+            # connection that would hang forever.
+            _reset_litellm_http_clients(litellm_module)
+            if attempt < retries:
+                log_warn(
+                    f"LLM call to {model_name} timed out after {timeout}s; "
+                    f"retry {attempt + 1}/{retries} on a fresh connection pool"
+                )
+                await asyncio.sleep(min(2.0 * (attempt + 1), 8.0))
+                continue
+            raise TimeoutError(
+                f"LLM call to {model_name} timed out after {timeout}s "
+                f"(asyncio safety net) after {retries} retries"
+            )
+
+
 def _get_openai():
     """Lazy import of openai - only loads when AI features are used."""
     global _openai
@@ -650,21 +701,12 @@ class AgentAI:
                     # socket level, so cancelled requests don't poison the
                     # connection pool for subsequent calls.
                     params.setdefault("timeout", effective_timeout)
-                    # asyncio.wait_for is a safety net at 2x the litellm timeout
-                    # in case litellm fails to honor its own timeout.
-                    try:
-                        return await asyncio.wait_for(
-                            litellm_module.acompletion(**params),
-                            timeout=effective_timeout * 2,
-                        )
-                    except asyncio.TimeoutError:
-                        model_name = params.get("model", "unknown")
-                        # Reset litellm's cached HTTP clients so the next call
-                        # gets a fresh connection pool.
-                        _reset_litellm_http_clients(litellm_module)
-                        raise TimeoutError(
-                            f"LLM call to {model_name} timed out after {effective_timeout * 2}s (asyncio safety net)"
-                        )
+                    # asyncio.wait_for is a safety net at 2x the litellm timeout;
+                    # on timeout it resets the client pool and retries (a stalled
+                    # connection is the usual cause, not the model itself).
+                    return await _acompletion_with_timeout_retry(
+                        litellm_module, params, effective_timeout * 2
+                    )
 
                 async def _call_with_fallbacks():
                     fallback_models = getattr(final_config, "fallback_models", None)
@@ -724,22 +766,12 @@ class AgentAI:
                     "litellm is not installed. Please install it with `pip install litellm`."
                 )
             # litellm/httpx already gets `timeout` via litellm_params (set
-            # earlier). asyncio.wait_for is a safety net at 2x in case litellm
-            # fails to honor its own timeout.
-            try:
-                return await asyncio.wait_for(
-                    litellm_module.acompletion(**litellm_params),
-                    timeout=effective_timeout * 2,
-                )
-            except asyncio.TimeoutError:
-                model_name = litellm_params.get("model", "unknown")
-                # Reset litellm's cached HTTP clients so the next call gets
-                # a fresh connection pool — the previous client is likely
-                # holding a stuck connection that will hang forever.
-                _reset_litellm_http_clients(litellm_module)
-                raise TimeoutError(
-                    f"LLM call to {model_name} timed out after {effective_timeout * 2}s (asyncio safety net)"
-                )
+            # earlier). asyncio.wait_for is a safety net at 2x; on timeout it
+            # resets the client pool and retries (a stalled connection is the
+            # usual cause, not the model itself).
+            return await _acompletion_with_timeout_retry(
+                litellm_module, litellm_params, effective_timeout * 2
+            )
 
         async def _execute_with_fallbacks():
             # Check for configured fallback models in AI config
