@@ -61,16 +61,24 @@ printf '%s\n' "KEEP_ME=$KEEP_ME"
 		require.NoError(t, err)
 		require.NotNil(t, result)
 		assert.Equal(t, 0, result.ReturnCode)
-		assert.Contains(t, result.Stdout, "PWD="+dir)
+		// Resolve symlinks: on macOS /var is a symlink to /private/var, so the
+		// child's $PWD may differ textually from t.TempDir()'s path.
+		resolvedDir, evalErr := filepath.EvalSymlinks(dir)
+		require.NoError(t, evalErr)
+		assert.True(t,
+			strings.Contains(result.Stdout, "PWD="+dir) || strings.Contains(result.Stdout, "PWD="+resolvedDir),
+			"stdout %q missing PWD=%s or PWD=%s", result.Stdout, dir, resolvedDir)
 		assert.Contains(t, result.Stdout, "REMOVE_ME=unset")
 		assert.Contains(t, result.Stdout, "KEEP_ME=set")
 	})
 
 	t.Run("context cancellation returns a killed-process result with partial stdout", func(t *testing.T) {
 		dir := t.TempDir()
+		// Flush the line, give the reader a beat, then stall so the kill lands
+		// during the sleep (not before the forked shell runs printf).
 		script := writeTestScript(t, dir, "sleepy", "#!/bin/sh\nprintf 'before-timeout'\nsleep 5\n")
 
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		defer cancel()
 
 		result, err := RunCLI(ctx, []string{script}, nil, "", 0)
@@ -78,6 +86,38 @@ printf '%s\n' "KEEP_ME=$KEEP_ME"
 		require.NotNil(t, result)
 		assert.NotEqual(t, 0, result.ReturnCode)
 		assert.Equal(t, "before-timeout", result.Stdout)
+	})
+
+	t.Run("idle watchdog aborts a stalled child before the wall-clock cap", func(t *testing.T) {
+		dir := t.TempDir()
+		// Prints one line, then stalls far longer than the idle window.
+		script := writeTestScript(t, dir, "staller", "#!/bin/sh\nprintf 'started\\n'\nsleep 600\n")
+
+		// Idle window of 1s; generous 60s wall-clock cap. Watchdog should fire first.
+		t.Setenv("AGENTFIELD_HARNESS_IDLE_SECONDS", "1")
+
+		start := time.Now()
+		result, err := RunCLI(context.Background(), []string{script}, nil, "", 60)
+		elapsed := time.Since(start)
+
+		require.Error(t, err)
+		require.NotNil(t, result)
+		assert.Contains(t, err.Error(), "no progress")
+		assert.Contains(t, result.Stdout, "started")
+		assert.Less(t, elapsed, 15*time.Second, "idle watchdog did not fire promptly")
+	})
+
+	t.Run("fast command returns full output even with a short idle window", func(t *testing.T) {
+		dir := t.TempDir()
+		script := writeTestScript(t, dir, "fast", "#!/bin/sh\nprintf 'line1\\nline2\\n'\n")
+
+		t.Setenv("AGENTFIELD_HARNESS_IDLE_SECONDS", "1")
+
+		result, err := RunCLI(context.Background(), []string{script}, nil, "", 10)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.Equal(t, 0, result.ReturnCode)
+		assert.Equal(t, "line1\nline2\n", result.Stdout)
 	})
 }
 

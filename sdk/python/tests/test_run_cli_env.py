@@ -14,6 +14,7 @@ test catches that regression early.
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
@@ -128,3 +129,49 @@ def test_run_cli_openrouter_attribution_caller_env_wins(monkeypatch):
 
     assert returncode == 0
     assert stdout.strip() == "https://caller.example:https://or-caller.example"
+
+
+@pytest.mark.asyncio
+async def test_run_cli_idle_watchdog_aborts_stalled_child():
+    """A child that emits one line then sleeps must be killed by the idle
+    watchdog well before the wall-clock timeout, not after."""
+    start = time.monotonic()
+    with pytest.raises(TimeoutError) as exc:
+        await run_cli(
+            ["bash", "-c", "echo started; sleep 600"],
+            # Generous wall-clock bound; the idle watchdog should fire first.
+            timeout=60.0,
+            idle_seconds=1.0,
+        )
+    elapsed = time.monotonic() - start
+    # Killed by the idle watchdog (~1s), not the 60s wall-clock bound.
+    assert elapsed < 10.0, f"idle watchdog did not fire promptly ({elapsed:.1f}s)"
+    assert "no progress" in str(exc.value).lower()
+
+
+@pytest.mark.asyncio
+async def test_run_cli_fast_command_returns_full_output():
+    """A normal fast command still returns its complete stdout and exit code
+    even with a short idle window configured."""
+    stdout, _stderr, returncode = await run_cli(
+        ["bash", "-c", "printf 'line1\\nline2\\nline3\\n'"],
+        timeout=10.0,
+        idle_seconds=1.0,
+    )
+    assert returncode == 0
+    assert stdout == "line1\nline2\nline3\n"
+
+
+@pytest.mark.asyncio
+async def test_run_cli_idle_seconds_from_env(monkeypatch):
+    """The idle window is read from AGENTFIELD_HARNESS_IDLE_SECONDS when the
+    explicit arg is not passed."""
+    monkeypatch.setenv("AGENTFIELD_HARNESS_IDLE_SECONDS", "1")
+    start = time.monotonic()
+    with pytest.raises(TimeoutError):
+        await run_cli(
+            ["bash", "-c", "echo started; sleep 600"],
+            timeout=60.0,
+        )
+    elapsed = time.monotonic() - start
+    assert elapsed < 10.0, f"env idle watchdog did not fire promptly ({elapsed:.1f}s)"
