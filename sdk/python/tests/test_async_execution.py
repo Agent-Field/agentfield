@@ -976,3 +976,108 @@ async def test_poll_active_executions_still_times_out_without_pause_clock():
     assert state.status == ExecutionStatus.TIMEOUT, (
         "no pause_clock attached: wallclock overdue check must still fire"
     )
+
+
+@pytest.mark.asyncio
+async def test_reasoner_failed_reports_failed_status_and_preserves_result(monkeypatch):
+    """A reasoner that raises ReasonerFailed must surface as status=failed
+    while still carrying its structured result (so the control plane, which
+    stores the result payload regardless of terminal status, keeps the rich
+    outcome rather than just a bare error string)."""
+    from agentfield.exceptions import ReasonerFailed
+
+    agent = Agent(
+        node_id="test-agent", agentfield_server="http://control", auto_register=False
+    )
+
+    @agent.reasoner()
+    async def build() -> dict:
+        await asyncio.sleep(0)
+        raise ReasonerFailed(
+            "Build failed: 0/3 issues completed, no branches merged",
+            result={"success": False, "completed_issues": 0, "merged_branches": 0},
+            error_details={"reason": "empty_build"},
+        )
+
+    recorded = []
+
+    class DummyResponse:
+        status_code = 200
+
+        def json(self):
+            return {}
+
+    async def fake_request(self, method, url, **kwargs):
+        recorded.append({"url": url, "json": kwargs.get("json")})
+        return DummyResponse()
+
+    monkeypatch.setattr(AgentFieldClient, "_async_request", fake_request)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=agent), base_url="http://agent"
+    ) as client:
+        response = await client.post(
+            "/reasoners/build",
+            json={},
+            headers={"X-Execution-ID": "exec-fail-1"},
+        )
+
+    assert response.status_code == 202
+    await asyncio.sleep(0.1)
+
+    status_calls = [e for e in recorded if "/executions/" in e["url"]]
+    assert status_calls, "expected async status callback"
+    payload = status_calls[-1]["json"]
+    assert payload["status"] == "failed"
+    assert "0/3 issues" in payload["error"]
+    assert payload["error_details"] == {"reason": "empty_build"}
+    # Structured result preserved alongside the failed status.
+    assert payload["result"]["success"] is False
+    assert payload["result"]["completed_issues"] == 0
+
+
+@pytest.mark.asyncio
+async def test_plain_exception_failed_status_has_no_result(monkeypatch):
+    """Regression guard: a generic exception still maps to status=failed with
+    no result key — ReasonerFailed's result-preservation must not leak into
+    the ordinary failure path."""
+    agent = Agent(
+        node_id="test-agent", agentfield_server="http://control", auto_register=False
+    )
+
+    @agent.reasoner()
+    async def boom() -> dict:
+        await asyncio.sleep(0)
+        raise RuntimeError("kaboom")
+
+    recorded = []
+
+    class DummyResponse:
+        status_code = 200
+
+        def json(self):
+            return {}
+
+    async def fake_request(self, method, url, **kwargs):
+        recorded.append({"url": url, "json": kwargs.get("json")})
+        return DummyResponse()
+
+    monkeypatch.setattr(AgentFieldClient, "_async_request", fake_request)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=agent), base_url="http://agent"
+    ) as client:
+        response = await client.post(
+            "/reasoners/boom",
+            json={},
+            headers={"X-Execution-ID": "exec-fail-2"},
+        )
+
+    assert response.status_code == 202
+    await asyncio.sleep(0.1)
+
+    status_calls = [e for e in recorded if "/executions/" in e["url"]]
+    payload = status_calls[-1]["json"]
+    assert payload["status"] == "failed"
+    assert payload["error"] == "kaboom"
+    assert "result" not in payload

@@ -33,6 +33,44 @@ class ExecutionFailedError(AgentFieldClientError):
     pass
 
 
+class ReasonerFailed(AgentFieldError):
+    """Raised *inside* a reasoner to report that the work ran but failed.
+
+    Returning a value from a reasoner — even one whose payload says
+    ``success: False`` — makes the async execution handler record the
+    execution as ``succeeded`` (it only distinguishes "returned" from
+    "raised", never inspecting the result). A build that completes zero
+    issues and merges nothing therefore surfaces as green, which is easy to
+    act on incorrectly.
+
+    Raise this when the reasoner has determined its own work failed but you
+    still want the structured ``result`` preserved on the execution record.
+    The handler posts ``status="failed"`` to the control plane while also
+    sending ``result`` (the control plane stores the result payload
+    regardless of status), so the rich outcome — debt, DAG state, any PR
+    that was opened — is not lost behind a bare error string.
+
+    Args:
+        message: Human-readable failure summary (becomes the execution error).
+        result: Optional structured result to preserve on the execution
+            record (e.g. ``BuildResult.model_dump()``). JSON-encoded by the
+            handler before it is posted.
+        error_details: Optional structured error metadata, mirrored onto the
+            status payload's ``error_details`` field.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        result: object | None = None,
+        error_details: object | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.result = result
+        self.error_details = error_details
+
+
 class ExecutionTimeoutError(AgentFieldError):
     """Execution timed out waiting for completion."""
 
@@ -80,6 +118,7 @@ __all__ = [
     "AgentFieldError",
     "AgentFieldClientError",
     "ExecutionFailedError",
+    "ReasonerFailed",
     "ExecutionTimeoutError",
     "ExecutionCancelledError",
     "MemoryAccessError",

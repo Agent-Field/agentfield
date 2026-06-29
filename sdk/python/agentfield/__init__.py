@@ -64,6 +64,7 @@ from .exceptions import (
     AgentFieldClientError,
     ExecutionTimeoutError,
     MemoryAccessError,
+    ReasonerFailed,
     RegistrationError,
     ValidationError,
 )
@@ -158,6 +159,7 @@ __all__ = [
     "AgentFieldClientError",
     "ExecutionTimeoutError",
     "MemoryAccessError",
+    "ReasonerFailed",
     "RegistrationError",
     "ValidationError",
     # Trigger / webhook plugin system

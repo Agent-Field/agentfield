@@ -2573,6 +2573,14 @@ class Agent(FastAPI):
                 "execution_id": execution_id,
                 "reasoner": reasoner_name,
             }
+            # A reasoner that ran, determined its own work failed, and wants its
+            # structured outcome preserved raises ReasonerFailed(result=...).
+            # Carry that result onto the failed-status payload so the control
+            # plane records status=failed WITHOUT discarding the rich result
+            # (it stores the result payload regardless of terminal status).
+            from .exceptions import ReasonerFailed
+            if isinstance(exc, ReasonerFailed) and exc.result is not None:
+                payload["result"] = jsonable_encoder(exc.result)
             log_error(f"Execution {execution_id} failed asynchronously: {exc}")
         finally:
             # If we landed here without the reasoner finishing (e.g. our own
