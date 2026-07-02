@@ -97,9 +97,11 @@
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.32; } }
 
   /* KPI strip: AGENTS, COST (hero), WALL TIME, SUCCEEDED/FAILED.
-     All four cards share identical chrome — Cost reads as hero through TYPE ONLY
-     (larger gold numeral), never a selection-style border. */
-  .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--gutter); margin-top: var(--section-gap); }
+     All cards share identical chrome — Cost reads as hero through TYPE ONLY
+     (larger gold numeral), never a selection-style border. Column count is
+     data-driven (--kpi-cols) so the strip flows cleanly whether cost data is
+     present (4 cards) or absent (3 cards) — no empty slot, no half-width gap. */
+  .kpis { display: grid; grid-template-columns: repeat(var(--kpi-cols, 4), minmax(0, 1fr)); gap: var(--gutter); margin-top: var(--section-gap); }
   .kpi { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px var(--panel-p) 15px; display: flex; flex-direction: column; gap: 9px; }
   .kpi .cap { font-size: 11px; line-height: 1; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-tertiary); font-weight: 600; }
   .kpi .val { font-size: 20px; line-height: 1; font-weight: 600; font-family: var(--font-mono); letter-spacing: -0.02em; }
@@ -543,10 +545,13 @@
   }
   kpiWrap.appendChild(kpiCard("Agents", document.createTextNode(String(agentCount))));
 
-  var costNode;
-  if (costStr) { costNode = document.createTextNode(costStr); }
-  else { costNode = el("span"); costNode.textContent = "n/a"; costNode.style.color = "var(--fg-tertiary)"; }
-  kpiWrap.appendChild(kpiCard("Cost", costNode, { hero: !!costStr }));
+  /* Cost card renders ONLY when cost data is available. Real runs export
+     cost_usd as null (the executions API carries no cost), and null must render
+     nothing at all — not an "n/a" placeholder. When absent, the strip drops to
+     3 cards and flows full-width via --kpi-cols below. */
+  if (costStr) {
+    kpiWrap.appendChild(kpiCard("Cost", document.createTextNode(costStr), { hero: true }));
+  }
 
   kpiWrap.appendChild(kpiCard("Wall time", document.createTextNode(fmtDuration(totals.duration_ms))));
 
@@ -561,6 +566,10 @@
   failSpan.appendChild(document.createTextNode(String(failedN)));
   sf.appendChild(failSpan);
   kpiWrap.appendChild(kpiCard("Succeeded / failed", sf));
+
+  /* Drive the grid column count off the actual number of rendered cards so a
+     3-card strip (no cost) spans the row cleanly instead of leaving a gap. */
+  kpiWrap.style.setProperty("--kpi-cols", String(kpiWrap.children.length));
 
   /* ---- DAG layout: topological longest-path layering ---- */
   function computeLayers() {
@@ -1143,7 +1152,9 @@
     kvRow(dl, "Ended", n.ended_at ? new Date(n.ended_at).toLocaleString() : "n/a", !n.ended_at, false);         /* date -> sans */
     kvRow(dl, "Duration", fmtDuration(n.duration_ms), n.duration_ms == null, true);          /* numeric -> mono */
     kvRow(dl, "Model", n.model ? n.model : "n/a", !n.model, true);                           /* model string -> mono */
-    kvRow(dl, "Cost", n.cost_usd != null ? fmtCost(n.cost_usd) : "n/a", n.cost_usd == null, true); /* numeric -> mono */
+    /* Cost row is omitted entirely when cost data is unavailable — real runs
+       carry no cost, and null must show nothing rather than an "n/a" row. */
+    if (n.cost_usd != null) { kvRow(dl, "Cost", fmtCost(n.cost_usd), false, true); }          /* numeric -> mono */
     body.appendChild(dl);
     fieldBlock(body, "Input", n.input_preview, false);
     fieldBlock(body, "Output", n.output_preview, false);
