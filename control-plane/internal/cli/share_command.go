@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Agent-Field/agentfield/control-plane/internal/cli/share"
+	"github.com/Agent-Field/agentfield/control-plane/internal/share"
 	"github.com/spf13/cobra"
 )
 

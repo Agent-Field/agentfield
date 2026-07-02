@@ -161,6 +161,70 @@ export async function downloadWorkflowVCAuditFile(
 }
 
 /**
+ * Download a self-contained, offline HTML artifact for a workflow run.
+ *
+ * The server returns the same versioned share bundle as `af share`, inlined
+ * into a standalone HTML document, as an `attachment`. We fetch it with the
+ * authenticated header set (so it works in cloud mode where the browser would
+ * not otherwise attach the X-API-Key) and hand it to the browser as a download,
+ * honouring the filename from Content-Disposition when present.
+ *
+ * Pass `redact` to strip every input/output preview from the artifact.
+ */
+export async function downloadWorkflowShareFile(
+  workflowId: string,
+  options?: { redact?: boolean },
+): Promise<void> {
+  const headers = new Headers();
+  const apiKey = getGlobalApiKey();
+  if (apiKey) {
+    headers.set("X-API-Key", apiKey);
+  }
+  const query = options?.redact ? "?redact=1" : "";
+  const response = await fetch(
+    `${API_BASE_URL}/workflows/${workflowId}/share${query}`,
+    { headers },
+  );
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({
+      error: `Request failed with status ${response.status}`,
+    }));
+    throw new Error(
+      errorData.error ?? errorData.message ?? `HTTP error! status: ${response.status}`,
+    );
+  }
+
+  const blob = await response.blob();
+  const fallback = `run-${workflowId.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 48)}.html`;
+  const filename =
+    filenameFromContentDisposition(response.headers.get("Content-Disposition")) ??
+    fallback;
+
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Extract the filename from a Content-Disposition header, if one is present.
+ * Handles the quoted `attachment; filename="run-x.html"` form the share
+ * endpoint emits.
+ */
+function filenameFromContentDisposition(header: string | null): string | null {
+  if (!header) return null;
+  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(header);
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
+}
+
+/**
  * Create a workflow-level VC
  */
 export async function createWorkflowVC(
