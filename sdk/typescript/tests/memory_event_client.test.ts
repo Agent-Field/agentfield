@@ -210,4 +210,32 @@ describe('MemoryEventClient exported methods', () => {
     await expect(client.history()).resolves.toEqual([]);
     expect(errorSpy).toHaveBeenCalledWith('Failed to get event history: Error: boom');
   });
+
+  it('derives history scope_id from metadata when scopeId is omitted', async () => {
+    const client = new MemoryEventClient('http://localhost:8080');
+    const http = getHttpClient();
+    http.get.mockResolvedValueOnce({ data: [] });
+
+    await expect(
+      client.history({
+        scope: 'workflow',
+        metadata: {
+          workflowId: 'wf-derived',
+          runId: 'run-fallback'
+        }
+      })
+    ).resolves.toEqual([]);
+
+    expect(http.get).toHaveBeenCalledWith('/api/v1/memory/events/history', {
+      params: {
+        limit: 100,
+        scope: 'workflow',
+        scope_id: 'wf-derived'
+      },
+      headers: {
+        'X-Workflow-ID': 'wf-derived',
+        'X-Run-ID': 'run-fallback'
+      }
+    });
+  });
 });

@@ -120,6 +120,7 @@ export class MemoryEventClient extends MemoryClientBase {
       limit = 100,
       scope,
       scopeId,
+      metadata,
     } = options;
 
     try {
@@ -144,8 +145,9 @@ export class MemoryEventClient extends MemoryClientBase {
         params.scope = scope;
       }
 
-      if (scopeId) {
-        params.scope_id = scopeId;
+      const resolvedScopeId = this.resolveScopeId(scope, scopeId, metadata);
+      if (resolvedScopeId) {
+        params.scope_id = resolvedScopeId;
       }
 
       const res = await this.http.get('/api/v1/memory/events/history', {
