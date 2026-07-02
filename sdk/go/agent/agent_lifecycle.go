@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -37,8 +38,8 @@ func (a *Agent) Initialize(ctx context.Context) error {
 		return errors.New("AgentFieldURL is required when running in server mode")
 	}
 
-	if len(a.reasoners) == 0 {
-		a.logExecutionError(ctx, "agent.initialize.failed", "no reasoners registered", map[string]any{
+	if len(a.reasoners) == 0 && len(a.skills) == 0 {
+		a.logExecutionError(ctx, "agent.initialize.failed", "no reasoners or skills registered", map[string]any{
 			"node_id": a.cfg.NodeID,
 		})
 		return errors.New("no reasoners registered")
@@ -94,12 +95,12 @@ func (a *Agent) Serve(ctx context.Context) error {
 	a.logExecutionInfo(ctx, "agent.serve.start", "starting agent server", map[string]any{
 		"node_id": a.cfg.NodeID,
 	})
-	if err := a.Initialize(ctx); err != nil {
-		return err
-	}
-
 	if err := a.startServer(); err != nil {
 		return fmt.Errorf("start server: %w", err)
+	}
+	if err := a.Initialize(ctx); err != nil {
+		_ = a.shutdown(context.Background())
+		return err
 	}
 
 	// listen for shutdown.
@@ -141,6 +142,15 @@ func (a *Agent) registerNode(ctx context.Context) error {
 			AcceptsWebhook: reasoner.AcceptsWebhook,
 		})
 	}
+	skills := make([]types.SkillDefinition, 0, len(a.skills))
+	for _, skill := range a.skills {
+		skills = append(skills, types.SkillDefinition{
+			ID:           skill.Name,
+			InputSchema:  skill.InputSchema,
+			Tags:         skill.Tags,
+			ProposedTags: skill.Tags,
+		})
+	}
 
 	payload := types.NodeRegistrationRequest{
 		ID:        a.cfg.NodeID,
@@ -148,7 +158,7 @@ func (a *Agent) registerNode(ctx context.Context) error {
 		BaseURL:   strings.TrimSuffix(a.cfg.PublicURL, "/"),
 		Version:   a.cfg.Version,
 		Reasoners: reasoners,
-		Skills:    []types.SkillDefinition{},
+		Skills:    skills,
 		CommunicationConfig: types.CommunicationConfig{
 			Protocols:         []string{"http"},
 			HeartbeatInterval: a.registeredHeartbeatInterval(),
@@ -265,8 +275,12 @@ func (a *Agent) markReady(ctx context.Context) error {
 }
 
 func (a *Agent) startServer() error {
+	listener, err := net.Listen("tcp", a.cfg.ListenAddress)
+	if err != nil {
+		return err
+	}
+
 	server := &http.Server{
-		Addr:    a.cfg.ListenAddress,
 		Handler: a.Handler(),
 	}
 	a.serverMu.Lock()
@@ -274,7 +288,7 @@ func (a *Agent) startServer() error {
 	a.serverMu.Unlock()
 
 	go func() {
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			a.logger.Printf("server error: %v", err)
 			a.logExecutionError(context.Background(), "server.failed", "server listener exited with error", map[string]any{
 				"node_id": a.cfg.NodeID,
@@ -320,7 +334,11 @@ func (a *Agent) shutdown(ctx context.Context) error {
 	a.logExecutionInfo(ctx, "agent.shutdown.start", "shutting down agent", map[string]any{
 		"node_id": a.cfg.NodeID,
 	})
-	close(a.stopLease)
+	select {
+	case <-a.stopLease:
+	default:
+		close(a.stopLease)
+	}
 
 	if a.client != nil {
 		if _, err := a.client.Shutdown(ctx, a.cfg.NodeID, types.ShutdownRequest{Reason: "shutdown", Version: a.cfg.Version}); err != nil {

@@ -206,7 +206,7 @@ Most agent tools help you **write** agent logic. AgentField is what **runs** it 
 | Prebuilt chains, retrievers, integrations | ● | — | ◐ | [◐](https://agentfield.ai/docs/integrations?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-integrations) |
 | Production REST APIs out of the box | — | ◐ | ● | ● |
 | Async + retries + webhooks | — | ● | ◐ | **●** |
-| Memory scopes (global · agent · session · run) | ◐ | — | — | ● |
+| Memory scopes (global · actor · session · workflow) | ◐ | — | — | ● |
 | Service discovery + cross-agent calls | — | — | — | **●** |
 | Distributed agents (register from anywhere, one mesh) | — | ◐ | — | **●** |
 | Coding agents as functions (Claude Code · Codex · CLI) | — | — | — | **●** |

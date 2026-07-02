@@ -1,6 +1,9 @@
 package agent
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"errors"
+)
 
 // RegisterReasoner makes a handler available at /reasoners/{name}.
 func (a *Agent) RegisterReasoner(name string, handler HandlerFunc, opts ...ReasonerOption) {
@@ -42,4 +45,27 @@ func (a *Agent) RegisterReasoner(name string, handler HandlerFunc, opts ...Reaso
 	}
 
 	a.reasoners[name] = meta
+}
+
+// RegisterSkill makes a deterministic handler available at /skills/{name}.
+func (a *Agent) RegisterSkill(name string, handler HandlerFunc, opts ...ReasonerOption) error {
+	if handler == nil {
+		return errors.New("nil handler supplied")
+	}
+
+	meta := &Reasoner{
+		Name:        name,
+		Handler:     handler,
+		InputSchema: json.RawMessage(`{"type":"object","additionalProperties":true}`),
+	}
+	for _, opt := range opts {
+		opt(meta)
+	}
+
+	if meta.RequireRealtimeValidation {
+		a.realtimeValidationFunctions[name] = struct{}{}
+	}
+
+	a.skills[name] = meta
+	return nil
 }

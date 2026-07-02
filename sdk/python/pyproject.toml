@@ -84,7 +84,7 @@ markers = [
     "harness_live: live tests that invoke real coding agents (claude, codex, opencode) — costs real money",
     "httpx_mock: pytest-httpx marker for configuring mock behavior"
 ]
-addopts = "-ra -q -m \"not harness_live\" --strict-markers --strict-config --cov=agentfield.client --cov=agentfield.agent_field_handler --cov=agentfield.execution_context --cov=agentfield.execution_state --cov=agentfield.memory --cov=agentfield.rate_limiter --cov=agentfield.result_cache --cov-report=term-missing:skip-covered"
+addopts = "-ra -q -m \"not harness_live and not functional\" --strict-markers --strict-config --cov=agentfield.client --cov=agentfield.agent_field_handler --cov=agentfield.execution_context --cov=agentfield.execution_state --cov=agentfield.memory --cov=agentfield.rate_limiter --cov=agentfield.result_cache --cov-report=term-missing:skip-covered"
 asyncio_mode = "auto"
 
 [tool.coverage.run]

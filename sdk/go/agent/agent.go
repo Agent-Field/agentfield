@@ -468,6 +468,7 @@ type Agent struct {
 	client     *client.Client
 	httpClient *http.Client
 	reasoners  map[string]*Reasoner
+	skills     map[string]*Reasoner
 	sessions   map[string]SessionDefinition
 	aiClient   *ai.Client // AI/LLM client
 	memory     *Memory    // Memory system for state management
@@ -555,6 +556,7 @@ func New(cfg Config) (*Agent, error) {
 		cfg:                         cfg,
 		httpClient:                  httpClient,
 		reasoners:                   make(map[string]*Reasoner),
+		skills:                      make(map[string]*Reasoner),
 		sessions:                    make(map[string]SessionDefinition),
 		aiClient:                    aiClient,
 		memory:                      NewMemory(cfg.MemoryBackend),
@@ -696,7 +698,10 @@ func (a *Agent) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (a *Agent) Execute(ctx context.Context, reasonerName string, input map[string]any) (any, error) {
 	reasoner, ok := a.reasoners[reasonerName]
 	if !ok {
-		return nil, fmt.Errorf("unknown reasoner %q", reasonerName)
+		reasoner, ok = a.skills[reasonerName]
+	}
+	if !ok {
+		return nil, fmt.Errorf("unknown reasoner or skill %q", reasonerName)
 	}
 	if input == nil {
 		input = make(map[string]any)
@@ -755,6 +760,9 @@ func (a *Agent) HandleServerlessEvent(ctx context.Context, event map[string]any,
 
 	handler, ok := a.reasoners[reasoner]
 	if !ok {
+		handler, ok = a.skills[reasoner]
+	}
+	if !ok {
 		return map[string]any{"error": "reasoner not found"}, http.StatusNotFound, nil
 	}
 
@@ -797,6 +805,7 @@ func (a *Agent) handler() http.Handler {
 		mux.HandleFunc("/execute", a.handleExecute)
 		mux.HandleFunc("/execute/", a.handleExecute)
 		mux.HandleFunc("/reasoners/", a.handleReasoner)
+		mux.HandleFunc("/skills/", a.handleSkill)
 		mux.HandleFunc("/_internal/executions/", a.handleInternalCancel)
 
 		var handler http.Handler = mux
@@ -867,6 +876,8 @@ func (a *Agent) localVerificationMiddleware(next http.Handler) http.Handler {
 			funcName = strings.TrimPrefix(path, "/execute/")
 		} else if strings.HasPrefix(path, "/reasoners/") {
 			funcName = strings.TrimPrefix(path, "/reasoners/")
+		} else if strings.HasPrefix(path, "/skills/") {
+			funcName = strings.TrimPrefix(path, "/skills/")
 		}
 		funcName = strings.TrimSuffix(funcName, "/")
 
@@ -1003,6 +1014,14 @@ func (a *Agent) discoveryPayload() map[string]any {
 			"tags":          []string{},
 		})
 	}
+	skills := make([]map[string]any, 0, len(a.skills))
+	for _, skill := range a.skills {
+		skills = append(skills, map[string]any{
+			"id":           skill.Name,
+			"input_schema": rawToMap(skill.InputSchema),
+			"tags":         skill.Tags,
+		})
+	}
 
 	deployment := strings.TrimSpace(a.cfg.DeploymentType)
 	if deployment == "" {
@@ -1014,7 +1033,7 @@ func (a *Agent) discoveryPayload() map[string]any {
 		"version":         a.cfg.Version,
 		"deployment_type": deployment,
 		"reasoners":       reasoners,
-		"skills":          []map[string]any{},
+		"skills":          skills,
 		"sessions":        a.SessionDefinitions(),
 	}
 }
@@ -1051,6 +1070,9 @@ func (a *Agent) handleExecute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	reasoner, ok := a.reasoners[reasonerName]
+	if !ok {
+		reasoner, ok = a.skills[reasonerName]
+	}
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -1313,6 +1335,46 @@ func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
 		"mode":        "http",
 		"duration_ms": durationMS,
 	})
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (a *Agent) handleSkill(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	name := strings.TrimPrefix(r.URL.Path, "/skills/")
+	if name == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	skill, ok := a.skills[name]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	defer r.Body.Close()
+	var input map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, fmt.Sprintf("invalid JSON: %v", err), http.StatusBadRequest)
+		return
+	}
+	if input == nil {
+		input = map[string]any{}
+	}
+
+	execCtx := a.buildExecutionContextFromServerless(r, map[string]any{"input": input}, name)
+	a.fillDIDContext(&execCtx)
+	ctx := contextWithExecution(r.Context(), execCtx)
+	result, err := skill.Handler(ctx, input)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -1707,7 +1769,10 @@ func (a *Agent) sendWorkflowEvent(event types.WorkflowExecutionEvent) error {
 func (a *Agent) CallLocal(ctx context.Context, reasonerName string, input map[string]any) (any, error) {
 	reasoner, ok := a.reasoners[reasonerName]
 	if !ok {
-		return nil, fmt.Errorf("unknown reasoner %q", reasonerName)
+		reasoner, ok = a.skills[reasonerName]
+	}
+	if !ok {
+		return nil, fmt.Errorf("unknown reasoner or skill %q", reasonerName)
 	}
 
 	parentCtx := executionContextFrom(ctx)
