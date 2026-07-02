@@ -169,15 +169,31 @@ async def test_invalid_scope_raises_on_delete(interface):
 @pytest.mark.unit
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scope", ["session", "actor", "workflow"])
-async def test_non_global_scope_without_id_raises(interface, scope):
-    with pytest.raises(ValueError) as exc_info:
-        await interface.set("k", 1, scope=scope)
+async def test_set_scope_without_id_uses_current_context(interface, scope):
+    await interface.set("k", 1, scope=scope)
+    interface.memory_client.set.assert_awaited_once_with(
+        "k", 1, scope=scope, scope_id=None
+    )
 
-    message = str(exc_info.value)
-    assert "scope_id" in message
-    # Points the caller at the accessor equivalent.
-    assert f"app.memory.{scope}(" in message
-    interface.memory_client.set.assert_not_awaited()
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["session", "actor", "workflow"])
+async def test_get_scope_without_id_uses_current_context(interface, scope):
+    await interface.get("k", scope=scope)
+    interface.memory_client.get.assert_awaited_once_with(
+        "k", default=None, scope=scope, scope_id=None
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["session", "actor", "workflow"])
+async def test_delete_scope_without_id_uses_current_context(interface, scope):
+    await interface.delete("k", scope=scope)
+    interface.memory_client.delete.assert_awaited_once_with(
+        "k", scope=scope, scope_id=None
+    )
 
 
 @pytest.mark.unit

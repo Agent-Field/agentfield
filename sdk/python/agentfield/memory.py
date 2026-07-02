@@ -722,7 +722,8 @@ class GlobalMemoryClient:
 # Scopes that a developer may target explicitly via the convenience kwargs on
 # MemoryInterface.set/get/delete. These are the canonical scope names the
 # control plane understands (see control-plane memory handlers). "global" is a
-# singleton scope and needs no scope_id; the other three require one.
+# singleton scope and needs no scope_id; the other three may use scope_id or the
+# current execution context headers already carried by MemoryClient.
 _VALID_SCOPES = ("global", "session", "actor", "workflow")
 
 
@@ -763,15 +764,15 @@ class MemoryInterface:
 
         Args:
             scope: One of ``"global"``, ``"session"``, ``"actor"``, ``"workflow"``.
-            scope_id: Identifier for the scope. Required for ``session``/``actor``/
-                ``workflow``; ignored for ``global``.
+            scope_id: Optional identifier for the scope. When omitted for
+                ``session``/``actor``/``workflow``, the current execution context
+                headers are used; ignored for ``global``.
 
         Returns:
             A ``GlobalMemoryClient`` or ``ScopedMemoryClient`` bound to the scope.
 
         Raises:
-            ValueError: If ``scope`` is not a recognized scope name, or if a
-                non-global scope is given without a ``scope_id``.
+            ValueError: If ``scope`` is not a recognized scope name.
         """
         if scope not in _VALID_SCOPES:
             valid = ", ".join(repr(s) for s in _VALID_SCOPES)
@@ -781,13 +782,6 @@ class MemoryInterface:
 
         if scope == "global":
             return self.global_scope
-
-        if scope_id is None:
-            raise ValueError(
-                f"scope_id is required when scope={scope!r}. "
-                f"Provide scope_id, or use the accessor API, e.g. "
-                f"app.memory.{scope}(<id>).set(...)."
-            )
 
         return ScopedMemoryClient(self.memory_client, scope, scope_id, self.events)
 
@@ -818,12 +812,12 @@ class MemoryInterface:
             data: The data to store
             scope: Optional explicit scope. One of ``"global"``, ``"session"``,
                 ``"actor"``, ``"workflow"``. ``None`` keeps automatic scoping.
-            scope_id: Identifier for the scope. Required for ``session``/``actor``/
-                ``workflow`` when ``scope`` is set; ignored for ``global``.
+            scope_id: Optional identifier for the scope. When omitted for
+                ``session``/``actor``/``workflow``, the current execution context
+                headers are used; ignored for ``global``.
 
         Raises:
-            ValueError: If ``scope`` is invalid, or if a non-global scope is given
-                without a ``scope_id``.
+            ValueError: If ``scope`` is invalid.
             TypeError: If data is not JSON serializable.
             MemoryAccessError: If the memory backend request fails.
         """
@@ -872,15 +866,15 @@ class MemoryInterface:
             default: Default value if key not found
             scope: Optional explicit scope. One of ``"global"``, ``"session"``,
                 ``"actor"``, ``"workflow"``. ``None`` performs hierarchical lookup.
-            scope_id: Identifier for the scope. Required for ``session``/``actor``/
-                ``workflow`` when ``scope`` is set; ignored for ``global``.
+            scope_id: Optional identifier for the scope. When omitted for
+                ``session``/``actor``/``workflow``, the current execution context
+                headers are used; ignored for ``global``.
 
         Returns:
             The stored value or default if not found
 
         Raises:
-            ValueError: If ``scope`` is invalid, or if a non-global scope is given
-                without a ``scope_id``.
+            ValueError: If ``scope`` is invalid.
             MemoryAccessError: If the memory backend request fails.
         """
         if scope is None:
@@ -922,12 +916,12 @@ class MemoryInterface:
             key: The memory key
             scope: Optional explicit scope. One of ``"global"``, ``"session"``,
                 ``"actor"``, ``"workflow"``. ``None`` uses the current scope.
-            scope_id: Identifier for the scope. Required for ``session``/``actor``/
-                ``workflow`` when ``scope`` is set; ignored for ``global``.
+            scope_id: Optional identifier for the scope. When omitted for
+                ``session``/``actor``/``workflow``, the current execution context
+                headers are used; ignored for ``global``.
 
         Raises:
-            ValueError: If ``scope`` is invalid, or if a non-global scope is given
-                without a ``scope_id``.
+            ValueError: If ``scope`` is invalid.
             MemoryAccessError: If the memory backend request fails.
         """
         if scope is None:
