@@ -5,8 +5,8 @@ package share
 
 import (
 	"bytes"
-	"encoding/json"
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -116,7 +116,7 @@ func RenderHTML(b *Bundle) ([]byte, error) {
 // sequence and escapes HTML-significant runes so the payload can never break
 // out of the script block or introduce markup.
 func escapeForScriptTag(raw []byte) string {
-	out := bytes.NewBuffer(make([]byte, 0, len(raw)+16))
+	var out bytes.Buffer
 	for _, r := range string(raw) {
 		switch r {
 		case '<':
