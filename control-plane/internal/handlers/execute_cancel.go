@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,11 +22,16 @@ type cancelExecutionRequest struct {
 }
 
 type cancelExecutionResponse struct {
-	ExecutionID    string  `json:"execution_id"`
-	PreviousStatus string  `json:"previous_status"`
-	Status         string  `json:"status"`
-	Reason         *string `json:"reason,omitempty"`
-	CancelledAt    string  `json:"cancelled_at"`
+	ExecutionID          string  `json:"execution_id"`
+	PreviousStatus       string  `json:"previous_status"`
+	Status               string  `json:"status"`
+	Reason               *string `json:"reason,omitempty"`
+	CancelledAt          string  `json:"cancelled_at"`
+	Scope                string  `json:"scope"`
+	RunID                string  `json:"run_id,omitempty"`
+	RemainingActiveInRun int     `json:"remaining_active_in_run,omitempty"`
+	SuggestedEndpoint    string  `json:"suggested_endpoint,omitempty"`
+	Warning              string  `json:"warning,omitempty"`
 }
 
 func CancelExecutionHandler(store ExecutionStore) gin.HandlerFunc {
@@ -154,7 +160,52 @@ func CancelExecutionHandler(store ExecutionStore) gin.HandlerFunc {
 			Status:         types.ExecutionStatusCancelled,
 			Reason:         reasonPtr,
 			CancelledAt:    now.Format(time.RFC3339),
+			Scope:          "execution",
+			RunID:          exec.RunID,
+		}
+		remaining, queryErr := countRemainingActiveInRun(reqCtx, store, exec.RunID, executionID)
+		if queryErr != nil {
+			logger.Logger.Warn().Err(queryErr).Str("run_id", exec.RunID).Str("execution_id", executionID).Msg("failed to inspect run after single-execution cancel")
+		} else if remaining > 0 {
+			response.RemainingActiveInRun = remaining
+			response.SuggestedEndpoint = fmt.Sprintf("/api/v1/workflows/%s/cancel-tree", exec.RunID)
+			response.Warning = fmt.Sprintf(
+				"Cancelled only execution %s; %d other non-terminal execution(s) remain in run %s. Use cancel-tree to stop the whole run.",
+				executionID,
+				remaining,
+				exec.RunID,
+			)
 		}
 		c.JSON(http.StatusOK, response)
 	}
+}
+
+func countRemainingActiveInRun(ctx context.Context, store ExecutionStore, runID string, cancelledExecutionID string) (int, error) {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return 0, nil
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			logger.Logger.Warn().Interface("panic", recovered).Str("run_id", runID).Str("execution_id", cancelledExecutionID).Msg("single-execution cancel advisory query panicked")
+		}
+	}()
+	executions, err := store.QueryExecutionRecords(ctx, types.ExecutionFilter{
+		RunID:          &runID,
+		SortBy:         "started_at",
+		SortDescending: false,
+	})
+	if err != nil {
+		return 0, err
+	}
+	remaining := 0
+	for _, exec := range executions {
+		if exec == nil || exec.ExecutionID == cancelledExecutionID {
+			continue
+		}
+		if !types.IsTerminalExecutionStatus(exec.Status) {
+			remaining++
+		}
+	}
+	return remaining, nil
 }

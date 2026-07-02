@@ -61,6 +61,34 @@ func (s *cancelHandlerStorage) seedExecution(executionID, status string) {
 	}
 }
 
+func (s *cancelHandlerStorage) seedExecutionWithParent(executionID, status string, parentID *string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	runID := "run-1"
+	statusCopy := status
+	s.executionRecords[executionID] = &types.Execution{
+		ExecutionID:       executionID,
+		RunID:             runID,
+		AgentNodeID:       "agent-1",
+		Status:            statusCopy,
+		StartedAt:         now,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+		StatusReason:      nil,
+		ParentExecutionID: parentID,
+	}
+	s.workflowExecutions[executionID] = &types.WorkflowExecution{
+		ExecutionID:       executionID,
+		WorkflowID:        "wf-1",
+		RunID:             &runID,
+		AgentNodeID:       "agent-1",
+		Status:            statusCopy,
+		StartedAt:         now,
+		ParentExecutionID: parentID,
+	}
+}
+
 func (s *cancelHandlerStorage) GetExecutionRecord(ctx context.Context, executionID string) (*types.Execution, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -127,6 +155,20 @@ func (s *cancelHandlerStorage) StoreWorkflowExecutionEvent(ctx context.Context, 
 	defer s.mu.Unlock()
 	s.workflowEvents = append(s.workflowEvents, event)
 	return nil
+}
+
+func (s *cancelHandlerStorage) QueryExecutionRecords(ctx context.Context, filter types.ExecutionFilter) ([]*types.Execution, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]*types.Execution, 0, len(s.executionRecords))
+	for _, exec := range s.executionRecords {
+		if filter.RunID != nil && exec.RunID != *filter.RunID {
+			continue
+		}
+		clone := *exec
+		out = append(out, &clone)
+	}
+	return out, nil
 }
 
 func TestCancelExecutionHandler_StateTransitions(t *testing.T) {
@@ -224,6 +266,39 @@ func TestCancelExecutionHandler_WithReason(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, wfExec.StatusReason)
 	require.Equal(t, "operator requested stop", *wfExec.StatusReason)
+}
+
+func TestCancelExecutionHandler_WarnsWhenRunStillHasActiveExecutions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := newCancelHandlerStorage()
+	root := "exec-root"
+	store.seedExecutionWithParent(root, types.ExecutionStatusRunning, nil)
+	store.seedExecutionWithParent("exec-child-running", types.ExecutionStatusRunning, &root)
+	store.seedExecutionWithParent("exec-child-succeeded", types.ExecutionStatusSucceeded, &root)
+
+	router := gin.New()
+	router.POST("/api/v1/executions/:execution_id/cancel", CancelExecutionHandler(store))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/executions/"+root+"/cancel", bytes.NewReader([]byte(`{"reason":"operator requested stop"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	var payload cancelExecutionResponse
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &payload))
+	require.Equal(t, root, payload.ExecutionID)
+	require.Equal(t, "execution", payload.Scope)
+	require.Equal(t, "run-1", payload.RunID)
+	require.Equal(t, 1, payload.RemainingActiveInRun)
+	require.Equal(t, "/api/v1/workflows/run-1/cancel-tree", payload.SuggestedEndpoint)
+	require.Contains(t, payload.Warning, "Cancelled only execution exec-root")
+	require.Contains(t, payload.Warning, "1 other non-terminal execution(s) remain")
+
+	child, err := store.GetExecutionRecord(context.Background(), "exec-child-running")
+	require.NoError(t, err)
+	require.Equal(t, types.ExecutionStatusRunning, child.Status, "single-execution cancel must remain non-cascading")
 }
 
 func TestCancelExecutionHandler_WithoutReasonOmitsReasonField(t *testing.T) {

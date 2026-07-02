@@ -21,6 +21,7 @@ func NewExecutionCommand() *cobra.Command {
 	}
 
 	cmd.AddCommand(newCancelExecutionCommand())
+	cmd.AddCommand(newCancelRunCommand())
 	cmd.AddCommand(newPauseExecutionCommand())
 	cmd.AddCommand(newResumeExecutionCommand())
 	cmd.AddCommand(newRestartExecutionCommand())
@@ -92,6 +93,7 @@ func newCancelExecutionCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cancel <execution_id>",
 		Short: "Cancel a workflow execution",
+		Long:  "Cancel one execution by execution_id. This preserves the historical per-execution behavior; use `af execution cancel-run <run_id>` to stop every non-terminal execution in a run.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			_, err := runExecutionAction(executionActionConfig{
@@ -100,6 +102,7 @@ func newCancelExecutionCommand() *cobra.Command {
 				endpoint:    "/api/v1/executions/%s/cancel",
 				opts:        &opts,
 				executionID: args[0],
+				targetKind:  "execution",
 				withReason:  true,
 			})
 			return err
@@ -107,6 +110,33 @@ func newCancelExecutionCommand() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&opts.reason, "reason", "", "Reason for cancelling the execution")
+	bindExecutionActionFlags(cmd, &opts)
+	return cmd
+}
+
+func newCancelRunCommand() *cobra.Command {
+	opts := defaultExecutionActionOptions()
+
+	cmd := &cobra.Command{
+		Use:   "cancel-run <run_id>",
+		Short: "Cancel every active execution in a run",
+		Long:  "Cancel every non-terminal execution belonging to a run, bottom-up. This is the safe command when the intent is to stop a whole workflow with child executions.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			_, err := runExecutionAction(executionActionConfig{
+				actionName:  "cancel",
+				successVerb: "cancelled",
+				endpoint:    "/api/v1/workflows/%s/cancel-tree",
+				opts:        &opts,
+				executionID: args[0],
+				targetKind:  "run",
+				withReason:  true,
+			})
+			return err
+		},
+	}
+
+	cmd.Flags().StringVar(&opts.reason, "reason", "", "Reason for cancelling the run")
 	bindExecutionActionFlags(cmd, &opts)
 	return cmd
 }
@@ -125,6 +155,7 @@ func newPauseExecutionCommand() *cobra.Command {
 				endpoint:    "/api/v1/executions/%s/pause",
 				opts:        &opts,
 				executionID: args[0],
+				targetKind:  "execution",
 				withReason:  true,
 			})
 			return err
@@ -150,6 +181,7 @@ func newResumeExecutionCommand() *cobra.Command {
 				endpoint:    "/api/v1/executions/%s/resume",
 				opts:        &opts,
 				executionID: args[0],
+				targetKind:  "execution",
 			})
 			return err
 		},
@@ -172,6 +204,7 @@ type executionActionConfig struct {
 	endpoint    string
 	opts        *executionActionOptions
 	executionID string
+	targetKind  string
 	withReason  bool
 	withBody    bool
 	body        map[string]interface{}
@@ -248,7 +281,7 @@ func runExecutionAction(cfg executionActionConfig) (map[string]any, error) {
 	}
 
 	if resp.StatusCode >= 300 {
-		return nil, formatExecutionActionError(resp.StatusCode, cfg.actionName, cfg.executionID, parsed)
+		return nil, formatExecutionActionError(resp.StatusCode, cfg.actionName, cfg.targetKind, cfg.executionID, parsed)
 	}
 
 	if cfg.opts.jsonOutput {
@@ -319,10 +352,23 @@ func parseRestartInput(value string) (map[string]interface{}, error) {
 func printExecutionActionHumanOutput(parsed map[string]any, successVerb string) {
 	executionID, _ := parsed["execution_id"].(string)
 	previousStatus, _ := parsed["previous_status"].(string)
+	runID, _ := parsed["run_id"].(string)
 	newRunID, _ := parsed["run_id"].(string)
 	sourceRunID, _ := parsed["source_run_id"].(string)
 	sourceExecutionID, _ := parsed["source_execution_id"].(string)
 	reuse, _ := parsed["replay_mode"].(string)
+
+	if successVerb == "cancelled" && runID != "" && executionID == "" {
+		fmt.Printf("Run %s cancelled", runID)
+		cancelled, hasCancelled := numberAsInt(parsed["cancelled_count"])
+		skipped, hasSkipped := numberAsInt(parsed["skipped_count"])
+		errors, hasErrors := numberAsInt(parsed["error_count"])
+		if hasCancelled || hasSkipped || hasErrors {
+			fmt.Printf(": %d cancelled, %d skipped, %d errors", cancelled, skipped, errors)
+		}
+		fmt.Println()
+		return
+	}
 
 	if successVerb == "restarted" && newRunID != "" {
 		if sourceRunID != "" && sourceExecutionID != "" {
@@ -349,9 +395,39 @@ func printExecutionActionHumanOutput(parsed map[string]any, successVerb string) 
 	if strings.TrimSpace(reason) != "" {
 		fmt.Printf("Reason: %s\n", reason)
 	}
+	warning, _ := parsed["warning"].(string)
+	if strings.TrimSpace(warning) != "" {
+		fmt.Printf("Warning: %s\n", warning)
+	}
+	suggestedEndpoint, _ := parsed["suggested_endpoint"].(string)
+	if strings.TrimSpace(suggestedEndpoint) != "" {
+		fmt.Printf("Suggestion: POST %s\n", suggestedEndpoint)
+	}
 }
 
-func formatExecutionActionError(statusCode int, actionName, executionID string, parsed map[string]any) error {
+func numberAsInt(value any) (int, bool) {
+	switch typed := value.(type) {
+	case int:
+		return typed, true
+	case int64:
+		return int(typed), true
+	case float64:
+		return int(typed), true
+	case json.Number:
+		asInt, err := typed.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return int(asInt), true
+	default:
+		return 0, false
+	}
+}
+
+func formatExecutionActionError(statusCode int, actionName, targetKind, executionID string, parsed map[string]any) error {
+	if strings.TrimSpace(targetKind) == "" {
+		targetKind = "execution"
+	}
 	message := ""
 	if v, ok := parsed["message"].(string); ok {
 		message = strings.TrimSpace(v)
@@ -365,18 +441,18 @@ func formatExecutionActionError(statusCode int, actionName, executionID string, 
 	switch statusCode {
 	case http.StatusNotFound:
 		if message != "" {
-			return fmt.Errorf("execution %s not found: %s", executionID, message)
+			return fmt.Errorf("%s %s not found: %s", targetKind, executionID, message)
 		}
-		return fmt.Errorf("execution %s not found", executionID)
+		return fmt.Errorf("%s %s not found", targetKind, executionID)
 	case http.StatusConflict:
 		if message != "" {
-			return fmt.Errorf("cannot %s execution %s: %s", actionName, executionID, message)
+			return fmt.Errorf("cannot %s %s %s: %s", actionName, targetKind, executionID, message)
 		}
-		return fmt.Errorf("cannot %s execution %s in its current state", actionName, executionID)
+		return fmt.Errorf("cannot %s %s %s in its current state", actionName, targetKind, executionID)
 	default:
 		if message != "" {
-			return fmt.Errorf("failed to %s execution %s (%d): %s", actionName, executionID, statusCode, message)
+			return fmt.Errorf("failed to %s %s %s (%d): %s", actionName, targetKind, executionID, statusCode, message)
 		}
-		return fmt.Errorf("failed to %s execution %s (%d)", actionName, executionID, statusCode)
+		return fmt.Errorf("failed to %s %s %s (%d)", actionName, targetKind, executionID, statusCode)
 	}
 }

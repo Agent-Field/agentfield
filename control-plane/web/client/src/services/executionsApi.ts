@@ -49,6 +49,11 @@ export interface CancelExecutionResponse {
   status: string;
   reason?: string;
   cancelled_at: string;
+  scope?: "execution";
+  run_id?: string;
+  remaining_active_in_run?: number;
+  suggested_endpoint?: string;
+  warning?: string;
 }
 
 export interface PauseExecutionResponse {

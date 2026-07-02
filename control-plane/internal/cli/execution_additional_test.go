@@ -106,6 +106,43 @@ func TestRunExecutionActionSuccessAndErrors(t *testing.T) {
 		require.Contains(t, output, `"execution_id": "ex-2"`)
 	})
 
+	t.Run("single execution cancel prints remaining-run warning", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			require.Equal(t, "/api/v1/executions/ex-root/cancel", r.URL.Path)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"execution_id":"ex-root",
+				"previous_status":"running",
+				"status":"cancelled",
+				"run_id":"run-1",
+				"scope":"execution",
+				"remaining_active_in_run":2,
+				"suggested_endpoint":"/api/v1/workflows/run-1/cancel-tree",
+				"warning":"Cancelled only execution ex-root; 2 other non-terminal execution(s) remain in run run-1. Use cancel-tree to stop the whole run."
+			}`))
+		}))
+		defer server.Close()
+
+		output := captureOutput(t, func() {
+			_, err := runExecutionAction(executionActionConfig{
+				actionName:  "cancel",
+				successVerb: "cancelled",
+				endpoint:    "/api/v1/executions/%s/cancel",
+				executionID: "ex-root",
+				targetKind:  "execution",
+				withReason:  true,
+				opts: &executionActionOptions{
+					serverURL: server.URL,
+					timeout:   time.Second,
+				},
+			})
+			require.NoError(t, err)
+		})
+		require.Contains(t, output, "Execution ex-root cancelled (was: running)")
+		require.Contains(t, output, "Warning: Cancelled only execution ex-root")
+		require.Contains(t, output, "Suggestion: POST /api/v1/workflows/run-1/cancel-tree")
+	})
+
 	t.Run("not found and conflict errors", func(t *testing.T) {
 		cases := []struct {
 			name       string
@@ -220,6 +257,34 @@ func TestResumeExecutionCommand(t *testing.T) {
 		require.NoError(t, cmd.Execute())
 	})
 	require.Contains(t, output, "Execution ex-9 resumed")
+}
+
+func TestCancelRunCommandUsesCancelTree(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/workflows/run-9/cancel-tree", r.URL.Path)
+		require.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		var payload map[string]string
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+		require.Equal(t, "operator stop", payload["reason"])
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"run_id":"run-9",
+			"total_nodes":3,
+			"cancelled_count":2,
+			"skipped_count":1,
+			"error_count":0,
+			"nodes":[],
+			"cancelled_at":"2026-07-02T03:35:00Z"
+		}`))
+	}))
+	defer server.Close()
+
+	cmd := newCancelRunCommand()
+	cmd.SetArgs([]string{"run-9", "--server", server.URL, "--timeout", "1s", "--reason", "operator stop"})
+	output := captureOutput(t, func() {
+		require.NoError(t, cmd.Execute())
+	})
+	require.Contains(t, output, "Run run-9 cancelled: 2 cancelled, 1 skipped, 0 errors")
 }
 
 func TestRestartExecutionCommandPostsRestartBody(t *testing.T) {
