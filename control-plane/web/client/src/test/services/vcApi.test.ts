@@ -5,6 +5,7 @@ import {
   copyVCToClipboard,
   downloadDIDResolutionBundle,
   downloadExecutionVCBundle,
+  downloadWorkflowShareFile,
   downloadVCDocument,
   downloadWorkflowVCAuditFile,
   exportVCs,
@@ -31,6 +32,16 @@ function jsonResponse(status: number, body: unknown) {
     status,
     json: vi.fn().mockResolvedValue(body),
     blob: vi.fn().mockResolvedValue(new Blob([JSON.stringify(body)], { type: "application/json" })),
+  } as unknown as Response;
+}
+
+function htmlResponse(status: number, body: string, disposition?: string) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: new Headers(disposition ? { "Content-Disposition": disposition } : {}),
+    json: vi.fn().mockResolvedValue({ error: body }),
+    blob: vi.fn().mockResolvedValue(new Blob([body], { type: "text/html" })),
   } as unknown as Response;
 }
 
@@ -365,6 +376,30 @@ describe("vcApi", () => {
     expect(click).toHaveBeenCalledTimes(4);
     expect(URL.createObjectURL).toHaveBeenCalled();
     expect(URL.revokeObjectURL).toHaveBeenCalled();
+  });
+
+  it("downloads workflow share HTML with auth, redaction, and server filename", async () => {
+    const click = vi.fn();
+    const anchor = originalCreateElement("a");
+    anchor.click = click;
+    document.createElement = vi.fn((tagName: string) => (tagName === "a" ? anchor : originalCreateElement(tagName)));
+    setGlobalApiKey("secret");
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(htmlResponse(200, "<html>share</html>", `attachment; filename="run-report.html"`))
+      .mockResolvedValueOnce(htmlResponse(404, "missing"));
+
+    await downloadWorkflowShareFile("run:1", { redact: true });
+
+    const [url, init] = vi.mocked(globalThis.fetch).mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/ui/v1/workflows/run:1/share?redact=1");
+    expect(new Headers(init.headers).get("X-API-Key")).toBe("secret");
+    expect(anchor.download).toBe("run-report.html");
+    expect(anchor.href).toBe("blob:mock-url");
+    expect(click).toHaveBeenCalledTimes(1);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:mock-url");
+
+    await expect(downloadWorkflowShareFile("missing")).rejects.toThrow("missing");
   });
 
   it("copies VC documents to the clipboard and handles clipboard failures", async () => {
