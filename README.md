@@ -245,7 +245,7 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 - **[Harness](https://agentfield.ai/docs/build/intelligence/harness?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-harness)** - `app.harness("Fix the bug")` dispatches multi-turn tasks to Claude Code, Codex, Gemini CLI, or OpenCode
 - **[Cross-Agent Calls](https://agentfield.ai/docs/build/coordination/cross-agent-calls?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-cross-agent-calls)** - `app.call("other-agent.func")` routes through the control plane with full tracing
 - **[Discovery](https://agentfield.ai/docs/reference/sdks/python?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-discovery)** - `app.discover(tags=["ml*"])` finds agents and capabilities across the mesh. `tools="discover"` lets LLMs auto-invoke them.
-- **[Memory](https://agentfield.ai/docs/build/coordination/shared-memory?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-memory)** - `app.memory.set()` / `.get()` / `.search()` - KV + vector search, four scopes, no Redis needed
+- **[Memory](https://agentfield.ai/docs/build/coordination/shared-memory?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-memory)** - `app.memory.set()` / `.get()` / `.similarity_search()` - KV + vector search, four scopes, no Redis needed
 
 **Scale** - Production infrastructure for non-deterministic AI.
 
@@ -314,8 +314,8 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 | Feature | How |
 |---|---|
 | Key-value storage | `app.memory.set(key, value)` / `.get(key)` |
-| Vector search (semantic) | `app.memory.search(embedding, top_k=5)` |
-| Four scopes | Global, agent, session, run |
+| Vector search (semantic) | `app.memory.similarity_search(embedding, top_k=5)` |
+| Four scopes | Global, actor, session, workflow |
 | Reactive memory events | `@app.memory.on_change("order_*")` |
 | Metadata filtering | Filter stored values by metadata |
 | Zero dependencies | Built into control plane - no Redis |
