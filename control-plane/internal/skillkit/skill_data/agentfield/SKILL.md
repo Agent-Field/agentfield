@@ -20,27 +20,41 @@ This skill is the workflow for getting that done.
 2. **Probe the environment.** Run `af doctor --json` once. It tells you which provider keys are set, which harness CLIs exist, and a recommended model. Don't guess. If `af` isn't installed yet, fall back to `os.environ` checks.
 3. **Decide which model to use.** Use what `af doctor` found. If no provider key is set, **ask** (see `references/model-selection.md`). Never silently pick a model the user didn't ask for.
 4. **Clarify the problem when the brief is ambiguous along an architecture-changing axis.** Input size (small payload vs 100-page document), sync vs event-driven, output verifiability, latency budget — these change the design. Ask 1–3 narrow questions only when an answer would change the topology. Otherwise state assumptions and proceed.
-5. **Design the topology from the problem.** Walk the five principles below for *this* problem. Do not pick a named pattern off a menu. The shape emerges; the pattern names are vocabulary to describe what emerged.
+5. **Derive the topology from the problem.** Run the derivation procedure below for *this* problem. Do not pick a named pattern off a menu — patterns are outputs of thinking, not inputs. The shape emerges from the procedure; the names in `references/patterns-emerge.md` exist so humans can review what emerged.
 
 **Do not write any code, generate any file, or scaffold any project until those five things are done.**
 
-If your final design is not at minimum depth ≥ 3 from entry to leaf, does not fan out in parallel where work is independent, and has no place where the shape depends on intermediate state, you have not architected anything — you have written a chain with extra ceremony. Go back to the principles.
+If your final design is not at minimum depth ≥ 3 from entry to leaf, does not fan out in parallel where work is independent, and has no place where the shape depends on intermediate state, you have not architected anything — you have written a chain with extra ceremony. Go back to the procedure. (Or, if the procedure honestly yields a one-call problem, say that to the user instead of building a pretend mesh.)
+
+---
+
+## How to think — the derivation procedure
+
+Patterns are outputs of thinking, not inputs. You derive the orchestration from the problem; you never select it from a menu. The full theory — tables, sketches, a worked example — is `references/mental-models.md`; load it once per design session. The procedure, in order:
+
+1. **Decompose by cognitive jobs.** Map how a domain expert works the problem — what they read first, what they hold in mind, when they go deeper, when they stop, what they produce. Each distinct mental move becomes a reasoner (one job, 2–4 output fields). The expert's workflow, not the data pipeline, is the decomposition.
+2. **Place each slot on the autonomy spectrum.** `app.ai()` = typed function call; a reasoner calling reasoners = manager; `app.harness()` = delegated engineer. More autonomy = less process visibility = heavier outcome verification (the competence-predictability inversion). Pick the leftmost point that does the job.
+3. **Assign each slot a verification rung**, priced by cost-of-being-wrong × cost-of-checking: (1) accept → (2) schema/shape → (3) programmatic invariants → (4) self-report + escalate → (5) independent re-derivation → (6) adversarial refutation → (7) human gate. Pick the lowest rung the stakes allow. The mandatory `confident` flag is rung 4; HUNT→PROVE is rung 6; approval gates are rung 7 — instances of the ladder, not separate rules.
+4. **Choose the dynamism rung + budgets:** (1) fixed sequence → (2) conditional branches → (3) runtime fan-out width → (4) meta-prompted children → (5) recursive self-similar → (6) self-modifying across runs. Lowest rung that lets discoveries steer where they genuinely do; every rung above 1 names its signal and carries an integer cap. "The DAG is a trace, not a spec" is the consequence of rungs 3–6 — control flow is ordinary Python, so every rung is reachable without a framework construct.
+5. **Apply the data-flow rule and the budget envelope.** Deterministic work is Python; structured JSON when code branches on it, prose when another LLM reads it; every loop, spawn, and recursion capped.
+
+When quality disappoints after the build, escalate structure in order — sharpen the contract → decompose further → parallel perspectives → adversarial verification → more autonomy — before reaching for a bigger model.
 
 ---
 
 ## The five foundational principles
 
-Apply each one to the user's specific problem. The topology falls out of the answers.
+Every design the procedure produces has these five properties. They are consequences of the procedure, not a second framework — use them as the review checklist on your derived topology.
 
-1. **Granular decomposition.** Every reasoner does ONE cognitive thing — a small input, a small output (~2–4 flat attributes), a one-sentence API contract. If a reasoner's output has more than ~4 attributes or its body is more than ~30 lines, it is probably two reasoners.
-2. **Guided autonomy.** A reasoner has freedom in HOW it answers, zero freedom in WHAT it answers. The orchestrator is a CEO — it sets the question and verifies the answer; it does not micromanage steps.
-3. **Dynamic orchestration.** The graph adapts to intermediate state. Some branches fire, others don't. A meta-level reasoner can decide at runtime how many specialists to spawn, what to ask each one, and what to do with their answers. *This* is what no static chain framework can do.
-4. **Contextual fidelity.** The orchestrator is a context broker. Each call receives exactly what it needs — task description, relevant prior outputs, applicable constraints. Claims carry citation keys; provenance flows through every downstream reasoner to the final answer.
-5. **Asynchronous parallelism.** Decompose to parallelize. Anything that doesn't depend on a sibling's output must `asyncio.gather`. Sequential pipelines of independent work are always wrong.
+1. **Granular decomposition** (from step 1). Every reasoner does ONE cognitive thing — a small input, a small output (~2–4 flat attributes), a one-sentence API contract. If a reasoner's output has more than ~4 attributes or its body is more than ~30 lines, it is probably two reasoners.
+2. **Guided autonomy** (from steps 2–3). A reasoner has freedom in HOW it answers, zero freedom in WHAT it answers. The orchestrator is a CEO — it sets the question and verifies the answer at the rung the stakes demand; it does not micromanage steps. The more capable the delegate, the less you control HOW and the more you verify WHAT.
+3. **Dynamic orchestration** (from step 4). The graph adapts to intermediate state. Some branches fire, others don't. A meta-level reasoner can decide at runtime how many specialists to spawn, what to ask each one, and what to do with their answers. The DAG is a trace of these decisions, not a spec you committed to upfront — *this* is what no static chain framework can do.
+4. **Contextual fidelity** (from step 5). The orchestrator is a context broker. Each call receives exactly what it needs — task description, relevant prior outputs, applicable constraints. Claims carry citation keys; provenance flows through every downstream reasoner to the final answer.
+5. **Asynchronous parallelism** (from step 1). Cognitive jobs that don't depend on a sibling's output are independent by construction — anything independent must `asyncio.gather`. Sequential pipelines of independent work are always wrong.
 
-Ask the question under each principle when you design. Where decomposition produces N independent dimensions → fan out. Where verification needs a frame separate from discovery → split discovery/proof reasoners. Where the investigation path depends on what was just found → meta-prompting / dynamic dispatch. Where coverage matters but the answer's shape is unknown → fan-out → filter → gap-find → recurse. Where the system runs on inbound events → triggers as the entry surface.
+Signals you meet during derivation map to structure: N independent analysis dimensions → fan out. Stakes that demand a frame separate from discovery → split discovery/refutation slots (rung 6). Investigation path depends on what was just found → meta-prompting (dynamism rung 4). Coverage matters but the answer's shape is unknown → fan-out → filter → gap-find → recurse (rung 5). System runs on inbound events → triggers as the entry surface.
 
-**Named patterns are emergent consequences, not templates.** Read `references/patterns-emerge.md` after you have a shape, to give the shape a name; not before. There is no preferred pattern — HUNT→PROVE is one option of many and earns its cost only when false positives are genuinely expensive.
+**Named patterns are shapes you may discover you have built.** Read `references/patterns-emerge.md` after the topology exists, to check whether it has a name; never before. There is no preferred pattern — HUNT→PROVE is verification rung 6 wearing a domain costume, and earns its ~2× cost only when false positives are genuinely expensive.
 
 ---
 
@@ -100,6 +114,8 @@ What is this reasoner doing?
 
 **Bias:** many small `@app.reasoner` units. `@app.skill` for anything code can do. `app.ai` with explicit prompts and a `confident` flag. Reserve `app.harness` for actual coding-agent delegation.
 
+This tree is the autonomy spectrum (procedure step 2) turned into questions. Each branch down trades process visibility for capability: `app.skill` is fully deterministic, `app.ai` verifies instantly on the schema, `app.harness` verifies only at the boundary. Pick the leftmost point that solves the problem, and pair every step right with the verification rung that step requires.
+
 ---
 
 ## Workflow
@@ -109,9 +125,9 @@ What is this reasoner doing?
 3. **Probe environment** — `af doctor --json`. Read `recommendation.provider`, `recommendation.ai_model`, `recommendation.harness_usable`, `provider_keys.*.set`, `control_plane.reachable`.
 4. **Pick the model** — `references/model-selection.md`. If `af doctor` recommends a model, use it. If no provider key, ask. If OpenRouter is present but no explicit pick, query `https://openrouter.ai/api/v1/models` for current cheap open-weight options and offer them.
 5. **Clarify if needed** — only for architecture-changing ambiguity. Use `AskUserQuestion` with 1–3 narrow choices.
-6. **Read `references/patterns-emerge.md` and `references/examples-map.md`.** Find the live example whose problem shape is closest to yours. Grep that example's code; do not paraphrase it. Then design *your* topology by walking the five principles.
+6. **Derive the topology** by running the procedure in `references/mental-models.md`. Then read `references/examples-map.md`, find the live example whose problem shape is closest, and grep its code for decomposition discipline — do not copy its topology. Only after your shape exists, open `references/patterns-emerge.md` to check whether it has a name.
 7. **Scaffold** — `af init <slug> --language python --docker --defaults --non-interactive --default-model <model>`. Then **rewrite `main.py` and `reasoners.py`** with your real architecture per `references/scaffold-recipe.md`. Generate `CLAUDE.md` from `references/project-claude-template.md`.
-8. **Verify** — `python3 -m py_compile`, `docker compose config`, then `docker compose up --build`. Use the verification ladder in `references/verification.md`. Use `af agent discover -q "<slug>"` and `af agent query --resource executions` for live introspection — see `references/cli-toolkit.md`.
+8. **Verify** — `python3 -m py_compile`, `docker compose config`, then `docker compose up --build`. Run the build checks in `references/verification.md`. Use `af agent discover -q "<slug>"` and `af agent query --resource executions` for live introspection — see `references/cli-toolkit.md`.
 9. **Smoke test live** — fire the canonical **async** curl (multi-reasoner pipelines exceed the 90s sync limit). Poll until `status: succeeded` with a real `result`. Static checks alone are not a green light. See "Mandatory live smoke test" below.
 10. **Hand off** — use the output contract at the bottom of this file.
 
@@ -134,7 +150,7 @@ What is this reasoner doing?
 1. **Per-request model propagation.** Entry reasoner accepts `model: str | None = None` and threads it through every `app.ai(..., model=model)` and `app.call(..., model=model)`. Child reasoners accept and use it identically. Users override per request via `{"input": {..., "model": "..."}}`.
 2. **Routers when reasoners > 4.** `AgentRouter(prefix="", tags=["domain"])` + `app.include_router(router)`. Inside a router file use `NODE_ID = os.getenv("AGENT_NODE_ID", "<slug>")` — `router.node_id` does NOT exist.
 3. **`tags=["entry"]` on the public entry reasoner** so discovery picks it up.
-4. **Every `.ai()` schema has a `confident: bool` field and the call site has a fallback path.** Three valid fallbacks: (a) escalate to a deeper reasoner, (b) return a safe-default Pydantic instance (`REFER_TO_HUMAN` / `NEEDS_REVIEW` — recommended for regulated systems), (c) escalate to `app.harness()` if and only if the harness gate passes.
+4. **Every `.ai()` schema has a `confident: bool` field and the call site has a fallback path** (verification rung 4). Three valid fallbacks: (a) escalate to a deeper reasoner, (b) return a safe-default Pydantic instance (`REFER_TO_HUMAN` / `NEEDS_REVIEW` — recommended for regulated systems), (c) escalate to `app.harness()` if and only if the harness gate passes.
 
 ---
 
@@ -142,6 +158,7 @@ What is this reasoner doing?
 
 | ❌ | ✅ |
 |---|---|
+| Pattern-first design ("this looks like HUNT→PROVE") | Derive from cognitive jobs; name the shape afterwards |
 | Direct HTTP between reasoners | `app.call(f"{app.node_id}.X", ...)` |
 | One giant reasoner doing 5 things | Decompose into 5 + orchestrate with `app.call` + `asyncio.gather` |
 | Static linear chain when the path depends on findings | Dynamic routing on intermediate state |
@@ -231,11 +248,12 @@ A TypeScript SDK exists (`sdk/typescript/`) and a Go SDK exists (`sdk/go/`). **D
 | `references/live-docs.md` | **Every invocation** — first thing, fetches the SDK truth |
 | `references/cli-toolkit.md` | **Every invocation** — `af doctor` + `af agent` are the introspection surface |
 | `references/model-selection.md` | Choosing the model — always |
-| `references/patterns-emerge.md` | After you've walked the principles and want to name the shape that emerged |
+| `references/mental-models.md` | Once per design session, before drawing the topology — the generative theory: cognitive jobs, autonomy spectrum, verification ladder, dynamism ladder, quality escalation |
+| `references/patterns-emerge.md` | After the topology exists — post-hoc naming so humans can review the shape |
 | `references/examples-map.md` | Finding the closest live example to grep for shape inspiration |
 | `references/primitives-snapshot.md` | **Offline only** — when you cannot fetch live docs |
 | `references/scaffold-recipe.md` | Actually writing files / compose / Dockerfile |
-| `references/verification.md` | The full ladder, troubleshooting, async vs sync |
+| `references/verification.md` | The build checks, troubleshooting, async vs sync |
 | `references/triggers.md` | Use case is event-driven (webhook) or scheduled (cron) |
 | `references/project-claude-template.md` | Generating the per-project CLAUDE.md (always) |
 | `references/anti-patterns.md` | When tempted to take a shortcut, or when the user pushes back on a rejection |
