@@ -52,13 +52,14 @@ Examples:
   # Build from an embedded demo fixture (no control plane needed)
   af share --demo
 
-  # Also publish to a hosted share server (opt-in; requires AGENTFIELD_SHARE_URL)
+  # Also publish a shareable permalink you can send or post (opt-in)
   af share run-a1b2c3d4 --public
+  # => https://agentfield.ai/share/<token>
 
 Server resolution matches other af commands: --server, then $AGENTFIELD_SERVER,
 then http://localhost:8080. Hosted sharing (--public) posts the bundle JSON to
-$AGENTFIELD_SHARE_URL/api/v1/shares; it degrades with a clear error when that
-variable is unset.`,
+agentfield.ai and prints the permalink. Point AGENTFIELD_SHARE_URL at your own
+share server to publish there instead.`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if opts.demo {
 				return cobra.MaximumNArgs(1)(cmd, args)
@@ -79,7 +80,7 @@ variable is unset.`,
 
 	cmd.Flags().StringVarP(&opts.output, "output", "o", "", "Output HTML path (default: run-<workflow-id>.html in the current directory)")
 	cmd.Flags().StringVar(&opts.title, "title", "", "Human title for the shared run (default: \"run of <agent>.<func>\" from the entry node)")
-	cmd.Flags().BoolVar(&opts.public, "public", false, "Also publish the bundle to a hosted share server (requires AGENTFIELD_SHARE_URL)")
+	cmd.Flags().BoolVar(&opts.public, "public", false, "Publish a shareable permalink (uploads to agentfield.ai; override with AGENTFIELD_SHARE_URL)")
 	cmd.Flags().BoolVar(&opts.demo, "demo", false, "Render from an embedded demo fixture instead of the control plane")
 	cmd.Flags().BoolVar(&opts.redact, "redact", false, "Replace every input/output preview with \"[redacted]\"")
 	return cmd
@@ -385,14 +386,17 @@ func computeWallClock(nodes []share.BundleNode) int64 {
 	return sumDur
 }
 
-// publishBundle posts the bundle JSON to the hosted share server. It degrades
-// with a clear, actionable error when AGENTFIELD_SHARE_URL is unset.
+// defaultShareHost is the hosted share server used by --public when the user
+// hasn't pointed AGENTFIELD_SHARE_URL at a self-hosted one.
+const defaultShareHost = "https://agentfield.ai"
+
+// publishBundle posts the bundle JSON to a hosted share server and prints the
+// returned permalink. Defaults to agentfield.ai; override with
+// AGENTFIELD_SHARE_URL to publish to a self-hosted share server instead.
 func publishBundle(ctx context.Context, bundle *share.Bundle) error {
 	base := strings.TrimSpace(os.Getenv("AGENTFIELD_SHARE_URL"))
 	if base == "" {
-		return cliExitError{Code: 2, Err: fmt.Errorf(
-			"hosted sharing is not configured: set AGENTFIELD_SHARE_URL to a share server, " +
-				"or self-host one. The local HTML file above already works offline")}
+		base = defaultShareHost
 	}
 	base = strings.TrimRight(base, "/")
 	url := base + "/api/v1/shares"
