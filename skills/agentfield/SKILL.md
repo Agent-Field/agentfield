@@ -28,13 +28,25 @@ If your final design is not at minimum depth ≥ 3 from entry to leaf, does not 
 
 ---
 
+## How to think — five mental models
+
+The principles below are rules. These are the frames that generate them, so you can extrapolate when the rules run out. Full treatment with code sketches: `references/mental-models.md`.
+
+1. **Orchestrated functions, not a DAG.** Reasoners are async functions calling each other through `app.call()`. There is no graph to declare — control flow is ordinary Python (if/else, loops, `asyncio.gather`, recursion). The dashboard DAG is a **trace** of what happened, not a spec you wrote. Declare-the-graph frameworks fix topology before the run; when the path depends on discoveries, a pre-declared graph cannot express the system. Actively use what this unlocks: recursion with depth caps, topology computed at runtime from intermediate results, meta-prompting (a parent writes a child's prompt from what it discovered), conditional deepening (spend calls only where signal appears).
+2. **Composing intelligence.** One LLM call reasons at ~0.3–0.4 on a normalized scale; deliberate composition of small, constrained, verifiable reasoners reaches 0.7–0.8 for a specific domain. Consequences: one cognitive job with 2–4 output fields per reasoner (verifiable, cheap on a mid-tier model); quality from structure — parallel perspectives, adversarial verification, cross-checks — not from a bigger prompt or model; errors localize to one inspectable slot in the trace instead of dissolving into a giant completion.
+3. **Guided autonomy.** Set the question, verify the answer, never script the steps. Competence-predictability inversion: the more capable the delegate, the less you control HOW and the more you verify WHAT. The membrane is the contract: budget in (`max_budget_usd`, `max_turns`, caps), tool surface, schema out. Every loop, spawn, and recursion carries an explicit integer cap.
+4. **The autonomy spectrum.** `app.ai()` is a typed function call (one shot, no tools, verify instantly). `app.harness()` is a delegated engineer (multi-turn, tools, opaque process, verifiable only at the boundary). A reasoner calling reasoners is a manager. Choosing a primitive = choosing a point on the spectrum + the verification that point requires.
+5. **Intelligence in the gaps, code everywhere else.** Anything deterministic (scoring, sorting, dedup, thresholds) is Python between reasoner calls; LLM slots are reserved for judgment, discovery, synthesis. Corollary: structured JSON when code branches on it, prose when another LLM reads it.
+
+---
+
 ## The five foundational principles
 
 Apply each one to the user's specific problem. The topology falls out of the answers.
 
 1. **Granular decomposition.** Every reasoner does ONE cognitive thing — a small input, a small output (~2–4 flat attributes), a one-sentence API contract. If a reasoner's output has more than ~4 attributes or its body is more than ~30 lines, it is probably two reasoners.
-2. **Guided autonomy.** A reasoner has freedom in HOW it answers, zero freedom in WHAT it answers. The orchestrator is a CEO — it sets the question and verifies the answer; it does not micromanage steps.
-3. **Dynamic orchestration.** The graph adapts to intermediate state. Some branches fire, others don't. A meta-level reasoner can decide at runtime how many specialists to spawn, what to ask each one, and what to do with their answers. *This* is what no static chain framework can do.
+2. **Guided autonomy.** A reasoner has freedom in HOW it answers, zero freedom in WHAT it answers. The orchestrator is a CEO — it sets the question and verifies the answer; it does not micromanage steps. The more capable the delegate, the less you control HOW and the more you verify WHAT (mental model 3).
+3. **Dynamic orchestration.** The graph adapts to intermediate state. Some branches fire, others don't. A meta-level reasoner can decide at runtime how many specialists to spawn, what to ask each one, and what to do with their answers. The DAG is a trace of these decisions, not a spec you committed to upfront — *this* is what no static chain framework can do.
 4. **Contextual fidelity.** The orchestrator is a context broker. Each call receives exactly what it needs — task description, relevant prior outputs, applicable constraints. Claims carry citation keys; provenance flows through every downstream reasoner to the final answer.
 5. **Asynchronous parallelism.** Decompose to parallelize. Anything that doesn't depend on a sibling's output must `asyncio.gather`. Sequential pipelines of independent work are always wrong.
 
@@ -99,6 +111,8 @@ What is this reasoner doing?
 ```
 
 **Bias:** many small `@app.reasoner` units. `@app.skill` for anything code can do. `app.ai` with explicit prompts and a `confident` flag. Reserve `app.harness` for actual coding-agent delegation.
+
+This tree is the autonomy spectrum (mental model 4) turned into questions. Each branch down trades process visibility for capability: `app.skill` is fully deterministic, `app.ai` verifies instantly on the schema, `app.harness` verifies only at the boundary. Pick the leftmost point that solves the problem, and pair every step right with the verification that step requires.
 
 ---
 
@@ -231,6 +245,7 @@ A TypeScript SDK exists (`sdk/typescript/`) and a Go SDK exists (`sdk/go/`). **D
 | `references/live-docs.md` | **Every invocation** — first thing, fetches the SDK truth |
 | `references/cli-toolkit.md` | **Every invocation** — `af doctor` + `af agent` are the introspection surface |
 | `references/model-selection.md` | Choosing the model — always |
+| `references/mental-models.md` | Once per design session, before drawing the topology — the frames behind the rules |
 | `references/patterns-emerge.md` | After you've walked the principles and want to name the shape that emerged |
 | `references/examples-map.md` | Finding the closest live example to grep for shape inspiration |
 | `references/primitives-snapshot.md` | **Offline only** — when you cannot fetch live docs |

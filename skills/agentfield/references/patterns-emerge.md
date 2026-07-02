@@ -1,6 +1,6 @@
 # Patterns Emerge — Vocabulary, Not a Menu
 
-These named patterns are **what topologies look like when the five principles are applied honestly to a problem**. They are vocabulary for describing what you built — not templates to copy from.
+These named patterns are **what topologies look like when the five principles are applied honestly to a problem**. They are vocabulary for describing what you built — not templates to copy from. Remember: the topology is never declared anywhere — it is the trace your control flow leaves at runtime. These names describe traces, not specs.
 
 The single most important framing for this whole reference: **reasoners are APIs.** Your final design should look like a service mesh where any reasoner can call any other reasoner at any depth, the call graph is shaped by intermediate state, and the depth from entry to leaf is ≥ 3. If your design ends up as one orchestrator fanning out to N siblings and that's it, you stopped decomposing too early — see "The composition cascade" below.
 
