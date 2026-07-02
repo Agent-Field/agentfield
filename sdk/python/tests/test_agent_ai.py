@@ -102,6 +102,16 @@ def test_get_rate_limiter_cached(monkeypatch, agent_with_ai):
     assert created["max_retries"] == agent_with_ai.ai_config.rate_limit_max_retries
 
 
+def test_media_router_registers_atlascloud(agent_with_ai):
+    ai = AgentAI(agent_with_ai)
+
+    provider = ai._media_router.resolve(
+        "atlascloud/google/nano-banana-2-lite/text-to-image", "image"
+    )
+
+    assert provider.name == "atlascloud"
+
+
 @pytest.mark.asyncio
 async def test_ensure_model_limits_cached(monkeypatch, agent_with_ai):
     calls = []

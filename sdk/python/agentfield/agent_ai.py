@@ -190,6 +190,7 @@ class AgentAI:
         self._initialization_complete = False
         self._rate_limiter = None
         self._fal_provider_instance = None
+        self._atlascloud_provider_instance = None
         self._openrouter_provider_instance = None
         self._media_router_instance = None
 
@@ -224,12 +225,26 @@ class AgentAI:
         return self._openrouter_provider_instance
 
     @property
+    def _atlascloud_provider(self):
+        """
+        Lazy-initialized Atlas Cloud provider for image and video generation.
+
+        Returns:
+            AtlasCloudProvider: Configured Atlas Cloud provider instance
+        """
+        if self._atlascloud_provider_instance is None:
+            from agentfield.media_providers import AtlasCloudProvider
+
+            self._atlascloud_provider_instance = AtlasCloudProvider()
+        return self._atlascloud_provider_instance
+
+    @property
     def _media_router(self):
         """
         Lazy-initialized MediaRouter for prefix-based provider dispatch.
 
         Returns:
-            MediaRouter: Configured router with fal, openrouter, and litellm providers
+            MediaRouter: Configured router with fal, atlascloud, openrouter, and litellm providers
         """
         if self._media_router_instance is None:
             from agentfield.media_providers import LiteLLMProvider
@@ -238,6 +253,7 @@ class AgentAI:
             router = MediaRouter()
             router.register("fal-ai/", self._fal_provider)
             router.register("fal/", self._fal_provider)
+            router.register("atlascloud/", self._atlascloud_provider)
             router.register("openrouter/", self._openrouter_provider)
             router.register("", LiteLLMProvider())  # catch-all fallback
             self._media_router_instance = router

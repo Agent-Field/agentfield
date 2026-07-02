@@ -1649,8 +1649,352 @@ class OpenRouterProvider(MediaProvider):
         )
 
 
+class AtlasCloudProvider(MediaProvider):
+    """
+    Atlas Cloud provider for asynchronous image and video generation.
+
+    Uses Atlas Cloud's media API:
+    - POST /model/generateImage
+    - POST /model/generateVideo
+    - GET /model/prediction/{id}
+
+    Requires ATLASCLOUD_API_KEY (or ATLAS_CLOUD_API_KEY) or an explicit api_key.
+    """
+
+    DEFAULT_IMAGE_MODEL = "google/nano-banana-2-lite/text-to-image"
+    DEFAULT_VIDEO_MODEL = "bytedance/seedance-2.0-mini/text-to-video"
+    BASE_URL = "https://api.atlascloud.ai/api/v1"
+
+    _SUCCESS_STATUSES = {"completed", "succeeded"}
+    _FAILURE_STATUSES = {"failed", "error", "cancelled", "canceled"}
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        base_url: str = BASE_URL,
+        poll_interval: float = 3.0,
+        timeout: float = 300.0,
+    ):
+        self._api_key = api_key
+        self._base_url = base_url.rstrip("/")
+        self._poll_interval = poll_interval
+        self._timeout = timeout
+
+    @property
+    def name(self) -> str:
+        return "atlascloud"
+
+    @property
+    def supported_modalities(self) -> List[str]:
+        return ["image", "video"]
+
+    @staticmethod
+    def _strip_atlas_prefix(model: str) -> str:
+        return model[len("atlascloud/") :] if model.startswith("atlascloud/") else model
+
+    @staticmethod
+    def _aspect_ratio_from_size(size: str) -> Optional[str]:
+        presets = {
+            "square": "1:1",
+            "square_hd": "1:1",
+            "landscape_16_9": "16:9",
+            "portrait_16_9": "9:16",
+            "landscape_4_3": "4:3",
+            "portrait_4_3": "3:4",
+        }
+        if size in presets:
+            return presets[size]
+        if "x" not in size.lower():
+            return None
+        try:
+            width_s, height_s = size.lower().split("x", 1)
+            width = int(width_s)
+            height = int(height_s)
+        except ValueError:
+            return None
+        if width <= 0 or height <= 0:
+            return None
+
+        import math
+
+        gcd = math.gcd(width, height)
+        ratio = f"{width // gcd}:{height // gcd}"
+        supported = {
+            "1:1",
+            "3:2",
+            "2:3",
+            "3:4",
+            "4:3",
+            "4:5",
+            "5:4",
+            "9:16",
+            "16:9",
+            "21:9",
+            "4:1",
+            "1:4",
+            "8:1",
+            "1:8",
+        }
+        return ratio if ratio in supported else None
+
+    def _get_api_key(self) -> str:
+        import os
+
+        api_key = (
+            self._api_key
+            or os.environ.get("ATLASCLOUD_API_KEY")
+            or os.environ.get("ATLAS_CLOUD_API_KEY")
+        )
+        if not api_key:
+            raise ValueError(
+                "Atlas Cloud API key required. Set ATLASCLOUD_API_KEY "
+                "or pass api_key to AtlasCloudProvider."
+            )
+        return api_key
+
+    def _headers(self) -> Dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self._get_api_key()}",
+            "Content-Type": "application/json",
+        }
+
+    async def _post_json(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        import aiohttp
+
+        timeout = aiohttp.ClientTimeout(total=60.0)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
+                f"{self._base_url}{path}",
+                headers=self._headers(),
+                json=payload,
+            ) as resp:
+                if resp.status >= 400:
+                    detail = await resp.text()
+                    raise RuntimeError(
+                        f"Atlas Cloud request failed ({resp.status}): {detail[:500]}"
+                    )
+                data = await resp.json()
+        return self._unwrap_response(data)
+
+    async def _get_json(self, path: str) -> Dict[str, Any]:
+        import aiohttp
+
+        timeout = aiohttp.ClientTimeout(total=30.0)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(
+                f"{self._base_url}{path}",
+                headers=self._headers(),
+            ) as resp:
+                if resp.status >= 400:
+                    detail = await resp.text()
+                    raise RuntimeError(
+                        f"Atlas Cloud poll failed ({resp.status}): {detail[:500]}"
+                    )
+                data = await resp.json()
+        return self._unwrap_response(data)
+
+    @staticmethod
+    def _unwrap_response(payload: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"Atlas Cloud returned an invalid response: {payload!r}")
+        code = payload.get("code")
+        if code not in (None, 0, 200, "0", "200"):
+            message = payload.get("message") or payload.get("error") or payload
+            raise RuntimeError(f"Atlas Cloud request failed: {message}")
+        data = payload.get("data", payload)
+        return data if isinstance(data, dict) else {"output": data}
+
+    @classmethod
+    def _extract_output_urls(cls, data: Dict[str, Any]) -> List[str]:
+        urls: List[str] = []
+
+        def visit(value: Any) -> None:
+            if not value:
+                return
+            if isinstance(value, str):
+                urls.append(value)
+                return
+            if isinstance(value, list):
+                for item in value:
+                    visit(item)
+                return
+            if isinstance(value, dict):
+                for key in ("url", "download_url"):
+                    if key in value:
+                        visit(value[key])
+                for key in ("output", "outputs", "images", "videos", "files"):
+                    if key in value:
+                        visit(value[key])
+
+        for key in ("outputs", "output", "urls", "url", "download_url"):
+            if key in data:
+                visit(data[key])
+        return urls
+
+    async def _submit_and_poll(
+        self, endpoint: str, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        submit_data = await self._post_json(endpoint, payload)
+        if self._extract_output_urls(submit_data):
+            return submit_data
+
+        prediction_id = submit_data.get("id") or submit_data.get("prediction_id")
+        if not prediction_id:
+            raise RuntimeError(
+                f"Atlas Cloud response did not include a prediction id: {submit_data}"
+            )
+        return await self._poll_prediction(str(prediction_id))
+
+    async def _poll_prediction(self, prediction_id: str) -> Dict[str, Any]:
+        import asyncio
+        import time
+
+        start_time = time.monotonic()
+        while True:
+            data = await self._get_json(f"/model/prediction/{prediction_id}")
+            status = str(data.get("status", "")).lower()
+            if status in self._SUCCESS_STATUSES:
+                return data
+            if status in self._FAILURE_STATUSES:
+                error = data.get("error") or data.get("message") or "unknown error"
+                raise RuntimeError(
+                    f"Atlas Cloud generation failed for {prediction_id}: {error}"
+                )
+            if time.monotonic() - start_time >= self._timeout:
+                raise TimeoutError(
+                    f"Atlas Cloud generation timed out after {self._timeout}s "
+                    f"(prediction {prediction_id})"
+                )
+            await asyncio.sleep(self._poll_interval)
+
+    async def generate_image(
+        self,
+        prompt: str,
+        model: Optional[str] = None,
+        size: str = "1024x1024",
+        quality: str = "standard",
+        **kwargs,
+    ) -> MultimodalResponse:
+        """Generate an image using Atlas Cloud's asynchronous media API."""
+        del quality  # Atlas Cloud quality controls are model-specific.
+        send_model = self._strip_atlas_prefix(model or self.DEFAULT_IMAGE_MODEL)
+
+        payload: Dict[str, Any] = {"model": send_model, "prompt": prompt}
+        kwargs.pop("response_format", None)
+        kwargs.pop("style", None)
+        extra = kwargs.pop("extra", None)
+        if "aspect_ratio" not in kwargs:
+            aspect_ratio = self._aspect_ratio_from_size(size)
+            if aspect_ratio:
+                payload["aspect_ratio"] = aspect_ratio
+        payload.update(kwargs)
+        if isinstance(extra, dict):
+            payload.update(extra)
+
+        try:
+            result = await self._submit_and_poll("/model/generateImage", payload)
+        except Exception as e:
+            from agentfield.logger import log_error
+
+            log_error(f"Atlas Cloud image generation failed: {e}")
+            raise
+
+        images = [
+            ImageOutput(url=url, b64_json=None, revised_prompt=prompt)
+            for url in self._extract_output_urls(result)
+        ]
+        return MultimodalResponse(
+            text=prompt,
+            audio=None,
+            images=images,
+            files=[],
+            raw_response=result,
+        )
+
+    async def generate_audio(
+        self,
+        text: str,
+        model: Optional[str] = None,
+        voice: str = "alloy",
+        format: str = "wav",
+        *,
+        system: Optional[str] = None,
+        **kwargs,
+    ) -> MultimodalResponse:
+        """Atlas Cloud media provider currently supports image and video here."""
+        raise NotImplementedError(f"{self.name} does not support audio generation")
+
+    async def generate_video(
+        self,
+        prompt: str,
+        model: Optional[str] = None,
+        image_url: Optional[str] = None,
+        duration: Optional[float] = None,
+        **kwargs,
+    ) -> MultimodalResponse:
+        """Generate a video using Atlas Cloud's asynchronous media API."""
+        send_model = self._strip_atlas_prefix(model or self.DEFAULT_VIDEO_MODEL)
+        payload: Dict[str, Any] = {"model": send_model, "prompt": prompt}
+
+        if image_url is not None:
+            payload["image_url"] = image_url
+        if duration is not None:
+            payload["duration"] = (
+                int(duration)
+                if isinstance(duration, float) and duration.is_integer()
+                else duration
+            )
+        if "aspect_ratio" in kwargs and "ratio" not in kwargs:
+            kwargs["ratio"] = kwargs.pop("aspect_ratio")
+        extra = kwargs.pop("extra", None)
+        payload.update(kwargs)
+        if isinstance(extra, dict):
+            payload.update(extra)
+
+        try:
+            result = await self._submit_and_poll("/model/generateVideo", payload)
+        except Exception as e:
+            from agentfield.logger import log_error
+
+            log_error(f"Atlas Cloud video generation failed: {e}")
+            raise
+
+        files = []
+        videos = []
+        for url in self._extract_output_urls(result):
+            file_output = FileOutput(
+                url=url,
+                data=None,
+                mime_type="video/mp4",
+                filename="generated_video.mp4",
+            )
+            files.append(file_output)
+            videos.append(
+                VideoOutput(
+                    url=url,
+                    data=None,
+                    mime_type="video/mp4",
+                    filename="generated_video.mp4",
+                    duration=float(duration) if duration is not None else None,
+                    resolution=payload.get("resolution"),
+                    aspect_ratio=payload.get("ratio"),
+                    has_audio=payload.get("generate_audio"),
+                )
+            )
+
+        return MultimodalResponse(
+            text=prompt,
+            audio=None,
+            images=[],
+            files=files,
+            videos=videos,
+            raw_response=result,
+        )
+
+
 # Provider registry for easy access
 _PROVIDERS: Dict[str, type] = {
+    "atlascloud": AtlasCloudProvider,
     "fal": FalProvider,
     "litellm": LiteLLMProvider,
     "openrouter": OpenRouterProvider,
@@ -1662,7 +2006,7 @@ def get_provider(name: str, **kwargs) -> MediaProvider:
     Get a media provider instance by name.
 
     Args:
-        name: Provider name ('fal', 'litellm', 'openrouter')
+        name: Provider name ('atlascloud', 'fal', 'litellm', 'openrouter')
         **kwargs: Provider-specific initialization arguments
 
     Returns:
@@ -1674,6 +2018,13 @@ def get_provider(name: str, **kwargs) -> MediaProvider:
         result = await provider.generate_image(
             "A sunset over mountains",
             model="fal-ai/flux/dev"
+        )
+
+        # Atlas Cloud provider
+        provider = get_provider("atlascloud")
+        result = await provider.generate_image(
+            "A sunset over mountains",
+            model="atlascloud/google/nano-banana-2-lite/text-to-image"
         )
 
         # LiteLLM provider for DALL-E

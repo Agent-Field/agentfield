@@ -5,7 +5,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from agentfield.media_providers import (
+    AtlasCloudProvider,
     FalProvider,
+    get_provider,
     MediaProvider,
     OpenRouterProvider,
     register_provider,
@@ -35,6 +37,92 @@ def test_media_provider_generate_video_and_register_validation():
 
     with pytest.raises(TypeError, match="provider_class must be a MediaProvider subclass"):
         register_provider("bad", object)
+
+
+def test_atlascloud_provider_registered():
+    provider = get_provider("atlascloud", api_key="atlas-key")
+    assert isinstance(provider, AtlasCloudProvider)
+    assert provider.name == "atlascloud"
+    assert provider.supported_modalities == ["image", "video"]
+
+
+def test_atlascloud_requires_api_key(monkeypatch):
+    monkeypatch.delenv("ATLASCLOUD_API_KEY", raising=False)
+    monkeypatch.delenv("ATLAS_CLOUD_API_KEY", raising=False)
+    provider = AtlasCloudProvider()
+
+    with pytest.raises(ValueError, match="Atlas Cloud API key required"):
+        provider._get_api_key()
+
+
+@pytest.mark.asyncio
+async def test_atlascloud_generate_image_payload_and_outputs(monkeypatch):
+    provider = AtlasCloudProvider(api_key="atlas-key", poll_interval=0, timeout=1)
+    mock_submit = AsyncMock(
+        return_value={
+            "status": "completed",
+            "outputs": [{"url": "https://cdn.atlascloud.ai/image.png"}],
+        }
+    )
+    monkeypatch.setattr(provider, "_submit_and_poll", mock_submit)
+
+    result = await provider.generate_image(
+        prompt="A skyline",
+        model="atlascloud/google/nano-banana-2-lite/text-to-image",
+        size="1024x576",
+        quality="hd",
+        response_format="url",
+        style="natural",
+        resolution="1k",
+    )
+
+    mock_submit.assert_awaited_once()
+    endpoint, payload = mock_submit.await_args.args
+    assert endpoint == "/model/generateImage"
+    assert payload == {
+        "model": "google/nano-banana-2-lite/text-to-image",
+        "prompt": "A skyline",
+        "aspect_ratio": "16:9",
+        "resolution": "1k",
+    }
+    assert result.has_images
+    assert result.images[0].url == "https://cdn.atlascloud.ai/image.png"
+
+
+@pytest.mark.asyncio
+async def test_atlascloud_generate_video_payload_and_outputs(monkeypatch):
+    provider = AtlasCloudProvider(api_key="atlas-key", poll_interval=0, timeout=1)
+    mock_submit = AsyncMock(
+        return_value={
+            "status": "succeeded",
+            "output": "https://cdn.atlascloud.ai/video.mp4",
+        }
+    )
+    monkeypatch.setattr(provider, "_submit_and_poll", mock_submit)
+
+    result = await provider.generate_video(
+        prompt="A rocket launch",
+        model="atlascloud/bytedance/seedance-2.0-mini/text-to-video",
+        duration=5.0,
+        aspect_ratio="16:9",
+        resolution="720p",
+        generate_audio=True,
+    )
+
+    endpoint, payload = mock_submit.await_args.args
+    assert endpoint == "/model/generateVideo"
+    assert payload == {
+        "model": "bytedance/seedance-2.0-mini/text-to-video",
+        "prompt": "A rocket launch",
+        "duration": 5,
+        "ratio": "16:9",
+        "resolution": "720p",
+        "generate_audio": True,
+    }
+    assert result.has_files
+    assert result.has_videos
+    assert result.files[0].url == "https://cdn.atlascloud.ai/video.mp4"
+    assert result.videos[0].has_audio is True
 
 
 def test_fal_provider_get_client_sets_env_and_raises_importerror(monkeypatch):
