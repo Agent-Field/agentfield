@@ -160,7 +160,7 @@ class AgentFieldClient:
         self._did_authenticator = DIDAuthenticator(did=did, private_key_jwk=private_key_jwk)
 
         # Async execution components
-        self.async_config = async_config or AsyncConfig()
+        self.async_config = async_config or AsyncConfig.from_environment()
         self._async_execution_manager: Optional[AsyncExecutionManager] = None
         self._async_http_client: Optional["httpx.AsyncClient"] = None
         self._async_http_client_lock: Optional[asyncio.Lock] = None
