@@ -106,6 +106,15 @@ def fast_timeout_agent():
     return agent
 
 
+@pytest.fixture(autouse=True)
+def _disable_timeout_retries(monkeypatch):
+    """These regression tests pin the single-shot safety-net + pool-reset
+    behavior (exact call counts and wall-clock bounds). The timeout-retry layer
+    is tested separately in ``test_timeout_retry_*`` below, so disable retries
+    here to keep these deterministic."""
+    monkeypatch.setenv("AGENTFIELD_AI_TIMEOUT_RETRIES", "0")
+
+
 def _install_litellm_stub(monkeypatch, acompletion_side_effect):
     """Install a fake `litellm` module with a controllable `acompletion`."""
     module = types.ModuleType("litellm")
@@ -698,3 +707,148 @@ async def test_tool_calling_loop_recovers_from_hang(monkeypatch, fast_timeout_ag
     never_set.set()
     await ai.ai("hello again", tools=[])
     assert call_count["n"] == 2
+
+
+# ---------------------------------------------------------------------------
+# 6. Timeout-retry layer
+#
+# A wall-clock timeout is usually a stalled connection, not the model genuinely
+# needing the full window. The retry layer re-issues the call on a fresh pool
+# instead of failing the reasoner. These tests pin that behavior.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_timeout_retry_recovers_when_first_attempt_stalls(
+    monkeypatch, fast_timeout_agent
+):
+    """With retries enabled, a single ai() call whose first acompletion stalls
+    (safety net fires) must RETRY on a fresh pool and succeed, rather than
+    surfacing TimeoutError to the caller."""
+    monkeypatch.setenv("AGENTFIELD_AI_TIMEOUT_RETRIES", "2")
+    call_count = {"n": 0}
+    never_set = asyncio.Event()
+
+    async def acompletion_side_effect(**params):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            await never_set.wait()  # first attempt stalls -> safety net fires
+            return _make_chat_response("never")
+        return _make_chat_response("recovered-via-retry")
+
+    stub_module = _install_litellm_stub(monkeypatch, acompletion_side_effect)
+    ai = AgentAI(fast_timeout_agent)
+    monkeypatch.setattr(ai, "_ensure_model_limits_cached", lambda: asyncio.sleep(0))
+    monkeypatch.setattr(
+        "agentfield.agent_ai.AgentUtils.detect_input_type", lambda value: "text"
+    )
+    monkeypatch.setattr(
+        "agentfield.agent_ai.AgentUtils.serialize_result", lambda value: value
+    )
+
+    # Single ai() call: it stalls once, the retry layer reissues on a fresh
+    # pool, and the second attempt returns successfully.
+    result = await asyncio.wait_for(ai.ai("hello"), timeout=5.0)
+    assert hasattr(result, "text")
+    assert result.text == "recovered-via-retry"
+    assert call_count["n"] == 2  # one stall + one successful retry
+    # Pool reset must have fired between attempts.
+    assert stub_module.module_level_aclient is None
+
+
+@pytest.mark.asyncio
+async def test_timeout_retry_exhausts_then_raises(monkeypatch, fast_timeout_agent):
+    """If every attempt stalls, the retry layer raises TimeoutError after the
+    configured number of retries (it does not loop forever)."""
+    monkeypatch.setenv("AGENTFIELD_AI_TIMEOUT_RETRIES", "1")
+    call_count = {"n": 0}
+    never_set = asyncio.Event()
+
+    async def acompletion_side_effect(**params):
+        call_count["n"] += 1
+        await never_set.wait()  # every attempt stalls
+        return _make_chat_response("never")
+
+    _install_litellm_stub(monkeypatch, acompletion_side_effect)
+    ai = AgentAI(fast_timeout_agent)
+    monkeypatch.setattr(ai, "_ensure_model_limits_cached", lambda: asyncio.sleep(0))
+    monkeypatch.setattr(
+        "agentfield.agent_ai.AgentUtils.detect_input_type", lambda value: "text"
+    )
+    monkeypatch.setattr(
+        "agentfield.agent_ai.AgentUtils.serialize_result", lambda value: value
+    )
+
+    with pytest.raises((TimeoutError, asyncio.TimeoutError)):
+        await asyncio.wait_for(ai.ai("hello"), timeout=5.0)
+    # 1 initial attempt + 1 retry = 2 acompletion calls.
+    assert call_count["n"] == 2
+    never_set.set()
+
+
+@pytest.mark.asyncio
+async def test_transient_api_error_is_retried(monkeypatch, fast_timeout_agent):
+    """A transient provider glitch (a malformed 'Unable to get json response'
+    error) must be retried on a fresh pool and recover, not fail the call."""
+    monkeypatch.setenv("AGENTFIELD_AI_TIMEOUT_RETRIES", "2")
+    call_count = {"n": 0}
+
+    class _ProviderError(Exception):
+        pass
+
+    async def acompletion_side_effect(**params):
+        call_count["n"] += 1
+        if call_count["n"] < 2:
+            raise _ProviderError(
+                "OpenrouterException - Unable to get json response"
+            )
+        return _make_chat_response("recovered-after-glitch")
+
+    _install_litellm_stub(monkeypatch, acompletion_side_effect)
+    ai = AgentAI(fast_timeout_agent)
+    monkeypatch.setattr(ai, "_ensure_model_limits_cached", lambda: asyncio.sleep(0))
+    monkeypatch.setattr(
+        "agentfield.agent_ai.AgentUtils.detect_input_type", lambda value: "text"
+    )
+    monkeypatch.setattr(
+        "agentfield.agent_ai.AgentUtils.serialize_result", lambda value: value
+    )
+
+    result = await asyncio.wait_for(ai.ai("hello"), timeout=5.0)
+    assert hasattr(result, "text")
+    assert result.text == "recovered-after-glitch"
+    assert call_count["n"] == 2
+
+
+@pytest.mark.asyncio
+async def test_permanent_client_error_is_not_retried(monkeypatch, fast_timeout_agent):
+    """A permanent client error (bad request / unsupported schema) must NOT be
+    retried — a retry can never fix it, so it should surface immediately."""
+    monkeypatch.setenv("AGENTFIELD_AI_TIMEOUT_RETRIES", "2")
+    call_count = {"n": 0}
+
+    class _BadRequest(Exception):
+        def __init__(self, msg):
+            super().__init__(msg)
+            self.status_code = 400
+
+    async def acompletion_side_effect(**params):
+        call_count["n"] += 1
+        raise _BadRequest(
+            "invalid_request_error: For 'integer' type, minimum not supported"
+        )
+
+    _install_litellm_stub(monkeypatch, acompletion_side_effect)
+    ai = AgentAI(fast_timeout_agent)
+    monkeypatch.setattr(ai, "_ensure_model_limits_cached", lambda: asyncio.sleep(0))
+    monkeypatch.setattr(
+        "agentfield.agent_ai.AgentUtils.detect_input_type", lambda value: "text"
+    )
+    monkeypatch.setattr(
+        "agentfield.agent_ai.AgentUtils.serialize_result", lambda value: value
+    )
+
+    with pytest.raises(Exception):
+        await asyncio.wait_for(ai.ai("hello"), timeout=5.0)
+    # No retry on a permanent error: exactly one acompletion attempt.
+    assert call_count["n"] == 1

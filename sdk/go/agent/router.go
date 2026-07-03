@@ -27,6 +27,7 @@ type routerHandlerEntry struct {
 	name    string
 	handler HandlerFunc
 	opts    []ReasonerOption
+	skill   bool
 }
 
 type routerChildEntry struct {
@@ -74,15 +75,13 @@ func (r *Router) RegisterReasoner(name string, handler HandlerFunc, opts ...Reas
 }
 
 // RegisterSkill adds a skill handler to the router.
-// In the current Go SDK, skills share the same registration path as reasoners;
-// the skill/reasoner distinction is enforced at the control-plane level.
 // opts accepts any ReasonerOption, e.g. WithDescription, WithReasonerTags.
 func (r *Router) RegisterSkill(name string, handler HandlerFunc, opts ...ReasonerOption) {
-	// Skills are registered identically to reasoners in the Go SDK today.
 	r.entries = append(r.entries, routerHandlerEntry{
 		name:    name,
 		handler: handler,
 		opts:    opts,
+		skill:   true,
 	})
 }
 
@@ -127,6 +126,7 @@ func (r *Router) flatten(prefix string, inheritedTags []string) []routerHandlerE
 			name:    name,
 			handler: e.handler,
 			opts:    opts,
+			skill:   e.skill,
 		})
 	}
 
@@ -146,7 +146,7 @@ func (r *Router) flatten(prefix string, inheritedTags []string) []routerHandlerE
 // IncludeRouter flattens all handlers from router into the Agent, prepending
 // opts.Prefix to every name and merging opts.Tags into every handler's tags.
 //
-// It delegates to the existing Agent.RegisterReasoner so all middleware
+// It delegates to the existing Agent registration methods so all middleware
 // (DID auth, VC generation, tracing) fires without any changes.
 //
 // Example — flat mount:
@@ -171,6 +171,10 @@ func (r *Router) flatten(prefix string, inheritedTags []string) []routerHandlerE
 //	// Registers: admin.users.get-profile, admin.orders.create, …
 func (a *Agent) IncludeRouter(router *Router, opts RouterOptions) {
 	for _, e := range router.flatten(opts.Prefix, opts.Tags) {
+		if e.skill {
+			a.RegisterSkill(e.name, e.handler, e.opts...)
+			continue
+		}
 		a.RegisterReasoner(e.name, e.handler, e.opts...)
 	}
 }

@@ -60,13 +60,13 @@ Examples:
 
 func newSkillInstallCommand() *cobra.Command {
 	var (
-		skillName    string
-		version      string
-		targets      []string
-		allDetected  bool
-		allTargets   bool
-		force        bool
-		dryRun       bool
+		skillName      string
+		version        string
+		targets        []string
+		allDetected    bool
+		allTargets     bool
+		force          bool
+		dryRun         bool
 		nonInteractive bool
 	)
 

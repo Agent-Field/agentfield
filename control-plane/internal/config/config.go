@@ -21,6 +21,23 @@ type Config struct {
 	UI         UIConfig         `yaml:"ui" mapstructure:"ui"`
 	API        APIConfig        `yaml:"api" mapstructure:"api"`
 	Telemetry  TelemetryConfig  `yaml:"telemetry" mapstructure:"telemetry"`
+	Logging    LoggingConfig    `yaml:"logging" mapstructure:"logging"`
+}
+
+// LoggingConfig controls structured logging behavior.
+type LoggingConfig struct {
+	// Level sets the minimum log level: "debug", "info", "warn", "error".
+	// Defaults to "info".
+	Level string `yaml:"level" mapstructure:"level"`
+	// RedactPayloads controls whether execution input/output payloads are
+	// omitted from structured log events and internal event bus data.
+	// Defaults to true (payloads are redacted).
+	RedactPayloads *bool `yaml:"redact_payloads" mapstructure:"redact_payloads"`
+}
+
+// ShouldRedactPayloads returns true (the safe default) unless explicitly set to false.
+func (l LoggingConfig) ShouldRedactPayloads() bool {
+	return l.RedactPayloads == nil || *l.RedactPayloads
 }
 
 // TelemetryConfig controls anonymous OSS usage telemetry. It is separate from
@@ -468,6 +485,9 @@ func ApplyDefaults(cfg *Config) {
 	if cfg.Telemetry.Timeout <= 0 {
 		cfg.Telemetry.Timeout = 800 * time.Millisecond
 	}
+	if cfg.Logging.Level == "" {
+		cfg.Logging.Level = "info"
+	}
 }
 
 // ApplyEnvOverrides applies environment variable overrides to the config.
@@ -780,6 +800,15 @@ func ApplyEnvOverrides(cfg *Config) {
 				cfg.Features.Connector.Capabilities[capName] = ConnectorCapability{Enabled: false}
 			}
 		}
+	}
+
+	// Logging overrides
+	if val := os.Getenv("AGENTFIELD_LOG_LEVEL"); val != "" {
+		cfg.Logging.Level = strings.ToLower(strings.TrimSpace(val))
+	}
+	if val := os.Getenv("AGENTFIELD_LOG_REDACT_PAYLOADS"); val != "" {
+		b := parseEnvBool(val)
+		cfg.Logging.RedactPayloads = &b
 	}
 }
 

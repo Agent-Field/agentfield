@@ -119,3 +119,100 @@ def test_accepts_webhook_in_agent_registration():
     assert webhook_disabled_entry is not None
     assert hasattr(webhook_disabled_entry, "accepts_webhook")
     assert webhook_disabled_entry.accepts_webhook == "warn"
+
+
+def test_agent_reasoner_explicit_false_overrides_trigger_metadata():
+    """@app.reasoner should preserve accepts_webhook=False with trigger bindings."""
+    app = Agent(node_id="test_agent", agentfield_server="http://localhost:8080")
+
+    @app.reasoner(
+        accepts_webhook=False,
+        triggers=[EventTrigger(source="github")],
+    )
+    async def no_webhook_trigger(x: str) -> dict:
+        return {"x": x}
+
+    metadata = next(r for r in app.reasoners if r["id"] == "no_webhook_trigger")
+
+    assert metadata["accepts_webhook"] == "false"
+
+
+def test_agent_reasoner_preserves_inner_reasoner_trigger_metadata():
+    """@app.reasoner should preserve metadata from stacked module-level @reasoner."""
+    app = Agent(node_id="test_agent", agentfield_server="http://localhost:8080")
+
+    @app.reasoner()
+    @reasoner(accepts_webhook=False, triggers=[EventTrigger(source="github")])
+    async def stacked_no_webhook_trigger(x: str) -> dict:
+        return {"x": x}
+
+    metadata = next(
+        r for r in app.reasoners if r["id"] == "stacked_no_webhook_trigger"
+    )
+
+    assert metadata["accepts_webhook"] == "false"
+    assert metadata["triggers"][0]["source"] == "github"
+
+
+def test_agent_reasoner_outer_triggers_override_inner_warn_default():
+    """Outer @app.reasoner triggers should imply webhook opt-in when inner is default."""
+    app = Agent(node_id="test_agent", agentfield_server="http://localhost:8080")
+
+    @app.reasoner(triggers=[EventTrigger(source="github")])
+    @reasoner()
+    async def stacked_trigger_opt_in(x: str) -> dict:
+        return {"x": x}
+
+    metadata = next(r for r in app.reasoners if r["id"] == "stacked_trigger_opt_in")
+
+    assert metadata["accepts_webhook"] == "true"
+    assert metadata["triggers"][0]["source"] == "github"
+
+
+def test_agent_reasoner_staged_triggers_override_inner_warn_default():
+    """Staged trigger sugar should imply webhook opt-in when inner is default."""
+    app = Agent(node_id="test_agent", agentfield_server="http://localhost:8080")
+
+    @app.reasoner()
+    @on_schedule("*/5 * * * *")
+    @reasoner()
+    async def stacked_schedule_opt_in(x: str) -> dict:
+        return {"x": x}
+
+    metadata = next(r for r in app.reasoners if r["id"] == "stacked_schedule_opt_in")
+
+    assert metadata["accepts_webhook"] == "true"
+    assert metadata["triggers"][0]["source"] == "cron"
+
+
+def test_agent_reasoner_registers_bound_method_without_metadata_write():
+    """Bound method registration should not require setting attrs on method objects."""
+    app = Agent(node_id="test_agent", agentfield_server="http://localhost:8080")
+
+    class Service:
+        async def handle(self, x: str) -> dict:
+            return {"x": x}
+
+    app.reasoner()(Service().handle)
+
+    metadata = next(r for r in app.reasoners if r["id"] == "handle")
+
+    assert metadata["accepts_webhook"] == "warn"
+
+
+def test_agent_reasoner_does_not_reuse_triggers_between_agent_registrations():
+    """Agent-local trigger registrations should not leak through function attrs."""
+    app1 = Agent(node_id="agent_one", agentfield_server="http://localhost:8080")
+    app2 = Agent(node_id="agent_two", agentfield_server="http://localhost:8080")
+
+    async def shared_handler(x: str) -> dict:
+        return {"x": x}
+
+    app1.reasoner(triggers=[EventTrigger(source="github")])(shared_handler)
+    app2.reasoner(triggers=[EventTrigger(source="stripe")])(shared_handler)
+
+    app1_metadata = next(r for r in app1.reasoners if r["id"] == "shared_handler")
+    app2_metadata = next(r for r in app2.reasoners if r["id"] == "shared_handler")
+
+    assert [trigger["source"] for trigger in app1_metadata["triggers"]] == ["github"]
+    assert [trigger["source"] for trigger in app2_metadata["triggers"]] == ["stripe"]

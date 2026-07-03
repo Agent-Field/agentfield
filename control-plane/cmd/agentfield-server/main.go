@@ -13,6 +13,7 @@ import (
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/cli"
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/server"
 	"github.com/Agent-Field/agentfield/control-plane/internal/utils"
 	"github.com/Agent-Field/agentfield/control-plane/web/client"
@@ -68,6 +69,13 @@ func runServer(cmd *cobra.Command, args []string) {
 	cfg, err := loadConfigFunc(cfgFilePath)
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
+	}
+
+	// Re-initialize logger with configured level now that config is loaded.
+	// The CLI root command sets a default (info/debug based on --verbose),
+	// but the YAML/env-based level takes precedence once available.
+	if cfg.Logging.Level != "" {
+		logger.InitLoggerWithLevel(cfg.Logging.Level)
 	}
 
 	// Override port from flag if provided

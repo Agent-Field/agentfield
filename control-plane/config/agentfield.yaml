@@ -60,6 +60,10 @@ telemetry:
   install_id_path: "/data/telemetry/install_id"
   timeout: 800ms
 
+logging:
+  level: "info"            # Log level: "debug", "info", "warn", "error"
+  redact_payloads: true    # Omit execution input/output from structured log events (prevents sensitive data leaks)
+
 storage:
   mode: "local"
   local:

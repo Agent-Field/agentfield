@@ -49,6 +49,10 @@ from agentfield.logger import log_debug, log_error, log_info, log_warn, set_cp_c
 from agentfield.router import AgentRouter
 from agentfield.connection_manager import ConnectionManager
 from agentfield.cost_tracker import CostTracker
+from agentfield.decorator_metadata import (
+    resolve_reasoner_metadata,
+    split_direct_registration_arg,
+)
 from agentfield.types import (
     AgentStatus,
     AIConfig,
@@ -1859,41 +1863,18 @@ class Agent(FastAPI):
             accepts_webhook (bool | "warn" | None, optional): 3-state UI guardrail flag.
         """
 
-        direct_registration: Optional[Callable] = None
-        decorator_path = path
+        direct_registration, decorator_path = split_direct_registration_arg(path)
         decorator_name = name
         decorator_tags = tags
         kwarg_triggers = list(triggers) if triggers else None
         kwarg_accepts_webhook = accepts_webhook
 
-        if decorator_path and (
-            inspect.isfunction(decorator_path) or inspect.ismethod(decorator_path)
-        ):
-            direct_registration = decorator_path
-            decorator_path = None
-
         def decorator(func: Callable) -> Callable:
-            # Merge any sugar-staged triggers (from @on_event / @on_schedule)
-            # with the explicit `triggers=[...]` kwarg passed to @app.reasoner.
-            # Mirrors the module-level @reasoner contract so the same syntax
-            # works under either decorator entry point.
-            staged = getattr(func, "_pending_triggers", None) or []
-            merged_triggers = list(kwarg_triggers or []) + list(staged)
-            if staged:
-                try:
-                    delattr(func, "_pending_triggers")
-                except AttributeError:
-                    pass
-            if merged_triggers:
-                setattr(func, "_reasoner_triggers", merged_triggers)
-                # Auto-set accepts_webhook=True when the dev declared triggers,
-                # unless they explicitly passed something else.
-                if kwarg_accepts_webhook is None:
-                    setattr(func, "_accepts_webhook", True)
-                else:
-                    setattr(func, "_accepts_webhook", kwarg_accepts_webhook)
-            elif kwarg_accepts_webhook is not None:
-                setattr(func, "_accepts_webhook", kwarg_accepts_webhook)
+            merged_triggers, resolved_accepts_webhook = resolve_reasoner_metadata(
+                func,
+                triggers=kwarg_triggers,
+                accepts_webhook=kwarg_accepts_webhook,
+            )
 
             # Extract function metadata
             func_name = func.__name__
@@ -1936,6 +1917,15 @@ class Agent(FastAPI):
 
             # Store input_fields for runtime validation (captured by closure)
             handler_input_fields = input_fields
+
+            # Capture the merged trigger bindings for the runtime invocation path.
+            # These are threaded through _execute_reasoner_endpoint (rather than
+            # stamped onto `func` via setattr) so an EventTrigger's declared
+            # transform is applied at dispatch time. Stamping the handler is
+            # unsafe: bound methods reject setattr, and the same function object
+            # registered on two agents would leak triggers across them (see
+            # resolve_reasoner_metadata, which reads _reasoner_triggers back).
+            handler_trigger_bindings = list(merged_triggers or [])
 
             # Create FastAPI endpoint with generic dict input (runtime validation)
             @self.post(endpoint_path)
@@ -1985,6 +1975,7 @@ class Agent(FastAPI):
                         signature=sig,
                         input_data=validated_input,
                         request=request,
+                        trigger_bindings=handler_trigger_bindings,
                     )
 
                 execution_id_header = request.headers.get("X-Execution-ID")
@@ -2093,13 +2084,6 @@ class Agent(FastAPI):
             vc_setting = self._effective_component_vc_setting(
                 reasoner_id, self._reasoner_vc_overrides
             )
-            decorator_triggers = getattr(original_func, "_reasoner_triggers", None)
-            if not decorator_triggers:
-                decorator_triggers = getattr(tracked_func, "_reasoner_triggers", None)
-            # Resolve accepts_webhook from the decorator
-            decorator_accepts_webhook = getattr(original_func, "_accepts_webhook", "warn")
-            if not decorator_accepts_webhook:
-                decorator_accepts_webhook = getattr(tracked_func, "_accepts_webhook", "warn")
             
             self._reasoner_registry[reasoner_id] = ReasonerEntry(
                 id=reasoner_id,
@@ -2108,8 +2092,8 @@ class Agent(FastAPI):
                 output_type=return_type,
                 tags=resolved_tags,
                 vc_enabled=vc_setting,
-                triggers=list(decorator_triggers or []),
-                accepts_webhook=decorator_accepts_webhook,
+                triggers=list(merged_triggers or []),
+                accepts_webhook=resolved_accepts_webhook,
             )
 
             # NOTE: Legacy storage removed - reasoners property generates list on-demand
@@ -2129,8 +2113,6 @@ class Agent(FastAPI):
             # consider a different pattern (e.g., a wrapper class or a global registry).
             return tracked_func
 
-        if direct_registration:
-            return decorator(direct_registration)
         if direct_registration:
             return decorator(direct_registration)
 
@@ -2245,6 +2227,7 @@ class Agent(FastAPI):
         signature: inspect.Signature,
         input_data: Dict[str, Any],
         request: Request,
+        trigger_bindings: Optional[list] = None,
     ) -> Any:
         import asyncio
         import time
@@ -2290,8 +2273,12 @@ class Agent(FastAPI):
             )
 
         try:
-            # Phase 5: Apply trigger transform if applicable
-            trigger_bindings = getattr(func, "_reasoner_triggers", [])
+            # Phase 5: Apply trigger transform if applicable.
+            # Prefer the bindings the registration decorator threaded in
+            # (agent-local, no cross-agent leakage); fall back to the function
+            # attr for any legacy caller that doesn't pass them.
+            if trigger_bindings is None:
+                trigger_bindings = getattr(func, "_reasoner_triggers", [])
             if execution_context.trigger and trigger_bindings:
                 payload_dict = self._apply_trigger_transform(
                     execution_context.trigger,
@@ -2843,16 +2830,9 @@ class Agent(FastAPI):
             - Use skills for reliable, repeatable operations
         """
 
-        direct_registration: Optional[Callable] = None
-        decorator_tags = tags
+        direct_registration, decorator_tags = split_direct_registration_arg(tags)
         decorator_path = path
         decorator_name = name
-
-        if decorator_tags and (
-            inspect.isfunction(decorator_tags) or inspect.ismethod(decorator_tags)
-        ):
-            direct_registration = decorator_tags
-            decorator_tags = None
 
         def decorator(func: Callable) -> Callable:
             # Extract function metadata

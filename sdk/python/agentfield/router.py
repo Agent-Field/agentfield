@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from .exceptions import AgentFieldClientError
+from .decorator_metadata import split_direct_registration_arg
 
 import asyncio
 import functools
-import inspect
 
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
@@ -41,16 +41,9 @@ class AgentRouter:
         between reasoners go through workflow tracking.
         """
 
-        direct_registration: Optional[Callable] = None
-        decorator_path = path
+        direct_registration, decorator_path = split_direct_registration_arg(path)
         decorator_tags = tags
         decorator_kwargs = dict(kwargs)
-
-        if decorator_path and (
-            inspect.isfunction(decorator_path) or inspect.ismethod(decorator_path)
-        ):
-            direct_registration = decorator_path
-            decorator_path = None
 
         router_ref = self
 
@@ -99,16 +92,9 @@ class AgentRouter:
     ) -> Callable[[Callable], Callable]:
         """Store a skill definition, merging router and local tags."""
 
-        direct_registration: Optional[Callable] = None
-        decorator_tags = tags
+        direct_registration, decorator_tags = split_direct_registration_arg(tags)
         decorator_path = path
         decorator_kwargs = dict(kwargs)
-
-        if decorator_tags and (
-            inspect.isfunction(decorator_tags) or inspect.ismethod(decorator_tags)
-        ):
-            direct_registration = decorator_tags
-            decorator_tags = None
 
         def decorator(func: Callable) -> Callable:
             merged_tags = self.tags + (decorator_tags or [])

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/boltdb/bolt"
@@ -553,7 +553,7 @@ func (ls *LocalStorage) initializeSQLite(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to convert database path to absolute path: %w", err)
 		}
-		log.Printf("⚠️  WARNING: Database path was relative (%s), converted to absolute path: %s", dbPath, absPath)
+		logger.Logger.Warn().Msgf("Database path was relative (%s), converted to absolute path: %s", dbPath, absPath)
 		dbPath = absPath
 	}
 
@@ -563,7 +563,7 @@ func (ls *LocalStorage) initializeSQLite(ctx context.Context) error {
 		return fmt.Errorf("failed to create database directory %s: %w", dbDir, err)
 	}
 
-	log.Printf("📁 Initializing SQLite database at: %s", dbPath)
+	logger.Logger.Info().Msgf("Initializing SQLite database at: %s", dbPath)
 
 	busyTimeout := resolveEnvInt("AGENTFIELD_SQLITE_BUSY_TIMEOUT_MS", 60000)
 	if busyTimeout <= 0 {
@@ -631,7 +631,7 @@ func resolveEnvInt(key string, fallback int) int {
 	}
 	value, err := strconv.Atoi(raw)
 	if err != nil {
-		log.Printf("⚠️  Invalid integer for %s=%s, using fallback %d", key, raw, fallback)
+		logger.Logger.Warn().Msgf("Invalid integer for %s=%s, using fallback %d", key, raw, fallback)
 		return fallback
 	}
 	return value
@@ -916,7 +916,7 @@ func (ls *LocalStorage) createSchema(ctx context.Context) error {
 	if err := ls.setupWorkflowExecutionFTS(); err != nil {
 		if strings.Contains(err.Error(), "no such module: fts5") {
 			ls.ftsEnabled = false
-			log.Printf("FTS5 module not available, full-text search will be degraded")
+			logger.Logger.Warn().Msg("FTS5 module not available, full-text search will be degraded")
 		} else {
 			return err
 		}
@@ -1341,7 +1341,7 @@ func (ls *LocalStorage) runPostgresMigrations(ctx context.Context) error {
 		if _, err := ls.db.ExecContext(ctx, `INSERT INTO schema_migrations (version, description) VALUES ($1, $2)`, m.version, m.description); err != nil {
 			return fmt.Errorf("failed to record migration %s: %w", m.version, err)
 		}
-		log.Printf("Applied postgres migration %s: %s", m.version, m.description)
+		logger.Logger.Info().Msgf("Applied postgres migration %s: %s", m.version, m.description)
 	}
 
 	return nil
@@ -1463,7 +1463,7 @@ func (ls *LocalStorage) ensureExecutionVCSchema() error {
 		return nil
 	}
 
-	log.Printf("Migrating execution_vcs table to remove component_dids foreign keys for VC persistence")
+	logger.Logger.Info().Msg("Migrating execution_vcs table to remove component_dids foreign keys for VC persistence")
 
 	tx, err := ls.db.Begin()
 	if err != nil {
@@ -1529,7 +1529,7 @@ func (ls *LocalStorage) ensureWorkflowVCSchema() error {
 		return nil
 	}
 
-	log.Printf("Migrating workflow_vcs table to update status constraint")
+	logger.Logger.Info().Msg("Migrating workflow_vcs table to update status constraint")
 
 	tx, err := ls.db.Begin()
 	if err != nil {
@@ -1717,16 +1717,16 @@ func (ls *LocalStorage) runMigrations() error {
 		}
 
 		// Apply the migration
-		log.Printf("Applying migration %s: %s", migration.version, migration.description)
+		logger.Logger.Info().Msgf("Applying migration %s: %s", migration.version, migration.description)
 
 		// Execute the migration SQL
 		_, err = ls.db.Exec(migration.sql)
 		if err != nil {
 			// For ALTER TABLE operations, check if column already exists
 			if strings.Contains(err.Error(), "duplicate column name") {
-				log.Printf("Column already exists for migration %s, marking as applied", migration.version)
+				logger.Logger.Info().Msgf("Column already exists for migration %s, marking as applied", migration.version)
 			} else if strings.Contains(err.Error(), "no such module: fts5") {
-				log.Printf("FTS5 module not available, skipping migration %s (search will be degraded)", migration.version)
+				logger.Logger.Warn().Msgf("FTS5 module not available, skipping migration %s (search will be degraded)", migration.version)
 			} else {
 				return fmt.Errorf("failed to apply migration %s: %w", migration.version, err)
 			}
@@ -1739,7 +1739,7 @@ func (ls *LocalStorage) runMigrations() error {
 			return fmt.Errorf("failed to record migration %s: %w", migration.version, err)
 		}
 
-		log.Printf("Successfully applied migration %s", migration.version)
+		logger.Logger.Info().Msgf("Successfully applied migration %s", migration.version)
 	}
 
 	return nil
@@ -2024,14 +2024,14 @@ func (ls *LocalStorage) StoreWorkflowExecution(ctx context.Context, execution *t
 // storeWorkflowExecutionInternal performs the actual storage operation
 func (ls *LocalStorage) storeWorkflowExecutionInternal(ctx context.Context, execution *types.WorkflowExecution) error {
 	// DIAGNOSTIC: Log concurrent transaction attempt
-	log.Printf("🔒 CONCURRENCY_DEBUG: Starting transaction for execution %s", execution.ExecutionID)
+	logger.Logger.Debug().Str("execution_id", execution.ExecutionID).Msg("starting transaction for workflow execution")
 
 	// Begin transaction for atomic operation
 	tx, err := ls.db.BeginTx(ctx, nil)
 	if err != nil {
 		// DIAGNOSTIC: Log database lock errors
 		if ls.isRetryableError(err) {
-			log.Printf("🚨 DATABASE_LOCK: Failed to begin transaction for execution %s: %v", execution.ExecutionID, err)
+			logger.Logger.Warn().Err(err).Str("execution_id", execution.ExecutionID).Msg("database lock: failed to begin transaction")
 		}
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -2041,7 +2041,7 @@ func (ls *LocalStorage) storeWorkflowExecutionInternal(ctx context.Context, exec
 	if err := ls.executeWorkflowInsert(ctx, tx, execution); err != nil {
 		// DIAGNOSTIC: Log insert/update failures
 		if ls.isRetryableError(err) {
-			log.Printf("🚨 DATABASE_LOCK: Failed to execute workflow insert for execution %s: %v", execution.ExecutionID, err)
+			logger.Logger.Warn().Err(err).Str("execution_id", execution.ExecutionID).Msg("database lock: failed to execute workflow insert")
 		}
 		return err
 	}
@@ -2050,12 +2050,12 @@ func (ls *LocalStorage) storeWorkflowExecutionInternal(ctx context.Context, exec
 	if err := tx.Commit(); err != nil {
 		// DIAGNOSTIC: Log commit failures
 		if ls.isRetryableError(err) {
-			log.Printf("🚨 DATABASE_LOCK: Failed to commit transaction for execution %s: %v", execution.ExecutionID, err)
+			logger.Logger.Warn().Err(err).Str("execution_id", execution.ExecutionID).Msg("database lock: failed to commit transaction")
 		}
 		return fmt.Errorf("failed to commit workflow execution transaction: %w", err)
 	}
 
-	log.Printf("✅ CONCURRENCY_DEBUG: Successfully committed transaction for execution %s", execution.ExecutionID)
+	logger.Logger.Debug().Str("execution_id", execution.ExecutionID).Msg("successfully committed workflow execution transaction")
 	return nil
 }
 
@@ -2101,7 +2101,7 @@ func (ls *LocalStorage) retryDatabaseOperation(ctx context.Context, operationID 
 		err := operation()
 		if err == nil {
 			if attempt > 0 {
-				log.Printf("🔄 RETRY_SUCCESS: Operation succeeded on attempt %d for %s", attempt+1, operationID)
+				logger.Logger.Debug().Msgf("retry succeeded on attempt %d for %s", attempt+1, operationID)
 			}
 			return nil
 		}
@@ -2110,7 +2110,7 @@ func (ls *LocalStorage) retryDatabaseOperation(ctx context.Context, operationID 
 
 		// Check if error is retryable
 		if !ls.isRetryableError(err) {
-			log.Printf("❌ NON_RETRYABLE: Operation failed with non-retryable error for %s: %v", operationID, err)
+			logger.Logger.Debug().Err(err).Msgf("non-retryable error for %s", operationID)
 			return err
 		}
 
@@ -2121,7 +2121,7 @@ func (ls *LocalStorage) retryDatabaseOperation(ctx context.Context, operationID 
 
 		// Calculate delay with exponential backoff
 		delay := time.Duration(1<<uint(attempt)) * baseDelay
-		log.Printf("🔄 RETRY_ATTEMPT: Retrying operation for %s in %v (attempt %d/%d): %v", operationID, delay, attempt+1, maxRetries, err)
+		logger.Logger.Debug().Msgf("retrying operation for %s in %v (attempt %d/%d): %v", operationID, delay, attempt+1, maxRetries, err)
 
 		// Wait with context cancellation support
 		select {
@@ -2132,7 +2132,7 @@ func (ls *LocalStorage) retryDatabaseOperation(ctx context.Context, operationID 
 		}
 	}
 
-	log.Printf("🚨 RETRY_EXHAUSTED: All retry attempts failed for %s: %v", operationID, lastErr)
+	logger.Logger.Warn().Err(lastErr).Msgf("all retry attempts exhausted for %s", operationID)
 	return fmt.Errorf("operation failed after %d retries: %w", maxRetries, lastErr)
 }
 
@@ -2166,7 +2166,7 @@ func (ls *LocalStorage) executeWorkflowInsert(ctx context.Context, q DBTX, execu
 	// If execution exists, validate the state transition
 	if existingExecution != nil {
 		if err := validateExecutionStateTransition(existingExecution.Status, execution.Status); err != nil {
-			log.Printf("Invalid workflow execution state transition blocked: execution_id=%s, current=%s, new=%s",
+			logger.Logger.Warn().Msgf("Invalid workflow execution state transition blocked: execution_id=%s, current=%s, new=%s",
 				execution.ExecutionID, existingExecution.Status, execution.Status)
 
 			// Add execution ID to the error for better context
@@ -2210,7 +2210,7 @@ func (ls *LocalStorage) executeWorkflowInsert(ctx context.Context, q DBTX, execu
 			return fmt.Errorf("failed to update workflow execution: %w", err)
 		}
 
-		log.Printf("Successfully updated workflow execution: execution_id=%s, status=%s", execution.ExecutionID, execution.Status)
+		logger.Logger.Debug().Msgf("Successfully updated workflow execution: execution_id=%s, status=%s", execution.ExecutionID, execution.Status)
 		return nil
 	}
 
@@ -2258,7 +2258,7 @@ func (ls *LocalStorage) executeWorkflowInsert(ctx context.Context, q DBTX, execu
 		return fmt.Errorf("failed to insert workflow execution: %w", err)
 	}
 
-	log.Printf("Successfully inserted new workflow execution: execution_id=%s, status=%s", execution.ExecutionID, execution.Status)
+	logger.Logger.Debug().Msgf("Successfully inserted new workflow execution: execution_id=%s, status=%s", execution.ExecutionID, execution.Status)
 	return nil
 }
 
@@ -2289,7 +2289,7 @@ func (ls *LocalStorage) UpdateWorkflowExecution(ctx context.Context, executionID
 
 		// Wait before retrying with exponential backoff
 		delay := baseDelay * time.Duration(1<<attempt) // 50ms, 100ms, 200ms
-		log.Printf("🔄 RETRY: Database locked, retrying workflow update for %s in %v (attempt %d/%d)", executionID, delay, attempt+1, maxRetries+1)
+		logger.Logger.Debug().Msgf("database locked, retrying workflow update for %s in %v (attempt %d/%d)", executionID, delay, attempt+1, maxRetries+1)
 
 		select {
 		case <-time.After(delay):
@@ -6361,7 +6361,7 @@ func (ls *LocalStorage) StoreAgentFieldServerDID(ctx context.Context, agentfield
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	log.Printf("Successfully stored af server DID: agentfield_server_id=%s, root_did=%s", agentfieldServerID, rootDID)
+	logger.Logger.Debug().Msgf("Successfully stored af server DID: agentfield_server_id=%s, root_did=%s", agentfieldServerID, rootDID)
 	return nil
 }
 
@@ -6471,7 +6471,7 @@ func (ls *LocalStorage) StoreAgentDIDWithComponents(ctx context.Context, agentID
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	log.Printf("Successfully stored agent DID with %d components: agent_id=%s, did=%s", len(components), agentID, agentDID)
+	logger.Logger.Debug().Msgf("Successfully stored agent DID with %d components: agent_id=%s, did=%s", len(components), agentID, agentDID)
 	return nil
 }
 
@@ -6550,7 +6550,7 @@ func (ls *LocalStorage) StoreDID(ctx context.Context, did string, didDocument, p
 	if err != nil {
 		// Check if this is a unique constraint violation (duplicate DID)
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") || strings.Contains(err.Error(), "did_registry.did") {
-			log.Printf("Duplicate DID registry entry detected: %s", did)
+			logger.Logger.Warn().Msgf("Duplicate DID registry entry detected: %s", did)
 			return &DuplicateDIDError{
 				DID:  did,
 				Type: "registry",
@@ -6559,7 +6559,7 @@ func (ls *LocalStorage) StoreDID(ctx context.Context, did string, didDocument, p
 		return fmt.Errorf("failed to store DID: %w", err)
 	}
 
-	log.Printf("Successfully stored DID registry entry: %s", did)
+	logger.Logger.Debug().Msgf("Successfully stored DID registry entry: %s", did)
 	return nil
 }
 
@@ -6785,7 +6785,7 @@ func (ls *LocalStorage) StoreAgentDID(ctx context.Context, agentID, agentDID, ag
 		if execErr != nil {
 			// Check if this is a unique constraint violation (duplicate agent DID)
 			if strings.Contains(execErr.Error(), "UNIQUE constraint failed") || strings.Contains(execErr.Error(), "agent_dids") {
-				log.Printf("Duplicate agent DID entry detected: agent_id=%s, agentfield_server_id=%s", agentID, agentfieldServerDID)
+				logger.Logger.Warn().Msgf("Duplicate agent DID entry detected: agent_id=%s, agentfield_server_id=%s", agentID, agentfieldServerDID)
 				return &DuplicateDIDError{
 					DID:  fmt.Sprintf("agent:%s@%s", agentID, agentfieldServerDID),
 					Type: "agent",
@@ -6815,7 +6815,7 @@ func (ls *LocalStorage) StoreAgentDID(ctx context.Context, agentID, agentDID, ag
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	log.Printf("Successfully stored agent DID entry: agent_id=%s, did=%s", agentID, agentDID)
+	logger.Logger.Debug().Msgf("Successfully stored agent DID entry: agent_id=%s, did=%s", agentID, agentDID)
 	return nil
 }
 
@@ -6993,7 +6993,7 @@ func (ls *LocalStorage) StoreComponentDID(ctx context.Context, componentID, comp
 		if execErr != nil {
 			// Check if this is a unique constraint violation (duplicate component DID)
 			if strings.Contains(execErr.Error(), "UNIQUE constraint failed") || strings.Contains(execErr.Error(), "component_dids") {
-				log.Printf("Duplicate component DID entry detected: agent_did=%s, function_name=%s, component_type=%s", agentDID, componentName, componentType)
+				logger.Logger.Warn().Msgf("Duplicate component DID entry detected: agent_did=%s, function_name=%s, component_type=%s", agentDID, componentName, componentType)
 				return &DuplicateDIDError{
 					DID:  fmt.Sprintf("component:%s/%s@%s", componentType, componentName, agentDID),
 					Type: "component",
@@ -7023,7 +7023,7 @@ func (ls *LocalStorage) StoreComponentDID(ctx context.Context, componentID, comp
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	log.Printf("Successfully stored component DID entry: component_did=%s, agent_did=%s, type=%s", componentDID, agentDID, componentType)
+	logger.Logger.Debug().Msgf("Successfully stored component DID entry: component_did=%s, agent_did=%s, type=%s", componentDID, agentDID, componentType)
 	return nil
 }
 

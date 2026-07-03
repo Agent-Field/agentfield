@@ -24,6 +24,7 @@ const state = vi.hoisted(() => ({
   getExecutionDetails: vi.fn<(executionId: string) => Promise<{ input_data: unknown }>>(),
   retryExecutionWebhook: vi.fn<(executionId: string) => Promise<void>>(),
   getWorkflowVCChain: vi.fn<(workflowId: string) => Promise<any>>(),
+  downloadWorkflowShareFile: vi.fn<(workflowId: string) => Promise<void>>(),
   downloadWorkflowVCAuditFile: vi.fn<(workflowId: string) => Promise<void>>(),
   navigateSpy: vi.fn(),
 }));
@@ -68,6 +69,7 @@ vi.mock("@/services/executionsApi", () => ({
 
 vi.mock("@/services/vcApi", () => ({
   getWorkflowVCChain: (workflowId: string) => state.getWorkflowVCChain(workflowId),
+  downloadWorkflowShareFile: (workflowId: string) => state.downloadWorkflowShareFile(workflowId),
   downloadWorkflowVCAuditFile: (workflowId: string) => state.downloadWorkflowVCAuditFile(workflowId),
 }));
 
@@ -390,6 +392,7 @@ describe("RunDetailPage", () => {
     state.getExecutionDetails.mockReset();
     state.retryExecutionWebhook.mockReset();
     state.getWorkflowVCChain.mockReset();
+    state.downloadWorkflowShareFile.mockReset();
     state.downloadWorkflowVCAuditFile.mockReset();
     state.navigateSpy.mockReset();
   });
@@ -515,6 +518,7 @@ describe("RunDetailPage", () => {
     };
     state.queryData = { workflow_vc: { issuer_did: "did:example:issuer" } };
     state.getWorkflowVCChain.mockResolvedValue({ workflow_vc: { issuer_did: "did:example:issuer" } });
+    state.downloadWorkflowShareFile.mockResolvedValue(undefined);
     state.downloadWorkflowVCAuditFile.mockResolvedValue(undefined);
 
     const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
@@ -537,6 +541,11 @@ describe("RunDetailPage", () => {
 
     expect(await screen.findByText("Run Alpha")).toBeInTheDocument();
     expect(screen.getByText("Step exec-1")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Share"));
+    await waitFor(() => {
+      expect(state.downloadWorkflowShareFile).toHaveBeenCalledWith("wf-1");
+    });
 
     fireEvent.click(screen.getByText("Preview VC chain"));
     await waitFor(() => {

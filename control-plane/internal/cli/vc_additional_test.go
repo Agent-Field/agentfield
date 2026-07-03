@@ -327,26 +327,26 @@ func signedExecutionVC(t *testing.T, issuer string) (types.ExecutionVC, []byte, 
 	require.NoError(t, err)
 
 	return types.ExecutionVC{
-		VCID:        "vc-1",
-		ExecutionID: "exec-1",
-		WorkflowID:  "wf-1",
-		SessionID:   "session-1",
-		IssuerDID:   issuer,
-		TargetDID:   "did:key:target",
-		CallerDID:   "did:key:caller",
-		VCDocument:  raw,
-		Signature:   doc.Proof.ProofValue,
-		InputHash:   "input-hash",
-		OutputHash:  "output-hash",
-		Status:      "completed",
-		CreatedAt:   mustParseRFC3339(t, doc.IssuanceDate),
-	}, raw, DIDResolutionInfo{
-		DID:    issuer,
-		Method: "key",
-		PublicKeyJWK: map[string]interface{}{
-			"x": base64.RawURLEncoding.EncodeToString(publicKey),
-		},
-	}
+			VCID:        "vc-1",
+			ExecutionID: "exec-1",
+			WorkflowID:  "wf-1",
+			SessionID:   "session-1",
+			IssuerDID:   issuer,
+			TargetDID:   "did:key:target",
+			CallerDID:   "did:key:caller",
+			VCDocument:  raw,
+			Signature:   doc.Proof.ProofValue,
+			InputHash:   "input-hash",
+			OutputHash:  "output-hash",
+			Status:      "completed",
+			CreatedAt:   mustParseRFC3339(t, doc.IssuanceDate),
+		}, raw, DIDResolutionInfo{
+			DID:    issuer,
+			Method: "key",
+			PublicKeyJWK: map[string]interface{}{
+				"x": base64.RawURLEncoding.EncodeToString(publicKey),
+			},
+		}
 }
 
 func mustParseRFC3339(t *testing.T, value string) time.Time {

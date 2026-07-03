@@ -128,6 +128,9 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		}
 	}
 
+	// Configure execution event payload redaction from logging config.
+	handlers.SetRedactPayloads(cfg.Logging.ShouldRedactPayloads())
+
 	Router := gin.Default()
 
 	// Sync installed.yaml to database for package visibility

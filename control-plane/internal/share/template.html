@@ -1,0 +1,1233 @@
+<!doctype html>
+<html lang="en" data-af-share>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AgentField shared run</title>
+<style>
+  :root {
+    /* Three-layer dark surface system (canvas -> card -> popover), lightness = elevation. */
+    --bg: hsl(224 24% 6%);
+    --card: hsl(224 20% 9%);
+    --card-hover: hsl(224 18% 13%);
+    --popover: hsl(224 19% 12%);
+    /* Inspector (detail drawer) sits one step ABOVE popover so it reads as a
+       separate elevated surface floating over the canvas, not part of it. */
+    --inspector: hsl(224 18% 15%);
+    --inset: hsl(224 26% 5%);
+    /* Text: three legible levels, all AA on --bg. */
+    --fg: hsl(210 24% 97%);
+    --fg-muted: hsl(214 14% 68%);
+    --fg-tertiary: hsl(216 12% 48%);
+    /* Borders carry hierarchy; shadows reserved for overlays. */
+    --border: hsl(222 16% 18%);
+    --border-strong: hsl(220 14% 27%);
+    /* ONE accent — AgentField brand gold (#d4a24a). Every non-semantic emphasis
+       (brand dot, hero numeral, selection, hover path) resolves through this. */
+    --accent: hsl(38 62% 56%);
+    --accent-fg: hsl(38 68% 64%);
+    --accent-bg: hsl(38 55% 52% / 0.14);
+    --accent-line: hsl(38 62% 56% / 0.6);
+    /* Semantic status: reserved strictly for run/node outcome (green/amber/red/grey). */
+    --ok: hsl(151 55% 52%);
+    --ok-bg: hsl(151 45% 45% / 0.14);
+    --warn: hsl(38 92% 60%);
+    --warn-bg: hsl(38 80% 55% / 0.14);
+    --err: hsl(2 74% 63%);
+    --err-bg: hsl(2 66% 58% / 0.15);
+    --neutral: hsl(216 12% 54%);
+    --neutral-bg: hsl(216 12% 52% / 0.14);
+    /* Agent-role palette for the node left-tick. Muted, quiet, categorical —
+       these encode WHO ran, never outcome (outcome is the red FAILED override). */
+    --role-orchestrator: hsl(268 34% 66%);
+    --role-recon:        hsl(199 38% 62%);
+    --role-hunter:       hsl(28 46% 62%);
+    --role-prover:       hsl(168 34% 58%);
+    --role-reporter:     hsl(218 30% 66%);
+    --role-unknown:      hsl(216 16% 60%);
+    --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+    --gutter: 14px;
+    --section-gap: 24px;
+    --panel-p: 14px;
+    --page-px: 28px;
+    --radius: 12px;
+    --radius-sm: 7px;
+    --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; background: var(--bg); color: var(--fg);
+    font-family: var(--font-sans); font-size: 13px; line-height: 1.55;
+    -webkit-font-smoothing: antialiased; font-variant-numeric: tabular-nums;
+  }
+  a { color: var(--accent-fg); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .mono { font-family: var(--font-mono); font-size: 12.5px; }
+  .wrap { max-width: 1160px; margin: 0 auto; padding: 0 var(--page-px) 72px; }
+
+  /* Screenshot frame: brand -> title -> narrative -> KPI -> DAG read as one crop. */
+  header.hero { padding-top: 26px; }
+  .brand { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 18px; }
+  .brand .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent-line); flex: none; }
+  .brand .mark { font-size: 12.5px; font-weight: 600; letter-spacing: 0.01em; color: var(--fg); }
+
+  .title-row { display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap; }
+  h1 { font-size: 24px; line-height: 1.2; font-weight: 600; letter-spacing: -0.01em; margin: 0; flex: 1 1 auto; min-width: 260px; word-break: break-word; }
+  /* Header meta: mono (workflow id + export facts). Middots replaced by a hairline
+     separator span so the row reads as spaced fields, not chatbot bullets. */
+  .meta { margin: 8px 0 0; color: var(--fg-tertiary); font-family: var(--font-mono); font-size: 12px; word-break: break-word; display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+  .meta .bar { width: 1px; height: 11px; background: var(--border-strong); flex: none; }
+  .narrative { margin: 13px 0 0; color: var(--fg-muted); font-size: 14px; line-height: 1.5; max-width: 78ch; }
+  .narrative .n-fail { color: var(--fg-muted); }
+
+  /* Overall-status pill. */
+  .pill { display: inline-flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; padding: 5px 11px; border-radius: 999px; border: 1px solid transparent; white-space: nowrap; flex: none; margin-top: 3px; }
+  .pill .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .st-succeeded { color: var(--ok); background: var(--ok-bg); border-color: hsl(151 45% 45% / 0.28); }
+  .st-succeeded .dot { background: var(--ok); }
+  .st-failed { color: var(--err); background: var(--err-bg); border-color: hsl(2 66% 58% / 0.3); }
+  .st-failed .dot { background: var(--err); }
+  .st-warning { color: var(--warn); background: var(--warn-bg); border-color: hsl(38 80% 55% / 0.3); }
+  .st-warning .dot { background: var(--warn); }
+  .st-running { color: var(--warn); background: var(--warn-bg); border-color: hsl(38 80% 55% / 0.3); }
+  .st-running .dot { background: var(--warn); animation: pulse 1.6s ease-in-out infinite; }
+  .st-neutral { color: var(--neutral); background: var(--neutral-bg); border-color: hsl(216 12% 52% / 0.28); }
+  .st-neutral .dot { background: var(--neutral); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.32; } }
+
+  /* KPI strip: AGENTS, COST (hero), WALL TIME, SUCCEEDED/FAILED.
+     All cards share identical chrome — Cost reads as hero through TYPE ONLY
+     (larger gold numeral), never a selection-style border. Column count is
+     data-driven (--kpi-cols) so the strip flows cleanly whether cost data is
+     present (4 cards) or absent (3 cards) — no empty slot, no half-width gap. */
+  .kpis { display: grid; grid-template-columns: repeat(var(--kpi-cols, 4), minmax(0, 1fr)); gap: var(--gutter); margin-top: var(--section-gap); }
+  .kpi { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px var(--panel-p) 15px; display: flex; flex-direction: column; gap: 9px; }
+  .kpi .cap { font-size: 11px; line-height: 1; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-tertiary); font-weight: 600; }
+  .kpi .val { font-size: 20px; line-height: 1; font-weight: 600; font-family: var(--font-mono); letter-spacing: -0.02em; }
+  .kpi .val .unit { font-size: 13px; color: var(--fg-muted); font-weight: 500; margin-left: 4px; letter-spacing: 0; }
+  /* Cost hero: bigger numeral + gold. No border, no cap tint — typography alone. */
+  .kpi.hero .val { font-size: 28px; color: var(--accent-fg); }
+  .kpi .sub { font-size: 12px; color: var(--fg-tertiary); line-height: 1; }
+  .sf { display: inline-flex; align-items: baseline; gap: 6px; font-family: var(--font-mono); font-size: 20px; line-height: 1; font-weight: 600; letter-spacing: -0.02em; }
+  .sf .ok { color: var(--ok); }
+  .sf .fail { color: var(--err); }
+  .sf .ok.zero, .sf .fail.zero { color: var(--fg-tertiary); }
+  .sf .glyph { font-size: 12px; margin-right: 1px; }
+  .sf .div { color: var(--border-strong); font-weight: 400; font-size: 16px; }
+
+  /* View toggle + legend, one row. */
+  .viewbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-top: var(--section-gap); }
+  .viewbar-left { display: inline-flex; align-items: center; gap: 10px; }
+  .toggle { display: inline-flex; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 3px; gap: 3px; }
+  .toggle button { appearance: none; background: transparent; border: 0; color: var(--fg-muted); font: inherit; font-size: 12px; font-weight: 500; padding: 5px 13px; border-radius: 5px; cursor: pointer; }
+  .toggle button:hover { color: var(--fg); }
+  .toggle button[aria-selected="true"] { background: var(--card-hover); color: var(--fg); box-shadow: inset 0 0 0 1px var(--border-strong); }
+  /* Zoom group — minus / Fit / plus, same segmented family as Graph|Timeline.
+     The +/- buttons are compact square steppers; Fit is the pressed default. */
+  .zoomgrp .zbtn { min-width: 30px; padding: 5px 0; font-size: 15px; line-height: 1; text-align: center; font-weight: 500; }
+  .zoomgrp .zfit { min-width: 46px; text-align: center; }
+  .toggle button[aria-pressed="true"] { background: var(--card-hover); color: var(--fg); box-shadow: inset 0 0 0 1px var(--border-strong); }
+  #zoom-toggle.hidden { display: none; }
+  /* Legend now encodes ROLE (round tick swatch) + failed + running, not raw status. */
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--fg-muted); }
+  .legend .sw { width: 8px; height: 8px; border-radius: 999px; flex: none; }
+
+  /* DAG. */
+  .stage { margin-top: 14px; position: relative; }
+  /* Drag-to-pan: the panel is the scroll viewport; grab shows it's movable,
+     grabbing shows an active pan. touch-action:none lets pointer events drive
+     panning on touch without the browser hijacking the gesture. */
+  .graph-panel { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; overflow: auto; cursor: grab; touch-action: none; }
+  .graph-panel.panning { cursor: grabbing; }
+  .graph-panel.panning svg.dag { pointer-events: none; }
+  svg.dag { display: block; }
+  /* "Scroll for more" affordance — only when the graph can't fit even at the min scale. */
+  .scroll-hint { position: absolute; top: 50%; right: 8px; transform: translateY(-50%); pointer-events: none; display: none; align-items: center; gap: 5px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.03em; color: var(--fg-muted); background: hsl(224 20% 9% / 0.86); border: 1px solid var(--border-strong); border-radius: 999px; padding: 4px 10px; box-shadow: -14px 0 24px 6px hsl(224 20% 9% / 0.72); z-index: 3; }
+  .scroll-hint.show { display: inline-flex; }
+  .scroll-hint .arrow { font-size: 12px; line-height: 1; animation: nudge 1.4s ease-in-out infinite; }
+  @keyframes nudge { 0%,100% { transform: translateX(0); } 50% { transform: translateX(3px); } }
+  .edge { stroke: var(--border-strong); stroke-width: 1.4; fill: none; transition: stroke 0.14s ease, stroke-width 0.14s ease; }
+  .edge.dim { stroke: var(--border); opacity: 0.4; }
+  /* Hover path-to-root lights in GOLD (accent), never blue. */
+  .edge.lit { stroke: var(--accent-line); stroke-width: 2; opacity: 1; }
+  .node-g { cursor: pointer; }
+  .node-rect { fill: var(--popover); stroke: var(--border-strong); stroke-width: 1; transition: fill 0.12s ease, stroke 0.12s ease; }
+  .node-g:hover .node-rect { fill: var(--card-hover); }
+  .node-g.dim { opacity: 0.42; transition: opacity 0.14s ease; }
+  .node-g.lit .node-rect { stroke: var(--border-strong); }
+  /* Left tick encodes AGENT ROLE (muted categorical), set inline via fill. It is
+     ALWAYS rendered, in every state — role identity never disappears.
+     FAILED overrides the tick to semantic red — outcome always wins. */
+  .node-bar { transition: fill 0.12s ease; }
+  .node-bar.failed { fill: var(--err); }
+  /* Selection signal is the GOLD FRAME (accent stroke + faint tint) plus a thin
+     gold rail just inside the role tick — the role tick itself stays put, so a
+     selected node reads as "this one" (gold) AND still "who ran" (role tone). */
+  .node-sel-rail { fill: var(--accent); opacity: 0; transition: opacity 0.12s ease; pointer-events: none; }
+  .node-g.selected .node-rect { fill: var(--accent-bg); stroke: var(--accent); stroke-width: 1.4; }
+  .node-g.selected .node-sel-rail { opacity: 1; }
+  .node-func { fill: var(--fg); font-size: 12px; font-weight: 600; font-family: var(--font-sans); pointer-events: none; }
+  /* Node sub-line: the agent/func TAG is SANS (it's a label), the metric is MONO
+     (duration + cost are numeric values that want tabular alignment). Sans labels,
+     mono values — the rule holds inside the card. */
+  .node-agent { fill: var(--fg); font-size: 10.5px; font-family: var(--font-sans); opacity: 0.62; pointer-events: none; }
+  .node-metric { fill: var(--fg); font-size: 10.5px; font-family: var(--font-mono); opacity: 0.62; pointer-events: none; }
+  .node-metric.err { fill: var(--err); opacity: 0.85; font-family: var(--font-sans); }
+  /* Group card (collapsed repeated siblings): a count badge sits top-right. */
+  .node-count { fill: var(--fg); font-size: 10.5px; font-weight: 600; font-family: var(--font-sans); opacity: 0.74; pointer-events: none; }
+  .node-count.err { fill: var(--err); opacity: 0.95; }
+  .group-hint { fill: var(--fg-tertiary); font-size: 9px; font-family: var(--font-sans); letter-spacing: 0.04em; text-transform: uppercase; pointer-events: none; }
+  .node-g.grouped .node-rect { stroke-dasharray: none; }
+  /* Stacked-card affordance behind a group node signals "expandable". */
+  .group-stack { fill: var(--popover); stroke: var(--border-strong); stroke-width: 1; }
+
+  /* Timeline (alternate view of the same stage). */
+  .tl { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--panel-p); }
+  .tl-row { display: grid; grid-template-columns: 200px 1fr 76px; align-items: center; gap: 12px; padding: 3px 0; }
+  .tl-name { font-size: 12px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tl-name .agent { color: var(--fg); opacity: 0.6; }
+  .tl-track { position: relative; height: 16px; }
+  .tl-bar { position: absolute; top: 2px; height: 12px; border-radius: 3px; min-width: 2px; cursor: pointer; opacity: 0.92; transition: opacity 0.12s ease; }
+  .tl-bar:hover { opacity: 1; }
+  .tl-bar.succeeded { background: var(--ok); }
+  .tl-bar.failed { background: var(--err); }
+  .tl-bar.running { background: var(--warn); }
+  .tl-bar.neutral { background: var(--neutral); }
+  .tl-dur { font-family: var(--font-mono); font-size: 11px; color: var(--fg-tertiary); text-align: right; }
+  .tl-axis { display: flex; justify-content: space-between; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); color: var(--fg-tertiary); font-size: 10px; font-family: var(--font-mono); }
+  .hidden { display: none; }
+
+  /* Detail panel. */
+  .detail-backdrop { position: fixed; inset: 0; background: hsl(224 32% 3% / 0.6); opacity: 0; pointer-events: none; transition: opacity 0.15s ease; z-index: 40; }
+  .detail-backdrop.open { opacity: 1; pointer-events: auto; }
+  /* Inspector surface: one step lighter than the canvas + a strong accent-tinted
+     left edge and deeper shadow so it detaches visually from the graph behind. */
+  .detail { position: fixed; top: 0; right: 0; height: 100%; width: min(460px, 94vw); background: var(--inspector); border-left: 1px solid var(--accent-line); box-shadow: -32px 0 64px hsl(224 40% 2% / 0.62); transform: translateX(100%); transition: transform 0.2s cubic-bezier(0.32,0.72,0,1); z-index: 50; display: flex; flex-direction: column; }
+  .detail.open { transform: translateX(0); }
+  .detail-head { padding: 18px var(--panel-p); border-bottom: 1px solid var(--border-strong); display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .detail-head .stack { min-width: 0; }
+  .detail-head .fn { font-size: 15px; font-weight: 600; color: var(--fg); word-break: break-word; font-family: var(--font-sans); }
+  /* Agent node id under the title is a data token -> mono. */
+  .detail-head .ag { font-size: 12px; color: var(--fg-tertiary); font-family: var(--font-mono); margin-top: 3px; word-break: break-word; }
+  .detail-head .close { background: transparent; border: 1px solid var(--border-strong); color: var(--fg-muted); width: 28px; height: 28px; border-radius: var(--radius-sm); cursor: pointer; font-size: 17px; line-height: 1; flex: none; }
+  .detail-head .close:hover { color: var(--fg); border-color: var(--fg-muted); }
+  .detail-body { padding: var(--panel-p); overflow-y: auto; }
+  .kv { display: grid; grid-template-columns: 96px 1fr; gap: 8px 14px; margin: 0 0 18px; }
+  /* Field CAPTIONS are prose -> SANS. Values default to sans; only data tokens
+     (id, model) and numerics carry .mono for tabular alignment. */
+  .kv dt { color: var(--fg-tertiary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; font-family: var(--font-sans); }
+  .kv dd { margin: 0; color: var(--fg); font-size: 12.5px; font-family: var(--font-sans); word-break: break-word; }
+  .kv dd.mono { font-family: var(--font-mono); }
+  .kv dd.na { color: var(--fg-tertiary); font-style: italic; font-family: var(--font-sans); }
+  /* Section labels (INPUT / OUTPUT / ERROR) are prose -> SANS. */
+  .field-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--fg-tertiary); font-weight: 600; margin: 0 0 7px; font-family: var(--font-sans); }
+  .code-block { background: var(--inset); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 11px 12px; font-family: var(--font-mono); font-size: 12px; color: var(--fg); white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; margin: 0 0 18px; }
+  .code-block.error { border-color: hsl(2 66% 58% / 0.4); color: var(--err); background: var(--err-bg); }
+
+  /* Footer conversion strip — one compact line: pitch + install + copy. */
+  footer { margin-top: 40px; padding-top: 18px; border-top: 1px solid var(--border); }
+  .convert { display: flex; align-items: center; justify-content: space-between; gap: 12px 20px; flex-wrap: wrap; }
+  .convert .pitch { font-size: 12.5px; color: var(--fg-muted); line-height: 1.5; display: inline-flex; align-items: center; flex-wrap: wrap; gap: 9px; }
+  .convert .pitch b { color: var(--fg); font-weight: 600; }
+  .convert .pitch a { font-weight: 500; }
+  /* Hairline field separator (no middot) — matches the header meta row grammar. */
+  .convert .pitch .sep { width: 1px; height: 11px; background: var(--border-strong); flex: none; }
+  .install { display: inline-flex; align-items: stretch; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); overflow: hidden; background: var(--inset); }
+  .install code { font-family: var(--font-mono); font-size: 12px; color: var(--fg); padding: 8px 11px; white-space: nowrap; }
+  .install .copy { appearance: none; border: 0; border-left: 1px solid var(--border-strong); background: var(--card); color: var(--fg-muted); font: inherit; font-size: 11px; font-weight: 500; padding: 0 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+  .install .copy:hover { color: var(--fg); background: var(--card-hover); }
+  .install .copy.done { color: var(--ok); }
+
+  .empty { color: var(--fg-tertiary); font-size: 12.5px; padding: 28px; text-align: center; }
+
+  /* Keyboard + accessibility. */
+  a.skip { position: absolute; left: -9999px; top: 8px; background: var(--card); color: var(--fg); padding: 8px 14px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); z-index: 60; }
+  a.skip:focus { left: 12px; text-decoration: none; }
+  :focus-visible { outline: none; box-shadow: var(--ring); border-radius: 3px; }
+  .node-g:focus-visible .node-rect { stroke: var(--accent); stroke-width: 1.6; }
+  .node-g:focus { outline: none; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .st-running .dot { animation: none; }
+    .scroll-hint .arrow { animation: none; }
+    .detail, .edge, .node-rect, .node-bar, .node-g, .tl-bar { transition: none; }
+  }
+  @media (max-width: 720px) {
+    :root { --page-px: 18px; }
+    .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .tl-row { grid-template-columns: 130px 1fr 60px; }
+  }
+</style>
+</head>
+<body>
+<a class="skip" href="#stage">Skip to graph</a>
+<div class="wrap">
+  <header class="hero" role="banner">
+    <div class="brand">
+      <span class="dot" aria-hidden="true"></span>
+      <span class="mark">AgentField</span>
+    </div>
+    <div class="title-row">
+      <h1 id="run-title"></h1>
+      <span id="run-status" class="pill st-neutral" role="status"></span>
+    </div>
+    <p class="meta mono" id="run-meta"></p>
+    <p class="narrative" id="run-narrative"></p>
+    <div class="kpis" id="kpis" aria-label="Run summary"></div>
+  </header>
+
+  <main role="main">
+    <div class="viewbar">
+      <div class="viewbar-left">
+        <div class="toggle" role="tablist" aria-label="View">
+          <button id="tab-graph" role="tab" aria-selected="true" aria-controls="stage">Graph</button>
+          <button id="tab-timeline" role="tab" aria-selected="false" aria-controls="stage">Timeline</button>
+        </div>
+        <div class="toggle zoomgrp" id="zoom-toggle" role="group" aria-label="Graph zoom">
+          <button id="zoom-out" class="zbtn" type="button" aria-label="Zoom out">&#8722;</button>
+          <button id="zoom-fit" class="zfit" type="button" aria-pressed="true" aria-label="Fit graph to width">Fit</button>
+          <button id="zoom-in" class="zbtn" type="button" aria-label="Zoom in">+</button>
+        </div>
+      </div>
+      <div class="legend" id="legend" aria-hidden="true"></div>
+    </div>
+    <section class="stage" id="stage" aria-label="Execution graph">
+      <div class="graph-panel" id="graph-panel"></div>
+      <div class="scroll-hint" id="scroll-hint" aria-hidden="true"><span class="arrow">→</span> scroll for more</div>
+      <div class="tl hidden" id="timeline"></div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="convert">
+      <p class="pitch"><span>Exported with <b>af share</b></span><span class="sep" aria-hidden="true"></span><span>Built with <a href="https://github.com/Agent-Field/agentfield" target="_blank" rel="noopener">AgentField</a></span></p>
+      <div class="install">
+        <code>curl -fsSL https://agentfield.ai/install.sh | bash</code>
+        <button class="copy" id="install-copy" aria-label="Copy install command">Copy</button>
+      </div>
+    </div>
+  </footer>
+</div>
+
+<div class="detail-backdrop" id="backdrop"></div>
+<aside class="detail" id="detail" role="dialog" aria-modal="true" aria-labelledby="detail-fn" aria-hidden="true">
+  <div class="detail-head">
+    <div class="stack">
+      <div class="fn" id="detail-fn"></div>
+      <div class="ag" id="detail-ag"></div>
+    </div>
+    <button class="close" id="detail-close" aria-label="Close detail panel">&times;</button>
+  </div>
+  <div class="detail-body" id="detail-body"></div>
+</aside>
+
+<script id="af-bundle" type="application/json">__BUNDLE_JSON__</script>
+<script>
+(function () {
+  "use strict";
+  var SVGNS = "http://www.w3.org/2000/svg";
+  var bundle = JSON.parse(document.getElementById("af-bundle").textContent);
+  var nodes = bundle.nodes || [];
+  var edges = bundle.edges || [];
+  var nodeById = {};
+  nodes.forEach(function (n) { nodeById[n.id] = n; });
+
+  /* ---- DOM helpers (safe construction only) ---- */
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined && text !== null) e.textContent = text;
+    return e;
+  }
+  function svg(tag, attrs) {
+    var e = document.createElementNS(SVGNS, tag);
+    for (var k in attrs) { if (Object.prototype.hasOwnProperty.call(attrs, k)) e.setAttribute(k, attrs[k]); }
+    return e;
+  }
+  function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+  function cssEscape(v) { return (window.CSS && CSS.escape) ? CSS.escape(v) : String(v).replace(/["\\]/g, "\\$&"); }
+
+  /* ---- formatting ---- */
+  function statusClass(s) {
+    if (s === "succeeded") return "succeeded";
+    if (s === "failed") return "failed";
+    if (s === "running") return "running";
+    return "neutral";
+  }
+
+  /* ---- agent-role -> tick color ----
+     Known roles map to fixed muted tokens; unknown roles hash deterministically
+     onto a small muted categorical palette so the same role is always one color. */
+  var ROLE_VARS = {
+    orchestrator: "--role-orchestrator",
+    recon: "--role-recon",
+    hunter: "--role-hunter",
+    prover: "--role-prover",
+    reporter: "--role-reporter"
+  };
+  /* Floor raised so no hashed tone collapses toward --border-strong (~27% L):
+     every entry is >= 58% L and >= 22% S, keeping the tick legible on the card. */
+  var UNKNOWN_ROLE_PALETTE = [
+    "hsl(206 30% 64%)", "hsl(292 26% 66%)", "hsl(48 34% 62%)",
+    "hsl(152 26% 60%)", "hsl(12 36% 64%)", "hsl(232 28% 68%)"
+  ];
+  function hashStr(s) {
+    var h = 0, i;
+    for (i = 0; i < s.length; i++) { h = ((h << 5) - h + s.charCodeAt(i)) | 0; }
+    return Math.abs(h);
+  }
+  /* Returns a CSS color for a node's role tick. FAILED overrides to red at the
+     call site; this only encodes identity. */
+  function roleColor(role) {
+    var key = (role || "").toLowerCase();
+    if (ROLE_VARS[key]) return "var(" + ROLE_VARS[key] + ")";
+    if (!key) return "var(--role-unknown)";
+    return UNKNOWN_ROLE_PALETTE[hashStr(key) % UNKNOWN_ROLE_PALETTE.length];
+  }
+  function tickColor(node) {
+    return node.status === "failed" ? "var(--err)" : roleColor(node.agent);
+  }
+  function fmtDuration(ms) {
+    if (ms === null || ms === undefined) return "n/a";
+    if (ms < 1000) return ms + "ms";
+    var s = ms / 1000;
+    if (s < 60) return (s < 10 ? s.toFixed(1) : Math.round(s)) + "s";
+    var m = Math.floor(s / 60);
+    return m + "m " + Math.round(s % 60) + "s";
+  }
+  function fmtDurationWords(ms) {
+    if (ms === null || ms === undefined) return null;
+    var s = Math.round(ms / 1000);
+    if (s < 60) return s + (s === 1 ? " second" : " seconds");
+    var m = Math.floor(s / 60), r = s % 60;
+    var out = m + (m === 1 ? " minute" : " minutes");
+    if (r) out += " " + r + (r === 1 ? " second" : " seconds");
+    return out;
+  }
+  function fmtCost(usd) {
+    if (usd === null || usd === undefined) return null;
+    var n = Number(usd);
+    if (n > 0 && n < 0.01) return "<$0.01";
+    return "$" + n.toFixed(2);
+  }
+  function truncate(str, max) {
+    if (!str) return "";
+    return str.length > max ? str.slice(0, max - 1) + "…" : str;
+  }
+  /* Capability suffix: the part of an agent id after the last dot, e.g.
+     "hunter.sql_injection" -> "sql_injection". Empty when there is no dot. */
+  function capabilitySuffix(agent) {
+    var a = String(agent || "");
+    var i = a.lastIndexOf(".");
+    return i >= 0 && i < a.length - 1 ? a.slice(i + 1) : "";
+  }
+
+  /* ---- Node title logic (data-driven) ----
+     A node's TITLE should carry the distinguishing token. When 2+ nodes in the
+     same layer share the same func while their agents differ (generic-func
+     bundles: five nodes all func="hunt", agents hunter.sql_injection /
+     hunter.auth_bypass / ...), the func is NOT distinguishing — so we promote the
+     agent's capability suffix to the title and demote func to the small tag.
+     Otherwise (demo fixture: funcs are already specific, agents are plain) the
+     func stays the title. titleParts is precomputed once over the full node set. */
+  var titleParts = {};
+  (function computeTitleParts() {
+    var layerOf = computeLayers();
+    /* Group by (layer, func); a func is "generic" in a layer when >= 2 members
+       carry it AND at least two distinct agents appear among them. */
+    var groups = {};
+    nodes.forEach(function (n) {
+      var k = layerOf[n.id] + " " + (n.func || "");
+      (groups[k] = groups[k] || []).push(n);
+    });
+    var genericFuncKey = {};
+    Object.keys(groups).forEach(function (k) {
+      var members = groups[k];
+      if (members.length < 2) return;
+      var agents = {};
+      members.forEach(function (m) { agents[m.agent || ""] = true; });
+      if (Object.keys(agents).length >= 2) genericFuncKey[k] = true;
+    });
+    nodes.forEach(function (n) {
+      var k = layerOf[n.id] + " " + (n.func || "");
+      var cap = capabilitySuffix(n.agent);
+      if (genericFuncKey[k] && cap) {
+        /* Distinguishing token = capability; func demoted to the tag. */
+        titleParts[n.id] = { title: cap, tag: n.func || n.agent || n.id };
+      } else {
+        /* Func is the title; agent id is the tag (existing behavior). */
+        titleParts[n.id] = { title: n.func || n.id, tag: n.agent || "" };
+      }
+    });
+  })();
+  function statusPill(status) {
+    var p = el("span", "pill st-" + statusClass(status));
+    p.appendChild(el("span", "dot"));
+    p.appendChild(document.createTextNode(status));
+    return p;
+  }
+
+  /* ---- run-level rollups ---- */
+  var totals = bundle.totals || {};
+  var agentCount = totals.agents != null ? totals.agents : nodes.length;
+  var succeededN = nodes.filter(function (n) { return n.status === "succeeded"; }).length;
+  var failedN = nodes.filter(function (n) { return n.status === "failed"; }).length;
+  var runningN = nodes.filter(function (n) { return n.status === "running"; }).length;
+  var costStr = fmtCost(totals.cost_usd);
+
+  /* Entry node: the DAG root (never the target of an edge), else first node. */
+  var hasParent = {};
+  edges.forEach(function (e) { hasParent[e.to] = true; });
+  var entry = nodes[0];
+  for (var i = 0; i < nodes.length; i++) { if (!hasParent[nodes[i].id]) { entry = nodes[i]; break; } }
+
+  /* Title: bundle.title, else "run of <agent>.<func>". */
+  var title = bundle.title && String(bundle.title).trim();
+  if (!title) {
+    title = entry ? "run of " + entry.agent + "." + entry.func : "shared run";
+  }
+  document.getElementById("run-title").textContent = title;
+
+  /* Demoted meta line. */
+  var genDate = bundle.generated_at ? new Date(bundle.generated_at) : new Date();
+  var dateStr = isNaN(genDate.getTime()) ? String(bundle.generated_at || "") :
+    genDate.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  var metaEl = document.getElementById("run-meta");
+  clear(metaEl);
+  function metaBar() { var b = el("span", "bar"); b.setAttribute("aria-hidden", "true"); return b; }
+  if (bundle.workflow_id) { metaEl.appendChild(document.createTextNode(bundle.workflow_id)); metaEl.appendChild(metaBar()); }
+  metaEl.appendChild(document.createTextNode("exported " + dateStr));
+  metaEl.appendChild(metaBar());
+  metaEl.appendChild(document.createTextNode("bundle v" + (bundle.version != null ? bundle.version : 1)));
+
+  /* Overall status pill. */
+  var overall = "neutral", overallLabel = "completed";
+  if (runningN) { overall = "running"; overallLabel = "running"; }
+  else if (failedN && failedN === nodes.length) { overall = "failed"; overallLabel = "failed"; }
+  else if (failedN) { overall = "warning"; overallLabel = "completed, " + failedN + " failed"; }
+  else if (nodes.length && succeededN === nodes.length) { overall = "succeeded"; overallLabel = "completed"; }
+  var statusEl = document.getElementById("run-status");
+  statusEl.className = "pill st-" + overall;
+  clear(statusEl);
+  statusEl.appendChild(el("span", "dot"));
+  statusEl.appendChild(document.createTextNode(overallLabel));
+
+  /* Narrative sentence (plain prose). */
+  var narrEl = document.getElementById("run-narrative");
+  clear(narrEl);
+  var durWords = fmtDurationWords(totals.duration_ms);
+  var clause = agentCount + (agentCount === 1 ? " agent" : " agents") + " ran";
+  if (durWords) clause += " " + durWords;
+  if (costStr) clause += " for " + costStr;
+  var sentence = clause + ".";
+  narrEl.appendChild(document.createTextNode(sentence));
+  var branchN = runningN ? 0 : failedN;
+  if (branchN) {
+    var tail = el("span", "n-fail", " " + branchN + (branchN === 1 ? " branch failed." : " branches failed."));
+    narrEl.appendChild(tail);
+  } else if (runningN) {
+    narrEl.appendChild(el("span", "n-fail", " " + runningN + (runningN === 1 ? " branch still running." : " branches still running.")));
+  }
+
+  /* KPI strip. */
+  var kpiWrap = document.getElementById("kpis");
+  function kpiCard(cap, valNode, opts) {
+    opts = opts || {};
+    var card = el("div", "kpi" + (opts.hero ? " hero" : ""));
+    card.appendChild(el("div", "cap", cap));
+    var v = el("div", "val");
+    v.appendChild(valNode);
+    card.appendChild(v);
+    if (opts.sub) card.appendChild(el("div", "sub", opts.sub));
+    return card;
+  }
+  kpiWrap.appendChild(kpiCard("Agents", document.createTextNode(String(agentCount))));
+
+  /* Cost card renders ONLY when cost data is available. Real runs export
+     cost_usd as null (the executions API carries no cost), and null must render
+     nothing at all — not an "n/a" placeholder. When absent, the strip drops to
+     3 cards and flows full-width via --kpi-cols below. */
+  if (costStr) {
+    kpiWrap.appendChild(kpiCard("Cost", document.createTextNode(costStr), { hero: true }));
+  }
+
+  kpiWrap.appendChild(kpiCard("Wall time", document.createTextNode(fmtDuration(totals.duration_ms))));
+
+  var sf = el("span", "sf");
+  var okSpan = el("span", "ok" + (succeededN ? "" : " zero"));
+  okSpan.appendChild(el("span", "glyph", "✓"));
+  okSpan.appendChild(document.createTextNode(String(succeededN)));
+  sf.appendChild(okSpan);
+  sf.appendChild(el("span", "div", "/"));
+  var failSpan = el("span", "fail" + (failedN ? "" : " zero"));
+  failSpan.appendChild(el("span", "glyph", "✗"));
+  failSpan.appendChild(document.createTextNode(String(failedN)));
+  sf.appendChild(failSpan);
+  kpiWrap.appendChild(kpiCard("Succeeded / failed", sf));
+
+  /* Drive the grid column count off the actual number of rendered cards so a
+     3-card strip (no cost) spans the row cleanly instead of leaving a gap. */
+  kpiWrap.style.setProperty("--kpi-cols", String(kpiWrap.children.length));
+
+  /* ---- DAG layout: topological longest-path layering ---- */
+  function computeLayers() {
+    var adj = {}, indeg = {};
+    nodes.forEach(function (n) { adj[n.id] = []; indeg[n.id] = 0; });
+    edges.forEach(function (e) {
+      if (adj[e.from] === undefined || indeg[e.to] === undefined) return;
+      adj[e.from].push(e.to);
+      indeg[e.to]++;
+    });
+    var layer = {}, queue = [], localIndeg = {};
+    Object.keys(indeg).forEach(function (k) { localIndeg[k] = indeg[k]; });
+    nodes.forEach(function (n) { if (indeg[n.id] === 0) { layer[n.id] = 0; queue.push(n.id); } });
+    var head = 0;
+    while (head < queue.length) {
+      var id = queue[head++];
+      adj[id].forEach(function (to) {
+        if (layer[to] === undefined || layer[to] < layer[id] + 1) layer[to] = layer[id] + 1;
+        localIndeg[to]--;
+        if (localIndeg[to] === 0) queue.push(to);
+      });
+    }
+    nodes.forEach(function (n) { if (layer[n.id] === undefined) layer[n.id] = 0; });
+    return layer;
+  }
+
+  /* Map each node -> its ancestor path back to a root, for hover highlighting. */
+  var parentsOf = {};
+  edges.forEach(function (e) { (parentsOf[e.to] = parentsOf[e.to] || []).push(e.from); });
+  function pathToRoot(id) {
+    var seen = {}, nodeSet = {}, edgeSet = {}, stack = [id];
+    while (stack.length) {
+      var cur = stack.pop();
+      if (seen[cur]) continue;
+      seen[cur] = true; nodeSet[cur] = true;
+      (parentsOf[cur] || []).forEach(function (p) {
+        edgeSet[p + " " + cur] = true;
+        stack.push(p);
+      });
+    }
+    return { nodes: nodeSet, edges: edgeSet };
+  }
+
+  var NW = 190, NH = 58, GAPX = 72, GAPY = 18, PADX = 18, PADY = 18;
+  var GROUP_MIN = 3;           /* collapse only when >= this many identical siblings */
+  /* Fit-to-width floor: below this uniform scale, text stops being readable, so we
+     stop shrinking and let the panel scroll instead. */
+  var MIN_SCALE = 0.55;
+  var MAX_SCALE = 2.2;         /* upper zoom bound for the + stepper */
+  var ZOOM_STEP = 1.25;        /* multiplicative step per +/- press */
+  var svgRoot = null, edgeEls = [], nodeEls = [];
+  var natW = 0, natH = 0;      /* natural (unscaled) graph dimensions */
+  /* Zoom state: zoomFitMode=true means auto scale-to-width; when the user zooms
+     with +/- we switch to an explicit userScale and remember it. */
+  var zoomFitMode = true;
+  var userScale = 1;
+  var lastAppliedScale = 1;    /* the scale actually rendered (for +/- to step from) */
+  var panHintDismissed = false; /* set once the user pans, so the hint stops showing */
+  var expandedGroups = {};     /* groupKey -> true once the user expands it */
+  var itemParentsOf = {};      /* item id -> parent item ids (current view) */
+  var memberToItemCur = {};    /* real node id -> item id (current view) */
+
+  /* ---- Group model ----
+     Within a layer, 3+ nodes sharing (func, agent) are one collapsed group card
+     by default. This removes the parallel-edge "curtain" (e.g. the six
+     verify_finding provers). Expanding a group re-lays-out with its members
+     restored to individual cards. */
+  function groupKeyFor(n, lyr) { return lyr + " " + (n.agent || "") + " " + (n.func || ""); }
+
+  function buildRenderModel() {
+    var layer = computeLayers();
+    /* Bucket nodes by group key, preserving order. */
+    var buckets = {}, order = [];
+    nodes.forEach(function (n) {
+      var k = groupKeyFor(n, layer[n.id]);
+      if (!buckets[k]) { buckets[k] = []; order.push(k); }
+      buckets[k].push(n);
+    });
+
+    /* A render item is either a single node or a collapsed group of members.
+       memberToItem maps every real node id to the item id that represents it in
+       the current (possibly collapsed) view — used to rewire edges + highlights. */
+    var items = [], memberToItem = {}, itemLayer = {};
+    order.forEach(function (k) {
+      var members = buckets[k];
+      var lyr = layer[members[0].id];
+      if (members.length >= GROUP_MIN && !expandedGroups[k]) {
+        var rep = members[0];
+        var itemId = "grp:" + k;
+        members.forEach(function (m) { memberToItem[m.id] = itemId; });
+        items.push({ id: itemId, group: true, key: k, members: members, layer: lyr,
+          agent: rep.agent, func: rep.func });
+        itemLayer[itemId] = lyr;
+      } else {
+        members.forEach(function (m) {
+          memberToItem[m.id] = m.id;
+          items.push({ id: m.id, group: false, node: m, layer: lyr });
+          itemLayer[m.id] = lyr;
+        });
+      }
+    });
+
+    /* Rewire edges onto item ids and dedupe (collapsed members share one node). */
+    var edgeSeen = {}, itemEdges = [];
+    edges.forEach(function (e) {
+      var f = memberToItem[e.from], t = memberToItem[e.to];
+      if (f === undefined || t === undefined || f === t) return;
+      var key = f + " " + t;
+      if (edgeSeen[key]) return;
+      edgeSeen[key] = true;
+      itemEdges.push({ from: f, to: t });
+    });
+
+    return { items: items, edges: itemEdges, itemLayer: itemLayer, memberToItem: memberToItem };
+  }
+
+  /* Group rollups: failed count, summed cost, duration range. */
+  function groupSummary(members) {
+    var failed = 0, running = 0, minD = null, maxD = null, cost = 0, haveCost = false;
+    members.forEach(function (m) {
+      if (m.status === "failed") failed++;
+      else if (m.status === "running") running++;
+      if (m.duration_ms != null) {
+        if (minD === null || m.duration_ms < minD) minD = m.duration_ms;
+        if (maxD === null || m.duration_ms > maxD) maxD = m.duration_ms;
+      }
+      if (m.cost_usd != null) { cost += Number(m.cost_usd); haveCost = true; }
+    });
+    var durStr = null;
+    if (minD !== null) durStr = (minD === maxD) ? fmtDuration(minD) : fmtDuration(minD) + " to " + fmtDuration(maxD);
+    return { failed: failed, running: running, durStr: durStr, cost: haveCost ? cost : null };
+  }
+
+  function renderGraph() {
+    var panel = document.getElementById("graph-panel");
+    clear(panel);
+    edgeEls = []; nodeEls = [];
+    if (!nodes.length) { panel.appendChild(el("div", "empty", "This run has no execution nodes.")); return; }
+
+    var model = buildRenderModel();
+    var items = model.items, iEdges = model.edges, itemLayer = model.itemLayer;
+
+    /* Item-space parent map for group-aware hover path-to-root. */
+    memberToItemCur = model.memberToItem;
+    itemParentsOf = {};
+    iEdges.forEach(function (e) { (itemParentsOf[e.to] = itemParentsOf[e.to] || []).push(e.from); });
+
+    var cols = {}, maxLayer = 0;
+    items.forEach(function (it) {
+      var l = itemLayer[it.id];
+      (cols[l] = cols[l] || []).push(it);
+      if (l > maxLayer) maxLayer = l;
+    });
+    var maxRows = 0;
+    for (var l = 0; l <= maxLayer; l++) { if (cols[l] && cols[l].length > maxRows) maxRows = cols[l].length; }
+    var totalHeight = maxRows * NH + Math.max(maxRows - 1, 0) * GAPY;
+
+    var pos = {};
+    for (var c = 0; c <= maxLayer; c++) {
+      var colItems = cols[c] || [];
+      var colHeight = colItems.length * NH + Math.max(colItems.length - 1, 0) * GAPY;
+      var yStart = PADY + (totalHeight - colHeight) / 2;
+      colItems.forEach(function (it, idx) {
+        pos[it.id] = { x: PADX + c * (NW + GAPX), y: yStart + idx * (NH + GAPY) };
+      });
+    }
+    var width = PADX * 2 + (maxLayer + 1) * NW + maxLayer * GAPX;
+    var height = PADY * 2 + totalHeight;
+    natW = width; natH = height;
+    /* viewBox holds the natural coordinate space; the rendered width/height attrs are
+       overridden by applyZoom() so the whole SVG scales uniformly (no reflow). */
+    var root = svg("svg", { "class": "dag", width: width, height: height, viewBox: "0 0 " + width + " " + height, preserveAspectRatio: "xMinYMin meet", role: "img", "aria-label": "Execution graph, " + nodes.length + " nodes" });
+    svgRoot = root;
+
+    iEdges.forEach(function (e) {
+      var a = pos[e.from], b = pos[e.to];
+      if (!a || !b) return;
+      var x1 = a.x + NW, y1 = a.y + NH / 2, x2 = b.x, y2 = b.y + NH / 2, mx = (x1 + x2) / 2;
+      var path = svg("path", { "class": "edge", d: "M" + x1 + " " + y1 + " C" + mx + " " + y1 + ", " + mx + " " + y2 + ", " + x2 + " " + y2 });
+      path.dataset.key = e.from + " " + e.to;
+      root.appendChild(path);
+      edgeEls.push(path);
+    });
+
+    items.forEach(function (it) {
+      var p = pos[it.id];
+      if (!p) return;
+      if (it.group) renderGroupCard(root, it, p);
+      else renderNodeCard(root, it.node, p);
+    });
+    panel.appendChild(root);
+    applyZoom();
+  }
+
+  /* One individual execution card: always-visible role tick + gold selection rail
+     (hidden until selected) + sans title + sans tag + mono metric. */
+  function renderNodeCard(root, n, p) {
+    var parts = titleParts[n.id] || { title: n.func || n.id, tag: n.agent || "" };
+    var g = svg("g", { "class": "node-g", tabindex: "0", role: "button",
+      "aria-label": parts.title + " on " + n.agent + ", " + n.status + (n.duration_ms != null ? ", " + fmtDuration(n.duration_ms) : "") });
+    g.dataset.id = n.id;
+    g.appendChild(svg("rect", { "class": "node-rect", x: p.x, y: p.y, width: NW, height: NH, rx: 9 }));
+    /* Role tick — ALWAYS drawn, in every state. FAILED overrides to red. */
+    var barR = svg("rect", { "class": "node-bar" + (n.status === "failed" ? " failed" : ""), x: p.x, y: p.y, width: 3, height: NH, rx: 0 });
+    barR.setAttribute("fill", tickColor(n));
+    g.appendChild(barR);
+    /* Gold selection rail — sits just inside the role tick, only visible when
+       selected, so selection never hides the role identity. */
+    g.appendChild(svg("rect", { "class": "node-sel-rail", x: p.x + 3, y: p.y + 6, width: 2, height: NH - 12, rx: 1 }));
+
+    var func = svg("text", { "class": "node-func", x: p.x + 15, y: p.y + 24 });
+    func.textContent = truncate(parts.title, 22);
+    g.appendChild(func);
+
+    var agent = svg("text", { "class": "node-agent", x: p.x + 15, y: p.y + 42 });
+    agent.textContent = truncate(parts.tag, 22);
+    g.appendChild(agent);
+
+    var metricStr = "", metricErr = false;
+    if (n.status === "failed") { metricStr = "failed"; metricErr = true; }
+    else {
+      metricStr = fmtDuration(n.duration_ms);
+      var c2 = fmtCost(n.cost_usd);
+      if (c2) metricStr += "   " + c2;
+    }
+    var metric = svg("text", { "class": "node-metric" + (metricErr ? " err" : ""), x: p.x + NW - 15, y: p.y + 42, "text-anchor": "end" });
+    metric.textContent = metricStr;
+    g.appendChild(metric);
+
+    g.addEventListener("click", function () { openDetail(n.id); });
+    g.addEventListener("keydown", function (ev) { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); openDetail(n.id); } });
+    g.addEventListener("mouseenter", function () { highlightPath(n.id); });
+    g.addEventListener("mouseleave", clearHighlight);
+    g.addEventListener("focus", function () { highlightPath(n.id); });
+    g.addEventListener("blur", clearHighlight);
+    root.appendChild(g);
+    nodeEls.push(g);
+  }
+
+  /* One collapsed group card: "func xN", role tick, duration range + summed cost,
+     red count badge if any member failed. Click/Enter expands to members. */
+  function renderGroupCard(root, it, p) {
+    var members = it.members, sum = groupSummary(members);
+    var anyFailed = sum.failed > 0;
+    /* Members share (agent, func); reuse the same distinguishing-token rule so a
+       group of generic-func siblings also shows its capability, not "hunt". */
+    var parts = titleParts[members[0].id] || { title: it.func || it.id, tag: it.agent || "" };
+    var aria = parts.title + " on " + it.agent + ", group of " + members.length +
+      (anyFailed ? ", " + sum.failed + " failed" : "") + ", press to expand";
+    var g = svg("g", { "class": "node-g grouped", tabindex: "0", role: "button", "aria-label": aria, "aria-expanded": "false" });
+    g.dataset.group = it.key;
+
+    /* Stacked-card shadow behind the front card = "more underneath / expandable". */
+    g.appendChild(svg("rect", { "class": "group-stack", x: p.x + 6, y: p.y - 6, width: NW, height: NH, rx: 9 }));
+    g.appendChild(svg("rect", { "class": "group-stack", x: p.x + 3, y: p.y - 3, width: NW, height: NH, rx: 9 }));
+    g.appendChild(svg("rect", { "class": "node-rect", x: p.x, y: p.y, width: NW, height: NH, rx: 9 }));
+    var bar = svg("rect", { "class": "node-bar", x: p.x, y: p.y, width: 3, height: NH, rx: 0 });
+    bar.setAttribute("fill", roleColor(it.agent));   /* role tick; a group is not a single outcome */
+    g.appendChild(bar);
+
+    var func = svg("text", { "class": "node-func", x: p.x + 15, y: p.y + 24 });
+    func.textContent = truncate(parts.title, 15) + "  ×" + members.length;
+    g.appendChild(func);
+
+    var agent = svg("text", { "class": "node-agent", x: p.x + 15, y: p.y + 42 });
+    agent.textContent = truncate(parts.tag, 22);
+    g.appendChild(agent);
+
+    var metricStr = "";
+    if (sum.durStr) metricStr += sum.durStr;
+    var cStr = fmtCost(sum.cost);
+    if (cStr) metricStr += (metricStr ? "   " : "") + cStr;
+    var metric = svg("text", { "class": "node-metric", x: p.x + NW - 15, y: p.y + 42, "text-anchor": "end" });
+    metric.textContent = metricStr;
+    g.appendChild(metric);
+
+    if (anyFailed) {
+      var badge = svg("text", { "class": "node-count err", x: p.x + NW - 15, y: p.y + 22, "text-anchor": "end" });
+      badge.textContent = sum.failed + " failed";
+      g.appendChild(badge);
+    }
+
+    function expand() {
+      expandedGroups[it.key] = true;
+      renderGraph();
+      /* Move focus to the first member after re-layout, for keyboard flow. */
+      var first = members[0];
+      var target = first && document.querySelector('.node-g[data-id="' + cssEscape(first.id) + '"]');
+      if (target && target.focus) target.focus();
+    }
+    g.addEventListener("click", expand);
+    g.addEventListener("keydown", function (ev) { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); expand(); } });
+    root.appendChild(g);
+    nodeEls.push(g);
+  }
+
+  /* fitScale: the scale that makes the whole graph fit the panel width, clamped to
+     the readability floor. Used by Fit mode and as the baseline the +/- stepper
+     starts from when the user first zooms. */
+  function fitScale() {
+    var panel = document.getElementById("graph-panel");
+    var cs = window.getComputedStyle(panel);
+    var padL = parseFloat(cs.paddingLeft) || 0, padR = parseFloat(cs.paddingRight) || 0;
+    var avail = panel.clientWidth - padL - padR;
+    if (avail <= 0) avail = natW;
+    if (natW <= avail) return 1;
+    return Math.max(avail / natW, MIN_SCALE);
+  }
+
+  /* Apply the current zoom. Fit mode auto-scales to width (viewBox fixed, only the
+     rendered width/height attrs change so there is no reflow). Explicit zoom uses
+     userScale. The scroll hint shows whenever the rendered graph overflows the
+     panel — panning is then the way to reach the rest. */
+  function applyZoom() {
+    if (!svgRoot || !natW) return;
+    var panel = document.getElementById("graph-panel");
+    var hint = document.getElementById("scroll-hint");
+    var cs = window.getComputedStyle(panel);
+    var padL = parseFloat(cs.paddingLeft) || 0, padR = parseFloat(cs.paddingRight) || 0;
+    var avail = panel.clientWidth - padL - padR;
+    if (avail <= 0) avail = natW;
+
+    var scale = zoomFitMode ? fitScale() : userScale;
+    lastAppliedScale = scale;
+    var renderW = Math.round(natW * scale);
+    var renderH = Math.round(natH * scale);
+    svgRoot.setAttribute("width", renderW);
+    svgRoot.setAttribute("height", renderH);
+
+    var overflows = renderW > avail + 1 || renderH > panel.clientHeight + 1;
+    if (hint && !panHintDismissed) hint.classList.toggle("show", overflows);
+    else if (hint) hint.classList.remove("show");
+  }
+
+  /* Path-to-root in the CURRENT (possibly grouped) item space so hover highlighting
+     works whether members are collapsed or expanded. */
+  function itemPathToRoot(itemId) {
+    var seen = {}, nodeSet = {}, edgeSet = {}, stack = [itemId];
+    while (stack.length) {
+      var cur = stack.pop();
+      if (seen[cur]) continue;
+      seen[cur] = true; nodeSet[cur] = true;
+      (itemParentsOf[cur] || []).forEach(function (p) {
+        edgeSet[p + " " + cur] = true;
+        stack.push(p);
+      });
+    }
+    return { nodes: nodeSet, edges: edgeSet };
+  }
+  function highlightPath(id) {
+    var itemId = memberToItemCur[id] || id;
+    var lit = itemPathToRoot(itemId);
+    nodeEls.forEach(function (g) {
+      var key = g.dataset.id || g.dataset.group;   /* group cards carry data-group */
+      var on = !!lit.nodes[key];
+      g.classList.toggle("lit", on);
+      g.classList.toggle("dim", !on);
+    });
+    edgeEls.forEach(function (p) {
+      var on = !!lit.edges[p.dataset.key];
+      p.classList.toggle("lit", on);
+      p.classList.toggle("dim", !on);
+    });
+  }
+  function clearHighlight() {
+    nodeEls.forEach(function (g) { g.classList.remove("lit", "dim"); });
+    edgeEls.forEach(function (p) { p.classList.remove("lit", "dim"); });
+  }
+
+  /* ---- Timeline ---- */
+  function renderTimeline() {
+    var box = document.getElementById("timeline");
+    clear(box);
+    var timed = nodes.filter(function (n) { return n.started_at; });
+    if (!timed.length) { box.appendChild(el("div", "empty", "No timing data for this run.")); return; }
+    var minT = Math.min.apply(null, timed.map(function (n) { return new Date(n.started_at).getTime(); }));
+    var maxEnd = minT;
+    timed.forEach(function (n) {
+      var s = new Date(n.started_at).getTime(), d = n.duration_ms || 0;
+      if (s + d > maxEnd) maxEnd = s + d;
+    });
+    var span = Math.max(maxEnd - minT, 1);
+    timed.slice().sort(function (a, b) {
+      return new Date(a.started_at).getTime() - new Date(b.started_at).getTime();
+    }).forEach(function (n) {
+      var s = new Date(n.started_at).getTime(), d = n.duration_ms || 0;
+      var left = ((s - minT) / span) * 100, w = Math.max((d / span) * 100, 0.6), sc = statusClass(n.status);
+      var parts = titleParts[n.id] || { title: n.func || n.id, tag: n.agent || "" };
+      var row = el("div", "tl-row");
+      var name = el("div", "tl-name");
+      if (parts.tag) name.appendChild(el("span", "agent", parts.tag + "."));
+      name.appendChild(document.createTextNode(parts.title));
+      row.appendChild(name);
+      var track = el("div", "tl-track");
+      var bar = el("div", "tl-bar " + sc);
+      bar.style.left = left.toFixed(2) + "%";
+      bar.style.width = w.toFixed(2) + "%";
+      bar.dataset.id = n.id;
+      bar.title = n.agent + "." + n.func + "  (" + fmtDuration(n.duration_ms) + ")";
+      bar.addEventListener("click", function () { openDetail(n.id); });
+      track.appendChild(bar);
+      row.appendChild(track);
+      row.appendChild(el("div", "tl-dur", fmtDuration(n.duration_ms)));
+      box.appendChild(row);
+    });
+    var axis = el("div", "tl-axis");
+    axis.appendChild(el("span", null, "0s"));
+    axis.appendChild(el("span", null, fmtDuration(span)));
+    box.appendChild(axis);
+  }
+
+  /* ---- View toggle ---- */
+  var graphPanel = document.getElementById("graph-panel");
+  var timelinePanel = document.getElementById("timeline");
+  var tabGraph = document.getElementById("tab-graph");
+  var tabTimeline = document.getElementById("tab-timeline");
+  var timelineRendered = false;
+  function selectView(which) {
+    var graph = which === "graph";
+    tabGraph.setAttribute("aria-selected", graph ? "true" : "false");
+    tabTimeline.setAttribute("aria-selected", graph ? "false" : "true");
+    graphPanel.classList.toggle("hidden", !graph);
+    timelinePanel.classList.toggle("hidden", graph);
+    document.getElementById("zoom-toggle").classList.toggle("hidden", !graph);
+    if (graph) { applyZoom(); }
+    else {
+      document.getElementById("scroll-hint").classList.remove("show");
+      if (!timelineRendered) { renderTimeline(); timelineRendered = true; }
+    }
+  }
+  tabGraph.addEventListener("click", function () { selectView("graph"); });
+  tabTimeline.addEventListener("click", function () { selectView("timeline"); });
+
+  /* ---- Zoom group (minus / Fit / plus) ----
+     Fit resets to auto scale-to-width. +/- switch to an explicit userScale that
+     steps around the current rendered scale, clamped to [MIN_SCALE, MAX_SCALE].
+     Zooming keeps the graph centered by preserving the panel's scroll midpoint. */
+  var zoomOut = document.getElementById("zoom-out");
+  var zoomFit = document.getElementById("zoom-fit");
+  var zoomIn = document.getElementById("zoom-in");
+
+  function clampScale(s) { return Math.min(MAX_SCALE, Math.max(MIN_SCALE, s)); }
+
+  function setFitMode() {
+    zoomFitMode = true;
+    zoomFit.setAttribute("aria-pressed", "true");
+    applyZoom();
+  }
+  /* Step zoom by factor around the current rendered scale, keeping the visual
+     center fixed so zooming feels anchored rather than jumping to a corner. */
+  function stepZoom(factor) {
+    var panel = document.getElementById("graph-panel");
+    var base = zoomFitMode ? lastAppliedScale : userScale;
+    var next = clampScale(base * factor);
+    if (next === base) return;
+    /* Center point in natural coords before the change. */
+    var cx = (panel.scrollLeft + panel.clientWidth / 2) / (base || 1);
+    var cy = (panel.scrollTop + panel.clientHeight / 2) / (base || 1);
+    zoomFitMode = false;
+    userScale = next;
+    zoomFit.setAttribute("aria-pressed", "false");
+    applyZoom();
+    /* Restore the same natural center under the new scale. */
+    panel.scrollLeft = cx * next - panel.clientWidth / 2;
+    panel.scrollTop = cy * next - panel.clientHeight / 2;
+  }
+  zoomOut.addEventListener("click", function () { stepZoom(1 / ZOOM_STEP); });
+  zoomFit.addEventListener("click", setFitMode);
+  zoomIn.addEventListener("click", function () { stepZoom(ZOOM_STEP); });
+
+  /* +/- from the keyboard when the graph area (panel or a node) has focus. */
+  document.getElementById("stage").addEventListener("keydown", function (ev) {
+    if (tabGraph.getAttribute("aria-selected") !== "true") return;
+    if (ev.key === "+" || ev.key === "=") { ev.preventDefault(); stepZoom(ZOOM_STEP); }
+    else if (ev.key === "-" || ev.key === "_") { ev.preventDefault(); stepZoom(1 / ZOOM_STEP); }
+    else if (ev.key === "0") { ev.preventDefault(); setFitMode(); }
+  });
+
+  /* ---- Drag-to-pan ----
+     Pointer down on the panel starts a candidate pan; we only enter "panning"
+     (and suppress the click-to-select) once movement passes PAN_THRESHOLD, so a
+     plain click still opens a node's detail. The panel is the scroll viewport, so
+     panning just adjusts scrollLeft/scrollTop. */
+  var PAN_THRESHOLD = 5;       /* px of movement before a press becomes a pan */
+  (function initPan() {
+    var panel = document.getElementById("graph-panel");
+    var active = false, moved = false, startX = 0, startY = 0, startL = 0, startT = 0, pid = null;
+
+    panel.addEventListener("pointerdown", function (ev) {
+      if (ev.button !== 0 && ev.pointerType === "mouse") return;
+      active = true; moved = false;
+      startX = ev.clientX; startY = ev.clientY;
+      startL = panel.scrollLeft; startT = panel.scrollTop;
+      pid = ev.pointerId;
+    });
+    panel.addEventListener("pointermove", function (ev) {
+      if (!active) return;
+      var dx = ev.clientX - startX, dy = ev.clientY - startY;
+      if (!moved && (Math.abs(dx) > PAN_THRESHOLD || Math.abs(dy) > PAN_THRESHOLD)) {
+        moved = true;
+        panel.classList.add("panning");
+        if (pid != null && panel.setPointerCapture) { try { panel.setPointerCapture(pid); } catch (e) {} }
+        /* First real pan hides the scroll hint for good — the user found the gesture. */
+        if (!panHintDismissed) {
+          panHintDismissed = true;
+          document.getElementById("scroll-hint").classList.remove("show");
+        }
+      }
+      if (moved) {
+        panel.scrollLeft = startL - dx;
+        panel.scrollTop = startT - dy;
+        ev.preventDefault();
+      }
+    });
+    function endPan(ev) {
+      if (!active) return;
+      active = false;
+      if (moved) {
+        panel.classList.remove("panning");
+        if (pid != null && panel.releasePointerCapture) { try { panel.releasePointerCapture(pid); } catch (e) {} }
+        /* Swallow the click that follows a drag so it never opens a node. */
+        var swallow = function (e) { e.stopPropagation(); e.preventDefault(); panel.removeEventListener("click", swallow, true); };
+        panel.addEventListener("click", swallow, true);
+        setTimeout(function () { panel.removeEventListener("click", swallow, true); }, 0);
+      }
+      moved = false; pid = null;
+    }
+    panel.addEventListener("pointerup", endPan);
+    panel.addEventListener("pointercancel", endPan);
+    panel.addEventListener("pointerleave", function (ev) { if (active && !moved) active = false; });
+  })();
+
+  /* Re-fit on viewport resize (graph view only, Fit mode only). */
+  var resizeTimer = null;
+  window.addEventListener("resize", function () {
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function () {
+      if (tabGraph.getAttribute("aria-selected") === "true" && zoomFitMode) applyZoom();
+    }, 120);
+  });
+
+  /* ---- Detail panel ---- */
+  var detail = document.getElementById("detail");
+  var backdrop = document.getElementById("backdrop");
+  var lastFocus = null;
+
+  /* kvRow: caption + value. mono=true tags data tokens (ids, model, numerics) so
+     they render in the mono family; prose values (dates) stay sans. na wins so a
+     "n/a" placeholder always reads as muted italic sans. */
+  function kvRow(dl, label, value, isNa, mono) {
+    dl.appendChild(el("dt", null, label));
+    var cls = isNa ? "na" : (mono ? "mono" : null);
+    dl.appendChild(el("dd", cls, value));
+  }
+  function fieldBlock(parent, label, value, isError) {
+    if (value === null || value === undefined || value === "") return;
+    parent.appendChild(el("div", "field-label", label));
+    parent.appendChild(el("pre", "code-block" + (isError ? " error" : ""), value));
+  }
+  function openDetail(id) {
+    var n = nodeById[id];
+    if (!n) return;
+    lastFocus = document.activeElement;
+    var prev = document.querySelectorAll(".node-g.selected");
+    for (var i = 0; i < prev.length; i++) prev[i].classList.remove("selected");
+    var g = document.querySelector('.node-g[data-id="' + cssEscape(id) + '"]');
+    if (g) g.classList.add("selected");
+
+    document.getElementById("detail-fn").textContent = n.func;
+    document.getElementById("detail-ag").textContent = n.agent;
+    var body = document.getElementById("detail-body");
+    clear(body);
+    var dl = el("dl", "kv");
+    dl.appendChild(el("dt", null, "Status"));
+    var statusDd = el("dd");
+    statusDd.appendChild(statusPill(n.status));
+    dl.appendChild(statusDd);
+    kvRow(dl, "Execution", n.id, false, true);                                              /* id -> mono */
+    kvRow(dl, "Started", n.started_at ? new Date(n.started_at).toLocaleString() : "n/a", !n.started_at, false); /* date -> sans */
+    kvRow(dl, "Ended", n.ended_at ? new Date(n.ended_at).toLocaleString() : "n/a", !n.ended_at, false);         /* date -> sans */
+    kvRow(dl, "Duration", fmtDuration(n.duration_ms), n.duration_ms == null, true);          /* numeric -> mono */
+    kvRow(dl, "Model", n.model ? n.model : "n/a", !n.model, true);                           /* model string -> mono */
+    /* Cost row is omitted entirely when cost data is unavailable — real runs
+       carry no cost, and null must show nothing rather than an "n/a" row. */
+    if (n.cost_usd != null) { kvRow(dl, "Cost", fmtCost(n.cost_usd), false, true); }          /* numeric -> mono */
+    body.appendChild(dl);
+    fieldBlock(body, "Input", n.input_preview, false);
+    fieldBlock(body, "Output", n.output_preview, false);
+    fieldBlock(body, "Error", n.error, true);
+
+    detail.classList.add("open");
+    detail.setAttribute("aria-hidden", "false");
+    backdrop.classList.add("open");
+    document.getElementById("detail-close").focus();
+  }
+  function closeDetail() {
+    detail.classList.remove("open");
+    detail.setAttribute("aria-hidden", "true");
+    backdrop.classList.remove("open");
+    var sel = document.querySelectorAll(".node-g.selected");
+    for (var i = 0; i < sel.length; i++) sel[i].classList.remove("selected");
+    if (lastFocus && lastFocus.focus) lastFocus.focus();
+  }
+  document.getElementById("detail-close").addEventListener("click", closeDetail);
+  backdrop.addEventListener("click", closeDetail);
+  document.addEventListener("keydown", function (ev) { if (ev.key === "Escape") closeDetail(); });
+
+  /* ---- Install copy button ---- */
+  var copyBtn = document.getElementById("install-copy");
+  var installCmd = "curl -fsSL https://agentfield.ai/install.sh | bash";
+  copyBtn.addEventListener("click", function () {
+    var done = function () {
+      copyBtn.classList.add("done");
+      copyBtn.textContent = "Copied";
+      setTimeout(function () { copyBtn.classList.remove("done"); copyBtn.textContent = "Copy"; }, 1600);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(installCmd).then(done, function () {});
+    } else {
+      var ta = document.createElement("textarea");
+      ta.value = installCmd; ta.setAttribute("readonly", "");
+      ta.style.position = "absolute"; ta.style.left = "-9999px";
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand("copy"); done(); } catch (e) {}
+      document.body.removeChild(ta);
+    }
+  });
+
+  /* ---- Legend: agent roles present + failed + running (not raw status) ---- */
+  function titleCase(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+  function renderLegend() {
+    var box = document.getElementById("legend");
+    if (!box) return;
+    clear(box);
+    /* Roles in run order, deduped. Known roles get friendly labels; the tick
+       color matches the node left-tick exactly. */
+    var seen = {}, roles = [];
+    nodes.forEach(function (n) {
+      var r = (n.agent || "").toLowerCase();
+      if (!r || seen[r]) return;
+      seen[r] = true; roles.push(r);
+    });
+    function item(color, label) {
+      var span = el("span");
+      var sw = el("span", "sw");
+      sw.style.background = color;
+      span.appendChild(sw);
+      span.appendChild(document.createTextNode(label));
+      box.appendChild(span);
+    }
+    roles.forEach(function (r) { item(roleColor(r), titleCase(r)); });
+    if (nodes.some(function (n) { return n.status === "failed"; })) item("var(--err)", "Failed");
+    if (nodes.some(function (n) { return n.status === "running"; })) item("var(--warn)", "Running");
+  }
+
+  renderLegend();
+  renderGraph();
+})();
+</script>
+</body>
+</html>

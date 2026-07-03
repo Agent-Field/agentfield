@@ -491,3 +491,79 @@ func TestApplyEnvOverridesIgnoresInvalidValues(t *testing.T) {
 		t.Fatalf("expected connector enabled to become false for non-true value")
 	}
 }
+
+func TestLoggingConfigShouldRedactPayloads(t *testing.T) {
+	t.Parallel()
+
+	// Default (nil pointer) should redact
+	cfg := LoggingConfig{}
+	if !cfg.ShouldRedactPayloads() {
+		t.Fatal("expected ShouldRedactPayloads() to return true when RedactPayloads is nil")
+	}
+
+	// Explicitly true
+	true_ := true
+	cfg.RedactPayloads = &true_
+	if !cfg.ShouldRedactPayloads() {
+		t.Fatal("expected ShouldRedactPayloads() to return true when RedactPayloads is true")
+	}
+
+	// Explicitly false
+	false_ := false
+	cfg.RedactPayloads = &false_
+	if cfg.ShouldRedactPayloads() {
+		t.Fatal("expected ShouldRedactPayloads() to return false when RedactPayloads is false")
+	}
+}
+
+func TestLoggingApplyDefaults(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{}
+	ApplyDefaults(&cfg)
+
+	if cfg.Logging.Level != "info" {
+		t.Fatalf("expected default logging level 'info', got %q", cfg.Logging.Level)
+	}
+}
+
+func TestLoggingEnvOverrides(t *testing.T) {
+	// Test log level override
+	t.Run("log_level", func(t *testing.T) {
+		os.Setenv("AGENTFIELD_LOG_LEVEL", "debug")
+		defer os.Unsetenv("AGENTFIELD_LOG_LEVEL")
+
+		cfg := Config{}
+		ApplyEnvOverrides(&cfg)
+
+		if cfg.Logging.Level != "debug" {
+			t.Fatalf("expected log level 'debug', got %q", cfg.Logging.Level)
+		}
+	})
+
+	// Test redact payloads override
+	t.Run("redact_payloads_false", func(t *testing.T) {
+		os.Setenv("AGENTFIELD_LOG_REDACT_PAYLOADS", "false")
+		defer os.Unsetenv("AGENTFIELD_LOG_REDACT_PAYLOADS")
+
+		cfg := Config{}
+		ApplyEnvOverrides(&cfg)
+
+		if cfg.Logging.RedactPayloads == nil || *cfg.Logging.RedactPayloads != false {
+			t.Fatal("expected RedactPayloads to be false")
+		}
+	})
+
+	// Test redact payloads override (true)
+	t.Run("redact_payloads_true", func(t *testing.T) {
+		os.Setenv("AGENTFIELD_LOG_REDACT_PAYLOADS", "true")
+		defer os.Unsetenv("AGENTFIELD_LOG_REDACT_PAYLOADS")
+
+		cfg := Config{}
+		ApplyEnvOverrides(&cfg)
+
+		if cfg.Logging.RedactPayloads == nil || *cfg.Logging.RedactPayloads != true {
+			t.Fatal("expected RedactPayloads to be true")
+		}
+	})
+}

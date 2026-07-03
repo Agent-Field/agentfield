@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +22,16 @@ type UserEnvironmentVar struct {
 	Default     string `yaml:"default"`
 	Optional    bool   `yaml:"optional"`
 	Validation  string `yaml:"validation"` // regex pattern
+	Scope       string `yaml:"scope"`      // "global" (shared across nodes, default) or "node"
+}
+
+// SecretScope returns the secret store scope for this variable given the node
+// name. Variables default to global so shared keys (API tokens) are entered once.
+func (v UserEnvironmentVar) SecretScope(nodeName string) string {
+	if v.Scope == "node" {
+		return nodeName
+	}
+	return globalScope
 }
 
 // UserEnvironmentConfig represents user-configurable environment variables
@@ -37,11 +48,22 @@ type PackageMetadata struct {
 	Author          string                 `yaml:"author"`
 	Type            string                 `yaml:"type"`
 	Main            string                 `yaml:"main"`
+	Entrypoint      EntrypointConfig       `yaml:"entrypoint"`
 	AgentNode       AgentNodeConfig        `yaml:"agent_node"`
 	Dependencies    DependencyConfig       `yaml:"dependencies"`
 	Capabilities    CapabilityConfig       `yaml:"capabilities"`
 	UserEnvironment UserEnvironmentConfig  `yaml:"user_environment"`
 	Metadata        map[string]interface{} `yaml:"metadata"`
+}
+
+// EntrypointConfig describes how to start the agent node process.
+type EntrypointConfig struct {
+	// Start is the shell-free command used to launch the node, e.g.
+	// "python -m pr_af.app". The first token is resolved against the package
+	// venv when it is "python"/"python3". Empty falls back to "python main.py".
+	Start string `yaml:"start"`
+	// Healthcheck is the HTTP path polled to confirm readiness (default "/health").
+	Healthcheck string `yaml:"healthcheck"`
 }
 
 // AgentNodeConfig represents agent node specific configuration
@@ -54,6 +76,10 @@ type AgentNodeConfig struct {
 type DependencyConfig struct {
 	Python []string `yaml:"python"`
 	System []string `yaml:"system"`
+	// Nodes lists other agent nodes this node depends on. Each entry is an
+	// installable source: an "af://registry/<name>[@version]" ref or a git URL.
+	// Installing this node installs its node dependencies recursively.
+	Nodes []string `yaml:"nodes"`
 }
 
 // CapabilityConfig represents agent node capabilities
@@ -388,26 +414,80 @@ func (pu *PackageUninstaller) saveRegistry(registry *InstallationRegistry) error
 	return nil
 }
 
-// validatePackage checks if the package has required files
+// validatePackage checks if the package has required files.
 func (pi *PackageInstaller) validatePackage(sourcePath string) error {
-	// Check if agentfield-package.yaml exists
+	return ValidatePackage(sourcePath)
+}
+
+// ValidatePackage checks that a directory is an installable agent node: it must
+// have an agentfield-package.yaml and declare how to start — either a manifest
+// entrypoint.start (e.g. "python -m pr_af.app") or a top-level main.py. Real
+// nodes use a module entrypoint and have no main.py, so main.py is not required.
+func ValidatePackage(sourcePath string) error {
 	packageYamlPath := filepath.Join(sourcePath, "agentfield-package.yaml")
 	if _, err := os.Stat(packageYamlPath); os.IsNotExist(err) {
 		return fmt.Errorf("agentfield-package.yaml not found in %s", sourcePath)
 	}
 
-	// Check if main.py exists
+	metadata, err := ParsePackageMetadata(sourcePath)
+	if err != nil {
+		return err
+	}
+	if metadata.Entrypoint.Start != "" {
+		return nil
+	}
 	mainPyPath := filepath.Join(sourcePath, "main.py")
 	if _, err := os.Stat(mainPyPath); os.IsNotExist(err) {
-		return fmt.Errorf("main.py not found in %s", sourcePath)
+		return fmt.Errorf("package must declare entrypoint.start in agentfield-package.yaml or contain a main.py")
 	}
 
 	return nil
 }
 
-// parsePackageMetadata parses the agentfield-package.yaml file
-func (pi *PackageInstaller) parsePackageMetadata(sourcePath string) (*PackageMetadata, error) {
-	packageYamlPath := filepath.Join(sourcePath, "agentfield-package.yaml")
+// StartCommand returns the tokens used to launch the node. It prefers the
+// manifest entrypoint.start and falls back to "python <main>" (default main.py).
+func (m *PackageMetadata) StartCommand() []string {
+	if strings.TrimSpace(m.Entrypoint.Start) != "" {
+		return strings.Fields(m.Entrypoint.Start)
+	}
+	main := m.Main
+	if main == "" {
+		main = "main.py"
+	}
+	return []string{"python", main}
+}
+
+// NodeDepName extracts the installed package name from a node dependency
+// reference such as "af://registry/<name>@v" or a git URL. Returns "" when the
+// name cannot be derived from the reference alone.
+func NodeDepName(ref string) string {
+	const afPrefix = "af://registry/"
+	if strings.HasPrefix(ref, afPrefix) {
+		spec := strings.TrimPrefix(ref, afPrefix)
+		if at := strings.Index(spec, "@"); at >= 0 {
+			spec = spec[:at]
+		}
+		return strings.Trim(spec, "/")
+	}
+	// Git URL: derive the repo name (last path segment, sans .git).
+	trimmed := strings.TrimSuffix(strings.TrimSuffix(ref, "/"), ".git")
+	if idx := strings.LastIndexAny(trimmed, "/:"); idx >= 0 {
+		return trimmed[idx+1:]
+	}
+	return ""
+}
+
+// HealthcheckPath returns the readiness path, defaulting to "/health".
+func (m *PackageMetadata) HealthcheckPath() string {
+	if p := strings.TrimSpace(m.Entrypoint.Healthcheck); p != "" {
+		return p
+	}
+	return "/health"
+}
+
+// ParsePackageMetadata parses agentfield-package.yaml from a package directory.
+func ParsePackageMetadata(dir string) (*PackageMetadata, error) {
+	packageYamlPath := filepath.Join(dir, "agentfield-package.yaml")
 
 	data, err := os.ReadFile(packageYamlPath)
 	if err != nil {
@@ -431,6 +511,11 @@ func (pi *PackageInstaller) parsePackageMetadata(sourcePath string) (*PackageMet
 	}
 
 	return &metadata, nil
+}
+
+// parsePackageMetadata parses the agentfield-package.yaml file.
+func (pi *PackageInstaller) parsePackageMetadata(sourcePath string) (*PackageMetadata, error) {
+	return ParsePackageMetadata(sourcePath)
 }
 
 // isPackageInstalled checks if a package is already installed
@@ -474,6 +559,15 @@ func (pi *PackageInstaller) copyPackage(sourcePath, destPath string) error {
 			return err
 		}
 
+		// Skip VCS, build artifacts, local venvs and plaintext secrets so they
+		// never get copied into ~/.agentfield/packages.
+		if shouldSkipCopy(relPath, info) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
 		destFilePath := filepath.Join(destPath, relPath)
 
 		if info.IsDir() {
@@ -483,6 +577,40 @@ func (pi *PackageInstaller) copyPackage(sourcePath, destPath string) error {
 		// Copy file
 		return pi.copyFile(path, destFilePath)
 	})
+}
+
+// copyExcludedNames are directory/file names skipped during package copy.
+var copyExcludedNames = map[string]bool{
+	".git":          true,
+	"venv":          true,
+	".venv":         true,
+	"__pycache__":   true,
+	".env":          true,
+	"node_modules":  true,
+	".mypy_cache":   true,
+	".pytest_cache": true,
+}
+
+// ShouldSkipCopy reports whether a walked path should be excluded when copying
+// a package into ~/.agentfield/packages (VCS, venvs, caches, plaintext secrets).
+func ShouldSkipCopy(relPath string, info os.FileInfo) bool {
+	return shouldSkipCopy(relPath, info)
+}
+
+// shouldSkipCopy reports whether a walked path should be excluded from the copy.
+func shouldSkipCopy(relPath string, info os.FileInfo) bool {
+	if relPath == "." {
+		return false
+	}
+	base := filepath.Base(relPath)
+	if copyExcludedNames[base] {
+		return true
+	}
+	// Skip stray .env.* local overrides but keep .env.example.
+	if strings.HasPrefix(base, ".env.") && base != ".env.example" {
+		return true
+	}
+	return false
 }
 
 // copyFile copies a single file from src to dst
@@ -505,60 +633,76 @@ func (pi *PackageInstaller) copyFile(src, dst string) error {
 
 // installDependencies installs package dependencies
 func (pi *PackageInstaller) installDependencies(packagePath string, metadata *PackageMetadata) error {
-	// Install Python dependencies in a virtual environment
-	if len(metadata.Dependencies.Python) > 0 || pi.hasRequirementsFile(packagePath) {
-		// Create virtual environment
+	return InstallPythonDependencies(packagePath, metadata.Dependencies.Python, metadata.Dependencies.System)
+}
+
+// InstallPythonDependencies sets up a per-package virtual environment and
+// installs the node's Python dependencies. A venv is created when the package
+// has a requirements.txt, a pyproject.toml, or manifest-declared Python deps.
+// Install sources, in order: requirements.txt, `pip install .` for a
+// pyproject.toml/setup.py project, then any manifest-declared packages.
+func InstallPythonDependencies(packagePath string, pyDeps, systemDeps []string) error {
+	hasReq := fileExistsAt(packagePath, "requirements.txt")
+	hasProject := fileExistsAt(packagePath, "pyproject.toml") || fileExistsAt(packagePath, "setup.py")
+
+	if hasReq || hasProject || len(pyDeps) > 0 {
 		venvPath := filepath.Join(packagePath, "venv")
 
 		cmd := exec.Command("python3", "-m", "venv", venvPath)
 		if _, err := cmd.CombinedOutput(); err != nil {
-			// Try with python if python3 fails
 			cmd = exec.Command("python", "-m", "venv", venvPath)
 			if output, err := cmd.CombinedOutput(); err != nil {
 				return fmt.Errorf("failed to create virtual environment: %w\nOutput: %s", err, output)
 			}
 		}
 
-		// Determine pip path
-		var pipPath string
-		if _, err := os.Stat(filepath.Join(venvPath, "bin", "pip")); err == nil {
-			pipPath = filepath.Join(venvPath, "bin", "pip")
-		} else {
+		pipPath := filepath.Join(venvPath, "bin", "pip")
+		if _, err := os.Stat(pipPath); err != nil {
 			pipPath = filepath.Join(venvPath, "Scripts", "pip.exe") // Windows
 		}
 
 		// Upgrade pip first (ignore failures)
-		cmd = exec.Command(pipPath, "install", "--upgrade", "pip")
-		_, _ = cmd.CombinedOutput()
+		_, _ = exec.Command(pipPath, "install", "--upgrade", "pip").CombinedOutput()
 
-		// Install from requirements.txt if it exists
-		requirementsPath := filepath.Join(packagePath, "requirements.txt")
-		if _, err := os.Stat(requirementsPath); err == nil {
-			cmd = exec.Command(pipPath, "install", "-r", requirementsPath)
+		// requirements.txt
+		if hasReq {
+			cmd = exec.Command(pipPath, "install", "-r", "requirements.txt")
 			cmd.Dir = packagePath
 			if output, err := cmd.CombinedOutput(); err != nil {
 				return fmt.Errorf("failed to install requirements.txt dependencies: %w\nOutput: %s", err, output)
 			}
 		}
 
-		// Install dependencies from agentfield-package.yaml
-		if len(metadata.Dependencies.Python) > 0 {
-			for _, dep := range metadata.Dependencies.Python {
-				cmd = exec.Command(pipPath, "install", dep)
-				cmd.Dir = packagePath
-				if output, err := cmd.CombinedOutput(); err != nil {
-					return fmt.Errorf("failed to install dependency %s: %w\nOutput: %s", dep, err, output)
-				}
+		// pyproject.toml / setup.py project (installs the project and its deps)
+		if hasProject {
+			cmd = exec.Command(pipPath, "install", ".")
+			cmd.Dir = packagePath
+			if output, err := cmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("failed to install project (pip install .): %w\nOutput: %s", err, output)
+			}
+		}
+
+		// Manifest-declared Python packages
+		for _, dep := range pyDeps {
+			cmd = exec.Command(pipPath, "install", dep)
+			cmd.Dir = packagePath
+			if output, err := cmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("failed to install dependency %s: %w\nOutput: %s", dep, err, output)
 			}
 		}
 	}
 
-	// Install system dependencies (if any)
-	for _, dep := range metadata.Dependencies.System {
+	for _, dep := range systemDeps {
 		fmt.Printf("System dependency required: %s (please install manually)\n", dep)
 	}
 
 	return nil
+}
+
+// fileExistsAt reports whether name exists directly under dir.
+func fileExistsAt(dir, name string) bool {
+	_, err := os.Stat(filepath.Join(dir, name))
+	return err == nil
 }
 
 // hasRequirementsFile checks if requirements.txt exists

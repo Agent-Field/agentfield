@@ -1,4 +1,3 @@
-
 package packages
 
 import (
@@ -65,11 +64,13 @@ func TestRunnerErrorCases(t *testing.T) {
 	t.Run("RunAgentNode-start-process-fails", func(t *testing.T) {
 		home := t.TempDir()
 		ar := &AgentNodeRunner{AgentFieldHome: home}
-		
+
 		pkgPath := filepath.Join(home, "packages", "demo")
-		if err := os.MkdirAll(pkgPath, 0755); err != nil {t.Fatal(err)}
+		if err := os.MkdirAll(pkgPath, 0755); err != nil {
+			t.Fatal(err)
+		}
 		registry := &InstallationRegistry{Installed: map[string]InstalledPackage{
-			"demo": { Name: "demo", Path: pkgPath },
+			"demo": {Name: "demo", Path: pkgPath},
 		}}
 		if err := (&PackageUninstaller{AgentFieldHome: home}).saveRegistry(registry); err != nil {
 			t.Fatal(err)
@@ -85,23 +86,23 @@ func TestRunnerErrorCases(t *testing.T) {
 			t.Fatalf("expected start process error, got %v", err)
 		}
 	})
-	
+
 	t.Run("displayCapabilities-fails", func(t *testing.T) {
 		ar := &AgentNodeRunner{}
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request){
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "error", http.StatusInternalServerError)
 		}))
 		defer server.Close()
 
 		port := server.Listener.Addr().(*net.TCPAddr).Port
-		
+
 		err := ar.displayCapabilities(InstalledPackage{}, port)
 		if err == nil {
 			t.Fatalf("expected display capabilities to fail")
 		}
 	})
 
-	t.Run("updateRuntimeInfo-read-only-registry", func(t *testing.T){
+	t.Run("updateRuntimeInfo-read-only-registry", func(t *testing.T) {
 		home := t.TempDir()
 		ar := &AgentNodeRunner{AgentFieldHome: home}
 		regPath := filepath.Join(home, "installed.yaml")
@@ -113,31 +114,16 @@ func TestRunnerErrorCases(t *testing.T) {
 		}
 
 		err := ar.updateRuntimeInfo("demo", 1234, 5678)
-		if err == nil || !(strings.Contains(err.Error(), "permission denied") || strings.Contains(err.Error(), "read-only file system")){
+		if err == nil || !(strings.Contains(err.Error(), "permission denied") || strings.Contains(err.Error(), "read-only file system")) {
 			t.Fatalf("expected permission error, got %v", err)
 		}
 		_ = os.Chmod(regPath, 0644)
-	})
-	
-	t.Run("loadPackageEnvFile-unquoted", func(t *testing.T){
-		ar := &AgentNodeRunner{}
-		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("FOO=bar"), 0644); err != nil {
-			t.Fatal(err)
-		}
-		vars, err := ar.loadPackageEnvFile(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if vars["FOO"] != "bar" {
-			t.Fatalf("expected bar, got %s", vars["FOO"])
-		}
 	})
 
 	t.Run("waitForAgentNode-timeout", func(t *testing.T) {
 		ar := &AgentNodeRunner{}
 		// just use a port that is not listening
-		err := ar.waitForAgentNode(1, 10 * time.Millisecond)
+		err := ar.waitForAgentNode(1, "/health", 10*time.Millisecond)
 		if err == nil {
 			t.Fatal("expected timeout error")
 		}

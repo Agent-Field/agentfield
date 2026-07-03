@@ -49,7 +49,14 @@ func NewAgentService(
 
 // RunAgent starts an installed agent
 func (as *DefaultAgentService) RunAgent(name string, options domain.RunOptions) (*domain.RunningAgent, error) {
+	return as.runAgentGuarded(name, options, map[string]bool{})
+}
+
+// runAgentGuarded starts a node; inProgress tracks nodes already being started
+// in this dependency chain to break cycles.
+func (as *DefaultAgentService) runAgentGuarded(name string, options domain.RunOptions, inProgress map[string]bool) (*domain.RunningAgent, error) {
 	fmt.Printf("🚀 Launching agent node: %s\n", name)
+	inProgress[name] = true
 
 	// 1. Check if agent node is installed
 	registry, err := as.loadRegistryDirect()
@@ -81,6 +88,10 @@ func (as *DefaultAgentService) RunAgent(name string, options domain.RunOptions) 
 		return nil, fmt.Errorf("agent node %s is already running on port %d", name, *agentNode.Runtime.Port)
 	}
 
+	// 2b. Start declared node dependencies first, before allocating this node's
+	// port — each dependency fully binds its own port, avoiding collisions.
+	as.startNodeDependencies(agentNode, inProgress, options)
+
 	// 3. Allocate port
 	fmt.Printf("🔍 Searching for available port...\n")
 	port := options.Port
@@ -95,14 +106,21 @@ func (as *DefaultAgentService) RunAgent(name string, options domain.RunOptions) 
 
 	// 4. Start agent node process
 	fmt.Printf("📡 Starting agent node process...\n")
-	processConfig := as.buildProcessConfig(agentNode, port)
+	processConfig, err := as.buildProcessConfig(agentNode, port)
+	if err != nil {
+		return nil, err
+	}
 	pid, err := as.processManager.Start(processConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start agent node: %w", err)
 	}
 
 	// 5. Wait for agent node to be ready
-	if err := as.waitForAgentNode(port, 10*time.Second); err != nil {
+	healthPath := "/health"
+	if metadata, err := packages.ParsePackageMetadata(agentNode.Path); err == nil {
+		healthPath = metadata.HealthcheckPath()
+	}
+	if err := as.waitForAgentNode(port, healthPath, 10*time.Second); err != nil {
 		// Kill the process if it failed to start properly
 		if stopErr := as.processManager.Stop(pid); stopErr != nil {
 			return nil, fmt.Errorf("agent node failed to start: %w (additionally failed to stop process: %v)", err, stopErr)
@@ -444,19 +462,68 @@ func (as *DefaultAgentService) convertToRunningAgent(pkg packages.InstalledPacka
 	return agent
 }
 
-// buildProcessConfig creates a process configuration for starting an agent
-func (as *DefaultAgentService) buildProcessConfig(agentNode packages.InstalledPackage, port int) interfaces.ProcessConfig {
-	// Prepare environment variables
+// startNodeDependencies starts a node's installed, not-yet-running node
+// dependencies before the node itself. inProgress guards against cycles.
+func (as *DefaultAgentService) startNodeDependencies(node packages.InstalledPackage, inProgress map[string]bool, options domain.RunOptions) {
+	metadata, err := packages.ParsePackageMetadata(node.Path)
+	if err != nil {
+		return
+	}
+	for _, ref := range metadata.Dependencies.Nodes {
+		depName := packages.NodeDepName(ref)
+		if depName == "" || inProgress[depName] {
+			continue
+		}
+		registry, err := as.loadRegistryDirect()
+		if err != nil {
+			return
+		}
+		dep, _, exists := as.findAgentInRegistry(registry, depName)
+		if !exists {
+			fmt.Printf("⚠️  Node dependency %s is declared but not installed (run: af install %s)\n", depName, ref)
+			continue
+		}
+		if running, _ := as.reconcileProcessState(&dep, depName); running {
+			continue
+		}
+		fmt.Printf("🔗 Starting node dependency: %s\n", depName)
+		// Dependencies get an auto-assigned port, not the parent's --port.
+		depOptions := options
+		depOptions.Port = 0
+		if _, err := as.runAgentGuarded(depName, depOptions, inProgress); err != nil {
+			fmt.Printf("⚠️  Failed to start node dependency %s: %v\n", depName, err)
+		}
+	}
+}
+
+// buildProcessConfig creates a process configuration for starting an agent.
+// It reads the manifest entrypoint and resolves declared environment variables
+// from the encrypted secret store (prompting for missing required ones).
+func (as *DefaultAgentService) buildProcessConfig(agentNode packages.InstalledPackage, port int) (interfaces.ProcessConfig, error) {
+	// Read the manifest for the entrypoint, healthcheck and declared env. Fall
+	// back to defaults (python main.py) if no manifest is present.
+	metadata, err := packages.ParsePackageMetadata(agentNode.Path)
+	if err != nil {
+		fmt.Printf("⚠️  No usable manifest (%v); falling back to python main.py\n", err)
+		metadata = &packages.PackageMetadata{}
+	}
+
+	// Prepare environment variables. Export both AGENTFIELD_SERVER (the var the
+	// SDK reads) and the legacy AGENTFIELD_SERVER_URL.
+	serverURL := resolveServerURL()
 	env := os.Environ()
 	env = append(env, fmt.Sprintf("PORT=%d", port))
-	env = append(env, fmt.Sprintf("AGENTFIELD_SERVER_URL=%s", resolveServerURL()))
+	env = append(env, fmt.Sprintf("AGENTFIELD_SERVER=%s", serverURL))
+	env = append(env, fmt.Sprintf("AGENTFIELD_SERVER_URL=%s", serverURL))
 
-	// Load environment variables from package .env file
-	if envVars, err := as.loadPackageEnvFile(agentNode.Path); err == nil {
-		for key, value := range envVars {
-			env = append(env, fmt.Sprintf("%s=%s", key, value))
-		}
-		fmt.Printf("🔧 Loaded %d environment variables from .env file\n", len(envVars))
+	// Resolve declared variables from the encrypted secret store. Secrets are
+	// injected only into this child process — never written to disk in plaintext.
+	resolvedEnv, err := as.resolveNodeEnvironment(agentNode.Name, metadata)
+	if err != nil {
+		return interfaces.ProcessConfig{}, err
+	}
+	for key, value := range resolvedEnv {
+		env = append(env, fmt.Sprintf("%s=%s", key, value))
 	}
 
 	// Determine Python path - use virtual environment if available
@@ -516,22 +583,49 @@ func (as *DefaultAgentService) buildProcessConfig(agentNode packages.InstalledPa
 		fmt.Printf("⚠️  Virtual environment not found at %s, using system Python: %s\n", venvPath, pythonPath)
 	}
 
+	// Launch via the manifest entrypoint (e.g. "python -m pr_af.app"). When the
+	// program token is python/python3, substitute the resolved interpreter.
+	startArgs := metadata.StartCommand()
+	command := startArgs[0]
+	args := startArgs[1:]
+	if command == "python" || command == "python3" {
+		command = pythonPath
+	}
+
 	return interfaces.ProcessConfig{
-		Command: pythonPath,
-		Args:    []string{"main.py"},
+		Command: command,
+		Args:    args,
 		Env:     env,
 		WorkDir: agentNode.Path,
 		LogFile: agentNode.Runtime.LogFile,
+	}, nil
+}
+
+// resolveNodeEnvironment resolves a node's declared variables via the encrypted
+// secret store, prompting for missing required ones.
+func (as *DefaultAgentService) resolveNodeEnvironment(nodeName string, metadata *packages.PackageMetadata) (map[string]string, error) {
+	env := metadata.UserEnvironment
+	if len(env.Required) == 0 && len(env.Optional) == 0 {
+		return map[string]string{}, nil
 	}
+	store, err := packages.NewSecretStore(as.agentfieldHome)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open secret store: %w", err)
+	}
+	resolver := &packages.EnvResolver{Store: store, NodeName: nodeName, Prompter: packages.TTYPrompter{}}
+	return resolver.Resolve(env)
 }
 
 // waitForAgentNode waits for the agent node to become ready
-func (as *DefaultAgentService) waitForAgentNode(port int, timeout time.Duration) error {
+func (as *DefaultAgentService) waitForAgentNode(port int, healthPath string, timeout time.Duration) error {
+	if healthPath == "" {
+		healthPath = "/health"
+	}
 	client := &http.Client{Timeout: 1 * time.Second}
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
-		resp, err := client.Get(fmt.Sprintf("http://localhost:%d/health", port))
+		resp, err := client.Get(fmt.Sprintf("http://localhost:%d%s", port, healthPath))
 		if err == nil && resp.StatusCode == 200 {
 			resp.Body.Close()
 			return nil
@@ -660,42 +754,6 @@ func (as *DefaultAgentService) findAgentInRegistry(registry *packages.Installati
 
 	// Not found
 	return packages.InstalledPackage{}, "", false
-}
-
-// loadPackageEnvFile loads environment variables from package .env file
-func (as *DefaultAgentService) loadPackageEnvFile(packagePath string) (map[string]string, error) {
-	envPath := filepath.Join(packagePath, ".env")
-
-	data, err := os.ReadFile(envPath)
-	if err != nil {
-		return nil, err
-	}
-
-	envVars := make(map[string]string)
-	lines := strings.Split(string(data), "\n")
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) == 2 {
-			key := strings.TrimSpace(parts[0])
-			value := strings.TrimSpace(parts[1])
-
-			// Remove quotes if present
-			if (strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"")) ||
-				(strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'")) {
-				value = value[1 : len(value)-1]
-			}
-
-			envVars[key] = value
-		}
-	}
-
-	return envVars, nil
 }
 
 // findPythonExecutable tries to find a suitable Python executable

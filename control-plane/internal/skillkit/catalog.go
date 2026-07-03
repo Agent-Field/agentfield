@@ -26,8 +26,8 @@ var Catalog = []Skill{
 	{
 		Name:        "agentfield",
 		Aliases:     []string{"agentfield-multi-reasoner-builder"},
-		Version:     "0.4.0",
-		Description: "Design and ship a multi-agent system on AgentField — composite intelligence from five foundational principles, deep dynamic call graphs, live SDK docs from agentfield.ai, async-first smoke tests.",
+		Version:     "0.5.0",
+		Description: "Design and ship a multi-agent system on AgentField. Derive the orchestration from the problem: decompose by cognitive jobs, place each slot on the autonomy spectrum, assign a verification rung, choose the dynamism rung with budgets. Composite intelligence, deep dynamic call graphs, live SDK docs from agentfield.ai, async-first smoke tests.",
 		EmbedRoot:   "skill_data/agentfield",
 		EntryFile:   "SKILL.md",
 	},

@@ -6,6 +6,520 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.97-rc.8] - 2026-07-03
+
+
+### Added
+
+- Feat(share): af share — export & publish run artifacts (offline HTML + hosted permalinks) (#706)
+
+* feat(cli): af share exports self-contained run artifact (DAG, timeline, bundle v1)
+
+* fix(share): hide cost UI entirely when cost data is unavailable
+
+* feat(share): workflow share export endpoint + UI share button
+
+Add GET /api/ui/v1/workflows/{workflow_id}/share returning the same
+self-contained offline HTML artifact as `af share`, as an attachment
+(run-<id>.html, text/html). Supports ?redact=1.
+
+The share bundle/template package moves from internal/cli/share to
+internal/share so both the CLI and the new handler import it. The
+handler builds the bundle directly from the storage layer (the same
+execution records the DAG and execution-details UI handlers read),
+resolving payloads from the payload store when stored by URI — no
+internal HTTP round-trip and no per-execution fan-out.
+
+UI: a native Share button in the run detail action row (matching the
+Export provenance button style, Share2 icon from lucide-react) and a
+Share item in the runs-list lifecycle kebab menu. Both download via an
+authenticated fetch + anchor, honouring Content-Disposition.
+
+* feat(share): default --public to agentfield.ai
+
+`af share <id> --public` now publishes to agentfield.ai and prints the
+returned permalink (https://agentfield.ai/share/<token>) instead of erroring
+when AGENTFIELD_SHARE_URL is unset. Point that variable at a self-hosted
+share server to publish there instead.
+
+* test(web): cover run share menu action
+
+* fix(share): avoid script escape preallocation overflow
+
+* test(share): cover artifact export paths (6f17fac)
+
+
+
+### Chores
+
+- Chore(sdk-go): bump testify to v1.11.1 (#681) (0e48916)
+
+
+
+### Fixed
+
+- Fix(harness): stream output with idle watchdog and explicit stdin null (#695) (#696)
+
+* fix(harness): stream output with idle watchdog and explicit stdin null (#695)
+
+The CLI harness runner in all three SDKs blocked until the child exited and
+read output only at the end, so it could not apply a no-progress watchdog.
+A stalled opencode/OpenRouter streaming call froze the run up to the
+wall-clock cap (default 1800s) while holding a concurrency-semaphore slot.
+
+Python (sdk/python/agentfield/harness/_cli.py):
+- Stream stdout and stderr concurrently; track last-output time; kill the
+  process group and raise TimeoutError if no output arrives for idle_seconds
+  (env AGENTFIELD_HARNESS_IDLE_SECONDS, default 120; <= 0 disables).
+- Set stdin=DEVNULL and start_new_session=True. Wall-clock timeout kept.
+
+Go (sdk/go/harness/cli.go, cli_unix.go, cli_windows.go):
+- Switch from c.Run() buffers to StdoutPipe/StderrPipe drained in goroutines;
+  poll last-activity; kill the process group on idle. Set c.Stdin to an empty
+  reader and run the child in its own process group.
+
+TypeScript (sdk/typescript/src/harness/cli.ts):
+- Add an idle-watchdog interval over the existing data listeners; SIGKILL on
+  idle. Spawn with stdio ['ignore','pipe','pipe'] so the child's stdin gets EOF.
+
+All return shapes are unchanged, so JSONL parsing downstream is unaffected.
+Adds idle-watchdog and fast-command tests in each SDK.
+
+* fix(ai): retry .ai() LLM calls on wall-clock timeout (#695)
+
+The .ai() path raised TimeoutError on the asyncio safety-net timeout with no
+retry (rate-limit retry only covers 429/503). A stalled OpenRouter connection
+therefore failed the reasoner outright. Add a timeout-retry layer that reissues
+the call on a fresh client pool (the pool is already reset on timeout), bounded
+by AGENTFIELD_AI_TIMEOUT_RETRIES (default 2, 0 disables). Applies to both the
+plain and tool-loop .ai paths. Existing deadlock-recovery tests run with retries
+disabled; added tests cover the retry-recovers and retry-exhausts cases.
+
+* fix(ai): retry transient provider errors (malformed response, 5xx) on .ai() (#695)
+
+The .ai() timeout-retry now also covers transient provider glitches: a
+malformed 'Unable to get json response', a 5xx, or a dropped connection are
+retried on a fresh client pool, while permanent client errors (bad request,
+auth, model-not-found, unsupported-schema) propagate immediately. Observed live
+with glm-5.2 returning a garbage whitespace body that failed a reasoner outright. (05ae9eb)
+
+
+
+### Other
+
+- [codex] fix Python SDK decorator metadata duplication (#693)
+
+* fix python sdk decorator metadata duplication
+
+* preserve stacked reasoner metadata
+
+* unwrap reasoners for code origin
+
+* honor outer reasoner trigger opt in
+
+* honor staged trigger opt in
+
+* keep agent reasoner metadata local
+
+* fix(sdk-python): apply EventTrigger transform on canonical reasoner form (#693)
+
+The decorator-dedup refactor moved trigger merging into
+resolve_reasoner_metadata but stopped stamping _reasoner_triggers on the
+stored handler. As a result the runtime path (_execute_reasoner_endpoint)
+read no bindings for the canonical `@app.reasoner(triggers=[EventTrigger(
+..., transform=fn)])` form on a plain handler, so the declared transform
+was silently skipped and the handler received the raw event payload.
+
+Rather than re-stamping the function (which the PR deliberately dropped:
+bound methods reject setattr, and a shared function object registered on
+two agents would leak triggers between them), thread the merged bindings
+through _execute_reasoner_endpoint via the registration closure. This
+keeps the PR's agent-local metadata intent while restoring transform
+application at dispatch time.
+
+Adds a regression test that drives the real route -> envelope unwrap ->
+_execute_reasoner_endpoint path and asserts the handler receives the
+transformed object.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Santosh <santosh@agentfield.ai>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (91d8f67)
+
+
+
+### Testing
+
+- Test(functional): fix docker-backed SDK test infra (#709) (b6f0292)
+
+## [0.1.97-rc.7] - 2026-07-03
+
+
+### Fixed
+
+- Fix(agentfield): add test for issue #589 (#703)
+
+* fix(agentfield): add test for issue #589
+
+Ref: #589
+Signed-off-by: Jay <sallomondiei@gmail.com>
+
+* fix: replace stub with real regression test for OpenRouter video download auth
+
+* test(#589): relocate regression test into sdk/python/tests so CI collects it
+
+The regression test for #589 was committed at repo-root tests/test_issue_589.py.
+The sdk-python CI workflow only triggers on sdk/python/**, so the test never ran,
+and 'import agentfield' does not resolve from repo root. Move it under
+sdk/python/tests/ where CI collects it and the package import resolves. Also drop
+an unused 'import os' flagged by ruff.
+
+Refs #703, #589
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+---------
+
+Signed-off-by: Jay <sallomondiei@gmail.com>
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (7b6f4b8)
+
+## [0.1.97-rc.6] - 2026-07-03
+
+
+### Added
+
+- Feat(cli): af install/run for agent nodes — encrypted secrets, env prompting, node-to-node deps (#692)
+
+* feat(cli): encrypted secret store + manifest entrypoint/env resolution for agent nodes
+
+Adds the foundation for making 'af install'/'af run' usable for real agent
+nodes (which start via 'python -m pkg.app' and have no top-level main.py):
+
+- internal/packages/secrets.go: encrypted at-rest secret store. KeyfileProvider
+  keeps a random 32-byte key at ~/.agentfield/keyring/master.key (0600);
+  SecretStore encrypts global.enc + <node>.enc via AES-256-GCM, with node scope
+  overriding global so shared keys (API tokens) are entered once.
+- internal/packages/env_resolver.go: resolves declared env vars in order
+  process-env -> node store -> global store -> manifest default -> prompt
+  (hidden for type:secret), persisting prompted secrets encrypted. Injected only
+  into the child process; never written to disk in plaintext.
+- installer.go: manifest gains entrypoint{start,healthcheck}, dependencies.nodes,
+  and per-var scope. Validation accepts entrypoint.start instead of requiring
+  main.py; package copy excludes .git/venv/.env/__pycache__.
+- runner.go: launches via manifest entrypoint, exports AGENTFIELD_SERVER (the
+  var the SDK actually reads) alongside legacy AGENTFIELD_SERVER_URL, honors the
+  manifest healthcheck path, and resolves env via the secret store.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* feat(cli): af secrets command + node-to-node dependency install/start
+
+- af secrets set/ls/rm manages the encrypted store (hidden input for set,
+  masked listing, global + --node scopes).
+- install resolves dependencies.nodes recursively (af://registry/<name>
+  -> github.com/Agent-Field/<name>, or git URLs), skipping already-installed
+  nodes to break cycles.
+- af run brings up a node's installed node-dependencies first, in dependency
+  order, with cycle protection.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* docs: agent-node install/run/secrets guide
+
+- docs/installing-agent-nodes.md: full guide to af install/run, the
+  agentfield-package.yaml manifest (entrypoint, node deps, user_environment),
+  the encrypted runtime-only secrets model, and af secrets.
+- cli-toolkit.md reference: document af install, af run, af secrets (+ embedded
+  skill_data copy synced).
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* fix(cli): apply install/run fixes to the active service layer
+
+Local end-to-end verification revealed the CLI's install/run path goes through
+internal/core/services (DefaultPackageService/DefaultAgentService), which
+duplicated — and so bypassed — the fixes previously made in internal/packages.
+'af install' on an entrypoint-only node still failed with 'main.py not found',
+and 'af run' still exported only AGENTFIELD_SERVER_URL and loaded plaintext .env.
+
+- package_service: validate/parse/copy now delegate to the shared
+  packages.ValidatePackage / ParsePackageMetadata / ShouldSkipCopy (entrypoint
+  accepted, junk excluded). Install guidance points at 'af secrets set'.
+- agent_service: buildProcessConfig launches via the manifest entrypoint,
+  exports AGENTFIELD_SERVER, resolves env via the encrypted secret store
+  (prompting for missing required), honors the manifest healthcheck path, and
+  drops the plaintext .env loader. RunAgent starts node deps first with a
+  threaded cycle guard.
+- packages: export ValidatePackage + ShouldSkipCopy as the single source of truth.
+- tests updated to the new contract (entrypoint validation, store-based env
+  injection instead of .env).
+
+Verified end-to-end: install entrypoint-only node -> missing-secret errors
+cleanly -> af secrets set -> af run injects AGENTFIELD_SERVER + the stored
+secret + manifest default into the process (confirmed via the node's env dump).
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* fix(cli): start node dependencies before allocating the parent's port
+
+Local multi-agent verification showed a port collision: dependencies were
+started after the parent allocated its port, so the parent's port (not yet
+bound) was handed out again to a dependency, which then failed to bind. Move
+dependency startup ahead of port allocation so each dependency fully binds its
+own port first.
+
+Verified end-to-end against a live local control plane: 'af run greeter-node'
+auto-starts its dependency echo-node (distinct ports 8002/8003), both register,
+both reasoners execute through the control plane, and an already-running
+dependency is left untouched (same PID).
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* test(cli): cover node-dependency resolution and ordered-start helpers
+
+Unit tests for resolveNodeRef, installedNames, installNodeDependencies
+(skip-already-installed), and startNodeDependencies (not-installed warning +
+already-running skip) in both the service and packages layers — covering the
+new patch lines and pinning the behaviors verified end-to-end.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* fix(cli): git/github install validation + pyproject dependency install
+
+End-to-end install testing against the published node repos surfaced two gaps:
+
+1. The git and GitHub install paths (git.go/github.go findPackageRoot) were a
+   third and fourth copy of the 'main.py required' check, so 'af install
+   <github-url>' failed for entrypoint-only nodes (no top-level main.py) such as
+   SWE-AF and cloudsecurity-af. Both now delegate to the shared ValidatePackage
+   (accepts a manifest entrypoint.start).
+2. Dependency install only ran for requirements.txt projects, so pyproject-only
+   nodes (pr-af, sec-af, cloudsecurity-af) installed with no venv and no deps.
+   Dependency install is now a single shared InstallPythonDependencies that also
+   runs 'pip install .' for pyproject.toml/setup.py projects.
+
+Verified: all five published node repos now install from their GitHub URLs; a
+pyproject node (sec-af) builds its venv and 'pip install .' succeeds, with
+sec_af + agentfield importable from the node's venv. (Nodes that declare
+requires-python >=3.11 need a matching interpreter on PATH — pip reports this
+clearly.) Tests updated for the new validation contract; new unit tests cover
+the pyproject branch and entrypoint-accepting findPackageRoot.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* test(#692): add patch-coverage tests for node install secrets/env/runner
+
+The coverage-summary check was failing the patch-coverage gate: touched
+lines in the af-node-install feature sat at 59% vs the 80% floor in
+.coverage-gate.toml. This adds behavior-focused Go tests for the
+previously untested error and lifecycle paths:
+
+- internal/cli/secrets.go: full `af secrets set/ls/rm` command tree
+  (global + node scope, stdin value, empty-value rejection, idempotent
+  remove) — previously had no test file.
+- internal/packages/secrets.go: KeyfileProvider generation/empty/
+  unreadable/unwritable key paths, provider-error propagation, empty
+  scope = global, load/save error propagation across Set/Delete/List/Get,
+  and ListAll (empty, non-.enc skip, corrupt-scope, read-dir errors).
+- internal/packages/env_resolver.go: store-read failures, optional
+  omission, prompter errors, skipped prompts, invalid/too-many validation
+  attempts, persist failure, and TTYPrompter plain-line reads.
+- internal/packages/runner.go: resolveEnvironment (declared/undeclared),
+  startAgentNodeProcess env assembly + manifest fallback, node-dependency
+  bring-up (not-installed / cycle-guard / already-running / recursive
+  start), and waitForAgentNode default health path.
+
+Patch coverage on touched lines: 59% -> 81% (gate passes at the 80%
+floor). No production code changed; tests only.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (753cba7)
+
+## [0.1.97-rc.5] - 2026-07-03
+
+
+### Fixed
+
+- Fix(control-plane): prevent structured logs from leaking execution payloads (#701)
+
+* fix(control-plane): prevent structured logs from leaking execution payloads (#560)
+
+Add logging configuration (level + redact_payloads) to control what
+execution data appears in structured log events and the internal event bus.
+
+Changes:
+- Add LoggingConfig with 'level' and 'redact_payloads' options
+- Support AGENTFIELD_LOG_LEVEL and AGENTFIELD_LOG_REDACT_PAYLOADS env vars
+- Guard execution input/output/context in event publishing behind redaction flag
+- Default to redact_payloads=true (safe) — opt-in via config to see full payloads
+- Replace 32 log.Printf calls in storage layer with leveled logger.Logger calls
+- Add InitLoggerWithLevel() for string-based log level configuration
+- Re-initialize logger from config at server startup
+
+Closes #560
+
+* fix: address Copilot review comments
+
+- Guard req.Result behind redactPayloads in handleStatusUpdate event data
+- Remove raw data preview from corrupted JSON warning log (log only metadata: context + length)
+
+* test(control-plane): cover payload redaction branches for patch-coverage gate (#701)
+
+The structured-log payload redaction added in #701 gated execution
+input/result/context data behind `redactPayloads`. Those branches were only
+exercised on their redact-enabled default, leaving the opt-out paths uncovered
+and dropping control-plane patch coverage below the 80% floor.
+
+Adds behavior tests that subscribe to the execution event bus and assert the
+observable contract: input/result/context payloads are omitted from published
+events when redaction is enabled (the safe default) and present only when an
+operator explicitly disables it. Covers completeExecution, failExecution,
+completeReplayHit, handleStatusUpdate, and the event-context path.
+
+Patch coverage on touched lines: 68% -> 93%. Additive only; does not weaken the
+redaction logic.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (841459b)
+
+## [0.1.97-rc.4] - 2026-07-03
+
+
+### Chores
+
+- Chore: remove dead identity UI surface and unreferenced docker-perf config (#618)
+
+Salvage of the safe, zero-regression subset of #618. Removes genuinely dead
+code only:
+
+- control-plane/internal/handlers/ui/identity.go (+2 tests): the DID Explorer /
+  Credentials UI backend. Its sole frontend consumer (identityApi.ts) has no
+  callers, and the DID Explorer pages were already removed — App.tsx redirects
+  /identity/dids and /identity/credentials to /settings. No live consumer.
+- web/client/src/services/identityApi.ts (+ test): orphaned frontend service.
+- control-plane/config/docker-perf.yaml: unreferenced by any Makefile/CI/compose.
+
+Deliberately EXCLUDES the regression-inducing parts of the original PR:
+the /admin/public-key alias removal (breaks all-SDK offline VC verification),
+node lifecycle + /actions/claim endpoints, legacy reasoner execute endpoints,
+the broken root compose.yaml, and storage-mode/telemetry config flips.
+
+Validation: go build/vet clean; go test ./... green (control-plane); web-ui
+npm build clean; web-ui coverage 84.78% (baseline 84.79%, floor 84.0).
+
+Co-authored-by pocesar via original PR #618.
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (615baa6)
+
+## [0.1.97-rc.3] - 2026-07-03
+
+
+### Fixed
+
+- Fix(sdk-python): use AsyncConfig.from_environment() for client default async config (#714)
+
+AgentFieldClient constructed its default async_config with AsyncConfig(),
+ignoring AGENTFIELD_ASYNC_* environment overrides that Agent already honors.
+Initialize the default from AsyncConfig.from_environment() so client-level
+async behavior can be tuned via env vars, while preserving any explicitly
+passed async_config unchanged. Adds regression coverage for both paths.
+
+Fixes #621. Supersedes #632 (original change by liuzemei / neooosky);
+re-authored here so it can land without the outstanding CLA signature.
+
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (04756b8)
+
+## [0.1.97-rc.2] - 2026-07-03
+
+
+### Chores
+
+- Chore(deps): bump golang.org/x/net (#710)
+
+Bumps the go_modules group with 1 update in the /control-plane directory: [golang.org/x/net](https://github.com/golang/net).
+
+
+Updates `golang.org/x/net` from 0.52.0 to 0.55.0
+- [Commits](https://github.com/golang/net/compare/v0.52.0...v0.55.0)
+
+---
+updated-dependencies:
+- dependency-name: golang.org/x/net
+  dependency-version: 0.55.0
+  dependency-type: indirect
+  dependency-group: go_modules
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (bd5f8cc)
+
+## [0.1.97-rc.1] - 2026-07-02
+
+
+### Added
+
+- Feat(skill): generative orchestration theory for the agentfield skill (#708)
+
+* feat(skill): add mental-models layer to agentfield skill
+
+* feat(skill): rework thinking layer into generative orchestration theory
+
+The skill taught rules and a pattern vocabulary; an agent reading it could
+imitate reference builds but not derive an orchestration for a problem that
+looks like neither security auditing nor contract review. Patterns are
+outputs of thinking, not inputs.
+
+- mental-models.md: rewritten as the full generative theory — cognitive-job
+  decomposition, autonomy spectrum, seven-rung verification ladder,
+  six-rung dynamism ladder, quality escalation ladder, code-for-certainty +
+  archei data-flow rule; one invoice-intake example threads through it
+- SKILL.md: 'How to think' is now the five-step derivation procedure; the
+  five principles are reframed as consequences and a review checklist;
+  pattern-first design added to hard rejections (+18 lines vs main)
+- patterns-emerge.md: reframed as post-hoc naming; every named pattern
+  carries a derivation line from the ladders (HUNT->PROVE = rung 6 on a
+  parallel discovery layer, etc.)
+- anti-patterns.md: rejections that follow from the theory (rung below/above
+  the stakes, unjustified dynamism, pattern-first design, model-size-first)
+- verification.md and templates: 'verification ladder' now names the output
+  ladder; build proof renamed to build checks; stale 'five principles'
+  pointers updated
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* chore(skill): bump agentfield skill to v0.5.0 and sync embedded copy
+
+The thinking-layer rework edited skills/agentfield/ (source of truth)
+but the binary embeds skill_data/agentfield/. Sync the mirror (adds
+mental-models.md, updates SKILL.md and references) and bump the catalog
+version 0.4.0 -> 0.5.0 so existing installs pick up the change on
+af skill install/update instead of being skipped as already-current.
+
+---------
+
+Co-authored-by: Claude Opus 4.8 <noreply@anthropic.com> (76fdf5e)
+
+
+
+### Documentation
+
+- Docs: credit integrations packs in comparison table (linked partial mark) (a709524)
+
+- Docs: sharpen vs-frameworks pitch (concede row, plain-words rows, second-caller rule) (2ea7c67)
+
+- Docs: scale-first README rewrite (fan-out hero sample, how-it-scales section, tutorial blog cards) (859174f)
+
 ## [0.1.96] - 2026-06-29
 
 ## [0.1.96-rc.1] - 2026-06-29

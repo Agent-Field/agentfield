@@ -136,6 +136,6 @@ For each entry: domain, dominant shape, entry reasoner path, and one sentence on
 2. Skim this map. Find the 1–2 examples whose **problem shape** most closely matches.
 3. Open the actual code (use `Read` on the entry reasoner file).
 4. Grep for `app.call(` and `@app.reasoner` / `@router.reasoner` to see the real call graph.
-5. **Do not copy verbatim.** Adapt the decomposition discipline to your problem by walking the five principles again.
+5. **Do not copy verbatim.** Steal the decomposition discipline; your topology comes from the derivation procedure in `mental-models.md`, priced for your stakes and signals.
 
-If no example matches, walk the principles fresh. The point of the map is to shortcut "what does a clean decomposition look like in code?" — not to substitute for thinking about your problem.
+If no example matches, run the derivation fresh. The point of the map is to shortcut "what does a clean decomposition look like in code?" — not to substitute for thinking about your problem.

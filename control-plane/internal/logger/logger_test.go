@@ -18,6 +18,52 @@ func TestInitLoggerSetsLevel(t *testing.T) {
 	require.Equal(t, zerolog.DebugLevel, Logger.GetLevel())
 }
 
+func TestInitLoggerWithLevel(t *testing.T) {
+	InitLoggerWithLevel("debug")
+	require.Equal(t, zerolog.DebugLevel, Logger.GetLevel())
+
+	InitLoggerWithLevel("info")
+	require.Equal(t, zerolog.InfoLevel, Logger.GetLevel())
+
+	InitLoggerWithLevel("warn")
+	require.Equal(t, zerolog.WarnLevel, Logger.GetLevel())
+
+	InitLoggerWithLevel("error")
+	require.Equal(t, zerolog.ErrorLevel, Logger.GetLevel())
+
+	// Unknown defaults to info
+	InitLoggerWithLevel("unknown")
+	require.Equal(t, zerolog.InfoLevel, Logger.GetLevel())
+
+	// Empty string defaults to info
+	InitLoggerWithLevel("")
+	require.Equal(t, zerolog.InfoLevel, Logger.GetLevel())
+}
+
+func TestParseLevel(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected zerolog.Level
+	}{
+		{"debug", zerolog.DebugLevel},
+		{"DEBUG", zerolog.DebugLevel},
+		{"verbose", zerolog.DebugLevel},
+		{"trace", zerolog.DebugLevel},
+		{"info", zerolog.InfoLevel},
+		{"INFO", zerolog.InfoLevel},
+		{"warn", zerolog.WarnLevel},
+		{"warning", zerolog.WarnLevel},
+		{"error", zerolog.ErrorLevel},
+		{"err", zerolog.ErrorLevel},
+		{" info ", zerolog.InfoLevel},
+		{"", zerolog.InfoLevel},
+		{"invalid", zerolog.InfoLevel},
+	}
+	for _, tt := range tests {
+		require.Equal(t, tt.expected, ParseLevel(tt.input), "ParseLevel(%q)", tt.input)
+	}
+}
+
 func TestFormattedHelpers(t *testing.T) {
 	var buf bytes.Buffer
 	Logger = zerolog.New(&buf).With().Timestamp().Logger().Level(zerolog.DebugLevel)

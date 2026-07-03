@@ -2,9 +2,11 @@
 
 A scaffold that "looks right" but isn't wired up is worse than no scaffold. Static checks prove syntax and shape; only the **live smoke test** proves the call graph works.
 
+(Naming note: this file is about proving the *build*. The **verification ladder** — the seven rungs for checking a *reasoner's output* — lives in `mental-models.md` §3.)
+
 ---
 
-## The verification ladder (run in order)
+## Build checks (run in order)
 
 ```bash
 # 1. Control plane health

@@ -10,9 +10,15 @@ When the user (or your own drift) reaches for one of these, name the rule, give 
 
 | ❌ | ✅ | Why |
 |---|---|---|
+| Pattern-first design ("this looks like a HUNT→PROVE problem") | Derive from cognitive jobs; open `patterns-emerge.md` only after the shape exists | Patterns are outputs of thinking, not inputs. Imitation can't generalize to problems the reference examples don't cover. |
+| Verification rung below the stakes (accepting a harness's diff without running tests; irreversible action with no human gate) | Price the rung by cost-of-being-wrong × cost-of-checking — tests (rung 3) for code, human gate (rung 7) for irreversible actions | An unverified opaque delegate is the most expensive way to be confidently wrong. |
+| Verification rung above the stakes (adversarial prover on a routing or formatting step) | Schema check (rung 2) or a programmatic invariant (rung 3) | Rung 6 costs ~2× per slot in money and latency. Spend it where confident-wrong is expensive, not as decoration. |
+| Dynamism rung above what any signal justifies (meta-prompting when the specialist set never varies; recursion over flat data) | Name the concrete signal or drop to the lower rung | Unjustified dynamism is ceremony — opacity and cost with nothing actually steering. |
+| Upgrading the model on an undiagnosed slot | Quality escalation ladder: sharpen contract → decompose → parallel perspectives → adversary → autonomy | Structure is cheaper and diagnosable; a bigger model hides the fault instead of localizing it. |
 | `httpx.post(other_agent_url, ...)` | `app.call(f"{app.node_id}.X", ...)` | The CP needs to see every call for DAG / VCs / replay / observability. Direct HTTP makes the system invisible. |
 | One giant reasoner doing 5 things | 5 reasoners + orchestrator with `app.call` + `asyncio.gather` | Granular decomposition is the forcing function for parallelism, observability, replayability. A monolithic reasoner is a script with extra steps. |
 | Static linear chain when the path depends on findings | Dynamic routing on intermediate state | Dynamic routing IS the meta-level intelligence that distinguishes AgentField. A static chain can be written in 30 lines of LangChain. |
+| Declaring topology upfront (fixed fan-out width, fixed specialist list) when findings should decide | Compute N, the specialist set, and the depth from intermediate results | The DAG is a trace of runtime decisions, not a spec. If the trace never varies, you rebuilt LangGraph with extra steps. |
 | `app.ai(prompt=full_50_page_doc)` | Chunked-loop reasoner OR `app.ai(tools=[...])` OR `app.harness` | `.ai()` is single-shot. It cannot adapt or navigate. Stuffing a long doc truncates silently or blows the window. |
 | `while not confident: ...` (no cap) | `for _ in range(MAX): ...` with explicit break | Unbounded loops are how you get a $400 bug report. |
 | `app.ai(user=str(prev.model_dump()))` | `app.ai(user=format_as_prose(prev))` | LLMs reason over prose, not serialized JSON. JSON between code-and-LLM is fine; JSON between two LLMs is a smell. |
@@ -40,6 +46,8 @@ When you (or the user) reach for one of these, recognize it and refuse.
 
 | Rationalization | Counter |
 |---|---|
+| "This is basically sec-af, I'll copy its shape" | Copy its decomposition discipline, derive your own topology. Its rungs were priced for its stakes and signals, not yours. |
+| "An adversary can't hurt" | It costs ~2× per slot and adds latency. Rung 6 is for expensive false positives, not for decoration. |
 | "Just for the demo, a chain is fine" | The demo IS the proof. A weak demo proves nothing. |
 | "The LLM is smart enough to handle the whole document in one call" | The LLM is 0.3-grade. The architecture is 0.8-grade. Don't mix them up. |
 | "I'll add the harness later if it doesn't work" | You'll never know it doesn't work — `.ai()` will silently truncate. Start with the right primitive. |

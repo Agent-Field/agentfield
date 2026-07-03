@@ -245,10 +245,6 @@ services:
       AGENT_CALLBACK_URL: http://<slug>:8001
       AGENT_NODE_ID: ${AGENT_NODE_ID:-<slug>}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      AGENTFIELD_OPENROUTER_SITE_URL: ${AGENTFIELD_OPENROUTER_SITE_URL:-https://agentfield.ai}
-      AGENTFIELD_OPENROUTER_APP_NAME: ${AGENTFIELD_OPENROUTER_APP_NAME:-AgentField AI}
-      OR_SITE_URL: ${OR_SITE_URL:-https://agentfield.ai}
-      OR_APP_NAME: ${OR_APP_NAME:-AgentField AI}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
@@ -340,7 +336,7 @@ Generate from `project-claude-template.md`. Customize every `<placeholder>`.
 
 ## Generation order
 
-1. Decide the topology (read `patterns-emerge.md` + closest example via `examples-map.md` + walk the five principles).
+1. Derive the topology (run the procedure in `mental-models.md`, grep the closest example via `examples-map.md`, then name the shape via `patterns-emerge.md`).
 2. Run `af init <slug> --language python --docker --defaults --non-interactive --default-model <model>`.
 3. **Rewrite `main.py`** with your real architecture.
 4. If > 4 reasoners, build the `reasoners/` package (models, helpers, routers).

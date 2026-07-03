@@ -1,4 +1,3 @@
-
 package packages
 
 import (
@@ -94,7 +93,7 @@ func TestGitHubInstallerErrorCasesFinal(t *testing.T) {
 			w.Write([]byte("short body"))
 		}))
 		defer server.Close()
-		
+
 		gi := &GitHubInstaller{}
 		info := &GitHubPackageInfo{ArchiveURL: server.URL}
 

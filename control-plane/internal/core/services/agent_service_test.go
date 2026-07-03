@@ -869,7 +869,8 @@ func TestBuildProcessConfig(t *testing.T) {
 		tmpDir,
 	).(*DefaultAgentService)
 
-	config := service.buildProcessConfig(agentNode, 8001)
+	config, err := service.buildProcessConfig(agentNode, 8001)
+	require.NoError(t, err)
 	// Check for any Python command (python, python3, or full path to python3)
 	assert.True(t, config.Command == "python" || config.Command == "python3" ||
 		strings.Contains(config.Command, "python3"),
