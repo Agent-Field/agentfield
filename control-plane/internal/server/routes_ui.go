@@ -262,10 +262,6 @@ func (s *AgentFieldServer) registerUIAPI() {
 			vc.POST("/verify", didHandler.VerifyVCHandler)
 		}
 
-		// Identity & Trust endpoints (DID Explorer and Credentials)
-		identityHandler := ui.NewIdentityHandlers(s.storage, s.didWebService)
-		identityHandler.RegisterRoutes(uiAPI)
-
 		// Authorization UI endpoints
 		authorization := uiAPI.Group("/authorization")
 		{
