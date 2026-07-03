@@ -7,7 +7,6 @@ The fix (PR #579) gates the auth header on the hostname: openrouter.ai URLs get
 the Bearer token; CDN-hosted URLs get none.
 """
 
-import os
 from unittest.mock import AsyncMock, patch
 
 import pytest
