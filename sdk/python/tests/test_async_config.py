@@ -1,4 +1,5 @@
 from agentfield.async_config import AsyncConfig
+from agentfield.client import AgentFieldClient
 
 
 def test_async_config_validate_defaults_ok():
@@ -48,3 +49,24 @@ def test_from_environment_overrides(monkeypatch):
     assert cfg.enable_event_stream is True
     assert cfg.event_stream_path == "/stream"
     assert cfg.event_stream_retry_backoff == 4.5
+
+
+def test_client_default_async_config_uses_environment(monkeypatch):
+    monkeypatch.setenv("AGENTFIELD_ASYNC_MAX_EXECUTION_TIMEOUT", "321")
+    monkeypatch.setenv("AGENTFIELD_ASYNC_ENABLE_EVENT_STREAM", "true")
+    monkeypatch.setenv("AGENTFIELD_ASYNC_EVENT_STREAM_PATH", "/client-events")
+
+    client = AgentFieldClient()
+
+    assert client.async_config.max_execution_timeout == 321
+    assert client.async_config.enable_event_stream is True
+    assert client.async_config.event_stream_path == "/client-events"
+
+
+def test_client_keeps_explicit_async_config(monkeypatch):
+    monkeypatch.setenv("AGENTFIELD_ASYNC_MAX_EXECUTION_TIMEOUT", "321")
+    explicit_config = AsyncConfig(max_execution_timeout=456)
+
+    client = AgentFieldClient(async_config=explicit_config)
+
+    assert client.async_config is explicit_config
