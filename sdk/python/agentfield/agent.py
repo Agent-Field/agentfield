@@ -1918,6 +1918,15 @@ class Agent(FastAPI):
             # Store input_fields for runtime validation (captured by closure)
             handler_input_fields = input_fields
 
+            # Capture the merged trigger bindings for the runtime invocation path.
+            # These are threaded through _execute_reasoner_endpoint (rather than
+            # stamped onto `func` via setattr) so an EventTrigger's declared
+            # transform is applied at dispatch time. Stamping the handler is
+            # unsafe: bound methods reject setattr, and the same function object
+            # registered on two agents would leak triggers across them (see
+            # resolve_reasoner_metadata, which reads _reasoner_triggers back).
+            handler_trigger_bindings = list(merged_triggers or [])
+
             # Create FastAPI endpoint with generic dict input (runtime validation)
             @self.post(endpoint_path)
             async def endpoint(request: Request):
@@ -1966,6 +1975,7 @@ class Agent(FastAPI):
                         signature=sig,
                         input_data=validated_input,
                         request=request,
+                        trigger_bindings=handler_trigger_bindings,
                     )
 
                 execution_id_header = request.headers.get("X-Execution-ID")
@@ -2217,6 +2227,7 @@ class Agent(FastAPI):
         signature: inspect.Signature,
         input_data: Dict[str, Any],
         request: Request,
+        trigger_bindings: Optional[list] = None,
     ) -> Any:
         import asyncio
         import time
@@ -2262,8 +2273,12 @@ class Agent(FastAPI):
             )
 
         try:
-            # Phase 5: Apply trigger transform if applicable
-            trigger_bindings = getattr(func, "_reasoner_triggers", [])
+            # Phase 5: Apply trigger transform if applicable.
+            # Prefer the bindings the registration decorator threaded in
+            # (agent-local, no cross-agent leakage); fall back to the function
+            # attr for any legacy caller that doesn't pass them.
+            if trigger_bindings is None:
+                trigger_bindings = getattr(func, "_reasoner_triggers", [])
             if execution_context.trigger and trigger_bindings:
                 payload_dict = self._apply_trigger_transform(
                     execution_context.trigger,

@@ -35,7 +35,7 @@ import inspect
 import httpx
 import pytest
 
-from agentfield import ScheduleTrigger, TriggerContext
+from agentfield import EventTrigger, ScheduleTrigger, TriggerContext
 from agentfield.agent import Agent, _bind_trigger_payload
 from agentfield.agent_registry import (
     clear_current_agent,
@@ -196,6 +196,57 @@ async def test_trigger_reasoner_with_plain_payload_param(monkeypatch):
 
     assert resp.status_code == 200, resp.text
     assert seen["payload"] == {"n": 1}
+
+
+@pytest.mark.asyncio
+async def test_canonical_event_trigger_transform_is_applied(monkeypatch):
+    """C7 (regression, #693): an ``EventTrigger`` declared with a ``transform``
+    on a PLAIN handler via the canonical ``@app.reasoner(triggers=[...])`` form
+    must have that transform applied on the real runtime path — the handler
+    receives the TRANSFORMED object, not the raw event payload.
+
+    The decorator-dedup refactor moved trigger merging into
+    ``resolve_reasoner_metadata`` but stopped stamping ``_reasoner_triggers`` on
+    the stored handler, so ``_execute_reasoner_endpoint`` saw no bindings and
+    silently skipped the transform. This drives the same route → envelope
+    unwrap → ``_execute_reasoner_endpoint`` path production uses."""
+    agent, _ = create_test_agent(monkeypatch)
+    _inline(agent)
+    seen = {}
+
+    def to_domain(event: dict) -> dict:
+        return {"transformed": True, "amount_cents": event.get("amount", 0) * 100}
+
+    @agent.reasoner(
+        triggers=[EventTrigger(source="stripe", types=["payment"], transform=to_domain)]
+    )
+    async def on_payment(payload: dict | None = None) -> dict:
+        seen["payload"] = payload
+        return {"ran": True}
+
+    envelope = {
+        "event": {"amount": 5},
+        "_meta": {
+            "trigger_id": "trg_evt_1",
+            "source": "stripe",
+            "event_type": "payment.succeeded",
+            "event_id": "evt_1",
+            "idempotency_key": "evt_1_key",
+            "received_at": "2026-06-08T09:00:00+00:00",
+        },
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=agent), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/reasoners/on_payment",
+            json=envelope,
+            headers={"x-workflow-id": "wf-1", "x-execution-id": "exec-1"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    # The handler must receive the transformed object, not the raw event.
+    assert seen["payload"] == {"transformed": True, "amount_cents": 500}
 
 
 # --------------------------------------------------------------------------- #
