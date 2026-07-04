@@ -148,3 +148,54 @@ func TestRegisterServerlessAgentHandler_FirstRegistrationUnchanged(t *testing.T)
 	assert.Equal(t, types.AgentStatusReady, store.registeredAgent.LifecycleStatus)
 	assert.Nil(t, store.registeredAgent.ApprovedTags)
 }
+
+func TestRegisterServerlessAgentHandler_CapturesAndRefreshesAuthRequired(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	authRequired := false
+	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/discover", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"node_id":"serverless-auth",
+			"version":"2026.04.09",
+			"auth_required":` + boolJSON(authRequired) + `,
+			"reasoners":[],
+			"skills":[]
+		}`))
+	}))
+	defer discoveryServer.Close()
+
+	store := &nodeRESTStorageStub{}
+	router := gin.New()
+	router.POST("/serverless/register", RegisterServerlessAgentHandler(store, nil, nil, nil, nil, []string{"127.0.0.1", "localhost"}))
+
+	req := httptest.NewRequest(http.MethodPost, "/serverless/register", strings.NewReader(`{"invocation_url":"`+discoveryServer.URL+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusCreated, resp.Code)
+	require.NotNil(t, store.registeredAgent)
+	assert.Equal(t, false, store.registeredAgent.Metadata.Custom["origin_auth_required"])
+
+	// The node turns auth on and re-registers against the same URL — the
+	// stored flag must flip on the next discovery, not stay stuck at the
+	// value captured during first registration.
+	authRequired = true
+	req = httptest.NewRequest(http.MethodPost, "/serverless/register", strings.NewReader(`{"invocation_url":"`+discoveryServer.URL+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp = httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusCreated, resp.Code)
+	require.NotNil(t, store.registeredAgent)
+	assert.Equal(t, true, store.registeredAgent.Metadata.Custom["origin_auth_required"])
+}
+
+func boolJSON(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
+}

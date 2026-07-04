@@ -387,6 +387,66 @@ func TestHandler(t *testing.T) {
 	assert.Equal(t, "ok", response["status"])
 }
 
+func TestStatusHandler(t *testing.T) {
+	cfg := Config{
+		NodeID:        "node-1",
+		Version:       "1.2.3",
+		AgentFieldURL: "https://api.example.com",
+		Logger:        log.New(io.Discard, "", 0),
+	}
+
+	agent, err := New(cfg)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/status", nil)
+	w := httptest.NewRecorder()
+	agent.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var response map[string]any
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&response))
+	assert.Equal(t, "running", response["status"])
+	assert.Equal(t, "node-1", response["node_id"])
+	assert.Equal(t, "1.2.3", response["version"])
+	assert.Contains(t, response, "uptime_seconds")
+}
+
+func TestStatusHandler_ExemptFromOriginAuth(t *testing.T) {
+	cfg := Config{
+		NodeID:            "node-1",
+		Version:           "1.0.0",
+		AgentFieldURL:     "https://api.example.com",
+		Logger:            log.New(io.Discard, "", 0),
+		InternalToken:     "secret",
+		RequireOriginAuth: true,
+	}
+
+	agent, err := New(cfg)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/status", nil)
+	w := httptest.NewRecorder()
+	agent.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code, "status endpoint must stay reachable without auth so the control plane's health monitor can poll it")
+}
+
+func TestDiscoveryPayload_ReportsAuthRequired(t *testing.T) {
+	cfg := Config{
+		NodeID:        "node-1",
+		Version:       "1.0.0",
+		AgentFieldURL: "https://api.example.com",
+		Logger:        log.New(io.Discard, "", 0),
+	}
+
+	agent, err := New(cfg)
+	require.NoError(t, err)
+	assert.Equal(t, false, agent.discoveryPayload()["auth_required"])
+
+	agent.cfg.RequireOriginAuth = true
+	assert.Equal(t, true, agent.discoveryPayload()["auth_required"])
+}
+
 func TestHandleReasoner_Sync(t *testing.T) {
 	cfg := Config{
 		NodeID:        "node-1",

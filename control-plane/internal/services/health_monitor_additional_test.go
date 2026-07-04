@@ -51,9 +51,9 @@ func TestHealthMonitorRecoverFromDatabaseSkipsMissingBaseURL(t *testing.T) {
 		RegisteredAt:  time.Now(),
 	}))
 	require.NoError(t, provider.RegisterAgent(ctx, &types.AgentNode{
-		ID:           "no-url-agent",
+		ID:            "no-url-agent",
 		LastHeartbeat: time.Now(),
-		RegisteredAt: time.Now(),
+		RegisteredAt:  time.Now(),
 	}))
 
 	mockClient.setStatusResponse("recoverable-agent", "running")
@@ -66,6 +66,42 @@ func TestHealthMonitorRecoverFromDatabaseSkipsMissingBaseURL(t *testing.T) {
 		_, okNoURL := hm.activeAgents["no-url-agent"]
 		return okRecoverable && !okNoURL && mockClient.getStatusCallCountFor("recoverable-agent") > 0
 	}, 5*time.Second, 100*time.Millisecond)
+}
+
+func TestHealthMonitorRecoverFromDatabaseSkipsServerlessNodes(t *testing.T) {
+	hm, provider, mockClient, _, _ := setupHealthMonitorTest(t)
+	ctx := context.Background()
+
+	require.NoError(t, provider.RegisterAgent(ctx, &types.AgentNode{
+		ID:             "long-running-agent",
+		BaseURL:        "http://long-running.example",
+		DeploymentType: "long_running",
+		LastHeartbeat:  time.Now(),
+		RegisteredAt:   time.Now(),
+	}))
+	require.NoError(t, provider.RegisterAgent(ctx, &types.AgentNode{
+		ID:             "serverless-agent",
+		BaseURL:        "http://serverless.example",
+		DeploymentType: "serverless",
+		LastHeartbeat:  time.Now(),
+		RegisteredAt:   time.Now(),
+	}))
+
+	mockClient.setStatusResponse("long-running-agent", "running")
+
+	require.NoError(t, hm.RecoverFromDatabase(ctx))
+	require.Eventually(t, func() bool {
+		hm.agentsMutex.RLock()
+		defer hm.agentsMutex.RUnlock()
+		_, okLongRunning := hm.activeAgents["long-running-agent"]
+		return okLongRunning && mockClient.getStatusCallCountFor("long-running-agent") > 0
+	}, 5*time.Second, 100*time.Millisecond)
+
+	hm.agentsMutex.RLock()
+	_, okServerless := hm.activeAgents["serverless-agent"]
+	hm.agentsMutex.RUnlock()
+	require.False(t, okServerless, "serverless nodes must not be added to the active health registry on restart recovery")
+	require.Equal(t, 0, mockClient.getStatusCallCountFor("serverless-agent"))
 }
 
 func TestHealthMonitorUnregisterAgentLegacyFallback(t *testing.T) {

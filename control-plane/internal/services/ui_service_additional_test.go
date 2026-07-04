@@ -200,6 +200,43 @@ func TestUIServiceStatusReconciliationAndSummaries(t *testing.T) {
 	require.Equal(t, types.HealthStatusActive, fallbackSummary.HealthStatus)
 }
 
+func TestGetNodesSummary_SurfacesDeploymentTypeAndAuthFlag(t *testing.T) {
+	unauthedServerless := &types.AgentNode{
+		ID:             "svless-open",
+		DeploymentType: "serverless",
+		Metadata:       types.AgentMetadata{Custom: map[string]interface{}{"origin_auth_required": false}},
+	}
+	authedServerless := &types.AgentNode{
+		ID:             "svless-authed",
+		DeploymentType: "serverless",
+		Metadata:       types.AgentMetadata{Custom: map[string]interface{}{"origin_auth_required": true}},
+	}
+	longRunning := &types.AgentNode{
+		ID:             "long-runner",
+		DeploymentType: "long_running",
+	}
+
+	service := &UIService{
+		storage:        &uiStorageStub{listAgentsResp: []*types.AgentNode{unauthedServerless, authedServerless, longRunning}},
+		clients:        syncMap(),
+		lastEventCache: make(map[string]NodeEvent),
+		stopHeartbeat:  make(chan struct{}),
+	}
+
+	summaries, count, err := service.GetNodesSummary(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 3, count)
+
+	require.Equal(t, "serverless", summaries[0].DeploymentType)
+	require.False(t, summaries[0].OriginAuthRequired)
+
+	require.Equal(t, "serverless", summaries[1].DeploymentType)
+	require.True(t, summaries[1].OriginAuthRequired)
+
+	require.Equal(t, "long_running", summaries[2].DeploymentType)
+	require.False(t, summaries[2].OriginAuthRequired)
+}
+
 func TestUIServiceNodeDetailsAndPackageLookup(t *testing.T) {
 	node := &types.AgentNode{ID: "node-1", TeamID: "team-a"}
 	schema, err := json.Marshal(map[string]any{"agent_node": map[string]any{"node_id": "node-1"}})
