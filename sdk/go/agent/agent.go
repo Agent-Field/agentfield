@@ -365,6 +365,13 @@ type Config struct {
 	// plane does not expect heartbeats.
 	LeaseRefreshInterval time.Duration
 
+	// CallTimeout bounds every outbound HTTP call this agent makes as a
+	// client - cross-agent Call()s, memory backend requests, etc.
+	// Optional. Default: 15s. A reasoning-model-backed reasoner chained
+	// behind Call() (search + a large max_tokens reasoning response) can
+	// easily exceed the old hardcoded 15s, so raise this for such workloads.
+	CallTimeout time.Duration
+
 	// DisableLeaseLoop disables automatic periodic lease refreshes.
 	// Optional. Default: false. When true, node registration reports
 	// HeartbeatInterval as "0s" to signal that the agent does not heartbeat.
@@ -538,8 +545,11 @@ func New(cfg Config) (*Agent, error) {
 		cfg.Logger = log.New(os.Stdout, "[agent] ", log.LstdFlags)
 	}
 
+	if cfg.CallTimeout <= 0 {
+		cfg.CallTimeout = 15 * time.Second
+	}
 	httpClient := &http.Client{
-		Timeout: 15 * time.Second,
+		Timeout: cfg.CallTimeout,
 	}
 
 	// Initialize AI client if config provided
