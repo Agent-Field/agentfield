@@ -80,9 +80,17 @@ def setup_litellm_stub(monkeypatch):
     return module
 
 
-def make_chat_response(content: str):
+def make_chat_response(content: str, reasoning_content=None):
     return SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(content=content, audio=None))]
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    content=content,
+                    audio=None,
+                    reasoning_content=reasoning_content,
+                )
+            )
+        ]
     )
 
 
@@ -280,6 +288,47 @@ async def test_ai_with_multimodal_passes_modalities(monkeypatch, agent_with_ai):
     assert captured["kwargs"]["modalities"] == ["text", "audio"]
     assert captured["kwargs"]["audio"] == {"voice": "nova"}
     assert captured["kwargs"]["model"] == "gpt-4o-audio-preview"
+
+
+@pytest.mark.asyncio
+async def test_ai_retries_empty_structured_output_after_reasoning(
+    monkeypatch, agent_with_ai
+):
+    from pydantic import BaseModel
+
+    class Result(BaseModel):
+        answer: str = ""
+
+    agent_with_ai.ai_config.max_tokens = 100
+    stub_module = setup_litellm_stub(monkeypatch)
+    calls = []
+
+    async def acompletion_side_effect(**params):
+        calls.append(params["max_tokens"])
+        if len(calls) == 1:
+            return make_chat_response("{}", reasoning_content="hidden reasoning")
+        return make_chat_response('{"answer": "done"}')
+
+    stub_module.acompletion.side_effect = acompletion_side_effect
+
+    class StubLimiter:
+        async def execute_with_retry(self, func):
+            return await func()
+
+    ai = AgentAI(agent_with_ai)
+    monkeypatch.setattr(ai, "_ensure_model_limits_cached", lambda: asyncio.sleep(0))
+    monkeypatch.setattr(ai, "_get_rate_limiter", lambda: StubLimiter())
+    monkeypatch.setattr(
+        "agentfield.agent_ai.AgentUtils.detect_input_type", lambda value: "text"
+    )
+    monkeypatch.setattr(
+        "agentfield.agent_ai.AgentUtils.serialize_result", lambda value: value
+    )
+
+    result = await ai.ai("hello", schema=Result)
+
+    assert result.answer == "done"
+    assert calls == [100, 200]
 
 
 @pytest.mark.asyncio

@@ -539,6 +539,9 @@ class AIConfig(BaseModel):
         "gpt-4o-mini": 128000,
         "gpt-4": 8192,
         "gpt-3.5-turbo": 16385,
+        # GLM models
+        "openrouter/z-ai/glm-5.2": 131072,
+        "z-ai/glm-5.2": 131072,
         # Claude models
         "openrouter/anthropic/claude-3.5-sonnet": 200000,
         "openrouter/anthropic/claude-3-opus": 200000,
