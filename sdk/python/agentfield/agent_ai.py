@@ -23,6 +23,10 @@ _litellm = None
 _openai = None
 
 
+class _EmptyReasoningStructuredOutput(ValueError):
+    pass
+
+
 def _get_litellm():
     """Lazy import of litellm - only loads when AI features are used."""
     global _litellm
@@ -39,6 +43,61 @@ def _get_litellm():
 
             _litellm = _LiteLLMStub()
     return _litellm
+
+
+def _get_message_reasoning_content(response: Any) -> Optional[Any]:
+    """Return provider reasoning metadata when it is present on the message."""
+    try:
+        message = response.choices[0].message
+    except (AttributeError, IndexError, TypeError):
+        return None
+    return getattr(message, "reasoning_content", None)
+
+
+def _has_non_empty_reasoning_content(response: Any) -> bool:
+    reasoning_content = _get_message_reasoning_content(response)
+    if reasoning_content is None:
+        return False
+    if isinstance(reasoning_content, str):
+        return bool(reasoning_content.strip())
+    return bool(reasoning_content)
+
+
+def _is_empty_structured_result(parsed: BaseModel) -> bool:
+    """
+    Treat {} or values equal to schema defaults as empty structured output.
+    """
+    if not isinstance(parsed, BaseModel):
+        return False
+
+    explicitly_set = getattr(parsed, "model_fields_set", set())
+    if not explicitly_set:
+        return True
+
+    try:
+        return parsed == parsed.__class__()
+    except Exception:
+        return False
+
+
+def _increase_retry_max_tokens(params: Dict[str, Any]) -> None:
+    current = params.get("max_tokens")
+    if current is None:
+        params.pop("max_tokens", None)
+        return
+    if isinstance(current, int) and current > 0:
+        params["max_tokens"] = current * 2
+
+
+def _raise_if_empty_reasoning_structured_output(
+    response: Any, parsed: BaseModel
+) -> None:
+    if _has_non_empty_reasoning_content(response) and _is_empty_structured_result(
+        parsed
+    ):
+        raise _EmptyReasoningStructuredOutput(
+            "Empty structured response after non-empty reasoning_content"
+        )
 
 
 def _reset_litellm_http_clients(litellm_module: Any) -> None:
@@ -882,6 +941,7 @@ class AgentAI:
 
         # Maximum retries for transient parse failures (malformed JSON from LLM)
         max_parse_retries = 2
+        empty_reasoning_retry_used = False
 
         async def _execute_and_parse():
             """Execute LLM call and parse response. Raised ValueError triggers parse retry."""
@@ -943,7 +1003,11 @@ class AgentAI:
             if schema:
                 try:
                     json_data = json.loads(str(multimodal_response.text))
-                    return schema(**json_data)
+                    parsed = schema(**json_data)
+                    _raise_if_empty_reasoning_structured_output(resp, parsed)
+                    return parsed
+                except _EmptyReasoningStructuredOutput:
+                    raise
                 except (
                     json.JSONDecodeError,
                     ValueError,
@@ -957,7 +1021,11 @@ class AgentAI:
                     if json_match:
                         try:
                             json_data = json.loads(json_match.group())
-                            return schema(**json_data)
+                            parsed = schema(**json_data)
+                            _raise_if_empty_reasoning_structured_output(resp, parsed)
+                            return parsed
+                        except _EmptyReasoningStructuredOutput:
+                            raise
                         except (json.JSONDecodeError, ValueError, ValidationError):
                             pass
                     raise ValueError(
@@ -971,6 +1039,15 @@ class AgentAI:
         for attempt in range(max_parse_retries + 1):
             try:
                 return await _execute_and_parse()
+            except _EmptyReasoningStructuredOutput:
+                if schema and not empty_reasoning_retry_used:
+                    empty_reasoning_retry_used = True
+                    _increase_retry_max_tokens(litellm_params)
+                    log_debug(
+                        "Structured response was empty after reasoning_content; retrying once with a larger max_tokens budget..."
+                    )
+                    continue
+                raise
             except ValueError as e:
                 if schema and "Could not parse structured response" in str(e):
                     last_parse_error = e
