@@ -199,7 +199,7 @@ jobs:
             goreleaser_ids: '--id agentfield-linux-amd64 --id agentfield-linux-arm64'
           - os: macos-14
             label: darwin
-            goreleaser_ids: '--id agentfield-darwin-amd64 --id agentfield-darwin-arm64'
+            goreleaser_ids: '--id agentfield-darwin-amd64 --id agentfield-darwin-arm64 --id agentfield-tray-darwin-amd64 --id agentfield-tray-darwin-arm64'
     runs-on: ${{ matrix.os }}
     env:
       GORELEASER_CURRENT_TAG: ${{ needs.prepare.outputs.tag_name }}
