@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.98-rc.2] - 2026-07-06
+
+
+### Fixed
+
+- Fix(control-plane): flush SSE headers immediately in memory events handler (#358) (#716)
+
+The SSEHandler deferred header flush until the first event, causing
+clients to hang on connection when no events matched immediately.
+
+Changes:
+- Subscribe before flushing headers so HTTP 500 is still possible on error
+- Flush response headers + WriteHeader(200) after successful subscription
+- Send ': connected' comment frame as keepalive marker
+- Replace deprecated c.Writer.CloseNotify() with c.Request.Context().Done()
+- Handle channel close (ok=false) to exit cleanly
+- Update test comments to reflect new behavior
+
+Closes #358 (e0e8337)
+
 ## [0.1.98-rc.1] - 2026-07-04
 
 
