@@ -30,26 +30,32 @@ var (
 )
 
 func main() {
+	os.Exit(run(os.Args[1:]))
+}
+
+// run dispatches a subcommand and returns the process exit code. It is split
+// out of main so it can be unit-tested without spawning a process.
+func run(args []string) int {
 	cmd := "run"
-	if len(os.Args) > 1 {
-		cmd = os.Args[1]
+	if len(args) > 0 {
+		cmd = args[0]
 	}
 
 	switch cmd {
 	case "run":
 		if err := runTray(); err != nil {
 			fmt.Fprintln(os.Stderr, "af-tray:", err)
-			os.Exit(1)
+			return 1
 		}
 	case "install":
 		if err := installDesktop(); err != nil {
 			fmt.Fprintln(os.Stderr, "af-tray install:", err)
-			os.Exit(1)
+			return 1
 		}
 	case "uninstall":
 		if err := uninstallDesktop(); err != nil {
 			fmt.Fprintln(os.Stderr, "af-tray uninstall:", err)
-			os.Exit(1)
+			return 1
 		}
 	case "version", "--version", "-v":
 		fmt.Printf("af-tray %s (%s) %s\n", version, commit, date)
@@ -57,8 +63,9 @@ func main() {
 		printUsage()
 	default:
 		printUsage()
-		os.Exit(2)
+		return 2
 	}
+	return 0
 }
 
 func printUsage() {

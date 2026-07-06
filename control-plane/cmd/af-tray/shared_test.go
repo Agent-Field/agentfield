@@ -235,6 +235,64 @@ func TestServerBinaryPathPrefersInstalled(t *testing.T) {
 	}
 }
 
+// Contract: with no installed copy, serverBinaryPath falls back to `af` on
+// PATH, then to `agentfield`, then to the (nonexistent) installed candidate.
+func TestServerBinaryPathFallbacks(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOME", root) // no ~/.agentfield/bin/agentfield present
+
+	// A fake `af` on PATH is preferred over the missing installed copy.
+	pathDir := t.TempDir()
+	afPath := filepath.Join(pathDir, "af")
+	if err := os.WriteFile(afPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", pathDir)
+	if got := serverBinaryPath(); got != afPath {
+		t.Errorf("serverBinaryPath() = %q, want PATH copy %q", got, afPath)
+	}
+
+	// Only `agentfield` on PATH (no `af`) → returns the agentfield copy.
+	pathDir2 := t.TempDir()
+	agPath := filepath.Join(pathDir2, "agentfield")
+	if err := os.WriteFile(agPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", pathDir2)
+	if got := serverBinaryPath(); got != agPath {
+		t.Errorf("serverBinaryPath() = %q, want agentfield copy %q", got, agPath)
+	}
+
+	// Nothing installed and nothing on PATH → the installed candidate path.
+	t.Setenv("PATH", t.TempDir())
+	want := filepath.Join(root, ".agentfield", "bin", "agentfield")
+	if got := serverBinaryPath(); got != want {
+		t.Errorf("serverBinaryPath() fallback = %q, want %q", got, want)
+	}
+}
+
+// Contract: writeFileAtomic surfaces an error when the destination directory
+// can't be created (here: a parent path component is a regular file).
+func TestWriteFileAtomicMkdirError(t *testing.T) {
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFileAtomic(filepath.Join(blocker, "sub", "f"), []byte("y"), 0o644); err == nil {
+		t.Error("writeFileAtomic under a file-as-parent = nil error, want error")
+	}
+
+	// Renaming the temp file over an existing directory fails.
+	target := filepath.Join(dir, "adir")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFileAtomic(target, []byte("z"), 0o644); err == nil {
+		t.Error("writeFileAtomic onto an existing directory = nil error, want error")
+	}
+}
+
 // Contract: the control-plane launchd agent must (a) run the `server`
 // subcommand of the resolved binary, (b) NOT open a browser, (c) restart only
 // on crash (KeepAlive SuccessfulExit=false) so a graceful Stop sticks, and
