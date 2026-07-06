@@ -1,5 +1,6 @@
 agentfield:
   port: 8080
+  shutdown_timeout: 30s  # Graceful shutdown drain timeout for in-flight requests
   registration:
     serverless_discovery_allowed_hosts: [] # Optional extra hosts allowed for server-side /discover fetches; localhost/loopback are always allowed.
   execution_cleanup:

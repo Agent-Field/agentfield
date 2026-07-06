@@ -69,6 +69,7 @@ type UIConfig struct {
 // AgentFieldConfig holds the core AgentField server configuration.
 type AgentFieldConfig struct {
 	Port             int                    `yaml:"port"`
+	ShutdownTimeout  time.Duration          `yaml:"shutdown_timeout" mapstructure:"shutdown_timeout"`
 	ARD              ARDConfig              `yaml:"ard" mapstructure:"ard"`
 	Registration     RegistrationConfig     `yaml:"registration" mapstructure:"registration"`
 	NodeHealth       NodeHealthConfig       `yaml:"node_health" mapstructure:"node_health"`
@@ -485,6 +486,9 @@ func ApplyDefaults(cfg *Config) {
 	if cfg.Telemetry.Timeout <= 0 {
 		cfg.Telemetry.Timeout = 800 * time.Millisecond
 	}
+	if cfg.AgentField.ShutdownTimeout <= 0 {
+		cfg.AgentField.ShutdownTimeout = 30 * time.Second
+	}
 	if cfg.Logging.Level == "" {
 		cfg.Logging.Level = "info"
 	}
@@ -570,6 +574,13 @@ func ApplyEnvOverrides(cfg *Config) {
 			if trimmed != "" {
 				cfg.AgentField.Registration.WebhookAllowedHosts = append(cfg.AgentField.Registration.WebhookAllowedHosts, trimmed)
 			}
+		}
+	}
+
+	// Shutdown timeout override
+	if val := os.Getenv("AGENTFIELD_SHUTDOWN_TIMEOUT"); val != "" {
+		if d, err := time.ParseDuration(val); err == nil {
+			cfg.AgentField.ShutdownTimeout = d
 		}
 	}
 

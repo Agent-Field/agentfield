@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -96,6 +97,10 @@ type AgentFieldServer struct {
 	kb         *knowledgebase.KB
 	// Native scope-aware RAG knowledge store (embed-on-write/search).
 	knowledgeService *knowledge.Service
+	// HTTP server for graceful shutdown support
+	httpServerMu sync.RWMutex
+	httpServer   *http.Server
+	stopping     bool
 }
 
 // NewAgentFieldServer creates a new instance of the AgentFieldServer.
@@ -649,9 +654,59 @@ func (s *AgentFieldServer) Start() error {
 		return fmt.Errorf("failed to start admin gRPC server: %w", err)
 	}
 
-	// TODO: Implement WebSocket, gRPC
-	// Start HTTP server
-	return s.Router.Run(":" + strconv.Itoa(s.config.AgentField.Port))
+	// Start HTTP server (using net/http.Server for graceful shutdown support)
+	addr := ":" + strconv.Itoa(s.config.AgentField.Port)
+	httpServer := &http.Server{
+		Addr:    addr,
+		Handler: s.Router,
+	}
+	if !s.setHTTPServer(httpServer) {
+		return nil
+	}
+	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("failed to start HTTP server on %s: %w", addr, err)
+	}
+	return nil
+}
+
+func (s *AgentFieldServer) setHTTPServer(httpServer *http.Server) bool {
+	s.httpServerMu.Lock()
+	defer s.httpServerMu.Unlock()
+	if s.stopping {
+		return false
+	}
+	s.httpServer = httpServer
+	return true
+}
+
+func (s *AgentFieldServer) getHTTPServer() *http.Server {
+	s.httpServerMu.RLock()
+	defer s.httpServerMu.RUnlock()
+	return s.httpServer
+}
+
+func (s *AgentFieldServer) shutdownHTTPServer() error {
+	httpServer := s.getHTTPServer()
+	if httpServer == nil {
+		return nil
+	}
+
+	var shutdownTimeout time.Duration
+	if s.config != nil {
+		shutdownTimeout = s.config.AgentField.ShutdownTimeout
+	}
+	if shutdownTimeout <= 0 {
+		shutdownTimeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	if err := httpServer.Shutdown(ctx); err != nil {
+		logger.Logger.Error().Err(err).Msg("HTTP server shutdown timed out, forcing close")
+		_ = httpServer.Close()
+		return err
+	}
+	logger.Logger.Info().Msg("HTTP server shut down gracefully")
+	return nil
 }
 
 func (s *AgentFieldServer) startAdminGRPCServer() error {
@@ -714,6 +769,12 @@ func (s *AgentFieldServer) ListReasoners(ctx context.Context, _ *adminpb.ListRea
 
 // Stop gracefully shuts down the AgentFieldServer.
 func (s *AgentFieldServer) Stop() error {
+	s.httpServerMu.Lock()
+	s.stopping = true
+	s.httpServerMu.Unlock()
+
+	httpShutdownErr := s.shutdownHTTPServer()
+
 	if s.adminGRPCServer != nil {
 		s.adminGRPCServer.GracefulStop()
 	}
@@ -731,7 +792,9 @@ func (s *AgentFieldServer) Stop() error {
 	}
 
 	// Stop health monitor service
-	s.healthMonitor.Stop()
+	if s.healthMonitor != nil {
+		s.healthMonitor.Stop()
+	}
 
 	// Stop execution cleanup service
 	if s.cleanupService != nil {
@@ -784,8 +847,8 @@ func (s *AgentFieldServer) Stop() error {
 		}
 	}
 
-	// TODO: Implement graceful shutdown for HTTP, WebSocket, gRPC
-	return nil
+	// TODO: Implement graceful shutdown for WebSocket
+	return httpShutdownErr
 }
 
 // setupRoutes composes the full HTTP surface by delegating to focused

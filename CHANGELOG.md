@@ -6,6 +6,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.98-rc.1] - 2026-07-04
+
+
+### Fixed
+
+- Fix(control-plane): implement graceful shutdown on SIGTERM/SIGINT (#715)
+
+* fix(control-plane): implement graceful shutdown (#427)
+
+Replace the select{} no-op with real signal handling and HTTP server
+drain so SIGTERM during rolling deploys no longer kills in-flight
+requests.
+
+Changes:
+- Install signal.NotifyContext for SIGINT/SIGTERM in runServer
+- Replace gin Router.Run() with net/http.Server for Shutdown() support
+- Call server.Stop() on signal: drains HTTP connections, stops background
+  goroutines (presence manager, health monitor, cleanup, OTel, etc.)
+- Add configurable shutdown_timeout (default 30s) via YAML and
+  AGENTFIELD_SHUTDOWN_TIMEOUT env var
+- Remove literal '// TODO: Implement graceful shutdown' comments
+- Add nil guard for healthMonitor.Stop() to prevent panic on empty server
+
+Closes #427
+
+* test: add coverage for graceful shutdown paths
+
+- Test AGENTFIELD_SHUTDOWN_TIMEOUT env override and defaults
+- Test Stop() on empty server (nil safety)
+- Test HTTP server graceful shutdown with active listener
+- Test HTTP server shutdown timeout + force close
+- Test defaultWaitForShutdown unblocks on SIGINT (Linux/macOS only)
+
+* fix(control-plane): tighten graceful shutdown lifecycle
+
+---------
+
+Co-authored-by: santoshkumarradha <instrument.santosh@gmail.com> (6c6c195)
+
+## [0.1.97] - 2026-07-04
+
 ## [0.1.97-rc.8] - 2026-07-03
 
 

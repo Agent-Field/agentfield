@@ -567,3 +567,39 @@ func TestLoggingEnvOverrides(t *testing.T) {
 		}
 	})
 }
+
+func TestShutdownTimeoutDefaults(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{}
+	ApplyDefaults(&cfg)
+
+	if cfg.AgentField.ShutdownTimeout != 30*time.Second {
+		t.Fatalf("expected default shutdown timeout 30s, got %v", cfg.AgentField.ShutdownTimeout)
+	}
+}
+
+func TestShutdownTimeoutEnvOverride(t *testing.T) {
+	os.Setenv("AGENTFIELD_SHUTDOWN_TIMEOUT", "45s")
+	defer os.Unsetenv("AGENTFIELD_SHUTDOWN_TIMEOUT")
+
+	cfg := Config{}
+	ApplyEnvOverrides(&cfg)
+
+	if cfg.AgentField.ShutdownTimeout != 45*time.Second {
+		t.Fatalf("expected shutdown timeout 45s, got %v", cfg.AgentField.ShutdownTimeout)
+	}
+}
+
+func TestShutdownTimeoutEnvOverrideIgnoresInvalidValue(t *testing.T) {
+	os.Setenv("AGENTFIELD_SHUTDOWN_TIMEOUT", "not-a-duration")
+	defer os.Unsetenv("AGENTFIELD_SHUTDOWN_TIMEOUT")
+
+	cfg := Config{}
+	cfg.AgentField.ShutdownTimeout = 15 * time.Second
+	ApplyEnvOverrides(&cfg)
+
+	if cfg.AgentField.ShutdownTimeout != 15*time.Second {
+		t.Fatalf("expected invalid shutdown timeout env value to be ignored, got %v", cfg.AgentField.ShutdownTimeout)
+	}
+}
