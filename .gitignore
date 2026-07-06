@@ -26,6 +26,7 @@ examples/go_agent_nodes/multi_version
 # Compiled binaries
 control-plane/agentfield-server
 control-plane/af
+control-plane/af-tray
 scripts/lambda-rie-fake/lambda-rie-fake
 
 # Python
