@@ -33,6 +33,15 @@ STAGING="${STAGING:-0}"
 #   SKILL_MODE=<mode>     → env var override
 SKILL_MODE="${SKILL_MODE:-all}"
 
+# Desktop tray mode (auto | none)
+#
+# On macOS (production channel), the installer also drops the AgentField
+# menu-bar tray and registers it — plus the control plane — to auto-start via
+# launchd. It is a small, separate binary from the control-plane binary and is
+# never installed on Linux/headless/container hosts. Opt out with --no-tray or
+# TRAY_MODE=none.
+TRAY_MODE="${TRAY_MODE:-auto}"
+
 # Color codes
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -77,6 +86,10 @@ parse_args() {
         SKILL_MODE="interactive"
         shift
         ;;
+      --no-tray)
+        TRAY_MODE="none"
+        shift
+        ;;
       --help|-h)
         echo "AgentField CLI Installer"
         echo ""
@@ -98,6 +111,8 @@ parse_args() {
         echo "  --interactive-skill    Run the interactive skill picker (only useful"
         echo "                         when you run install.sh from a real terminal,"
         echo "                         not from 'curl … | bash')"
+        echo "  --no-tray              Skip the macOS desktop tray / auto-start setup"
+        echo "                         (control-plane binary only)"
         echo "  --help                 Show this help message"
         echo ""
         echo "Environment variables:"
@@ -107,6 +122,7 @@ parse_args() {
         echo "  SKIP_PATH_CONFIG=1      Skip PATH configuration"
         echo "  AGENTFIELD_INSTALL_DIR  Custom install directory"
         echo "  SKILL_MODE              all (default) | all-targets | interactive | none"
+        echo "  TRAY_MODE               auto (default, macOS only) | none"
         exit 0
         ;;
       *)
@@ -567,6 +583,80 @@ install_skill() {
   esac
 }
 
+# Install the AgentField desktop tray (menu-bar app) and register it — plus the
+# control plane — to auto-start via launchd. macOS + production channel only.
+#
+# The tray is a small, SEPARATE binary from the control-plane binary: it carries
+# the GUI dependency so the server never has to, and it is simply never fetched
+# on Linux/headless/container hosts. Every step here is best-effort — a failure
+# to set up the tray must never fail the overall install, because the control
+# plane itself is already installed and working by this point.
+install_tray() {
+  local os="$1"
+  local arch="$2"
+  local version="$3"
+
+  if [[ "$os" != "darwin" ]]; then
+    return 0
+  fi
+  if [[ "$TRAY_MODE" == "none" ]]; then
+    print_info "Skipping desktop tray (TRAY_MODE=none)"
+    return 0
+  fi
+  # Staging uses a separate install dir and would collide with the production
+  # launchd agents (same labels), so leave the tray to the production channel.
+  if [[ "$STAGING" == "1" ]]; then
+    print_info "Skipping desktop tray on staging channel (run 'af-tray install' manually to test)"
+    return 0
+  fi
+
+  printf "\n"
+  print_info "Installing AgentField desktop tray (menu-bar app)..."
+
+  local tray_name="agentfield-tray-$os-$arch"
+  local tray_url="https://github.com/$REPO/releases/download/$version/$tray_name"
+  local tray_path="$TMP_DIR/$tray_name"
+
+  # Soft download — do not let a missing tray asset abort the installer.
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$tray_url" -o "$tray_path" 2>/dev/null || {
+      print_warning "Desktop tray asset unavailable ($tray_name); skipping. Control plane is unaffected."
+      return 0
+    }
+  else
+    wget -q -O "$tray_path" "$tray_url" 2>/dev/null || {
+      print_warning "Desktop tray asset unavailable ($tray_name); skipping. Control plane is unaffected."
+      return 0
+    }
+  fi
+
+  # Best-effort checksum verification (soft — warn and skip on mismatch).
+  if [[ -f "$TMP_DIR/checksums.txt" ]] && command -v shasum >/dev/null 2>&1; then
+    local expected actual
+    expected=$(grep "$tray_name" "$TMP_DIR/checksums.txt" | awk '{print $1}')
+    actual=$(shasum -a 256 "$tray_path" | awk '{print $1}')
+    if [[ -n "$expected" && "$expected" != "$actual" ]]; then
+      print_warning "Desktop tray checksum mismatch; skipping tray install."
+      return 0
+    fi
+  fi
+
+  cp "$tray_path" "$INSTALL_DIR/af-tray"
+  chmod +x "$INSTALL_DIR/af-tray"
+  xattr -d com.apple.quarantine "$INSTALL_DIR/af-tray" 2>/dev/null || true
+
+  # Delegate .app-bundle + launchd setup to the tray binary itself, so all of
+  # that logic lives in one place (Go) and stays testable — mirroring how the
+  # skill install is delegated to `af skill install`. Idempotent: safe to re-run
+  # on every update, and it force-restarts a stale running tray onto the new
+  # binary so a `curl … | bash` update is fully hands-off.
+  if "$INSTALL_DIR/af-tray" install; then
+    print_success "Desktop tray installed — look for the AgentField icon in your menu bar"
+  else
+    print_warning "Desktop tray setup reported an issue; the control plane is unaffected"
+  fi
+}
+
 # Print success message
 print_success_message() {
   printf "\n"
@@ -712,6 +802,10 @@ main() {
   # behaviour for `curl … | bash`). Override via --no-skill /
   # --all-skill-targets / --interactive-skill or SKILL_MODE.
   install_skill "$INSTALL_DIR"
+
+  # Install the desktop tray + auto-start (macOS, production channel). Best-effort:
+  # never fails the overall install, and never runs on Linux/headless/container hosts.
+  install_tray "$os" "$arch" "$VERSION"
 
   # Print success message
   print_success_message
