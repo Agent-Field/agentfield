@@ -1,3 +1,4 @@
+import asyncio
 import inspect
 import time
 from typing import Any, Callable, Dict, Optional
@@ -121,7 +122,8 @@ class AgentWorkflow:
         *,
         parent_execution_id: Optional[str] = None,
     ) -> None:
-        await self._emit_execution_transition_log(
+        await asyncio.to_thread(
+            self._emit_execution_transition_log,
             context,
             reasoner_name,
             event_type="reasoner.started",
@@ -131,6 +133,7 @@ class AgentWorkflow:
             input_data=input_data,
             parent_execution_id=parent_execution_id,
         )
+
         payload = self._build_event_payload(
             context,
             reasoner_name,
@@ -151,7 +154,8 @@ class AgentWorkflow:
         input_data: Optional[Dict[str, Any]] = None,
         parent_execution_id: Optional[str] = None,
     ) -> None:
-        await self._emit_execution_transition_log(
+        await asyncio.to_thread(
+            self._emit_execution_transition_log,
             context,
             context.reasoner_name,
             event_type="reasoner.completed",
@@ -163,6 +167,7 @@ class AgentWorkflow:
             input_data=input_data,
             parent_execution_id=parent_execution_id,
         )
+
         payload = self._build_event_payload(
             context,
             context.reasoner_name,
@@ -185,7 +190,8 @@ class AgentWorkflow:
         input_data: Optional[Dict[str, Any]] = None,
         parent_execution_id: Optional[str] = None,
     ) -> None:
-        await self._emit_execution_transition_log(
+        await asyncio.to_thread(
+            self._emit_execution_transition_log,
             context,
             context.reasoner_name,
             event_type="reasoner.failed",
@@ -291,7 +297,8 @@ class AgentWorkflow:
                 context.execution_id = body.get("execution_id", context.execution_id)
                 context.workflow_id = body.get("workflow_id", context.workflow_id)
                 context.run_id = body.get("run_id", context.run_id)
-            await self._emit_execution_transition_log(
+            await asyncio.to_thread(
+                self._emit_execution_transition_log,
                 context,
                 reasoner_name,
                 event_type="execution.registered",
@@ -303,7 +310,8 @@ class AgentWorkflow:
         except Exception as exc:  # pragma: no cover - network failure path
             if getattr(self.agent, "dev_mode", False):
                 log_warn(f"Workflow registration failed: {exc}")
-            await self._emit_execution_transition_log(
+            await asyncio.to_thread(
+                self._emit_execution_transition_log,
                 context,
                 reasoner_name,
                 event_type="execution.registration.failed",
@@ -348,7 +356,7 @@ class AgentWorkflow:
             payload["input_data"] = input_data
         return payload
 
-    async def _emit_execution_transition_log(
+    def _emit_execution_transition_log(
         self,
         context: ExecutionContext,
         reasoner_name: str,

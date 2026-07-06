@@ -2245,13 +2245,17 @@ class Agent(FastAPI):
 
         if hasattr(self, "workflow_handler") and self.workflow_handler:
             execution_context.reasoner_name = reasoner_id
-            await self.workflow_handler.notify_call_start(
-                execution_context.execution_id,
-                execution_context,
-                reasoner_id,
-                payload_dict,
-                parent_execution_id=execution_context.parent_execution_id,
+            task = asyncio.create_task(
+                self.workflow_handler.notify_call_start(
+                    execution_context.execution_id,
+                    execution_context,
+                    reasoner_id,
+                    payload_dict,
+                    parent_execution_id=execution_context.parent_execution_id,
+                )
             )
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
 
         start_time = time.time()
 
@@ -2358,29 +2362,38 @@ class Agent(FastAPI):
 
             if hasattr(self, "workflow_handler") and self.workflow_handler:
                 end_time = time.time()
-                await self.workflow_handler.notify_call_complete(
-                    execution_context.execution_id,
-                    execution_context.workflow_id,
-                    result,
-                    int((end_time - start_time) * 1000),
-                    execution_context,
-                    input_data=payload_dict,
-                    parent_execution_id=execution_context.parent_execution_id,
+                task = asyncio.create_task(
+                        self.workflow_handler.notify_call_complete(
+                            execution_context.execution_id,
+                            execution_context.workflow_id,
+                            result,
+                            int((end_time - start_time) * 1000),
+                            execution_context,
+                            input_data=payload_dict,
+                            parent_execution_id=execution_context.parent_execution_id,
+                    )
                 )
+                self._background_tasks.add(task)
+                task.add_done_callback(self._background_tasks.discard)
 
             return result
         except asyncio.CancelledError as cancel_err:
             if hasattr(self, "workflow_handler") and self.workflow_handler:
                 end_time = time.time()
-                await self.workflow_handler.notify_call_error(
-                    execution_context.execution_id,
-                    execution_context.workflow_id,
-                    "Execution cancelled by upstream client",
-                    int((end_time - start_time) * 1000),
-                    execution_context,
-                    input_data=payload_dict,
-                    parent_execution_id=execution_context.parent_execution_id,
+
+                task = asyncio.create_task(
+                    self.workflow_handler.notify_call_error(
+                        execution_context.execution_id,
+                        execution_context.workflow_id,
+                        "Execution cancelled by upstream client",
+                        int((end_time - start_time) * 1000),
+                        execution_context,
+                        input_data=payload_dict,
+                        parent_execution_id=execution_context.parent_execution_id,
+                    )
                 )
+                self._background_tasks.add(task)
+                task.add_done_callback(self._background_tasks.discard)
             raise cancel_err
         except ExecuteError as exec_err:
             # Propagate upstream HTTP status codes from cross-agent calls.
@@ -2388,15 +2401,20 @@ class Agent(FastAPI):
             # (unhandled exception) and then 502 at the outer control plane.
             if hasattr(self, "workflow_handler") and self.workflow_handler:
                 end_time = time.time()
-                await self.workflow_handler.notify_call_error(
-                    execution_context.execution_id,
-                    execution_context.workflow_id,
-                    str(exec_err),
-                    int((end_time - start_time) * 1000),
-                    execution_context,
-                    input_data=payload_dict,
-                    parent_execution_id=execution_context.parent_execution_id,
+
+                task = asyncio.create_task(
+                    self.workflow_handler.notify_call_error(
+                        execution_context.execution_id,
+                        execution_context.workflow_id,
+                        str(exec_err),
+                        int((end_time - start_time) * 1000),
+                        execution_context,
+                        input_data=payload_dict,
+                        parent_execution_id=execution_context.parent_execution_id,
+                    )
                 )
+                self._background_tasks.add(task)
+                task.add_done_callback(self._background_tasks.discard)
             detail = {"error": str(exec_err)}
             if exec_err.error_details:
                 detail["error_details"] = exec_err.error_details
@@ -2408,28 +2426,38 @@ class Agent(FastAPI):
             if hasattr(self, "workflow_handler") and self.workflow_handler:
                 end_time = time.time()
                 detail = getattr(http_exc, "detail", None) or str(http_exc)
-                await self.workflow_handler.notify_call_error(
-                    execution_context.execution_id,
-                    execution_context.workflow_id,
-                    detail,
-                    int((end_time - start_time) * 1000),
-                    execution_context,
-                    input_data=payload_dict,
-                    parent_execution_id=execution_context.parent_execution_id,
+
+                task = asyncio.create_task(
+                    self.workflow_handler.notify_call_error(
+                        execution_context.execution_id,
+                        execution_context.workflow_id,
+                        detail,
+                        int((end_time - start_time) * 1000),
+                        execution_context,
+                        input_data=payload_dict,
+                        parent_execution_id=execution_context.parent_execution_id,
+                    )
                 )
+                self._background_tasks.add(task)
+                task.add_done_callback(self._background_tasks.discard)
             raise
         except Exception as exc:
             if hasattr(self, "workflow_handler") and self.workflow_handler:
                 end_time = time.time()
-                await self.workflow_handler.notify_call_error(
-                    execution_context.execution_id,
-                    execution_context.workflow_id,
-                    str(exc),
-                    int((end_time - start_time) * 1000),
-                    execution_context,
-                    input_data=payload_dict,
-                    parent_execution_id=execution_context.parent_execution_id,
+
+                task = asyncio.create_task(
+                    self.workflow_handler.notify_call_error(
+                        execution_context.execution_id,
+                        execution_context.workflow_id,
+                        str(exc),
+                        int((end_time - start_time) * 1000),
+                        execution_context,
+                        input_data=payload_dict,
+                        parent_execution_id=execution_context.parent_execution_id,
+                    )
                 )
+                self._background_tasks.add(task)
+                task.add_done_callback(self._background_tasks.discard)
             raise
         finally:
             reset_execution_context(context_token)
@@ -3110,40 +3138,54 @@ class Agent(FastAPI):
                 previous_ctx = self._current_execution_context
                 self._current_execution_context = child_context
                 input_payload = _build_invocation_payload(args, kwargs)
-
-                await self.workflow_handler.notify_call_start(
-                    child_context.execution_id,
-                    child_context,
-                    skill_id,
-                    input_payload,
-                    parent_execution_id=current_context.execution_id,
+                
+                task = asyncio.create_task(
+                    self.workflow_handler.notify_call_start(
+                        child_context.execution_id,
+                        child_context,
+                        skill_id,
+                        input_payload,
+                        parent_execution_id=current_context.execution_id,
+                    )
                 )
+                self._background_tasks.add(task)
+                task.add_done_callback(self._background_tasks.discard)
 
                 start_time = time.time()
                 try:
                     result = await original_func(*args, **kwargs)
                     duration_ms = int((time.time() - start_time) * 1000)
-                    await self.workflow_handler.notify_call_complete(
-                        child_context.execution_id,
-                        child_context.workflow_id,
-                        result,
-                        duration_ms,
-                        child_context,
-                        input_data=input_payload,
-                        parent_execution_id=current_context.execution_id,
+
+                    task = asyncio.create_task(
+                        self.workflow_handler.notify_call_complete(
+                            child_context.execution_id,
+                            child_context.workflow_id,
+                            result,
+                            duration_ms,
+                            child_context,
+                            input_data=input_payload,
+                            parent_execution_id=current_context.execution_id,
+                        )
                     )
+                    self._background_tasks.add(task)
+                    task.add_done_callback(self._background_tasks.discard)
                     return result
                 except Exception as exc:
                     duration_ms = int((time.time() - start_time) * 1000)
-                    await self.workflow_handler.notify_call_error(
-                        child_context.execution_id,
-                        child_context.workflow_id,
-                        str(exc),
-                        duration_ms,
-                        child_context,
-                        input_data=input_payload,
-                        parent_execution_id=current_context.execution_id,
+
+                    task = asyncio.create_task(
+                        self.workflow_handler.notify_call_error(
+                            child_context.execution_id,
+                            child_context.workflow_id,
+                            str(exc),
+                            duration_ms,
+                            child_context,
+                            input_data=input_payload,
+                            parent_execution_id=current_context.execution_id,
+                        )
                     )
+                    self._background_tasks.add(task)
+                    task.add_done_callback(self._background_tasks.discard)
                     raise
                 finally:
                     reset_execution_context(token)
