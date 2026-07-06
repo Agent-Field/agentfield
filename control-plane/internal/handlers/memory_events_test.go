@@ -208,13 +208,6 @@ func TestMemoryEventsHandler_WebSocketUpgradeAndPatternFilter(t *testing.T) {
 }
 
 func TestMemoryEventsHandler_SSEHappyPathHonorsScopeFilter(t *testing.T) {
-	// NOTE: The SSE handler in memory_events.go does not flush response
-	// headers until it writes its first matching event, so http.Client.Do
-	// would block waiting for headers if we did the request synchronously.
-	// We work around it here by running the request in a goroutine and
-	// publishing events after the subscription is registered. The source
-	//-side flush refactor is tracked in #358; once that lands, this test
-	// can be simplified.
 	gin.SetMode(gin.TestMode)
 
 	store := newMemoryEventStorageStub()
@@ -227,10 +220,8 @@ func TestMemoryEventsHandler_SSEHappyPathHonorsScopeFilter(t *testing.T) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/sse?scope=session&scope_id=s1", nil)
 	require.NoError(t, err)
 
-	// The SSE handler does not flush headers until it writes the first event,
-	// so http.Client.Do blocks until something is published. Run the request in
-	// a goroutine and publish from the main goroutine once the subscription is
-	// active.
+	// Run the request in a goroutine; headers are flushed immediately but we
+	// still need to wait for the subscription to be active before publishing.
 	type doResult struct {
 		resp *http.Response
 		err  error
