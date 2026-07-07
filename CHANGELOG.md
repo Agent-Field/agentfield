@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.101] - 2026-07-07
+
+## [0.1.101-rc.1] - 2026-07-07
+
+
+### Added
+
+- Feat(cli): styled terminal UI — shared ui package + af list/secrets tables (#730)
+
+* feat(cli): add shared ui package for styled terminal output
+
+Introduce internal/cli/ui: a small lipgloss-based toolkit (bordered panels,
+column tables, status badges, key/value blocks) so CLI commands share one
+consistent, styled look. Palette matches the existing af init flow. lipgloss and
+bubbletea are already dependencies, so this adds no new modules.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* feat(cli): render af list and af secrets ls as styled tables
+
+Replace the ad-hoc printf output of `af list` and `af secrets ls` with bordered
+ui tables: status badges (● running / ○ stopped), aligned columns, sorted rows,
+and framed empty states. Update the two list assertions to the new header text.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (726e211)
+
 ## [0.1.100] - 2026-07-07
 
 ## [0.1.100-rc.1] - 2026-07-07
