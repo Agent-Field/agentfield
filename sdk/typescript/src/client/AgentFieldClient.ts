@@ -14,6 +14,7 @@ import {
 } from '../observability/ExecutionLogger.js';
 import { httpAgent, httpsAgent } from '../utils/httpAgents.js';
 import { DIDAuthenticator } from './DIDAuthenticator.js';
+import { normalizeStatus as normalizeExecutionStatus, isTerminal as isTerminalExecutionStatus } from '../status/ExecutionStatus.js';
 
 export interface ExecutionStatusUpdate {
   status?: string;
@@ -22,6 +23,54 @@ export interface ExecutionStatusUpdate {
   durationMs?: number;
   progress?: number;
   statusReason?: string;
+}
+
+/** Metadata forwarded as `X-*` headers on execute / executeAsync dispatch. */
+export interface ExecuteMetadata {
+  runId?: string;
+  workflowId?: string;
+  rootWorkflowId?: string;
+  parentExecutionId?: string;
+  reasonerId?: string;
+  sessionId?: string;
+  actorId?: string;
+  callerDid?: string;
+  targetDid?: string;
+  agentNodeDid?: string;
+  agentNodeId?: string;
+  replaySourceRunId?: string;
+  replayBeforeExecutionId?: string;
+  replayMode?: string;
+}
+
+/** Terminal (or in-flight) status snapshot from `GET /executions/{id}`. */
+export interface ExecutionStatusSnapshot {
+  executionId: string;
+  status: string;
+  statusReason?: string;
+  result?: any;
+  error?: string;
+  errorDetails?: unknown;
+  durationMs?: number;
+}
+
+/** Options for {@link AgentFieldClient.waitForExecutionResult}. */
+export interface WaitForExecutionOptions {
+  /** Total timeout in milliseconds. Omit for no wall-clock cap. */
+  timeoutMs?: number;
+  /** Initial poll interval in milliseconds (default: 1000). */
+  pollIntervalMs?: number;
+  /** Maximum poll interval in milliseconds (default: 5000). */
+  maxIntervalMs?: number;
+  /**
+   * Pause-clock whose paused time is excluded from the wall-clock timeout, so
+   * a parent awaiting a paused descendant does not spuriously time out.
+   */
+  pauseClock?: import('../agent/pause.js').PauseClock;
+  /** Fired once when the awaited child transitions into `waiting`. */
+  onChildWaiting?: () => void | Promise<void>;
+  /** Fired once when the awaited child leaves `waiting` (back to running). */
+  onChildRunning?: () => void | Promise<void>;
 }
 
 export interface RestartExecutionOptions {
@@ -166,21 +215,7 @@ this.http = axios.create({
       replayMode?: string;
     }
   ): Promise<T> {
-    const headers: Record<string, string> = {};
-    if (metadata?.runId) headers['X-Run-ID'] = metadata.runId;
-    if (metadata?.workflowId) headers['X-Workflow-ID'] = metadata.workflowId;
-    if (metadata?.rootWorkflowId) headers['X-Root-Workflow-ID'] = metadata.rootWorkflowId;
-    if (metadata?.parentExecutionId) headers['X-Parent-Execution-ID'] = metadata.parentExecutionId;
-    if (metadata?.reasonerId) headers['X-Reasoner-ID'] = metadata.reasonerId;
-    if (metadata?.sessionId) headers['X-Session-ID'] = metadata.sessionId;
-    if (metadata?.actorId) headers['X-Actor-ID'] = metadata.actorId;
-    if (metadata?.callerDid) headers['X-Caller-DID'] = metadata.callerDid;
-    if (metadata?.targetDid) headers['X-Target-DID'] = metadata.targetDid;
-    if (metadata?.agentNodeDid) headers['X-Agent-Node-DID'] = metadata.agentNodeDid;
-    if (metadata?.agentNodeId) headers['X-Agent-Node-ID'] = metadata.agentNodeId;
-    if (metadata?.replaySourceRunId) headers['X-AgentField-Replay-Source-Run-ID'] = metadata.replaySourceRunId;
-    if (metadata?.replayBeforeExecutionId) headers['X-AgentField-Replay-Before-Execution-ID'] = metadata.replayBeforeExecutionId;
-    if (metadata?.replayMode) headers['X-AgentField-Replay-Mode'] = metadata.replayMode;
+    const headers = this.buildExecuteHeaders(metadata);
 
     const bodyStr = JSON.stringify({ input });
     const authHeaders = this.didAuthenticator.signRequest(Buffer.from(bodyStr));
@@ -340,6 +375,266 @@ this.http = axios.create({
     await this.http.post(`/api/v1/executions/${executionId}/status`, bodyStr, {
       headers: this.mergeHeaders({ 'Content-Type': 'application/json', ...authHeaders })
     });
+  }
+
+  /** Build the `X-*` dispatch headers shared by execute / executeAsync. */
+  private buildExecuteHeaders(metadata?: ExecuteMetadata): Record<string, string> {
+    const headers: Record<string, string> = {};
+    if (metadata?.runId) headers['X-Run-ID'] = metadata.runId;
+    if (metadata?.workflowId) headers['X-Workflow-ID'] = metadata.workflowId;
+    if (metadata?.rootWorkflowId) headers['X-Root-Workflow-ID'] = metadata.rootWorkflowId;
+    if (metadata?.parentExecutionId) headers['X-Parent-Execution-ID'] = metadata.parentExecutionId;
+    if (metadata?.reasonerId) headers['X-Reasoner-ID'] = metadata.reasonerId;
+    if (metadata?.sessionId) headers['X-Session-ID'] = metadata.sessionId;
+    if (metadata?.actorId) headers['X-Actor-ID'] = metadata.actorId;
+    if (metadata?.callerDid) headers['X-Caller-DID'] = metadata.callerDid;
+    if (metadata?.targetDid) headers['X-Target-DID'] = metadata.targetDid;
+    if (metadata?.agentNodeDid) headers['X-Agent-Node-DID'] = metadata.agentNodeDid;
+    if (metadata?.agentNodeId) headers['X-Agent-Node-ID'] = metadata.agentNodeId;
+    if (metadata?.replaySourceRunId) headers['X-AgentField-Replay-Source-Run-ID'] = metadata.replaySourceRunId;
+    if (metadata?.replayBeforeExecutionId) headers['X-AgentField-Replay-Before-Execution-ID'] = metadata.replayBeforeExecutionId;
+    if (metadata?.replayMode) headers['X-AgentField-Replay-Mode'] = metadata.replayMode;
+    return headers;
+  }
+
+  /**
+   * Submit an async execution and return its `execution_id`.
+   *
+   * POSTs to `/api/v1/execute/async/{target}`, which enqueues the execution
+   * and responds `202 Accepted` immediately (the control plane runs it and
+   * tracks status out-of-band). Use with {@link waitForExecutionResult} to
+   * poll for the terminal result without holding a synchronous connection —
+   * this is what lets a parent await a descendant that legitimately pauses
+   * (WAITING) for a long time without hitting the dispatch ceiling.
+   */
+  async executeAsync(
+    target: string,
+    input: any,
+    metadata?: ExecuteMetadata
+  ): Promise<string> {
+    const headers = this.buildExecuteHeaders(metadata);
+    const bodyStr = JSON.stringify({ input });
+    const authHeaders = this.didAuthenticator.signRequest(Buffer.from(bodyStr));
+    try {
+      const res = await this.http.post(
+        `/api/v1/execute/async/${target}`,
+        bodyStr,
+        { headers: this.mergeHeaders({ 'Content-Type': 'application/json', ...headers, ...authHeaders }) }
+      );
+      const executionId =
+        res.data?.execution_id ??
+        res.data?.executionId ??
+        (typeof res.headers?.['x-execution-id'] === 'string' ? res.headers['x-execution-id'] : undefined);
+      if (!executionId) {
+        throw new Error(`execute async ${target} returned no execution_id`);
+      }
+      return executionId;
+    } catch (err: any) {
+      const respData = err?.response?.data;
+      if (respData) {
+        const status = err.response.status;
+        const msg = respData.message || respData.error || JSON.stringify(respData);
+        const enriched: ExecutionError = Object.assign(
+          new Error(`execute async ${target} failed (${status}): ${msg}`),
+          { status, responseData: respData }
+        );
+        throw enriched;
+      }
+      throw err;
+    }
+  }
+
+  /** Fetch the current status snapshot for an execution. */
+  async getExecutionStatus(executionId: string): Promise<ExecutionStatusSnapshot> {
+    const res = await this.http.get(
+      `/api/v1/executions/${encodeURIComponent(executionId)}`,
+      { headers: this.mergeHeaders({}) }
+    );
+    const data = res.data ?? {};
+    return {
+      executionId: data.execution_id ?? executionId,
+      status: data.status ?? 'unknown',
+      statusReason: data.status_reason ?? undefined,
+      result: data.result,
+      error: data.error ?? undefined,
+      errorDetails: data.error_details,
+      durationMs: data.duration_ms ?? undefined
+    };
+  }
+
+  /**
+   * Poll an async execution until it reaches a terminal status, returning its
+   * result (or throwing on failure/cancellation/timeout).
+   *
+   * While polling, this observes the child's status transitions: when the
+   * child enters `waiting` it starts the supplied pause-clock and fires
+   * `onChildWaiting`; when the child leaves `waiting` it stops the clock and
+   * fires `onChildRunning`. Paused time is excluded from `timeoutMs`, so a
+   * parent awaiting a paused descendant does not time out while the descendant
+   * legitimately waits. Mirrors the Python SDK's `wait_for_execution_result`.
+   */
+  async waitForExecutionResult<T = any>(
+    executionId: string,
+    opts: WaitForExecutionOptions = {}
+  ): Promise<T> {
+    const pollInterval = opts.pollIntervalMs ?? 1000;
+    const maxInterval = opts.maxIntervalMs ?? 5000;
+    const pauseClock = opts.pauseClock;
+    const start = Date.now();
+    let interval = pollInterval;
+    let childWaiting = false;
+
+    const activeElapsed = () => (Date.now() - start) - (pauseClock?.totalPaused() ?? 0);
+
+    try {
+      while (true) {
+        let snapshot: ExecutionStatusSnapshot;
+        try {
+          snapshot = await this.getExecutionStatus(executionId);
+        } catch {
+          // Transient poll failure — back off and retry rather than aborting
+          // the whole wait on a single blip.
+          if (opts.timeoutMs != null && activeElapsed() >= opts.timeoutMs) {
+            throw new Error(`waitForExecutionResult(${executionId}) timed out`);
+          }
+          await sleep(interval);
+          interval = Math.min(interval * 2, maxInterval);
+          continue;
+        }
+
+        const status = normalizeExecutionStatus(snapshot.status);
+
+        // Observe WAITING transitions so the awaiter can pause its own clock
+        // and cascade its status upward (multi-hop propagation).
+        if (status === 'waiting' && !childWaiting) {
+          childWaiting = true;
+          pauseClock?.startPause();
+          await safePauseCallback(opts.onChildWaiting);
+        } else if (status !== 'waiting' && childWaiting) {
+          childWaiting = false;
+          pauseClock?.endPause();
+          await safePauseCallback(opts.onChildRunning);
+        }
+
+        if (isTerminalExecutionStatus(status)) {
+          if (status === 'succeeded') {
+            return (snapshot.result?.result as T) ?? (snapshot.result as T);
+          }
+          const detail = snapshot.error || snapshot.statusReason || status;
+          const failure: ExecutionError = Object.assign(
+            new Error(`execution ${executionId} ${status}: ${detail}`),
+            { status: 0, responseData: snapshot.errorDetails ?? snapshot.error }
+          );
+          throw failure;
+        }
+
+        if (opts.timeoutMs != null && activeElapsed() >= opts.timeoutMs) {
+          throw new Error(`waitForExecutionResult(${executionId}) timed out`);
+        }
+
+        await sleep(interval);
+        interval = Math.min(interval * 2, maxInterval);
+      }
+    } finally {
+      // Guarantee the clock is unpaused if we exit while the child was waiting.
+      if (childWaiting) {
+        pauseClock?.endPause();
+      }
+    }
+  }
+
+  /**
+   * Notify the control plane that THIS execution is now `waiting` or `running`
+   * because of its awaited child's state — the multi-hop pause propagation
+   * hook. Distinct from request-approval: no approval id, no webhook, no human.
+   * It exists purely so ancestors watching this execution see WAITING
+   * transitively while a descendant is paused, and stop counting wall-clock.
+   *
+   * POSTs to `/api/v1/agents/{node}/executions/{id}/awaiter-status`.
+   */
+  async notifyAwaiterStatus(
+    executionId: string,
+    status: 'waiting' | 'running',
+    reason = ''
+  ): Promise<void> {
+    if (status !== 'waiting' && status !== 'running') {
+      throw new Error(`notifyAwaiterStatus: status must be 'waiting' or 'running', got '${status}'`);
+    }
+    const nodeId = this.config.nodeId ?? '';
+    const payload: Record<string, unknown> = { status };
+    if (reason) payload.reason = reason;
+    const bodyStr = JSON.stringify(payload);
+    const authHeaders = this.didAuthenticator.signRequest(Buffer.from(bodyStr));
+    const res = await this.http.post(
+      `/api/v1/agents/${encodeURIComponent(nodeId)}/executions/${encodeURIComponent(executionId)}/awaiter-status`,
+      bodyStr,
+      {
+        headers: this.mergeHeaders({ 'Content-Type': 'application/json', ...authHeaders }),
+        timeout: 10000
+      }
+    );
+    if (res.status >= 400) {
+      throw new Error(`awaiter-status update failed (${res.status})`);
+    }
+  }
+
+  /**
+   * Deliver a terminal execution result to the control plane, with retries.
+   *
+   * This is the out-of-band completion callback used by async-execution
+   * dispatch: after a reasoner has been 202-acked and run detached, its final
+   * status (`succeeded` / `failed` / `cancelled`) is POSTed to
+   * `/api/v1/executions/{id}/status`. Retries with exponential backoff because
+   * a dropped terminal callback would leave the execution stuck forever.
+   */
+  async reportExecutionResult(
+    executionId: string,
+    payload: {
+      status: string;
+      result?: any;
+      error?: string;
+      errorDetails?: unknown;
+      durationMs?: number;
+      completedAt?: string;
+      reasoner?: string;
+    },
+    maxRetries = 5
+  ): Promise<boolean> {
+    const body: Record<string, unknown> = {
+      status: payload.status,
+      execution_id: executionId,
+      duration_ms: payload.durationMs,
+      completed_at: payload.completedAt,
+      reasoner: payload.reasoner
+    };
+    if (payload.result !== undefined) body.result = wrapResult(payload.result);
+    if (payload.error !== undefined) body.error = payload.error;
+    if (payload.errorDetails !== undefined) body.error_details = payload.errorDetails;
+
+    const bodyStr = JSON.stringify(body);
+    const authHeaders = this.didAuthenticator.signRequest(Buffer.from(bodyStr));
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const res = await this.http.post(
+          `/api/v1/executions/${encodeURIComponent(executionId)}/status`,
+          bodyStr,
+          {
+            headers: this.mergeHeaders({ 'Content-Type': 'application/json', ...authHeaders }),
+            timeout: 30000
+          }
+        );
+        if (res.status >= 200 && res.status < 300) {
+          return true;
+        }
+      } catch {
+        // fall through to backoff/retry
+      }
+      if (attempt < maxRetries - 1) {
+        await sleep(2 ** attempt * 1000);
+      }
+    }
+    return false;
   }
 
   async discoverCapabilities(options: DiscoveryOptions = {}): Promise<DiscoveryResult> {
@@ -568,4 +863,38 @@ this.http = axios.create({
       .catch(() => {});
     void request;
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Run an awaiter-status callback without letting a slow/failed control plane
+ * stall the poll loop. Bounded to 2s and swallows errors — mirrors the Python
+ * SDK's `_safe_pause_callback` so a transient blip can't break the call graph.
+ */
+async function safePauseCallback(cb?: () => void | Promise<void>): Promise<void> {
+  if (!cb) return;
+  try {
+    await Promise.race([
+      Promise.resolve().then(cb),
+      sleep(2000)
+    ]);
+  } catch {
+    // best-effort; propagation is advisory
+  }
+}
+
+/**
+ * The control plane's status-update `result` field is a JSON object. Wrap
+ * non-object results so a reasoner returning a scalar/array still delivers a
+ * terminal status instead of being rejected by the control plane. Objects pass
+ * through unchanged so the common case matches sync-dispatch behaviour.
+ */
+function wrapResult(result: unknown): Record<string, any> {
+  if (result !== null && typeof result === 'object' && !Array.isArray(result)) {
+    return result as Record<string, any>;
+  }
+  return { result };
 }

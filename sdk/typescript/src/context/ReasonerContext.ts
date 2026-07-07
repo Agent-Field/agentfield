@@ -138,6 +138,25 @@ export class ReasonerContext<TInput = any> {
     return this.agent.call(target, input);
   }
 
+  /**
+   * Pause this execution for external approval / resumption.
+   *
+   * Transitions the execution to `waiting` on the control plane and blocks
+   * until a decision arrives via the agent's approval webhook, or the timeout
+   * elapses (returning `{ decision: 'expired' }`). The caller creates the
+   * approval request on an external service first and passes its
+   * `approvalRequestId`. Delegates to {@link Agent.pause}. See its docs for the
+   * async-execution requirement that lets a pause outlive the dispatch ceiling.
+   */
+  pause(opts: {
+    approvalRequestId: string;
+    approvalRequestUrl?: string;
+    expiresInHours?: number;
+    timeoutMs?: number;
+  }): Promise<import('../agent/pause.js').ApprovalResult> {
+    return this.agent.pause({ ...opts, executionId: this.executionId });
+  }
+
   discover(options?: DiscoveryOptions) {
     return this.agent.discover(options);
   }

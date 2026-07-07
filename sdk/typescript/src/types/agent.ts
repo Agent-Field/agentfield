@@ -32,6 +32,25 @@ export interface AgentConfig {
   verificationRefreshInterval?: number;
   /** Agent-level tags for tag-based authorization policies. */
   tags?: string[];
+  /**
+   * Enable async-execution dispatch (default: true). When enabled, a reasoner
+   * invoked by the control plane (i.e. carrying an `X-Execution-ID` header) is
+   * acknowledged immediately with `202 Accepted` and run detached; its terminal
+   * result is delivered out-of-band via `POST /executions/{id}/status`. This is
+   * what lets a reasoner call `ctx.pause()` and wait far longer than the
+   * control plane's synchronous dispatch ceiling. Set to `false` to keep the
+   * legacy behaviour of holding the HTTP connection open until the reasoner
+   * returns (in which case `ctx.pause()` is bounded by that ceiling).
+   */
+  asyncExecution?: boolean;
+  /**
+   * Active-time wall-clock budget for a detached reasoner, in milliseconds
+   * (default: 7_200_000 = 2h). Time spent inside `ctx.pause()` (and waiting on
+   * a paused descendant) is excluded from this budget. When active time exceeds
+   * it, the reasoner is aborted and reported as failed with reason
+   * `reasoner_timeout`. Only applies when `asyncExecution` is enabled.
+   */
+  executionBudgetMs?: number;
 }
 
 export interface AIConfig {

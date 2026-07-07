@@ -1,5 +1,6 @@
 export * from './agent/Agent.js';
 export * from './agent/AgentConfig.js';
+export * from './agent/pause.js';
 export * from './router/AgentRouter.js';
 export * from './context/ExecutionContext.js';
 export * from './context/ReasonerContext.js';
