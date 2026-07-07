@@ -34,8 +34,9 @@ and a way to start (either `entrypoint.start` or a top-level `main.py`) are
 required; everything else is optional.
 
 ```yaml
+config_version: v1            # manifest *schema* version (see below). Omit = v0 (legacy).
 name: pr-af
-version: 0.1.0
+version: 0.1.0                # the node's own release version — unrelated to config_version
 description: Opens draft PRs from a task description
 author: Agent-Field
 
@@ -78,6 +79,39 @@ user_environment:
       description: Override the default model
       default: openrouter/moonshotai/kimi-k2
 ```
+
+A published, real-world manifest to copy from:
+[Agent-Field/SWE-AF `agentfield-package.yaml`](https://github.com/Agent-Field/SWE-AF/blob/main/agentfield-package.yaml).
+
+### Manifest schema version (`config_version`)
+
+`config_version` declares which version of the **manifest format** your file was
+written against, so the control plane knows how to read it as the format evolves —
+you're never locked into whatever shape shipped the day you authored the file.
+
+- It is **not** the same as `version`. `version` is your node's own release
+  (semver of the agent); `config_version` is the schema version of this file.
+- **Omitting it means `v0`** — the original, pre-versioning format. Existing
+  manifests keep working untouched.
+- The current version is **`v1`**. New manifests should set `config_version: v1`.
+- The `v` prefix is optional and case-insensitive (`v1`, `V1`, and `1` are equal).
+  A value the control plane doesn't recognize (a typo, or a version **newer** than
+  your `af` binary understands) fails the install with a clear message rather than
+  being silently mis-read — upgrade `af` to install a node authored for a newer
+  schema.
+
+**When does `config_version` get bumped?** Only for **breaking** changes to the
+format — a field renamed or removed, or its shape/meaning changed such that an old
+reader would mis-handle a new file (or vice-versa). **Adding** a new optional field
+is *not* breaking and does **not** bump the version: unknown keys are ignored by
+older readers, and newer readers fall back to defaults. So most format growth needs
+no bump at all; you only stamp a new `config_version` when the structure of an
+existing config actually changes.
+
+| `config_version` | Reader behavior                                             |
+| ---------------- | ---------------------------------------------------------- |
+| absent / `v0`    | Legacy format, read leniently. Every field below is optional except the manifest basics. |
+| `v1`             | Same fields as v0, now explicitly versioned. Current default for new manifests. |
 
 ### `require_one_of` — "at least one of these"
 

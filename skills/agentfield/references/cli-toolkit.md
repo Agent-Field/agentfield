@@ -100,6 +100,8 @@ See [docs/installing-agent-nodes.md](../../../docs/installing-agent-nodes.md) fo
 
 Install an agent node from a local directory, a git/GitHub URL, or a registry name. The node is described by its `agentfield-package.yaml` manifest; its Python deps are installed into a per-node venv. If the manifest declares `dependencies.nodes` (e.g. `af://registry/swe-planner`), those nodes are installed recursively.
 
+When you author an `agentfield-package.yaml`, set `config_version: v1` at the top — the manifest *schema* version, distinct from the node's own `version:`. Omitting it means `v0` (the legacy format). Only bump `config_version` for **breaking** format changes (a field renamed/removed or its shape changed); adding a new optional field does **not** need a bump. A version newer than the installed `af` understands is refused with a clear error. Full contract + a real example (Agent-Field/SWE-AF): [docs/installing-agent-nodes.md](../../../docs/installing-agent-nodes.md).
+
 ### `af run <agent-node-name>`
 
 Start an installed node in the background. Brings up the node's declared node dependencies first. Resolves the node's required environment from the encrypted secret store, **prompting once** for anything missing (hidden input for `type: secret`) and remembering it encrypted. Secrets are injected only into the node process — never written to disk in plaintext. Exports `AGENTFIELD_SERVER` + `PORT` to the node.
