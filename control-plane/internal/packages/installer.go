@@ -648,11 +648,28 @@ func InstallPythonDependencies(packagePath string, pyDeps, systemDeps []string) 
 	if hasReq || hasProject || len(pyDeps) > 0 {
 		venvPath := filepath.Join(packagePath, "venv")
 
-		cmd := exec.Command("python3", "-m", "venv", venvPath)
-		if _, err := cmd.CombinedOutput(); err != nil {
-			cmd = exec.Command("python", "-m", "venv", venvPath)
+		// Pick an interpreter that satisfies the node's requires-python (when it
+		// declares one), provisioning a compatible Python via uv/pyenv if the
+		// ambient one is too old — rather than failing later with a raw pip
+		// "requires a different Python" trace.
+		interp, err := resolveVenvInterpreter(packagePath)
+		if err != nil {
+			return err
+		}
+
+		var cmd *exec.Cmd
+		if interp != "" {
+			cmd = exec.Command(interp, "-m", "venv", venvPath)
 			if output, err := cmd.CombinedOutput(); err != nil {
-				return fmt.Errorf("failed to create virtual environment: %w\nOutput: %s", err, output)
+				return fmt.Errorf("failed to create virtual environment with %s: %w\nOutput: %s", interp, err, output)
+			}
+		} else {
+			cmd = exec.Command("python3", "-m", "venv", venvPath)
+			if _, err := cmd.CombinedOutput(); err != nil {
+				cmd = exec.Command("python", "-m", "venv", venvPath)
+				if output, err := cmd.CombinedOutput(); err != nil {
+					return fmt.Errorf("failed to create virtual environment: %w\nOutput: %s", err, output)
+				}
 			}
 		}
 
