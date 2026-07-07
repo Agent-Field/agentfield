@@ -26,7 +26,7 @@ describe('async-execution dispatch', () => {
 
     const res = await fetch(`${agentUrl}/reasoners/echo`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Execution-ID': 'exec-async-1' },
+      headers: { 'Content-Type': 'application/json', 'X-Execution-ID': 'exec-async-1', 'X-Run-ID': 'run-exec-async-1' },
       body: JSON.stringify({ value: 42 })
     });
 
@@ -54,7 +54,7 @@ describe('async-execution dispatch', () => {
 
     const res = await fetch(`${agentUrl}/reasoners/boom`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Execution-ID': 'exec-async-2' },
+      headers: { 'Content-Type': 'application/json', 'X-Execution-ID': 'exec-async-2', 'X-Run-ID': 'run-exec-async-2' },
       body: JSON.stringify({})
     });
     expect(res.status).toBe(202);
@@ -74,7 +74,7 @@ describe('async-execution dispatch', () => {
 
     await fetch(`${agentUrl}/reasoners/scalar`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Execution-ID': 'exec-async-3' },
+      headers: { 'Content-Type': 'application/json', 'X-Execution-ID': 'exec-async-3', 'X-Run-ID': 'run-exec-async-3' },
       body: JSON.stringify({})
     });
 
@@ -103,6 +103,29 @@ describe('async-execution dispatch', () => {
     expect(cp.find('POST', '/status')).toBeUndefined();
   });
 
+  it('runs synchronously (inline result) when X-Execution-ID is present but X-Run-ID is not', async () => {
+    // Reproduces the legacy synchronous invoke endpoint
+    // (POST /api/v1/reasoners/{node}.{reasoner}), which sets X-Execution-ID but
+    // NOT X-Run-ID for long-running agents and forwards the agent's response
+    // verbatim. The agent must return the result inline (200), not a 202 marker.
+    cp = new MockControlPlane();
+    const cpUrl = await cp.start();
+
+    agent = new Agent({ nodeId: 'async-agent', agentFieldUrl: cpUrl, didEnabled: false, devMode: true });
+    agent.reasoner('echo', async (ctx) => ({ echoed: (ctx.input as any).value }));
+    const agentUrl = await listenAgent(agent);
+
+    const res = await fetch(`${agentUrl}/reasoners/echo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Execution-ID': 'exec-legacy-1' },
+      body: JSON.stringify({ value: 5 })
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ echoed: 5 });
+    expect(cp.find('POST', '/status')).toBeUndefined();
+  });
+
   it('runs synchronously when asyncExecution is disabled, even with the header', async () => {
     cp = new MockControlPlane();
     const cpUrl = await cp.start();
@@ -119,7 +142,7 @@ describe('async-execution dispatch', () => {
 
     const res = await fetch(`${agentUrl}/reasoners/echo`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Execution-ID': 'exec-sync-1' },
+      headers: { 'Content-Type': 'application/json', 'X-Execution-ID': 'exec-sync-1', 'X-Run-ID': 'run-exec-sync-1' },
       body: JSON.stringify({ value: 9 })
     });
     expect(res.status).toBe(200);
@@ -152,7 +175,7 @@ describe('async-execution dispatch', () => {
 
     await fetch(`${agentUrl}/reasoners/slow`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Execution-ID': 'exec-timeout-1' },
+      headers: { 'Content-Type': 'application/json', 'X-Execution-ID': 'exec-timeout-1', 'X-Run-ID': 'run-exec-timeout-1' },
       body: JSON.stringify({})
     });
 

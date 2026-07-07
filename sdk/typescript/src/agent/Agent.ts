@@ -1443,16 +1443,29 @@ export class Agent {
 
   /**
    * True when an incoming reasoner dispatch should run detached (202-ack).
-   * Requires async execution to be enabled AND the request to carry an
-   * `X-Execution-ID` header (present only when the control plane dispatched
-   * it). Direct HTTP callers / tests without that header keep the synchronous
-   * request/response contract.
+   *
+   * Requires async execution to be enabled AND the request to carry BOTH
+   * `X-Execution-ID` and `X-Run-ID`. The `X-Run-ID` header is the marker that
+   * the control plane dispatched this via an async-aware path — the workflow
+   * execute paths (`/execute`, `/execute/async`, agent-to-agent calls, triggers)
+   * always set it (see control-plane callAgent), and those paths wait for the
+   * out-of-band `/status` result. The legacy synchronous invoke endpoint
+   * (`POST /api/v1/reasoners/{node}.{reasoner}`) omits `X-Run-ID` for
+   * long-running agents and forwards the agent's HTTP response verbatim; it
+   * cannot handle a 202, so we must run synchronously there and return the
+   * result inline. Direct HTTP callers / tests without these headers likewise
+   * keep the synchronous request/response contract.
    */
   private shouldRunAsync(req: express.Request): boolean {
     if (this.config.asyncExecution === false) return false;
-    const header = req.headers['x-execution-id'];
-    const executionId = Array.isArray(header) ? header[0] : header;
-    return typeof executionId === 'string' && executionId.trim().length > 0;
+    return this.hasHeader(req, 'x-execution-id') && this.hasHeader(req, 'x-run-id');
+  }
+
+  /** True when the request carries a non-empty value for the given header. */
+  private hasHeader(req: express.Request, name: string): boolean {
+    const raw = req.headers[name];
+    const value = Array.isArray(raw) ? raw[0] : raw;
+    return typeof value === 'string' && value.trim().length > 0;
   }
 
   /**

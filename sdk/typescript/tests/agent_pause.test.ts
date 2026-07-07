@@ -30,7 +30,7 @@ describe('ctx.pause() / Agent.pause() end-to-end', () => {
 
     const res = await fetch(`${agentUrl}/reasoners/review`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Execution-ID': 'exec-pause-1' },
+      headers: { 'Content-Type': 'application/json', 'X-Execution-ID': 'exec-pause-1', 'X-Run-ID': 'run-exec-pause-1' },
       body: JSON.stringify({})
     });
     expect(res.status).toBe(202);
@@ -79,7 +79,7 @@ describe('ctx.pause() / Agent.pause() end-to-end', () => {
 
     await fetch(`${agentUrl}/reasoners/review`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Execution-ID': 'exec-expire' },
+      headers: { 'Content-Type': 'application/json', 'X-Execution-ID': 'exec-expire', 'X-Run-ID': 'run-exec-expire' },
       body: JSON.stringify({})
     });
 
@@ -105,7 +105,7 @@ describe('ctx.pause() / Agent.pause() end-to-end', () => {
 
     await fetch(`${agentUrl}/reasoners/review`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Execution-ID': 'exec-err' },
+      headers: { 'Content-Type': 'application/json', 'X-Execution-ID': 'exec-err', 'X-Run-ID': 'run-exec-err' },
       body: JSON.stringify({})
     });
 
@@ -158,7 +158,7 @@ describe('multi-hop pause propagation (awaiter-status cascade)', () => {
 
     await fetch(`${agentUrl}/reasoners/orchestrate`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Execution-ID': 'parent-exec-1' },
+      headers: { 'Content-Type': 'application/json', 'X-Execution-ID': 'parent-exec-1', 'X-Run-ID': 'run-parent-exec-1' },
       body: JSON.stringify({})
     });
 
