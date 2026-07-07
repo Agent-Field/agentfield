@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Agent-Field/agentfield/control-plane/internal/cli/ui"
 	"github.com/Agent-Field/agentfield/control-plane/internal/packages"
+	"github.com/Agent-Field/agentfield/control-plane/internal/ui"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )

@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/Agent-Field/agentfield/control-plane/internal/cli/ui"
 	"github.com/Agent-Field/agentfield/control-plane/internal/packages"
+	"github.com/Agent-Field/agentfield/control-plane/internal/ui"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
