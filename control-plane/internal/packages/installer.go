@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,40 @@ import (
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
+
+// CurrentConfigVersion is the highest agentfield-package.yaml schema version this
+// control plane knows how to read. A manifest may declare `config_version` up to
+// this value; anything higher was authored for a newer AgentField and is refused
+// rather than mis-parsed.
+//
+// When to bump this (and stamp manifests with the new version): ONLY when a change
+// is *breaking* — a field is renamed or removed, or its shape/meaning changes such
+// that an old reader would mis-handle a new manifest (or a new reader would
+// mis-handle an old one). Purely *additive* changes (new optional keys) do NOT
+// require a bump: yaml.Unmarshal ignores unknown keys, so old readers skip new
+// fields and new readers fall back to defaults. Keep this list of versions and
+// their breaking change in docs/installing-agent-nodes.md.
+const CurrentConfigVersion = 1
+
+// parseConfigVersion normalizes the manifest's `config_version` string to an int.
+//
+//   - absent / empty  -> 0  (v0: pre-versioning legacy manifests)
+//   - "v1", "V1", "1" -> 1  (the "v" prefix is optional and case-insensitive)
+//
+// Any other form is an error, so a typo fails loudly instead of silently reading
+// as v0.
+func parseConfigVersion(raw string) (int, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return 0, nil
+	}
+	s = strings.TrimPrefix(strings.ToLower(s), "v")
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("invalid config_version %q (expected a form like \"v1\")", raw)
+	}
+	return n, nil
+}
 
 // UserEnvironmentVar represents a user-configurable environment variable
 type UserEnvironmentVar struct {
@@ -64,6 +99,12 @@ type UserEnvironmentConfig struct {
 
 // PackageMetadata represents the structure of agentfield-package.yaml
 type PackageMetadata struct {
+	// ConfigVersion is the *schema* version of this manifest (e.g. "v1"), NOT the
+	// package's own release version (that is the Version field below). It lets the
+	// reader stay compatible as the manifest format evolves. Absent means "v0" —
+	// the pre-versioning format — which is read leniently. See CurrentConfigVersion
+	// for the bump policy (breaking changes only).
+	ConfigVersion   string                 `yaml:"config_version"`
 	Name            string                 `yaml:"name"`
 	Version         string                 `yaml:"version"`
 	Description     string                 `yaml:"description"`
@@ -552,6 +593,15 @@ func NodeDepName(ref string) string {
 	return ""
 }
 
+// ConfigVersionNumber returns the manifest's normalized schema version as an int
+// (absent/"v0" -> 0, "v1" -> 1). It ignores malformed values, returning 0; callers
+// that need to surface a parse error should go through ParsePackageMetadata, which
+// rejects both malformed and too-new versions.
+func (m *PackageMetadata) ConfigVersionNumber() int {
+	n, _ := parseConfigVersion(m.ConfigVersion)
+	return n
+}
+
 // HealthcheckPath returns the readiness path, defaulting to "/health".
 func (m *PackageMetadata) HealthcheckPath() string {
 	if p := strings.TrimSpace(m.Entrypoint.Healthcheck); p != "" {
@@ -572,6 +622,26 @@ func ParsePackageMetadata(dir string) (*PackageMetadata, error) {
 	var metadata PackageMetadata
 	if err := yaml.Unmarshal(data, &metadata); err != nil {
 		return nil, fmt.Errorf("failed to parse agentfield-package.yaml: %w", err)
+	}
+
+	// Version-dependent read: decide how to interpret the manifest from the schema
+	// version the author declared, so we don't mis-parse a format we don't know.
+	ver, err := parseConfigVersion(metadata.ConfigVersion)
+	if err != nil {
+		return nil, fmt.Errorf("agentfield-package.yaml: %w", err)
+	}
+	if ver > CurrentConfigVersion {
+		return nil, fmt.Errorf(
+			"agentfield-package.yaml declares config_version %q, but this AgentField reads up to v%d — upgrade AgentField to install this node",
+			metadata.ConfigVersion, CurrentConfigVersion)
+	}
+	// v0 (legacy, unversioned) and v1 currently share one decoder because v1 only
+	// *introduces* the version marker without changing any field. A future breaking
+	// version adds its own case here (e.g. a migrateFromV1 step) — the switch is the
+	// single place that fans out on version.
+	switch ver {
+	case 0, 1:
+		// nothing version-specific to do yet; metadata is already decoded above.
 	}
 
 	// Validate required fields
