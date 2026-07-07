@@ -128,9 +128,13 @@ func DefaultEntries() []EndpointEntry {
 		{Method: "GET", Path: "/api/v1/agentic/kb/guide", Group: "agentic-kb", Summary: "Goal-oriented reading path for building agents", AuthLevel: "public", Tags: []string{"kb", "guide", "learning", "onboarding"}},
 
 		// --- Settings ---
-		{Method: "GET", Path: "/api/v1/settings/webhooks", Group: "settings", Summary: "List observability webhooks", AuthLevel: "api_key", Tags: []string{"settings", "webhooks", "observability"}},
-		{Method: "POST", Path: "/api/v1/settings/webhooks", Group: "settings", Summary: "Create observability webhook", AuthLevel: "api_key", Tags: []string{"settings", "webhooks", "observability"}},
-		{Method: "DELETE", Path: "/api/v1/settings/webhooks/:webhook_id", Group: "settings", Summary: "Delete observability webhook", AuthLevel: "api_key", Tags: []string{"settings", "webhooks"}},
+		{Method: "GET", Path: "/api/v1/settings/observability-webhook", Group: "settings", Summary: "Get the observability webhook config (singleton)", AuthLevel: "api_key", Tags: []string{"settings", "webhooks", "observability"}},
+		{Method: "POST", Path: "/api/v1/settings/observability-webhook", Group: "settings", Summary: "Create or update the observability webhook config", AuthLevel: "api_key", Tags: []string{"settings", "webhooks", "observability"}},
+		{Method: "DELETE", Path: "/api/v1/settings/observability-webhook", Group: "settings", Summary: "Delete the observability webhook config", AuthLevel: "api_key", Tags: []string{"settings", "webhooks", "observability"}},
+		{Method: "GET", Path: "/api/v1/settings/observability-webhook/status", Group: "settings", Summary: "Observability webhook delivery status and queue depth", AuthLevel: "api_key", Tags: []string{"settings", "webhooks", "observability"}},
+		{Method: "POST", Path: "/api/v1/settings/observability-webhook/redrive", Group: "settings", Summary: "Retry dead-lettered observability webhook deliveries", AuthLevel: "api_key", Tags: []string{"settings", "webhooks", "observability"}},
+		{Method: "GET", Path: "/api/v1/settings/observability-webhook/dlq", Group: "settings", Summary: "Inspect the observability webhook dead-letter queue", AuthLevel: "api_key", Tags: []string{"settings", "webhooks", "observability"}},
+		{Method: "DELETE", Path: "/api/v1/settings/observability-webhook/dlq", Group: "settings", Summary: "Clear the observability webhook dead-letter queue", AuthLevel: "api_key", Tags: []string{"settings", "webhooks", "observability"}},
 
 		// --- Admin ---
 		{Method: "GET", Path: "/api/v1/admin/tags/pending", Group: "admin", Summary: "List pending tag approval requests", AuthLevel: "admin", Tags: []string{"admin", "tags", "approval"}},
