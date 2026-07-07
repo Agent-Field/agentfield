@@ -34,10 +34,31 @@ func (v UserEnvironmentVar) SecretScope(nodeName string) string {
 	return globalScope
 }
 
-// UserEnvironmentConfig represents user-configurable environment variables
+// RequireOneOfGroup is a set of alternative variables where at least one must be
+// provided (e.g. an Anthropic key OR an OpenRouter key). The group is satisfied
+// as soon as any one of its Options resolves to a value.
+type RequireOneOfGroup struct {
+	ID          string               `yaml:"id"`
+	Description string               `yaml:"description"`
+	Options     []UserEnvironmentVar `yaml:"options"`
+}
+
+// OptionNames returns the option variable names in declaration order.
+func (g RequireOneOfGroup) OptionNames() []string {
+	names := make([]string, len(g.Options))
+	for i, o := range g.Options {
+		names[i] = o.Name
+	}
+	return names
+}
+
+// UserEnvironmentConfig represents user-configurable environment variables.
+// Required vars must all be set; each RequireOneOf group needs at least one of
+// its options; Optional vars fall back to their default.
 type UserEnvironmentConfig struct {
-	Required []UserEnvironmentVar `yaml:"required"`
-	Optional []UserEnvironmentVar `yaml:"optional"`
+	Required     []UserEnvironmentVar `yaml:"required"`
+	RequireOneOf []RequireOneOfGroup  `yaml:"require_one_of"`
+	Optional     []UserEnvironmentVar `yaml:"optional"`
 }
 
 // PackageMetadata represents the structure of agentfield-package.yaml
@@ -271,14 +292,26 @@ func (pi *PackageInstaller) InstallPackage(sourcePath string, force bool) error 
 }
 
 // checkEnvironmentVariables checks for required environment variables and provides setup guidance
+// envGroupSatisfied reports whether at least one option of a require_one_of
+// group is present in the process environment.
+func envGroupSatisfied(g RequireOneOfGroup) bool {
+	for _, opt := range g.Options {
+		if os.Getenv(opt.Name) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func (pi *PackageInstaller) checkEnvironmentVariables(metadata *PackageMetadata) {
-	if len(metadata.UserEnvironment.Required) == 0 && len(metadata.UserEnvironment.Optional) == 0 {
+	env := metadata.UserEnvironment
+	if len(env.Required) == 0 && len(env.RequireOneOf) == 0 && len(env.Optional) == 0 {
 		return // No user environment variables configured
 	}
 
 	// Check required environment variables
 	missingRequired := []UserEnvironmentVar{}
-	for _, envVar := range metadata.UserEnvironment.Required {
+	for _, envVar := range env.Required {
 		if os.Getenv(envVar.Name) == "" {
 			missingRequired = append(missingRequired, envVar)
 		}
@@ -288,6 +321,21 @@ func (pi *PackageInstaller) checkEnvironmentVariables(metadata *PackageMetadata)
 		fmt.Printf("\n%s %s\n", Yellow("⚠"), Bold("Missing required environment variables:"))
 		for _, envVar := range missingRequired {
 			fmt.Printf("  %s\n", Cyan(fmt.Sprintf("af config %s --set %s=your-value-here", metadata.Name, envVar.Name)))
+		}
+	}
+
+	// Check require_one_of groups (at least one option must be set).
+	for _, g := range env.RequireOneOf {
+		if envGroupSatisfied(g) {
+			continue
+		}
+		label := g.Description
+		if label == "" {
+			label = "one of these"
+		}
+		fmt.Printf("\n%s %s (%s):\n", Yellow("⚠"), Bold("Set at least one of"), label)
+		for _, opt := range g.Options {
+			fmt.Printf("  %s\n", Cyan(fmt.Sprintf("af config %s --set %s=your-value-here", metadata.Name, opt.Name)))
 		}
 	}
 

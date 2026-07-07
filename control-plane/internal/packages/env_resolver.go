@@ -2,6 +2,7 @@ package packages
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -36,68 +37,160 @@ type EnvResolver struct {
 //  3. manifest default
 //  4. (required only) prompt the user, validate, and persist encrypted
 //
-// Required variables that remain unset after prompting (or in a non-interactive
-// session) are returned as a list of missing names alongside an error.
+// require_one_of groups are satisfied when at least one option resolves; when
+// none is set in an interactive session the user is asked to fill one in.
+//
+// Required variables (or groups) that remain unset after prompting (or in a
+// non-interactive session) produce an error naming what is missing.
 func (r *EnvResolver) Resolve(env UserEnvironmentConfig) (map[string]string, error) {
 	resolved := map[string]string{}
 	var missing []string
-
-	resolveOne := func(v UserEnvironmentVar, required bool) error {
-		// 1. Process environment wins and is never written to disk.
-		if val, ok := os.LookupEnv(v.Name); ok && val != "" {
-			resolved[v.Name] = val
-			return nil
-		}
-		// 2. Secret store (node overrides global).
-		if val, ok, err := r.Store.Get(r.NodeName, v.Name); err != nil {
-			return err
-		} else if ok {
-			resolved[v.Name] = val
-			return nil
-		}
-		// 3. Manifest default.
-		if v.Default != "" {
-			resolved[v.Name] = v.Default
-			return nil
-		}
-		if !required {
-			return nil // optional and unset: leave it out
-		}
-		// 4. Prompt (required only).
-		if r.Prompter == nil || !r.Prompter.Interactive() {
-			missing = append(missing, v.Name)
-			return nil
-		}
-		val, err := r.promptAndValidate(v)
-		if err != nil {
-			return err
-		}
-		if val == "" {
-			missing = append(missing, v.Name)
-			return nil
-		}
-		if err := r.Store.Set(v.SecretScope(r.NodeName), v.Name, val); err != nil {
-			return fmt.Errorf("failed to save %s: %w", v.Name, err)
-		}
-		resolved[v.Name] = val
-		return nil
-	}
+	var missingGroups []RequireOneOfGroup
 
 	for _, v := range env.Required {
-		if err := resolveOne(v, true); err != nil {
+		val, err := r.lookup(v)
+		if err != nil {
 			return nil, err
 		}
-	}
-	for _, v := range env.Optional {
-		if err := resolveOne(v, false); err != nil {
+		if val != "" {
+			resolved[v.Name] = val
+			continue
+		}
+		got, err := r.promptAndStore(v)
+		if err != nil {
 			return nil, err
+		}
+		if got == "" {
+			missing = append(missing, v.Name)
+		} else {
+			resolved[v.Name] = got
 		}
 	}
 
-	if len(missing) > 0 {
-		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))
+	for _, g := range env.RequireOneOf {
+		if r.resolveGroupFromSources(g, resolved) {
+			continue
+		}
+		if r.Prompter == nil || !r.Prompter.Interactive() {
+			missingGroups = append(missingGroups, g)
+			continue
+		}
+		got, err := r.promptGroup(g, resolved)
+		if err != nil {
+			return nil, err
+		}
+		if !got {
+			missingGroups = append(missingGroups, g)
+		}
+	}
+
+	for _, v := range env.Optional {
+		val, err := r.lookup(v)
+		if err != nil {
+			return nil, err
+		}
+		if val != "" {
+			resolved[v.Name] = val
+		}
+	}
+
+	if len(missing) > 0 || len(missingGroups) > 0 {
+		return nil, missingEnvError(missing, missingGroups)
 	}
 	return resolved, nil
+}
+
+// lookup resolves a variable from the process environment, the secret store
+// (node overriding global), then its manifest default — without prompting.
+// It returns "" when the variable is unset from all of those sources.
+func (r *EnvResolver) lookup(v UserEnvironmentVar) (string, error) {
+	if val, ok := os.LookupEnv(v.Name); ok && val != "" {
+		return val, nil
+	}
+	if val, ok, err := r.Store.Get(r.NodeName, v.Name); err != nil {
+		return "", err
+	} else if ok {
+		return val, nil
+	}
+	if v.Default != "" {
+		return v.Default, nil
+	}
+	return "", nil
+}
+
+// promptAndStore prompts for a variable (interactive only), persists the value
+// encrypted, and returns it. It returns "" when there is no interactive prompt
+// or the user skips.
+func (r *EnvResolver) promptAndStore(v UserEnvironmentVar) (string, error) {
+	if r.Prompter == nil || !r.Prompter.Interactive() {
+		return "", nil
+	}
+	val, err := r.promptAndValidate(v)
+	if err != nil {
+		return "", err
+	}
+	if val == "" {
+		return "", nil
+	}
+	if err := r.Store.Set(v.SecretScope(r.NodeName), v.Name, val); err != nil {
+		return "", fmt.Errorf("failed to save %s: %w", v.Name, err)
+	}
+	return val, nil
+}
+
+// resolveGroupFromSources injects every option of a require_one_of group that is
+// already available (env/store/default) and reports whether at least one was.
+func (r *EnvResolver) resolveGroupFromSources(g RequireOneOfGroup, resolved map[string]string) bool {
+	found := false
+	for _, opt := range g.Options {
+		val, err := r.lookup(opt)
+		if err == nil && val != "" {
+			resolved[opt.Name] = val
+			found = true
+		}
+	}
+	return found
+}
+
+// promptGroup asks the user to fill in one option of a require_one_of group,
+// persisting the first non-empty answer. Options are offered in order; leaving
+// one blank moves on to the next alternative.
+func (r *EnvResolver) promptGroup(g RequireOneOfGroup, resolved map[string]string) (bool, error) {
+	desc := g.Description
+	if desc == "" {
+		desc = "one of the following"
+	}
+	fmt.Printf("  This node needs %s — fill in one, leave the rest blank:\n    %s\n",
+		desc, strings.Join(g.OptionNames(), "  |  "))
+
+	for _, opt := range g.Options {
+		val, err := r.promptAndValidate(opt)
+		if err != nil {
+			return false, err
+		}
+		if val == "" {
+			continue
+		}
+		if err := r.Store.Set(opt.SecretScope(r.NodeName), opt.Name, val); err != nil {
+			return false, fmt.Errorf("failed to save %s: %w", opt.Name, err)
+		}
+		resolved[opt.Name] = val
+		return true, nil
+	}
+	return false, nil
+}
+
+// missingEnvError formats a single error covering unset required variables and
+// any unsatisfied require_one_of groups.
+func missingEnvError(missing []string, groups []RequireOneOfGroup) error {
+	var parts []string
+	if len(missing) > 0 {
+		parts = append(parts, "missing required environment variables: "+strings.Join(missing, ", "))
+	}
+	for _, g := range groups {
+		parts = append(parts, "at least one of ["+strings.Join(g.OptionNames(), " | ")+"] is required")
+	}
+	return errors.New(strings.Join(parts, "; "))
 }
 
 // promptAndValidate prompts until the value satisfies the variable's validation

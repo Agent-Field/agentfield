@@ -610,13 +610,14 @@ func (ps *DefaultPackageService) updateRegistry(metadata *packages.PackageMetada
 
 // checkEnvironmentVariables checks for required environment variables and provides setup guidance
 func (ps *DefaultPackageService) checkEnvironmentVariables(metadata *packages.PackageMetadata) {
-	if len(metadata.UserEnvironment.Required) == 0 && len(metadata.UserEnvironment.Optional) == 0 {
+	env := metadata.UserEnvironment
+	if len(env.Required) == 0 && len(env.RequireOneOf) == 0 && len(env.Optional) == 0 {
 		return // No user environment variables configured
 	}
 
 	// Check required environment variables
 	missingRequired := []packages.UserEnvironmentVar{}
-	for _, envVar := range metadata.UserEnvironment.Required {
+	for _, envVar := range env.Required {
 		if os.Getenv(envVar.Name) == "" {
 			missingRequired = append(missingRequired, envVar)
 		}
@@ -626,6 +627,29 @@ func (ps *DefaultPackageService) checkEnvironmentVariables(metadata *packages.Pa
 		fmt.Printf("\n%s %s\n", ps.yellow("⚠"), ps.bold("Missing required environment variables:"))
 		for _, envVar := range missingRequired {
 			fmt.Printf("  %s\n", ps.cyan(fmt.Sprintf("af secrets set %s", envVar.Name)))
+		}
+		fmt.Printf("  %s\n", ps.gray("(or you'll be prompted on first 'af run')"))
+	}
+
+	// Check require_one_of groups (at least one option must be set).
+	for _, g := range env.RequireOneOf {
+		satisfied := false
+		for _, opt := range g.Options {
+			if os.Getenv(opt.Name) != "" {
+				satisfied = true
+				break
+			}
+		}
+		if satisfied {
+			continue
+		}
+		label := g.Description
+		if label == "" {
+			label = "one of these"
+		}
+		fmt.Printf("\n%s %s (%s):\n", ps.yellow("⚠"), ps.bold("Set at least one of"), label)
+		for _, opt := range g.Options {
+			fmt.Printf("  %s\n", ps.cyan(fmt.Sprintf("af secrets set %s", opt.Name)))
 		}
 		fmt.Printf("  %s\n", ps.gray("(or you'll be prompted on first 'af run')"))
 	}
