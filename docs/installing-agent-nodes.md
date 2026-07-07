@@ -58,16 +58,42 @@ dependencies:
 # Variables the node needs. Required ones are prompted for on first run and
 # remembered (encrypted). type: secret hides the input and stores it encrypted.
 user_environment:
-  required:
-    - name: OPENROUTER_API_KEY
-      description: LLM provider key
+  required:                     # every one of these must be set
+    - name: GH_TOKEN
+      description: GitHub token
       type: secret
       scope: global           # global (default) = shared across nodes; node = this node only
+  require_one_of:               # each group needs AT LEAST ONE option set
+    - id: llm_provider
+      description: an LLM provider key
+      options:
+        - name: ANTHROPIC_API_KEY
+          description: Anthropic key (Claude)
+          type: secret
+        - name: OPENROUTER_API_KEY
+          description: OpenRouter key (DeepSeek/Qwen/Llama/…)
+          type: secret
   optional:
     - name: PR_AF_MODEL
       description: Override the default model
       default: openrouter/moonshotai/kimi-k2
 ```
+
+### `require_one_of` — "at least one of these"
+
+Some nodes accept alternatives — e.g. either an Anthropic key **or** an
+OpenRouter key. List them under `require_one_of` as a group of `options`. A group
+is satisfied as soon as **one** option resolves (from the process environment,
+the secret store, or a manifest default).
+
+On `af run`, if no option of a group is set, you're asked to fill in one and
+leave the rest blank — the value you enter is validated and stored encrypted,
+exactly like a required secret. In a non-interactive session an unsatisfied group
+is a clean error listing the alternatives (`at least one of [ANTHROPIC_API_KEY |
+OPENROUTER_API_KEY] is required`) instead of a runtime failure inside the node.
+
+`required` (all must be set), `require_one_of` (at least one per group), and
+`optional` (falls back to `default`) can all be used together in one manifest.
 
 ### Python dependencies
 
