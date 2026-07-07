@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/fatih/color"
+	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
 
@@ -151,8 +152,23 @@ type PackageInstaller struct {
 type Spinner struct {
 	message string
 	active  bool
+	tty     bool
 	mu      sync.Mutex
 	done    chan bool
+}
+
+// stdoutIsTTY reports whether stdout is an interactive terminal.
+func stdoutIsTTY() bool {
+	return term.IsTerminal(int(os.Stdout.Fd()))
+}
+
+// clearLine returns the escape sequence to clear the current terminal line, or
+// "" when stdout is not a terminal (so piped/logged output stays clean).
+func clearLine() string {
+	if stdoutIsTTY() {
+		return "\r\033[K"
+	}
+	return ""
 }
 
 // Professional CLI status symbols
@@ -183,11 +199,19 @@ func (pi *PackageInstaller) newSpinner(message string) *Spinner {
 	}
 }
 
-// Start begins the spinner animation
+// Start begins the spinner animation. When stdout is not a terminal (piped or
+// captured to a log) it animates nothing — the completing Success/Error line is
+// enough — so output stays clean instead of emitting thousands of frames.
 func (s *Spinner) Start() {
+	tty := stdoutIsTTY()
 	s.mu.Lock()
+	s.tty = tty
 	s.active = true
 	s.mu.Unlock()
+
+	if !tty {
+		return
+	}
 
 	go func() {
 		i := 0
@@ -208,13 +232,16 @@ func (s *Spinner) Start() {
 	}()
 }
 
-// Stop stops the spinner and clears the line
+// Stop stops the spinner and clears its line (terminal only).
 func (s *Spinner) Stop() {
 	s.mu.Lock()
+	tty := s.tty
 	s.active = false
 	s.mu.Unlock()
-	s.done <- true
-	fmt.Print("\r\033[K") // Clear the line
+	if tty {
+		s.done <- true
+		fmt.Print("\r\033[K") // Clear the line
+	}
 }
 
 // Success stops the spinner and shows a success message

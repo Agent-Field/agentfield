@@ -221,13 +221,15 @@ func resolveVenvInterpreter(packagePath string) (string, error) {
 
 	// 2. Provision via uv (downloads a standalone interpreter if needed).
 	if interp := provisionViaUv(requires); interp != "" {
-		fmt.Printf("🐍 Provisioned Python %s via uv (node requires %q)\n", displayVersion(interp), requires)
+		// clearLine() wipes the active dependency spinner's line so this notice
+		// lands cleanly on its own line instead of being appended to it.
+		fmt.Printf("%s  🐍 Provisioned Python %s via uv (node requires %q)\n", clearLine(), displayVersion(interp), requires)
 		return interp, nil
 	}
 
 	// 3. Discover a matching pyenv-installed version.
 	if interp := provisionViaPyenv(requires); interp != "" {
-		fmt.Printf("🐍 Using pyenv Python %s (node requires %q)\n", displayVersion(interp), requires)
+		fmt.Printf("%s  🐍 Using pyenv Python %s (node requires %q)\n", clearLine(), displayVersion(interp), requires)
 		return interp, nil
 	}
 

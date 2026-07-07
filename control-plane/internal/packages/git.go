@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/ui"
 	"gopkg.in/yaml.v3"
 )
 
@@ -116,11 +117,11 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 		return fmt.Errorf("failed to parse Git URL: %w", err)
 	}
 
-	logger.Logger.Info().Msgf("Installing package from Git repository...")
-	logger.Logger.Info().Msgf("  %s %s", Gray("Repository:"), info.URL)
+	ref := info.URL
 	if info.Ref != "" {
-		logger.Logger.Info().Msgf("  %s %s", Gray("Reference:"), info.Ref)
+		ref = info.URL + " @ " + info.Ref
 	}
+	fmt.Println(ui.Muted("  from " + ref))
 
 	// 1. Clone repository
 	spinner := gi.newSpinner("Cloning repository")
@@ -188,17 +189,22 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 		return fmt.Errorf("failed to update registry: %w", err)
 	}
 
-	logger.Logger.Info().Msgf("%s Installed %s v%s from Git", Green(StatusSuccess), Bold(metadata.Name), Gray(metadata.Version))
-	logger.Logger.Info().Msgf("  %s %s", Gray("Source:"), info.URL)
+	details := [][2]string{{"Source", info.URL}}
 	if info.Ref != "" {
-		logger.Logger.Info().Msgf("  %s %s", Gray("Reference:"), info.Ref)
+		details = append(details, [2]string{"Reference", info.Ref})
 	}
-	logger.Logger.Info().Msgf("  %s %s", Gray("Location:"), destPath)
+	details = append(details, [2]string{"Location", destPath})
+
+	fmt.Println()
+	fmt.Println(ui.SuccessPanel(
+		fmt.Sprintf("Installed %s v%s", metadata.Name, metadata.Version),
+		ui.KV(details)))
 
 	// Check for required environment variables
 	installer.checkEnvironmentVariables(metadata)
 
-	logger.Logger.Info().Msgf("\n%s %s", Blue("→"), Bold(fmt.Sprintf("Run: af run %s", metadata.Name)))
+	fmt.Println()
+	fmt.Println(ui.Title("→ Run: af run " + metadata.Name))
 
 	return nil
 }
