@@ -117,11 +117,7 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 		return fmt.Errorf("failed to parse Git URL: %w", err)
 	}
 
-	ref := info.URL
-	if info.Ref != "" {
-		ref = info.URL + " @ " + info.Ref
-	}
-	fmt.Println(ui.Muted("  from " + ref))
+	fmt.Println(ui.Muted("  from " + installSourceLabel(info.URL, info.Ref)))
 
 	// 1. Clone repository
 	spinner := gi.newSpinner("Cloning repository")
@@ -189,16 +185,8 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 		return fmt.Errorf("failed to update registry: %w", err)
 	}
 
-	details := [][2]string{{"Source", info.URL}}
-	if info.Ref != "" {
-		details = append(details, [2]string{"Reference", info.Ref})
-	}
-	details = append(details, [2]string{"Location", destPath})
-
 	fmt.Println()
-	fmt.Println(ui.SuccessPanel(
-		fmt.Sprintf("Installed %s v%s", metadata.Name, metadata.Version),
-		ui.KV(details)))
+	fmt.Println(installSummaryPanel(metadata.Name, metadata.Version, info.URL, info.Ref, destPath))
 
 	// Check for required environment variables
 	installer.checkEnvironmentVariables(metadata)
@@ -379,4 +367,24 @@ func (gi *GitInstaller) updateRegistryWithGit(metadata *PackageMetadata, info *G
 	}
 
 	return nil
+}
+
+// installSourceLabel formats an install source for display: "<url>" or
+// "<url> @ <ref>" when a ref is pinned.
+func installSourceLabel(url, ref string) string {
+	if ref != "" {
+		return url + " @ " + ref
+	}
+	return url
+}
+
+// installSummaryPanel renders the post-install success panel showing the node
+// name/version and its source and on-disk location.
+func installSummaryPanel(name, version, source, ref, location string) string {
+	details := [][2]string{{"Source", source}}
+	if ref != "" {
+		details = append(details, [2]string{"Reference", ref})
+	}
+	details = append(details, [2]string{"Location", location})
+	return ui.SuccessPanel(fmt.Sprintf("Installed %s v%s", name, version), ui.KV(details))
 }
