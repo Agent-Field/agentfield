@@ -136,6 +136,54 @@ agent.reasoner<
   };
 });
 
+/**
+ * Reasoner that uses the high-level `ctx.pause()` primitive (parity with the
+ * Python SDK's `app.pause()`).
+ *
+ * Unlike `planWithApproval` above — which drives the low-level ApprovalClient
+ * and polls — `ctx.pause()` transitions the execution to WAITING and blocks on
+ * a single promise resolved by the agent's `/webhooks/approval` route when the
+ * control plane delivers the human decision. Combined with async-execution
+ * dispatch (on by default), the reasoner is 202-acked immediately, so the pause
+ * can outlive the control plane's synchronous dispatch ceiling.
+ */
+agent.reasoner<
+  { task: string },
+  { status: string; plan: string; feedback?: string }
+>('planWithPause', async (ctx) => {
+  ctx.note('Generating plan before pausing for approval', ['pause', 'start']);
+
+  const planText = openAIApiKey
+    ? stringifyPlan(
+        await ctx.ai(
+          `You are a project planner. Create a concise 3-step plan for: ${ctx.input.task}`,
+          { temperature: 0.7 }
+        )
+      )
+    : staticPlan(ctx.input.task);
+
+  // The approval request would normally be created on an external service
+  // (e.g. hax-sdk Response Hub) first; here we just mint an id for the demo.
+  const approvalRequestId = `req-${crypto.randomBytes(6).toString('hex')}`;
+
+  // Execution transitions to WAITING here and blocks until the control plane
+  // POSTs the decision to this agent's /webhooks/approval route (or the pause
+  // times out and returns { decision: 'expired' }).
+  const result = await ctx.pause({
+    approvalRequestId,
+    approvalRequestUrl: `https://hub.example.com/review/${approvalRequestId}`,
+    expiresInHours: 24,
+  });
+
+  ctx.note(`Pause resolved: ${result.decision}`, ['pause', 'resolved']);
+
+  return {
+    status: result.approved ? 'approved' : result.decision,
+    plan: planText,
+    feedback: result.feedback || undefined,
+  };
+});
+
 
 async function main() {
   await agent.serve();
@@ -143,7 +191,8 @@ async function main() {
   console.log(`Control Plane: ${agentFieldUrl}`);
   console.log();
   console.log('Reasoners:');
-  console.log('  - planWithApproval: Generates plan, pauses for approval, resumes');
+  console.log('  - planWithApproval: Generates plan, requests approval, polls (low-level)');
+  console.log('  - planWithPause: Generates plan, pauses via ctx.pause(), resumes (high-level)');
   console.log('  - checkApproval: Polls approval status for a given execution');
 }
 
