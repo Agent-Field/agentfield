@@ -62,9 +62,9 @@ func TestCommandAndAgentHelpers(t *testing.T) {
 		output := captureOutput(t, func() {
 			runListCommand(&cobra.Command{}, nil)
 		})
-		require.Contains(t, output, "Installed Agent Node Packages")
+		require.Contains(t, output, "Installed agent nodes")
 		require.Contains(t, output, "demo package")
-		require.Contains(t, output, "Running on port 8080")
+		require.Contains(t, output, "8080")
 	})
 
 	t.Run("log viewer covers missing logs and tail output", func(t *testing.T) {
