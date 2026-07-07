@@ -15,6 +15,7 @@ func (errPrompter) Interactive() bool { return true }
 func (e errPrompter) Prompt(UserEnvironmentVar) (string, error) {
 	return "", e.err
 }
+func (e errPrompter) PromptLine(string) (string, error) { return "", e.err }
 
 // resolverWithBrokenScope builds a resolver whose node-scope secret file is a
 // directory, so any Store.Get for that node fails on load.
@@ -192,5 +193,29 @@ func TestTTYPrompter_ReadsPlainLine(t *testing.T) {
 	}
 	if strings.TrimSpace(got) != "us-east-1" {
 		t.Fatalf("Prompt = %q, want us-east-1", got)
+	}
+}
+
+// Contract: PromptLine reads a single echoed line from stdin and returns it
+// trimmed — this is the require_one_of menu selection input.
+func TestTTYPrompter_PromptLineReadsTrimmedLine(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.WriteString("  2  \n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = w.Close()
+	origStdin := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = origStdin }()
+
+	got, err := TTYPrompter{}.PromptLine("  Enter 1 or 2: ")
+	if err != nil {
+		t.Fatalf("PromptLine: %v", err)
+	}
+	if got != "2" {
+		t.Fatalf("PromptLine = %q, want trimmed \"2\"", got)
 	}
 }

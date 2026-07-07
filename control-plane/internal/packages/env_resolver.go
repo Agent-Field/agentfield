@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"golang.org/x/term"
+
+	"github.com/Agent-Field/agentfield/control-plane/internal/ui"
 )
 
 // Prompter asks the user to supply a value for a missing required variable.
@@ -19,6 +22,9 @@ type Prompter interface {
 	// Prompt requests a value for the given variable. Secret types should be
 	// read without echo.
 	Prompt(v UserEnvironmentVar) (string, error)
+	// PromptLine reads a single echoed line (trimmed), used to choose among
+	// require_one_of options. It is never used for secret values.
+	PromptLine(prompt string) (string, error)
 }
 
 // EnvResolver resolves an agent node's environment variables, prompting for and
@@ -160,32 +166,86 @@ func (r *EnvResolver) resolveGroupFromSources(g RequireOneOfGroup, resolved map[
 	return found, nil
 }
 
-// promptGroup asks the user to fill in one option of a require_one_of group,
-// persisting the first non-empty answer. Options are offered in order; leaving
-// one blank moves on to the next alternative.
+// promptGroup asks the user to satisfy a require_one_of group. A single-option
+// group is prompted for directly; a multi-option group is presented as a
+// numbered menu so the user picks one provider, and only the chosen option is
+// then prompted for and persisted. Returns true once one option is supplied.
 func (r *EnvResolver) promptGroup(g RequireOneOfGroup, resolved map[string]string) (bool, error) {
+	if len(g.Options) == 1 {
+		return r.storeGroupOption(g.Options[0], resolved)
+	}
+
 	desc := g.Description
 	if desc == "" {
 		desc = "one of the following"
 	}
-	fmt.Printf("  This node needs %s — fill in one, leave the rest blank:\n    %s\n",
-		desc, strings.Join(g.OptionNames(), "  |  "))
+	fmt.Printf("\n  %s\n", ui.Title("This node needs "+desc+" — choose one:"))
 
+	width := 0
 	for _, opt := range g.Options {
-		val, err := r.promptAndValidate(opt)
+		if len(opt.Name) > width {
+			width = len(opt.Name)
+		}
+	}
+	nums := make([]string, len(g.Options))
+	for i, opt := range g.Options {
+		nums[i] = strconv.Itoa(i + 1)
+		line := fmt.Sprintf("    %s  %-*s", ui.Title("["+nums[i]+"]"), width, opt.Name)
+		if opt.Description != "" {
+			line += "  " + ui.Muted(opt.Description)
+		}
+		fmt.Println(line)
+	}
+
+	for attempt := 0; attempt < 3; attempt++ {
+		choice, err := r.Prompter.PromptLine(fmt.Sprintf("  Enter %s (or press Enter to skip): ", orJoin(nums)))
 		if err != nil {
 			return false, err
 		}
-		if val == "" {
+		choice = strings.TrimSpace(choice)
+		if choice == "" {
+			return false, nil // skipped the whole group
+		}
+		n, convErr := strconv.Atoi(choice)
+		if convErr != nil || n < 1 || n > len(g.Options) {
+			fmt.Printf("  %s\n", ui.Muted("please enter "+orJoin(nums)))
 			continue
 		}
-		if err := r.Store.Set(opt.SecretScope(r.NodeName), opt.Name, val); err != nil {
-			return false, fmt.Errorf("failed to save %s: %w", opt.Name, err)
-		}
-		resolved[opt.Name] = val
-		return true, nil
+		return r.storeGroupOption(g.Options[n-1], resolved)
 	}
 	return false, nil
+}
+
+// storeGroupOption prompts for a single group option, persisting and recording
+// a non-empty value. A blank answer leaves the group unsatisfied.
+func (r *EnvResolver) storeGroupOption(opt UserEnvironmentVar, resolved map[string]string) (bool, error) {
+	val, err := r.promptAndValidate(opt)
+	if err != nil {
+		return false, err
+	}
+	if val == "" {
+		return false, nil
+	}
+	if err := r.Store.Set(opt.SecretScope(r.NodeName), opt.Name, val); err != nil {
+		return false, fmt.Errorf("failed to save %s: %w", opt.Name, err)
+	}
+	resolved[opt.Name] = val
+	return true, nil
+}
+
+// orJoin renders a human list joined with "or": ["1"] -> "1",
+// ["1","2"] -> "1 or 2", ["1","2","3"] -> "1, 2, or 3".
+func orJoin(items []string) string {
+	switch len(items) {
+	case 0:
+		return ""
+	case 1:
+		return items[0]
+	case 2:
+		return items[0] + " or " + items[1]
+	default:
+		return strings.Join(items[:len(items)-1], ", ") + ", or " + items[len(items)-1]
+	}
 }
 
 // missingEnvError formats a single error covering unset required variables and
@@ -196,7 +256,7 @@ func missingEnvError(missing []string, groups []RequireOneOfGroup) error {
 		parts = append(parts, "missing required environment variables: "+strings.Join(missing, ", "))
 	}
 	for _, g := range groups {
-		parts = append(parts, "at least one of ["+strings.Join(g.OptionNames(), " | ")+"] is required")
+		parts = append(parts, "at least one of "+orJoin(g.OptionNames())+" is required")
 	}
 	return errors.New(strings.Join(parts, "; "))
 }
@@ -263,4 +323,15 @@ func (TTYPrompter) Prompt(v UserEnvironmentVar) (string, error) {
 		return "", fmt.Errorf("failed to read input: %w", err)
 	}
 	return line, nil
+}
+
+// PromptLine prints prompt and reads a single echoed line from stdin, trimmed.
+func (TTYPrompter) PromptLine(prompt string) (string, error) {
+	fmt.Print(prompt)
+	reader := bufio.NewReader(os.Stdin)
+	line, err := reader.ReadString('\n')
+	if err != nil && line == "" {
+		return "", fmt.Errorf("failed to read input: %w", err)
+	}
+	return strings.TrimSpace(line), nil
 }

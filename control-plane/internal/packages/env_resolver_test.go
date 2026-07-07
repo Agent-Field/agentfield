@@ -5,17 +5,29 @@ import (
 	"testing"
 )
 
-// fakePrompter returns canned answers and records what it was asked.
+// fakePrompter returns canned answers and records what it was asked. choices
+// feeds PromptLine (the require_one_of menu selection) in order; once exhausted
+// it returns "" (i.e. the user pressed Enter to skip).
 type fakePrompter struct {
 	interactive bool
 	answers     map[string]string
 	asked       []string
+	choices     []string
+	ci          int
 }
 
 func (f *fakePrompter) Interactive() bool { return f.interactive }
 func (f *fakePrompter) Prompt(v UserEnvironmentVar) (string, error) {
 	f.asked = append(f.asked, v.Name)
 	return f.answers[v.Name], nil
+}
+func (f *fakePrompter) PromptLine(string) (string, error) {
+	if f.ci >= len(f.choices) {
+		return "", nil
+	}
+	v := f.choices[f.ci]
+	f.ci++
+	return v, nil
 }
 
 func newResolver(t *testing.T, node string, p Prompter) *EnvResolver {
@@ -233,11 +245,15 @@ func TestResolve_OneOfNonInteractiveErrorsNamingOptions(t *testing.T) {
 	}
 }
 
-// Contract: interactively, filling in one option (leaving the other blank)
-// satisfies the group and persists just that option encrypted.
+// Contract: interactively, choosing one option from the menu satisfies the
+// group and persists just that option encrypted.
 func TestResolve_OneOfPromptFillsOneAndPersists(t *testing.T) {
-	// User skips Anthropic (empty answer), provides OpenRouter.
-	p := &fakePrompter{interactive: true, answers: map[string]string{"OPENROUTER_API_KEY": "sk-or-prompted"}}
+	// User picks OpenRouter (option 2) and provides its key.
+	p := &fakePrompter{
+		interactive: true,
+		choices:     []string{"2"},
+		answers:     map[string]string{"OPENROUTER_API_KEY": "sk-or-prompted"},
+	}
 	r := newResolver(t, "swe-planner", p)
 
 	got, err := r.Resolve(llmGroup())
@@ -299,3 +315,4 @@ func (r *retryPrompter) Prompt(v UserEnvironmentVar) (string, error) {
 	r.i++
 	return val, nil
 }
+func (r *retryPrompter) PromptLine(string) (string, error) { return "", nil }
