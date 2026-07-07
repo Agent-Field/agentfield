@@ -325,10 +325,17 @@ exit 0
 		assert.Equal(t, statusError, service.statusError())
 
 		t.Setenv("OPTIONAL_KEY", "configured")
+		t.Setenv("PROVIDER_B", "set") // satisfies the second group
 		metadata := &packages.PackageMetadata{
 			Name: "env-agent",
 			UserEnvironment: packages.UserEnvironmentConfig{
 				Required: []packages.UserEnvironmentVar{{Name: "REQUIRED_KEY"}},
+				RequireOneOf: []packages.RequireOneOfGroup{
+					// Unsatisfied group (no option set), empty description → default label.
+					{ID: "g1", Options: []packages.UserEnvironmentVar{{Name: "PROVIDER_A1"}, {Name: "PROVIDER_A2"}}},
+					// Satisfied group (PROVIDER_B is set) → skipped.
+					{ID: "g2", Description: "second provider", Options: []packages.UserEnvironmentVar{{Name: "PROVIDER_B"}}},
+				},
 				Optional: []packages.UserEnvironmentVar{{Name: "OPTIONAL_KEY", Description: "optional", Default: "fallback"}},
 			},
 		}

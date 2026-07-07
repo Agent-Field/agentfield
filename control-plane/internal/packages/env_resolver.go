@@ -68,7 +68,11 @@ func (r *EnvResolver) Resolve(env UserEnvironmentConfig) (map[string]string, err
 	}
 
 	for _, g := range env.RequireOneOf {
-		if r.resolveGroupFromSources(g, resolved) {
+		satisfied, err := r.resolveGroupFromSources(g, resolved)
+		if err != nil {
+			return nil, err
+		}
+		if satisfied {
 			continue
 		}
 		if r.Prompter == nil || !r.Prompter.Interactive() {
@@ -139,17 +143,21 @@ func (r *EnvResolver) promptAndStore(v UserEnvironmentVar) (string, error) {
 }
 
 // resolveGroupFromSources injects every option of a require_one_of group that is
-// already available (env/store/default) and reports whether at least one was.
-func (r *EnvResolver) resolveGroupFromSources(g RequireOneOfGroup, resolved map[string]string) bool {
+// already available (env/store/default) and reports whether at least one was. A
+// store read failure aborts, consistent with required/optional resolution.
+func (r *EnvResolver) resolveGroupFromSources(g RequireOneOfGroup, resolved map[string]string) (bool, error) {
 	found := false
 	for _, opt := range g.Options {
 		val, err := r.lookup(opt)
-		if err == nil && val != "" {
+		if err != nil {
+			return false, err
+		}
+		if val != "" {
 			resolved[opt.Name] = val
 			found = true
 		}
 	}
-	return found
+	return found, nil
 }
 
 // promptGroup asks the user to fill in one option of a require_one_of group,
