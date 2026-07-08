@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -120,7 +121,7 @@ func (as *DefaultAgentService) runAgentGuarded(name string, options domain.RunOp
 	if metadata, err := packages.ParsePackageMetadata(agentNode.Path); err == nil {
 		healthPath = metadata.HealthcheckPath()
 	}
-	if err := as.waitForAgentNode(port, healthPath, 10*time.Second); err != nil {
+	if err := as.waitForAgentNode(port, healthPath, nodeReadyTimeout()); err != nil {
 		// Kill the process if it failed to start properly
 		if stopErr := as.processManager.Stop(pid); stopErr != nil {
 			return nil, fmt.Errorf("agent node failed to start: %w (additionally failed to stop process: %v)", err, stopErr)
@@ -513,6 +514,11 @@ func (as *DefaultAgentService) buildProcessConfig(agentNode packages.InstalledPa
 	serverURL := resolveServerURL()
 	env := os.Environ()
 	env = append(env, fmt.Sprintf("PORT=%d", port))
+	// Tell the SDK to bind exactly this port and fail fast if it is unavailable,
+	// rather than silently moving to another port that the runner is not polling
+	// (the readiness check below targets this exact port). Gated by this signal so
+	// standalone `python -m <node>.app` keeps its lenient auto-port fallback.
+	env = append(env, "AGENTFIELD_STRICT_PORT=1")
 	env = append(env, fmt.Sprintf("AGENTFIELD_SERVER=%s", serverURL))
 	env = append(env, fmt.Sprintf("AGENTFIELD_SERVER_URL=%s", serverURL))
 
@@ -614,6 +620,20 @@ func (as *DefaultAgentService) resolveNodeEnvironment(nodeName string, metadata 
 	}
 	resolver := &packages.EnvResolver{Store: store, NodeName: nodeName, Prompter: packages.TTYPrompter{}}
 	return resolver.Resolve(env)
+}
+
+// nodeReadyTimeout is how long to wait for a freshly started node to answer its
+// health check. Import-heavy nodes (large dependency graphs) routinely take more
+// than the old hardcoded 10s to boot, which produced spurious "did not become
+// ready" failures on nodes that were actually starting fine. Default 30s,
+// overridable via AGENTFIELD_NODE_READY_TIMEOUT (whole seconds).
+func nodeReadyTimeout() time.Duration {
+	if v := os.Getenv("AGENTFIELD_NODE_READY_TIMEOUT"); v != "" {
+		if secs, err := strconv.Atoi(v); err == nil && secs > 0 {
+			return time.Duration(secs) * time.Second
+		}
+	}
+	return 30 * time.Second
 }
 
 // waitForAgentNode waits for the agent node to become ready
