@@ -407,6 +407,20 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 
 ## Built With AgentField
 
+Each of these is a real, installable agent node. With a control plane running, drop any of them into your setup with a single command — `af install <repo-url>` clones the repo, isolates its dependencies, and registers the node. You're prompted once for shared secrets like `OPENROUTER_API_KEY` (stored encrypted and reused across every node), then the node's reasoners are callable over REST or with `af call`:
+
+```bash
+af install https://github.com/Agent-Field/SWE-AF              # autonomous engineering team  → node: swe-planner
+af install https://github.com/Agent-Field/sec-af             # security auditor              → node: sec-af
+af install https://github.com/Agent-Field/cloudsecurity-af   # cloud / IaC security scanner  → node: cloudsecurity
+af install https://github.com/Agent-Field/pr-af              # agentic code review           → node: pr-af
+
+af run swe-planner                                           # start a node (prompts once for required secrets)
+af call swe-planner.build --in '{"goal": "Add JWT auth", "repo_url": "https://github.com/user/my-repo"}'
+```
+
+Full walkthrough — authoring, installing, and configuring nodes: [Installing agent nodes →](docs/installing-agent-nodes.md).
+
 <table>
   <tr>
     <td align="center" width="50%">
