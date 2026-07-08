@@ -9,12 +9,16 @@ package main
 // into these helpers.
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -39,6 +43,12 @@ func serverLogPath() string   { return filepath.Join(logsDir(), "control-plane.l
 func trayLogPath() string     { return filepath.Join(logsDir(), "tray.log") }
 func trayPlistPath() string   { return filepath.Join(launchAgentsDir(), trayLabel+".plist") }
 func serverPlistPath() string { return filepath.Join(launchAgentsDir(), serverLabel+".plist") }
+
+// credentialsPath is where the tray persists an API key entered by the user.
+// It is written 0600 and is deliberately separate from any server config: the
+// server may receive its key via env/config that the tray's launchd context
+// cannot see, so the tray keeps its own copy for talking to the local API.
+func credentialsPath() string { return filepath.Join(agentfieldDir(), "tray-apikey") }
 
 func trayBundleBinaryPath() string {
 	return filepath.Join(appBundleDir(), "Contents", "MacOS", "af-tray")
@@ -97,6 +107,198 @@ func checkHealth(url string) bool {
 }
 
 func serverHealthy() bool { return checkHealth(healthURL()) }
+
+// ---- Fleet (registered agents) ---------------------------------------------
+
+// nodesURL lists every registered node (show_all=true bypasses the default
+// active-only filter so we can report online vs. total).
+func nodesURL() string {
+	return fmt.Sprintf("http://localhost:%d/api/v1/nodes?show_all=true", serverPort())
+}
+
+// fleetStatus is the outcome of trying to read the fleet from the control plane.
+type fleetStatus int
+
+const (
+	fleetOK           fleetStatus = iota // agents read successfully
+	fleetAuthRequired                    // server demands an API key we don't have (or ours was rejected)
+	fleetUnavailable                     // server unreachable / unexpected response
+)
+
+// agentInfo is the slice of a registered node the tray cares about.
+type agentInfo struct {
+	ID        string
+	Online    bool
+	Skills    int
+	Reasoners int
+	Group     string
+	Version   string
+}
+
+// fleetSummary is the digest the tray renders: counts plus the agent list.
+type fleetSummary struct {
+	Status fleetStatus
+	Online int
+	Total  int
+	Skills int // total skills + reasoners across all agents
+	Agents []agentInfo
+}
+
+// parseNodes extracts the agent list from a GET /api/v1/nodes response body.
+func parseNodes(body []byte) ([]agentInfo, error) {
+	var payload struct {
+		Nodes []struct {
+			ID           string            `json:"id"`
+			HealthStatus string            `json:"health_status"`
+			GroupID      string            `json:"group_id"`
+			Version      string            `json:"version"`
+			Skills       []json.RawMessage `json:"skills"`
+			Reasoners    []json.RawMessage `json:"reasoners"`
+		} `json:"nodes"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, err
+	}
+	agents := make([]agentInfo, 0, len(payload.Nodes))
+	for _, n := range payload.Nodes {
+		agents = append(agents, agentInfo{
+			ID:        n.ID,
+			Online:    n.HealthStatus == "active",
+			Skills:    len(n.Skills),
+			Reasoners: len(n.Reasoners),
+			Group:     n.GroupID,
+			Version:   n.Version,
+		})
+	}
+	return agents, nil
+}
+
+// summarizeFleet rolls a parsed agent list up into counts. Skills are summed
+// over online agents only — offline agents' capabilities aren't callable right
+// now, so counting them would overstate what's actually available.
+func summarizeFleet(agents []agentInfo) fleetSummary {
+	s := fleetSummary{Status: fleetOK, Total: len(agents), Agents: agents}
+	for _, a := range agents {
+		if a.Online {
+			s.Online++
+			s.Skills += a.Skills + a.Reasoners
+		}
+	}
+	return s
+}
+
+// fetchFleet reads the fleet from the local control plane, authenticating with
+// apiKey when non-empty. A 401/403 becomes fleetAuthRequired so the tray can
+// prompt for (or re-prompt for) a key; anything else unexpected is
+// fleetUnavailable and rendered as a transient "unavailable" state.
+func fetchFleet(apiKey string) fleetSummary {
+	req, err := http.NewRequest(http.MethodGet, nodesURL(), nil)
+	if err != nil {
+		return fleetSummary{Status: fleetUnavailable}
+	}
+	if apiKey != "" {
+		req.Header.Set("X-API-Key", apiKey)
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fleetSummary{Status: fleetUnavailable}
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		if err != nil {
+			return fleetSummary{Status: fleetUnavailable}
+		}
+		agents, err := parseNodes(body)
+		if err != nil {
+			return fleetSummary{Status: fleetUnavailable}
+		}
+		return summarizeFleet(agents)
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return fleetSummary{Status: fleetAuthRequired}
+	default:
+		return fleetSummary{Status: fleetUnavailable}
+	}
+}
+
+// ---- API key storage -------------------------------------------------------
+
+// effectiveAPIKey is the key the tray should present to the API: an explicit
+// env var wins (mirrors the `af` CLI), otherwise the key the user saved via the
+// tray. Empty means "no key available".
+func effectiveAPIKey() string {
+	if k := strings.TrimSpace(os.Getenv("AGENTFIELD_API_KEY")); k != "" {
+		return k
+	}
+	return storedAPIKey()
+}
+
+func storedAPIKey() string {
+	data, err := os.ReadFile(credentialsPath())
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func saveAPIKey(key string) error {
+	return writeFileAtomic(credentialsPath(), []byte(strings.TrimSpace(key)+"\n"), 0o600)
+}
+
+// ---- Presentation helpers (pure, so they're unit-tested on any OS) ----------
+
+// fleetHeadline is the one-line summary shown under the status header.
+func fleetHeadline(f fleetSummary) string {
+	switch f.Status {
+	case fleetAuthRequired:
+		return "🔒 API key required"
+	case fleetUnavailable:
+		return "Agents unavailable"
+	default:
+		if f.Total == 0 {
+			return "No agents registered yet"
+		}
+		return fmt.Sprintf("%d of %d agents online · %d skills", f.Online, f.Total, f.Skills)
+	}
+}
+
+// agentLine renders a single agent row: a filled dot when online, hollow when
+// not, the node id, and its capability count.
+func agentLine(a agentInfo) string {
+	dot := "○"
+	if a.Online {
+		dot = "●"
+	}
+	caps := a.Skills + a.Reasoners
+	if caps > 0 {
+		return fmt.Sprintf("%s  %s — %d skill%s", dot, a.ID, caps, plural(caps))
+	}
+	return fmt.Sprintf("%s  %s", dot, a.ID)
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+// sortAgents orders online agents first, then alphabetically by id, so the most
+// relevant rows fill the (bounded) menu slots.
+func sortAgents(in []agentInfo) []agentInfo {
+	out := make([]agentInfo, len(in))
+	copy(out, in)
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Online != out[j].Online {
+			return out[i].Online // online (true) sorts before offline (false)
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
 
 // ---- launchctl argument construction ---------------------------------------
 

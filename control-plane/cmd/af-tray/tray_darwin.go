@@ -41,12 +41,36 @@ func hasGUISession() bool {
 	return name == "" || name == "Aqua"
 }
 
+// maxAgentSlots bounds how many agent rows the menu shows inline. systray can't
+// grow/shrink its menu after build, so we pre-allocate a fixed pool of rows and
+// show/hide/relabel them on each refresh; any overflow collapses into mMore.
+const maxAgentSlots = 10
+
 func onReady() {
 	systray.SetIcon(iconInactive)
 	systray.SetTooltip("AgentField")
 
+	// --- Status header + fleet summary ---
 	mStatus := systray.AddMenuItem("AgentField — checking…", "")
 	mStatus.Disable()
+	mFleet := systray.AddMenuItem("", "")
+	mFleet.Disable()
+	mFleet.Hide()
+
+	// --- Live agent list (bounded pool, populated on refresh) ---
+	systray.AddSeparator()
+	mAgents := make([]*systray.MenuItem, maxAgentSlots)
+	for i := range mAgents {
+		it := systray.AddMenuItem("", "Open the AgentField dashboard")
+		it.Hide()
+		mAgents[i] = it
+	}
+	mMore := systray.AddMenuItem("", "Open the AgentField dashboard to see all agents")
+	mMore.Hide()
+
+	// Shown only when the API demands a key we don't have (or ours was rejected).
+	mEnterKey := systray.AddMenuItem("Enter API key…", "Provide the API key this control plane requires")
+	mEnterKey.Hide()
 
 	systray.AddSeparator()
 	mOpen := systray.AddMenuItem("Open Dashboard", "Open the AgentField dashboard in your browser")
@@ -63,17 +87,72 @@ func onReady() {
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "Quit the AgentField tray")
 
-	refresh := func() {
-		if serverHealthy() {
-			systray.SetIcon(iconActive)
-			mStatus.SetTitle(fmt.Sprintf("AgentField — running (:%d)", serverPort()))
-			mStart.Disable()
-			mStop.Enable()
+	// Each agent slot opens the dashboard when clicked. The slots are reused
+	// across refreshes, so the action is intentionally generic.
+	for _, slot := range mAgents {
+		go func(ch <-chan struct{}) {
+			for range ch {
+				openDashboard()
+			}
+		}(slot.ClickedCh)
+	}
+
+	hideAgents := func() {
+		for _, slot := range mAgents {
+			slot.Hide()
+		}
+		mMore.Hide()
+	}
+
+	renderAgents := func(agents []agentInfo) {
+		sorted := sortAgents(agents)
+		for i, slot := range mAgents {
+			if i < len(sorted) {
+				slot.SetTitle(agentLine(sorted[i]))
+				slot.Show()
+			} else {
+				slot.Hide()
+			}
+		}
+		if len(sorted) > maxAgentSlots {
+			mMore.SetTitle(fmt.Sprintf("   …and %d more — open dashboard", len(sorted)-maxAgentSlots))
+			mMore.Show()
 		} else {
+			mMore.Hide()
+		}
+	}
+
+	refresh := func() {
+		if !serverHealthy() {
 			systray.SetIcon(iconInactive)
 			mStatus.SetTitle("AgentField — stopped")
 			mStart.Enable()
 			mStop.Disable()
+			mFleet.Hide()
+			hideAgents()
+			mEnterKey.Hide()
+			return
+		}
+
+		systray.SetIcon(iconActive)
+		mStatus.SetTitle(fmt.Sprintf("AgentField — running (:%d)", serverPort()))
+		mStart.Disable()
+		mStop.Enable()
+
+		fleet := fetchFleet(effectiveAPIKey())
+		mFleet.SetTitle(fleetHeadline(fleet))
+		mFleet.Show()
+
+		switch fleet.Status {
+		case fleetAuthRequired:
+			hideAgents()
+			mEnterKey.Show()
+		case fleetOK:
+			mEnterKey.Hide()
+			renderAgents(fleet.Agents)
+		default: // fleetUnavailable — transient; leave the list as-is but drop stale rows
+			mEnterKey.Hide()
+			hideAgents()
 		}
 	}
 	refresh()
@@ -87,6 +166,11 @@ func onReady() {
 				refresh()
 			case <-mOpen.ClickedCh:
 				openDashboard()
+			case <-mMore.ClickedCh:
+				openDashboard()
+			case <-mEnterKey.ClickedCh:
+				handleEnterAPIKey()
+				refresh()
 			case <-mStart.ClickedCh:
 				_ = startServer()
 				time.Sleep(800 * time.Millisecond)
@@ -118,6 +202,51 @@ func onReady() {
 			}
 		}
 	}()
+}
+
+// handleEnterAPIKey prompts for an API key with a native macOS dialog, validates
+// it against the local API, and persists it only if it is accepted. A rejected
+// key surfaces an error and leaves any previously stored key untouched, so the
+// next refresh keeps showing the "API key required" prompt.
+func handleEnterAPIKey() {
+	invalid := effectiveAPIKey() != "" // we already have a key, so it must be wrong/expired
+	key, ok := promptForAPIKey(invalid)
+	if !ok || key == "" {
+		return
+	}
+	if fetchFleet(key).Status == fleetAuthRequired {
+		notify("API key rejected", "That key was not accepted. Please check it and try again.")
+		return
+	}
+	if err := saveAPIKey(key); err != nil {
+		notify("Could not save API key", err.Error())
+	}
+}
+
+// promptForAPIKey shows a native password-style dialog. It returns ok=false when
+// the user cancels (osascript exits non-zero) or on any error.
+func promptForAPIKey(invalid bool) (string, bool) {
+	msg := "Enter the API key for this AgentField control plane:"
+	if invalid {
+		msg = "This API key was rejected (invalid or expired). Enter a new one:"
+	}
+	script := fmt.Sprintf(
+		`display dialog %q with title "AgentField" default answer "" `+
+			`buttons {"Cancel","Save"} default button "Save" with hidden answer`,
+		msg,
+	)
+	out, err := exec.Command("osascript", "-e", script, "-e", "text returned of result").Output()
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(string(out)), true
+}
+
+// notify shows a small informational dialog (used for errors the user should see
+// right after acting; menu-bar apps have no other affordance for this).
+func notify(title, body string) {
+	script := fmt.Sprintf(`display dialog %q with title %q buttons {"OK"} default button "OK" with icon caution`, body, title)
+	_ = exec.Command("osascript", "-e", script).Start()
 }
 
 func openDashboard() {
