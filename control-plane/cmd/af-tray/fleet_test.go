@@ -187,40 +187,39 @@ func TestCredentialsPathUnderHome(t *testing.T) {
 	}
 }
 
-// Contract: the headline reflects each fleet state, and the OK line reports
-// online/total/skills.
-func TestFleetHeadline(t *testing.T) {
+// Contract: the Agents submenu title reflects each fleet state and reports
+// online/total when data is available.
+func TestAgentsHeadline(t *testing.T) {
 	cases := []struct {
 		name string
 		in   fleetSummary
 		want string
 	}{
-		{"auth", fleetSummary{Status: fleetAuthRequired}, "🔒 API key required"},
-		{"unavailable", fleetSummary{Status: fleetUnavailable}, "Agents unavailable"},
-		{"empty", fleetSummary{Status: fleetOK, Total: 0}, "No agents registered yet"},
-		{"counts", fleetSummary{Status: fleetOK, Online: 2, Total: 3, Skills: 7}, "2 of 3 agents online · 7 skills"},
+		{"unavailable", fleetSummary{Status: fleetUnavailable}, "👥  Agents — unavailable"},
+		{"empty", fleetSummary{Status: fleetOK, Total: 0}, "👥  No agents registered yet"},
+		{"counts", fleetSummary{Status: fleetOK, Online: 2, Total: 3}, "👥  2 of 3 agents online"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := fleetHeadline(tc.in); got != tc.want {
-				t.Errorf("fleetHeadline() = %q, want %q", got, tc.want)
+			if got := agentsHeadline(tc.in); got != tc.want {
+				t.Errorf("agentsHeadline() = %q, want %q", got, tc.want)
 			}
 		})
 	}
 }
 
-// Contract: an online agent shows a filled dot, an offline one a hollow dot, and
-// the capability count is pluralized correctly.
+// Contract: online agents show a green dot + capability count; offline agents
+// show a hollow dot and read "offline" (their skills aren't callable).
 func TestAgentLine(t *testing.T) {
 	cases := []struct {
 		name string
 		in   agentInfo
 		want string
 	}{
-		{"online plural", agentInfo{ID: "weather", Online: true, Skills: 2, Reasoners: 1}, "●  weather — 3 skills"},
-		{"online singular", agentInfo{ID: "solo", Online: true, Skills: 1}, "●  solo — 1 skill"},
-		{"offline", agentInfo{ID: "stale", Online: false, Skills: 4}, "○  stale — 4 skills"},
-		{"no caps", agentInfo{ID: "bare", Online: true}, "●  bare"},
+		{"online plural", agentInfo{ID: "weather", Online: true, Skills: 2, Reasoners: 1}, "🟢  weather — 3 skills"},
+		{"online singular", agentInfo{ID: "solo", Online: true, Skills: 1}, "🟢  solo — 1 skill"},
+		{"offline", agentInfo{ID: "stale", Online: false, Skills: 4}, "⚪  stale — offline"},
+		{"online no caps", agentInfo{ID: "bare", Online: true}, "🟢  bare"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -228,6 +227,117 @@ func TestAgentLine(t *testing.T) {
 				t.Errorf("agentLine() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// Contract: the success line reports rate/runs, appends failures and running
+// counts only when non-zero, and reads gracefully with no executions.
+func TestSuccessLine(t *testing.T) {
+	cases := []struct {
+		name string
+		in   execStats
+		want string
+	}{
+		{"none-ok-false", execStats{OK: false}, "✅  No executions yet"},
+		{"zero", execStats{OK: true, Total: 0}, "✅  No executions yet"},
+		{"clean", execStats{OK: true, Total: 10, Successful: 10}, "✅  100% success · 10 runs"},
+		{"with-failures", execStats{OK: true, Total: 24, Successful: 20, Failed: 4}, "✅  83% success · 24 runs · ✗ 4 failed"},
+		{"singular-run", execStats{OK: true, Total: 1, Successful: 1}, "✅  100% success · 1 run"},
+		{"with-running", execStats{OK: true, Total: 5, Successful: 3, Failed: 0, Running: 2}, "✅  60% success · 5 runs · ▶ 2"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := successLine(tc.in); got != tc.want {
+				t.Errorf("successLine() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// Contract: perfLine combines latency and memory, drops either half when
+// unavailable, and is empty (→ row hidden) when it has nothing to show.
+func TestPerfLine(t *testing.T) {
+	cases := []struct {
+		name  string
+		stats execStats
+		memMB int
+		want  string
+	}{
+		{"both", execStats{OK: true, Total: 3, AvgMS: 42.4}, 37, "⏱  42 ms avg  ·  🧠  37 MB"},
+		{"latency-only", execStats{OK: true, Total: 3, AvgMS: 100}, 0, "⏱  100 ms avg"},
+		{"memory-only", execStats{OK: false}, 55, "🧠  55 MB"},
+		{"neither", execStats{OK: false}, 0, ""},
+		{"no-runs-has-mem", execStats{OK: true, Total: 0}, 20, "🧠  20 MB"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := perfLine(tc.stats, tc.memMB); got != tc.want {
+				t.Errorf("perfLine() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// Contract: the key prompt title distinguishes "need a key" from "your key
+// stopped working".
+func TestEnterKeyTitle(t *testing.T) {
+	if got, want := enterKeyTitle(false), "🔒  API key required — enter…"; got != want {
+		t.Errorf("enterKeyTitle(false) = %q, want %q", got, want)
+	}
+	if got, want := enterKeyTitle(true), "🔒  API key expired — re-enter…"; got != want {
+		t.Errorf("enterKeyTitle(true) = %q, want %q", got, want)
+	}
+}
+
+// Contract: execution stats parse from the UI endpoint's JSON shape.
+func TestParseExecStats(t *testing.T) {
+	body := []byte(`{"total_executions":24,"successful_count":20,"failed_count":4,"running_count":1,"average_duration_ms":42.5}`)
+	s, err := parseExecStats(body)
+	if err != nil {
+		t.Fatalf("parseExecStats: %v", err)
+	}
+	if !s.OK || s.Total != 24 || s.Successful != 20 || s.Failed != 4 || s.Running != 1 || s.AvgMS != 42.5 {
+		t.Errorf("parseExecStats = %+v, want 24/20/4/1/42.5", s)
+	}
+	if _, err := parseExecStats([]byte("nope")); err == nil {
+		t.Error("parseExecStats on garbage = nil error, want error")
+	}
+}
+
+// Contract: fetchExecStats sends the key and returns OK only on 200; any error
+// or non-200 (including auth) yields OK=false so the caller omits the rows.
+func TestFetchExecStats(t *testing.T) {
+	var mode, gotKey string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKey = r.Header.Get("X-API-Key")
+		switch mode {
+		case "ok":
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"total_executions":2,"successful_count":2,"failed_count":0,"average_duration_ms":10}`)
+		case "401":
+			w.WriteHeader(http.StatusUnauthorized)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer ts.Close()
+	u, _ := url.Parse(ts.URL)
+	t.Setenv("AGENTFIELD_PORT", u.Port())
+
+	mode = "ok"
+	if s := fetchExecStats("k"); !s.OK || s.Total != 2 {
+		t.Errorf("fetchExecStats ok = %+v, want OK/Total=2", s)
+	}
+	if gotKey != "k" {
+		t.Errorf("X-API-Key = %q, want %q", gotKey, "k")
+	}
+	mode = "401"
+	if s := fetchExecStats("k"); s.OK {
+		t.Error("fetchExecStats on 401 = OK, want OK=false")
+	}
+	mode = "500"
+	if s := fetchExecStats("k"); s.OK {
+		t.Error("fetchExecStats on 500 = OK, want OK=false")
 	}
 }
 

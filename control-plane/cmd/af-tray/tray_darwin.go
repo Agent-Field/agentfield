@@ -41,35 +41,47 @@ func hasGUISession() bool {
 	return name == "" || name == "Aqua"
 }
 
-// maxAgentSlots bounds how many agent rows the menu shows inline. systray can't
-// grow/shrink its menu after build, so we pre-allocate a fixed pool of rows and
-// show/hide/relabel them on each refresh; any overflow collapses into mMore.
-const maxAgentSlots = 10
+// maxAgentSlots bounds how many agent rows the Agents submenu shows. systray
+// can't grow/shrink its menu after build, so we pre-allocate a fixed pool of
+// child rows and show/hide/relabel them on each refresh; any overflow collapses
+// into an "…and N more" row that opens the dashboard.
+const maxAgentSlots = 12
 
 func onReady() {
 	systray.SetIcon(iconInactive)
 	systray.SetTooltip("AgentField")
 
-	// --- Status header + fleet summary ---
+	// --- Status header ---
 	mStatus := systray.AddMenuItem("AgentField — checking…", "")
 	mStatus.Disable()
-	mFleet := systray.AddMenuItem("", "")
-	mFleet.Disable()
-	mFleet.Hide()
 
-	// --- Live agent list (bounded pool, populated on refresh) ---
 	systray.AddSeparator()
+
+	// --- Agents submenu (keeps the top level uncluttered) ---
+	// The parent title carries the headline count; the per-agent rows live one
+	// level down so the main menu stays short and scannable.
+	mAgentsParent := systray.AddMenuItem("👥  Agents", "Registered agents")
 	mAgents := make([]*systray.MenuItem, maxAgentSlots)
 	for i := range mAgents {
-		it := systray.AddMenuItem("", "Open the AgentField dashboard")
+		it := mAgentsParent.AddSubMenuItem("", "Open the AgentField dashboard")
 		it.Hide()
 		mAgents[i] = it
 	}
-	mMore := systray.AddMenuItem("", "Open the AgentField dashboard to see all agents")
+	mMore := mAgentsParent.AddSubMenuItem("", "Open the AgentField dashboard to see all agents")
 	mMore.Hide()
+	mAgentsParent.AddSeparator()
+	mAgentsOpen := mAgentsParent.AddSubMenuItem("Open Dashboard →", "Open the AgentField dashboard")
+
+	// --- Metric rows (compact, emoji-led, disabled/non-interactive) ---
+	mSuccess := systray.AddMenuItem("", "Execution success rate")
+	mSuccess.Disable()
+	mSuccess.Hide()
+	mPerf := systray.AddMenuItem("", "Average latency and server memory")
+	mPerf.Disable()
+	mPerf.Hide()
 
 	// Shown only when the API demands a key we don't have (or ours was rejected).
-	mEnterKey := systray.AddMenuItem("Enter API key…", "Provide the API key this control plane requires")
+	mEnterKey := systray.AddMenuItem(enterKeyTitle(false), "Provide the API key this control plane requires")
 	mEnterKey.Hide()
 
 	systray.AddSeparator()
@@ -87,8 +99,8 @@ func onReady() {
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "Quit the AgentField tray")
 
-	// Each agent slot opens the dashboard when clicked. The slots are reused
-	// across refreshes, so the action is intentionally generic.
+	// Each agent row opens the dashboard when clicked. Rows are reused across
+	// refreshes, so the action is intentionally generic.
 	for _, slot := range mAgents {
 		go func(ch <-chan struct{}) {
 			for range ch {
@@ -115,11 +127,20 @@ func onReady() {
 			}
 		}
 		if len(sorted) > maxAgentSlots {
-			mMore.SetTitle(fmt.Sprintf("   …and %d more — open dashboard", len(sorted)-maxAgentSlots))
+			mMore.SetTitle(fmt.Sprintf("⋯  and %d more", len(sorted)-maxAgentSlots))
 			mMore.Show()
 		} else {
 			mMore.Hide()
 		}
+	}
+
+	// showMetrics/hideMetrics toggle everything below the status header that only
+	// makes sense while the server is up and reachable.
+	hideMetrics := func() {
+		mAgentsParent.Hide()
+		hideAgents()
+		mSuccess.Hide()
+		mPerf.Hide()
 	}
 
 	refresh := func() {
@@ -128,8 +149,7 @@ func onReady() {
 			mStatus.SetTitle("AgentField — stopped")
 			mStart.Enable()
 			mStop.Disable()
-			mFleet.Hide()
-			hideAgents()
+			hideMetrics()
 			mEnterKey.Hide()
 			return
 		}
@@ -139,20 +159,37 @@ func onReady() {
 		mStart.Disable()
 		mStop.Enable()
 
-		fleet := fetchFleet(effectiveAPIKey())
-		mFleet.SetTitle(fleetHeadline(fleet))
-		mFleet.Show()
+		key := effectiveAPIKey()
+		fleet := fetchFleet(key)
 
-		switch fleet.Status {
-		case fleetAuthRequired:
-			hideAgents()
+		if fleet.Status == fleetAuthRequired {
+			// One clear call to action; everything data-bearing is hidden until
+			// we have a working key.
+			hideMetrics()
+			mEnterKey.SetTitle(enterKeyTitle(key != ""))
 			mEnterKey.Show()
-		case fleetOK:
-			mEnterKey.Hide()
+			return
+		}
+		mEnterKey.Hide()
+
+		// Agents.
+		mAgentsParent.SetTitle(agentsHeadline(fleet))
+		mAgentsParent.Show()
+		if fleet.Status == fleetOK {
 			renderAgents(fleet.Agents)
-		default: // fleetUnavailable — transient; leave the list as-is but drop stale rows
-			mEnterKey.Hide()
+		} else {
 			hideAgents()
+		}
+
+		// Metrics (best-effort; each row hides itself when it has nothing to say).
+		stats := fetchExecStats(key)
+		mSuccess.SetTitle(successLine(stats))
+		mSuccess.Show()
+		if line := perfLine(stats, serverMemoryMB()); line != "" {
+			mPerf.SetTitle(line)
+			mPerf.Show()
+		} else {
+			mPerf.Hide()
 		}
 	}
 	refresh()
@@ -167,6 +204,8 @@ func onReady() {
 			case <-mOpen.ClickedCh:
 				openDashboard()
 			case <-mMore.ClickedCh:
+				openDashboard()
+			case <-mAgentsOpen.ClickedCh:
 				openDashboard()
 			case <-mEnterKey.ClickedCh:
 				handleEnterAPIKey()

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -224,6 +225,76 @@ func fetchFleet(apiKey string) fleetSummary {
 	}
 }
 
+// ---- Execution stats -------------------------------------------------------
+
+// execStatsURL is the UI stats endpoint. It sits behind the API key (unlike
+// /health and /metrics), so it takes the same key as the nodes fetch.
+func execStatsURL() string {
+	return fmt.Sprintf("http://localhost:%d/api/ui/v1/executions/stats", serverPort())
+}
+
+// execStats is the slice of the executions summary the tray renders.
+type execStats struct {
+	OK         bool // false when the fetch failed / was unauthorized
+	Total      int
+	Successful int
+	Failed     int
+	Running    int
+	AvgMS      float64
+}
+
+func parseExecStats(body []byte) (execStats, error) {
+	var payload struct {
+		Total      int     `json:"total_executions"`
+		Successful int     `json:"successful_count"`
+		Failed     int     `json:"failed_count"`
+		Running    int     `json:"running_count"`
+		AvgMS      float64 `json:"average_duration_ms"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return execStats{}, err
+	}
+	return execStats{
+		OK:         true,
+		Total:      payload.Total,
+		Successful: payload.Successful,
+		Failed:     payload.Failed,
+		Running:    payload.Running,
+		AvgMS:      payload.AvgMS,
+	}, nil
+}
+
+// fetchExecStats is best-effort: any failure (including auth) yields OK=false so
+// the caller simply omits the metrics rows. Auth is already gated by the nodes
+// fetch, which runs first and shows the key prompt.
+func fetchExecStats(apiKey string) execStats {
+	req, err := http.NewRequest(http.MethodGet, execStatsURL(), nil)
+	if err != nil {
+		return execStats{}
+	}
+	if apiKey != "" {
+		req.Header.Set("X-API-Key", apiKey)
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return execStats{}
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return execStats{}
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return execStats{}
+	}
+	stats, err := parseExecStats(body)
+	if err != nil {
+		return execStats{}
+	}
+	return stats
+}
+
 // ---- API key storage -------------------------------------------------------
 
 // effectiveAPIKey is the key the tray should present to the API: an explicit
@@ -249,34 +320,75 @@ func saveAPIKey(key string) error {
 }
 
 // ---- Presentation helpers (pure, so they're unit-tested on any OS) ----------
+//
+// The tray uses colored emoji as its palette: NSMenu renders plain item text in
+// the system color, but emoji glyphs keep their color, so 🟢/⚪ and the metric
+// icons are how we get a polished, scannable look without custom drawing.
 
-// fleetHeadline is the one-line summary shown under the status header.
-func fleetHeadline(f fleetSummary) string {
+// agentsHeadline titles the Agents submenu, e.g. "👥  4 of 7 agents online".
+func agentsHeadline(f fleetSummary) string {
 	switch f.Status {
-	case fleetAuthRequired:
-		return "🔒 API key required"
 	case fleetUnavailable:
-		return "Agents unavailable"
+		return "👥  Agents — unavailable"
 	default:
 		if f.Total == 0 {
-			return "No agents registered yet"
+			return "👥  No agents registered yet"
 		}
-		return fmt.Sprintf("%d of %d agents online · %d skills", f.Online, f.Total, f.Skills)
+		return fmt.Sprintf("👥  %d of %d agents online", f.Online, f.Total)
 	}
 }
 
-// agentLine renders a single agent row: a filled dot when online, hollow when
-// not, the node id, and its capability count.
+// agentLine renders one agent row inside the submenu. Online agents get a green
+// dot and their live capability count; offline agents get a hollow dot and read
+// "offline", since their skills aren't callable right now.
 func agentLine(a agentInfo) string {
-	dot := "○"
-	if a.Online {
-		dot = "●"
+	if !a.Online {
+		return fmt.Sprintf("⚪  %s — offline", a.ID)
 	}
 	caps := a.Skills + a.Reasoners
 	if caps > 0 {
-		return fmt.Sprintf("%s  %s — %d skill%s", dot, a.ID, caps, plural(caps))
+		return fmt.Sprintf("🟢  %s — %d skill%s", a.ID, caps, plural(caps))
 	}
-	return fmt.Sprintf("%s  %s", dot, a.ID)
+	return fmt.Sprintf("🟢  %s", a.ID)
+}
+
+// successLine summarizes executions: "✅  83% success · 24 runs · ✗ 4 failed".
+// Running executions, when any, are appended as "· ▶ N".
+func successLine(s execStats) string {
+	if !s.OK || s.Total == 0 {
+		return "✅  No executions yet"
+	}
+	rate := int(math.Round(100 * float64(s.Successful) / float64(s.Total)))
+	line := fmt.Sprintf("✅  %d%% success · %d run%s", rate, s.Total, plural(s.Total))
+	if s.Failed > 0 {
+		line += fmt.Sprintf(" · ✗ %d failed", s.Failed)
+	}
+	if s.Running > 0 {
+		line += fmt.Sprintf(" · ▶ %d", s.Running)
+	}
+	return line
+}
+
+// perfLine combines average latency and server memory: "⏱  42 ms avg · 🧠  37 MB".
+// Either half is dropped when unavailable; an empty result means "hide the row".
+func perfLine(s execStats, memMB int) string {
+	var parts []string
+	if s.OK && s.Total > 0 {
+		parts = append(parts, fmt.Sprintf("⏱  %d ms avg", int(math.Round(s.AvgMS))))
+	}
+	if memMB > 0 {
+		parts = append(parts, fmt.Sprintf("🧠  %d MB", memMB))
+	}
+	return strings.Join(parts, "  ·  ")
+}
+
+// enterKeyTitle labels the key-prompt item; it doubles as the "auth required"
+// message so the menu needs no separate status line for it.
+func enterKeyTitle(haveKey bool) string {
+	if haveKey {
+		return "🔒  API key expired — re-enter…"
+	}
+	return "🔒  API key required — enter…"
 }
 
 func plural(n int) string {
