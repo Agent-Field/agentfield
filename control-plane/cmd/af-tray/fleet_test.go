@@ -295,6 +295,80 @@ func TestMetricMemory(t *testing.T) {
 	}
 }
 
+// Contract: success rate maps to green ≥60%, yellow 30–59%, red <30%, neutral
+// with no runs — including the boundary values.
+func TestSuccessLevel(t *testing.T) {
+	cases := []struct {
+		name string
+		in   execStats
+		want metricLevel
+	}{
+		{"no-runs", execStats{OK: true, Total: 0}, levelNeutral},
+		{"not-ok", execStats{OK: false}, levelNeutral},
+		{"good-100", execStats{OK: true, Total: 10, Successful: 10}, levelGood},
+		{"good-boundary-60", execStats{OK: true, Total: 100, Successful: 60}, levelGood},
+		{"warn-59", execStats{OK: true, Total: 100, Successful: 59}, levelWarn},
+		{"warn-boundary-30", execStats{OK: true, Total: 100, Successful: 30}, levelWarn},
+		{"bad-29", execStats{OK: true, Total: 100, Successful: 29}, levelBad},
+		{"bad-0", execStats{OK: true, Total: 10, Successful: 0}, levelBad},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := successLevel(tc.in); got != tc.want {
+				t.Errorf("successLevel() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// Contract: response maps to green ≤100ms, yellow ≤500ms, red >500ms, neutral
+// with no runs — including the boundaries.
+func TestResponseLevel(t *testing.T) {
+	cases := []struct {
+		name string
+		in   execStats
+		want metricLevel
+	}{
+		{"no-runs", execStats{OK: true, Total: 0}, levelNeutral},
+		{"good-42", execStats{OK: true, Total: 5, AvgMS: 42}, levelGood},
+		{"good-boundary-100", execStats{OK: true, Total: 5, AvgMS: 100}, levelGood},
+		{"warn-101", execStats{OK: true, Total: 5, AvgMS: 101}, levelWarn},
+		{"warn-boundary-500", execStats{OK: true, Total: 5, AvgMS: 500}, levelWarn},
+		{"bad-501", execStats{OK: true, Total: 5, AvgMS: 501}, levelBad},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := responseLevel(tc.in); got != tc.want {
+				t.Errorf("responseLevel() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// Contract: memory maps to green <1GB, yellow <2GB, red ≥2GB, neutral unknown.
+func TestMemoryLevel(t *testing.T) {
+	cases := []struct {
+		name  string
+		memMB int
+		want  metricLevel
+	}{
+		{"unknown", 0, levelNeutral},
+		{"good-34", 34, levelGood},
+		{"good-boundary-1023", 1023, levelGood},
+		{"warn-1024", 1024, levelWarn},
+		{"warn-2047", 2047, levelWarn},
+		{"bad-2048", 2048, levelBad},
+		{"bad-4096", 4096, levelBad},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := memoryLevel(tc.memMB); got != tc.want {
+				t.Errorf("memoryLevel(%d) = %v, want %v", tc.memMB, got, tc.want)
+			}
+		})
+	}
+}
+
 // Contract: the key prompt title distinguishes "need a key" from "your key
 // stopped working".
 func TestEnterKeyTitle(t *testing.T) {

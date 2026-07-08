@@ -398,6 +398,77 @@ func metricMemory(memMB int) string {
 	return fmt.Sprintf("Memory — %d MB", memMB)
 }
 
+// metricLevel is a traffic-light rating for a stat, used to pick its icon color.
+type metricLevel int
+
+const (
+	levelNeutral metricLevel = iota // no data → monochrome icon
+	levelGood                       // green
+	levelWarn                       // yellow
+	levelBad                        // red
+)
+
+// Thresholds. These encode the product's rules of thumb for what's healthy:
+//   - success rate ≥ 60% is good, 30–59% is a warning, below that is bad;
+//   - average response ≤ 100ms is good, ≤ 500ms is a warning, above is bad;
+//   - server memory < 1GB is good, < 2GB is a warning, at/above 2GB is bad.
+const (
+	successGoodPct = 60
+	successWarnPct = 30
+
+	responseGoodMS = 100
+	responseWarnMS = 500
+
+	memoryGoodMB = 1024
+	memoryWarnMB = 2048
+)
+
+// successLevel rates the success rate; no runs yet is neutral.
+func successLevel(s execStats) metricLevel {
+	if !s.OK || s.Total == 0 {
+		return levelNeutral
+	}
+	rate := int(math.Round(100 * float64(s.Successful) / float64(s.Total)))
+	switch {
+	case rate >= successGoodPct:
+		return levelGood
+	case rate >= successWarnPct:
+		return levelWarn
+	default:
+		return levelBad
+	}
+}
+
+// responseLevel rates average latency; no runs yet is neutral.
+func responseLevel(s execStats) metricLevel {
+	if !s.OK || s.Total == 0 {
+		return levelNeutral
+	}
+	switch {
+	case s.AvgMS <= responseGoodMS:
+		return levelGood
+	case s.AvgMS <= responseWarnMS:
+		return levelWarn
+	default:
+		return levelBad
+	}
+}
+
+// memoryLevel rates server memory; unknown is neutral.
+func memoryLevel(memMB int) metricLevel {
+	if memMB <= 0 {
+		return levelNeutral
+	}
+	switch {
+	case memMB < memoryGoodMB:
+		return levelGood
+	case memMB < memoryWarnMB:
+		return levelWarn
+	default:
+		return levelBad
+	}
+}
+
 // enterKeyTitle labels the key-prompt item; it doubles as the "auth required"
 // message so the menu needs no separate status line for it.
 func enterKeyTitle(haveKey bool) string {

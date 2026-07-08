@@ -161,6 +161,22 @@ func onReady() {
 		it.Show()
 	}
 
+	// applyLevelIcon tints a metric row by its traffic-light rating: green/yellow/
+	// red colored icons for good/warn/bad, and the monochrome template icon when
+	// there's no data to rate.
+	applyLevelIcon := func(it *systray.MenuItem, lvl metricLevel, mono, green, yellow, red []byte) {
+		switch lvl {
+		case levelGood:
+			it.SetIcon(green)
+		case levelWarn:
+			it.SetIcon(yellow)
+		case levelBad:
+			it.SetIcon(red)
+		default:
+			it.SetTemplateIcon(mono, mono)
+		}
+	}
+
 	// hideData hides everything below the header that only makes sense while the
 	// server is up, reachable, and authorized.
 	hideData := func() {
@@ -210,11 +226,16 @@ func onReady() {
 			hideAgents()
 		}
 
-		// Metrics — one fact per row, each hiding itself when it has nothing to say.
+		// Metrics — one fact per row, each hiding itself when it has nothing to
+		// say and tinted green/yellow/red by its threshold.
 		stats := fetchExecStats(key)
 		setRow(mSuccess, metricSuccess(stats))
+		applyLevelIcon(mSuccess, successLevel(stats), iconSuccess, iconSuccessGreen, iconSuccessYellow, iconSuccessRed)
 		setRow(mResponse, metricResponse(stats))
-		setRow(mMemory, metricMemory(serverMemoryMB()))
+		applyLevelIcon(mResponse, responseLevel(stats), iconGauge, iconGaugeGreen, iconGaugeYellow, iconGaugeRed)
+		mem := serverMemoryMB()
+		setRow(mMemory, metricMemory(mem))
+		applyLevelIcon(mMemory, memoryLevel(mem), iconCPU, iconCPUGreen, iconCPUYellow, iconCPURed)
 	}
 	refresh()
 

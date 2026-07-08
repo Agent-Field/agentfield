@@ -23,6 +23,36 @@ var iconGauge []byte
 //go:embed assets/icons/cpu.png
 var iconCPU []byte
 
+// Traffic-light variants of the metric icons (green good, yellow caution, red
+// bad), applied as regular (colored) images based on each stat's threshold.
+//
+//go:embed assets/icons/circle-check-green.png
+var iconSuccessGreen []byte
+
+//go:embed assets/icons/circle-check-yellow.png
+var iconSuccessYellow []byte
+
+//go:embed assets/icons/circle-check-red.png
+var iconSuccessRed []byte
+
+//go:embed assets/icons/gauge-green.png
+var iconGaugeGreen []byte
+
+//go:embed assets/icons/gauge-yellow.png
+var iconGaugeYellow []byte
+
+//go:embed assets/icons/gauge-red.png
+var iconGaugeRed []byte
+
+//go:embed assets/icons/cpu-green.png
+var iconCPUGreen []byte
+
+//go:embed assets/icons/cpu-yellow.png
+var iconCPUYellow []byte
+
+//go:embed assets/icons/cpu-red.png
+var iconCPURed []byte
+
 //go:embed assets/icons/layout-dashboard.png
 var iconDashboard []byte
 
