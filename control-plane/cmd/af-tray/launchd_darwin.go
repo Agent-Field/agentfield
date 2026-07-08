@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 )
 
 // ---- Install / uninstall ---------------------------------------------------
@@ -54,12 +55,9 @@ func installDesktop() error {
 		return fmt.Errorf("write tray plist: %w", err)
 	}
 
-	// Converge launchd state. bootstrap is ignored if already loaded; the
-	// kickstart -k then force-restarts onto the new binary in every case.
-	_ = bootstrapAgent(serverPlistPath())
-	_ = kickstartAgent(serverLabel, true)
-	_ = bootstrapAgent(trayPlistPath())
-	_ = kickstartAgent(trayLabel, true)
+	// Converge launchd state by fully reloading each agent (see reloadAgent).
+	reloadAgent(serverPlistPath(), serverLabel)
+	reloadAgent(trayPlistPath(), trayLabel)
 
 	fmt.Println("AgentField desktop tray installed. Look for the icon in your menu bar.")
 	return nil
@@ -113,6 +111,27 @@ func setServerAutostart(enable bool) error {
 }
 
 // ---- launchctl exec wrappers -----------------------------------------------
+
+// reloadAgent converges a launchd agent onto the freshly written plist and
+// binary. It fully unloads (bootout) then reloads (bootstrap) rather than using
+// `kickstart -k`, because kickstart cannot re-exec across a binary whose code
+// signature changed — and every rebuild/upgrade carries a new ad-hoc cdhash, so
+// launchd rejects the relaunch with EX_CONFIG ("spawn failed") and the agent
+// dies on upgrade. bootout+bootstrap always lands on the new bytes.
+//
+// bootout is not fully synchronous, so bootstrap is retried briefly until the
+// prior job has finished tearing down. A final kickstart makes sure the agent
+// is running now (not only at next login).
+func reloadAgent(plistPath, label string) {
+	_ = bootoutAgent(label) // ignored if the agent isn't currently loaded
+	for i := 0; i < 20; i++ {
+		if err := bootstrapAgent(plistPath); err == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	_ = kickstartAgent(label, false)
+}
 
 func bootstrapAgent(plistPath string) error {
 	return exec.Command("launchctl", "bootstrap", guiDomain(), plistPath).Run()
