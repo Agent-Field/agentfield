@@ -321,20 +321,31 @@ func saveAPIKey(key string) error {
 
 // ---- Presentation helpers (pure, so they're unit-tested on any OS) ----------
 //
-// The tray uses colored emoji as its palette: NSMenu renders plain item text in
-// the system color, but emoji glyphs keep their color, so 🟢/⚪ and the metric
-// icons are how we get a polished, scannable look without custom drawing.
+// Design: NSMenu renders item text in the system color, so the only color we
+// get is from emoji glyphs. The menu is laid out as a calm dashboard — a
+// two-line header, then one fact per row (never crammed), each row led by a
+// single category glyph and reading "Label — value". Detail and controls live
+// in submenus so the top level stays quiet.
 
-// agentsHeadline titles the Agents submenu, e.g. "👥  4 of 7 agents online".
+// statusLine is the header's second line: a colored state dot, the state word,
+// and where to reach the control plane.
+func statusLine(healthy bool, port int) string {
+	if !healthy {
+		return "🔴  Stopped"
+	}
+	return fmt.Sprintf("🟢  Running · localhost:%d", port)
+}
+
+// agentsHeadline titles the Agents submenu, e.g. "🤖  Agents — 4 of 7 online".
 func agentsHeadline(f fleetSummary) string {
 	switch f.Status {
 	case fleetUnavailable:
-		return "👥  Agents — unavailable"
+		return "🤖  Agents — unavailable"
 	default:
 		if f.Total == 0 {
-			return "👥  No agents registered yet"
+			return "🤖  Agents — none registered"
 		}
-		return fmt.Sprintf("👥  %d of %d agents online", f.Online, f.Total)
+		return fmt.Sprintf("🤖  Agents — %d of %d online", f.Online, f.Total)
 	}
 }
 
@@ -352,43 +363,41 @@ func agentLine(a agentInfo) string {
 	return fmt.Sprintf("🟢  %s", a.ID)
 }
 
-// successLine summarizes executions: "✅  83% success · 24 runs · ✗ 4 failed".
-// Running executions, when any, are appended as "· ▶ N".
-func successLine(s execStats) string {
+// metricSuccess is the success-rate row: "✅  Success — 83% (20 of 24)". The
+// fraction carries the run volume and, implicitly, the failures, so success and
+// activity fit one clean row.
+func metricSuccess(s execStats) string {
 	if !s.OK || s.Total == 0 {
-		return "✅  No executions yet"
+		return "✅  Success — no runs yet"
 	}
 	rate := int(math.Round(100 * float64(s.Successful) / float64(s.Total)))
-	line := fmt.Sprintf("✅  %d%% success · %d run%s", rate, s.Total, plural(s.Total))
-	if s.Failed > 0 {
-		line += fmt.Sprintf(" · ✗ %d failed", s.Failed)
-	}
-	if s.Running > 0 {
-		line += fmt.Sprintf(" · ▶ %d", s.Running)
-	}
-	return line
+	return fmt.Sprintf("✅  Success — %d%% (%d of %d)", rate, s.Successful, s.Total)
 }
 
-// perfLine combines average latency and server memory: "⏱  42 ms avg · 🧠  37 MB".
-// Either half is dropped when unavailable; an empty result means "hide the row".
-func perfLine(s execStats, memMB int) string {
-	var parts []string
-	if s.OK && s.Total > 0 {
-		parts = append(parts, fmt.Sprintf("⏱  %d ms avg", int(math.Round(s.AvgMS))))
+// metricResponse is the latency row, or "" when there's nothing to average
+// (which tells the caller to hide the row).
+func metricResponse(s execStats) string {
+	if !s.OK || s.Total == 0 {
+		return ""
 	}
-	if memMB > 0 {
-		parts = append(parts, fmt.Sprintf("🧠  %d MB", memMB))
+	return fmt.Sprintf("⚡  Response — %d ms avg", int(math.Round(s.AvgMS)))
+}
+
+// metricMemory is the server-memory row, or "" when unknown.
+func metricMemory(memMB int) string {
+	if memMB <= 0 {
+		return ""
 	}
-	return strings.Join(parts, "  ·  ")
+	return fmt.Sprintf("🧠  Memory — %d MB", memMB)
 }
 
 // enterKeyTitle labels the key-prompt item; it doubles as the "auth required"
 // message so the menu needs no separate status line for it.
 func enterKeyTitle(haveKey bool) string {
 	if haveKey {
-		return "🔒  API key expired — re-enter…"
+		return "🔑  API key expired — re-enter…"
 	}
-	return "🔒  API key required — enter…"
+	return "🔑  API key required — enter…"
 }
 
 func plural(n int) string {

@@ -51,16 +51,16 @@ func onReady() {
 	systray.SetIcon(iconInactive)
 	systray.SetTooltip("AgentField")
 
-	// --- Status header ---
-	mStatus := systray.AddMenuItem("AgentField — checking…", "")
+	// --- Header: brand line + status line ---
+	mBrand := systray.AddMenuItem("AgentField", "")
+	mBrand.Disable()
+	mStatus := systray.AddMenuItem(statusLine(false, serverPort()), "")
 	mStatus.Disable()
 
 	systray.AddSeparator()
 
-	// --- Agents submenu (keeps the top level uncluttered) ---
-	// The parent title carries the headline count; the per-agent rows live one
-	// level down so the main menu stays short and scannable.
-	mAgentsParent := systray.AddMenuItem("👥  Agents", "Registered agents")
+	// --- Agents submenu: the headline count on the parent, the roster below ---
+	mAgentsParent := systray.AddMenuItem("🤖  Agents", "Registered agents")
 	mAgents := make([]*systray.MenuItem, maxAgentSlots)
 	for i := range mAgents {
 		it := mAgentsParent.AddSubMenuItem("", "Open the AgentField dashboard")
@@ -72,13 +72,16 @@ func onReady() {
 	mAgentsParent.AddSeparator()
 	mAgentsOpen := mAgentsParent.AddSubMenuItem("Open Dashboard →", "Open the AgentField dashboard")
 
-	// --- Metric rows (compact, emoji-led, disabled/non-interactive) ---
+	// --- Metric rows: one fact per row, each led by a single category glyph ---
 	mSuccess := systray.AddMenuItem("", "Execution success rate")
 	mSuccess.Disable()
 	mSuccess.Hide()
-	mPerf := systray.AddMenuItem("", "Average latency and server memory")
-	mPerf.Disable()
-	mPerf.Hide()
+	mResponse := systray.AddMenuItem("", "Average execution latency")
+	mResponse.Disable()
+	mResponse.Hide()
+	mMemory := systray.AddMenuItem("", "Control-plane memory usage")
+	mMemory.Disable()
+	mMemory.Hide()
 
 	// Shown only when the API demands a key we don't have (or ours was rejected).
 	mEnterKey := systray.AddMenuItem(enterKeyTitle(false), "Provide the API key this control plane requires")
@@ -87,13 +90,13 @@ func onReady() {
 	systray.AddSeparator()
 	mOpen := systray.AddMenuItem("Open Dashboard", "Open the AgentField dashboard in your browser")
 
-	systray.AddSeparator()
-	mStart := systray.AddMenuItem("Start control-plane", "Start the AgentField control plane")
-	mStop := systray.AddMenuItem("Stop control-plane", "Stop the AgentField control plane")
-	mRestart := systray.AddMenuItem("Restart control-plane", "Restart the AgentField control plane")
-	mLogin := systray.AddMenuItemCheckbox("Start at login", "Launch the control plane automatically when you log in", serverAutostartEnabled())
-
-	systray.AddSeparator()
+	// --- Server controls tucked into a submenu to keep the surface calm ---
+	mServer := systray.AddMenuItem("Control plane", "Start, stop, or restart the control plane")
+	mStart := mServer.AddSubMenuItem("Start", "Start the AgentField control plane")
+	mStop := mServer.AddSubMenuItem("Stop", "Stop the AgentField control plane")
+	mRestart := mServer.AddSubMenuItem("Restart", "Restart the AgentField control plane")
+	mServer.AddSeparator()
+	mLogin := mServer.AddSubMenuItemCheckbox("Start at login", "Launch the control plane automatically when you log in", serverAutostartEnabled())
 	mLogs := systray.AddMenuItem("View logs", "Open the control-plane log file")
 
 	systray.AddSeparator()
@@ -134,28 +137,39 @@ func onReady() {
 		}
 	}
 
-	// showMetrics/hideMetrics toggle everything below the status header that only
-	// makes sense while the server is up and reachable.
-	hideMetrics := func() {
+	// setRow sets a row's title and shows it, or hides it when the value is empty.
+	setRow := func(it *systray.MenuItem, title string) {
+		if title == "" {
+			it.Hide()
+			return
+		}
+		it.SetTitle(title)
+		it.Show()
+	}
+
+	// hideData hides everything below the header that only makes sense while the
+	// server is up, reachable, and authorized.
+	hideData := func() {
 		mAgentsParent.Hide()
 		hideAgents()
 		mSuccess.Hide()
-		mPerf.Hide()
+		mResponse.Hide()
+		mMemory.Hide()
 	}
 
 	refresh := func() {
-		if !serverHealthy() {
+		healthy := serverHealthy()
+		mStatus.SetTitle(statusLine(healthy, serverPort()))
+		if !healthy {
 			systray.SetIcon(iconInactive)
-			mStatus.SetTitle("AgentField — stopped")
 			mStart.Enable()
 			mStop.Disable()
-			hideMetrics()
+			hideData()
 			mEnterKey.Hide()
 			return
 		}
 
 		systray.SetIcon(iconActive)
-		mStatus.SetTitle(fmt.Sprintf("AgentField — running (:%d)", serverPort()))
 		mStart.Disable()
 		mStop.Enable()
 
@@ -163,9 +177,8 @@ func onReady() {
 		fleet := fetchFleet(key)
 
 		if fleet.Status == fleetAuthRequired {
-			// One clear call to action; everything data-bearing is hidden until
-			// we have a working key.
-			hideMetrics()
+			// One clear call to action; data rows stay hidden until a key works.
+			hideData()
 			mEnterKey.SetTitle(enterKeyTitle(key != ""))
 			mEnterKey.Show()
 			return
@@ -181,16 +194,11 @@ func onReady() {
 			hideAgents()
 		}
 
-		// Metrics (best-effort; each row hides itself when it has nothing to say).
+		// Metrics — one fact per row, each hiding itself when it has nothing to say.
 		stats := fetchExecStats(key)
-		mSuccess.SetTitle(successLine(stats))
-		mSuccess.Show()
-		if line := perfLine(stats, serverMemoryMB()); line != "" {
-			mPerf.SetTitle(line)
-			mPerf.Show()
-		} else {
-			mPerf.Hide()
-		}
+		setRow(mSuccess, metricSuccess(stats))
+		setRow(mResponse, metricResponse(stats))
+		setRow(mMemory, metricMemory(serverMemoryMB()))
 	}
 	refresh()
 
