@@ -23,6 +23,14 @@ func TestNodesURL(t *testing.T) {
 	}
 }
 
+// Contract: metric rows deep-link into the embedded UI under /ui/<page>.
+func TestUIPageURL(t *testing.T) {
+	t.Setenv("AGENTFIELD_PORT", "8080")
+	if got, want := uiPageURL("executions"), "http://localhost:8080/ui/executions"; got != want {
+		t.Errorf("uiPageURL() = %q, want %q", got, want)
+	}
+}
+
 // Contract: a node counts as online only when health_status == "active", and a
 // node's capability count is skills + reasoners.
 func TestParseAndSummarizeNodes(t *testing.T) {

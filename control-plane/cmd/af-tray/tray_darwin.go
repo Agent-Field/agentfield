@@ -74,18 +74,17 @@ func onReady() {
 	mAgentsParent.AddSeparator()
 	mAgentsOpen := mAgentsParent.AddSubMenuItem("Open Dashboard →", "Open the AgentField dashboard")
 
-	// --- Metric rows: one fact per row, each led by a monochrome icon ---
-	mSuccess := systray.AddMenuItem("", "Execution success rate")
+	// --- Metric rows: one fact per row, each led by a monochrome icon. They are
+	// live links (not dim, non-interactive labels): clicking opens the dashboard
+	// view the stat summarizes, so full-contrast text is honest. ---
+	mSuccess := systray.AddMenuItem("", "View executions in the dashboard")
 	mSuccess.SetTemplateIcon(iconSuccess, iconSuccess)
-	mSuccess.Disable()
 	mSuccess.Hide()
-	mResponse := systray.AddMenuItem("", "Average execution latency")
+	mResponse := systray.AddMenuItem("", "View executions in the dashboard")
 	mResponse.SetTemplateIcon(iconGauge, iconGauge)
-	mResponse.Disable()
 	mResponse.Hide()
-	mMemory := systray.AddMenuItem("", "Control-plane memory usage")
+	mMemory := systray.AddMenuItem("", "Open the dashboard")
 	mMemory.SetTemplateIcon(iconCPU, iconCPU)
-	mMemory.Disable()
 	mMemory.Hide()
 
 	// Shown only when the API demands a key we don't have (or ours was rejected).
@@ -229,9 +228,15 @@ func onReady() {
 			case <-mOpen.ClickedCh:
 				openDashboard()
 			case <-mMore.ClickedCh:
-				openDashboard()
+				openURL(uiPageURL("agents"))
 			case <-mAgentsOpen.ClickedCh:
-				openDashboard()
+				openURL(uiPageURL("agents"))
+			case <-mSuccess.ClickedCh:
+				openURL(uiPageURL("executions"))
+			case <-mResponse.ClickedCh:
+				openURL(uiPageURL("executions"))
+			case <-mMemory.ClickedCh:
+				openURL(uiPageURL("dashboard"))
 			case <-mEnterKey.ClickedCh:
 				handleEnterAPIKey()
 				refresh()
@@ -315,6 +320,12 @@ func notify(title, body string) {
 
 func openDashboard() {
 	_ = exec.Command("open", dashboardURL()).Start()
+}
+
+// openURL opens an arbitrary URL in the default browser (used for dashboard
+// deep-links from the metric rows).
+func openURL(u string) {
+	_ = exec.Command("open", u).Start()
 }
 
 func openLogs() {

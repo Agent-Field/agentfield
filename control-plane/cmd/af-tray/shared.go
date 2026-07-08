@@ -94,6 +94,12 @@ func serverPort() int {
 func healthURL() string    { return fmt.Sprintf("http://localhost:%d/health", serverPort()) }
 func dashboardURL() string { return fmt.Sprintf("http://localhost:%d", serverPort()) }
 
+// uiPageURL deep-links to a page in the embedded web UI (served under /ui/), so
+// a metric row can open the dashboard view it summarizes.
+func uiPageURL(page string) string {
+	return fmt.Sprintf("http://localhost:%d/ui/%s", serverPort(), page)
+}
+
 // checkHealth reports whether the given URL answers HTTP 200 within a short
 // timeout. The control plane's /health endpoint returns 200 when healthy and
 // 503 when not, so only a 200 counts as "running".
