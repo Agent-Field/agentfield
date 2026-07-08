@@ -321,57 +321,58 @@ func saveAPIKey(key string) error {
 
 // ---- Presentation helpers (pure, so they're unit-tested on any OS) ----------
 //
-// Design: NSMenu renders item text in the system color, so the only color we
-// get is from emoji glyphs. The menu is laid out as a calm dashboard — a
-// two-line header, then one fact per row (never crammed), each row led by a
-// single category glyph and reading "Label — value". Detail and controls live
-// in submenus so the top level stays quiet.
+// Design: the menu is a calm dashboard — a two-line header, then one fact per
+// row (never crammed), reading "Label — value". Each row is prefixed with a
+// real monochrome Lucide icon (set as a macOS template image by the caller),
+// not an emoji; status is shown with small colored dot icons. Detail and
+// controls live in submenus so the top level stays quiet. These helpers produce
+// only the text — the icons are applied in the darwin tray code.
 
-// statusLine is the header's second line: a colored state dot, the state word,
-// and where to reach the control plane.
+// statusLine is the header's second line: the state word and, when running,
+// where to reach the control plane. The colored state dot is an icon.
 func statusLine(healthy bool, port int) string {
 	if !healthy {
-		return "🔴  Stopped"
+		return "Stopped"
 	}
-	return fmt.Sprintf("🟢  Running · localhost:%d", port)
+	return fmt.Sprintf("Running · localhost:%d", port)
 }
 
-// agentsHeadline titles the Agents submenu, e.g. "🤖  Agents — 4 of 7 online".
+// agentsHeadline titles the Agents submenu, e.g. "Agents — 4 of 7 online".
 func agentsHeadline(f fleetSummary) string {
 	switch f.Status {
 	case fleetUnavailable:
-		return "🤖  Agents — unavailable"
+		return "Agents — unavailable"
 	default:
 		if f.Total == 0 {
-			return "🤖  Agents — none registered"
+			return "Agents — none registered"
 		}
-		return fmt.Sprintf("🤖  Agents — %d of %d online", f.Online, f.Total)
+		return fmt.Sprintf("Agents — %d of %d online", f.Online, f.Total)
 	}
 }
 
-// agentLine renders one agent row inside the submenu. Online agents get a green
-// dot and their live capability count; offline agents get a hollow dot and read
-// "offline", since their skills aren't callable right now.
+// agentLine renders one agent row inside the submenu. The colored online/offline
+// dot is an icon; online agents show their live capability count, offline ones
+// read "offline" since their skills aren't callable right now.
 func agentLine(a agentInfo) string {
 	if !a.Online {
-		return fmt.Sprintf("⚪  %s — offline", a.ID)
+		return fmt.Sprintf("%s — offline", a.ID)
 	}
 	caps := a.Skills + a.Reasoners
 	if caps > 0 {
-		return fmt.Sprintf("🟢  %s — %d skill%s", a.ID, caps, plural(caps))
+		return fmt.Sprintf("%s — %d skill%s", a.ID, caps, plural(caps))
 	}
-	return fmt.Sprintf("🟢  %s", a.ID)
+	return a.ID
 }
 
-// metricSuccess is the success-rate row: "✅  Success — 83% (20 of 24)". The
+// metricSuccess is the success-rate row: "Success — 83% (20 of 24)". The
 // fraction carries the run volume and, implicitly, the failures, so success and
 // activity fit one clean row.
 func metricSuccess(s execStats) string {
 	if !s.OK || s.Total == 0 {
-		return "✅  Success — no runs yet"
+		return "Success — no runs yet"
 	}
 	rate := int(math.Round(100 * float64(s.Successful) / float64(s.Total)))
-	return fmt.Sprintf("✅  Success — %d%% (%d of %d)", rate, s.Successful, s.Total)
+	return fmt.Sprintf("Success — %d%% (%d of %d)", rate, s.Successful, s.Total)
 }
 
 // metricResponse is the latency row, or "" when there's nothing to average
@@ -380,7 +381,7 @@ func metricResponse(s execStats) string {
 	if !s.OK || s.Total == 0 {
 		return ""
 	}
-	return fmt.Sprintf("⚡  Response — %d ms avg", int(math.Round(s.AvgMS)))
+	return fmt.Sprintf("Response — %d ms avg", int(math.Round(s.AvgMS)))
 }
 
 // metricMemory is the server-memory row, or "" when unknown.
@@ -388,16 +389,16 @@ func metricMemory(memMB int) string {
 	if memMB <= 0 {
 		return ""
 	}
-	return fmt.Sprintf("🧠  Memory — %d MB", memMB)
+	return fmt.Sprintf("Memory — %d MB", memMB)
 }
 
 // enterKeyTitle labels the key-prompt item; it doubles as the "auth required"
 // message so the menu needs no separate status line for it.
 func enterKeyTitle(haveKey bool) string {
 	if haveKey {
-		return "🔑  API key expired — re-enter…"
+		return "API key expired — re-enter…"
 	}
-	return "🔑  API key required — enter…"
+	return "API key required — enter…"
 }
 
 func plural(n int) string {

@@ -190,10 +190,10 @@ func TestCredentialsPathUnderHome(t *testing.T) {
 // Contract: the header status line shows a colored dot + state, and the address
 // only when running.
 func TestStatusLine(t *testing.T) {
-	if got, want := statusLine(true, 8080), "🟢  Running · localhost:8080"; got != want {
+	if got, want := statusLine(true, 8080), "Running · localhost:8080"; got != want {
 		t.Errorf("statusLine(healthy) = %q, want %q", got, want)
 	}
-	if got, want := statusLine(false, 8080), "🔴  Stopped"; got != want {
+	if got, want := statusLine(false, 8080), "Stopped"; got != want {
 		t.Errorf("statusLine(stopped) = %q, want %q", got, want)
 	}
 }
@@ -206,9 +206,9 @@ func TestAgentsHeadline(t *testing.T) {
 		in   fleetSummary
 		want string
 	}{
-		{"unavailable", fleetSummary{Status: fleetUnavailable}, "🤖  Agents — unavailable"},
-		{"empty", fleetSummary{Status: fleetOK, Total: 0}, "🤖  Agents — none registered"},
-		{"counts", fleetSummary{Status: fleetOK, Online: 2, Total: 3}, "🤖  Agents — 2 of 3 online"},
+		{"unavailable", fleetSummary{Status: fleetUnavailable}, "Agents — unavailable"},
+		{"empty", fleetSummary{Status: fleetOK, Total: 0}, "Agents — none registered"},
+		{"counts", fleetSummary{Status: fleetOK, Online: 2, Total: 3}, "Agents — 2 of 3 online"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -227,10 +227,10 @@ func TestAgentLine(t *testing.T) {
 		in   agentInfo
 		want string
 	}{
-		{"online plural", agentInfo{ID: "weather", Online: true, Skills: 2, Reasoners: 1}, "🟢  weather — 3 skills"},
-		{"online singular", agentInfo{ID: "solo", Online: true, Skills: 1}, "🟢  solo — 1 skill"},
-		{"offline", agentInfo{ID: "stale", Online: false, Skills: 4}, "⚪  stale — offline"},
-		{"online no caps", agentInfo{ID: "bare", Online: true}, "🟢  bare"},
+		{"online plural", agentInfo{ID: "weather", Online: true, Skills: 2, Reasoners: 1}, "weather — 3 skills"},
+		{"online singular", agentInfo{ID: "solo", Online: true, Skills: 1}, "solo — 1 skill"},
+		{"offline", agentInfo{ID: "stale", Online: false, Skills: 4}, "stale — offline"},
+		{"online no caps", agentInfo{ID: "bare", Online: true}, "bare"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -249,10 +249,10 @@ func TestMetricSuccess(t *testing.T) {
 		in   execStats
 		want string
 	}{
-		{"ok-false", execStats{OK: false}, "✅  Success — no runs yet"},
-		{"zero", execStats{OK: true, Total: 0}, "✅  Success — no runs yet"},
-		{"clean", execStats{OK: true, Total: 10, Successful: 10}, "✅  Success — 100% (10 of 10)"},
-		{"with-failures", execStats{OK: true, Total: 24, Successful: 20, Failed: 4}, "✅  Success — 83% (20 of 24)"},
+		{"ok-false", execStats{OK: false}, "Success — no runs yet"},
+		{"zero", execStats{OK: true, Total: 0}, "Success — no runs yet"},
+		{"clean", execStats{OK: true, Total: 10, Successful: 10}, "Success — 100% (10 of 10)"},
+		{"with-failures", execStats{OK: true, Total: 24, Successful: 20, Failed: 4}, "Success — 83% (20 of 24)"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -266,7 +266,7 @@ func TestMetricSuccess(t *testing.T) {
 // Contract: the response row shows rounded average latency, or "" (hidden) when
 // there's nothing to average.
 func TestMetricResponse(t *testing.T) {
-	if got, want := metricResponse(execStats{OK: true, Total: 3, AvgMS: 42.4}), "⚡  Response — 42 ms avg"; got != want {
+	if got, want := metricResponse(execStats{OK: true, Total: 3, AvgMS: 42.4}), "Response — 42 ms avg"; got != want {
 		t.Errorf("metricResponse() = %q, want %q", got, want)
 	}
 	if got := metricResponse(execStats{OK: true, Total: 0}); got != "" {
@@ -279,7 +279,7 @@ func TestMetricResponse(t *testing.T) {
 
 // Contract: the memory row shows MB, or "" (hidden) when unknown.
 func TestMetricMemory(t *testing.T) {
-	if got, want := metricMemory(37), "🧠  Memory — 37 MB"; got != want {
+	if got, want := metricMemory(37), "Memory — 37 MB"; got != want {
 		t.Errorf("metricMemory() = %q, want %q", got, want)
 	}
 	if got := metricMemory(0); got != "" {
@@ -290,10 +290,10 @@ func TestMetricMemory(t *testing.T) {
 // Contract: the key prompt title distinguishes "need a key" from "your key
 // stopped working".
 func TestEnterKeyTitle(t *testing.T) {
-	if got, want := enterKeyTitle(false), "🔑  API key required — enter…"; got != want {
+	if got, want := enterKeyTitle(false), "API key required — enter…"; got != want {
 		t.Errorf("enterKeyTitle(false) = %q, want %q", got, want)
 	}
-	if got, want := enterKeyTitle(true), "🔑  API key expired — re-enter…"; got != want {
+	if got, want := enterKeyTitle(true), "API key expired — re-enter…"; got != want {
 		t.Errorf("enterKeyTitle(true) = %q, want %q", got, want)
 	}
 }

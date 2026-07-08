@@ -55,12 +55,14 @@ func onReady() {
 	mBrand := systray.AddMenuItem("AgentField", "")
 	mBrand.Disable()
 	mStatus := systray.AddMenuItem(statusLine(false, serverPort()), "")
+	mStatus.SetIcon(iconDotRed) // colored status dot; recolored on refresh
 	mStatus.Disable()
 
 	systray.AddSeparator()
 
 	// --- Agents submenu: the headline count on the parent, the roster below ---
-	mAgentsParent := systray.AddMenuItem("🤖  Agents", "Registered agents")
+	mAgentsParent := systray.AddMenuItem("Agents", "Registered agents")
+	mAgentsParent.SetTemplateIcon(iconBot, iconBot)
 	mAgents := make([]*systray.MenuItem, maxAgentSlots)
 	for i := range mAgents {
 		it := mAgentsParent.AddSubMenuItem("", "Open the AgentField dashboard")
@@ -72,35 +74,43 @@ func onReady() {
 	mAgentsParent.AddSeparator()
 	mAgentsOpen := mAgentsParent.AddSubMenuItem("Open Dashboard →", "Open the AgentField dashboard")
 
-	// --- Metric rows: one fact per row, each led by a single category glyph ---
+	// --- Metric rows: one fact per row, each led by a monochrome icon ---
 	mSuccess := systray.AddMenuItem("", "Execution success rate")
+	mSuccess.SetTemplateIcon(iconSuccess, iconSuccess)
 	mSuccess.Disable()
 	mSuccess.Hide()
 	mResponse := systray.AddMenuItem("", "Average execution latency")
+	mResponse.SetTemplateIcon(iconGauge, iconGauge)
 	mResponse.Disable()
 	mResponse.Hide()
 	mMemory := systray.AddMenuItem("", "Control-plane memory usage")
+	mMemory.SetTemplateIcon(iconCPU, iconCPU)
 	mMemory.Disable()
 	mMemory.Hide()
 
 	// Shown only when the API demands a key we don't have (or ours was rejected).
 	mEnterKey := systray.AddMenuItem(enterKeyTitle(false), "Provide the API key this control plane requires")
+	mEnterKey.SetTemplateIcon(iconKey, iconKey)
 	mEnterKey.Hide()
 
 	systray.AddSeparator()
 	mOpen := systray.AddMenuItem("Open Dashboard", "Open the AgentField dashboard in your browser")
+	mOpen.SetTemplateIcon(iconDashboard, iconDashboard)
 
 	// --- Server controls tucked into a submenu to keep the surface calm ---
 	mServer := systray.AddMenuItem("Control plane", "Start, stop, or restart the control plane")
+	mServer.SetTemplateIcon(iconServer, iconServer)
 	mStart := mServer.AddSubMenuItem("Start", "Start the AgentField control plane")
 	mStop := mServer.AddSubMenuItem("Stop", "Stop the AgentField control plane")
 	mRestart := mServer.AddSubMenuItem("Restart", "Restart the AgentField control plane")
 	mServer.AddSeparator()
 	mLogin := mServer.AddSubMenuItemCheckbox("Start at login", "Launch the control plane automatically when you log in", serverAutostartEnabled())
 	mLogs := systray.AddMenuItem("View logs", "Open the control-plane log file")
+	mLogs.SetTemplateIcon(iconLogs, iconLogs)
 
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "Quit the AgentField tray")
+	mQuit.SetTemplateIcon(iconPower, iconPower)
 
 	// Each agent row opens the dashboard when clicked. Rows are reused across
 	// refreshes, so the action is intentionally generic.
@@ -123,6 +133,11 @@ func onReady() {
 		sorted := sortAgents(agents)
 		for i, slot := range mAgents {
 			if i < len(sorted) {
+				if sorted[i].Online {
+					slot.SetIcon(iconDotGreen)
+				} else {
+					slot.SetIcon(iconDotGray)
+				}
 				slot.SetTitle(agentLine(sorted[i]))
 				slot.Show()
 			} else {
@@ -162,6 +177,7 @@ func onReady() {
 		mStatus.SetTitle(statusLine(healthy, serverPort()))
 		if !healthy {
 			systray.SetIcon(iconInactive)
+			mStatus.SetIcon(iconDotRed)
 			mStart.Enable()
 			mStop.Disable()
 			hideData()
@@ -170,6 +186,7 @@ func onReady() {
 		}
 
 		systray.SetIcon(iconActive)
+		mStatus.SetIcon(iconDotGreen)
 		mStart.Disable()
 		mStop.Enable()
 
