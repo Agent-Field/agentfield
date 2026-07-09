@@ -118,6 +118,16 @@ func RunCLIWithStdin(ctx context.Context, cmd []string, env map[string]string, c
 	// the whole tree, not just the leader. setProcessGroup is platform-guarded.
 	setProcessGroup(c)
 
+	// On ctx cancellation/timeout, kill the whole process group too.
+	// exec.CommandContext's default Cancel only kills the group LEADER, which
+	// orphans grandchildren (e.g. MCP servers spawned by the claude CLI) when
+	// a caller times out or cancels. On Windows killProcessGroup degrades to
+	// killing just the leader, matching the previous behavior.
+	c.Cancel = func() error {
+		killProcessGroup(c)
+		return nil
+	}
+
 	stdoutPipe, err := c.StdoutPipe()
 	if err != nil {
 		return nil, err

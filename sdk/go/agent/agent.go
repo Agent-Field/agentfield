@@ -365,11 +365,13 @@ type Config struct {
 	// plane does not expect heartbeats.
 	LeaseRefreshInterval time.Duration
 
-	// CallTimeout bounds every outbound HTTP call this agent makes as a
-	// client - cross-agent Call()s, memory backend requests, etc.
-	// Optional. Default: 15s. A reasoning-model-backed reasoner chained
-	// behind Call() (search + a large max_tokens reasoning response) can
-	// easily exceed the old hardcoded 15s, so raise this for such workloads.
+	// CallTimeout bounds every INDIVIDUAL outbound HTTP request this agent
+	// makes as a client - memory backend requests, and for cross-agent
+	// Call()s the async submit plus each status poll. It does NOT bound a
+	// Call() end-to-end: Call submits to the async execute endpoint and
+	// polls until the child execution finishes, so a child reasoner may run
+	// arbitrarily longer than CallTimeout (bound the overall wait with the
+	// ctx passed to Call instead). Optional. Default: 15s.
 	CallTimeout time.Duration
 
 	// DisableLeaseLoop disables automatic periodic lease refreshes.
@@ -1565,7 +1567,45 @@ func (a *Agent) postExecutionStatus(ctx context.Context, callbackURL string, pay
 	return lastErr
 }
 
+// Poll pacing for Call's async-submit + wait loop. Mirrors the Python SDK's
+// _await_execution_sync (sdk/python/agentfield/client.py:970-1011) with the
+// AsyncConfig defaults from sdk/python/agentfield/async_config.py:
+// interval starts at max(initial_poll_interval, 0.25s), doubles per poll
+// capped at max_poll_interval (4s), and each sleep is jittered by
+// uniform(0.8, 1.2) clamped to [50ms, 4s] (client.py:1141-1143).
+const (
+	callInitialPollInterval = 250 * time.Millisecond
+	callMaxPollInterval     = 4 * time.Second
+	callMinPollInterval     = 50 * time.Millisecond
+)
+
+// nextCallPollInterval applies the Python _next_poll_interval jitter:
+// uniform(0.8, 1.2) * current, clamped to [callMinPollInterval, callMaxPollInterval].
+func nextCallPollInterval(current time.Duration) time.Duration {
+	jittered := time.Duration(float64(current) * (0.8 + 0.4*rand.Float64()))
+	if jittered < callMinPollInterval {
+		return callMinPollInterval
+	}
+	if jittered > callMaxPollInterval {
+		return callMaxPollInterval
+	}
+	return jittered
+}
+
 // Call invokes another reasoner via the AgentField control plane, preserving execution context.
+//
+// The call is submitted to the asynchronous execute endpoint
+// (POST /api/v1/execute/async/{target}) and the result is awaited by polling
+// GET /api/v1/executions/{execution_id} until the execution reaches a terminal
+// status — mirroring the Python SDK's app.call
+// (sdk/python/agentfield/client.py _submit_execution_sync/_await_execution_sync).
+//
+// Timeout semantics: Config.CallTimeout bounds each individual HTTP request
+// (the submit and every poll), NOT the end-to-end call. A child reasoner may
+// run arbitrarily long; the overall wait is bounded only by ctx. Cancelling
+// ctx aborts the wait but does NOT cancel the child execution server-side —
+// the child keeps running on its node and the control plane records its
+// result (the Python SDK behaves the same way when the caller stops waiting).
 func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (map[string]any, error) {
 	if strings.TrimSpace(a.cfg.AgentFieldURL) == "" {
 		return nil, errors.New("AgentFieldURL is required to call other reasoners")
@@ -1591,16 +1631,26 @@ func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (
 		"target":      target,
 		"reasoner_id": strings.TrimPrefix(target, a.cfg.NodeID+"."),
 	})
-	url := fmt.Sprintf("%s/api/v1/execute/%s", strings.TrimSuffix(a.cfg.AgentFieldURL, "/"), strings.TrimPrefix(target, "/"))
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+
+	base := strings.TrimSuffix(a.cfg.AgentFieldURL, "/")
+
+	executionID, submittedRunID, err := a.submitAsyncExecution(ctx, base, target, body, execCtx, runID)
 	if err != nil {
-		a.logExecutionError(ctx, "call.outbound.failed", "failed to build cross-node call request", map[string]any{
-			"target": target,
-			"error":  err.Error(),
-		})
-		return nil, fmt.Errorf("build request: %w", err)
+		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	if submittedRunID != "" {
+		runID = submittedRunID
+	}
+
+	return a.awaitExecutionResult(ctx, base, target, executionID, runID, execCtx)
+}
+
+// applyCallHeaders sets the execution-context lineage headers shared by the
+// async submit and every status poll. The control plane reads these via
+// readExecutionHeaders (control-plane/internal/handlers/execute.go) through
+// the same prepareExecution path for both the sync and async endpoints, so
+// workflow DAG parentage is recorded identically.
+func (a *Agent) applyCallHeaders(req *http.Request, execCtx ExecutionContext, runID string) {
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Run-ID", runID)
 	if execCtx.ExecutionID != "" {
@@ -1628,6 +1678,30 @@ func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (
 	if a.cfg.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+a.cfg.Token)
 	}
+}
+
+// submitAsyncExecution POSTs to /api/v1/execute/async/{target} and returns the
+// accepted execution's identifiers. Mirrors Python _submit_execution_sync
+// (client.py:866-905): any HTTP status >= 400 is an ExecuteError, and a
+// response without an execution_id is rejected.
+func (a *Agent) submitAsyncExecution(
+	ctx context.Context,
+	base, target string,
+	body []byte,
+	execCtx ExecutionContext,
+	runID string,
+) (executionID, submittedRunID string, err error) {
+	url := fmt.Sprintf("%s/api/v1/execute/async/%s", base, strings.TrimPrefix(target, "/"))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		a.logExecutionError(ctx, "call.outbound.failed", "failed to build cross-node call request", map[string]any{
+			"target": target,
+			"error":  err.Error(),
+		})
+		return "", "", fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	a.applyCallHeaders(req, execCtx, runID)
 
 	// Sign request with DID auth headers if configured
 	if a.client != nil {
@@ -1640,16 +1714,16 @@ func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (
 			"target": target,
 			"error":  err.Error(),
 		})
-		return nil, fmt.Errorf("perform execute call: %w", err)
+		return "", "", fmt.Errorf("perform execute call: %w", err)
 	}
 	defer resp.Body.Close()
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read execute response: %w", err)
+		return "", "", fmt.Errorf("read execute response: %w", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode >= 400 {
 		// Try to parse structured error from control plane response.
 		var errResp struct {
 			Error        string      `json:"error"`
@@ -1661,7 +1735,7 @@ func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (
 				"status": resp.StatusCode,
 				"error":  errResp.Error,
 			})
-			return nil, &ExecuteError{
+			return "", "", &ExecuteError{
 				StatusCode:   resp.StatusCode,
 				Message:      errResp.Error,
 				ErrorDetails: errResp.ErrorDetails,
@@ -1671,57 +1745,192 @@ func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (
 			"target": target,
 			"status": resp.StatusCode,
 		})
-		return nil, &ExecuteError{
+		return "", "", &ExecuteError{
 			StatusCode: resp.StatusCode,
 			Message:    fmt.Sprintf("execute failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes))),
 		}
 	}
 
-	var execResp struct {
-		ExecutionID  string         `json:"execution_id"`
-		RunID        string         `json:"run_id"`
-		Status       string         `json:"status"`
-		Result       map[string]any `json:"result"`
-		ErrorMessage *string        `json:"error_message"`
-		ErrorDetails interface{}    `json:"error_details"`
+	var submitResp struct {
+		ExecutionID string `json:"execution_id"`
+		RunID       string `json:"run_id"`
+		Status      string `json:"status"`
 	}
-	if err := json.Unmarshal(bodyBytes, &execResp); err != nil {
+	if err := json.Unmarshal(bodyBytes, &submitResp); err != nil {
 		a.logExecutionError(ctx, "call.outbound.failed", "failed to decode cross-node call response", map[string]any{
 			"target": target,
 			"error":  err.Error(),
 		})
-		return nil, fmt.Errorf("decode execute response: %w", err)
+		return "", "", fmt.Errorf("decode execute response: %w", err)
+	}
+	if submitResp.ExecutionID == "" {
+		a.logExecutionError(ctx, "call.outbound.failed", "async submission missing execution id", map[string]any{
+			"target": target,
+		})
+		return "", "", errors.New("execution submission missing identifiers")
 	}
 
-	if execResp.ErrorMessage != nil && *execResp.ErrorMessage != "" {
-		a.logExecutionError(ctx, "call.outbound.failed", "cross-node call returned execution error", map[string]any{
-			"target": target,
-			"error":  *execResp.ErrorMessage,
-		})
-		return nil, &ExecuteError{
-			StatusCode:   resp.StatusCode,
-			Message:      *execResp.ErrorMessage,
-			ErrorDetails: execResp.ErrorDetails,
-		}
-	}
-	if !strings.EqualFold(execResp.Status, "succeeded") {
-		a.logExecutionError(ctx, "call.outbound.failed", "cross-node call did not succeed", map[string]any{
-			"target": target,
-			"status": execResp.Status,
-		})
-		return nil, &ExecuteError{
-			StatusCode:   resp.StatusCode,
-			Message:      fmt.Sprintf("execute status %s", execResp.Status),
-			ErrorDetails: execResp.ErrorDetails,
-		}
-	}
+	return submitResp.ExecutionID, submitResp.RunID, nil
+}
 
-	a.logExecutionInfo(ctx, "call.outbound.complete", "cross-node call completed", map[string]any{
-		"target":       target,
-		"execution_id": execResp.ExecutionID,
-		"run_id":       execResp.RunID,
-	})
-	return execResp.Result, nil
+// awaitExecutionResult polls GET /api/v1/executions/{execution_id} until the
+// execution reaches a terminal status. Mirrors Python _await_execution_sync
+// (client.py:970-1011): statuses are normalized, "succeeded" returns the
+// result, {failed, cancelled, timeout} surface the execution error (with the
+// status endpoint's "error" field coalesced into the error message), and any
+// other status keeps polling with jittered exponential backoff. The overall
+// wait is unbounded — only ctx cancellation stops it — while each poll request
+// is individually bounded by the HTTP client's CallTimeout.
+func (a *Agent) awaitExecutionResult(
+	ctx context.Context,
+	base, target, executionID, runID string,
+	execCtx ExecutionContext,
+) (map[string]any, error) {
+	pollURL := fmt.Sprintf("%s/api/v1/executions/%s", base, url.PathEscape(executionID))
+	interval := callInitialPollInterval
+
+	for {
+		if err := ctx.Err(); err != nil {
+			a.logExecutionError(ctx, "call.outbound.failed", "cross-node call wait cancelled", map[string]any{
+				"target":       target,
+				"execution_id": executionID,
+				"error":        err.Error(),
+			})
+			return nil, err
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, pollURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("build status request: %w", err)
+		}
+		a.applyCallHeaders(req, execCtx, runID)
+		if a.client != nil {
+			a.client.SignHTTPRequest(req, nil)
+		}
+
+		resp, err := a.httpClient.Do(req)
+		if err != nil {
+			// Distinguish caller cancellation from transport failures so the
+			// ctx-cancel contract surfaces context.Canceled/DeadlineExceeded.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				a.logExecutionError(ctx, "call.outbound.failed", "cross-node call wait cancelled", map[string]any{
+					"target":       target,
+					"execution_id": executionID,
+					"error":        ctxErr.Error(),
+				})
+				return nil, ctxErr
+			}
+			a.logExecutionError(ctx, "call.outbound.failed", "cross-node call status poll failed", map[string]any{
+				"target":       target,
+				"execution_id": executionID,
+				"error":        err.Error(),
+			})
+			return nil, fmt.Errorf("poll execution status: %w", err)
+		}
+
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("read execution status: %w", readErr)
+		}
+
+		// Python's poll uses raise_for_status(): any HTTP error aborts the wait.
+		if resp.StatusCode >= 400 {
+			a.logExecutionError(ctx, "call.outbound.failed", "cross-node call status poll returned error status", map[string]any{
+				"target":       target,
+				"execution_id": executionID,
+				"status":       resp.StatusCode,
+			})
+			return nil, &ExecuteError{
+				StatusCode: resp.StatusCode,
+				Message:    fmt.Sprintf("execution status failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes))),
+			}
+		}
+
+		var statusResp struct {
+			ExecutionID  string          `json:"execution_id"`
+			RunID        string          `json:"run_id"`
+			Status       string          `json:"status"`
+			Result       json.RawMessage `json:"result"`
+			Error        *string         `json:"error"`
+			ErrorMessage *string         `json:"error_message"`
+			ErrorDetails interface{}     `json:"error_details"`
+		}
+		if err := json.Unmarshal(bodyBytes, &statusResp); err != nil {
+			a.logExecutionError(ctx, "call.outbound.failed", "failed to decode execution status response", map[string]any{
+				"target":       target,
+				"execution_id": executionID,
+				"error":        err.Error(),
+			})
+			return nil, fmt.Errorf("decode execute response: %w", err)
+		}
+
+		status := types.NormalizeStatus(statusResp.Status)
+
+		if status == types.ExecutionStatusSucceeded {
+			var result map[string]any
+			if len(statusResp.Result) > 0 && string(statusResp.Result) != "null" {
+				if err := json.Unmarshal(statusResp.Result, &result); err != nil {
+					a.logExecutionError(ctx, "call.outbound.failed", "failed to decode cross-node call result", map[string]any{
+						"target":       target,
+						"execution_id": executionID,
+						"error":        err.Error(),
+					})
+					return nil, fmt.Errorf("decode execute response: %w", err)
+				}
+			}
+			a.logExecutionInfo(ctx, "call.outbound.complete", "cross-node call completed", map[string]any{
+				"target":       target,
+				"execution_id": executionID,
+				"run_id":       runID,
+			})
+			return result, nil
+		}
+
+		if types.TerminalStatuses[status] {
+			// error_message, falling back to the status endpoint's "error"
+			// field — Python parity (client.py:1000-1002).
+			message := ""
+			if statusResp.ErrorMessage != nil && *statusResp.ErrorMessage != "" {
+				message = *statusResp.ErrorMessage
+			} else if statusResp.Error != nil && *statusResp.Error != "" {
+				message = *statusResp.Error
+			}
+			if message == "" {
+				message = fmt.Sprintf("execute status %s", status)
+			}
+			a.logExecutionError(ctx, "call.outbound.failed", "cross-node call did not succeed", map[string]any{
+				"target":       target,
+				"execution_id": executionID,
+				"status":       status,
+				"error":        message,
+			})
+			// StatusBadGateway matches what the synchronous execute endpoint
+			// returns for failed executions, so ExecuteError.StatusCode keeps
+			// its pre-async meaning for callers that inspect it.
+			return nil, &ExecuteError{
+				StatusCode:   http.StatusBadGateway,
+				Message:      message,
+				ErrorDetails: statusResp.ErrorDetails,
+			}
+		}
+
+		// Non-terminal: sleep with jittered exponential backoff, honoring ctx.
+		select {
+		case <-ctx.Done():
+			a.logExecutionError(ctx, "call.outbound.failed", "cross-node call wait cancelled", map[string]any{
+				"target":       target,
+				"execution_id": executionID,
+				"error":        ctx.Err().Error(),
+			})
+			return nil, ctx.Err()
+		case <-time.After(nextCallPollInterval(interval)):
+		}
+		interval *= 2
+		if interval > callMaxPollInterval {
+			interval = callMaxPollInterval
+		}
+	}
 }
 
 // emitWorkflowEvent sends a workflow event to the control plane asynchronously.
