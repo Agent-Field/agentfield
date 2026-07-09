@@ -104,12 +104,18 @@ type PackageMetadata struct {
 	// reader stay compatible as the manifest format evolves. Absent means "v0" —
 	// the pre-versioning format — which is read leniently. See CurrentConfigVersion
 	// for the bump policy (breaking changes only).
-	ConfigVersion   string                 `yaml:"config_version"`
-	Name            string                 `yaml:"name"`
-	Version         string                 `yaml:"version"`
-	Description     string                 `yaml:"description"`
-	Author          string                 `yaml:"author"`
-	Type            string                 `yaml:"type"`
+	ConfigVersion string `yaml:"config_version"`
+	Name          string `yaml:"name"`
+	Version       string `yaml:"version"`
+	Description   string `yaml:"description"`
+	Author        string `yaml:"author"`
+	Type          string `yaml:"type"`
+	// Language is the node's implementation language: "python" (default) or "go".
+	// It selects the install/build and launch strategy. When empty it is resolved
+	// at parse time by detection (a go.mod at the package root => "go", otherwise
+	// "python"), so existing Python manifests keep working with no new field. This
+	// is an *additive* optional key: it does NOT bump config_version.
+	Language        string                 `yaml:"language"`
 	Main            string                 `yaml:"main"`
 	Entrypoint      EntrypointConfig       `yaml:"entrypoint"`
 	AgentNode       AgentNodeConfig        `yaml:"agent_node"`
@@ -123,8 +129,16 @@ type PackageMetadata struct {
 type EntrypointConfig struct {
 	// Start is the shell-free command used to launch the node, e.g.
 	// "python -m pr_af.app". The first token is resolved against the package
-	// venv when it is "python"/"python3". Empty falls back to "python main.py".
+	// venv when it is "python"/"python3". For a Go node it is either a
+	// package-relative binary path built at install time (e.g. "bin/swe-planner")
+	// or a "go run ./cmd/..." form. Empty falls back to "python main.py" for a
+	// Python node and "go run ." for a Go node.
 	Start string `yaml:"start"`
+	// Build names the Go package to compile at install time for a Go node, e.g.
+	// "./cmd/swe-planner". The installer runs `go build -o <Start> <Build>`, so
+	// Start is the resulting binary path. Ignored for Python nodes and for Go
+	// nodes launched via `go run` (which compile on start). Additive optional key.
+	Build string `yaml:"build"`
 	// Healthcheck is the HTTP path polled to confirm readiness (default "/health").
 	Healthcheck string `yaml:"healthcheck"`
 }
@@ -538,7 +552,10 @@ func (pi *PackageInstaller) validatePackage(sourcePath string) error {
 // ValidatePackage checks that a directory is an installable agent node: it must
 // have an agentfield-package.yaml and declare how to start — either a manifest
 // entrypoint.start (e.g. "python -m pr_af.app") or a top-level main.py. Real
-// nodes use a module entrypoint and have no main.py, so main.py is not required.
+// Python nodes use a module entrypoint and have no main.py, so main.py is not
+// required. A Go node is buildable/runnable from its module, so a go.mod at the
+// root satisfies the "how to start" requirement even without an explicit
+// entrypoint.start (it defaults to `go run .`).
 func ValidatePackage(sourcePath string) error {
 	packageYamlPath := filepath.Join(sourcePath, "agentfield-package.yaml")
 	if _, err := os.Stat(packageYamlPath); os.IsNotExist(err) {
@@ -552,19 +569,36 @@ func ValidatePackage(sourcePath string) error {
 	if metadata.Entrypoint.Start != "" {
 		return nil
 	}
+	if metadata.IsGo() && fileExistsAt(sourcePath, "go.mod") {
+		return nil
+	}
 	mainPyPath := filepath.Join(sourcePath, "main.py")
 	if _, err := os.Stat(mainPyPath); os.IsNotExist(err) {
-		return fmt.Errorf("package must declare entrypoint.start in agentfield-package.yaml or contain a main.py")
+		return fmt.Errorf("package must declare entrypoint.start in agentfield-package.yaml, contain a main.py (Python), or ship a go.mod (Go)")
 	}
 
 	return nil
 }
 
+// IsGo reports whether this node is a Go node. It reflects the resolved
+// language (the explicit `language:` field, or go.mod detection applied by
+// ParsePackageMetadata). A metadata value built without going through the parser
+// (e.g. &PackageMetadata{}) is treated as Python, preserving legacy behavior.
+func (m *PackageMetadata) IsGo() bool {
+	return strings.EqualFold(strings.TrimSpace(m.Language), "go")
+}
+
 // StartCommand returns the tokens used to launch the node. It prefers the
-// manifest entrypoint.start and falls back to "python <main>" (default main.py).
+// manifest entrypoint.start; otherwise it falls back to a language-appropriate
+// default: "go run ." for a Go node, "python <main>" (default main.py) for a
+// Python node. For a Go node whose Start is a package-relative binary path, the
+// runner resolves that path against the package directory (see GoBinaryProgram).
 func (m *PackageMetadata) StartCommand() []string {
 	if strings.TrimSpace(m.Entrypoint.Start) != "" {
 		return strings.Fields(m.Entrypoint.Start)
+	}
+	if m.IsGo() {
+		return []string{"go", "run", "."}
 	}
 	main := m.Main
 	if main == "" {
@@ -653,6 +687,14 @@ func ParsePackageMetadata(dir string) (*PackageMetadata, error) {
 	}
 	if metadata.Main == "" {
 		metadata.Main = "main.py" // Default
+	}
+
+	// Resolve the implementation language. An explicit `language:` wins; when it
+	// is absent we detect a Go module by a go.mod at the package root. This keeps
+	// legacy Python manifests (no language, no go.mod) reading as Python while a
+	// Go node need only ship its go.mod to be recognized.
+	if strings.TrimSpace(metadata.Language) == "" && fileExistsAt(dir, "go.mod") {
+		metadata.Language = "go"
 	}
 
 	return &metadata, nil
@@ -778,6 +820,17 @@ func (pi *PackageInstaller) copyFile(src, dst string) error {
 
 // installDependencies installs package dependencies
 func (pi *PackageInstaller) installDependencies(packagePath string, metadata *PackageMetadata) error {
+	return InstallDependencies(packagePath, metadata)
+}
+
+// InstallDependencies resolves and installs a node's dependencies for its
+// implementation language: it builds the Go binary for a Go node, or provisions
+// the Python venv + pip installs for a Python node. It is the single entry point
+// shared by the CLI installer and the package service so both stay in lockstep.
+func InstallDependencies(packagePath string, metadata *PackageMetadata) error {
+	if metadata.IsGo() {
+		return InstallGoDependencies(packagePath, metadata)
+	}
 	return InstallPythonDependencies(packagePath, metadata.Dependencies.Python, metadata.Dependencies.System)
 }
 

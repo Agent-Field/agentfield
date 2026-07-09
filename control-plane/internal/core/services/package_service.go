@@ -545,9 +545,11 @@ func (ps *DefaultPackageService) copyFile(src, dst string) error {
 	return err
 }
 
-// installDependencies installs package dependencies
+// installDependencies installs package dependencies for the node's language
+// (Go build or Python venv), delegating to the shared, language-aware installer
+// so this service path handles Go nodes identically to the CLI installer.
 func (ps *DefaultPackageService) installDependencies(packagePath string, metadata *packages.PackageMetadata) error {
-	return packages.InstallPythonDependencies(packagePath, metadata.Dependencies.Python, metadata.Dependencies.System)
+	return packages.InstallDependencies(packagePath, metadata)
 }
 
 // hasRequirementsFile checks if requirements.txt exists

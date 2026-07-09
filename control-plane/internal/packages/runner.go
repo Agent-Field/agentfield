@@ -153,19 +153,29 @@ func (ar *AgentNodeRunner) startAgentNodeProcess(agentNode InstalledPackage, por
 		env = append(env, fmt.Sprintf("%s=%s", key, value))
 	}
 
-	// Prepare command - use virtual environment if available
+	// Prepare command - resolve the launcher for the node's language.
 	startArgs := metadata.StartCommand()
 	program := startArgs[0]
 	args := startArgs[1:]
 
-	venvPath := filepath.Join(agentNode.Path, "venv")
-	if program == "python" || program == "python3" {
-		if p := venvPython(venvPath); p != "" {
-			program = p
-			fmt.Printf("🐍 Using virtual environment: %s\n", venvPath)
-		} else {
-			program = "python"
-			fmt.Printf("⚠️  Virtual environment not found, using system Python\n")
+	if metadata.IsGo() {
+		// Go nodes launch a compiled binary (built at install time) or `go run`.
+		// A package-relative binary path is resolved against the install dir so
+		// exec finds it regardless of the parent's working directory.
+		if resolved := GoBinaryProgram(agentNode.Path, program); resolved != program {
+			program = resolved
+			fmt.Printf("🐹 Launching Go binary: %s\n", program)
+		}
+	} else {
+		venvPath := filepath.Join(agentNode.Path, "venv")
+		if program == "python" || program == "python3" {
+			if p := venvPython(venvPath); p != "" {
+				program = p
+				fmt.Printf("🐍 Using virtual environment: %s\n", venvPath)
+			} else {
+				program = "python"
+				fmt.Printf("⚠️  Virtual environment not found, using system Python\n")
+			}
 		}
 	}
 

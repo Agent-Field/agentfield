@@ -14,12 +14,17 @@ af install https://github.com/Agent-Field/pr-af
 af run pr-af
 ```
 
+Nodes can be written in **Python** (venv + pip) or **Go** (compiled binary).
+`af install`/`af run` pick the right toolchain per node; the port, health check,
+secret injection, and control-plane wiring are identical either way. See
+[Language: Python or Go](#language-python-or-go) for the Go specifics.
+
 Everything lives under `~/.agentfield/` (override with `AGENTFIELD_HOME`):
 
 ```
 ~/.agentfield/
 ├── installed.yaml          # registry of installed nodes + runtime state
-├── packages/<node>/        # the installed node + its Python venv
+├── packages/<node>/        # the installed node + its Python venv or built Go binary
 ├── logs/<node>.log         # process logs (af logs <node>)
 ├── keyring/master.key      # 0600 — local key that decrypts your secrets
 └── secrets/
@@ -30,8 +35,8 @@ Everything lives under `~/.agentfield/` (override with `AGENTFIELD_HOME`):
 ## The manifest: `agentfield-package.yaml`
 
 Every installable node has this file at its repo root. Only `name`, `version`,
-and a way to start (either `entrypoint.start` or a top-level `main.py`) are
-required; everything else is optional.
+and a way to start (an `entrypoint.start`, a top-level `main.py` for a Python
+node, or a `go.mod` for a Go node) are required; everything else is optional.
 
 ```yaml
 config_version: v1            # manifest *schema* version (see below). Omit = v0 (legacy).
@@ -111,7 +116,7 @@ existing config actually changes.
 | `config_version` | Reader behavior                                             |
 | ---------------- | ---------------------------------------------------------- |
 | absent / `v0`    | Legacy format, read leniently. Every field below is optional except the manifest basics. |
-| `v1`             | Same fields as v0, now explicitly versioned. Current default for new manifests. |
+| `v1`             | Same fields as v0, now explicitly versioned. Current default for new manifests. Later *additive* keys (e.g. `language`, `entrypoint.build` for Go nodes) live here too — they did not bump the version. |
 
 ### `require_one_of` — "at least one of these"
 
@@ -141,6 +146,62 @@ The venv is built with the `python3`/`python` on your `PATH`. If a node declares
 `requires-python` (e.g. `>=3.11`) that your interpreter doesn't satisfy, `pip`
 reports it and install fails — point `af` at a compatible interpreter (e.g. via
 `pyenv`/`PATH`) and reinstall.
+
+### Language: Python or Go
+
+A node's implementation language is set by the optional top-level `language`
+field: `python` (the default) or `go`. When `language` is omitted, `af` detects
+a Go node by the presence of a `go.mod` at the package root; anything else is
+treated as Python. Existing Python manifests need no changes.
+
+```yaml
+language: go
+entrypoint:
+  build: ./cmd/swe-planner   # Go package to compile at install time
+  start: bin/swe-planner     # resulting binary, launched by `af run`
+  healthcheck: /health
+```
+
+At install time a Go node is **compiled**, not pip-installed:
+
+- The `go` toolchain is discovered on `PATH`. A missing `go` is an actionable
+  error (how to install it); a `go` older than the module's `go.mod` directive is
+  refused with an upgrade hint — the Go analogue of the `requires-python` check.
+- With `entrypoint.build` set, `af` runs `go build -o <start> <build>`, leaving a
+  runnable binary at the `entrypoint.start` path. `af run` launches that binary
+  directly — same `PORT`, health check, secrets, and control-plane env as a
+  Python node.
+- Alternatively, use a `go run` entrypoint (`start: go run ./cmd/swe-planner`)
+  or omit `entrypoint.start` entirely (defaults to `go run .`). Install then only
+  compile-checks (`go build ./...`) and the binary is built on launch. This is
+  simpler but recompiles each start, so a prebuilt binary is preferred for large
+  nodes.
+
+A Go node reads the same runtime environment as a Python node — `PORT`,
+`AGENTFIELD_SERVER`, and any declared `user_environment` secrets are injected
+into the process identically, and readiness is confirmed by polling
+`entrypoint.healthcheck`.
+
+#### `replace` directives and vendoring
+
+Go modules that use a **local `replace` directive pointing outside the package**
+(e.g. `replace example.com/sdk => ../../other/sdk`, as the SWE-AF Go port does for
+the AgentField Go SDK) will not build after install, because the node is copied
+into `~/.agentfield/packages/<node>/` and the relative path no longer resolves.
+`af install` detects this and refuses with guidance rather than a confusing raw
+build failure. Fix it one of these ways:
+
+- **Vendor the module** (recommended): run `go mod vendor` in the node repo and
+  commit the `vendor/` directory. It ships with the package, so the build is
+  hermetic (`go build -mod=vendor`) regardless of `replace` targets.
+- **Publish/tag the replaced module** and use a versioned `require` instead of a
+  local `replace`.
+- **Override at install time** with `AGENTFIELD_GO_REPLACE` — a comma-separated
+  list of `go mod edit -replace` specs applied before building, e.g.
+  `AGENTFIELD_GO_REPLACE="example.com/sdk=/abs/path/to/sdk" af install <src>`.
+
+In-tree replaces (pointing inside the package) and module-version replaces are
+always fine.
 
 ### Node dependencies
 

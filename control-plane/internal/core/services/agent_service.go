@@ -590,11 +590,15 @@ func (as *DefaultAgentService) buildProcessConfig(agentNode packages.InstalledPa
 	}
 
 	// Launch via the manifest entrypoint (e.g. "python -m pr_af.app"). When the
-	// program token is python/python3, substitute the resolved interpreter.
+	// program token is python/python3, substitute the resolved interpreter. A Go
+	// node launches its install-time-built binary; a package-relative binary path
+	// is resolved against the install dir so exec finds it regardless of cwd.
 	startArgs := metadata.StartCommand()
 	command := startArgs[0]
 	args := startArgs[1:]
-	if command == "python" || command == "python3" {
+	if metadata.IsGo() {
+		command = packages.GoBinaryProgram(agentNode.Path, command)
+	} else if command == "python" || command == "python3" {
 		command = pythonPath
 	}
 

@@ -127,6 +127,7 @@ name: pr-af
 version: 0.2.0
 description: Opens draft PRs from a task description
 author: Agent-Field
+language: python
 entrypoint:
   start: python -m pr_af.app
   healthcheck: /health
@@ -166,6 +167,15 @@ user_environment:
 			}
 			if md.Name != "pr-af" || md.Version != "0.2.0" {
 				t.Errorf("basics: name=%q version=%q", md.Name, md.Version)
+			}
+			// `language` is an additive optional field (added without a
+			// config_version bump): the current-version fixture asserts the
+			// reader extracts it and that "python" is not treated as a Go node.
+			if md.Language != "python" {
+				t.Errorf("language = %q, want python", md.Language)
+			}
+			if md.IsGo() {
+				t.Errorf("a python node must not be classified as Go")
 			}
 			if got := md.StartCommand(); len(got) == 0 || got[0] != "python" {
 				t.Errorf("StartCommand() = %v", got)
