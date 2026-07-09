@@ -12,6 +12,10 @@ import (
 // It uses the `claude` CLI with `--print` mode for non-interactive output.
 type ClaudeCodeProvider struct {
 	BinPath string
+
+	// runCLI is the subprocess runner, injectable for tests. It defaults to
+	// RunCLIWithStdin so the prompt can be delivered via stdin.
+	runCLI func(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int, stdin []byte) (*CLIResult, error)
 }
 
 // NewClaudeCodeProvider creates a Claude Code provider. If binPath is empty,
@@ -20,7 +24,7 @@ func NewClaudeCodeProvider(binPath string) *ClaudeCodeProvider {
 	if binPath == "" {
 		binPath = "claude"
 	}
-	return &ClaudeCodeProvider{BinPath: binPath}
+	return &ClaudeCodeProvider{BinPath: binPath, runCLI: RunCLIWithStdin}
 }
 
 // permissionMap translates common permission mode names to Claude Code flags.
@@ -64,8 +68,12 @@ func (p *ClaudeCodeProvider) Execute(ctx context.Context, prompt string, options
 		cmd = append(cmd, "--allowedTools", tool)
 	}
 
-	// The prompt is passed via stdin-like argument (last positional arg)
-	cmd = append(cmd, prompt)
+	// The prompt is delivered on stdin, NOT as a trailing positional argument.
+	// `--allowedTools` is variadic in the claude CLI (verified against 2.1.191):
+	// a positional prompt immediately following it is greedily absorbed into the
+	// tool list, so `--print` sees no prompt and exits non-zero with
+	// "Input must be provided ... when using --print". `claude --print` reads
+	// the prompt from stdin when no positional is present.
 
 	env := make(map[string]string)
 	for k, v := range options.Env {
@@ -81,9 +89,14 @@ func (p *ClaudeCodeProvider) Execute(ctx context.Context, prompt string, options
 		cwd = options.ProjectDir
 	}
 
+	runCLI := p.runCLI
+	if runCLI == nil {
+		runCLI = RunCLIWithStdin
+	}
+
 	startAPI := time.Now()
 
-	cliResult, err := RunCLI(ctx, cmd, env, cwd, options.timeout())
+	cliResult, err := runCLI(ctx, cmd, env, cwd, options.timeout(), []byte(prompt))
 	apiMS := int(time.Since(startAPI).Milliseconds())
 
 	if err != nil {

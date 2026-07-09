@@ -39,7 +39,7 @@ func TestNote_Basic(t *testing.T) {
 	cfg := Config{
 		NodeID:        "test-node",
 		Version:       "1.0.0",
-		AgentFieldURL: server.URL + "/api/v1", // Will be used directly
+		AgentFieldURL: server.URL, // bare control-plane base; /api/v1 appended by note.go
 		Logger:        log.New(io.Discard, "", 0),
 	}
 
@@ -97,7 +97,7 @@ func TestNotef_Formatted(t *testing.T) {
 	cfg := Config{
 		NodeID:        "test-node",
 		Version:       "1.0.0",
-		AgentFieldURL: server.URL + "/api/v1",
+		AgentFieldURL: server.URL,
 		Logger:        log.New(io.Discard, "", 0),
 	}
 
@@ -134,7 +134,7 @@ func TestNote_NoTags(t *testing.T) {
 	cfg := Config{
 		NodeID:        "test-node",
 		Version:       "1.0.0",
-		AgentFieldURL: server.URL + "/api/v1",
+		AgentFieldURL: server.URL,
 		Logger:        log.New(io.Discard, "", 0),
 	}
 
@@ -191,7 +191,7 @@ func TestNote_ServerError(t *testing.T) {
 	cfg := Config{
 		NodeID:        "test-node",
 		Version:       "1.0.0",
-		AgentFieldURL: server.URL + "/api/v1",
+		AgentFieldURL: server.URL,
 		Logger:        log.New(io.Discard, "", 0),
 	}
 
@@ -209,7 +209,14 @@ func TestNote_ServerError(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 }
 
-func TestNote_URLConversion(t *testing.T) {
+// TestNote_URLPath pins the canonical note endpoint. Contract: given the bare
+// control-plane base URL as AgentFieldURL (the same value handed to
+// client.New, which every other endpoint appends /api/v1/... to), a note POSTs
+// to /api/v1/executions/note — the route the control plane actually registers
+// (control-plane/internal/server/routes_core.go). A trailing slash on the base
+// must not change the path. The previous test asserted the pre-fix path
+// (/executions/note), which 404s against a real control plane.
+func TestNote_URLPath(t *testing.T) {
 	var requestPath string
 	requestReceived := make(chan struct{})
 
@@ -221,19 +228,19 @@ func TestNote_URLConversion(t *testing.T) {
 	defer server.Close()
 
 	tests := []struct {
-		name           string
-		agentFieldURL  string
-		expectedPath   string
+		name          string
+		agentFieldURL string
+		expectedPath  string
 	}{
 		{
-			name:          "Standard /api/v1 URL",
-			agentFieldURL: server.URL + "/api/v1",
+			name:          "bare base URL",
+			agentFieldURL: server.URL,
 			expectedPath:  "/api/v1/executions/note",
 		},
 		{
-			name:          "URL without /api/v1",
-			agentFieldURL: server.URL,
-			expectedPath:  "/executions/note",
+			name:          "bare base URL with trailing slash",
+			agentFieldURL: server.URL + "/",
+			expectedPath:  "/api/v1/executions/note",
 		},
 	}
 
@@ -282,7 +289,7 @@ func TestNote_WithToken(t *testing.T) {
 	cfg := Config{
 		NodeID:        "test-node",
 		Version:       "1.0.0",
-		AgentFieldURL: server.URL + "/api/v1",
+		AgentFieldURL: server.URL,
 		Token:         "test-token-123",
 		Logger:        log.New(io.Discard, "", 0),
 	}
@@ -316,7 +323,7 @@ func TestNote_FireAndForget(t *testing.T) {
 	cfg := Config{
 		NodeID:        "test-node",
 		Version:       "1.0.0",
-		AgentFieldURL: slowServer.URL + "/api/v1",
+		AgentFieldURL: slowServer.URL,
 		Logger:        log.New(io.Discard, "", 0),
 	}
 
@@ -350,7 +357,7 @@ func TestNote_MultipleNotes(t *testing.T) {
 	cfg := Config{
 		NodeID:        "test-node",
 		Version:       "1.0.0",
-		AgentFieldURL: server.URL + "/api/v1",
+		AgentFieldURL: server.URL,
 		Logger:        log.New(io.Discard, "", 0),
 	}
 
