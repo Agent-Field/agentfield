@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -65,9 +66,20 @@ func (r *Runner) Run(ctx context.Context, prompt string, schema map[string]any, 
 		outputDir = tempOutputDir
 	}
 
+	// schema_mode selects how the agent is asked to produce the output:
+	//   "single"      — one Write of the whole object (default, cheapest)
+	//   "incremental" — build the object one top-level field at a time, with
+	//                   field-level recovery (robust for large/deep schemas)
+	//   "auto"        — incremental only when the schema is large, else single
+	useIncremental := resolveIncremental(schema, opts)
+
 	effectivePrompt := prompt
 	if schema != nil {
-		effectivePrompt = prompt + BuildPromptSuffix(schema, outputDir)
+		if useIncremental {
+			effectivePrompt = prompt + BuildIncrementalPromptSuffix(schema, outputDir)
+		} else {
+			effectivePrompt = prompt + BuildPromptSuffix(schema, outputDir)
+		}
 	}
 
 	startTime := time.Now()
@@ -78,7 +90,7 @@ func (r *Runner) Run(ctx context.Context, prompt string, schema map[string]any, 
 	}
 
 	if schema != nil {
-		result := r.handleSchemaWithRetry(ctx, raw, schema, dest, outputDir, startTime, provider, opts, effectivePrompt)
+		result := r.handleSchemaWithRetry(ctx, raw, schema, dest, outputDir, startTime, provider, opts, effectivePrompt, useIncremental)
 		CleanupTempFiles(outputDir)
 		return result, nil
 	}
@@ -89,6 +101,7 @@ func (r *Runner) Run(ctx context.Context, prompt string, schema map[string]any, 
 		IsError:      raw.IsError,
 		ErrorMessage: raw.ErrorMessage,
 		FailureType:  raw.FailureType,
+		CostUSD:      raw.Metrics.CostUSD,
 		NumTurns:     raw.Metrics.NumTurns,
 		DurationMS:   elapsed,
 		SessionID:    raw.Metrics.SessionID,
@@ -169,8 +182,46 @@ func (r *Runner) mergeOptions(overrides Options) Options {
 	if overrides.SchemaMaxRetries > 0 {
 		merged.SchemaMaxRetries = overrides.SchemaMaxRetries
 	}
+	if overrides.SchemaMode != "" {
+		merged.SchemaMode = overrides.SchemaMode
+	}
 
 	return merged
+}
+
+// resolveIncremental decides whether to use the incremental field-by-field
+// schema build. Mirrors the Python HarnessRunner._resolve_incremental:
+//
+//	schema is nil            -> false
+//	mode == "incremental"    -> true
+//	mode == "auto"           -> true iff the compact JSON schema exceeds the
+//	                            large-schema token threshold
+//	otherwise ("single"/"")  -> false
+//
+// The "auto" branch uses the COMPACT JSON encoding (json.Marshal, matching
+// Python's json.dumps with no indent), which differs from the indented
+// encoding the prompt-suffix builders use to decide whether to spill the
+// schema to a file — this matches Python exactly.
+func resolveIncremental(jsonSchema map[string]any, opts Options) bool {
+	if jsonSchema == nil {
+		return false
+	}
+	mode := strings.ToLower(opts.SchemaMode)
+	if mode == "" {
+		mode = "single"
+	}
+	switch mode {
+	case "incremental":
+		return true
+	case "auto":
+		compact, err := json.Marshal(jsonSchema)
+		if err != nil {
+			return false
+		}
+		return estimateTokens(string(compact)) > largeSchemaTokenThreshold
+	default:
+		return false
+	}
 }
 
 // transientPatterns are substrings that indicate a retryable error.
@@ -252,6 +303,7 @@ func (r *Runner) handleSchemaWithRetry(
 	provider Provider,
 	opts Options,
 	originalPrompt string,
+	useIncremental bool,
 ) *Result {
 	outputPath := OutputPath(outputDir)
 	maxRetries := opts.schemaMaxRetries()
@@ -270,10 +322,11 @@ func (r *Runner) handleSchemaWithRetry(
 
 	if err == nil && data != nil {
 		elapsed := int(time.Since(startTime).Milliseconds())
-		turns, sid, msgs := accumulateMetrics(allRaws)
+		cost, turns, sid, msgs := accumulateMetrics(allRaws)
 		return &Result{
 			Result:     initialRaw.Result,
 			Parsed:     dest,
+			CostUSD:    cost,
 			NumTurns:   turns,
 			DurationMS: elapsed,
 			SessionID:  sid,
@@ -289,7 +342,7 @@ func (r *Runner) handleSchemaWithRetry(
 	}
 	if initialRaw.IsError && !fileExists(outputPath) && !retryableFailures[initialRaw.FailureType] {
 		elapsed := int(time.Since(startTime).Milliseconds())
-		turns, sid, msgs := accumulateMetrics(allRaws)
+		cost, turns, sid, msgs := accumulateMetrics(allRaws)
 		providerError := initialRaw.ErrorMessage
 		if providerError == "" {
 			providerError = "Provider execution failed."
@@ -299,6 +352,7 @@ func (r *Runner) handleSchemaWithRetry(
 			IsError:      true,
 			ErrorMessage: fmt.Sprintf("%s Output file was not created at %s.", providerError, outputPath),
 			FailureType:  initialRaw.FailureType,
+			CostUSD:      cost,
 			NumTurns:     turns,
 			DurationMS:   elapsed,
 			SessionID:    sid,
@@ -317,11 +371,12 @@ func (r *Runner) handleSchemaWithRetry(
 			case <-ctx.Done():
 				timer.Stop()
 				elapsed := int(time.Since(startTime).Milliseconds())
-				turns, sid, msgs := accumulateMetrics(allRaws)
+				cost, turns, sid, msgs := accumulateMetrics(allRaws)
 				return &Result{
 					IsError:      true,
 					ErrorMessage: "context cancelled during schema retry",
 					FailureType:  FailureTimeout,
+					CostUSD:      cost,
 					NumTurns:     turns,
 					DurationMS:   elapsed,
 					SessionID:    sid,
@@ -334,6 +389,20 @@ func (r *Runner) handleSchemaWithRetry(
 		var retryPrompt string
 		if isCrash {
 			retryPrompt = originalPrompt
+		} else if useIncremental {
+			// Incremental mode: patch only the fields that are missing or
+			// invalid, one at a time, instead of regenerating the whole
+			// object. The partial output file persists on disk between
+			// attempts, so the agent edits it in place. The original goal is
+			// prepended so the agent keeps the task in view (parity with the
+			// Python incremental retry path).
+			fieldErrors := DiagnoseFieldFailures(outputPath, schema, dest)
+			followup := BuildIncrementalFollowup(fieldErrors, outputDir, schema)
+			if originalPrompt != "" {
+				retryPrompt = originalPrompt + "\n\n" + followup
+			} else {
+				retryPrompt = followup
+			}
 		} else {
 			errorDetail := DiagnoseOutputFailure(outputPath, schema)
 			retryPrompt = BuildFollowupPrompt(errorDetail, outputDir, schema)
@@ -375,11 +444,12 @@ func (r *Runner) handleSchemaWithRetry(
 
 		if err == nil && data != nil {
 			elapsed := int(time.Since(startTime).Milliseconds())
-			turns, sid, msgs := accumulateMetrics(allRaws)
+			cost, turns, sid, msgs := accumulateMetrics(allRaws)
 			r.Logger.Printf("Schema validation succeeded on retry %d", retryNum+1)
 			return &Result{
 				Result:     retryRaw.Result,
 				Parsed:     dest,
+				CostUSD:    cost,
 				NumTurns:   turns,
 				DurationMS: elapsed,
 				SessionID:  sid,
@@ -389,7 +459,7 @@ func (r *Runner) handleSchemaWithRetry(
 	}
 
 	elapsed := int(time.Since(startTime).Milliseconds())
-	turns, sid, msgs := accumulateMetrics(allRaws)
+	cost, turns, sid, msgs := accumulateMetrics(allRaws)
 	finalDiagnosis := DiagnoseOutputFailure(outputPath, schema)
 	return &Result{
 		Result:  allRaws[len(allRaws)-1].Result,
@@ -399,6 +469,7 @@ func (r *Runner) handleSchemaWithRetry(
 			maxRetries, finalDiagnosis,
 		),
 		FailureType: FailureSchema,
+		CostUSD:     cost,
 		NumTurns:    turns,
 		DurationMS:  elapsed,
 		SessionID:   sid,
@@ -406,8 +477,20 @@ func (r *Runner) handleSchemaWithRetry(
 	}
 }
 
-func accumulateMetrics(raws []*RawResult) (totalTurns int, sessionID string, allMessages []map[string]any) {
+// accumulateMetrics sums metrics across every provider execution that
+// contributed to a result — including failed retry attempts, mirroring the
+// Python _accumulate_metrics. CostUSD is summed only over executions that
+// reported a cost; the returned pointer is nil when none did (distinguishing
+// "unknown" from "$0.00").
+func accumulateMetrics(raws []*RawResult) (totalCost *float64, totalTurns int, sessionID string, allMessages []map[string]any) {
 	for _, raw := range raws {
+		if raw.Metrics.CostUSD != nil {
+			if totalCost == nil {
+				zero := 0.0
+				totalCost = &zero
+			}
+			*totalCost += *raw.Metrics.CostUSD
+		}
 		totalTurns += raw.Metrics.NumTurns
 		if raw.Metrics.SessionID != "" {
 			sessionID = raw.Metrics.SessionID

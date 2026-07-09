@@ -101,7 +101,7 @@ func TestRunner_HandleSchemaWithRetry_FirstAttemptSuccess(t *testing.T) {
 	raw := &RawResult{Result: "done", Metrics: Metrics{NumTurns: 1}}
 	result := runner.handleSchemaWithRetry(
 		context.Background(), raw, schema, &dest, dir,
-		time.Now(), mock, Options{Provider: "opencode"}, "test prompt",
+		time.Now(), mock, Options{Provider: "opencode"}, "test prompt", false,
 	)
 
 	assert.False(t, result.IsError)
@@ -136,7 +136,7 @@ func TestRunner_HandleSchemaWithRetry_StdoutFallback(t *testing.T) {
 
 	result := runner.handleSchemaWithRetry(
 		context.Background(), raw, schema, &dest, dir,
-		time.Now(), mock, Options{Provider: "opencode"}, "test prompt",
+		time.Now(), mock, Options{Provider: "opencode"}, "test prompt", false,
 	)
 
 	assert.False(t, result.IsError)
@@ -196,7 +196,7 @@ func TestRunner_HandleSchemaWithRetry_RetrySuccess(t *testing.T) {
 
 	result := runner.handleSchemaWithRetry(
 		context.Background(), initialRaw, schema, &dest, dir,
-		time.Now(), mock2, Options{Provider: "opencode", SchemaMaxRetries: 2}, "test prompt",
+		time.Now(), mock2, Options{Provider: "opencode", SchemaMaxRetries: 2}, "test prompt", false,
 	)
 
 	assert.False(t, result.IsError)
@@ -250,7 +250,7 @@ func TestRunner_HandleSchemaWithRetry_AllRetriesFail(t *testing.T) {
 
 	result := runner.handleSchemaWithRetry(
 		context.Background(), initialRaw, schema, &dest, dir,
-		time.Now(), mock, Options{Provider: "opencode", SchemaMaxRetries: 2}, "test prompt",
+		time.Now(), mock, Options{Provider: "opencode", SchemaMaxRetries: 2}, "test prompt", false,
 	)
 
 	assert.True(t, result.IsError)

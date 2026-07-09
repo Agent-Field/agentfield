@@ -340,6 +340,12 @@ func (a *Agent) shutdown(ctx context.Context) error {
 		close(a.stopLease)
 	}
 
+	// Unblock any reasoner still parked in Agent.Pause() so shutdown does not
+	// hang waiting on an approval callback that will never arrive.
+	if a.pauseManager != nil {
+		a.pauseManager.CancelAll()
+	}
+
 	if a.client != nil {
 		if _, err := a.client.Shutdown(ctx, a.cfg.NodeID, types.ShutdownRequest{Reason: "shutdown", Version: a.cfg.Version}); err != nil {
 			a.logger.Printf("failed to notify shutdown: %v", err)

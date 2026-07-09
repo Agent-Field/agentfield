@@ -48,10 +48,10 @@ func TestInvariant_Runner_RetryCountBounded(t *testing.T) {
 		maxRetries int
 		wantMax    int
 	}{
-		{"default max retries (3)", 0, 4},  // default 3 retries = 4 total attempts (1 + 3)
-		{"max retries = 1", 1, 2},           // 1 retry = 2 total attempts
-		{"max retries = 2", 2, 3},           // 2 retries = 3 total attempts
-		{"max retries = 5", 5, 6},           // 5 retries = 6 total attempts
+		{"default max retries (3)", 0, 4}, // default 3 retries = 4 total attempts (1 + 3)
+		{"max retries = 1", 1, 2},         // 1 retry = 2 total attempts
+		{"max retries = 2", 2, 3},         // 2 retries = 3 total attempts
+		{"max retries = 5", 5, 6},         // 5 retries = 6 total attempts
 	}
 
 	for _, tt := range tests {
@@ -222,7 +222,7 @@ func TestInvariant_Runner_SchemaMaxRetriesBounded(t *testing.T) {
 		schemaMaxRetries int
 		wantMaxCalls     int
 	}{
-		{"default (2)", 0, 2},  // default schemaMaxRetries = 2
+		{"default (2)", 0, 2}, // default schemaMaxRetries = 2
 		{"1 retry", 1, 1},
 		{"3 retries", 3, 3},
 	}
@@ -267,7 +267,7 @@ func TestInvariant_Runner_SchemaMaxRetriesBounded(t *testing.T) {
 
 			result := runner.handleSchemaWithRetry(
 				context.Background(), initialRaw, schema, &dest, dir,
-				time.Now(), prov, opts, "test prompt",
+				time.Now(), prov, opts, "test prompt", false,
 			)
 
 			assert.True(t, result.IsError, "should fail after exhausting retries")
