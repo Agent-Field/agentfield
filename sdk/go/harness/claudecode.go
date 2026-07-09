@@ -150,6 +150,7 @@ func (p *ClaudeCodeProvider) parseJSONOutput(stdout string, raw *RawResult) {
 	var messages []map[string]any
 	var resultText string
 	var sessionID string
+	var cost *float64
 	numTurns := 0
 
 	for _, line := range strings.Split(stdout, "\n") {
@@ -174,6 +175,9 @@ func (p *ClaudeCodeProvider) parseJSONOutput(stdout string, raw *RawResult) {
 			if sid, ok := msg["session_id"].(string); ok {
 				sessionID = sid
 			}
+			if c := extractCost(msg); c != nil {
+				cost = c
+			}
 			if turns, ok := msg["num_turns"].(float64); ok {
 				numTurns = int(turns)
 			}
@@ -189,10 +193,35 @@ func (p *ClaudeCodeProvider) parseJSONOutput(stdout string, raw *RawResult) {
 	}
 	raw.Messages = messages
 	raw.Metrics.SessionID = sessionID
+	raw.Metrics.CostUSD = cost
 	raw.Metrics.NumTurns = numTurns
 	if numTurns == 0 && len(messages) > 0 {
 		raw.Metrics.NumTurns = len(messages)
 	}
+}
+
+// extractCost pulls the per-call cost from a Claude Code result message.
+//
+// Mirrors the Python provider's semantics exactly
+// (agentfield/harness/providers/claude.py):
+//
+//	cost_info = msg.get("cost_usd") or msg.get("total_cost_usd")
+//	if cost_info is not None:
+//	    total_cost = float(cost_info)
+//
+// The Python `or` treats a zero/absent "cost_usd" as falsy and falls through
+// to "total_cost_usd". Returns nil when neither yields a usable number, so the
+// caller can distinguish "unknown cost" (nil) from "$0.00".
+func extractCost(msg map[string]any) *float64 {
+	if v, ok := msg["cost_usd"].(float64); ok && v != 0 {
+		c := v
+		return &c
+	}
+	if v, ok := msg["total_cost_usd"].(float64); ok {
+		c := v
+		return &c
+	}
+	return nil
 }
 
 // extractAssistantText pulls text content from an assistant message.

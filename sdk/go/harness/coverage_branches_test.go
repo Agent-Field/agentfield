@@ -18,23 +18,23 @@ func TestResultText(t *testing.T) {
 
 func TestRunnerMergeOptions_AllOverrideBranches(t *testing.T) {
 	defaults := Options{
-		Provider:        ProviderOpenCode,
-		Model:           "base-model",
-		MaxTurns:        1,
-		PermissionMode:  "plan",
-		SystemPrompt:    "base system",
-		Env:             map[string]string{"BASE": "1"},
-		Cwd:             "/base/cwd",
-		ProjectDir:      "/base/project",
-		Tools:           []string{"base-tool"},
-		MaxBudgetUSD:    1.25,
-		ResumeSessionID: "base-session",
-		BinPath:         "/base/bin",
-		Timeout:         10,
-		MaxRetries:      1,
-		InitialDelay:    1.5,
-		MaxDelay:        2.5,
-		BackoffFactor:   3.5,
+		Provider:         ProviderOpenCode,
+		Model:            "base-model",
+		MaxTurns:         1,
+		PermissionMode:   "plan",
+		SystemPrompt:     "base system",
+		Env:              map[string]string{"BASE": "1"},
+		Cwd:              "/base/cwd",
+		ProjectDir:       "/base/project",
+		Tools:            []string{"base-tool"},
+		MaxBudgetUSD:     1.25,
+		ResumeSessionID:  "base-session",
+		BinPath:          "/base/bin",
+		Timeout:          10,
+		MaxRetries:       1,
+		InitialDelay:     1.5,
+		MaxDelay:         2.5,
+		BackoffFactor:    3.5,
 		SchemaMaxRetries: 1,
 	}
 
@@ -296,6 +296,7 @@ func TestRunnerRetryAdditionalBranches(t *testing.T) {
 			prov,
 			Options{SchemaMaxRetries: 2},
 			"prompt",
+			false,
 		)
 
 		assert.True(t, result.IsError)
