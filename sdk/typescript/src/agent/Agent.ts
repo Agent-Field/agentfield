@@ -15,6 +15,13 @@ import type {
 import { ReasonerRegistry } from './ReasonerRegistry.js';
 import { SkillRegistry } from './SkillRegistry.js';
 import { CancelRegistry, installCancelRoute } from './cancel.js';
+import {
+  PauseManager,
+  PauseClock,
+  ApprovalResult,
+  installApprovalWebhookRoute
+} from './pause.js';
+import { ApprovalClient } from '../approval/ApprovalClient.js';
 import { AgentRouter } from '../router/AgentRouter.js';
 import type { ReasonerHandler, ReasonerOptions } from '../types/reasoner.js';
 import type { SkillHandler, SkillOptions } from '../types/skill.js';
@@ -110,6 +117,17 @@ export class Agent {
    *  code that respects `signal.aborted` (fetch, anthropic SDK, openai
    *  SDK, etc.). See ./cancel.ts. */
   private readonly cancelRegistry = new CancelRegistry();
+  /** Registry of pending `ctx.pause()` promises, resolved by the
+   *  `/webhooks/approval` route when the control plane delivers a decision.
+   *  See ./pause.ts. */
+  private readonly pauseManager = new PauseManager();
+  /** Per-execution pause clocks, keyed by execution_id. Present only for
+   *  detached (async-execution) reasoners; used to exclude pause/await time
+   *  from the reasoner's active wall-clock budget and from an awaiter's wait
+   *  timeout. See ./pause.ts. */
+  private readonly pauseClocks = new Map<string, PauseClock>();
+  /** Execution-scoped approval client used by `Agent.pause()`. */
+  private readonly approvalClient: ApprovalClient;
 
   constructor(config: AgentConfig) {
     this.config = {
@@ -118,7 +136,8 @@ export class Agent {
       host: '0.0.0.0',
       ...config,
       didEnabled: config.didEnabled ?? true,
-      deploymentType: config.deploymentType ?? 'long_running'
+      deploymentType: config.deploymentType ?? 'long_running',
+      asyncExecution: config.asyncExecution ?? true
     };
 
     this.app = express();
@@ -126,6 +145,12 @@ export class Agent {
 
     this.aiClient = new AIClient(this.config.aiConfig);
     this.agentFieldClient = new AgentFieldClient(this.config);
+    this.approvalClient = new ApprovalClient({
+      baseURL: this.config.agentFieldUrl ?? 'http://localhost:8080',
+      nodeId: this.config.nodeId,
+      apiKey: this.config.apiKey,
+      headers: this.sanitizeDefaultHeaders(this.config.defaultHeaders)
+    });
     this.memoryClient = new MemoryClient(this.config.agentFieldUrl!, this.config.defaultHeaders);
     this.memoryEventClient = new MemoryEventClient(this.config.agentFieldUrl!, this.config.defaultHeaders);
     this.didClient = new DidClient(this.config.agentFieldUrl!, this.config.defaultHeaders);
@@ -159,6 +184,38 @@ export class Agent {
       info: (message, meta) =>
         this.executionLogger.system('execution.cancel.received', message, meta ?? {})
     });
+    // Install the control-plane approval callback route so `ctx.pause()` can be
+    // resolved out-of-band. Always-on for the same reason as the cancel route.
+    installApprovalWebhookRoute(this.app, this.pauseManager, {
+      info: (message, meta) =>
+        this.executionLogger.system('execution.approval.received', message, meta ?? {})
+    });
+  }
+
+  /** Coerce the loosely-typed `defaultHeaders` config into string headers. */
+  private sanitizeDefaultHeaders(
+    headers?: Record<string, string | number | boolean | undefined>
+  ): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const [key, value] of Object.entries(headers ?? {})) {
+      if (value !== undefined && value !== null) {
+        out[key] = String(value);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Resolve the externally-reachable base URL for this agent — the URL the
+   * control plane uses to call back (approval webhook, cancel). Mirrors the
+   * value published at registration time.
+   */
+  private resolvePublicUrl(): string {
+    const port = this.config.port ?? 8001;
+    const hostForUrl = this.config.publicUrl
+      ? undefined
+      : (this.config.host && this.config.host !== '0.0.0.0' ? this.config.host : '127.0.0.1');
+    return this.config.publicUrl ?? `http://${hostForUrl ?? '127.0.0.1'}:${port}`;
   }
 
   reasoner<TInput = any, TOutput = any>(
@@ -330,6 +387,103 @@ export class Agent {
     this.agentFieldClient.sendNote(message, tags, this.config.nodeId, execMetadata, uiApiUrl, this.config.devMode);
   }
 
+  /**
+   * Pause the current execution for external approval / resumption.
+   *
+   * Transitions the execution to `waiting` on the control plane, then blocks
+   * until the approval webhook callback resolves it or the timeout elapses.
+   * The caller is responsible for creating the approval request on an external
+   * service (e.g. hax-sdk) *before* calling this and passing the resulting
+   * `approvalRequestId`.
+   *
+   * Requires the agent to be serving (a reachable callback URL) and, to survive
+   * past the control plane's synchronous dispatch ceiling, requires
+   * async-execution dispatch to be enabled (the default). When async dispatch
+   * is disabled the pause still works but is bounded by that ceiling.
+   *
+   * Returns an {@link ApprovalResult}. On timeout it returns
+   * `{ decision: 'expired' }` rather than throwing. Mirrors the Python SDK's
+   * `Agent.pause()`.
+   */
+  async pause(opts: {
+    approvalRequestId: string;
+    approvalRequestUrl?: string;
+    expiresInHours?: number;
+    timeoutMs?: number;
+    executionId?: string;
+  }): Promise<ApprovalResult> {
+    const executionId =
+      opts.executionId ?? ExecutionContext.getCurrent()?.metadata.executionId;
+    if (!executionId) {
+      throw new Error('No execution_id available — cannot pause');
+    }
+
+    const callbackUrl = `${this.resolvePublicUrl()}/webhooks/approval`;
+    const expiresInHours = opts.expiresInHours ?? 72;
+
+    // Register the promise BEFORE telling the control plane, so we don't miss a
+    // fast callback that arrives before request-approval returns.
+    const future = this.pauseManager.register(opts.approvalRequestId, executionId);
+
+    try {
+      await this.approvalClient.requestApproval(executionId, {
+        approvalRequestId: opts.approvalRequestId,
+        approvalRequestUrl: opts.approvalRequestUrl,
+        callbackUrl,
+        expiresInHours
+      });
+    } catch (err) {
+      // Clean up the pending promise if we couldn't even reach the control plane.
+      this.pauseManager.resolve(
+        opts.approvalRequestId,
+        new ApprovalResult({
+          decision: 'error',
+          feedback: 'failed to notify control plane',
+          executionId,
+          approvalRequestId: opts.approvalRequestId
+        })
+      );
+      throw err;
+    }
+
+    this.note(`Execution paused — waiting for approval ${opts.approvalRequestId}`, [
+      'approval',
+      'waiting'
+    ]);
+
+    const timeoutMs = opts.timeoutMs ?? expiresInHours * 3_600_000;
+    const pauseClock = this.pauseClocks.get(executionId);
+    pauseClock?.startPause();
+
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const result = await Promise.race([
+        future,
+        new Promise<ApprovalResult>((resolve) => {
+          timer = setTimeout(() => {
+            resolve(
+              new ApprovalResult({
+                decision: 'expired',
+                feedback: 'timed out waiting for approval',
+                executionId,
+                approvalRequestId: opts.approvalRequestId
+              })
+            );
+          }, timeoutMs);
+        })
+      ]);
+      // If we timed out, drop the still-pending promise so a late callback
+      // doesn't leak a resolved-but-unawaited entry.
+      if (result.decision === 'expired') {
+        this.pauseManager.resolve(opts.approvalRequestId, result);
+      }
+      return result;
+    } finally {
+      if (timer) clearTimeout(timer);
+      pauseClock?.endPause();
+    }
+  }
+
   private buildExecutionLogContext(metadata?: ExecutionMetadata): ExecutionLogContext | undefined {
     const current = metadata ?? ExecutionContext.getCurrent()?.metadata;
     if (!current) return undefined;
@@ -382,6 +536,8 @@ export class Agent {
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
     }
+    // Unblock any reasoner still parked in ctx.pause() so shutdown doesn't hang.
+    this.pauseManager.cancelAll();
     await new Promise<void>((resolve, reject) => {
       this.server?.close((err) => {
         if (err) reject(err);
@@ -584,23 +740,27 @@ export class Agent {
       reasonerId: name
     });
 
+    const executeMetadata = {
+      runId,
+      workflowId,
+      rootWorkflowId,
+      parentExecutionId: parentMetadata?.executionId,
+      reasonerId: name,
+      sessionId: parentMetadata?.sessionId,
+      actorId: parentMetadata?.actorId,
+      callerDid: parentMetadata?.callerDid,
+      targetDid: parentMetadata?.targetDid,
+      agentNodeDid: parentMetadata?.agentNodeDid,
+      agentNodeId: this.config.nodeId,
+      replaySourceRunId: parentMetadata?.replaySourceRunId,
+      replayBeforeExecutionId: parentMetadata?.replayBeforeExecutionId,
+      replayMode: parentMetadata?.replayMode
+    };
+
     try {
-      const result = await this.agentFieldClient.execute(target, input, {
-        runId,
-        workflowId,
-        rootWorkflowId,
-        parentExecutionId: parentMetadata?.executionId,
-        reasonerId: name,
-        sessionId: parentMetadata?.sessionId,
-        actorId: parentMetadata?.actorId,
-        callerDid: parentMetadata?.callerDid,
-        targetDid: parentMetadata?.targetDid,
-        agentNodeDid: parentMetadata?.agentNodeDid,
-        agentNodeId: this.config.nodeId,
-        replaySourceRunId: parentMetadata?.replaySourceRunId,
-        replayBeforeExecutionId: parentMetadata?.replayBeforeExecutionId,
-        replayMode: parentMetadata?.replayMode
-      });
+      const result = this.config.asyncExecution === false
+        ? await this.agentFieldClient.execute(target, input, executeMetadata)
+        : await this.callRemoteAsync(target, input, executeMetadata, parentMetadata?.executionId);
       this.executionLogger.system('agent.call.completed', 'Remote agent call completed', {
         target,
         agentNodeId: agentId,
@@ -630,6 +790,57 @@ export class Agent {
       });
       throw err;
     }
+  }
+
+  /**
+   * Remote call variant that submits the execution asynchronously and polls for
+   * its result, instead of holding a synchronous connection open. This lets a
+   * caller await a descendant that legitimately pauses (WAITING) for a long
+   * time without tripping the control plane's synchronous dispatch ceiling.
+   *
+   * Multi-hop pause propagation: if the caller itself is a detached reasoner
+   * (has a registered pause-clock), then when the awaited child enters WAITING
+   * we push the caller's own execution to WAITING via awaiter-status — so any
+   * ancestor awaiting the caller transitively sees WAITING too and doesn't time
+   * out. Mirrors the propagation wiring in the Python SDK's `Agent.call`.
+   */
+  private async callRemoteAsync(
+    target: string,
+    input: any,
+    executeMetadata: Parameters<AgentFieldClient['execute']>[2],
+    parentExecutionId?: string
+  ): Promise<any> {
+    const childExecutionId = await this.agentFieldClient.executeAsync(target, input, executeMetadata);
+
+    const parentPauseClock = parentExecutionId
+      ? this.pauseClocks.get(parentExecutionId)
+      : undefined;
+
+    let onChildWaiting: (() => Promise<void>) | undefined;
+    let onChildRunning: (() => Promise<void>) | undefined;
+    if (parentExecutionId && parentPauseClock) {
+      const reason = `awaiting child ${childExecutionId}`;
+      onChildWaiting = async () => {
+        try {
+          await this.agentFieldClient.notifyAwaiterStatus(parentExecutionId, 'waiting', reason);
+        } catch {
+          /* advisory; swallow so a control-plane blip can't break the call graph */
+        }
+      };
+      onChildRunning = async () => {
+        try {
+          await this.agentFieldClient.notifyAwaiterStatus(parentExecutionId, 'running', reason);
+        } catch {
+          /* advisory */
+        }
+      };
+    }
+
+    return this.agentFieldClient.waitForExecutionResult(childExecutionId, {
+      pauseClock: parentPauseClock,
+      onChildWaiting,
+      onChildRunning
+    });
   }
 
   private registerDefaultRoutes() {
@@ -813,12 +1024,29 @@ export class Agent {
   }
 
   private async executeReasoner(req: express.Request, res: express.Response, name: string) {
+    const metadata = this.buildMetadata(req);
+    const reasoner = this.reasoners.get(name);
+
+    // Async-execution dispatch: when enabled and the control plane dispatched
+    // this reasoner (i.e. it carries an X-Execution-ID header), acknowledge
+    // immediately with 202 and run the reasoner detached, delivering the
+    // terminal result out-of-band via POST /executions/{id}/status. This frees
+    // the dispatch connection so a reasoner may `ctx.pause()` and wait far
+    // longer than the control plane's synchronous dispatch ceiling. Mirrors the
+    // Python SDK's `_execute_async_with_callback`.
+    if (reasoner && this.shouldRunAsync(req)) {
+      res.status(202).json({ status: 'processing', execution_id: metadata.executionId });
+      // Detached — do not await; runReasonerAsync reports its own terminal status.
+      void this.runReasonerAsync(reasoner, { targetName: name, input: req.body, metadata });
+      return;
+    }
+
     try {
       await this.executeInvocation({
         targetName: name,
         targetType: 'reasoner',
         input: req.body,
-        metadata: this.buildMetadata(req),
+        metadata,
         req,
         res,
         respond: true
@@ -1213,6 +1441,132 @@ export class Agent {
     throw new TargetNotFoundError(`Reasoner not found: ${params.targetName}`);
   }
 
+  /**
+   * True when an incoming reasoner dispatch should run detached (202-ack).
+   *
+   * Requires async execution to be enabled AND the request to carry BOTH
+   * `X-Execution-ID` and `X-Run-ID`. The `X-Run-ID` header is the marker that
+   * the control plane dispatched this via an async-aware path — the workflow
+   * execute paths (`/execute`, `/execute/async`, agent-to-agent calls, triggers)
+   * always set it (see control-plane callAgent), and those paths wait for the
+   * out-of-band `/status` result. The legacy synchronous invoke endpoint
+   * (`POST /api/v1/reasoners/{node}.{reasoner}`) omits `X-Run-ID` for
+   * long-running agents and forwards the agent's HTTP response verbatim; it
+   * cannot handle a 202, so we must run synchronously there and return the
+   * result inline. Direct HTTP callers / tests without these headers likewise
+   * keep the synchronous request/response contract.
+   */
+  private shouldRunAsync(req: express.Request): boolean {
+    if (this.config.asyncExecution === false) return false;
+    return this.hasHeader(req, 'x-execution-id') && this.hasHeader(req, 'x-run-id');
+  }
+
+  /** True when the request carries a non-empty value for the given header. */
+  private hasHeader(req: express.Request, name: string): boolean {
+    const raw = req.headers[name];
+    const value = Array.isArray(raw) ? raw[0] : raw;
+    return typeof value === 'string' && value.trim().length > 0;
+  }
+
+  /**
+   * Run a reasoner detached after its dispatch was 202-acked, delivering the
+   * terminal status out-of-band via `POST /executions/{id}/status`.
+   *
+   * A pause-clock is registered for the execution so `ctx.pause()` (and any
+   * awaited paused descendant) can exclude its wait from the active wall-clock
+   * budget. A watchdog aborts the reasoner if active time exceeds the budget,
+   * guaranteeing the control plane always sees a terminal status even if the
+   * reasoner hangs. Mirrors the Python SDK's `_execute_async_with_callback`.
+   */
+  private async runReasonerAsync(
+    reasoner: { handler: ReasonerHandler<any, any> },
+    params: { targetName: string; input: any; metadata: ExecutionMetadata }
+  ): Promise<void> {
+    const executionId = params.metadata.executionId;
+    const reasonerName = params.metadata.reasonerId ?? params.targetName;
+    const start = Date.now();
+    const budgetMs = this.config.executionBudgetMs ?? 7_200_000;
+
+    const pauseClock = new PauseClock();
+    this.pauseClocks.set(executionId, pauseClock);
+    const controller = new AbortController();
+
+    let watchdogTimer: NodeJS.Timeout | undefined;
+    const watchdog = new Promise<never>((_, reject) => {
+      const checkInterval = Math.min(5000, Math.max(100, budgetMs / 4));
+      watchdogTimer = setInterval(() => {
+        const activeElapsed = (Date.now() - start) - pauseClock.totalPaused();
+        if (activeElapsed > budgetMs) {
+          pauseClock.timedOut = true;
+          this.cancelRegistry.cancel(executionId, 'reasoner_timeout');
+          reject(
+            new Error(
+              `reasoner '${reasonerName}' timed out after ${Math.round(budgetMs / 1000)}s of active time`
+            )
+          );
+        }
+      }, checkInterval);
+    });
+    // The watchdog rejection is consumed by Promise.race below; attach a no-op
+    // catch so an unraced rejection (race already settled) isn't unhandled.
+    watchdog.catch(() => {});
+
+    const completedAt = () => new Date().toISOString();
+    try {
+      const result = await Promise.race([
+        this.runReasoner(reasoner, {
+          targetName: params.targetName,
+          input: params.input,
+          metadata: params.metadata,
+          respond: false,
+          controller
+        }),
+        watchdog
+      ]);
+      await this.agentFieldClient.reportExecutionResult(executionId, {
+        status: 'succeeded',
+        result,
+        durationMs: Date.now() - start,
+        completedAt: completedAt(),
+        reasoner: reasonerName
+      });
+    } catch (err: any) {
+      const durationMs = Date.now() - start;
+      if (pauseClock.timedOut) {
+        await this.agentFieldClient.reportExecutionResult(executionId, {
+          status: 'failed',
+          error: err?.message ?? `reasoner '${reasonerName}' timed out`,
+          errorDetails: { reason: 'reasoner_timeout' },
+          durationMs,
+          completedAt: completedAt(),
+          reasoner: reasonerName
+        });
+      } else if (controller.signal.aborted) {
+        // External cooperative cancel arrived via the cancel dispatcher.
+        await this.agentFieldClient.reportExecutionResult(executionId, {
+          status: 'cancelled',
+          error: 'cancelled_by_control_plane',
+          errorDetails: { reason: 'cancelled' },
+          durationMs,
+          completedAt: completedAt(),
+          reasoner: reasonerName
+        });
+      } else {
+        await this.agentFieldClient.reportExecutionResult(executionId, {
+          status: 'failed',
+          error: err?.message ?? 'Execution failed',
+          errorDetails: err?.responseData,
+          durationMs,
+          completedAt: completedAt(),
+          reasoner: reasonerName
+        });
+      }
+    } finally {
+      if (watchdogTimer) clearInterval(watchdogTimer);
+      this.pauseClocks.delete(executionId);
+    }
+  }
+
   private async runReasoner(
     reasoner: { handler: ReasonerHandler<any, any> },
     params: {
@@ -1222,6 +1576,7 @@ export class Agent {
       req?: express.Request;
       res?: express.Response;
       respond?: boolean;
+      controller?: AbortController;
     }
   ) {
     const req = params.req ?? ({} as express.Request);
@@ -1243,9 +1598,12 @@ export class Agent {
     // Register an AbortController for this execution so the control-plane
     // cancel callback (POST /_internal/executions/:id/cancel) can abort
     // in-flight `fetch` / Anthropic SDK / OpenAI SDK requests bound to
-    // ctx.signal. release() is always called, even on throw.
+    // ctx.signal. release() is always called, even on throw. In async-execution
+    // mode the caller supplies the controller so it can inspect the abort
+    // reason (timeout vs. cooperative cancel) after the handler settles.
     const { controller, release } = this.cancelRegistry.register(
-      executionMetadata.executionId
+      executionMetadata.executionId,
+      params.controller
     );
 
     return ExecutionContext.run(execCtx, async () => {
@@ -1491,12 +1849,7 @@ export class Agent {
       const reasoners = this.reasonerDefinitions();
       const skills = this.skillDefinitions();
 
-      const port = this.config.port ?? 8001;
-      const hostForUrl = this.config.publicUrl
-        ? undefined
-        : (this.config.host && this.config.host !== '0.0.0.0' ? this.config.host : '127.0.0.1');
-      const publicUrl =
-        this.config.publicUrl ?? `http://${hostForUrl ?? '127.0.0.1'}:${port}`;
+      const publicUrl = this.resolvePublicUrl();
 
       const agentTags = this.config.tags ?? [];
       const regResponse = await this.agentFieldClient.register({

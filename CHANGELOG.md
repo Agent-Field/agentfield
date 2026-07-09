@@ -6,6 +6,648 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.106] - 2026-07-09
+
+## [0.1.106-rc.2] - 2026-07-08
+
+
+### Added
+
+- Feat(af-tray): live status dashboard — fleet, metrics, traffic-light thresholds, API-key flow (#739)
+
+* feat(af-tray): live fleet status menu with API-key handling
+
+Enhance the macOS menu-bar tray beyond a bare running/stopped indicator:
+
+- Fleet summary line under the status header: "N of M agents online · X
+  skills" (skills counted over online agents only, since offline agents'
+  capabilities aren't callable).
+- A bounded, live list of agents (online-first, then alphabetical), each
+  row a filled/hollow dot + node id + capability count. Overflow beyond
+  the slot pool collapses into "…and N more". Rows open the dashboard.
+- API-key aware: /health stays public so status never breaks, but
+  /api/v1/nodes returns 401 when the control plane has a key configured.
+  The tray detects that, shows "🔒 API key required" + an "Enter API
+  key…" item, prompts with a native hidden-answer dialog, validates the
+  key against the API before persisting it 0600 to ~/.agentfield/
+  tray-apikey, and re-prompts whenever the stored key is missing, wrong,
+  or expired. AGENTFIELD_API_KEY (env) still wins, mirroring the af CLI.
+
+All parsing/summary/formatting/key-storage logic lives in the
+build-tag-free shared.go so it unit-tests on Linux CI; the systray event
+loop and osascript dialogs stay in the _darwin file. fleet_test.go covers
+node parsing, online/skill counting, the 200/401/403/500/unreachable
+status mapping, header/proxy X-API-Key behavior, env-vs-file key
+precedence (0600), and the row/headline/sort formatting.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* feat(af-tray): polished, colored status menu with live metrics
+
+Redesign the tray menu around the feedback that it was crowded, colorless,
+and hard to tell online from offline:
+
+- Color via emoji (NSMenu renders item text in the system color, but emoji
+  keep their color): 🟢 online / ⚪ offline agents, and icon-led metric
+  rows. Replaces the near-identical ●/○ dots that read as "all the same".
+- Declutter: the per-agent list moves into an "Agents" submenu whose title
+  carries the "N of M agents online" headline, so the top level stays short.
+- Live metrics rows:
+    ✅ success rate · run count · ✗ failures (· ▶ running)
+    ⏱ average latency · 🧠 server memory
+  Success/latency come from /api/ui/v1/executions/stats; memory is the
+  control-plane process RSS read via `ps` (the Prometheus /metrics endpoint
+  only exports Go heap, which understates the real footprint). Each row
+  hides itself when it has nothing to show.
+- The stats endpoint sits behind the API key like /nodes, so the existing
+  auth flow covers it; the key prompt now doubles as the "auth required"
+  message ("🔒 API key required — enter…" / "… expired — re-enter…").
+
+New pure helpers (agentsHeadline, agentLine, successLine, perfLine,
+enterKeyTitle, parse/fetchExecStats) live in the tag-free shared.go and are
+unit-tested on Linux CI; serverMemoryMB (ps-based RSS) is darwin-only.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* fix(af-tray): reload launchd agents via bootout+bootstrap on install
+
+The install converge step used `kickstart -k`, which cannot re-exec a
+launchd agent across a binary whose code signature changed. Every
+rebuild/upgrade produces a new ad-hoc cdhash, so on a real upgrade launchd
+rejects the relaunch with EX_CONFIG (78) — "spawn failed" — and the tray
+(and potentially the server) dies until the next login.
+
+Replace the bootstrap-then-kickstart-k dance with reloadAgent: bootout
+(ignored if not loaded), bootstrap with a short retry loop to ride out
+bootout's async teardown, then a plain kickstart to ensure it's running
+now. This lands cleanly on the new bytes every time, and also fixes the
+long-standing caveat that plist-content changes weren't hot-reloaded.
+
+Verified across an A→B upgrade with distinct cdhashes plus repeated
+installs: tray and server both stay running, server healthy, no EX_CONFIG.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* refine(af-tray): calmer, one-fact-per-row dashboard layout
+
+Address the feedback that rows were still cramming multiple facts:
+
+- Two-line header: "AgentField" over a colored status line
+  ("🟢 Running · localhost:8080" / "🔴 Stopped").
+- One fact per row, each led by a single category glyph and reading
+  "Label — value":
+      🤖 Agents — 4 of 7 online   (submenu holds the roster)
+      ✅ Success — 83% (20 of 24) (fraction carries volume + failures)
+      ⚡ Response — 42 ms avg
+      🧠 Memory — 34 MB
+  Replaces the two crammed "… · … · …" lines. Rows with no data hide
+  themselves via a small setRow helper.
+- Server controls (Start/Stop/Restart/Start at login) move into a
+  "Control plane" submenu, so the top level reads as a quiet dashboard
+  rather than a wall of actions.
+
+Helpers renamed/split accordingly (statusLine, metricSuccess,
+metricResponse, metricMemory) and remain pure + unit-tested on Linux CI.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* refine(af-tray): replace emoji with Lucide icon set
+
+Swap the emoji prefixes for real monochrome menu icons, so the tray looks
+native rather than "vibecoded":
+
+- Pull only the nine icons we use from Lucide (ISC): bot, circle-check,
+  gauge, cpu, layout-dashboard, server, scroll-text, key, power. Each is
+  rendered to a 32×32 (16pt @2x) black-on-transparent PNG and applied with
+  SetTemplateIcon, so macOS recolors it to match the menu in light/dark.
+- Status is shown with small colored dot icons (green/red header state,
+  green/gray per-agent) applied as regular images so their color survives.
+- Menu text drops all emoji; the pure helpers now emit text only and the
+  icons are attached in the darwin tray code.
+
+Assets live in assets/icons/ with a LICENSE.md crediting Lucide. Total
+footprint is ~6 KB for all twelve PNGs. Embeds are darwin-only
+(menu_icons_darwin.go); Linux CI cross-build and all unit tests still pass.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* refine(af-tray): make metric rows readable, clickable dashboard links
+
+The stats were disabled menu items, which macOS renders in a hard-to-read
+dim gray; enabling them plainly would make them look like clickable actions
+with no action. Resolve the tension by making them genuine links: each stat
+row is now enabled (full-contrast, legible) and opens the dashboard view it
+summarizes —
+
+  Success / Response  -> /ui/executions
+  Memory              -> /ui/dashboard
+  Agents "Open …"     -> /ui/agents
+
+So the full-contrast text is honest rather than misleading. Adds uiPageURL
+(pure, tested) and an openURL helper.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* feat(af-tray): traffic-light thresholds on the metric icons
+
+Color each stat's icon green / yellow / red by a benchmark, so health reads
+at a glance (NSMenu won't let us color the row text, so the icon carries it):
+
+  Success   green ≥60%   · yellow 30–59%  · red <30%
+  Response  green ≤100ms · yellow ≤500ms  · red >500ms
+  Memory    green <1GB   · yellow <2GB    · red ≥2GB
+
+No data → the neutral monochrome (template) icon. Green/yellow/red variants
+of circle-check, gauge and cpu are rendered from the same Lucide sources
+(ISC) and applied as regular colored images; the thresholds and
+level-mapping (successLevel/responseLevel/memoryLevel) are pure and
+unit-tested at every boundary.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.8 <noreply@anthropic.com> (95d54ac)
+
+## [0.1.106-rc.1] - 2026-07-08
+
+
+### Added
+
+- Feat: macOS menu-bar tray (af-tray) with launchd auto-start (#725)
+
+* feat(control-plane): add macOS menu-bar tray (af-tray)
+
+Adds `af-tray`, a small separate binary that puts an AgentField icon in
+the macOS menu bar. It polls the control plane's public /health endpoint
+to show running/stopped status, opens the dashboard, and drives the
+control-plane lifecycle (start/stop/restart/start-at-login) via launchd —
+the tray is a controller of an OS service, not a supervisor.
+
+Design/isolation:
+- Separate binary so the systray/CGO dependency never enters the server
+  binary (verified: ./cmd/af has no systray/dbus deps). Containers/headless
+  hosts (Railway/ECS/EC2) never build, install, or run it.
+- Platform-neutral logic (health, launchd plist generation, launchctl arg
+  construction, atomic writes) lives in shared.go with contract tests that
+  run on the Linux CI; the systray loop and launchctl exec calls are
+  darwin-tagged. Non-darwin builds compile a graceful no-op stub.
+- launchd semantics encode the intended behaviour: server uses
+  KeepAlive={SuccessfulExit:false} so a graceful Stop sticks but a crash
+  restarts; tray uses KeepAlive={Crashed:true} so Quit / no-GUI exit never
+  crash-loops; server runs with --open=false under launchd.
+- install is idempotent/convergent (bootstrap + kickstart -k) so a
+  `curl | bash` update force-restarts a stale tray/server onto the new
+  binary with nothing manual.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* feat(install): install macOS tray + auto-start via install.sh
+
+On macOS (production channel) the installer now fetches the separate
+`agentfield-tray-<arch>` binary and delegates .app-bundle + launchd setup
+to `af-tray install` (mirroring how the skill install is delegated to the
+binary). Best-effort throughout: a missing/failed tray never fails the
+overall install, and it is never fetched on Linux/headless/container hosts.
+Opt out with --no-tray or TRAY_MODE=none.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* build(release): build and ship af-tray for darwin
+
+Adds goreleaser build targets for agentfield-tray-darwin-{amd64,arm64}
+(CGO on, macOS only) and includes them in the release matrix on the
+macos-14 runner so the Cocoa/CGO link happens on a real macOS host. The
+binaries are named to match the existing agentfield-* asset convention,
+so the flatten/checksum/upload steps pick them up automatically.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* test(control-plane): make af-tray dispatch testable and cover shared helpers
+
+Splits the CLI dispatch out of main() into a testable run([]string) int and
+adds unit tests for it plus the non-darwin stubs and the shared helpers
+(serverBinaryPath fallbacks, writeFileAtomic error paths). This lifts the
+control-plane patch coverage on the af-tray files from 66% to ~85%, above the
+80% patch-coverage gate. The darwin-only files are not measured on the Linux
+coverage run; the systray loop / launchctl calls remain covered only by the
+on-device build.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (e2bf705)
+
+
+
+### Documentation
+
+- Docs: document installing agent nodes via `af install <repo-url>` (#738)
+
+Add an install snippet to the 'Built With AgentField' section: with a control
+plane running, any first-party node (swe-planner, sec-af, cloudsecurity, pr-af)
+installs with one `af install <github-url>` command, prompts once for shared
+secrets, and its reasoners become callable. Links to docs/installing-agent-nodes.md.
+
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (d9569d1)
+
+## [0.1.105] - 2026-07-08
+
+## [0.1.105-rc.1] - 2026-07-08
+
+
+### Fixed
+
+- Fix(af run): eliminate port race that killed healthy nodes on startup (#737)
+
+`af run <node>` intermittently failed with 'agent node did not become ready
+within 10s' — worst for import-heavy nodes like pr-af. Root cause is a
+check-then-exec race between the runner and the SDK:
+
+1. The runner probes a free port, releases the probe, exports PORT=N, then
+   polls ONLY port N for readiness.
+2. If N is momentarily unavailable when the child binds, the SDK SILENTLY
+   moves to the next free port (N+1) — a port the runner never learns about.
+   The runner then polls the dead port N until timeout and kills a node that
+   actually came up fine on N+1.
+3. The 10s readiness window is also too short for nodes with large import
+   graphs, independent of the race.
+
+Fix (regression-safe, gated):
+- Runner exports AGENTFIELD_STRICT_PORT=1 alongside PORT.
+- SDK, only when that signal is set, binds the injected PORT authoritatively:
+  if it is unavailable it exits with a clear error instead of silently
+  bumping, so the runner and node can never disagree about the port. Absent
+  the signal (standalone `python -m <node>.app`, manual PORT=...), the old
+  lenient auto-bump behavior is unchanged — no regression.
+- Readiness timeout is now 30s and configurable via
+  AGENTFIELD_NODE_READY_TIMEOUT (whole seconds).
+- Guard PortManager's reserved-ports map with a mutex (it was read/written
+  without synchronization).
+
+Verified: with the patched control plane + SDK, all four reference nodes
+(swe-planner, cloudsecurity-af, sec-af, pr-af) start on their assigned ports
+and pass health; pr-af — previously failing almost every run — now binds its
+assigned port every time.
+
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (23d9086)
+
+## [0.1.104] - 2026-07-08
+
+## [0.1.104-rc.2] - 2026-07-07
+
+
+### Fixed
+
+- Fix(cli): don't dump usage/help block on runtime errors (#736)
+
+When a command failed at runtime — e.g. `af run <node>` hitting a
+readiness timeout — cobra printed the full usage/help block (flags,
+global flags, etc.) after the error. Usage text is meant for
+mis-invocation, not runtime failures, so it was pure noise on top of the
+actual error the user cares about.
+
+Set SilenceUsage on the root command (cobra suppresses the usage block
+for any subcommand when the root has this set). The error itself still
+propagates — main.go surfaces it — so nothing is hidden; only the
+irrelevant usage wall is gone. Genuine bad-invocation errors (wrong arg
+count, unknown flag) still print their concise error message.
+
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (fac34e1)
+
+## [0.1.104-rc.1] - 2026-07-07
+
+
+### Fixed
+
+- Fix(control-plane): correct observability-webhook paths in KB + API catalog (#735)
+
+The embedded Knowledge Base article ("observability/webhooks") and the
+machine-readable API catalog both advertised
+`GET/POST/DELETE /api/v1/settings/webhooks`, which is not a registered
+route and 404s on the server (the Smart404 handler confirms
+"/api/v1/settings/webhooks does not exist"). The real endpoint is the
+singleton `GET/POST/DELETE /api/v1/settings/observability-webhook`
+(plus `/status`, `/redrive`, `/dlq`), registered in
+registerObservabilityRoutes.
+
+Both surfaces are served to users/agents (public KB article endpoint and
+the /discover + .well-known/ai-catalog.json catalog), so the wrong paths
+were externally visible.
+
+Changes:
+- KB article: repoint to the real observability-webhook endpoints, note
+  the config is a singleton (POST upserts, no :id), document the
+  `X-AgentField-Signature: sha256=<hex>` HMAC signing (when a secret is
+  set) and the lifecycle events it fires on, and clarify that this
+  outbound observability webhook is distinct from the inbound,
+  HMAC-signed approval webhook (POST /api/v1/webhooks/approval-response).
+- API catalog: replace the three dead `/settings/webhooks` entries with
+  the seven real `/settings/observability-webhook*` endpoints.
+
+Verified live: all documented paths now resolve (200), the dead path is
+gone from the served KB, and the corrected KB/catalog match the router.
+
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (06f9110)
+
+## [0.1.103] - 2026-07-07
+
+## [0.1.103-rc.1] - 2026-07-07
+
+
+### Added
+
+- Feat(cli): numbered menu for require_one_of provider selection (#734)
+
+When an interactive `af run`/`af install` hits an unsatisfied
+require_one_of group, the old flow prompted for each option in sequence
+and told the user to "fill in one, leave the rest blank" — so to use
+OpenRouter you had to know to press Enter past the Anthropic prompt.
+Nobody could tell how to select. It also listed options as
+`ANTHROPIC_API_KEY  |  OPENROUTER_API_KEY`, which reads poorly.
+
+Now a group with two or more options renders a numbered menu (each
+option on its own line with its description), reads a single selection,
+and prompts only for the chosen provider. A single-option group still
+prompts directly. All user-facing option enumerations join with "or"
+instead of "|" (menu prompt "Enter 1 or 2 …", and the missing-env
+error).
+
+Adds a PromptLine method to the Prompter interface (echoed line read for
+the selection) with a stdin-swap test, and menu contract tests covering
+select/retry/skip/exhaust/blank/single-option paths.
+
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (c07b197)
+
+## [0.1.102] - 2026-07-07
+
+## [0.1.102-rc.3] - 2026-07-07
+
+
+### Added
+
+- Feat(install): version the agentfield-package.yaml manifest schema (config_version) (#733)
+
+* feat(install): version the agentfield-package.yaml manifest schema
+
+Add a config_version field to the agent-node manifest so the control plane
+can read it as the format evolves without locking authors into whatever
+shape shipped the day they wrote it. It is distinct from the node's own
+version: (release semver); config_version is the schema version.
+
+ParsePackageMetadata now does a version-dependent read: an absent value is
+v0 (the legacy, pre-versioning format, read leniently), the current version
+is v1, and a manifest declaring a version newer than CurrentConfigVersion is
+refused with an "upgrade AgentField" error rather than silently mis-parsed.
+The "v" prefix is optional/case-insensitive; malformed values fail loudly.
+
+Bump policy: config_version bumps only for BREAKING format changes (a field
+renamed/removed or its shape changed). Additive optional fields (e.g. the
+existing require_one_of) do not bump it.
+
+Tests:
+- config_version_test.go: parse/normalize + future-version and malformed
+  rejection + additive-field tolerance.
+- config_version_fixtures_test.go: one canonical golden manifest + structure
+  assertion per schema version, with a coverage guard that fails if a version
+  has no fixture (or the highest fixture and CurrentConfigVersion drift) —
+  the executable spec that forces "net-new version -> net-new fixture, never
+  rewrite old fixtures" for future maintainers.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* docs(install): document the config_version manifest schema version
+
+Explain config_version in the agent-node install guide and the coding-agent
+CLI reference: what it is (schema version, distinct from the node's release
+version:), that absent means v0, that v1 is current, and the bump policy
+(breaking changes only — additive fields don't bump). Add a version table and
+link Agent-Field/SWE-AF's manifest as a real example to copy from. Mirror the
+CLI-reference change into the embedded skill_data copy.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* docs(agents): note the manifest config_version contract for coding agents
+
+Tell agents authoring/reading agentfield-package.yaml about config_version:
+the single reader (packages.ParsePackageMetadata), the bump policy, and that
+the golden-fixture suite is the spec they must maintain (grow the current
+fixture for additive fields; add a net-new fixture for a net-new version).
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (315f732)
+
+## [0.1.102-rc.2] - 2026-07-07
+
+
+### Added
+
+- Feat(cli): clean, styled af install output (follow-up to #730) (#732)
+
+* refactor(cli): move ui package to internal/ui
+
+Relocate the shared ui package out of internal/cli so non-cli packages (e.g.
+internal/packages, which prints install progress) can render with the same
+styled primitives without a cli->packages layering inversion. No behaviour
+change; only the import path moves.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* feat(cli): clean, styled af install output
+
+The git install path routed user-facing text through the JSON logger, so the
+terminal showed raw {"level":"info",...\u001b[..m} lines mixed with the
+spinners. Print those directly instead, and render the completion as a bordered
+success panel (name/version + source/location). Two more fixes to the flow:
+
+- Spinner is now TTY-aware: when stdout is piped/captured it no longer emits
+  thousands of animation frames — just the final ✓/✗ line per step.
+- The uv/pyenv 'Provisioned Python' notice clears the active spinner line
+  (terminal only) so it lands on its own line instead of being appended to
+  'Installing dependencies'.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* test(cli): cover install summary rendering and TTY-aware spinner
+
+Extract the post-install source label and success panel into pure
+installSourceLabel / installSummaryPanel helpers so the styled completion is
+unit-tested (the surrounding InstallFromGit needs a real clone). Add spinner
+lifecycle tests for the non-TTY path and a clearLine test.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (2c4d446)
+
+## [0.1.102-rc.1] - 2026-07-07
+
+
+### Added
+
+- Feat(sdk-ts): pause/WAITING + async-execution dispatch (parity with Python) — closes #726 (#731)
+
+* feat(sdk-ts): add pause/WAITING + async-execution dispatch (parity with Python)
+
+Ports the control-plane pause/resume mechanism to the TypeScript SDK
+(closes the gap tracked in #726, where it existed only in the Python SDK).
+
+Three layers:
+
+1. Async-execution dispatch (on by default, `asyncExecution` config to opt out):
+   a reasoner dispatched by the control plane (carrying `X-Execution-ID`) is
+   acknowledged immediately with `202 Accepted` and run detached; its terminal
+   status is delivered out-of-band via `POST /executions/{id}/status`. This
+   frees the dispatch connection so a reasoner can wait far longer than the
+   control plane's synchronous dispatch ceiling. A watchdog (pause-aware
+   active-time budget) guarantees a terminal status even if a reasoner hangs.
+
+2. Pause primitive: `ctx.pause()` / `Agent.pause()` transition the execution to
+   WAITING via request-approval and block on a promise resolved by the always-on
+   `POST /webhooks/approval` route when the control plane delivers the decision.
+   Returns an `ApprovalResult`; times out to `{ decision: 'expired' }` rather
+   than throwing. Backed by a PauseManager + PauseClock (new src/agent/pause.ts).
+
+3. Multi-hop propagation: the remote `call()` path now submits async and polls
+   for the result, and when an awaited child enters WAITING it pushes the
+   caller's own execution to WAITING via `notifyAwaiterStatus` — so ancestors
+   don't time out while a descendant legitimately waits.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* test(sdk-ts): cover pause/WAITING, async dispatch, and multi-hop cascade
+
+- pause.test.ts: PauseClock accounting, PauseManager resolve/fallback/cancelAll,
+  ApprovalResult getters, and the /webhooks/approval route.
+- agent_async_execution.test.ts: 202 fast-ack + out-of-band succeeded/failed
+  reporting, non-object result wrapping, sync fallback (no header /
+  asyncExecution:false), and the reasoner_timeout watchdog.
+- agent_pause.test.ts: end-to-end ctx.pause() resume via webhook, expired
+  timeout, request-approval failure, and the awaiter-status multi-hop cascade,
+  all driven through a mock control plane.
+- agentfield_client_async.test.ts: executeAsync / getExecutionStatus /
+  waitForExecutionResult (incl. WAITING-window clock pause) / notifyAwaiterStatus
+  / reportExecutionResult.
+- agent_runtime_paths.test.ts: pin the existing remote-delegation test to the
+  synchronous path (asyncExecution:false); the async default is covered above.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* docs(examples): add ctx.pause() reasoner to the TS waiting-state example
+
+Adds `planWithPause`, which uses the high-level `ctx.pause()` primitive
+alongside the existing low-level ApprovalClient demo, so the example shows both
+the parity API and the manual polling approach.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* fix(sdk-ts): only run async dispatch on async-aware paths (require X-Run-ID)
+
+The functional test `test_ts_agent` invokes the reasoner via the legacy
+synchronous endpoint `POST /api/v1/reasoners/{node}.{reasoner}`, which forwards
+the agent's HTTP response verbatim and cannot handle a 202. With async dispatch
+gated only on `X-Execution-ID`, the agent 202-acked there and the caller got the
+`{status:"processing"}` marker instead of the result.
+
+Gate async dispatch on BOTH `X-Execution-ID` and `X-Run-ID`. `X-Run-ID` is set
+only by the control plane's async-aware `callAgent` path (workflow execute,
+execute/async, agent-to-agent calls, triggers) — all of which wait for the
+out-of-band `/status` result. The legacy sync invoke endpoint omits `X-Run-ID`
+for long-running agents, so the agent now runs synchronously and returns the
+result inline there, while pause/async continues to work on the execute paths.
+
+Verified live: the legacy endpoint returns the inline echo result again, and a
+pause submitted via execute/async still reaches WAITING and resumes to
+succeeded. Adds a regression test for the X-Execution-ID-without-X-Run-ID case.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (1e11e82)
+
+## [0.1.101] - 2026-07-07
+
+## [0.1.101-rc.1] - 2026-07-07
+
+
+### Added
+
+- Feat(cli): styled terminal UI — shared ui package + af list/secrets tables (#730)
+
+* feat(cli): add shared ui package for styled terminal output
+
+Introduce internal/cli/ui: a small lipgloss-based toolkit (bordered panels,
+column tables, status badges, key/value blocks) so CLI commands share one
+consistent, styled look. Palette matches the existing af init flow. lipgloss and
+bubbletea are already dependencies, so this adds no new modules.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* feat(cli): render af list and af secrets ls as styled tables
+
+Replace the ad-hoc printf output of `af list` and `af secrets ls` with bordered
+ui tables: status badges (● running / ○ stopped), aligned columns, sorted rows,
+and framed empty states. Update the two list assertions to the new header text.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (726e211)
+
+## [0.1.100] - 2026-07-07
+
+## [0.1.100-rc.1] - 2026-07-07
+
+
+### Added
+
+- Feat(cli): require_one_of env-var groups for agent nodes (#729)
+
+* feat(cli): require_one_of env-var groups for agent nodes
+
+Agent-node manifests could only mark each variable independently required or
+optional. Nodes that accept alternatives — e.g. SWE-AF works with either an
+Anthropic key OR an OpenRouter key — had no way to say "at least one of these";
+you had to over-require one provider or make both optional and fail at runtime.
+
+Add a `require_one_of` section: a list of groups, each satisfied when at least
+one of its options resolves (env / secret store / default). On `af run`, an
+unsatisfied group prompts the user to fill in one option (leaving the rest
+blank), validating and persisting it encrypted like any required secret; a
+non-interactive session errors naming the alternatives instead of failing inside
+the node. `af install` surfaces unsatisfied groups the same way it does required
+vars. Required / require_one_of / optional compose in one manifest.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* docs: document require_one_of env-var groups
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* test(cli): cover require_one_of install warnings and group error paths
+
+Add unit coverage for the require_one_of paths flagged by the patch-coverage
+gate: the install-time group warnings in both checkEnvironmentVariables copies,
+envGroupSatisfied, and the group store-read / persist / combined-missing error
+branches. Also propagate store-read errors from resolveGroupFromSources so a
+group option's store failure aborts the resolve, consistent with required and
+optional variables.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (468caf0)
+
+## [0.1.99] - 2026-07-07
+
 ## [0.1.99-rc.1] - 2026-07-07
 
 

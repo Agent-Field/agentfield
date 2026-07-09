@@ -677,7 +677,26 @@ class AgentServer:
             env_port = os.getenv("PORT")
             if env_port and env_port.isdigit():
                 suggested_port = int(env_port)
-                if AgentUtils.is_port_available(suggested_port):
+                if os.getenv("AGENTFIELD_STRICT_PORT") == "1":
+                    # The AgentField runner assigned this exact port and polls it
+                    # for readiness. Bind it authoritatively — never silently move
+                    # to another port, or the runner would poll a port nothing is
+                    # listening on and kill us for "not becoming ready". If it is
+                    # genuinely unavailable, exit fast with a clear error so the
+                    # runner surfaces a real failure instead of a phantom timeout.
+                    if not AgentUtils.is_port_available(suggested_port):
+                        log_error(
+                            f"AGENTFIELD_STRICT_PORT set but the assigned port "
+                            f"{suggested_port} is unavailable; exiting so the "
+                            f"control plane can reallocate and retry"
+                        )
+                        raise RuntimeError(
+                            f"assigned port {suggested_port} is unavailable"
+                        )
+                    port = suggested_port
+                    if self.agent.dev_mode:
+                        log_debug(f"Using assigned port from AgentField CLI: {port}")
+                elif AgentUtils.is_port_available(suggested_port):
                     port = suggested_port
                     if self.agent.dev_mode:
                         log_debug(f"Using port from AgentField CLI: {port}")

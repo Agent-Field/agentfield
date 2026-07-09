@@ -6,13 +6,49 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/fatih/color"
+	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
+
+// CurrentConfigVersion is the highest agentfield-package.yaml schema version this
+// control plane knows how to read. A manifest may declare `config_version` up to
+// this value; anything higher was authored for a newer AgentField and is refused
+// rather than mis-parsed.
+//
+// When to bump this (and stamp manifests with the new version): ONLY when a change
+// is *breaking* — a field is renamed or removed, or its shape/meaning changes such
+// that an old reader would mis-handle a new manifest (or a new reader would
+// mis-handle an old one). Purely *additive* changes (new optional keys) do NOT
+// require a bump: yaml.Unmarshal ignores unknown keys, so old readers skip new
+// fields and new readers fall back to defaults. Keep this list of versions and
+// their breaking change in docs/installing-agent-nodes.md.
+const CurrentConfigVersion = 1
+
+// parseConfigVersion normalizes the manifest's `config_version` string to an int.
+//
+//   - absent / empty  -> 0  (v0: pre-versioning legacy manifests)
+//   - "v1", "V1", "1" -> 1  (the "v" prefix is optional and case-insensitive)
+//
+// Any other form is an error, so a typo fails loudly instead of silently reading
+// as v0.
+func parseConfigVersion(raw string) (int, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return 0, nil
+	}
+	s = strings.TrimPrefix(strings.ToLower(s), "v")
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("invalid config_version %q (expected a form like \"v1\")", raw)
+	}
+	return n, nil
+}
 
 // UserEnvironmentVar represents a user-configurable environment variable
 type UserEnvironmentVar struct {
@@ -34,14 +70,41 @@ func (v UserEnvironmentVar) SecretScope(nodeName string) string {
 	return globalScope
 }
 
-// UserEnvironmentConfig represents user-configurable environment variables
+// RequireOneOfGroup is a set of alternative variables where at least one must be
+// provided (e.g. an Anthropic key OR an OpenRouter key). The group is satisfied
+// as soon as any one of its Options resolves to a value.
+type RequireOneOfGroup struct {
+	ID          string               `yaml:"id"`
+	Description string               `yaml:"description"`
+	Options     []UserEnvironmentVar `yaml:"options"`
+}
+
+// OptionNames returns the option variable names in declaration order.
+func (g RequireOneOfGroup) OptionNames() []string {
+	names := make([]string, len(g.Options))
+	for i, o := range g.Options {
+		names[i] = o.Name
+	}
+	return names
+}
+
+// UserEnvironmentConfig represents user-configurable environment variables.
+// Required vars must all be set; each RequireOneOf group needs at least one of
+// its options; Optional vars fall back to their default.
 type UserEnvironmentConfig struct {
-	Required []UserEnvironmentVar `yaml:"required"`
-	Optional []UserEnvironmentVar `yaml:"optional"`
+	Required     []UserEnvironmentVar `yaml:"required"`
+	RequireOneOf []RequireOneOfGroup  `yaml:"require_one_of"`
+	Optional     []UserEnvironmentVar `yaml:"optional"`
 }
 
 // PackageMetadata represents the structure of agentfield-package.yaml
 type PackageMetadata struct {
+	// ConfigVersion is the *schema* version of this manifest (e.g. "v1"), NOT the
+	// package's own release version (that is the Version field below). It lets the
+	// reader stay compatible as the manifest format evolves. Absent means "v0" —
+	// the pre-versioning format — which is read leniently. See CurrentConfigVersion
+	// for the bump policy (breaking changes only).
+	ConfigVersion   string                 `yaml:"config_version"`
 	Name            string                 `yaml:"name"`
 	Version         string                 `yaml:"version"`
 	Description     string                 `yaml:"description"`
@@ -130,8 +193,23 @@ type PackageInstaller struct {
 type Spinner struct {
 	message string
 	active  bool
+	tty     bool
 	mu      sync.Mutex
 	done    chan bool
+}
+
+// stdoutIsTTY reports whether stdout is an interactive terminal.
+func stdoutIsTTY() bool {
+	return term.IsTerminal(int(os.Stdout.Fd()))
+}
+
+// clearLine returns the escape sequence to clear the current terminal line, or
+// "" when stdout is not a terminal (so piped/logged output stays clean).
+func clearLine() string {
+	if stdoutIsTTY() {
+		return "\r\033[K"
+	}
+	return ""
 }
 
 // Professional CLI status symbols
@@ -162,11 +240,19 @@ func (pi *PackageInstaller) newSpinner(message string) *Spinner {
 	}
 }
 
-// Start begins the spinner animation
+// Start begins the spinner animation. When stdout is not a terminal (piped or
+// captured to a log) it animates nothing — the completing Success/Error line is
+// enough — so output stays clean instead of emitting thousands of frames.
 func (s *Spinner) Start() {
+	tty := stdoutIsTTY()
 	s.mu.Lock()
+	s.tty = tty
 	s.active = true
 	s.mu.Unlock()
+
+	if !tty {
+		return
+	}
 
 	go func() {
 		i := 0
@@ -187,13 +273,16 @@ func (s *Spinner) Start() {
 	}()
 }
 
-// Stop stops the spinner and clears the line
+// Stop stops the spinner and clears its line (terminal only).
 func (s *Spinner) Stop() {
 	s.mu.Lock()
+	tty := s.tty
 	s.active = false
 	s.mu.Unlock()
-	s.done <- true
-	fmt.Print("\r\033[K") // Clear the line
+	if tty {
+		s.done <- true
+		fmt.Print("\r\033[K") // Clear the line
+	}
 }
 
 // Success stops the spinner and shows a success message
@@ -271,14 +360,26 @@ func (pi *PackageInstaller) InstallPackage(sourcePath string, force bool) error 
 }
 
 // checkEnvironmentVariables checks for required environment variables and provides setup guidance
+// envGroupSatisfied reports whether at least one option of a require_one_of
+// group is present in the process environment.
+func envGroupSatisfied(g RequireOneOfGroup) bool {
+	for _, opt := range g.Options {
+		if os.Getenv(opt.Name) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func (pi *PackageInstaller) checkEnvironmentVariables(metadata *PackageMetadata) {
-	if len(metadata.UserEnvironment.Required) == 0 && len(metadata.UserEnvironment.Optional) == 0 {
+	env := metadata.UserEnvironment
+	if len(env.Required) == 0 && len(env.RequireOneOf) == 0 && len(env.Optional) == 0 {
 		return // No user environment variables configured
 	}
 
 	// Check required environment variables
 	missingRequired := []UserEnvironmentVar{}
-	for _, envVar := range metadata.UserEnvironment.Required {
+	for _, envVar := range env.Required {
 		if os.Getenv(envVar.Name) == "" {
 			missingRequired = append(missingRequired, envVar)
 		}
@@ -288,6 +389,21 @@ func (pi *PackageInstaller) checkEnvironmentVariables(metadata *PackageMetadata)
 		fmt.Printf("\n%s %s\n", Yellow("⚠"), Bold("Missing required environment variables:"))
 		for _, envVar := range missingRequired {
 			fmt.Printf("  %s\n", Cyan(fmt.Sprintf("af config %s --set %s=your-value-here", metadata.Name, envVar.Name)))
+		}
+	}
+
+	// Check require_one_of groups (at least one option must be set).
+	for _, g := range env.RequireOneOf {
+		if envGroupSatisfied(g) {
+			continue
+		}
+		label := g.Description
+		if label == "" {
+			label = "one of these"
+		}
+		fmt.Printf("\n%s %s (%s):\n", Yellow("⚠"), Bold("Set at least one of"), label)
+		for _, opt := range g.Options {
+			fmt.Printf("  %s\n", Cyan(fmt.Sprintf("af config %s --set %s=your-value-here", metadata.Name, opt.Name)))
 		}
 	}
 
@@ -477,6 +593,15 @@ func NodeDepName(ref string) string {
 	return ""
 }
 
+// ConfigVersionNumber returns the manifest's normalized schema version as an int
+// (absent/"v0" -> 0, "v1" -> 1). It ignores malformed values, returning 0; callers
+// that need to surface a parse error should go through ParsePackageMetadata, which
+// rejects both malformed and too-new versions.
+func (m *PackageMetadata) ConfigVersionNumber() int {
+	n, _ := parseConfigVersion(m.ConfigVersion)
+	return n
+}
+
 // HealthcheckPath returns the readiness path, defaulting to "/health".
 func (m *PackageMetadata) HealthcheckPath() string {
 	if p := strings.TrimSpace(m.Entrypoint.Healthcheck); p != "" {
@@ -497,6 +622,26 @@ func ParsePackageMetadata(dir string) (*PackageMetadata, error) {
 	var metadata PackageMetadata
 	if err := yaml.Unmarshal(data, &metadata); err != nil {
 		return nil, fmt.Errorf("failed to parse agentfield-package.yaml: %w", err)
+	}
+
+	// Version-dependent read: decide how to interpret the manifest from the schema
+	// version the author declared, so we don't mis-parse a format we don't know.
+	ver, err := parseConfigVersion(metadata.ConfigVersion)
+	if err != nil {
+		return nil, fmt.Errorf("agentfield-package.yaml: %w", err)
+	}
+	if ver > CurrentConfigVersion {
+		return nil, fmt.Errorf(
+			"agentfield-package.yaml declares config_version %q, but this AgentField reads up to v%d — upgrade AgentField to install this node",
+			metadata.ConfigVersion, CurrentConfigVersion)
+	}
+	// v0 (legacy, unversioned) and v1 currently share one decoder because v1 only
+	// *introduces* the version marker without changing any field. A future breaking
+	// version adds its own case here (e.g. a migrateFromV1 step) — the switch is the
+	// single place that fans out on version.
+	switch ver {
+	case 0, 1:
+		// nothing version-specific to do yet; metadata is already decoded above.
 	}
 
 	// Validate required fields

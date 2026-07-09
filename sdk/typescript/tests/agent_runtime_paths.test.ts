@@ -439,7 +439,10 @@ describe('Agent runtime paths', () => {
   });
 
   it('call() delegates remote targets and note() emits only when execution metadata exists', async () => {
-    const agent = createAgent({ nodeId: 'agent-1', agentFieldUrl: 'http://control-plane.local/api/v1' });
+    // asyncExecution:false pins the classic synchronous execute() delegation
+    // path. The async default (executeAsync + poll) is covered separately in
+    // agent_async_execution.test.ts.
+    const agent = createAgent({ nodeId: 'agent-1', agentFieldUrl: 'http://control-plane.local/api/v1', asyncExecution: false });
     const execute = vi.spyOn(AgentFieldClient.prototype, 'execute').mockResolvedValue({ remote: true });
     const sendNote = vi.spyOn(AgentFieldClient.prototype, 'sendNote').mockImplementation(() => {});
 

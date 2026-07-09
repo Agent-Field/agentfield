@@ -41,11 +41,11 @@ export class CancelRegistry {
    * so callers always get a usable signal even outside the control-plane
    * dispatch path (e.g. local manual invocations).
    */
-  register(executionId: string | undefined): {
+  register(executionId: string | undefined, existing?: AbortController): {
     controller: AbortController;
     release: () => void;
   } {
-    const controller = new AbortController();
+    const controller = existing ?? new AbortController();
     if (!executionId) {
       return { controller, release: () => {} };
     }

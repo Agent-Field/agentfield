@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/packages"
+	"github.com/Agent-Field/agentfield/control-plane/internal/ui"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -92,13 +93,19 @@ func newSecretsListCommand() *cobra.Command {
 				return err
 			}
 			if len(refs) == 0 {
-				PrintInfo("No secrets stored yet. Add one with: af secrets set KEY")
+				fmt.Println(ui.Panel("No secrets stored",
+					ui.Muted("Add one with:")+"\n  af secrets set KEY"))
 				return nil
 			}
-			fmt.Printf("%-30s %s\n", "KEY", "SCOPE")
+			rows := make([][]string, 0, len(refs))
 			for _, ref := range refs {
-				fmt.Printf("%-30s %s\n", ref.Key, ref.Scope)
+				rows = append(rows, []string{ref.Key, ref.Scope, ui.Muted("••••••••")})
 			}
+			fmt.Println(ui.Table(
+				fmt.Sprintf("Stored secrets (%d)", len(rows)),
+				[]string{"KEY", "SCOPE", "VALUE"},
+				rows,
+			))
 			return nil
 		},
 	}

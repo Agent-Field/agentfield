@@ -86,6 +86,41 @@ builds:
       - embedded
       - sqlite_fts5
 
+  # AgentField desktop tray (menu-bar companion). macOS only — it carries the
+  # systray/Cocoa (CGO) dependency so the control-plane binary never has to.
+  # A separate, small binary; the installer fetches it only on macOS.
+  - id: agentfield-tray-darwin-amd64
+    dir: control-plane
+    main: ./cmd/af-tray
+    binary: agentfield-tray-darwin-amd64
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - darwin
+    goarch:
+      - amd64
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .ShortCommit }}
+      - -X main.date={{ .Date }}
+
+  - id: agentfield-tray-darwin-arm64
+    dir: control-plane
+    main: ./cmd/af-tray
+    binary: agentfield-tray-darwin-arm64
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - darwin
+    goarch:
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .ShortCommit }}
+      - -X main.date={{ .Date }}
+
   # Windows build disabled - focus on Linux and macOS for now
   # - id: agentfield-windows-amd64
   #   dir: control-plane
@@ -116,8 +151,12 @@ archives:
       - agentfield-linux-arm64
       - agentfield-darwin-amd64
       - agentfield-darwin-arm64
+      - agentfield-tray-darwin-amd64
+      - agentfield-tray-darwin-arm64
     format: binary
-    name_template: "agentfield-{{ .Os }}-{{ .Arch }}"
+    # Each build's `binary:` is already the exact asset name we want
+    # (agentfield-<os>-<arch> and agentfield-tray-darwin-<arch>).
+    name_template: "{{ .Binary }}"
 
 checksum:
   name_template: "checksums.txt"

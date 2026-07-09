@@ -9,3 +9,4 @@
 ## Learned Workspace Facts
 
 - Monorepo: Go control plane in `control-plane/`, SDKs in `sdk/`, embedded admin UI in `control-plane/web/client/`.
+- Agent-node manifests (`agentfield-package.yaml`) carry a `config_version` (schema version, e.g. `v1`; absent = `v0`) that is separate from the node's own `version:`. Bump `config_version` only for breaking format changes, never for additive fields. The single reader is `packages.ParsePackageMetadata` (`control-plane/internal/packages/installer.go`); the authoring contract lives in `docs/installing-agent-nodes.md`.

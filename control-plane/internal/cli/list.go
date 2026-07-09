@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/packages"
+	"github.com/Agent-Field/agentfield/control-plane/internal/ui"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -48,35 +50,38 @@ func runListCommand(cmd *cobra.Command, args []string) {
 	}
 
 	if len(registry.Installed) == 0 {
-		fmt.Println("📦 No agent node packages installed")
-		fmt.Println("💡 Install packages with: agentfield install <package-path>")
+		fmt.Println(ui.Panel("No agent nodes installed",
+			ui.Muted("Install one with:")+"\n  af install <path | git-url | af://registry/<name>>"))
 		return
 	}
 
-	fmt.Printf("📦 Installed Agent Node Packages (%d total):\n\n", len(registry.Installed))
+	names := make([]string, 0, len(registry.Installed))
+	for name := range registry.Installed {
+		names = append(names, name)
+	}
+	sort.Strings(names)
 
-	for name, pkg := range registry.Installed {
-		status := pkg.Status
-		statusIcon := "⏹️"
-		if status == "running" {
-			statusIcon = "🟢"
-		} else if status == "error" {
-			statusIcon = "🔴"
+	rows := make([][]string, 0, len(names))
+	for _, name := range names {
+		pkg := registry.Installed[name]
+		port := "—"
+		if pkg.Status == "running" && pkg.Runtime.Port != nil {
+			port = fmt.Sprintf("%d", *pkg.Runtime.Port)
 		}
-
-		fmt.Printf("%s %s (v%s)\n", statusIcon, name, pkg.Version)
-		fmt.Printf("   %s\n", pkg.Description)
-
-		if status == "running" && pkg.Runtime.Port != nil {
-			fmt.Printf("   🌐 Running on port %d (PID: %d)\n", *pkg.Runtime.Port, *pkg.Runtime.PID)
-		}
-
-		fmt.Printf("   📁 %s\n", pkg.Path)
-		fmt.Println()
+		rows = append(rows, []string{
+			name,
+			"v" + pkg.Version,
+			ui.StatusBadge(pkg.Status),
+			port,
+			pkg.Description,
+		})
 	}
 
-	fmt.Println("💡 Commands:")
-	fmt.Println("   af run <name>     - Start an agent node")
-	fmt.Println("   af stop <name>    - Stop a running agent node")
-	fmt.Println("   af logs <name>    - View agent node logs")
+	fmt.Println(ui.Table(
+		fmt.Sprintf("Installed agent nodes (%d)", len(rows)),
+		[]string{"NODE", "VERSION", "STATUS", "PORT", "DESCRIPTION"},
+		rows,
+	))
+	fmt.Println()
+	fmt.Println(ui.Muted("af run <name>  ·  af stop <name>  ·  af logs <name>"))
 }

@@ -34,8 +34,9 @@ and a way to start (either `entrypoint.start` or a top-level `main.py`) are
 required; everything else is optional.
 
 ```yaml
+config_version: v1            # manifest *schema* version (see below). Omit = v0 (legacy).
 name: pr-af
-version: 0.1.0
+version: 0.1.0                # the node's own release version — unrelated to config_version
 description: Opens draft PRs from a task description
 author: Agent-Field
 
@@ -58,16 +59,75 @@ dependencies:
 # Variables the node needs. Required ones are prompted for on first run and
 # remembered (encrypted). type: secret hides the input and stores it encrypted.
 user_environment:
-  required:
-    - name: OPENROUTER_API_KEY
-      description: LLM provider key
+  required:                     # every one of these must be set
+    - name: GH_TOKEN
+      description: GitHub token
       type: secret
       scope: global           # global (default) = shared across nodes; node = this node only
+  require_one_of:               # each group needs AT LEAST ONE option set
+    - id: llm_provider
+      description: an LLM provider key
+      options:
+        - name: ANTHROPIC_API_KEY
+          description: Anthropic key (Claude)
+          type: secret
+        - name: OPENROUTER_API_KEY
+          description: OpenRouter key (DeepSeek/Qwen/Llama/…)
+          type: secret
   optional:
     - name: PR_AF_MODEL
       description: Override the default model
       default: openrouter/moonshotai/kimi-k2
 ```
+
+A published, real-world manifest to copy from:
+[Agent-Field/SWE-AF `agentfield-package.yaml`](https://github.com/Agent-Field/SWE-AF/blob/main/agentfield-package.yaml).
+
+### Manifest schema version (`config_version`)
+
+`config_version` declares which version of the **manifest format** your file was
+written against, so the control plane knows how to read it as the format evolves —
+you're never locked into whatever shape shipped the day you authored the file.
+
+- It is **not** the same as `version`. `version` is your node's own release
+  (semver of the agent); `config_version` is the schema version of this file.
+- **Omitting it means `v0`** — the original, pre-versioning format. Existing
+  manifests keep working untouched.
+- The current version is **`v1`**. New manifests should set `config_version: v1`.
+- The `v` prefix is optional and case-insensitive (`v1`, `V1`, and `1` are equal).
+  A value the control plane doesn't recognize (a typo, or a version **newer** than
+  your `af` binary understands) fails the install with a clear message rather than
+  being silently mis-read — upgrade `af` to install a node authored for a newer
+  schema.
+
+**When does `config_version` get bumped?** Only for **breaking** changes to the
+format — a field renamed or removed, or its shape/meaning changed such that an old
+reader would mis-handle a new file (or vice-versa). **Adding** a new optional field
+is *not* breaking and does **not** bump the version: unknown keys are ignored by
+older readers, and newer readers fall back to defaults. So most format growth needs
+no bump at all; you only stamp a new `config_version` when the structure of an
+existing config actually changes.
+
+| `config_version` | Reader behavior                                             |
+| ---------------- | ---------------------------------------------------------- |
+| absent / `v0`    | Legacy format, read leniently. Every field below is optional except the manifest basics. |
+| `v1`             | Same fields as v0, now explicitly versioned. Current default for new manifests. |
+
+### `require_one_of` — "at least one of these"
+
+Some nodes accept alternatives — e.g. either an Anthropic key **or** an
+OpenRouter key. List them under `require_one_of` as a group of `options`. A group
+is satisfied as soon as **one** option resolves (from the process environment,
+the secret store, or a manifest default).
+
+On `af run`, if no option of a group is set, you're asked to fill in one and
+leave the rest blank — the value you enter is validated and stored encrypted,
+exactly like a required secret. In a non-interactive session an unsatisfied group
+is a clean error listing the alternatives (`at least one of [ANTHROPIC_API_KEY |
+OPENROUTER_API_KEY] is required`) instead of a runtime failure inside the node.
+
+`required` (all must be set), `require_one_of` (at least one per group), and
+`optional` (falls back to `default`) can all be used together in one manifest.
 
 ### Python dependencies
 
