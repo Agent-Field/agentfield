@@ -517,6 +517,11 @@ type Agent struct {
 	cancelMu    sync.Mutex
 	cancelFuncs map[string]context.CancelFunc
 
+	// pauseManager tracks pending Agent.Pause() calls, keyed by
+	// approval_request_id, and resolves them when the control plane POSTs an
+	// approval resolution to /webhooks/approval.
+	pauseManager *PauseManager
+
 	startTime time.Time
 }
 
@@ -576,6 +581,7 @@ func New(cfg Config) (*Agent, error) {
 		logger:                      cfg.Logger,
 		realtimeValidationFunctions: make(map[string]struct{}),
 		cancelFuncs:                 make(map[string]context.CancelFunc),
+		pauseManager:                NewPauseManager(),
 		startTime:                   time.Now(),
 	}
 
@@ -821,6 +827,7 @@ func (a *Agent) handler() http.Handler {
 		mux.HandleFunc("/reasoners/", a.handleReasoner)
 		mux.HandleFunc("/skills/", a.handleSkill)
 		mux.HandleFunc("/_internal/executions/", a.handleInternalCancel)
+		mux.HandleFunc("/webhooks/approval", a.handleApprovalWebhook)
 
 		var handler http.Handler = mux
 
@@ -852,6 +859,15 @@ func (a *Agent) originAuthMiddleware(next http.Handler, token string) http.Handl
 			next.ServeHTTP(w, r)
 			return
 		}
+		// /webhooks/approval is a control-plane→worker approval-resolution
+		// callback delivered unauthenticated (see notifyApprovalCallback in the
+		// control plane), analogous to the cancel notification. It only
+		// resolves a pause the agent itself initiated, so treat it as an open
+		// infrastructure route rather than a caller-initiated invocation.
+		if path == "/webhooks/approval" {
+			next.ServeHTTP(w, r)
+			return
+		}
 
 		expected := "Bearer " + token
 		if r.Header.Get("Authorization") != expected {
@@ -880,6 +896,14 @@ func (a *Agent) localVerificationMiddleware(next http.Handler) http.Handler {
 		// notification, not a DID-signed user-initiated call. Bearer-token
 		// origin auth still applies via originAuthMiddleware.
 		if strings.HasPrefix(path, "/_internal/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// /webhooks/approval is a control-plane→worker approval-resolution
+		// callback, delivered unauthenticated by the control plane. It carries
+		// no DID signature; skip local verification (same rationale as the
+		// cancel notification above).
+		if path == "/webhooks/approval" {
 			next.ServeHTTP(w, r)
 			return
 		}
