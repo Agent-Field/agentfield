@@ -720,7 +720,7 @@ func TestCall(t *testing.T) {
 			assert.Equal(t, map[string]any{"value": float64(42)}, reqBody["input"])
 
 			w.WriteHeader(http.StatusAccepted)
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"execution_id": "exec-1",
 				"run_id":       "run-1",
 				"status":       "queued",
@@ -733,14 +733,14 @@ func TestCall(t *testing.T) {
 
 			// First poll: still running; second poll: terminal result.
 			if polls.Add(1) == 1 {
-				json.NewEncoder(w).Encode(map[string]any{
+				_ = json.NewEncoder(w).Encode(map[string]any{
 					"execution_id": "exec-1",
 					"run_id":       "run-1",
 					"status":       "running",
 				})
 				return
 			}
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"execution_id": "exec-1",
 				"run_id":       "run-1",
 				"status":       "succeeded",
@@ -792,7 +792,7 @@ func TestCall_OutlivesCallTimeout(t *testing.T) {
 		switch {
 		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/v1/execute/async/"):
 			w.WriteHeader(http.StatusAccepted)
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"execution_id": "exec-slow",
 				"run_id":       "run-slow",
 				"status":       "queued",
@@ -801,10 +801,10 @@ func TestCall_OutlivesCallTimeout(t *testing.T) {
 			// Child stays 'running' for 3x CallTimeout, then succeeds. Every
 			// individual poll response is fast — only the CHILD is slow.
 			if time.Since(start) < 3*callTimeout {
-				json.NewEncoder(w).Encode(map[string]any{"status": "running"})
+				_ = json.NewEncoder(w).Encode(map[string]any{"status": "running"})
 				return
 			}
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"status": "succeeded",
 				"result": map[string]any{"took": "longer than CallTimeout"},
 			})
@@ -840,14 +840,14 @@ func TestCall_CtxCancelAbortsWait(t *testing.T) {
 		switch {
 		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/v1/execute/async/"):
 			w.WriteHeader(http.StatusAccepted)
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"execution_id": "exec-hang",
 				"run_id":       "run-hang",
 				"status":       "queued",
 			})
 		case r.Method == http.MethodGet:
 			// Child never finishes.
-			json.NewEncoder(w).Encode(map[string]any{"status": "running"})
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "running"})
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -894,7 +894,7 @@ func TestCall_ErrorHandling(t *testing.T) {
 			name: "submission missing execution id",
 			serverResponse: func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusAccepted)
-				json.NewEncoder(w).Encode(map[string]any{"status": "queued"})
+				_ = json.NewEncoder(w).Encode(map[string]any{"status": "queued"})
 			},
 			wantErrSubstr: "missing identifiers",
 		},
@@ -903,14 +903,14 @@ func TestCall_ErrorHandling(t *testing.T) {
 			serverResponse: func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == http.MethodPost {
 					w.WriteHeader(http.StatusAccepted)
-					json.NewEncoder(w).Encode(map[string]any{
+					_ = json.NewEncoder(w).Encode(map[string]any{
 						"execution_id": "exec-f",
 						"run_id":       "run-f",
 						"status":       "queued",
 					})
 					return
 				}
-				json.NewEncoder(w).Encode(map[string]any{
+				_ = json.NewEncoder(w).Encode(map[string]any{
 					"status":        "failed",
 					"error_message": "execution failed",
 				})
@@ -922,7 +922,7 @@ func TestCall_ErrorHandling(t *testing.T) {
 			serverResponse: func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == http.MethodPost {
 					w.WriteHeader(http.StatusAccepted)
-					json.NewEncoder(w).Encode(map[string]any{
+					_ = json.NewEncoder(w).Encode(map[string]any{
 						"execution_id": "exec-e",
 						"run_id":       "run-e",
 						"status":       "queued",
@@ -932,7 +932,7 @@ func TestCall_ErrorHandling(t *testing.T) {
 				// The status endpoint reports failures in "error"
 				// (ExecutionStatusResponse), not "error_message" — Python
 				// coalesces it (client.py:1000-1002) and so must we.
-				json.NewEncoder(w).Encode(map[string]any{
+				_ = json.NewEncoder(w).Encode(map[string]any{
 					"status": "failed",
 					"error":  "boom from error field",
 				})
@@ -944,14 +944,14 @@ func TestCall_ErrorHandling(t *testing.T) {
 			serverResponse: func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == http.MethodPost {
 					w.WriteHeader(http.StatusAccepted)
-					json.NewEncoder(w).Encode(map[string]any{
+					_ = json.NewEncoder(w).Encode(map[string]any{
 						"execution_id": "exec-c",
 						"run_id":       "run-c",
 						"status":       "queued",
 					})
 					return
 				}
-				json.NewEncoder(w).Encode(map[string]any{"status": "cancelled"})
+				_ = json.NewEncoder(w).Encode(map[string]any{"status": "cancelled"})
 			},
 			wantErrSubstr: "execute status cancelled",
 		},
