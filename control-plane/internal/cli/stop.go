@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/packages"
@@ -130,8 +129,8 @@ func (as *AgentNodeStopper) StopAgentNode(agentNodeName string) error {
 	if !httpShutdownSuccess {
 		fmt.Printf("🔄 Falling back to process signal shutdown for agent %s\n", agentNodeName)
 
-		// Send SIGTERM for graceful shutdown
-		if err := process.Signal(os.Interrupt); err != nil {
+		// Ask for graceful shutdown (SIGINT on Unix, taskkill on Windows)
+		if err := signalGracefulStop(process); err != nil {
 			// If graceful shutdown fails, force kill
 			if err := process.Kill(); err != nil {
 				return fmt.Errorf("failed to kill process: %w", err)
@@ -141,7 +140,7 @@ func (as *AgentNodeStopper) StopAgentNode(agentNodeName string) error {
 			time.Sleep(3 * time.Second)
 
 			// Check if process is still running
-			if err := process.Signal(syscall.Signal(0)); err == nil {
+			if isProcessAlive(process) {
 				// Process still running, force kill
 				fmt.Printf("⚠️ Process still running, force killing agent %s\n", agentNodeName)
 				if err := process.Kill(); err != nil {
