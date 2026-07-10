@@ -1,30 +1,78 @@
 package cli
 
 import (
+	"reflect"
 	"runtime"
-	"strings"
 	"testing"
 )
 
-// Contract: on Unix, `af logs` shells out to tail(1) with the requested line
-// count, adding -f when following. (The Windows branch builds a PowerShell
-// Get-Content command instead; it is compile-verified via the windows
-// cross-build and exercised only on a real Windows machine.)
-func TestTailCommandUnix(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("unix tail arguments are not used on windows")
+// Contract: `af logs` tails via tail(1) on Unix and via PowerShell
+// Get-Content on Windows (which has no tail), preserving the requested line
+// count, the follow flag, and safe quoting of the log path. The helper is
+// parameterized by GOOS so both platform branches are exercised regardless of
+// the host running the tests.
+func TestTailCommandArgs(t *testing.T) {
+	cases := []struct {
+		name     string
+		goos     string
+		file     string
+		n        int
+		follow   bool
+		wantProg string
+		wantArgs []string
+	}{
+		{
+			name: "unix no follow", goos: "linux",
+			file: "/var/log/agent.log", n: 7,
+			wantProg: "tail",
+			wantArgs: []string{"-n", "7", "/var/log/agent.log"},
+		},
+		{
+			name: "unix follow", goos: "darwin",
+			file: "/var/log/agent.log", n: 10, follow: true,
+			wantProg: "tail",
+			wantArgs: []string{"-n", "10", "-f", "/var/log/agent.log"},
+		},
+		{
+			name: "windows no follow", goos: "windows",
+			file: `C:\logs\agent.log`, n: 7,
+			wantProg: "powershell",
+			wantArgs: []string{
+				"-NoProfile", "-Command",
+				`Get-Content -LiteralPath 'C:\logs\agent.log' -Tail 7`,
+			},
+		},
+		{
+			name: "windows follow with quote escaping", goos: "windows",
+			file: `C:\it's here\agent.log`, n: 10, follow: true,
+			wantProg: "powershell",
+			wantArgs: []string{
+				"-NoProfile", "-Command",
+				`Get-Content -LiteralPath 'C:\it''s here\agent.log' -Tail 10 -Wait`,
+			},
+		},
 	}
-
-	cmd := tailCommand("/var/log/agent.log", 7, false)
-	want := []string{"tail", "-n", "7", "/var/log/agent.log"}
-	if got := strings.Join(cmd.Args, " "); got != strings.Join(want, " ") {
-		t.Fatalf("tailCommand(no follow) args = %q; want %q", got, strings.Join(want, " "))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			prog, args := tailCommandArgs(tc.goos, tc.file, tc.n, tc.follow)
+			if prog != tc.wantProg {
+				t.Fatalf("program = %q; want %q", prog, tc.wantProg)
+			}
+			if !reflect.DeepEqual(args, tc.wantArgs) {
+				t.Fatalf("args = %q; want %q", args, tc.wantArgs)
+			}
+		})
 	}
+}
 
-	follow := tailCommand("/var/log/agent.log", 10, true)
-	wantFollow := []string{"tail", "-n", "10", "-f", "/var/log/agent.log"}
-	if got := strings.Join(follow.Args, " "); got != strings.Join(wantFollow, " ") {
-		t.Fatalf("tailCommand(follow) args = %q; want %q", got, strings.Join(wantFollow, " "))
+// Contract: tailCommand builds an exec.Cmd from the host platform's
+// tailCommandArgs — the first Args entry is the program itself.
+func TestTailCommandUsesHostGOOS(t *testing.T) {
+	cmd := tailCommand("/var/log/agent.log", 5, false)
+	prog, args := tailCommandArgs(runtime.GOOS, "/var/log/agent.log", 5, false)
+	want := append([]string{prog}, args...)
+	if !reflect.DeepEqual(cmd.Args, want) {
+		t.Fatalf("cmd.Args = %q; want %q", cmd.Args, want)
 	}
 }
 

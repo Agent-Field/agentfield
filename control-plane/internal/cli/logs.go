@@ -121,21 +121,29 @@ func (lv *LogViewer) followLogs(logFile string) error {
 }
 
 // tailCommand builds the platform command that prints the last n lines of a
-// file, optionally following it. Unix uses tail(1); Windows has no tail, so
-// PowerShell's Get-Content stands in (compile-verified only, not yet tested on
-// a real Windows machine).
+// file, optionally following it.
 func tailCommand(logFile string, n int, follow bool) *exec.Cmd {
-	if runtime.GOOS == "windows" {
+	program, args := tailCommandArgs(runtime.GOOS, logFile, n, follow)
+	return exec.Command(program, args...)
+}
+
+// tailCommandArgs returns the program and arguments that tail a log file on
+// the given GOOS. Unix uses tail(1); Windows has no tail, so PowerShell's
+// Get-Content stands in (compile-verified only, not yet tested on a real
+// Windows machine). Pure so both platform branches are unit-testable anywhere.
+func tailCommandArgs(goos, logFile string, n int, follow bool) (string, []string) {
+	if goos == "windows" {
 		script := fmt.Sprintf("Get-Content -LiteralPath %s -Tail %d", psSingleQuote(logFile), n)
 		if follow {
 			script += " -Wait"
 		}
-		return exec.Command("powershell", "-NoProfile", "-Command", script)
+		return "powershell", []string{"-NoProfile", "-Command", script}
 	}
+	args := []string{"-n", fmt.Sprintf("%d", n)}
 	if follow {
-		return exec.Command("tail", "-n", fmt.Sprintf("%d", n), "-f", logFile)
+		args = append(args, "-f")
 	}
-	return exec.Command("tail", "-n", fmt.Sprintf("%d", n), logFile)
+	return "tail", append(args, logFile)
 }
 
 // psSingleQuote quotes s as a PowerShell single-quoted string literal, where

@@ -243,7 +243,13 @@ func defaultGoBinName(buildPkg string) string {
 // conventional executable extension there). A no-op on other platforms and on
 // paths that already end in .exe.
 func withExeSuffix(path string) string {
-	if runtime.GOOS == "windows" && !strings.EqualFold(filepath.Ext(path), ".exe") {
+	return withExeSuffixFor(runtime.GOOS, path)
+}
+
+// withExeSuffixFor is withExeSuffix for an explicit GOOS, pure so the Windows
+// branch is unit-testable on any platform.
+func withExeSuffixFor(goos, path string) string {
+	if goos == "windows" && !strings.EqualFold(filepath.Ext(path), ".exe") {
 		return path + ".exe"
 	}
 	return path
@@ -378,6 +384,12 @@ func applyGoReplaceOverrides(goCmd, packagePath string) error {
 // already-absolute path is returned unchanged. It is the Go counterpart to the
 // venv-python substitution the runner does for Python nodes.
 func GoBinaryProgram(packageDir, program string) string {
+	return goBinaryProgramFor(runtime.GOOS, packageDir, program)
+}
+
+// goBinaryProgramFor is GoBinaryProgram for an explicit GOOS, pure so the
+// Windows .exe fallback is unit-testable on any platform.
+func goBinaryProgramFor(goos, packageDir, program string) string {
 	if program == "" || program == "go" || filepath.IsAbs(program) {
 		return program
 	}
@@ -387,7 +399,7 @@ func GoBinaryProgram(packageDir, program string) string {
 		// Windows the install-time build produced "bin/swe-planner.exe", so
 		// resolve to that when the extensionless path is absent.
 		if !fileExists(resolved) {
-			if withExe := withExeSuffix(resolved); withExe != resolved && fileExists(withExe) {
+			if withExe := withExeSuffixFor(goos, resolved); withExe != resolved && fileExists(withExe) {
 				return withExe
 			}
 		}
