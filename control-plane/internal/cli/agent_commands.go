@@ -69,6 +69,7 @@ func NewAgentCommand() *cobra.Command {
 	cmd.AddCommand(newAgentDiscoverCmd())
 	cmd.AddCommand(newAgentQueryCmd())
 	cmd.AddCommand(newAgentRunCmd())
+	cmd.AddCommand(newAgentExecCmd())
 	cmd.AddCommand(newAgentAgentSummaryCmd())
 	cmd.AddCommand(newAgentKBCmd())
 	cmd.AddCommand(newAgentBatchCmd())
@@ -550,6 +551,8 @@ func proxyToServer(method, path string, body interface{}) {
 				if _, hasHint := errMap["hint"]; !hasHint {
 					errMap["hint"] = defaultHintForStatus(statusCode)
 				}
+			} else if errStr, ok := payload["error"].(string); ok {
+				payload["error"] = structuredErrorFromString(payload, errStr, statusCode)
 			}
 		}
 
@@ -594,6 +597,44 @@ func readBatchInput(file string) ([]byte, error) {
 		return nil, fmt.Errorf("file %q is empty", source)
 	}
 	return data, nil
+}
+
+// structuredErrorFromString converts legacy {"error":"..."} responses into the
+// structured envelope error object {code,message,hint}. Handlers that return
+// {"error":"some_code","message":"detail"} keep the error string as the code;
+// otherwise the code is derived from the HTTP status.
+func structuredErrorFromString(payload map[string]interface{}, errStr string, statusCode int) map[string]interface{} {
+	code := defaultCodeForStatus(statusCode)
+	message := errStr
+	if msg, ok := payload["message"].(string); ok && strings.TrimSpace(msg) != "" {
+		code = errStr
+		message = msg
+	}
+	return map[string]interface{}{
+		"code":    code,
+		"message": message,
+		"hint":    defaultHintForStatus(statusCode),
+	}
+}
+
+func defaultCodeForStatus(statusCode int) string {
+	switch statusCode {
+	case http.StatusBadRequest:
+		return "bad_request"
+	case http.StatusUnauthorized:
+		return "unauthorized"
+	case http.StatusForbidden:
+		return "forbidden"
+	case http.StatusNotFound:
+		return "not_found"
+	case http.StatusConflict:
+		return "conflict"
+	default:
+		if statusCode >= 500 {
+			return "server_error"
+		}
+		return "request_failed"
+	}
 }
 
 func defaultHintForStatus(statusCode int) string {
@@ -690,6 +731,66 @@ func agentHelpData() map[string]interface{} {
 				"example":     "af agent agent-summary --id sec-analyst",
 			},
 			{
+				"name":        "exec pause",
+				"description": "Pause a running execution",
+				"usage":       "af agent exec pause --id <execution_id> [--reason <text>]",
+				"flags": []map[string]string{
+					{"name": "id", "short": "", "type": "string (required)"},
+					{"name": "reason", "short": "", "type": "string"},
+				},
+				"example": "af agent exec pause --id exec_123 --reason 'manual review'",
+			},
+			{
+				"name":        "exec resume",
+				"description": "Resume a paused execution",
+				"usage":       "af agent exec resume --id <execution_id>",
+				"flags":       []map[string]string{{"name": "id", "short": "", "type": "string (required)"}},
+				"example":     "af agent exec resume --id exec_123",
+			},
+			{
+				"name":        "exec cancel",
+				"description": "Cancel an execution",
+				"usage":       "af agent exec cancel --id <execution_id> [--reason <text>]",
+				"flags": []map[string]string{
+					{"name": "id", "short": "", "type": "string (required)"},
+					{"name": "reason", "short": "", "type": "string"},
+				},
+				"example": "af agent exec cancel --id exec_123 --reason 'wrong input'",
+			},
+			{
+				"name":        "exec restart",
+				"description": "Restart a workflow from an execution point",
+				"usage":       "af agent exec restart --id <execution_id> [--scope] [--reuse] [--fork] [--model] [--input] [--reason]",
+				"flags": []map[string]string{
+					{"name": "id", "short": "", "type": "string (required)"},
+					{"name": "scope", "short": "", "type": "string (workflow|execution)"},
+					{"name": "reuse", "short": "", "type": "string (succeeded-before|all-succeeded|none)"},
+					{"name": "fork", "short": "", "type": "bool"},
+					{"name": "model", "short": "", "type": "string"},
+					{"name": "input", "short": "", "type": "string (JSON or @path)"},
+					{"name": "reason", "short": "", "type": "string"},
+				},
+				"example": "af agent exec restart --id exec_123 --scope workflow --reuse succeeded-before",
+			},
+			{
+				"name":        "exec approval-status",
+				"description": "Get the approval status for an execution",
+				"usage":       "af agent exec approval-status --id <execution_id>",
+				"flags":       []map[string]string{{"name": "id", "short": "", "type": "string (required)"}},
+				"example":     "af agent exec approval-status --id exec_123",
+			},
+			{
+				"name":        "exec approve",
+				"description": "Resolve a pending approval for an execution",
+				"usage":       "af agent exec approve --id <execution_id> --decision <approved|rejected|request_changes> [--reason <text>]",
+				"flags": []map[string]string{
+					{"name": "id", "short": "", "type": "string (required)"},
+					{"name": "decision", "short": "", "type": "string (required)"},
+					{"name": "reason", "short": "", "type": "string"},
+				},
+				"example": "af agent exec approve --id exec_123 --decision approved",
+			},
+			{
 				"name":        "kb topics",
 				"description": "List knowledge base topics",
 				"usage":       "af agent kb topics",
@@ -749,7 +850,7 @@ func agentHelpData() map[string]interface{} {
 		"auth": map[string]interface{}{
 			"method":           "Set X-API-Key header via --api-key or AGENTFIELD_API_KEY",
 			"public_endpoints": []string{"GET /api/v1/agentic/kb/topics", "GET /api/v1/agentic/kb/articles", "GET /api/v1/agentic/kb/articles/:article_id", "GET /api/v1/agentic/kb/guide"},
-			"requires_auth":    []string{"GET /api/v1/agentic/status", "GET /api/v1/agentic/discover", "POST /api/v1/agentic/query", "GET /api/v1/agentic/run/:run_id", "GET /api/v1/agentic/agent/:agent_id/summary", "POST /api/v1/agentic/batch"},
+			"requires_auth":    []string{"GET /api/v1/agentic/status", "GET /api/v1/agentic/discover", "POST /api/v1/agentic/query", "GET /api/v1/agentic/run/:run_id", "GET /api/v1/agentic/agent/:agent_id/summary", "POST /api/v1/agentic/batch", "POST /api/v1/executions/:execution_id/pause", "POST /api/v1/executions/:execution_id/resume", "POST /api/v1/executions/:execution_id/cancel", "POST /api/v1/executions/:execution_id/restart", "GET /api/v1/executions/:execution_id/approval-status", "POST /api/v1/executions/:execution_id/approval-response"},
 		},
 		"response_schemas": map[string]interface{}{
 			"success": map[string]interface{}{
