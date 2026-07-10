@@ -7654,11 +7654,17 @@ func (ls *LocalStorage) storeWorkflowExecutionEventTx(ctx context.Context, tx DB
 		payload = "{}"
 	}
 
+	// Persist recorded_at explicitly: the GORM model's autoCreateTime does
+	// not apply to this raw INSERT, and a NULL recorded_at breaks listing.
+	if event.RecordedAt.IsZero() {
+		event.RecordedAt = time.Now().UTC()
+	}
+
 	query := `
 		INSERT INTO workflow_execution_events (
 			execution_id, workflow_id, run_id, parent_execution_id, sequence, previous_sequence,
-			event_type, status, status_reason, payload, emitted_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			event_type, status, status_reason, payload, emitted_at, recorded_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	result, err := tx.ExecContext(ctx, query,
 		event.ExecutionID,
@@ -7672,6 +7678,7 @@ func (ls *LocalStorage) storeWorkflowExecutionEventTx(ctx context.Context, tx DB
 		event.StatusReason,
 		payload,
 		event.EmittedAt,
+		event.RecordedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to insert workflow execution event: %w", err)
@@ -7679,9 +7686,6 @@ func (ls *LocalStorage) storeWorkflowExecutionEventTx(ctx context.Context, tx DB
 
 	if id, err := result.LastInsertId(); err == nil {
 		event.EventID = id
-	}
-	if event.RecordedAt.IsZero() {
-		event.RecordedAt = time.Now().UTC()
 	}
 
 	return nil
@@ -7720,6 +7724,7 @@ func (ls *LocalStorage) ListWorkflowExecutionEvents(ctx context.Context, executi
 		var status sql.NullString
 		var statusReason sql.NullString
 		var payload sql.NullString
+		var recordedAt sql.NullTime
 
 		if err := rows.Scan(
 			&evt.EventID,
@@ -7734,9 +7739,17 @@ func (ls *LocalStorage) ListWorkflowExecutionEvents(ctx context.Context, executi
 			&statusReason,
 			&payload,
 			&evt.EmittedAt,
-			&evt.RecordedAt,
+			&recordedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan workflow execution event: %w", err)
+		}
+
+		// Rows written before recorded_at was persisted have NULL here;
+		// fall back to emitted_at rather than failing the whole listing.
+		if recordedAt.Valid {
+			evt.RecordedAt = recordedAt.Time
+		} else {
+			evt.RecordedAt = evt.EmittedAt
 		}
 
 		if runID.Valid {

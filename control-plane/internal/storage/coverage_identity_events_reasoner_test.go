@@ -163,19 +163,29 @@ func TestExecutionEventAndLogCoverage(t *testing.T) {
 		require.NoError(t, ls.StoreWorkflowExecutionEvent(ctx, event))
 		require.NotZero(t, event.EventID)
 		require.False(t, event.RecordedAt.IsZero())
-		_, err = ls.db.ExecContext(ctx, `UPDATE workflow_execution_events SET recorded_at = ? WHERE event_id = ?`, event.RecordedAt, event.EventID)
-		require.NoError(t, err)
 
+		// The insert must persist recorded_at itself — listing previously
+		// failed with a NULL-scan error because the raw INSERT omitted it.
 		stored, err := ls.ListWorkflowExecutionEvents(ctx, "exec-events-1", nil, 10)
 		require.NoError(t, err)
 		require.Len(t, stored, 1)
 		require.Equal(t, json.RawMessage("{}"), stored[0].Payload)
 		require.Equal(t, &status, stored[0].Status)
+		require.False(t, stored[0].RecordedAt.IsZero())
 
 		after := int64(1)
 		stored, err = ls.ListWorkflowExecutionEvents(ctx, "exec-events-1", &after, 10)
 		require.NoError(t, err)
 		require.Empty(t, stored)
+
+		// Legacy rows written before recorded_at was persisted have NULL;
+		// listing must fall back to emitted_at instead of erroring.
+		_, err = ls.db.ExecContext(ctx, `UPDATE workflow_execution_events SET recorded_at = NULL WHERE event_id = ?`, event.EventID)
+		require.NoError(t, err)
+		stored, err = ls.ListWorkflowExecutionEvents(ctx, "exec-events-1", nil, 10)
+		require.NoError(t, err)
+		require.Len(t, stored, 1)
+		require.Equal(t, emittedAt, stored[0].RecordedAt.UTC().Truncate(time.Second))
 	})
 
 	t.Run("stores lists and prunes execution logs", func(t *testing.T) {
