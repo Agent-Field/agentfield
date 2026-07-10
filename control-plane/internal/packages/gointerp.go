@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -221,19 +222,31 @@ func (m *PackageMetadata) goBuildTarget() (buildPkg, outBin string) {
 	// The output is the start token when start is a bare binary path (not a
 	// `go run ...` command). Otherwise derive a sensible default under bin/.
 	if len(start) > 0 && start[0] != "go" {
-		return build, start[0]
+		return build, withExeSuffix(start[0])
 	}
 	return build, defaultGoBinName(build)
 }
 
 // defaultGoBinName derives a bin/<name> output path from a Go build package spec
-// like "./cmd/swe-planner" -> "bin/swe-planner".
+// like "./cmd/swe-planner" -> "bin/swe-planner" ("bin/swe-planner.exe" on
+// Windows).
 func defaultGoBinName(buildPkg string) string {
 	name := filepath.Base(strings.TrimSpace(buildPkg))
 	if name == "" || name == "." || name == "/" || name == "..." {
 		name = "app"
 	}
-	return filepath.Join("bin", name)
+	return withExeSuffix(filepath.Join("bin", name))
+}
+
+// withExeSuffix appends ".exe" to a binary path on Windows (manifests declare
+// unix-style paths like "bin/swe-planner"; the compiled output must carry the
+// conventional executable extension there). A no-op on other platforms and on
+// paths that already end in .exe.
+func withExeSuffix(path string) string {
+	if runtime.GOOS == "windows" && !strings.EqualFold(filepath.Ext(path), ".exe") {
+		return path + ".exe"
+	}
+	return path
 }
 
 // hasVendorDir reports whether the package ships a Go vendor/ directory, which
@@ -369,7 +382,16 @@ func GoBinaryProgram(packageDir, program string) string {
 		return program
 	}
 	if strings.ContainsRune(program, '/') || strings.ContainsRune(program, filepath.Separator) {
-		return filepath.Join(packageDir, program)
+		resolved := filepath.Join(packageDir, program)
+		// Manifests declare unix-style binary paths ("bin/swe-planner"); on
+		// Windows the install-time build produced "bin/swe-planner.exe", so
+		// resolve to that when the extensionless path is absent.
+		if !fileExists(resolved) {
+			if withExe := withExeSuffix(resolved); withExe != resolved && fileExists(withExe) {
+				return withExe
+			}
+		}
+		return resolved
 	}
 	return program
 }
