@@ -367,6 +367,16 @@ func (r *Runner) handleSchemaWithRetry(
 			r.Logger.Println("Stdout fallback succeeded")
 		}
 	}
+	// Enforce the schema: unmarshal-only parsing (ParseAndValidate /
+	// TryParseFromText) accepts missing required fields, invalid enums and
+	// extra fields silently, so validate here to drive the retry loop below.
+	if err == nil {
+		if verr := runSchemaValidation(data, schema, dest); verr != nil {
+			r.Logger.Printf("Initial output failed schema validation: %v", verr)
+			err = verr
+			data = nil
+		}
+	}
 
 	if err == nil && data != nil {
 		elapsed := int(time.Since(startTime).Milliseconds())
@@ -489,6 +499,13 @@ func (r *Runner) handleSchemaWithRetry(
 				r.Logger.Printf("Schema retry %d succeeded via stdout fallback", retryNum+1)
 			}
 		}
+		if err == nil {
+			if verr := runSchemaValidation(data, schema, dest); verr != nil {
+				r.Logger.Printf("Schema retry %d failed validation: %v", retryNum+1, verr)
+				err = verr
+				data = nil
+			}
+		}
 
 		if err == nil && data != nil {
 			elapsed := int(time.Since(startTime).Milliseconds())
@@ -551,6 +568,18 @@ func accumulateMetrics(raws []*RawResult) (totalCost *float64, totalTurns int, s
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// runSchemaValidation enforces the JSON Schema on parsed output when the normal
+// harness contract holds — both a destination struct and a schema were
+// provided. It returns nil (validation not applicable) when either is absent or
+// the data is nil, preserving the previous unmarshal-only behavior for
+// schema-only or dest-less callers.
+func runSchemaValidation(data map[string]any, schema map[string]any, dest any) error {
+	if data == nil || schema == nil || dest == nil {
+		return nil
+	}
+	return validateAgainstSchema(data, schema)
 }
 
 // StructToJSONSchema converts a Go struct (or pointer to struct) to a basic

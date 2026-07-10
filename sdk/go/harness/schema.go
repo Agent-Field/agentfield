@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,6 +10,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/santhosh-tekuri/jsonschema/v5"
 )
 
 const (
@@ -357,6 +360,79 @@ func unmarshalInto(data map[string]any, dest any) error {
 		return err
 	}
 	return json.Unmarshal(b, dest)
+}
+
+// validateAgainstSchema validates a parsed JSON object against a JSON Schema
+// map and returns a concise, prompt-friendly error when it does not conform.
+//
+// A JSON round-trip into a Go struct (unmarshalInto) accepts missing required
+// fields, invalid enum values, and extra fields silently — so on its own it
+// lets malformed output pass the harness. This compiles the schema and runs
+// real JSON Schema validation so the runner's schema-retry loop fires for those
+// cases. When the schema cannot be serialized or compiled, it returns nil (no
+// regression versus the previous unmarshal-only behavior — validation is simply
+// skipped rather than blocking).
+func validateAgainstSchema(data map[string]any, schema map[string]any) error {
+	schemaBytes, err := json.Marshal(schema)
+	if err != nil {
+		return nil
+	}
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource("mem://agentfield/schema.json", bytes.NewReader(schemaBytes)); err != nil {
+		return nil
+	}
+	compiled, err := compiler.Compile("mem://agentfield/schema.json")
+	if err != nil {
+		return nil
+	}
+	// Normalize the data through JSON so the validator sees canonical types
+	// (e.g. float64 for numbers, []any for arrays) regardless of how it was
+	// produced upstream.
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil
+	}
+	var normalized any
+	if err := json.Unmarshal(dataBytes, &normalized); err != nil {
+		return nil
+	}
+	if verr := compiled.Validate(normalized); verr != nil {
+		return fmt.Errorf("schema validation failed: %s", conciseSchemaError(verr))
+	}
+	return nil
+}
+
+// conciseSchemaError flattens a jsonschema ValidationError tree into a short,
+// prompt-friendly string listing the most specific (leaf) failures with their
+// instance locations.
+func conciseSchemaError(err error) string {
+	ve, ok := err.(*jsonschema.ValidationError)
+	if !ok {
+		return truncate(err.Error(), 300)
+	}
+
+	var leaves []string
+	var walk func(e *jsonschema.ValidationError)
+	walk = func(e *jsonschema.ValidationError) {
+		if len(e.Causes) == 0 {
+			loc := e.InstanceLocation
+			if loc == "" {
+				loc = "/"
+			}
+			leaves = append(leaves, fmt.Sprintf("%s: %s", loc, e.Message))
+			return
+		}
+		for _, c := range e.Causes {
+			walk(c)
+		}
+	}
+	walk(ve)
+
+	if len(leaves) == 0 {
+		return truncate(ve.Message, 300)
+	}
+	sort.Strings(leaves)
+	return truncate(strings.Join(leaves, "; "), 400)
 }
 
 // CleanupTempFiles removes harness temp files.
