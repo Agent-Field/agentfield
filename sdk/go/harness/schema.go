@@ -32,6 +32,103 @@ func estimateTokens(text string) int {
 	return len(text) / 4
 }
 
+// codexStrictJSONSchema rewrites a JSON schema into the strict form codex's
+// --output-schema (OpenAI structured output) requires. On every object node it
+// drops each property's "default", marks ALL properties required, and sets
+// additionalProperties:false; it recurses into properties, array items,
+// allOf/anyOf/oneOf branches, and $defs/definitions. Port of
+// _codex_strict_json_schema (codex_harness_patch.py:23-65).
+//
+// The input schema is not mutated — every level is copied before edits.
+func codexStrictJSONSchema(schema map[string]any) map[string]any {
+	strict := make(map[string]any, len(schema))
+	for k, v := range schema {
+		strict[k] = v
+	}
+
+	schemaType, _ := strict["type"].(string)
+
+	if schemaType == "object" {
+		if props, ok := strict["properties"].(map[string]any); ok {
+			cleaned := make(map[string]any, len(props))
+			keys := make([]string, 0, len(props))
+			for key, value := range props {
+				keys = append(keys, key)
+				if child, ok := value.(map[string]any); ok {
+					childCopy := make(map[string]any, len(child))
+					for ck, cv := range child {
+						if ck == "default" {
+							continue
+						}
+						childCopy[ck] = cv
+					}
+					cleaned[key] = codexStrictJSONSchema(childCopy)
+				} else {
+					cleaned[key] = value
+				}
+			}
+			// Sort for deterministic output (Go maps randomize iteration order;
+			// Python preserves dict insertion order). codex validation is
+			// order-independent, so this only stabilizes the emitted file.
+			sort.Strings(keys)
+			strict["properties"] = cleaned
+			strict["required"] = keys
+			strict["additionalProperties"] = false
+		}
+	}
+
+	if schemaType == "array" {
+		if items, ok := strict["items"].(map[string]any); ok {
+			strict["items"] = codexStrictJSONSchema(items)
+		}
+	}
+
+	for _, key := range []string{"allOf", "anyOf", "oneOf"} {
+		if branch, ok := strict[key].([]any); ok {
+			newBranch := make([]any, len(branch))
+			for i, item := range branch {
+				if m, ok := item.(map[string]any); ok {
+					newBranch[i] = codexStrictJSONSchema(m)
+				} else {
+					newBranch[i] = item
+				}
+			}
+			strict[key] = newBranch
+		}
+	}
+
+	for _, defKey := range []string{"$defs", "definitions"} {
+		if defs, ok := strict[defKey].(map[string]any); ok {
+			newDefs := make(map[string]any, len(defs))
+			for key, value := range defs {
+				if m, ok := value.(map[string]any); ok {
+					newDefs[key] = codexStrictJSONSchema(m)
+				} else {
+					newDefs[key] = value
+				}
+			}
+			strict[defKey] = newDefs
+		}
+	}
+
+	return strict
+}
+
+// BuildCodexNativeSuffix constructs the prompt suffix for codex's native
+// structured output. Unlike BuildPromptSuffix (which asks the model to Write a
+// file), this tells the model to emit its final JSON answer directly — the
+// codex CLI persists it to outputPath via --output-last-message and validates
+// it against schemaPath via --output-schema. Port of the codex-native suffix in
+// codex_harness_patch.py:141-148 + 179-186.
+func BuildCodexNativeSuffix(schemaPath, outputPath string) string {
+	return "\n\n---\n" +
+		"CRITICAL CODEX STRUCTURED OUTPUT REQUIREMENTS:\n" +
+		fmt.Sprintf("Return a single final JSON object conforming to the schema at: %s\n", schemaPath) +
+		fmt.Sprintf("The Codex CLI will persist your final response to: %s\n", outputPath) +
+		"Return the JSON object as your final answer. Do not use markdown fences, comments, or surrounding prose.\n" +
+		"Do not try to create .agentfield_output.json yourself; the Codex CLI will persist your final JSON response for AgentField."
+}
+
 // BuildPromptSuffix constructs the OUTPUT REQUIREMENTS instruction that tells
 // the coding agent to write JSON to a deterministic file path.
 func BuildPromptSuffix(jsonSchema map[string]any, dir string) string {
