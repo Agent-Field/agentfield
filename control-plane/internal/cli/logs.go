@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec" // Added missing import
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/packages"
@@ -104,7 +106,7 @@ func (lv *LogViewer) ViewLogs(agentNodeName string) error {
 
 // tailLogs shows the last N lines of the log file
 func (lv *LogViewer) tailLogs(logFile string, lines int) error {
-	cmd := exec.Command("tail", "-n", fmt.Sprintf("%d", lines), logFile)
+	cmd := tailCommand(logFile, lines, false)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -112,8 +114,32 @@ func (lv *LogViewer) tailLogs(logFile string, lines int) error {
 
 // followLogs follows the log file in real-time
 func (lv *LogViewer) followLogs(logFile string) error {
-	cmd := exec.Command("tail", "-f", logFile)
+	cmd := tailCommand(logFile, 10, true)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// tailCommand builds the platform command that prints the last n lines of a
+// file, optionally following it. Unix uses tail(1); Windows has no tail, so
+// PowerShell's Get-Content stands in (compile-verified only, not yet tested on
+// a real Windows machine).
+func tailCommand(logFile string, n int, follow bool) *exec.Cmd {
+	if runtime.GOOS == "windows" {
+		script := fmt.Sprintf("Get-Content -LiteralPath %s -Tail %d", psSingleQuote(logFile), n)
+		if follow {
+			script += " -Wait"
+		}
+		return exec.Command("powershell", "-NoProfile", "-Command", script)
+	}
+	if follow {
+		return exec.Command("tail", "-n", fmt.Sprintf("%d", n), "-f", logFile)
+	}
+	return exec.Command("tail", "-n", fmt.Sprintf("%d", n), logFile)
+}
+
+// psSingleQuote quotes s as a PowerShell single-quoted string literal, where
+// the only escape is doubling embedded single quotes.
+func psSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
