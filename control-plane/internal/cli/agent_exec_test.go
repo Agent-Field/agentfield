@@ -126,6 +126,45 @@ func TestAgentExecHappyPaths(t *testing.T) {
 	}
 }
 
+// Contract: `af agent query -r events` forwards execution_id/run_id/since/
+// until filters to POST /api/v1/agentic/query.
+func TestAgentQueryEventsSendsFilters(t *testing.T) {
+	var gotBody []byte
+
+	oldTransport := http.DefaultTransport
+	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		gotBody, _ = io.ReadAll(req.Body)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"ok":true,"data":{"resource":"events","results":[]}}`)),
+			Request:    req,
+		}, nil
+	})
+	defer func() { http.DefaultTransport = oldTransport }()
+
+	oldServer, oldFormat, oldTimeout := serverURL, outputFormat, requestTimeout
+	serverURL, outputFormat, requestTimeout = "http://agent.test", "json", 1
+	defer func() {
+		serverURL, outputFormat, requestTimeout = oldServer, oldFormat, oldTimeout
+	}()
+
+	_ = captureOutput(t, func() {
+		cmd := NewAgentCommand()
+		cmd.SetArgs([]string{"query", "-r", "events", "--execution-id", "exec_1", "--run-id", "run_1", "--since", "2026-07-01T00:00:00Z", "--limit", "5"})
+		require.NoError(t, cmd.Execute())
+	})
+
+	var payload map[string]interface{}
+	require.NoError(t, json.Unmarshal(gotBody, &payload))
+	require.Equal(t, "events", payload["resource"])
+	filters := payload["filters"].(map[string]interface{})
+	require.Equal(t, "exec_1", filters["execution_id"])
+	require.Equal(t, "run_1", filters["run_id"])
+	require.Equal(t, "2026-07-01T00:00:00Z", filters["since"])
+	require.Equal(t, float64(5), payload["limit"])
+}
+
 // Contract: exec subcommand without a verb lists the available verbs.
 func TestAgentExecListsVerbs(t *testing.T) {
 	oldFormat := outputFormat

@@ -133,6 +133,7 @@ func newAgentQueryCmd() *cobra.Command {
 	var status string
 	var agentID string
 	var runID string
+	var executionID string
 	var since string
 	var until string
 	var limit int
@@ -142,10 +143,19 @@ func newAgentQueryCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "query",
 		Short: "Run unified resource query",
+		Long: `Run a unified resource query against the control plane.
+
+Resources: runs, executions, agents, workflows, sessions, events.
+
+The events resource returns persisted execution lifecycle events
+(status transitions, approval waits/resolutions) sorted by emitted_at
+ascending — a pollable snapshot of the SSE event stream, filtered by
+--execution-id or fanned out across a run with --run-id (one of the two
+is required). It does not include live in-flight SSE-only data.`,
 		Run: func(cmd *cobra.Command, args []string) {
 			resource = strings.TrimSpace(resource)
 			if resource == "" {
-				agentError("missing_required_flag", "--resource is required", "Set --resource to one of runs, executions, agents, workflows, sessions.")
+				agentError("missing_required_flag", "--resource is required", "Set --resource to one of runs, executions, agents, workflows, sessions, events.")
 			}
 
 			filters := map[string]string{}
@@ -157,6 +167,9 @@ func newAgentQueryCmd() *cobra.Command {
 			}
 			if v := strings.TrimSpace(runID); v != "" {
 				filters["run_id"] = v
+			}
+			if v := strings.TrimSpace(executionID); v != "" {
+				filters["execution_id"] = v
 			}
 			if v := strings.TrimSpace(since); v != "" {
 				filters["since"] = v
@@ -189,10 +202,11 @@ func newAgentQueryCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVarP(&resource, "resource", "r", "", "Resource type: runs, executions, agents, workflows, sessions")
+	cmd.Flags().StringVarP(&resource, "resource", "r", "", "Resource type: runs, executions, agents, workflows, sessions, events")
 	cmd.Flags().StringVar(&status, "status", "", "Status filter")
 	cmd.Flags().StringVar(&agentID, "agent-id", "", "Agent ID filter")
 	cmd.Flags().StringVar(&runID, "run-id", "", "Run ID filter")
+	cmd.Flags().StringVar(&executionID, "execution-id", "", "Execution ID filter (events resource)")
 	cmd.Flags().StringVar(&since, "since", "", "RFC3339 lower time bound")
 	cmd.Flags().StringVar(&until, "until", "", "RFC3339 upper time bound")
 	cmd.Flags().IntVar(&limit, "limit", 20, "Result limit")
@@ -701,13 +715,14 @@ func agentHelpData() map[string]interface{} {
 			},
 			{
 				"name":        "query",
-				"description": "Query runs/executions/agents/workflows/sessions",
-				"usage":       "af agent query --resource runs [--status] [--agent-id] [--run-id] [--since] [--until] [--limit] [--offset] [--include]",
+				"description": "Query runs/executions/agents/workflows/sessions/events",
+				"usage":       "af agent query --resource runs [--status] [--agent-id] [--run-id] [--execution-id] [--since] [--until] [--limit] [--offset] [--include]",
 				"flags": []map[string]string{
 					{"name": "resource", "short": "r", "type": "string (required)"},
 					{"name": "status", "short": "", "type": "string"},
 					{"name": "agent-id", "short": "", "type": "string"},
 					{"name": "run-id", "short": "", "type": "string"},
+					{"name": "execution-id", "short": "", "type": "string"},
 					{"name": "since", "short": "", "type": "string(RFC3339)"},
 					{"name": "until", "short": "", "type": "string(RFC3339)"},
 					{"name": "limit", "short": "", "type": "int"},
@@ -715,6 +730,7 @@ func agentHelpData() map[string]interface{} {
 					{"name": "include", "short": "", "type": "string(csv)"},
 				},
 				"example": "af agent query -r executions --agent-id analyst --status completed --limit 25",
+				"notes":   "resource=events returns persisted execution lifecycle events sorted by emitted_at ascending; requires --execution-id or --run-id. It is a pollable snapshot of the SSE stream, not a live subscription.",
 			},
 			{
 				"name":        "run",
