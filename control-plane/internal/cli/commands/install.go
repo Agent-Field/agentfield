@@ -36,6 +36,7 @@ func (cmd *InstallCommand) GetDescription() string {
 func (cmd *InstallCommand) BuildCobraCommand() *cobra.Command {
 	var force bool
 	var verbose bool
+	var path string
 
 	cobraCmd := &cobra.Command{
 		Use:   "install <package-path>",
@@ -47,28 +48,40 @@ The package can be:
 - A GitHub repository URL
 - A package name from the AgentField registry
 
+Use --path to install a package that lives in a subdirectory of the source, so a
+single repository can ship more than one installable node. The subdirectory must
+contain its own agentfield-package.yaml; that subtree becomes the package root.
+--path is relative to the source root and may not escape it. It composes with an
+@ref pin on a Git URL.
+
 Examples:
   agentfield install ./my-agent
   agentfield install https://github.com/user/agent-repo
+  agentfield install https://github.com/user/agent-repo --path go
+  agentfield install https://github.com/user/agent-repo@v1.2.3 --path go
   agentfield install agent-name`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cobraCmd *cobra.Command, args []string) error {
 			// Update output formatter with verbose setting
 			cmd.output.SetVerbose(verbose)
-			return cmd.execute(args[0], force, verbose)
+			return cmd.execute(args[0], force, verbose, path)
 		},
 	}
 
 	cobraCmd.Flags().BoolVarP(&force, "force", "f", false, "Force reinstall if package exists")
 	cobraCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output")
+	cobraCmd.Flags().StringVar(&path, "path", "", "Install the package from this subdirectory of the source (relative to its root)")
 
 	return cobraCmd
 }
 
 // execute performs the actual installation
-func (cmd *InstallCommand) execute(packagePath string, force, verbose bool) error {
+func (cmd *InstallCommand) execute(packagePath string, force, verbose bool, path string) error {
 	cmd.output.PrintHeader("Installing AgentField Package")
 	cmd.output.PrintInfo(fmt.Sprintf("Package: %s", packagePath))
+	if path != "" {
+		cmd.output.PrintInfo(fmt.Sprintf("Subdirectory: %s", path))
+	}
 
 	if verbose {
 		cmd.output.PrintVerbose("Using new framework-based install command")
@@ -78,6 +91,7 @@ func (cmd *InstallCommand) execute(packagePath string, force, verbose bool) erro
 	options := domain.InstallOptions{
 		Force:   force,
 		Verbose: verbose,
+		Path:    path,
 	}
 
 	// Show progress
