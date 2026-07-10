@@ -369,12 +369,15 @@ type Config struct {
 	LeaseRefreshInterval time.Duration
 
 	// CallTimeout bounds every INDIVIDUAL outbound HTTP request this agent
-	// makes as a client - memory backend requests, and for cross-agent
-	// Call()s the async submit plus each status poll. It does NOT bound a
-	// Call() end-to-end: Call submits to the async execute endpoint and
-	// polls until the child execution finishes, so a child reasoner may run
-	// arbitrarily longer than CallTimeout (bound the overall wait with the
-	// ctx passed to Call instead). Optional. Default: 15s.
+	// makes through its shared client (e.g. memory backend requests).
+	// Optional. Default: 15s.
+	//
+	// NOTE: cross-agent Call() does NOT use this timeout. Its async submit and
+	// status polls run through dedicated clients bounded by
+	// AGENTFIELD_CALL_SUBMIT_TIMEOUT_SECONDS / AGENTFIELD_CALL_POLL_TIMEOUT_SECONDS,
+	// with transient failures retried within AGENTFIELD_CALL_RETRY_WINDOW_SECONDS,
+	// so a child reasoner may run arbitrarily long; bound the overall Call wait
+	// with the ctx passed to Call instead.
 	CallTimeout time.Duration
 
 	// DisableLeaseLoop disables automatic periodic lease refreshes.
@@ -1803,12 +1806,17 @@ func nextCallPollInterval(current time.Duration) time.Duration {
 // status — mirroring the Python SDK's app.call
 // (sdk/python/agentfield/client.py _submit_execution_sync/_await_execution_sync).
 //
-// Timeout semantics: Config.CallTimeout bounds each individual HTTP request
-// (the submit and every poll), NOT the end-to-end call. A child reasoner may
-// run arbitrarily long; the overall wait is bounded only by ctx. Cancelling
-// ctx aborts the wait but does NOT cancel the child execution server-side —
-// the child keeps running on its node and the control plane records its
-// result (the Python SDK behaves the same way when the caller stops waiting).
+// Timeout semantics: each submit and each poll is an independent HTTP request
+// bounded by its own dedicated client timeout
+// (AGENTFIELD_CALL_SUBMIT_TIMEOUT_SECONDS / AGENTFIELD_CALL_POLL_TIMEOUT_SECONDS),
+// NOT by Config.CallTimeout and NOT by the end-to-end call. Transient submit
+// and poll failures are retried within AGENTFIELD_CALL_RETRY_WINDOW_SECONDS
+// (see submitAsyncExecution / awaitExecutionResult), so a brief control-plane
+// outage does not kill a long-running call. A child reasoner may run
+// arbitrarily long; the overall wait is bounded only by ctx. Cancelling ctx
+// aborts the wait but does NOT cancel the child execution server-side — the
+// child keeps running on its node and the control plane records its result
+// (the Python SDK behaves the same way when the caller stops waiting).
 func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (map[string]any, error) {
 	if strings.TrimSpace(a.cfg.AgentFieldURL) == "" {
 		return nil, errors.New("AgentFieldURL is required to call other reasoners")
