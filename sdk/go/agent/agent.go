@@ -1171,6 +1171,21 @@ func (a *Agent) handleExecute(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, statusCode, response)
 			return
 		}
+		// A reasoner that ran but failed can return &ReasonerFailed{Result: ...}
+		// to preserve its structured outcome; carry it onto the error response
+		// (mirroring the async status payload) so the result is not lost.
+		var rf *ReasonerFailed
+		if errors.As(err, &rf) {
+			response := map[string]any{"error": rf.Message}
+			if rf.Result != nil {
+				response["result"] = rf.Result
+			}
+			if rf.ErrorDetails != nil {
+				response["error_details"] = rf.ErrorDetails
+			}
+			writeJSON(w, http.StatusInternalServerError, response)
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
@@ -1374,6 +1389,20 @@ func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, statusCode, response)
 			return
 		}
+		// Preserve a ReasonerFailed's structured result/details on the sync
+		// error response, mirroring the async failed-status payload.
+		var rf *ReasonerFailed
+		if errors.As(err, &rf) {
+			response := map[string]any{"error": rf.Message}
+			if rf.Result != nil {
+				response["result"] = rf.Result
+			}
+			if rf.ErrorDetails != nil {
+				response["error_details"] = rf.ErrorDetails
+			}
+			writeJSON(w, http.StatusInternalServerError, response)
+			return
+		}
 
 		writeJSON(w, http.StatusInternalServerError, map[string]any{
 			"error": err.Error(),
@@ -1486,6 +1515,21 @@ func (a *Agent) executeReasonerAsync(reasoner *Reasoner, input map[string]any, e
 	if err != nil {
 		payload["status"] = "failed"
 		payload["error"] = err.Error()
+		// A reasoner that ran, determined its own work failed, and wants its
+		// structured outcome preserved returns &ReasonerFailed{Result: ...}.
+		// Carry that result/details onto the failed-status payload so the single
+		// (5x-retried) status post records status=failed WITHOUT discarding the
+		// rich result — the control plane stores the result regardless of
+		// terminal status. Byte-parity with the Python async handler.
+		var rf *ReasonerFailed
+		if errors.As(err, &rf) {
+			if rf.Result != nil {
+				payload["result"] = rf.Result
+			}
+			if rf.ErrorDetails != nil {
+				payload["error_details"] = rf.ErrorDetails
+			}
+		}
 		a.logExecutionError(ctx, "reasoner.invoke.failed", "reasoner execution failed", map[string]any{
 			"reasoner_id": reasoner.Name,
 			"mode":        "async",
