@@ -165,6 +165,48 @@ func TestAgentQueryEventsSendsFilters(t *testing.T) {
 	require.Equal(t, float64(5), payload["limit"])
 }
 
+// Contract: legacy string errors normalize into {code,message,hint} — the
+// error string becomes the code only when a sibling message carries the
+// human detail; otherwise the code derives from the HTTP status.
+func TestStructuredErrorFromString(t *testing.T) {
+	t.Run("bare string error derives code from status", func(t *testing.T) {
+		got := structuredErrorFromString(map[string]interface{}{}, "execution exec_x not found", http.StatusNotFound)
+		require.Equal(t, "not_found", got["code"])
+		require.Equal(t, "execution exec_x not found", got["message"])
+		require.NotEmpty(t, got["hint"])
+	})
+
+	t.Run("error code with sibling message keeps the code", func(t *testing.T) {
+		payload := map[string]interface{}{"message": "execution is in 'running' state"}
+		got := structuredErrorFromString(payload, "invalid_state", http.StatusConflict)
+		require.Equal(t, "invalid_state", got["code"])
+		require.Equal(t, "execution is in 'running' state", got["message"])
+	})
+
+	t.Run("blank sibling message falls back to derived code", func(t *testing.T) {
+		payload := map[string]interface{}{"message": "  "}
+		got := structuredErrorFromString(payload, "boom", http.StatusBadRequest)
+		require.Equal(t, "bad_request", got["code"])
+		require.Equal(t, "boom", got["message"])
+	})
+}
+
+func TestDefaultCodeForStatus(t *testing.T) {
+	cases := map[int]string{
+		http.StatusBadRequest:          "bad_request",
+		http.StatusUnauthorized:        "unauthorized",
+		http.StatusForbidden:           "forbidden",
+		http.StatusNotFound:            "not_found",
+		http.StatusConflict:            "conflict",
+		http.StatusInternalServerError: "server_error",
+		http.StatusBadGateway:          "server_error",
+		http.StatusTeapot:              "request_failed",
+	}
+	for status, want := range cases {
+		require.Equal(t, want, defaultCodeForStatus(status), "status %d", status)
+	}
+}
+
 // Contract: exec subcommand without a verb lists the available verbs.
 func TestAgentExecListsVerbs(t *testing.T) {
 	oldFormat := outputFormat
