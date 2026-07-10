@@ -121,41 +121,47 @@ builds:
       - -X main.commit={{ .ShortCommit }}
       - -X main.date={{ .Date }}
 
-  # Windows build disabled - focus on Linux and macOS for now
-  # - id: agentfield-windows-amd64
-  #   dir: control-plane
-  #   main: ./cmd/af
-  #   binary: agentfield
-  #   env:
-  #     - CGO_ENABLED=1
-  #     - CC=gcc
-  #   goos:
-  #     - windows
-  #   goarch:
-  #     - amd64
-  #   ldflags:
-  #     - -s -w
-  #     - -X main.version={{ .Version }}
-  #     - -X main.commit={{ .ShortCommit }}
-  #     - -X main.date={{ .Date }}
-  #   tags:
-  #     - embedded
-  #     - sqlite_fts5
-  #   no_unique_dist_dir: true
+  # Windows CLI/server binary (goreleaser appends .exe automatically).
+  # Groundwork only: the release workflow's build matrix filters by --id and
+  # does not build this id yet. CGO is required (mattn/go-sqlite3 with
+  # sqlite_fts5), so building it needs either a windows runner (drop the CC
+  # override) or mingw-w64 on the linux runner (mirrors the aarch64
+  # cross-compile approach).
+  - id: agentfield-windows-amd64
+    dir: control-plane
+    main: ./cmd/af
+    binary: agentfield-windows-amd64
+    env:
+      - CGO_ENABLED=1
+      - CC=x86_64-w64-mingw32-gcc
+    goos:
+      - windows
+    goarch:
+      - amd64
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .ShortCommit }}
+      - -X main.date={{ .Date }}
+    tags:
+      - embedded
+      - sqlite_fts5
 
 # Don't create archives - ship raw binaries
 archives:
   - id: default
-    builds:
+    ids:
       - agentfield-linux-amd64
       - agentfield-linux-arm64
       - agentfield-darwin-amd64
       - agentfield-darwin-arm64
+      - agentfield-windows-amd64
       - agentfield-tray-darwin-amd64
       - agentfield-tray-darwin-arm64
-    format: binary
+    formats: [binary]
     # Each build's `binary:` is already the exact asset name we want
-    # (agentfield-<os>-<arch> and agentfield-tray-darwin-<arch>).
+    # (agentfield-<os>-<arch> and agentfield-tray-darwin-<arch>); goreleaser
+    # appends .exe for the windows build on its own.
     name_template: "{{ .Binary }}"
 
 checksum:
