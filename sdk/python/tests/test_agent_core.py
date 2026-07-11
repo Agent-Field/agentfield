@@ -27,6 +27,7 @@ def make_agent_stub():
         api_base="http://agentfield/api/v1",
         _get_auth_headers=lambda: {},
     )
+    agent._background_tasks = set()
     return agent
 
 
@@ -79,6 +80,7 @@ async def test_cleanup_async_resources(monkeypatch):
     await agent._cleanup_async_resources()
     assert manager.stopped is True
     assert agent._async_execution_manager is None
+    assert len(agent._background_tasks) == 0
 
 
 @pytest.mark.asyncio
