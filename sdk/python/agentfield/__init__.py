@@ -67,6 +67,7 @@ from .exceptions import (
     ReasonerFailed,
     RegistrationError,
     ValidationError,
+    HarnessProviderUnavailable,
 )
 from .client import ApprovalRequestResponse, ApprovalResult, ApprovalStatusResponse
 from .triggers import EventTrigger, ScheduleTrigger, TriggerContext
@@ -93,6 +94,7 @@ __all__ = [
     "AIConfig",
     "HarnessConfig",
     "HarnessResult",
+    "HarnessProviderUnavailable",
     "MemoryConfig",
     "ReasonerDefinition",
     "SkillDefinition",

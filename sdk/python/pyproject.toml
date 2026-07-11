@@ -54,6 +54,19 @@ exclude = ["tests*", "examples*"]
 harness-claude = [
     "claude-agent-sdk>=0.1",
 ]
+harness-codex = [
+    "openai-codex>=0.1.0b3",
+    "openai-codex-cli-bin==0.137.0a4",
+]
+harness-opencode = [
+    "opencode-ai>=0.1.0a36",
+]
+harness-all = [
+    "claude-agent-sdk>=0.1",
+    "openai-codex>=0.1.0b3",
+    "openai-codex-cli-bin==0.137.0a4",
+    "opencode-ai>=0.1.0a36",
+]
 harness = [
     "claude-agent-sdk>=0.1",
 ]

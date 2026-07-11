@@ -7,6 +7,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from agentfield.exceptions import HarnessProviderUnavailable
 
 from agentfield.harness._cli import extract_final_text, parse_jsonl, run_cli
 from agentfield.harness.providers._factory import build_provider
@@ -145,6 +146,9 @@ async def test_codex_provider_constructs_command_and_maps_result(
         return stdout, "", 0
 
     monkeypatch.setattr("agentfield.harness.providers.codex.run_cli", fake_run_cli)
+    monkeypatch.setattr(
+        "agentfield.harness._availability.shutil.which", lambda path: path
+    )
 
     provider = CodexProvider(bin_path="/usr/local/bin/codex")
     raw = await provider.execute(
@@ -186,10 +190,8 @@ async def test_codex_provider_returns_helpful_binary_not_found_error(
     monkeypatch.setattr("agentfield.harness.providers.codex.run_cli", fake_run_cli)
 
     provider = CodexProvider(bin_path="codex-missing")
-    raw = await provider.execute("hello", {})
-
-    assert raw.is_error is True
-    assert "Codex binary not found at 'codex-missing'" in (raw.error_message or "")
+    with pytest.raises(HarnessProviderUnavailable, match="codex-missing"):
+        await provider.execute("hello", {})
 
 
 @pytest.mark.asyncio

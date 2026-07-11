@@ -6,6 +6,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from agentfield.exceptions import HarnessProviderUnavailable
 
 from agentfield.harness.providers._factory import build_provider
 from agentfield.harness.providers.gemini import GeminiProvider
@@ -26,6 +27,9 @@ async def test_gemini_provider_constructs_command_and_maps_result(
         return "final text\n", "", 0
 
     monkeypatch.setattr("agentfield.harness.providers.gemini.run_cli", fake_run_cli)
+    monkeypatch.setattr(
+        "agentfield.harness._availability.shutil.which", lambda path: path
+    )
 
     provider = GeminiProvider(bin_path="/usr/local/bin/gemini")
     raw = await provider.execute(
@@ -65,10 +69,8 @@ async def test_gemini_provider_returns_helpful_binary_not_found_error(
     monkeypatch.setattr("agentfield.harness.providers.gemini.run_cli", fake_run_cli)
 
     provider = GeminiProvider(bin_path="gemini-missing")
-    raw = await provider.execute("hello", {})
-
-    assert raw.is_error is True
-    assert "Gemini binary not found at 'gemini-missing'" in (raw.error_message or "")
+    with pytest.raises(HarnessProviderUnavailable, match="gemini-missing"):
+        await provider.execute("hello", {})
 
 
 @pytest.mark.asyncio

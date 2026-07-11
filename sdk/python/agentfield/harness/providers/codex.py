@@ -12,6 +12,7 @@ from agentfield.harness._cli import (
     run_cli,
     strip_ansi,
 )
+from agentfield.harness._availability import ensure_cli_available, provider_unavailable
 from agentfield.harness._result import FailureType, Metrics, RawResult
 
 
@@ -22,6 +23,7 @@ class CodexProvider:
         self._bin = bin_path
 
     async def execute(self, prompt: str, options: dict[str, object]) -> RawResult:
+        ensure_cli_available("codex", self._bin)
         # --skip-git-repo-check lets the harness run in arbitrary working dirs
         # (temp dirs, non-repo project roots); codex exec otherwise refuses to
         # start outside a git repo.
@@ -58,16 +60,8 @@ class CodexProvider:
 
         try:
             stdout, stderr, returncode = await run_cli(cmd, env=env, cwd=cwd)
-        except FileNotFoundError:
-            return RawResult(
-                is_error=True,
-                error_message=(
-                    f"Codex binary not found at '{self._bin}'. "
-                    "Install Codex CLI: https://github.com/openai/codex"
-                ),
-                failure_type=FailureType.CRASH,
-                metrics=Metrics(),
-            )
+        except FileNotFoundError as exc:
+            raise provider_unavailable("codex", self._bin) from exc
         except TimeoutError as exc:
             return RawResult(
                 is_error=True,
