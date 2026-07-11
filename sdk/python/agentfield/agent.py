@@ -4415,6 +4415,20 @@ class Agent(FastAPI):
                 if self.dev_mode:
                     log_debug(f"Error cleaning up AsyncExecutionManager: {e}")
 
+        if self._background_tasks:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*self._background_tasks, return_exceptions=True),
+                    timeout = 5
+                )
+                if self.dev_mode:
+                    log_debug("Background tasks are cleaned up")
+            except Exception as e:
+                if self.dev_mode:
+                    log_debug(f"Error cleaning up background tasks: {e}")
+            finally:
+                self._background_tasks.clear()
+
         if getattr(self, "client", None) is not None:
             try:
                 await self.client.aclose()
