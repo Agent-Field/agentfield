@@ -15,6 +15,13 @@ from agentfield.harness.providers.codex import CodexProvider
 from agentfield.types import HarnessConfig
 
 
+@pytest.fixture(autouse=True)
+def mock_codex_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "agentfield.harness._availability.shutil.which", lambda path: path
+    )
+
+
 def test_parse_jsonl_parses_valid_lines_and_skips_invalid() -> None:
     text = '{"type":"thread.started","thread_id":"t1"}\ninvalid\n{"type":"result","result":"ok"}\n'
 
@@ -146,10 +153,6 @@ async def test_codex_provider_constructs_command_and_maps_result(
         return stdout, "", 0
 
     monkeypatch.setattr("agentfield.harness.providers.codex.run_cli", fake_run_cli)
-    monkeypatch.setattr(
-        "agentfield.harness._availability.shutil.which", lambda path: path
-    )
-
     provider = CodexProvider(bin_path="/usr/local/bin/codex")
     raw = await provider.execute(
         "hello",

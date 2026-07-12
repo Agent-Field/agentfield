@@ -33,6 +33,7 @@ dev = [
     { name = "responses" },
     { name = "respx" },
     { name = "syrupy" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
 ]
 harness = [
     { name = "claude-agent-sdk" },
@@ -85,6 +86,7 @@ requires-dist = [
     { name = "responses", marker = "extra == 'dev'", specifier = ">=0.23,<0.26" },
     { name = "respx", marker = "extra == 'dev'", specifier = ">=0.20,<0.22" },
     { name = "syrupy", marker = "extra == 'dev'", specifier = ">=5,<6" },
+    { name = "tomli", marker = "python_full_version < '3.11' and extra == 'dev'", specifier = ">=2.0" },
     { name = "uvicorn" },
     { name = "websockets" },
 ]

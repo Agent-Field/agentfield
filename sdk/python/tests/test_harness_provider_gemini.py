@@ -13,6 +13,13 @@ from agentfield.harness.providers.gemini import GeminiProvider
 from agentfield.types import HarnessConfig
 
 
+@pytest.fixture(autouse=True)
+def mock_gemini_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "agentfield.harness._availability.shutil.which", lambda path: path
+    )
+
+
 @pytest.mark.asyncio
 async def test_gemini_provider_constructs_command_and_maps_result(
     monkeypatch: pytest.MonkeyPatch,
@@ -27,10 +34,6 @@ async def test_gemini_provider_constructs_command_and_maps_result(
         return "final text\n", "", 0
 
     monkeypatch.setattr("agentfield.harness.providers.gemini.run_cli", fake_run_cli)
-    monkeypatch.setattr(
-        "agentfield.harness._availability.shutil.which", lambda path: path
-    )
-
     provider = GeminiProvider(bin_path="/usr/local/bin/gemini")
     raw = await provider.execute(
         "hello",

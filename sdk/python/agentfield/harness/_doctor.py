@@ -36,7 +36,7 @@ async def _probe_version(command: list[str]) -> str:
         stdout, stderr = await asyncio.wait_for(
             process.communicate(), timeout=VERSION_PROBE_TIMEOUT_SECONDS
         )
-    except TimeoutError as exc:
+    except asyncio.TimeoutError as exc:
         process.kill()
         await process.wait()
         raise RuntimeError("version probe timed out") from exc

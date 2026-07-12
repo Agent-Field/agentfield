@@ -13,6 +13,13 @@ from agentfield.harness.providers.opencode import OpenCodeProvider
 from agentfield.types import HarnessConfig
 
 
+@pytest.fixture(autouse=True)
+def mock_opencode_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "agentfield.harness._availability.shutil.which", lambda path: path
+    )
+
+
 @pytest.mark.asyncio
 async def test_opencode_provider_constructs_command_and_maps_result(
     monkeypatch: pytest.MonkeyPatch,
@@ -27,10 +34,6 @@ async def test_opencode_provider_constructs_command_and_maps_result(
         return "final text\n", "", 0
 
     monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
-    monkeypatch.setattr(
-        "agentfield.harness._availability.shutil.which", lambda path: path
-    )
-
     provider = OpenCodeProvider(
         bin_path="/usr/local/bin/opencode",
     )
