@@ -239,7 +239,7 @@ dependencies:
 // times out when nothing is listening.
 func TestWaitForAgentNode_DefaultHealthPath(t *testing.T) {
 	ar := &AgentNodeRunner{}
-	err := ar.waitForAgentNode(1, "", 10*time.Millisecond)
+	err := ar.waitForAgentNode(1, "", "", 10*time.Millisecond)
 	if err == nil {
 		t.Fatalf("expected timeout when nothing is listening")
 	}

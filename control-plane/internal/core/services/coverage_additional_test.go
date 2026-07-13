@@ -104,13 +104,13 @@ func TestAgentServiceWaitForAgentNode(t *testing.T) {
 		defer server.Close()
 
 		service := &DefaultAgentService{}
-		require.NoError(t, service.waitForAgentNode(port, "/health", 2*time.Second))
+		require.NoError(t, service.waitForAgentNode(port, "/health", "", 2*time.Second))
 	})
 
 	t.Run("timeout", func(t *testing.T) {
 		port := findFreePortInRange(t)
 		service := &DefaultAgentService{}
-		err := service.waitForAgentNode(port, "/health", 750*time.Millisecond)
+		err := service.waitForAgentNode(port, "/health", "", 750*time.Millisecond)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "did not become ready")
 	})

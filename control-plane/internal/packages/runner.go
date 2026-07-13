@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -74,10 +75,14 @@ func (ar *AgentNodeRunner) runAgentNode(agentNodeName string, inProgress map[str
 
 	// 5. Wait for agent node to be ready
 	healthPath := "/health"
+	expectedNodeID := agentNodeName
 	if metadata, err := ParsePackageMetadata(agentNode.Path); err == nil {
 		healthPath = metadata.HealthcheckPath()
+		if metadata.AgentNode.NodeID != "" {
+			expectedNodeID = metadata.AgentNode.NodeID
+		}
 	}
-	if err := ar.waitForAgentNode(port, healthPath, 10*time.Second); err != nil {
+	if err := ar.waitForAgentNode(port, healthPath, expectedNodeID, 10*time.Second); err != nil {
 		if killErr := cmd.Process.Kill(); killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
 			fmt.Printf("⚠️  Failed to kill agent node process: %v\n", killErr)
 		}
@@ -120,6 +125,14 @@ func (ar *AgentNodeRunner) isPortAvailable(port int) bool {
 		return false
 	}
 	conn.Close()
+	// A successful bind is not proof on Windows: without SO_EXCLUSIVEADDRUSE
+	// a probe bind can succeed while another process is actively listening on
+	// the same port (observed with uvicorn agent nodes). If something accepts
+	// a connection, the port is taken.
+	if dial, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 250*time.Millisecond); err == nil {
+		dial.Close()
+		return false
+	}
 	return true
 }
 
@@ -279,26 +292,39 @@ func (ar *AgentNodeRunner) resolveEnvironment(nodeName string, metadata *Package
 	return resolver.Resolve(env)
 }
 
-// waitForAgentNode waits for the agent node to become ready
-func (ar *AgentNodeRunner) waitForAgentNode(port int, healthPath string, timeout time.Duration) error {
+// waitForAgentNode waits for the agent node to become ready. A 200 on the
+// health endpoint is only trusted when the payload's node_id (if it carries
+// one) matches the node just started — on Windows the port probe can miss an
+// existing listener (no SO_EXCLUSIVEADDRUSE), and without this check a
+// squatter's health response makes a dead agent look started. An empty
+// expectedNodeID or a payload without node_id skips the identity check.
+func (ar *AgentNodeRunner) waitForAgentNode(port int, healthPath, expectedNodeID string, timeout time.Duration) error {
 	if healthPath == "" {
 		healthPath = "/health"
 	}
 	client := &http.Client{Timeout: 1 * time.Second}
 	deadline := time.Now().Add(timeout)
 
+	impostor := ""
 	for time.Now().Before(deadline) {
 		resp, err := client.Get(fmt.Sprintf("http://localhost:%d%s", port, healthPath))
 		if err == nil && resp.StatusCode == 200 {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 			resp.Body.Close()
-			return nil
-		}
-		if resp != nil {
+			got := HealthNodeID(body)
+			if got == "" || expectedNodeID == "" || NodeIDsEquivalent(got, expectedNodeID) {
+				return nil
+			}
+			impostor = got
+		} else if resp != nil {
 			resp.Body.Close()
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 
+	if impostor != "" {
+		return fmt.Errorf("port %d is answering health checks as %q, not %q — another process is using the port", port, impostor, expectedNodeID)
+	}
 	return fmt.Errorf("agent node did not become ready within %v", timeout)
 }
 

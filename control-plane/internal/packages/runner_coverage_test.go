@@ -123,7 +123,7 @@ func TestRunnerErrorCases(t *testing.T) {
 	t.Run("waitForAgentNode-timeout", func(t *testing.T) {
 		ar := &AgentNodeRunner{}
 		// just use a port that is not listening
-		err := ar.waitForAgentNode(1, "/health", 10*time.Millisecond)
+		err := ar.waitForAgentNode(1, "/health", "", 10*time.Millisecond)
 		if err == nil {
 			t.Fatal("expected timeout error")
 		}

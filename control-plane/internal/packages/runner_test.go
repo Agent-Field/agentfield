@@ -126,7 +126,7 @@ func TestAgentNodeRunnerWaitDisplayAndStartProcess(t *testing.T) {
 	})
 	waitForHTTPServer(t, fmt.Sprintf("127.0.0.1:%d", port))
 
-	if err := runner.waitForAgentNode(port, "/health", 2*time.Second); err != nil {
+	if err := runner.waitForAgentNode(port, "/health", "", 2*time.Second); err != nil {
 		t.Fatalf("waitForAgentNode: %v", err)
 	}
 	if err := runner.displayCapabilities(InstalledPackage{Name: "demo"}, port); err != nil {
@@ -139,7 +139,7 @@ func TestAgentNodeRunnerWaitDisplayAndStartProcess(t *testing.T) {
 	}
 	unusedPort := unusedPortListener.Addr().(*net.TCPAddr).Port
 	_ = unusedPortListener.Close()
-	if err := runner.waitForAgentNode(unusedPort, "/health", 600*time.Millisecond); err == nil || !strings.Contains(err.Error(), "did not become ready") {
+	if err := runner.waitForAgentNode(unusedPort, "/health", "", 600*time.Millisecond); err == nil || !strings.Contains(err.Error(), "did not become ready") {
 		t.Fatalf("expected timeout error, got %v", err)
 	}
 

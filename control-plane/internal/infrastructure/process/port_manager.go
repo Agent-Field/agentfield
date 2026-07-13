@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
 )
@@ -48,6 +49,14 @@ func (pm *DefaultPortManager) IsPortAvailable(port int) bool {
 	}
 	// If listening was successful, close the listener immediately as we only wanted to check.
 	listener.Close()
+	// A successful bind is not proof on Windows: without SO_EXCLUSIVEADDRUSE a
+	// probe bind can succeed while another process is actively listening on
+	// the same port (observed with uvicorn agent nodes). If something accepts
+	// a connection, the port is taken.
+	if dial, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 250*time.Millisecond); err == nil {
+		dial.Close()
+		return false
+	}
 	return true
 }
 
