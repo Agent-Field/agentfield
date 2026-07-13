@@ -43,10 +43,14 @@ function errorMessage(err: unknown): string {
 
 /**
  * Probe GET {baseUrl}/health.
- *  - 200 {"status":"healthy",...}            -> { reachable: true,  healthy: true }
- *  - 503 {"status":"unhealthy",...}          -> { reachable: true,  healthy: false }
+ *  - 200 {"status":"healthy",...}   -> { reachable: true, recognized: true,  healthy: true }
+ *  - 503 {"status":"unhealthy",...} -> { reachable: true, recognized: true,  healthy: false }
  *    (an HTTP response — even 503 — still means the control plane is reachable)
- *  - network error / timeout (3s)            -> { reachable: false, healthy: false, error }
+ *  - any response whose body is not an AgentField health payload
+ *                                   -> { reachable: true, recognized: false, healthy: false, error }
+ *    (default port 8080 is popular — an unrelated dev server answering 200 on
+ *    /health must not light up the dashboard as a running control plane)
+ *  - network error / timeout (3s)   -> { reachable: false, recognized: false, healthy: false, error }
  */
 export async function checkControlPlane(
   baseUrl: string = DEFAULT_BASE_URL,
@@ -62,9 +66,20 @@ export async function checkControlPlane(
     } catch {
       raw = undefined
     }
-    return { reachable: true, healthy: res.ok, raw }
+    const status = isRecord(raw) && typeof raw.status === 'string' ? raw.status : undefined
+    const recognized = status === 'healthy' || status === 'unhealthy'
+    if (!recognized) {
+      return {
+        reachable: true,
+        recognized: false,
+        healthy: false,
+        raw,
+        error: `A service answered ${baseUrl}/health but does not look like an AgentField control plane — another app may be using the port.`
+      }
+    }
+    return { reachable: true, recognized: true, healthy: res.ok && status === 'healthy', raw }
   } catch (err) {
-    return { reachable: false, healthy: false, error: errorMessage(err) }
+    return { reachable: false, recognized: false, healthy: false, error: errorMessage(err) }
   }
 }
 
@@ -197,7 +212,9 @@ export async function getSnapshot(options: SnapshotOptions = {}): Promise<AgentF
     readInstalledAgents(options.homeDir)
   ])
 
-  const nodeIds = controlPlane.reachable
+  // Only cross-check against a recognized control plane; an unrelated service
+  // on the port must not influence the badges.
+  const nodeIds = controlPlane.recognized
     ? await fetchControlPlaneNodes(baseUrl, fetchImpl)
     : null
   const hasControlPlaneView = nodeIds !== null

@@ -8,12 +8,15 @@ export function ControlPlaneCard({ controlPlane }: ControlPlaneCardProps) {
   let dotClass = 'gray'
   let label = 'Checking…'
   if (controlPlane) {
-    if (controlPlane.reachable && controlPlane.healthy) {
+    if (controlPlane.healthy) {
       dotClass = 'green'
       label = 'Running'
-    } else if (controlPlane.reachable) {
+    } else if (controlPlane.reachable && controlPlane.recognized) {
       dotClass = 'yellow'
       label = 'Reachable (unhealthy)'
+    } else if (controlPlane.reachable) {
+      dotClass = 'yellow'
+      label = 'Another service is on this port'
     } else {
       dotClass = 'red'
       label = 'Not reachable'
@@ -30,9 +33,7 @@ export function ControlPlaneCard({ controlPlane }: ControlPlaneCardProps) {
         <span className={`status-dot ${dotClass}`} aria-hidden="true" />
         <span className="status-label">{label}</span>
       </div>
-      {controlPlane && !controlPlane.reachable && controlPlane.error && (
-        <p className="muted small">{controlPlane.error}</p>
-      )}
+      {controlPlane?.error && <p className="muted small">{controlPlane.error}</p>}
     </section>
   )
 }

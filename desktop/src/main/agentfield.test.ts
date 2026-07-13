@@ -170,7 +170,7 @@ describe('checkControlPlane', () => {
     }
     const fetchImpl: FetchLike = async () => jsonResponse(body, 200)
     const result = await checkControlPlane('http://localhost:8080', fetchImpl)
-    expect(result).toEqual({ reachable: true, healthy: true, raw: body })
+    expect(result).toEqual({ reachable: true, recognized: true, healthy: true, raw: body })
   })
 
   // Contract: 503 with an unhealthy body still means reachable, just not healthy.
@@ -179,8 +179,32 @@ describe('checkControlPlane', () => {
     const fetchImpl: FetchLike = async () => jsonResponse(body, 503)
     const result = await checkControlPlane('http://localhost:8080', fetchImpl)
     expect(result.reachable).toBe(true)
+    expect(result.recognized).toBe(true)
     expect(result.healthy).toBe(false)
     expect(result.raw).toEqual(body)
+  })
+
+  // Contract: a 200 from something that is NOT an AgentField control plane
+  // (default port 8080 is popular) must not read as healthy. Found live on
+  // Windows: an unrelated dev server answering {"status":"alive"} on /health
+  // lit the dashboard green.
+  it('rejects a foreign 200 /health payload as unrecognized', async () => {
+    const body = { status: 'alive', uptime_s: 3714 }
+    const fetchImpl: FetchLike = async () => jsonResponse(body, 200)
+    const result = await checkControlPlane('http://localhost:8080', fetchImpl)
+    expect(result.reachable).toBe(true)
+    expect(result.recognized).toBe(false)
+    expect(result.healthy).toBe(false)
+    expect(result.error).toContain('does not look like an AgentField control plane')
+  })
+
+  it('rejects a non-JSON 200 response as unrecognized', async () => {
+    const fetchImpl: FetchLike = async () =>
+      new Response('<html>hi</html>', { status: 200, headers: { 'content-type': 'text/html' } })
+    const result = await checkControlPlane('http://localhost:8080', fetchImpl)
+    expect(result.reachable).toBe(true)
+    expect(result.recognized).toBe(false)
+    expect(result.healthy).toBe(false)
   })
 
   // Contract: network error / timeout -> not reachable, error captured.
@@ -189,7 +213,12 @@ describe('checkControlPlane', () => {
       throw new TypeError('fetch failed')
     }
     const result = await checkControlPlane('http://localhost:8080', fetchImpl)
-    expect(result).toEqual({ reachable: false, healthy: false, error: 'fetch failed' })
+    expect(result).toEqual({
+      reachable: false,
+      recognized: false,
+      healthy: false,
+      error: 'fetch failed'
+    })
   })
 
   it('probes {baseUrl}/health', async () => {
@@ -285,6 +314,27 @@ describe('getSnapshot', () => {
     )
     // Nodes view unavailable -> trust registry statuses directly.
     expect(badges).toEqual({ 'pr-af': 'running', 'swe-af': 'stopped' })
+  })
+
+  it('does not consult the nodes view of an unrecognized service on the port', async () => {
+    const home = await makeHome(REGISTRY_FIXTURE)
+    const requested: string[] = []
+    const fetchImpl: FetchLike = async (input) => {
+      requested.push(String(input))
+      // A foreign service that would answer BOTH endpoints with junk.
+      return jsonResponse({ status: 'alive', nodes: [] })
+    }
+
+    const snapshot = await getSnapshot({ homeDir: home, fetchImpl })
+
+    expect(snapshot.controlPlane.recognized).toBe(false)
+    // Badges fall back to registry statuses — the foreign 200 on /api/v1/nodes
+    // must not flip a running agent to unknown.
+    const badges = Object.fromEntries(
+      snapshot.registry.agents.map((a) => [a.name, a.badge])
+    )
+    expect(badges).toEqual({ 'pr-af': 'running', 'swe-af': 'stopped' })
+    expect(requested.some((url) => url.endsWith('/api/v1/nodes'))).toBe(false)
   })
 
   it('reports an unreachable control plane and an absent registry gracefully', async () => {

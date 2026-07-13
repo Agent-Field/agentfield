@@ -5,11 +5,17 @@
 export interface ControlPlaneStatus {
   /** An HTTP response came back (any status code, including 503). */
   reachable: boolean
-  /** The health endpoint answered 200 (body reports "healthy"). */
+  /**
+   * The response body looks like an AgentField control plane health payload
+   * (status: "healthy" | "unhealthy"). False when some unrelated service is
+   * squatting on the port — its nodes view must not be trusted.
+   */
+  recognized: boolean
+  /** The health endpoint answered 200 with a body reporting "healthy". */
   healthy: boolean
   /** Raw JSON body of the health response, when one was parseable. */
   raw?: unknown
-  /** Network/timeout error message when unreachable. */
+  /** Network/timeout error when unreachable, or why the payload was rejected. */
   error?: string
 }
 
