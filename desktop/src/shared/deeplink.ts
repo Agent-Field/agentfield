@@ -8,7 +8,7 @@
 export const DEEP_LINK_SCHEME = 'agentfield'
 
 /** The app's views, also the vocabulary of deep-link targets. */
-export const VIEWS = ['dashboard', 'agents', 'activity', 'install'] as const
+export const VIEWS = ['dashboard', 'agents', 'activity', 'install', 'settings'] as const
 export type View = (typeof VIEWS)[number]
 
 export function isView(value: string): value is View {

@@ -6,6 +6,7 @@ import { DashboardView } from './components/DashboardView'
 import { AgentsPanel } from './components/AgentsPanel'
 import { ActivityPanel } from './components/ActivityPanel'
 import { InstallPanel } from './components/InstallPanel'
+import { SettingsPanel } from './components/SettingsPanel'
 
 const POLL_INTERVAL_MS = 5000
 
@@ -36,7 +37,8 @@ const VIEW_TITLES: Record<View, string> = {
   dashboard: 'Dashboard',
   agents: 'Agents',
   activity: 'Activity',
-  install: 'Install'
+  install: 'Install',
+  settings: 'Settings'
 }
 
 export default function App() {
@@ -51,10 +53,16 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    // agentfield://<view> deep links land here via the main process.
-    return window.agentfield.onNavigate((v) => {
+    // agentfield://<view> deep links land here via the main process. Deep
+    // links from before this listener existed (a link that cold-started the
+    // app) are collected by announceReady once the subscription is live.
+    const unsubscribe = window.agentfield.onNavigate((v) => {
       if (isView(v)) setView(v)
     })
+    void window.agentfield.announceReady().then((v) => {
+      if (v !== null && isView(v)) setView(v)
+    })
+    return unsubscribe
   }, [])
 
   const refresh = useCallback(async () => {
@@ -91,7 +99,9 @@ export default function App() {
           {view === 'dashboard' && (
             <DashboardView snapshot={snapshot} onNavigate={setView} />
           )}
-          {view === 'agents' && <AgentsPanel registry={snapshot?.registry ?? null} />}
+          {view === 'agents' && (
+            <AgentsPanel registry={snapshot?.registry ?? null} onChanged={() => void refresh()} />
+          )}
           {view === 'activity' && (
             <ActivityPanel
               executions={snapshot?.executions ?? null}
@@ -101,6 +111,7 @@ export default function App() {
           {view === 'install' && (
             <InstallPanel installedNames={installedNames} onInstalled={() => void refresh()} />
           )}
+          {view === 'settings' && <SettingsPanel agents={snapshot?.registry.agents ?? []} />}
         </div>
       </div>
     </div>

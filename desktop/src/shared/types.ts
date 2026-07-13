@@ -83,6 +83,27 @@ export interface InstallResult {
   message: string
 }
 
+/** Outcome of a start/stop/restart issued from the app. */
+export interface AgentActionResult {
+  ok: boolean
+  message: string
+}
+
+/**
+ * Persisted app settings (settings.json in the app's user-data dir).
+ * The goal: the app is "just there" — it boots at login, brings the control
+ * plane up, starts the agents you selected, and everything is queryable the
+ * moment Claude/Codex/anything asks.
+ */
+export interface DesktopSettings {
+  /** Launch the app when you log in (starts hidden, in the tray). */
+  openAtLogin: boolean
+  /** Start the control plane on app launch when nothing is listening. */
+  autostartControlPlane: boolean
+  /** Installed agent names to start once the control plane is healthy. */
+  autostartAgents: string[]
+}
+
 /** Headline numbers from GET /api/ui/v1/dashboard/summary. */
 export interface DashboardMetrics {
   agentsRunning: number
@@ -115,6 +136,11 @@ export interface AgentFieldApi {
   getCatalog(): Promise<CatalogEntry[]>
   /** Install a catalog entry by name. Resolves when `af install` exits. */
   install(name: string): Promise<InstallResult>
+  /** Start / stop / restart an installed agent by its registry name. */
+  agentAction(action: 'start' | 'stop' | 'restart', name: string): Promise<AgentActionResult>
+  getSettings(): Promise<DesktopSettings>
+  /** Merge a partial update into the settings; returns the result. */
+  setSettings(patch: Partial<DesktopSettings>): Promise<DesktopSettings>
   /** Subscribe to install output lines; returns an unsubscribe function. */
   onInstallProgress(listener: (line: string) => void): () => void
   /**
@@ -122,6 +148,12 @@ export interface AgentFieldApi {
    * as a plain string over IPC; validate with isView() before trusting it.
    */
   onNavigate(listener: (view: string) => void): () => void
+  /**
+   * Tell the main process the navigation listener is live. Returns the view
+   * of a deep link that arrived before then (e.g. the link that cold-started
+   * a hidden app), or null. Call once, after subscribing with onNavigate.
+   */
+  announceReady(): Promise<string | null>
   /** "darwin" | "win32" | "linux" — for platform-specific chrome (traffic-light inset). */
   platform: string
 }

@@ -2,16 +2,27 @@ import { join, resolve } from 'node:path'
 import { BrowserWindow, Menu, app, ipcMain, shell } from 'electron'
 import { CATALOG } from '../shared/catalog'
 import { DEEP_LINK_SCHEME, type View, deepLinkFromArgv, parseDeepLink } from '../shared/deeplink'
+import type { DesktopSettings } from '../shared/types'
 import { getSnapshot } from './agentfield'
+import { type AgentAction, runAgentAction } from './agents'
+import { runAutostart } from './autostart'
 import { installAgent } from './installer'
+import { loadSettings, mergeSettings, saveSettings } from './settings'
 import { setupTray } from './tray'
 import appIcon from '../../resources/icon.png?asset'
 
 const isMac = process.platform === 'darwin'
 
 let mainWindow: BrowserWindow | null = null
-/** Deep-link view waiting for a window that can render it. */
+/** Deep-link view waiting for a renderer that can show it. */
 let pendingView: View | null = null
+/**
+ * True once the renderer subscribed to navigation (it announces itself via
+ * agentfield:renderer-ready on mount). A push before that would be dropped —
+ * did-finish-load fires before React mounts, so readiness is the renderer's
+ * call, not the page loader's.
+ */
+let rendererReady = false
 /** True once the user chose Quit — lets close-to-tray tell hide from exit. */
 let quitting = false
 /** True when a tray exists (Windows/Linux) — enables close-to-tray. */
@@ -88,9 +99,15 @@ function createWindow(): void {
     }
   })
   win.on('closed', () => {
-    if (mainWindow === win) mainWindow = null
+    if (mainWindow === win) {
+      mainWindow = null
+      rendererReady = false
+    }
   })
-  win.webContents.on('did-finish-load', () => flushPendingView())
+  // A reload restarts the renderer; it re-announces readiness on mount.
+  win.webContents.on('did-start-loading', () => {
+    rendererReady = false
+  })
 
   // electron-vite convention: dev server URL in dev, built file in production.
   const devUrl = process.env['ELECTRON_RENDERER_URL']
@@ -112,8 +129,9 @@ function showMainWindow(): void {
 }
 
 function flushPendingView(): void {
-  if (!mainWindow || !pendingView) return
-  if (mainWindow.webContents.isLoading()) return // did-finish-load will flush
+  // Not ready yet -> keep pendingView; the renderer collects it when it
+  // announces readiness (agentfield:renderer-ready returns-and-clears it).
+  if (!mainWindow || !pendingView || !rendererReady) return
   mainWindow.webContents.send('agentfield:navigate', pendingView)
   pendingView = null
 }
@@ -141,6 +159,22 @@ function registerDeepLinks(): void {
 }
 
 let installInFlight = false
+let settings: DesktopSettings
+
+function settingsFile(): string {
+  return join(app.getPath('userData'), 'settings.json')
+}
+
+// Register (or clear) the OS login item. Dev builds skip it — registering
+// electron.exe as a login item would be wrong and confusing.
+function applyLoginItem(next: DesktopSettings): void {
+  if (!app.isPackaged) return
+  app.setLoginItemSettings({
+    openAtLogin: next.openAtLogin,
+    // Started at login the app stays out of the way: tray only, no window.
+    args: ['--hidden']
+  })
+}
 
 function main(): void {
   registerDeepLinks()
@@ -159,8 +193,10 @@ function main(): void {
     quitting = true
   })
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     installAppMenu()
+    settings = await loadSettings(settingsFile())
+    applyLoginItem(settings)
 
     ipcMain.handle('agentfield:snapshot', () => getSnapshot())
     ipcMain.handle('agentfield:catalog', () => CATALOG)
@@ -182,6 +218,30 @@ function main(): void {
         installInFlight = false
       }
     })
+    ipcMain.handle('agentfield:agent-action', (_event, action: unknown, name: unknown) => {
+      if (
+        typeof name !== 'string' ||
+        (action !== 'start' && action !== 'stop' && action !== 'restart')
+      ) {
+        return { ok: false, message: 'invalid agent action' }
+      }
+      return runAgentAction(action as AgentAction, name)
+    })
+    // The renderer calls this once its navigation listener is live; the
+    // return value is the deep-link view (if any) that arrived before then.
+    ipcMain.handle('agentfield:renderer-ready', () => {
+      rendererReady = true
+      const view = pendingView
+      pendingView = null
+      return view
+    })
+    ipcMain.handle('agentfield:settings-get', () => settings)
+    ipcMain.handle('agentfield:settings-set', async (_event, patch: unknown) => {
+      settings = mergeSettings(settings, patch)
+      applyLoginItem(settings)
+      await saveSettings(settingsFile(), settings)
+      return settings
+    })
 
     // macOS has its own menu-bar companion (af-tray) — no in-app tray there.
     if (!isMac) {
@@ -192,7 +252,16 @@ function main(): void {
     const initial = deepLinkFromArgv(process.argv)
     if (initial) pendingView = initial
 
-    createWindow()
+    // Login-item launches pass --hidden: stay in the tray, no window. Without
+    // a tray to live in, fall back to showing the window as usual.
+    if (!process.argv.includes('--hidden') || !trayActive) {
+      createWindow()
+    }
+
+    // Bring the control plane and the selected agents up in the background.
+    runAutostart(settings, (message) => console.log(message)).catch((err) =>
+      console.error('autostart failed:', err)
+    )
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()

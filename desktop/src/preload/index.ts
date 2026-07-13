@@ -11,11 +11,15 @@ const api: AgentFieldApi = {
     ipcRenderer.on('agentfield:install-progress', wrapped)
     return () => ipcRenderer.removeListener('agentfield:install-progress', wrapped)
   },
+  agentAction: (action, name) => ipcRenderer.invoke('agentfield:agent-action', action, name),
+  getSettings: () => ipcRenderer.invoke('agentfield:settings-get'),
+  setSettings: (patch) => ipcRenderer.invoke('agentfield:settings-set', patch),
   onNavigate: (listener) => {
     const wrapped = (_event: Electron.IpcRendererEvent, view: string) => listener(view)
     ipcRenderer.on('agentfield:navigate', wrapped)
     return () => ipcRenderer.removeListener('agentfield:navigate', wrapped)
   },
+  announceReady: () => ipcRenderer.invoke('agentfield:renderer-ready'),
   platform: process.platform
 }
 

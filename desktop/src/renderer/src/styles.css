@@ -469,6 +469,86 @@ body[data-platform='win32'] .view-header {
   color: var(--green);
 }
 
+/* --- agent lifecycle controls ------------------------------------------------ */
+
+.row-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.action-button {
+  -webkit-app-region: no-drag;
+  background: var(--pill-bg);
+  color: var(--text-primary);
+  border: none;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.action-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text-primary) 14%, var(--pill-bg));
+}
+
+.action-button.primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.action-button.primary:hover:not(:disabled) {
+  background: var(--accent-pressed);
+}
+
+.action-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* --- settings ----------------------------------------------------------------- */
+
+.section-title {
+  margin: 18px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.switch {
+  -webkit-app-region: no-drag;
+  position: relative;
+  width: 36px;
+  height: 21px;
+  border: none;
+  border-radius: 999px;
+  background: var(--pill-bg);
+  cursor: pointer;
+  transition: background 0.15s ease;
+  flex: none;
+}
+
+.switch.on {
+  background: var(--green);
+}
+
+.switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 0.15s ease;
+}
+
+.switch.on .switch-thumb {
+  transform: translateX(15px);
+}
+
 /* --- misc ------------------------------------------------------------------ */
 
 .callout {
