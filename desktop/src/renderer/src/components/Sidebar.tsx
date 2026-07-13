@@ -1,7 +1,10 @@
 import type { ReactElement } from 'react'
+import type { View } from '../../../shared/deeplink'
 import type { CpTone } from '../App'
 
-export type View = 'dashboard' | 'agents' | 'activity' | 'install'
+// Re-exported so view components keep one import site; the canonical list
+// lives in shared/deeplink.ts, where agentfield:// URLs resolve to views.
+export type { View }
 
 interface SidebarProps {
   view: View

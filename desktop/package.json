@@ -17,6 +17,14 @@
   "build": {
     "appId": "ai.agentfield.desktop",
     "productName": "AgentField",
+    "protocols": [
+      {
+        "name": "AgentField",
+        "schemes": [
+          "agentfield"
+        ]
+      }
+    ],
     "files": [
       "out/**",
       "resources/**"

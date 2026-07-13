@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
+import { type View, isView } from '../../shared/deeplink'
 import type { AgentFieldSnapshot } from '../../shared/types'
-import { Sidebar, type View } from './components/Sidebar'
+import { Sidebar } from './components/Sidebar'
 import { DashboardView } from './components/DashboardView'
 import { AgentsPanel } from './components/AgentsPanel'
 import { ActivityPanel } from './components/ActivityPanel'
@@ -47,6 +48,13 @@ export default function App() {
     // Lets styles.css inset window chrome for macOS traffic lights vs the
     // Windows caption-button overlay.
     document.body.dataset.platform = window.agentfield.platform
+  }, [])
+
+  useEffect(() => {
+    // agentfield://<view> deep links land here via the main process.
+    return window.agentfield.onNavigate((v) => {
+      if (isView(v)) setView(v)
+    })
   }, [])
 
   const refresh = useCallback(async () => {

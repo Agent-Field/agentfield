@@ -117,6 +117,11 @@ export interface AgentFieldApi {
   install(name: string): Promise<InstallResult>
   /** Subscribe to install output lines; returns an unsubscribe function. */
   onInstallProgress(listener: (line: string) => void): () => void
+  /**
+   * Subscribe to deep-link navigation (agentfield://<view>). The view arrives
+   * as a plain string over IPC; validate with isView() before trusting it.
+   */
+  onNavigate(listener: (view: string) => void): () => void
   /** "darwin" | "win32" | "linux" — for platform-specific chrome (traffic-light inset). */
   platform: string
 }
