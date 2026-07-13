@@ -249,15 +249,15 @@ func onReady() {
 			case <-mOpen.ClickedCh:
 				openDashboard()
 			case <-mMore.ClickedCh:
-				openURL(uiPageURL("agents"))
+				openPage("agents")
 			case <-mAgentsOpen.ClickedCh:
-				openURL(uiPageURL("agents"))
+				openPage("agents")
 			case <-mSuccess.ClickedCh:
-				openURL(uiPageURL("executions"))
+				openPage("executions")
 			case <-mResponse.ClickedCh:
-				openURL(uiPageURL("executions"))
+				openPage("executions")
 			case <-mMemory.ClickedCh:
-				openURL(uiPageURL("dashboard"))
+				openPage("dashboard")
 			case <-mEnterKey.ClickedCh:
 				handleEnterAPIKey()
 				refresh()
@@ -339,14 +339,18 @@ func notify(title, body string) {
 	_ = exec.Command("osascript", "-e", script).Start()
 }
 
-func openDashboard() {
-	_ = exec.Command("open", dashboardURL()).Start()
-}
+func openDashboard() { openPage("") }
 
-// openURL opens an arbitrary URL in the default browser (used for dashboard
-// deep-links from the metric rows).
-func openURL(u string) {
-	_ = exec.Command("open", u).Start()
+// openPage opens a view, preferring the AgentField desktop app over the
+// browser: `open agentfield://…` succeeds only when something has registered
+// the scheme (the desktop app does on install) and fails fast when nothing
+// has — in which case the same page opens as web UI in the default browser.
+// Run (not Start) on the deep link because the fallback needs its exit code.
+func openPage(page string) {
+	if exec.Command("open", deepLinkForPage(page)).Run() == nil {
+		return
+	}
+	_ = exec.Command("open", browserURLForPage(page)).Start()
 }
 
 func openLogs() {
