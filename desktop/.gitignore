@@ -3,3 +3,10 @@ dist/
 out/
 release/
 *.log
+
+# The root .gitignore excludes build/, but electron-builder reads the app
+# icons from desktop/build — track exactly those.
+!build/
+build/*
+!build/icon.png
+!build/icon.icns

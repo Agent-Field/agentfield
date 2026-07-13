@@ -10,6 +10,7 @@
     "build": "npm run typecheck && electron-vite build",
     "preview": "electron-vite preview",
     "test": "vitest run",
+    "icons": "electron scripts/make-icons.mjs",
     "dist": "npm run build && electron-builder",
     "dist:dir": "npm run build && electron-builder --dir"
   },
@@ -17,7 +18,8 @@
     "appId": "ai.agentfield.desktop",
     "productName": "AgentField",
     "files": [
-      "out/**"
+      "out/**",
+      "resources/**"
     ],
     "directories": {
       "output": "release"
