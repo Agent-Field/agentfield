@@ -72,8 +72,35 @@ committed, so this only needs re-running when the mark changes.
 
 - Node.js 20+ (developed on Node 22)
 - An AgentField control plane on `http://localhost:8080` (optional — the app
-  degrades gracefully when it is not running)
-- The `af` CLI on PATH for the Install view (the app tells you if it's missing)
+  degrades gracefully when it is not running, and can start one itself)
+- Nothing else: the packaged app bundles the `af` CLI (see below). In dev,
+  either have `af` on PATH or run `npm run bundle-cli` once.
+
+## Bundled CLI, resolution, and updates
+
+The packaged app carries the af CLI (`resources/bin`, staged from `vendor/`
+by `npm run bundle-cli` or the release pipeline) so a desktop-app-only
+install works on a machine that never saw AgentField. On every launch the
+app resolves which af to drive (`src/main/cli.ts`), in order:
+
+1. **managed** — `~/.agentfield/bin` (where the curl installer puts it, and
+   where the app provisions its bundled copy: the shared location both
+   installers converge on, so there is never a double install)
+2. **PATH** — a developer's own `af`
+3. **bundled** — the copy inside the app package
+
+A copy older than the app's minimum version is skipped — the app runs on its
+bundled CLI meanwhile and Settings shows an "Update AgentField" button that
+installs the bundled copy into the managed location (never over a newer
+one; `Version: dev` builds are trusted as-is). On a machine with no CLI at
+all, first launch auto-provisions `~/.agentfield/bin` (both `agentfield`
+and the `af` alias, Windows user PATH registered) so terminals and coding
+agents get a working `af` too.
+
+Unless switched off in Settings, the app also runs
+`af skill install --non-interactive` on launch, keeping the AgentField skill
+present in detected coding agents (Claude Code, Codex, Gemini, …) —
+idempotent via skillkit's state file, shared with the curl installer.
 
 ## Development
 
@@ -120,6 +147,8 @@ Packaging is unsigned for now (no notarization/signing identities configured).
 
 - Control plane URL is hard-coded to `http://localhost:8080` (not configurable yet).
 - No stop control for the control plane itself yet (the app only starts it).
+- macOS/Linux shell PATH setup stays with the curl installer — the app only
+  provisions `~/.agentfield/bin` there (absolute path always works).
 - The registry is read directly from `~/.agentfield/installed.yaml`; once
   `af list -o json` lands, the app should shell out to the CLI instead (see
   the `TODO(af-cli)` seam in `src/main/agentfield.ts`).
