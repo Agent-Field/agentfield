@@ -616,7 +616,7 @@ func (as *DefaultAgentService) buildProcessConfig(agentNode packages.InstalledPa
 // secret store, prompting for missing required ones.
 func (as *DefaultAgentService) resolveNodeEnvironment(nodeName string, metadata *packages.PackageMetadata) (map[string]string, error) {
 	env := metadata.UserEnvironment
-	if len(env.Required) == 0 && len(env.Optional) == 0 {
+	if len(env.Required) == 0 && len(env.Optional) == 0 && len(env.RequireOneOf) == 0 {
 		return map[string]string{}, nil
 	}
 	store, err := packages.NewSecretStore(as.agentfieldHome)

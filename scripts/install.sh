@@ -545,13 +545,17 @@ verify_installation() {
   fi
 }
 
-# Install the agentfield skill into coding-agent integrations (Claude Code,
+# Install the agentfield skills into coding-agent integrations (Claude Code,
 # Codex, Gemini, OpenCode, Aider, Windsurf, Cursor). Delegated to the
 # freshly-installed `af` binary so the install logic stays in one place.
+# Two skills ship with the binary: agentfield (building agents) and
+# agentfield-use (calling installed agents) — `af skill install` handles one
+# skill per invocation, so loop.
 # Honors $SKILL_MODE: all (default) | all-targets | interactive | none.
 install_skill() {
   local install_dir="$1"
   local af_bin="$install_dir/agentfield"
+  local skill
 
   if [[ ! -x "$af_bin" ]]; then
     print_warning "af binary not executable, skipping skill install"
@@ -568,17 +572,24 @@ install_skill() {
       ;;
     all)
       printf "\n"
-      print_info "Installing skill into all detected coding agents..."
-      "$af_bin" skill install --all || print_warning "Skill install reported errors"
+      print_info "Installing skills into all detected coding agents..."
+      for skill in agentfield agentfield-use; do
+        "$af_bin" skill install "$skill" --all || print_warning "Skill install ($skill) reported errors"
+      done
       ;;
     all-targets)
       printf "\n"
-      print_info "Installing skill into all registered coding agents (even undetected)..."
-      "$af_bin" skill install --all-targets || print_warning "Skill install reported errors"
+      print_info "Installing skills into all registered coding agents (even undetected)..."
+      for skill in agentfield agentfield-use; do
+        "$af_bin" skill install "$skill" --all-targets || print_warning "Skill install ($skill) reported errors"
+      done
       ;;
     interactive|*)
       printf "\n"
       "$af_bin" skill install || print_warning "Skill install reported errors"
+      printf "\n"
+      print_info "Also installing the agentfield-use skill (calling installed agents)..."
+      "$af_bin" skill install agentfield-use --non-interactive || print_warning "Skill install (agentfield-use) reported errors"
       ;;
   esac
 }

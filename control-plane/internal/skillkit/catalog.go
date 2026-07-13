@@ -17,6 +17,10 @@ type Skill struct {
 	Description string   // one-line description for `af skill list`
 	EmbedRoot   string   // root path inside SkillData where this skill's files live
 	EntryFile   string   // relative path to the skill's main file (usually SKILL.md)
+	// Trigger is the "when must the agent read this skill" sentence rendered
+	// into marker-block targets' rules files (see renderPointerBlock) — each
+	// skill fires on different requests, so each carries its own trigger.
+	Trigger string
 }
 
 // Catalog is the registry of every skill the binary ships. Add a new entry
@@ -30,6 +34,20 @@ var Catalog = []Skill{
 		Description: "Design and ship a multi-agent system on AgentField. Derive the orchestration from the problem: decompose by cognitive jobs, place each slot on the autonomy spectrum, assign a verification rung, choose the dynamism rung with budgets. Composite intelligence, deep dynamic call graphs, live SDK docs from agentfield.ai, async-first smoke tests.",
 		EmbedRoot:   "skill_data/agentfield",
 		EntryFile:   "SKILL.md",
+		Trigger: `When the user asks you to architect or build a multi-agent system on
+AgentField (composite-intelligence backends, multi-reasoner pipelines,
+financial reviewer / clinical triage / research agent / etc.), you MUST
+read this skill first`,
+	},
+	{
+		Name:        "agentfield-use",
+		Version:     "0.1.0",
+		Description: "Discover and call agents already running on a local AgentField control plane. Health check, capability discovery, sync/async execution and polling, sessions, failure triage, and the af CLI ops (run/stop/logs/secrets) that keep installed agents answering.",
+		EmbedRoot:   "skill_data/agentfield-use",
+		EntryFile:   "SKILL.md",
+		Trigger: `When the user asks you to use, call, query, or delegate work to an
+installed AgentField agent, to list available agents or reasoners, or to
+check on a running execution, you MUST read this skill first`,
 	},
 }
 

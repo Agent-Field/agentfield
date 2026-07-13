@@ -268,7 +268,7 @@ func fileExists(path string) bool {
 // secret store, prompting for missing required ones.
 func (ar *AgentNodeRunner) resolveEnvironment(nodeName string, metadata *PackageMetadata) (map[string]string, error) {
 	env := metadata.UserEnvironment
-	if len(env.Required) == 0 && len(env.Optional) == 0 {
+	if len(env.Required) == 0 && len(env.Optional) == 0 && len(env.RequireOneOf) == 0 {
 		return map[string]string{}, nil
 	}
 	store, err := NewSecretStore(ar.AgentFieldHome)

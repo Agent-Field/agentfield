@@ -121,25 +121,25 @@ func markerEnd(skill Skill) string {
 // flow through automatically — no need to re-edit every agent rules file.
 func renderPointerBlock(skill Skill, canonicalCurrentDir string) string {
 	skillPath := filepath.Join(canonicalCurrentDir, skill.EntryFile)
+	trigger := skill.Trigger
+	if trigger == "" {
+		trigger = "When working with AgentField, you MUST read this skill first"
+	}
 	return fmt.Sprintf(`%s
 ## %s
 
-When the user asks you to architect or build a multi-agent system on
-AgentField (composite-intelligence backends, multi-reasoner pipelines,
-financial reviewer / clinical triage / research agent / etc.), you MUST
-read this skill first:
+%s:
 
   %s
 
 The skill is self-contained and every reference file is one level deep
-from SKILL.md. It teaches the philosophy, the SDK primitives, the
-canonical scaffold layout, the verification workflow, and the curl
-smoke test.
+from SKILL.md.
 
 Skill version: %s
 %s`,
 		markerStart(skill),
 		skill.Description,
+		trigger,
 		skillPath,
 		skill.Version,
 		markerEnd(skill),

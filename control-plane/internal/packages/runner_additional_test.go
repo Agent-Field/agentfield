@@ -32,6 +32,32 @@ func TestResolveEnvironment_NoDeclaredEnv(t *testing.T) {
 	}
 }
 
+// Contract: a manifest that declares ONLY require_one_of groups (no required/
+// optional lists) still goes through the resolver — a satisfied group's value
+// is injected, and an unsatisfied group errors instead of being skipped.
+func TestResolveEnvironment_RequireOneOfAloneIsResolved(t *testing.T) {
+	t.Setenv("ONE_OF_OPTION_B", "chosen")
+	ar := &AgentNodeRunner{AgentFieldHome: t.TempDir()}
+	meta := &PackageMetadata{
+		UserEnvironment: UserEnvironmentConfig{
+			RequireOneOf: []RequireOneOfGroup{{
+				ID: "provider",
+				Options: []UserEnvironmentVar{
+					{Name: "ONE_OF_OPTION_A"},
+					{Name: "ONE_OF_OPTION_B"},
+				},
+			}},
+		},
+	}
+	env, err := ar.resolveEnvironment("demo", meta)
+	if err != nil {
+		t.Fatalf("resolveEnvironment: %v", err)
+	}
+	if env["ONE_OF_OPTION_B"] != "chosen" {
+		t.Fatalf("ONE_OF_OPTION_B = %q, want chosen", env["ONE_OF_OPTION_B"])
+	}
+}
+
 // Contract: a declared required variable already present in the process
 // environment is resolved from there (no prompt needed) via the secret store.
 func TestResolveEnvironment_ResolvesFromProcessEnv(t *testing.T) {
