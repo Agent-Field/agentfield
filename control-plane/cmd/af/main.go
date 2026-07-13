@@ -338,6 +338,14 @@ func loadConfig(configFile string) (*config.Config, error) {
 	// Set default storage mode to local if not specified
 	if cfg.Storage.Mode == "" {
 		cfg.Storage.Mode = "local"
+	}
+	// Default the local storage paths whenever they are unset — not only when
+	// the mode was defaulted. A config file may set mode: "local" while leaving
+	// the paths empty (the sample config/agentfield.yaml does exactly that,
+	// and it is picked up automatically when af runs next to it), which
+	// previously skipped this block and failed startup with "database path is
+	// empty". Mirrors cmd/agentfield-server.
+	if cfg.Storage.Mode == "local" {
 		// Use the universal path management system
 		if cfg.Storage.Local.DatabasePath == "" {
 			dbPath, err := utils.GetDatabasePath()
