@@ -141,6 +141,7 @@ func (ar *AgentNodeRunner) startAgentNodeProcess(agentNode InstalledPackage, por
 	env = append(env, fmt.Sprintf("PORT=%d", port))
 	env = append(env, fmt.Sprintf("AGENTFIELD_SERVER=%s", serverURL))
 	env = append(env, fmt.Sprintf("AGENTFIELD_SERVER_URL=%s", serverURL))
+	env = PythonUTF8Env(env)
 
 	// Resolve declared variables from the encrypted secret store, prompting for
 	// missing required ones and persisting them. Secrets are only ever injected
@@ -230,6 +231,21 @@ func (ar *AgentNodeRunner) startNodeDependencies(node InstalledPackage, inProgre
 			fmt.Printf("⚠️  Failed to start node dependency %s: %v\n", depName, err)
 		}
 	}
+}
+
+// PythonUTF8Env appends PYTHONUTF8=1 unless the environment already pins a
+// value. Spawned agents log through a redirected stdout/stderr; on Windows
+// Python then encodes with the legacy ANSI code page (e.g. cp1252), which
+// cannot represent the SDK's emoji log prefixes and floods the log file with
+// UnicodeEncodeError tracebacks. UTF-8 mode is a no-op where UTF-8 is already
+// the default, so this is safe to set on every platform.
+func PythonUTF8Env(env []string) []string {
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "PYTHONUTF8=") {
+			return env
+		}
+	}
+	return append(env, "PYTHONUTF8=1")
 }
 
 // venvPython returns the venv python interpreter path, or "" if no venv exists.

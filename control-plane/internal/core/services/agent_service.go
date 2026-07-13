@@ -521,6 +521,7 @@ func (as *DefaultAgentService) buildProcessConfig(agentNode packages.InstalledPa
 	env = append(env, "AGENTFIELD_STRICT_PORT=1")
 	env = append(env, fmt.Sprintf("AGENTFIELD_SERVER=%s", serverURL))
 	env = append(env, fmt.Sprintf("AGENTFIELD_SERVER_URL=%s", serverURL))
+	env = packages.PythonUTF8Env(env)
 
 	// Resolve declared variables from the encrypted secret store. Secrets are
 	// injected only into this child process — never written to disk in plaintext.
