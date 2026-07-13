@@ -9,7 +9,12 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
 describe('normalizeSettings', () => {
   it('accepts a valid shape as-is', () => {
-    const s = { openAtLogin: true, autostartControlPlane: false, autostartAgents: ['a', 'b'] }
+    const s = {
+      openAtLogin: true,
+      autostartControlPlane: false,
+      autostartAgents: ['a', 'b'],
+      installSkills: false
+    }
     expect(normalizeSettings(s)).toEqual(s)
   })
 
@@ -48,7 +53,12 @@ describe('mergeSettings', () => {
 describe('load/save round trip', () => {
   it('persists and reloads settings', async () => {
     const file = join(dir, 'nested', 'settings.json')
-    const s = { openAtLogin: true, autostartControlPlane: true, autostartAgents: ['swe-planner'] }
+    const s = {
+      openAtLogin: true,
+      autostartControlPlane: true,
+      autostartAgents: ['swe-planner'],
+      installSkills: true
+    }
     await saveSettings(file, s)
     expect(await loadSettings(file)).toEqual(s)
   })

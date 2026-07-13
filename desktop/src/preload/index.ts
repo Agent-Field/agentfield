@@ -14,6 +14,8 @@ const api: AgentFieldApi = {
   agentAction: (action, name) => ipcRenderer.invoke('agentfield:agent-action', action, name),
   getSettings: () => ipcRenderer.invoke('agentfield:settings-get'),
   setSettings: (patch) => ipcRenderer.invoke('agentfield:settings-set', patch),
+  getCliStatus: () => ipcRenderer.invoke('agentfield:cli-status'),
+  updateCli: () => ipcRenderer.invoke('agentfield:cli-update'),
   onNavigate: (listener) => {
     const wrapped = (_event: Electron.IpcRendererEvent, view: string) => listener(view)
     ipcRenderer.on('agentfield:navigate', wrapped)

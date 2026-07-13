@@ -3,9 +3,11 @@ import { BrowserWindow, Menu, app, ipcMain, shell } from 'electron'
 import { CATALOG } from '../shared/catalog'
 import { DEEP_LINK_SCHEME, type View, deepLinkFromArgv, parseDeepLink } from '../shared/deeplink'
 import type { DesktopSettings } from '../shared/types'
+import { spawn } from 'node:child_process'
 import { getSnapshot } from './agentfield'
 import { type AgentAction, runAgentAction } from './agents'
 import { runAutostart } from './autostart'
+import { getCliCommand, initializeCli, installBundledCli, refreshCliStatus } from './cli'
 import { installAgent } from './installer'
 import { loadSettings, mergeSettings, saveSettings } from './settings'
 import { setupTray } from './tray'
@@ -165,6 +167,26 @@ function settingsFile(): string {
   return join(app.getPath('userData'), 'settings.json')
 }
 
+// The af CLI shipped inside the app package (see build.extraResources). In
+// dev, scripts/bundle-cli.mjs drops it into desktop/vendor/ instead.
+function bundledCliPath(): string {
+  const name = process.platform === 'win32' ? 'af.exe' : 'af'
+  return app.isPackaged
+    ? join(process.resourcesPath, 'bin', name)
+    : join(app.getAppPath(), 'vendor', name)
+}
+
+// Keep the AgentField skill present in detected coding agents (Claude Code,
+// Codex, Gemini, …) so they know how to drive local agents. Idempotent —
+// skillkit tracks versions in ~/.agentfield/skills/.state.json — and pure
+// best-effort: a failure only means the user runs `af skill install` later.
+function syncSkills(): void {
+  spawn(getCliCommand(), ['skill', 'install', '--non-interactive'], {
+    windowsHide: true,
+    stdio: 'ignore'
+  }).on('error', () => {})
+}
+
 // Register (or clear) the OS login item. Dev builds skip it — registering
 // electron.exe as a login item would be wrong and confusing.
 function applyLoginItem(next: DesktopSettings): void {
@@ -197,6 +219,12 @@ function main(): void {
     installAppMenu()
     settings = await loadSettings(settingsFile())
     applyLoginItem(settings)
+
+    // Resolve which af to drive (managed → PATH → bundled); on a machine
+    // with no AgentField at all this provisions the bundled CLI, so a
+    // desktop-app-only install still gets a working `af`.
+    await initializeCli(bundledCliPath())
+    if (settings.installSkills) syncSkills()
 
     ipcMain.handle('agentfield:snapshot', () => getSnapshot())
     ipcMain.handle('agentfield:catalog', () => CATALOG)
@@ -234,6 +262,12 @@ function main(): void {
       const view = pendingView
       pendingView = null
       return view
+    })
+    ipcMain.handle('agentfield:cli-status', () => refreshCliStatus(bundledCliPath()))
+    ipcMain.handle('agentfield:cli-update', async () => {
+      const result = await installBundledCli(bundledCliPath())
+      if (!result.ok) console.error(result.message)
+      return refreshCliStatus(bundledCliPath())
     })
     ipcMain.handle('agentfield:settings-get', () => settings)
     ipcMain.handle('agentfield:settings-set', async (_event, patch: unknown) => {

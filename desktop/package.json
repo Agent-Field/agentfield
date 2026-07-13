@@ -11,6 +11,7 @@
     "preview": "electron-vite preview",
     "test": "vitest run",
     "icons": "electron scripts/make-icons.mjs",
+    "bundle-cli": "node scripts/bundle-cli.mjs",
     "dist": "npm run build && electron-builder",
     "dist:dir": "npm run build && electron-builder --dir"
   },
@@ -28,6 +29,16 @@
     "files": [
       "out/**",
       "resources/**"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor",
+        "to": "bin",
+        "filter": [
+          "af",
+          "af.exe"
+        ]
+      }
     ],
     "directories": {
       "output": "release"

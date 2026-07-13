@@ -6,6 +6,7 @@
 import { spawn } from 'node:child_process'
 import { catalogEntry } from '../shared/catalog'
 import type { InstallResult } from '../shared/types'
+import { getCliCommand } from './cli'
 
 // CSI sequences (colors, cursor movement, erase-line spinner frames) and OSC
 // sequences (terminal titles), per ECMA-48. Written with \u escapes so no
@@ -36,8 +37,9 @@ export function sanitizeInstallOutput(chunk: string): string[] {
 export function installCommand(name: string): { command: string; args: string[] } | null {
   const entry = catalogEntry(name)
   if (!entry) return null
-  // spawn() without a shell; Windows CreateProcess resolves `af` -> af.exe.
-  return { command: 'af', args: ['install', entry.source] }
+  // spawn() without a shell; the command is whatever CLI resolution picked
+  // (managed copy, PATH `af`, or the app's bundled binary — see main/cli.ts).
+  return { command: getCliCommand(), args: ['install', entry.source] }
 }
 
 /**

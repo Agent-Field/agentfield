@@ -89,6 +89,23 @@ export interface AgentActionResult {
   message: string
 }
 
+/** Which af CLI the app resolved and whether an installed copy needs updating. */
+export interface CliStatus {
+  /** Spawnable command (absolute path or bare "af"), null when none usable. */
+  command: string | null
+  /** Where the resolved CLI came from. */
+  source: 'managed' | 'path' | 'bundled' | null
+  /** Its version, or null for dev/unparseable builds (trusted as-is). */
+  version: string | null
+  /** Oldest version this app can drive. */
+  minVersion: string
+  /** An installed copy that is too old — drives the "Update AgentField" banner. */
+  outdated: { source: string; version: string } | null
+  /** The app package carries a CLI it can (re)install. */
+  bundledAvailable: boolean
+  bundledVersion: string | null
+}
+
 /**
  * Persisted app settings (settings.json in the app's user-data dir).
  * The goal: the app is "just there" — it boots at login, brings the control
@@ -102,6 +119,11 @@ export interface DesktopSettings {
   autostartControlPlane: boolean
   /** Installed agent names to start once the control plane is healthy. */
   autostartAgents: string[]
+  /**
+   * Keep the AgentField skill installed in detected coding agents (Claude
+   * Code, Codex, …) via `af skill install` — so they know how to use this.
+   */
+  installSkills: boolean
 }
 
 /** Headline numbers from GET /api/ui/v1/dashboard/summary. */
@@ -141,6 +163,10 @@ export interface AgentFieldApi {
   getSettings(): Promise<DesktopSettings>
   /** Merge a partial update into the settings; returns the result. */
   setSettings(patch: Partial<DesktopSettings>): Promise<DesktopSettings>
+  /** Which af CLI the app is using (managed / PATH / bundled) and its version. */
+  getCliStatus(): Promise<CliStatus>
+  /** Install/refresh the bundled CLI into ~/.agentfield/bin; returns new status. */
+  updateCli(): Promise<CliStatus>
   /** Subscribe to install output lines; returns an unsubscribe function. */
   onInstallProgress(listener: (line: string) => void): () => void
   /**

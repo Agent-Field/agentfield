@@ -15,7 +15,13 @@ function agent(name: string, badge: SnapshotAgent['badge']): SnapshotAgent {
 }
 
 function settings(overrides: Partial<DesktopSettings>): DesktopSettings {
-  return { openAtLogin: false, autostartControlPlane: true, autostartAgents: [], ...overrides }
+  return {
+    openAtLogin: false,
+    autostartControlPlane: true,
+    autostartAgents: [],
+    installSkills: true,
+    ...overrides
+  }
 }
 
 function cp(overrides: Partial<AgentFieldSnapshot['controlPlane']>): AgentFieldSnapshot['controlPlane'] {

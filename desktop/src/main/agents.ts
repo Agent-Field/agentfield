@@ -16,6 +16,7 @@ import { closeSync, mkdirSync, openSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentActionResult } from '../shared/types'
 import { checkControlPlane, getAgentFieldHome, readInstalledAgents } from './agentfield'
+import { getCliCommand } from './cli'
 import { sanitizeInstallOutput } from './installer'
 
 export type AgentAction = 'start' | 'stop' | 'restart'
@@ -38,7 +39,7 @@ function runCli(args: string[], timeoutMs = CLI_TIMEOUT_MS): Promise<AgentAction
       }
     }
 
-    const child = spawn('af', args, { windowsHide: true })
+    const child = spawn(getCliCommand(), args, { windowsHide: true })
     const timer = setTimeout(() => {
       child.kill()
       done({ ok: false, message: `af ${args.join(' ')} timed out` })
@@ -116,7 +117,7 @@ export async function startControlPlane(
   }
 
   try {
-    const child = spawn('af', ['server'], {
+    const child = spawn(getCliCommand(), ['server'], {
       windowsHide: true,
       detached: true,
       stdio: ['ignore', log, log]

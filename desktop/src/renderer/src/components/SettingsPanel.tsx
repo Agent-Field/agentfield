@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { DesktopSettings, InstalledAgent } from '../../../shared/types'
+import type { CliStatus, DesktopSettings, InstalledAgent } from '../../../shared/types'
 
 interface SettingsPanelProps {
   agents: InstalledAgent[]
@@ -59,8 +59,17 @@ export function SettingsPanel({ agents }: SettingsPanelProps) {
             checked={settings.autostartControlPlane}
             onChange={(on) => update({ autostartControlPlane: on })}
           />
+          <ToggleRow
+            title="Keep coding-agent skills installed"
+            sub="Teach Claude Code, Codex, and friends how to use AgentField (via `af skill install`)."
+            checked={settings.installSkills}
+            onChange={(on) => update({ installSkills: on })}
+          />
         </ul>
       </div>
+
+      <h2 className="section-title">AgentField CLI</h2>
+      <CliCard />
 
       <h2 className="section-title">Auto-start agents</h2>
       <div className="panel">
@@ -83,6 +92,84 @@ export function SettingsPanel({ agents }: SettingsPanelProps) {
         )}
       </div>
     </>
+  )
+}
+
+/** Which af the app drives, and the one-click path to a good version. */
+function CliCard() {
+  const [status, setStatus] = useState<CliStatus | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    void window.agentfield.getCliStatus().then(setStatus)
+  }, [])
+
+  if (!status) {
+    return (
+      <div className="panel">
+        <div className="empty secondary">Checking…</div>
+      </div>
+    )
+  }
+
+  const runUpdate = async () => {
+    setBusy(true)
+    setStatus(await window.agentfield.updateCli())
+    setBusy(false)
+  }
+
+  const SOURCE_LABEL: Record<string, string> = {
+    managed: 'installed in ~/.agentfield',
+    path: 'from your PATH',
+    bundled: 'bundled with the app'
+  }
+
+  const versionLabel = status.version ? `v${status.version}` : status.command ? 'dev build' : '—'
+  const updateAvailable =
+    status.bundledAvailable &&
+    status.bundledVersion !== null &&
+    status.version !== null &&
+    status.bundledVersion !== status.version
+
+  let issue: string | null = null
+  let buttonLabel: string | null = null
+  if (!status.command) {
+    issue = 'No AgentField CLI found.'
+    if (status.bundledAvailable) buttonLabel = 'Install AgentField CLI'
+  } else if (status.outdated) {
+    issue = `Your installed AgentField (v${status.outdated.version}) is older than this app needs (v${status.minVersion}) — the app is using its bundled copy meanwhile.`
+    buttonLabel = 'Update AgentField'
+  } else if (updateAvailable) {
+    buttonLabel = `Update to v${status.bundledVersion}`
+  }
+
+  return (
+    <div className="panel">
+      <ul className="row-list">
+        <li className="row">
+          <div className="row-main">
+            <span className="row-title">
+              {versionLabel}
+              {status.source && (
+                <span className="row-meta"> · {SOURCE_LABEL[status.source] ?? status.source}</span>
+              )}
+            </span>
+            {issue && <span className="row-sub error-text">{issue}</span>}
+          </div>
+          {buttonLabel && (
+            <div className="row-side">
+              <button
+                className="action-button primary"
+                disabled={busy}
+                onClick={() => void runUpdate()}
+              >
+                {busy ? 'Updating…' : buttonLabel}
+              </button>
+            </div>
+          )}
+        </li>
+      </ul>
+    </div>
   )
 }
 
