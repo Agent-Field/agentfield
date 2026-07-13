@@ -6,11 +6,14 @@ import {
   checkControlPlane,
   deriveAgentBadge,
   fetchControlPlaneNodes,
+  fetchExecutions,
   getAgentFieldHome,
   getSnapshot,
   readInstalledAgents,
   type FetchLike
 } from './agentfield'
+import { installCommand, sanitizeInstallOutput } from './installer'
+import { CATALOG, catalogEntry } from '../shared/catalog'
 
 const tmpDirs: string[] = []
 
@@ -266,6 +269,123 @@ describe('fetchControlPlaneNodes', () => {
   })
 })
 
+describe('fetchExecutions', () => {
+  const runRow = (overrides: Record<string, unknown>) => ({
+    run_id: 'run_1',
+    status: 'succeeded',
+    display_name: 'demo_echo',
+    agent_id: 'smoke-agent',
+    started_at: '2026-07-13T13:51:39Z',
+    duration_ms: 45,
+    terminal: true,
+    ...overrides
+  })
+
+  it('splits rows into running (non-terminal) and recent (terminal)', async () => {
+    const fetchImpl: FetchLike = async () =>
+      jsonResponse({
+        runs: [
+          runRow({ run_id: 'run_live', status: 'running', terminal: false, duration_ms: null }),
+          runRow({ run_id: 'run_done' })
+        ],
+        total_count: 2
+      })
+    const result = await fetchExecutions('http://localhost:8080', fetchImpl)
+    expect(result).not.toBeNull()
+    expect(result!.running.map((r) => r.runId)).toEqual(['run_live'])
+    expect(result!.recent.map((r) => r.runId)).toEqual(['run_done'])
+    expect(result!.recent[0]).toEqual({
+      runId: 'run_done',
+      status: 'succeeded',
+      displayName: 'demo_echo',
+      agentId: 'smoke-agent',
+      startedAt: '2026-07-13T13:51:39Z',
+      durationMs: 45,
+      terminal: true
+    })
+  })
+
+  it('caps recent executions at 5', async () => {
+    const runs = Array.from({ length: 9 }, (_, i) => runRow({ run_id: `run_${i}` }))
+    const fetchImpl: FetchLike = async () => jsonResponse({ runs, total_count: 9 })
+    const result = await fetchExecutions('http://localhost:8080', fetchImpl)
+    expect(result!.recent).toHaveLength(5)
+  })
+
+  it('drops rows without a run_id instead of failing', async () => {
+    const fetchImpl: FetchLike = async () =>
+      jsonResponse({ runs: [runRow({}), { status: 'running' }], total_count: 2 })
+    const result = await fetchExecutions('http://localhost:8080', fetchImpl)
+    expect(result!.recent).toHaveLength(1)
+    expect(result!.running).toHaveLength(0)
+  })
+
+  it.each([
+    ['non-200 response', async () => jsonResponse({ error: 'nope' }, 500)],
+    ['junk payload', async () => jsonResponse({ items: [] })],
+    [
+      'rejected fetch',
+      async () => {
+        throw new TypeError('fetch failed')
+      }
+    ]
+  ] as const)('returns null on %s', async (_name, fetchImpl) => {
+    expect(await fetchExecutions('http://localhost:8080', fetchImpl)).toBeNull()
+  })
+})
+
+describe('install catalog', () => {
+  it('every entry has a name, description, and an https or af:// source', () => {
+    expect(CATALOG.length).toBeGreaterThan(0)
+    for (const entry of CATALOG) {
+      expect(entry.name).toMatch(/^[a-z0-9][a-z0-9-]*$/)
+      expect(entry.description.length).toBeGreaterThan(0)
+      expect(entry.source).toMatch(/^(https:\/\/|af:\/\/)/)
+    }
+  })
+
+  it('entry names are unique', () => {
+    const names = CATALOG.map((e) => e.name)
+    expect(new Set(names).size).toBe(names.length)
+  })
+
+  it('catalogEntry resolves known names and rejects unknown ones', () => {
+    expect(catalogEntry(CATALOG[0].name)).toEqual(CATALOG[0])
+    expect(catalogEntry('definitely-not-real')).toBeUndefined()
+  })
+})
+
+describe('installCommand', () => {
+  // Contract: the renderer sends catalog *names* over IPC; only vetted
+  // sources ever reach spawn, and unknown names are refused.
+  it('builds `af install <source>` for a catalog name', () => {
+    expect(installCommand(CATALOG[0].name)).toEqual({
+      command: 'af',
+      args: ['install', CATALOG[0].source]
+    })
+  })
+
+  it('returns null for names not in the catalog', () => {
+    expect(installCommand('evil; rm -rf /')).toBeNull()
+    expect(installCommand('')).toBeNull()
+  })
+})
+
+describe('sanitizeInstallOutput', () => {
+  it('strips ANSI color and erase codes and splits spinner frames', () => {
+    const esc = String.fromCharCode(27)
+    const chunk = `${esc}[32m✓ Dependencies installed${esc}[0m\r${esc}[K✓ Installed swe-af v0.2.0\n`
+    expect(sanitizeInstallOutput(chunk)).toEqual([
+      '✓ Dependencies installed',
+      '✓ Installed swe-af v0.2.0'
+    ])
+  })
+
+  it('drops empty and whitespace-only lines', () => {
+    expect(sanitizeInstallOutput('\r\n  \n\r')).toEqual([])
+  })
+})
+
 describe('getSnapshot', () => {
   function routedFetch(routes: Record<string, () => Response>): FetchLike {
     return async (input) => {
@@ -281,7 +401,29 @@ describe('getSnapshot', () => {
     const fetchImpl = routedFetch({
       '/health': () => jsonResponse({ status: 'healthy' }),
       // Control plane sees pr-af but not swe-af.
-      '/api/v1/nodes': () => jsonResponse({ nodes: [{ id: 'pr-af' }], count: 1 })
+      '/api/v1/nodes': () => jsonResponse({ nodes: [{ id: 'pr-af' }], count: 1 }),
+      'sort_order=desc': () =>
+        jsonResponse({
+          runs: [
+            {
+              run_id: 'run_live',
+              status: 'running',
+              display_name: 'summarize',
+              agent_id: 'pr-af',
+              started_at: '2026-07-13T13:51:39Z',
+              duration_ms: null,
+              terminal: false
+            }
+          ],
+          total_count: 1
+        }),
+      '/dashboard/summary': () =>
+        jsonResponse({
+          agents: { running: 1, total: 2 },
+          executions: { today: 4, yesterday: 2 },
+          success_rate: 100,
+          packages: { available: 1, installed: 0 }
+        })
     })
 
     const snapshot = await getSnapshot({ homeDir: home, fetchImpl })
@@ -290,6 +432,14 @@ describe('getSnapshot', () => {
     expect(snapshot.controlPlane.reachable).toBe(true)
     expect(snapshot.controlPlane.healthy).toBe(true)
     expect(snapshot.registry.exists).toBe(true)
+    expect(snapshot.executions?.running.map((r) => r.runId)).toEqual(['run_live'])
+    expect(snapshot.metrics).toEqual({
+      agentsRunning: 1,
+      agentsTotal: 2,
+      executionsToday: 4,
+      executionsYesterday: 2,
+      successRate: 100
+    })
     expect(Date.parse(snapshot.fetchedAt)).not.toBeNaN()
 
     const badges = Object.fromEntries(
@@ -335,6 +485,9 @@ describe('getSnapshot', () => {
     )
     expect(badges).toEqual({ 'pr-af': 'running', 'swe-af': 'stopped' })
     expect(requested.some((url) => url.endsWith('/api/v1/nodes'))).toBe(false)
+    // Nor may its workflow runs show up as activity.
+    expect(snapshot.executions).toBeNull()
+    expect(requested.some((url) => url.includes('/workflow-runs'))).toBe(false)
   })
 
   it('reports an unreachable control plane and an absent registry gracefully', async () => {

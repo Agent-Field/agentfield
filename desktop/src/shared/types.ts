@@ -47,6 +47,52 @@ export interface SnapshotAgent extends InstalledAgent {
   badge: AgentBadge
 }
 
+/** One workflow run parsed from GET /api/ui/v2/workflow-runs. */
+export interface ExecutionSummary {
+  runId: string
+  /** e.g. "running", "succeeded", "failed" */
+  status: string
+  /** Human-facing name (the root reasoner, e.g. "demo_echo"). */
+  displayName: string
+  agentId: string
+  startedAt: string
+  durationMs: number | null
+  /** True once the run reached a terminal state. */
+  terminal: boolean
+}
+
+/** Executions view: in-flight runs plus a short tail of finished ones. */
+export interface ExecutionsResult {
+  running: ExecutionSummary[]
+  recent: ExecutionSummary[]
+}
+
+/** One installable node in the curated catalog (see shared/catalog.ts). */
+export interface CatalogEntry {
+  /** Node name, matches the registry key after install. */
+  name: string
+  description: string
+  /** `af install` source: a git URL or af://registry/<name> reference. */
+  source: string
+  language?: string
+}
+
+/** Terminal states of an install kicked off from the app. */
+export interface InstallResult {
+  ok: boolean
+  message: string
+}
+
+/** Headline numbers from GET /api/ui/v1/dashboard/summary. */
+export interface DashboardMetrics {
+  agentsRunning: number
+  agentsTotal: number
+  executionsToday: number
+  executionsYesterday: number
+  /** Percentage 0-100, or null when the server reports none. */
+  successRate: number | null
+}
+
 /** The single payload shipped over IPC to the renderer. */
 export interface AgentFieldSnapshot {
   controlPlane: ControlPlaneStatus & { baseUrl: string }
@@ -55,6 +101,10 @@ export interface AgentFieldSnapshot {
     agents: SnapshotAgent[]
     error?: string
   }
+  /** null when the control plane view is unavailable. */
+  executions: ExecutionsResult | null
+  /** null when the control plane view is unavailable. */
+  metrics: DashboardMetrics | null
   /** ISO timestamp of when this snapshot was assembled. */
   fetchedAt: string
 }
@@ -62,4 +112,11 @@ export interface AgentFieldSnapshot {
 /** Surface exposed on window.agentfield by the preload script. */
 export interface AgentFieldApi {
   getSnapshot(): Promise<AgentFieldSnapshot>
+  getCatalog(): Promise<CatalogEntry[]>
+  /** Install a catalog entry by name. Resolves when `af install` exits. */
+  install(name: string): Promise<InstallResult>
+  /** Subscribe to install output lines; returns an unsubscribe function. */
+  onInstallProgress(listener: (line: string) => void): () => void
+  /** "darwin" | "win32" | "linux" — for platform-specific chrome (traffic-light inset). */
+  platform: string
 }

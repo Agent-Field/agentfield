@@ -16,6 +16,9 @@ import type {
   AgentBadge,
   AgentFieldSnapshot,
   ControlPlaneStatus,
+  DashboardMetrics,
+  ExecutionsResult,
+  ExecutionSummary,
   InstalledAgent,
   RegistryResult
 } from '../shared/types'
@@ -193,6 +196,85 @@ export function deriveAgentBadge(
   return 'unknown'
 }
 
+const RECENT_EXECUTIONS_LIMIT = 5
+
+function toExecutionSummary(row: Record<string, unknown>): ExecutionSummary | null {
+  const runId = typeof row.run_id === 'string' ? row.run_id : ''
+  if (!runId) return null
+  return {
+    runId,
+    status: typeof row.status === 'string' ? row.status : 'unknown',
+    displayName:
+      typeof row.display_name === 'string' && row.display_name !== ''
+        ? row.display_name
+        : runId,
+    agentId: typeof row.agent_id === 'string' ? row.agent_id : '',
+    startedAt: typeof row.started_at === 'string' ? row.started_at : '',
+    durationMs: typeof row.duration_ms === 'number' ? row.duration_ms : null,
+    terminal: row.terminal === true
+  }
+}
+
+/**
+ * GET {baseUrl}/api/ui/v2/workflow-runs (newest first) and split the rows into
+ * in-flight runs and a short tail of finished ones. Returns null on any
+ * failure — callers render "activity unavailable", never an error page.
+ */
+export async function fetchExecutions(
+  baseUrl: string = DEFAULT_BASE_URL,
+  fetchImpl: FetchLike = fetch
+): Promise<ExecutionsResult | null> {
+  try {
+    const res = await fetchImpl(
+      `${baseUrl}/api/ui/v2/workflow-runs?page=1&page_size=25&sort_by=updated_at&sort_order=desc`,
+      { signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) }
+    )
+    if (!res.ok) return null
+    const body: unknown = await res.json()
+    if (!isRecord(body) || !Array.isArray(body.runs)) return null
+    const summaries = body.runs
+      .filter(isRecord)
+      .map(toExecutionSummary)
+      .filter((s): s is ExecutionSummary => s !== null)
+    return {
+      running: summaries.filter((s) => !s.terminal),
+      recent: summaries.filter((s) => s.terminal).slice(0, RECENT_EXECUTIONS_LIMIT)
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * GET {baseUrl}/api/ui/v1/dashboard/summary -> headline dashboard numbers.
+ * Returns null on any failure; the dashboard renders placeholders instead.
+ */
+export async function fetchDashboardMetrics(
+  baseUrl: string = DEFAULT_BASE_URL,
+  fetchImpl: FetchLike = fetch
+): Promise<DashboardMetrics | null> {
+  try {
+    const res = await fetchImpl(`${baseUrl}/api/ui/v1/dashboard/summary`, {
+      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS)
+    })
+    if (!res.ok) return null
+    const body: unknown = await res.json()
+    if (!isRecord(body)) return null
+    const agents = isRecord(body.agents) ? body.agents : {}
+    const executions = isRecord(body.executions) ? body.executions : {}
+    return {
+      agentsRunning: typeof agents.running === 'number' ? agents.running : 0,
+      agentsTotal: typeof agents.total === 'number' ? agents.total : 0,
+      executionsToday: typeof executions.today === 'number' ? executions.today : 0,
+      executionsYesterday:
+        typeof executions.yesterday === 'number' ? executions.yesterday : 0,
+      successRate: typeof body.success_rate === 'number' ? body.success_rate : null
+    }
+  } catch {
+    return null
+  }
+}
+
 export interface SnapshotOptions {
   baseUrl?: string
   homeDir?: string
@@ -212,11 +294,15 @@ export async function getSnapshot(options: SnapshotOptions = {}): Promise<AgentF
     readInstalledAgents(options.homeDir)
   ])
 
-  // Only cross-check against a recognized control plane; an unrelated service
-  // on the port must not influence the badges.
-  const nodeIds = controlPlane.recognized
-    ? await fetchControlPlaneNodes(baseUrl, fetchImpl)
-    : null
+  // Only consult a recognized control plane; an unrelated service on the
+  // port must not influence badges or show foreign runs as activity.
+  const [nodeIds, executions, metrics] = controlPlane.recognized
+    ? await Promise.all([
+        fetchControlPlaneNodes(baseUrl, fetchImpl),
+        fetchExecutions(baseUrl, fetchImpl),
+        fetchDashboardMetrics(baseUrl, fetchImpl)
+      ])
+    : [null, null, null]
   const hasControlPlaneView = nodeIds !== null
   const seen = new Set(nodeIds ?? [])
 
@@ -228,6 +314,8 @@ export async function getSnapshot(options: SnapshotOptions = {}): Promise<AgentF
   return {
     controlPlane: { ...controlPlane, baseUrl },
     registry: { exists: registry.exists, agents, error: registry.error },
+    executions,
+    metrics,
     fetchedAt: new Date().toISOString()
   }
 }
