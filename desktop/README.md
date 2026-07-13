@@ -23,8 +23,23 @@ navigation, light/dark from the OS.
   are keyed by the node's manifest name so installed state is detected. The
   hard-coded list is the pre-marketplace seam — replace with a remote catalog
   fetch when registry search lands.
+- **Settings** — the "set it and forget it" surface: open at login (hidden,
+  tray-only, via an OS login item), start the control plane automatically,
+  and pick which agents auto-start. Persisted to `settings.json` in the
+  app's user-data dir.
 
 The renderer polls a single snapshot over IPC every 5 seconds.
+
+Agents can be started, stopped, and restarted from their rows — each action
+shells out to `af run <name>` / `af stop <name>` (restart is stop-then-run;
+the CLI has no restart verb). On every launch the app runs the autostart
+sequence (`src/main/autostart.ts`): start the control plane when nothing is
+listening (never when the port is taken — by a foreign service or a live
+control plane), then bring up the selected agents; agents whose registry
+entry went stale (running with no control-plane presence, e.g. after a
+reboot) are restarted rather than skipped. The goal: by the time Claude,
+Codex, or anything else queries your agents, they are already answering —
+no one has to remember to start a server first.
 
 The control-plane probe only trusts `/health` responses that look like
 AgentField's payload — an unrelated service on port 8080 renders as
@@ -104,7 +119,7 @@ Packaging is unsigned for now (no notarization/signing identities configured).
 ## Current limitations
 
 - Control plane URL is hard-coded to `http://localhost:8080` (not configurable yet).
-- No start/stop controls yet — installs only (run/stop are next).
+- No stop control for the control plane itself yet (the app only starts it).
 - The registry is read directly from `~/.agentfield/installed.yaml`; once
   `af list -o json` lands, the app should shell out to the CLI instead (see
   the `TODO(af-cli)` seam in `src/main/agentfield.ts`).
