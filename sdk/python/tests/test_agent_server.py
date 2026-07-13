@@ -42,6 +42,9 @@ def make_agent_app(**overrides):
             resolve_by_execution_id=AsyncMock(return_value=False),
         ),
     )
+    app._notification_dispatcher = overrides.get(
+        "_notification_dispatcher", SimpleNamespace(start=MagicMock())
+    )
     return app
 
 

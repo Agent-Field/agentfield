@@ -71,12 +71,14 @@ class AgentWorkflow:
         start_time = time.time()
         parent_execution_id = parent_context.execution_id if parent_context else None
 
-        await self.notify_call_start(
-            execution_context.execution_id,
-            execution_context,
-            reasoner_name,
-            input_data,
-            parent_execution_id=parent_execution_id,
+        self.agent._notification_dispatcher.submit(
+            lambda: self.notify_call_start(
+                execution_context.execution_id,
+                execution_context,
+                reasoner_name,
+                input_data,
+                parent_execution_id=parent_execution_id,
+            )
         )
 
         try:
@@ -84,27 +86,36 @@ class AgentWorkflow:
             if inspect.isawaitable(result):
                 result = await result
             duration_ms = int((time.time() - start_time) * 1000)
-            await self.notify_call_complete(
-                execution_context.execution_id,
-                execution_context.workflow_id,
-                result,
-                duration_ms,
-                execution_context,
-                input_data=input_data,
-                parent_execution_id=parent_execution_id,
+
+            self.agent._notification_dispatcher.submit(
+                lambda: self.notify_call_complete(
+                    execution_context.execution_id,
+                    execution_context.workflow_id,
+                    result,
+                    duration_ms,
+                    execution_context,
+                    input_data=input_data,
+                    parent_execution_id=parent_execution_id,
+                )
             )
+
             return result
         except Exception as exc:  # pragma: no cover - re-raised
             duration_ms = int((time.time() - start_time) * 1000)
-            await self.notify_call_error(
-                execution_context.execution_id,
-                execution_context.workflow_id,
-                str(exc),
-                duration_ms,
-                execution_context,
-                input_data=input_data,
-                parent_execution_id=parent_execution_id,
+            error_msg = str(exc)
+
+            self.agent._notification_dispatcher.submit(
+                lambda: self.notify_call_error(
+                    execution_context.execution_id,
+                    execution_context.workflow_id,
+                    error_msg,
+                    duration_ms,
+                    execution_context,
+                    input_data=input_data,
+                    parent_execution_id=parent_execution_id,
+                )
             )
+
             raise
         finally:
             reset_execution_context(token)

@@ -887,6 +887,9 @@ class AgentServer:
             # Start connection manager (non-blocking)
             connected = await self.agent.connection_manager.start()
 
+            # Start notification dispatcher
+            self.agent._notification_dispatcher.start()
+
             # Connect memory event client - works independently of AgentField server connection
             if self.agent.memory_event_client:
                 try:
