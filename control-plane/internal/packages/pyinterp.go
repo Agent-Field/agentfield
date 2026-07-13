@@ -212,11 +212,9 @@ func resolveVenvInterpreter(packagePath string) (string, error) {
 	}
 
 	// 1. Ambient interpreter already satisfies?
-	ambient := firstOnPath("python3", "python")
-	if ambient != "" {
-		if v, ok := interpreterVersion(ambient); ok && constraintSatisfied(v, requires) {
-			return ambient, nil
-		}
+	ambient, ambientV, ambientOK := ambientPythonInterpreter()
+	if ambientOK && constraintSatisfied(ambientV, requires) {
+		return ambient, nil
 	}
 
 	// 2. Provision via uv (downloads a standalone interpreter if needed).
@@ -233,11 +231,9 @@ func resolveVenvInterpreter(packagePath string) (string, error) {
 		return interp, nil
 	}
 
-	found := "no python3 found on PATH"
-	if ambient != "" {
-		if v, ok := interpreterVersion(ambient); ok {
-			found = fmt.Sprintf("found %s (Python %s)", ambient, v)
-		}
+	found := "no working python3/python found on PATH"
+	if ambientOK {
+		found = fmt.Sprintf("found %s (Python %s)", ambient, ambientV)
 	}
 	req := uvRequest(requires)
 	if req == "" {
@@ -254,6 +250,8 @@ func resolveVenvInterpreter(packagePath string) (string, error) {
 }
 
 // firstOnPath returns the first of the given commands found on PATH, or "".
+// Note: existence on PATH does not prove the command runs — for Python
+// candidates use ambientPythonInterpreter, which also probes execution.
 func firstOnPath(cmds ...string) string {
 	for _, c := range cmds {
 		if _, err := exec.LookPath(c); err == nil {
@@ -261,6 +259,31 @@ func firstOnPath(cmds ...string) string {
 		}
 	}
 	return ""
+}
+
+// pythonCandidates are the interpreter commands probed for an ambient Python,
+// in preference order. "py" is the Windows launcher, which python.org
+// installers register even when "add python to PATH" is left unchecked (the
+// default) — on such machines it is the only working entry. It does not exist
+// on Unix, so probing it there is a no-op.
+var pythonCandidates = []string{"python3", "python", "py"}
+
+// ambientPythonInterpreter returns the first pythonCandidates entry that is
+// both on PATH and actually runs, along with its reported version. Merely
+// existing on PATH is not enough: stock Windows ships Microsoft Store "app
+// execution alias" stubs named python3.exe/python.exe that exec.LookPath
+// resolves like real binaries but that exit 9009 without running anything.
+// Probing with interpreterVersion filters those out.
+func ambientPythonInterpreter() (string, pyVersion, bool) {
+	for _, c := range pythonCandidates {
+		if _, err := exec.LookPath(c); err != nil {
+			continue
+		}
+		if v, ok := interpreterVersion(c); ok {
+			return c, v, true
+		}
+	}
+	return "", pyVersion{}, false
 }
 
 // displayVersion returns interp's version as a string for logging, or the

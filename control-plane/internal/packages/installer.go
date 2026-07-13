@@ -855,20 +855,21 @@ func InstallPythonDependencies(packagePath string, pyDeps, systemDeps []string) 
 			return err
 		}
 
-		var cmd *exec.Cmd
-		if interp != "" {
-			cmd = exec.Command(interp, "-m", "venv", venvPath)
-			if output, err := cmd.CombinedOutput(); err != nil {
-				return fmt.Errorf("failed to create virtual environment with %s: %w\nOutput: %s", interp, err, output)
+		if interp == "" {
+			// Legacy path (no requires-python declared): pick the first ambient
+			// interpreter that actually runs. Blindly trying "python3 -m venv"
+			// first breaks on stock Windows, where python3 (and often python) is
+			// a Microsoft Store stub that exits 9009; on default python.org
+			// installs (PATH box unchecked) only the "py" launcher works.
+			ambient, _, ok := ambientPythonInterpreter()
+			if !ok {
+				return fmt.Errorf("no working Python interpreter found on PATH (tried %s) - install Python 3, ensure it is on PATH, then run `af install` again", strings.Join(pythonCandidates, ", "))
 			}
-		} else {
-			cmd = exec.Command("python3", "-m", "venv", venvPath)
-			if _, err := cmd.CombinedOutput(); err != nil {
-				cmd = exec.Command("python", "-m", "venv", venvPath)
-				if output, err := cmd.CombinedOutput(); err != nil {
-					return fmt.Errorf("failed to create virtual environment: %w\nOutput: %s", err, output)
-				}
-			}
+			interp = ambient
+		}
+		cmd := exec.Command(interp, "-m", "venv", venvPath)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to create virtual environment with %s: %w\nOutput: %s", interp, err, output)
 		}
 
 		pipPath := filepath.Join(venvPath, "bin", "pip")

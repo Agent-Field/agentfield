@@ -36,7 +36,9 @@ func TestCoverageGapInstallDependenciesErrors(t *testing.T) {
 			Dependencies: packages.DependencyConfig{Python: []string{"requests"}},
 		})
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to create virtual environment")
+		// Both stubs fail to run at all, so interpreter selection reports the
+		// actionable no-working-interpreter error (the stock-Windows shape).
+		assert.Contains(t, err.Error(), "no working Python interpreter found on PATH")
 	})
 
 	t.Run("requirements installation fails", func(t *testing.T) {
@@ -46,6 +48,7 @@ func TestCoverageGapInstallDependenciesErrors(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(packagePath, "requirements.txt"), []byte("broken\n"), 0o644))
 
 		python3Script := []byte(`#!/bin/sh
+if [ "$1" = "-c" ]; then echo "3.12.0"; exit 0; fi
 mkdir -p "$3/bin"
 cat > "$3/bin/pip" <<'SH'
 #!/bin/sh
@@ -75,6 +78,7 @@ chmod +x "$3/bin/pip"
 		require.NoError(t, os.MkdirAll(fakeBin, 0o755))
 
 		python3Script := []byte(`#!/bin/sh
+if [ "$1" = "-c" ]; then echo "3.12.0"; exit 0; fi
 mkdir -p "$3/bin"
 cat > "$3/bin/pip" <<'SH'
 #!/bin/sh
