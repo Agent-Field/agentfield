@@ -30,6 +30,29 @@ The control-plane probe only trusts `/health` responses that look like
 AgentField's payload — an unrelated service on port 8080 renders as
 "Port in use", never as a running control plane.
 
+## Tray icon (Windows/Linux) and deep links
+
+On Windows and Linux the app puts a status icon in the tray: the brand dot
+turns gold while the control plane is running and gray otherwise, and the
+menu offers Open AgentField / Open web UI / Quit. Closing the window hides it
+to the tray (Docker-Desktop style) — Quit lives in the tray menu. On macOS the
+desktop app adds **no** tray: the menu-bar companion there is `af-tray`,
+installed with AgentField itself (`control-plane/cmd/af-tray`).
+
+The app registers the `agentfield://` URL scheme (single-instance: a second
+launch focuses the running app). `agentfield://dashboard|agents|activity|install`
+opens the app on that view; a bare or unknown target lands on the dashboard.
+This is how the macOS `af-tray` opens the desktop app when it is installed —
+and why it can *detect* it: `open agentfield://…` fails fast when nothing has
+registered the scheme, and the tray then falls back to the web UI.
+
+## Icons
+
+All icons render from the brand "•af" mark (the exact outlined paths from the
+web UI logo). `npm run icons` regenerates `build/icon.{png,icns}`, the runtime
+window icon, the tray glyphs, and af-tray's `appicon.icns` — outputs are
+committed, so this only needs re-running when the mark changes.
+
 ## Prerequisites
 
 - Node.js 20+ (developed on Node 22)
@@ -69,7 +92,9 @@ Packaging is unsigned for now (no notarization/signing identities configured).
   `nodeIntegration: false`, `sandbox: true`. The preload
   (`src/preload/index.ts`) exposes a small typed API via `contextBridge`.
 - **Shared IPC types** live in `src/shared/types.ts`; the install catalog in
-  `src/shared/catalog.ts`.
+  `src/shared/catalog.ts`; deep-link parsing in `src/shared/deeplink.ts`.
+- **Tray presentation logic** (state/labels/glyph selection) is pure in
+  `src/main/tray-model.ts` (unit-tested); the Electron glue is `src/main/tray.ts`.
 - **Mac-first chrome** in `src/main/index.ts`: `titleBarStyle: hiddenInset` +
   sidebar vibrancy on macOS (minimal app menu since macOS needs one for
   Cmd+Q/copy-paste), hidden titlebar with native control overlay on Windows,
@@ -85,5 +110,5 @@ Packaging is unsigned for now (no notarization/signing identities configured).
   the `TODO(af-cli)` seam in `src/main/agentfield.ts`).
 - macOS chrome (traffic-light inset, vibrancy) is implemented per platform
   guards but has only been exercised on Windows so far — needs one smoke run
-  on a real Mac.
+  on a real Mac. Same for macOS deep-link delivery (`open-url`).
 - Packaging is unsigned; add signing/notarization before distribution.
