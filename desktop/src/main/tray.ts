@@ -93,8 +93,11 @@ export function setupTray(host: TrayHost): boolean {
   }
   apply(state)
 
+  // Re-render only on actual change — replacing the icon/menu every poll
+  // would churn native tray APIs (and can dismiss an open menu on Windows).
   const refresh = async (): Promise<void> => {
-    apply(trayState(await checkControlPlane()))
+    const next = trayState(await checkControlPlane())
+    if (next !== state) apply(next)
   }
   void refresh()
   setInterval(() => void refresh(), POLL_MS)
