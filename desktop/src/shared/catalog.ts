@@ -7,14 +7,38 @@ import type { CatalogEntry } from './types'
 // renderer only ever passes a catalog *name* over IPC, never a raw source).
 // When the marketplace/registry search lands, this file is the seam to
 // replace with a remote catalog fetch.
+//
+// What qualifies: an Agent-Field org repo is installable iff it has an
+// `agentfield-package.yaml` manifest at its root — that manifest is what
+// `af install` requires. When adding an entry, `name` MUST equal the
+// manifest's `name:` (the registry key after install — how the app detects
+// installed state), which is often NOT the repo name (SWE-AF → swe-planner).
 export const CATALOG: CatalogEntry[] = [
   {
-    // `name` MUST equal the node's manifest name (agentfield-package.yaml
-    // `name:`), which becomes the registry key after install — it is how the
-    // app detects that an entry is already installed. It is NOT the repo name.
     name: 'swe-planner',
-    description: 'Autonomous software-engineering fleet: plan, code, test, and ship production-grade PRs',
+    description:
+      'Autonomous software-engineering fleet: plan, code, test, and ship production-grade PRs',
     source: 'https://github.com/Agent-Field/SWE-AF',
+    language: 'python'
+  },
+  {
+    name: 'pr-af',
+    description: 'Turns a plain task description into a draft pull request on GitHub',
+    source: 'https://github.com/Agent-Field/pr-af',
+    language: 'python'
+  },
+  {
+    name: 'sec-af',
+    description:
+      'Code security auditor: scans repositories and proves exploitability with verdicts and traces',
+    source: 'https://github.com/Agent-Field/sec-af',
+    language: 'python'
+  },
+  {
+    name: 'cloudsecurity-af',
+    description:
+      'Cloud security posture: read-only attack-path scans across AWS, GCP, and Azure',
+    source: 'https://github.com/Agent-Field/cloudsecurity-af',
     language: 'python'
   }
 ]
