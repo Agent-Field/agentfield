@@ -12,6 +12,10 @@ const api: AgentFieldApi = {
     return () => ipcRenderer.removeListener('agentfield:install-progress', wrapped)
   },
   agentAction: (action, name) => ipcRenderer.invoke('agentfield:agent-action', action, name),
+  getEnvReports: () => ipcRenderer.invoke('agentfield:env-reports'),
+  setAgentSecret: (agent, key, value) =>
+    ipcRenderer.invoke('agentfield:secret-set', agent, key, value),
+  revokeAgentSecret: (agent, key) => ipcRenderer.invoke('agentfield:secret-revoke', agent, key),
   getSettings: () => ipcRenderer.invoke('agentfield:settings-get'),
   setSettings: (patch) => ipcRenderer.invoke('agentfield:settings-set', patch),
   getCliStatus: () => ipcRenderer.invoke('agentfield:cli-status'),

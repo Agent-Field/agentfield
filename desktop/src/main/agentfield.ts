@@ -95,6 +95,7 @@ function toInstalledAgent(key: string, entry: unknown): InstalledAgent {
     description: typeof record.description === 'string' ? record.description : '',
     language: typeof record.language === 'string' ? record.language : undefined,
     status: typeof record.status === 'string' ? record.status : 'unknown',
+    path: typeof record.path === 'string' && record.path !== '' ? record.path : null,
     port: typeof runtime.port === 'number' ? runtime.port : null,
     pid: typeof runtime.pid === 'number' ? runtime.pid : null
   }

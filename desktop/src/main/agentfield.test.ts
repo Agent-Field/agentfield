@@ -90,6 +90,7 @@ describe('readInstalledAgents', () => {
       description: 'Opens draft pull requests from a task description',
       language: 'python',
       status: 'running',
+      path: '/home/abir/.agentfield/packages/pr-af',
       port: 9001,
       pid: 4242
     })
@@ -102,6 +103,7 @@ describe('readInstalledAgents', () => {
       description: 'Software engineering agent',
       language: undefined,
       status: 'stopped',
+      path: null,
       port: null,
       pid: null
     })

@@ -441,6 +441,113 @@ body[data-platform='win32'] .view-header {
   color: var(--yellow);
 }
 
+.badge.warn {
+  background: color-mix(in srgb, var(--yellow) 14%, transparent);
+  color: var(--yellow);
+}
+
+/* --- agent rows with an expandable keys editor -------------------------------- */
+
+.row-item + .row-item {
+  border-top: 1px solid var(--hairline);
+}
+
+.env-editor {
+  padding: 4px 16px 14px 37px;
+}
+
+.env-section-title {
+  margin: 12px 0 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.env-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 0;
+}
+
+.env-row + .env-row {
+  border-top: 1px solid var(--hairline);
+}
+
+.env-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.env-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.env-name {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.env-scope {
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+}
+
+.chip {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.chip.env,
+.chip.stored {
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+  color: var(--green);
+}
+
+.chip.default {
+  background: var(--pill-bg);
+  color: var(--text-secondary);
+}
+
+.chip.missing {
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  color: var(--red);
+}
+
+.env-row-controls {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.env-input {
+  -webkit-app-region: no-drag;
+  width: 180px;
+  background: var(--pill-bg);
+  border: 1px solid var(--hairline);
+  border-radius: 7px;
+  padding: 4px 9px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--text);
+  outline: none;
+}
+
+.env-input:focus {
+  border-color: var(--accent);
+}
+
 .install-button {
   -webkit-app-region: no-drag;
   background: var(--accent);

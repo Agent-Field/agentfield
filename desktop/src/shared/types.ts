@@ -28,6 +28,8 @@ export interface InstalledAgent {
   language?: string
   /** Raw registry status string (e.g. "running", "stopped"). */
   status: string
+  /** Install dir (~/.agentfield/packages/<name>) — where the manifest lives. */
+  path: string | null
   port: number | null
   pid: number | null
 }
@@ -89,6 +91,43 @@ export interface AgentActionResult {
   message: string
 }
 
+/**
+ * How one declared variable resolves for `af run`, mirroring the CLI's
+ * EnvResolver order: process env → encrypted secret store → manifest default.
+ */
+export type EnvVarStatus = 'env' | 'stored' | 'default' | 'missing'
+
+/** One variable an agent's manifest declares under user_environment. */
+export interface AgentEnvVar {
+  name: string
+  description: string
+  /** Manifest type: secret — render a password input, mask everywhere. */
+  secret: boolean
+  /** Store scope a set writes to: shared "global" (default) or per-node. */
+  scope: 'global' | 'node'
+  /** Must resolve for `af run` to succeed (required list or a group member). */
+  required: boolean
+  /** require_one_of group id — any one member resolving satisfies the group. */
+  group?: string
+  groupDescription?: string
+  status: EnvVarStatus
+  /** Secret-store scopes currently holding this key ("global" or the node name). */
+  storedScopes: string[]
+}
+
+/**
+ * Everything the renderer needs to show and edit one agent's keys. Values
+ * themselves never cross the IPC boundary — only these status flags do.
+ */
+export interface AgentEnvReport {
+  agent: string
+  vars: AgentEnvVar[]
+  /** Every required variable and group resolves — `af run` won't fail on env. */
+  satisfied: boolean
+  /** Set when the secret store could not be read (statuses degrade gracefully). */
+  error?: string
+}
+
 /** Which af CLI the app resolved and whether an installed copy needs updating. */
 export interface CliStatus {
   /** Spawnable command (absolute path or bare "af"), null when none usable. */
@@ -120,7 +159,8 @@ export interface DesktopSettings {
   /** Installed agent names to start once the control plane is healthy. */
   autostartAgents: string[]
   /**
-   * Keep the AgentField skill installed in detected coding agents (Claude
+   * Keep the AgentField skills (agentfield: building agents; agentfield-use:
+   * calling installed ones) installed in detected coding agents (Claude
    * Code, Codex, …) via `af skill install` — so they know how to use this.
    */
   installSkills: boolean
@@ -160,6 +200,12 @@ export interface AgentFieldApi {
   install(name: string): Promise<InstallResult>
   /** Start / stop / restart an installed agent by its registry name. */
   agentAction(action: 'start' | 'stop' | 'restart', name: string): Promise<AgentActionResult>
+  /** Env/secret status for every installed agent that declares variables. */
+  getEnvReports(): Promise<AgentEnvReport[]>
+  /** Store a declared variable's value in af's encrypted secret store. */
+  setAgentSecret(agent: string, key: string, value: string): Promise<AgentActionResult>
+  /** Remove a stored value from every scope relevant to this agent. */
+  revokeAgentSecret(agent: string, key: string): Promise<AgentActionResult>
   getSettings(): Promise<DesktopSettings>
   /** Merge a partial update into the settings; returns the result. */
   setSettings(patch: Partial<DesktopSettings>): Promise<DesktopSettings>

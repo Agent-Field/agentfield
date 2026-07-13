@@ -45,6 +45,34 @@ The control-plane probe only trusts `/health` responses that look like
 AgentField's payload — an unrelated service on port 8080 renders as
 "Port in use", never as a running control plane.
 
+## Agent keys (secrets)
+
+Agents declare the environment they need (API keys, tokens) in their
+`agentfield-package.yaml` under `user_environment` — required variables,
+`require_one_of` groups (e.g. an Anthropic **or** an OpenRouter key), and
+optionals with defaults. `af run` resolves them process env → encrypted
+secret store → manifest default, and fails headlessly when a required one
+is missing. The app closes that gap in the UI:
+
+- Any agent that declares variables gets a **Keys** button and, while
+  something required is unresolved, a **Needs keys** chip. Clicking Start
+  in that state opens the editor instead of running into a guaranteed
+  "missing required environment variables" failure.
+- The editor shows every declared variable with its resolution status
+  (from environment / stored / default / missing), a set field (password
+  input for `type: secret`), and a **Revoke** button for stored values.
+- Reads and writes go through the af CLI — `af secrets ls` / `set` / `rm`
+  against the encrypted store (`~/.agentfield/secrets`, AES-256-GCM), the
+  exact store `af run` decrypts into the agent's process. Values are piped
+  over stdin (never argv), written to the scope the manifest names (global
+  by default, so a shared key is entered once), validated against the
+  manifest's regex when present, and **never read back** — the renderer
+  only ever sees status flags.
+
+All of this lives in `src/main/secrets.ts` (pure parsing/report logic,
+unit-tested) with the catalog-style guard that the renderer can only name
+variables the manifest declares.
+
 ## Tray icon (Windows/Linux) and deep links
 
 On Windows and Linux the app puts a status icon in the tray: the brand dot
@@ -97,10 +125,12 @@ all, first launch auto-provisions `~/.agentfield/bin` (both `agentfield`
 and the `af` alias, Windows user PATH registered) so terminals and coding
 agents get a working `af` too.
 
-Unless switched off in Settings, the app also runs
-`af skill install --non-interactive` on launch, keeping the AgentField skill
-present in detected coding agents (Claude Code, Codex, Gemini, …) —
-idempotent via skillkit's state file, shared with the curl installer.
+Unless switched off in Settings, the app also installs both bundled skills
+on launch (`af skill install <name> --non-interactive`, sequentially):
+**agentfield** (how to build agents) and **agentfield-use** (how to discover
+and call the agents installed here) — so detected coding agents (Claude
+Code, Codex, Gemini, …) can drive this machine's agents without extra
+setup. Idempotent via skillkit's state file, shared with the curl installer.
 
 ## Development
 

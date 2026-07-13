@@ -8,6 +8,7 @@ function agent(name: string, badge: SnapshotAgent['badge']): SnapshotAgent {
     version: '0.1.0',
     description: '',
     status: badge === 'running' ? 'running' : 'stopped',
+    path: null,
     port: null,
     pid: null,
     badge

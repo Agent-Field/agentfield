@@ -9,6 +9,7 @@ import { type AgentAction, runAgentAction } from './agents'
 import { runAutostart } from './autostart'
 import { getCliCommand, initializeCli, installBundledCli, refreshCliStatus } from './cli'
 import { installAgent } from './installer'
+import { getEnvReports, revokeAgentSecret, setAgentSecret } from './secrets'
 import { loadSettings, mergeSettings, saveSettings } from './settings'
 import { setupTray } from './tray'
 import appIcon from '../../resources/icon.png?asset'
@@ -176,15 +177,22 @@ function bundledCliPath(): string {
     : join(app.getAppPath(), 'vendor', name)
 }
 
-// Keep the AgentField skill present in detected coding agents (Claude Code,
-// Codex, Gemini, …) so they know how to drive local agents. Idempotent —
-// skillkit tracks versions in ~/.agentfield/skills/.state.json — and pure
-// best-effort: a failure only means the user runs `af skill install` later.
-function syncSkills(): void {
-  spawn(getCliCommand(), ['skill', 'install', '--non-interactive'], {
+// Keep the AgentField skills present in detected coding agents (Claude Code,
+// Codex, Gemini, …): the builder skill (agentfield) and the consumer skill
+// (agentfield-use — how to discover and call installed agents). One install
+// per skill, sequential so concurrent runs never race on skillkit's state
+// file. Idempotent — skillkit tracks versions in ~/.agentfield/skills/
+// .state.json — and pure best-effort: an older CLI without agentfield-use in
+// its catalog fails that one invocation and nothing else.
+function syncSkills(names = ['agentfield', 'agentfield-use']): void {
+  const [head, ...rest] = names
+  if (!head) return
+  spawn(getCliCommand(), ['skill', 'install', head, '--non-interactive'], {
     windowsHide: true,
     stdio: 'ignore'
-  }).on('error', () => {})
+  })
+    .on('error', () => {})
+    .on('close', () => syncSkills(rest))
 }
 
 // Register (or clear) the OS login item. Dev builds skip it — registering
@@ -254,6 +262,22 @@ function main(): void {
         return { ok: false, message: 'invalid agent action' }
       }
       return runAgentAction(action as AgentAction, name)
+    })
+    ipcMain.handle('agentfield:env-reports', () => getEnvReports())
+    ipcMain.handle(
+      'agentfield:secret-set',
+      (_event, agent: unknown, key: unknown, value: unknown) => {
+        if (typeof agent !== 'string' || typeof key !== 'string' || typeof value !== 'string') {
+          return { ok: false, message: 'invalid secret request' }
+        }
+        return setAgentSecret(agent, key, value)
+      }
+    )
+    ipcMain.handle('agentfield:secret-revoke', (_event, agent: unknown, key: unknown) => {
+      if (typeof agent !== 'string' || typeof key !== 'string') {
+        return { ok: false, message: 'invalid secret request' }
+      }
+      return revokeAgentSecret(agent, key)
     })
     // The renderer calls this once its navigation listener is live; the
     // return value is the deep-link view (if any) that arrived before then.
