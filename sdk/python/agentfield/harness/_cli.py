@@ -13,7 +13,13 @@ from agentfield.openrouter_attribution import apply_subprocess_env
 
 _ANSI_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 
-_DEFAULT_IDLE_SECONDS = 120.0
+# 300 rather than 120: provider CLIs in JSON mode (e.g. `opencode run
+# --format json`) emit events only at completion boundaries - never
+# token-by-token - so one long reasoning completion over a large context is
+# minutes of legitimate stdout silence. At 120s the watchdog routinely
+# killed healthy runs on slower models; 300s tolerates a long single
+# completion while still catching genuine hangs.
+_DEFAULT_IDLE_SECONDS = 300.0
 
 
 def strip_ansi(text: str) -> str:
@@ -24,7 +30,7 @@ def _resolve_idle_seconds(idle_seconds: Optional[float]) -> Optional[float]:
     """Resolve the no-progress watchdog window.
 
     Precedence: explicit ``idle_seconds`` arg, then env
-    ``AGENTFIELD_HARNESS_IDLE_SECONDS``, then ``_DEFAULT_IDLE_SECONDS`` (120s).
+    ``AGENTFIELD_HARNESS_IDLE_SECONDS``, then ``_DEFAULT_IDLE_SECONDS`` (300s).
     A value <= 0 disables the watchdog.
     """
     if idle_seconds is None:

@@ -16,7 +16,14 @@ import (
 
 // defaultIdleSeconds is the no-progress watchdog window used when the env var
 // AGENTFIELD_HARNESS_IDLE_SECONDS is unset or invalid. A value <= 0 disables it.
-const defaultIdleSeconds = 120
+//
+// 300 rather than 120: provider CLIs in JSON mode (e.g. `opencode run
+// --format json`) emit events only at completion boundaries — never
+// token-by-token — so one long reasoning completion over a large context is
+// minutes of legitimate stdout silence. At 120s the watchdog routinely killed
+// healthy runs on slower models; 300s tolerates a long single completion while
+// still catching genuine hangs.
+const defaultIdleSeconds = 300
 
 // resolveIdleSeconds reads the idle watchdog window from the environment,
 // falling back to defaultIdleSeconds. A value <= 0 disables the watchdog.
