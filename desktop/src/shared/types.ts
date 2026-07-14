@@ -218,6 +218,12 @@ export interface AgentFieldApi {
   install(name: string): Promise<InstallResult>
   /** Uninstall an installed agent (stops it first; removes files + secrets). */
   uninstall(name: string): Promise<AgentActionResult>
+  /**
+   * Update an installed catalog agent to the latest version of its source
+   * (reinstall in place; secrets survive). A running agent is stopped for
+   * the update and restarted after; a stopped one stays stopped.
+   */
+  update(name: string): Promise<InstallResult>
   /** Start / stop / restart an installed agent by its registry name. */
   agentAction(action: 'start' | 'stop' | 'restart', name: string): Promise<AgentActionResult>
   /** Env/secret status for every installed agent that declares variables. */

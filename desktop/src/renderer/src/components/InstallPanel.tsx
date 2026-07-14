@@ -44,6 +44,13 @@ export function InstallPanel({ installedNames, onInstalled }: InstallPanelProps)
     onInstalled()
   }
 
+  const update = async (name: string) => {
+    setPhase({ state: 'installing', name, progress: 'Updating…' })
+    const result = await window.agentfield.update(name)
+    setPhase({ state: 'done', name, ok: result.ok, message: result.message })
+    if (result.ok) onInstalled()
+  }
+
   const installing = phase.state === 'installing'
 
   return (
@@ -65,8 +72,10 @@ export function InstallPanel({ installedNames, onInstalled }: InstallPanelProps)
                   {busy && phase.state === 'installing' && (
                     <span className="row-progress">{phase.progress}</span>
                   )}
-                  {phase.state === 'done' && phase.name === entry.name && !phase.ok && (
-                    <span className="row-progress error-text">{phase.message}</span>
+                  {phase.state === 'done' && phase.name === entry.name && (
+                    <span className={`row-progress${phase.ok ? '' : ' error-text'}`}>
+                      {phase.message}
+                    </span>
                   )}
                   {confirming === entry.name && (
                     <span className="row-progress warn-text">
@@ -97,6 +106,14 @@ export function InstallPanel({ installedNames, onInstalled }: InstallPanelProps)
                     ) : (
                       <div className="row-actions">
                         <span className="installed-check">Installed ✓</span>
+                        <button
+                          className="action-button"
+                          title="Reinstall the latest version; a running agent restarts after the update"
+                          disabled={installing}
+                          onClick={() => void update(entry.name)}
+                        >
+                          {busy ? 'Updating…' : 'Update'}
+                        </button>
                         <button
                           className="action-button"
                           disabled={installing}

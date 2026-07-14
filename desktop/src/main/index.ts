@@ -8,7 +8,7 @@ import { DEFAULT_BASE_URL, getSnapshot } from './agentfield'
 import { type AgentAction, runAgentAction, uninstallAgent } from './agents'
 import { runAutostart } from './autostart'
 import { getCliCommand, initializeCli, installBundledCli, refreshCliStatus } from './cli'
-import { installAgent } from './installer'
+import { installAgent, updateAgent } from './installer'
 import {
   getEnvReports,
   listStoredSecrets,
@@ -265,6 +265,26 @@ function main(): void {
         return { ok: false, message: 'invalid uninstall request' }
       }
       return uninstallAgent(name)
+    })
+    // Update shares the install mutex and progress channel: it is an install
+    // with a stop/restart wrapped around it.
+    ipcMain.handle('agentfield:update', async (event, name: unknown) => {
+      if (typeof name !== 'string') {
+        return { ok: false, message: 'invalid update request' }
+      }
+      if (installInFlight) {
+        return { ok: false, message: 'an install is already in progress' }
+      }
+      installInFlight = true
+      try {
+        return await updateAgent(name, (line) => {
+          if (!event.sender.isDestroyed()) {
+            event.sender.send('agentfield:install-progress', line)
+          }
+        })
+      } finally {
+        installInFlight = false
+      }
     })
     ipcMain.handle('agentfield:agent-action', (_event, action: unknown, name: unknown) => {
       if (
