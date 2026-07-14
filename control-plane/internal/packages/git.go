@@ -20,6 +20,11 @@ type GitPackageInfo struct {
 	URL      string // Original URL provided by user
 	Ref      string // branch, tag, or commit (optional)
 	CloneURL string // URL for git clone (may be same as URL)
+	// Subdir is an optional path inside the repository whose
+	// agentfield-package.yaml is the package to install — the `//` selector
+	// in e.g. https://github.com/Agent-Field/pr-af//go. Lets one repo ship
+	// several installable nodes (a Python root and a Go port side by side).
+	Subdir string
 }
 
 // GitInstaller handles Git package installation from any Git repository
@@ -56,16 +61,44 @@ func isHTTPSGitURL(url string) bool {
 		!strings.HasSuffix(url, "/")
 }
 
+// splitSubdir separates a `//subdir` selector from a Git URL. The scheme's
+// own `//` (https://…) is skipped; the first `//` after it marks the
+// subdirectory. Returns the URL without the selector and the cleaned subdir
+// ("" when none).
+func splitSubdir(url string) (string, string) {
+	rest := url
+	offset := 0
+	if i := strings.Index(url, "://"); i >= 0 {
+		offset = i + 3
+		rest = url[offset:]
+	}
+	j := strings.Index(rest, "//")
+	if j < 0 {
+		return url, ""
+	}
+	return url[:offset+j], strings.Trim(rest[j+2:], "/")
+}
+
 // ParseGitURL parses a Git URL into components
 func ParseGitURL(url string) (*GitPackageInfo, error) {
 	info := &GitPackageInfo{
 		URL: url,
 	}
 
+	// Split a trailing `//subdir[@ref]` selector off first: the ref of
+	// https://github.com/owner/repo//go@main belongs to the repo, not the dir.
+	var subdir string
+	url, subdir = splitSubdir(url)
+	if at := strings.LastIndex(subdir, "@"); at >= 0 {
+		info.Ref = subdir[at+1:]
+		subdir = subdir[:at]
+	}
+	info.Subdir = subdir
+
 	// Handle URLs with @ for branch/tag specification
 	// e.g., https://github.com/owner/repo@branch
 	// But not SSH URLs like git@github.com:owner/repo.git
-	if strings.Contains(url, "@") && !strings.HasPrefix(url, "git@") {
+	if info.Ref == "" && strings.Contains(url, "@") && !strings.HasPrefix(url, "git@") {
 		// Find the last @ that's not part of the domain
 		parts := strings.Split(url, "@")
 		if len(parts) >= 2 {
@@ -136,7 +169,12 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 	spinner = gi.newSpinner("Validating package structure")
 	spinner.Start()
 
-	packagePath, err := gi.findPackageRoot(tempDir)
+	var packagePath string
+	if info.Subdir != "" {
+		packagePath, err = subdirPackageRoot(tempDir, info.Subdir)
+	} else {
+		packagePath, err = gi.findPackageRoot(tempDir)
+	}
 	if err != nil {
 		spinner.Error("Invalid package structure")
 		return fmt.Errorf("invalid package structure: %w", err)
@@ -257,6 +295,32 @@ func (gi *GitInstaller) cloneRepository(info *GitPackageInfo) (string, error) {
 	return tempDir, nil
 }
 
+// subdirPackageRoot resolves an explicit //subdir selector against the clone
+// root. Unlike findPackageRoot there is no walking: the manifest must sit
+// exactly at the named directory, so a repo shipping several installable
+// nodes (a Python root plus a Go port under go/) stays unambiguous.
+func subdirPackageRoot(cloneDir, subdir string) (string, error) {
+	cleanClone, err := filepath.Abs(cloneDir)
+	if err != nil {
+		return "", err
+	}
+	packageRoot, err := filepath.Abs(filepath.Join(cleanClone, filepath.FromSlash(subdir)))
+	if err != nil {
+		return "", err
+	}
+	if packageRoot != cleanClone &&
+		!strings.HasPrefix(packageRoot, cleanClone+string(filepath.Separator)) {
+		return "", fmt.Errorf("subdirectory %q escapes the repository", subdir)
+	}
+	if _, err := os.Stat(filepath.Join(packageRoot, "agentfield-package.yaml")); err != nil {
+		return "", fmt.Errorf("agentfield-package.yaml not found under %q in the repository", subdir)
+	}
+	if err := ValidatePackage(packageRoot); err != nil {
+		return "", err
+	}
+	return packageRoot, nil
+}
+
 // findPackageRoot finds the root directory containing agentfield-package.yaml
 func (gi *GitInstaller) findPackageRoot(cloneDir string) (string, error) {
 	var packageRoot string
@@ -327,11 +391,10 @@ func (gi *GitInstaller) updateRegistryWithGit(metadata *PackageMetadata, info *G
 		sourceType = "bitbucket"
 	}
 
-	// Build source path string
+	// The original source string is already reproducible as-is — it carries
+	// any @ref and //subdir the user gave. (Appending the ref again used to
+	// produce doubled "…@main@main" entries.)
 	sourcePathStr := info.URL
-	if info.Ref != "" {
-		sourcePathStr = fmt.Sprintf("%s@%s", info.URL, info.Ref)
-	}
 
 	// Add/update package entry with Git information
 	registry.Installed[metadata.Name] = InstalledPackage{

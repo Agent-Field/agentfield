@@ -482,7 +482,15 @@ func (pu *PackageUninstaller) UninstallPackage(packageName string) error {
 		}
 	}
 
-	// 7. Update registry
+	// 7. Remove node-scoped secrets — useless without the node. Global
+	// (shared) secrets are left alone.
+	if store, err := NewSecretStore(pu.AgentFieldHome); err == nil {
+		if err := store.DeleteScope(packageName); err != nil {
+			fmt.Printf("Warning: Failed to remove node-scoped secrets: %v\n", err)
+		}
+	}
+
+	// 8. Update registry
 	delete(registry.Installed, packageName)
 	if err := pu.saveRegistry(registry); err != nil {
 		return fmt.Errorf("failed to update registry: %w", err)
