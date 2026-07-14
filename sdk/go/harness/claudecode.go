@@ -12,6 +12,10 @@ import (
 // It uses the `claude` CLI with `--print` mode for non-interactive output.
 type ClaudeCodeProvider struct {
 	BinPath string
+
+	// runCLI is the subprocess runner, injectable for tests. It defaults to
+	// RunCLIWithStdin so the prompt can be delivered via stdin.
+	runCLI func(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int, stdin []byte) (*CLIResult, error)
 }
 
 // NewClaudeCodeProvider creates a Claude Code provider. If binPath is empty,
@@ -20,7 +24,7 @@ func NewClaudeCodeProvider(binPath string) *ClaudeCodeProvider {
 	if binPath == "" {
 		binPath = "claude"
 	}
-	return &ClaudeCodeProvider{BinPath: binPath}
+	return &ClaudeCodeProvider{BinPath: binPath, runCLI: RunCLIWithStdin}
 }
 
 // permissionMap translates common permission mode names to Claude Code flags.
@@ -30,7 +34,17 @@ var permissionMap = map[string]string{
 }
 
 func (p *ClaudeCodeProvider) Execute(ctx context.Context, prompt string, options Options) (*RawResult, error) {
-	cmd := []string{p.BinPath, "--print", "--output-format", "json"}
+	// stream-json (rather than plain json) keeps RunCLI's idle watchdog fed:
+	// with --output-format json the CLI is COMPLETELY SILENT until the run
+	// finishes, so any turn quieter than AGENTFIELD_HARNESS_IDLE_SECONDS
+	// (default 120s) was SIGKILLed mid-run. stream-json emits per-message
+	// JSONL events (init, thinking deltas, assistant messages, final result)
+	// as they happen — verified against claude CLI 2.1.191 — and the final
+	// "result" event carries the same fields as the json format (result,
+	// session_id, num_turns, total_cost_usd), so parseJSONOutput's contract
+	// is unchanged. In --print mode the CLI hard-requires --verbose alongside
+	// stream-json ("--output-format=stream-json requires --verbose").
+	cmd := []string{p.BinPath, "--print", "--output-format", "stream-json", "--verbose"}
 
 	if options.Model != "" {
 		cmd = append(cmd, "--model", options.Model)
@@ -64,8 +78,12 @@ func (p *ClaudeCodeProvider) Execute(ctx context.Context, prompt string, options
 		cmd = append(cmd, "--allowedTools", tool)
 	}
 
-	// The prompt is passed via stdin-like argument (last positional arg)
-	cmd = append(cmd, prompt)
+	// The prompt is delivered on stdin, NOT as a trailing positional argument.
+	// `--allowedTools` is variadic in the claude CLI (verified against 2.1.191):
+	// a positional prompt immediately following it is greedily absorbed into the
+	// tool list, so `--print` sees no prompt and exits non-zero with
+	// "Input must be provided ... when using --print". `claude --print` reads
+	// the prompt from stdin when no positional is present.
 
 	env := make(map[string]string)
 	for k, v := range options.Env {
@@ -81,9 +99,14 @@ func (p *ClaudeCodeProvider) Execute(ctx context.Context, prompt string, options
 		cwd = options.ProjectDir
 	}
 
+	runCLI := p.runCLI
+	if runCLI == nil {
+		runCLI = RunCLIWithStdin
+	}
+
 	startAPI := time.Now()
 
-	cliResult, err := RunCLI(ctx, cmd, env, cwd, options.timeout())
+	cliResult, err := runCLI(ctx, cmd, env, cwd, options.timeout(), []byte(prompt))
 	apiMS := int(time.Since(startAPI).Milliseconds())
 
 	if err != nil {
@@ -109,7 +132,7 @@ func (p *ClaudeCodeProvider) Execute(ctx context.Context, prompt string, options
 		return nil, err
 	}
 
-	// Parse JSON output from Claude Code's --output-format json
+	// Parse the JSONL event stream from Claude Code's --output-format stream-json
 	raw := &RawResult{
 		Metrics: Metrics{
 			DurationAPIMS: apiMS,
@@ -144,9 +167,16 @@ func (p *ClaudeCodeProvider) Execute(ctx context.Context, prompt string, options
 	return raw, nil
 }
 
-// parseJSONOutput attempts to extract structured data from Claude Code's JSON output.
+// parseJSONOutput extracts structured data from Claude Code's JSONL output.
+// It consumes both the stream-json event stream (system/init, thinking
+// deltas, assistant messages, terminal "result" event) and the legacy
+// single-line json format: every line is parsed as an event, all events are
+// collected into Messages (mirroring the Python provider, which appends every
+// SDK stream message), and the LAST "result" event supplies Result,
+// SessionID, CostUSD and NumTurns — its fields are identical across both
+// output formats. Assistant-message text is only a fallback when no result
+// event ever arrives (e.g. a stream truncated by a crash).
 func (p *ClaudeCodeProvider) parseJSONOutput(stdout string, raw *RawResult) {
-	// Claude Code with --output-format json outputs JSONL
 	var messages []map[string]any
 	var resultText string
 	var sessionID string

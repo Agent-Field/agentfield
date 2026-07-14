@@ -9,6 +9,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -29,6 +30,18 @@ func NewRunner(defaults Options) *Runner {
 		DefaultOptions: defaults,
 		Logger:         log.New(io.Discard, "[harness] ", log.LstdFlags),
 	}
+}
+
+// schemaAware is implemented by providers that consume a JSON schema natively
+// (codex's --output-schema / --output-last-message) instead of the Write-tool
+// file protocol used by the claude/opencode providers. When a schema is
+// present the runner writes the STRICT schema rewrite, hands the provider the
+// deterministic schema/output paths, and uses a codex-native prompt suffix
+// rather than BuildPromptSuffix — matching the provider-dispatching suffix in
+// codex_harness_patch.py. Providers that do not implement this keep the
+// original file-write protocol, so this is fully back-compatible.
+type schemaAware interface {
+	SetSchema(schemaPath, outputPath string)
 }
 
 // Run dispatches a prompt to a coding agent and returns the result.
@@ -73,11 +86,46 @@ func (r *Runner) Run(ctx context.Context, prompt string, schema map[string]any, 
 	//   "auto"        — incremental only when the schema is large, else single
 	useIncremental := resolveIncremental(schema, opts)
 
+	// Native-schema providers (codex) consume the schema through CLI flags
+	// instead of the Write-tool file protocol. Detect and prepare before the
+	// prompt suffix is built so codex gets a codex-native instruction while
+	// claude/opencode keep the Write-tool suffix.
+	var nativeSchemaPath, nativeOutputPath string
+	useNativeSchema := false
+	if schema != nil {
+		if sa, ok := provider.(schemaAware); ok {
+			absDir, absErr := filepath.Abs(outputDir)
+			if absErr != nil {
+				absDir = outputDir
+			}
+			nativeSchemaPath = SchemaPath(absDir)
+			nativeOutputPath = OutputPath(absDir)
+			if strictJSON, mErr := json.MarshalIndent(codexStrictJSONSchema(schema), "", "  "); mErr == nil {
+				if mkErr := os.MkdirAll(filepath.Dir(nativeSchemaPath), 0o700); mkErr == nil {
+					if wErr := os.WriteFile(nativeSchemaPath, strictJSON, 0o600); wErr == nil {
+						sa.SetSchema(nativeSchemaPath, nativeOutputPath)
+						useNativeSchema = true
+						// Clean up unconditionally: CleanupTempFiles no-ops when
+						// outputDir is "." so the strict schema / native output
+						// file would otherwise leak into the working directory.
+						defer func() {
+							_ = os.Remove(nativeSchemaPath)
+							_ = os.Remove(nativeOutputPath)
+						}()
+					}
+				}
+			}
+		}
+	}
+
 	effectivePrompt := prompt
 	if schema != nil {
-		if useIncremental {
+		switch {
+		case useNativeSchema:
+			effectivePrompt = prompt + BuildCodexNativeSuffix(nativeSchemaPath, nativeOutputPath)
+		case useIncremental:
 			effectivePrompt = prompt + BuildIncrementalPromptSuffix(schema, outputDir)
-		} else {
+		default:
 			effectivePrompt = prompt + BuildPromptSuffix(schema, outputDir)
 		}
 	}
@@ -319,6 +367,16 @@ func (r *Runner) handleSchemaWithRetry(
 			r.Logger.Println("Stdout fallback succeeded")
 		}
 	}
+	// Enforce the schema: unmarshal-only parsing (ParseAndValidate /
+	// TryParseFromText) accepts missing required fields, invalid enums and
+	// extra fields silently, so validate here to drive the retry loop below.
+	if err == nil {
+		if verr := runSchemaValidation(data, schema, dest); verr != nil {
+			r.Logger.Printf("Initial output failed schema validation: %v", verr)
+			err = verr
+			data = nil
+		}
+	}
 
 	if err == nil && data != nil {
 		elapsed := int(time.Since(startTime).Milliseconds())
@@ -441,6 +499,13 @@ func (r *Runner) handleSchemaWithRetry(
 				r.Logger.Printf("Schema retry %d succeeded via stdout fallback", retryNum+1)
 			}
 		}
+		if err == nil {
+			if verr := runSchemaValidation(data, schema, dest); verr != nil {
+				r.Logger.Printf("Schema retry %d failed validation: %v", retryNum+1, verr)
+				err = verr
+				data = nil
+			}
+		}
 
 		if err == nil && data != nil {
 			elapsed := int(time.Since(startTime).Milliseconds())
@@ -503,6 +568,18 @@ func accumulateMetrics(raws []*RawResult) (totalCost *float64, totalTurns int, s
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// runSchemaValidation enforces the JSON Schema on parsed output when the normal
+// harness contract holds — both a destination struct and a schema were
+// provided. It returns nil (validation not applicable) when either is absent or
+// the data is nil, preserving the previous unmarshal-only behavior for
+// schema-only or dest-less callers.
+func runSchemaValidation(data map[string]any, schema map[string]any, dest any) error {
+	if data == nil || schema == nil || dest == nil {
+		return nil
+	}
+	return validateAgainstSchema(data, schema)
 }
 
 // StructToJSONSchema converts a Go struct (or pointer to struct) to a basic

@@ -51,25 +51,26 @@ func writeSubdirManifest(t *testing.T, dir, name string) {
 	}
 }
 
-// Contract: an explicit subdir resolves exactly there (no walking), rejects
-// escapes, and errors helpfully when the subdir carries no manifest.
-func TestSubdirPackageRoot(t *testing.T) {
+// Contract: a URL //subdir selector resolves exactly there (no walking),
+// rejects escapes, and errors helpfully when the subdir carries no manifest —
+// via the same resolver the --path flag uses.
+func TestResolvePackageRoot_UrlSelector(t *testing.T) {
 	clone := t.TempDir()
 	writeSubdirManifest(t, clone, "root-node")
 	writeSubdirManifest(t, filepath.Join(clone, "go"), "root-node-go")
 
-	got, err := subdirPackageRoot(clone, "go")
+	got, err := (&GitInstaller{Subdir: "go"}).resolvePackageRoot(clone)
 	if err != nil {
-		t.Fatalf("subdirPackageRoot: %v", err)
+		t.Fatalf("resolvePackageRoot: %v", err)
 	}
-	if want, _ := filepath.Abs(filepath.Join(clone, "go")); got != want {
-		t.Fatalf("subdirPackageRoot = %q, want %q", got, want)
+	if want := filepath.Join(clone, "go"); got != want {
+		t.Fatalf("resolvePackageRoot = %q, want %q", got, want)
 	}
 
-	if _, err := subdirPackageRoot(clone, "missing"); err == nil {
+	if _, err := (&GitInstaller{Subdir: "missing"}).resolvePackageRoot(clone); err == nil {
 		t.Fatal("expected error for a subdir without a manifest")
 	}
-	if _, err := subdirPackageRoot(clone, "../outside"); err == nil {
+	if _, err := (&GitInstaller{Subdir: "../outside"}).resolvePackageRoot(clone); err == nil {
 		t.Fatal("expected error for a subdir escaping the repository")
 	}
 }
@@ -145,9 +146,13 @@ func TestInstallFromGit_SubdirSelector(t *testing.T) {
 		t.Fatalf("installed subdir package missing manifest: %v", err)
 	}
 
-	// A subdir without a manifest fails with a pointed error.
-	err := gi.InstallFromGit("https://gitlab.com/acme/dual//nope", false)
-	if err == nil || !strings.Contains(err.Error(), `not found under "nope"`) {
+	// A subdir without a manifest fails with a pointed error. Fresh installer:
+	// the service constructs one per install, and InstallFromGit folds the URL
+	// selector into gi.Subdir.
+	err := (&GitInstaller{AgentFieldHome: home}).InstallFromGit(
+		"https://gitlab.com/acme/dual//nope", false,
+	)
+	if err == nil || !strings.Contains(err.Error(), "no agentfield-package.yaml found") {
 		t.Fatalf("expected missing-manifest subdir error, got %v", err)
 	}
 }

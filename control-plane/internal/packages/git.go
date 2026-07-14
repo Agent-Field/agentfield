@@ -31,6 +31,12 @@ type GitPackageInfo struct {
 type GitInstaller struct {
 	AgentFieldHome string
 	Verbose        bool
+	// Subdir optionally selects a package subdirectory within the cloned repo
+	// (the `--path` flag). Empty means the historical root-first walk. When set,
+	// the manifest MUST live at <clone>/<Subdir>/agentfield-package.yaml and that
+	// subdirectory becomes the package root that is copied and installed. It
+	// composes with an @ref pin on the URL, which is parsed independently.
+	Subdir string
 }
 
 // newSpinner creates a new spinner with the given message
@@ -139,6 +145,12 @@ func checkGitAvailable() error {
 
 // InstallFromGit installs a package from any Git repository
 func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
+	// Reject a malformed --path selector (absolute / escaping) up front, before
+	// any install work (clone, copy, registry mutation) happens.
+	if err := validateSubdirSelector(gi.Subdir); err != nil {
+		return err
+	}
+
 	// Check if Git is available
 	if err := checkGitAvailable(); err != nil {
 		return err
@@ -169,12 +181,13 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 	spinner = gi.newSpinner("Validating package structure")
 	spinner.Start()
 
-	var packagePath string
-	if info.Subdir != "" {
-		packagePath, err = subdirPackageRoot(tempDir, info.Subdir)
-	} else {
-		packagePath, err = gi.findPackageRoot(tempDir)
+	// The subdirectory can be named two ways: the --path flag (gi.Subdir) or
+	// the URL's //subdir selector (info.Subdir). The flag wins when both are
+	// given; folding the URL form in here lets one resolver handle both.
+	if strings.TrimSpace(gi.Subdir) == "" {
+		gi.Subdir = info.Subdir
 	}
+	packagePath, err := gi.resolvePackageRoot(tempDir)
 	if err != nil {
 		spinner.Error("Invalid package structure")
 		return fmt.Errorf("invalid package structure: %w", err)
@@ -295,30 +308,25 @@ func (gi *GitInstaller) cloneRepository(info *GitPackageInfo) (string, error) {
 	return tempDir, nil
 }
 
-// subdirPackageRoot resolves an explicit //subdir selector against the clone
-// root. Unlike findPackageRoot there is no walking: the manifest must sit
-// exactly at the named directory, so a repo shipping several installable
-// nodes (a Python root plus a Go port under go/) stays unambiguous.
-func subdirPackageRoot(cloneDir, subdir string) (string, error) {
-	cleanClone, err := filepath.Abs(cloneDir)
+// resolvePackageRoot determines which directory of the cloned repository is the
+// package to install. With no subdirectory selector (--path flag or the URL's
+// //subdir form, folded into gi.Subdir by InstallFromGit) it defers to
+// findPackageRoot's root-first walk (unchanged behavior). With a selector it
+// resolves and validates <cloneDir>/<Subdir>, requiring the manifest to exist
+// there, so one repo can ship multiple installable nodes selected explicitly.
+func (gi *GitInstaller) resolvePackageRoot(cloneDir string) (string, error) {
+	if strings.TrimSpace(gi.Subdir) == "" {
+		return gi.findPackageRoot(cloneDir)
+	}
+	root, err := ResolvePackageSubdir(cloneDir, gi.Subdir)
 	if err != nil {
 		return "", err
 	}
-	packageRoot, err := filepath.Abs(filepath.Join(cleanClone, filepath.FromSlash(subdir)))
-	if err != nil {
+	// A selected subdir must still be a valid, startable agent node.
+	if err := ValidatePackage(root); err != nil {
 		return "", err
 	}
-	if packageRoot != cleanClone &&
-		!strings.HasPrefix(packageRoot, cleanClone+string(filepath.Separator)) {
-		return "", fmt.Errorf("subdirectory %q escapes the repository", subdir)
-	}
-	if _, err := os.Stat(filepath.Join(packageRoot, "agentfield-package.yaml")); err != nil {
-		return "", fmt.Errorf("agentfield-package.yaml not found under %q in the repository", subdir)
-	}
-	if err := ValidatePackage(packageRoot); err != nil {
-		return "", err
-	}
-	return packageRoot, nil
+	return root, nil
 }
 
 // findPackageRoot finds the root directory containing agentfield-package.yaml

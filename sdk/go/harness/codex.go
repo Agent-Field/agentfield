@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 )
@@ -12,6 +13,19 @@ import (
 // It uses `codex exec --json` for structured JSONL output.
 type CodexProvider struct {
 	BinPath string
+
+	// runCLI is the subprocess runner, injectable for tests. It defaults to
+	// RunCLIWithStdin so the prompt can be delivered via stdin (mirroring the
+	// claude provider). A nil value falls back to RunCLIWithStdin at call time.
+	runCLI func(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int, stdin []byte) (*CLIResult, error)
+
+	// schemaPath / outputPath are set by the runner (via SetSchema) when a JSON
+	// schema is in effect. codex consumes the schema natively through
+	// --output-schema and persists its final message to --output-last-message,
+	// which the runner then reads — instead of relying on the Write-tool file
+	// protocol used by the claude/opencode providers.
+	schemaPath string
+	outputPath string
 }
 
 // NewCodexProvider creates a Codex provider. If binPath is empty,
@@ -20,38 +34,83 @@ func NewCodexProvider(binPath string) *CodexProvider {
 	if binPath == "" {
 		binPath = "codex"
 	}
-	return &CodexProvider{BinPath: binPath}
+	return &CodexProvider{BinPath: binPath, runCLI: RunCLIWithStdin}
+}
+
+// SetSchema tells the codex provider that a JSON schema is in effect, giving it
+// the deterministic paths where the runner wrote the strict schema and expects
+// codex to persist its final JSON answer. The runner owns strict-schema
+// computation and file writing; the provider only needs the paths so it can
+// point codex's native --output-schema / --output-last-message flags at them.
+//
+// This implements the schemaAware interface the runner detects (see runner.go).
+func (p *CodexProvider) SetSchema(schemaPath, outputPath string) {
+	p.schemaPath = schemaPath
+	p.outputPath = outputPath
 }
 
 func (p *CodexProvider) Execute(ctx context.Context, prompt string, options Options) (*RawResult, error) {
-	cmd := []string{p.BinPath, "exec", "--json"}
+	// --skip-git-repo-check lets the harness run in arbitrary working dirs
+	// (temp dirs, non-repo project roots); codex exec otherwise refuses to
+	// start outside a git repo.
+	cmd := []string{p.BinPath, "exec", "--json", "--skip-git-repo-check"}
 
-	if options.Cwd != "" {
-		cmd = append(cmd, "-C", options.Cwd)
-	} else if options.ProjectDir != "" {
-		cmd = append(cmd, "-C", options.ProjectDir)
+	cwd := options.Cwd
+	if cwd == "" {
+		cwd = options.ProjectDir
+	}
+	if cwd != "" {
+		cmd = append(cmd, "-C", cwd)
 	}
 
-	if options.PermissionMode == "auto" {
-		cmd = append(cmd, "--full-auto")
+	// Pass the model through with -m. SWE-AF resolves gpt-5.5 vs gpt-5.3-codex by
+	// auth mode and relies on the value reaching the CLI; the old provider
+	// ignored options.Model entirely.
+	if options.Model != "" {
+		cmd = append(cmd, "-m", options.Model)
 	}
 
-	// Prompt is the final positional argument.
-	cmd = append(cmd, prompt)
+	// permission_mode → sandbox policy (port of codex_harness_patch.py:165-170).
+	// codex exec never prompts (approval policy is always Never); the sandbox
+	// controls what it may write. --full-auto is deprecated in favour of the
+	// bypass flag / --sandbox.
+	switch options.PermissionMode {
+	case "auto":
+		cmd = append(cmd, "--dangerously-bypass-approvals-and-sandbox")
+	case "read-only", "workspace-write", "danger-full-access":
+		cmd = append(cmd, "--sandbox", options.PermissionMode)
+	default:
+		cmd = append(cmd, "--sandbox", "workspace-write")
+	}
+
+	// Native structured output: when the runner has set a schema, point codex at
+	// the strict schema file and the last-message output file (patch lines
+	// 176-178). codex writes its final message to the last-message file, which
+	// the runner reads back.
+	if p.schemaPath != "" && fileExists(p.schemaPath) {
+		cmd = append(cmd, "--output-schema", p.schemaPath)
+		if p.outputPath != "" {
+			cmd = append(cmd, "--output-last-message", p.outputPath)
+		}
+	}
 
 	env := make(map[string]string)
 	for k, v := range options.Env {
 		env[k] = v
 	}
 
-	cwd := options.Cwd
-	if cwd == "" {
-		cwd = options.ProjectDir
+	runCLI := p.runCLI
+	if runCLI == nil {
+		runCLI = RunCLIWithStdin
 	}
 
 	startAPI := time.Now()
 
-	cliResult, err := RunCLI(ctx, cmd, env, cwd, options.timeout())
+	// The prompt is delivered on stdin, NOT as a trailing positional argument
+	// (patch lines 84-102, mirroring the claude provider). codex exec reads the
+	// prompt from stdin, and delivering it there keeps large prompts off the
+	// argv and out of process listings.
+	cliResult, err := runCLI(ctx, cmd, env, cwd, options.timeout(), []byte(prompt))
 	apiMS := int(time.Since(startAPI).Milliseconds())
 
 	if err != nil {
@@ -88,8 +147,19 @@ func (p *CodexProvider) Execute(ctx context.Context, prompt string, options Opti
 	cleanStderr := StripANSI(strings.TrimSpace(cliResult.Stderr))
 
 	if stdout != "" {
-		raw.Result = stdout
+		// parseJSONLOutput sets raw.Result to the extracted final message only
+		// when one is present, so an empty Result below reliably signals "no
+		// parseable final text" and triggers the last-message fallback.
 		p.parseJSONLOutput(stdout, raw)
+	}
+
+	// Native last-message fallback: when stdout parsing yielded no usable final
+	// text but codex persisted its answer to the --output-last-message file,
+	// read it (patch lines 236-243).
+	if raw.Result == "" && p.outputPath != "" && fileExists(p.outputPath) {
+		if data, readErr := os.ReadFile(p.outputPath); readErr == nil {
+			raw.Result = strings.TrimSpace(string(data))
+		}
 	}
 
 	if cliResult.ReturnCode != 0 && raw.Result == "" {

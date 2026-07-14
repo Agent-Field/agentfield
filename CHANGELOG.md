@@ -6,6 +6,299 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.108] - 2026-07-13
+
+## [0.1.108-rc.1] - 2026-07-13
+
+
+### Added
+
+- Feat: af install --path selector + Go SDK harness fixes (#750)
+
+* feat(control-plane): af install --path subdirectory selector
+
+Add a --path flag to `af install` so a single repository can ship more than
+one installable agent node (e.g. a Python node at the root and a Go port under
+go/). By default `af install` finds the first agentfield-package.yaml root-first;
+with --path <subdir> it installs the node whose manifest lives at
+<root>/<subdir>/agentfield-package.yaml, and that subtree becomes the package
+root that is copied to ~/.agentfield/packages/<name>.
+
+- domain.InstallOptions gains Path (top-level source only; never propagated to
+  recursively-installed node dependencies).
+- packages.ResolvePackageSubdir / ValidateSubdirSelector: shared, reusable
+  resolution+validation. Reject absolute paths and paths that escape the source
+  root via ".." (validated before any clone/copy work); a missing manifest is
+  reported with the full expected path.
+- GitInstaller gains a Subdir field and resolvePackageRoot: no selector keeps the
+  historical root-first walk; a selector resolves+validates the subdir post-clone.
+  Composes with the existing @ref URL pin (parsed independently).
+- Local-directory installs honor --path with identical semantics
+  (<local-dir>/<subdir>), resolved before any copy/registry mutation.
+- CLI help/examples document --path.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): cover af install --path selector
+
+Behavior-driven tests derived from the --path validation contract:
+
+- packages: ResolvePackageSubdir / ValidateSubdirSelector (root vs subdir
+  selection, in-tree traversal allowed, absolute + escaping paths rejected,
+  missing manifest names the expected path); GitInstaller.resolvePackageRoot
+  against a faked clone (root install unchanged, --path go selects the go
+  subtree, missing/absolute/escaping paths rejected — the last also proving
+  InstallFromGit rejects a bad selector before any clone); @ref composes with
+  --path; a Go subdir package builds relative to the subdir-as-root.
+- services: local-directory `af install --path <subdir>` selects the subdir node,
+  bare install installs the root node, a missing/absolute/escaping --path errors
+  and leaves the registry unmutated.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: document af install --path for multi-node repositories
+
+Add a "One repo, many nodes: --path" section to the agent-node install guide
+covering git and local sources, @ref composition, the relative-path/escape
+rules, and that a bare install is unchanged. Add a --path row to the lifecycle
+reference table.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/go): deliver claude prompt via stdin; correct note endpoint path
+
+The claude provider appended the prompt as a trailing positional after
+repeated --allowedTools flags; claude CLI 2.1.x treats --allowedTools
+as variadic and swallows the positional, so every tool-passing call
+exited 1 with 'Input must be provided'. The prompt now flows through
+stdin (RunCLIWithStdin), which --print reads natively; codex/opencode/
+gemini were inspected and are unaffected. Verified against the real
+CLI via a gated integration test.
+
+Note() posted to {base}/executions/note without the /api/v1 prefix,
+404ing on the control plane (route registered under the /api/v1 group)
+and silently dropping every progress note; existing tests masked it by
+baking /api/v1 into the base URL, contrary to the SDK-wide bare-base
+contract.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+(cherry picked from commit 7c6f11e1c89a55e4a9959901b6b866d482519c3a)
+
+* fix(sdk/go): async-submit Agent.Call and stream-json claude output
+
+Agent.Call was a synchronous POST /execute/{target} bounded by the
+15s CallTimeout http.Client default, killing any caller whose child
+reasoner worked longer. It now mirrors the Python SDK: submit via
+/execute/async/{target}, then poll the execution record with
+Python-parity pacing (0.25s doubling to 4s, jittered), CallTimeout
+bounding each request rather than the overall wait, ctx-cancellable,
+lineage headers on submit and polls so DAG parentage is unchanged.
+
+The claude provider now uses --output-format stream-json --verbose:
+per-event output keeps the CLI idle watchdog fed during long silent
+turns (plain json emitted nothing until completion, so >120s turns
+were SIGKILLed), and the terminal result event carries the same
+fields including total_cost_usd. Real 2.1.191 capture committed as a
+fixture; ctx cancellation now kills the whole CLI process group.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+(cherry picked from commit 18c3f3eaf5aab18667c08e23c5836b38ff739e36)
+
+* test(sdk/go): cover async Call submit/poll paths and claudecode default-runner fallback
+
+Adds tests closing the patch-coverage gap on PR #746's async-submit
+Agent.Call rewrite and the claudecode stdin/stream-json changes.
+
+agent_call_coverage_test.go (package agent) exercises the error/edge
+branches of Call's submit + poll loop that the happy-path tests miss:
+  - nextCallPollInterval clamps (below floor / above ceiling)
+  - submitAsyncExecution: build-request, transport, read-body,
+    structured 4xx, and JSON-decode errors
+  - awaitExecutionResult: ctx-already-cancelled, GET build error,
+    ctx-cancel-during-poll, transport error, read-body error,
+    poll HTTP-error status, poll decode error, succeeded-result
+    decode error, and succeeded-null-result
+
+claudecode_defaultrunner_test.go covers the runCLI == nil fallback in
+ClaudeCodeProvider.Execute via a struct-literal provider (bypassing
+NewClaudeCodeProvider) driving the real default runner.
+
+Lifts sdk-go patch coverage from 61% to 98% (agent.go 98.29%,
+claudecode.go 100%), clearing the 80% min_patch gate. Tests only; no
+production code changed.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+(cherry picked from commit 5b763d872751309c0b72ebd90f48626cfbdf9692)
+
+* fix(sdk/go): codex native structured output + model/sandbox parity
+
+Port the codex harness patch behaviors into the Go codex provider so it
+matches the Python reference (runtime/codex_harness_patch.py):
+
+- Pass `-m <model>` (was ignored entirely; SWE-AF resolves gpt-5.5 vs
+  gpt-5.3-codex by auth mode and the value must reach the CLI).
+- Add `--skip-git-repo-check` so the harness runs outside a git repo.
+- Replace deprecated `--full-auto` with the permission->sandbox mapping:
+  "auto" -> --dangerously-bypass-approvals-and-sandbox; read-only /
+  workspace-write / danger-full-access -> --sandbox <mode>; else
+  --sandbox workspace-write.
+- Deliver the prompt via stdin (not argv), mirroring the claude provider.
+- Native structured output: when a schema is set, pass --output-schema
+  (pointing at the STRICT rewrite) + --output-last-message, and read the
+  last-message file when stdout yields no parseable final text.
+
+Schema plumbing uses a schemaAware interface the runner detects: the
+runner owns the strict-schema rewrite (codexStrictJSONSchema, ported from
+_codex_strict_json_schema), writes it, hands the provider the
+deterministic paths, and swaps in a codex-native prompt suffix while
+claude/opencode keep the Write-tool suffix. Options gains no schema field.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/go): enforce JSON Schema in the harness retry loop
+
+ParseAndValidate was unmarshal-only, so output missing required fields,
+carrying invalid enum values, or (with additionalProperties:false)
+extra fields passed silently and the schema-retry loop never fired.
+
+Add validateAgainstSchema (github.com/santhosh-tekuri/jsonschema/v5) and
+run it at every parse-success point in handleSchemaWithRetry — after the
+initial ParseAndValidate/TryParseFromText and inside each retry iteration
+— so a validation failure sets err and the EXISTING retry branch fires
+(schemaMaxRetries default 2 preserved). Validation applies only when both
+a destination struct and a schema are provided; uncompilable schemas skip
+validation (return nil) so there is no regression versus unmarshal-only.
+
+This makes map-schema harness calls stricter than before; callers control
+strictness through the schema they pass.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/go): opencode JSON event stream + exit-0 error surfacing
+
+Port the Python opencode provider behaviors (providers/opencode.py):
+
+- Add `--format json` and parse the JSONL event stream: recover the final
+  assistant text (extract_final_text parity), sum per-step cost from
+  step_finish events (nil when none report a cost, distinguishing
+  "unknown" from "$0.00"), and count turns as one per step_start, falling
+  back to tool_use events.
+- Surface in-band JSON "error" events and — critically — hard failures on
+  which opencode exits 0 (Model not found, AuthenticationError,
+  Unauthorized, APIError): when stderr matches one of those markers and no
+  result was produced, mark IsError with the extracted error window
+  instead of returning empty output that reads downstream as "no result".
+
+Non-JSON stdout still falls back to trimmed raw text, so older opencode
+versions keep working.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/go): preserve ReasonerFailed result on failed executions
+
+Add a native ReasonerFailed error type (Message / Result / ErrorDetails)
+so a reasoner that ran but failed can report status=failed WITHOUT
+discarding its structured outcome — mirroring the Python SDK's
+ReasonerFailed exception.
+
+In executeReasonerAsync's error branch, detect it via errors.As and
+attach payload["result"] / payload["error_details"] (only when non-nil)
+so the single 5x-retried status post carries the result atomically; the
+control plane stores the result regardless of terminal status. The two
+sync HTTP paths (handleExecute / handleReasoner) mirror this by carrying
+the result/details onto their error response. A plain error synthesizes
+neither key.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/go): make Agent.Call resilient to transient control-plane outages
+
+The async submit+poll Agent.Call path (introduced earlier on this branch)
+failed a call the instant a single HTTP request to the control plane failed.
+Real-world testing exposed the impact: two ~hour-long SWE-AF builds died at
+~55 minutes when the CP briefly went slow under system load — one timed-out
+status poll ("context deadline exceeded while awaiting headers") aborted calls
+that had been running for 30+ minutes, and a slow submit POST likewise killed
+a call before the request could be confirmed accepted.
+
+Poll resilience: a transient poll failure (transport error/timeout, 408/429,
+or 5xx) no longer fails the call. Consecutive failures are retried with
+exponential backoff (capped at 15s) for a configurable window of UNBROKEN
+failure — default 5 minutes — after which the call fails with a clear
+"control plane unreachable for Xs" error instead of the raw first error. A
+single successful poll resets the window. A 404 on a just-submitted execution
+(the CP can lag before the row is queryable) is retried within a shorter
+bounded window, then fails with a distinct not-found message. Permanent 4xx
+(auth, bad request) still abort immediately.
+
+Submit safety: re-POSTing execute/async is NOT idempotent (a duplicate would
+double-run a coder), so the submit is retried ONLY on errors that prove the
+request never reached the server — dial/DNS/connection-refused, detected by
+inspecting the error chain (syscall.ECONNREFUSED, net.DNSError, dial-phase
+net.OpError). Ambiguous failures (a timeout awaiting headers — the request may
+already have been accepted) are never blind-retried; instead the submit client
+timeout is raised substantially (default 120s) so a slow-but-healthy CP does
+not abort an accepted request, and the call fails with a clear message if it
+still times out.
+
+Config: three env knobs following the AGENTFIELD_* integer-seconds convention,
+read once and cached on the agent — AGENTFIELD_CALL_POLL_TIMEOUT_SECONDS (60),
+AGENTFIELD_CALL_RETRY_WINDOW_SECONDS (300), AGENTFIELD_CALL_SUBMIT_TIMEOUT_SECONDS
+(120) — with dedicated submit/poll HTTP clients so these timeouts don't affect
+other client traffic. Each retried failure is logged at warn via the existing
+structured-log seam (call.outbound.submit_retry / call.outbound.poll_retry)
+with attempt count and elapsed window so operators see degradation without the
+call dying.
+
+The Python SDK's async Call path (_submit_execution_sync / _await_execution_sync)
+uses bare requests with raise_for_status() and no transient retry, so it shares
+this fragility; this change improves on it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(sdk/go): cover Agent.Call resilience to transient CP outages
+
+Extends the async-Call test suite for the submit/poll resilience change:
+
+- Poll retries: 2 healthy polls, then 3 transient 5xx, then recovery — the
+  call succeeds and each transient failure emits a warn call.outbound.poll_retry
+  log with an attempt count.
+- Poll unreachable: a CP down past the (env-shortened) window fails with the
+  "control plane unreachable" error, having retried rather than dying on the
+  first blip.
+- 404 after submit: retried within the bounded window, then a distinct 404
+  not-found error.
+- Submit connection-refused: refused twice then accepted creates EXACTLY ONE
+  execution (asserted server-side); refused beyond the window fails unreachable.
+- Submit ambiguous timeout: a hung-but-listening CP is NOT retried (exactly one
+  request reaches the server) and fails with a clear message.
+- Env overrides read once and cached; invalid values fall back to defaults.
+- Direct unit tests for requestNeverReachedServer (dial/DNS/econnrefused vs
+  ambiguous/opaque), isTransientPollStatus, nextRetryBackoff, and sleepCtx.
+
+Existing branch tests updated for the new semantics: submit/poll now use the
+dedicated call clients; a persistent poll transport error is retried to the
+unreachable-window error; a permanent poll status uses 403 (5xx is now
+retried). Also checks previously-unchecked json.Encode returns and switches to
+tagged switches so golangci-lint is clean on the branch delta.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(sdk/go): correct Call timeout docs for the dedicated call clients
+
+The Call() and Config.CallTimeout doc comments still claimed CallTimeout bounds
+the async submit and each status poll. That is no longer true: the Call path now
+uses dedicated submit/poll HTTP clients bounded by
+AGENTFIELD_CALL_SUBMIT_TIMEOUT_SECONDS / AGENTFIELD_CALL_POLL_TIMEOUT_SECONDS,
+with transient failures retried within AGENTFIELD_CALL_RETRY_WINDOW_SECONDS.
+Update both comments so the documented timeout semantics match the code.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (a995105)
+
 ## [0.1.107] - 2026-07-09
 
 ## [0.1.107-rc.3] - 2026-07-09

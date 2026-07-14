@@ -324,7 +324,7 @@ func TestPackageServiceAdditionalCoverage(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(home, "installed.yaml"), data, 0o644))
 
 		service := &DefaultPackageService{agentfieldHome: home}
-		require.NoError(t, service.installLocalPackage(sourcePath, true, false))
+		require.NoError(t, service.installLocalPackage(sourcePath, "", true, false))
 
 		updatedData, err := os.ReadFile(filepath.Join(home, "installed.yaml"))
 		require.NoError(t, err)
@@ -341,7 +341,7 @@ func TestPackageServiceAdditionalCoverage(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(home, "packages"), []byte("blocker"), 0o644))
 
 		service := &DefaultPackageService{agentfieldHome: home}
-		err := service.installLocalPackage(sourcePath, false, false)
+		err := service.installLocalPackage(sourcePath, "", false, false)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to copy package")
 	})

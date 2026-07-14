@@ -46,13 +46,27 @@ type CLIResult struct {
 	ReturnCode int
 }
 
-// RunCLI runs a CLI command and returns its output. The context controls
-// cancellation; timeout is in seconds (0 means no timeout beyond ctx).
+// RunCLI runs a CLI command with no standard input: the child sees an immediate
+// EOF on stdin. It is a thin wrapper over RunCLIWithStdin; see that function for
+// the full contract.
+func RunCLI(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int) (*CLIResult, error) {
+	return RunCLIWithStdin(ctx, cmd, env, cwd, timeout, nil)
+}
+
+// RunCLIWithStdin runs a CLI command and returns its output. The context
+// controls cancellation; timeout is in seconds (0 means no timeout beyond ctx).
+//
+// stdin is fed to the child process's standard input. A nil (or empty) slice
+// yields an immediate EOF — identical to RunCLI. Providers whose CLI reads the
+// prompt from stdin (e.g. `claude --print`) pass the prompt bytes here instead
+// of appending them as a trailing positional argument, which a preceding
+// variadic flag (e.g. claude's `--allowedTools`) would otherwise greedily
+// consume — leaving the CLI with no prompt and exiting non-zero.
 //
 // Environment merging: entries in env are merged with os.Environ(). An empty
 // string value ("") causes that variable to be removed from the environment
 // rather than set to empty — use this to unset inherited variables.
-func RunCLI(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int) (*CLIResult, error) {
+func RunCLIWithStdin(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int, stdin []byte) (*CLIResult, error) {
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
@@ -94,13 +108,25 @@ func RunCLI(ctx context.Context, cmd []string, env map[string]string, cwd string
 		c.Dir = cwd
 	}
 
-	// Explicit null stdin so the child gets an immediate EOF instead of
-	// inheriting the parent's stdin (a hang risk if the child reads stdin).
-	c.Stdin = bytes.NewReader(nil)
+	// Feed the provided stdin to the child. A nil/empty slice yields an
+	// immediate EOF, so the child never inherits the parent's stdin (a hang
+	// risk if the child blocks reading stdin). When the child exits without
+	// draining stdin, the copy fails with EPIPE, which os/exec ignores.
+	c.Stdin = bytes.NewReader(stdin)
 
 	// Run the child in its own process group so the idle watchdog can kill
 	// the whole tree, not just the leader. setProcessGroup is platform-guarded.
 	setProcessGroup(c)
+
+	// On ctx cancellation/timeout, kill the whole process group too.
+	// exec.CommandContext's default Cancel only kills the group LEADER, which
+	// orphans grandchildren (e.g. MCP servers spawned by the claude CLI) when
+	// a caller times out or cancels. On Windows killProcessGroup degrades to
+	// killing just the leader, matching the previous behavior.
+	c.Cancel = func() error {
+		killProcessGroup(c)
+		return nil
+	}
 
 	stdoutPipe, err := c.StdoutPipe()
 	if err != nil {
