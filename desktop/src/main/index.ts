@@ -4,7 +4,7 @@ import { CATALOG } from '../shared/catalog'
 import { DEEP_LINK_SCHEME, type View, deepLinkFromArgv, parseDeepLink } from '../shared/deeplink'
 import type { DesktopSettings } from '../shared/types'
 import { spawn } from 'node:child_process'
-import { getSnapshot } from './agentfield'
+import { DEFAULT_BASE_URL, getSnapshot } from './agentfield'
 import { type AgentAction, runAgentAction, uninstallAgent } from './agents'
 import { runAutostart } from './autostart'
 import { getCliCommand, initializeCli, installBundledCli, refreshCliStatus } from './cli'
@@ -305,6 +305,17 @@ function main(): void {
       const view = pendingView
       pendingView = null
       return view
+    })
+    // Open a control-plane web-UI page in the default browser. Only absolute
+    // paths are accepted (no scheme/host smuggling — "//evil" would be a
+    // protocol-relative URL) and they are joined to the known base URL, so
+    // the renderer can never send the user to an arbitrary site.
+    ipcMain.handle('agentfield:open-web-ui', (_event, path: unknown) => {
+      if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//')) {
+        return false
+      }
+      void shell.openExternal(`${DEFAULT_BASE_URL}${path}`)
+      return true
     })
     ipcMain.handle('agentfield:cli-status', () => refreshCliStatus(bundledCliPath()))
     ipcMain.handle('agentfield:cli-update', async () => {

@@ -101,7 +101,10 @@ function AgentsBody({ registry, onChanged }: AgentsPanelProps) {
         return (
           <li key={agent.name} className="row-item">
             <div className="row">
-              <span className={`row-dot ${agent.badge}`} aria-hidden="true" />
+              <span
+                className={`row-dot ${agent.badge}${running ? ' pulse' : ''}`}
+                aria-hidden="true"
+              />
               <div className="row-main">
                 <span className="row-title">{agent.name}</span>
                 {agent.description && <span className="row-sub">{agent.description}</span>}
@@ -129,6 +132,13 @@ function AgentsBody({ registry, onChanged }: AgentsPanelProps) {
                   )}
                   {running ? (
                     <>
+                      <button
+                        className="action-button"
+                        title="Open in the control-plane web UI"
+                        onClick={() => void window.agentfield.openWebUI('/ui/agents')}
+                      >
+                        Web UI ↗
+                      </button>
                       <button
                         className="action-button"
                         disabled={busy !== null}

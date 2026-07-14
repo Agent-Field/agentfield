@@ -29,6 +29,7 @@ const api: AgentFieldApi = {
     return () => ipcRenderer.removeListener('agentfield:navigate', wrapped)
   },
   announceReady: () => ipcRenderer.invoke('agentfield:renderer-ready'),
+  openWebUI: (path) => ipcRenderer.invoke('agentfield:open-web-ui', path),
   platform: process.platform
 }
 

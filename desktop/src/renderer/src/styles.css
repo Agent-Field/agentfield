@@ -372,6 +372,35 @@ body[data-platform='win32'] .view-header {
   font-variant-numeric: tabular-nums;
 }
 
+/* In-flight run indicator: a small spinning ring instead of the word
+   "running" — the row already says what is running. */
+.spinner {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--green) 30%, transparent);
+  border-top-color: var(--green);
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Open-in-web-UI affordance on activity rows: quiet until the row is hovered. */
+.run-open {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.row:hover .run-open,
+.run-open:focus-visible {
+  opacity: 1;
+}
+
 .row-past .row-title {
   font-weight: 400;
 }

@@ -139,27 +139,34 @@ describe('readInstalledAgents', () => {
 })
 
 describe('deriveAgentBadge', () => {
-  // Contract: full truth table.
+  // Contract: full truth table. Third column is the node's control-plane
+  // health_status, or null when it is not registered there.
   it.each([
-    // [registryStatus, cpReachable, nodeSeen, expected]
+    // [registryStatus, cpReachable, nodeHealth, expected]
     // CP view unavailable -> trust the registry
-    ['running', false, false, 'running'],
-    ['running', false, true, 'running'],
-    ['stopped', false, false, 'stopped'],
-    ['stopped', false, true, 'stopped'],
-    ['error', false, false, 'unknown'],
-    [undefined, false, false, 'unknown'],
+    ['running', false, null, 'running'],
+    ['running', false, 'active', 'running'],
+    ['stopped', false, null, 'stopped'],
+    ['stopped', false, 'active', 'stopped'],
+    ['error', false, null, 'unknown'],
+    [undefined, false, null, 'unknown'],
     // CP view available -> cross-check
-    ['running', true, true, 'running'],
-    ['running', true, false, 'unknown'], // stale registry
-    ['stopped', true, true, 'unknown'], // conflict
-    ['stopped', true, false, 'stopped'],
-    ['error', true, true, 'unknown'],
-    [undefined, true, false, 'unknown']
+    ['running', true, 'active', 'running'],
+    // Registration presence beats a transient health dip — no flicker.
+    ['running', true, 'unknown', 'running'],
+    ['running', true, 'inactive', 'running'],
+    ['running', true, null, 'unknown'], // stale registry
+    ['stopped', true, 'active', 'unknown'], // conflict: something is serving
+    // Stopped nodes STAY registered (inactive/unknown) — still just stopped.
+    ['stopped', true, 'inactive', 'stopped'],
+    ['stopped', true, 'unknown', 'stopped'],
+    ['stopped', true, null, 'stopped'],
+    ['error', true, 'active', 'unknown'],
+    [undefined, true, null, 'unknown']
   ] as const)(
-    'status=%s reachable=%s seen=%s -> %s',
-    (status, reachable, seen, expected) => {
-      expect(deriveAgentBadge(status, reachable, seen)).toBe(expected)
+    'status=%s reachable=%s health=%s -> %s',
+    (status, reachable, health, expected) => {
+      expect(deriveAgentBadge(status, reachable, health)).toBe(expected)
     }
   )
 })
@@ -247,10 +254,12 @@ describe('fetchControlPlaneNodes', () => {
         ],
         count: 2
       })
-    expect(await fetchControlPlaneNodes('http://localhost:8080', fetchImpl)).toEqual([
-      'pr-af',
-      'swe-af'
-    ])
+    expect(await fetchControlPlaneNodes('http://localhost:8080', fetchImpl)).toEqual(
+      new Map([
+        ['pr-af', 'active'],
+        ['swe-af', 'active']
+      ])
+    )
   })
 
   it('returns null on a non-200 response', async () => {
@@ -268,6 +277,20 @@ describe('fetchControlPlaneNodes', () => {
   it('returns null on an unexpected payload shape', async () => {
     const fetchImpl: FetchLike = async () => jsonResponse({ items: [] })
     expect(await fetchControlPlaneNodes('http://localhost:8080', fetchImpl)).toBeNull()
+  })
+
+  it('requests the unfiltered node list (show_all) so health dips cannot flicker badges', async () => {
+    let requested = ''
+    const fetchImpl: FetchLike = async (url) => {
+      requested = String(url)
+      return jsonResponse({ nodes: [{ id: 'pr-af', health_status: 'unknown' }], count: 1 })
+    }
+    // A node whose health momentarily reads "unknown" is still SEEN — its
+    // registration is what proves the registry entry is not stale.
+    expect(await fetchControlPlaneNodes('http://localhost:8080', fetchImpl)).toEqual(
+      new Map([['pr-af', 'unknown']])
+    )
+    expect(requested).toContain('show_all=true')
   })
 })
 
@@ -303,8 +326,29 @@ describe('fetchExecutions', () => {
       agentId: 'smoke-agent',
       startedAt: '2026-07-13T13:51:39Z',
       durationMs: 45,
-      terminal: true
+      terminal: true,
+      errorMessage: null
     })
+  })
+
+  it('surfaces the root error message on failed runs', async () => {
+    const fetchImpl: FetchLike = async () =>
+      jsonResponse({
+        runs: [
+          runRow({
+            run_id: 'run_bad',
+            status: 'failed',
+            root_error_message: 'review execution failed: CLI command made no progress for 360s'
+          }),
+          runRow({ run_id: 'run_ok' })
+        ],
+        total_count: 2
+      })
+    const result = await fetchExecutions('http://localhost:8080', fetchImpl)
+    expect(result!.recent.map((r) => r.errorMessage)).toEqual([
+      'review execution failed: CLI command made no progress for 360s',
+      null
+    ])
   })
 
   it('caps recent executions at 5', async () => {
@@ -486,7 +530,7 @@ describe('getSnapshot', () => {
       snapshot.registry.agents.map((a) => [a.name, a.badge])
     )
     expect(badges).toEqual({ 'pr-af': 'running', 'swe-af': 'stopped' })
-    expect(requested.some((url) => url.endsWith('/api/v1/nodes'))).toBe(false)
+    expect(requested.some((url) => url.includes('/api/v1/nodes'))).toBe(false)
     // Nor may its workflow runs show up as activity.
     expect(snapshot.executions).toBeNull()
     expect(requested.some((url) => url.includes('/workflow-runs'))).toBe(false)

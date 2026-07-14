@@ -140,26 +140,33 @@ export async function readInstalledAgents(
 }
 
 /**
- * GET {baseUrl}/api/v1/nodes -> {"nodes":[{"id":...,"health_status":...},...],"count":N}
- * (the server's default filter returns active nodes only).
- * Returns the list of node ids, or null on any failure — callers treat null as
- * "control plane view unavailable" and fall back to registry status alone.
+ * GET {baseUrl}/api/v1/nodes?show_all=true -> {"nodes":[{"id":...,"health_status":...},...]}
+ * show_all matters: the endpoint's default filter returns health=active nodes
+ * only, and keying "seen on the control plane" off that made the badge flicker
+ * running→unknown whenever a node's health dipped for one poll (busy node,
+ * post-restart unknown, late lease renewal). Registration presence is stable;
+ * health is not — so both are returned and the badge weighs them separately.
+ * Returns a map of node id -> health_status, or null on any failure — callers
+ * treat null as "control plane view unavailable" and fall back to registry
+ * status alone.
  */
 export async function fetchControlPlaneNodes(
   baseUrl: string = DEFAULT_BASE_URL,
   fetchImpl: FetchLike = fetch
-): Promise<string[] | null> {
+): Promise<Map<string, string> | null> {
   try {
-    const res = await fetchImpl(`${baseUrl}/api/v1/nodes`, {
+    const res = await fetchImpl(`${baseUrl}/api/v1/nodes?show_all=true`, {
       signal: AbortSignal.timeout(HTTP_TIMEOUT_MS)
     })
     if (!res.ok) return null
     const body: unknown = await res.json()
     if (!isRecord(body) || !Array.isArray(body.nodes)) return null
-    return body.nodes
-      .filter(isRecord)
-      .map((node) => (typeof node.id === 'string' ? node.id : ''))
-      .filter((id) => id.length > 0)
+    const health = new Map<string, string>()
+    for (const node of body.nodes) {
+      if (!isRecord(node) || typeof node.id !== 'string' || node.id === '') continue
+      health.set(node.id, typeof node.health_status === 'string' ? node.health_status : 'unknown')
+    }
+    return health
   } catch {
     return null
   }
@@ -168,20 +175,26 @@ export async function fetchControlPlaneNodes(
 /**
  * Pure badge derivation. `controlPlaneReachable` here means "we have a usable
  * control-plane node view" (health reachable AND the nodes list fetched).
+ * `nodeHealth` is the node's health_status on the control plane, or null when
+ * it is not registered there at all.
  *
  * CP view unavailable — trust the registry:
  *   'running' -> 'running' | 'stopped' -> 'stopped' | other/absent -> 'unknown'
- * CP view available — cross-check:
- *   registry running + node seen      -> 'running'
- *   registry running + node NOT seen  -> 'unknown'  (stale registry)
- *   registry stopped + node seen      -> 'unknown'  (conflict)
- *   registry stopped + node NOT seen  -> 'stopped'
- *   other/absent registry status      -> 'unknown'
+ * CP view available — cross-check. Registration presence (not health) proves
+ * a running registry entry is live, so transient health dips cannot flicker
+ * the badge; health only matters for stopped entries, where an ACTIVE node
+ * contradicts the registry:
+ *   registry running + registered (any health) -> 'running'
+ *   registry running + not registered          -> 'unknown'  (stale registry)
+ *   registry stopped + health active           -> 'unknown'  (conflict)
+ *   registry stopped + otherwise               -> 'stopped'  (stopped nodes stay
+ *                                                  registered as inactive/unknown)
+ *   other/absent registry status               -> 'unknown'
  */
 export function deriveAgentBadge(
   registryStatus: string | undefined,
   controlPlaneReachable: boolean,
-  nodeSeenOnControlPlane: boolean
+  nodeHealth: string | null
 ): AgentBadge {
   if (!controlPlaneReachable) {
     if (registryStatus === 'running') return 'running'
@@ -189,10 +202,10 @@ export function deriveAgentBadge(
     return 'unknown'
   }
   if (registryStatus === 'running') {
-    return nodeSeenOnControlPlane ? 'running' : 'unknown'
+    return nodeHealth !== null ? 'running' : 'unknown'
   }
   if (registryStatus === 'stopped') {
-    return nodeSeenOnControlPlane ? 'unknown' : 'stopped'
+    return nodeHealth === 'active' ? 'unknown' : 'stopped'
   }
   return 'unknown'
 }
@@ -212,7 +225,11 @@ function toExecutionSummary(row: Record<string, unknown>): ExecutionSummary | nu
     agentId: typeof row.agent_id === 'string' ? row.agent_id : '',
     startedAt: typeof row.started_at === 'string' ? row.started_at : '',
     durationMs: typeof row.duration_ms === 'number' ? row.duration_ms : null,
-    terminal: row.terminal === true
+    terminal: row.terminal === true,
+    errorMessage:
+      typeof row.root_error_message === 'string' && row.root_error_message !== ''
+        ? row.root_error_message
+        : null
   }
 }
 
@@ -297,19 +314,22 @@ export async function getSnapshot(options: SnapshotOptions = {}): Promise<AgentF
 
   // Only consult a recognized control plane; an unrelated service on the
   // port must not influence badges or show foreign runs as activity.
-  const [nodeIds, executions, metrics] = controlPlane.recognized
+  const [nodeHealth, executions, metrics] = controlPlane.recognized
     ? await Promise.all([
         fetchControlPlaneNodes(baseUrl, fetchImpl),
         fetchExecutions(baseUrl, fetchImpl),
         fetchDashboardMetrics(baseUrl, fetchImpl)
       ])
     : [null, null, null]
-  const hasControlPlaneView = nodeIds !== null
-  const seen = new Set(nodeIds ?? [])
+  const hasControlPlaneView = nodeHealth !== null
 
   const agents = registry.agents.map((agent) => ({
     ...agent,
-    badge: deriveAgentBadge(agent.status, hasControlPlaneView, seen.has(agent.name))
+    badge: deriveAgentBadge(
+      agent.status,
+      hasControlPlaneView,
+      nodeHealth?.get(agent.name) ?? null
+    )
   }))
 
   return {

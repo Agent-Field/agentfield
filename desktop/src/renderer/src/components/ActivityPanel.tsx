@@ -58,6 +58,7 @@ function ActivityBody({ executions, controlPlaneUp }: ActivityPanelProps) {
 }
 
 export function ExecutionRow({ run, live = false }: { run: ExecutionSummary; live?: boolean }) {
+  const failed = !live && (run.status === 'failed' || run.status === 'timeout')
   return (
     <li className={`row ${live ? '' : 'row-past'}`}>
       {live ? (
@@ -73,11 +74,25 @@ export function ExecutionRow({ run, live = false }: { run: ExecutionSummary; liv
           {run.agentId}
           {live ? ` · started ${formatStarted(run.startedAt)}` : ''}
         </span>
+        {failed && run.errorMessage && (
+          <span className="row-sub error-text" title={run.errorMessage}>
+            {run.errorMessage}
+          </span>
+        )}
       </div>
       <div className="row-side">
-        <span className="row-meta">
-          {live ? 'running' : formatDuration(run.durationMs) || run.status}
-        </span>
+        {live ? (
+          <span className="spinner" role="status" aria-label="running" />
+        ) : (
+          <span className="row-meta">{formatDuration(run.durationMs) || run.status}</span>
+        )}
+        <button
+          className="action-button run-open"
+          title="Open this run in the control-plane web UI"
+          onClick={() => void window.agentfield.openWebUI(`/ui/runs/${encodeURIComponent(run.runId)}`)}
+        >
+          ↗
+        </button>
       </div>
     </li>
   )

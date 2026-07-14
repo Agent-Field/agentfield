@@ -61,6 +61,8 @@ export interface ExecutionSummary {
   durationMs: number | null
   /** True once the run reached a terminal state. */
   terminal: boolean
+  /** Root execution's error message when the run failed (null otherwise). */
+  errorMessage: string | null
 }
 
 /** Executions view: in-flight runs plus a short tail of finished ones. */
@@ -248,6 +250,12 @@ export interface AgentFieldApi {
    * a hidden app), or null. Call once, after subscribing with onNavigate.
    */
   announceReady(): Promise<string | null>
+  /**
+   * Open a control-plane web-UI page in the default browser. `path` must be
+   * an absolute path on the control plane (e.g. "/ui/runs/run_123"); the main
+   * process validates it and joins it to the control-plane base URL.
+   */
+  openWebUI(path: string): Promise<boolean>
   /** "darwin" | "win32" | "linux" — for platform-specific chrome (traffic-light inset). */
   platform: string
 }
