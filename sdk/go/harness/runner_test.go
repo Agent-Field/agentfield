@@ -396,7 +396,7 @@ func TestOpenCodeProvider_WithOptions(t *testing.T) {
 func TestOpenCodeProvider_OpenRouterConfigOverlay(t *testing.T) {
 	p := NewOpenCodeProvider("opencode", "")
 	var capturedEnv map[string]string
-	p.runCLI = func(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int) (*CLIResult, error) {
+	p.runCLI = func(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int, _ []byte) (*CLIResult, error) {
 		capturedEnv = env
 		return &CLIResult{Stdout: "ok\n", ReturnCode: 0}, nil
 	}

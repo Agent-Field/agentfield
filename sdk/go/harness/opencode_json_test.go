@@ -13,7 +13,7 @@ import (
 // runCLI that yields the given stdout/stderr/returncode and captures the argv.
 func fakeOpenCode(stdout, stderr string, code int, gotCmd *[]string) *OpenCodeProvider {
 	p := NewOpenCodeProvider("opencode", "")
-	p.runCLI = func(_ context.Context, cmd []string, _ map[string]string, _ string, _ int) (*CLIResult, error) {
+	p.runCLI = func(_ context.Context, cmd []string, _ map[string]string, _ string, _ int, _ []byte) (*CLIResult, error) {
 		if gotCmd != nil {
 			*gotCmd = cmd
 		}

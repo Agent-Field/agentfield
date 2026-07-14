@@ -6,11 +6,24 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
+
+// openCodePromptViaStdin reports whether to hand the prompt to opencode over
+// stdin instead of argv. On Windows the CLI on PATH is usually an npm .cmd
+// shim that runs via cmd.exe, whose ~8k command-line cap real prompts blow
+// straight through ("The command line is too long.") — pr-af style prompts
+// that embed diff context die there, and schema retries (which append more
+// text) can never recover. opencode reads the prompt from stdin when the
+// positional arg is absent, so feed it that way there. POSIX keeps the
+// battle-tested positional-arg path. Mirrors the Python SDK's
+// _prompt_via_stdin (harness/providers/opencode.py). Package var so tests can
+// exercise both paths on any OS.
+var openCodePromptViaStdin = runtime.GOOS == "windows"
 
 var (
 	openCodeSemaphore chan struct{}
@@ -23,7 +36,7 @@ const defaultMaxConcurrent = 4
 type OpenCodeProvider struct {
 	BinPath   string
 	ServerURL string
-	runCLI    func(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int) (*CLIResult, error)
+	runCLI    func(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int, stdin []byte) (*CLIResult, error)
 }
 
 func getSemaphore() chan struct{} {
@@ -48,7 +61,7 @@ func NewOpenCodeProvider(binPath, serverURL string) *OpenCodeProvider {
 	if serverURL == "" {
 		serverURL = os.Getenv("OPENCODE_SERVER")
 	}
-	return &OpenCodeProvider{BinPath: binPath, ServerURL: serverURL, runCLI: RunCLI}
+	return &OpenCodeProvider{BinPath: binPath, ServerURL: serverURL, runCLI: RunCLIWithStdin}
 }
 
 func (p *OpenCodeProvider) Execute(ctx context.Context, prompt string, options Options) (*RawResult, error) {
@@ -97,8 +110,14 @@ func (p *OpenCodeProvider) Execute(ctx context.Context, prompt string, options O
 		)
 	}
 
-	// Prompt is positional on `opencode run` (replaces deprecated -p).
-	cmd = append(cmd, effectivePrompt)
+	// Prompt is positional on `opencode run` (replaces deprecated -p) on
+	// POSIX; on Windows it goes over stdin instead (see openCodePromptViaStdin).
+	var stdinPrompt []byte
+	if openCodePromptViaStdin {
+		stdinPrompt = []byte(effectivePrompt)
+	} else {
+		cmd = append(cmd, effectivePrompt)
+	}
 
 	// Build environment
 	env := make(map[string]string)
@@ -146,7 +165,7 @@ func (p *OpenCodeProvider) Execute(ctx context.Context, prompt string, options O
 
 	startAPI := time.Now()
 
-	cliResult, err := p.runCLI(ctx, cmd, env, options.Cwd, options.timeout())
+	cliResult, err := p.runCLI(ctx, cmd, env, options.Cwd, options.timeout(), stdinPrompt)
 	apiMS := int(time.Since(startAPI).Milliseconds())
 
 	if err != nil {
