@@ -58,7 +58,8 @@
     },
     "nsis": {
       "oneClick": true,
-      "deleteAppDataOnUninstall": true
+      "deleteAppDataOnUninstall": true,
+      "artifactName": "${productName}-Setup-${version}.${ext}"
     }
   },
   "dependencies": {
