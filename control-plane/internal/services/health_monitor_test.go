@@ -17,7 +17,7 @@ import (
 
 // Mock AgentClient for testing
 type mockAgentClient struct {
-	mu                   sync.RWMutex
+	mu                 sync.RWMutex
 	statusResponses    map[string]*interfaces.AgentStatusResponse
 	statusErrors       map[string]error
 	getStatusCallCount map[string]int
@@ -377,7 +377,6 @@ func TestHealthMonitor_CheckAgentHealth_StatusTransitions(t *testing.T) {
 	require.NoError(t, err)
 
 	hm.RegisterAgent(nodeID, baseURL)
-
 
 	// Test transition: Unknown -> Active
 	mockClient.setStatusResponse(nodeID, "running")
@@ -1350,4 +1349,40 @@ func TestHealthMonitor_Config_ConsecutiveFailuresOne(t *testing.T) {
 		"With ConsecutiveFailures=1, a single failure should mark agent inactive immediately")
 	assert.Equal(t, 1, hm.activeAgents[nodeID].ConsecutiveFailures)
 	hm.agentsMutex.RUnlock()
+}
+
+// Contract: RegisterAgent is called by every DB-updating heartbeat and lease
+// renewal, so re-registration at the same BaseURL must keep the tracked state —
+// resetting LastStatus to "unknown" each time would discard the promote/demote
+// history between HTTP checks. A changed BaseURL means the agent moved, and
+// tracking starts over.
+func TestHealthMonitor_RegisterAgentIdempotentForSameBaseURL(t *testing.T) {
+	hm := NewHealthMonitor(nil, HealthMonitorConfig{}, nil, nil, nil, nil)
+
+	hm.RegisterAgent("node-idem", "http://localhost:9001")
+	require.True(t, hm.IsMonitoring("node-idem"))
+
+	hm.agentsMutex.Lock()
+	hm.activeAgents["node-idem"].LastStatus = types.HealthStatusActive
+	hm.activeAgents["node-idem"].ConsecutiveFailures = 2
+	hm.agentsMutex.Unlock()
+
+	// Same URL: heartbeat-driven re-registration keeps the tracking state.
+	hm.RegisterAgent("node-idem", "http://localhost:9001")
+	hm.agentsMutex.RLock()
+	kept := hm.activeAgents["node-idem"]
+	hm.agentsMutex.RUnlock()
+	assert.Equal(t, types.HealthStatusActive, kept.LastStatus,
+		"re-registering at the same BaseURL must not reset LastStatus")
+	assert.Equal(t, 2, kept.ConsecutiveFailures,
+		"re-registering at the same BaseURL must not reset the failure counter")
+
+	// New URL: the agent moved, tracking starts over.
+	hm.RegisterAgent("node-idem", "http://localhost:9002")
+	hm.agentsMutex.RLock()
+	moved := hm.activeAgents["node-idem"]
+	hm.agentsMutex.RUnlock()
+	assert.Equal(t, "http://localhost:9002", moved.BaseURL)
+	assert.Equal(t, types.HealthStatusUnknown, moved.LastStatus)
+	assert.Equal(t, 0, moved.ConsecutiveFailures)
 }
