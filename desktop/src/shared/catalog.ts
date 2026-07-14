@@ -9,10 +9,12 @@ import type { CatalogEntry } from './types'
 // replace with a remote catalog fetch.
 //
 // What qualifies: an Agent-Field org repo is installable iff it has an
-// `agentfield-package.yaml` manifest at its root — that manifest is what
-// `af install` requires. When adding an entry, `name` MUST equal the
-// manifest's `name:` (the registry key after install — how the app detects
-// installed state), which is often NOT the repo name (SWE-AF → swe-planner).
+// `agentfield-package.yaml` manifest — at the repo root, or in a
+// subdirectory addressed with the `//<subdir>` source selector (how the Go
+// ports living beside their Python originals are installed). When adding an
+// entry, `name` MUST equal the manifest's `name:` (the registry key after
+// install — how the app detects installed state), which is often NOT the
+// repo name (SWE-AF → swe-planner).
 export const CATALOG: CatalogEntry[] = [
   {
     name: 'swe-planner',
@@ -22,10 +24,23 @@ export const CATALOG: CatalogEntry[] = [
     language: 'python'
   },
   {
+    name: 'swe-planner-go',
+    description:
+      'Go port of the SWE fleet: same planning/execution reasoners, one static binary',
+    source: 'https://github.com/Agent-Field/SWE-AF//go',
+    language: 'go'
+  },
+  {
     name: 'pr-af',
     description: 'Turns a plain task description into a draft pull request on GitHub',
     source: 'https://github.com/Agent-Field/pr-af',
     language: 'python'
+  },
+  {
+    name: 'pr-af-go',
+    description: 'Go port of the PR review agent: same reasoners, one static binary',
+    source: 'https://github.com/Agent-Field/pr-af//go',
+    language: 'go'
   },
   {
     name: 'sec-af',

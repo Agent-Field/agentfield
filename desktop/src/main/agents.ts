@@ -99,6 +99,21 @@ export async function runAgentAction(
 }
 
 /**
+ * Uninstall an installed agent: graceful stop first (a stopped agent's stop
+ * is a no-op), then `af uninstall --force`, which removes the package dir,
+ * the registry entry, and the node-scoped secrets. Names are validated
+ * against the registry like every other verb.
+ */
+export async function uninstallAgent(name: string): Promise<AgentActionResult> {
+  const registry = await readInstalledAgents()
+  if (!registry.agents.some((agent) => agent.name === name)) {
+    return { ok: false, message: `"${name}" is not an installed agent` }
+  }
+  await runCli(['stop', name])
+  return runCli(['uninstall', name, '--force'])
+}
+
+/**
  * Spawn `af server` detached — it outlives the app, matching the "agents on
  * autopilot" model — and wait until /health reports an AgentField control
  * plane. Output goes to ~/.agentfield/logs/control-plane.log (same file the

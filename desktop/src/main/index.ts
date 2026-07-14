@@ -5,7 +5,7 @@ import { DEEP_LINK_SCHEME, type View, deepLinkFromArgv, parseDeepLink } from '..
 import type { DesktopSettings } from '../shared/types'
 import { spawn } from 'node:child_process'
 import { getSnapshot } from './agentfield'
-import { type AgentAction, runAgentAction } from './agents'
+import { type AgentAction, runAgentAction, uninstallAgent } from './agents'
 import { runAutostart } from './autostart'
 import { getCliCommand, initializeCli, installBundledCli, refreshCliStatus } from './cli'
 import { installAgent } from './installer'
@@ -259,6 +259,12 @@ function main(): void {
       } finally {
         installInFlight = false
       }
+    })
+    ipcMain.handle('agentfield:uninstall', (_event, name: unknown) => {
+      if (typeof name !== 'string') {
+        return { ok: false, message: 'invalid uninstall request' }
+      }
+      return uninstallAgent(name)
     })
     ipcMain.handle('agentfield:agent-action', (_event, action: unknown, name: unknown) => {
       if (

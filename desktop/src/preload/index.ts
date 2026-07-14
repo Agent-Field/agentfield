@@ -6,6 +6,7 @@ const api: AgentFieldApi = {
   getSnapshot: () => ipcRenderer.invoke('agentfield:snapshot'),
   getCatalog: () => ipcRenderer.invoke('agentfield:catalog'),
   install: (name) => ipcRenderer.invoke('agentfield:install', name),
+  uninstall: (name) => ipcRenderer.invoke('agentfield:uninstall', name),
   onInstallProgress: (listener) => {
     const wrapped = (_event: Electron.IpcRendererEvent, line: string) => listener(line)
     ipcRenderer.on('agentfield:install-progress', wrapped)

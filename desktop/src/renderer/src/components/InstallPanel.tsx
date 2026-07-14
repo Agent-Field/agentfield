@@ -14,6 +14,8 @@ type InstallPhase =
 export function InstallPanel({ installedNames, onInstalled }: InstallPanelProps) {
   const [catalog, setCatalog] = useState<CatalogEntry[]>([])
   const [phase, setPhase] = useState<InstallPhase>({ state: 'idle' })
+  /** Catalog entry with the uninstall confirm step open. */
+  const [confirming, setConfirming] = useState<string | null>(null)
 
   useEffect(() => {
     void window.agentfield.getCatalog().then(setCatalog)
@@ -32,6 +34,14 @@ export function InstallPanel({ installedNames, onInstalled }: InstallPanelProps)
     const result = await window.agentfield.install(name)
     setPhase({ state: 'done', name, ok: result.ok, message: result.message })
     if (result.ok) onInstalled()
+  }
+
+  const uninstall = async (name: string) => {
+    setConfirming(null)
+    setPhase({ state: 'installing', name, progress: 'Uninstalling…' })
+    const result = await window.agentfield.uninstall(name)
+    setPhase({ state: 'done', name, ok: result.ok, message: result.message })
+    onInstalled()
   }
 
   const installing = phase.state === 'installing'
@@ -58,10 +68,44 @@ export function InstallPanel({ installedNames, onInstalled }: InstallPanelProps)
                   {phase.state === 'done' && phase.name === entry.name && !phase.ok && (
                     <span className="row-progress error-text">{phase.message}</span>
                   )}
+                  {confirming === entry.name && (
+                    <span className="row-progress warn-text">
+                      Stops the agent and removes its files, registry entry, and
+                      agent-scoped secrets. Shared keys stay.
+                    </span>
+                  )}
                 </div>
                 <div className="row-side">
                   {isInstalled ? (
-                    <span className="installed-check">Installed ✓</span>
+                    confirming === entry.name ? (
+                      <div className="row-actions">
+                        <button
+                          className="action-button danger"
+                          disabled={installing}
+                          onClick={() => void uninstall(entry.name)}
+                        >
+                          Uninstall
+                        </button>
+                        <button
+                          className="action-button"
+                          disabled={installing}
+                          onClick={() => setConfirming(null)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="row-actions">
+                        <span className="installed-check">Installed ✓</span>
+                        <button
+                          className="action-button"
+                          disabled={installing}
+                          onClick={() => setConfirming(entry.name)}
+                        >
+                          Uninstall
+                        </button>
+                      </div>
+                    )
                   ) : (
                     <button
                       className="install-button"

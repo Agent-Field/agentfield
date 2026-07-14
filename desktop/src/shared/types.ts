@@ -214,6 +214,8 @@ export interface AgentFieldApi {
   getCatalog(): Promise<CatalogEntry[]>
   /** Install a catalog entry by name. Resolves when `af install` exits. */
   install(name: string): Promise<InstallResult>
+  /** Uninstall an installed agent (stops it first; removes files + secrets). */
+  uninstall(name: string): Promise<AgentActionResult>
   /** Start / stop / restart an installed agent by its registry name. */
   agentAction(action: 'start' | 'stop' | 'restart', name: string): Promise<AgentActionResult>
   /** Env/secret status for every installed agent that declares variables. */
