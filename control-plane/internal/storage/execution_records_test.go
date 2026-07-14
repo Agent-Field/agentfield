@@ -231,6 +231,97 @@ func TestGetRunAggregationIncludesRootErrorFields(t *testing.T) {
 	require.Equal(t, rootMessage, *agg.RootErrorMessage)
 }
 
+func TestQueryRunSummariesActiveOnly(t *testing.T) {
+	ls, ctx := setupLocalStorage(t)
+
+	base := time.Date(2024, 3, 1, 8, 0, 0, 0, time.UTC)
+	rootActive := "exec-active-root"
+
+	executions := []*types.Execution{
+		// Run with one running root and one succeeded child → active.
+		{
+			ExecutionID: rootActive,
+			RunID:       "run-active",
+			AgentNodeID: "agent-x",
+			ReasonerID:  "review",
+			NodeID:      "node-x",
+			Status:      string(types.ExecutionStatusRunning),
+			StartedAt:   base,
+			CreatedAt:   base,
+			UpdatedAt:   base,
+		},
+		{
+			ExecutionID:       "exec-active-child",
+			RunID:             "run-active",
+			ParentExecutionID: &rootActive,
+			AgentNodeID:       "agent-x",
+			ReasonerID:        "intake_phase",
+			NodeID:            "node-x",
+			Status:            string(types.ExecutionStatusSucceeded),
+			StartedAt:         base.Add(time.Second),
+			CreatedAt:         base.Add(time.Second),
+			UpdatedAt:         base.Add(time.Second),
+		},
+		// Fully terminal run → excluded.
+		{
+			ExecutionID: "exec-done",
+			RunID:       "run-done",
+			AgentNodeID: "agent-x",
+			ReasonerID:  "review",
+			NodeID:      "node-x",
+			Status:      string(types.ExecutionStatusSucceeded),
+			StartedAt:   base,
+			CreatedAt:   base,
+			UpdatedAt:   base,
+		},
+		// Queued-only run → active. A Status="running" pre-filter would miss
+		// this one; ActiveOnly must not.
+		{
+			ExecutionID: "exec-queued",
+			RunID:       "run-queued",
+			AgentNodeID: "agent-y",
+			ReasonerID:  "plan",
+			NodeID:      "node-y",
+			Status:      string(types.ExecutionStatusQueued),
+			StartedAt:   base,
+			CreatedAt:   base,
+			UpdatedAt:   base,
+		},
+	}
+	for _, exec := range executions {
+		require.NoError(t, ls.CreateExecutionRecord(ctx, exec))
+	}
+
+	results, total, err := ls.QueryRunSummaries(ctx, types.ExecutionFilter{ActiveOnly: true})
+	require.NoError(t, err)
+	require.Equal(t, 2, total)
+	require.Len(t, results, 2)
+
+	byRunID := map[string]*RunSummaryAggregation{}
+	for _, r := range results {
+		byRunID[r.RunID] = r
+	}
+	require.Contains(t, byRunID, "run-active")
+	require.Contains(t, byRunID, "run-queued")
+	require.NotContains(t, byRunID, "run-done")
+
+	// ActiveOnly filters whole runs, not rows: the surviving run's terminal
+	// children must still be counted.
+	active := byRunID["run-active"]
+	require.Equal(t, 2, active.TotalExecutions)
+	require.Equal(t, 1, active.StatusCounts[string(types.ExecutionStatusSucceeded)])
+	require.Equal(t, 1, active.StatusCounts[string(types.ExecutionStatusRunning)])
+	require.Equal(t, 1, active.ActiveExecutions)
+
+	// AgentNodeID narrows to runs touching that agent.
+	agent := "agent-y"
+	results, total, err = ls.QueryRunSummaries(ctx, types.ExecutionFilter{ActiveOnly: true, AgentNodeID: &agent})
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Len(t, results, 1)
+	require.Equal(t, "run-queued", results[0].RunID)
+}
+
 func pointerTime(t time.Time) *time.Time {
 	return &t
 }

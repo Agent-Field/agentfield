@@ -361,6 +361,12 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 		where = append(where, "run_id = ?")
 		args = append(args, *filter.RunID)
 	}
+	if filter.AgentNodeID != nil {
+		// Keeps runs with at least one execution on this agent; the surviving
+		// run's aggregates still count only the WHERE-matched rows.
+		where = append(where, "agent_node_id = ?")
+		args = append(args, *filter.AgentNodeID)
+	}
 	if filter.Status != nil {
 		where = append(where, "status = ?")
 		args = append(args, *filter.Status)
@@ -392,10 +398,22 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 		whereClause = " WHERE " + strings.Join(where, " AND ")
 	}
 
+	// ActiveOnly filters at the run level (post-aggregation) so terminal
+	// children still contribute to status_counts — a Status="running" filter
+	// would instead drop those rows before grouping and also miss runs whose
+	// only in-flight executions are queued/pending/waiting.
+	havingClause := ""
+	if filter.ActiveOnly {
+		havingClause = " HAVING SUM(CASE WHEN LOWER(status) IN ('running','pending','queued','waiting') THEN 1 ELSE 0 END) > 0"
+	}
+
 	db := ls.requireSQLDB()
 
 	// Query total run count up front so pagination metadata is accurate without extra round trips.
 	countQuery := "SELECT COUNT(DISTINCT run_id) FROM executions" + whereClause
+	if filter.ActiveOnly {
+		countQuery = "SELECT COUNT(*) FROM (SELECT run_id FROM executions" + whereClause + " GROUP BY run_id" + havingClause + ") active_runs"
+	}
 	var totalRuns int
 	if err := db.QueryRowContext(ctx, countQuery, args...).Scan(&totalRuns); err != nil {
 		return nil, 0, fmt.Errorf("count run_ids: %w", err)
@@ -450,10 +468,10 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 			END AS status_rank
 		FROM executions
 		%s
-		GROUP BY run_id
+		GROUP BY run_id%s
 		ORDER BY %s %s
 		LIMIT %d OFFSET %d`,
-		whereClause, orderColumn, orderDirection, limit, offset)
+		whereClause, havingClause, orderColumn, orderDirection, limit, offset)
 
 	logger.Logger.Debug().
 		Str("query", query).

@@ -18,8 +18,8 @@ as `X-API-Key: <key>` on every request.
 
 1. Health-check the control plane.
 2. Discover what agents and reasoners exist.
-3. Execute — async for anything nontrivial.
-4. Poll (or stream) until the execution finishes.
+3. Execute — async for anything nontrivial. Fire independent calls concurrently.
+4. Poll (or stream) until the execution finishes — and watch for wedged runs.
 
 ## 1. Is the control plane up?
 
@@ -35,20 +35,33 @@ can start one in the background (`af server` blocks, so background it and poll
 ## 2. Discover agents and reasoners
 
 ```bash
-curl -s "http://localhost:8080/api/v1/discovery/capabilities?include_input_schema=true" \
-  | jq '.capabilities[] | {agent: .agent_id, health: .health_status, reasoners: [.reasoners[].id]}'
+curl -s "http://localhost:8080/api/v1/discovery/capabilities?include_input_schema=true"
 ```
 
 This is the durable discovery endpoint. Reasoner names are `.reasoners[].id`
 (NOT `.name`), and `include_input_schema=true` adds each reasoner's JSON input
 schema — read it before calling so your `input` matches.
 
-Two gotchas:
+Don't assume `jq` exists (fresh Windows boxes lack it) — parse with what's
+installed, e.g.:
+
+```bash
+curl -s "http://localhost:8080/api/v1/discovery/capabilities?include_input_schema=true" -o caps.json
+python -c "
+import json
+for c in json.load(open('caps.json'))['capabilities']:
+    print(c['agent_id'], c.get('health_status'), [r['id'] for r in c.get('reasoners',[])])"
+```
+
+Three gotchas:
 
 - The response's `invocation_target` field uses a **colon** (`agent:reasoner`).
   The execute URL uses a **dot**. Build the target yourself: `<agent_id>.<reasoner_id>`.
-- Discovery only lists agents that are **running and registered**. Installed but
-  stopped agents live in the local registry — check with `af ls`, start with
+- Discovery lists **every registered agent, including dead ones** — check
+  `health_status` and only dispatch to `"active"` agents. Dispatching to an
+  `inactive`/`unknown` agent queues work that never runs.
+- Installed-but-never-started agents may not appear at all. The local registry
+  is the source of truth for what's installed: `af ls`, start with
   `af run <name>` (it detaches; the agent keeps running after the CLI exits).
 
 ## 3. Call a reasoner
@@ -73,23 +86,69 @@ curl -s -X POST http://localhost:8080/api/v1/execute/swe-planner.plan \
   -d '{"input": {"task": "..."}}'
 ```
 
+### Concurrency — use it
+
+Async dispatch is cheap: fire all independent calls up front, then poll them
+together. Do NOT serialize multi-agent work — the whole point of the control
+plane is managing many agents at once. What to know:
+
+- Concurrent calls to the **same reasoner** are safe when the agent is (e.g.
+  pr-af isolates concurrent reviews per PR). If an agent's docs don't say it's
+  parallel-safe, assume same-target calls may contend on shared state and
+  stagger them; different agents never contend.
+- Each call fans out inside the agent (one review ≈ dozens of sub-executions,
+  several LLM CLI processes). 3–4 heavy runs per node is a sensible ceiling
+  unless the agent documents otherwise.
+- Save every `execution_id` you dispatch. Group related calls with an
+  `X-Session-ID` header so they're queryable as one batch later.
+
 ## 4. Get the result
 
-Poll the execution until `status` is terminal (`succeeded` / `failed`, also
-`cancelled` / `timeout`):
+**What's in flight right now** — no IDs needed (also answers "how many agents
+are running something"):
 
 ```bash
-curl -s http://localhost:8080/api/v1/executions/<execution_id> \
-  | jq '{status, result, error}'
+curl -s http://localhost:8080/api/v1/executions/active
+# {"count":2,"runs":[{"run_id":"...","target":"pr-af-go.review","root_status":"running",
+#   "active_executions":4,"total_executions":27,"started_at":"...","latest_activity":"..."}]}
 ```
 
-Long-running agents can take minutes — poll with backoff (2s → 5s → 10s) and
-tell the user what is in flight. For live progress, stream Server-Sent Events
-from `GET /api/v1/executions/<execution_id>/events`. To check several at once:
-`POST /api/v1/executions/batch-status` with `{"execution_ids": [...]}`.
+Filters: `?agent_id=<node>`, `?session_id=<your session>`. CLI equivalent: `af ps`.
 
-There is **no** `GET /api/v1/executions` list endpoint — do not invent one.
-Cancel with `POST /api/v1/executions/<id>/cancel`.
+**One execution** — poll until `status` is terminal (`succeeded` / `failed`,
+also `cancelled` / `timeout`):
+
+```bash
+curl -s http://localhost:8080/api/v1/executions/<execution_id>
+```
+
+Long-running agents can take tens of minutes — poll with backoff (start ~5s,
+settle at ~30s) and tell the user what is in flight. For live progress, stream
+Server-Sent Events from `GET /api/v1/executions/<execution_id>/events`.
+
+**Several at once:** `POST /api/v1/executions/batch-status` with
+`{"execution_ids": [...]}`. Terminal entries embed the FULL result payload —
+responses can be large (100KB+), so write to a file and parse from there; never
+pass the response through a command-line argument (Windows caps argv ~32KB).
+
+There is **no** `GET /api/v1/executions` list endpoint — use `/executions/active`
+for in-flight work and `POST /api/v1/agentic/query` (body:
+`{"resource":"runs","filters":{"status":"..."},"limit":20}`) for history.
+
+### Wedge protocol — "running" is not proof of progress
+
+An execution can report `running` indefinitely after its agent silently dies or
+deadlocks. Treat a run as suspect when `/executions/active` shows
+`latest_activity` **more than ~10 minutes old** while `active_executions > 0`
+AND `af logs <agent>` shows nothing new for that run. (A quiet log alone is not
+proof — one long LLM completion can be minutes of legitimate silence.) Then:
+
+1. Cancel the WHOLE run, not just the root:
+   `POST /api/v1/workflows/<run_id>/cancel-tree` (bottom-up, cancels children
+   too). Plain `/executions/<id>/cancel` cancels ONLY that execution — children
+   keep "running" and must be cancelled individually.
+2. Restart the agent if it's wedged: `af stop <name> && af run <name>`.
+3. Re-submit the work.
 
 ## Sessions and multi-call work
 
@@ -108,17 +167,19 @@ resolve from the `X-Workflow-ID` / `X-Session-ID` / `X-Actor-ID` headers).
 | Symptom | Meaning | Fix |
 |---|---|---|
 | connection refused on :8080 | control plane not running | desktop app, or background `af server` and poll `/health` |
-| agent missing from discovery | node installed but not running (or not installed) | `af ls`, then `af run <name>` — or `af install <source>` |
+| agent `inactive` in discovery / missing | node installed but not running (or not installed) | `af ls`, then `af run <name>` — or `af install <source>` |
 | `missing required environment variables: X` from `af run` | required key not configured | `af secrets set X` (value via stdin/arg; `--node <name>` for node-scoped) — or desktop app → Agents → Keys |
 | HTTP 502 with `error_message` | the agent itself errored | read `af logs <name>`, fix, retry |
-| execution stuck in `queued`/`running` | agent wedged or overloaded | `af stop <name> && af run <name>`, then re-submit |
+| execution `running` but latest_activity stale & logs quiet | wedged run | wedge protocol above: cancel-tree → restart agent → re-submit |
+| result claims success with zero findings/output on nontrivial input | possible silent tool failure inside the agent | check `af logs <name>` for that run before trusting it |
 
 ## Local ops cheat sheet (af CLI)
 
 ```bash
 af ls                      # installed agents + status
+af ps                      # in-flight runs across all agents (af ps --agent <name>)
 af run <name>              # start (detached); af stop <name>
-af logs <name>             # agent logs
+af logs <name>             # agent logs (-f follows; no per-run filter — grep by run_id)
 af secrets set KEY         # store an API key (encrypted; prompts for value)
 af secrets ls              # what's configured (values never shown)
 af install <git-url>       # install a new agent node
@@ -136,8 +197,9 @@ is enabled), and verify offline with `af verify audit.json`.
 - Every call goes through the control plane — never POST to an agent's own port.
 - Kwargs live under `"input"`. Empty input is `{"input": {}}`.
 - Async + poll for anything that might exceed a few seconds; sync is for quick
-  lookups only.
+  lookups only. Independent async calls go out together, not one at a time.
+- Only dispatch to agents whose discovery `health_status` is `"active"`.
 - Don't guess endpoints. The surface above is the contract; if something is
-  missing, say so instead of inventing a route.
+  missing, ask `GET /api/v1/agentic/discover?q=<keyword>` before inventing a route.
 - Building or modifying an agent (new reasoners, scaffolds, deploys) is the
   **agentfield** skill's job — switch to it for that.
