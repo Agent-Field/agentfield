@@ -635,10 +635,18 @@ body[data-platform='win32'] .view-header {
   cursor: default;
 }
 
-.installed-check {
-  font-size: 12px;
-  font-weight: 500;
+/* Installed catalog entries: the title itself carries the state — green name
+   plus a small tick — so the actions column stays just buttons. */
+.row-title.installed {
   color: var(--green);
+}
+
+.installed-tick {
+  margin-left: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--green);
+  opacity: 0.85;
 }
 
 /* --- agent lifecycle controls ------------------------------------------------ */

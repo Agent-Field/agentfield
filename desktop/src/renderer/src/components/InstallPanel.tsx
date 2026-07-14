@@ -67,7 +67,14 @@ export function InstallPanel({ installedNames, onInstalled }: InstallPanelProps)
             return (
               <li key={entry.name} className="row">
                 <div className="row-main">
-                  <span className="row-title">{entry.name}</span>
+                  <span className={`row-title${isInstalled ? ' installed' : ''}`}>
+                    {entry.name}
+                    {isInstalled && (
+                      <span className="installed-tick" title="Installed">
+                        ✓
+                      </span>
+                    )}
+                  </span>
                   <span className="row-sub">{entry.description}</span>
                   {busy && phase.state === 'installing' && (
                     <span className="row-progress">{phase.progress}</span>
@@ -105,7 +112,6 @@ export function InstallPanel({ installedNames, onInstalled }: InstallPanelProps)
                       </div>
                     ) : (
                       <div className="row-actions">
-                        <span className="installed-check">Installed ✓</span>
                         <button
                           className="action-button"
                           title="Reinstall the latest version; a running agent restarts after the update"
