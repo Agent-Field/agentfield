@@ -233,6 +233,16 @@ body[data-platform='win32'] .view-header {
   line-height: 1.2;
 }
 
+.tile-value.good {
+  color: var(--green);
+}
+.tile-value.warn {
+  color: var(--yellow);
+}
+.tile-value.bad {
+  color: var(--red);
+}
+
 .tile-context {
   font-size: 11.5px;
   color: var(--text-secondary);

@@ -11,16 +11,18 @@ interface DashboardViewProps {
 function Tile({
   label,
   value,
-  context
+  context,
+  tone
 }: {
   label: string
   value: string
   context?: string
+  tone?: 'good' | 'warn' | 'bad'
 }) {
   return (
     <div className="tile">
       <span className="tile-label">{label}</span>
-      <span className="tile-value">{value}</span>
+      <span className={tone ? `tile-value ${tone}` : 'tile-value'}>{value}</span>
       {context && <span className="tile-context">{context}</span>}
     </div>
   )
@@ -31,6 +33,14 @@ function todayDelta(today: number, yesterday: number): string {
   const diff = today - yesterday
   if (diff === 0) return 'same as yesterday'
   return `${diff > 0 ? '+' : ''}${diff} vs yesterday`
+}
+
+// Color reinforces the number (never replaces it): ≥90% healthy, ≥60% needs
+// attention, below that something is systematically failing.
+function successTone(rate: number): 'good' | 'warn' | 'bad' {
+  if (rate >= 90) return 'good'
+  if (rate >= 60) return 'warn'
+  return 'bad'
 }
 
 export function DashboardView({ snapshot, onNavigate }: DashboardViewProps): ReactElement {
@@ -59,7 +69,16 @@ export function DashboardView({ snapshot, onNavigate }: DashboardViewProps): Rea
         />
         <Tile
           label="Success rate"
-          value={off || metrics.successRate === null ? '—' : `${metrics.successRate}%`}
+          value={
+            off || metrics.successRate === null
+              ? '—'
+              : `${Math.round(metrics.successRate)}%`
+          }
+          tone={
+            off || metrics.successRate === null
+              ? undefined
+              : successTone(metrics.successRate)
+          }
           context={off ? undefined : 'last 24 hours'}
         />
       </div>
