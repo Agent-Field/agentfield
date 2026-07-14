@@ -177,3 +177,62 @@ def test_estimate_cli_cost_returns_none_when_litellm_raises():
         )
 
     assert cost is None
+
+
+def test_resolve_cli_command_passthrough_on_posix():
+    from agentfield.harness._cli import resolve_cli_command
+
+    with patch("agentfield.harness._cli.os") as mock_os:
+        mock_os.name = "posix"
+        assert resolve_cli_command("opencode") == "opencode"
+
+
+def test_resolve_cli_command_resolves_bare_names_on_windows():
+    # On Windows CreateProcess does no PATHEXT resolution, so bare names of
+    # npm-installed CLIs (.cmd shims) must be resolved via shutil.which.
+    from agentfield.harness import _cli
+
+    with (
+        patch.object(_cli.os, "name", "nt"),
+        patch.object(_cli.os, "sep", "\\"),
+        patch.object(_cli.shutil, "which", return_value="C:\npm\opencode.CMD") as which,
+    ):
+        assert _cli.resolve_cli_command("opencode") == "C:\npm\opencode.CMD"
+        which.assert_called_once_with("opencode")
+        # Explicit paths pass through untouched — never re-resolved.
+        assert _cli.resolve_cli_command("C:\tools\opencode.exe") == (
+            "C:\tools\opencode.exe"
+        )
+        # Unresolvable names fall through so the spawn error names the input.
+        which.return_value = None
+        which.reset_mock()
+        assert _cli.resolve_cli_command("nonexistent") == "nonexistent"
+
+
+@pytest.mark.asyncio
+async def test_run_cli_feeds_input_text_via_stdin():
+    process = MagicMock()
+    process.stdout = _stream_reader([b"OK"])
+    process.stderr = _stream_reader([])
+    process.stdin = MagicMock()
+    process.stdin.drain = AsyncMock()
+    process.returncode = 0
+    process.wait = AsyncMock(return_value=0)
+
+    create_process = AsyncMock(return_value=process)
+
+    with patch("asyncio.create_subprocess_exec", create_process):
+        stdout, _, returncode = await run_cli(
+            ["opencode", "run"],
+            timeout=1,
+            input_text="a prompt too large for a cmd.exe command line",
+        )
+
+    assert stdout == "OK"
+    assert returncode == 0
+    _, kwargs = create_process.call_args
+    assert kwargs["stdin"] is asyncio.subprocess.PIPE
+    process.stdin.write.assert_called_once_with(
+        b"a prompt too large for a cmd.exe command line"
+    )
+    process.stdin.close.assert_called_once()

@@ -35,6 +35,18 @@ _OPENCODE_STDERR_ERROR_PATTERNS = (
 )
 
 
+def _prompt_via_stdin() -> bool:
+    """Whether to hand the prompt to opencode over stdin instead of argv.
+
+    On Windows the CLI on PATH is usually an npm .cmd shim that runs via
+    cmd.exe, whose ~8k command-line cap real prompts blow straight through
+    ("The command line is too long."). opencode reads the prompt from stdin
+    when the positional arg is absent, so feed it that way there. POSIX keeps
+    the battle-tested positional-arg path.
+    """
+    return os.name == "nt"
+
+
 def _count_turns_from_events(events: list[dict[str, object]]) -> int:
     """Count opencode turns from JSON events.
 
@@ -184,8 +196,11 @@ class OpenCodeProvider:
                 f"---\n\nUSER REQUEST:\n{prompt}"
             )
 
-        # Prompt is a positional arg to `opencode run` (not -p)
-        cmd.append(effective_prompt)
+        # Prompt is a positional arg to `opencode run` (not -p) on POSIX; on
+        # Windows it goes over stdin instead (see _prompt_via_stdin).
+        prompt_via_stdin = _prompt_via_stdin()
+        if not prompt_via_stdin:
+            cmd.append(effective_prompt)
 
         env: Dict[str, str] = {}
         env_value = options.get("env")
@@ -239,7 +254,11 @@ class OpenCodeProvider:
         try:
             try:
                 stdout, stderr, returncode = await run_cli(
-                    cmd, env=env, cwd=cwd, timeout=timeout_seconds
+                    cmd,
+                    env=env,
+                    cwd=cwd,
+                    timeout=timeout_seconds,
+                    input_text=effective_prompt if prompt_via_stdin else None,
                 )
             except FileNotFoundError:
                 return RawResult(

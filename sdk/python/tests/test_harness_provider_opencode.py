@@ -12,14 +12,28 @@ from agentfield.harness.providers.opencode import OpenCodeProvider
 from agentfield.types import HarnessConfig
 
 
+@pytest.fixture(autouse=True)
+def _argv_prompt_path(monkeypatch: pytest.MonkeyPatch):
+    """Pin the POSIX CLI shape (prompt as positional arg).
+
+    The provider hands the prompt over stdin on Windows (cmd.exe's ~8k
+    command-line cap); these tests assert the argv shape, so the platform
+    decision is pinned to keep them deterministic on Windows dev machines.
+    The stdin path has its own test below.
+    """
+    monkeypatch.setattr(
+        "agentfield.harness.providers.opencode._prompt_via_stdin", lambda: False
+    )
+
+
 @pytest.mark.asyncio
 async def test_opencode_provider_constructs_command_and_maps_result(
     monkeypatch: pytest.MonkeyPatch,
 ):
     captured: dict[str, Any] = {}
 
-    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
-        _ = timeout
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None, input_text=None):
+        _ = timeout, input_text
         captured["cmd"] = cmd
         captured["env"] = env
         captured["cwd"] = cwd
@@ -110,7 +124,7 @@ def test_factory_builds_opencode_provider_with_config_bin() -> None:
 async def test_opencode_passes_model_flag(monkeypatch: pytest.MonkeyPatch):
     captured: dict[str, Any] = {}
 
-    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None, input_text=None):
         _ = timeout
         captured["cmd"] = cmd
         captured["env"] = env
@@ -138,7 +152,7 @@ async def test_opencode_passes_model_flag(monkeypatch: pytest.MonkeyPatch):
 async def test_opencode_cost_flows_through_metrics(monkeypatch: pytest.MonkeyPatch):
     """When model is provided, estimated cost populates metrics.total_cost_usd."""
 
-    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None, input_text=None):
         _ = (env, cwd, timeout)
         return "result text\n", "", 0
 
@@ -169,7 +183,7 @@ async def test_opencode_cost_prefers_stream_cost_when_present(
         ]
     )
 
-    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None, input_text=None):
         _ = (cmd, env, cwd, timeout)
         return stdout, "", 0
 
@@ -191,7 +205,7 @@ async def test_opencode_cost_prefers_stream_cost_when_present(
 async def test_opencode_cost_none_without_model(monkeypatch: pytest.MonkeyPatch):
     """Without a model, cost estimation returns None (not 0)."""
 
-    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None, input_text=None):
         _ = (env, cwd, timeout)
         return "result text\n", "", 0
 
@@ -211,7 +225,9 @@ async def test_opencode_command_does_not_use_attach_pattern(
     """Verify the provider uses direct CLI pattern, NOT serve+attach workaround."""
     captured_cmd: list[str] | None = None
 
-    async def capture_cmd(cmd: list[str], *, env=None, cwd=None, timeout=None):
+    async def capture_cmd(
+        cmd: list[str], *, env=None, cwd=None, timeout=None, input_text=None
+    ):
         nonlocal captured_cmd
         captured_cmd = cmd
         return "result", "", 0
@@ -237,7 +253,9 @@ async def test_opencode_uses_project_dir_when_no_cwd(
     """Verify project_dir is used as --dir argument when cwd is not provided."""
     captured_cmd: list[str] | None = None
 
-    async def capture_cmd(cmd: list[str], *, env=None, cwd=None, timeout=None):
+    async def capture_cmd(
+        cmd: list[str], *, env=None, cwd=None, timeout=None, input_text=None
+    ):
         nonlocal captured_cmd
         captured_cmd = cmd
         return "result", "", 0
@@ -263,7 +281,9 @@ async def test_opencode_project_dir_takes_precedence_over_cwd(
     """
     captured_cmd: list[str] | None = None
 
-    async def capture_cmd(cmd: list[str], *, env=None, cwd=None, timeout=None):
+    async def capture_cmd(
+        cmd: list[str], *, env=None, cwd=None, timeout=None, input_text=None
+    ):
         nonlocal captured_cmd
         captured_cmd = cmd
         return "result", "", 0
@@ -304,7 +324,7 @@ async def test_opencode_exit0_with_error_stderr_is_treated_as_failure(
         "Error: Model not found: minimax/minimax-m2.5.\n"
     )
 
-    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None, input_text=None):
         return "", stderr_with_real_error, 0
 
     monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
@@ -326,7 +346,7 @@ async def test_opencode_exit0_with_only_migration_stderr_is_success(
 ):
     """Migration prelude on stderr without an Error: line should NOT be a failure."""
 
-    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None, input_text=None):
         return (
             "actual model output\n",
             "Performing one time database migration, may take a few minutes...\n"
@@ -355,7 +375,7 @@ async def test_opencode_exit0_with_json_error_event_is_treated_as_failure(
         ]
     )
 
-    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None, input_text=None):
         _ = (cmd, env, cwd, timeout)
         return stdout, "", 0
 
@@ -379,7 +399,7 @@ async def test_opencode_exit_nonzero_uses_extracted_error_not_truncated_prelude(
     long_prelude = "Performing one time database migration line\n" * 30
     stderr = long_prelude + "Error: AuthenticationError: bad key\n"
 
-    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None, input_text=None):
         return "", stderr, 1
 
     monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
@@ -408,7 +428,9 @@ async def test_opencode_v14_cli_shape_no_deprecated_flags(
     """
     captured_cmd: list[str] | None = None
 
-    async def capture_cmd(cmd: list[str], *, env=None, cwd=None, timeout=None):
+    async def capture_cmd(
+        cmd: list[str], *, env=None, cwd=None, timeout=None, input_text=None
+    ):
         nonlocal captured_cmd
         captured_cmd = cmd
         return "result", "", 0
@@ -455,7 +477,7 @@ async def test_opencode_num_turns_counts_step_start_events(
         ]
     )
 
-    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None, input_text=None):
         _ = (cmd, env, cwd, timeout)
         return stdout, "", 0
 
@@ -483,7 +505,7 @@ async def test_opencode_extracts_result_from_text_events(
         ]
     )
 
-    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None, input_text=None):
         _ = (cmd, env, cwd, timeout)
         return stdout, "", 0
 
@@ -510,7 +532,7 @@ async def test_opencode_accumulates_multiple_text_parts(
         ]
     )
 
-    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None, input_text=None):
         _ = (cmd, env, cwd, timeout)
         return stdout, "", 0
 
@@ -522,3 +544,37 @@ async def test_opencode_accumulates_multiple_text_parts(
     assert raw.is_error is False
     assert raw.result == "first second"
     assert raw.metrics.num_turns == 1
+
+
+@pytest.mark.asyncio
+async def test_opencode_windows_hands_prompt_over_stdin(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """On Windows the prompt goes over stdin, never argv — npm .cmd shims run
+    via cmd.exe, whose ~8k command-line cap real prompts exceed."""
+    captured: dict[str, Any] = {}
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None, input_text=None):
+        _ = env, cwd, timeout
+        captured["cmd"] = cmd
+        captured["input_text"] = input_text
+        return "ok\n", "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
+    monkeypatch.setattr(
+        "agentfield.harness.providers.opencode._prompt_via_stdin", lambda: True
+    )
+
+    provider = OpenCodeProvider()
+    raw = await provider.execute(
+        "a prompt far too large for a cmd.exe command line",
+        {"system_prompt": "be brief"},
+    )
+
+    assert raw.is_error is False
+    # The prompt (with the system prompt folded in) went over stdin...
+    assert "a prompt far too large" in (captured["input_text"] or "")
+    assert "SYSTEM INSTRUCTIONS:" in (captured["input_text"] or "")
+    # ...and argv carries only the fixed flags, no positional prompt.
+    assert captured["cmd"][:4] == ["opencode", "run", "--format", "json"]
+    assert all("too large" not in part for part in captured["cmd"])
