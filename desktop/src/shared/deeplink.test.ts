@@ -47,7 +47,7 @@ describe('deepLinkFromArgv', () => {
 
 describe('isView', () => {
   it('accepts exactly the app views', () => {
-    for (const v of ['dashboard', 'agents', 'activity', 'install', 'settings']) {
+    for (const v of ['dashboard', 'agents', 'activity', 'install', 'secrets', 'settings']) {
       expect(isView(v)).toBe(true)
     }
     expect(isView('marketplace')).toBe(false)

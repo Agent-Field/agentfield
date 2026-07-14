@@ -22,7 +22,9 @@ import type {
   AgentActionResult,
   AgentEnvReport,
   AgentEnvVar,
-  EnvVarStatus
+  EnvVarStatus,
+  SecretsListResult,
+  StoredSecret
 } from '../shared/types'
 import { getAgentFieldHome, readInstalledAgents } from './agentfield'
 import { getCliCommand } from './cli'
@@ -353,6 +355,89 @@ export async function setAgentSecret(
   return result.ok
     ? { ok: true, message: `${key} stored` }
     : { ok: false, message: result.output || `failed to store ${key}` }
+}
+
+/** Names of installed agents whose spec declares the given variable name. */
+function agentsDeclaring(
+  specs: { agent: string; spec: EnvSpec }[],
+  key: string
+): string[] {
+  return specs.filter(({ spec }) => findSpecVar(spec, key) !== null).map(({ agent }) => agent)
+}
+
+/**
+ * Join the raw store listing with the installed agents' manifests: which
+ * agents can actually read each stored secret. Global secrets are readable
+ * by every agent declaring the name; a node-scoped secret only by that node.
+ * Ordered global-first, then node scopes, keys alphabetical within a scope.
+ */
+export function buildSecretsInventory(
+  refs: SecretRef[],
+  specs: { agent: string; spec: EnvSpec }[]
+): StoredSecret[] {
+  const rank = (ref: SecretRef) => (ref.scope === GLOBAL_SCOPE ? 0 : 1)
+  return [...refs]
+    .sort(
+      (a, b) =>
+        rank(a) - rank(b) || a.scope.localeCompare(b.scope) || a.key.localeCompare(b.key)
+    )
+    .map((ref) => ({
+      key: ref.key,
+      scope: ref.scope,
+      usedBy:
+        ref.scope === GLOBAL_SCOPE
+          ? agentsDeclaring(specs, ref.key)
+          : agentsDeclaring(
+              specs.filter(({ agent }) => agent === ref.scope),
+              ref.key
+            )
+    }))
+}
+
+/** The whole secret store (keys and scopes only — never values). */
+export async function listStoredSecrets(
+  homeDir: string = getAgentFieldHome()
+): Promise<SecretsListResult> {
+  const ls = await runSecretsCli(['ls'])
+  if (!ls.ok) {
+    return { secrets: [], error: `could not read the secret store: ${ls.output}` }
+  }
+
+  const registry = await readInstalledAgents(homeDir)
+  const specs: { agent: string; spec: EnvSpec }[] = []
+  for (const agent of registry.agents) {
+    const dir = agent.path ?? path.join(homeDir, 'packages', agent.name)
+    const spec = await readEnvSpec(dir)
+    if (spec && !specIsEmpty(spec)) specs.push({ agent: agent.name, spec })
+  }
+  return { secrets: buildSecretsInventory(parseSecretsTable(ls.output), specs) }
+}
+
+/**
+ * Remove one stored secret from one scope. Only (key, scope) pairs that the
+ * store actually lists are accepted — the renderer never gets to invent
+ * arguments for `af secrets rm`.
+ */
+export async function revokeStoredSecret(
+  key: string,
+  scope: string
+): Promise<AgentActionResult> {
+  const ls = await runSecretsCli(['ls'])
+  if (!ls.ok) return { ok: false, message: `could not read the secret store: ${ls.output}` }
+  const exists = parseSecretsTable(ls.output).some(
+    (ref) => ref.key === key && ref.scope === scope
+  )
+  if (!exists) return { ok: false, message: `${key} is not stored in the ${scope} scope` }
+
+  const args = ['rm', key]
+  if (scope !== GLOBAL_SCOPE) args.push('--node', scope)
+  const result = await runSecretsCli(args)
+  if (!result.ok) return { ok: false, message: result.output || `failed to remove ${key}` }
+  return {
+    ok: true,
+    message:
+      scope === GLOBAL_SCOPE ? `${key} removed for all agents` : `${key} removed for ${scope}`
+  }
 }
 
 /**

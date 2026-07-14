@@ -2,6 +2,7 @@ import yaml from 'js-yaml'
 import { describe, expect, it } from 'vitest'
 import {
   buildEnvReport,
+  buildSecretsInventory,
   findSpecVar,
   parseSecretsTable,
   parseUserEnvironment,
@@ -185,5 +186,36 @@ describe('buildEnvReport', () => {
   it('an empty env value does not count as resolved', () => {
     const report = buildEnvReport('swe-planner', sweSpec(), [], { GH_TOKEN: '' })
     expect(report.vars.find((v) => v.name === 'GH_TOKEN')?.status).toBe('missing')
+  })
+})
+
+describe('buildSecretsInventory', () => {
+  const specs = [{ agent: 'swe-planner', spec: sweSpec() }]
+
+  it('orders global first and joins in the declaring agents', () => {
+    const refs = [
+      { key: 'ANTHROPIC_API_KEY', scope: 'swe-planner' },
+      { key: 'OPENROUTER_API_KEY', scope: 'global' },
+      { key: 'GH_TOKEN', scope: 'global' }
+    ]
+    const inventory = buildSecretsInventory(refs, specs)
+    expect(inventory.map((s) => `${s.scope}:${s.key}`)).toEqual([
+      'global:GH_TOKEN',
+      'global:OPENROUTER_API_KEY',
+      'swe-planner:ANTHROPIC_API_KEY'
+    ])
+    expect(inventory[0].usedBy).toEqual(['swe-planner'])
+    expect(inventory[2].usedBy).toEqual(['swe-planner'])
+  })
+
+  it('flags secrets no installed agent declares', () => {
+    const inventory = buildSecretsInventory([{ key: 'RANDOM_TOKEN', scope: 'global' }], specs)
+    expect(inventory[0].usedBy).toEqual([])
+  })
+
+  it('a node-scoped secret is only attributed to its own node', () => {
+    const refs = [{ key: 'GH_TOKEN', scope: 'other-agent' }]
+    const inventory = buildSecretsInventory(refs, specs)
+    expect(inventory[0]).toMatchObject({ scope: 'other-agent', usedBy: [] })
   })
 })

@@ -83,6 +83,7 @@ function EnvRow({
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [confirming, setConfirming] = useState(false)
 
   const save = async () => {
     setBusy(true)
@@ -102,6 +103,7 @@ function EnvRow({
     setError(null)
     const result = await window.agentfield.revokeAgentSecret(agent, envVar.name)
     setBusy(false)
+    setConfirming(false)
     if (!result.ok) {
       setError(result.message)
       return
@@ -110,11 +112,9 @@ function EnvRow({
   }
 
   const stored = envVar.storedScopes.length > 0
-  // A stored global key is shared by every agent that names it — say so
-  // before a revoke silently breaks a sibling.
-  const revokeTitle = envVar.storedScopes.includes('global')
-    ? 'Remove from the shared (global) secret store'
-    : 'Remove from this agent’s secret store'
+  // A stored global key is shared by every agent that names it — the
+  // confirm step says so before a revoke silently breaks a sibling.
+  const shared = envVar.storedScopes.includes('global')
 
   return (
     <div className="env-row">
@@ -125,36 +125,63 @@ function EnvRow({
           {stored && envVar.scope === 'global' && <span className="env-scope">shared</span>}
         </div>
         {envVar.description && <span className="row-sub">{envVar.description}</span>}
+        {confirming && !busy && (
+          <span className="row-progress warn-text">
+            {shared
+              ? 'This key is shared — revoking removes it for every agent that uses it.'
+              : 'Revoking removes this key for this agent only.'}
+          </span>
+        )}
         {error && <span className="row-progress error-text">{error}</span>}
       </div>
       <div className="env-row-controls">
-        <input
-          className="env-input"
-          type={envVar.secret ? 'password' : 'text'}
-          placeholder={envVar.status === 'missing' ? 'enter value' : 'replace value'}
-          value={draft}
-          disabled={busy}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && draft.trim() !== '') void save()
-          }}
-        />
-        <button
-          className="action-button primary"
-          disabled={busy || draft.trim() === ''}
-          onClick={() => void save()}
-        >
-          {busy ? '…' : 'Set'}
-        </button>
-        {stored && (
-          <button
-            className="action-button"
-            disabled={busy}
-            title={revokeTitle}
-            onClick={() => void revoke()}
-          >
-            Revoke
-          </button>
+        {confirming ? (
+          <>
+            <button
+              className="action-button danger"
+              disabled={busy}
+              onClick={() => void revoke()}
+            >
+              {busy ? 'Revoking…' : shared ? 'Revoke for all agents' : 'Revoke'}
+            </button>
+            <button
+              className="action-button"
+              disabled={busy}
+              onClick={() => setConfirming(false)}
+            >
+              Cancel
+            </button>
+          </>
+        ) : (
+          <>
+            <input
+              className="env-input"
+              type={envVar.secret ? 'password' : 'text'}
+              placeholder={envVar.status === 'missing' ? 'enter value' : 'replace value'}
+              value={draft}
+              disabled={busy}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && draft.trim() !== '') void save()
+              }}
+            />
+            <button
+              className="action-button primary"
+              disabled={busy || draft.trim() === ''}
+              onClick={() => void save()}
+            >
+              {busy ? '…' : 'Set'}
+            </button>
+            {/* The slot is always rendered so the input column lines up
+                across rows whether or not a value is stored. */}
+            <button
+              className={stored ? 'action-button' : 'action-button ghost-slot'}
+              disabled={!stored || busy}
+              onClick={() => setConfirming(true)}
+            >
+              Revoke
+            </button>
+          </>
         )}
       </div>
     </div>

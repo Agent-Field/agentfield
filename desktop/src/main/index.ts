@@ -9,7 +9,13 @@ import { type AgentAction, runAgentAction } from './agents'
 import { runAutostart } from './autostart'
 import { getCliCommand, initializeCli, installBundledCli, refreshCliStatus } from './cli'
 import { installAgent } from './installer'
-import { getEnvReports, revokeAgentSecret, setAgentSecret } from './secrets'
+import {
+  getEnvReports,
+  listStoredSecrets,
+  revokeAgentSecret,
+  revokeStoredSecret,
+  setAgentSecret
+} from './secrets'
 import { loadSettings, mergeSettings, saveSettings } from './settings'
 import { setupTray } from './tray'
 import appIcon from '../../resources/icon.png?asset'
@@ -278,6 +284,13 @@ function main(): void {
         return { ok: false, message: 'invalid secret request' }
       }
       return revokeAgentSecret(agent, key)
+    })
+    ipcMain.handle('agentfield:secrets-list', () => listStoredSecrets())
+    ipcMain.handle('agentfield:secrets-revoke', (_event, key: unknown, scope: unknown) => {
+      if (typeof key !== 'string' || typeof scope !== 'string') {
+        return { ok: false, message: 'invalid secret request' }
+      }
+      return revokeStoredSecret(key, scope)
     })
     // The renderer calls this once its navigation listener is live; the
     // return value is the deep-link view (if any) that arrived before then.

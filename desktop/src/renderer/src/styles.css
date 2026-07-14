@@ -558,6 +558,32 @@ body[data-platform='win32'] .view-header {
   border-color: var(--accent);
 }
 
+/* Reserved slot: keeps the input column aligned across rows whether or not
+   a Revoke button is visible. */
+.action-button.ghost-slot {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.action-button.danger {
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+  color: var(--red);
+}
+
+.action-button.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 24%, transparent);
+}
+
+.warn-text {
+  color: var(--yellow);
+}
+
+.footnote {
+  margin: 10px 4px 0;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+
 .install-button {
   -webkit-app-region: no-drag;
   background: var(--accent);

@@ -6,6 +6,7 @@ import { DashboardView } from './components/DashboardView'
 import { AgentsPanel } from './components/AgentsPanel'
 import { ActivityPanel } from './components/ActivityPanel'
 import { InstallPanel } from './components/InstallPanel'
+import { SecretsPanel } from './components/SecretsPanel'
 import { SettingsPanel } from './components/SettingsPanel'
 
 const POLL_INTERVAL_MS = 5000
@@ -38,6 +39,7 @@ const VIEW_TITLES: Record<View, string> = {
   agents: 'Agents',
   activity: 'Activity',
   install: 'Install',
+  secrets: 'Secrets',
   settings: 'Settings'
 }
 
@@ -111,6 +113,7 @@ export default function App() {
           {view === 'install' && (
             <InstallPanel installedNames={installedNames} onInstalled={() => void refresh()} />
           )}
+          {view === 'secrets' && <SecretsPanel />}
           {view === 'settings' && <SettingsPanel agents={snapshot?.registry.agents ?? []} />}
         </div>
       </div>

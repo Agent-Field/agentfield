@@ -16,6 +16,8 @@ const api: AgentFieldApi = {
   setAgentSecret: (agent, key, value) =>
     ipcRenderer.invoke('agentfield:secret-set', agent, key, value),
   revokeAgentSecret: (agent, key) => ipcRenderer.invoke('agentfield:secret-revoke', agent, key),
+  listSecrets: () => ipcRenderer.invoke('agentfield:secrets-list'),
+  revokeSecret: (key, scope) => ipcRenderer.invoke('agentfield:secrets-revoke', key, scope),
   getSettings: () => ipcRenderer.invoke('agentfield:settings-get'),
   setSettings: (patch) => ipcRenderer.invoke('agentfield:settings-set', patch),
   getCliStatus: () => ipcRenderer.invoke('agentfield:cli-status'),

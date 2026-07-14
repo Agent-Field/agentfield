@@ -128,6 +128,22 @@ export interface AgentEnvReport {
   error?: string
 }
 
+/** One entry of the whole secret store (values never leave the store). */
+export interface StoredSecret {
+  key: string
+  /** "global" (shared by every agent) or the node name it is scoped to. */
+  scope: string
+  /** Installed agents whose manifest declares this variable. */
+  usedBy: string[]
+}
+
+/** The Secrets view payload: everything `af secrets ls` knows. */
+export interface SecretsListResult {
+  secrets: StoredSecret[]
+  /** Set when the store could not be read (e.g. no usable af CLI). */
+  error?: string
+}
+
 /** Which af CLI the app resolved and whether an installed copy needs updating. */
 export interface CliStatus {
   /** Spawnable command (absolute path or bare "af"), null when none usable. */
@@ -206,6 +222,10 @@ export interface AgentFieldApi {
   setAgentSecret(agent: string, key: string, value: string): Promise<AgentActionResult>
   /** Remove a stored value from every scope relevant to this agent. */
   revokeAgentSecret(agent: string, key: string): Promise<AgentActionResult>
+  /** Every secret in the store, with the agents that declare each one. */
+  listSecrets(): Promise<SecretsListResult>
+  /** Remove one stored secret from one scope (global = for all agents). */
+  revokeSecret(key: string, scope: string): Promise<AgentActionResult>
   getSettings(): Promise<DesktopSettings>
   /** Merge a partial update into the settings; returns the result. */
   setSettings(patch: Partial<DesktopSettings>): Promise<DesktopSettings>
