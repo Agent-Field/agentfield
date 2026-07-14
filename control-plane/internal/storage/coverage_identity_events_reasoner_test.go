@@ -188,6 +188,48 @@ func TestExecutionEventAndLogCoverage(t *testing.T) {
 		require.Equal(t, emittedAt, stored[0].RecordedAt.UTC().Truncate(time.Second))
 	})
 
+	t.Run("persists recorded_at for execution logs", func(t *testing.T) {
+		ls, ctx := setupLocalStorage(t)
+
+		// Distinct timestamps so the NULL-read fallback (recorded_at ->
+		// emitted_at) cannot masquerade as persistence: if the raw INSERT
+		// drops recorded_at again, the listed value comes back as emittedAt
+		// and this test fails.
+		emittedAt := time.Now().UTC().Add(-2 * time.Minute).Truncate(time.Second)
+		recordedAt := time.Now().UTC().Truncate(time.Second)
+
+		entry := &types.ExecutionLogEntry{
+			ExecutionID: "exec-logs-recorded",
+			WorkflowID:  "wf-logs-recorded",
+			Level:       "info",
+			Message:     "recorded-at roundtrip",
+			EmittedAt:   emittedAt,
+			RecordedAt:  recordedAt,
+		}
+		require.NoError(t, ls.StoreExecutionLogEntry(ctx, entry))
+
+		stored, err := ls.ListExecutionLogEntries(ctx, "exec-logs-recorded", nil, 10, nil, nil, nil, "")
+		require.NoError(t, err)
+		require.Len(t, stored, 1)
+		require.Equal(t, recordedAt, stored[0].RecordedAt.UTC().Truncate(time.Second))
+
+		// The batch path funnels through the same Tx helper; a zero
+		// RecordedAt must be stamped before the INSERT, not after it.
+		batch := []*types.ExecutionLogEntry{{
+			ExecutionID: "exec-logs-recorded-batch",
+			WorkflowID:  "wf-logs-recorded",
+			Level:       "info",
+			Message:     "batch recorded-at",
+			EmittedAt:   emittedAt,
+		}}
+		require.NoError(t, ls.StoreExecutionLogEntries(ctx, "exec-logs-recorded-batch", batch))
+		stored, err = ls.ListExecutionLogEntries(ctx, "exec-logs-recorded-batch", nil, 10, nil, nil, nil, "")
+		require.NoError(t, err)
+		require.Len(t, stored, 1)
+		require.False(t, stored[0].RecordedAt.IsZero())
+		require.NotEqual(t, emittedAt, stored[0].RecordedAt.UTC().Truncate(time.Second))
+	})
+
 	t.Run("stores lists and prunes execution logs", func(t *testing.T) {
 		ls, ctx := setupLocalStorage(t)
 		require.EqualError(t, ls.StoreExecutionLogEntry(ctx, nil), "execution log entry is nil")

@@ -7881,12 +7881,20 @@ func (ls *LocalStorage) storeExecutionLogEntryTx(ctx context.Context, tx DBTX, e
 		attributes = string(entry.Attributes)
 	}
 
+	// Persist recorded_at explicitly: the GORM model's autoCreateTime does
+	// not apply to this raw INSERT, so omitting the column stores NULL and
+	// every read silently takes the legacy emitted_at fallback.
+	if entry.RecordedAt.IsZero() {
+		entry.RecordedAt = time.Now().UTC()
+	}
+
 	query := `
 		INSERT INTO execution_logs (
 			execution_id, workflow_id, run_id, root_workflow_id, parent_execution_id, sequence,
 			agent_node_id, reasoner_id, level, source, event_type, message, attributes,
-			system_generated, sdk_language, attempt, span_id, step_id, error_category, emitted_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			system_generated, sdk_language, attempt, span_id, step_id, error_category, emitted_at,
+			recorded_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	result, err := tx.ExecContext(ctx, query,
 		entry.ExecutionID,
@@ -7909,15 +7917,13 @@ func (ls *LocalStorage) storeExecutionLogEntryTx(ctx context.Context, tx DBTX, e
 		entry.StepID,
 		entry.ErrorCategory,
 		entry.EmittedAt,
+		entry.RecordedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to insert execution log entry: %w", err)
 	}
 	if id, err := result.LastInsertId(); err == nil {
 		entry.EventID = id
-	}
-	if entry.RecordedAt.IsZero() {
-		entry.RecordedAt = time.Now().UTC()
 	}
 	return nil
 }
