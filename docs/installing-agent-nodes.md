@@ -219,6 +219,33 @@ doesn't already have, recursively. Already-installed nodes are skipped, which
 also breaks dependency cycles. `af run <node>` starts a node's installed
 dependencies first (in dependency order) before the node itself.
 
+## One repo, many nodes: `--path`
+
+By default `af install <src>` looks for the `agentfield-package.yaml` at the root
+of the source (a git repo or a local directory). When a single repository ships
+more than one installable node — for example a Python node at the root and a Go
+port under `go/` — use `--path` to select the subdirectory to install:
+
+```bash
+# Install the node whose manifest lives at go/agentfield-package.yaml
+af install https://github.com/Agent-Field/SWE-AF --path go
+
+# Composes with an @ref pin on the URL
+af install https://github.com/Agent-Field/SWE-AF@v1.2.3 --path go
+
+# Also works for a local source
+af install ./SWE-AF --path go
+```
+
+The subdirectory must contain its own `agentfield-package.yaml`; that subtree
+becomes the package root that is copied to `~/.agentfield/packages/<name>` and
+installed (a Go node builds relative to it). Because registry entries are keyed by
+the manifest `name`, the root node and a `--path` node from the same repo coexist
+as separate installs. `--path` is a path **relative to the source root**: absolute
+paths and paths that escape the root with `..` are rejected, and a missing manifest
+is reported with the full expected path. A bare `af install <src>` (no `--path`) is
+unchanged — the root manifest is always what you get by default.
+
 ## Secrets: encrypted, shared, runtime-only
 
 Secrets are never written to disk in plaintext and never baked into the package.
@@ -267,6 +294,7 @@ server URL is resolved from your local configuration.
 | Command                     | Does                                                            |
 | --------------------------- | -------------------------------------------------------------- |
 | `af install <src>`          | Install from a local path, git URL, or registry name + node deps |
+| `af install <src> --path <subdir>` | Install the node in `<subdir>` (one repo shipping multiple nodes) |
 | `af run <node>`             | Start a node (and its node deps) in the background              |
 | `af list`                   | Show installed nodes and runtime state                         |
 | `af logs <node>`            | Tail a node's process log                                      |

@@ -26,6 +26,12 @@ type GitPackageInfo struct {
 type GitInstaller struct {
 	AgentFieldHome string
 	Verbose        bool
+	// Subdir optionally selects a package subdirectory within the cloned repo
+	// (the `--path` flag). Empty means the historical root-first walk. When set,
+	// the manifest MUST live at <clone>/<Subdir>/agentfield-package.yaml and that
+	// subdirectory becomes the package root that is copied and installed. It
+	// composes with an @ref pin on the URL, which is parsed independently.
+	Subdir string
 }
 
 // newSpinner creates a new spinner with the given message
@@ -106,6 +112,12 @@ func checkGitAvailable() error {
 
 // InstallFromGit installs a package from any Git repository
 func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
+	// Reject a malformed --path selector (absolute / escaping) up front, before
+	// any install work (clone, copy, registry mutation) happens.
+	if err := validateSubdirSelector(gi.Subdir); err != nil {
+		return err
+	}
+
 	// Check if Git is available
 	if err := checkGitAvailable(); err != nil {
 		return err
@@ -136,7 +148,7 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 	spinner = gi.newSpinner("Validating package structure")
 	spinner.Start()
 
-	packagePath, err := gi.findPackageRoot(tempDir)
+	packagePath, err := gi.resolvePackageRoot(tempDir)
 	if err != nil {
 		spinner.Error("Invalid package structure")
 		return fmt.Errorf("invalid package structure: %w", err)
@@ -255,6 +267,26 @@ func (gi *GitInstaller) cloneRepository(info *GitPackageInfo) (string, error) {
 	}
 
 	return tempDir, nil
+}
+
+// resolvePackageRoot determines which directory of the cloned repository is the
+// package to install. With no --path selector it defers to findPackageRoot's
+// root-first walk (unchanged behavior). With a selector it resolves and validates
+// <cloneDir>/<Subdir>, requiring the manifest to exist there, so one repo can ship
+// multiple installable nodes selected explicitly.
+func (gi *GitInstaller) resolvePackageRoot(cloneDir string) (string, error) {
+	if strings.TrimSpace(gi.Subdir) == "" {
+		return gi.findPackageRoot(cloneDir)
+	}
+	root, err := ResolvePackageSubdir(cloneDir, gi.Subdir)
+	if err != nil {
+		return "", err
+	}
+	// A selected subdir must still be a valid, startable agent node.
+	if err := ValidatePackage(root); err != nil {
+		return "", err
+	}
+	return root, nil
 }
 
 // findPackageRoot finds the root directory containing agentfield-package.yaml

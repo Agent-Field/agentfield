@@ -47,7 +47,12 @@ func (ps *DefaultPackageService) InstallPackage(source string, options domain.In
 		return err
 	}
 
-	return ps.installNodeDependencies(before, options)
+	// The --path selector targets a subdirectory of THIS source only. Node
+	// dependencies are their own installable sources, so never carry the selector
+	// into recursive dependency installs.
+	depOptions := options
+	depOptions.Path = ""
+	return ps.installNodeDependencies(before, depOptions)
 }
 
 // installOne installs a single package from a git URL or local path.
@@ -57,12 +62,13 @@ func (ps *DefaultPackageService) installOne(source string, options domain.Instal
 		installer := &packages.GitInstaller{
 			AgentFieldHome: ps.agentfieldHome,
 			Verbose:        options.Verbose,
+			Subdir:         options.Path,
 		}
 		return installer.InstallFromGit(source, options.Force)
 	}
 
 	// Handle local package installation
-	return ps.installLocalPackage(source, options.Force, options.Verbose)
+	return ps.installLocalPackage(source, options.Path, options.Force, options.Verbose)
 }
 
 // installedNames returns the set of currently-installed package names.
@@ -134,8 +140,20 @@ func resolveNodeRef(ref string) (source string, name string) {
 	return ref, ""
 }
 
-// installLocalPackage installs a package from a local source path
-func (ps *DefaultPackageService) installLocalPackage(sourcePath string, force bool, verbose bool) error {
+// installLocalPackage installs a package from a local source path. When subdir is
+// non-empty (the --path selector) the package root is resolved to
+// <sourcePath>/<subdir>, which must contain an agentfield-package.yaml; that
+// subdirectory is what gets validated, copied, and installed. Resolution happens
+// before any copy or registry mutation, so a bad selector fails cleanly.
+func (ps *DefaultPackageService) installLocalPackage(sourcePath string, subdir string, force bool, verbose bool) error {
+	if strings.TrimSpace(subdir) != "" {
+		resolved, err := packages.ResolvePackageSubdir(sourcePath, subdir)
+		if err != nil {
+			return err
+		}
+		sourcePath = resolved
+	}
+
 	// Get package name first for better messaging
 	metadata, err := ps.parsePackageMetadata(sourcePath)
 	if err != nil {

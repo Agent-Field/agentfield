@@ -9,12 +9,15 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/Agent-Field/agentfield/sdk/go/ai"
@@ -365,11 +368,16 @@ type Config struct {
 	// plane does not expect heartbeats.
 	LeaseRefreshInterval time.Duration
 
-	// CallTimeout bounds every outbound HTTP call this agent makes as a
-	// client - cross-agent Call()s, memory backend requests, etc.
-	// Optional. Default: 15s. A reasoning-model-backed reasoner chained
-	// behind Call() (search + a large max_tokens reasoning response) can
-	// easily exceed the old hardcoded 15s, so raise this for such workloads.
+	// CallTimeout bounds every INDIVIDUAL outbound HTTP request this agent
+	// makes through its shared client (e.g. memory backend requests).
+	// Optional. Default: 15s.
+	//
+	// NOTE: cross-agent Call() does NOT use this timeout. Its async submit and
+	// status polls run through dedicated clients bounded by
+	// AGENTFIELD_CALL_SUBMIT_TIMEOUT_SECONDS / AGENTFIELD_CALL_POLL_TIMEOUT_SECONDS,
+	// with transient failures retried within AGENTFIELD_CALL_RETRY_WINDOW_SECONDS,
+	// so a child reasoner may run arbitrarily long; bound the overall Call wait
+	// with the ctx passed to Call instead.
 	CallTimeout time.Duration
 
 	// DisableLeaseLoop disables automatic periodic lease refreshes.
@@ -474,11 +482,24 @@ type Agent struct {
 	cfg        Config
 	client     *client.Client
 	httpClient *http.Client
-	reasoners  map[string]*Reasoner
-	skills     map[string]*Reasoner
-	sessions   map[string]SessionDefinition
-	aiClient   *ai.Client // AI/LLM client
-	memory     *Memory    // Memory system for state management
+
+	// callSubmitClient and callPollClient are dedicated HTTP clients for the
+	// async Agent.Call path. They are separate from httpClient so the submit
+	// and poll requests carry their own (larger) per-request timeouts without
+	// affecting memory-backend or other client traffic. Resolved once in New()
+	// from AGENTFIELD_CALL_SUBMIT_TIMEOUT_SECONDS / AGENTFIELD_CALL_POLL_TIMEOUT_SECONDS.
+	callSubmitClient *http.Client
+	callPollClient   *http.Client
+	// callRetryWindow bounds how long consecutive transient poll/submit
+	// failures are tolerated before the call is declared failed with an
+	// "unreachable" error. Resolved from AGENTFIELD_CALL_RETRY_WINDOW_SECONDS.
+	callRetryWindow time.Duration
+
+	reasoners map[string]*Reasoner
+	skills    map[string]*Reasoner
+	sessions  map[string]SessionDefinition
+	aiClient  *ai.Client // AI/LLM client
+	memory    *Memory    // Memory system for state management
 
 	// DID/VC subsystem
 	didManager  *did.Manager
@@ -559,6 +580,17 @@ func New(cfg Config) (*Agent, error) {
 		Timeout: cfg.CallTimeout,
 	}
 
+	// Dedicated clients + retry window for the async Agent.Call path. See the
+	// resolver's doc comment for the env vars and defaults. A slow-but-healthy
+	// control plane must not abort an already-accepted submit, so the submit
+	// client's timeout is intentionally generous (default 120s), and each poll
+	// gets its own (default 60s) rather than inheriting CallTimeout's 15s.
+	callSubmitTimeout := resolveCallDurationEnv(envCallSubmitTimeoutSeconds, defaultCallSubmitTimeout)
+	callPollTimeout := resolveCallDurationEnv(envCallPollTimeoutSeconds, defaultCallPollTimeout)
+	callRetryWindow := resolveCallDurationEnv(envCallRetryWindowSeconds, defaultCallRetryWindow)
+	callSubmitClient := &http.Client{Timeout: callSubmitTimeout}
+	callPollClient := &http.Client{Timeout: callPollTimeout}
+
 	// Initialize AI client if config provided
 	var aiClient *ai.Client
 	var err error
@@ -572,6 +604,9 @@ func New(cfg Config) (*Agent, error) {
 	a := &Agent{
 		cfg:                         cfg,
 		httpClient:                  httpClient,
+		callSubmitClient:            callSubmitClient,
+		callPollClient:              callPollClient,
+		callRetryWindow:             callRetryWindow,
 		reasoners:                   make(map[string]*Reasoner),
 		skills:                      make(map[string]*Reasoner),
 		sessions:                    make(map[string]SessionDefinition),
@@ -1169,6 +1204,21 @@ func (a *Agent) handleExecute(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, statusCode, response)
 			return
 		}
+		// A reasoner that ran but failed can return &ReasonerFailed{Result: ...}
+		// to preserve its structured outcome; carry it onto the error response
+		// (mirroring the async status payload) so the result is not lost.
+		var rf *ReasonerFailed
+		if errors.As(err, &rf) {
+			response := map[string]any{"error": rf.Message}
+			if rf.Result != nil {
+				response["result"] = rf.Result
+			}
+			if rf.ErrorDetails != nil {
+				response["error_details"] = rf.ErrorDetails
+			}
+			writeJSON(w, http.StatusInternalServerError, response)
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
@@ -1372,6 +1422,20 @@ func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, statusCode, response)
 			return
 		}
+		// Preserve a ReasonerFailed's structured result/details on the sync
+		// error response, mirroring the async failed-status payload.
+		var rf *ReasonerFailed
+		if errors.As(err, &rf) {
+			response := map[string]any{"error": rf.Message}
+			if rf.Result != nil {
+				response["result"] = rf.Result
+			}
+			if rf.ErrorDetails != nil {
+				response["error_details"] = rf.ErrorDetails
+			}
+			writeJSON(w, http.StatusInternalServerError, response)
+			return
+		}
 
 		writeJSON(w, http.StatusInternalServerError, map[string]any{
 			"error": err.Error(),
@@ -1484,6 +1548,21 @@ func (a *Agent) executeReasonerAsync(reasoner *Reasoner, input map[string]any, e
 	if err != nil {
 		payload["status"] = "failed"
 		payload["error"] = err.Error()
+		// A reasoner that ran, determined its own work failed, and wants its
+		// structured outcome preserved returns &ReasonerFailed{Result: ...}.
+		// Carry that result/details onto the failed-status payload so the single
+		// (5x-retried) status post records status=failed WITHOUT discarding the
+		// rich result — the control plane stores the result regardless of
+		// terminal status. Byte-parity with the Python async handler.
+		var rf *ReasonerFailed
+		if errors.As(err, &rf) {
+			if rf.Result != nil {
+				payload["result"] = rf.Result
+			}
+			if rf.ErrorDetails != nil {
+				payload["error_details"] = rf.ErrorDetails
+			}
+		}
 		a.logExecutionError(ctx, "reasoner.invoke.failed", "reasoner execution failed", map[string]any{
 			"reasoner_id": reasoner.Name,
 			"mode":        "async",
@@ -1565,7 +1644,179 @@ func (a *Agent) postExecutionStatus(ctx context.Context, callbackURL string, pay
 	return lastErr
 }
 
+// Poll pacing for Call's async-submit + wait loop. Mirrors the Python SDK's
+// _await_execution_sync (sdk/python/agentfield/client.py:970-1011) with the
+// AsyncConfig defaults from sdk/python/agentfield/async_config.py:
+// interval starts at max(initial_poll_interval, 0.25s), doubles per poll
+// capped at max_poll_interval (4s), and each sleep is jittered by
+// uniform(0.8, 1.2) clamped to [50ms, 4s] (client.py:1141-1143).
+const (
+	callInitialPollInterval = 250 * time.Millisecond
+	callMaxPollInterval     = 4 * time.Second
+	callMinPollInterval     = 50 * time.Millisecond
+)
+
+// Env vars controlling Agent.Call resilience to transient control-plane
+// outages. They follow the AGENTFIELD_* integer-seconds convention used by
+// AGENTFIELD_HARNESS_IDLE_SECONDS (sdk/go/harness/cli.go). All are read once
+// per Agent in New() and cached on the struct.
+const (
+	// envCallPollTimeoutSeconds bounds each individual status-poll HTTP
+	// request. Default 60s.
+	envCallPollTimeoutSeconds = "AGENTFIELD_CALL_POLL_TIMEOUT_SECONDS"
+	// envCallSubmitTimeoutSeconds bounds the async-submit POST. Default 120s —
+	// deliberately generous so a slow-but-healthy CP does not abort a request
+	// that may already have been accepted (re-POSTing is not idempotent).
+	envCallSubmitTimeoutSeconds = "AGENTFIELD_CALL_SUBMIT_TIMEOUT_SECONDS"
+	// envCallRetryWindowSeconds bounds how long consecutive transient failures
+	// (poll timeouts/5xx, or submit dial failures) are tolerated before the
+	// call fails with an "unreachable" error. Default 300s. A single success
+	// resets the window.
+	envCallRetryWindowSeconds = "AGENTFIELD_CALL_RETRY_WINDOW_SECONDS"
+)
+
+const (
+	defaultCallPollTimeout   = 60 * time.Second
+	defaultCallSubmitTimeout = 120 * time.Second
+	defaultCallRetryWindow   = 5 * time.Minute
+
+	// callRetryBackoffMin/Max bound the exponential backoff BETWEEN consecutive
+	// failed submit/poll attempts (distinct from the healthy poll pacing above).
+	callRetryBackoffMin = 500 * time.Millisecond
+	callRetryBackoffMax = 15 * time.Second
+
+	// callNotFoundRetryWindow bounds how long a 404 on a just-submitted
+	// execution is retried before failing with a distinct error. The control
+	// plane can briefly lag between accepting a submit and making the execution
+	// row queryable, so a 404 is treated as transient for a SHORTER window than
+	// a general outage. The effective window is min(this, callRetryWindow) so a
+	// shrunk retry window (tests) shrinks the 404 window too.
+	callNotFoundRetryWindow = 30 * time.Second
+)
+
+// resolveCallDurationEnv reads an integer-seconds env var, falling back to def
+// when unset, unparseable, or non-positive. Mirrors resolveIdleSeconds' laxity.
+func resolveCallDurationEnv(name string, def time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil || v <= 0 {
+		return def
+	}
+	return time.Duration(v) * time.Second
+}
+
+// requestNeverReachedServer reports whether an HTTP client error proves the
+// request never reached the server, so re-sending it cannot cause a duplicate
+// side effect. Only dial-phase failures qualify: the connection was never
+// established, hence no bytes of the request body were delivered. Ambiguous
+// failures (a timeout while awaiting response headers — the server may have
+// accepted and be processing the request) and caller cancellation return
+// false, so a non-idempotent submit is never blindly retried.
+func requestNeverReachedServer(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Caller-driven cancellation / deadline is not a "never reached" signal:
+	// the request may have been sent before the caller gave up.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	// Connection actively refused: nothing is listening, so no request landed.
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return true
+	}
+	// DNS resolution failed: the request never left the client.
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+	// A net.OpError whose Op is "dial" means the failure happened while
+	// establishing the connection, before any request bytes were written.
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "dial" {
+		return true
+	}
+	return false
+}
+
+// isTransientPollStatus reports whether an HTTP status returned by a status
+// poll is a transient control-plane condition worth retrying (overload, gateway
+// hiccups) rather than a permanent client error. 404 is handled separately
+// (bounded, distinct message) because it means "not visible yet", and other 4xx
+// (auth, bad request) are permanent and abort immediately.
+func isTransientPollStatus(code int) bool {
+	switch code {
+	case http.StatusRequestTimeout, // 408
+		http.StatusTooManyRequests: // 429
+		return true
+	}
+	return code >= 500
+}
+
+// nextRetryBackoff doubles the failure backoff, clamped to
+// [callRetryBackoffMin, callRetryBackoffMax].
+func nextRetryBackoff(current time.Duration) time.Duration {
+	next := current * 2
+	if next > callRetryBackoffMax {
+		return callRetryBackoffMax
+	}
+	if next < callRetryBackoffMin {
+		return callRetryBackoffMin
+	}
+	return next
+}
+
+// sleepCtx sleeps for d unless ctx is cancelled first. It returns true if the
+// full duration elapsed, false if ctx was cancelled during the wait.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return ctx.Err() == nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
+// nextCallPollInterval applies the Python _next_poll_interval jitter:
+// uniform(0.8, 1.2) * current, clamped to [callMinPollInterval, callMaxPollInterval].
+func nextCallPollInterval(current time.Duration) time.Duration {
+	jittered := time.Duration(float64(current) * (0.8 + 0.4*rand.Float64()))
+	if jittered < callMinPollInterval {
+		return callMinPollInterval
+	}
+	if jittered > callMaxPollInterval {
+		return callMaxPollInterval
+	}
+	return jittered
+}
+
 // Call invokes another reasoner via the AgentField control plane, preserving execution context.
+//
+// The call is submitted to the asynchronous execute endpoint
+// (POST /api/v1/execute/async/{target}) and the result is awaited by polling
+// GET /api/v1/executions/{execution_id} until the execution reaches a terminal
+// status — mirroring the Python SDK's app.call
+// (sdk/python/agentfield/client.py _submit_execution_sync/_await_execution_sync).
+//
+// Timeout semantics: each submit and each poll is an independent HTTP request
+// bounded by its own dedicated client timeout
+// (AGENTFIELD_CALL_SUBMIT_TIMEOUT_SECONDS / AGENTFIELD_CALL_POLL_TIMEOUT_SECONDS),
+// NOT by Config.CallTimeout and NOT by the end-to-end call. Transient submit
+// and poll failures are retried within AGENTFIELD_CALL_RETRY_WINDOW_SECONDS
+// (see submitAsyncExecution / awaitExecutionResult), so a brief control-plane
+// outage does not kill a long-running call. A child reasoner may run
+// arbitrarily long; the overall wait is bounded only by ctx. Cancelling ctx
+// aborts the wait but does NOT cancel the child execution server-side — the
+// child keeps running on its node and the control plane records its result
+// (the Python SDK behaves the same way when the caller stops waiting).
 func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (map[string]any, error) {
 	if strings.TrimSpace(a.cfg.AgentFieldURL) == "" {
 		return nil, errors.New("AgentFieldURL is required to call other reasoners")
@@ -1591,16 +1842,26 @@ func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (
 		"target":      target,
 		"reasoner_id": strings.TrimPrefix(target, a.cfg.NodeID+"."),
 	})
-	url := fmt.Sprintf("%s/api/v1/execute/%s", strings.TrimSuffix(a.cfg.AgentFieldURL, "/"), strings.TrimPrefix(target, "/"))
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+
+	base := strings.TrimSuffix(a.cfg.AgentFieldURL, "/")
+
+	executionID, submittedRunID, err := a.submitAsyncExecution(ctx, base, target, body, execCtx, runID)
 	if err != nil {
-		a.logExecutionError(ctx, "call.outbound.failed", "failed to build cross-node call request", map[string]any{
-			"target": target,
-			"error":  err.Error(),
-		})
-		return nil, fmt.Errorf("build request: %w", err)
+		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	if submittedRunID != "" {
+		runID = submittedRunID
+	}
+
+	return a.awaitExecutionResult(ctx, base, target, executionID, runID, execCtx)
+}
+
+// applyCallHeaders sets the execution-context lineage headers shared by the
+// async submit and every status poll. The control plane reads these via
+// readExecutionHeaders (control-plane/internal/handlers/execute.go) through
+// the same prepareExecution path for both the sync and async endpoints, so
+// workflow DAG parentage is recorded identically.
+func (a *Agent) applyCallHeaders(req *http.Request, execCtx ExecutionContext, runID string) {
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Run-ID", runID)
 	if execCtx.ExecutionID != "" {
@@ -1628,28 +1889,108 @@ func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (
 	if a.cfg.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+a.cfg.Token)
 	}
+}
 
-	// Sign request with DID auth headers if configured
-	if a.client != nil {
-		a.client.SignHTTPRequest(req, body)
-	}
+// submitAsyncExecution POSTs to /api/v1/execute/async/{target} and returns the
+// accepted execution's identifiers. Mirrors Python _submit_execution_sync
+// (client.py:866-905): any HTTP status >= 400 is an ExecuteError, and a
+// response without an execution_id is rejected.
+func (a *Agent) submitAsyncExecution(
+	ctx context.Context,
+	base, target string,
+	body []byte,
+	execCtx ExecutionContext,
+	runID string,
+) (executionID, submittedRunID string, err error) {
+	url := fmt.Sprintf("%s/api/v1/execute/async/%s", base, strings.TrimPrefix(target, "/"))
 
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		a.logExecutionError(ctx, "call.outbound.failed", "cross-node call failed", map[string]any{
-			"target": target,
-			"error":  err.Error(),
+	var (
+		resp        *http.Response
+		streakStart time.Time
+		backoff     = callRetryBackoffMin
+		attempt     int
+	)
+	for {
+		attempt++
+		req, buildErr := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if buildErr != nil {
+			a.logExecutionError(ctx, "call.outbound.failed", "failed to build cross-node call request", map[string]any{
+				"target": target,
+				"error":  buildErr.Error(),
+			})
+			return "", "", fmt.Errorf("build request: %w", buildErr)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		a.applyCallHeaders(req, execCtx, runID)
+
+		// Sign request with DID auth headers if configured. Re-signed on every
+		// attempt so a retry carries a fresh signature timestamp.
+		if a.client != nil {
+			a.client.SignHTTPRequest(req, body)
+		}
+
+		var doErr error
+		resp, doErr = a.callSubmitClient.Do(req)
+		if doErr == nil {
+			break
+		}
+		// Caller-driven cancellation/deadline: surface verbatim, never retry.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			a.logExecutionError(ctx, "call.outbound.failed", "cross-node call submit cancelled", map[string]any{
+				"target": target,
+				"error":  ctxErr.Error(),
+			})
+			return "", "", ctxErr
+		}
+		// Re-POSTing execute/async is NOT idempotent — a duplicate would
+		// double-run the target reasoner. Retry ONLY when the request provably
+		// never reached the server (dial/DNS/connection-refused); every
+		// ambiguous failure (e.g. a timeout awaiting headers, where the CP may
+		// already have accepted the request) fails without a retry. The submit
+		// client's generous timeout (default 120s) is what protects a
+		// slow-but-healthy CP from a premature abort.
+		if !requestNeverReachedServer(doErr) {
+			a.logExecutionError(ctx, "call.outbound.failed", "cross-node call failed", map[string]any{
+				"target": target,
+				"error":  doErr.Error(),
+			})
+			return "", "", fmt.Errorf("perform execute call (not retried to avoid double-execution): %w", doErr)
+		}
+		now := time.Now()
+		if streakStart.IsZero() {
+			streakStart = now
+		}
+		elapsed := now.Sub(streakStart)
+		if elapsed >= a.callRetryWindow {
+			a.logExecutionError(ctx, "call.outbound.failed", "cross-node call submit unreachable", map[string]any{
+				"target":     target,
+				"attempts":   attempt,
+				"elapsed_ms": elapsed.Milliseconds(),
+				"error":      doErr.Error(),
+			})
+			return "", "", fmt.Errorf("control plane unreachable for %s: submit to %s never connected after %d attempts: %w",
+				elapsed.Round(time.Second), target, attempt, doErr)
+		}
+		a.logExecutionWarn(ctx, "call.outbound.submit_retry", "cross-node call submit failed to connect, retrying", map[string]any{
+			"target":     target,
+			"attempt":    attempt,
+			"elapsed_ms": elapsed.Milliseconds(),
+			"window_ms":  a.callRetryWindow.Milliseconds(),
+			"error":      doErr.Error(),
 		})
-		return nil, fmt.Errorf("perform execute call: %w", err)
+		if !sleepCtx(ctx, backoff) {
+			return "", "", ctx.Err()
+		}
+		backoff = nextRetryBackoff(backoff)
 	}
 	defer resp.Body.Close()
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read execute response: %w", err)
+		return "", "", fmt.Errorf("read execute response: %w", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode >= 400 {
 		// Try to parse structured error from control plane response.
 		var errResp struct {
 			Error        string      `json:"error"`
@@ -1661,7 +2002,7 @@ func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (
 				"status": resp.StatusCode,
 				"error":  errResp.Error,
 			})
-			return nil, &ExecuteError{
+			return "", "", &ExecuteError{
 				StatusCode:   resp.StatusCode,
 				Message:      errResp.Error,
 				ErrorDetails: errResp.ErrorDetails,
@@ -1671,57 +2012,335 @@ func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (
 			"target": target,
 			"status": resp.StatusCode,
 		})
-		return nil, &ExecuteError{
+		return "", "", &ExecuteError{
 			StatusCode: resp.StatusCode,
 			Message:    fmt.Sprintf("execute failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes))),
 		}
 	}
 
-	var execResp struct {
-		ExecutionID  string         `json:"execution_id"`
-		RunID        string         `json:"run_id"`
-		Status       string         `json:"status"`
-		Result       map[string]any `json:"result"`
-		ErrorMessage *string        `json:"error_message"`
-		ErrorDetails interface{}    `json:"error_details"`
+	var submitResp struct {
+		ExecutionID string `json:"execution_id"`
+		RunID       string `json:"run_id"`
+		Status      string `json:"status"`
 	}
-	if err := json.Unmarshal(bodyBytes, &execResp); err != nil {
+	if err := json.Unmarshal(bodyBytes, &submitResp); err != nil {
 		a.logExecutionError(ctx, "call.outbound.failed", "failed to decode cross-node call response", map[string]any{
 			"target": target,
 			"error":  err.Error(),
 		})
-		return nil, fmt.Errorf("decode execute response: %w", err)
+		return "", "", fmt.Errorf("decode execute response: %w", err)
+	}
+	if submitResp.ExecutionID == "" {
+		a.logExecutionError(ctx, "call.outbound.failed", "async submission missing execution id", map[string]any{
+			"target": target,
+		})
+		return "", "", errors.New("execution submission missing identifiers")
 	}
 
-	if execResp.ErrorMessage != nil && *execResp.ErrorMessage != "" {
-		a.logExecutionError(ctx, "call.outbound.failed", "cross-node call returned execution error", map[string]any{
-			"target": target,
-			"error":  *execResp.ErrorMessage,
-		})
-		return nil, &ExecuteError{
-			StatusCode:   resp.StatusCode,
-			Message:      *execResp.ErrorMessage,
-			ErrorDetails: execResp.ErrorDetails,
-		}
-	}
-	if !strings.EqualFold(execResp.Status, "succeeded") {
-		a.logExecutionError(ctx, "call.outbound.failed", "cross-node call did not succeed", map[string]any{
-			"target": target,
-			"status": execResp.Status,
-		})
-		return nil, &ExecuteError{
-			StatusCode:   resp.StatusCode,
-			Message:      fmt.Sprintf("execute status %s", execResp.Status),
-			ErrorDetails: execResp.ErrorDetails,
-		}
+	return submitResp.ExecutionID, submitResp.RunID, nil
+}
+
+// awaitExecutionResult polls GET /api/v1/executions/{execution_id} until the
+// execution reaches a terminal status. Statuses are normalized, "succeeded"
+// returns the result, and {failed, cancelled, timeout} surface the execution
+// error (with the status endpoint's "error" field coalesced into the message —
+// Python parity, client.py:1000-1002).
+//
+// Resilience to transient control-plane outages (this is the key departure from
+// the Python SDK, whose _await_execution_sync raise_for_status()es on every
+// poll and so lets a single blip kill a 30-minute call): a transient poll
+// failure — a transport error/timeout, or a 408/429/5xx — does NOT fail the
+// call. Consecutive failures are retried with exponential backoff (capped at
+// callRetryBackoffMax) for up to a.callRetryWindow of UNBROKEN failure; a single
+// successful poll resets that window. Only when the window is exceeded does the
+// call fail with a "control plane unreachable for Xs" error. A 404 (execution
+// not yet queryable right after submit) is retried within a shorter bounded
+// window and then fails with a distinct message. Other 4xx are permanent and
+// abort immediately. Each poll request is bounded by callPollClient's timeout;
+// the overall wait is otherwise bounded only by ctx.
+func (a *Agent) awaitExecutionResult(
+	ctx context.Context,
+	base, target, executionID, runID string,
+	execCtx ExecutionContext,
+) (map[string]any, error) {
+	pollURL := fmt.Sprintf("%s/api/v1/executions/%s", base, url.PathEscape(executionID))
+	interval := callInitialPollInterval
+
+	var (
+		transientStreakStart time.Time
+		notFoundStreakStart  time.Time
+		failCount            int
+		failBackoff          = callRetryBackoffMin
+	)
+
+	// resetFailureStreak clears the consecutive-failure bookkeeping — called
+	// after any successful poll, honoring "a successful poll resets the window".
+	resetFailureStreak := func() {
+		transientStreakStart = time.Time{}
+		notFoundStreakStart = time.Time{}
+		failCount = 0
+		failBackoff = callRetryBackoffMin
 	}
 
-	a.logExecutionInfo(ctx, "call.outbound.complete", "cross-node call completed", map[string]any{
-		"target":       target,
-		"execution_id": execResp.ExecutionID,
-		"run_id":       execResp.RunID,
-	})
-	return execResp.Result, nil
+	// recordTransientFailure advances the transient-failure window. It returns
+	// retry=true (keep polling after a backoff) until the window is exceeded,
+	// at which point it returns the terminal "unreachable" error.
+	recordTransientFailure := func(cause error) (bool, error) {
+		now := time.Now()
+		if transientStreakStart.IsZero() {
+			transientStreakStart = now
+		}
+		notFoundStreakStart = time.Time{}
+		failCount++
+		elapsed := now.Sub(transientStreakStart)
+		if elapsed >= a.callRetryWindow {
+			a.logExecutionError(ctx, "call.outbound.failed", "cross-node call control plane unreachable", map[string]any{
+				"target":       target,
+				"execution_id": executionID,
+				"attempts":     failCount,
+				"elapsed_ms":   elapsed.Milliseconds(),
+				"error":        cause.Error(),
+			})
+			return false, fmt.Errorf("control plane unreachable for %s: %d consecutive failed polls of execution %s: %w",
+				elapsed.Round(time.Second), failCount, executionID, cause)
+		}
+		a.logExecutionWarn(ctx, "call.outbound.poll_retry", "cross-node call status poll failed, retrying", map[string]any{
+			"target":       target,
+			"execution_id": executionID,
+			"attempt":      failCount,
+			"elapsed_ms":   elapsed.Milliseconds(),
+			"window_ms":    a.callRetryWindow.Milliseconds(),
+			"error":        cause.Error(),
+		})
+		return true, nil
+	}
+
+	// recordNotFound advances the shorter 404 window (the CP may briefly lag
+	// between accepting a submit and making the execution row queryable).
+	recordNotFound := func() (bool, error) {
+		now := time.Now()
+		if notFoundStreakStart.IsZero() {
+			notFoundStreakStart = now
+		}
+		transientStreakStart = time.Time{}
+		failCount++
+		window := callNotFoundRetryWindow
+		if a.callRetryWindow < window {
+			window = a.callRetryWindow
+		}
+		elapsed := now.Sub(notFoundStreakStart)
+		if elapsed >= window {
+			a.logExecutionError(ctx, "call.outbound.failed", "cross-node call execution not found", map[string]any{
+				"target":       target,
+				"execution_id": executionID,
+				"attempts":     failCount,
+				"elapsed_ms":   elapsed.Milliseconds(),
+			})
+			return false, &ExecuteError{
+				StatusCode: http.StatusNotFound,
+				Message: fmt.Sprintf("execution %s not found on control plane after %s (submit was accepted but the execution never became queryable)",
+					executionID, elapsed.Round(time.Second)),
+			}
+		}
+		a.logExecutionWarn(ctx, "call.outbound.poll_retry", "cross-node call execution not yet visible, retrying", map[string]any{
+			"target":       target,
+			"execution_id": executionID,
+			"attempt":      failCount,
+			"elapsed_ms":   elapsed.Milliseconds(),
+			"reason":       "not_found",
+		})
+		return true, nil
+	}
+
+	// backoffAfterFailure sleeps the current failure backoff (honoring ctx) and
+	// advances it. Returns false if ctx was cancelled during the wait.
+	backoffAfterFailure := func() bool {
+		if !sleepCtx(ctx, failBackoff) {
+			return false
+		}
+		failBackoff = nextRetryBackoff(failBackoff)
+		return true
+	}
+
+	for {
+		if err := ctx.Err(); err != nil {
+			a.logExecutionError(ctx, "call.outbound.failed", "cross-node call wait cancelled", map[string]any{
+				"target":       target,
+				"execution_id": executionID,
+				"error":        err.Error(),
+			})
+			return nil, err
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, pollURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("build status request: %w", err)
+		}
+		a.applyCallHeaders(req, execCtx, runID)
+		if a.client != nil {
+			a.client.SignHTTPRequest(req, nil)
+		}
+
+		resp, err := a.callPollClient.Do(req)
+		if err != nil {
+			// Distinguish caller cancellation from transport failures so the
+			// ctx-cancel contract surfaces context.Canceled/DeadlineExceeded.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				a.logExecutionError(ctx, "call.outbound.failed", "cross-node call wait cancelled", map[string]any{
+					"target":       target,
+					"execution_id": executionID,
+					"error":        ctxErr.Error(),
+				})
+				return nil, ctxErr
+			}
+			// A transport error/timeout is transient: retry within the window
+			// instead of killing a call that may have been running for a long
+			// time (the observed real-world failure — one timed-out poll aborted
+			// a 30-minute call).
+			retry, failErr := recordTransientFailure(fmt.Errorf("poll execution status: %w", err))
+			if !retry {
+				return nil, failErr
+			}
+			if !backoffAfterFailure() {
+				return nil, ctx.Err()
+			}
+			continue
+		}
+
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("read execution status: %w", readErr)
+		}
+
+		// 404: the execution row may not be queryable yet right after submit.
+		// Retry within a bounded (shorter) window, then fail distinctly.
+		if resp.StatusCode == http.StatusNotFound {
+			retry, failErr := recordNotFound()
+			if !retry {
+				return nil, failErr
+			}
+			if !backoffAfterFailure() {
+				return nil, ctx.Err()
+			}
+			continue
+		}
+
+		// Transient server-side conditions (408/429/5xx): retry within the
+		// failure window rather than aborting the call.
+		if isTransientPollStatus(resp.StatusCode) {
+			retry, failErr := recordTransientFailure(fmt.Errorf("poll execution status %d: %s",
+				resp.StatusCode, strings.TrimSpace(string(bodyBytes))))
+			if !retry {
+				return nil, failErr
+			}
+			if !backoffAfterFailure() {
+				return nil, ctx.Err()
+			}
+			continue
+		}
+
+		// Other 4xx (auth, bad request): a persistent client error retrying
+		// cannot fix — abort with the status.
+		if resp.StatusCode >= 400 {
+			a.logExecutionError(ctx, "call.outbound.failed", "cross-node call status poll returned error status", map[string]any{
+				"target":       target,
+				"execution_id": executionID,
+				"status":       resp.StatusCode,
+			})
+			return nil, &ExecuteError{
+				StatusCode: resp.StatusCode,
+				Message:    fmt.Sprintf("execution status failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes))),
+			}
+		}
+
+		// A genuine 2xx answer from the CP resets the failure window.
+		resetFailureStreak()
+
+		var statusResp struct {
+			ExecutionID  string          `json:"execution_id"`
+			RunID        string          `json:"run_id"`
+			Status       string          `json:"status"`
+			Result       json.RawMessage `json:"result"`
+			Error        *string         `json:"error"`
+			ErrorMessage *string         `json:"error_message"`
+			ErrorDetails interface{}     `json:"error_details"`
+		}
+		if err := json.Unmarshal(bodyBytes, &statusResp); err != nil {
+			a.logExecutionError(ctx, "call.outbound.failed", "failed to decode execution status response", map[string]any{
+				"target":       target,
+				"execution_id": executionID,
+				"error":        err.Error(),
+			})
+			return nil, fmt.Errorf("decode execute response: %w", err)
+		}
+
+		status := types.NormalizeStatus(statusResp.Status)
+
+		if status == types.ExecutionStatusSucceeded {
+			var result map[string]any
+			if len(statusResp.Result) > 0 && string(statusResp.Result) != "null" {
+				if err := json.Unmarshal(statusResp.Result, &result); err != nil {
+					a.logExecutionError(ctx, "call.outbound.failed", "failed to decode cross-node call result", map[string]any{
+						"target":       target,
+						"execution_id": executionID,
+						"error":        err.Error(),
+					})
+					return nil, fmt.Errorf("decode execute response: %w", err)
+				}
+			}
+			a.logExecutionInfo(ctx, "call.outbound.complete", "cross-node call completed", map[string]any{
+				"target":       target,
+				"execution_id": executionID,
+				"run_id":       runID,
+			})
+			return result, nil
+		}
+
+		if types.TerminalStatuses[status] {
+			// error_message, falling back to the status endpoint's "error"
+			// field — Python parity (client.py:1000-1002).
+			message := ""
+			if statusResp.ErrorMessage != nil && *statusResp.ErrorMessage != "" {
+				message = *statusResp.ErrorMessage
+			} else if statusResp.Error != nil && *statusResp.Error != "" {
+				message = *statusResp.Error
+			}
+			if message == "" {
+				message = fmt.Sprintf("execute status %s", status)
+			}
+			a.logExecutionError(ctx, "call.outbound.failed", "cross-node call did not succeed", map[string]any{
+				"target":       target,
+				"execution_id": executionID,
+				"status":       status,
+				"error":        message,
+			})
+			// StatusBadGateway matches what the synchronous execute endpoint
+			// returns for failed executions, so ExecuteError.StatusCode keeps
+			// its pre-async meaning for callers that inspect it.
+			return nil, &ExecuteError{
+				StatusCode:   http.StatusBadGateway,
+				Message:      message,
+				ErrorDetails: statusResp.ErrorDetails,
+			}
+		}
+
+		// Non-terminal: sleep with jittered exponential backoff, honoring ctx.
+		select {
+		case <-ctx.Done():
+			a.logExecutionError(ctx, "call.outbound.failed", "cross-node call wait cancelled", map[string]any{
+				"target":       target,
+				"execution_id": executionID,
+				"error":        ctx.Err().Error(),
+			})
+			return nil, ctx.Err()
+		case <-time.After(nextCallPollInterval(interval)):
+		}
+		interval *= 2
+		if interval > callMaxPollInterval {
+			interval = callMaxPollInterval
+		}
+	}
 }
 
 // emitWorkflowEvent sends a workflow event to the control plane asynchronously.

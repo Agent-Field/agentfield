@@ -920,6 +920,66 @@ func fileExistsAt(dir, name string) bool {
 	return err == nil
 }
 
+// validateSubdirSelector checks the *syntax* of a `--path` subdirectory selector
+// without touching the filesystem, so it can be enforced before any install work
+// (e.g. before cloning a repo). An empty selector is valid (no selection). A
+// non-empty selector must be relative and must not escape the source root via
+// "..". Absolute paths and escaping paths are rejected with an actionable message.
+func validateSubdirSelector(subdir string) error {
+	subdir = strings.TrimSpace(subdir)
+	if subdir == "" {
+		return nil
+	}
+	if filepath.IsAbs(subdir) {
+		return fmt.Errorf("--path must be a subdirectory relative to the package root, not an absolute path (got %q)", subdir)
+	}
+	clean := filepath.Clean(subdir)
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("--path %q must stay within the package root (it may not use %q to escape)", subdir, "..")
+	}
+	return nil
+}
+
+// ValidateSubdirSelector is the exported form of validateSubdirSelector: it
+// checks that a `--path` selector is syntactically safe (relative, non-escaping)
+// without requiring the source to be present on disk. Callers that need to reject
+// a bad selector before doing any install work (e.g. before a git clone) use this.
+func ValidateSubdirSelector(subdir string) error {
+	return validateSubdirSelector(subdir)
+}
+
+// ResolvePackageSubdir resolves a `--path` subdirectory selector against a source
+// root (a cloned git repository directory or a local source directory) and returns
+// the package root to install. It enforces that:
+//   - subdir is relative (absolute paths are rejected),
+//   - subdir does not escape root via "..",
+//   - an agentfield-package.yaml exists at the resolved directory.
+//
+// An empty subdir returns root unchanged (the caller handles the no-selector
+// root-first walk itself). A missing manifest is reported with the full expected
+// path so the user can see exactly where it was looked for.
+func ResolvePackageSubdir(root, subdir string) (string, error) {
+	if err := validateSubdirSelector(subdir); err != nil {
+		return "", err
+	}
+	subdir = strings.TrimSpace(subdir)
+	if subdir == "" {
+		return root, nil
+	}
+	target := filepath.Join(root, filepath.Clean(subdir))
+	// Defense in depth: after joining, confirm the target is still contained in
+	// root (guards against any residual traversal the syntax check missed).
+	if rel, err := filepath.Rel(root, target); err != nil ||
+		rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("--path %q resolves outside the package root", subdir)
+	}
+	manifest := filepath.Join(target, "agentfield-package.yaml")
+	if _, err := os.Stat(manifest); err != nil {
+		return "", fmt.Errorf("no agentfield-package.yaml found for --path %q (expected at %s)", subdir, manifest)
+	}
+	return target, nil
+}
+
 // hasRequirementsFile checks if requirements.txt exists
 func (pi *PackageInstaller) hasRequirementsFile(packagePath string) bool {
 	requirementsPath := filepath.Join(packagePath, "requirements.txt")

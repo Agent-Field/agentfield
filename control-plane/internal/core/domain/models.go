@@ -66,6 +66,12 @@ type AgentFieldConfig struct {
 type InstallOptions struct {
 	Force   bool `json:"force"`
 	Verbose bool `json:"verbose"`
+	// Path optionally selects a subdirectory within the source (git repo or local
+	// directory) whose agentfield-package.yaml should be installed, letting one
+	// repository ship multiple installable nodes. Empty means the default
+	// root-first behavior. It applies only to the top-level source, never to
+	// recursively-installed node dependencies.
+	Path string `json:"path"`
 }
 
 // RunOptions represents options for running an agent
