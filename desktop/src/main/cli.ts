@@ -10,10 +10,17 @@
 //   2. PATH     — a developer's own `af`
 //   3. bundled  — resources/bin inside the app package
 //
-// A copy that answers with a semver older than MIN_AF_VERSION is skipped (the
-// UI then offers "Update AgentField", which installs the bundled copy into
-// the managed location — never over a newer one). Dev builds answer
-// "Version: dev" and are trusted as-is.
+// A copy that answers with a semver older than the effective minimum is
+// skipped (the UI then offers "Update AgentField", which installs the bundled
+// copy into the managed location — never over a newer one). The effective
+// minimum is the bundle's own stamped version when it has one — the app needs
+// at least the features it shipped with — falling back to MIN_AF_VERSION.
+//
+// Unparseable versions ("Version: dev") are trusted only while the bundle is
+// unstamped too (source builds keep their dev workflow). A release app
+// carries a stamped bundle, and a dev-versioned managed/PATH copy is then
+// treated as superseded — otherwise a stale dev binary this app once
+// provisioned would win forever and no update could ever be offered.
 //
 // No electron imports: the bundled path is injected by main, so probing,
 // selection, and provisioning stay unit-testable.
@@ -80,20 +87,38 @@ export function compareVersions(a: string, b: string): number {
 }
 
 /**
+ * The version floor for candidate selection: the bundle's own stamped
+ * version when it has one (the catalog and app features are built against
+ * exactly that CLI), MIN_AF_VERSION otherwise (unstamped dev bundles).
+ */
+export function effectiveMinVersion(probed: readonly ProbedCandidate[]): string {
+  const bundled = probed.find((c) => c.source === 'bundled' && c.responds)
+  if (bundled?.version && compareVersions(bundled.version, MIN_AF_VERSION) > 0) {
+    return bundled.version
+  }
+  return MIN_AF_VERSION
+}
+
+/**
  * Pick the CLI to use. Returns the first responding candidate that is not
- * too old ("dev" versions are trusted), plus the best-ranked copy that WAS
- * too old — that one drives the "Update AgentField" banner.
+ * too old, plus the best-ranked copy that WAS skipped — that one drives the
+ * "Update AgentField" banner. Unparseable ("dev") versions are trusted only
+ * while the bundle is unstamped too; against a stamped bundle they are
+ * superseded (see the header comment).
  */
 export function selectCli(
   probed: readonly ProbedCandidate[],
   minVersion: string = MIN_AF_VERSION
 ): { chosen: ProbedCandidate | null; outdated: ProbedCandidate | null } {
+  const bundledVersion = probed.find((c) => c.source === 'bundled' && c.responds)?.version ?? null
   let outdated: ProbedCandidate | null = null
   for (const candidate of probed) {
     if (!candidate.responds) continue
+    const superseded =
+      candidate.version === null && candidate.source !== 'bundled' && bundledVersion !== null
     const tooOld =
       candidate.version !== null && compareVersions(candidate.version, minVersion) < 0
-    if (tooOld) {
+    if (tooOld || superseded) {
       if (!outdated) outdated = candidate
       continue
     }
@@ -145,13 +170,14 @@ export function getCliCommand(): string {
 function buildStatus(
   chosen: ProbedCandidate | null,
   outdated: ProbedCandidate | null,
-  bundled: ProbedCandidate | null
+  bundled: ProbedCandidate | null,
+  minVersion: string
 ): CliStatus {
   return {
     command: chosen?.command ?? null,
     source: chosen?.source ?? null,
     version: chosen?.version ?? null,
-    minVersion: MIN_AF_VERSION,
+    minVersion,
     outdated:
       outdated && outdated.version
         ? { source: outdated.source, version: outdated.version }
@@ -171,27 +197,35 @@ export async function initializeCli(bundledPath: string | null): Promise<CliStat
   const probeAll = async () => Promise.all(cliCandidates(bundledPath).map(probeCli))
 
   let probed = await probeAll()
-  let { chosen, outdated } = selectCli(probed)
+  let minVersion = effectiveMinVersion(probed)
+  let { chosen, outdated } = selectCli(probed, minVersion)
   const bundled = probed.find((c) => c.source === 'bundled') ?? null
 
   if ((chosen === null || chosen.source === 'bundled') && bundled?.responds) {
     const installed = await installBundledCli(bundledPath as string)
     if (installed.ok) {
       probed = await probeAll()
-      ;({ chosen, outdated } = selectCli(probed))
+      minVersion = effectiveMinVersion(probed)
+      ;({ chosen, outdated } = selectCli(probed, minVersion))
     }
   }
 
   if (chosen) activeCommand = chosen.command
-  return buildStatus(chosen, outdated, bundled)
+  return buildStatus(chosen, outdated, bundled, minVersion)
 }
 
 /** Re-resolve without side effects (used after an explicit update). */
 export async function refreshCliStatus(bundledPath: string | null): Promise<CliStatus> {
   const probed = await Promise.all(cliCandidates(bundledPath).map(probeCli))
-  const { chosen, outdated } = selectCli(probed)
+  const minVersion = effectiveMinVersion(probed)
+  const { chosen, outdated } = selectCli(probed, minVersion)
   if (chosen) activeCommand = chosen.command
-  return buildStatus(chosen, outdated, probed.find((c) => c.source === 'bundled') ?? null)
+  return buildStatus(
+    chosen,
+    outdated,
+    probed.find((c) => c.source === 'bundled') ?? null,
+    minVersion
+  )
 }
 
 /**

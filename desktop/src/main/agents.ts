@@ -132,10 +132,17 @@ export async function startControlPlane(
   }
 
   try {
+    // Pin the spawned server to the port this app polls. Without it, an
+    // agentfield.yaml that sets a custom port makes `af server` bind there
+    // while the app waits on 8080 forever — a healthy server and a spinner
+    // that never resolves. Custom-port setups (their own server, agents
+    // pointed elsewhere) remain unsupported by the app for now; this only
+    // makes the app's own spawn deterministic.
     const child = spawn(getCliCommand(), ['server'], {
       windowsHide: true,
       detached: true,
-      stdio: ['ignore', log, log]
+      stdio: ['ignore', log, log],
+      env: { ...process.env, AGENTFIELD_PORT: '8080' }
     })
     const spawnError = new Promise<AgentActionResult>((resolve) => {
       child.on('error', (err: NodeJS.ErrnoException) => {

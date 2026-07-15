@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { type ProbedCandidate, cliCandidates, compareVersions, parseAfVersion, selectCli } from './cli'
+import {
+  type ProbedCandidate,
+  cliCandidates,
+  compareVersions,
+  effectiveMinVersion,
+  parseAfVersion,
+  selectCli
+} from './cli'
 
 function probed(overrides: Partial<ProbedCandidate>): ProbedCandidate {
   return { command: 'af', source: 'path', responds: true, version: '0.1.107', ...overrides }
@@ -77,13 +84,40 @@ describe('selectCli', () => {
     expect(outdated?.version).toBe('0.1.90')
   })
 
-  it('trusts dev builds (unparseable version) as usable', () => {
+  it('trusts dev builds (unparseable version) while the bundle is unstamped too', () => {
     const { chosen, outdated } = selectCli(
-      [probed({ source: 'path', version: null }), probed({ source: 'bundled', version: '0.1.108' })],
+      [probed({ source: 'path', version: null }), probed({ source: 'bundled', version: null })],
       MIN
     )
     expect(chosen?.source).toBe('path')
     expect(outdated).toBeNull()
+  })
+
+  it('supersedes dev-versioned copies when the bundle is stamped', () => {
+    // A release app must never let a stale dev binary it once provisioned
+    // win forever: against a stamped bundle, unparseable managed/PATH copies
+    // are skipped so the bundle gets chosen (and then provisioned).
+    const { chosen, outdated } = selectCli(
+      [
+        probed({ source: 'managed', version: null }),
+        probed({ source: 'path', version: null }),
+        probed({ source: 'bundled', version: '0.1.110' })
+      ],
+      MIN
+    )
+    expect(chosen?.source).toBe('bundled')
+    expect(outdated?.source).toBe('managed')
+  })
+
+  it('never supersedes a parseable copy that meets the minimum', () => {
+    const { chosen } = selectCli(
+      [
+        probed({ source: 'managed', version: '0.1.115' }),
+        probed({ source: 'bundled', version: '0.1.110' })
+      ],
+      MIN
+    )
+    expect(chosen?.source).toBe('managed')
   })
 
   it('reports nothing usable when everything is dead or old with no bundle', () => {
@@ -96,6 +130,19 @@ describe('selectCli', () => {
     )
     expect(chosen).toBeNull()
     expect(outdated?.version).toBe('0.1.1')
+  })
+})
+
+describe('effectiveMinVersion', () => {
+  it('uses the stamped bundle version as the floor', () => {
+    expect(effectiveMinVersion([probed({ source: 'bundled', version: '0.1.120' })])).toBe('0.1.120')
+  })
+
+  it('falls back to MIN_AF_VERSION for unstamped or missing bundles', () => {
+    expect(effectiveMinVersion([probed({ source: 'bundled', version: null })])).toBe('0.1.107')
+    expect(effectiveMinVersion([probed({ source: 'path' })])).toBe('0.1.107')
+    // A bundle older than the constant never lowers the floor.
+    expect(effectiveMinVersion([probed({ source: 'bundled', version: '0.1.1' })])).toBe('0.1.107')
   })
 })
 

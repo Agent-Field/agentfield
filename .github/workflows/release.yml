@@ -578,6 +578,10 @@ jobs:
         working-directory: desktop
         env:
           CGO_ENABLED: '1'
+          # Stamp the bundled CLI with the release version (goreleaser
+          # parity). Without it the binary answers `Version: dev` and the
+          # app can neither min-version-gate it nor ever update over it.
+          AF_CLI_VERSION: ${{ needs.prepare.outputs.tag_name }}
         run: npm run bundle-cli -- full
 
       - name: Build installers
