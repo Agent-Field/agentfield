@@ -209,6 +209,7 @@ func (s *AgentFieldServer) registerUIAPI() {
 		workflows := uiAPI.Group("/workflows")
 		{
 			workflows.GET("/:workflowId/dag", handlers.GetWorkflowDAGHandler(s.storage))
+			workflows.GET("/:workflowId/share", handlers.GetWorkflowShareHandler(s.storage, s.payloadStore))
 			workflows.POST("/:workflowId/cancel-tree", handlers.CancelWorkflowTreeHandler(s.storage))
 			workflows.DELETE("/:workflowId/cleanup", handlers.CleanupWorkflowHandler(s.storage))
 			didHandler := ui.NewDIDHandler(s.storage, s.didService, s.vcService, s.didWebService)
@@ -261,10 +262,6 @@ func (s *AgentFieldServer) registerUIAPI() {
 			vc.GET("/:vcId/download", didHandler.DownloadVCHandler)
 			vc.POST("/verify", didHandler.VerifyVCHandler)
 		}
-
-		// Identity & Trust endpoints (DID Explorer and Credentials)
-		identityHandler := ui.NewIdentityHandlers(s.storage, s.didWebService)
-		identityHandler.RegisterRoutes(uiAPI)
 
 		// Authorization UI endpoints
 		authorization := uiAPI.Group("/authorization")

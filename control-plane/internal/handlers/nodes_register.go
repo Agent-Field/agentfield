@@ -882,9 +882,10 @@ func RegisterServerlessAgentHandler(storageProvider storage.StorageProvider, uiS
 
 		// Parse discovery response
 		var discoveryData struct {
-			NodeID    string `json:"node_id"`
-			Version   string `json:"version"`
-			Reasoners []struct {
+			NodeID       string `json:"node_id"`
+			Version      string `json:"version"`
+			AuthRequired bool   `json:"auth_required"`
+			Reasoners    []struct {
 				ID           string                 `json:"id"`
 				Name         string                 `json:"name"`
 				Description  string                 `json:"description"`
@@ -968,8 +969,9 @@ func RegisterServerlessAgentHandler(storageProvider storage.StorageProvider, uiS
 			LifecycleStatus: types.AgentStatusReady,    // Serverless agents are always ready
 			Metadata: types.AgentMetadata{
 				Custom: map[string]interface{}{
-					"serverless":    true,
-					"discovery_url": discoveryURL,
+					"serverless":           true,
+					"discovery_url":        discoveryURL,
+					"origin_auth_required": discoveryData.AuthRequired,
 				},
 			},
 		}

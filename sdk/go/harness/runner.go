@@ -2,12 +2,14 @@ package harness
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"math"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -28,6 +30,18 @@ func NewRunner(defaults Options) *Runner {
 		DefaultOptions: defaults,
 		Logger:         log.New(io.Discard, "[harness] ", log.LstdFlags),
 	}
+}
+
+// schemaAware is implemented by providers that consume a JSON schema natively
+// (codex's --output-schema / --output-last-message) instead of the Write-tool
+// file protocol used by the claude/opencode providers. When a schema is
+// present the runner writes the STRICT schema rewrite, hands the provider the
+// deterministic schema/output paths, and uses a codex-native prompt suffix
+// rather than BuildPromptSuffix — matching the provider-dispatching suffix in
+// codex_harness_patch.py. Providers that do not implement this keep the
+// original file-write protocol, so this is fully back-compatible.
+type schemaAware interface {
+	SetSchema(schemaPath, outputPath string)
 }
 
 // Run dispatches a prompt to a coding agent and returns the result.
@@ -65,9 +79,55 @@ func (r *Runner) Run(ctx context.Context, prompt string, schema map[string]any, 
 		outputDir = tempOutputDir
 	}
 
+	// schema_mode selects how the agent is asked to produce the output:
+	//   "single"      — one Write of the whole object (default, cheapest)
+	//   "incremental" — build the object one top-level field at a time, with
+	//                   field-level recovery (robust for large/deep schemas)
+	//   "auto"        — incremental only when the schema is large, else single
+	useIncremental := resolveIncremental(schema, opts)
+
+	// Native-schema providers (codex) consume the schema through CLI flags
+	// instead of the Write-tool file protocol. Detect and prepare before the
+	// prompt suffix is built so codex gets a codex-native instruction while
+	// claude/opencode keep the Write-tool suffix.
+	var nativeSchemaPath, nativeOutputPath string
+	useNativeSchema := false
+	if schema != nil {
+		if sa, ok := provider.(schemaAware); ok {
+			absDir, absErr := filepath.Abs(outputDir)
+			if absErr != nil {
+				absDir = outputDir
+			}
+			nativeSchemaPath = SchemaPath(absDir)
+			nativeOutputPath = OutputPath(absDir)
+			if strictJSON, mErr := json.MarshalIndent(codexStrictJSONSchema(schema), "", "  "); mErr == nil {
+				if mkErr := os.MkdirAll(filepath.Dir(nativeSchemaPath), 0o700); mkErr == nil {
+					if wErr := os.WriteFile(nativeSchemaPath, strictJSON, 0o600); wErr == nil {
+						sa.SetSchema(nativeSchemaPath, nativeOutputPath)
+						useNativeSchema = true
+						// Clean up unconditionally: CleanupTempFiles no-ops when
+						// outputDir is "." so the strict schema / native output
+						// file would otherwise leak into the working directory.
+						defer func() {
+							_ = os.Remove(nativeSchemaPath)
+							_ = os.Remove(nativeOutputPath)
+						}()
+					}
+				}
+			}
+		}
+	}
+
 	effectivePrompt := prompt
 	if schema != nil {
-		effectivePrompt = prompt + BuildPromptSuffix(schema, outputDir)
+		switch {
+		case useNativeSchema:
+			effectivePrompt = prompt + BuildCodexNativeSuffix(nativeSchemaPath, nativeOutputPath)
+		case useIncremental:
+			effectivePrompt = prompt + BuildIncrementalPromptSuffix(schema, outputDir)
+		default:
+			effectivePrompt = prompt + BuildPromptSuffix(schema, outputDir)
+		}
 	}
 
 	startTime := time.Now()
@@ -78,7 +138,7 @@ func (r *Runner) Run(ctx context.Context, prompt string, schema map[string]any, 
 	}
 
 	if schema != nil {
-		result := r.handleSchemaWithRetry(ctx, raw, schema, dest, outputDir, startTime, provider, opts, effectivePrompt)
+		result := r.handleSchemaWithRetry(ctx, raw, schema, dest, outputDir, startTime, provider, opts, effectivePrompt, useIncremental)
 		CleanupTempFiles(outputDir)
 		return result, nil
 	}
@@ -89,6 +149,7 @@ func (r *Runner) Run(ctx context.Context, prompt string, schema map[string]any, 
 		IsError:      raw.IsError,
 		ErrorMessage: raw.ErrorMessage,
 		FailureType:  raw.FailureType,
+		CostUSD:      raw.Metrics.CostUSD,
 		NumTurns:     raw.Metrics.NumTurns,
 		DurationMS:   elapsed,
 		SessionID:    raw.Metrics.SessionID,
@@ -169,8 +230,46 @@ func (r *Runner) mergeOptions(overrides Options) Options {
 	if overrides.SchemaMaxRetries > 0 {
 		merged.SchemaMaxRetries = overrides.SchemaMaxRetries
 	}
+	if overrides.SchemaMode != "" {
+		merged.SchemaMode = overrides.SchemaMode
+	}
 
 	return merged
+}
+
+// resolveIncremental decides whether to use the incremental field-by-field
+// schema build. Mirrors the Python HarnessRunner._resolve_incremental:
+//
+//	schema is nil            -> false
+//	mode == "incremental"    -> true
+//	mode == "auto"           -> true iff the compact JSON schema exceeds the
+//	                            large-schema token threshold
+//	otherwise ("single"/"")  -> false
+//
+// The "auto" branch uses the COMPACT JSON encoding (json.Marshal, matching
+// Python's json.dumps with no indent), which differs from the indented
+// encoding the prompt-suffix builders use to decide whether to spill the
+// schema to a file — this matches Python exactly.
+func resolveIncremental(jsonSchema map[string]any, opts Options) bool {
+	if jsonSchema == nil {
+		return false
+	}
+	mode := strings.ToLower(opts.SchemaMode)
+	if mode == "" {
+		mode = "single"
+	}
+	switch mode {
+	case "incremental":
+		return true
+	case "auto":
+		compact, err := json.Marshal(jsonSchema)
+		if err != nil {
+			return false
+		}
+		return estimateTokens(string(compact)) > largeSchemaTokenThreshold
+	default:
+		return false
+	}
 }
 
 // transientPatterns are substrings that indicate a retryable error.
@@ -252,6 +351,7 @@ func (r *Runner) handleSchemaWithRetry(
 	provider Provider,
 	opts Options,
 	originalPrompt string,
+	useIncremental bool,
 ) *Result {
 	outputPath := OutputPath(outputDir)
 	maxRetries := opts.schemaMaxRetries()
@@ -267,13 +367,24 @@ func (r *Runner) handleSchemaWithRetry(
 			r.Logger.Println("Stdout fallback succeeded")
 		}
 	}
+	// Enforce the schema: unmarshal-only parsing (ParseAndValidate /
+	// TryParseFromText) accepts missing required fields, invalid enums and
+	// extra fields silently, so validate here to drive the retry loop below.
+	if err == nil {
+		if verr := runSchemaValidation(data, schema, dest); verr != nil {
+			r.Logger.Printf("Initial output failed schema validation: %v", verr)
+			err = verr
+			data = nil
+		}
+	}
 
 	if err == nil && data != nil {
 		elapsed := int(time.Since(startTime).Milliseconds())
-		turns, sid, msgs := accumulateMetrics(allRaws)
+		cost, turns, sid, msgs := accumulateMetrics(allRaws)
 		return &Result{
 			Result:     initialRaw.Result,
 			Parsed:     dest,
+			CostUSD:    cost,
 			NumTurns:   turns,
 			DurationMS: elapsed,
 			SessionID:  sid,
@@ -289,7 +400,7 @@ func (r *Runner) handleSchemaWithRetry(
 	}
 	if initialRaw.IsError && !fileExists(outputPath) && !retryableFailures[initialRaw.FailureType] {
 		elapsed := int(time.Since(startTime).Milliseconds())
-		turns, sid, msgs := accumulateMetrics(allRaws)
+		cost, turns, sid, msgs := accumulateMetrics(allRaws)
 		providerError := initialRaw.ErrorMessage
 		if providerError == "" {
 			providerError = "Provider execution failed."
@@ -299,6 +410,7 @@ func (r *Runner) handleSchemaWithRetry(
 			IsError:      true,
 			ErrorMessage: fmt.Sprintf("%s Output file was not created at %s.", providerError, outputPath),
 			FailureType:  initialRaw.FailureType,
+			CostUSD:      cost,
 			NumTurns:     turns,
 			DurationMS:   elapsed,
 			SessionID:    sid,
@@ -317,11 +429,12 @@ func (r *Runner) handleSchemaWithRetry(
 			case <-ctx.Done():
 				timer.Stop()
 				elapsed := int(time.Since(startTime).Milliseconds())
-				turns, sid, msgs := accumulateMetrics(allRaws)
+				cost, turns, sid, msgs := accumulateMetrics(allRaws)
 				return &Result{
 					IsError:      true,
 					ErrorMessage: "context cancelled during schema retry",
 					FailureType:  FailureTimeout,
+					CostUSD:      cost,
 					NumTurns:     turns,
 					DurationMS:   elapsed,
 					SessionID:    sid,
@@ -334,6 +447,20 @@ func (r *Runner) handleSchemaWithRetry(
 		var retryPrompt string
 		if isCrash {
 			retryPrompt = originalPrompt
+		} else if useIncremental {
+			// Incremental mode: patch only the fields that are missing or
+			// invalid, one at a time, instead of regenerating the whole
+			// object. The partial output file persists on disk between
+			// attempts, so the agent edits it in place. The original goal is
+			// prepended so the agent keeps the task in view (parity with the
+			// Python incremental retry path).
+			fieldErrors := DiagnoseFieldFailures(outputPath, schema, dest)
+			followup := BuildIncrementalFollowup(fieldErrors, outputDir, schema)
+			if originalPrompt != "" {
+				retryPrompt = originalPrompt + "\n\n" + followup
+			} else {
+				retryPrompt = followup
+			}
 		} else {
 			errorDetail := DiagnoseOutputFailure(outputPath, schema)
 			retryPrompt = BuildFollowupPrompt(errorDetail, outputDir, schema)
@@ -372,14 +499,22 @@ func (r *Runner) handleSchemaWithRetry(
 				r.Logger.Printf("Schema retry %d succeeded via stdout fallback", retryNum+1)
 			}
 		}
+		if err == nil {
+			if verr := runSchemaValidation(data, schema, dest); verr != nil {
+				r.Logger.Printf("Schema retry %d failed validation: %v", retryNum+1, verr)
+				err = verr
+				data = nil
+			}
+		}
 
 		if err == nil && data != nil {
 			elapsed := int(time.Since(startTime).Milliseconds())
-			turns, sid, msgs := accumulateMetrics(allRaws)
+			cost, turns, sid, msgs := accumulateMetrics(allRaws)
 			r.Logger.Printf("Schema validation succeeded on retry %d", retryNum+1)
 			return &Result{
 				Result:     retryRaw.Result,
 				Parsed:     dest,
+				CostUSD:    cost,
 				NumTurns:   turns,
 				DurationMS: elapsed,
 				SessionID:  sid,
@@ -389,7 +524,7 @@ func (r *Runner) handleSchemaWithRetry(
 	}
 
 	elapsed := int(time.Since(startTime).Milliseconds())
-	turns, sid, msgs := accumulateMetrics(allRaws)
+	cost, turns, sid, msgs := accumulateMetrics(allRaws)
 	finalDiagnosis := DiagnoseOutputFailure(outputPath, schema)
 	return &Result{
 		Result:  allRaws[len(allRaws)-1].Result,
@@ -399,6 +534,7 @@ func (r *Runner) handleSchemaWithRetry(
 			maxRetries, finalDiagnosis,
 		),
 		FailureType: FailureSchema,
+		CostUSD:     cost,
 		NumTurns:    turns,
 		DurationMS:  elapsed,
 		SessionID:   sid,
@@ -406,8 +542,20 @@ func (r *Runner) handleSchemaWithRetry(
 	}
 }
 
-func accumulateMetrics(raws []*RawResult) (totalTurns int, sessionID string, allMessages []map[string]any) {
+// accumulateMetrics sums metrics across every provider execution that
+// contributed to a result — including failed retry attempts, mirroring the
+// Python _accumulate_metrics. CostUSD is summed only over executions that
+// reported a cost; the returned pointer is nil when none did (distinguishing
+// "unknown" from "$0.00").
+func accumulateMetrics(raws []*RawResult) (totalCost *float64, totalTurns int, sessionID string, allMessages []map[string]any) {
 	for _, raw := range raws {
+		if raw.Metrics.CostUSD != nil {
+			if totalCost == nil {
+				zero := 0.0
+				totalCost = &zero
+			}
+			*totalCost += *raw.Metrics.CostUSD
+		}
 		totalTurns += raw.Metrics.NumTurns
 		if raw.Metrics.SessionID != "" {
 			sessionID = raw.Metrics.SessionID
@@ -420,6 +568,18 @@ func accumulateMetrics(raws []*RawResult) (totalTurns int, sessionID string, all
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// runSchemaValidation enforces the JSON Schema on parsed output when the normal
+// harness contract holds — both a destination struct and a schema were
+// provided. It returns nil (validation not applicable) when either is absent or
+// the data is nil, preserving the previous unmarshal-only behavior for
+// schema-only or dest-less callers.
+func runSchemaValidation(data map[string]any, schema map[string]any, dest any) error {
+	if data == nil || schema == nil || dest == nil {
+		return nil
+	}
+	return validateAgainstSchema(data, schema)
 }
 
 // StructToJSONSchema converts a Go struct (or pointer to struct) to a basic

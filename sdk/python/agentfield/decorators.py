@@ -29,38 +29,21 @@ from .execution_context import (
     reset_execution_context,
 )
 from .agent_registry import get_current_agent_instance
+from .decorator_metadata import (
+    code_origin,
+    resolve_reasoner_metadata,
+    stage_trigger,
+)
 from .triggers import EventTrigger, ScheduleTrigger, Trigger
 from .types import ReasonerDefinition
 from .pydantic_utils import convert_function_args, should_convert_args
 from pydantic import ValidationError
-
-# Attribute used by the @on_event / @on_schedule sugar to stage triggers on a
-# function before the outer @reasoner consumes them. Keeping this off of the
-# function signature lets the canonical `triggers=[...]` kwarg coexist with
-# stacked sugar without either form leaking into the other.
-_PENDING_TRIGGERS_ATTR = "_pending_triggers"
 
 # Type variables for decorator signature preservation
 F = TypeVar("F", bound=Callable[..., Any])
 P = ParamSpec("P")
 T = TypeVar("T")
 R = TypeVar("R")
-
-
-def _code_origin(fn: Callable[..., Any]) -> Optional[str]:
-    """Capture the source code location (file:line) of a function.
-
-    Returns the fully qualified path to the file and the line number where the
-    function is declared, in the format 'path/to/file.py:42'.
-    """
-    try:
-        src = inspect.getsourcefile(fn)
-        line = fn.__code__.co_firstlineno
-        if src and line:
-            return f"{src}:{line}"
-    except Exception:
-        pass
-    return None
 
 
 @overload
@@ -163,41 +146,12 @@ def reasoner(
             description or f.__doc__ or f"Reasoner: {f.__name__}"
         )
 
-        # Merge canonical triggers= kwarg with any sugar-staged bindings on the
-        # wrapped function. Sugar must run inside @reasoner so order is
-        # @reasoner outermost, @on_event / @on_schedule inner.
-        merged: List[Trigger] = []
-        if triggers:
-            merged.extend(triggers)
-        pending = getattr(f, _PENDING_TRIGGERS_ATTR, None)
-        if pending:
-            merged.extend(pending)
-            try:
-                delattr(f, _PENDING_TRIGGERS_ATTR)
-            except AttributeError:
-                pass
-        # Stamp code_origin on triggers that don't already have it
-
-        origin = _code_origin(f)
-
-        if origin:
-            for trigger in merged:
-                if not getattr(trigger, "code_origin", None):
-                    trigger.code_origin = origin
-
+        merged, resolved_accepts_webhook = resolve_reasoner_metadata(
+            f,
+            triggers=triggers,
+            accepts_webhook=accepts_webhook,
+        )
         wrapper._reasoner_triggers = merged  # type: ignore[attr-defined]
-
-        # Resolve accepts_webhook value:
-        # - If explicitly passed (True/False/str), use that
-        # - Else if any triggers declared, auto-set to True
-        # - Else default to "warn"
-        resolved_accepts_webhook: Union[bool, str]
-        if accepts_webhook is not None:
-            resolved_accepts_webhook = accepts_webhook
-        elif merged:
-            resolved_accepts_webhook = True
-        else:
-            resolved_accepts_webhook = "warn"
         wrapper._accepts_webhook = resolved_accepts_webhook  # type: ignore[attr-defined]
 
         # Store any additional metadata
@@ -239,12 +193,8 @@ def on_event(
         )
         # Capture code origin automatically
         if not binding.code_origin:
-            binding.code_origin = _code_origin(func)
-        existing = getattr(func, _PENDING_TRIGGERS_ATTR, None)
-        if existing is None:
-            existing = []
-            setattr(func, _PENDING_TRIGGERS_ATTR, existing)
-        existing.append(binding)
+            binding.code_origin = code_origin(func)
+        stage_trigger(func, binding)
         return func
 
     return decorator
@@ -262,12 +212,8 @@ def on_schedule(
         binding = ScheduleTrigger(cron=cron, timezone=timezone)
         # Capture code origin automatically
         if not binding.code_origin:
-            binding.code_origin = _code_origin(func)
-        existing = getattr(func, _PENDING_TRIGGERS_ATTR, None)
-        if existing is None:
-            existing = []
-            setattr(func, _PENDING_TRIGGERS_ATTR, existing)
-        existing.append(binding)
+            binding.code_origin = code_origin(func)
+        stage_trigger(func, binding)
         return func
 
     return decorator

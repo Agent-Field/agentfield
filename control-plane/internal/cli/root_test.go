@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -34,6 +36,30 @@ func TestRootCommandDisplaysHelp(t *testing.T) {
 	cmd.SetArgs([]string{"--help"})
 
 	require.NoError(t, cmd.Execute())
+}
+
+// Contract: when a subcommand fails at runtime, the CLI must NOT print the
+// usage/help block — usage is for mis-invocation, not runtime errors.
+func TestRootCommand_RuntimeErrorDoesNotPrintUsage(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	resetCLIStateForTest()
+
+	cmd := NewRootCommand(func(cmd *cobra.Command, args []string) {}, VersionInfo{})
+	cmd.AddCommand(&cobra.Command{
+		Use: "boom",
+		RunE: func(*cobra.Command, []string) error {
+			return errors.New("kaboom")
+		},
+	})
+
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	cmd.SetArgs([]string{"boom"})
+
+	err := cmd.Execute()
+	require.Error(t, err) // the error still propagates to main.go
+	require.NotContains(t, buf.String(), "Usage:", "runtime error must not dump the usage block")
 }
 
 func TestRootCommandServerFlags(t *testing.T) {

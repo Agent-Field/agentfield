@@ -23,6 +23,10 @@ _litellm = None
 _openai = None
 
 
+class _EmptyReasoningStructuredOutput(ValueError):
+    pass
+
+
 def _get_litellm():
     """Lazy import of litellm - only loads when AI features are used."""
     global _litellm
@@ -39,6 +43,61 @@ def _get_litellm():
 
             _litellm = _LiteLLMStub()
     return _litellm
+
+
+def _get_message_reasoning_content(response: Any) -> Optional[Any]:
+    """Return provider reasoning metadata when it is present on the message."""
+    try:
+        message = response.choices[0].message
+    except (AttributeError, IndexError, TypeError):
+        return None
+    return getattr(message, "reasoning_content", None)
+
+
+def _has_non_empty_reasoning_content(response: Any) -> bool:
+    reasoning_content = _get_message_reasoning_content(response)
+    if reasoning_content is None:
+        return False
+    if isinstance(reasoning_content, str):
+        return bool(reasoning_content.strip())
+    return bool(reasoning_content)
+
+
+def _is_empty_structured_result(parsed: BaseModel) -> bool:
+    """
+    Treat {} or values equal to schema defaults as empty structured output.
+    """
+    if not isinstance(parsed, BaseModel):
+        return False
+
+    explicitly_set = getattr(parsed, "model_fields_set", set())
+    if not explicitly_set:
+        return True
+
+    try:
+        return parsed == parsed.__class__()
+    except Exception:
+        return False
+
+
+def _increase_retry_max_tokens(params: Dict[str, Any]) -> None:
+    current = params.get("max_tokens")
+    if current is None:
+        params.pop("max_tokens", None)
+        return
+    if isinstance(current, int) and current > 0:
+        params["max_tokens"] = current * 2
+
+
+def _raise_if_empty_reasoning_structured_output(
+    response: Any, parsed: BaseModel
+) -> None:
+    if _has_non_empty_reasoning_content(response) and _is_empty_structured_result(
+        parsed
+    ):
+        raise _EmptyReasoningStructuredOutput(
+            "Empty structured response after non-empty reasoning_content"
+        )
 
 
 def _reset_litellm_http_clients(litellm_module: Any) -> None:
@@ -102,6 +161,123 @@ def _reset_litellm_http_clients(litellm_module: Any) -> None:
         )
     except Exception as exc:  # pragma: no cover
         log_debug(f"litellm client reset failed: {exc}")
+
+
+_AI_TIMEOUT_RETRIES_DEFAULT = 2
+
+
+def _resolve_timeout_retries() -> int:
+    """How many times to retry an LLM call that hit the wall-clock safety-net
+    timeout. Precedence: env ``AGENTFIELD_AI_TIMEOUT_RETRIES``, then default (2).
+    These timeouts are usually a stalled connection rather than the model
+    genuinely needing the full window, so a retry on a fresh pool usually
+    succeeds. Set to 0 to disable."""
+    raw = os.environ.get("AGENTFIELD_AI_TIMEOUT_RETRIES")
+    if raw is not None:
+        try:
+            n = int(raw)
+            return n if n >= 0 else 0
+        except ValueError:
+            pass
+    return _AI_TIMEOUT_RETRIES_DEFAULT
+
+
+_PERMANENT_LLM_ERROR_MARKERS = (
+    "invalid_request_error",
+    "not supported",
+    "authentication",
+    "unauthorized",
+    "invalid api key",
+    "permission",
+    "no such model",
+    "model_not_found",
+    "context_length",
+    "maximum context",
+)
+_TRANSIENT_LLM_ERROR_MARKERS = (
+    "unable to get json response",
+    "internal server error",
+    "internalservererror",
+    "service unavailable",
+    "serviceunavailable",
+    "overloaded",
+    "bad gateway",
+    "gateway timeout",
+    "connection",
+    "econnreset",
+    "temporarily",
+    "try again",
+    "provider returned error",
+)
+
+
+def _is_transient_llm_error(exc: Exception) -> bool:
+    """Whether an LLM-call exception is a transient provider glitch worth
+    retrying (a malformed/garbage response, a 5xx, a dropped connection) versus
+    a permanent client error (bad request, auth, model-not-found, schema) that a
+    retry can never fix. Conservative: a clear permanent marker always wins."""
+    code = getattr(exc, "status_code", None)
+    if code is None:
+        resp = getattr(exc, "response", None)
+        code = getattr(resp, "status_code", None)
+    msg = str(exc).lower()
+    if any(p in msg for p in _PERMANENT_LLM_ERROR_MARKERS):
+        return False
+    if isinstance(code, int):
+        if code in (408, 409, 425, 429) or code >= 500:
+            return True
+        if 400 <= code < 500:
+            return False
+    return any(t in msg for t in _TRANSIENT_LLM_ERROR_MARKERS)
+
+
+async def _acompletion_with_timeout_retry(
+    litellm_module: Any, params: Dict[str, Any], timeout: float
+) -> Any:
+    """Run ``litellm.acompletion`` under an asyncio.wait_for safety net, retrying
+    on timeout AND on transient provider errors (malformed response, 5xx, dropped
+    connection). On each retry the cached HTTP clients are reset so the next
+    attempt opens a fresh connection pool. Permanent client errors (bad request,
+    auth, model-not-found) are NOT retried. Raises after the retries are
+    exhausted."""
+    retries = _resolve_timeout_retries()
+    for attempt in range(retries + 1):
+        try:
+            return await asyncio.wait_for(
+                litellm_module.acompletion(**params), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            model_name = params.get("model", "unknown")
+            # Reset litellm's cached HTTP clients so the next call gets a fresh
+            # connection pool — the previous client likely holds a stuck
+            # connection that would hang forever.
+            _reset_litellm_http_clients(litellm_module)
+            if attempt < retries:
+                log_warn(
+                    f"LLM call to {model_name} timed out after {timeout}s; "
+                    f"retry {attempt + 1}/{retries} on a fresh connection pool"
+                )
+                await asyncio.sleep(min(2.0 * (attempt + 1), 8.0))
+                continue
+            raise TimeoutError(
+                f"LLM call to {model_name} timed out after {timeout}s "
+                f"(asyncio safety net) after {retries} retries"
+            )
+        except Exception as exc:
+            # Transient provider glitch (malformed/garbage response, 5xx, dropped
+            # connection): retry on a fresh pool. Permanent client errors (bad
+            # request, auth, model-not-found) propagate immediately.
+            if attempt < retries and _is_transient_llm_error(exc):
+                model_name = params.get("model", "unknown")
+                _reset_litellm_http_clients(litellm_module)
+                log_warn(
+                    f"LLM call to {model_name} hit a transient error "
+                    f"({type(exc).__name__}: {str(exc)[:80]}); retry "
+                    f"{attempt + 1}/{retries} on a fresh connection pool"
+                )
+                await asyncio.sleep(min(2.0 * (attempt + 1), 8.0))
+                continue
+            raise
 
 
 def _get_openai():
@@ -650,21 +826,12 @@ class AgentAI:
                     # socket level, so cancelled requests don't poison the
                     # connection pool for subsequent calls.
                     params.setdefault("timeout", effective_timeout)
-                    # asyncio.wait_for is a safety net at 2x the litellm timeout
-                    # in case litellm fails to honor its own timeout.
-                    try:
-                        return await asyncio.wait_for(
-                            litellm_module.acompletion(**params),
-                            timeout=effective_timeout * 2,
-                        )
-                    except asyncio.TimeoutError:
-                        model_name = params.get("model", "unknown")
-                        # Reset litellm's cached HTTP clients so the next call
-                        # gets a fresh connection pool.
-                        _reset_litellm_http_clients(litellm_module)
-                        raise TimeoutError(
-                            f"LLM call to {model_name} timed out after {effective_timeout * 2}s (asyncio safety net)"
-                        )
+                    # asyncio.wait_for is a safety net at 2x the litellm timeout;
+                    # on timeout it resets the client pool and retries (a stalled
+                    # connection is the usual cause, not the model itself).
+                    return await _acompletion_with_timeout_retry(
+                        litellm_module, params, effective_timeout * 2
+                    )
 
                 async def _call_with_fallbacks():
                     fallback_models = getattr(final_config, "fallback_models", None)
@@ -724,22 +891,12 @@ class AgentAI:
                     "litellm is not installed. Please install it with `pip install litellm`."
                 )
             # litellm/httpx already gets `timeout` via litellm_params (set
-            # earlier). asyncio.wait_for is a safety net at 2x in case litellm
-            # fails to honor its own timeout.
-            try:
-                return await asyncio.wait_for(
-                    litellm_module.acompletion(**litellm_params),
-                    timeout=effective_timeout * 2,
-                )
-            except asyncio.TimeoutError:
-                model_name = litellm_params.get("model", "unknown")
-                # Reset litellm's cached HTTP clients so the next call gets
-                # a fresh connection pool — the previous client is likely
-                # holding a stuck connection that will hang forever.
-                _reset_litellm_http_clients(litellm_module)
-                raise TimeoutError(
-                    f"LLM call to {model_name} timed out after {effective_timeout * 2}s (asyncio safety net)"
-                )
+            # earlier). asyncio.wait_for is a safety net at 2x; on timeout it
+            # resets the client pool and retries (a stalled connection is the
+            # usual cause, not the model itself).
+            return await _acompletion_with_timeout_retry(
+                litellm_module, litellm_params, effective_timeout * 2
+            )
 
         async def _execute_with_fallbacks():
             # Check for configured fallback models in AI config
@@ -784,6 +941,7 @@ class AgentAI:
 
         # Maximum retries for transient parse failures (malformed JSON from LLM)
         max_parse_retries = 2
+        empty_reasoning_retry_used = False
 
         async def _execute_and_parse():
             """Execute LLM call and parse response. Raised ValueError triggers parse retry."""
@@ -845,7 +1003,11 @@ class AgentAI:
             if schema:
                 try:
                     json_data = json.loads(str(multimodal_response.text))
-                    return schema(**json_data)
+                    parsed = schema(**json_data)
+                    _raise_if_empty_reasoning_structured_output(resp, parsed)
+                    return parsed
+                except _EmptyReasoningStructuredOutput:
+                    raise
                 except (
                     json.JSONDecodeError,
                     ValueError,
@@ -859,7 +1021,11 @@ class AgentAI:
                     if json_match:
                         try:
                             json_data = json.loads(json_match.group())
-                            return schema(**json_data)
+                            parsed = schema(**json_data)
+                            _raise_if_empty_reasoning_structured_output(resp, parsed)
+                            return parsed
+                        except _EmptyReasoningStructuredOutput:
+                            raise
                         except (json.JSONDecodeError, ValueError, ValidationError):
                             pass
                     raise ValueError(
@@ -873,6 +1039,15 @@ class AgentAI:
         for attempt in range(max_parse_retries + 1):
             try:
                 return await _execute_and_parse()
+            except _EmptyReasoningStructuredOutput:
+                if schema and not empty_reasoning_retry_used:
+                    empty_reasoning_retry_used = True
+                    _increase_retry_max_tokens(litellm_params)
+                    log_debug(
+                        "Structured response was empty after reasoning_content; retrying once with a larger max_tokens budget..."
+                    )
+                    continue
+                raise
             except ValueError as e:
                 if schema and "Could not parse structured response" in str(e):
                     last_parse_error = e

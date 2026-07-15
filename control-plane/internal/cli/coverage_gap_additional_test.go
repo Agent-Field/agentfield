@@ -219,10 +219,10 @@ func TestCLIExitHelper(t *testing.T) {
 		_ = verifyVC(filepath.Join(t.TempDir(), "missing.json"), VerifyOptions{OutputFormat: "json"})
 	case "output-json-invalid":
 		_ = outputJSON(VCVerificationResult{
-			Valid:      false,
-			Type:       "credential",
+			Valid:       false,
+			Type:        "credential",
 			FormatValid: false,
-			Message:    "bad",
+			Message:     "bad",
 		})
 	case "output-pretty-invalid":
 		_ = outputPretty(VCVerificationResult{
@@ -607,9 +607,9 @@ func TestEnhancedWorkflowVerificationBranches(t *testing.T) {
 	t.Run("validate vc structure covers required fields", func(t *testing.T) {
 		verifier := NewEnhancedVCVerifier(nil, false)
 		cases := []struct {
-			name  string
-			doc   types.VCDocument
-			want  string
+			name string
+			doc  types.VCDocument
+			want string
 		}{
 			{name: "missing context", doc: types.VCDocument{}, want: "missing @context"},
 			{name: "missing type", doc: types.VCDocument{Context: []string{"ctx"}}, want: "missing type"},
@@ -669,17 +669,17 @@ func signedWorkflowVCForTest(t *testing.T, issuer string, componentIDs []string)
 	require.NoError(t, err)
 
 	return types.WorkflowVC{
-		WorkflowID:   "wf-1",
-		ComponentVCs: componentIDs,
-		Status:       "completed",
-		VCDocument:   raw,
-	}, DIDResolutionInfo{
-		DID:    issuer,
-		Method: "key",
-		PublicKeyJWK: map[string]interface{}{
-			"x": base64.RawURLEncoding.EncodeToString(publicKey),
-		},
-	}
+			WorkflowID:   "wf-1",
+			ComponentVCs: componentIDs,
+			Status:       "completed",
+			VCDocument:   raw,
+		}, DIDResolutionInfo{
+			DID:    issuer,
+			Method: "key",
+			PublicKeyJWK: map[string]interface{}{
+				"x": base64.RawURLEncoding.EncodeToString(publicKey),
+			},
+		}
 }
 
 func TestPrepareConfigFixtureShape(t *testing.T) {
@@ -720,7 +720,6 @@ func withStreamingStdin(t *testing.T, chunks []string, fn func()) {
 	fn()
 	<-done
 }
-
 
 func TestProxyErrorOutputIncludesHint(t *testing.T) {
 	output, err := runCLITestHelper(t, "proxy-http-error-with-default-error")

@@ -1,18 +1,22 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/cli"
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/server"
 	"github.com/Agent-Field/agentfield/control-plane/internal/utils"
 	"github.com/Agent-Field/agentfield/control-plane/web/client"
@@ -35,7 +39,7 @@ var (
 	buildUIFunc               = buildUI
 	openBrowserFunc           = openBrowser
 	sleepFunc                 = time.Sleep
-	waitForShutdownFunc       = func() { select {} }
+	waitForShutdownFunc       = defaultWaitForShutdown
 	commandRunner             = defaultCommandRunner
 	browserLauncher           = defaultBrowserLauncher
 	startAgentFieldServerFunc = defaultStartAgentFieldServer
@@ -68,6 +72,13 @@ func runServer(cmd *cobra.Command, args []string) {
 	cfg, err := loadConfigFunc(cfgFilePath)
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
+	}
+
+	// Re-initialize logger with configured level now that config is loaded.
+	// The CLI root command sets a default (info/debug based on --verbose),
+	// but the YAML/env-based level takes precedence once available.
+	if cfg.Logging.Level != "" {
+		logger.InitLoggerWithLevel(cfg.Logging.Level)
 	}
 
 	// Override port from flag if provided
@@ -228,10 +239,17 @@ func runServer(cmd *cobra.Command, args []string) {
 	}
 
 	fmt.Printf("AgentField server running. Press Ctrl+C to exit.\n")
-	// Keep main goroutine alive
+
+	// Wait for shutdown signal
 	waitForShutdownFunc()
 
-	// TODO: Implement graceful shutdown
+	// Graceful shutdown
+	fmt.Println("\nShutdown signal received, draining connections...")
+	if err := agentfieldServer.Stop(); err != nil {
+		log.Printf("Error during shutdown: %v", err)
+		os.Exit(1)
+	}
+	fmt.Println("Server stopped gracefully.")
 }
 
 // loadConfig loads configuration from file and environment variables.
@@ -488,6 +506,13 @@ func defaultBrowserLauncher(name string, args ...string) error {
 
 func defaultStartAgentFieldServer(s *server.AgentFieldServer) error {
 	return s.Start()
+}
+
+// defaultWaitForShutdown blocks until SIGINT or SIGTERM is received.
+func defaultWaitForShutdown() {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	<-ctx.Done()
 }
 
 func openBrowser(url string) {

@@ -92,6 +92,24 @@ Use `--default-model <model>` to bake the model from `af doctor` into the scaffo
 
 ---
 
+## Installing and running agent nodes
+
+See [docs/installing-agent-nodes.md](../../../docs/installing-agent-nodes.md) for the full guide.
+
+### `af install <source>`
+
+Install an agent node from a local directory, a git/GitHub URL, or a registry name. The node is described by its `agentfield-package.yaml` manifest; its Python deps are installed into a per-node venv. If the manifest declares `dependencies.nodes` (e.g. `af://registry/swe-planner`), those nodes are installed recursively.
+
+When you author an `agentfield-package.yaml`, set `config_version: v1` at the top — the manifest *schema* version, distinct from the node's own `version:`. Omitting it means `v0` (the legacy format). Only bump `config_version` for **breaking** format changes (a field renamed/removed or its shape changed); adding a new optional field does **not** need a bump. A version newer than the installed `af` understands is refused with a clear error. Full contract + a real example (Agent-Field/SWE-AF): [docs/installing-agent-nodes.md](../../../docs/installing-agent-nodes.md).
+
+### `af run <agent-node-name>`
+
+Start an installed node in the background. Brings up the node's declared node dependencies first. Resolves the node's required environment from the encrypted secret store, **prompting once** for anything missing (hidden input for `type: secret`) and remembering it encrypted. Secrets are injected only into the node process — never written to disk in plaintext. Exports `AGENTFIELD_SERVER` + `PORT` to the node.
+
+### `af secrets set <KEY> [VALUE]` / `af secrets ls` / `af secrets rm <KEY>`
+
+Manage the encrypted secret store under `~/.agentfield/secrets/` (AES-256-GCM, key in `~/.agentfield/keyring/master.key`, mode 0600). `set` with no value prompts hidden; `--node <name>` scopes a secret to one node (default is `global`, shared across all nodes). `ls` shows keys + scope only — values are never printed.
+
 ## Running and observing
 
 ### `af list`

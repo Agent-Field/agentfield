@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -385,5 +386,35 @@ func TestOpenBrowserUsesLauncher(t *testing.T) {
 
 	if !called {
 		t.Fatal("expected browserLauncher to be invoked")
+	}
+}
+
+func TestDefaultWaitForShutdown(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sending SIGINT to self is not supported on Windows")
+	}
+
+	// defaultWaitForShutdown should unblock when SIGINT is sent to the process
+	done := make(chan struct{})
+	go func() {
+		defaultWaitForShutdown()
+		close(done)
+	}()
+
+	// Send SIGINT to self
+	time.Sleep(50 * time.Millisecond)
+	p, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Fatalf("failed to find self process: %v", err)
+	}
+	if err := p.Signal(syscall.SIGINT); err != nil {
+		t.Fatalf("failed to send SIGINT: %v", err)
+	}
+
+	select {
+	case <-done:
+		// success
+	case <-time.After(3 * time.Second):
+		t.Fatal("defaultWaitForShutdown did not unblock after SIGINT")
 	}
 }

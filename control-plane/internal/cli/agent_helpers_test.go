@@ -184,7 +184,7 @@ func TestListCommandAndLogViewer(t *testing.T) {
 		output := captureOutput(t, func() {
 			runListCommand(nil, nil)
 		})
-		require.Contains(t, output, "No agent node packages installed")
+		require.Contains(t, output, "No agent nodes installed")
 
 		require.NoError(t, os.WriteFile(filepath.Join(home, "installed.yaml"), []byte("installed: ["), 0o644))
 		cmd := NewListCommand()
@@ -210,9 +210,11 @@ installed:
 		output = captureOutput(t, func() {
 			runListCommand(cmd, nil)
 		})
-		require.Contains(t, output, "Installed Agent Node Packages (1 total)")
-		require.Contains(t, output, "demo (v1.2.3)")
-		require.Contains(t, output, "Running on port 8123 (PID: 456)")
+		require.Contains(t, output, "Installed agent nodes (1)")
+		require.Contains(t, output, "demo")
+		require.Contains(t, output, "v1.2.3")
+		require.Contains(t, output, "8123")   // running node's port cell
+		require.Contains(t, output, "running") // status badge
 		_ = port
 		_ = pid
 	})

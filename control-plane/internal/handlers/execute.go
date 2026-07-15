@@ -132,14 +132,15 @@ type replayHit struct {
 }
 
 type executionController struct {
-	store         ExecutionStore
-	httpClient    *http.Client
-	payloads      services.PayloadStore
-	webhooks      services.WebhookDispatcher
-	eventBus      *events.ExecutionEventBus
-	timeout       time.Duration
-	internalToken string // sent as Authorization header when forwarding to agents
-	readARDConfig func() config.ARDConfig
+	store          ExecutionStore
+	httpClient     *http.Client
+	payloads       services.PayloadStore
+	webhooks       services.WebhookDispatcher
+	eventBus       *events.ExecutionEventBus
+	timeout        time.Duration
+	internalToken  string // sent as Authorization header when forwarding to agents
+	readARDConfig  func() config.ARDConfig
+	redactPayloads bool
 }
 
 type asyncExecutionJob struct {
@@ -166,7 +167,18 @@ var (
 
 	completionOnce  sync.Once
 	completionQueue chan completionJob
+
+	// defaultRedactPayloads controls whether execution input/output data is
+	// excluded from internal event bus payloads. Set at server startup from
+	// config.Logging.ShouldRedactPayloads(). Default true (safe).
+	defaultRedactPayloads = true
 )
+
+// SetRedactPayloads configures the package-level default for payload redaction.
+// Call this once at server startup after loading config.
+func SetRedactPayloads(redact bool) {
+	defaultRedactPayloads = redact
+}
 
 const (
 	maxWebhookHeaders      = 20
@@ -225,12 +237,13 @@ func newExecutionController(store ExecutionStore, payloads services.PayloadStore
 		httpClient: &http.Client{
 			Timeout: timeout,
 		},
-		payloads:      payloads,
-		webhooks:      webhooks,
-		eventBus:      store.GetExecutionEventBus(),
-		timeout:       timeout,
-		internalToken: internalToken,
-		readARDConfig: ardConfigReader,
+		payloads:       payloads,
+		webhooks:       webhooks,
+		eventBus:       store.GetExecutionEventBus(),
+		timeout:        timeout,
+		internalToken:  internalToken,
+		readARDConfig:  ardConfigReader,
+		redactPayloads: defaultRedactPayloads,
 	}
 }
 
@@ -953,15 +966,17 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 	}
 
 	eventData := map[string]interface{}{
-		"result":   req.Result,
 		"error":    req.Error,
 		"progress": req.Progress,
 	}
 	if req.StatusReason != nil && strings.TrimSpace(*req.StatusReason) != "" {
 		eventData["status_reason"] = strings.TrimSpace(*req.StatusReason)
 	}
-	if inputPayload := decodeJSON(updated.InputPayload); inputPayload != nil {
-		eventData["input"] = inputPayload
+	if !c.redactPayloads {
+		eventData["result"] = req.Result
+		if inputPayload := decodeJSON(updated.InputPayload); inputPayload != nil {
+			eventData["input"] = inputPayload
+		}
 	}
 	c.publishExecutionEvent(updated, normalizedStatus, eventData)
 
@@ -1076,7 +1091,7 @@ func (c *executionController) publishExecutionEventWithReasonerInfo(exec *types.
 		data["actor_id"] = *exec.ActorID
 	}
 	storedPayload := types.DecodeStoredExecutionPayload(exec.InputPayload)
-	if storedPayload.Context != nil {
+	if !c.redactPayloads && storedPayload.Context != nil {
 		data["context"] = storedPayload.Context
 	}
 	if workflowExec, err := c.store.GetWorkflowExecution(context.Background(), exec.ExecutionID); err == nil && workflowExec != nil {
@@ -1694,10 +1709,12 @@ func (c *executionController) completeReplayHit(ctx context.Context, plan *prepa
 			"source_execution_id": plan.replayHit.SourceExecutionID,
 			"source_run_id":       plan.replayHit.SourceRunID,
 		},
-		"result": decodeJSON(result),
 	}
-	if inputPayload := decodeJSON(plan.exec.InputPayload); inputPayload != nil {
-		eventData["input"] = inputPayload
+	if !c.redactPayloads {
+		eventData["result"] = decodeJSON(result)
+		if inputPayload := decodeJSON(plan.exec.InputPayload); inputPayload != nil {
+			eventData["input"] = inputPayload
+		}
 	}
 	c.publishExecutionEventWithReasonerInfo(updated, string(types.ExecutionStatusSucceeded), eventData, plan.agent, &plan.target.TargetName)
 	return nil
@@ -1871,11 +1888,13 @@ func (c *executionController) completeExecution(ctx context.Context, plan *prepa
 				c.triggerWebhook(plan.exec.ExecutionID)
 			}
 			eventData := map[string]interface{}{}
-			if payload := decodeJSON(result); payload != nil {
-				eventData["result"] = payload
-			}
-			if inputPayload := decodeJSON(plan.exec.InputPayload); inputPayload != nil {
-				eventData["input"] = inputPayload
+			if !c.redactPayloads {
+				if payload := decodeJSON(result); payload != nil {
+					eventData["result"] = payload
+				}
+				if inputPayload := decodeJSON(plan.exec.InputPayload); inputPayload != nil {
+					eventData["input"] = inputPayload
+				}
 			}
 			c.publishExecutionEventWithReasonerInfo(updated, string(types.ExecutionStatusSucceeded), eventData, plan.agent, &plan.target.TargetName)
 			return nil
@@ -1955,11 +1974,13 @@ func (c *executionController) failExecution(ctx context.Context, plan *preparedE
 			eventData := map[string]interface{}{
 				"error": errMsg,
 			}
-			if payload := decodeJSON(result); payload != nil {
-				eventData["result"] = payload
-			}
-			if inputPayload := decodeJSON(plan.exec.InputPayload); inputPayload != nil {
-				eventData["input"] = inputPayload
+			if !c.redactPayloads {
+				if payload := decodeJSON(result); payload != nil {
+					eventData["result"] = payload
+				}
+				if inputPayload := decodeJSON(plan.exec.InputPayload); inputPayload != nil {
+					eventData["input"] = inputPayload
+				}
 			}
 			c.publishExecutionEventWithReasonerInfo(updated, string(types.ExecutionStatusFailed), eventData, plan.agent, &plan.target.TargetName)
 			return nil

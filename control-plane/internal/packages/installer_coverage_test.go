@@ -1,4 +1,3 @@
-
 package packages
 
 import (
@@ -20,7 +19,7 @@ func TestInstallerCoverage(t *testing.T) {
 		}
 	})
 
-	t.Run("copyFile-open-fails", func(t *testing.T){
+	t.Run("copyFile-open-fails", func(t *testing.T) {
 		pi := &PackageInstaller{}
 		err := pi.copyFile("/nonexistent", "/tmp/dest")
 		if err == nil {
@@ -28,7 +27,7 @@ func TestInstallerCoverage(t *testing.T) {
 		}
 	})
 
-	t.Run("copyFile-create-fails", func(t *testing.T){
+	t.Run("copyFile-create-fails", func(t *testing.T) {
 		pi := &PackageInstaller{}
 		src := filepath.Join(t.TempDir(), "src")
 		if err := os.WriteFile(src, []byte{}, 0644); err != nil {
@@ -46,7 +45,7 @@ func TestInstallerCoverage(t *testing.T) {
 		_ = os.Chmod(destDir, 0755)
 	})
 
-	t.Run("installDependencies-python-fails", func(t *testing.T){
+	t.Run("installDependencies-python-fails", func(t *testing.T) {
 		pi := &PackageInstaller{}
 		pkgPath := t.TempDir()
 		metadata := &PackageMetadata{
@@ -63,8 +62,8 @@ func TestInstallerCoverage(t *testing.T) {
 			t.Fatalf("expected python to fail, got %v", err)
 		}
 	})
-	
-	t.Run("installDependencies-pip-fails", func(t *testing.T){
+
+	t.Run("installDependencies-pip-fails", func(t *testing.T) {
 		pi := &PackageInstaller{}
 		pkgPath := t.TempDir()
 		metadata := &PackageMetadata{
@@ -86,8 +85,8 @@ func TestInstallerCoverage(t *testing.T) {
 			t.Fatalf("expected pip to fail, got %v", err)
 		}
 	})
-	
-	t.Run("InstallPackage-install-deps-fails", func(t *testing.T){
+
+	t.Run("InstallPackage-install-deps-fails", func(t *testing.T) {
 		pi := &PackageInstaller{AgentFieldHome: t.TempDir()}
 		sourcePath := t.TempDir()
 		writeTestPackage(t, sourcePath, `

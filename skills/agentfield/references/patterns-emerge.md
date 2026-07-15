@@ -1,23 +1,25 @@
-# Patterns Emerge — Vocabulary, Not a Menu
+# Patterns Emerge — Post-Hoc Naming, Never Design Inputs
 
-These named patterns are **what topologies look like when the five principles are applied honestly to a problem**. They are vocabulary for describing what you built — not templates to copy from.
+Read this file **after** your topology has emerged from the derivation procedure in `mental-models.md` — never before. Its job is to check whether the shape you derived has a name. Names help humans review a design ("this is parallel hunters feeding an adversary"); they are not inputs to design. Each entry below therefore carries a **derivation line** showing which combination of the ladders produces it — proof that the pattern is an output of the procedure, not an axiom.
 
-The single most important framing for this whole reference: **reasoners are APIs.** Your final design should look like a service mesh where any reasoner can call any other reasoner at any depth, the call graph is shaped by intermediate state, and the depth from entry to leaf is ≥ 3. If your design ends up as one orchestrator fanning out to N siblings and that's it, you stopped decomposing too early — see "The composition cascade" below.
+The topology is never declared anywhere — it is the trace your control flow leaves at runtime. These names describe traces, not specs. And the framing underneath them all: **reasoners are APIs.** A derived design looks like a service mesh where any reasoner can call any other at any depth, the call graph is shaped by intermediate state, and the depth from entry to leaf is ≥ 3. If your design ends up as one orchestrator fanning out to N siblings and that's it, you stopped decomposing too early — see "The composition cascade" below.
 
-For every pattern, the right way to read this file is:
+How to use this file:
 
-1. Have your problem in mind.
-2. Skim the patterns and find the one whose problem shape matches yours.
-3. Open the live example pointed at in `examples-map.md`, grep its real code, copy its decomposition discipline (not its prose).
-4. Adapt to your problem by walking the five principles again.
+1. Finish the derivation. You have a shape.
+2. Skim below for the entry whose shape matches what you built.
+3. Open the live example pointed at in `examples-map.md`, grep its real code, and steal its decomposition discipline (not its topology — yours was derived for your stakes and signals).
+4. Use the name in your CLAUDE.md and handoff so future reviewers can orient fast.
 
-There is no "preferred" pattern. HUNT→PROVE earns its cost when false positives are expensive; a linear refinement cascade earns its place when there's no adversary to add. Pick what the problem needs.
+There is no "preferred" pattern. HUNT→PROVE earns its ~2× cost when false positives are expensive; a linear refinement cascade earns its place when no signal justifies more. The derivation already told you which — the name just labels it.
 
 ---
 
 ## The composition cascade — the structural backbone of every build
 
 **Not a specific shape. The discipline of decomposing every reasoner into 2–4 sub-reasoners until the DAG has depth ≥ 3 and every leaf is atomic.** Every other pattern in this file is a specific topology layered on top of this discipline.
+
+**Derivation:** cognitive-job decomposition (step 1) applied recursively — every job that itself contains sub-judgments becomes an orchestrator over them.
 
 What "composition cascade" looks like in code: the orchestrator at the top of the pipeline is NOT the only thing calling `app.call`. Every "specialist" reasoner is itself a small orchestrator that calls 2–4 sub-reasoners. Those sub-reasoners may themselves call further sub-reasoners. The call graph forms recursively, like a service mesh.
 
@@ -43,11 +45,13 @@ What "composition cascade" looks like in code: the orchestrator at the top of th
 
 ## When each pattern emerges
 
-The shape comes from applying the principles. Here are the named consequences and the questions that produce them.
+The shape comes from running the derivation procedure. Here are the named consequences, the questions that produce them, and the ladder rungs each one instantiates.
 
 ### Parallel hunters + signal cascade
 
 **Question:** "Are there N independent analysis dimensions of the same input?"
+
+**Derivation:** step-1 decomposition along independent expert lenses, run under `asyncio.gather`. Dynamism rung 1 when the lens set is fixed; rung 3 when the data decides how many hunters run.
 
 Each "hunter" is a narrow specialist. They run concurrently via `asyncio.gather`. Findings funnel into a downstream synthesizer or a cross-reference resolver.
 
@@ -59,6 +63,8 @@ Each "hunter" is a narrow specialist. They run concurrently via `asyncio.gather`
 
 **Question:** "Is the cost of a confident-but-wrong final answer meaningful, AND does a single cognitive frame confuse discovery with verification?"
 
+**Derivation:** verification rung 6 (adversarial refutation) applied to a parallel discovery layer — nothing more exotic than that.
+
 Discovery reasoners find candidates (biased toward sensitivity). Verification reasoners try to falsify them (biased toward specificity). Keeping them in one head produces reasoners that rationalize their initial guesses.
 
 **Reference:** `sec-af` (HUNT phase → PROVE phase), `contract-af` (analysts → adversarial reviewer).
@@ -69,6 +75,8 @@ Discovery reasoners find candidates (biased toward sensitivity). Verification re
 
 **Question:** "Can downstream reasoners begin working on partial upstream results without waiting for the full batch?"
 
+**Derivation:** not from the ladders at all — a pure latency optimization layerable on any multi-stage shape. It changes when work runs, never what the topology is.
+
 Upstream agents emit findings into a queue; downstream consumes them as they arrive. Total wall-clock time is dominated by the slowest path through the pipeline, not by the sum of phases.
 
 **Reference:** `sec-af` (HUNT→PROVE streaming), `contract-af` (analysts → cross-ref + adversary streaming).
@@ -76,6 +84,8 @@ Upstream agents emit findings into a queue; downstream consumes them as they arr
 ### Meta-prompting (reasoners spawning reasoners with runtime prompts)
 
 **Question:** "Does the investigation path depend on what gets discovered? Can I not pre-define which sub-reasoners will run?"
+
+**Derivation:** dynamism rung 4 — the discovery is the signal, the spawn cap is the budget.
 
 A parent reasoner discovers something (a defined term, a suspicious combination, a referenced section) and **crafts a specific prompt at runtime** for a child reasoner with the discovery encoded in the prompt. This is pure dynamic intelligence — no static chain framework can replicate it.
 
@@ -87,6 +97,8 @@ A parent reasoner discovers something (a defined term, a suspicious combination,
 
 **Question:** "Does adaptation need to happen at multiple scopes simultaneously — per-reasoner self-adaptation, cross-reasoner deep-dives, and pipeline-wide coverage iteration?"
 
+**Derivation:** dynamism rungs 2–4 stacked at three scopes, each with its own integer budget; the outer loop is the quality-escalation ladder applied to coverage.
+
 Three loops with three caps. Inner adapts per call. Middle adapts across calls in one phase. Outer iterates the whole pipeline until a coverage gate passes.
 
 **Reference:** `af-swe` (inner coding loop → middle sprint loop → outer factory loop), `contract-af` (analyst loop → cross-ref loop → coverage loop).
@@ -97,6 +109,8 @@ Three loops with three caps. Inner adapts per call. Middle adapts across calls i
 
 **Question:** "Is the shape of the answer unknown upfront, and does a coverage gate drive iteration?"
 
+**Derivation:** dynamism rung 5 (recursive, depth-capped) + a programmatic filter between rounds (code for certainty) + a gap-finder as the recursion signal.
+
 Generate N candidates → filter to top K → ask a gap-finder if anything important is still missing → if so, recurse with new seeds. The graph grows until a quality threshold or a hard iteration cap.
 
 **Reference:** `af-deep-research` (recursive research with quality-driven loops).
@@ -104,6 +118,8 @@ Generate N candidates → filter to top K → ask a gap-finder if anything impor
 ### Factory control loops (multi-phase execution with replanning)
 
 **Question:** "Is this long-running multi-phase work where the plan itself must adapt as earlier phases reveal information about later ones?"
+
+**Derivation:** dynamism rung 4 across phases (each phase's results write the next phase's instructions) + verification rung 3 at every membrane (the output is code, so tests and compilation are the check).
 
 Plan → execute → re-plan based on results → execute. Each phase is itself a sub-pipeline.
 
@@ -113,6 +129,8 @@ Plan → execute → re-plan based on results → execute. Each phase is itself 
 
 **Question:** "Is this a content / extraction / generation pipeline where each stage strictly refines the previous, with no adversary needed?"
 
+**Derivation:** dynamism rungs 1–2 + verification rungs 2–3 — and that's correct, because no signal justifies more. Honest low rungs beat decorated high ones.
+
 Sequential cascade with parallelism waves where independent sub-tasks appear. No HUNT/PROVE. No coverage gate. Just careful decomposition with depth ≥ 3.
 
 **Reference:** `reel-af` article path (URL → essence → script → audio ∥ visuals ∥ accents ∥ beats → videos → stitch), `roboscribe-af` (multi-pass annotation refinement).
@@ -120,6 +138,8 @@ Sequential cascade with parallelism waves where independent sub-tasks appear. No
 ### Dynamic router cascade
 
 **Question:** "Is the input classified into mutually-exclusive categories that each trigger a different downstream subgraph?"
+
+**Derivation:** dynamism rung 2 (the classification is the signal, the branch set is the budget) + verification rung 4 on the classifier itself — a misroute poisons everything downstream.
 
 Intake classifier routes to one of several conditional branches. Each branch is its own composition cascade.
 
@@ -129,6 +149,8 @@ Intake classifier routes to one of several conditional branches. Each branch is 
 
 **Question:** "Is the work triggered by data arriving rather than by an explicit user request?"
 
+**Derivation:** any of the above shapes with a trigger as the entry surface — the arrival mechanism changes, the derivation doesn't.
+
 The entry surface is a trigger (`@on_event`, `@on_schedule`) rather than a curl. The triggered reasoner is thin — it routes and fans out. The actual reasoning lives in `@app.reasoner` specialists downstream.
 
 **Reference:** `reactive-atlas` (MongoDB change streams → enrichment agents; engine is domain-agnostic, config defines the domain).
@@ -137,11 +159,11 @@ See `triggers.md` before declaring any `@on_event` / `@on_schedule` / `triggers=
 
 ---
 
-## How to pick
+## How names emerge
 
-Walk the five principles in order. Ask the questions from `SKILL.md`. The answers draw the graph for you:
+You don't pick. You run the derivation, and afterwards the shape you drew usually has a name. This table maps derivation observations to the name your trace will likely carry:
 
-| What you observed | Pattern that tends to emerge |
+| What the derivation surfaced | Name your shape probably has |
 |---|---|
 | N independent analysis dimensions | Parallel hunters + signal cascade |
 | Verification frame must be separate from discovery frame, false-positives expensive | HUNT → PROVE |
@@ -160,4 +182,6 @@ For all of the above, the **composition cascade** discipline applies. Every laye
 
 ## If none of these fit
 
-After walking the five principles, if no pattern emerges and the problem can be solved by a deterministic pipeline with one or two LLM calls, **tell the user honestly.** AgentField earns its place when the architecture itself encodes intelligence. If your problem is "one LLM call + some plumbing", build it as one LLM call + some plumbing — don't force a pretend mesh on top.
+Good — that's the procedure working, not failing. A derived topology with no name is still a correct topology; describe it in your CLAUDE.md in ladder terms ("rung-3 fan-out feeding a rung-5 cross-check") and move on. Names are conveniences, not requirements.
+
+And if the derivation yields a deterministic pipeline with one or two LLM calls, **tell the user honestly.** AgentField earns its place when the architecture itself encodes intelligence. If your problem is "one LLM call + some plumbing", build it as one LLM call + some plumbing — don't force a pretend mesh on top.

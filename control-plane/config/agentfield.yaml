@@ -1,5 +1,6 @@
 agentfield:
   port: 8080
+  shutdown_timeout: 30s  # Graceful shutdown drain timeout for in-flight requests
   registration:
     serverless_discovery_allowed_hosts: [] # Optional extra hosts allowed for server-side /discover fetches; localhost/loopback are always allowed.
   execution_cleanup:
@@ -59,6 +60,10 @@ telemetry:
   endpoint: "https://agentfield.ai/api/oss/telemetry"
   install_id_path: "/data/telemetry/install_id"
   timeout: 800ms
+
+logging:
+  level: "info"            # Log level: "debug", "info", "warn", "error"
+  redact_payloads: true    # Omit execution input/output from structured log events (prevents sensitive data leaks)
 
 storage:
   mode: "local"

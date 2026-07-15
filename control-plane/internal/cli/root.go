@@ -40,6 +40,12 @@ func NewRootCommand(runServerFunc func(cmd *cobra.Command, args []string), versi
 		Long: `AgentField is a comprehensive AI agent platform for building, managing, and deploying AI agent capabilities.
 
 AI Agent? Run "af agent help" for structured JSON output optimized for programmatic use.`,
+		// Don't dump the full usage/help block when a command fails at runtime
+		// (e.g. `af run` failing to start an agent). Usage text is for
+		// mis-invocation, not runtime errors; main.go already surfaces the
+		// error message itself. Set on the root so it applies to every
+		// subcommand (cobra suppresses usage when the root has this set).
+		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			// Initialize logging based on verbose flag
 			logger.InitLogger(verbose)
@@ -112,6 +118,7 @@ AI Agent? Run "af agent help" for structured JSON output optimized for programma
 
 	// Add remaining old commands (not yet migrated)
 	RootCmd.AddCommand(NewUninstallCommand())
+	RootCmd.AddCommand(NewSecretsCommand())
 	RootCmd.AddCommand(NewListCommand())
 	RootCmd.AddCommand(NewStopCommand())
 	RootCmd.AddCommand(NewLogsCommand())
@@ -124,6 +131,7 @@ AI Agent? Run "af agent help" for structured JSON output optimized for programma
 	RootCmd.AddCommand(NewCallCommand())
 	RootCmd.AddCommand(NewReasonerListCommand())
 	RootCmd.AddCommand(NewTailCommand())
+	RootCmd.AddCommand(NewShareCommand())
 
 	// Add version command
 	RootCmd.AddCommand(NewVersionCommand(versionInfo))

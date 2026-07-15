@@ -324,7 +324,7 @@ func TestPackageServiceAdditionalCoverage(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(home, "installed.yaml"), data, 0o644))
 
 		service := &DefaultPackageService{agentfieldHome: home}
-		require.NoError(t, service.installLocalPackage(sourcePath, true, false))
+		require.NoError(t, service.installLocalPackage(sourcePath, "", true, false))
 
 		updatedData, err := os.ReadFile(filepath.Join(home, "installed.yaml"))
 		require.NoError(t, err)
@@ -341,7 +341,7 @@ func TestPackageServiceAdditionalCoverage(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(home, "packages"), []byte("blocker"), 0o644))
 
 		service := &DefaultPackageService{agentfieldHome: home}
-		err := service.installLocalPackage(sourcePath, false, false)
+		err := service.installLocalPackage(sourcePath, "", false, false)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to copy package")
 	})
@@ -499,13 +499,14 @@ func TestAgentServiceBuildProcessConfigAdditionalCoverage(t *testing.T) {
 		require.NoError(t, os.WriteFile(pythonPath, []byte("stub"), 0o755))
 
 		service := &DefaultAgentService{}
-		cfg := service.buildProcessConfig(packages.InstalledPackage{
+		cfg, err := service.buildProcessConfig(packages.InstalledPackage{
 			Name: "windows-agent",
 			Path: dir,
 			Runtime: packages.RuntimeInfo{
 				LogFile: filepath.Join(dir, "agent.log"),
 			},
 		}, 8141)
+		require.NoError(t, err)
 
 		assert.Equal(t, pythonPath, cfg.Command)
 		assert.Contains(t, cfg.Env, "VIRTUAL_ENV="+filepath.Join(dir, "venv"))
@@ -525,10 +526,11 @@ func TestAgentServiceBuildProcessConfigAdditionalCoverage(t *testing.T) {
 		service := &DefaultAgentService{}
 		assert.Equal(t, fakePython, service.findPythonExecutable())
 
-		cfg := service.buildProcessConfig(packages.InstalledPackage{
+		cfg, err := service.buildProcessConfig(packages.InstalledPackage{
 			Name: "fallback-agent",
 			Path: dir,
 		}, 8142)
+		require.NoError(t, err)
 		assert.Equal(t, fakePython, cfg.Command)
 	})
 

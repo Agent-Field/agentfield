@@ -182,10 +182,19 @@ func (hm *HealthMonitor) RecoverFromDatabase(ctx context.Context) error {
 
 	logger.Logger.Info().Int("count", len(nodes)).Msg("🏥 Recovering nodes from database for health monitoring")
 
-	// Register all nodes with the health monitor
+	// Register all nodes with the health monitor. Serverless nodes are
+	// excluded: they have no heartbeat loop (DisableLeaseLoop) and no
+	// guaranteed /status implementation, so during live operation only the
+	// heartbeat handler ever adds a node to this registry - never
+	// registration itself. Registering them here would make a CP restart
+	// the only time they get HTTP-polled, spuriously flipping them to
+	// HealthStatusInactive on the first failed/missing check.
 	for _, node := range nodes {
 		if node == nil || node.BaseURL == "" {
 			continue // Skip nodes without callback URL
+		}
+		if node.DeploymentType == "serverless" {
+			continue
 		}
 
 		hm.RegisterAgent(node.ID, node.BaseURL)

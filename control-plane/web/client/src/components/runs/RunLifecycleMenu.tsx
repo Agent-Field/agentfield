@@ -6,6 +6,7 @@ import {
   XCircle,
   Activity,
   GitBranch,
+  Share2,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -30,6 +31,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { isTerminalStatus } from "@/utils/status";
+import { downloadWorkflowShareFile } from "@/services/vcApi";
 import type { WorkflowSummary } from "@/types/workflows";
 
 /**
@@ -98,7 +100,11 @@ export function RunLifecycleMenu({
   const canRestart = Boolean(
     onRestart && run.root_execution_id && isTerminalStatus(run.status),
   );
-  const hasAnyAction = canPause || canResume || canCancel || canRestart;
+  // Share is always available: any run can be exported to a self-contained
+  // offline HTML artifact, so the kebab is never fully empty.
+  const canShare = Boolean(run.run_id);
+  const hasAnyAction =
+    canPause || canResume || canCancel || canRestart || canShare;
 
   // Render an inert placeholder with the same footprint so the column
   // stays aligned across rows even when no action is available.
@@ -189,6 +195,23 @@ export function RunLifecycleMenu({
               />
               Restart run
             </DropdownMenuItem>
+          ) : null}
+          {canShare ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="gap-2 text-xs"
+                onClick={() => {
+                  setMenuOpen(false);
+                  void downloadWorkflowShareFile(run.run_id).catch((e) =>
+                    console.error(e),
+                  );
+                }}
+              >
+                <Share2 className="size-3.5 text-muted-foreground" aria-hidden />
+                Share run
+              </DropdownMenuItem>
+            </>
           ) : null}
           {canCancel ? (
             <>

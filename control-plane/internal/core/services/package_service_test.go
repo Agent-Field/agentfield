@@ -443,7 +443,7 @@ func TestValidatePackage_Success(t *testing.T) {
 	require.NoError(t, os.MkdirAll(packagePath, 0755))
 
 	packageYamlPath := filepath.Join(packagePath, "agentfield-package.yaml")
-	require.NoError(t, os.WriteFile(packageYamlPath, []byte("name: test"), 0644))
+	require.NoError(t, os.WriteFile(packageYamlPath, []byte("name: test\nversion: 1.0.0\n"), 0644))
 
 	mainPyPath := filepath.Join(packagePath, "main.py")
 	require.NoError(t, os.WriteFile(mainPyPath, []byte("# test"), 0644))
@@ -480,7 +480,7 @@ func TestValidatePackage_MissingMainPy(t *testing.T) {
 	require.NoError(t, os.MkdirAll(packagePath, 0755))
 
 	packageYamlPath := filepath.Join(packagePath, "agentfield-package.yaml")
-	require.NoError(t, os.WriteFile(packageYamlPath, []byte("name: test"), 0644))
+	require.NoError(t, os.WriteFile(packageYamlPath, []byte("name: test\nversion: 1.0.0\n"), 0644))
 
 	registryStorage := newMockPackageRegistryStorage()
 	fileSystem := newMockFileSystemAdapter()

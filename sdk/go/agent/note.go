@@ -61,8 +61,11 @@ func (a *Agent) sendNote(ctx context.Context, message string, tags []string) {
 	// Get execution context from the provided context
 	execCtx := ExecutionContextFrom(ctx)
 
-	// Build note URL (canonical endpoint: /api/v1/executions/note)
-	noteURL := strings.TrimSuffix(baseURL, "/") + "/executions/note"
+	// Build note URL. AgentFieldURL is the bare control-plane base (e.g.
+	// http://localhost:8080); the canonical endpoint is /api/v1/executions/note,
+	// consistent with the other endpoint builders in agent.go and the client
+	// package. Omitting /api/v1 posts to an unregistered route and 404s.
+	noteURL := strings.TrimSuffix(baseURL, "/") + "/api/v1/executions/note"
 
 	// Build payload
 	payload := notePayload{

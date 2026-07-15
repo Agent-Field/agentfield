@@ -1,16 +1,17 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
-	"log"
 	"math"
-	"os"
 	"testing"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
@@ -96,12 +97,11 @@ func TestSafeJSONRawMessageAndMin(t *testing.T) {
 	require.JSONEq(t, `{"fallback":true}`, string(safeJSONRawMessage("", `{"fallback":true}`, "blank")))
 	require.JSONEq(t, `{"ok":true}`, string(safeJSONRawMessage(`{"ok":true}`, `{"fallback":true}`, "valid")))
 
-	logFile, err := os.CreateTemp(t.TempDir(), "storage-log-*.txt")
-	require.NoError(t, err)
-	defer logFile.Close()
-	previousWriter := log.Writer()
-	log.SetOutput(logFile)
-	defer log.SetOutput(previousWriter)
+	// Redirect zerolog to a buffer to capture the warning
+	var buf bytes.Buffer
+	previousLogger := logger.Logger
+	logger.Logger = zerolog.New(&buf).With().Timestamp().Logger()
+	defer func() { logger.Logger = previousLogger }()
 
 	raw := safeJSONRawMessage(`{"bad":`, `{"fallback":true}`, `config-sync`)
 	var decoded map[string]string
@@ -110,9 +110,8 @@ func TestSafeJSONRawMessageAndMin(t *testing.T) {
 	require.Equal(t, "config-sync", decoded["context"])
 	require.Contains(t, decoded["preview"], `{"bad":`)
 
-	contents, err := os.ReadFile(logFile.Name())
-	require.NoError(t, err)
-	require.Contains(t, string(contents), "Corrupted JSON data detected in config-sync")
+	require.Contains(t, buf.String(), "Corrupted JSON data detected, using fallback")
+	require.Contains(t, buf.String(), "config-sync")
 
 	require.Equal(t, 2, min(2, 9))
 	require.Equal(t, -3, min(4, -3))

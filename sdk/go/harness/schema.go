@@ -1,13 +1,17 @@
 package harness
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/santhosh-tekuri/jsonschema/v5"
 )
 
 const (
@@ -29,6 +33,103 @@ func SchemaPath(dir string) string {
 // estimateTokens gives a rough token count (~4 chars per token).
 func estimateTokens(text string) int {
 	return len(text) / 4
+}
+
+// codexStrictJSONSchema rewrites a JSON schema into the strict form codex's
+// --output-schema (OpenAI structured output) requires. On every object node it
+// drops each property's "default", marks ALL properties required, and sets
+// additionalProperties:false; it recurses into properties, array items,
+// allOf/anyOf/oneOf branches, and $defs/definitions. Port of
+// _codex_strict_json_schema (codex_harness_patch.py:23-65).
+//
+// The input schema is not mutated — every level is copied before edits.
+func codexStrictJSONSchema(schema map[string]any) map[string]any {
+	strict := make(map[string]any, len(schema))
+	for k, v := range schema {
+		strict[k] = v
+	}
+
+	schemaType, _ := strict["type"].(string)
+
+	if schemaType == "object" {
+		if props, ok := strict["properties"].(map[string]any); ok {
+			cleaned := make(map[string]any, len(props))
+			keys := make([]string, 0, len(props))
+			for key, value := range props {
+				keys = append(keys, key)
+				if child, ok := value.(map[string]any); ok {
+					childCopy := make(map[string]any, len(child))
+					for ck, cv := range child {
+						if ck == "default" {
+							continue
+						}
+						childCopy[ck] = cv
+					}
+					cleaned[key] = codexStrictJSONSchema(childCopy)
+				} else {
+					cleaned[key] = value
+				}
+			}
+			// Sort for deterministic output (Go maps randomize iteration order;
+			// Python preserves dict insertion order). codex validation is
+			// order-independent, so this only stabilizes the emitted file.
+			sort.Strings(keys)
+			strict["properties"] = cleaned
+			strict["required"] = keys
+			strict["additionalProperties"] = false
+		}
+	}
+
+	if schemaType == "array" {
+		if items, ok := strict["items"].(map[string]any); ok {
+			strict["items"] = codexStrictJSONSchema(items)
+		}
+	}
+
+	for _, key := range []string{"allOf", "anyOf", "oneOf"} {
+		if branch, ok := strict[key].([]any); ok {
+			newBranch := make([]any, len(branch))
+			for i, item := range branch {
+				if m, ok := item.(map[string]any); ok {
+					newBranch[i] = codexStrictJSONSchema(m)
+				} else {
+					newBranch[i] = item
+				}
+			}
+			strict[key] = newBranch
+		}
+	}
+
+	for _, defKey := range []string{"$defs", "definitions"} {
+		if defs, ok := strict[defKey].(map[string]any); ok {
+			newDefs := make(map[string]any, len(defs))
+			for key, value := range defs {
+				if m, ok := value.(map[string]any); ok {
+					newDefs[key] = codexStrictJSONSchema(m)
+				} else {
+					newDefs[key] = value
+				}
+			}
+			strict[defKey] = newDefs
+		}
+	}
+
+	return strict
+}
+
+// BuildCodexNativeSuffix constructs the prompt suffix for codex's native
+// structured output. Unlike BuildPromptSuffix (which asks the model to Write a
+// file), this tells the model to emit its final JSON answer directly — the
+// codex CLI persists it to outputPath via --output-last-message and validates
+// it against schemaPath via --output-schema. Port of the codex-native suffix in
+// codex_harness_patch.py:141-148 + 179-186.
+func BuildCodexNativeSuffix(schemaPath, outputPath string) string {
+	return "\n\n---\n" +
+		"CRITICAL CODEX STRUCTURED OUTPUT REQUIREMENTS:\n" +
+		fmt.Sprintf("Return a single final JSON object conforming to the schema at: %s\n", schemaPath) +
+		fmt.Sprintf("The Codex CLI will persist your final response to: %s\n", outputPath) +
+		"Return the JSON object as your final answer. Do not use markdown fences, comments, or surrounding prose.\n" +
+		"Do not try to create .agentfield_output.json yourself; the Codex CLI will persist your final JSON response for AgentField."
 }
 
 // BuildPromptSuffix constructs the OUTPUT REQUIREMENTS instruction that tells
@@ -261,6 +362,79 @@ func unmarshalInto(data map[string]any, dest any) error {
 	return json.Unmarshal(b, dest)
 }
 
+// validateAgainstSchema validates a parsed JSON object against a JSON Schema
+// map and returns a concise, prompt-friendly error when it does not conform.
+//
+// A JSON round-trip into a Go struct (unmarshalInto) accepts missing required
+// fields, invalid enum values, and extra fields silently — so on its own it
+// lets malformed output pass the harness. This compiles the schema and runs
+// real JSON Schema validation so the runner's schema-retry loop fires for those
+// cases. When the schema cannot be serialized or compiled, it returns nil (no
+// regression versus the previous unmarshal-only behavior — validation is simply
+// skipped rather than blocking).
+func validateAgainstSchema(data map[string]any, schema map[string]any) error {
+	schemaBytes, err := json.Marshal(schema)
+	if err != nil {
+		return nil
+	}
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource("mem://agentfield/schema.json", bytes.NewReader(schemaBytes)); err != nil {
+		return nil
+	}
+	compiled, err := compiler.Compile("mem://agentfield/schema.json")
+	if err != nil {
+		return nil
+	}
+	// Normalize the data through JSON so the validator sees canonical types
+	// (e.g. float64 for numbers, []any for arrays) regardless of how it was
+	// produced upstream.
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil
+	}
+	var normalized any
+	if err := json.Unmarshal(dataBytes, &normalized); err != nil {
+		return nil
+	}
+	if verr := compiled.Validate(normalized); verr != nil {
+		return fmt.Errorf("schema validation failed: %s", conciseSchemaError(verr))
+	}
+	return nil
+}
+
+// conciseSchemaError flattens a jsonschema ValidationError tree into a short,
+// prompt-friendly string listing the most specific (leaf) failures with their
+// instance locations.
+func conciseSchemaError(err error) string {
+	ve, ok := err.(*jsonschema.ValidationError)
+	if !ok {
+		return truncate(err.Error(), 300)
+	}
+
+	var leaves []string
+	var walk func(e *jsonschema.ValidationError)
+	walk = func(e *jsonschema.ValidationError) {
+		if len(e.Causes) == 0 {
+			loc := e.InstanceLocation
+			if loc == "" {
+				loc = "/"
+			}
+			leaves = append(leaves, fmt.Sprintf("%s: %s", loc, e.Message))
+			return
+		}
+		for _, c := range e.Causes {
+			walk(c)
+		}
+	}
+	walk(ve)
+
+	if len(leaves) == 0 {
+		return truncate(ve.Message, 300)
+	}
+	sort.Strings(leaves)
+	return truncate(strings.Join(leaves, "; "), 400)
+}
+
 // CleanupTempFiles removes harness temp files.
 //
 // For safety, this is a no-op when dir is empty or ".".
@@ -351,4 +525,225 @@ func BuildFollowupPrompt(errorMessage string, dir string, jsonSchema map[string]
 	b.WriteString("Each field defined in the schema must be present as a top-level key in your JSON object.")
 
 	return b.String()
+}
+
+// topLevelField describes one top-level schema property for the incremental
+// build: its name and whether the schema marks it required.
+type topLevelField struct {
+	Name     string
+	Required bool
+}
+
+// getTopLevelFields returns the schema's top-level properties and whether each
+// is required. Mirrors the Python _schema.get_top_level_fields.
+//
+// Note on ordering: Go's JSON schema is a map[string]any, so the original
+// property order from the source schema is not preserved (Python dicts keep
+// insertion order). Field names are sorted for deterministic prompt output;
+// this affects only the order of the field list, not correctness — the agent
+// is asked to add every field regardless of order.
+func getTopLevelFields(jsonSchema map[string]any) []topLevelField {
+	props, _ := jsonSchema["properties"].(map[string]any)
+	required := requiredSet(jsonSchema)
+
+	names := make([]string, 0, len(props))
+	for name := range props {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	fields := make([]topLevelField, 0, len(names))
+	for _, name := range names {
+		fields = append(fields, topLevelField{Name: name, Required: required[name]})
+	}
+	return fields
+}
+
+// requiredSet extracts the schema's "required" list as a set.
+func requiredSet(jsonSchema map[string]any) map[string]bool {
+	set := make(map[string]bool)
+	if req, ok := jsonSchema["required"].([]any); ok {
+		for _, r := range req {
+			if s, ok := r.(string); ok {
+				set[s] = true
+			}
+		}
+	}
+	// Also accept a pre-typed []string (callers who build schemas in Go).
+	if req, ok := jsonSchema["required"].([]string); ok {
+		for _, s := range req {
+			set[s] = true
+		}
+	}
+	return set
+}
+
+// BuildIncrementalPromptSuffix builds the OUTPUT REQUIREMENTS suffix that
+// instructs a field-by-field build. Byte-for-byte parity with the Python
+// _schema.build_incremental_prompt_suffix.
+func BuildIncrementalPromptSuffix(jsonSchema map[string]any, dir string) string {
+	outputPath := OutputPath(dir)
+	schemaJSON, err := json.MarshalIndent(jsonSchema, "", "  ")
+	if err != nil {
+		// Fall back to the single-shot suffix if the schema cannot be
+		// serialized — matches the defensive posture of BuildPromptSuffix.
+		return BuildPromptSuffix(jsonSchema, dir)
+	}
+
+	fields := getTopLevelFields(jsonSchema)
+	fieldLineParts := make([]string, 0, len(fields))
+	for _, f := range fields {
+		req := "optional"
+		if f.Required {
+			req = "required"
+		}
+		fieldLineParts = append(fieldLineParts, fmt.Sprintf("  - %s (%s)", f.Name, req))
+	}
+	fieldLines := strings.Join(fieldLineParts, "\n")
+
+	var schemaRef string
+	if estimateTokens(string(schemaJSON)) > largeSchemaTokenThreshold {
+		schemaPath := SchemaPath(dir)
+		_ = writeSchemaFile(string(schemaJSON), dir)
+		schemaRef = fmt.Sprintf(
+			"The full JSON Schema is at: %s\nRead it for each field's exact shape.\n",
+			schemaPath,
+		)
+	} else {
+		schemaRef = fmt.Sprintf("Full JSON Schema:\n%s\n", string(schemaJSON))
+	}
+
+	return "\n\n---\n" +
+		"CRITICAL OUTPUT REQUIREMENTS (incremental build):\n" +
+		fmt.Sprintf("Produce a single JSON object in this file using your Write/Edit tools: %s\n", outputPath) +
+		"Build it ONE FIELD AT A TIME so nothing gets truncated:\n" +
+		"  1. First create the file with an empty object: {}\n" +
+		"  2. Then add each field listed below one at a time using Edit, and after\n" +
+		"     each edit re-read the file to confirm it is still valid JSON.\n" +
+		"  3. Each field's value MUST conform to its shape in the schema.\n" +
+		"  4. Do not finish until every required field is present.\n\n" +
+		fmt.Sprintf("Top-level fields to add:\n%s\n\n", fieldLines) +
+		fmt.Sprintf("%s\n", schemaRef) +
+		fmt.Sprintf("The final file at %s MUST contain ONLY the complete valid JSON "+
+			"object — no markdown fences, no commentary, no extra text.", outputPath)
+}
+
+// DiagnoseFieldFailures maps each missing/invalid top-level field to a short
+// reason. Returns an empty map when the file validates cleanly. Mirrors the
+// Python _schema.diagnose_field_failures, adapted to the Go dest-struct
+// contract.
+//
+// Go has no per-field pydantic error list, so where Python enumerates
+// validation errors by field location, Go can only detect (a) missing required
+// fields — via the schema's "required" list against the parsed object — and
+// (b) a whole-document type mismatch when the object fails to unmarshal into
+// dest, reported once under the "_root" key (matching Python's fallback).
+func DiagnoseFieldFailures(filePath string, jsonSchema map[string]any, dest any) map[string]string {
+	props, _ := jsonSchema["properties"].(map[string]any)
+	propNames := make([]string, 0, len(props))
+	for name := range props {
+		propNames = append(propNames, name)
+	}
+	sort.Strings(propNames)
+	required := requiredSet(jsonSchema)
+
+	data, err := ReadAndParse(filePath)
+	if err != nil {
+		data, err = ReadRepairAndParse(filePath)
+	}
+
+	failures := make(map[string]string)
+
+	if err != nil || data == nil {
+		// Whole file unusable — report every required field (or all fields if
+		// none are required) as needing to be written.
+		targets := make([]string, 0)
+		for _, name := range propNames {
+			if required[name] {
+				targets = append(targets, name)
+			}
+		}
+		if len(targets) == 0 {
+			targets = propNames
+		}
+		for _, name := range targets {
+			failures[name] = "output file missing or not a JSON object"
+		}
+		return failures
+	}
+
+	// Required-field presence check (sorted for deterministic prompt output).
+	reqNames := make([]string, 0, len(required))
+	for name := range required {
+		reqNames = append(reqNames, name)
+	}
+	sort.Strings(reqNames)
+	for _, name := range reqNames {
+		if _, present := data[name]; !present {
+			failures[name] = "missing required field"
+		}
+	}
+
+	// Validation against the destination struct. Use a throwaway instance so
+	// the caller's dest is not mutated during diagnosis.
+	if dest != nil {
+		if fresh := freshDest(dest); fresh != nil {
+			if e := unmarshalInto(data, fresh); e != nil {
+				if _, exists := failures["_root"]; !exists {
+					failures["_root"] = truncate(e.Error(), 200)
+				}
+			}
+		}
+	}
+
+	return failures
+}
+
+// freshDest returns a new zero-valued instance of the same type dest points to
+// (a pointer), so validation can run without mutating the caller's value.
+// Returns nil when dest is not a non-nil pointer.
+func freshDest(dest any) any {
+	rv := reflect.ValueOf(dest)
+	if rv.Kind() != reflect.Pointer || rv.IsNil() {
+		return nil
+	}
+	return reflect.New(rv.Elem().Type()).Interface()
+}
+
+// BuildIncrementalFollowup builds the follow-up prompt that asks the agent to
+// patch only the failing fields. Byte-for-byte parity with the Python
+// _schema.build_incremental_followup.
+func BuildIncrementalFollowup(fieldErrors map[string]string, dir string, jsonSchema map[string]any) string {
+	outputPath := OutputPath(dir)
+
+	// Deterministic order (Go maps randomize; Python preserves dict order).
+	names := make([]string, 0, len(fieldErrors))
+	for name := range fieldErrors {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	lineParts := make([]string, 0, len(names))
+	for _, name := range names {
+		lineParts = append(lineParts, fmt.Sprintf("  - %s: %s", name, fieldErrors[name]))
+	}
+	fieldLines := strings.Join(lineParts, "\n")
+
+	var schemaRef string
+	schemaJSON, err := json.MarshalIndent(jsonSchema, "", "  ")
+	if err == nil && estimateTokens(string(schemaJSON)) > largeSchemaTokenThreshold {
+		schemaPath := SchemaPath(dir)
+		if _, statErr := os.Stat(schemaPath); statErr != nil {
+			_ = writeSchemaFile(string(schemaJSON), dir)
+		}
+		schemaRef = fmt.Sprintf("Full schema is at: %s\n", schemaPath)
+	} else if err == nil {
+		schemaRef = fmt.Sprintf("Full schema:\n%s\n", string(schemaJSON))
+	}
+
+	return fmt.Sprintf(
+		"PARTIAL OUTPUT NEEDS FIXES. The JSON at %s is incomplete or invalid.\n", outputPath) +
+		"Patch ONLY these fields, one at a time, using Edit, keeping the file valid JSON after each change:\n" +
+		fmt.Sprintf("%s\n\n", fieldLines) +
+		schemaRef +
+		"Leave every already-correct field unchanged. Do NOT rewrite the whole file."
 }

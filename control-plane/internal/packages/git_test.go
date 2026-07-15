@@ -77,8 +77,8 @@ func TestGitInstallerFindPackageRootAndRegistry(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(missingMain, "agentfield-package.yaml"), []byte("name: bad\nversion: 1.0.0\n"), 0644); err != nil {
 		t.Fatalf("write yaml: %v", err)
 	}
-	if _, err := gi.findPackageRoot(missingMain); err == nil || !strings.Contains(err.Error(), "main.py not found") {
-		t.Fatalf("expected main.py error, got %v", err)
+	if _, err := gi.findPackageRoot(missingMain); err == nil || !strings.Contains(err.Error(), "main.py") {
+		t.Fatalf("expected entrypoint/main.py error, got %v", err)
 	}
 
 	emptyRepo := t.TempDir()

@@ -298,7 +298,7 @@ func TestGitHubInstallerAdditionalErrorCoverage(t *testing.T) {
 		}
 
 		err = gi.InstallFromGitHub("acme/repo@main", true)
-		if err == nil || !strings.Contains(err.Error(), "failed to parse package metadata") {
+		if err == nil || !strings.Contains(err.Error(), "version is required") {
 			t.Fatalf("InstallFromGitHub error = %v", err)
 		}
 	})

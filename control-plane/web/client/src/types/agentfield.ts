@@ -9,6 +9,7 @@ export interface AgentNode {
   registered_at?: string;
   deployment_type?: string; // "long_running" or "serverless"
   invocation_url?: string; // For serverless agents
+  origin_auth_required?: boolean; // Whether the node enforces auth on inbound execute calls (serverless only)
   reasoners?: ReasonerDefinition[];
   skills?: SkillDefinition[];
   sessions?: SessionDefinition[];
@@ -24,6 +25,7 @@ export interface AgentNodeSummary {
   last_heartbeat?: string;
   deployment_type?: string; // "long_running" or "serverless"
   invocation_url?: string; // For serverless agents
+  origin_auth_required?: boolean; // Whether the node enforces auth on inbound execute calls (serverless only)
   reasoner_count: number;
   skill_count: number;
   session_count?: number;

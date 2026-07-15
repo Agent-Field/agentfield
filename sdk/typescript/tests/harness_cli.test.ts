@@ -52,7 +52,7 @@ describe('harness cli utilities', () => {
     expect(spawnMock).toHaveBeenCalledWith('node', ['script.js'], {
       env: expect.objectContaining({ CUSTOM_ENV: 'yes' }),
       cwd: '/tmp/work',
-      stdio: ['pipe', 'pipe', 'pipe']
+      stdio: ['ignore', 'pipe', 'pipe']
     });
 
     (proc.stdout as unknown as MockStream).pushChunk('hello ');
@@ -83,7 +83,7 @@ describe('harness cli utilities', () => {
         OR_APP_NAME: 'Caller App'
       }),
       cwd: undefined,
-      stdio: ['pipe', 'pipe', 'pipe']
+      stdio: ['ignore', 'pipe', 'pipe']
     });
 
     proc.emit('close', 0);
@@ -106,6 +106,64 @@ describe('harness cli utilities', () => {
     await vi.advanceTimersByTimeAsync(25);
     await timeoutExpectation;
     expect(timeoutProc.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts a stalled child via the idle watchdog before the wall-clock cap', async () => {
+    vi.useFakeTimers();
+    const proc = createProcess();
+    spawnMock.mockReturnValueOnce(proc as unknown as ReturnType<SpawnImpl>);
+
+    // Generous wall-clock cap; the 1s idle window should fire first.
+    const pending = runCli(['staller'], { timeout: 60000, idleSeconds: 1 });
+    const expectation = expect(pending).rejects.toThrow('CLI made no progress for 1s');
+
+    // One line of output, then the child stalls (no more data events).
+    (proc.stdout as unknown as MockStream).pushChunk('started\n');
+
+    // Advance past the idle window without any further output.
+    await vi.advanceTimersByTimeAsync(1200);
+    await expectation;
+    expect(proc.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it('resets the idle window on each chunk so an active child is not killed', async () => {
+    vi.useFakeTimers();
+    const proc = createProcess();
+    spawnMock.mockReturnValueOnce(proc as unknown as ReturnType<SpawnImpl>);
+
+    const pending = runCli(['active'], { idleSeconds: 1 });
+
+    // Emit a chunk every 600ms: under the 1s idle window, so no kill.
+    for (let i = 0; i < 4; i += 1) {
+      (proc.stdout as unknown as MockStream).pushChunk(`chunk-${i} `);
+      await vi.advanceTimersByTimeAsync(600);
+    }
+    proc.emit('close', 0);
+
+    await expect(pending).resolves.toMatchObject({ exitCode: 0 });
+    expect(proc.kill).not.toHaveBeenCalled();
+  });
+
+  it('reads the idle window from AGENTFIELD_HARNESS_IDLE_SECONDS', async () => {
+    vi.useFakeTimers();
+    const prev = process.env.AGENTFIELD_HARNESS_IDLE_SECONDS;
+    process.env.AGENTFIELD_HARNESS_IDLE_SECONDS = '1';
+    try {
+      const proc = createProcess();
+      spawnMock.mockReturnValueOnce(proc as unknown as ReturnType<SpawnImpl>);
+
+      const pending = runCli(['staller'], { timeout: 60000 });
+      const expectation = expect(pending).rejects.toThrow('CLI made no progress for 1s');
+      await vi.advanceTimersByTimeAsync(1200);
+      await expectation;
+      expect(proc.kill).toHaveBeenCalledTimes(1);
+    } finally {
+      if (prev === undefined) {
+        delete process.env.AGENTFIELD_HARNESS_IDLE_SECONDS;
+      } else {
+        process.env.AGENTFIELD_HARNESS_IDLE_SECONDS = prev;
+      }
+    }
   });
 
   it('parses JSONL and extracts the last final text from supported event types', () => {

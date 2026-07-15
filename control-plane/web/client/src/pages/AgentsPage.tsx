@@ -530,6 +530,19 @@ function AgentRow({ node, tagSummary, ardPublications }: AgentRowProps) {
           <LifecycleDot status={node.lifecycle_status} size="sm" />
         </div>
 
+        {/* Serverless auth posture, reported at (re-)registration */}
+        {node.deployment_type === "serverless" && !node.origin_auth_required && (
+          <Badge
+            variant="degraded"
+            size="sm"
+            showIcon={false}
+            className="flex-shrink-0 text-micro"
+            title="This serverless node does not require an Authorization header on inbound execute calls"
+          >
+            Unauthenticated
+          </Badge>
+        )}
+
         {/* Capability counts */}
         {totalItems > 0 && (
           <span className="text-xs text-muted-foreground flex-shrink-0 text-right tabular-nums max-sm:max-w-[6.5rem] max-sm:truncate sm:w-44">

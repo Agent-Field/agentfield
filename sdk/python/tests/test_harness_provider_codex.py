@@ -47,25 +47,38 @@ def test_extract_final_text_empty_events_returns_none() -> None:
     assert extract_final_text([]) is None
 
 
+def _fake_stream(chunks: list[bytes]):
+    """Fake StreamReader: yield each chunk, then EOF (b"")."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    reader = MagicMock()
+    reader.read = AsyncMock(side_effect=list(chunks) + [b""])
+    return reader
+
+
 @pytest.mark.asyncio
 async def test_run_cli_returns_stdout_stderr_and_exitcode(
     monkeypatch: pytest.MonkeyPatch,
 ):
+    from unittest.mock import AsyncMock, MagicMock
+
     class FakeProc:
         def __init__(self) -> None:
             self.returncode = 7
-
-        async def communicate(self):
-            return b"out", b"err"
+            self.pid = 4321
+            self.stdout = _fake_stream([b"out"])
+            self.stderr = _fake_stream([b"err"])
+            self.wait = AsyncMock(return_value=7)
+            self.kill = MagicMock()
 
     captured: dict[str, Any] = {}
 
-    async def fake_create_subprocess_exec(*args, **kwargs):
+    async def fake_spawn(*args, **kwargs):
         captured["args"] = args
         captured["kwargs"] = kwargs
         return FakeProc()
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_spawn)
 
     stdout, stderr, code = await run_cli(
         ["codex", "exec"],
@@ -80,38 +93,38 @@ async def test_run_cli_returns_stdout_stderr_and_exitcode(
     assert captured["args"] == ("codex", "exec")
     assert captured["kwargs"]["cwd"] == "/tmp/work"
     assert captured["kwargs"]["env"]["TEST_ENV"] == "1"
+    assert captured["kwargs"]["stdin"] is asyncio.subprocess.DEVNULL
 
 
 @pytest.mark.asyncio
 async def test_run_cli_timeout_kills_process(monkeypatch: pytest.MonkeyPatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    async def _never_ready(_n):
+        await asyncio.sleep(10)
+        return b""
+
     class FakeProc:
         def __init__(self) -> None:
             self.returncode = None
-            self.killed = False
-            self.waited = False
-
-        async def communicate(self):
-            await asyncio.sleep(0.05)
-            return b"", b""
-
-        def kill(self) -> None:
-            self.killed = True
-
-        async def wait(self) -> None:
-            self.waited = True
+            self.pid = 2147483647  # nonexistent: killpg falls back to kill()
+            self.kill = MagicMock()
+            self.wait = AsyncMock(return_value=None)
+            self.stdout = MagicMock(read=AsyncMock(side_effect=_never_ready))
+            self.stderr = MagicMock(read=AsyncMock(side_effect=_never_ready))
 
     proc = FakeProc()
 
-    async def fake_create_subprocess_exec(*_args, **_kwargs):
+    async def fake_spawn(*_args, **_kwargs):
         return proc
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_spawn)
 
     with pytest.raises(TimeoutError, match="timed out"):
-        await run_cli(["codex"], timeout=0.001)
+        await run_cli(["codex"], timeout=0.001, idle_seconds=0)
 
-    assert proc.killed is True
-    assert proc.waited is True
+    assert proc.kill.called is True
+    proc.wait.assert_awaited()
 
 
 @pytest.mark.asyncio

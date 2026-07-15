@@ -21,6 +21,15 @@ type Metrics struct {
 	DurationAPIMS int
 	NumTurns      int
 	SessionID     string
+
+	// CostUSD is the cost in USD reported by the provider for this single
+	// execution, or nil when the provider does not report a cost. Mirrors the
+	// Python SDK's Metrics.total_cost_usd (Optional[float]): nil means
+	// "unknown", not "free". Only providers that surface a native cost (e.g.
+	// Claude Code's result JSON) populate this; providers whose Python
+	// counterparts derive cost via litellm token estimation leave it nil in Go
+	// because there is no Go equivalent of litellm's pricing database.
+	CostUSD *float64
 }
 
 // RawResult is the output from a single provider execution before schema
@@ -48,6 +57,12 @@ type Result struct {
 	IsError      bool
 	ErrorMessage string
 	FailureType  FailureType
+
+	// CostUSD is the total cost in USD accumulated across every provider
+	// execution that contributed to this result (including failed retry
+	// attempts), or nil when no execution reported a cost. Mirrors the Python
+	// SDK's HarnessResult.cost_usd (Optional[float]).
+	CostUSD *float64
 
 	NumTurns   int
 	DurationMS int

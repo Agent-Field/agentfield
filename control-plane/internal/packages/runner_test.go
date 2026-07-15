@@ -50,32 +50,6 @@ func TestAgentNodeRunnerPortEnvAndRegistry(t *testing.T) {
 	}
 	_ = listener.Close()
 
-	pkgPath := filepath.Join(t.TempDir(), "pkg")
-	if err := os.MkdirAll(pkgPath, 0755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(pkgPath, ".env"), []byte(strings.Join([]string{
-		"PLAIN=value",
-		`QUOTED="double"`,
-		"SINGLE='single'",
-		"# comment",
-		"",
-	}, "\n")), 0644); err != nil {
-		t.Fatalf("write env: %v", err)
-	}
-
-	envVars, err := runner.loadPackageEnvFile(pkgPath)
-	if err != nil {
-		t.Fatalf("loadPackageEnvFile: %v", err)
-	}
-	if envVars["PLAIN"] != "value" || envVars["QUOTED"] != "double" || envVars["SINGLE"] != "single" {
-		t.Fatalf("unexpected env vars: %#v", envVars)
-	}
-
-	if _, err := runner.loadPackageEnvFile(filepath.Join(t.TempDir(), "missing")); err == nil {
-		t.Fatalf("expected missing env error")
-	}
-
 	registry := &InstallationRegistry{
 		Installed: map[string]InstalledPackage{
 			"demo": {Name: "demo"},
@@ -135,7 +109,7 @@ func TestAgentNodeRunnerWaitDisplayAndStartProcess(t *testing.T) {
 	})
 	waitForHTTPServer(t, fmt.Sprintf("127.0.0.1:%d", port))
 
-	if err := runner.waitForAgentNode(port, 2*time.Second); err != nil {
+	if err := runner.waitForAgentNode(port, "/health", 2*time.Second); err != nil {
 		t.Fatalf("waitForAgentNode: %v", err)
 	}
 	if err := runner.displayCapabilities(InstalledPackage{Name: "demo"}, port); err != nil {
@@ -148,7 +122,7 @@ func TestAgentNodeRunnerWaitDisplayAndStartProcess(t *testing.T) {
 	}
 	unusedPort := unusedPortListener.Addr().(*net.TCPAddr).Port
 	_ = unusedPortListener.Close()
-	if err := runner.waitForAgentNode(unusedPort, 600*time.Millisecond); err == nil || !strings.Contains(err.Error(), "did not become ready") {
+	if err := runner.waitForAgentNode(unusedPort, "/health", 600*time.Millisecond); err == nil || !strings.Contains(err.Error(), "did not become ready") {
 		t.Fatalf("expected timeout error, got %v", err)
 	}
 

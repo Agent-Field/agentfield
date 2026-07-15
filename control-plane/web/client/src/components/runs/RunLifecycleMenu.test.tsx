@@ -3,6 +3,7 @@ import type { ButtonHTMLAttributes, HTMLAttributes, PropsWithChildren } from "re
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CANCEL_RUN_COPY, RunLifecycleMenu } from "@/components/runs/RunLifecycleMenu";
+import { downloadWorkflowShareFile } from "@/services/vcApi";
 import type { WorkflowSummary } from "@/types/workflows";
 
 vi.mock("@/components/ui/button", () => ({
@@ -62,6 +63,10 @@ vi.mock("@/components/ui/alert-dialog", () => ({
   AlertDialogTitle: ({ children }: PropsWithChildren) => <div>{children}</div>,
 }));
 
+vi.mock("@/services/vcApi", () => ({
+  downloadWorkflowShareFile: vi.fn().mockResolvedValue(undefined),
+}));
+
 function makeRun(overrides: Partial<WorkflowSummary> = {}): WorkflowSummary {
   return {
     run_id: "run-1",
@@ -88,10 +93,16 @@ describe("RunLifecycleMenu", () => {
     vi.clearAllMocks();
   });
 
-  it("renders a placeholder when no actions are available", () => {
+  it("renders a placeholder when no run action can be resolved", () => {
     const { container } = render(
       <RunLifecycleMenu
-        run={makeRun({ root_execution_id: undefined, status: "succeeded", root_execution_status: "succeeded", terminal: true })}
+        run={makeRun({
+          run_id: "",
+          root_execution_id: undefined,
+          status: "succeeded",
+          root_execution_status: "succeeded",
+          terminal: true,
+        })}
         isPending={false}
         onPause={vi.fn()}
         onResume={vi.fn()}
@@ -101,6 +112,27 @@ describe("RunLifecycleMenu", () => {
 
     expect(container.querySelector("span[aria-hidden='true']")).not.toBeNull();
     expect(screen.queryByRole("button", { name: /run actions/i })).not.toBeInTheDocument();
+  });
+
+  it("offers share for terminal runs", () => {
+    render(
+      <RunLifecycleMenu
+        run={makeRun({
+          root_execution_id: undefined,
+          status: "succeeded",
+          root_execution_status: "succeeded",
+          terminal: true,
+        })}
+        isPending={false}
+        onPause={vi.fn()}
+        onResume={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Share run" }));
+
+    expect(downloadWorkflowShareFile).toHaveBeenCalledWith("run-1");
   });
 
   it("invokes pause and shows the running menu state", () => {

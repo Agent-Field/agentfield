@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/ui"
 	"gopkg.in/yaml.v3"
 )
 
@@ -25,6 +26,12 @@ type GitPackageInfo struct {
 type GitInstaller struct {
 	AgentFieldHome string
 	Verbose        bool
+	// Subdir optionally selects a package subdirectory within the cloned repo
+	// (the `--path` flag). Empty means the historical root-first walk. When set,
+	// the manifest MUST live at <clone>/<Subdir>/agentfield-package.yaml and that
+	// subdirectory becomes the package root that is copied and installed. It
+	// composes with an @ref pin on the URL, which is parsed independently.
+	Subdir string
 }
 
 // newSpinner creates a new spinner with the given message
@@ -105,6 +112,12 @@ func checkGitAvailable() error {
 
 // InstallFromGit installs a package from any Git repository
 func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
+	// Reject a malformed --path selector (absolute / escaping) up front, before
+	// any install work (clone, copy, registry mutation) happens.
+	if err := validateSubdirSelector(gi.Subdir); err != nil {
+		return err
+	}
+
 	// Check if Git is available
 	if err := checkGitAvailable(); err != nil {
 		return err
@@ -116,11 +129,7 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 		return fmt.Errorf("failed to parse Git URL: %w", err)
 	}
 
-	logger.Logger.Info().Msgf("Installing package from Git repository...")
-	logger.Logger.Info().Msgf("  %s %s", Gray("Repository:"), info.URL)
-	if info.Ref != "" {
-		logger.Logger.Info().Msgf("  %s %s", Gray("Reference:"), info.Ref)
-	}
+	fmt.Println(ui.Muted("  from " + installSourceLabel(info.URL, info.Ref)))
 
 	// 1. Clone repository
 	spinner := gi.newSpinner("Cloning repository")
@@ -139,7 +148,7 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 	spinner = gi.newSpinner("Validating package structure")
 	spinner.Start()
 
-	packagePath, err := gi.findPackageRoot(tempDir)
+	packagePath, err := gi.resolvePackageRoot(tempDir)
 	if err != nil {
 		spinner.Error("Invalid package structure")
 		return fmt.Errorf("invalid package structure: %w", err)
@@ -188,17 +197,14 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 		return fmt.Errorf("failed to update registry: %w", err)
 	}
 
-	logger.Logger.Info().Msgf("%s Installed %s v%s from Git", Green(StatusSuccess), Bold(metadata.Name), Gray(metadata.Version))
-	logger.Logger.Info().Msgf("  %s %s", Gray("Source:"), info.URL)
-	if info.Ref != "" {
-		logger.Logger.Info().Msgf("  %s %s", Gray("Reference:"), info.Ref)
-	}
-	logger.Logger.Info().Msgf("  %s %s", Gray("Location:"), destPath)
+	fmt.Println()
+	fmt.Println(installSummaryPanel(metadata.Name, metadata.Version, info.URL, info.Ref, destPath))
 
 	// Check for required environment variables
 	installer.checkEnvironmentVariables(metadata)
 
-	logger.Logger.Info().Msgf("\n%s %s", Blue("→"), Bold(fmt.Sprintf("Run: af run %s", metadata.Name)))
+	fmt.Println()
+	fmt.Println(ui.Title("→ Run: af run " + metadata.Name))
 
 	return nil
 }
@@ -263,6 +269,26 @@ func (gi *GitInstaller) cloneRepository(info *GitPackageInfo) (string, error) {
 	return tempDir, nil
 }
 
+// resolvePackageRoot determines which directory of the cloned repository is the
+// package to install. With no --path selector it defers to findPackageRoot's
+// root-first walk (unchanged behavior). With a selector it resolves and validates
+// <cloneDir>/<Subdir>, requiring the manifest to exist there, so one repo can ship
+// multiple installable nodes selected explicitly.
+func (gi *GitInstaller) resolvePackageRoot(cloneDir string) (string, error) {
+	if strings.TrimSpace(gi.Subdir) == "" {
+		return gi.findPackageRoot(cloneDir)
+	}
+	root, err := ResolvePackageSubdir(cloneDir, gi.Subdir)
+	if err != nil {
+		return "", err
+	}
+	// A selected subdir must still be a valid, startable agent node.
+	if err := ValidatePackage(root); err != nil {
+		return "", err
+	}
+	return root, nil
+}
+
 // findPackageRoot finds the root directory containing agentfield-package.yaml
 func (gi *GitInstaller) findPackageRoot(cloneDir string) (string, error) {
 	var packageRoot string
@@ -288,10 +314,10 @@ func (gi *GitInstaller) findPackageRoot(cloneDir string) (string, error) {
 		return "", fmt.Errorf("agentfield-package.yaml not found in the repository")
 	}
 
-	// Also check for main.py
-	mainPyPath := filepath.Join(packageRoot, "main.py")
-	if _, err := os.Stat(mainPyPath); os.IsNotExist(err) {
-		return "", fmt.Errorf("main.py not found in package root")
+	// The node must declare how to start: a manifest entrypoint.start or a
+	// top-level main.py. Real nodes use a module entrypoint and have no main.py.
+	if err := ValidatePackage(packageRoot); err != nil {
+		return "", err
 	}
 
 	return packageRoot, nil
@@ -373,4 +399,24 @@ func (gi *GitInstaller) updateRegistryWithGit(metadata *PackageMetadata, info *G
 	}
 
 	return nil
+}
+
+// installSourceLabel formats an install source for display: "<url>" or
+// "<url> @ <ref>" when a ref is pinned.
+func installSourceLabel(url, ref string) string {
+	if ref != "" {
+		return url + " @ " + ref
+	}
+	return url
+}
+
+// installSummaryPanel renders the post-install success panel showing the node
+// name/version and its source and on-disk location.
+func installSummaryPanel(name, version, source, ref, location string) string {
+	details := [][2]string{{"Source", source}}
+	if ref != "" {
+		details = append(details, [2]string{"Reference", ref})
+	}
+	details = append(details, [2]string{"Location", location})
+	return ui.SuccessPanel(fmt.Sprintf("Installed %s v%s", name, version), ui.KV(details))
 }

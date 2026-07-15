@@ -117,10 +117,10 @@ func TestInstallDependenciesAdditionalCoverage(t *testing.T) {
 			wantErr:          "failed to install requirements.txt dependencies",
 		},
 		{
-			name:        "dependency install failure",
-			pythonDeps:  []string{"baddep"},
-			failDep:     "baddep",
-			wantErr:     "failed to install dependency baddep",
+			name:       "dependency install failure",
+			pythonDeps: []string{"baddep"},
+			failDep:    "baddep",
+			wantErr:    "failed to install dependency baddep",
 			wantPipCalls: []string{
 				"install --upgrade pip",
 				"install baddep",

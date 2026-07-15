@@ -58,15 +58,28 @@ func NewUIService(storageProvider storage.StorageProvider, agentClient interface
 
 // AgentNodeSummaryForUI is a subset of types.AgentNode for summary display.
 type AgentNodeSummaryForUI struct {
-	ID              string                     `json:"id"`
-	TeamID          string                     `json:"team_id"`
-	Version         string                     `json:"version"`
-	HealthStatus    types.HealthStatus         `json:"health_status"`
-	LifecycleStatus types.AgentLifecycleStatus `json:"lifecycle_status"`
-	ReasonerCount   int                        `json:"reasoner_count"`
-	SkillCount      int                        `json:"skill_count"`
-	SessionCount    int                        `json:"session_count"`
-	LastHeartbeat   time.Time                  `json:"last_heartbeat"`
+	ID                 string                     `json:"id"`
+	TeamID             string                     `json:"team_id"`
+	Version            string                     `json:"version"`
+	HealthStatus       types.HealthStatus         `json:"health_status"`
+	LifecycleStatus    types.AgentLifecycleStatus `json:"lifecycle_status"`
+	DeploymentType     string                     `json:"deployment_type,omitempty"`
+	OriginAuthRequired bool                       `json:"origin_auth_required,omitempty"`
+	ReasonerCount      int                        `json:"reasoner_count"`
+	SkillCount         int                        `json:"skill_count"`
+	SessionCount       int                        `json:"session_count"`
+	LastHeartbeat      time.Time                  `json:"last_heartbeat"`
+}
+
+// originAuthRequired reads the "origin_auth_required" flag a serverless node
+// reports at discovery time (see nodes_register.go), stored under
+// Metadata.Custom since it's not a first-class AgentNode column.
+func originAuthRequired(node *types.AgentNode) bool {
+	if node == nil || node.Metadata.Custom == nil {
+		return false
+	}
+	required, _ := node.Metadata.Custom["origin_auth_required"].(bool)
+	return required
 }
 
 // GetNodesSummary retrieves a list of node summaries with robust status checking.
@@ -94,15 +107,17 @@ func (s *UIService) GetNodesSummary(ctx context.Context) ([]AgentNodeSummaryForU
 		lifecycleStatus, healthStatus := s.getReconciledNodeStatus(node.ID, node)
 
 		summaries = append(summaries, AgentNodeSummaryForUI{
-			ID:              node.ID,
-			TeamID:          node.TeamID,
-			Version:         node.Version,
-			HealthStatus:    healthStatus,
-			LifecycleStatus: lifecycleStatus,
-			ReasonerCount:   len(node.Reasoners),
-			SkillCount:      len(node.Skills),
-			SessionCount:    len(node.Sessions),
-			LastHeartbeat:   node.LastHeartbeat,
+			ID:                 node.ID,
+			TeamID:             node.TeamID,
+			Version:            node.Version,
+			HealthStatus:       healthStatus,
+			LifecycleStatus:    lifecycleStatus,
+			DeploymentType:     node.DeploymentType,
+			OriginAuthRequired: originAuthRequired(node),
+			ReasonerCount:      len(node.Reasoners),
+			SkillCount:         len(node.Skills),
+			SessionCount:       len(node.Sessions),
+			LastHeartbeat:      node.LastHeartbeat,
 		})
 	}
 	return summaries, len(summaries), nil

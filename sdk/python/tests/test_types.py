@@ -747,6 +747,8 @@ class TestAIConfig:
         limits = cfg._MODEL_CONTEXT_LIMITS
         assert len(limits) > 10
         assert "gpt-4o" in limits
+        assert limits["openrouter/z-ai/glm-5.2"] == 131072
+        assert limits["z-ai/glm-5.2"] == 131072
 
     def test_protected_namespaces(self):
         cfg = AIConfig()

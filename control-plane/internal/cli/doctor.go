@@ -19,15 +19,15 @@ import (
 // Coding agents (and skills like agentfield) call this once to learn
 // what's actually available in the environment instead of probing manually.
 type DoctorReport struct {
-	OS              string                  `json:"os"`
-	Arch            string                  `json:"arch"`
-	Python          ToolStatus              `json:"python"`
-	Node            ToolStatus              `json:"node"`
-	Docker          ToolStatus              `json:"docker"`
+	OS               string                 `json:"os"`
+	Arch             string                 `json:"arch"`
+	Python           ToolStatus             `json:"python"`
+	Node             ToolStatus             `json:"node"`
+	Docker           ToolStatus             `json:"docker"`
 	HarnessProviders map[string]ToolStatus  `json:"harness_providers"`
-	ProviderKeys    map[string]ProviderKey  `json:"provider_keys"`
-	ControlPlane    ControlPlaneStatus      `json:"control_plane"`
-	Recommendation  Recommendation          `json:"recommendation"`
+	ProviderKeys     map[string]ProviderKey `json:"provider_keys"`
+	ControlPlane     ControlPlaneStatus     `json:"control_plane"`
+	Recommendation   Recommendation         `json:"recommendation"`
 }
 
 // ToolStatus describes whether a CLI is available and, if so, where.
@@ -47,21 +47,21 @@ type ProviderKey struct {
 // ControlPlaneStatus reports whether a local control plane is reachable
 // and whether the Docker image is locally available.
 type ControlPlaneStatus struct {
-	URL                string `json:"url"`
-	Reachable          bool   `json:"reachable"`
-	HealthStatus       string `json:"health_status,omitempty"`
-	DockerImageName    string `json:"docker_image_name"`
-	DockerImageLocal   bool   `json:"docker_image_local"`
+	URL              string `json:"url"`
+	Reachable        bool   `json:"reachable"`
+	HealthStatus     string `json:"health_status,omitempty"`
+	DockerImageName  string `json:"docker_image_name"`
+	DockerImageLocal bool   `json:"docker_image_local"`
 }
 
 // Recommendation tells the caller (a skill or a coding agent) what to default to,
 // based on what's actually present in the environment.
 type Recommendation struct {
-	Provider           string   `json:"provider"`             // "openrouter" / "openai" / "anthropic" / "google" / "none"
-	AIModel            string   `json:"ai_model"`             // suggested LiteLLM-style model string
-	HarnessUsable      bool     `json:"harness_usable"`       // true only if at least one provider CLI is on PATH
-	HarnessProviders   []string `json:"harness_providers"`    // available provider CLI names
-	Notes              []string `json:"notes"`                // human-readable suggestions
+	Provider         string   `json:"provider"`          // "openrouter" / "openai" / "anthropic" / "google" / "none"
+	AIModel          string   `json:"ai_model"`          // suggested LiteLLM-style model string
+	HarnessUsable    bool     `json:"harness_usable"`    // true only if at least one provider CLI is on PATH
+	HarnessProviders []string `json:"harness_providers"` // available provider CLI names
+	Notes            []string `json:"notes"`             // human-readable suggestions
 }
 
 // providerEnvVars maps provider name -> env var. Order matters for the recommendation.

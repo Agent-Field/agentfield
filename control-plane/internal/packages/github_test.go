@@ -181,8 +181,8 @@ func TestGitHubInstallerExtractZipRejectsTraversal(t *testing.T) {
 	if err := gi.extractZip(missingMainZip, dest); err != nil {
 		t.Fatalf("extractZip: %v", err)
 	}
-	if _, err := gi.findPackageRoot(dest); err == nil || !strings.Contains(err.Error(), "main.py not found") {
-		t.Fatalf("expected main.py error, got %v", err)
+	if _, err := gi.findPackageRoot(dest); err == nil || !strings.Contains(err.Error(), "main.py") {
+		t.Fatalf("expected entrypoint/main.py error, got %v", err)
 	}
 
 	badZipServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

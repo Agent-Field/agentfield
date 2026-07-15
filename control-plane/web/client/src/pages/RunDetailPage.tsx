@@ -26,6 +26,7 @@ import {
   Play,
   RefreshCw,
   RotateCcw,
+  Share2,
   Star,
   XCircle,
 } from "lucide-react";
@@ -100,6 +101,7 @@ import {
   getExecutionDetails,
 } from "@/services/executionsApi";
 import {
+  downloadWorkflowShareFile,
   downloadWorkflowVCAuditFile,
   getWorkflowVCChain,
 } from "@/services/vcApi";
@@ -1180,6 +1182,26 @@ export function RunDetailPage() {
           >
             <RotateCcw className="size-3.5 mr-1" />
             Replay
+          </Button>
+
+          {/* Share run — download the self-contained offline HTML artifact */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 gap-1.5 px-3 shadow-sm"
+            disabled={(dag?.total_nodes ?? 0) === 0}
+            aria-label="Share this run: download a self-contained offline HTML file"
+            onClick={() => {
+              void downloadWorkflowShareFile(workflowId).catch((e) =>
+                console.error(e),
+              );
+            }}
+          >
+            <Share2
+              className="size-3.5 shrink-0 text-muted-foreground"
+              aria-hidden
+            />
+            <span className="text-xs font-medium">Share</span>
           </Button>
 
           {/* Export run provenance (VC chain + audit bundle) */}

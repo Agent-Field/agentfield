@@ -21,7 +21,7 @@ External callers should hit `<slug>.<entry_reasoner_name>` first.
 
 ## Architecture at a glance
 
-- **Pattern(s) (vocabulary, not template):** <e.g., parallel hunters + dynamic router>, derived from walking the five principles in the `agentfield` skill
+- **Pattern(s) (post-hoc name, not template):** <e.g., parallel hunters + dynamic router>, derived via the `agentfield` skill's derivation procedure (cognitive jobs → autonomy → verification rungs → dynamism rung + budgets)
 - **Topology:** one AgentField node (`<slug>`) with <N> reasoners
 - **Depth from entry to leaf:** <N> layers — every "specialist" is itself an orchestrator calling 2–4 sub-reasoners
 - **Entry reasoner:** `<entry_reasoner_name>` — orchestrates the full pipeline
@@ -67,7 +67,7 @@ External callers should hit `<slug>.<entry_reasoner_name>` first.
 
 - ✅ A runnable `docker compose up --build` (validated with `docker compose config`)
 - ✅ A valid `.env.example` listing all required keys
-- ✅ A `README.md` with the verification ladder (health → discovery/capabilities → async execute + poll → vc-chain)
+- ✅ A `README.md` with the build checks (health → discovery/capabilities → async execute + poll → vc-chain)
 - ✅ The canonical async curl smoke test in the README — body shape `{"input": {...kwargs...}}`, returns a real reasoned answer
 - ✅ This `CLAUDE.md`
 

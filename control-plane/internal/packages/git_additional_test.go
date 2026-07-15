@@ -167,7 +167,7 @@ func TestGitInstallerInstallFromGitAdditionalCoverage(t *testing.T) {
 
 		gi := &GitInstaller{AgentFieldHome: home}
 		err := gi.InstallFromGit("https://gitlab.com/acme/repo", true)
-		if err == nil || !strings.Contains(err.Error(), "failed to parse package metadata") {
+		if err == nil || !strings.Contains(err.Error(), "version is required") {
 			t.Fatalf("InstallFromGit error = %v", err)
 		}
 	})

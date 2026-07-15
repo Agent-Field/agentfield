@@ -4,6 +4,7 @@ import inspect
 
 from agentfield.decorators import reasoner, on_event, on_schedule
 from agentfield.triggers import EventTrigger, ScheduleTrigger, trigger_to_payload
+from tests.helpers import create_test_agent
 
 
 class TestReasonerTriggersCodeOrigin:
@@ -34,6 +35,43 @@ class TestReasonerTriggersCodeOrigin:
         file_path, line_num = parts
         assert file_path.endswith(".py")
         assert line_num.isdigit()
+
+    def test_agent_reasoner_trigger_metadata_stamps_code_origin(self, monkeypatch):
+        """@app.reasoner should expose code_origin for registered trigger metadata."""
+        app, _ = create_test_agent(monkeypatch)
+
+        @app.reasoner(triggers=[EventTrigger(source="stripe")])
+        async def handle_agent_payment(payload: dict) -> dict:
+            return payload
+
+        metadata = next(
+            r for r in app.reasoners if r["id"] == "handle_agent_payment"
+        )
+
+        code_origin = metadata["triggers"][0]["code_origin"]
+        assert code_origin is not None
+        origin_file, origin_line = code_origin.rsplit(":", 1)
+        assert origin_file.endswith("test_decorator_code_origin.py")
+        assert origin_line.isdigit()
+
+    def test_agent_reasoner_trigger_metadata_unwraps_inner_reasoner(self, monkeypatch):
+        """@app.reasoner should stamp code_origin from the user handler."""
+        app, _ = create_test_agent(monkeypatch)
+
+        @app.reasoner(triggers=[EventTrigger(source="stripe")])
+        @reasoner()
+        async def wrapped_agent_payment(payload: dict) -> dict:
+            return payload
+
+        metadata = next(
+            r for r in app.reasoners if r["id"] == "wrapped_agent_payment"
+        )
+
+        code_origin = metadata["triggers"][0]["code_origin"]
+        assert code_origin is not None
+        origin_file, origin_line = code_origin.rsplit(":", 1)
+        assert origin_file.endswith("test_decorator_code_origin.py")
+        assert origin_line.isdigit()
 
     def test_reasoner_preserves_user_supplied_code_origin(self):
         """If user passes code_origin explicitly, don't overwrite it."""

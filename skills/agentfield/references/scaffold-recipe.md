@@ -336,7 +336,7 @@ Generate from `project-claude-template.md`. Customize every `<placeholder>`.
 
 ## Generation order
 
-1. Decide the topology (read `patterns-emerge.md` + closest example via `examples-map.md` + walk the five principles).
+1. Derive the topology (run the procedure in `mental-models.md`, grep the closest example via `examples-map.md`, then name the shape via `patterns-emerge.md`).
 2. Run `af init <slug> --language python --docker --defaults --non-interactive --default-model <model>`.
 3. **Rewrite `main.py`** with your real architecture.
 4. If > 4 reasoners, build the `reasoners/` package (models, helpers, routers).

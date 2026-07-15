@@ -3,8 +3,9 @@ package storage
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
+
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 )
 
 // safeJSONRawMessage safely creates a json.RawMessage from a potentially corrupted string
@@ -19,8 +20,8 @@ func safeJSONRawMessage(data string, fallback string, context string) json.RawMe
 		return json.RawMessage(data)
 	}
 
-	// Log corruption warning with context
-	log.Printf("WARNING: Corrupted JSON data detected in %s, using fallback. Data preview: %.100s", context, data)
+	// Log corruption warning with metadata only (no raw content to avoid leaking sensitive data)
+	logger.Logger.Warn().Str("context", context).Int("data_length", len(data)).Msg("Corrupted JSON data detected, using fallback")
 
 	// Return safe fallback with error indication
 	errorFallback := fmt.Sprintf(`{"error": "corrupted_json_data", "context": "%s", "preview": "%s"}`,

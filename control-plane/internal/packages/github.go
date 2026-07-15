@@ -341,10 +341,10 @@ func (gi *GitHubInstaller) findPackageRoot(extractDir string) (string, error) {
 		return "", fmt.Errorf("agentfield-package.yaml not found in the repository")
 	}
 
-	// Also check for main.py
-	mainPyPath := filepath.Join(packageRoot, "main.py")
-	if _, err := os.Stat(mainPyPath); os.IsNotExist(err) {
-		return "", fmt.Errorf("main.py not found in package root")
+	// The node must declare how to start: a manifest entrypoint.start or a
+	// top-level main.py. Real nodes use a module entrypoint and have no main.py.
+	if err := ValidatePackage(packageRoot); err != nil {
+		return "", err
 	}
 
 	return packageRoot, nil

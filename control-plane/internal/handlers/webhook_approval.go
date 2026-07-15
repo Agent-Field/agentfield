@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"
@@ -440,6 +441,20 @@ func (c *webhookApprovalController) verifySignature(body []byte, signature strin
 
 	// Try hax-sdk format: "t=timestamp,v1=signature"
 	if ts, sig, ok := parseHaxSignature(signature); ok {
+		// Enforce timestamp freshness to prevent replay attacks.
+		// Hard-coded to 5 minutes; making this configurable would require
+		// plumbing config through the handler constructor (future enhancement).
+		if tsInt, err := strconv.ParseInt(ts, 10, 64); err == nil {
+			diff := time.Now().Unix() - tsInt
+			const maxSkewSeconds = 300 // 5 minutes
+			if diff > maxSkewSeconds || diff < -maxSkewSeconds {
+				return false
+			}
+		} else {
+			// Non-numeric timestamp — reject
+			return false
+		}
+
 		signedPayload := fmt.Sprintf("%s.%s", ts, string(body))
 		mac := hmac.New(sha256.New, []byte(c.webhookSecret))
 		mac.Write([]byte(signedPayload))

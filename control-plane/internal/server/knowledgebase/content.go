@@ -500,17 +500,43 @@ Point your Grafana instance at the /metrics endpoint for dashboards.
 
 	kb.Add(Article{
 		ID: "observability/webhooks", Topic: "observability", Title: "Observability Webhooks",
-		Summary:    "Configure webhooks for execution events and status changes",
+		Summary:    "Configure the outbound webhook that receives execution lifecycle events",
 		Difficulty: "intermediate",
 		Tags:       []string{"webhooks", "events", "notifications"},
 		Content: `# Observability Webhooks
 
-## API Endpoints
-- GET /api/v1/settings/webhooks — List webhooks
-- POST /api/v1/settings/webhooks — Create webhook
-- DELETE /api/v1/settings/webhooks/:id — Delete webhook
+The control plane can forward execution lifecycle events to a single, global
+outbound webhook. The configuration is a singleton (one webhook per control
+plane), so POST upserts it and there is no per-webhook :id.
 
-Webhooks fire on execution state changes (started, completed, failed).
+## API Endpoints
+- GET /api/v1/settings/observability-webhook — Get the current webhook config
+- POST /api/v1/settings/observability-webhook — Create or update the webhook config
+- DELETE /api/v1/settings/observability-webhook — Remove the webhook config
+- GET /api/v1/settings/observability-webhook/status — Delivery status and queue depth
+- POST /api/v1/settings/observability-webhook/redrive — Retry dead-lettered deliveries
+- GET /api/v1/settings/observability-webhook/dlq — Inspect the dead-letter queue
+- DELETE /api/v1/settings/observability-webhook/dlq — Clear the dead-letter queue
+
+## Request body (POST)
+` + "```json" + `
+{ "url": "https://example.com/hook", "secret": "optional", "enabled": true, "headers": {} }
+` + "```" + `
+
+## Signing
+When a secret is configured, each delivery carries an
+"X-AgentField-Signature: sha256=<hex>" header — an HMAC-SHA256 of the raw
+request body, keyed by the secret.
+
+## Events
+Deliveries fire on execution lifecycle events: created, completed, failed,
+cancelled, paused, and resumed.
+
+## Note: this is not the approval webhook
+This observability webhook is outbound — the control plane calls your URL. It is
+distinct from the inbound, HMAC-signed approval webhook
+(POST /api/v1/webhooks/approval-response), which resolves executions that are
+paused awaiting approval.
 `,
 	})
 
