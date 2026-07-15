@@ -182,6 +182,39 @@ export interface DesktopSettings {
    * Code, Codex, …) via `af skill install` — so they know how to use this.
    */
   installSkills: boolean
+  /**
+   * App-update version the user dismissed from the banner (null = none).
+   * Hides the banner for that version only — a newer release brings it
+   * back, and Settings keeps offering the update regardless.
+   */
+  dismissedUpdateVersion: string | null
+}
+
+/** A newer app release found on GitHub (the desktop app's update channel). */
+export interface AppUpdateInfo {
+  /** Release version without the v prefix (e.g. "0.1.110"). */
+  version: string
+  tagName: string
+  /** Release page — the fallback when no platform installer asset exists. */
+  releaseUrl: string
+  /** This platform's installer asset, when the release carries one. */
+  assetName: string | null
+  assetUrl: string | null
+  assetSize: number | null
+}
+
+/** State of the app's own update flow (check → download → hand-off). */
+export interface AppUpdateStatus {
+  currentVersion: string
+  checking: boolean
+  /** A release newer than currentVersion, else null. */
+  available: AppUpdateInfo | null
+  /** ISO time of the last successful check, null before the first. */
+  lastCheckedAt: string | null
+  downloading: boolean
+  /** Whole percent 0-100 while downloading, null otherwise. */
+  progress: number | null
+  error: string | null
 }
 
 /** Headline numbers from GET /api/ui/v1/dashboard/summary. */
@@ -243,6 +276,18 @@ export interface AgentFieldApi {
   getCliStatus(): Promise<CliStatus>
   /** Install/refresh the bundled CLI into ~/.agentfield/bin; returns new status. */
   updateCli(): Promise<CliStatus>
+  /** Current state of the app's own update check. */
+  getAppUpdateStatus(): Promise<AppUpdateStatus>
+  /** Ask GitHub for the latest release now; resolves to the refreshed status. */
+  checkForAppUpdate(): Promise<AppUpdateStatus>
+  /**
+   * Download this platform's installer and hand off to it (Windows quits
+   * into the one-click installer; macOS opens the DMG). Falls back to the
+   * release page when the release has no installer for this platform.
+   */
+  installAppUpdate(): Promise<AppUpdateStatus>
+  /** Subscribe to update-status pushes (auto-checks, download progress). */
+  onAppUpdateStatus(listener: (status: AppUpdateStatus) => void): () => void
   /** Subscribe to install output lines; returns an unsubscribe function. */
   onInstallProgress(listener: (line: string) => void): () => void
   /**

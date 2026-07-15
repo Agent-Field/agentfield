@@ -18,6 +18,7 @@ import {
 } from './secrets'
 import { loadSettings, mergeSettings, saveSettings } from './settings'
 import { setupTray } from './tray'
+import { AppUpdater } from './updates'
 import appIcon from '../../resources/icon.png?asset'
 
 const isMac = process.platform === 'darwin'
@@ -343,6 +344,32 @@ function main(): void {
       if (!result.ok) console.error(result.message)
       return refreshCliStatus(bundledCliPath())
     })
+
+    // The app's own updates, fed by the public GitHub releases (see
+    // main/updates.ts). Found updates surface as a banner in the renderer
+    // and under Settings; installing hands off to the platform installer.
+    const updater = new AppUpdater({
+      currentVersion: app.getVersion(),
+      platform: process.platform,
+      tempDir: app.getPath('temp'),
+      openExternal: (url) => void shell.openExternal(url),
+      openPath: (path) => shell.openPath(path),
+      // Give the installer a beat to start, then get out of its way — the
+      // NSIS one-click installer replaces the app in place and relaunches.
+      quitForUpdate: () => setTimeout(() => app.quit(), 500),
+      onStatus: (status) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('agentfield:app-update-status', status)
+        }
+      }
+    })
+    ipcMain.handle('agentfield:app-update-get', () => updater.status())
+    ipcMain.handle('agentfield:app-update-check', () => updater.check())
+    ipcMain.handle('agentfield:app-update-install', () => updater.install())
+    // Dev builds carry package.json's static version — every release would
+    // look like an update — so only packaged apps poll the channel. Manual
+    // checks from Settings still work anywhere.
+    if (app.isPackaged) updater.startAutoCheck()
     ipcMain.handle('agentfield:settings-get', () => settings)
     ipcMain.handle('agentfield:settings-set', async (_event, patch: unknown) => {
       settings = mergeSettings(settings, patch)

@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react'
-import type { CliStatus, DesktopSettings, InstalledAgent } from '../../../shared/types'
+import type {
+  AppUpdateStatus,
+  CliStatus,
+  DesktopSettings,
+  InstalledAgent
+} from '../../../shared/types'
+import { updateActionLabel } from './UpdateBanner'
 
 interface SettingsPanelProps {
   agents: InstalledAgent[]
@@ -68,6 +74,9 @@ export function SettingsPanel({ agents }: SettingsPanelProps) {
         </ul>
       </div>
 
+      <h2 className="section-title">App updates</h2>
+      <AppUpdateCard />
+
       <h2 className="section-title">AgentField CLI</h2>
       <CliCard />
 
@@ -92,6 +101,78 @@ export function SettingsPanel({ agents }: SettingsPanelProps) {
         )}
       </div>
     </>
+  )
+}
+
+/**
+ * The app's own release channel: current version, an on-demand check, and
+ * the install action — always offered here, even when the user dismissed
+ * the banner for this version.
+ */
+function AppUpdateCard() {
+  const [status, setStatus] = useState<AppUpdateStatus | null>(null)
+  // macOS: the DMG was opened; tell the user what to do with it.
+  const [handedOff, setHandedOff] = useState(false)
+
+  useEffect(() => {
+    void window.agentfield.getAppUpdateStatus().then(setStatus)
+    return window.agentfield.onAppUpdateStatus(setStatus)
+  }, [])
+
+  if (!status) {
+    return (
+      <div className="panel">
+        <div className="empty secondary">Checking…</div>
+      </div>
+    )
+  }
+
+  const install = async () => {
+    setHandedOff(false)
+    const next = await window.agentfield.installAppUpdate()
+    setStatus(next)
+    if (window.agentfield.platform === 'darwin' && !next.error) setHandedOff(true)
+  }
+
+  const sub = status.available
+    ? handedOff && !status.error
+      ? `Installer for v${status.available.version} opened — drag AgentField to Applications, then relaunch.`
+      : `Version ${status.available.version} is available.`
+    : status.lastCheckedAt
+      ? 'You are up to date.'
+      : 'Updates come from the AgentField releases on GitHub.'
+
+  return (
+    <div className="panel">
+      <ul className="row-list">
+        <li className="row">
+          <div className="row-main">
+            <span className="row-title">AgentField Desktop v{status.currentVersion}</span>
+            <span className="row-sub">{sub}</span>
+            {status.error && <span className="row-sub error-text">{status.error}</span>}
+          </div>
+          <div className="row-side">
+            {status.available ? (
+              <button
+                className="action-button primary"
+                disabled={status.downloading}
+                onClick={() => void install()}
+              >
+                {updateActionLabel(status, window.agentfield.platform)}
+              </button>
+            ) : (
+              <button
+                className="action-button"
+                disabled={status.checking}
+                onClick={() => void window.agentfield.checkForAppUpdate().then(setStatus)}
+              >
+                {status.checking ? 'Checking…' : 'Check for updates'}
+              </button>
+            )}
+          </div>
+        </li>
+      </ul>
+    </div>
   )
 }
 

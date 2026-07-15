@@ -10,7 +10,8 @@ export const DEFAULT_SETTINGS: DesktopSettings = {
   openAtLogin: false,
   autostartControlPlane: true,
   autostartAgents: [],
-  installSkills: true
+  installSkills: true,
+  dismissedUpdateVersion: null
 }
 
 /**
@@ -32,7 +33,11 @@ export function normalizeSettings(raw: unknown): DesktopSettings {
         : DEFAULT_SETTINGS.autostartControlPlane,
     autostartAgents: agents,
     installSkills:
-      typeof obj.installSkills === 'boolean' ? obj.installSkills : DEFAULT_SETTINGS.installSkills
+      typeof obj.installSkills === 'boolean' ? obj.installSkills : DEFAULT_SETTINGS.installSkills,
+    dismissedUpdateVersion:
+      typeof obj.dismissedUpdateVersion === 'string' && obj.dismissedUpdateVersion !== ''
+        ? obj.dismissedUpdateVersion
+        : null
   }
 }
 

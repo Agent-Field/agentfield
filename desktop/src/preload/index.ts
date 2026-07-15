@@ -24,6 +24,17 @@ const api: AgentFieldApi = {
   setSettings: (patch) => ipcRenderer.invoke('agentfield:settings-set', patch),
   getCliStatus: () => ipcRenderer.invoke('agentfield:cli-status'),
   updateCli: () => ipcRenderer.invoke('agentfield:cli-update'),
+  getAppUpdateStatus: () => ipcRenderer.invoke('agentfield:app-update-get'),
+  checkForAppUpdate: () => ipcRenderer.invoke('agentfield:app-update-check'),
+  installAppUpdate: () => ipcRenderer.invoke('agentfield:app-update-install'),
+  onAppUpdateStatus: (listener) => {
+    const wrapped = (
+      _event: Electron.IpcRendererEvent,
+      status: Parameters<typeof listener>[0]
+    ) => listener(status)
+    ipcRenderer.on('agentfield:app-update-status', wrapped)
+    return () => ipcRenderer.removeListener('agentfield:app-update-status', wrapped)
+  },
   onNavigate: (listener) => {
     const wrapped = (_event: Electron.IpcRendererEvent, view: string) => listener(view)
     ipcRenderer.on('agentfield:navigate', wrapped)

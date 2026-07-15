@@ -132,6 +132,24 @@ and call the agents installed here) — so detected coding agents (Claude
 Code, Codex, Gemini, …) can drive this machine's agents without extra
 setup. Idempotent via skillkit's state file, shared with the curl installer.
 
+## App updates
+
+The app updates itself from the public GitHub releases (`src/main/updates.ts`):
+packaged builds poll `/releases/latest` shortly after launch and every few
+hours (stable releases only — RC prereleases are never offered; an RC install
+IS offered the stable build of its own version once that lands). A newer
+release surfaces as an "Update available" banner across the top of the window
+and under **Settings → App updates**. Installing downloads this platform's
+installer asset from the release and hands off to it: Windows quits into the
+NSIS one-click installer (which replaces the app in place and relaunches);
+macOS opens the downloaded DMG for a drag-install (silent replacement needs
+signed builds — a known follow-up). A release without an installer for the
+platform falls back to opening the release page. Dismissing the banner hides
+it for that version only (persisted in settings); Settings keeps offering the
+update, and the next release brings the banner back. Dev builds never
+auto-check (their package.json version is static), but the manual check in
+Settings works everywhere.
+
 ## Development
 
 ```bash

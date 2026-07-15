@@ -729,6 +729,55 @@ body[data-platform='win32'] .view-header {
   transform: translateX(15px);
 }
 
+/* --- app update banner ------------------------------------------------------ */
+
+.update-banner {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 28px 6px;
+  max-width: 820px;
+  padding: 8px 8px 8px 14px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.update-banner-text {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+}
+
+.update-banner-note,
+.update-banner .error-text {
+  font-weight: 400;
+}
+
+.update-banner-note {
+  color: var(--text-secondary);
+}
+
+.update-banner-dismiss {
+  -webkit-app-region: no-drag;
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+
+.update-banner-dismiss:hover {
+  background: var(--pill-bg);
+  color: var(--text);
+}
+
 /* --- misc ------------------------------------------------------------------ */
 
 .callout {

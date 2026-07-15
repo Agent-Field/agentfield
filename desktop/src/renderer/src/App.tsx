@@ -8,6 +8,7 @@ import { ActivityPanel } from './components/ActivityPanel'
 import { InstallPanel } from './components/InstallPanel'
 import { SecretsPanel } from './components/SecretsPanel'
 import { SettingsPanel } from './components/SettingsPanel'
+import { UpdateBanner } from './components/UpdateBanner'
 
 const POLL_INTERVAL_MS = 5000
 
@@ -94,6 +95,7 @@ export default function App() {
         <header className="view-header">
           <h1>{VIEW_TITLES[view]}</h1>
         </header>
+        <UpdateBanner />
         <div className="view-body">
           {ipcError && <div className="callout error">{ipcError}</div>}
           {cp.detail && <div className="callout">{cp.detail}</div>}

@@ -13,7 +13,8 @@ describe('normalizeSettings', () => {
       openAtLogin: true,
       autostartControlPlane: false,
       autostartAgents: ['a', 'b'],
-      installSkills: false
+      installSkills: false,
+      dismissedUpdateVersion: '0.1.110'
     }
     expect(normalizeSettings(s)).toEqual(s)
   })
@@ -30,6 +31,14 @@ describe('normalizeSettings', () => {
     expect(
       normalizeSettings({ autostartAgents: ['a', 7, 'a', null, 'b'] }).autostartAgents
     ).toEqual(['a', 'b'])
+  })
+
+  it('coerces a bad dismissed update version to null', () => {
+    expect(normalizeSettings({ dismissedUpdateVersion: 42 }).dismissedUpdateVersion).toBeNull()
+    expect(normalizeSettings({ dismissedUpdateVersion: '' }).dismissedUpdateVersion).toBeNull()
+    expect(normalizeSettings({ dismissedUpdateVersion: '0.2.0' }).dismissedUpdateVersion).toBe(
+      '0.2.0'
+    )
   })
 })
 
@@ -57,7 +66,8 @@ describe('load/save round trip', () => {
       openAtLogin: true,
       autostartControlPlane: true,
       autostartAgents: ['swe-planner'],
-      installSkills: true
+      installSkills: true,
+      dismissedUpdateVersion: null
     }
     await saveSettings(file, s)
     expect(await loadSettings(file)).toEqual(s)
