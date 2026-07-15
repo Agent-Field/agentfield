@@ -32,6 +32,10 @@ func TestStopAgentNodeShutdownPaths(t *testing.T) {
 		port := ln.Addr().(*net.TCPAddr).Port
 
 		server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/health" {
+				_, _ = w.Write([]byte(`{"node_id":"demo"}`))
+				return
+			}
 			require.Equal(t, "/shutdown", r.URL.Path)
 			require.Equal(t, http.MethodPost, r.Method)
 			w.WriteHeader(http.StatusOK)
@@ -72,6 +76,10 @@ func TestStopAgentNodeShutdownPaths(t *testing.T) {
 		port := ln.Addr().(*net.TCPAddr).Port
 
 		server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/health" {
+				_, _ = w.Write([]byte(`{"node_id":"demo"}`))
+				return
+			}
 			w.WriteHeader(http.StatusServiceUnavailable)
 		})}
 		go func() { _ = server.Serve(ln) }()
@@ -96,6 +104,68 @@ func TestStopAgentNodeShutdownPaths(t *testing.T) {
 		require.Contains(t, output, "Falling back to process signal shutdown")
 		require.Contains(t, output, "force killing agent demo")
 		require.Contains(t, output, "stopped successfully")
+	})
+
+	t.Run("dead PID reconciles to stopped instead of erroring", func(t *testing.T) {
+		home := t.TempDir()
+
+		// Re-exec the test binary with a run filter matching nothing: it
+		// exits immediately and leaves a PID that is definitely dead — the
+		// post-reboot registry shape.
+		cmd := exec.Command(os.Args[0], "-test.run=^TestNothingMatchesThis$")
+		require.NoError(t, cmd.Start())
+		pid := cmd.Process.Pid
+		_, _ = cmd.Process.Wait()
+
+		port := 65_000
+		stopper := &AgentNodeStopper{AgentFieldHome: home}
+		require.NoError(t, stopper.saveRegistry(makeRegistry("demo", "running", &port, &pid)))
+
+		// Must succeed (stop-then-start flows depend on it), not error out
+		// before the registry is reconciled.
+		require.NoError(t, stopper.StopAgentNode("demo"))
+
+		registry, err := stopper.loadRegistry()
+		require.NoError(t, err)
+		require.Equal(t, "stopped", registry.Installed["demo"].Status)
+		require.Nil(t, registry.Installed["demo"].Runtime.PID)
+		require.Nil(t, registry.Installed["demo"].Runtime.Port)
+	})
+
+	t.Run("port owned by a different node is never signalled", func(t *testing.T) {
+		home := t.TempDir()
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		port := ln.Addr().(*net.TCPAddr).Port
+
+		server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/health" {
+				_, _ = w.Write([]byte(`{"node_id":"somebody-else"}`))
+				return
+			}
+			t.Errorf("unexpected request to %s — a foreign node must not receive /shutdown", r.URL.Path)
+		})}
+		go func() { _ = server.Serve(ln) }()
+		t.Cleanup(func() { _ = server.Close() })
+
+		cmd := exec.Command("sleep", "30")
+		require.NoError(t, cmd.Start())
+		t.Cleanup(func() {
+			_ = cmd.Process.Kill()
+			_, _ = cmd.Process.Wait()
+		})
+
+		pid := cmd.Process.Pid
+		stopper := &AgentNodeStopper{AgentFieldHome: home}
+		require.NoError(t, stopper.saveRegistry(makeRegistry("demo", "running", &port, &pid)))
+
+		require.NoError(t, stopper.StopAgentNode("demo"))
+
+		// The registry reconciled, but the unrelated live process survived.
+		registry, err := stopper.loadRegistry()
+		require.NoError(t, err)
+		require.Equal(t, "stopped", registry.Installed["demo"].Status)
+		require.True(t, isProcessAlive(cmd.Process), "stale-record stop must not kill a process it cannot identify as its own")
 	})
 }
 

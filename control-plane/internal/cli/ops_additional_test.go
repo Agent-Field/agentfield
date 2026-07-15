@@ -3,7 +3,6 @@ package cli
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -51,19 +50,21 @@ func TestStopperAndUtilityHelpers(t *testing.T) {
 		})
 		require.Contains(t, output, "is not running")
 
+		// Stale records — a dead PID or a running-with-no-PID entry — must
+		// reconcile to "stopped" rather than error, or stop-then-start flows
+		// (desktop restart, login autostart) wedge permanently after reboot.
 		pid := 999999
 		require.NoError(t, stopper.saveRegistry(makeRegistry("demo", "running", nil, &pid)))
-		err = stopper.StopAgentNode("demo")
-		require.Error(t, err)
-		require.True(t,
-			strings.Contains(err.Error(), "failed to find process") ||
-				strings.Contains(err.Error(), "failed to kill process") ||
-				strings.Contains(err.Error(), "failed to force kill process"),
-			"unexpected error: %v", err)
+		require.NoError(t, stopper.StopAgentNode("demo"))
+		saved, err = stopper.loadRegistry()
+		require.NoError(t, err)
+		require.Equal(t, "stopped", saved.Installed["demo"].Status)
 
 		require.NoError(t, stopper.saveRegistry(makeRegistry("demo", "running", nil, nil)))
-		err = stopper.StopAgentNode("demo")
-		require.ErrorContains(t, err, "no PID found")
+		require.NoError(t, stopper.StopAgentNode("demo"))
+		saved, err = stopper.loadRegistry()
+		require.NoError(t, err)
+		require.Equal(t, "stopped", saved.Installed["demo"].Status)
 	})
 }
 
