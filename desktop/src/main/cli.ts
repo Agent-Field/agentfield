@@ -30,6 +30,7 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentActionResult, CliStatus } from '../shared/types'
 import { getAgentFieldHome } from './agentfield'
+import { childEnv } from './env'
 
 /** Oldest af this app can drive (needs `af run/stop <name>`, `af skill`). */
 export const MIN_AF_VERSION = '0.1.107'
@@ -138,7 +139,7 @@ export function probeCli(candidate: CliCandidate): Promise<ProbedCandidate> {
       resolve({ ...candidate, responds, version: responds ? parseAfVersion(output) : null })
     }
 
-    const child = spawn(candidate.command, ['version'], { windowsHide: true })
+    const child = spawn(candidate.command, ['version'], { windowsHide: true, env: childEnv() })
     const timer = setTimeout(() => {
       child.kill()
       done(false)

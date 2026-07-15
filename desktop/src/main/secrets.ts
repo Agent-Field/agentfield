@@ -28,6 +28,7 @@ import type {
 } from '../shared/types'
 import { getAgentFieldHome, readInstalledAgents } from './agentfield'
 import { getCliCommand } from './cli'
+import { childEnv } from './env'
 import { sanitizeInstallOutput } from './installer'
 
 const SECRETS_TIMEOUT_MS = 15_000
@@ -229,7 +230,10 @@ function runSecretsCli(
       }
     }
 
-    const child = spawn(getCliCommand(), ['secrets', ...args], { windowsHide: true })
+    const child = spawn(getCliCommand(), ['secrets', ...args], {
+      windowsHide: true,
+      env: childEnv()
+    })
     const timer = setTimeout(() => {
       child.kill()
       lines.push('af secrets timed out')
