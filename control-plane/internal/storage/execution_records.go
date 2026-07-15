@@ -496,9 +496,19 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 	}
 	defer rows.Close()
 
-	summaries := make([]*RunSummaryAggregation, 0, limit)
-	runIDsForDepth := make([]string, 0, limit)
-	summaryByRunID := make(map[string]*RunSummaryAggregation, limit)
+	// Capacity hint bounded by what the query can actually return (the DB's
+	// own run count) and the page ceiling — deliberately not by the
+	// request-supplied limit, so allocation size never depends on caller
+	// input (CodeQL go/uncontrolled-allocation-size; the reassignment-style
+	// clamp above is not recognized as a sanitizer).
+	capHint := totalRuns
+	if capHint > maxRunSummaryLimit {
+		capHint = maxRunSummaryLimit
+	}
+
+	summaries := make([]*RunSummaryAggregation, 0, capHint)
+	runIDsForDepth := make([]string, 0, capHint)
+	summaryByRunID := make(map[string]*RunSummaryAggregation, capHint)
 
 	for rows.Next() {
 		var (
