@@ -71,6 +71,14 @@ export function SettingsPanel({ agents }: SettingsPanelProps) {
             checked={settings.installSkills}
             onChange={(on) => update({ installSkills: on })}
           />
+          {window.agentfield.platform === 'darwin' && (
+            <ToggleRow
+              title="Show the menu bar icon"
+              sub="Install the AgentField menu-bar companion (af-tray) for at-a-glance status and quick controls."
+              checked={settings.trayCompanion}
+              onChange={(on) => update({ trayCompanion: on })}
+            />
+          )}
         </ul>
       </div>
 

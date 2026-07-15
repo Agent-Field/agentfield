@@ -14,9 +14,16 @@ describe('normalizeSettings', () => {
       autostartControlPlane: false,
       autostartAgents: ['a', 'b'],
       installSkills: false,
+      trayCompanion: false,
       dismissedUpdateVersion: '0.1.110'
     }
     expect(normalizeSettings(s)).toEqual(s)
+  })
+
+  it('defaults trayCompanion on and coerces non-booleans', () => {
+    expect(normalizeSettings({}).trayCompanion).toBe(true)
+    expect(normalizeSettings({ trayCompanion: false }).trayCompanion).toBe(false)
+    expect(normalizeSettings({ trayCompanion: 'yes' }).trayCompanion).toBe(true)
   })
 
   it('falls back to defaults for garbage', () => {
@@ -67,6 +74,7 @@ describe('load/save round trip', () => {
       autostartControlPlane: true,
       autostartAgents: ['swe-planner'],
       installSkills: true,
+      trayCompanion: true,
       dismissedUpdateVersion: null
     }
     await saveSettings(file, s)

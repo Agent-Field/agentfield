@@ -183,6 +183,14 @@ export interface DesktopSettings {
    */
   installSkills: boolean
   /**
+   * macOS only: keep the af-tray menu-bar companion provisioned and installed
+   * (~/.agentfield/bin/af-tray → ~/Applications/AgentField.app + launchd), so a
+   * desktop-app-only install still gets the menu-bar icon. Meaningless on
+   * Windows/Linux, where the app carries its own in-app tray; the setting is
+   * present but the toggle is hidden there.
+   */
+  trayCompanion: boolean
+  /**
    * App-update version the user dismissed from the banner (null = none).
    * Hides the banner for that version only — a newer release brings it
    * back, and Settings keeps offering the update regardless.
@@ -249,6 +257,13 @@ export interface AgentFieldApi {
   getCatalog(): Promise<CatalogEntry[]>
   /** Install a catalog entry by name. Resolves when `af install` exits. */
   install(name: string): Promise<InstallResult>
+  /**
+   * Install a node from a pasted GitHub repo URL
+   * (`https://github.com/<owner>/<repo>` or `…/<repo>//<subdir>`). The main
+   * process validates the shape and refuses anything else. Shares the install
+   * mutex and progress channel with catalog installs.
+   */
+  installFromSource(source: string): Promise<InstallResult>
   /** Uninstall an installed agent (stops it first; removes files + secrets). */
   uninstall(name: string): Promise<AgentActionResult>
   /**

@@ -11,6 +11,7 @@ export const DEFAULT_SETTINGS: DesktopSettings = {
   autostartControlPlane: true,
   autostartAgents: [],
   installSkills: true,
+  trayCompanion: true,
   dismissedUpdateVersion: null
 }
 
@@ -34,6 +35,8 @@ export function normalizeSettings(raw: unknown): DesktopSettings {
     autostartAgents: agents,
     installSkills:
       typeof obj.installSkills === 'boolean' ? obj.installSkills : DEFAULT_SETTINGS.installSkills,
+    trayCompanion:
+      typeof obj.trayCompanion === 'boolean' ? obj.trayCompanion : DEFAULT_SETTINGS.trayCompanion,
     dismissedUpdateVersion:
       typeof obj.dismissedUpdateVersion === 'string' && obj.dismissedUpdateVersion !== ''
         ? obj.dismissedUpdateVersion

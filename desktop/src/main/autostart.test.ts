@@ -21,6 +21,7 @@ function settings(overrides: Partial<DesktopSettings>): DesktopSettings {
     autostartControlPlane: true,
     autostartAgents: [],
     installSkills: true,
+    trayCompanion: true,
     dismissedUpdateVersion: null,
     ...overrides
   }
