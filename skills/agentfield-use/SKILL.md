@@ -49,7 +49,7 @@ installed, e.g.:
 curl -s "http://localhost:8080/api/v1/discovery/capabilities?include_input_schema=true" -o caps.json
 python -c "
 import json
-for c in json.load(open('caps.json'))['capabilities']:
+for c in json.load(open('caps.json'))['capabilities'] or []:  # null when no agents registered
     print(c['agent_id'], c.get('health_status'), [r['id'] for r in c.get('reasoners',[])])"
 ```
 
@@ -61,7 +61,7 @@ Three gotchas:
   `health_status` and only dispatch to `"active"` agents. Dispatching to an
   `inactive`/`unknown` agent queues work that never runs.
 - Installed-but-never-started agents may not appear at all. The local registry
-  is the source of truth for what's installed: `af ls`, start with
+  is the source of truth for what's installed: `af list`, start with
   `af run <name>` (it detaches; the agent keeps running after the CLI exits).
 
 ## 3. Call a reasoner
@@ -167,7 +167,7 @@ resolve from the `X-Workflow-ID` / `X-Session-ID` / `X-Actor-ID` headers).
 | Symptom | Meaning | Fix |
 |---|---|---|
 | connection refused on :8080 | control plane not running | desktop app, or background `af server` and poll `/health` |
-| agent `inactive` in discovery / missing | node installed but not running (or not installed) | `af ls`, then `af run <name>` — or `af install <source>` |
+| agent `inactive` in discovery / missing | node installed but not running (or not installed) | `af list`, then `af run <name>` — or `af install <source>` |
 | `missing required environment variables: X` from `af run` | required key not configured | `af secrets set X` (value via stdin/arg; `--node <name>` for node-scoped) — or desktop app → Agents → Keys |
 | HTTP 502 with `error_message` | the agent itself errored | read `af logs <name>`, fix, retry |
 | execution `running` but latest_activity stale & logs quiet | wedged run | wedge protocol above: cancel-tree → restart agent → re-submit |
@@ -176,7 +176,8 @@ resolve from the `X-Workflow-ID` / `X-Session-ID` / `X-Actor-ID` headers).
 ## Local ops cheat sheet (af CLI)
 
 ```bash
-af ls                      # installed agents + status
+af list                    # installed agents + status
+af ls [query]              # search reasoners across running agents (NOT the install registry)
 af ps                      # in-flight runs across all agents (af ps --agent <name>)
 af run <name>              # start (detached); af stop <name>
 af logs <name>             # agent logs (-f follows; no per-run filter — grep by run_id)
