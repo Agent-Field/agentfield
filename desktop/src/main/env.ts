@@ -11,7 +11,7 @@
 
 import { spawn } from 'node:child_process'
 import { homedir } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { posix } from 'node:path'
 
 // Sentinel markers fence the printed PATH off from any banner/motd an
 // interactive rc file emits, so we can extract it cleanly.
@@ -30,9 +30,9 @@ export function wellKnownBinDirs(home: string = homedir()): string[] {
   return [
     '/opt/homebrew/bin', // Homebrew on Apple silicon
     '/usr/local/bin', // Homebrew on Intel, and manual installs
-    join(home, '.agentfield', 'bin'), // where the curl installer / this app put af
-    join(home, '.cargo', 'bin'), // rustup (uv, some agent toolchains)
-    join(home, '.local', 'bin') // pipx / uv / user-scope python tools
+    posix.join(home, '.agentfield', 'bin'), // where the curl installer / this app put af
+    posix.join(home, '.cargo', 'bin'), // rustup (uv, some agent toolchains)
+    posix.join(home, '.local', 'bin') // pipx / uv / user-scope python tools
   ]
 }
 
@@ -48,11 +48,12 @@ export function extractShellPath(output: string): string | null {
 /**
  * Merge PATH-like inputs into one string, de-duped with first occurrence
  * winning so priority order is preserved. Empty entries and blank inputs are
- * dropped.
+ * dropped. Only the darwin/linux branches ever merge (win32 returns its PATH
+ * untouched above), so the separator is POSIX regardless of the host.
  */
 export function mergePaths(
   inputs: ReadonlyArray<string | null | undefined>,
-  sep: string = delimiter
+  sep: string = posix.delimiter
 ): string {
   const seen = new Set<string>()
   const out: string[] = []

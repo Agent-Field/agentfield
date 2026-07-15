@@ -1,5 +1,5 @@
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { posix } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   childEnv,
@@ -45,9 +45,9 @@ describe('wellKnownBinDirs', () => {
     const dirs = wellKnownBinDirs('/home/me')
     expect(dirs).toContain('/opt/homebrew/bin')
     expect(dirs).toContain('/usr/local/bin')
-    expect(dirs).toContain(join('/home/me', '.agentfield', 'bin'))
-    expect(dirs).toContain(join('/home/me', '.cargo', 'bin'))
-    expect(dirs).toContain(join('/home/me', '.local', 'bin'))
+    expect(dirs).toContain('/home/me/.agentfield/bin')
+    expect(dirs).toContain('/home/me/.cargo/bin')
+    expect(dirs).toContain('/home/me/.local/bin')
   })
 })
 
@@ -56,7 +56,7 @@ describe('syncResolvedPath', () => {
     const path = syncResolvedPath({ platform: 'darwin', env: { PATH: '/usr/bin' }, home: '/home/me' })
     expect(path.split(':')).toContain('/usr/bin')
     expect(path.split(':')).toContain('/opt/homebrew/bin')
-    expect(path.split(':')).toContain(join('/home/me', '.agentfield', 'bin'))
+    expect(path.split(':')).toContain('/home/me/.agentfield/bin')
   })
 
   it('returns the process PATH unchanged on win32', () => {
@@ -129,7 +129,7 @@ describe('childEnv / initUserPath cache', () => {
     // non-Windows hosts.
     expect(env.PATH).toBeDefined()
     if (process.platform !== 'win32') {
-      expect(env.PATH?.split(':')).toContain(join(homedir(), '.agentfield', 'bin'))
+      expect(env.PATH?.split(':')).toContain(posix.join(homedir(), '.agentfield', 'bin'))
     }
   })
 
