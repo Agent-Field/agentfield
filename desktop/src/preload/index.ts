@@ -6,6 +6,7 @@ const api: AgentFieldApi = {
   getSnapshot: () => ipcRenderer.invoke('agentfield:snapshot'),
   getCatalog: () => ipcRenderer.invoke('agentfield:catalog'),
   install: (name) => ipcRenderer.invoke('agentfield:install', name),
+  installFromSource: (source) => ipcRenderer.invoke('agentfield:install-source', source),
   uninstall: (name) => ipcRenderer.invoke('agentfield:uninstall', name),
   update: (name) => ipcRenderer.invoke('agentfield:update', name),
   onInstallProgress: (listener) => {
