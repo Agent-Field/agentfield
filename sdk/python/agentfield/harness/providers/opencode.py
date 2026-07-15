@@ -18,6 +18,7 @@ from agentfield.harness._cli import (
     run_cli,
     strip_ansi,
 )
+from agentfield.harness._availability import ensure_cli_available, provider_unavailable
 from agentfield.harness._result import FailureType, Metrics, RawResult
 
 logger = logging.getLogger("agentfield.harness.opencode")
@@ -152,6 +153,7 @@ class OpenCodeProvider:
         return cls._concurrency_sem
 
     async def execute(self, prompt: str, options: dict[str, object]) -> RawResult:
+        ensure_cli_available("opencode", self._bin)
         sem = self._get_semaphore()
         logger.debug(
             "Waiting for concurrency slot (%d/%d in use)",
@@ -260,16 +262,8 @@ class OpenCodeProvider:
                     timeout=timeout_seconds,
                     input_text=effective_prompt if prompt_via_stdin else None,
                 )
-            except FileNotFoundError:
-                return RawResult(
-                    is_error=True,
-                    error_message=(
-                        f"OpenCode binary not found at '{self._bin}'. "
-                        "Install OpenCode: https://opencode.ai"
-                    ),
-                    failure_type=FailureType.CRASH,
-                    metrics=Metrics(),
-                )
+            except FileNotFoundError as exc:
+                raise provider_unavailable("opencode", self._bin) from exc
             except TimeoutError as exc:
                 return RawResult(
                     is_error=True,

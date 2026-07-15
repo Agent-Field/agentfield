@@ -6,6 +6,243 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.109-rc.5] - 2026-07-15
+
+
+### Added
+
+- Feat(harness): add Python provider preflight (#756)
+
+* feat(harness): add Python provider preflight (#685)
+
+* fix(harness): restore Python 3.10 CI compatibility
+
+* fix(harness): align claude-code doctor spec with Python SDK, trim doc, KeyError fallback
+
+Address the three unresolved review threads on #756:
+
+- docs/harness-providers.md: drop the TypeScript/Go doctor examples — those
+  APIs (agent.harnessDoctor, harness.Doctor) do not exist yet. Document the
+  Python SDK + af CLI surface that actually ships and note TS/Go as planned
+  follow-ups of #685.
+
+- control-plane/internal/cli/harness_doctor.go: the claude-code row now
+  mirrors the Python doctor (_doctor.py::_claude_health). It probes a Python
+  interpreter for the claude_agent_sdk pip package (which bundles its own
+  CLI) instead of looking for a global `claude` binary, and hints
+  `pip install 'agentfield[harness-claude]'` instead of npm. Interpreter
+  candidates (python3/python/py) are run-probed so dead launcher stubs are
+  skipped; issues are wrapper_not_installed / python_not_found.
+
+- sdk/python/agentfield/harness/_availability.py: provider_unavailable()
+  falls back to a generic ProviderSpec via .get() so providers without a
+  PROVIDER_SPECS entry (claude-code, or any future provider) raise the
+  helpful HarnessProviderUnavailable instead of a bare KeyError. Regression
+  test added for both provider_unavailable and ensure_cli_available.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (ea8aaad)
+
+## [0.1.109-rc.4] - 2026-07-15
+
+
+### Added
+
+- Feat(sdk-python): accept scope kwargs on memory set/get/delete and reconcile memory.search (#707)
+
+* feat(sdk-python): accept scope kwargs on memory set/get/delete and correct README search API
+
+Add optional scope/scope_id kwargs to app.memory.set/get/delete so the
+developer-facing MemoryInterface matches what humans and LLMs naturally guess
+(app.memory.set(key, data, scope="global")) and mirrors the TypeScript SDK,
+which already accepts scope positionally. scope=None keeps today's hierarchical
+behavior unchanged; explicit scopes route to the existing accessor clients.
+Invalid scopes raise a ValueError listing valid scopes; non-global scopes
+without a scope_id raise a clear ValueError.
+
+No general memory search endpoint exists on the control plane (only
+/api/v1/memory/vector/search, already exposed as similarity_search), so the
+README's advertised app.memory.search(...) is corrected to similarity_search
+and the scope names are corrected from 'agent/run' to 'actor/workflow'.
+
+* fix(memory): allow context-derived explicit scopes
+
+* fix(memory): derive event history scope ids
+
+* feat(sdk-python): extend scope kwargs to memory.similarity_search
+
+Finish the memory-scope DX work for #712: the developer-facing
+MemoryInterface.similarity_search now accepts the same optional
+scope/scope_id kwargs as set/get/delete, dispatching through the shared
+_resolve_scope_target helper. This matches the TypeScript SDK, whose
+searchVector already takes scope/scopeId options. scope=None keeps
+today's behavior exactly.
+
+Also loosen ScopedMemoryClient/ScopedMemoryEventClient scope_id type
+hints to Optional[str] - the context-derived explicit-scope path passes
+None by design - and apply ruff format to memory_events.py.
+
+Verified end-to-end against a local control plane (local mode):
+set/get/delete with scope kwargs across global/session/workflow,
+hierarchical get, accessor-style reads, context-derived scope ids,
+similarity_search with scope="global", and ValueError on invalid
+scopes.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (31a90f2)
+
+- Feat(sdk/ts): add trigger types, factories, and registration plumbing (#743)
+
+* feat(sdk/ts): add trigger types, factories, and registration plumbing (#509)
+
+Implement the foundation layer for the TypeScript SDK trigger system,
+bringing it to parity with the Python SDK's triggers.py.
+
+New files:
+- src/triggers/types.ts — TriggerContext, EventTriggerSpec,
+  ScheduleTriggerSpec, TriggerBinding interfaces
+- src/triggers/factories.ts — eventTrigger() + scheduleTrigger() factory
+  functions + triggerToPayload() wire serializer
+- src/triggers/index.ts — public barrel re-exports
+
+Modified files:
+- src/types/reasoner.ts — add triggers?: TriggerBinding[] to
+  ReasonerOptions
+- src/agent/Agent.ts — reasonerDefinitions() now serializes triggers
+  array and auto-sets accepts_webhook=true when triggers are present
+- src/index.ts — re-export triggers module
+
+Tests:
+- 14 tests covering types, factories, async transform rejection,
+  payload serialization, and registration integration
+
+Fixes #509
+
+* fix(sdk/ts): send accepts_webhook as string not bool
+
+The control plane's ReasonerDefinition.accepts_webhook is typed as
+*string ("true" / "false" / "warn") and rejects bool literals with a 400.
+This was causing POST /api/v1/nodes/register to fail with:
+
+  json: cannot unmarshal bool into Go struct field
+  ReasonerDefinition.reasoners.accepts_webhook of type string
+
+Fix: emit "true" string when triggers are present, omit field (omitempty)
+when no triggers are declared — matching the Python SDK normalization in
+agent.py lines 914-926.
+
+* review: mark TriggerContext @experimental, omit empty triggers from wire
+
+Address review feedback:
+- TriggerContext: add @experimental tag noting runtime wiring lands in #510
+- Registration payload: omit triggers[] and accepts_webhook entirely when
+  no triggers are declared, keeping the wire format stable for older
+  control planes that don't know about trigger fields
+
+* feat(sdk/ts): 3-state acceptsWebhook on ReasonerOptions, parity with Python
+
+Replace the hardcoded 2-state webhook opt-in (accepts_webhook="true" only
+when triggers exist, otherwise absent) with the Python SDK's 3-state model:
+
+- ReasonerOptions gains acceptsWebhook?: boolean | 'warn'. An explicit
+  author value always wins, so a reasoner with triggers can opt OUT via
+  acceptsWebhook: false (mirrors resolve_reasoner_metadata in
+  sdk/python/agentfield/decorator_metadata.py).
+- Trigger auto-opt-in (true) is now the fallback, not the only path.
+- Trigger-less reasoners register with the explicit default "warn"
+  instead of omitting the field, matching Python's _entry_to_metadata.
+- Serialization normalizes to the wire strings "true"/"false"/"warn" —
+  the control plane types AcceptsWebhook as *string.
+
+Adds tests for explicit false-with-triggers (opt-out), explicit true,
+explicit 'warn' overriding the auto-set, default-with-triggers auto
+opt-in, trigger-less "warn" default, and string-typed serialization in
+the registration payload.
+
+Resolves review thread on PR #743.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (8c08186)
+
+## [0.1.109-rc.3] - 2026-07-15
+
+
+### Fixed
+
+- Fix(sdk/go): rewrite max_tokens to max_completion_tokens for newer OpenAI models (#724)
+
+* fix(sdk/go): rewrite max_tokens to max_completion_tokens for newer OpenAI models (#441)
+
+Newer OpenAI models (o1, o3, gpt-4o, gpt-4.x) dropped support for the
+legacy max_tokens parameter in favor of max_completion_tokens. The Go
+SDK was always emitting max_tokens, causing the output-length cap to be
+silently ignored.
+
+Changes:
+- Add model-aware marshalRequest() that detects newer OpenAI models and
+  rewrites max_tokens → max_completion_tokens at serialization time
+- Detection uses model prefix matching (o1, o3, o4, gpt-4o, gpt-4.)
+- Preserves backward compatibility: legacy models still use max_tokens
+- Request-level model override takes precedence over client default
+- Add 6 focused tests covering new models, legacy models, nil handling,
+  and request-level model override
+
+Closes #441
+
+* Potential fix for pull request finding
+
+Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
+
+* review: add tests for isOpenAICompatible and streaming path wire format
+
+Address reviewer feedback:
+- TestIsOpenAICompatible: pin down behavior for OpenAI, Azure, OpenRouter,
+  Anthropic, Cohere, and custom/self-hosted endpoints
+- TestMarshalRequest_NonOpenAIEndpointKeepsMaxTokens: verify non-OpenAI
+  endpoints keep max_tokens even for new model names
+- TestMarshalRequest_StreamingPathRewritesMaxTokens: verify the rewrite
+  works correctly when stream=true (same marshalRequest path)
+
+* fix(sdk/go): scope max_tokens rewrite to vouched endpoints, future-proof model matching
+
+Address review feedback on #724:
+
+- Invert the model check: instead of allowlisting o1/o3/o4/gpt-4o/gpt-4.x
+  (which missed gpt-5 and any future family), deny the closed legacy set
+  (gpt-4, gpt-4-*, gpt-3*) and rewrite for every other gpt-* model plus
+  any o<digit> reasoning model.
+- Invert the endpoint default: rewrite max_tokens -> max_completion_tokens
+  only for endpoints known to accept it (api.openai.com, *.openai.azure.com,
+  openrouter.ai), matched by parsed hostname rather than substring. Unknown
+  or self-hosted BaseURLs (Ollama, LM Studio, llama.cpp, vLLM) keep
+  max_tokens so servers that silently drop unknown fields never lose the
+  output cap (#441).
+- Tests: check the NewClient error instead of discarding it, pin BaseURL
+  explicitly so env vars cannot flip the endpoint gate, and add coverage
+  for gpt-5/o5 rewrites, unknown-host passthrough, host lookalikes, and
+  two end-to-end wire-body assertions (recording RoundTripper against
+  api.openai.com and a real httptest server for the self-hosted case).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (99f3e9f)
+
 ## [0.1.109-rc.2] - 2026-07-15
 
 

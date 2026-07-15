@@ -114,6 +114,30 @@ class ValidationError(AgentFieldError):
     pass
 
 
+class HarnessProviderUnavailable(AgentFieldError):
+    """Raised before a harness run when its runtime dependency is unavailable."""
+
+    def __init__(
+        self,
+        provider: str,
+        *,
+        binary: str,
+        install_command: str,
+        missing_auth_env: tuple[str, ...] = (),
+    ) -> None:
+        self.provider = provider
+        self.binary = binary
+        self.install_command = install_command
+        self.missing_auth_env = missing_auth_env
+        message = (
+            f"Harness provider {provider!r} is unavailable: binary {binary!r} "
+            f"was not found. Install it with: {install_command}"
+        )
+        if missing_auth_env:
+            message += f". Configure one of: {', '.join(missing_auth_env)}"
+        super().__init__(message)
+
+
 __all__ = [
     "AgentFieldError",
     "AgentFieldClientError",
@@ -124,4 +148,5 @@ __all__ = [
     "MemoryAccessError",
     "RegistrationError",
     "ValidationError",
+    "HarnessProviderUnavailable",
 ]

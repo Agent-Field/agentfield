@@ -6,6 +6,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from agentfield.exceptions import HarnessProviderUnavailable
 
 from agentfield.harness.providers._factory import build_provider
 from agentfield.harness.providers.opencode import OpenCodeProvider
@@ -26,6 +27,13 @@ def _argv_prompt_path(monkeypatch: pytest.MonkeyPatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def mock_opencode_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "agentfield.harness._availability.shutil.which", lambda path: path
+    )
+
+
 @pytest.mark.asyncio
 async def test_opencode_provider_constructs_command_and_maps_result(
     monkeypatch: pytest.MonkeyPatch,
@@ -40,7 +48,6 @@ async def test_opencode_provider_constructs_command_and_maps_result(
         return "final text\n", "", 0
 
     monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
-
     provider = OpenCodeProvider(
         bin_path="/usr/local/bin/opencode",
     )
@@ -83,12 +90,8 @@ async def test_opencode_provider_returns_helpful_binary_not_found_error(
     provider = OpenCodeProvider(
         bin_path="opencode-missing",
     )
-    raw = await provider.execute("hello", {})
-
-    assert raw.is_error is True
-    assert "OpenCode binary not found at 'opencode-missing'" in (
-        raw.error_message or ""
-    )
+    with pytest.raises(HarnessProviderUnavailable, match="opencode-missing"):
+        await provider.execute("hello", {})
 
 
 @pytest.mark.asyncio

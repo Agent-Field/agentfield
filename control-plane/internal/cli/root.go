@@ -98,6 +98,7 @@ AI Agent? Run "af agent help" for structured JSON output optimized for programma
 
 	// Add doctor command — environment introspection for skills/coding agents
 	RootCmd.AddCommand(NewDoctorCommand())
+	RootCmd.AddCommand(NewHarnessCommand())
 
 	// Add skill command — install/manage AgentField skills across coding agents
 	RootCmd.AddCommand(NewSkillCommand())
