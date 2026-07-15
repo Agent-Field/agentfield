@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from agentfield.exceptions import HarnessProviderUnavailable
+from agentfield.harness._availability import ensure_cli_available, provider_unavailable
 from agentfield.harness.providers.codex import CodexProvider
 from agentfield.harness.providers.claude import ClaudeCodeProvider
 from agentfield.harness.providers.gemini import GeminiProvider
@@ -72,6 +73,20 @@ async def test_claude_raises_typed_error_when_wrapper_is_missing(monkeypatch):
     assert exc_info.value.provider == "claude-code"
     assert exc_info.value.binary == "claude_agent_sdk"
     assert "harness-claude" in exc_info.value.install_command
+
+
+@pytest.mark.parametrize("provider", ["claude-code", "some-future-provider"])
+def test_provider_without_spec_raises_typed_error_not_keyerror(monkeypatch, provider):
+    monkeypatch.setattr("agentfield.harness._availability.shutil.which", lambda _: None)
+
+    error = provider_unavailable(provider, "missing-binary")
+    assert isinstance(error, HarnessProviderUnavailable)
+    assert error.provider == provider
+    assert error.binary == "missing-binary"
+    assert error.install_command
+
+    with pytest.raises(HarnessProviderUnavailable):
+        ensure_cli_available(provider, "missing-binary")
 
 
 @pytest.mark.asyncio

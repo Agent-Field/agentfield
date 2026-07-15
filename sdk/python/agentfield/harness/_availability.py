@@ -35,6 +35,16 @@ PROVIDER_SPECS = {
     ),
 }
 
+# Providers without a PROVIDER_SPECS entry (claude-code today, or any future
+# provider) still get a helpful HarnessProviderUnavailable instead of a bare
+# KeyError.
+_FALLBACK_SPEC = ProviderSpec(
+    binary="",
+    version_args=(),
+    install_command="see docs/harness-providers.md for installation instructions",
+    auth_env_vars=(),
+)
+
 
 def ensure_cli_available(provider: str, binary: str) -> str:
     resolved = shutil.which(binary)
@@ -44,7 +54,7 @@ def ensure_cli_available(provider: str, binary: str) -> str:
 
 
 def provider_unavailable(provider: str, binary: str) -> HarnessProviderUnavailable:
-    spec = PROVIDER_SPECS[provider]
+    spec = PROVIDER_SPECS.get(provider, _FALLBACK_SPEC)
     return HarnessProviderUnavailable(
         provider,
         binary=binary,

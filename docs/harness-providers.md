@@ -43,19 +43,11 @@ for report in reports:
     print(report.provider, report.usable, report.issues)
 ```
 
-TypeScript agents expose the same operation:
+The preflight currently ships in the Python SDK and the `af` CLI. Equivalent
+TypeScript and Go SDK APIs are planned follow-ups (see #685) and are not
+available yet.
 
-```typescript
-const reports = await agent.harnessDoctor(["codex", "opencode"]);
-```
-
-Go callers can run the package-level preflight:
-
-```go
-reports, err := harness.Doctor(ctx, []string{harness.ProviderCodex})
-```
-
-All three SDKs report the provider name, resolved binary, installed state,
+Each report includes the provider name, resolved binary, installed state,
 version, auth state, usability, installation command, recognized auth variables,
 and machine-readable issues.
 

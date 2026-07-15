@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -30,7 +33,10 @@ type harnessProviderSpec struct {
 }
 
 var harnessProviderSpecs = []harnessProviderSpec{
-	{Name: "claude-code", Binary: "claude", InstallCommand: "npm install -g @anthropic-ai/claude-code", AuthEnvVars: []string{"ANTHROPIC_API_KEY"}},
+	// claude-code has no Binary: the Python provider runs on the
+	// claude_agent_sdk pip package (which bundles its own CLI), not on a
+	// globally installed `claude` binary. See claudeCodeHealth.
+	{Name: "claude-code", InstallCommand: "pip install 'agentfield[harness-claude]'", AuthEnvVars: []string{"ANTHROPIC_API_KEY"}},
 	{Name: "codex", Binary: "codex", InstallCommand: "npm install -g @openai/codex", AuthEnvVars: []string{"OPENAI_API_KEY"}},
 	{Name: "gemini", Binary: "gemini", InstallCommand: "npm install -g @google/gemini-cli", AuthEnvVars: []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}},
 	{Name: "opencode", Binary: "opencode", InstallCommand: "curl -fsSL https://opencode.ai/install | bash", AuthEnvVars: []string{}},
@@ -99,6 +105,10 @@ func buildHarnessDoctorReports(requested []string) ([]HarnessProviderHealth, err
 		if len(selected) > 0 && !selected[spec.Name] {
 			continue
 		}
+		if spec.Name == "claude-code" {
+			reports = append(reports, claudeCodeHealth(spec))
+			continue
+		}
 		tool := checkTool(spec.Binary, "--version")
 		issues := []string{}
 		if !tool.Available {
@@ -106,19 +116,12 @@ func buildHarnessDoctorReports(requested []string) ([]HarnessProviderHealth, err
 		} else if tool.Version == "" {
 			issues = append(issues, "version_probe_failed")
 		}
-		auth := "unknown"
-		for _, envVar := range spec.AuthEnvVars {
-			if strings.TrimSpace(os.Getenv(envVar)) != "" {
-				auth = "configured"
-				break
-			}
-		}
 		reports = append(reports, HarnessProviderHealth{
 			Provider:       spec.Name,
 			Binary:         tool.Path,
 			Installed:      tool.Available,
 			Version:        tool.Version,
-			Auth:           auth,
+			Auth:           harnessAuthStatus(spec.AuthEnvVars),
 			Usable:         tool.Available && tool.Version != "",
 			InstallCommand: spec.InstallCommand,
 			AuthEnvVars:    append([]string{}, spec.AuthEnvVars...),
@@ -126,6 +129,68 @@ func buildHarnessDoctorReports(requested []string) ([]HarnessProviderHealth, err
 		})
 	}
 	return reports, nil
+}
+
+// claudeWrapperProbe asks a Python interpreter whether the claude_agent_sdk
+// package is importable, exiting zero either way so a non-zero exit always
+// means the interpreter itself is unusable.
+const claudeWrapperProbe = "import importlib.util, sys; sys.stdout.write('ok' if importlib.util.find_spec('claude_agent_sdk') else 'missing')"
+
+var pythonInterpreterCandidates = []string{"python3", "python", "py"}
+
+// claudeCodeHealth mirrors the Python doctor's semantics for claude-code
+// (sdk/python/agentfield/harness/_doctor.py::_claude_health): the provider is
+// usable when the claude_agent_sdk pip package is importable — it bundles its
+// own CLI — so a globally installed `claude` binary is neither necessary nor
+// sufficient.
+func claudeCodeHealth(spec harnessProviderSpec) HarnessProviderHealth {
+	installed, pythonFound := probeClaudeWrapper()
+	issues := []string{}
+	if !pythonFound {
+		issues = append(issues, "python_not_found")
+	} else if !installed {
+		issues = append(issues, "wrapper_not_installed")
+	}
+	return HarnessProviderHealth{
+		Provider:       spec.Name,
+		Installed:      installed,
+		Auth:           harnessAuthStatus(spec.AuthEnvVars),
+		Usable:         installed,
+		InstallCommand: spec.InstallCommand,
+		AuthEnvVars:    append([]string{}, spec.AuthEnvVars...),
+		Issues:         issues,
+	}
+}
+
+// probeClaudeWrapper reports whether claude_agent_sdk is importable and
+// whether a working Python interpreter was found at all. Candidates are
+// run-probed rather than merely resolved on PATH because dead launcher stubs
+// (e.g. the Windows Store python3 alias) resolve but fail when executed.
+func probeClaudeWrapper() (installed bool, pythonFound bool) {
+	for _, interpreter := range pythonInterpreterCandidates {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		out, err := exec.CommandContext(ctx, interpreter, "-c", claudeWrapperProbe).Output()
+		cancel()
+		if err != nil {
+			continue
+		}
+		switch strings.TrimSpace(string(out)) {
+		case "ok":
+			return true, true
+		case "missing":
+			return false, true
+		}
+	}
+	return false, false
+}
+
+func harnessAuthStatus(envVars []string) string {
+	for _, envVar := range envVars {
+		if strings.TrimSpace(os.Getenv(envVar)) != "" {
+			return "configured"
+		}
+	}
+	return "unknown"
 }
 
 func findHarnessProviderSpec(name string) *harnessProviderSpec {
