@@ -519,7 +519,7 @@ class ScopedMemoryClient:
         self,
         memory_client: MemoryClient,
         scope: str,
-        scope_id: str,
+        scope_id: Optional[str],
         event_client: Optional[MemoryEventClient] = None,
     ):
         self.memory_client = memory_client
@@ -720,7 +720,7 @@ class GlobalMemoryClient:
 
 
 # Scopes that a developer may target explicitly via the convenience kwargs on
-# MemoryInterface.set/get/delete. These are the canonical scope names the
+# MemoryInterface.set/get/delete/similarity_search. These are the canonical scope names the
 # control plane understands (see control-plane memory handlers). "global" is a
 # singleton scope and needs no scope_id; the other three may use scope_id or the
 # current execution context headers already carried by MemoryClient.
@@ -743,9 +743,10 @@ class MemoryInterface:
         await app.memory.workflow(workflow_id).set("step1", {...})
 
     As a convenience (and to mirror the TypeScript SDK), ``set``/``get``/``delete``
-    also accept optional ``scope`` and ``scope_id`` keyword arguments. Passing
-    ``scope=None`` (the default) keeps the automatic hierarchical behavior; passing
-    an explicit scope routes to the equivalent accessor above.
+    and ``similarity_search`` also accept optional ``scope`` and ``scope_id``
+    keyword arguments. Passing ``scope=None`` (the default) keeps the automatic
+    hierarchical behavior; passing an explicit scope routes to the equivalent
+    accessor above.
     """
 
     def __init__(self, memory_client: MemoryClient, event_client: MemoryEventClient):
@@ -759,8 +760,9 @@ class MemoryInterface:
         Map an explicit ``scope``/``scope_id`` pair to the equivalent scoped client.
 
         This is the shared dispatch used by the ``scope`` kwargs on
-        ``set``/``get``/``delete``. It reuses the existing accessor clients so the
-        convenience layer stays a thin wrapper over one code path.
+        ``set``/``get``/``delete``/``similarity_search``. It reuses the existing
+        accessor clients so the convenience layer stays a thin wrapper over one
+        code path.
 
         Args:
             scope: One of ``"global"``, ``"session"``, ``"actor"``, ``"workflow"``.
@@ -944,14 +946,45 @@ class MemoryInterface:
         query_embedding: Union[Sequence[float], Any],
         top_k: int = 10,
         filters: Optional[Dict[str, Any]] = None,
+        scope: Optional[str] = None,
+        scope_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Search stored vectors using similarity matching.
 
+        By default (``scope=None``) the search uses the current execution
+        context, matching today's behavior. When an explicit ``scope`` is
+        passed, only vectors in that scope are searched (matching the
+        accessor API and the TypeScript SDK's ``searchVector``)::
+
+            await app.memory.similarity_search(embedding, top_k=5, scope="global")
+            await app.memory.similarity_search(
+                embedding, scope="session", scope_id=session_id
+            )
+
+        Args:
+            query_embedding: The query vector to match against stored vectors.
+            top_k: Maximum number of results to return.
+            filters: Optional metadata filters applied to candidates.
+            scope: Optional explicit scope. One of ``"global"``, ``"session"``,
+                ``"actor"``, ``"workflow"``. ``None`` keeps the current behavior.
+            scope_id: Optional identifier for the scope. When omitted for
+                ``session``/``actor``/``workflow``, the current execution context
+                headers are used; ignored for ``global``.
+
+        Returns:
+            A list of match dictionaries ordered by similarity.
+
         Raises:
+            ValueError: If ``scope`` is invalid.
             MemoryAccessError: If the memory backend request fails.
         """
-        return await self.memory_client.similarity_search(
+        if scope is None:
+            return await self.memory_client.similarity_search(
+                query_embedding, top_k=top_k, filters=filters
+            )
+
+        return await self._resolve_scope_target(scope, scope_id).similarity_search(
             query_embedding, top_k=top_k, filters=filters
         )
 

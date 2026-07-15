@@ -1,7 +1,7 @@
 """Unit tests for the convenience ``scope``/``scope_id`` kwargs on MemoryInterface.
 
-These cover the developer-facing ``app.memory.set/get/delete`` convenience layer
-added to mirror the TypeScript SDK. The kwargs delegate to the same scoped clients
+These cover the developer-facing ``app.memory.set/get/delete/similarity_search``
+convenience layer added to mirror the TypeScript SDK. The kwargs delegate to the same scoped clients
 the accessor API (``global_scope``/``session()``/``actor()``/``workflow()``) uses,
 so the tests assert the delegation reaches the underlying MemoryClient with the
 right scope/scope_id.
@@ -30,6 +30,9 @@ def interface(memory_client):
     memory_client.set = AsyncMock()  # type: ignore[assignment]
     memory_client.get = AsyncMock(return_value="stored")  # type: ignore[assignment]
     memory_client.delete = AsyncMock()  # type: ignore[assignment]
+    memory_client.similarity_search = AsyncMock(  # type: ignore[assignment]
+        return_value=[{"key": "match", "score": 0.9}]
+    )
     return MemoryInterface(memory_client, None)  # type: ignore[arg-type]
 
 
@@ -204,3 +207,64 @@ async def test_global_scope_ignores_scope_id(interface):
     interface.memory_client.set.assert_awaited_once_with(
         "config", {"v": 1}, scope="global"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Explicit scope kwarg delegation — similarity_search
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_similarity_search_default_scope_unchanged(interface):
+    result = await interface.similarity_search([0.1, 0.2], top_k=5)
+    interface.memory_client.similarity_search.assert_awaited_once_with(
+        [0.1, 0.2], top_k=5, filters=None
+    )
+    assert result == [{"key": "match", "score": 0.9}]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_similarity_search_scope_global(interface):
+    result = await interface.similarity_search([0.1, 0.2], scope="global")
+    interface.memory_client.similarity_search.assert_awaited_once_with(
+        [0.1, 0.2], top_k=10, scope="global", filters=None
+    )
+    assert result == [{"key": "match", "score": 0.9}]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["session", "actor", "workflow"])
+async def test_similarity_search_scope_with_id(interface, scope):
+    await interface.similarity_search(
+        [0.3],
+        top_k=3,
+        filters={"kind": "doc"},
+        scope=scope,
+        scope_id="id-123",
+    )
+    interface.memory_client.similarity_search.assert_awaited_once_with(
+        [0.3], top_k=3, scope=scope, scope_id="id-123", filters={"kind": "doc"}
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["session", "actor", "workflow"])
+async def test_similarity_search_scope_without_id_uses_current_context(
+    interface, scope
+):
+    await interface.similarity_search([0.3], scope=scope)
+    interface.memory_client.similarity_search.assert_awaited_once_with(
+        [0.3], top_k=10, scope=scope, scope_id=None, filters=None
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_invalid_scope_raises_on_similarity_search(interface):
+    with pytest.raises(ValueError):
+        await interface.similarity_search([0.1], scope="run")
+    interface.memory_client.similarity_search.assert_not_awaited()
