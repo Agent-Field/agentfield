@@ -169,7 +169,7 @@ describe('AppUpdater.install', () => {
   const withUpdate = async (overrides: Partial<AppUpdaterDeps>) => {
     const calls: Record<string, unknown[]> = { launch: [], quit: [], external: [], open: [] }
     const fetchImpl = ((url: unknown) =>
-      String(url).includes('api.github.com')
+      new URL(String(url)).hostname === 'api.github.com'
         ? Promise.resolve(new Response(JSON.stringify(RELEASE)))
         : Promise.resolve(new Response('installer-bytes'))) as typeof fetch
     const updater = new AppUpdater(
@@ -226,7 +226,7 @@ describe('AppUpdater.install', () => {
 
   it('a failed download lands in status.error and resets the flow', async () => {
     const fetchImpl = ((url: unknown) =>
-      String(url).includes('api.github.com')
+      new URL(String(url)).hostname === 'api.github.com'
         ? Promise.resolve(new Response(JSON.stringify(RELEASE)))
         : Promise.reject(new Error('connection reset'))) as typeof fetch
     const updater = new AppUpdater(deps({ fetchImpl }))
