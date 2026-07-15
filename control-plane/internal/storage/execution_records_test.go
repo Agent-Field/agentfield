@@ -388,6 +388,105 @@ func derefOrEmptyTest(s *string) string {
 	return *s
 }
 
+// TestQueryRunSummariesSessionRunMembership reproduces the live wedge-heuristic
+// false alarm: a session-scoped /executions/active poll must count a run's
+// in-process child executions even though only the root row carries session_id.
+// Child records created through the workflow-execution-events path (SDK
+// CallLocal) are persisted without a session_id, so a row-level session_id = ?
+// filter collapsed the whole run to its root alone (total/active stuck at 1,
+// latest_activity frozen at dispatch). The filter is run-level membership.
+func TestQueryRunSummariesSessionRunMembership(t *testing.T) {
+	ls, ctx := setupLocalStorage(t)
+
+	base := time.Date(2024, 4, 1, 8, 0, 0, 0, time.UTC)
+	session := "claude-subharness-test"
+	rootID := "exec-session-root"
+
+	sessionRun := []*types.Execution{
+		// Root carries the session id (set by the dispatch path).
+		{
+			ExecutionID: rootID,
+			RunID:       "run-session",
+			AgentNodeID: "pr-af-go",
+			ReasonerID:  "review",
+			NodeID:      "pr-af-go",
+			Status:      string(types.ExecutionStatusRunning),
+			SessionID:   &session,
+			StartedAt:   base,
+			CreatedAt:   base,
+			UpdatedAt:   base,
+		},
+	}
+	// Two in-process child calls with NO session_id — the shape the
+	// workflow-execution-events path persists. One still running, one done.
+	childStatuses := []string{
+		string(types.ExecutionStatusSucceeded),
+		string(types.ExecutionStatusRunning),
+	}
+	for i, status := range childStatuses {
+		child := &types.Execution{
+			ExecutionID:       "exec-session-child-" + string(rune('a'+i)),
+			RunID:             "run-session",
+			ParentExecutionID: &rootID,
+			AgentNodeID:       "pr-af-go",
+			ReasonerID:        "verify_obligation",
+			NodeID:            "pr-af-go",
+			Status:            status,
+			// SessionID deliberately nil.
+			StartedAt: base.Add(time.Duration(i+1) * time.Minute),
+			CreatedAt: base.Add(time.Duration(i+1) * time.Minute),
+			UpdatedAt: base.Add(time.Duration(i+1) * time.Minute),
+		}
+		sessionRun = append(sessionRun, child)
+	}
+	// A second run in a different session that must NOT leak into the results.
+	otherSession := "someone-else"
+	sessionRun = append(sessionRun, &types.Execution{
+		ExecutionID: "exec-other-root",
+		RunID:       "run-other",
+		AgentNodeID: "pr-af-go",
+		ReasonerID:  "review",
+		NodeID:      "pr-af-go",
+		Status:      string(types.ExecutionStatusRunning),
+		SessionID:   &otherSession,
+		StartedAt:   base,
+		CreatedAt:   base,
+		UpdatedAt:   base,
+	})
+	for _, exec := range sessionRun {
+		require.NoError(t, ls.CreateExecutionRecord(ctx, exec))
+	}
+
+	results, total, err := ls.QueryRunSummaries(ctx, types.ExecutionFilter{
+		ActiveOnly: true,
+		SessionID:  &session,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Len(t, results, 1)
+
+	run := results[0]
+	require.Equal(t, "run-session", run.RunID)
+	// Root + both children counted — not collapsed to the root alone.
+	require.Equal(t, 3, run.TotalExecutions)
+	require.Equal(t, 2, run.StatusCounts[string(types.ExecutionStatusRunning)])
+	require.Equal(t, 1, run.StatusCounts[string(types.ExecutionStatusSucceeded)])
+	require.Equal(t, 2, run.ActiveExecutions)
+	// Run's session id is still reported from the root row.
+	require.Equal(t, session, derefOrEmptyTest(run.SessionID))
+
+	// The other session's run must not appear.
+	other, otherTotal, err := ls.QueryRunSummaries(ctx, types.ExecutionFilter{
+		ActiveOnly: true,
+		SessionID:  &otherSession,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, otherTotal)
+	require.Len(t, other, 1)
+	require.Equal(t, "run-other", other[0].RunID)
+	require.Equal(t, 1, other[0].TotalExecutions)
+}
+
 func TestQueryRunSummariesClampsLimit(t *testing.T) {
 	ls, ctx := setupLocalStorage(t)
 

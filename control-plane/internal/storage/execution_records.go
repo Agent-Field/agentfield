@@ -379,7 +379,16 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 		args = append(args, *filter.Status)
 	}
 	if filter.SessionID != nil {
-		where = append(where, "session_id = ?")
+		// Run-level membership: keep every row of any run whose root is in this
+		// session. Only the root execution carries session_id — child records
+		// created through the workflow-execution-events path (SDK CallLocal /
+		// in-process composition) are persisted without one. A plain
+		// session_id = ? here would drop all those children before GROUP BY,
+		// collapsing a session-scoped active run to its root alone:
+		// total_/active_executions stuck at 1 and latest_activity frozen at the
+		// root's dispatch time for the whole run, false-alarming the wedge
+		// heuristic on every legitimate long run.
+		where = append(where, "run_id IN (SELECT run_id FROM executions WHERE session_id = ?)")
 		args = append(args, *filter.SessionID)
 	}
 	if filter.ActorID != nil {
