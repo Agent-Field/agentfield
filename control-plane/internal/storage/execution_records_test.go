@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -320,6 +321,32 @@ func TestQueryRunSummariesActiveOnly(t *testing.T) {
 	require.Equal(t, 1, total)
 	require.Len(t, results, 1)
 	require.Equal(t, "run-queued", results[0].RunID)
+}
+
+func TestQueryRunSummariesClampsLimit(t *testing.T) {
+	ls, ctx := setupLocalStorage(t)
+
+	base := time.Date(2024, 3, 1, 8, 0, 0, 0, time.UTC)
+	require.NoError(t, ls.CreateExecutionRecord(ctx, &types.Execution{
+		ExecutionID: "exec-clamp",
+		RunID:       "run-clamp",
+		AgentNodeID: "agent-x",
+		ReasonerID:  "review",
+		NodeID:      "node-x",
+		Status:      string(types.ExecutionStatusSucceeded),
+		StartedAt:   base,
+		CreatedAt:   base,
+		UpdatedAt:   base,
+	}))
+
+	// Limit pre-sizes the result slices; without the maxRunSummaryLimit clamp
+	// this request would attempt a multi-gigabyte allocation before reading a
+	// single row.
+	results, total, err := ls.QueryRunSummaries(ctx, types.ExecutionFilter{Limit: math.MaxInt32})
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Len(t, results, 1)
+	require.Equal(t, "run-clamp", results[0].RunID)
 }
 
 func pointerTime(t time.Time) *time.Time {

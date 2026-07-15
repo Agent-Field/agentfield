@@ -347,6 +347,11 @@ func (ls *LocalStorage) QueryExecutionRecords(ctx context.Context, filter types.
 	return executions, nil
 }
 
+// maxRunSummaryLimit caps filter.Limit in QueryRunSummaries. The limit
+// pre-sizes result slices, so an unchecked request-supplied value would let
+// one call allocate gigabytes up front (CodeQL go/uncontrolled-allocation-size).
+const maxRunSummaryLimit = 1000
+
 // QueryRunSummaries returns aggregated statistics for workflow runs without fetching all execution records.
 // The implementation uses a single GROUP BY query plus a lightweight COUNT for total runs to stay fast even
 // when page_size is large.
@@ -422,9 +427,15 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 		return []*RunSummaryAggregation{}, 0, nil
 	}
 
+	// Every API caller clamps its page size (UI ≤200, agentic ≤100, af ps
+	// ≤200), but limit sizes the result pre-allocations below, so the
+	// storage layer enforces its own ceiling rather than trusting callers.
 	limit := filter.Limit
 	if limit <= 0 {
 		limit = 20
+	}
+	if limit > maxRunSummaryLimit {
+		limit = maxRunSummaryLimit
 	}
 	offset := filter.Offset
 	if offset < 0 {
