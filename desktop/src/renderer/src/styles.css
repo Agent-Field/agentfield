@@ -193,6 +193,14 @@ body[data-platform='win32'] .view-header {
   width: 100%;
 }
 
+/* Children keep their natural height. Without this, a view taller than the
+   window (Settings, long agent lists) gets its panels squeezed to fit —
+   flex-shrink compresses them instead of letting the column overflow into
+   .view-body's scrollbar. */
+.view-body > * {
+  flex: none;
+}
+
 .view-lede {
   margin: -6px 0 0;
   color: var(--text-secondary);
@@ -585,6 +593,12 @@ body[data-platform='win32'] .view-header {
 
 .env-input:focus {
   border-color: var(--accent);
+}
+
+/* Install-from-repository field: the URL wants the full row width, unlike the
+   fixed-width secret inputs. */
+.repo-input {
+  width: 100%;
 }
 
 /* Reserved slot: keeps the input column aligned across rows whether or not

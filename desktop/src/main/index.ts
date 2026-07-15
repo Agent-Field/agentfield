@@ -8,7 +8,8 @@ import { DEFAULT_BASE_URL, getSnapshot } from './agentfield'
 import { type AgentAction, runAgentAction, uninstallAgent } from './agents'
 import { runAutostart } from './autostart'
 import { getCliCommand, initializeCli, installBundledCli, refreshCliStatus } from './cli'
-import { installAgent, updateAgent } from './installer'
+import { childEnv, initUserPath } from './env'
+import { installAgent, installFromSource, updateAgent } from './installer'
 import {
   getEnvReports,
   listStoredSecrets,
@@ -18,6 +19,7 @@ import {
 } from './secrets'
 import { loadSettings, mergeSettings, saveSettings } from './settings'
 import { setupTray } from './tray'
+import { syncTrayCompanion } from './tray-companion'
 import { AppUpdater } from './updates'
 import appIcon from '../../resources/icon.png?asset'
 
@@ -149,6 +151,12 @@ function flushPendingView(): void {
 /** Bring the app forward and, when a deep link named a view, switch to it. */
 function navigate(view: View | null): void {
   if (view) pendingView = view
+  // Deep links can land before the app is ready — macOS delivers a cold-start
+  // agentfield:// URL as an open-url event that can fire ahead of whenReady.
+  // Constructing a BrowserWindow before app.whenReady() throws, so just stash
+  // the view: the whenReady path builds the window and, once the renderer
+  // announces itself, flushes pendingView (agentfield:renderer-ready).
+  if (!app.isReady()) return
   showMainWindow()
   flushPendingView()
 }
@@ -184,6 +192,28 @@ function bundledCliPath(): string {
     : join(app.getAppPath(), 'vendor', name)
 }
 
+// The af-tray menu-bar companion shipped inside the app package (macOS only;
+// see build.extraResources). Same layout as bundledCliPath — resources/bin when
+// packaged, desktop/vendor in dev (npm run bundle-cli drops it there).
+function bundledTrayPath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'bin', 'af-tray')
+    : join(app.getAppPath(), 'vendor', 'af-tray')
+}
+
+// macOS only: provision + install (or, when toggled off, uninstall) the af-tray
+// menu-bar companion. Fire-and-forget like syncSkills — errors are logged, never
+// thrown — and safe to call repeatedly (planTray only runs `af-tray install`
+// when the binary changed or the launchd agent isn't loaded).
+function syncTray(enabled: boolean): void {
+  if (!isMac) return
+  void syncTrayCompanion(enabled, bundledTrayPath())
+    .then((r) => {
+      if (!r.ok) console.error('tray companion:', r.message)
+    })
+    .catch((err) => console.error('tray companion failed:', err))
+}
+
 // Keep the AgentField skills present in detected coding agents (Claude Code,
 // Codex, Gemini, …): the builder skill (agentfield) and the consumer skill
 // (agentfield-use — how to discover and call installed agents). One install
@@ -196,7 +226,8 @@ function syncSkills(names = ['agentfield', 'agentfield-use']): void {
   if (!head) return
   spawn(getCliCommand(), ['skill', 'install', head, '--non-interactive'], {
     windowsHide: true,
-    stdio: 'ignore'
+    stdio: 'ignore',
+    env: childEnv()
   })
     .on('error', () => {})
     .on('close', () => syncSkills(rest))
@@ -206,10 +237,23 @@ function syncSkills(names = ['agentfield', 'agentfield-use']): void {
 // electron.exe as a login item would be wrong and confusing.
 function applyLoginItem(next: DesktopSettings): void {
   if (!app.isPackaged) return
+  // Only touch the OS when the desired state differs. Registering is not free:
+  // on macOS an unsigned app (or one running outside /Applications) is refused
+  // by SMAppService with a logged "Operation not permitted" — calling it with
+  // an unchanged openAtLogin=false would emit that noise on every launch.
+  if (app.getLoginItemSettings().openAtLogin === next.openAtLogin) return
   app.setLoginItemSettings({
     openAtLogin: next.openAtLogin,
-    // Started at login the app stays out of the way: tray only, no window.
-    args: ['--hidden']
+    // Started at login the app stays out of the way: no window on show.
+    // macOS launches login items with openAsHidden; Windows/Linux ignore that
+    // field and honor the --hidden arg the startup guard reads instead.
+    //
+    // CAVEAT (macOS 13+): login items are now managed by SMAppService, which
+    // treats openAsHidden / wasOpenedAsHidden as legacy and may ignore them —
+    // the window can still appear at login on modern macOS. This is a
+    // best-effort request; the OS gives no reliable "start hidden" there.
+    openAsHidden: isMac,
+    args: isMac ? [] : ['--hidden']
   })
 }
 
@@ -235,11 +279,23 @@ function main(): void {
     settings = await loadSettings(settingsFile())
     applyLoginItem(settings)
 
+    // Resolve the user's real login-shell PATH once (Finder/Dock launches
+    // inherit launchd's minimal PATH — see main/env.ts). Kicked off here so it
+    // runs in parallel with CLI resolution; awaited before autostart, the main
+    // spawn path. Until it lands, spawns fall back to process.env.PATH plus the
+    // well-known dirs, so nothing breaks in the meantime.
+    const userPathReady = initUserPath()
+
     // Resolve which af to drive (managed → PATH → bundled); on a machine
     // with no AgentField at all this provisions the bundled CLI, so a
     // desktop-app-only install still gets a working `af`.
     await initializeCli(bundledCliPath())
     if (settings.installSkills) syncSkills()
+
+    // macOS only: provision + install the af-tray menu-bar companion so a
+    // desktop-app-only install gets the menu-bar icon. Runs after initializeCli
+    // (it needs the managed bin dir to exist) and non-blocking, like syncSkills.
+    syncTray(settings.trayCompanion)
 
     ipcMain.handle('agentfield:snapshot', () => getSnapshot())
     ipcMain.handle('agentfield:catalog', () => CATALOG)
@@ -253,6 +309,29 @@ function main(): void {
       installInFlight = true
       try {
         return await installAgent(name, (line) => {
+          if (!event.sender.isDestroyed()) {
+            event.sender.send('agentfield:install-progress', line)
+          }
+        })
+      } finally {
+        installInFlight = false
+      }
+    })
+    // Install from a pasted GitHub repo URL. Shares the SAME install mutex and
+    // the SAME progress channel as catalog installs — only one install of any
+    // kind runs at a time. The source is raw renderer input; installFromSource
+    // (via parseRepoSource) is the shape guard that keeps it to github.com
+    // https URLs and never a CLI flag.
+    ipcMain.handle('agentfield:install-source', async (event, source: unknown) => {
+      if (typeof source !== 'string') {
+        return { ok: false, message: 'invalid install request' }
+      }
+      if (installInFlight) {
+        return { ok: false, message: 'an install is already in progress' }
+      }
+      installInFlight = true
+      try {
+        return await installFromSource(source, (line) => {
           if (!event.sender.isDestroyed()) {
             event.sender.send('agentfield:install-progress', line)
           }
@@ -351,8 +430,9 @@ function main(): void {
     const updater = new AppUpdater({
       currentVersion: app.getVersion(),
       platform: process.platform,
+      // arch picks the matching macOS DMG (arm64 vs x64) — see updates.ts.
+      arch: process.arch,
       tempDir: app.getPath('temp'),
-      openExternal: (url) => void shell.openExternal(url),
       openPath: (path) => shell.openPath(path),
       // Give the installer a beat to start, then get out of its way — the
       // NSIS one-click installer replaces the app in place and relaunches.
@@ -372,8 +452,11 @@ function main(): void {
     if (app.isPackaged) updater.startAutoCheck()
     ipcMain.handle('agentfield:settings-get', () => settings)
     ipcMain.handle('agentfield:settings-set', async (_event, patch: unknown) => {
+      const prev = settings
       settings = mergeSettings(settings, patch)
       applyLoginItem(settings)
+      // macOS: reflect a flipped tray toggle (install ↔ uninstall) right away.
+      if (settings.trayCompanion !== prev.trayCompanion) syncTray(settings.trayCompanion)
       await saveSettings(settingsFile(), settings)
       return settings
     })
@@ -387,15 +470,25 @@ function main(): void {
     const initial = deepLinkFromArgv(process.argv)
     if (initial) pendingView = initial
 
-    // Login-item launches pass --hidden: stay in the tray, no window. Without
-    // a tray to live in, fall back to showing the window as usual.
-    if (!process.argv.includes('--hidden') || !trayActive) {
+    // Suppress the initial window when we were launched hidden at login. On
+    // Windows/Linux that is signalled by the --hidden arg we register; on macOS
+    // by wasOpenedAsHidden (best-effort — SMAppService may ignore it on macOS
+    // 13+, see applyLoginItem). A windowless macOS app is fine (the Dock and
+    // the af-tray companion reopen it); on Windows/Linux only stay hidden when
+    // a tray exists to live in, else there would be no way back to the window.
+    const openedHidden = isMac
+      ? app.getLoginItemSettings().wasOpenedAsHidden
+      : process.argv.includes('--hidden')
+    if (!openedHidden || (!isMac && !trayActive)) {
       createWindow()
     }
 
-    // Bring the control plane and the selected agents up in the background.
-    runAutostart(settings, (message) => console.log(message)).catch((err) =>
-      console.error('autostart failed:', err)
+    // Bring the control plane and the selected agents up in the background,
+    // once the real PATH is resolved so af's subprocesses (go, uv, …) resolve.
+    void userPathReady.finally(() =>
+      runAutostart(settings, (message) => console.log(message)).catch((err) =>
+        console.error('autostart failed:', err)
+      )
     )
 
     app.on('activate', () => {

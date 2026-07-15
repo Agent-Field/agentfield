@@ -36,15 +36,18 @@
         "to": "bin",
         "filter": [
           "af",
-          "af.exe"
+          "af.exe",
+          "af-tray"
         ]
       }
     ],
     "directories": {
       "output": "release"
     },
+    "afterPack": "scripts/macos-adhoc-sign.mjs",
     "mac": {
       "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns",
       "target": [
         "dmg",
         "zip"

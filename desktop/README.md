@@ -17,12 +17,19 @@ navigation, light/dark from the OS.
   - `unknown` — registry and control plane disagree (stale registry / conflict)
 - **Activity** — in-flight workflow runs (live pulse) and a short tail of
   finished ones, from `GET /api/ui/v2/workflow-runs`.
-- **Install** — a curated, hard-coded catalog (`src/shared/catalog.ts`).
-  Installing shells out to `af install <source>` and streams progress lines
-  into the row; the af CLI stays the single contract for installs. Entries
-  are keyed by the node's manifest name so installed state is detected. The
-  hard-coded list is the pre-marketplace seam — replace with a remote catalog
-  fetch when registry search lands.
+- **Install** — a curated, hard-coded catalog (`src/shared/catalog.ts`)
+  plus an **Install from repository** field for pasting any GitHub repo that
+  hosts an installable node (`https://github.com/<owner>/<repo>`, or
+  `…/<repo>//<subdir>` to pick one node out of a multi-node repo). Both shell
+  out to `af install <source>` and stream progress lines into the row; the af
+  CLI stays the single contract for installs. Catalog entries are keyed by the
+  node's manifest name so installed state is detected. The hard-coded list is
+  the pre-marketplace seam — replace with a remote catalog fetch when registry
+  search lands. Security: catalog installs only ever send a curated name; the
+  paste-a-repo channel is the one place a raw source reaches the main process,
+  and it is validated there to an `https://github.com/…` shape before spawn
+  (`parseRepoSource` in `src/main/installer.ts`) — no other host or scheme, and
+  never a value that could be read as a CLI flag.
 - **Settings** — the "set it and forget it" surface: open at login (hidden,
   tray-only, via an OS login item), start the control plane automatically,
   and pick which agents auto-start. Persisted to `settings.json` in the
@@ -78,9 +85,23 @@ variables the manifest declares.
 On Windows and Linux the app puts a status icon in the tray: the brand dot
 turns gold while the control plane is running and gray otherwise, and the
 menu offers Open AgentField / Open web UI / Quit. Closing the window hides it
-to the tray (Docker-Desktop style) — Quit lives in the tray menu. On macOS the
-desktop app adds **no** tray: the menu-bar companion there is `af-tray`,
-installed with AgentField itself (`control-plane/cmd/af-tray`).
+to the tray (Docker-Desktop style) — Quit lives in the tray menu.
+
+On macOS the desktop app adds **no** in-app tray: the menu-bar companion there
+is `af-tray` (`control-plane/cmd/af-tray`), and **the app now provisions and
+installs it itself** (`src/main/tray-companion.ts`). On launch it stages the
+bundled `af-tray` into `~/.agentfield/bin/af-tray` — the same managed location
+the curl installer uses, so both installers converge there — and runs `af-tray
+install`, which builds `~/Applications/AgentField.app` and the launchd agents.
+A desktop-app-only install therefore gets the menu-bar icon without ever running
+the curl installer. It only re-stages when the bundled copy is a newer stamped
+version (via `af-tray version`, matching how `cli.ts` gates the CLI), and only
+re-runs `af-tray install` when the binary changed or the tray's launchd agent
+is not loaded — never unconditionally, since install reloads launchd and would
+blink the tray on every launch. The **Show the menu bar icon** toggle in
+Settings (macOS only) drives this: turning it off runs `af-tray uninstall`. The
+bundled `af-tray` is built by `npm run bundle-cli` on macOS only (it carries the
+systray/CGO dependency); Windows/Linux keep the in-app tray instead.
 
 The app registers the `agentfield://` URL scheme (single-instance: a second
 launch focuses the running app). `agentfield://dashboard|agents|activity|install`
@@ -175,9 +196,10 @@ Packaging is unsigned for now (no notarization/signing identities configured).
 - **All Node-side data access lives in `src/main/agentfield.ts`** (registry
   parsing, control-plane HTTP probes, badge derivation, executions/metrics
   fetch, snapshot composition) and **installs in `src/main/installer.ts`**
-  (spawns `af install`, sanitizes spinner/ANSI output, only accepts catalog
-  names — never raw sources — from the renderer). Neither imports Electron,
-  so both are unit-tested directly with Vitest.
+  (spawns `af install`, sanitizes spinner/ANSI output, accepts curated catalog
+  names from the renderer plus — on the one Install-from-repository channel —
+  a raw source that `parseRepoSource` validates to a github.com https URL).
+  Neither imports Electron, so both are unit-tested directly with Vitest.
 - **Secure Electron layout:** the renderer runs with `contextIsolation: true`,
   `nodeIntegration: false`, `sandbox: true`. The preload
   (`src/preload/index.ts`) exposes a small typed API via `contextBridge`.
@@ -197,10 +219,16 @@ Packaging is unsigned for now (no notarization/signing identities configured).
 - No stop control for the control plane itself yet (the app only starts it).
 - macOS/Linux shell PATH setup stays with the curl installer — the app only
   provisions `~/.agentfield/bin` there (absolute path always works).
+- The macOS `af-tray` companion installs its own `~/Applications/AgentField.app`
+  wrapper — a second bundle named "AgentField" distinct from this desktop app in
+  `/Applications`. Harmless (the tray bundle is `LSUIElement`, menu-bar only) but
+  a naming collision; disambiguating it is a separate, out-of-scope decision.
 - The registry is read directly from `~/.agentfield/installed.yaml`; once
   `af list -o json` lands, the app should shell out to the CLI instead (see
   the `TODO(af-cli)` seam in `src/main/agentfield.ts`).
-- macOS chrome (traffic-light inset, vibrancy) is implemented per platform
-  guards but has only been exercised on Windows so far — needs one smoke run
-  on a real Mac. Same for macOS deep-link delivery (`open-url`).
-- Packaging is unsigned; add signing/notarization before distribution.
+- Packaging has no signing identity. Builds without one get a valid **ad-hoc**
+  signature (`scripts/macos-adhoc-sign.mjs`, afterPack) — electron-builder
+  would otherwise leave a resource-less linker signature that codesign/spctl
+  reject as invalid. Ad-hoc is enough to run locally-built apps normally;
+  *downloaded* builds still carry quarantine and need right-click-Open or
+  `xattr -dr com.apple.quarantine` until real signing/notarization lands.
