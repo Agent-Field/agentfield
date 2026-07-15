@@ -7,6 +7,7 @@ import json
 import os
 import re
 import signal
+import subprocess
 from typing import Any, Dict, List, Optional, Tuple
 
 from agentfield.openrouter_attribution import apply_subprocess_env
@@ -61,6 +62,53 @@ async def _drain(
         last_activity[0] = asyncio.get_event_loop().time()
 
 
+# Grace period for the child's exit notification after its pipes hit EOF (or
+# after it was killed). Post-EOF a child is dead or exiting, so this only
+# delays the pathological cases handled in _wait_process_exit.
+_PROC_EXIT_GRACE_SECONDS = 10.0
+
+
+async def _wait_process_exit(
+    proc: asyncio.subprocess.Process, kill_group
+) -> Optional[int]:
+    """Await the child's exit without trusting the exit notification.
+
+    A bare ``await proc.wait()`` can park forever on Windows' proactor loop:
+    the RegisterWaitWithQueue completion that resolves it is occasionally lost
+    even though the child already exited (CPython gh-81562 / gh-111604 —
+    observed in production as a swe-planner reasoner silently wedged for 26
+    minutes with no child process and a perfectly healthy event loop; the
+    coroutine sat here, after both pipes had hit EOF, waiting on an exit
+    notification that never came). It also parks when an orphaned grandchild
+    outlives a killed parent while holding the output pipes, since asyncio
+    resolves ``wait()`` only once every pipe disconnects. Bound the wait; on
+    timeout, kill whatever may remain and recover the real exit status by
+    polling the underlying Popen object, which needs no event delivery.
+    Returns the exit code, or None if it cannot be determined.
+    """
+    try:
+        return await asyncio.wait_for(proc.wait(), timeout=_PROC_EXIT_GRACE_SECONDS)
+    except (asyncio.TimeoutError, TimeoutError):
+        pass
+    # The notification may have landed while we grace-waited (in which case
+    # the transport finalizer may already have dropped its Popen reference —
+    # but ``proc.returncode`` stays available), so check it at every step.
+    if proc.returncode is not None:
+        return proc.returncode
+    kill_group()
+    popen = getattr(getattr(proc, "_transport", None), "_proc", None)
+    for _ in range(100):  # <= 10s; TerminateProcess/SIGKILL act promptly
+        if proc.returncode is not None:
+            return proc.returncode
+        if popen is None:
+            break
+        returncode = popen.poll()
+        if returncode is not None:
+            return returncode
+        await asyncio.sleep(0.1)
+    return proc.returncode
+
+
 async def run_cli(
     cmd: List[str],
     *,
@@ -106,11 +154,28 @@ async def run_cli(
 
     def _kill_group() -> None:
         pid = proc.pid
-        if isinstance(pid, int) and pid > 0:
+        # killpg only exists on POSIX; on Windows use taskkill /T instead.
+        if hasattr(os, "killpg") and isinstance(pid, int) and pid > 0:
             try:
                 os.killpg(pid, signal.SIGKILL)
                 return
             except (ProcessLookupError, PermissionError, OSError):
+                pass
+        if os.name == "nt" and isinstance(pid, int) and pid > 0:
+            # proc.kill() terminates only the direct child. CLI shims
+            # (.cmd -> cmd.exe -> node/bun) do their real work in
+            # grandchildren that inherit the output pipes; if they outlive
+            # the parent they hold the pipes open and asyncio's proc.wait()
+            # — which resolves only after every pipe disconnects — blocks
+            # indefinitely. taskkill /T is the closest analog to killpg.
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(pid)],
+                    capture_output=True,
+                    timeout=5,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError):
                 pass
         try:
             proc.kill()
@@ -119,6 +184,7 @@ async def run_cli(
 
     timed_out = False
     idle_timed_out = False
+    completed = False
     deadline = asyncio.get_event_loop().time() + timeout if timeout else None
 
     try:
@@ -135,6 +201,7 @@ async def run_cli(
 
             try:
                 await asyncio.wait_for(asyncio.shield(drain), timeout=wait_for)
+                completed = True
                 break  # both pipes hit EOF: child is done
             except asyncio.TimeoutError:
                 now = asyncio.get_event_loop().time()
@@ -146,14 +213,18 @@ async def run_cli(
                     break
                 # Spurious wakeup (progress reset the idle window): loop again.
     finally:
-        if timed_out or idle_timed_out:
+        if not completed:
+            # Timeout, cancellation, or an internal error: stop the child so
+            # nothing keeps running and the exit wait below can conclude.
+            # (Previously only the timeout paths killed; a cancelled run_cli
+            # left the child running and awaited its natural exit.)
             _kill_group()
         drain.cancel()
         try:
             await drain
         except BaseException:
             pass
-        await proc.wait()
+        fallback_returncode = await _wait_process_exit(proc, _kill_group)
 
     if idle_timed_out:
         raise TimeoutError(
@@ -162,10 +233,13 @@ async def run_cli(
     if timed_out:
         raise TimeoutError(f"CLI command timed out after {timeout}s: {' '.join(cmd)}")
 
+    returncode = proc.returncode
+    if returncode is None:
+        returncode = fallback_returncode
     return (
         b"".join(stdout_chunks).decode("utf-8", errors="replace"),
         b"".join(stderr_chunks).decode("utf-8", errors="replace"),
-        proc.returncode if proc.returncode is not None else -1,
+        returncode if returncode is not None else -1,
     )
 
 
