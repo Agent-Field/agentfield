@@ -59,6 +59,71 @@ async def test_run_cli_success():
 
 
 @pytest.mark.asyncio
+async def test_run_cli_survives_lost_exit_notification(monkeypatch):
+    """Regression: CPython gh-81562 — Windows' proactor loop can lose the
+    RegisterWaitWithQueue completion, so ``proc.wait()`` never resolves even
+    though the child exited (both pipes at EOF). run_cli used to park there
+    forever, silently wedging the calling reasoner. It must instead recover
+    the exit status from the underlying Popen object and return."""
+    from agentfield.harness import _cli
+
+    monkeypatch.setattr(_cli, "_PROC_EXIT_GRACE_SECONDS", 0.05)
+
+    async def _never_resolves():
+        await asyncio.Event().wait()
+
+    process = MagicMock()
+    process.pid = 2147483647  # nonexistent pid: group kill falls back to kill()
+    process.stdout = _stream_reader([b"partial output"])
+    process.stderr = _stream_reader([])
+    process.returncode = None  # transport never learns the exit status
+    process.wait = _never_resolves
+    process.kill = MagicMock()
+    # Underlying Popen: first poll still racing, then the real exit code.
+    process._transport._proc.poll = MagicMock(side_effect=[None, 7])
+
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=process)):
+        stdout, stderr, returncode = await asyncio.wait_for(
+            run_cli(["opencode", "run"], timeout=5),
+            timeout=5,  # the whole call must conclude promptly, not hang
+        )
+
+    assert stdout == "partial output"
+    assert returncode == 7
+    process.kill.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_run_cli_kills_child_on_cancellation():
+    """A cancelled run_cli must kill the child instead of leaving it running
+    and awaiting its natural exit (which for a coding-agent CLI can be many
+    minutes away, or forever)."""
+
+    async def never_ready(_n):
+        await asyncio.sleep(30)
+        return b""
+
+    process = MagicMock()
+    process.pid = 2147483647
+    process.returncode = None
+    process.stdout = MagicMock(read=AsyncMock(side_effect=never_ready))
+    process.stderr = MagicMock(read=AsyncMock(side_effect=never_ready))
+    process.kill = MagicMock()
+    process.wait = AsyncMock(return_value=1)
+
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=process)):
+        task = asyncio.ensure_future(
+            run_cli(["opencode", "run"], timeout=60, idle_seconds=0)
+        )
+        await asyncio.sleep(0.05)  # let it spawn and park on the drain
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    process.kill.assert_called()
+
+
+@pytest.mark.asyncio
 async def test_run_cli_timeout():
     async def never_ready(_n):
         # Streams that never reach EOF: the watchdog must abort the run.

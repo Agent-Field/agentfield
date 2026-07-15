@@ -6,6 +6,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.109-rc.2] - 2026-07-15
+
+
+### Fixed
+
+- Fix(sdk/python): bound the harness subprocess exit wait — silent reasoner wedge (#778)
+
+A reasoner calling a CLI harness provider could wedge silently forever:
+stuck 'running' with no child process, no logs, and a healthy event loop.
+Root-caused from a production swe-planner run that sat 26 minutes in that
+state: run_cli's finally block ended with a bare `await proc.wait()`, which
+parks indefinitely in two real situations —
+
+1. Windows proactor loop loses the RegisterWaitWithQueue completion that
+   resolves proc.wait() even though the child already exited (CPython
+   gh-81562 / gh-111604). Both pipes are at EOF, no process remains, and
+   nothing ever wakes the coroutine.
+2. An orphaned grandchild outlives a killed parent while holding the
+   inherited output pipes: asyncio resolves proc.wait() only after every
+   pipe disconnects, and on Windows proc.kill() cannot reach grandchildren
+   (pre-fix, test_run_cli_idle_watchdog_aborts_stalled_child hangs >100s
+   on a real Windows machine because of exactly this).
+
+Fix:
+- _wait_process_exit(): bound the exit wait with a grace period; on
+  expiry, kill whatever remains and recover the real exit status from
+  proc.returncode or by polling the underlying Popen object, which needs
+  no event delivery.
+- _kill_group(): use `taskkill /F /T` on Windows as the killpg analog so
+  kills reach the whole tree (also guards os.killpg with hasattr — it
+  does not exist on Windows).
+- run_cli now also kills the child when the wait loop exits abnormally
+  (cancellation included); previously a cancelled run_cli left the CLI
+  subprocess running and awaited its natural exit.
+
+Tests: unit regressions for the lost-notification recovery and
+kill-on-cancellation, plus a real-subprocess regression where a grandchild
+holds the pipes — run_cli must conclude in bounded time on every platform.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (45a4d4d)
+
 ## [0.1.109-rc.1] - 2026-07-14
 
 
