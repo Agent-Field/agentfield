@@ -4,11 +4,18 @@
 // version, and this platform's installer asset from that release is
 // downloaded and handed off on demand.
 //
+// The release train is the monorepo's, not the desktop app's: releases exist
+// that carry only CLI/SDK artifacts (every release before the desktop app
+// landed, and any cut from a branch without it). A release is only an *app*
+// update when it actually ships this platform's desktop installer — the
+// asset is the marker. Version comparison alone would offer "updates" the
+// app cannot install (and once mis-offered, the only action left is a
+// browser link — exactly the manual flow in-app updates exist to replace).
+//
 // Builds are unsigned for now, which rules out electron-updater's silent
 // flows (Squirrel.Mac refuses unsigned apps). Instead: Windows runs the
 // downloaded NSIS one-click installer — it replaces the app in place and
 // relaunches it — and macOS opens the downloaded DMG for a drag-install.
-// No installer asset for the platform falls back to the release page.
 //
 // No electron imports: the version, platform, temp dir, and every side
 // effect (open/launch/quit) are injected by main/index.ts so the check,
@@ -65,27 +72,41 @@ interface InstallerAsset {
  * goreleaser CLI archives and checksums, so match exactly what
  * electron-builder produces (see desktop/package.json build): the
  * AgentField-Setup-<version>.exe NSIS installer on Windows, a .dmg on
- * macOS. Anything else (Linux has no packaged app yet) gets null, which
- * routes the UI to the release page instead.
+ * macOS. Anything else (Linux has no packaged app yet, CLI-only releases
+ * carry no installers at all) gets null, and check() then treats the
+ * release as not-an-update for this platform.
+ *
+ * macOS is arch-sensitive: electron-builder emits AgentField-<v>-arm64.dmg
+ * and AgentField-<v>.dmg (or -x64.dmg). Prefer the exact arch suffix, then a
+ * plain .dmg with no arch suffix (a universal build), then any .dmg. The
+ * .dmg.blockmap sidecar ends in .blockmap, so `.endsWith('.dmg')` never picks
+ * it up.
  */
 export function pickInstallerAsset(
   assets: readonly unknown[],
-  platform: NodeJS.Platform
+  platform: NodeJS.Platform,
+  arch: NodeJS.Architecture = process.arch
 ): InstallerAsset | null {
-  const matches =
-    platform === 'win32'
-      ? (name: string) => /^AgentField-Setup-.+\.exe$/.test(name)
-      : platform === 'darwin'
-        ? (name: string) => name.endsWith('.dmg')
-        : null
-  if (!matches) return null
+  const named: InstallerAsset[] = []
   for (const raw of assets) {
     const asset = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
     const name = typeof asset.name === 'string' ? asset.name : null
     const url = typeof asset.browser_download_url === 'string' ? asset.browser_download_url : null
-    if (name && url && matches(name)) {
-      return { name, url, size: typeof asset.size === 'number' ? asset.size : null }
-    }
+    if (name && url) named.push({ name, url, size: typeof asset.size === 'number' ? asset.size : null })
+  }
+
+  if (platform === 'win32') {
+    return named.find((a) => /^AgentField-Setup-.+\.exe$/.test(a.name)) ?? null
+  }
+  if (platform === 'darwin') {
+    const dmgs = named.filter((a) => a.name.endsWith('.dmg'))
+    const suffix = arch === 'arm64' ? '-arm64.dmg' : '-x64.dmg'
+    const exact = dmgs.find((a) => a.name.endsWith(suffix))
+    if (exact) return exact
+    // No exact arch match: a plain .dmg with no arch suffix is assumed
+    // universal; otherwise take whatever .dmg the release does carry.
+    const universal = dmgs.find((a) => !/-(arm64|x64)\.dmg$/.test(a.name))
+    return universal ?? dmgs[0] ?? null
   }
   return null
 }
@@ -93,7 +114,8 @@ export function pickInstallerAsset(
 /** Shape an /releases/latest payload into AppUpdateInfo; null when unusable. */
 export function parseLatestRelease(
   payload: unknown,
-  platform: NodeJS.Platform
+  platform: NodeJS.Platform,
+  arch: NodeJS.Architecture = process.arch
 ): AppUpdateInfo | null {
   const obj =
     typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : null
@@ -103,7 +125,7 @@ export function parseLatestRelease(
     typeof obj.html_url === 'string'
       ? obj.html_url
       : `https://github.com/Agent-Field/agentfield/releases/tag/${tag}`
-  const asset = pickInstallerAsset(Array.isArray(obj.assets) ? obj.assets : [], platform)
+  const asset = pickInstallerAsset(Array.isArray(obj.assets) ? obj.assets : [], platform, arch)
   return {
     version: tag.replace(/^v/, ''),
     tagName: tag,
@@ -118,10 +140,10 @@ export interface AppUpdaterDeps {
   /** The running app's version (app.getVersion(): release-stamped when packaged). */
   currentVersion: string
   platform: NodeJS.Platform
+  /** The app's CPU arch (process.arch) — picks the matching macOS DMG. */
+  arch?: NodeJS.Architecture
   /** Where downloads are staged (app.getPath('temp')). */
   tempDir: string
-  /** Open a URL in the default browser (shell.openExternal). */
-  openExternal: (url: string) => void
   /** Open a local file with its OS handler (shell.openPath) — mounts the DMG. */
   openPath: (path: string) => Promise<string>
   /** Quit so the Windows installer can replace the app's files. */
@@ -189,10 +211,15 @@ export class AppUpdater {
         })
       }
       if (!res.ok) throw new Error(`GitHub answered ${res.status}`)
-      const info = parseLatestRelease(await res.json(), this.deps.platform)
+      const info = parseLatestRelease(await res.json(), this.deps.platform, this.deps.arch)
       if (!info) throw new Error('unrecognized release payload')
+      // Newer AND carrying this platform's installer — a CLI-only release
+      // (no desktop assets) is not an app update, whatever its version says.
       const available =
-        compareAppVersions(info.version, this.deps.currentVersion) > 0 ? info : null
+        info.assetUrl !== null &&
+        compareAppVersions(info.version, this.deps.currentVersion) > 0
+          ? info
+          : null
       return this.patch({
         checking: false,
         available,
@@ -206,16 +233,13 @@ export class AppUpdater {
   /**
    * Download the platform installer and hand off to it: Windows launches the
    * NSIS one-click installer and quits (it replaces the app and relaunches);
-   * macOS opens the DMG. Without an installer asset the release page opens
-   * in the browser. Never rejects — failures land in status.error.
+   * macOS opens the DMG. Never rejects — failures land in status.error.
    */
   async install(): Promise<AppUpdateStatus> {
     const info = this.st.available
     if (!info || this.st.downloading) return this.status()
-    if (!info.assetUrl || !info.assetName) {
-      this.deps.openExternal(info.releaseUrl)
-      return this.status()
-    }
+    // check() only offers releases that carry an installer; belt-and-braces.
+    if (!info.assetUrl || !info.assetName) return this.status()
     this.patch({ downloading: true, progress: 0, error: null })
     try {
       const file = await this.download(info.assetUrl, info.assetName, info.assetSize)
@@ -224,7 +248,12 @@ export class AppUpdater {
         ;(this.deps.launchInstaller ?? launchWindowsInstaller)(file)
         this.deps.quitForUpdate()
       } else {
-        await this.deps.openPath(file)
+        // shell.openPath resolves with an error STRING (empty means success) —
+        // it never rejects — so a failure to mount/open the DMG only shows up
+        // here. Surface it through the same status.error channel as every
+        // other install failure.
+        const openError = await this.deps.openPath(file)
+        if (openError) throw new Error(openError)
         this.patch({ downloading: false, progress: null })
       }
       return this.status()

@@ -28,12 +28,25 @@ const RELEASE = {
   ]
 }
 
+// A CLI-only release: newer than the app, but no desktop installer assets —
+// exactly what the monorepo's release train produced before the desktop app
+// existed (goreleaser binaries, wheels, checksums).
+const CLI_ONLY_RELEASE = {
+  tag_name: 'v0.3.0',
+  html_url: 'https://github.com/Agent-Field/agentfield/releases/tag/v0.3.0',
+  assets: [
+    { name: 'agentfield-darwin-arm64', browser_download_url: 'https://dl/af-mac', size: 36 },
+    { name: 'agentfield_0.3.0_windows_amd64.zip', browser_download_url: 'https://dl/cli.zip', size: 10 },
+    { name: 'agentfield-0.3.0-py3-none-any.whl', browser_download_url: 'https://dl/wheel', size: 1 },
+    { name: 'checksums.txt', browser_download_url: 'https://dl/checksums.txt', size: 1 }
+  ]
+}
+
 function deps(overrides: Partial<AppUpdaterDeps>): AppUpdaterDeps {
   return {
     currentVersion: '0.1.0',
     platform: 'win32',
     tempDir: dir,
-    openExternal: () => {},
     openPath: () => Promise.resolve(''),
     quitForUpdate: () => {},
     launchInstaller: () => {},
@@ -71,11 +84,49 @@ describe('pickInstallerAsset', () => {
   })
 
   it('picks the DMG on macOS, never the mac zip', () => {
-    expect(pickInstallerAsset(RELEASE.assets, 'darwin')?.name).toBe('AgentField-0.2.0-arm64.dmg')
+    expect(pickInstallerAsset(RELEASE.assets, 'darwin', 'arm64')?.name).toBe(
+      'AgentField-0.2.0-arm64.dmg'
+    )
   })
 
   it('returns null on platforms without a packaged app', () => {
     expect(pickInstallerAsset(RELEASE.assets, 'linux')).toBeNull()
+  })
+
+  // A release carrying both per-arch DMGs plus the blockmap sidecars.
+  const DUAL_ARCH = [
+    { name: 'AgentField-0.2.0-arm64.dmg', browser_download_url: 'https://dl/arm64.dmg', size: 50 },
+    { name: 'AgentField-0.2.0-arm64.dmg.blockmap', browser_download_url: 'https://dl/arm64.map', size: 2 },
+    { name: 'AgentField-0.2.0-x64.dmg', browser_download_url: 'https://dl/x64.dmg', size: 55 },
+    { name: 'AgentField-0.2.0-x64.dmg.blockmap', browser_download_url: 'https://dl/x64.map', size: 2 }
+  ]
+
+  it('picks the arm64 DMG on arm64 when both arches are present', () => {
+    const asset = pickInstallerAsset(DUAL_ARCH, 'darwin', 'arm64')
+    expect(asset?.name).toBe('AgentField-0.2.0-arm64.dmg')
+    expect(asset?.url).toBe('https://dl/arm64.dmg')
+  })
+
+  it('picks the x64 DMG on x64 when both arches are present', () => {
+    const asset = pickInstallerAsset(DUAL_ARCH, 'darwin', 'x64')
+    expect(asset?.name).toBe('AgentField-0.2.0-x64.dmg')
+    expect(asset?.url).toBe('https://dl/x64.dmg')
+  })
+
+  it('never picks a .dmg.blockmap sidecar', () => {
+    const onlyBlockmaps = [
+      { name: 'AgentField-0.2.0-arm64.dmg.blockmap', browser_download_url: 'https://dl/map', size: 2 }
+    ]
+    expect(pickInstallerAsset(onlyBlockmaps, 'darwin', 'arm64')).toBeNull()
+  })
+
+  it('falls back to a plain (universal) DMG when no arch suffix matches', () => {
+    const universal = [
+      { name: 'AgentField-0.2.0.dmg', browser_download_url: 'https://dl/universal.dmg', size: 60 },
+      { name: 'AgentField-0.2.0.dmg.blockmap', browser_download_url: 'https://dl/map', size: 2 }
+    ]
+    // x64 requested, only a suffix-less DMG exists -> take it, not the blockmap.
+    expect(pickInstallerAsset(universal, 'darwin', 'x64')?.name).toBe('AgentField-0.2.0.dmg')
   })
 })
 
@@ -127,6 +178,23 @@ describe('AppUpdater.check', () => {
     expect((await updater.check()).available?.version).toBe('0.2.0')
   })
 
+  it('ignores a newer CLI-only release — no desktop installer means no app update', async () => {
+    for (const platform of ['win32', 'darwin'] as const) {
+      const updater = new AppUpdater(
+        deps({ platform, fetchImpl: jsonResponse(CLI_ONLY_RELEASE) })
+      )
+      const status = await updater.check()
+      expect(status.available).toBeNull()
+      expect(status.error).toBeNull()
+      expect(status.lastCheckedAt).not.toBeNull()
+    }
+  })
+
+  it('never offers an update on platforms without a packaged app', async () => {
+    const updater = new AppUpdater(deps({ platform: 'linux', fetchImpl: jsonResponse(RELEASE) }))
+    expect((await updater.check()).available).toBeNull()
+  })
+
   it('treats 404 (no stable release yet) as up to date, not an error', async () => {
     const updater = new AppUpdater(
       deps({
@@ -167,7 +235,7 @@ describe('AppUpdater.check', () => {
 
 describe('AppUpdater.install', () => {
   const withUpdate = async (overrides: Partial<AppUpdaterDeps>) => {
-    const calls: Record<string, unknown[]> = { launch: [], quit: [], external: [], open: [] }
+    const calls: Record<string, unknown[]> = { launch: [], quit: [], open: [] }
     const fetchImpl = ((url: unknown) =>
       new URL(String(url)).hostname === 'api.github.com'
         ? Promise.resolve(new Response(JSON.stringify(RELEASE)))
@@ -177,7 +245,6 @@ describe('AppUpdater.install', () => {
         fetchImpl,
         launchInstaller: (p) => calls.launch.push(p),
         quitForUpdate: () => calls.quit.push(true),
-        openExternal: (u) => calls.external.push(u),
         openPath: (p) => {
           calls.open.push(p)
           return Promise.resolve('')
@@ -209,19 +276,24 @@ describe('AppUpdater.install', () => {
     expect(calls.quit).toHaveLength(0)
   })
 
-  it('opens the release page when the platform has no installer asset', async () => {
-    const { updater, calls } = await withUpdate({ platform: 'linux' })
-    await updater.install()
-    expect(calls.external).toEqual([RELEASE.html_url])
-    expect(calls.launch).toHaveLength(0)
+  it('surfaces a failed DMG open as status.error (openPath never rejects)', async () => {
+    const { updater } = await withUpdate({
+      platform: 'darwin',
+      // shell.openPath resolves with a non-empty error string on failure.
+      openPath: () => Promise.resolve('The application could not be launched.')
+    })
+    const status = await updater.install()
+    expect(status.error).toContain('could not be launched')
+    expect(status.downloading).toBe(false)
+    expect(status.progress).toBeNull()
   })
 
   it('is a no-op without a known update', async () => {
-    const calls: string[] = []
-    const updater = new AppUpdater(deps({ openExternal: (u) => calls.push(u) }))
+    const launched: string[] = []
+    const updater = new AppUpdater(deps({ launchInstaller: (p) => launched.push(p) }))
     const status = await updater.install()
     expect(status.downloading).toBe(false)
-    expect(calls).toHaveLength(0)
+    expect(launched).toHaveLength(0)
   })
 
   it('a failed download lands in status.error and resets the flow', async () => {

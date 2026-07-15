@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
 import type { AppUpdateStatus } from '../../../shared/types'
 
-/** Per-platform action label for the install button. */
+/** Per-platform action label for the install button. An offered update always
+ *  carries this platform's installer (check() filters CLI-only releases), so
+ *  the label only distinguishes download progress and install mechanics. */
 export function updateActionLabel(status: AppUpdateStatus, platform: string): string {
   if (status.downloading) {
     return status.progress !== null ? `Downloading… ${status.progress}%` : 'Downloading…'
   }
-  if (!status.available?.assetUrl) return 'View release'
   return platform === 'darwin' ? 'Download update' : 'Install update'
 }
 
