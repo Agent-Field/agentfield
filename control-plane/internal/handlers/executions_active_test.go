@@ -35,10 +35,13 @@ func TestActiveExecutionsHandler(t *testing.T) {
 	store := &fakeRunSummaryStore{
 		summaries: []*storage.RunSummaryAggregation{
 			{
-				RunID:            "run-1",
-				TotalExecutions:  27,
-				ActiveExecutions: 4,
-				StatusCounts:     map[string]int{"running": 4, "succeeded": 23},
+				RunID:           "run-1",
+				TotalExecutions: 27,
+				// The aggregation's own ActiveExecutions column excludes
+				// paused; the handler must count from StatusCounts instead
+				// (3 running + 1 paused = 4 in flight here).
+				ActiveExecutions: 3,
+				StatusCounts:     map[string]int{"running": 3, "paused": 1, "succeeded": 23},
 				EarliestStarted:  started,
 				LatestStarted:    latest,
 				RootExecutionID:  strPtr("exec-root"),

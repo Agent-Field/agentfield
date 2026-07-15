@@ -49,11 +49,27 @@ type ActiveExecutionsResponse struct {
 	Runs  []ActiveRun `json:"runs"`
 }
 
+// activeExecutionCount sums every non-terminal status in a run's counts —
+// the same definition ActiveOnly's HAVING clause uses (running, pending,
+// queued, waiting, paused, unknown), and deliberately NOT the aggregation's
+// narrower pre-existing ActiveExecutions column, which excludes paused and
+// which the UI's status derivation still depends on.
+func activeExecutionCount(statusCounts map[string]int) int {
+	active := 0
+	for status, count := range statusCounts {
+		if !types.IsTerminalExecutionStatus(status) {
+			active += count
+		}
+	}
+	return active
+}
+
 // ActiveExecutionsHandler serves GET /api/v1/executions/active: every run
-// with at least one non-terminal execution (running/pending/queued/waiting),
-// with complete per-run status counts. This is the documented caller surface
-// for in-flight visibility — callers no longer need to track execution IDs
-// themselves (batch-status) or scrape UI-internal endpoints.
+// with at least one non-terminal execution (running/pending/queued/waiting/
+// paused/unknown), with complete per-run status counts. This is the
+// documented caller surface for in-flight visibility — callers no longer
+// need to track execution IDs themselves (batch-status) or scrape
+// UI-internal endpoints.
 func ActiveExecutionsHandler(store RunSummaryStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		limit := 100
@@ -96,7 +112,7 @@ func ActiveExecutionsHandler(store RunSummaryStore) gin.HandlerFunc {
 				AgentID:          derefOrEmpty(agg.RootAgentNodeID),
 				ReasonerID:       derefOrEmpty(agg.RootReasonerID),
 				RootStatus:       derefOrEmpty(agg.RootStatus),
-				ActiveExecutions: agg.ActiveExecutions,
+				ActiveExecutions: activeExecutionCount(agg.StatusCounts),
 				TotalExecutions:  agg.TotalExecutions,
 				StatusCounts:     agg.StatusCounts,
 				SessionID:        derefOrEmpty(agg.SessionID),

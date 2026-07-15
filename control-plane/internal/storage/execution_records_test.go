@@ -288,15 +288,58 @@ func TestQueryRunSummariesActiveOnly(t *testing.T) {
 			CreatedAt:   base,
 			UpdatedAt:   base,
 		},
+		// Paused-only run → active. Paused is non-terminal; a pause-wedged
+		// run vanishing from the in-flight view was the original bug this
+		// surface exists to expose.
+		{
+			ExecutionID: "exec-paused",
+			RunID:       "run-paused",
+			AgentNodeID: "agent-x",
+			ReasonerID:  "plan",
+			NodeID:      "node-x",
+			Status:      string(types.ExecutionStatusPaused),
+			StartedAt:   base,
+			CreatedAt:   base,
+			UpdatedAt:   base,
+		},
 	}
+	crossRoot := "exec-cross-root"
+	executions = append(executions,
+		// Cross-agent run: running root on agent-x, terminal child on
+		// agent-y. The agent-y filter must still return this run — with the
+		// agent-x rows in its counts and the agent-x root fields intact.
+		&types.Execution{
+			ExecutionID: crossRoot,
+			RunID:       "run-cross",
+			AgentNodeID: "agent-x",
+			ReasonerID:  "orchestrate",
+			NodeID:      "node-x",
+			Status:      string(types.ExecutionStatusRunning),
+			StartedAt:   base,
+			CreatedAt:   base,
+			UpdatedAt:   base,
+		},
+		&types.Execution{
+			ExecutionID:       "exec-cross-child",
+			RunID:             "run-cross",
+			ParentExecutionID: &crossRoot,
+			AgentNodeID:       "agent-y",
+			ReasonerID:        "summarize",
+			NodeID:            "node-y",
+			Status:            string(types.ExecutionStatusSucceeded),
+			StartedAt:         base.Add(time.Second),
+			CreatedAt:         base.Add(time.Second),
+			UpdatedAt:         base.Add(time.Second),
+		},
+	)
 	for _, exec := range executions {
 		require.NoError(t, ls.CreateExecutionRecord(ctx, exec))
 	}
 
 	results, total, err := ls.QueryRunSummaries(ctx, types.ExecutionFilter{ActiveOnly: true})
 	require.NoError(t, err)
-	require.Equal(t, 2, total)
-	require.Len(t, results, 2)
+	require.Equal(t, 4, total)
+	require.Len(t, results, 4)
 
 	byRunID := map[string]*RunSummaryAggregation{}
 	for _, r := range results {
@@ -304,6 +347,8 @@ func TestQueryRunSummariesActiveOnly(t *testing.T) {
 	}
 	require.Contains(t, byRunID, "run-active")
 	require.Contains(t, byRunID, "run-queued")
+	require.Contains(t, byRunID, "run-paused")
+	require.Contains(t, byRunID, "run-cross")
 	require.NotContains(t, byRunID, "run-done")
 
 	// ActiveOnly filters whole runs, not rows: the surviving run's terminal
@@ -314,13 +359,33 @@ func TestQueryRunSummariesActiveOnly(t *testing.T) {
 	require.Equal(t, 1, active.StatusCounts[string(types.ExecutionStatusRunning)])
 	require.Equal(t, 1, active.ActiveExecutions)
 
-	// AgentNodeID narrows to runs touching that agent.
+	// AgentNodeID keeps whole runs that touched the agent — including
+	// run-cross, whose only agent-y execution is already terminal, and whose
+	// counts and root fields must reflect ALL rows, not just agent-y's.
 	agent := "agent-y"
 	results, total, err = ls.QueryRunSummaries(ctx, types.ExecutionFilter{ActiveOnly: true, AgentNodeID: &agent})
 	require.NoError(t, err)
-	require.Equal(t, 1, total)
-	require.Len(t, results, 1)
-	require.Equal(t, "run-queued", results[0].RunID)
+	require.Equal(t, 2, total)
+	require.Len(t, results, 2)
+	byRunID = map[string]*RunSummaryAggregation{}
+	for _, r := range results {
+		byRunID[r.RunID] = r
+	}
+	require.Contains(t, byRunID, "run-queued")
+	cross := byRunID["run-cross"]
+	require.NotNil(t, cross)
+	require.Equal(t, 2, cross.TotalExecutions)
+	require.Equal(t, 1, cross.StatusCounts[string(types.ExecutionStatusRunning)])
+	require.Equal(t, 1, cross.StatusCounts[string(types.ExecutionStatusSucceeded)])
+	require.Equal(t, crossRoot, derefOrEmptyTest(cross.RootExecutionID))
+	require.Equal(t, "agent-x", derefOrEmptyTest(cross.RootAgentNodeID))
+}
+
+func derefOrEmptyTest(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 func TestQueryRunSummariesClampsLimit(t *testing.T) {

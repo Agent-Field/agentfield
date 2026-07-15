@@ -367,9 +367,11 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 		args = append(args, *filter.RunID)
 	}
 	if filter.AgentNodeID != nil {
-		// Keeps runs with at least one execution on this agent; the surviving
-		// run's aggregates still count only the WHERE-matched rows.
-		where = append(where, "agent_node_id = ?")
+		// Run-level membership: keep every row of any run that touched this
+		// agent. A plain agent_node_id = ? here would drop other agents' rows
+		// before GROUP BY, corrupting a cross-agent run's status_counts and
+		// losing its root fields when the root ran elsewhere.
+		where = append(where, "run_id IN (SELECT run_id FROM executions WHERE agent_node_id = ?)")
 		args = append(args, *filter.AgentNodeID)
 	}
 	if filter.Status != nil {
@@ -406,10 +408,15 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 	// ActiveOnly filters at the run level (post-aggregation) so terminal
 	// children still contribute to status_counts — a Status="running" filter
 	// would instead drop those rows before grouping and also miss runs whose
-	// only in-flight executions are queued/pending/waiting.
+	// only in-flight executions are queued/pending/waiting. The set matches
+	// types.IsTerminalExecutionStatus: every canonical non-terminal status
+	// counts as in flight, including paused (a pause-wedged run must not
+	// vanish from af ps) and unknown. Deliberately wider than the query's
+	// active_executions column, whose narrower pre-existing set the UI's
+	// status derivation depends on.
 	havingClause := ""
 	if filter.ActiveOnly {
-		havingClause = " HAVING SUM(CASE WHEN LOWER(status) IN ('running','pending','queued','waiting') THEN 1 ELSE 0 END) > 0"
+		havingClause = " HAVING SUM(CASE WHEN LOWER(status) IN ('running','pending','queued','waiting','paused','unknown') THEN 1 ELSE 0 END) > 0"
 	}
 
 	db := ls.requireSQLDB()
