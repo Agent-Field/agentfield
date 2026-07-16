@@ -73,7 +73,10 @@ func ReasonersHandler(store storage.StorageProvider) gin.HandlerFunc {
 		idx := newBM25Index(docs)
 		hits := idx.Search(query)
 
-		results := make([]ReasonerSearchResult, 0, limit)
+		// Capacity is the constant maximum, not the request-supplied limit, so
+		// the allocation size is provably attacker-independent (CodeQL
+		// go/uncontrolled-allocation-size); the loop below still stops at limit.
+		results := make([]ReasonerSearchResult, 0, reasonerSearchMaxLimit)
 		for _, hit := range hits {
 			if len(results) >= limit {
 				break
