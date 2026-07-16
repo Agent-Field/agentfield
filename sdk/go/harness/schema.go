@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,6 +10,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/santhosh-tekuri/jsonschema/v5"
 )
 
 const (
@@ -30,6 +33,103 @@ func SchemaPath(dir string) string {
 // estimateTokens gives a rough token count (~4 chars per token).
 func estimateTokens(text string) int {
 	return len(text) / 4
+}
+
+// codexStrictJSONSchema rewrites a JSON schema into the strict form codex's
+// --output-schema (OpenAI structured output) requires. On every object node it
+// drops each property's "default", marks ALL properties required, and sets
+// additionalProperties:false; it recurses into properties, array items,
+// allOf/anyOf/oneOf branches, and $defs/definitions. Port of
+// _codex_strict_json_schema (codex_harness_patch.py:23-65).
+//
+// The input schema is not mutated — every level is copied before edits.
+func codexStrictJSONSchema(schema map[string]any) map[string]any {
+	strict := make(map[string]any, len(schema))
+	for k, v := range schema {
+		strict[k] = v
+	}
+
+	schemaType, _ := strict["type"].(string)
+
+	if schemaType == "object" {
+		if props, ok := strict["properties"].(map[string]any); ok {
+			cleaned := make(map[string]any, len(props))
+			keys := make([]string, 0, len(props))
+			for key, value := range props {
+				keys = append(keys, key)
+				if child, ok := value.(map[string]any); ok {
+					childCopy := make(map[string]any, len(child))
+					for ck, cv := range child {
+						if ck == "default" {
+							continue
+						}
+						childCopy[ck] = cv
+					}
+					cleaned[key] = codexStrictJSONSchema(childCopy)
+				} else {
+					cleaned[key] = value
+				}
+			}
+			// Sort for deterministic output (Go maps randomize iteration order;
+			// Python preserves dict insertion order). codex validation is
+			// order-independent, so this only stabilizes the emitted file.
+			sort.Strings(keys)
+			strict["properties"] = cleaned
+			strict["required"] = keys
+			strict["additionalProperties"] = false
+		}
+	}
+
+	if schemaType == "array" {
+		if items, ok := strict["items"].(map[string]any); ok {
+			strict["items"] = codexStrictJSONSchema(items)
+		}
+	}
+
+	for _, key := range []string{"allOf", "anyOf", "oneOf"} {
+		if branch, ok := strict[key].([]any); ok {
+			newBranch := make([]any, len(branch))
+			for i, item := range branch {
+				if m, ok := item.(map[string]any); ok {
+					newBranch[i] = codexStrictJSONSchema(m)
+				} else {
+					newBranch[i] = item
+				}
+			}
+			strict[key] = newBranch
+		}
+	}
+
+	for _, defKey := range []string{"$defs", "definitions"} {
+		if defs, ok := strict[defKey].(map[string]any); ok {
+			newDefs := make(map[string]any, len(defs))
+			for key, value := range defs {
+				if m, ok := value.(map[string]any); ok {
+					newDefs[key] = codexStrictJSONSchema(m)
+				} else {
+					newDefs[key] = value
+				}
+			}
+			strict[defKey] = newDefs
+		}
+	}
+
+	return strict
+}
+
+// BuildCodexNativeSuffix constructs the prompt suffix for codex's native
+// structured output. Unlike BuildPromptSuffix (which asks the model to Write a
+// file), this tells the model to emit its final JSON answer directly — the
+// codex CLI persists it to outputPath via --output-last-message and validates
+// it against schemaPath via --output-schema. Port of the codex-native suffix in
+// codex_harness_patch.py:141-148 + 179-186.
+func BuildCodexNativeSuffix(schemaPath, outputPath string) string {
+	return "\n\n---\n" +
+		"CRITICAL CODEX STRUCTURED OUTPUT REQUIREMENTS:\n" +
+		fmt.Sprintf("Return a single final JSON object conforming to the schema at: %s\n", schemaPath) +
+		fmt.Sprintf("The Codex CLI will persist your final response to: %s\n", outputPath) +
+		"Return the JSON object as your final answer. Do not use markdown fences, comments, or surrounding prose.\n" +
+		"Do not try to create .agentfield_output.json yourself; the Codex CLI will persist your final JSON response for AgentField."
 }
 
 // BuildPromptSuffix constructs the OUTPUT REQUIREMENTS instruction that tells
@@ -260,6 +360,79 @@ func unmarshalInto(data map[string]any, dest any) error {
 		return err
 	}
 	return json.Unmarshal(b, dest)
+}
+
+// validateAgainstSchema validates a parsed JSON object against a JSON Schema
+// map and returns a concise, prompt-friendly error when it does not conform.
+//
+// A JSON round-trip into a Go struct (unmarshalInto) accepts missing required
+// fields, invalid enum values, and extra fields silently — so on its own it
+// lets malformed output pass the harness. This compiles the schema and runs
+// real JSON Schema validation so the runner's schema-retry loop fires for those
+// cases. When the schema cannot be serialized or compiled, it returns nil (no
+// regression versus the previous unmarshal-only behavior — validation is simply
+// skipped rather than blocking).
+func validateAgainstSchema(data map[string]any, schema map[string]any) error {
+	schemaBytes, err := json.Marshal(schema)
+	if err != nil {
+		return nil
+	}
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource("mem://agentfield/schema.json", bytes.NewReader(schemaBytes)); err != nil {
+		return nil
+	}
+	compiled, err := compiler.Compile("mem://agentfield/schema.json")
+	if err != nil {
+		return nil
+	}
+	// Normalize the data through JSON so the validator sees canonical types
+	// (e.g. float64 for numbers, []any for arrays) regardless of how it was
+	// produced upstream.
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil
+	}
+	var normalized any
+	if err := json.Unmarshal(dataBytes, &normalized); err != nil {
+		return nil
+	}
+	if verr := compiled.Validate(normalized); verr != nil {
+		return fmt.Errorf("schema validation failed: %s", conciseSchemaError(verr))
+	}
+	return nil
+}
+
+// conciseSchemaError flattens a jsonschema ValidationError tree into a short,
+// prompt-friendly string listing the most specific (leaf) failures with their
+// instance locations.
+func conciseSchemaError(err error) string {
+	ve, ok := err.(*jsonschema.ValidationError)
+	if !ok {
+		return truncate(err.Error(), 300)
+	}
+
+	var leaves []string
+	var walk func(e *jsonschema.ValidationError)
+	walk = func(e *jsonschema.ValidationError) {
+		if len(e.Causes) == 0 {
+			loc := e.InstanceLocation
+			if loc == "" {
+				loc = "/"
+			}
+			leaves = append(leaves, fmt.Sprintf("%s: %s", loc, e.Message))
+			return
+		}
+		for _, c := range e.Causes {
+			walk(c)
+		}
+	}
+	walk(ve)
+
+	if len(leaves) == 0 {
+		return truncate(ve.Message, 300)
+	}
+	sort.Strings(leaves)
+	return truncate(strings.Join(leaves, "; "), 400)
 }
 
 // CleanupTempFiles removes harness temp files.

@@ -4,8 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec" // Added missing import
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
@@ -190,7 +191,7 @@ func tailFileLines(path string, n int) ([]string, error) {
 
 // tailLogs shows the last N lines of the log file
 func (lv *LogViewer) tailLogs(logFile string, lines int) error {
-	cmd := exec.Command("tail", "-n", fmt.Sprintf("%d", lines), logFile)
+	cmd := tailCommand(logFile, lines, false)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -198,8 +199,40 @@ func (lv *LogViewer) tailLogs(logFile string, lines int) error {
 
 // followLogs follows the log file in real-time
 func (lv *LogViewer) followLogs(logFile string) error {
-	cmd := exec.Command("tail", "-f", logFile)
+	cmd := tailCommand(logFile, 10, true)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// tailCommand builds the platform command that prints the last n lines of a
+// file, optionally following it.
+func tailCommand(logFile string, n int, follow bool) *exec.Cmd {
+	program, args := tailCommandArgs(runtime.GOOS, logFile, n, follow)
+	return exec.Command(program, args...)
+}
+
+// tailCommandArgs returns the program and arguments that tail a log file on
+// the given GOOS. Unix uses tail(1); Windows has no tail, so PowerShell's
+// Get-Content stands in (compile-verified only, not yet tested on a real
+// Windows machine). Pure so both platform branches are unit-testable anywhere.
+func tailCommandArgs(goos, logFile string, n int, follow bool) (string, []string) {
+	if goos == "windows" {
+		script := fmt.Sprintf("Get-Content -LiteralPath %s -Tail %d", psSingleQuote(logFile), n)
+		if follow {
+			script += " -Wait"
+		}
+		return "powershell", []string{"-NoProfile", "-Command", script}
+	}
+	args := []string{"-n", fmt.Sprintf("%d", n)}
+	if follow {
+		args = append(args, "-f")
+	}
+	return "tail", append(args, logFile)
+}
+
+// psSingleQuote quotes s as a PowerShell single-quoted string literal, where
+// the only escape is doubling embedded single quotes.
+func psSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }

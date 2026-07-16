@@ -18,7 +18,7 @@ import (
 const DefaultLeaseTTL = 5 * time.Minute
 
 // NodeStatusLeaseHandler processes lease-based status updates from agents.
-func NodeStatusLeaseHandler(storageProvider storage.StorageProvider, statusManager *services.StatusManager, presenceManager *services.PresenceManager, leaseTTL time.Duration) gin.HandlerFunc {
+func NodeStatusLeaseHandler(storageProvider storage.StorageProvider, statusManager *services.StatusManager, healthMonitor *services.HealthMonitor, presenceManager *services.PresenceManager, leaseTTL time.Duration) gin.HandlerFunc {
 	if leaseTTL <= 0 {
 		leaseTTL = DefaultLeaseTTL
 	}
@@ -70,6 +70,15 @@ func NodeStatusLeaseHandler(storageProvider storage.StorageProvider, statusManag
 				"next_lease_renewal": now.Add(leaseTTL).Format(time.RFC3339),
 			})
 			return
+		}
+
+		// Lease renewals are these nodes' only keep-alive (the Go SDK never
+		// POSTs /heartbeat), so this is also where they must enter HTTP health
+		// monitoring — otherwise the monitor never polls them and their
+		// health_status never leaves "unknown". Serverless nodes are excluded
+		// for the same reason as in RecoverFromDatabase: no /status endpoint.
+		if healthMonitor != nil && agent.BaseURL != "" && agent.DeploymentType != "serverless" {
+			healthMonitor.RegisterAgent(nodeID, agent.BaseURL)
 		}
 
 		update := &types.AgentStatusUpdate{

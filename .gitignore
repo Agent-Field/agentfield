@@ -69,3 +69,13 @@ reports/
 
 # Typescript
 .plandb.db
+
+# Local dev builds of the control plane / bundled CLI (never commit binaries)
+/control-plane/af.exe
+/control-plane/af.exe~
+/control-plane/agentfield.exe
+/desktop/af.exe
+/desktop/agentfield.exe
+# Harness schema-output artifacts from local agent runs
+.agentfield_output.json
+.agentfield_schema.json

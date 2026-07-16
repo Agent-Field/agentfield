@@ -482,7 +482,15 @@ func (pu *PackageUninstaller) UninstallPackage(packageName string) error {
 		}
 	}
 
-	// 7. Update registry
+	// 7. Remove node-scoped secrets — useless without the node. Global
+	// (shared) secrets are left alone.
+	if store, err := NewSecretStore(pu.AgentFieldHome); err == nil {
+		if err := store.DeleteScope(packageName); err != nil {
+			fmt.Printf("Warning: Failed to remove node-scoped secrets: %v\n", err)
+		}
+	}
+
+	// 8. Update registry
 	delete(registry.Installed, packageName)
 	if err := pu.saveRegistry(registry); err != nil {
 		return fmt.Errorf("failed to update registry: %w", err)
@@ -855,20 +863,21 @@ func InstallPythonDependencies(packagePath string, pyDeps, systemDeps []string) 
 			return err
 		}
 
-		var cmd *exec.Cmd
-		if interp != "" {
-			cmd = exec.Command(interp, "-m", "venv", venvPath)
-			if output, err := cmd.CombinedOutput(); err != nil {
-				return fmt.Errorf("failed to create virtual environment with %s: %w\nOutput: %s", interp, err, output)
+		if interp == "" {
+			// Legacy path (no requires-python declared): pick the first ambient
+			// interpreter that actually runs. Blindly trying "python3 -m venv"
+			// first breaks on stock Windows, where python3 (and often python) is
+			// a Microsoft Store stub that exits 9009; on default python.org
+			// installs (PATH box unchecked) only the "py" launcher works.
+			ambient, _, ok := ambientPythonInterpreter()
+			if !ok {
+				return fmt.Errorf("no working Python interpreter found on PATH (tried %s) - install Python 3, ensure it is on PATH, then run `af install` again", strings.Join(pythonCandidates, ", "))
 			}
-		} else {
-			cmd = exec.Command("python3", "-m", "venv", venvPath)
-			if _, err := cmd.CombinedOutput(); err != nil {
-				cmd = exec.Command("python", "-m", "venv", venvPath)
-				if output, err := cmd.CombinedOutput(); err != nil {
-					return fmt.Errorf("failed to create virtual environment: %w\nOutput: %s", err, output)
-				}
-			}
+			interp = ambient
+		}
+		cmd := exec.Command(interp, "-m", "venv", venvPath)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to create virtual environment with %s: %w\nOutput: %s", interp, err, output)
 		}
 
 		pipPath := filepath.Join(venvPath, "bin", "pip")
@@ -918,6 +927,66 @@ func InstallPythonDependencies(packagePath string, pyDeps, systemDeps []string) 
 func fileExistsAt(dir, name string) bool {
 	_, err := os.Stat(filepath.Join(dir, name))
 	return err == nil
+}
+
+// validateSubdirSelector checks the *syntax* of a `--path` subdirectory selector
+// without touching the filesystem, so it can be enforced before any install work
+// (e.g. before cloning a repo). An empty selector is valid (no selection). A
+// non-empty selector must be relative and must not escape the source root via
+// "..". Absolute paths and escaping paths are rejected with an actionable message.
+func validateSubdirSelector(subdir string) error {
+	subdir = strings.TrimSpace(subdir)
+	if subdir == "" {
+		return nil
+	}
+	if filepath.IsAbs(subdir) {
+		return fmt.Errorf("--path must be a subdirectory relative to the package root, not an absolute path (got %q)", subdir)
+	}
+	clean := filepath.Clean(subdir)
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("--path %q must stay within the package root (it may not use %q to escape)", subdir, "..")
+	}
+	return nil
+}
+
+// ValidateSubdirSelector is the exported form of validateSubdirSelector: it
+// checks that a `--path` selector is syntactically safe (relative, non-escaping)
+// without requiring the source to be present on disk. Callers that need to reject
+// a bad selector before doing any install work (e.g. before a git clone) use this.
+func ValidateSubdirSelector(subdir string) error {
+	return validateSubdirSelector(subdir)
+}
+
+// ResolvePackageSubdir resolves a `--path` subdirectory selector against a source
+// root (a cloned git repository directory or a local source directory) and returns
+// the package root to install. It enforces that:
+//   - subdir is relative (absolute paths are rejected),
+//   - subdir does not escape root via "..",
+//   - an agentfield-package.yaml exists at the resolved directory.
+//
+// An empty subdir returns root unchanged (the caller handles the no-selector
+// root-first walk itself). A missing manifest is reported with the full expected
+// path so the user can see exactly where it was looked for.
+func ResolvePackageSubdir(root, subdir string) (string, error) {
+	if err := validateSubdirSelector(subdir); err != nil {
+		return "", err
+	}
+	subdir = strings.TrimSpace(subdir)
+	if subdir == "" {
+		return root, nil
+	}
+	target := filepath.Join(root, filepath.Clean(subdir))
+	// Defense in depth: after joining, confirm the target is still contained in
+	// root (guards against any residual traversal the syntax check missed).
+	if rel, err := filepath.Rel(root, target); err != nil ||
+		rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("--path %q resolves outside the package root", subdir)
+	}
+	manifest := filepath.Join(target, "agentfield-package.yaml")
+	if _, err := os.Stat(manifest); err != nil {
+		return "", fmt.Errorf("no agentfield-package.yaml found for --path %q (expected at %s)", subdir, manifest)
+	}
+	return target, nil
 }
 
 // hasRequirementsFile checks if requirements.txt exists

@@ -70,6 +70,11 @@ func newSecretsSetCommand() *cobra.Command {
 				return err
 			}
 			PrintSuccess(fmt.Sprintf("Stored %s in %s scope", key, scope))
+			// Secrets decrypt into a node's environment at spawn time only —
+			// a running node keeps the env it started with.
+			if node != "" {
+				PrintInfo(fmt.Sprintf("Applies on next start: af stop %s && af run %s", node, node))
+			}
 			return nil
 		},
 	}

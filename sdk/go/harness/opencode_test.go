@@ -24,7 +24,7 @@ func TestOpenCodeConcurrencyLimit(t *testing.T) {
 	var wg sync.WaitGroup
 
 	p := NewOpenCodeProvider("", "")
-	p.runCLI = func(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int) (*CLIResult, error) {
+	p.runCLI = func(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int, stdin []byte) (*CLIResult, error) {
 		c := atomic.AddInt64(&current, 1)
 
 		// track max concurrency
@@ -73,7 +73,7 @@ func TestOpenCodeContextCancellation(t *testing.T) {
 
 	p := NewOpenCodeProvider("", "")
 
-	p.runCLI = func(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int) (*CLIResult, error) {
+	p.runCLI = func(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int, stdin []byte) (*CLIResult, error) {
 		<-block
 		return &CLIResult{}, nil
 	}
@@ -220,6 +220,59 @@ func TestOpenCodeSemaphore_ReleasedOnSubprocessFailure(t *testing.T) {
 		}
 		if !raw.IsError {
 			t.Fatalf("call %d expected IsError for non-zero exit", i)
+		}
+	}
+}
+
+// TestOpenCodePromptDelivery pins how the prompt reaches opencode: over stdin
+// when openCodePromptViaStdin is set (Windows — npm .cmd shims run via
+// cmd.exe, whose ~8k argv cap real prompts exceed), positional argv otherwise
+// (POSIX). Regression test for the silent review degradation where every
+// long-prompt call died with "The command line is too long." and schema
+// validation reported "The output file was NOT created."
+func TestOpenCodePromptDelivery(t *testing.T) {
+	orig := openCodePromptViaStdin
+	defer func() { openCodePromptViaStdin = orig }()
+
+	const prompt = "review this very long diff"
+
+	for _, viaStdin := range []bool{true, false} {
+		openCodePromptViaStdin = viaStdin
+
+		var gotCmd []string
+		var gotStdin []byte
+		p := NewOpenCodeProvider("opencode", "")
+		p.runCLI = func(_ context.Context, cmd []string, _ map[string]string, _ string, _ int, stdin []byte) (*CLIResult, error) {
+			gotCmd = append([]string(nil), cmd...)
+			gotStdin = append([]byte(nil), stdin...)
+			return &CLIResult{Stdout: "done"}, nil
+		}
+
+		if _, err := p.Execute(context.Background(), prompt, Options{}); err != nil {
+			t.Fatalf("viaStdin=%v: Execute error: %v", viaStdin, err)
+		}
+
+		inArgv := false
+		for _, arg := range gotCmd {
+			if arg == prompt {
+				inArgv = true
+			}
+		}
+
+		if viaStdin {
+			if inArgv {
+				t.Fatalf("viaStdin=true: prompt must not be in argv: %q", gotCmd)
+			}
+			if string(gotStdin) != prompt {
+				t.Fatalf("viaStdin=true: stdin = %q, want the prompt", gotStdin)
+			}
+		} else {
+			if !inArgv {
+				t.Fatalf("viaStdin=false: prompt missing from argv: %q", gotCmd)
+			}
+			if len(gotStdin) != 0 {
+				t.Fatalf("viaStdin=false: stdin should be empty, got %q", gotStdin)
+			}
 		}
 	}
 }

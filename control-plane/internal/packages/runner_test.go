@@ -79,6 +79,23 @@ func TestAgentNodeRunnerPortEnvAndRegistry(t *testing.T) {
 	}
 }
 
+func TestPythonUTF8Env(t *testing.T) {
+	t.Run("appends PYTHONUTF8=1 when unset", func(t *testing.T) {
+		env := PythonUTF8Env([]string{"PORT=8001", "PATH=/usr/bin"})
+		if env[len(env)-1] != "PYTHONUTF8=1" {
+			t.Fatalf("expected PYTHONUTF8=1 appended, got %v", env)
+		}
+	})
+
+	t.Run("respects an explicit caller value", func(t *testing.T) {
+		in := []string{"PYTHONUTF8=0", "PORT=8001"}
+		env := PythonUTF8Env(in)
+		if len(env) != len(in) {
+			t.Fatalf("caller's PYTHONUTF8 must win, got %v", env)
+		}
+	})
+}
+
 func TestAgentNodeRunnerWaitDisplayAndStartProcess(t *testing.T) {
 	// Cannot use t.Parallel() — this test modifies PATH via t.Setenv,
 	// which is process-global and unsafe to share with parallel tests.
@@ -109,7 +126,7 @@ func TestAgentNodeRunnerWaitDisplayAndStartProcess(t *testing.T) {
 	})
 	waitForHTTPServer(t, fmt.Sprintf("127.0.0.1:%d", port))
 
-	if err := runner.waitForAgentNode(port, "/health", 2*time.Second); err != nil {
+	if err := runner.waitForAgentNode(port, "/health", "", 2*time.Second); err != nil {
 		t.Fatalf("waitForAgentNode: %v", err)
 	}
 	if err := runner.displayCapabilities(InstalledPackage{Name: "demo"}, port); err != nil {
@@ -122,7 +139,7 @@ func TestAgentNodeRunnerWaitDisplayAndStartProcess(t *testing.T) {
 	}
 	unusedPort := unusedPortListener.Addr().(*net.TCPAddr).Port
 	_ = unusedPortListener.Close()
-	if err := runner.waitForAgentNode(unusedPort, "/health", 600*time.Millisecond); err == nil || !strings.Contains(err.Error(), "did not become ready") {
+	if err := runner.waitForAgentNode(unusedPort, "/health", "", 600*time.Millisecond); err == nil || !strings.Contains(err.Error(), "did not become ready") {
 		t.Fatalf("expected timeout error, got %v", err)
 	}
 

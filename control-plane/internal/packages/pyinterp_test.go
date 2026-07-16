@@ -145,6 +145,26 @@ func TestResolveVenvInterpreter(t *testing.T) {
 		}
 	})
 
+	// The stock-Windows scenario: python3 resolves on PATH but is the
+	// Microsoft Store app-execution-alias stub, which exits non-zero without
+	// running anything. Resolution must skip it and use the real python.
+	t.Run("skips a dead python3 stub and uses the working python", func(t *testing.T) {
+		bin := t.TempDir()
+		stubBrokenPython(t, bin, "python3")
+		stubPython(t, bin, "python", "3.12.5")
+		t.Setenv("PATH", bin)
+		dir := t.TempDir()
+		writeFile(t, dir, "pyproject.toml", "[project]\nrequires-python = \">=3.12\"\n")
+
+		interp, err := resolveVenvInterpreter(dir)
+		if err != nil {
+			t.Fatalf("unexpected err: %v", err)
+		}
+		if interp != "python" {
+			t.Fatalf("got %q; want python (the working interpreter after the dead python3 stub)", interp)
+		}
+	})
+
 	t.Run("incompatible and no provisioner -> actionable error", func(t *testing.T) {
 		bin := t.TempDir()
 		stubPython(t, bin, "python3", "3.10.13") // too old, no uv/pyenv on PATH
@@ -183,6 +203,85 @@ func TestResolveVenvInterpreter(t *testing.T) {
 			t.Fatalf("got %q; want uv-provided %q", interp, target)
 		}
 	})
+}
+
+// TestAmbientPythonInterpreter pins the candidate-probing contract: a PATH
+// hit alone is not enough — the interpreter must actually run. This is what
+// keeps stock-Windows Store aliases (python3.exe stubs that exit 9009) from
+// being selected, and what lets the "py" launcher serve as a last resort.
+func TestAmbientPythonInterpreter(t *testing.T) {
+	t.Run("prefers python3 when it works", func(t *testing.T) {
+		bin := t.TempDir()
+		stubPython(t, bin, "python3", "3.12.5")
+		stubPython(t, bin, "python", "3.10.1")
+		t.Setenv("PATH", bin)
+		interp, v, ok := ambientPythonInterpreter()
+		if !ok || interp != "python3" || v.String() != "3.12.5" {
+			t.Fatalf("got (%q,%v,%v); want (python3,3.12.5,true)", interp, v, ok)
+		}
+	})
+
+	t.Run("skips dead stubs in order python3 -> python -> py", func(t *testing.T) {
+		bin := t.TempDir()
+		stubBrokenPython(t, bin, "python3")
+		stubBrokenPython(t, bin, "python")
+		stubPython(t, bin, "py", "3.11.9")
+		t.Setenv("PATH", bin)
+		interp, v, ok := ambientPythonInterpreter()
+		if !ok || interp != "py" || v.String() != "3.11.9" {
+			t.Fatalf("got (%q,%v,%v); want (py,3.11.9,true)", interp, v, ok)
+		}
+	})
+
+	t.Run("reports not-ok when nothing on PATH runs", func(t *testing.T) {
+		bin := t.TempDir()
+		stubBrokenPython(t, bin, "python3")
+		t.Setenv("PATH", bin)
+		if interp, _, ok := ambientPythonInterpreter(); ok {
+			t.Fatalf("got (%q,true); want not-ok", interp)
+		}
+	})
+}
+
+// TestInstallPythonDependencies_LegacyPathSkipsDeadStub drives the public API
+// through the no-requires-python branch: the dead python3 stub must be
+// skipped and the venv built with the working python.
+func TestInstallPythonDependencies_LegacyPathSkipsDeadStub(t *testing.T) {
+	bin := t.TempDir()
+	stubBrokenPython(t, bin, "python3")
+	stubVenvPython(t, bin, "python", "3.12.5")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	pkg := t.TempDir()
+	writeFile(t, pkg, "requirements.txt", "")
+
+	if err := InstallPythonDependencies(pkg, nil, nil); err != nil {
+		t.Fatalf("InstallPythonDependencies: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(pkg, "venv", "bin", "pip")); err != nil {
+		t.Fatalf("expected a venv built via the working interpreter: %v", err)
+	}
+}
+
+// TestInstallPythonDependencies_LegacyPathNoWorkingInterpreter pins the
+// actionable error when every candidate is a dead stub (a stock Windows
+// machine with no Python installed).
+func TestInstallPythonDependencies_LegacyPathNoWorkingInterpreter(t *testing.T) {
+	bin := t.TempDir()
+	stubBrokenPython(t, bin, "python3")
+	stubBrokenPython(t, bin, "python")
+	stubBrokenPython(t, bin, "py")
+	t.Setenv("PATH", bin)
+	pkg := t.TempDir()
+	writeFile(t, pkg, "requirements.txt", "")
+
+	err := InstallPythonDependencies(pkg, nil, nil)
+	if err == nil {
+		t.Fatal("expected an error when no candidate interpreter runs")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "python3, python, py") || !strings.Contains(msg, "af install") {
+		t.Fatalf("error should list the probed candidates and tell the user what to do: %q", msg)
+	}
 }
 
 func TestProvisionViaPyenv(t *testing.T) {
@@ -271,6 +370,17 @@ func stubPython(t *testing.T, dir, name, version string) string {
 		t.Fatal(err)
 	}
 	return p
+}
+
+// stubBrokenPython writes an executable that mimics the Microsoft Store app
+// execution alias: it prints the Store hint and exits non-zero without ever
+// behaving like an interpreter.
+func stubBrokenPython(t *testing.T, dir, name string) {
+	t.Helper()
+	script := "#!/bin/sh\n" +
+		"echo 'Python was not found; run without arguments to install from the Microsoft Store' >&2\n" +
+		"exit 49\n"
+	writeExecutable(t, filepath.Join(dir, name), script)
 }
 
 // stubUv writes a fake `uv` that returns findPath for `uv python find ...`.

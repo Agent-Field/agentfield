@@ -24,6 +24,7 @@ import {
 import { ApprovalClient } from '../approval/ApprovalClient.js';
 import { AgentRouter } from '../router/AgentRouter.js';
 import type { ReasonerHandler, ReasonerOptions } from '../types/reasoner.js';
+import { triggerToPayload } from '../triggers/factories.js';
 import type { SkillHandler, SkillOptions } from '../types/skill.js';
 import { ExecutionContext, type ExecutionMetadata } from '../context/ExecutionContext.js';
 import { ReasonerContext } from '../context/ReasonerContext.js';
@@ -74,6 +75,19 @@ class TargetNotFoundError extends Error {}
 const AGENTFIELD_TS_SDK_VERSION = '0.1.82';
 
 const harnessRunners = new WeakMap<object, HarnessRunner>();
+
+/**
+ * Normalize the 3-state accepts_webhook value to its wire string
+ * ("true" / "false" / "warn"). Mirrors the Python SDK's
+ * `Agent._entry_to_metadata`: booleans map to their string forms, the
+ * known strings pass through, and anything unexpected falls back to "warn".
+ */
+function normalizeAcceptsWebhook(value: unknown): 'true' | 'false' | 'warn' {
+  if (value === true) return 'true';
+  if (value === false) return 'false';
+  if (value === 'true' || value === 'false' || value === 'warn') return value;
+  return 'warn';
+}
 
 function normalizeExecutionContext(
   ctx: RawExecutionContext
@@ -1371,7 +1385,20 @@ export class Agent {
   private reasonerDefinitions() {
     return this.reasoners.all().map((r) => {
       const tags = r.options?.tags ?? [];
-      return {
+      const triggers = r.options?.triggers ?? [];
+      const triggerPayloads = triggers.map(triggerToPayload);
+      // Resolve the 3-state webhook flag like the Python SDK
+      // (resolve_reasoner_metadata): an explicit author value always wins;
+      // declaring triggers auto-opts-in only as the fallback; the
+      // trigger-less default is "warn".
+      const explicitAcceptsWebhook = r.options?.acceptsWebhook;
+      const resolvedAcceptsWebhook =
+        explicitAcceptsWebhook !== undefined
+          ? explicitAcceptsWebhook
+          : triggers.length > 0
+            ? true
+            : 'warn';
+      const def: { id: string; [key: string]: any } = {
         id: r.name,
         input_schema: toJsonSchema(r.options?.inputSchema),
         output_schema: toJsonSchema(r.options?.outputSchema),
@@ -1381,8 +1408,16 @@ export class Agent {
           cache_results: false
         },
         tags,
-        proposed_tags: tags
+        proposed_tags: tags,
+        // Always present, normalized to "true" / "false" / "warn" — the
+        // control plane's ReasonerDefinition types AcceptsWebhook as *string
+        // and rejects bool literals (mirrors Python's _entry_to_metadata).
+        accepts_webhook: normalizeAcceptsWebhook(resolvedAcceptsWebhook),
       };
+      if (triggerPayloads.length > 0) {
+        def.triggers = triggerPayloads;
+      }
+      return def;
     });
   }
 

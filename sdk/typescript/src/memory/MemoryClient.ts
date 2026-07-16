@@ -87,7 +87,7 @@ export class MemoryClientBase {
     }
   }
 
-  private resolveScopeId(scope?: MemoryScope, scopeId?: string, metadata?: MemoryRequestMetadata) {
+  protected resolveScopeId(scope?: MemoryScope, scopeId?: string, metadata?: MemoryRequestMetadata) {
     if (scopeId) return scopeId;
     switch (scope) {
       case 'workflow':

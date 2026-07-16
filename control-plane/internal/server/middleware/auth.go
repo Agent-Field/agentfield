@@ -30,6 +30,11 @@ func APIKeyAuth(config AuthConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// No auth configured, allow everything.
 		if config.APIKey == "" {
+			// Callers have full access in no-auth mode; say so, or the
+			// auth-level filtering in agentic discover / smart 404 treats
+			// them as "public" and hides every api_key endpoint from the
+			// very callers who can use them.
+			c.Set("auth_level", "api_key")
 			c.Next()
 			return
 		}

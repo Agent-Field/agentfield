@@ -1,0 +1,86 @@
+{
+  "name": "agentfield-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Read-only desktop dashboard for the AgentField control plane and locally installed agent nodes",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck && electron-vite build",
+    "preview": "electron-vite preview",
+    "test": "vitest run",
+    "icons": "electron scripts/make-icons.mjs",
+    "bundle-cli": "node scripts/bundle-cli.mjs",
+    "dist": "npm run build && electron-builder",
+    "dist:dir": "npm run build && electron-builder --dir"
+  },
+  "build": {
+    "appId": "ai.agentfield.desktop",
+    "productName": "AgentField",
+    "protocols": [
+      {
+        "name": "AgentField",
+        "schemes": [
+          "agentfield"
+        ]
+      }
+    ],
+    "files": [
+      "out/**",
+      "resources/**"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor",
+        "to": "bin",
+        "filter": [
+          "af",
+          "af.exe",
+          "af-tray"
+        ]
+      }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "afterPack": "scripts/macos-adhoc-sign.mjs",
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "darkModeSupport": true
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "deleteAppDataOnUninstall": true,
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    }
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.10.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^39.8.5",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^3.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "vitest": "^3.0.5"
+  }
+}

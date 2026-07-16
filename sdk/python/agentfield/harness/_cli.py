@@ -6,25 +6,51 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import signal
+import subprocess
 from typing import Any, Dict, List, Optional, Tuple
 
 from agentfield.openrouter_attribution import apply_subprocess_env
 
 _ANSI_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 
-_DEFAULT_IDLE_SECONDS = 120.0
+# 300 rather than 120: provider CLIs in JSON mode (e.g. `opencode run
+# --format json`) emit events only at completion boundaries - never
+# token-by-token - so one long reasoning completion over a large context is
+# minutes of legitimate stdout silence. At 120s the watchdog routinely
+# killed healthy runs on slower models; 300s tolerates a long single
+# completion while still catching genuine hangs.
+_DEFAULT_IDLE_SECONDS = 300.0
 
 
 def strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
 
 
+def resolve_cli_command(name: str) -> str:
+    """Resolve a bare CLI name to a spawnable path on Windows.
+
+    ``create_subprocess_exec`` uses CreateProcess, which does no PATHEXT
+    resolution — npm-installed CLIs (opencode, codex, gemini) exist on
+    Windows PATH only as ``.cmd``/``.ps1`` shims, so spawning the bare name
+    raises FileNotFoundError even though the shell finds it. ``shutil.which``
+    honors PATHEXT; the resolved full path (CreateProcess runs ``.cmd`` files
+    via cmd.exe when given the real path) spawns fine. Names that already
+    carry a path separator, and anything on POSIX, pass through untouched.
+    """
+    if os.name != "nt":
+        return name
+    if os.sep in name or "/" in name:
+        return name
+    return shutil.which(name) or name
+
+
 def _resolve_idle_seconds(idle_seconds: Optional[float]) -> Optional[float]:
     """Resolve the no-progress watchdog window.
 
     Precedence: explicit ``idle_seconds`` arg, then env
-    ``AGENTFIELD_HARNESS_IDLE_SECONDS``, then ``_DEFAULT_IDLE_SECONDS`` (120s).
+    ``AGENTFIELD_HARNESS_IDLE_SECONDS``, then ``_DEFAULT_IDLE_SECONDS`` (300s).
     A value <= 0 disables the watchdog.
     """
     if idle_seconds is None:
@@ -55,6 +81,69 @@ async def _drain(
         last_activity[0] = asyncio.get_event_loop().time()
 
 
+async def _feed_stdin(proc: asyncio.subprocess.Process, data: bytes) -> None:
+    """Write data to the child's stdin and close it, tolerating early exits."""
+    if proc.stdin is None:
+        return
+    try:
+        proc.stdin.write(data)
+        await proc.stdin.drain()
+    except (BrokenPipeError, ConnectionResetError, OSError):
+        pass
+    finally:
+        try:
+            proc.stdin.close()
+        except OSError:
+            pass
+
+
+# Grace period for the child's exit notification after its pipes hit EOF (or
+# after it was killed). Post-EOF a child is dead or exiting, so this only
+# delays the pathological cases handled in _wait_process_exit.
+_PROC_EXIT_GRACE_SECONDS = 10.0
+
+
+async def _wait_process_exit(
+    proc: asyncio.subprocess.Process, kill_group
+) -> Optional[int]:
+    """Await the child's exit without trusting the exit notification.
+
+    A bare ``await proc.wait()`` can park forever on Windows' proactor loop:
+    the RegisterWaitWithQueue completion that resolves it is occasionally lost
+    even though the child already exited (CPython gh-81562 / gh-111604 —
+    observed in production as a swe-planner reasoner silently wedged for 26
+    minutes with no child process and a perfectly healthy event loop; the
+    coroutine sat here, after both pipes had hit EOF, waiting on an exit
+    notification that never came). It also parks when an orphaned grandchild
+    outlives a killed parent while holding the output pipes, since asyncio
+    resolves ``wait()`` only once every pipe disconnects. Bound the wait; on
+    timeout, kill whatever may remain and recover the real exit status by
+    polling the underlying Popen object, which needs no event delivery.
+    Returns the exit code, or None if it cannot be determined.
+    """
+    try:
+        return await asyncio.wait_for(proc.wait(), timeout=_PROC_EXIT_GRACE_SECONDS)
+    except (asyncio.TimeoutError, TimeoutError):
+        pass
+    # The notification may have landed while we grace-waited (in which case
+    # the transport finalizer may already have dropped its Popen reference —
+    # but ``proc.returncode`` stays available), so check it at every step.
+    if proc.returncode is not None:
+        return proc.returncode
+    kill_group()
+    popen = getattr(getattr(proc, "_transport", None), "_proc", None)
+    for _ in range(100):  # <= 10s; TerminateProcess/SIGKILL act promptly
+        if proc.returncode is not None:
+            return proc.returncode
+        if popen is None:
+            break
+        returncode = popen.poll()
+        if returncode is not None:
+            return returncode
+        await asyncio.sleep(0.1)
+    return proc.returncode
+
+
 async def run_cli(
     cmd: List[str],
     *,
@@ -62,6 +151,7 @@ async def run_cli(
     cwd: Optional[str] = None,
     timeout: Optional[float] = None,
     idle_seconds: Optional[float] = None,
+    input_text: Optional[str] = None,
 ) -> Tuple[str, str, int]:
     """Run a CLI command async. Returns (stdout, stderr, returncode).
 
@@ -70,6 +160,11 @@ async def run_cli(
     ``AGENTFIELD_HARNESS_IDLE_SECONDS``, default 120s; <= 0 disables), the process
     group is killed and ``TimeoutError`` is raised. ``timeout`` remains the outer
     wall-clock bound.
+
+    ``input_text`` is written to the child's stdin (UTF-8) and stdin is closed;
+    without it stdin is /dev/null. Providers use this to hand over prompts too
+    large for a command line — on Windows an npm ``.cmd`` shim runs via
+    cmd.exe, which caps the command line at ~8k characters.
     """
     merged_env = {**os.environ}
     if env:
@@ -79,8 +174,11 @@ async def run_cli(
     idle = _resolve_idle_seconds(idle_seconds)
 
     proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdin=asyncio.subprocess.DEVNULL,
+        resolve_cli_command(cmd[0]),
+        *cmd[1:],
+        stdin=asyncio.subprocess.PIPE
+        if input_text is not None
+        else asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=merged_env,
@@ -92,19 +190,40 @@ async def run_cli(
     stderr_chunks: List[bytes] = []
     last_activity = [asyncio.get_event_loop().time()]
 
-    # Drain both pipes concurrently to avoid a pipe-buffer deadlock.
-    drain = asyncio.gather(
+    # Pump all pipes concurrently to avoid a pipe-buffer deadlock (a large
+    # stdin feed must not block stdout/stderr reads, and vice versa).
+    pumps = [
         _drain(proc.stdout, stdout_chunks, last_activity),
         _drain(proc.stderr, stderr_chunks, last_activity),
-    )
+    ]
+    if input_text is not None:
+        pumps.append(_feed_stdin(proc, input_text.encode("utf-8")))
+    drain = asyncio.gather(*pumps)
 
     def _kill_group() -> None:
         pid = proc.pid
-        if isinstance(pid, int) and pid > 0:
+        # killpg only exists on POSIX; on Windows use taskkill /T instead.
+        if hasattr(os, "killpg") and isinstance(pid, int) and pid > 0:
             try:
                 os.killpg(pid, signal.SIGKILL)
                 return
             except (ProcessLookupError, PermissionError, OSError):
+                pass
+        if os.name == "nt" and isinstance(pid, int) and pid > 0:
+            # proc.kill() terminates only the direct child. CLI shims
+            # (.cmd -> cmd.exe -> node/bun) do their real work in
+            # grandchildren that inherit the output pipes; if they outlive
+            # the parent they hold the pipes open and asyncio's proc.wait()
+            # — which resolves only after every pipe disconnects — blocks
+            # indefinitely. taskkill /T is the closest analog to killpg.
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(pid)],
+                    capture_output=True,
+                    timeout=5,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError):
                 pass
         try:
             proc.kill()
@@ -113,6 +232,7 @@ async def run_cli(
 
     timed_out = False
     idle_timed_out = False
+    completed = False
     deadline = asyncio.get_event_loop().time() + timeout if timeout else None
 
     try:
@@ -129,6 +249,7 @@ async def run_cli(
 
             try:
                 await asyncio.wait_for(asyncio.shield(drain), timeout=wait_for)
+                completed = True
                 break  # both pipes hit EOF: child is done
             except asyncio.TimeoutError:
                 now = asyncio.get_event_loop().time()
@@ -140,26 +261,31 @@ async def run_cli(
                     break
                 # Spurious wakeup (progress reset the idle window): loop again.
     finally:
-        if timed_out or idle_timed_out:
+        if not completed:
+            # Timeout, cancellation, or an internal error: stop the child so
+            # nothing keeps running and the exit wait below can conclude.
+            # (Previously only the timeout paths killed; a cancelled run_cli
+            # left the child running and awaited its natural exit.)
             _kill_group()
         drain.cancel()
         try:
             await drain
         except BaseException:
             pass
-        await proc.wait()
+        fallback_returncode = await _wait_process_exit(proc, _kill_group)
 
     if idle_timed_out:
-        raise TimeoutError(
-            f"CLI command made no progress for {idle}s: {' '.join(cmd)}"
-        )
+        raise TimeoutError(f"CLI command made no progress for {idle}s: {' '.join(cmd)}")
     if timed_out:
         raise TimeoutError(f"CLI command timed out after {timeout}s: {' '.join(cmd)}")
 
+    returncode = proc.returncode
+    if returncode is None:
+        returncode = fallback_returncode
     return (
         b"".join(stdout_chunks).decode("utf-8", errors="replace"),
         b"".join(stderr_chunks).decode("utf-8", errors="replace"),
-        proc.returncode if proc.returncode is not None else -1,
+        returncode if returncode is not None else -1,
     )
 
 

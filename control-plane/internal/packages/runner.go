@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -74,10 +75,14 @@ func (ar *AgentNodeRunner) runAgentNode(agentNodeName string, inProgress map[str
 
 	// 5. Wait for agent node to be ready
 	healthPath := "/health"
+	expectedNodeID := agentNodeName
 	if metadata, err := ParsePackageMetadata(agentNode.Path); err == nil {
 		healthPath = metadata.HealthcheckPath()
+		if metadata.AgentNode.NodeID != "" {
+			expectedNodeID = metadata.AgentNode.NodeID
+		}
 	}
-	if err := ar.waitForAgentNode(port, healthPath, 10*time.Second); err != nil {
+	if err := ar.waitForAgentNode(port, healthPath, expectedNodeID, 10*time.Second); err != nil {
 		if killErr := cmd.Process.Kill(); killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
 			fmt.Printf("⚠️  Failed to kill agent node process: %v\n", killErr)
 		}
@@ -120,6 +125,14 @@ func (ar *AgentNodeRunner) isPortAvailable(port int) bool {
 		return false
 	}
 	conn.Close()
+	// A successful bind is not proof on Windows: without SO_EXCLUSIVEADDRUSE
+	// a probe bind can succeed while another process is actively listening on
+	// the same port (observed with uvicorn agent nodes). If something accepts
+	// a connection, the port is taken.
+	if dial, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 250*time.Millisecond); err == nil {
+		dial.Close()
+		return false
+	}
 	return true
 }
 
@@ -141,6 +154,7 @@ func (ar *AgentNodeRunner) startAgentNodeProcess(agentNode InstalledPackage, por
 	env = append(env, fmt.Sprintf("PORT=%d", port))
 	env = append(env, fmt.Sprintf("AGENTFIELD_SERVER=%s", serverURL))
 	env = append(env, fmt.Sprintf("AGENTFIELD_SERVER_URL=%s", serverURL))
+	env = PythonUTF8Env(env)
 
 	// Resolve declared variables from the encrypted secret store, prompting for
 	// missing required ones and persisting them. Secrets are only ever injected
@@ -232,6 +246,21 @@ func (ar *AgentNodeRunner) startNodeDependencies(node InstalledPackage, inProgre
 	}
 }
 
+// PythonUTF8Env appends PYTHONUTF8=1 unless the environment already pins a
+// value. Spawned agents log through a redirected stdout/stderr; on Windows
+// Python then encodes with the legacy ANSI code page (e.g. cp1252), which
+// cannot represent the SDK's emoji log prefixes and floods the log file with
+// UnicodeEncodeError tracebacks. UTF-8 mode is a no-op where UTF-8 is already
+// the default, so this is safe to set on every platform.
+func PythonUTF8Env(env []string) []string {
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "PYTHONUTF8=") {
+			return env
+		}
+	}
+	return append(env, "PYTHONUTF8=1")
+}
+
 // venvPython returns the venv python interpreter path, or "" if no venv exists.
 func venvPython(venvPath string) string {
 	if p := filepath.Join(venvPath, "bin", "python"); fileExists(p) {
@@ -252,7 +281,7 @@ func fileExists(path string) bool {
 // secret store, prompting for missing required ones.
 func (ar *AgentNodeRunner) resolveEnvironment(nodeName string, metadata *PackageMetadata) (map[string]string, error) {
 	env := metadata.UserEnvironment
-	if len(env.Required) == 0 && len(env.Optional) == 0 {
+	if len(env.Required) == 0 && len(env.Optional) == 0 && len(env.RequireOneOf) == 0 {
 		return map[string]string{}, nil
 	}
 	store, err := NewSecretStore(ar.AgentFieldHome)
@@ -263,26 +292,39 @@ func (ar *AgentNodeRunner) resolveEnvironment(nodeName string, metadata *Package
 	return resolver.Resolve(env)
 }
 
-// waitForAgentNode waits for the agent node to become ready
-func (ar *AgentNodeRunner) waitForAgentNode(port int, healthPath string, timeout time.Duration) error {
+// waitForAgentNode waits for the agent node to become ready. A 200 on the
+// health endpoint is only trusted when the payload's node_id (if it carries
+// one) matches the node just started — on Windows the port probe can miss an
+// existing listener (no SO_EXCLUSIVEADDRUSE), and without this check a
+// squatter's health response makes a dead agent look started. An empty
+// expectedNodeID or a payload without node_id skips the identity check.
+func (ar *AgentNodeRunner) waitForAgentNode(port int, healthPath, expectedNodeID string, timeout time.Duration) error {
 	if healthPath == "" {
 		healthPath = "/health"
 	}
 	client := &http.Client{Timeout: 1 * time.Second}
 	deadline := time.Now().Add(timeout)
 
+	impostor := ""
 	for time.Now().Before(deadline) {
 		resp, err := client.Get(fmt.Sprintf("http://localhost:%d%s", port, healthPath))
 		if err == nil && resp.StatusCode == 200 {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 			resp.Body.Close()
-			return nil
-		}
-		if resp != nil {
+			got := HealthNodeID(body)
+			if got == "" || expectedNodeID == "" || NodeIDsEquivalent(got, expectedNodeID) {
+				return nil
+			}
+			impostor = got
+		} else if resp != nil {
 			resp.Body.Close()
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 
+	if impostor != "" {
+		return fmt.Errorf("port %d is answering health checks as %q, not %q — another process is using the port", port, impostor, expectedNodeID)
+	}
 	return fmt.Errorf("agent node did not become ready within %v", timeout)
 }
 

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
@@ -17,12 +18,12 @@ import (
 
 func TestNormalizePhase(t *testing.T) {
 	tests := []struct {
-		name              string
-		phase             string
-		wantState         *types.AgentState
-		wantLifecycle     *types.AgentLifecycleStatus
-		wantErr           bool
-		wantErrContains   string
+		name            string
+		phase           string
+		wantState       *types.AgentState
+		wantLifecycle   *types.AgentLifecycleStatus
+		wantErr         bool
+		wantErrContains string
 	}{
 		{
 			name:  "empty phase returns nil",
@@ -144,7 +145,7 @@ func TestNodeStatusLeaseHandler_ValidationErrors(t *testing.T) {
 
 	t.Run("missing node_id returns 400", func(t *testing.T) {
 		router := gin.New()
-		router.PUT("/nodes/:node_id/status", NodeStatusLeaseHandler(nil, nil, nil, 0))
+		router.PUT("/nodes/:node_id/status", NodeStatusLeaseHandler(nil, nil, nil, nil, 0))
 
 		body, _ := json.Marshal(map[string]string{"phase": "ready"})
 		// Use empty node_id by calling the route with empty param
@@ -159,7 +160,7 @@ func TestNodeStatusLeaseHandler_ValidationErrors(t *testing.T) {
 
 	t.Run("invalid JSON returns 400", func(t *testing.T) {
 		router := gin.New()
-		router.PUT("/nodes/:node_id/status", NodeStatusLeaseHandler(nil, nil, nil, 0))
+		router.PUT("/nodes/:node_id/status", NodeStatusLeaseHandler(nil, nil, nil, nil, 0))
 
 		req, _ := http.NewRequest("PUT", "/nodes/test-node/status", bytes.NewBufferString("not json"))
 		req.Header.Set("Content-Type", "application/json")
@@ -272,3 +273,64 @@ func TestNormalizePhase_AllPhases_ProduceDistinctStates(t *testing.T) {
 // - normalizePhase: all phase values, case insensitivity, distinctness
 // - Input validation: bad JSON, missing required fields
 // - DefaultLeaseTTL constant
+
+// Contract: a status-lease renewal is a lease-renewing node's only keep-alive
+// (the Go SDK never POSTs /heartbeat), so it must also enroll the node in HTTP
+// health monitoring — otherwise the monitor never polls it and its
+// health_status never leaves "unknown". Serverless nodes have no /status
+// endpoint to poll and stay out.
+func TestNodeStatusLeaseHandler_RegistersHealthMonitor(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := &nodeRESTStorageStub{
+		agent: &types.AgentNode{
+			ID:              "lease-go-node",
+			Version:         "1.0.0",
+			BaseURL:         "http://localhost:8002",
+			DeploymentType:  "long_running",
+			LifecycleStatus: types.AgentStatusStarting,
+		},
+	}
+	healthMonitor := services.NewHealthMonitor(store, services.HealthMonitorConfig{}, nil, nil, nil, nil)
+
+	router := gin.New()
+	router.PATCH("/nodes/:node_id/status", NodeStatusLeaseHandler(store, nil, healthMonitor, nil, time.Minute))
+
+	body := bytes.NewReader([]byte(`{"phase":"ready"}`))
+	req := httptest.NewRequest(http.MethodPatch, "/nodes/lease-go-node/status", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, healthMonitor.IsMonitoring("lease-go-node"),
+		"a lease renewal must enroll the node for HTTP health polling")
+}
+
+func TestNodeStatusLeaseHandler_SkipsHealthMonitorForServerless(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := &nodeRESTStorageStub{
+		agent: &types.AgentNode{
+			ID:              "lease-serverless",
+			Version:         "1.0.0",
+			BaseURL:         "http://example.com/fn",
+			DeploymentType:  "serverless",
+			LifecycleStatus: types.AgentStatusReady,
+		},
+	}
+	healthMonitor := services.NewHealthMonitor(store, services.HealthMonitorConfig{}, nil, nil, nil, nil)
+
+	router := gin.New()
+	router.PATCH("/nodes/:node_id/status", NodeStatusLeaseHandler(store, nil, healthMonitor, nil, time.Minute))
+
+	body := bytes.NewReader([]byte(`{"phase":"ready"}`))
+	req := httptest.NewRequest(http.MethodPatch, "/nodes/lease-serverless/status", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.False(t, healthMonitor.IsMonitoring("lease-serverless"),
+		"serverless nodes have no /status endpoint and must not be HTTP-polled")
+}

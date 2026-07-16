@@ -213,7 +213,7 @@ installed:
 		require.Contains(t, output, "Installed agent nodes (1)")
 		require.Contains(t, output, "demo")
 		require.Contains(t, output, "v1.2.3")
-		require.Contains(t, output, "8123")   // running node's port cell
+		require.Contains(t, output, "8123")    // running node's port cell
 		require.Contains(t, output, "running") // status badge
 		_ = port
 		_ = pid
@@ -300,6 +300,7 @@ func TestAgentCommandSubcommands(t *testing.T) {
 	}{
 		{name: "status", args: []string{"status"}, wantMethod: http.MethodGet, wantPath: "/api/v1/agentic/status"},
 		{name: "discover", args: []string{"discover", "--query", "runs", "--group", "agentic", "--method", "get", "--limit", "5"}, wantMethod: http.MethodGet, wantPath: "/api/v1/agentic/discover", wantQuery: "group=agentic&limit=5&method=GET&q=runs"},
+		{name: "search", args: []string{"search", "review pull request", "--agent", "pr-af", "--limit", "5"}, wantMethod: http.MethodGet, wantPath: "/api/v1/agentic/reasoners", wantQuery: "agent=pr-af&limit=5&q=review+pull+request"},
 		{name: "query", args: []string{"query", "--resource", "runs", "--status", "completed", "--agent-id", "agent-1", "--run-id", "run-1", "--since", "2026-01-01T00:00:00Z", "--until", "2026-01-02T00:00:00Z", "--limit", "5", "--offset", "2", "--include", "steps,metrics"}, wantMethod: http.MethodPost, wantPath: "/api/v1/agentic/query", wantBodyPart: `"resource":"runs"`},
 		{name: "run", args: []string{"run", "--id", "run/1"}, wantMethod: http.MethodGet, wantPath: "/api/v1/agentic/run/run/1"},
 		{name: "agent summary", args: []string{"agent-summary", "--id", "agent/1"}, wantMethod: http.MethodGet, wantPath: "/api/v1/agentic/agent/agent/1/summary"},

@@ -87,12 +87,14 @@
     },
     "overrides": {
         "js-yaml": "4.2.0",
-        "esbuild": "0.28.1"
+        "esbuild": "0.28.1",
+        "ws": "8.21.0"
     },
     "pnpm": {
         "overrides": {
             "js-yaml": "4.2.0",
-            "esbuild": "0.28.1"
+            "esbuild": "0.28.1",
+            "ws": "8.21.0"
         }
     }
 }

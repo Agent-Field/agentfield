@@ -90,7 +90,12 @@ func TestGitInstallerFindPackageRootAndRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parsePackageMetadata: %v", err)
 	}
-	info := &GitPackageInfo{URL: "https://gitlab.com/acme/repo", Ref: "main"}
+	// Provenance keeps the user's original source string verbatim — the ref
+	// (and any //subdir) already live inside it.
+	info, err := ParseGitURL("https://gitlab.com/acme/repo@main")
+	if err != nil {
+		t.Fatalf("ParseGitURL: %v", err)
+	}
 	dest := filepath.Join(home, "packages", "git-demo")
 	if err := gi.updateRegistryWithGit(metadata, info, repo, dest); err != nil {
 		t.Fatalf("updateRegistryWithGit: %v", err)

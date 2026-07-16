@@ -104,6 +104,35 @@ func (r *EnvResolver) Resolve(env UserEnvironmentConfig) (map[string]string, err
 		}
 	}
 
+	// Node-scoped secrets the manifest does not declare are still injected: a
+	// user who ran `af secrets set KEY --node <name>` has explicitly scoped
+	// that value to this node, and silently skipping it (the previous
+	// behavior) made operational overrides — AGENTFIELD_HARNESS_IDLE_SECONDS,
+	// provider tuning, and the like — appear stored while never reaching the
+	// process. Declared variables keep their full precedence chain above; for
+	// undeclared ones the process environment still wins, and global secrets
+	// stay manifest-driven so a shared key never leaks into every node.
+	if r.NodeName != "" && r.NodeName != globalScope {
+		nodeKeys, err := r.Store.List(r.NodeName)
+		if err != nil {
+			return nil, err
+		}
+		for _, key := range nodeKeys {
+			if _, done := resolved[key]; done {
+				continue
+			}
+			if val, ok := os.LookupEnv(key); ok && val != "" {
+				resolved[key] = val
+				continue
+			}
+			if val, ok, err := r.Store.Get(r.NodeName, key); err != nil {
+				return nil, err
+			} else if ok && val != "" {
+				resolved[key] = val
+			}
+		}
+	}
+
 	if len(missing) > 0 || len(missingGroups) > 0 {
 		return nil, missingEnvError(missing, missingGroups)
 	}

@@ -393,7 +393,7 @@ func TestNodeRESTHandlersAdditionalBranches(t *testing.T) {
 		presence := services.NewPresenceManager(nil, services.PresenceManagerConfig{})
 
 		router := gin.New()
-		router.PUT("/nodes/:node_id/status", NodeStatusLeaseHandler(store, nil, presence, 0))
+		router.PUT("/nodes/:node_id/status", NodeStatusLeaseHandler(store, nil, nil, presence, 0))
 
 		req := httptest.NewRequest(http.MethodPut, "/nodes/node-1/status", strings.NewReader(`{"phase":"ready"}`))
 		req.Header.Set("Content-Type", "application/json")
@@ -415,7 +415,7 @@ func TestNodeRESTHandlersAdditionalBranches(t *testing.T) {
 			agent: &types.AgentNode{ID: "node-2", Version: "v2"},
 		}
 		router := gin.New()
-		router.PUT("/nodes/:node_id/status", NodeStatusLeaseHandler(store, nil, nil, time.Minute))
+		router.PUT("/nodes/:node_id/status", NodeStatusLeaseHandler(store, nil, nil, nil, time.Minute))
 
 		req := httptest.NewRequest(http.MethodPut, "/nodes/node-2/status", strings.NewReader(`{"health_score":101}`))
 		req.Header.Set("Content-Type", "application/json")

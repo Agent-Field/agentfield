@@ -3,11 +3,12 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/packages"
@@ -101,15 +102,32 @@ func (as *AgentNodeStopper) StopAgentNode(agentNodeName string) error {
 	}
 
 	if agentNode.Runtime.PID == nil {
-		return fmt.Errorf("no PID found for agent node %s", agentNodeName)
+		as.printf("⚠️  Agent node %s has no recorded PID — clearing stale registry entry\n", agentNodeName)
+		return as.markStopped(registry, agentNodeName, agentNode)
 	}
 
 	as.printf("🛑 Stopping agent node: %s (PID: %d)\n", agentNodeName, *agentNode.Runtime.PID)
 
-	// Find and kill the process
+	// A "running" registry entry is a claim, not a fact: after a reboot or a
+	// crash the PID is gone — or reassigned to an unrelated process — and the
+	// port may be someone else's. Verify before signalling anything. A dead
+	// process reconciles to "stopped" instead of erroring, so stop-then-start
+	// flows (desktop restart, login autostart) recover on their own.
 	process, err := os.FindProcess(*agentNode.Runtime.PID)
-	if err != nil {
-		return fmt.Errorf("failed to find process: %w", err)
+	if err != nil || !isProcessAlive(process) {
+		as.printf("⚠️  Process %d is not running anymore — clearing stale registry entry\n", *agentNode.Runtime.PID)
+		return as.markStopped(registry, agentNodeName, agentNode)
+	}
+
+	// If the recorded port answers /health as a DIFFERENT node, the record is
+	// stale and the live PID is almost certainly a reused one belonging to
+	// someone else — never signal a process we cannot identify as ours.
+	if agentNode.Runtime.Port != nil {
+		if id := probeHealthNodeID(*agentNode.Runtime.Port); id != "" && !packages.NodeIDsEquivalent(id, agentNodeName) {
+			as.printf("⚠️  Port %d belongs to node %q, not %s — clearing stale registry entry without signalling PID %d\n",
+				*agentNode.Runtime.Port, id, agentNodeName, *agentNode.Runtime.PID)
+			return as.markStopped(registry, agentNodeName, agentNode)
+		}
 	}
 
 	// Try HTTP shutdown first if port is available
@@ -158,10 +176,12 @@ func (as *AgentNodeStopper) StopAgentNode(agentNodeName string) error {
 	if !httpShutdownSuccess {
 		as.printf("🔄 Falling back to process signal shutdown for agent %s\n", agentNodeName)
 
-		// Send SIGTERM for graceful shutdown
-		if err := process.Signal(os.Interrupt); err != nil {
+		// Ask for graceful shutdown (SIGINT on Unix, taskkill on Windows).
+		// A process that exits between the aliveness check above and the
+		// signal is a success, not a failure.
+		if err := signalGracefulStop(process); err != nil {
 			// If graceful shutdown fails, force kill
-			if err := process.Kill(); err != nil {
+			if err := process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 				return fmt.Errorf("failed to kill process: %w", err)
 			}
 		} else {
@@ -169,31 +189,53 @@ func (as *AgentNodeStopper) StopAgentNode(agentNodeName string) error {
 			time.Sleep(3 * time.Second)
 
 			// Check if process is still running
-			if err := process.Signal(syscall.Signal(0)); err == nil {
+			if isProcessAlive(process) {
 				// Process still running, force kill
 				as.printf("⚠️ Process still running, force killing agent %s\n", agentNodeName)
-				if err := process.Kill(); err != nil {
+				if err := process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 					return fmt.Errorf("failed to force kill process: %w", err)
 				}
 			}
 		}
 	}
 
-	// Update registry
-	agentNode.Status = "stopped"
-	agentNode.Runtime.Port = nil
-	agentNode.Runtime.PID = nil
-	agentNode.Runtime.StartedAt = nil
-	registry.Installed[agentNodeName] = agentNode
+	return as.markStopped(registry, agentNodeName, agentNode)
+}
+
+// markStopped clears the runtime fields and persists the registry — shared by
+// the healthy stop path and every stale-record reconciliation, so `af stop`
+// always leaves the registry in a state `af run` can start from.
+func (as *AgentNodeStopper) markStopped(registry *packages.InstallationRegistry, name string, node packages.InstalledPackage) error {
+	node.Status = "stopped"
+	node.Runtime.Port = nil
+	node.Runtime.PID = nil
+	node.Runtime.StartedAt = nil
+	registry.Installed[name] = node
 
 	if err := as.saveRegistry(registry); err != nil {
 		return fmt.Errorf("failed to update registry: %w", err)
 	}
 
 	as.Outcome = "stopped"
-	as.printf("✅ Agent node %s stopped successfully\n", agentNodeName)
-
+	as.printf("✅ Agent node %s stopped successfully\n", name)
 	return nil
+}
+
+// probeHealthNodeID asks /health on a local port and returns the node_id the
+// responder claims — "" when nothing answers or the payload carries none
+// (custom health endpoints are not required to identify themselves).
+func probeHealthNodeID(port int) string {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("http://localhost:%d/health", port))
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return ""
+	}
+	return packages.HealthNodeID(body)
 }
 
 // loadRegistry loads the installation registry

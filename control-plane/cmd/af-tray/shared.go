@@ -100,6 +100,36 @@ func uiPageURL(page string) string {
 	return fmt.Sprintf("http://localhost:%d/ui/%s", serverPort(), page)
 }
 
+// ---- Desktop app deep links --------------------------------------------------
+//
+// The AgentField desktop app (desktop/ in this repo) registers the
+// agentfield:// URL scheme. When it is installed, the tray opens views there;
+// when it is not, `open agentfield://…` fails fast (no handler registered)
+// and the tray falls back to the web UI in the browser (see openPage in
+// tray_darwin.go).
+
+// deepLinkForPage maps a web-UI page name to the desktop-app view showing the
+// same thing. Unknown/empty pages land on the app's dashboard.
+func deepLinkForPage(page string) string {
+	switch page {
+	case "agents":
+		return "agentfield://agents"
+	case "executions":
+		return "agentfield://activity"
+	default:
+		return "agentfield://dashboard"
+	}
+}
+
+// browserURLForPage is the web-UI fallback for the same page: the server root
+// for the default page, /ui/<page> otherwise.
+func browserURLForPage(page string) string {
+	if page == "" {
+		return dashboardURL()
+	}
+	return uiPageURL(page)
+}
+
 // checkHealth reports whether the given URL answers HTTP 200 within a short
 // timeout. The control plane's /health endpoint returns 200 when healthy and
 // 503 when not, so only a 200 counts as "running".

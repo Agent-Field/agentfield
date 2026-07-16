@@ -70,6 +70,13 @@ func DefaultEntries() []EndpointEntry {
 		{Method: "POST", Path: "/api/v1/skills/:skill_id", Group: "execute", Summary: "Execute a skill (legacy endpoint)", AuthLevel: "api_key", Tags: []string{"execute", "skill", "legacy"}},
 
 		// --- Executions ---
+		{Method: "GET", Path: "/api/v1/executions/active", Group: "executions", Summary: "List in-flight workflow runs (any run with a non-terminal execution) with live counts", AuthLevel: "api_key", Tags: []string{"executions", "status", "active", "in-flight"},
+			Parameters: []ParamEntry{
+				{Name: "agent_id", In: "query", Required: false, Type: "string", Desc: "Only runs touching this agent"},
+				{Name: "session_id", In: "query", Required: false, Type: "string", Desc: "Only runs in this session"},
+				{Name: "limit", In: "query", Required: false, Type: "integer", Desc: "Max runs returned (default 100, cap 200)"},
+			},
+		},
 		{Method: "GET", Path: "/api/v1/executions/:execution_id", Group: "executions", Summary: "Get execution status", AuthLevel: "api_key", Tags: []string{"executions", "status"},
 			Parameters: []ParamEntry{{Name: "execution_id", In: "path", Required: true, Type: "string", Desc: "Execution ID"}},
 		},

@@ -83,7 +83,9 @@ func TestWorkflowExecutionEventHandler_CreateAndUpdate(t *testing.T) {
 	require.NotNil(t, exec)
 	assert.Equal(t, string(types.ExecutionStatusSucceeded), exec.Status)
 	require.NotNil(t, exec.CompletedAt)
-	assert.True(t, exec.CompletedAt.After(exec.StartedAt))
+	// Not After: both events can land within one clock tick on coarse timers
+	// (Windows ~15ms), making CompletedAt == StartedAt.
+	assert.False(t, exec.CompletedAt.Before(exec.StartedAt))
 	require.NotNil(t, exec.ResultPayload)
 	assert.Contains(t, string(exec.ResultPayload), "result")
 	require.NotNil(t, exec.DurationMS)

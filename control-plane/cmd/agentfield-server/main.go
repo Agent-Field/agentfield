@@ -201,9 +201,17 @@ func runServer(cmd *cobra.Command, args []string) {
 		fmt.Println("UI is already embedded in binary, skipping build.")
 	}
 
-	// Create AgentField server instance
+	// Create AgentField server instance. An incumbent server (the desktop app
+	// direct-spawned one, say) makes this fail before any port bind — local
+	// storage init hits the incumbent's BoltDB/SQLite file locks. When a
+	// healthy AgentField already answers on our port, exit 0 instead of dying,
+	// so a launchd-managed second instance stops cleanly rather than
+	// relaunch-looping on the lock timeout.
 	agentfieldServer, err := newAgentFieldServerFunc(cfg)
 	if err != nil {
+		if server.ExitCleanIfAlreadyRunning(err, cfg.AgentField.Port) {
+			os.Exit(0)
+		}
 		log.Fatalf("Failed to create AgentField server: %v", err)
 	}
 
@@ -211,6 +219,11 @@ func runServer(cmd *cobra.Command, args []string) {
 	go func() {
 		fmt.Printf("AgentField server attempting to start on port %d...\n", cfg.AgentField.Port)
 		if err := startAgentFieldServerFunc(agentfieldServer); err != nil {
+			// Same idempotency rule for a failure at the bind itself (storage
+			// somehow shared, port not): a healthy incumbent means exit 0.
+			if server.ExitCleanIfAlreadyRunning(err, cfg.AgentField.Port) {
+				os.Exit(0)
+			}
 			log.Fatalf("Failed to start AgentField server: %v", err)
 		}
 	}()

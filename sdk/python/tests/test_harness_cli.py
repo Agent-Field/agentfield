@@ -59,6 +59,71 @@ async def test_run_cli_success():
 
 
 @pytest.mark.asyncio
+async def test_run_cli_survives_lost_exit_notification(monkeypatch):
+    """Regression: CPython gh-81562 — Windows' proactor loop can lose the
+    RegisterWaitWithQueue completion, so ``proc.wait()`` never resolves even
+    though the child exited (both pipes at EOF). run_cli used to park there
+    forever, silently wedging the calling reasoner. It must instead recover
+    the exit status from the underlying Popen object and return."""
+    from agentfield.harness import _cli
+
+    monkeypatch.setattr(_cli, "_PROC_EXIT_GRACE_SECONDS", 0.05)
+
+    async def _never_resolves():
+        await asyncio.Event().wait()
+
+    process = MagicMock()
+    process.pid = 2147483647  # nonexistent pid: group kill falls back to kill()
+    process.stdout = _stream_reader([b"partial output"])
+    process.stderr = _stream_reader([])
+    process.returncode = None  # transport never learns the exit status
+    process.wait = _never_resolves
+    process.kill = MagicMock()
+    # Underlying Popen: first poll still racing, then the real exit code.
+    process._transport._proc.poll = MagicMock(side_effect=[None, 7])
+
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=process)):
+        stdout, stderr, returncode = await asyncio.wait_for(
+            run_cli(["opencode", "run"], timeout=5),
+            timeout=5,  # the whole call must conclude promptly, not hang
+        )
+
+    assert stdout == "partial output"
+    assert returncode == 7
+    process.kill.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_run_cli_kills_child_on_cancellation():
+    """A cancelled run_cli must kill the child instead of leaving it running
+    and awaiting its natural exit (which for a coding-agent CLI can be many
+    minutes away, or forever)."""
+
+    async def never_ready(_n):
+        await asyncio.sleep(30)
+        return b""
+
+    process = MagicMock()
+    process.pid = 2147483647
+    process.returncode = None
+    process.stdout = MagicMock(read=AsyncMock(side_effect=never_ready))
+    process.stderr = MagicMock(read=AsyncMock(side_effect=never_ready))
+    process.kill = MagicMock()
+    process.wait = AsyncMock(return_value=1)
+
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=process)):
+        task = asyncio.ensure_future(
+            run_cli(["opencode", "run"], timeout=60, idle_seconds=0)
+        )
+        await asyncio.sleep(0.05)  # let it spawn and park on the drain
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    process.kill.assert_called()
+
+
+@pytest.mark.asyncio
 async def test_run_cli_timeout():
     async def never_ready(_n):
         # Streams that never reach EOF: the watchdog must abort the run.
@@ -177,3 +242,62 @@ def test_estimate_cli_cost_returns_none_when_litellm_raises():
         )
 
     assert cost is None
+
+
+def test_resolve_cli_command_passthrough_on_posix():
+    from agentfield.harness._cli import resolve_cli_command
+
+    with patch("agentfield.harness._cli.os") as mock_os:
+        mock_os.name = "posix"
+        assert resolve_cli_command("opencode") == "opencode"
+
+
+def test_resolve_cli_command_resolves_bare_names_on_windows():
+    # On Windows CreateProcess does no PATHEXT resolution, so bare names of
+    # npm-installed CLIs (.cmd shims) must be resolved via shutil.which.
+    from agentfield.harness import _cli
+
+    with (
+        patch.object(_cli.os, "name", "nt"),
+        patch.object(_cli.os, "sep", "\\"),
+        patch.object(_cli.shutil, "which", return_value="C:\npm\opencode.CMD") as which,
+    ):
+        assert _cli.resolve_cli_command("opencode") == "C:\npm\opencode.CMD"
+        which.assert_called_once_with("opencode")
+        # Explicit paths pass through untouched — never re-resolved.
+        assert _cli.resolve_cli_command("C:\tools\opencode.exe") == (
+            "C:\tools\opencode.exe"
+        )
+        # Unresolvable names fall through so the spawn error names the input.
+        which.return_value = None
+        which.reset_mock()
+        assert _cli.resolve_cli_command("nonexistent") == "nonexistent"
+
+
+@pytest.mark.asyncio
+async def test_run_cli_feeds_input_text_via_stdin():
+    process = MagicMock()
+    process.stdout = _stream_reader([b"OK"])
+    process.stderr = _stream_reader([])
+    process.stdin = MagicMock()
+    process.stdin.drain = AsyncMock()
+    process.returncode = 0
+    process.wait = AsyncMock(return_value=0)
+
+    create_process = AsyncMock(return_value=process)
+
+    with patch("asyncio.create_subprocess_exec", create_process):
+        stdout, _, returncode = await run_cli(
+            ["opencode", "run"],
+            timeout=1,
+            input_text="a prompt too large for a cmd.exe command line",
+        )
+
+    assert stdout == "OK"
+    assert returncode == 0
+    _, kwargs = create_process.call_args
+    assert kwargs["stdin"] is asyncio.subprocess.PIPE
+    process.stdin.write.assert_called_once_with(
+        b"a prompt too large for a cmd.exe command line"
+    )
+    process.stdin.close.assert_called_once()

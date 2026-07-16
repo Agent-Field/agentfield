@@ -56,6 +56,27 @@ func TestAPIKeyAuth_NoAuthConfigured(t *testing.T) {
 	assert.Equal(t, "success", resp["message"])
 }
 
+func TestAPIKeyAuth_NoAuthConfiguredGrantsAPIKeyLevel(t *testing.T) {
+	// In no-auth mode callers have full access, so downstream auth-level
+	// filtering (agentic discover, smart 404) must see them as api_key —
+	// "public" would hide every api_key endpoint on default local installs.
+	router := gin.New()
+	router.Use(APIKeyAuth(AuthConfig{APIKey: ""}))
+	router.GET("/api/v1/test", func(c *gin.Context) {
+		level, _ := c.Get("auth_level")
+		c.JSON(http.StatusOK, gin.H{"auth_level": level})
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "api_key", resp["auth_level"])
+}
+
 func TestAPIKeyAuth_ValidXAPIKeyHeader(t *testing.T) {
 	router := setupRouter(AuthConfig{APIKey: "secret-key"})
 

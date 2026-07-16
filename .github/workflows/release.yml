@@ -507,3 +507,100 @@ jobs:
           files: |
             sdk/python/dist/*.whl
             sdk/python/dist/*.tar.gz
+
+  # Desktop installers — unsigned for now (signing/notarization is a known
+  # follow-up): DMG + zip on macOS (Apple Silicon), NSIS .exe on Windows
+  # (x64), attached to the same release as the CLI binaries so users download
+  # whichever they want. Runs for staging (RC prereleases) and production
+  # alike. The bundled af CLI is built from the release commit with the
+  # embedded web UI + sqlite FTS (parity with build-single-binary.sh), so the
+  # installed app is fully self-contained on a fresh machine.
+  desktop-installers:
+    needs:
+      - prepare
+      - publish
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            assets: desktop/release/*.dmg desktop/release/*.zip
+          - os: windows-latest
+            assets: desktop/release/*.exe
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    env:
+      # No signing identities in CI yet; package unsigned.
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.release_sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: control-plane/go.sum
+
+      - name: Ensure C toolchain for CGO (sqlite FTS in the bundled CLI)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: gcc --version || choco install mingw -y --no-progress
+
+      - name: Build Web UI (embedded into the bundled CLI)
+        working-directory: control-plane/web/client
+        run: |
+          npm install
+          npm run build
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Stamp release version into the app
+        working-directory: desktop
+        shell: bash
+        # Installer filenames and the app's About version follow the release,
+        # not the static version in package.json.
+        run: npm version --no-git-tag-version "${{ needs.prepare.outputs.version }}"
+
+      - name: Bundle af CLI (embedded UI + FTS)
+        working-directory: desktop
+        env:
+          CGO_ENABLED: '1'
+          # Stamp the bundled CLI with the release version (goreleaser
+          # parity). Without it the binary answers `Version: dev` and the
+          # app can neither min-version-gate it nor ever update over it.
+          AF_CLI_VERSION: ${{ needs.prepare.outputs.tag_name }}
+        run: npm run bundle-cli -- full
+
+      - name: Build installers
+        working-directory: desktop
+        run: npm run dist
+
+      - name: Attach installers to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(${{ matrix.assets }})
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "no installer artifacts found under desktop/release" >&2
+            ls -la desktop/release || true
+            exit 1
+          fi
+          ls -lah "${files[@]}"
+          gh release upload "$TAG" "${files[@]}" --clobber

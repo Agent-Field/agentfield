@@ -292,8 +292,10 @@ agent.Run(context.Background())
 ## API Endpoints
 - POST /api/v1/execute/:target — Sync execution
 - POST /api/v1/execute/async/:target — Async execution
+- GET /api/v1/executions/active — What's in flight right now (run-level, with live counts)
 - GET /api/v1/executions/:id — Check status
-- POST /api/v1/executions/:id/cancel — Cancel
+- POST /api/v1/executions/:id/cancel — Cancel (one execution only — children keep running)
+- POST /api/v1/workflows/:workflowId/cancel-tree — Cancel a whole run, bottom-up
 - POST /api/v1/executions/:id/pause — Pause
 - POST /api/v1/executions/:id/resume — Resume
 

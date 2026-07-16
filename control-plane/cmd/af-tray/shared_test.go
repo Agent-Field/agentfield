@@ -54,6 +54,36 @@ func TestURLsUsePort(t *testing.T) {
 	}
 }
 
+// Contract: every page the tray can open has a desktop-app deep link, and
+// unknown/empty pages land on the app's dashboard instead of failing. The
+// scheme must stay "agentfield" — it is what the desktop app registers.
+func TestDeepLinkForPage(t *testing.T) {
+	cases := map[string]string{
+		"":           "agentfield://dashboard",
+		"dashboard":  "agentfield://dashboard",
+		"agents":     "agentfield://agents",
+		"executions": "agentfield://activity",
+		"whatever":   "agentfield://dashboard",
+	}
+	for page, want := range cases {
+		if got := deepLinkForPage(page); got != want {
+			t.Errorf("deepLinkForPage(%q) = %q, want %q", page, got, want)
+		}
+	}
+}
+
+// Contract: the browser fallback opens the server root for the default page
+// and the embedded web UI for named pages, on the resolved port.
+func TestBrowserURLForPage(t *testing.T) {
+	t.Setenv("AGENTFIELD_PORT", "1234")
+	if got, want := browserURLForPage(""), "http://localhost:1234"; got != want {
+		t.Errorf("browserURLForPage(\"\") = %q, want %q", got, want)
+	}
+	if got, want := browserURLForPage("agents"), "http://localhost:1234/ui/agents"; got != want {
+		t.Errorf("browserURLForPage(\"agents\") = %q, want %q", got, want)
+	}
+}
+
 // Contract: a server is "running" only when /health answers HTTP 200; a 503
 // (unhealthy) or an unreachable server both read as not running.
 func TestCheckHealth(t *testing.T) {

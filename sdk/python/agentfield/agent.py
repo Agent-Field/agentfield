@@ -76,6 +76,7 @@ from dataclasses import dataclass, field
 import weakref
 
 if TYPE_CHECKING:
+    from agentfield.harness._doctor import ProviderHealth
     from agentfield.harness._result import HarnessResult
     from agentfield.harness._runner import HarnessRunner
 
@@ -3540,6 +3541,14 @@ class Agent(FastAPI):
             schema_mode=schema_mode,
             **kwargs,
         )
+
+    async def harness_doctor(
+        self, providers: Optional[List[str]] = None
+    ) -> List["ProviderHealth"]:
+        """Check harness provider dependencies without starting an agent run."""
+        from agentfield.harness import harness_doctor
+
+        return await harness_doctor(providers=providers)
 
     def _ensure_call_semaphore(self) -> asyncio.Semaphore:
         semaphore = getattr(self, "_call_semaphore", None)

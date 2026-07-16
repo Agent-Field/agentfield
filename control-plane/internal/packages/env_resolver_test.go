@@ -316,3 +316,61 @@ func (r *retryPrompter) Prompt(v UserEnvironmentVar) (string, error) {
 	return val, nil
 }
 func (r *retryPrompter) PromptLine(string) (string, error) { return "", nil }
+
+// TestResolve_UndeclaredNodeSecretInjected pins that a node-scoped secret is
+// injected even when the manifest does not declare it: `af secrets set KEY
+// --node <name>` is explicit per-node intent, and the previous behavior
+// (silently skipping undeclared keys) made operational overrides like
+// AGENTFIELD_HARNESS_IDLE_SECONDS appear stored while never reaching the
+// process.
+func TestResolve_UndeclaredNodeSecretInjected(t *testing.T) {
+	r := newResolver(t, "my-node", &fakePrompter{})
+	if err := r.Store.Set("my-node", "AGENTFIELD_HARNESS_IDLE_SECONDS", "360"); err != nil {
+		t.Fatalf("seed node secret: %v", err)
+	}
+
+	resolved, err := r.Resolve(UserEnvironmentConfig{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if got := resolved["AGENTFIELD_HARNESS_IDLE_SECONDS"]; got != "360" {
+		t.Fatalf("undeclared node secret = %q, want 360", got)
+	}
+}
+
+// TestResolve_UndeclaredGlobalSecretNotInjected pins the containment side:
+// global secrets stay manifest-driven, so a shared key does not leak into
+// every node that never declared it.
+func TestResolve_UndeclaredGlobalSecretNotInjected(t *testing.T) {
+	r := newResolver(t, "my-node", &fakePrompter{})
+	if err := r.Store.Set(GlobalScope, "SHARED_API_KEY", "s3cret"); err != nil {
+		t.Fatalf("seed global secret: %v", err)
+	}
+
+	resolved, err := r.Resolve(UserEnvironmentConfig{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if _, ok := resolved["SHARED_API_KEY"]; ok {
+		t.Fatalf("undeclared GLOBAL secret must not be injected, got %v", resolved)
+	}
+}
+
+// TestResolve_UndeclaredNodeSecretProcessEnvWins keeps the declared-variable
+// precedence for undeclared keys too: an exported process variable beats the
+// stored node value.
+func TestResolve_UndeclaredNodeSecretProcessEnvWins(t *testing.T) {
+	r := newResolver(t, "my-node", &fakePrompter{})
+	if err := r.Store.Set("my-node", "TUNING_KNOB", "store-value"); err != nil {
+		t.Fatalf("seed node secret: %v", err)
+	}
+	t.Setenv("TUNING_KNOB", "env-value")
+
+	resolved, err := r.Resolve(UserEnvironmentConfig{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if got := resolved["TUNING_KNOB"]; got != "env-value" {
+		t.Fatalf("process env must win for undeclared keys, got %q", got)
+	}
+}

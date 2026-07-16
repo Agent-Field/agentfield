@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -395,7 +396,7 @@ func TestOpenCodeProvider_WithOptions(t *testing.T) {
 func TestOpenCodeProvider_OpenRouterConfigOverlay(t *testing.T) {
 	p := NewOpenCodeProvider("opencode", "")
 	var capturedEnv map[string]string
-	p.runCLI = func(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int) (*CLIResult, error) {
+	p.runCLI = func(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int, _ []byte) (*CLIResult, error) {
 		capturedEnv = env
 		return &CLIResult{Stdout: "ok\n", ReturnCode: 0}, nil
 	}
@@ -467,18 +468,36 @@ func TestCodexProvider_NonZeroExit(t *testing.T) {
 	assert.Equal(t, FailureCrash, raw.FailureType)
 }
 
-func TestCodexProvider_WithFullAuto(t *testing.T) {
-	dir := t.TempDir()
-	// Script that echoes its arguments so we can verify --full-auto is passed
-	script := writeTestScript(t, dir, "codex", "#!/bin/sh\necho \"args: $@\"\n")
+// TestCodexProvider_AutoPermissionUsesBypassNotFullAuto verifies the deprecated
+// --full-auto flag is gone and the "auto" permission mode maps to the bypass
+// flag (codex_harness_patch.py:165-166). Argv is captured via an injected
+// runCLI rather than echoed to stdout, because the provider no longer surfaces
+// raw stdout as the result.
+func TestCodexProvider_AutoPermissionUsesBypassNotFullAuto(t *testing.T) {
+	var gotCmd []string
+	var gotStdin []byte
+	p := NewCodexProvider("codex")
+	p.runCLI = func(_ context.Context, cmd []string, _ map[string]string, _ string, _ int, stdin []byte) (*CLIResult, error) {
+		gotCmd = cmd
+		gotStdin = stdin
+		return &CLIResult{Stdout: `{"type":"result","result":"done"}`, ReturnCode: 0}, nil
+	}
 
-	p := NewCodexProvider(script)
 	raw, err := p.Execute(context.Background(), "test prompt", Options{
+		Model:          "gpt-5.5",
 		PermissionMode: "auto",
 	})
 	assert.NoError(t, err)
 	assert.False(t, raw.IsError)
-	assert.Contains(t, raw.Result, "--full-auto")
+
+	joined := strings.Join(gotCmd, " ")
+	assert.Contains(t, joined, "-m gpt-5.5")
+	assert.Contains(t, gotCmd, "--dangerously-bypass-approvals-and-sandbox")
+	assert.Contains(t, gotCmd, "--skip-git-repo-check")
+	assert.NotContains(t, gotCmd, "--full-auto")
+	// The prompt rides on stdin, never as a positional argv entry.
+	assert.Equal(t, "test prompt", string(gotStdin))
+	assert.NotContains(t, gotCmd, "test prompt")
 }
 
 // --- Gemini provider tests ---
