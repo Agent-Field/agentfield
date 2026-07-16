@@ -6,6 +6,95 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.109-rc.7] - 2026-07-16
+
+
+### Added
+
+- Feat(agentic): ranked reasoner search + ambient load metadata (beta-plan: Santosh's recommendations) (#784)
+
+* feat(agentic): ranked reasoner search + ambient load metadata
+
+Two beta-plan items ("Santosh's recommendations") for the sub-harness
+flow, where a coding agent drives AgentField through `af agent` and the
+agentfield-use skill:
+
+1. Reasoner discovery at scale. With hundreds of reasoners installed
+   the brain must search, not list. New GET /api/v1/agentic/reasoners
+   ?q=<free text>&agent=<id>&limit=<1..50> ranks reasoners with a
+   dependency-free BM25F-lite index built per request from the same
+   registration data discovery serves (id boost 3.0, tags 2.0, agent
+   1.5, metadata description 1.0; snake/kebab/camelCase-aware
+   tokenizer; deterministic tie-break). Each hit carries
+   invocation_target + agent_health so the brain dispatches with no
+   second lookup. CLI: `af agent search "<text>" [--agent] [--limit]`.
+
+2. Ambient machine-load metadata. Every agentic response now carries
+   meta.load = {running_agents, total_agents, active_executions,
+   cpu_cores, recommended_max_concurrent} via a load provider stamped
+   into respondOK (2s TTL cache; omitted silently on error — never
+   fails a response). recommended_max_concurrent = max(1, cores/2),
+   cores-based; memory-aware refinement noted as follow-up. The
+   `af agent` CLI already forwards server meta, so the driving agent
+   gets load data with zero extra round-trips.
+
+The agentfield-use skill (v0.2.0 -> v0.3.0, embedded mirror synced)
+teaches both: search-first discovery past ~20 reasoners, and pacing —
+if active_executions >= recommended_max_concurrent, finish in-flight
+work before launching more.
+
+Verified end-to-end on a live control plane with 78 registered
+reasoners: "review pull request" ranks pr-af-go:review_dimension /
+review on top, --agent filters, empty q -> structured missing_query,
+meta.load rides every response (16 cores -> recommendation 8).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(agentic): constant allocation cap for reasoner search results
+
+CodeQL (go/uncontrolled-allocation-size) does not track the limit clamp
+through getIntQuery. Allocate at the constant max (50) instead - the
+loop still stops at the requested limit.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (4db5244)
+
+
+
+### Chores
+
+- Chore(deps): bump the npm_and_yarn group across 1 directory with 2 updates (#779)
+
+Bumps the npm_and_yarn group with 2 updates in the /desktop directory: [electron](https://github.com/electron/electron) and [tar](https://github.com/isaacs/node-tar).
+
+
+Updates `electron` from 33.4.11 to 39.8.5
+- [Release notes](https://github.com/electron/electron/releases)
+- [Commits](https://github.com/electron/electron/compare/v33.4.11...v39.8.5)
+
+Updates `tar` from 6.2.1 to 7.5.20
+- [Release notes](https://github.com/isaacs/node-tar/releases)
+- [Changelog](https://github.com/isaacs/node-tar/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/isaacs/node-tar/compare/v6.2.1...v7.5.20)
+
+---
+updated-dependencies:
+- dependency-name: electron
+  dependency-version: 39.8.5
+  dependency-type: direct:development
+  dependency-group: npm_and_yarn
+- dependency-name: tar
+  dependency-version: 7.5.20
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (e04a84f)
+
 ## [0.1.109-rc.6] - 2026-07-15
 
 

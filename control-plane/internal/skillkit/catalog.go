@@ -41,8 +41,8 @@ read this skill first`,
 	},
 	{
 		Name:        "agentfield-use",
-		Version:     "0.2.0",
-		Description: "Discover and call agents already running on a local AgentField control plane. Health check, capability discovery, concurrent sync/async execution, in-flight visibility (af ps / executions/active), wedged-run triage (cancel-tree), sessions, and the af CLI ops (run/stop/logs/secrets) that keep installed agents answering.",
+		Version:     "0.3.0",
+		Description: "Discover and call agents already running on a local AgentField control plane. Health check, capability discovery, ranked reasoner search (af agent search), concurrent sync/async execution, load-aware pacing (meta.load), in-flight visibility (af ps / executions/active), wedged-run triage (cancel-tree), sessions, and the af CLI ops (run/stop/logs/secrets) that keep installed agents answering.",
 		EmbedRoot:   "skill_data/agentfield-use",
 		EntryFile:   "SKILL.md",
 		Trigger: `When the user asks you to use, call, query, or delegate work to an
