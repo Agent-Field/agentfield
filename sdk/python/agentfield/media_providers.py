@@ -3,6 +3,7 @@ Media Provider Abstraction for AgentField
 
 Provides a unified interface for different media generation backends:
 - Fal.ai (Flux, SDXL, Whisper, TTS, Video models)
+- MiniMax (Video generation)
 - OpenRouter (via LiteLLM)
 - OpenAI DALL-E (via LiteLLM)
 - Future: ElevenLabs, Replicate, etc.
@@ -25,6 +26,10 @@ from agentfield.multimodal_response import (
     MultimodalResponse,
     VideoOutput,
 )
+
+
+MINIMAX_GLOBAL_BASE_URL = "https://api.minimax.io/v1"
+MINIMAX_CN_BASE_URL = "https://api.minimaxi.com/v1"
 
 
 # Fal image size presets
@@ -644,6 +649,227 @@ class FalProvider(MediaProvider):
 
             log_error(f"Fal transcription failed: {e}")
             raise
+
+
+class MiniMaxProvider(MediaProvider):
+    """MiniMax provider for asynchronous video generation."""
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ):
+        import os
+
+        self._api_key = api_key
+        configured_base_url = (
+            base_url or os.environ.get("MINIMAX_BASE_URL") or MINIMAX_GLOBAL_BASE_URL
+        )
+        self._base_url = configured_base_url.rstrip("/")
+
+    @property
+    def name(self) -> str:
+        return "minimax"
+
+    @property
+    def supported_modalities(self) -> List[str]:
+        return ["video"]
+
+    async def generate_image(
+        self,
+        prompt: str,
+        model: Optional[str] = None,
+        size: str = "1024x1024",
+        quality: str = "standard",
+        **kwargs,
+    ) -> MultimodalResponse:
+        raise NotImplementedError("minimax does not support image generation")
+
+    async def generate_audio(
+        self,
+        text: str,
+        model: Optional[str] = None,
+        voice: str = "alloy",
+        format: str = "wav",
+        *,
+        system: Optional[str] = None,
+        **kwargs,
+    ) -> MultimodalResponse:
+        raise NotImplementedError("minimax does not support audio generation")
+
+    @staticmethod
+    def _strip_prefix(model: str) -> str:
+        return model[len("minimax/") :] if model.startswith("minimax/") else model
+
+    @staticmethod
+    def _check_api_response(payload: Dict[str, Any], operation: str) -> None:
+        base_resp = payload.get("base_resp") or {}
+        status_code = base_resp.get("status_code")
+        if status_code not in (None, 0):
+            status_msg = base_resp.get("status_msg") or "unknown error"
+            raise RuntimeError(
+                f"MiniMax video {operation} failed ({status_code}): {status_msg}"
+            )
+
+    async def _read_response(self, response: Any, operation: str) -> Dict[str, Any]:
+        if response.status >= 400:
+            detail = await response.text()
+            raise RuntimeError(
+                f"MiniMax video {operation} failed ({response.status}): {detail[:500]}"
+            )
+        payload = await response.json()
+        if not isinstance(payload, dict):
+            raise RuntimeError(
+                f"MiniMax video {operation} returned an invalid response"
+            )
+        self._check_api_response(payload, operation)
+        return payload
+
+    async def generate_video(
+        self,
+        prompt: str,
+        model: Optional[str] = None,
+        image_url: Optional[str] = None,
+        duration: Optional[float] = None,
+        resolution: Optional[str] = None,
+        extra: Optional[Dict[str, Any]] = None,
+        poll_interval: float = 10.0,
+        timeout: float = 600.0,
+        **kwargs,
+    ) -> MultimodalResponse:
+        """Submit, poll, and retrieve a MiniMax video generation task."""
+        import asyncio
+        import os
+        import time
+
+        import aiohttp
+
+        api_key = self._api_key or os.environ.get("MINIMAX_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "MiniMax API key required. Set MINIMAX_API_KEY or pass api_key "
+                "to MiniMaxProvider."
+            )
+        if not model:
+            raise ValueError("MiniMax video generation requires an explicit model")
+        if poll_interval < 0:
+            raise ValueError("poll_interval must be non-negative")
+        if timeout <= 0:
+            raise ValueError("timeout must be greater than zero")
+
+        send_model = self._strip_prefix(model)
+        if not send_model:
+            raise ValueError("MiniMax video generation requires an explicit model")
+
+        body: Dict[str, Any] = {"model": send_model, "prompt": prompt}
+        if image_url:
+            body["first_frame_image"] = image_url
+        if duration is not None:
+            if not float(duration).is_integer():
+                raise ValueError("MiniMax video duration must be a whole number")
+            body["duration"] = int(duration)
+        if resolution:
+            body["resolution"] = resolution.upper()
+        if extra:
+            body.update(extra)
+        if kwargs:
+            body.update(kwargs)
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        submit_url = f"{self._base_url}/video_generation"
+        query_url = f"{self._base_url}/query/video_generation"
+        retrieve_url = f"{self._base_url}/files/retrieve"
+        client_timeout = aiohttp.ClientTimeout(
+            total=None,
+            connect=30.0,
+            sock_read=120.0,
+        )
+
+        async with aiohttp.ClientSession(timeout=client_timeout) as session:
+            async with session.post(submit_url, headers=headers, json=body) as response:
+                submit_data = await self._read_response(response, "submit")
+
+            task_id = str(submit_data.get("task_id") or "")
+            if not task_id:
+                raise RuntimeError("MiniMax video submit returned no task_id")
+
+            start_time = time.monotonic()
+            query_data: Dict[str, Any] = {}
+            while True:
+                elapsed = time.monotonic() - start_time
+                if elapsed >= timeout:
+                    raise TimeoutError(
+                        f"MiniMax video generation timed out after {timeout}s "
+                        f"(task {task_id})"
+                    )
+                await asyncio.sleep(min(poll_interval, timeout - elapsed))
+
+                async with session.get(
+                    query_url,
+                    headers=headers,
+                    params={"task_id": task_id},
+                ) as response:
+                    query_data = await self._read_response(response, "query")
+
+                status = str(query_data.get("status") or "").lower()
+                if status == "success":
+                    break
+                if status in {"fail", "failed"}:
+                    detail = (
+                        query_data.get("error_message")
+                        or (query_data.get("base_resp") or {}).get("status_msg")
+                        or "unknown error"
+                    )
+                    raise RuntimeError(f"MiniMax video generation failed: {detail}")
+
+            file_id = str(query_data.get("file_id") or "")
+            if not file_id:
+                raise RuntimeError("MiniMax video task succeeded without a file_id")
+
+            async with session.get(
+                retrieve_url,
+                headers=headers,
+                params={"file_id": file_id},
+            ) as response:
+                file_data = await self._read_response(response, "file retrieval")
+
+        file_info = file_data.get("file") or {}
+        video_url = file_info.get("download_url")
+        if not video_url:
+            raise RuntimeError("MiniMax file retrieval returned no download_url")
+        _assert_safe_download_url(video_url)
+
+        filename = file_info.get("filename") or "generated_video.mp4"
+        normalized_resolution = resolution.upper() if resolution else None
+        file_output = FileOutput(
+            url=video_url,
+            data=None,
+            mime_type="video/mp4",
+            filename=filename,
+        )
+        video_output = VideoOutput(
+            url=video_url,
+            data=None,
+            mime_type="video/mp4",
+            filename=filename,
+            duration=duration,
+            resolution=normalized_resolution,
+        )
+        return MultimodalResponse(
+            text=prompt,
+            audio=None,
+            images=[],
+            files=[file_output],
+            videos=[video_output],
+            raw_response={
+                "submit": submit_data,
+                "query": query_data,
+                "file": file_data,
+            },
+        )
 
 
 class LiteLLMProvider(MediaProvider):
@@ -1653,6 +1879,7 @@ class OpenRouterProvider(MediaProvider):
 _PROVIDERS: Dict[str, type] = {
     "fal": FalProvider,
     "litellm": LiteLLMProvider,
+    "minimax": MiniMaxProvider,
     "openrouter": OpenRouterProvider,
 }
 
@@ -1662,7 +1889,7 @@ def get_provider(name: str, **kwargs) -> MediaProvider:
     Get a media provider instance by name.
 
     Args:
-        name: Provider name ('fal', 'litellm', 'openrouter')
+        name: Provider name ('fal', 'litellm', 'minimax', 'openrouter')
         **kwargs: Provider-specific initialization arguments
 
     Returns:
