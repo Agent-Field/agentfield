@@ -64,6 +64,21 @@ Three gotchas:
   is the source of truth for what's installed: `af list`, start with
   `af run <name>` (it detaches; the agent keeps running after the CLI exits).
 
+### Too many reasoners to scan? Search, don't dump
+
+When a box has more than ~20 reasoners installed, ranked search beats reading
+the whole capabilities payload into context:
+
+```bash
+af agent search "review a pull request"     # BM25-ranked; --agent <id>, --limit N (max 50)
+# or: curl -s "http://localhost:8080/api/v1/agentic/reasoners?q=review+pull+request"
+```
+
+Each hit carries `reasoner_id`, `agent_id`, `invocation_target`, `tags`,
+`score`, and `agent_health` — everything you need to dispatch with no second
+lookup. Build the execute target straight from `invocation_target` (colon → dot)
+and only dispatch to hits whose `agent_health` is `"active"`.
+
 ## 3. Call a reasoner
 
 Input kwargs are ALWAYS nested under `"input"` — never raw at the top level.
@@ -101,6 +116,13 @@ plane is managing many agents at once. What to know:
   unless the agent documents otherwise.
 - Save every `execution_id` you dispatch. Group related calls with an
   `X-Session-ID` header so they're queryable as one batch later.
+
+**Check the load before piling on.** Every `af agent` / agentic response carries
+`meta.load`: `{running_agents, total_agents, active_executions, cpu_cores,
+recommended_max_concurrent}` (the recommendation is CPU-based). Read it before
+launching more heavy runs — if `active_executions >= recommended_max_concurrent`,
+finish or await in-flight work first rather than starting more, and tell the
+user you're throttling to avoid overloading the machine.
 
 ## 4. Get the result
 

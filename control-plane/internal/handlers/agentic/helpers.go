@@ -27,6 +27,10 @@ type ErrorInfo struct {
 type MetaInfo struct {
 	TokenEstimate int    `json:"token_estimate,omitempty"`
 	Hint          string `json:"hint,omitempty"`
+	// Load is ambient machine-load metadata attached to every successful
+	// response so the driving agent can pace heavy work without extra
+	// round-trips. Omitted when no load provider is registered.
+	Load *LoadInfo `json:"load,omitempty"`
 }
 
 // respondOK sends a successful agentic response.
@@ -35,6 +39,11 @@ func respondOK(c *gin.Context, data interface{}) {
 	tokens := estimateTokens(data)
 	if tokens > 0 {
 		c.Header("X-Token-Estimate", fmt.Sprintf("%d", tokens))
+	}
+	// Ambient load metadata — best-effort. If no provider is set (or it errors
+	// and returns nil), meta.load is silently omitted; it never fails a response.
+	if load := currentLoad(); load != nil {
+		resp.Meta = &MetaInfo{Load: load}
 	}
 	c.JSON(http.StatusOK, resp)
 }

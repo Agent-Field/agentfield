@@ -67,6 +67,7 @@ func NewAgentCommand() *cobra.Command {
 
 	cmd.AddCommand(newAgentStatusCmd())
 	cmd.AddCommand(newAgentDiscoverCmd())
+	cmd.AddCommand(newAgentSearchCmd())
 	cmd.AddCommand(newAgentQueryCmd())
 	cmd.AddCommand(newAgentRunCmd())
 	cmd.AddCommand(newAgentAgentSummaryCmd())
@@ -124,6 +125,42 @@ func newAgentDiscoverCmd() *cobra.Command {
 	cmd.Flags().StringVar(&method, "method", "", "HTTP method filter")
 	cmd.Flags().IntVar(&limit, "limit", 20, "Result limit")
 
+	return cmd
+}
+
+func newAgentSearchCmd() *cobra.Command {
+	var agentID string
+	var limit int
+
+	cmd := &cobra.Command{
+		Use:   "search <query>",
+		Short: "Rank installed reasoners by a free-text query (BM25)",
+		Long: "Ranked reasoner search across all registered agents. Prefer this over " +
+			"dumping full capabilities when many reasoners are installed — use the " +
+			"invocation_target from each result to call the reasoner directly.",
+		Args: cobra.ArbitraryArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			query := strings.TrimSpace(strings.Join(args, " "))
+			if query == "" {
+				agentError("missing_query", "a search query is required",
+					"Provide free text, for example: af agent search \"review pull request\"")
+			}
+
+			params := url.Values{}
+			params.Set("q", query)
+			if v := strings.TrimSpace(agentID); v != "" {
+				params.Set("agent", v)
+			}
+			if limit > 0 {
+				params.Set("limit", strconv.Itoa(limit))
+			}
+
+			proxyToServer(http.MethodGet, "/api/v1/agentic/reasoners?"+params.Encode(), nil)
+		},
+	}
+
+	cmd.Flags().StringVar(&agentID, "agent", "", "Restrict search to a single agent ID")
+	cmd.Flags().IntVar(&limit, "limit", 10, "Maximum results (default 10, max 50)")
 	return cmd
 }
 
@@ -659,6 +696,16 @@ func agentHelpData() map[string]interface{} {
 				"example": "af agent discover -q execute --group agentic --method GET --limit 10",
 			},
 			{
+				"name":        "search",
+				"description": "Rank installed reasoners by a free-text query (BM25)",
+				"usage":       "af agent search \"<free text>\" [--agent <id>] [--limit N]",
+				"flags": []map[string]string{
+					{"name": "agent", "short": "", "type": "string"},
+					{"name": "limit", "short": "", "type": "int"},
+				},
+				"example": "af agent search \"review pull request\" --limit 5",
+			},
+			{
 				"name":        "query",
 				"description": "Query runs/executions/agents/workflows/sessions",
 				"usage":       "af agent query --resource runs [--status] [--agent-id] [--run-id] [--since] [--until] [--limit] [--offset] [--include]",
@@ -741,6 +788,7 @@ func agentHelpData() map[string]interface{} {
 		"quick_start": []string{
 			"af agent status",
 			"af agent discover -q run",
+			"af agent search \"review pull request\"",
 			"af agent query -r runs --limit 10",
 			"af agent run --id <run_id>",
 			"af agent kb topics",
@@ -749,7 +797,7 @@ func agentHelpData() map[string]interface{} {
 		"auth": map[string]interface{}{
 			"method":           "Set X-API-Key header via --api-key or AGENTFIELD_API_KEY",
 			"public_endpoints": []string{"GET /api/v1/agentic/kb/topics", "GET /api/v1/agentic/kb/articles", "GET /api/v1/agentic/kb/articles/:article_id", "GET /api/v1/agentic/kb/guide"},
-			"requires_auth":    []string{"GET /api/v1/agentic/status", "GET /api/v1/agentic/discover", "POST /api/v1/agentic/query", "GET /api/v1/agentic/run/:run_id", "GET /api/v1/agentic/agent/:agent_id/summary", "POST /api/v1/agentic/batch"},
+			"requires_auth":    []string{"GET /api/v1/agentic/status", "GET /api/v1/agentic/discover", "GET /api/v1/agentic/reasoners", "POST /api/v1/agentic/query", "GET /api/v1/agentic/run/:run_id", "GET /api/v1/agentic/agent/:agent_id/summary", "POST /api/v1/agentic/batch"},
 		},
 		"response_schemas": map[string]interface{}{
 			"success": map[string]interface{}{
