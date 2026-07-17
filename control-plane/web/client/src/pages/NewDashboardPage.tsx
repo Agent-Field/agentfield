@@ -782,7 +782,7 @@ export function NewDashboardPage() {
           <Separator orientation="vertical" className="hidden h-6 sm:block" />
           <div className="flex items-center gap-1.5">
             <span className="text-2xl font-semibold tabular-nums">
-              {successRate != null ? `${(successRate * 100).toFixed(0)}%` : "—"}
+              {successRate != null ? `${successRate.toFixed(0)}%` : "—"}
             </span>
             <span className="text-muted-foreground">success</span>
           </div>

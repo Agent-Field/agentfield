@@ -6,6 +6,74 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.110-rc.4] - 2026-07-17
+
+
+### Fixed
+
+- Fix(control-plane): dashboard success rate defaults to 100% and actually covers 24h (#792)
+
+* fix(control-plane): dashboard success rate covers a rolling 24h window
+
+The summary endpoint computed success_rate from calendar-today (UTC)
+executions only, returned 0 when nothing had run, and counted in-flight
+executions as failures. An idle system therefore showed a red 0% under a
+label claiming "last 24 hours".
+
+Compute the rate over executions started in the rolling last-24h window,
+count only terminal executions in the denominator, and report 100 when
+none have finished - no completed runs means nothing has failed.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(web): stop double-scaling the dashboard success rate
+
+The summary endpoint returns success_rate as a 0-100 percentage, but the
+dashboard multiplied it by 100 again before display. The test fixtures
+mirrored the same wrong 0-1 scale, so the tautology passed while a real
+server response would have rendered 9100%. Align the fixtures with the
+actual API contract.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (623084e)
+
+- Fix(desktop): correct Windows tray icon theme and DPI rendering (#791)
+
+* feat(desktop): generate multi-size ICO tray glyphs
+
+The Windows tray ignores PNG scale-factor representations
+(electron/electron#33044) and upscales the 16px bitmap on >100% displays,
+so make-icons.mjs now also emits one .ico per tray variant with
+16/20/24/32/48 frames (20 covers the common 125% scaling). The PNGs stay
+for the Linux representation path.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): render the Windows tray glyph correctly
+
+Two fixes for the washed-out / blurry tray icon on Windows:
+
+- Pick the light/dark glyph from the *system* (taskbar) theme via
+  nativeTheme.shouldUseDarkColorsForSystemIntegratedUI instead of
+  shouldUseDarkColors, which tracks the separately-configurable *apps*
+  theme. With mixed themes (dark taskbar + light apps is common) the
+  tray wore a near-invisible glyph that read as the offline icon. The
+  poll re-checks the theme too, since Windows does not reliably emit
+  nativeTheme 'updated' for system-theme-only flips.
+- Load the tray image from the multi-size .ico on win32 so Electron
+  serves a DPI-correct frame; scale-factor PNG representations are
+  ignored by the Windows tray (electron/electron#33044) and the 16px
+  bitmap got upscaled on >100% displays.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (6da0607)
+
 ## [0.1.110-rc.3] - 2026-07-17
 
 

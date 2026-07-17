@@ -130,7 +130,7 @@ describe("NewDashboardPage", () => {
     });
     vi.mocked(getDashboardSummary).mockResolvedValue({
       executions: { today: 10 },
-      success_rate: 0.9,
+      success_rate: 90,
       agents: { running: 1 },
     });
   });
@@ -279,7 +279,7 @@ describe("NewDashboardPage", () => {
     });
     vi.mocked(getDashboardSummary).mockResolvedValue({
         executions: { today: 123 },
-        success_rate: 0.88,
+        success_rate: 88,
         agents: { running: 5 },
     });
     
