@@ -9,7 +9,18 @@
 import { readFileSync } from 'node:fs'
 import { Menu, Tray, nativeImage, nativeTheme, shell } from 'electron'
 import { DEFAULT_BASE_URL, checkControlPlane } from './agentfield'
-import { type TrayState, trayIconBase, trayState, trayStatusLabel, trayTooltip } from './tray-model'
+import {
+  type TrayState,
+  darkTaskbar,
+  trayIconBase,
+  trayState,
+  trayStatusLabel,
+  trayTooltip
+} from './tray-model'
+import trayActiveLightIco from '../../resources/tray/tray-active-light.ico?asset'
+import trayActiveDarkIco from '../../resources/tray/tray-active-dark.ico?asset'
+import trayInactiveLightIco from '../../resources/tray/tray-inactive-light.ico?asset'
+import trayInactiveDarkIco from '../../resources/tray/tray-inactive-dark.ico?asset'
 import trayActiveLight16 from '../../resources/tray/tray-active-light-16.png?asset'
 import trayActiveLight24 from '../../resources/tray/tray-active-light-24.png?asset'
 import trayActiveLight32 from '../../resources/tray/tray-active-light-32.png?asset'
@@ -25,7 +36,15 @@ import trayInactiveDark32 from '../../resources/tray/tray-inactive-dark-32.png?a
 
 const POLL_MS = 5000
 
-/** 1x / 1.5x / 2x raster per glyph (see scripts/make-icons.mjs). */
+/** Multi-size ico per glyph, for Windows (see scripts/make-icons.mjs). */
+const ICOS: Record<string, string> = {
+  'tray-active-light': trayActiveLightIco,
+  'tray-active-dark': trayActiveDarkIco,
+  'tray-inactive-light': trayInactiveLightIco,
+  'tray-inactive-dark': trayInactiveDarkIco
+}
+
+/** 1x / 1.5x / 2x raster per glyph, for Linux (see scripts/make-icons.mjs). */
 const ICONS: Record<string, [string, string, string]> = {
   'tray-active-light': [trayActiveLight16, trayActiveLight24, trayActiveLight32],
   'tray-active-dark': [trayActiveDark16, trayActiveDark24, trayActiveDark32],
@@ -34,17 +53,16 @@ const ICONS: Record<string, [string, string, string]> = {
 }
 
 function trayImage(base: string): Electron.NativeImage {
+  // The Windows tray ignores scale-factor representations and upscales the 1x
+  // bitmap on >100% displays (electron/electron#33044); Electron only serves a
+  // DPI-correct frame when the image is created from an .ico path.
+  if (process.platform === 'win32') return nativeImage.createFromPath(ICOS[base])
   const [x1, x15, x2] = ICONS[base]
   const image = nativeImage.createEmpty()
   image.addRepresentation({ scaleFactor: 1, buffer: readFileSync(x1) })
   image.addRepresentation({ scaleFactor: 1.5, buffer: readFileSync(x15) })
   image.addRepresentation({ scaleFactor: 2, buffer: readFileSync(x2) })
   return image
-}
-
-/** The taskbar follows the OS "system UI" theme, not the app theme. */
-function darkTaskbar(): boolean {
-  return nativeTheme.shouldUseDarkColors
 }
 
 /** What the tray needs from the app shell, kept narrow for clarity. */
@@ -61,10 +79,11 @@ export interface TrayHost {
 export function setupTray(host: TrayHost): boolean {
   const hostLabel = new URL(DEFAULT_BASE_URL).host
   let state: TrayState = 'stopped'
+  let dark = darkTaskbar(nativeTheme)
 
   let tray: Tray
   try {
-    tray = new Tray(trayImage(trayIconBase(state, darkTaskbar())))
+    tray = new Tray(trayImage(trayIconBase(state, dark)))
   } catch (err) {
     // e.g. a Linux desktop without a status area — or a packaging bug that
     // lost the glyphs; degrade to quit-on-close but say why.
@@ -72,9 +91,8 @@ export function setupTray(host: TrayHost): boolean {
     return false
   }
 
-  const apply = (next: TrayState): void => {
-    state = next
-    tray.setImage(trayImage(trayIconBase(state, darkTaskbar())))
+  const apply = (): void => {
+    tray.setImage(trayImage(trayIconBase(state, dark)))
     tray.setToolTip(trayTooltip(state, hostLabel))
     tray.setContextMenu(
       Menu.buildFromTemplate([
@@ -91,18 +109,26 @@ export function setupTray(host: TrayHost): boolean {
       ])
     )
   }
-  apply(state)
+  apply()
 
   // Re-render only on actual change — replacing the icon/menu every poll
   // would churn native tray APIs (and can dismiss an open menu on Windows).
+  const update = (nextState: TrayState, nextDark: boolean): void => {
+    if (nextState === state && nextDark === dark) return
+    state = nextState
+    dark = nextDark
+    apply()
+  }
+
+  // The poll re-reads the taskbar theme too: Windows does not reliably emit
+  // nativeTheme 'updated' when only the system (taskbar) theme flips.
   const refresh = async (): Promise<void> => {
-    const next = trayState(await checkControlPlane())
-    if (next !== state) apply(next)
+    update(trayState(await checkControlPlane()), darkTaskbar(nativeTheme))
   }
   void refresh()
   setInterval(() => void refresh(), POLL_MS)
 
   tray.on('click', () => host.showWindow())
-  nativeTheme.on('updated', () => apply(state))
+  nativeTheme.on('updated', () => update(state, darkTaskbar(nativeTheme)))
   return true
 }

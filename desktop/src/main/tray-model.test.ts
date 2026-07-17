@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ControlPlaneStatus } from '../shared/types'
-import { trayIconBase, trayState, trayStatusLabel, trayTooltip } from './tray-model'
+import { darkTaskbar, trayIconBase, trayState, trayStatusLabel, trayTooltip } from './tray-model'
 
 function cp(overrides: Partial<ControlPlaneStatus>): ControlPlaneStatus {
   return { reachable: false, recognized: false, healthy: false, ...overrides }
@@ -60,5 +60,22 @@ describe('trayIconBase', () => {
   it('light glyphs for dark taskbars, dark glyphs for light taskbars', () => {
     expect(trayIconBase('running', false)).toBe('tray-active-dark')
     expect(trayIconBase('stopped', false)).toBe('tray-inactive-dark')
+  })
+})
+
+describe('darkTaskbar', () => {
+  const theme = (app: boolean, system: boolean): Parameters<typeof darkTaskbar>[0] => ({
+    shouldUseDarkColors: app,
+    shouldUseDarkColorsForSystemIntegratedUI: system
+  })
+
+  it('windows follows the system (taskbar) theme, not the apps theme', () => {
+    expect(darkTaskbar(theme(false, true), 'win32')).toBe(true) // dark taskbar, light apps
+    expect(darkTaskbar(theme(true, false), 'win32')).toBe(false) // light taskbar, dark apps
+  })
+
+  it('elsewhere the app theme is the only signal', () => {
+    expect(darkTaskbar(theme(true, false), 'linux')).toBe(true)
+    expect(darkTaskbar(theme(false, true), 'linux')).toBe(false)
   })
 })
