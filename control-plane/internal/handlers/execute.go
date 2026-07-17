@@ -123,6 +123,10 @@ type executionStatusUpdateRequest struct {
 	DurationMS   *int64                 `json:"duration_ms,omitempty"`
 	CompletedAt  *time.Time             `json:"completed_at,omitempty"`
 	Progress     *int                   `json:"progress,omitempty"`
+	// Usage is the optional token/cost usage object the agent SDK attaches at
+	// the top level of the status-callback body. It is a sibling of Result, so
+	// it is never persisted into the result payload. Absent = no-op.
+	Usage map[string]interface{} `json:"usage,omitempty"`
 }
 
 type replayHit struct {
@@ -371,7 +375,17 @@ func (c *executionController) handleSync(ctx *gin.Context) {
 		return
 	}
 
-	// Agent returned HTTP 200 (synchronous result), process completion normally
+	// Agent returned HTTP 200 (synchronous result). Extract any token/cost
+	// usage the SDK attached to the result envelope, persist it (best-effort),
+	// and strip it so it never leaks into the stored/returned result payload.
+	if callErr == nil {
+		if usageRaw, stripped := extractUsageFromResult(resultBody); usageRaw != nil {
+			resultBody = stripped
+			c.ingestUsage(reqCtx, plan.exec, usageRaw)
+		}
+	}
+
+	// Process completion normally
 	job := completionJob{
 		controller: c,
 		plan:       plan,
@@ -955,6 +969,10 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 	if elapsed == 0 && updated.DurationMS != nil {
 		elapsed = time.Duration(*updated.DurationMS) * time.Millisecond
 	}
+
+	// Persist token/cost usage reported alongside the status callback.
+	// Best-effort: failures are logged and never fail the status update.
+	c.ingestUsage(reqCtx, updated, req.Usage)
 
 	c.updateWorkflowExecutionStatus(reqCtx, executionID, normalizedStatus, req.StatusReason)
 
@@ -2698,6 +2716,16 @@ func (j asyncExecutionJob) process() {
 			Msg("agent accepted execution for async processing")
 		return
 	}
+
+	// Extract, persist (best-effort), and strip token/cost usage from the
+	// synchronous result envelope so it never leaks into the stored payload.
+	if callErr == nil {
+		if usageRaw, stripped := extractUsageFromResult(resultBody); usageRaw != nil {
+			resultBody = stripped
+			j.controller.ingestUsage(bgCtx, j.plan.exec, usageRaw)
+		}
+	}
+
 	job := completionJob{
 		controller: j.controller,
 		plan:       &j.plan,

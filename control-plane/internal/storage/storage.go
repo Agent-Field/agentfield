@@ -12,21 +12,21 @@ import (
 
 // RunSummaryAggregation holds aggregated statistics for a single workflow run
 type RunSummaryAggregation struct {
-	RunID            string
-	TotalExecutions  int
-	StatusCounts     map[string]int
-	EarliestStarted  time.Time
-	LatestStarted    time.Time
-	RootExecutionID  *string
-	RootStatus       *string
+	RunID             string
+	TotalExecutions   int
+	StatusCounts      map[string]int
+	EarliestStarted   time.Time
+	LatestStarted     time.Time
+	RootExecutionID   *string
+	RootStatus        *string
 	RootErrorCategory *string
 	RootErrorMessage  *string
-	RootAgentNodeID  *string
-	RootReasonerID   *string
-	SessionID        *string
-	ActorID          *string
-	MaxDepth         int
-	ActiveExecutions int
+	RootAgentNodeID   *string
+	RootReasonerID    *string
+	SessionID         *string
+	ActorID           *string
+	MaxDepth          int
+	ActiveExecutions  int
 }
 
 // ConfigEntry represents a database-stored configuration file.
@@ -158,6 +158,34 @@ type StorageProvider interface {
 	StoreExecutionLogEntry(ctx context.Context, entry *types.ExecutionLogEntry) error
 	ListExecutionLogEntries(ctx context.Context, executionID string, afterSeq *int64, limit int, levels []string, nodeIDs []string, sources []string, query string) ([]*types.ExecutionLogEntry, error)
 	PruneExecutionLogEntries(ctx context.Context, executionID string, maxEntries int, olderThan time.Time) error
+
+	// Token/cost usage operations
+	// CreateExecutionUsage persists a batch of token/cost usage rows for an execution.
+	// The ctx scopes the write, and rows carries the usage entries to insert.
+	// A nil/empty slice is a no-op. Returns an error if the rows cannot be stored.
+	CreateExecutionUsage(ctx context.Context, rows []*types.ExecutionUsage) error
+	// GetUsageStats aggregates token/cost usage over the window starting at since (inclusive).
+	// The ctx scopes the query, and a nil since aggregates over all rows.
+	// Returns the aggregation or an error if the query fails.
+	GetUsageStats(ctx context.Context, since *time.Time) (*types.UsageStatsAggregation, error)
+	// GetUsageTimeseries returns a bucketed token/cost series over the window
+	// ending at now, divided into exactly `buckets` equal buckets. The ctx scopes
+	// the query, a nil since spans from the oldest row to now ("all" window), and
+	// the result is zero-filled with exactly `buckets` ascending points.
+	// Returns the series or an error if the query fails.
+	GetUsageTimeseries(ctx context.Context, since *time.Time, now time.Time, buckets int) (*types.UsageTimeseries, error)
+	// GetUsageTimeseriesByModel returns per-model bucketed token series over the
+	// same aligned grid as GetUsageTimeseries. The ctx scopes the query and a nil
+	// since spans from the oldest row to now ("all" window). The top models by
+	// in-window tokens each get a series (descending); the remainder is rolled up
+	// into a trailing "other" series (omitted when there is no remainder). Each
+	// series is zero-filled with exactly `buckets` ascending points (tokens only).
+	// Returns the series or an error if the query fails.
+	GetUsageTimeseriesByModel(ctx context.Context, since *time.Time, now time.Time, buckets int) ([]types.UsageModelSeries, error)
+	// GetExecutionUsageTotals sums cost and total tokens for a single execution.
+	// The ctx scopes the query, and executionID selects the execution.
+	// Cost is nil when there are no rows or all costs are null. Returns an error if the query fails.
+	GetExecutionUsageTotals(ctx context.Context, executionID string) (*float64, int64, error)
 
 	// Execution cleanup operations
 	// CleanupOldExecutions deletes execution data older than the retention period.

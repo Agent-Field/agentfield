@@ -57,8 +57,8 @@ func (m *configStorageMock) DeleteConfig(ctx context.Context, key string) error 
 func (m *configStorageMock) Initialize(ctx context.Context, config storage.StorageConfig) error {
 	return nil
 }
-func (m *configStorageMock) Close(ctx context.Context) error                    { return nil }
-func (m *configStorageMock) HealthCheck(ctx context.Context) error              { return nil }
+func (m *configStorageMock) Close(ctx context.Context) error       { return nil }
+func (m *configStorageMock) HealthCheck(ctx context.Context) error { return nil }
 func (m *configStorageMock) StoreExecution(ctx context.Context, execution *types.AgentExecution) error {
 	return nil
 }
@@ -136,6 +136,21 @@ func (m *configStorageMock) ListExecutionLogEntries(ctx context.Context, executi
 }
 func (m *configStorageMock) PruneExecutionLogEntries(ctx context.Context, executionID string, maxEntries int, olderThan time.Time) error {
 	return nil
+}
+func (m *configStorageMock) CreateExecutionUsage(ctx context.Context, rows []*types.ExecutionUsage) error {
+	return nil
+}
+func (m *configStorageMock) GetUsageStats(ctx context.Context, since *time.Time) (*types.UsageStatsAggregation, error) {
+	return &types.UsageStatsAggregation{}, nil
+}
+func (m *configStorageMock) GetUsageTimeseries(ctx context.Context, since *time.Time, now time.Time, buckets int) (*types.UsageTimeseries, error) {
+	return &types.UsageTimeseries{}, nil
+}
+func (m *configStorageMock) GetUsageTimeseriesByModel(ctx context.Context, since *time.Time, now time.Time, buckets int) ([]types.UsageModelSeries, error) {
+	return nil, nil
+}
+func (m *configStorageMock) GetExecutionUsageTotals(ctx context.Context, executionID string) (*float64, int64, error) {
+	return nil, 0, nil
 }
 func (m *configStorageMock) ListWorkflowExecutionEvents(ctx context.Context, executionID string, afterSeq *int64, limit int) ([]*types.WorkflowExecutionEvent, error) {
 	return nil, nil
@@ -634,19 +649,41 @@ func TestConfigStorage_ReloadConfig_Error(t *testing.T) {
 
 // Trigger plugin system stubs — interface fillers for the test mock; not exercised.
 func (m *configStorageMock) CreateTrigger(context.Context, *types.Trigger) error { return nil }
-func (m *configStorageMock) GetTrigger(context.Context, string) (*types.Trigger, error) { return nil, nil }
-func (m *configStorageMock) ListTriggers(context.Context, string, string) ([]*types.Trigger, error) { return nil, nil }
+func (m *configStorageMock) GetTrigger(context.Context, string) (*types.Trigger, error) {
+	return nil, nil
+}
+func (m *configStorageMock) ListTriggers(context.Context, string, string) ([]*types.Trigger, error) {
+	return nil, nil
+}
 func (m *configStorageMock) UpdateTrigger(context.Context, *types.Trigger) error { return nil }
-func (m *configStorageMock) DeleteTrigger(context.Context, string) error { return nil }
-func (m *configStorageMock) UpsertCodeManagedTrigger(context.Context, *types.Trigger) (string, error) { return "", nil }
+func (m *configStorageMock) DeleteTrigger(context.Context, string) error         { return nil }
+func (m *configStorageMock) UpsertCodeManagedTrigger(context.Context, *types.Trigger) (string, error) {
+	return "", nil
+}
 func (m *configStorageMock) MarkOrphanedTriggers(context.Context, string, []string) error { return nil }
 func (m *configStorageMock) SetTriggerOverride(context.Context, string, bool, bool) error { return nil }
-func (m *configStorageMock) ConvertTriggerToUIManaged(context.Context, string) error { return nil }
-func (m *configStorageMock) InsertInboundEvent(context.Context, *types.InboundEvent) error { return nil }
-func (m *configStorageMock) InboundEventExistsByIdempotency(context.Context, string, string) (bool, error) { return false, nil }
-func (m *configStorageMock) GetInboundEvent(context.Context, string) (*types.InboundEvent, error) { return nil, nil }
-func (m *configStorageMock) ListInboundEvents(context.Context, string, int) ([]*types.InboundEvent, error) { return nil, nil }
-func (m *configStorageMock) MarkInboundEventProcessed(context.Context, string, string, string, string) error { return nil }
-func (m *configStorageMock) SetInboundEventDispatchedWorkflow(context.Context, string, string) error { return nil }
-func (m *configStorageMock) GetInboundEventByWorkflowID(context.Context, string) (*types.InboundEvent, error) { return nil, nil }
-func (m *configStorageMock) TriggerMetrics(context.Context) (*types.TriggerMetrics, error) { return &types.TriggerMetrics{}, nil }
+func (m *configStorageMock) ConvertTriggerToUIManaged(context.Context, string) error      { return nil }
+func (m *configStorageMock) InsertInboundEvent(context.Context, *types.InboundEvent) error {
+	return nil
+}
+func (m *configStorageMock) InboundEventExistsByIdempotency(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+func (m *configStorageMock) GetInboundEvent(context.Context, string) (*types.InboundEvent, error) {
+	return nil, nil
+}
+func (m *configStorageMock) ListInboundEvents(context.Context, string, int) ([]*types.InboundEvent, error) {
+	return nil, nil
+}
+func (m *configStorageMock) MarkInboundEventProcessed(context.Context, string, string, string, string) error {
+	return nil
+}
+func (m *configStorageMock) SetInboundEventDispatchedWorkflow(context.Context, string, string) error {
+	return nil
+}
+func (m *configStorageMock) GetInboundEventByWorkflowID(context.Context, string) (*types.InboundEvent, error) {
+	return nil, nil
+}
+func (m *configStorageMock) TriggerMetrics(context.Context) (*types.TriggerMetrics, error) {
+	return &types.TriggerMetrics{}, nil
+}

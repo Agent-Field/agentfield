@@ -189,6 +189,21 @@ func (m *mockStorage) StoreExecutionLogEntry(ctx context.Context, entry *types.E
 func (m *mockStorage) ListExecutionLogEntries(ctx context.Context, executionID string, afterSeq *int64, limit int, levels []string, nodeIDs []string, sources []string, query string) ([]*types.ExecutionLogEntry, error) {
 	return nil, nil
 }
+func (m *mockStorage) CreateExecutionUsage(ctx context.Context, rows []*types.ExecutionUsage) error {
+	return nil
+}
+func (m *mockStorage) GetUsageStats(ctx context.Context, since *time.Time) (*types.UsageStatsAggregation, error) {
+	return &types.UsageStatsAggregation{}, nil
+}
+func (m *mockStorage) GetUsageTimeseries(ctx context.Context, since *time.Time, now time.Time, buckets int) (*types.UsageTimeseries, error) {
+	return &types.UsageTimeseries{}, nil
+}
+func (m *mockStorage) GetUsageTimeseriesByModel(ctx context.Context, since *time.Time, now time.Time, buckets int) ([]types.UsageModelSeries, error) {
+	return nil, nil
+}
+func (m *mockStorage) GetExecutionUsageTotals(ctx context.Context, executionID string) (*float64, int64, error) {
+	return nil, 0, nil
+}
 func (m *mockStorage) PruneExecutionLogEntries(ctx context.Context, executionID string, maxEntries int, olderThan time.Time) error {
 	return nil
 }
@@ -481,9 +496,9 @@ func defaultConnectorConfig() config.ConnectorConfig {
 		Token:   "test-token",
 		Capabilities: map[string]config.ConnectorCapability{
 			"reasoner_management": {Enabled: true, ReadOnly: false},
-			"status_read":        {Enabled: true, ReadOnly: true},
-			"policy_management":  {Enabled: true, ReadOnly: false},
-			"tag_management":     {Enabled: true, ReadOnly: false},
+			"status_read":         {Enabled: true, ReadOnly: true},
+			"policy_management":   {Enabled: true, ReadOnly: false},
+			"tag_management":      {Enabled: true, ReadOnly: false},
 		},
 	}
 }
@@ -1304,20 +1319,38 @@ func toJSON(t *testing.T, v interface{}) string {
 }
 
 // Trigger plugin system stubs — interface fillers for the test mock; not exercised.
-func (m *mockStorage) CreateTrigger(context.Context, *types.Trigger) error { return nil }
+func (m *mockStorage) CreateTrigger(context.Context, *types.Trigger) error        { return nil }
 func (m *mockStorage) GetTrigger(context.Context, string) (*types.Trigger, error) { return nil, nil }
-func (m *mockStorage) ListTriggers(context.Context, string, string) ([]*types.Trigger, error) { return nil, nil }
+func (m *mockStorage) ListTriggers(context.Context, string, string) ([]*types.Trigger, error) {
+	return nil, nil
+}
 func (m *mockStorage) UpdateTrigger(context.Context, *types.Trigger) error { return nil }
-func (m *mockStorage) DeleteTrigger(context.Context, string) error { return nil }
-func (m *mockStorage) UpsertCodeManagedTrigger(context.Context, *types.Trigger) (string, error) { return "", nil }
-func (m *mockStorage) MarkOrphanedTriggers(context.Context, string, []string) error { return nil }
-func (m *mockStorage) SetTriggerOverride(context.Context, string, bool, bool) error { return nil }
-func (m *mockStorage) ConvertTriggerToUIManaged(context.Context, string) error { return nil }
+func (m *mockStorage) DeleteTrigger(context.Context, string) error         { return nil }
+func (m *mockStorage) UpsertCodeManagedTrigger(context.Context, *types.Trigger) (string, error) {
+	return "", nil
+}
+func (m *mockStorage) MarkOrphanedTriggers(context.Context, string, []string) error  { return nil }
+func (m *mockStorage) SetTriggerOverride(context.Context, string, bool, bool) error  { return nil }
+func (m *mockStorage) ConvertTriggerToUIManaged(context.Context, string) error       { return nil }
 func (m *mockStorage) InsertInboundEvent(context.Context, *types.InboundEvent) error { return nil }
-func (m *mockStorage) InboundEventExistsByIdempotency(context.Context, string, string) (bool, error) { return false, nil }
-func (m *mockStorage) GetInboundEvent(context.Context, string) (*types.InboundEvent, error) { return nil, nil }
-func (m *mockStorage) ListInboundEvents(context.Context, string, int) ([]*types.InboundEvent, error) { return nil, nil }
-func (m *mockStorage) MarkInboundEventProcessed(context.Context, string, string, string, string) error { return nil }
-func (m *mockStorage) SetInboundEventDispatchedWorkflow(context.Context, string, string) error { return nil }
-func (m *mockStorage) GetInboundEventByWorkflowID(context.Context, string) (*types.InboundEvent, error) { return nil, nil }
-func (m *mockStorage) TriggerMetrics(context.Context) (*types.TriggerMetrics, error) { return &types.TriggerMetrics{}, nil }
+func (m *mockStorage) InboundEventExistsByIdempotency(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+func (m *mockStorage) GetInboundEvent(context.Context, string) (*types.InboundEvent, error) {
+	return nil, nil
+}
+func (m *mockStorage) ListInboundEvents(context.Context, string, int) ([]*types.InboundEvent, error) {
+	return nil, nil
+}
+func (m *mockStorage) MarkInboundEventProcessed(context.Context, string, string, string, string) error {
+	return nil
+}
+func (m *mockStorage) SetInboundEventDispatchedWorkflow(context.Context, string, string) error {
+	return nil
+}
+func (m *mockStorage) GetInboundEventByWorkflowID(context.Context, string) (*types.InboundEvent, error) {
+	return nil, nil
+}
+func (m *mockStorage) TriggerMetrics(context.Context) (*types.TriggerMetrics, error) {
+	return &types.TriggerMetrics{}, nil
+}
