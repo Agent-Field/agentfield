@@ -122,6 +122,34 @@ def apply_litellm_attribution(
     )
 
 
+def apply_openrouter_usage_accounting(
+    params: MutableMapping[str, object],
+) -> None:
+    """Ask OpenRouter to include native cost/usage accounting in responses.
+
+    OpenRouter returns ``usage.cost`` (in USD) only when the request body opts
+    in with ``usage: {"include": true}``. LiteLLM forwards unknown body fields
+    to the provider via ``extra_body``. This is a no-op for non-OpenRouter
+    requests and merges without clobbering any caller-provided ``extra_body``.
+    """
+    if not is_openrouter_request(
+        model=str(params.get("model") or ""),
+        api_base=str(params.get("api_base") or ""),
+        base_url=str(params.get("base_url") or ""),
+    ):
+        return
+
+    extra_body = params.get("extra_body")
+    if not isinstance(extra_body, dict):
+        extra_body = {}
+    usage_opt = extra_body.get("usage")
+    if not isinstance(usage_opt, dict):
+        usage_opt = {}
+    usage_opt.setdefault("include", True)
+    extra_body["usage"] = usage_opt
+    params["extra_body"] = extra_body
+
+
 def attribution_env(env: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
     source = env if env is not None else os.environ
     if not attribution_enabled(source):
