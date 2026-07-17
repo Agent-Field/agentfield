@@ -10,7 +10,7 @@ const pageState = vi.hoisted(() => ({
   useQueryResult: {
     data: {
       executions: { today: 12 },
-      success_rate: 0.91,
+      success_rate: 91,
       agents: { running: 3 },
     },
     isLoading: false,
@@ -147,7 +147,7 @@ describe("NewDashboardPage", () => {
     pageState.useQueryResult = {
       data: {
         executions: { today: 12 },
-        success_rate: 0.91,
+        success_rate: 91,
         agents: { running: 3 },
       },
       isLoading: false,
