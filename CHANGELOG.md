@@ -6,6 +6,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.110-rc.5] - 2026-07-18
+
+
+### Fixed
+
+- Fix(desktop): survive a CLI probe candidate that throws on spawn (#793)
+
+spawn() can throw synchronously - on Windows it raises UNKNOWN when PATH
+resolves af to a non-PE file, e.g. the WSL Linux binary seen through the
+interop PATH of a dev launch. The throw happened inside probeCli's promise
+executor before any listeners attached, so the promise rejected, Promise.all
+in probeAll rejected with it, and app.whenReady's await initializeCli died
+before the tray or window were created: the app ran headless with no UI.
+
+Catch the throw and treat that candidate as not responding, matching
+probeCli's documented never-rejects contract.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (7784f32)
+
+
+
+### Testing
+
+- Test(sdk/python): expand verification.py coverage to 100% (#398) (#794)
+
+Add test_verification_extended.py covering:
+- _resolve_public_key: valid did:key resolution, invalid multicodec prefix,
+  admin key fallback, decode exceptions
+- _evaluate_constraints: all operators (==, >, <, >=, <=), invalid float
+  (fail-closed), missing params, None threshold, function-keyed constraints
+- refresh(): success path populating all caches, partial failure (one
+  endpoint 500), timestamp/initialized state, API key header propagation
+- verify_signature: full Ed25519 crypto with valid/invalid signatures,
+  nonce support, wrong key, admin key fallback
+
+Coverage on verification.py: 71% -> 100%
+
+Closes #398 (50d18c3)
+
 ## [0.1.110-rc.4] - 2026-07-17
 
 
