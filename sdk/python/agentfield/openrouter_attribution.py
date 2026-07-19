@@ -7,7 +7,8 @@ read or write AgentField control-plane auth headers such as X-API-Key.
 from __future__ import annotations
 
 import os
-from typing import Dict, Mapping, MutableMapping, Optional
+from collections.abc import MutableMapping
+from typing import Dict, Mapping, Optional
 
 DEFAULT_OPENROUTER_SITE_URL = "https://agentfield.ai"
 DEFAULT_OPENROUTER_APP_NAME = "AgentField AI"

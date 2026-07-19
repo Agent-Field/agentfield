@@ -20,7 +20,7 @@ import sys
 import textwrap
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
@@ -463,7 +463,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 
 def ensure_agent_nodes(conn: sqlite3.Connection, team_id: str) -> None:
     """Upsert the canned agent nodes so UI views have metadata."""
-    now_iso = isoformat(datetime.utcnow())
+    now_iso = isoformat(datetime.now(timezone.utc))
     for node in AGENT_NODE_POOL:
         payload = (
             node.node_id,
@@ -738,7 +738,7 @@ def insert_workflow(
             isoformat(min(n.started_at for n in nodes)),
             isoformat(max(n.completed_at for n in nodes)),
             isoformat(scenario.started_at),
-            isoformat(datetime.utcnow()),
+            isoformat(datetime.now(timezone.utc)),
         ),
     )
 
@@ -768,7 +768,7 @@ def insert_workflow(
             3,
             json.dumps(run_metadata).encode(),
             isoformat(scenario.started_at),
-            isoformat(datetime.utcnow()),
+            isoformat(datetime.now(timezone.utc)),
             isoformat(max(n.completed_at for n in nodes)),
         ),
     )
@@ -1033,7 +1033,7 @@ def seed_database(args: argparse.Namespace) -> List[Tuple[str, str, int]]:
             purge_workflows_with_prefix(conn, args.workflow_prefix)
 
         inserted: List[Tuple[str, str, int]] = []
-        base_start = datetime.utcnow() - timedelta(hours=args.start_hours_ago)
+        base_start = datetime.now(timezone.utc) - timedelta(hours=args.start_hours_ago)
 
         for wf_index in range(args.workflow_count):
             scenario = generate_scenario(

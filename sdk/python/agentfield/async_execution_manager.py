@@ -907,7 +907,7 @@ class AsyncExecutionManager:
                     ) as response:
                         if response.status != 200:
                             body = await response.text()
-                            logger.warn(
+                            logger.warning(
                                 f"Event stream returned {response.status} for {url}: {body[:256]}"
                             )
                             await asyncio.sleep(backoff)
@@ -928,7 +928,7 @@ class AsyncExecutionManager:
 
                             # Prevent unbounded buffer growth (1MB limit)
                             if len(buffer) > 1024 * 1024:
-                                logger.warn(
+                                logger.warning(
                                     "SSE buffer exceeded 1MB limit, clearing to prevent memory leak"
                                 )
                                 buffer = ""
@@ -965,7 +965,7 @@ class AsyncExecutionManager:
             except Exception as e:
                 if self._shutdown_event.is_set():
                     break
-                logger.warn(f"Event stream error: {e}")
+                logger.warning(f"Event stream error: {e}")
                 await asyncio.sleep(backoff)
 
         logger.debug("Event stream loop stopped")
@@ -1449,7 +1449,7 @@ class AsyncExecutionManager:
             >= self.config.circuit_breaker_failure_threshold
         ):
             self._circuit_breaker_open = True
-            logger.warn(
+            logger.warning(
                 f"Circuit breaker opened after {self._circuit_breaker_failures} failures"
             )
 
