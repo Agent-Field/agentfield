@@ -90,7 +90,7 @@ async def test_cleanup_async_resources(monkeypatch):
     agent._async_execution_manager = manager
     agent._notification_dispatcher = notification_dispatcher
 
-    for i in range(1,6):
+    for i in range(1, 6):
         task = asyncio.create_task(dummy_async_task(i))
         agent._background_tasks.add(task)
         task.add_done_callback(agent._background_tasks.discard)

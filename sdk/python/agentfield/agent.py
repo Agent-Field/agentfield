@@ -545,7 +545,7 @@ class _NotificationDispatcher:
                 await coro_factory()
             except Exception as e:
                 if self._dev_mode:
-                    log_error(f"Notification dilivery failed: {e}")
+                    log_error(f"Notification delivery failed: {e}")
             finally:
                 self._queue.task_done()
 
@@ -4483,7 +4483,7 @@ class Agent(FastAPI):
             try:
                 await asyncio.wait_for(
                     asyncio.gather(*self._background_tasks, return_exceptions=True),
-                    timeout = 5
+                    timeout=5,
                 )
                 if self.dev_mode:
                     log_debug("Background tasks are cleaned up")
