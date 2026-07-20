@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentfield"
-version = "0.1.108"
+version = "0.1.111-rc.1"
 description = "Python SDK for the AgentField control plane"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -54,10 +54,24 @@ exclude = ["tests*", "examples*"]
 harness-claude = [
     "claude-agent-sdk>=0.1",
 ]
+harness-codex = [
+    "openai-codex>=0.1.0b3",
+    "openai-codex-cli-bin==0.137.0a4",
+]
+harness-opencode = [
+    "opencode-ai>=0.1.0a36",
+]
+harness-all = [
+    "claude-agent-sdk>=0.1",
+    "openai-codex>=0.1.0b3",
+    "openai-codex-cli-bin==0.137.0a4",
+    "opencode-ai>=0.1.0a36",
+]
 harness = [
     "claude-agent-sdk>=0.1",
 ]
 dev = [
+    "tomli>=2.0; python_version < '3.11'",
     "pytest>=9.0.3,<10",
     "pytest-asyncio>=1.3,<2",
     "pytest-cov>=4.1,<5",

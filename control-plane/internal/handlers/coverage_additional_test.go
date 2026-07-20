@@ -617,7 +617,7 @@ func TestNodeRESTHandlers_SuccessPaths(t *testing.T) {
 	t.Run("status lease updates heartbeat and returns lease", func(t *testing.T) {
 		store := &nodeRESTStorageStub{agent: agent}
 		router := gin.New()
-		router.PUT("/nodes/:node_id/status", NodeStatusLeaseHandler(store, nil, presence, 2*time.Minute))
+		router.PUT("/nodes/:node_id/status", NodeStatusLeaseHandler(store, nil, nil, presence, 2*time.Minute))
 
 		req := httptest.NewRequest(http.MethodPut, "/nodes/node-1/status", strings.NewReader(`{"phase":"ready","health_score":99}`))
 		req.Header.Set("Content-Type", "application/json")
@@ -633,7 +633,7 @@ func TestNodeRESTHandlers_SuccessPaths(t *testing.T) {
 	t.Run("pending approval only renews lease", func(t *testing.T) {
 		store := &nodeRESTStorageStub{agent: pendingAgent}
 		router := gin.New()
-		router.PUT("/nodes/:node_id/status", NodeStatusLeaseHandler(store, nil, presence, 0))
+		router.PUT("/nodes/:node_id/status", NodeStatusLeaseHandler(store, nil, nil, presence, 0))
 
 		req := httptest.NewRequest(http.MethodPut, "/nodes/node-pending/status", strings.NewReader(`{"phase":"offline"}`))
 		req.Header.Set("Content-Type", "application/json")

@@ -85,9 +85,9 @@ class MemoryEventClient:
 
     def __init__(self, base_url: str, execution_context, api_key: Optional[str] = None):
         if base_url.startswith("https://"):
-            self.base_url = "wss://" + base_url[len("https://"):]
+            self.base_url = "wss://" + base_url[len("https://") :]
         elif base_url.startswith("http://"):
-            self.base_url = "ws://" + base_url[len("http://"):]
+            self.base_url = "ws://" + base_url[len("http://") :]
         else:
             self.base_url = base_url
         self.execution_context = execution_context
@@ -347,9 +347,9 @@ class MemoryEventClient:
 
                 # Make request to history endpoint
                 if self.base_url.startswith("wss://"):
-                    http_url = "https://" + self.base_url[len("wss://"):]
+                    http_url = "https://" + self.base_url[len("wss://") :]
                 elif self.base_url.startswith("ws://"):
-                    http_url = "http://" + self.base_url[len("ws://"):]
+                    http_url = "http://" + self.base_url[len("ws://") :]
                 else:
                     http_url = self.base_url
                 response = await client.get(
@@ -397,9 +397,9 @@ class MemoryEventClient:
 
             # Make request to history endpoint
             if self.base_url.startswith("wss://"):
-                http_url = "https://" + self.base_url[len("wss://"):]
+                http_url = "https://" + self.base_url[len("wss://") :]
             elif self.base_url.startswith("ws://"):
-                http_url = "http://" + self.base_url[len("ws://"):]
+                http_url = "http://" + self.base_url[len("ws://") :]
             else:
                 http_url = self.base_url
             response = requests.get(
@@ -447,7 +447,9 @@ class MemoryEventClient:
 class ScopedMemoryEventClient:
     """Memory event client scoped to a specific context."""
 
-    def __init__(self, event_client: MemoryEventClient, scope: str, scope_id: str):
+    def __init__(
+        self, event_client: MemoryEventClient, scope: str, scope_id: Optional[str]
+    ):
         self.event_client = event_client
         self.scope = scope
         self.scope_id = scope_id

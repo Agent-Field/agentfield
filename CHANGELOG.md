@@ -6,6 +6,2039 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.111-rc.1] - 2026-07-19
+
+
+### Added
+
+- Feat(sdk/typescript): trigger system parity — dispatch, sugar, testing, demo (#510, #511, #512) (#796)
+
+Implements the three remaining sub-issues of the TypeScript SDK trigger
+parity epic (#507):
+
+#510 — Dispatch envelope unwrap + TriggerContext injection
+- New src/triggers/dispatch.ts: isTriggerEnvelope(), unwrapEnvelope(),
+  applyTriggerTransform() — detects {event, _meta} envelope shape from
+  the control plane dispatcher, constructs TriggerContext, applies the
+  matched binding's transform
+- ReasonerContext gains trigger?: TriggerContext field
+- Agent.ts runReasoner() and local call() path wired to unwrap envelopes
+- Direct calls (no envelope) pass through unchanged
+
+#511 — onEvent/onSchedule sugar + test helpers + fixtures
+- Agent.ts: app.onEvent(spec, handler) and app.onSchedule(cron, handler)
+  sugar methods that forward to app.reasoner() with triggers
+- New src/triggers/testing.ts: simulateTrigger(), simulateSchedule(),
+  loadFixture() for unit testing without a control plane
+- Copied 6 fixture JSONs from Python SDK (stripe, github, slack, cron,
+  generic_hmac, generic_bearer)
+
+#512 — examples/triggers-demo-ts + skill docs
+- New examples/triggers-demo-ts/: agent.ts (3 deterministic reasoners),
+  Dockerfile, docker-compose.yml, README.md, fire-events.sh
+- New skills/agentfield-multi-reasoner-builder/references/triggers.md
+  with Python + TypeScript scaffold reference
+
+Tests: 744 pass (75 files), including 74 new trigger-specific tests.
+Build: tsc clean, tsup ESM+DTS success. (95fe429)
+
+
+
+### Fixed
+
+- Fix(security): SSRF protection for approval callback_url (#435) (#790)
+
+* fix(security): SSRF protection for approval callback_url (#435)
+
+The approval callback_url field was accepted without SSRF validation and
+dispatched via a plain http.Client, allowing an attacker to use the
+control plane as a proxy to internal services (cloud metadata, RFC-1918,
+loopback).
+
+Changes:
+- Validate callback_url at registration time using services.ValidateWebhookURL()
+  to reject private/internal targets (localhost, 169.254.x, 10.x, 172.16.x,
+  192.168.x, ::1) before the URL is persisted.
+- Replace the plain http.Client in notifyApprovalCallback with
+  services.NewSSRFSafeClient() which enforces DNS-rebinding-safe private-IP
+  blocking at dial time.
+- Add comprehensive test coverage for both registration rejection and
+  runtime transport enforcement.
+
+Fixes #435
+
+* fix(test): allowlist loopback in webhook helper test for SSRF-safe client
+
+The existing TestExecuteReasonerAndWebhookHelpersCoverage test calls
+notifyApprovalCallback against a httptest server (127.0.0.1). After
+switching to NewSSRFSafeClient (#435), the SSRF transport rejects
+loopback as a private IP, causing the test to hang waiting for
+callbacks that never arrive.
+
+Fix: set services.SetWebhookAllowedHosts([]string{"127.0.0.1"})
+before the callback calls so the httptest server is reachable. (7fb1193)
+
+## [0.1.110] - 2026-07-18
+
+
+### Fixed
+
+- Fix(install): replace binaries atomically to avoid macOS SIGKILL on upgrade (#797)
+
+cp onto an existing binary reuses the inode, which poisons the macOS
+kernel's cached code-signature state for that vnode. Every exec after an
+upgrade is then killed with SIGKILL ("zsh: killed af") even though
+codesign --verify passes on disk. Stage to a temp file and mv into place
+so upgrades always land on a fresh inode. Applies to both the agentfield
+binary and the af-tray binary.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (1a55ddc)
+
+## [0.1.110-rc.5] - 2026-07-18
+
+
+### Fixed
+
+- Fix(desktop): survive a CLI probe candidate that throws on spawn (#793)
+
+spawn() can throw synchronously - on Windows it raises UNKNOWN when PATH
+resolves af to a non-PE file, e.g. the WSL Linux binary seen through the
+interop PATH of a dev launch. The throw happened inside probeCli's promise
+executor before any listeners attached, so the promise rejected, Promise.all
+in probeAll rejected with it, and app.whenReady's await initializeCli died
+before the tray or window were created: the app ran headless with no UI.
+
+Catch the throw and treat that candidate as not responding, matching
+probeCli's documented never-rejects contract.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (7784f32)
+
+
+
+### Testing
+
+- Test(sdk/python): expand verification.py coverage to 100% (#398) (#794)
+
+Add test_verification_extended.py covering:
+- _resolve_public_key: valid did:key resolution, invalid multicodec prefix,
+  admin key fallback, decode exceptions
+- _evaluate_constraints: all operators (==, >, <, >=, <=), invalid float
+  (fail-closed), missing params, None threshold, function-keyed constraints
+- refresh(): success path populating all caches, partial failure (one
+  endpoint 500), timestamp/initialized state, API key header propagation
+- verify_signature: full Ed25519 crypto with valid/invalid signatures,
+  nonce support, wrong key, admin key fallback
+
+Coverage on verification.py: 71% -> 100%
+
+Closes #398 (50d18c3)
+
+## [0.1.110-rc.4] - 2026-07-17
+
+
+### Fixed
+
+- Fix(control-plane): dashboard success rate defaults to 100% and actually covers 24h (#792)
+
+* fix(control-plane): dashboard success rate covers a rolling 24h window
+
+The summary endpoint computed success_rate from calendar-today (UTC)
+executions only, returned 0 when nothing had run, and counted in-flight
+executions as failures. An idle system therefore showed a red 0% under a
+label claiming "last 24 hours".
+
+Compute the rate over executions started in the rolling last-24h window,
+count only terminal executions in the denominator, and report 100 when
+none have finished - no completed runs means nothing has failed.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(web): stop double-scaling the dashboard success rate
+
+The summary endpoint returns success_rate as a 0-100 percentage, but the
+dashboard multiplied it by 100 again before display. The test fixtures
+mirrored the same wrong 0-1 scale, so the tautology passed while a real
+server response would have rendered 9100%. Align the fixtures with the
+actual API contract.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (623084e)
+
+- Fix(desktop): correct Windows tray icon theme and DPI rendering (#791)
+
+* feat(desktop): generate multi-size ICO tray glyphs
+
+The Windows tray ignores PNG scale-factor representations
+(electron/electron#33044) and upscales the 16px bitmap on >100% displays,
+so make-icons.mjs now also emits one .ico per tray variant with
+16/20/24/32/48 frames (20 covers the common 125% scaling). The PNGs stay
+for the Linux representation path.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): render the Windows tray glyph correctly
+
+Two fixes for the washed-out / blurry tray icon on Windows:
+
+- Pick the light/dark glyph from the *system* (taskbar) theme via
+  nativeTheme.shouldUseDarkColorsForSystemIntegratedUI instead of
+  shouldUseDarkColors, which tracks the separately-configurable *apps*
+  theme. With mixed themes (dark taskbar + light apps is common) the
+  tray wore a near-invisible glyph that read as the offline icon. The
+  poll re-checks the theme too, since Windows does not reliably emit
+  nativeTheme 'updated' for system-theme-only flips.
+- Load the tray image from the multi-size .ico on win32 so Electron
+  serves a DPI-correct frame; scale-factor PNG representations are
+  ignored by the Windows tray (electron/electron#33044) and the 16px
+  bitmap got upscaled on >100% displays.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (6da0607)
+
+## [0.1.110-rc.3] - 2026-07-17
+
+
+### Chores
+
+- Chore(deps): bump mcp in /sdk/python in the uv group across 1 directory (#785)
+
+Bumps the uv group with 1 update in the /sdk/python directory: [mcp](https://github.com/modelcontextprotocol/python-sdk).
+
+
+Updates `mcp` from 1.27.0 to 1.28.1
+- [Release notes](https://github.com/modelcontextprotocol/python-sdk/releases)
+- [Changelog](https://github.com/modelcontextprotocol/python-sdk/blob/main/RELEASE.md)
+- [Commits](https://github.com/modelcontextprotocol/python-sdk/compare/v1.27.0...v1.28.1)
+
+---
+updated-dependencies:
+- dependency-name: mcp
+  dependency-version: 1.28.1
+  dependency-type: indirect
+  dependency-group: uv
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (75e942a)
+
+## [0.1.110-rc.2] - 2026-07-17
+
+
+### Added
+
+- Feat(control-plane): agent-mode steering verbs, events query resource, and --json lifecycle output (#751)
+
+* feat(control-plane): authenticated approval resolution endpoint by execution ID
+
+Approvals could previously only be resolved through the HMAC-signed
+webhook (POST /api/v1/webhooks/approval-response), whose secret is held
+by the external approval service. Extract the resolution core
+(idempotency, state transitions, approval bookkeeping, events, agent
+callback) into webhookApprovalController.applyApprovalDecision and add
+POST /api/v1/executions/:execution_id/approval-response under the
+authenticated agentAPI group, so operators and CLIs holding an API key
+can approve/reject/request_changes directly. Webhook behavior is
+unchanged; 'expired' stays webhook-only since expiry is not an operator
+decision.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(control-plane): af agent exec steering verbs in agent-mode CLI
+
+Add 'af agent exec pause|resume|cancel|restart|approval-status|approve'
+as thin wrappers over the existing /api/v1/executions/:execution_id/*
+endpoints, emitting the standard AgentResponse envelope with non-zero
+exit on error. approve wires --decision approved|rejected|
+request_changes [--reason] to the new authenticated approval-response
+endpoint.
+
+proxyToServer now normalizes legacy string errors ({"error":"..."},
+optionally with a sibling message) into the structured envelope error
+object {code,message,hint}, deriving the code from the HTTP status when
+the handler didn't provide one — so agents scripting against 'af agent'
+always get {ok:false,error:{...}} on failures.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(control-plane): events resource in agentic unified query
+
+Expose persisted execution lifecycle events (workflow_execution_events)
+through POST /api/v1/agentic/query as resource=events so agents can
+poll event history from a shell loop instead of consuming SSE. Queries
+require filters.execution_id (direct per-execution listing) or
+filters.run_id (fan-out over the run's execution records); results are
+sorted by emitted_at ascending with sequence tie-breaking, honor
+since/until RFC3339 bounds, and paginate with limit/offset (total is
+the pre-pagination count). No new persistence layer or storage
+interface methods — this composes the existing QueryExecutionRecords
+and ListWorkflowExecutionEvents queries.
+
+CLI: 'af agent query -r events --execution-id X | --run-id Y' with a
+new --execution-id filter flag; help documents that this is a pollable
+snapshot of the SSE stream, not a live subscription.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(control-plane): --json envelopes for node lifecycle commands
+
+Add a --json flag to af list, af install, af run, af stop, and af logs
+that emits the agent-mode {ok,data,error:{code,message,hint}} envelope
+on stdout with non-zero exit on error. Default human output is
+unchanged.
+
+- list: {nodes:[{name,version,status,port,description}], total}
+- install/run: envelope on the real stdout; service-layer progress
+  prints are redirected to stderr for the duration
+- stop: {node, status: stopped|not_running}; progress output is
+  suppressed via a Quiet flag on AgentNodeStopper (printf wrapper only,
+  no changes to the signal/liveness logic)
+- logs: {node, log_path, lines:[...]} honoring --tail via a Go-native
+  tail (no external tail binary); --follow with --json is rejected as
+  invalid_flags since a stream cannot be a JSON snapshot
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): persist recorded_at on workflow execution events
+
+The raw INSERT in storeWorkflowExecutionEventTx omitted recorded_at
+(the GORM model's autoCreateTime does not apply to raw SQL), leaving
+NULL in SQLite/Postgres. ListWorkflowExecutionEvents scanned the column
+into a non-nullable time.Time, so listing any stored event failed with
+'unsupported Scan, storing driver.Value type <nil>'. Nothing exercised
+this listing path end-to-end until the agentic events query resource;
+the existing storage test masked the bug with a manual UPDATE of
+recorded_at before listing.
+
+Write recorded_at in the INSERT and scan it through sql.NullTime,
+falling back to emitted_at for legacy NULL rows so old databases keep
+listing cleanly. Found via runtime verification of
+'af agent query -r events' against a local control plane.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): in-process unit tests for proxy error normalization
+
+structuredErrorFromString and defaultCodeForStatus were exercised only
+through subprocess exit-path tests, which record no coverage. Add
+direct table-driven tests so the patch-coverage gate sees these lines.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(control-plane): list approval-response endpoint in discover catalog
+
+Register POST /api/v1/executions/:execution_id/approval-response in the
+agentic API catalog so 'af agent discover' surfaces the new resolution
+endpoint alongside the other approval routes.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(storage): persist recorded_at on the execution_logs raw INSERT too
+
+storeExecutionLogEntryTx — the single writer behind both
+StoreExecutionLogEntry and StoreExecutionLogEntries — omitted recorded_at
+from its raw INSERT, so every execution-log row landed NULL and every read
+silently took the legacy emitted_at fallback: the server-ingestion timestamp
+was never actually stored. It also stamped entry.RecordedAt only AFTER the
+insert, mutating the caller's struct with a value that never reached the
+database. This is the same bug this branch already fixed for
+workflow_execution_events (the GORM model's autoCreateTime does not apply to
+raw INSERTs); the sibling path was missed.
+
+The default is now stamped before the query is built and recorded_at is
+bound explicitly, mirroring storeWorkflowExecutionEventTx. The regression
+test uses distinct emitted_at/recorded_at values so the NULL-read fallback
+cannot masquerade as persistence, and covers the batch path's zero-value
+stamping; it fails against the previous INSERT.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(storage): align clinch execution-log test with persisted recorded_at
+
+The recorded_at-persistence fix (raw INSERT no longer leaves the column
+NULL) made the legacy assertion here fail: it expected the NULL-read
+fallback (recorded_at -> emitted_at) for a freshly stored entry. Give
+the entry an explicit RecordedAt and assert it round-trips; the NULL
+fallback branch is still covered by the forced-NULL UPDATE above.
+
+Latent in the branch before the main merge - conflict state had kept
+full CI from running on the previous head.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (cf29386)
+
+## [0.1.110-rc.1] - 2026-07-16
+
+
+### Chores
+
+- Chore(web-client): override ws to 8.21.0 (#773) (9c7089f)
+
+## [0.1.109] - 2026-07-16
+
+## [0.1.109-rc.7] - 2026-07-16
+
+
+### Added
+
+- Feat(agentic): ranked reasoner search + ambient load metadata (beta-plan: Santosh's recommendations) (#784)
+
+* feat(agentic): ranked reasoner search + ambient load metadata
+
+Two beta-plan items ("Santosh's recommendations") for the sub-harness
+flow, where a coding agent drives AgentField through `af agent` and the
+agentfield-use skill:
+
+1. Reasoner discovery at scale. With hundreds of reasoners installed
+   the brain must search, not list. New GET /api/v1/agentic/reasoners
+   ?q=<free text>&agent=<id>&limit=<1..50> ranks reasoners with a
+   dependency-free BM25F-lite index built per request from the same
+   registration data discovery serves (id boost 3.0, tags 2.0, agent
+   1.5, metadata description 1.0; snake/kebab/camelCase-aware
+   tokenizer; deterministic tie-break). Each hit carries
+   invocation_target + agent_health so the brain dispatches with no
+   second lookup. CLI: `af agent search "<text>" [--agent] [--limit]`.
+
+2. Ambient machine-load metadata. Every agentic response now carries
+   meta.load = {running_agents, total_agents, active_executions,
+   cpu_cores, recommended_max_concurrent} via a load provider stamped
+   into respondOK (2s TTL cache; omitted silently on error — never
+   fails a response). recommended_max_concurrent = max(1, cores/2),
+   cores-based; memory-aware refinement noted as follow-up. The
+   `af agent` CLI already forwards server meta, so the driving agent
+   gets load data with zero extra round-trips.
+
+The agentfield-use skill (v0.2.0 -> v0.3.0, embedded mirror synced)
+teaches both: search-first discovery past ~20 reasoners, and pacing —
+if active_executions >= recommended_max_concurrent, finish in-flight
+work before launching more.
+
+Verified end-to-end on a live control plane with 78 registered
+reasoners: "review pull request" ranks pr-af-go:review_dimension /
+review on top, --agent filters, empty q -> structured missing_query,
+meta.load rides every response (16 cores -> recommendation 8).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(agentic): constant allocation cap for reasoner search results
+
+CodeQL (go/uncontrolled-allocation-size) does not track the limit clamp
+through getIntQuery. Allocate at the constant max (50) instead - the
+loop still stops at the requested limit.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (4db5244)
+
+
+
+### Chores
+
+- Chore(deps): bump the npm_and_yarn group across 1 directory with 2 updates (#779)
+
+Bumps the npm_and_yarn group with 2 updates in the /desktop directory: [electron](https://github.com/electron/electron) and [tar](https://github.com/isaacs/node-tar).
+
+
+Updates `electron` from 33.4.11 to 39.8.5
+- [Release notes](https://github.com/electron/electron/releases)
+- [Commits](https://github.com/electron/electron/compare/v33.4.11...v39.8.5)
+
+Updates `tar` from 6.2.1 to 7.5.20
+- [Release notes](https://github.com/isaacs/node-tar/releases)
+- [Changelog](https://github.com/isaacs/node-tar/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/isaacs/node-tar/compare/v6.2.1...v7.5.20)
+
+---
+updated-dependencies:
+- dependency-name: electron
+  dependency-version: 39.8.5
+  dependency-type: direct:development
+  dependency-group: npm_and_yarn
+- dependency-name: tar
+  dependency-version: 7.5.20
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (e04a84f)
+
+## [0.1.109-rc.6] - 2026-07-15
+
+
+### Added
+
+- Feat: AgentField Desktop (Mac-first) + Windows enablement, bundled CLI, tray, deep links (#752)
+
+* feat(desktop): Electron desktop app skeleton (read-only v1)
+
+Docker-Desktop-style dashboard for non-technical users: shows control
+plane health (GET /health) and the locally installed agent nodes from
+~/.agentfield/installed.yaml, cross-checked against GET /api/v1/nodes
+for a running/stopped/unknown badge per agent. Polls every 5s with a
+manual Refresh button and graceful empty states.
+
+Electron + electron-vite + React + TypeScript, plain CSS. Secure
+defaults: contextIsolation on, nodeIntegration off, sandboxed renderer,
+single contextBridge API. All data access is isolated in
+src/main/agentfield.ts with a marked seam to later swap the registry
+read to `af list -o json`. 29 vitest unit tests cover registry parsing,
+health mapping, and badge derivation.
+
+Self-contained under desktop/ (own package.json); no packaging
+(electron-builder) yet, and the GUI is untested in this headless
+environment — typecheck, production build, and unit tests all pass.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(release): add windows/amd64 build target to goreleaser
+
+Replaces the stale commented-out windows block with a real
+agentfield-windows-amd64 build mirroring the linux/darwin ones
+(goreleaser appends .exe on its own). Groundwork only: the release
+workflow's build matrix filters by --id and does not build this id yet;
+shipping the artifact needs a follow-up matrix entry (windows runner,
+or mingw-w64 on the linux runner for the CGO sqlite dependency).
+
+Also modernizes archives.builds/format to ids/formats so
+`goreleaser check` passes clean again (both were deprecated).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): build-tagged process stop/liveness for windows
+
+`af stop` used process.Signal(os.Interrupt) and a signal-0 probe, both
+unsupported on Windows (and os.FindProcess always succeeds there, so
+the liveness check was meaningless). Extract the two process operations
+into build-tagged helpers: proc_unix.go keeps the existing SIGINT +
+signal-0 behaviour; proc_windows.go uses taskkill for the graceful
+request and a tasklist PID query for liveness.
+
+stop.go changes are limited to swapping the two call sites and the
+now-unused syscall import. Windows paths are compile-verified only
+(GOOS=windows cross-build), not yet tested on a real Windows machine.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): platform-aware log tailing for af logs
+
+`af logs` shelled out to tail(1), which does not exist on Windows. The
+tail/follow commands now go through one tailCommand helper: unchanged
+tail(1) invocations on Unix, PowerShell Get-Content -Tail (-Wait for
+follow) on Windows, with proper single-quote escaping of the log path.
+Windows path is compile-verified only, not yet run on a real machine.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): .exe-aware Go node binary naming on windows
+
+Go agent nodes declare unix-style binary paths in their manifests
+(entrypoint.start: bin/foo). On Windows the install-time `go build -o`
+output now carries the conventional .exe extension, and the runner's
+GoBinaryProgram resolves an extensionless start path to the built .exe
+when present. No behaviour change on other platforms; windows path is
+compile-verified only.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): cover windows-only branches via goos-parameterized helpers
+
+The patch-coverage gate flagged the runtime.GOOS-gated windows branches
+(PowerShell tail construction in logs.go, .exe naming/resolution in
+gointerp.go) as untestable on linux CI. Extract each into a pure helper
+taking an explicit goos string — tailCommandArgs, withExeSuffixFor,
+goBinaryProgramFor — with the exported wrappers passing runtime.GOOS,
+so behavior is unchanged while both platform paths are unit-testable
+anywhere. Table-driven tests cover the windows tail command (incl.
+single-quote escaping), .exe suffixing, and the built-.exe fallback
+resolution; refactored regions now profile with zero uncovered blocks.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): remove agentfield.yaml symlink that breaks startup on Windows
+
+control-plane/agentfield.yaml was a checked-in symlink to
+config/agentfield.yaml. On Windows checkouts (core.symlinks=false, the
+default) git materializes it as a plain text file containing the literal
+target path, which Viper then finds via its . search path and fails to
+parse: `cannot unmarshal !!str config/...` — a fatal error on every
+`af server` run from the control-plane directory.
+
+The symlink is redundant on every platform: both cmd/af and
+cmd/agentfield-server already search ./config and <execDir>/config, which
+resolve to the same file.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): default local storage paths whenever mode is local
+
+The af binary only filled in DatabasePath/KVStorePath when storage.mode
+was absent entirely. A config file that sets mode: "local" while leaving
+the paths empty (which the repo's own sample config/agentfield.yaml does,
+and which af picks up automatically when running next to it) skipped the
+defaulting block and failed startup with "database path is empty".
+
+Default the paths whenever the effective mode is local, mirroring
+cmd/agentfield-server which already had this shape. Found on Windows but
+platform-independent.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): probe python candidates for a working interpreter
+
+exec.LookPath alone cannot pick a Python on Windows: stock machines ship
+Microsoft Store "app execution alias" stubs named python3.exe (and often
+python.exe) that resolve like real binaries but exit 9009 without running
+anything. resolveVenvInterpreter took the first PATH hit and only
+version-checked that one, so a node declaring requires-python failed with
+"no compatible interpreter" even when a perfectly good python was next in
+line. Verified live on Windows 11: python3 -> dead Store stub (exit
+9009), python -> real 3.11.9, never consulted.
+
+ambientPythonInterpreter now probes each candidate by actually running it
+(-c version query) and takes the first that answers. The candidate list
+gains "py", the Windows launcher: python.org installers register it even
+when "add python to PATH" is left unchecked (the default), where it is
+the only working entry. It does not exist on Unix, so probing it there is
+a no-op.
+
+The legacy no-requires-python path in InstallPythonDependencies now uses
+the same probe instead of blindly running python3 -m venv and falling
+back, and fails with an actionable error listing the probed candidates
+when nothing on PATH runs.
+
+Test stubs that previously only handled -m venv now answer the -c version
+probe, matching how real interpreters behave; the venv-creation-failure
+contracts now expect the earlier, more actionable error.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): force PYTHONUTF8=1 for spawned python agent nodes
+
+Spawned agents log through stdout/stderr redirected to a log file. On
+Windows, Python then encodes with the legacy ANSI code page (cp1252),
+which cannot represent the SDK's emoji log prefixes - every heartbeat
+flooded the log with UnicodeEncodeError tracebacks from the logging
+module. Verified live: with PYTHONUTF8=1 the same agent logs cleanly.
+
+Applied in both spawn paths (services.buildProcessConfig, which backs
+af run, and the legacy packages runner). An explicit PYTHONUTF8 in the
+caller's environment wins. UTF-8 mode is a no-op where UTF-8 is already
+the default, so this is safe on every platform.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): make the services package compile under GOOS=windows
+
+dev_service.go is build-tagged !windows (Windows gets a stub service),
+but two pieces of its test surface were not:
+
+- mockFileSystemAdapter lived in dev_service_test.go (!windows) while
+  untagged test files (package_service_test.go, coverage_additional_
+  test.go) use it. Moved to a new untagged mocks_fs_test.go.
+- Three tests in the untagged coverage_additional_test.go exercised
+  Unix-only DefaultDevService methods (loadDevEnvFile, startDevProcess,
+  port helpers) that the Windows stub does not define. Moved into the
+  !windows-tagged dev_service_test.go.
+
+Before this, go vet / go test of internal/core/services failed to
+compile on Windows. Also carries the one-line stub update from the
+interpreter-probe change (the fake python in coverage_additional_test.go
+now answers the -c version query); no other test logic changed.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): don't report an unrelated service on 8080 as a running control plane
+
+checkControlPlane treated any HTTP 200 from {baseUrl}/health as
+"healthy", so anything squatting on the popular default port lit the
+dashboard green. Found live on Windows: an unrelated dev server answering
+{"status":"alive"} on /health showed as a running control plane.
+
+The probe now recognizes an AgentField control plane by its health
+payload shape (status: healthy|unhealthy, per routes_core.go). Anything
+else reachable on the port reports recognized: false with an explanatory
+error, renders as a yellow "Another service is on this port" state, and
+is excluded from the nodes cross-check so a foreign /api/v1/nodes
+response cannot corrupt agent badges.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): executions, dashboard metrics, and a curated install flow
+
+Data layer growth behind the same single-snapshot IPC:
+- fetchExecutions parses GET /api/ui/v2/workflow-runs into in-flight runs
+  plus a short tail of finished ones.
+- fetchDashboardMetrics parses GET /api/ui/v1/dashboard/summary (agents
+  running/total, runs today/yesterday, success rate).
+- Both are only consulted on a recognized control plane, so a foreign
+  service on 8080 can't inject activity or metrics.
+
+Install flow, with the af CLI as the single contract:
+- src/shared/catalog.ts is a curated hard-coded list of installable nodes
+  (the pre-marketplace seam; swap for a remote catalog fetch later). Entry
+  names must equal the node's manifest name — that is the registry key the
+  app uses to detect installed state (SWE-AF installs as "swe-planner").
+- src/main/installer.ts spawns `af install <source>`, sanitizes
+  ANSI/spinner output into displayable lines, and streams them to the
+  renderer over agentfield:install-progress. The renderer only ever sends
+  catalog names over IPC; unknown names are refused, raw sources never
+  reach a shell. A missing af CLI degrades to an actionable message.
+
+Verified live on Windows: installed SWE-AF from the app end-to-end —
+including uv provisioning Python 3.12.13 because the node requires >=3.12
+and the ambient interpreter is 3.11 (the interpreter-probing fix working
+in production).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): mac-first chrome with sidebar navigation and dashboard
+
+Native-feeling chrome:
+- No default File/Edit/View menu bar anywhere. macOS keeps the minimal
+  app menu it needs for Cmd+Q/copy-paste; Windows/Linux drop the bar
+  entirely (Menu.setApplicationMenu(null)).
+- Seamless titlebar: hiddenInset + sidebar vibrancy + traffic-light inset
+  on macOS, hidden titlebar with the native control overlay on Windows.
+  The sidebar rail and view header are draggable regions.
+- System font stack, light/dark from the OS, hairline borders.
+
+Layout: left sidebar (Dashboard / Agents / Activity / Install + a
+control-plane status pill pinned at the bottom), right content view.
+The Dashboard leads with stat tiles (agents running, executing now, runs
+today vs yesterday, success rate) over a recent-activity list; Agents and
+Activity render as clean row panels; Install streams per-row progress.
+
+macOS-specific chrome is behind platform guards and still needs one smoke
+run on a real Mac; everything else verified live on Windows.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* build(desktop): package as an installable app via electron-builder
+
+`npm run dist` produces DMG+zip on macOS and a one-click NSIS installer
+on Windows into release/ (git-ignored); `npm run dist:dir` for a quick
+unpacked smoke. electron-builder is pinned to v25 — v26 requires
+require(ESM) support (Node 20.19+/22.12+) that older Node 22 lacks.
+
+Unsigned for now, default Electron icon; signing/notarization and a real
+icon come before distribution. Verified on Windows: the packaged
+AgentField.exe boots and opens its window.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(desktop): update README for sidebar views, install flow, packaging
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): brand icon set rendered from the .af mark
+
+Replace the default Electron icon everywhere. scripts/make-icons.mjs
+renders the brand mark (the exact outlined "af" + dot paths from the web
+UI logo, so no font dependency) via an offscreen Electron window into:
+
+- build/icon.icns — a real ICNS container (Apple-grid margins, baked
+  shadow) that electron-builder ships on macOS
+- build/icon.png — the 1024px source electron-builder converts to the
+  Windows/Linux app icon (verified: the packaged exe carries the mark)
+- resources/icon.png — runtime window/taskbar icon for win/linux
+- resources/tray/* — tray glyphs at 1x/1.5x/2x, active/inactive crossed
+  with light/dark-taskbar variants; the gold dot doubles as the status
+  light
+
+Outputs are committed (`npm run icons` regenerates), resources/** now
+ships inside the app package, and desktop/build is un-ignored for
+exactly the two icon files the root .gitignore would otherwise drop.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): windows tray icon and agentfield:// deep links
+
+Tray (Windows/Linux only — macOS has af-tray, installed with AgentField
+itself): a status glyph whose brand dot goes gold while the control
+plane runs, tooltip + disabled menu row naming the state (running /
+unhealthy / port-in-use / stopped), Open AgentField / Open web UI /
+Quit. Closing the window now hides to the tray, Docker-Desktop style;
+presentation logic is pure in tray-model.ts and unit-tested. If tray
+creation fails (some Linux desktops) the app logs why and keeps classic
+quit-on-close.
+
+Deep links: the app registers the agentfield:// scheme (declared for
+macOS via electron-builder `protocols`, HKCU-registered at runtime on
+Windows) and holds the single-instance lock — a relaunch or an
+agentfield://dashboard|agents|activity|install URL focuses the running
+app and switches it to that view. Parsing is pure in shared/deeplink.ts
+(unit-tested); the view union now lives there as the one canonical list.
+
+Verified live on Windows (packaged build): deep link cold-open, deep
+link into a tray-resident app, view switching, single-instance focus,
+close-to-tray, and the port-in-use state against a foreign service
+squatting on 8080.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(af-tray): open the desktop app via deep link, plus a real icns
+
+The macOS menu-bar tray now prefers the AgentField desktop app when it
+is installed: every "open" action first tries the agentfield:// deep
+link for the equivalent view (dashboard/agents/activity) and falls back
+to the web UI in the browser. Detection is the deep link itself —
+`open agentfield://…` exits non-zero fast when nothing registered the
+scheme, so there is no separate probe to drift. Page→view mapping and
+the browser fallback are pure helpers in shared.go with contract tests;
+the darwin file only gains the two-line try/fallback.
+
+assets/appicon.icns was a renamed 512px PNG, not an ICNS container —
+Finder/dock could show a generic icon. It is now a real icns (PNG
+members at 32…1024 on Apple's grid), generated by the same
+desktop/scripts/make-icons.mjs that produces the desktop app's icons,
+so both apps wear the same mark.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(desktop): tray, deep links, and icon pipeline in the README
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): only re-render the tray when its state changes
+
+Replacing the icon and context menu on every 5s poll churns native tray
+APIs for nothing and can dismiss a menu the user has open on Windows.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): catalog every installable node in the Agent-Field org
+
+Swept the org: a repo is installable iff it has agentfield-package.yaml
+at its root (the manifest `af install` requires) — that held for four of
+fifteen repos, and the catalog now carries all of them: swe-planner
+(SWE-AF), pr-af, sec-af, and cloudsecurity-af, each keyed by its
+manifest `name:` so installed-state detection keeps working. The sweep
+rule is documented at the top of catalog.ts for the next addition.
+
+Required secrets (e.g. OPENROUTER_API_KEY) are resolved at `af run`
+time, not install time, so installs from the app stream cleanly and
+setup prompts happen where a terminal exists.
+
+Verified in the packaged app: all four render, swe-planner shows
+Installed ✓.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): agent lifecycle controls and autopilot settings
+
+Agents view: Start / Stop / Restart per row, shelling out to the af CLI
+(`af run` / `af stop`; restart is stop-then-run — the CLI has no restart
+verb). Names are validated against installed.yaml before anything is
+spawned; the renderer only ever sends names.
+
+Settings view: open at login (OS login item, packaged builds only —
+launches hidden with --hidden, tray-only), start the control plane
+automatically, and per-agent auto-start switches. Persisted to
+settings.json in userData, normalized on load so hand-edits and old
+shapes can't break the app.
+
+Autostart on every launch (src/main/autostart.ts, planning pure and
+unit-tested): spawn `af server` detached (logs to
+~/.agentfield/logs/control-plane.log, same file macOS launchd uses) only
+when nothing answers on the port — never over a live control plane or a
+foreign service — then start the selected agents. Agents whose registry
+entry went stale (running with no control-plane presence, e.g. after a
+reboot; Windows never reconciles that live) are restarted, not skipped.
+The point: agents are already answering when Claude/Codex/anything
+queries them — nobody has to start a server first.
+
+Also fixes a deep-link race this surfaced: a link that cold-starts the
+app pushed the view at did-finish-load, before React subscribed, and got
+dropped. The renderer now announces readiness and collects the pending
+view (agentfield:renderer-ready), so agentfield://settings into a hidden
+app lands on Settings.
+
+Verified live on Windows (packaged build): start/restart/stop from the
+UI (badge, port, registry all agree), settings round-trip, login-item
+registration with --hidden, hidden tray-only launch, autostart bringing
+a stopped agent up on relaunch, and the port-in-use guard skipping the
+control-plane start while a foreign service owns 8080.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(desktop): lifecycle controls, settings, and autostart in the README
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): bundle the af CLI with smart resolution and updates
+
+Non-technical users install ONLY the desktop app and get all of
+AgentField: the package now carries the af CLI (extraResources from
+vendor/, staged by `npm run bundle-cli` or the release pipeline).
+
+Every launch resolves which af to drive (src/main/cli.ts):
+managed (~/.agentfield/bin — the same location the curl installer uses,
+so the two installers converge instead of double-installing) → PATH →
+bundled. A copy older than MIN_AF_VERSION is skipped — the app runs on
+its bundled CLI meanwhile, and Settings grows an "AgentField CLI" card
+showing version + source with an Update button that installs the
+bundled copy into the managed location (never over a newer one; dev
+builds are trusted). With no CLI anywhere, first launch auto-provisions
+~/.agentfield/bin (agentfield + af alias, curl-installer naming), copes
+with a running binary via rename-aside, and registers the Windows user
+PATH so terminals get `af` too.
+
+Launches also run `af skill install --non-interactive` (Settings toggle,
+default on) so detected coding agents — Claude Code, Codex, Gemini … —
+always know how to use AgentField; skillkit's state file makes this
+idempotent and shared with the curl installer.
+
+Verified live on Windows from a simulated fresh machine (no managed
+copy, no PATH af): first launch provisioned both binaries, registered
+the user PATH, installed the skill into ~/.claude/skills, resolved to
+the managed copy, and drove agent start/stop through it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* ci: desktop app on macOS+Windows runners, compile the darwin tray per PR
+
+Two blind spots closed:
+
+- The desktop app had no CI at all — its tests only ever ran on a dev
+  machine. New desktop.yml runs typecheck, vitest, and an unsigned
+  electron-builder package on macos-14 and windows-latest (a stub in
+  vendor/ validates the bundled-CLI extraResources wiring), so the
+  platform-guarded chrome and packaging config prove out on both ship
+  targets per PR.
+
+- cmd/af-tray's darwin implementation is CGO code that Linux CI never
+  compiles (it builds the !darwin stub, and the CGO_ENABLED=0 matrix
+  can't touch it) — a type error in tray_darwin.go would only surface
+  at release time. control-plane.yml grows a macos-14 job that builds
+  and vets the tray, wired into required-checks.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(desktop): bundled CLI, resolution order, and update flow in README
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(skillkit): agentfield-use skill — teach coding agents to call installed agents
+
+The embedded skill catalog gains a second skill. The existing agentfield
+skill teaches BUILDING multi-agent systems; agentfield-use teaches USING
+the agents already installed on this machine: control-plane health check,
+capability discovery (with the colon-vs-dot invocation_target gotcha),
+sync/async execution + polling/SSE, session headers, failure triage
+(including `af secrets set` for missing keys), the af CLI ops cheat
+sheet, and the VC-chain audit trail. Grounded in the verified HTTP
+surface — it deliberately omits endpoints that don't exist (e.g. a
+GET /api/v1/executions list).
+
+Skill struct gains a per-skill Trigger sentence so marker-block targets
+route build requests and use requests to the right SKILL.md; install.sh
+and the catalog test cover both skills.
+
+Also fixes a real resolution gap both runner paths shared: a manifest
+declaring ONLY require_one_of groups (no required/optional lists)
+skipped env resolution entirely, so nothing was injected and an
+unsatisfied group never errored. The emptiness guard now includes
+RequireOneOf, with a regression test.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): agent keys — manifest-driven secrets entry and revoke, start gating
+
+Closes the sharpest install-to-running gap: a catalog install whose
+manifest requires API keys used to hit a guaranteed "missing required
+environment variables" failure on Start, with no in-app fix.
+
+- Agents view: any agent declaring user_environment gets a Keys button
+  and a "Needs keys" chip while something required is unresolved;
+  Start in that state opens the inline editor instead of failing.
+- Editor mirrors the manifest: required vars, require_one_of groups
+  ("One of — an LLM provider key"), optionals with defaults; per-var
+  resolution status (from environment / stored / default / missing),
+  password inputs for type: secret, Revoke for stored values with the
+  shared-scope labeled.
+- All reads/writes ride the af CLI against its encrypted store — the
+  one `af run` decrypts into the agent process: `af secrets ls` parsed
+  for key presence (values never leave the store), `af secrets set`
+  with the value piped over stdin (never argv), `af secrets rm` per
+  scope. Writes go to the manifest-declared scope and are validated
+  against the manifest regex; the renderer can only name declared vars.
+- Launch-time skill sync now installs both bundled skills sequentially
+  (agentfield + agentfield-use); an older CLI without the second skill
+  fails that invocation harmlessly.
+- InstalledAgent carries the registry path so manifests are read from
+  the actual install dir.
+
+Live-verified on a packaged Windows build against SWE-AF's real
+manifest: chip/gating, set → encrypted global store, group satisfaction
+clearing the chip, revoke emptying the store, and agentfield-use
+landing in ~/.claude/skills on boot. 13 new unit tests (103 total).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(run): port probe blind to live listeners on Windows; readiness check trusted squatters
+
+Caught by the first real end-to-end run on Windows (live control plane,
+swe-planner + smoke-agent): `af run smoke-agent` was assigned port 8001
+while swe-planner was actively listening there, reported "started
+successfully" (its readiness poll got swe-planner's 200 and even printed
+swe-planner's reasoner list), and the control plane then routed
+smoke-agent executions into swe-planner — agent error 404.
+
+Two root causes, both fixed in the port manager and both run paths:
+
+1. Port probing used a bind-only check. On Windows a probe bind can
+   succeed while another process holds a non-exclusive listener on the
+   same port (no SO_EXCLUSIVEADDRUSE — reproduced against a live uvicorn
+   agent: net.Listen on :8001/127.0.0.1:8001/0.0.0.0:8001 all "FREE"
+   while netstat shows LISTENING). Availability now also dial-probes:
+   anything accepting a connection means the port is taken.
+
+2. waitForAgentNode accepted any HTTP 200 on the port. It now reads the
+   health payload's node_id and refuses a response from a different node
+   ("port 8001 is answering health checks as "swe-planner", not
+   "smoke-agent""). Payloads without node_id (custom healthchecks) and
+   empty expectations skip the check.
+
+Re-ran the live collision after the fix: smoke-agent correctly lands on
+8002, registers, and an async demo_echo execution through the control
+plane succeeds in 6ms.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): harness CLI providers work on Windows — PATHEXT resolution, stdin prompts, killpg guard
+
+Caught by the first real LLM-backed SWE-AF run on Windows (OpenRouter +
+opencode runtime), which peeled three layers off the same onion:
+
+1. `run_cli` spawned providers with create_subprocess_exec, whose
+   CreateProcess does no PATHEXT resolution — npm-installed CLIs
+   (opencode, codex, gemini) exist on Windows PATH only as .cmd shims,
+   so every call died with FileNotFoundError ("OpenCode binary not
+   found") even though the shell finds the command. cmd[0] is now
+   resolved via shutil.which on Windows.
+
+2. With the shim found, the prompt-as-positional-argv convention hit
+   cmd.exe's ~8k command-line cap ("The command line is too long.") on
+   any real prompt. opencode reads the prompt from stdin when the
+   positional arg is absent, so on Windows the provider now hands the
+   prompt to run_cli's new input_text, which pipes it to the child's
+   stdin (fed concurrently with the stdout/stderr drains to stay
+   deadlock-free). POSIX keeps the battle-tested argv path.
+
+3. run_cli's watchdog kill path called os.killpg, which does not exist
+   on Windows (AttributeError escaped the except clause) — now guarded
+   with hasattr and falling through to proc.kill().
+
+After these, a full swe-planner.plan run on Windows succeeded end to
+end: 10 minutes of multi-role LLM work through the control plane, PRD +
+architecture + sprint issues written to disk.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): success-rate tile — round to whole percent, tone color by threshold
+
+The dashboard tile rendered the API's raw float (57.894736842…%,
+overflowing the tile). Now rounded to a whole percent and colored as a
+reinforcement of the number: green ≥90, yellow ≥60, red below — using
+the existing status palette vars, so light/dark both work.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): Secrets view + honest shared-scope revoke, keys-editor alignment
+
+Secrets in af's store are global by default — one key shared by every
+agent that declares it, and users can add keys the CLI way that no
+installed agent's manifest mentions. The per-agent Keys editor showed a
+sliver of that world and revoked with only a tooltip's warning.
+
+- New Secrets view (sidebar + agentfield://secrets): every stored
+  secret from `af secrets ls`, global scope first, each annotated with
+  the installed agents whose manifests declare it ("used by
+  swe-planner" / "not declared by any installed agent"). Values never
+  leave the store.
+- Revoke everywhere is now a two-step confirm that says what it does:
+  "This key is shared — revoking removes it for every agent that uses
+  it." (node-scoped keys get the scoped wording). Same flow in the
+  per-agent Keys editor, replacing the tooltip.
+- Keys-editor alignment: the Revoke slot is always reserved (hidden
+  when nothing is stored), so the input column lines up across rows.
+- Renderer can only revoke (key, scope) pairs the store actually lists.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(install): //subdir source selector; uninstall drops node secrets
+
+Repos ship several installable nodes side by side (pr-af has a Python
+root and a Go port under go/), but the installer could only find one
+manifest per repo — findPackageRoot walks to the FIRST
+agentfield-package.yaml and stops.
+
+- `af install <repo>//<subdir>[@ref]` installs the subdirectory's
+  package: ParseGitURL learns the `//` selector (the scheme's own //
+  is skipped; composes with @ref), and InstallFromGit resolves the
+  manifest exactly there — no walking, escape-guarded. Registry stays
+  keyed by manifest name, so root and subdir nodes coexist.
+- Provenance fix: the registry's source_path now records the user's
+  source string verbatim (it used to append the ref a second time —
+  "repo@feature@feature").
+- `af uninstall` now also removes the node's node-scoped secrets file
+  (secrets/<name>.enc) — useless without the node; the shared global
+  scope is untouched. New SecretStore.DeleteScope refuses global.
+
+Verified live on Windows: pr-af-go installed from
+https://github.com/Agent-Field/pr-af//go (clone -> subdir resolve ->
+go build at install -> 17 reasoners registered), then uninstalled with
+zero residue. swe-planner-go same cycle (30 reasoners) via
+Agent-Field/SWE-AF#96, which ships that repo's go manifest.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): Go variants in the catalog; uninstall from the Install view
+
+- Catalog gains the Go ports living beside their Python originals,
+  addressed with the installer's new //subdir selector: pr-af-go
+  (…/pr-af//go) and swe-planner-go (…/SWE-AF//go — live once
+  Agent-Field/SWE-AF#96 ships that repo's go manifest).
+- Install view: installed entries get an Uninstall button with a
+  two-step confirm that says what it does (stops the agent, removes
+  files + registry entry + agent-scoped secrets; shared keys stay).
+  The main process stops the agent gracefully first, then shells
+  `af uninstall --force` — names validated against the registry.
+
+Live-verified on Windows: both Go nodes installed, ran (17 and 30
+reasoners registered on a live control plane), and uninstalled with
+zero residue.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* ci: nudge — GitHub dropped the pull_request events for 066932e7
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): agents no longer stuck at health "unknown" — complete state transitions on evidence, poll lease-renewing nodes
+
+Go SDK nodes (swe-planner-go, pr-af-go) reported health_status "unknown"
+forever while running and serving traffic. Root cause, in four parts:
+
+1. StatusManager held starting→active as a "pending" transition instead of
+   completing it, so State stayed "starting" and persisted as health
+   "unknown" even as the same update set lifecycle "ready". The Go SDK
+   renews its status lease every 2 minutes — exactly MaxTransitionTime —
+   so every renewal re-created the pending transition right before the
+   timeout sweeper could force-complete it. A state claim always arrives
+   with direct evidence (ready lease renewal, heartbeat, health check
+   result), so handleStateTransition now completes immediately. (This was
+   also behind the intermittent Python-node "unknown" wedge: its plain
+   heartbeats don't reset the transition, so it usually escaped via the
+   2-minute sweeper — Go nodes never did.)
+
+2. Only POST /heartbeat enrolled a node in HTTP health monitoring. Nodes
+   whose keep-alive is the status lease (PATCH /nodes/:id/status — the Go
+   SDK) were never polled. NodeStatusLeaseHandler now registers them with
+   the HealthMonitor; serverless nodes stay excluded (no /status to poll).
+
+3. HealthMonitor.RegisterAgent reset the tracked status to "unknown" on
+   every call, and it is called on every DB-updating heartbeat. It is now
+   idempotent for an unchanged BaseURL; a moved agent restarts tracking.
+
+4. needsReconciliation had no rule for the wedged shape itself: health
+   "unknown" with a fresh heartbeat past the startup grace period. The
+   reconciler now sweeps such rows to active, unwedging rows left behind
+   by pre-fix control planes without requiring a server restart.
+
+Live-verified on Windows: a fresh `af stop && af run swe-planner-go` cycle
+now reaches health "active" within 5 seconds; before the fix the same flow
+sat at "unknown" for 100+ minutes.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/go): opencode prompts over stdin on Windows — argv blew cmd.exe's 8k cap
+
+On Windows the opencode CLI on PATH is an npm .cmd shim that CreateProcess
+routes through cmd.exe, whose ~8k command-line cap real prompts blow straight
+through ("The command line is too long."). The Go harness passed the prompt as
+a positional arg, so every call whose prompt embedded diff context died at
+spawn — and schema retries, which append more text, could never recover. The
+observable failure was silent and severe: pr-af-go on Windows "completed"
+reviews with zero dimensions planned, empty LLM fields, and a confident
+"Safe to merge — 0 findings" verdict manufactured from mechanical parsing
+alone (every failed call was downgraded to "0 findings for this dimension").
+
+opencode reads the prompt from stdin when the positional arg is absent, so on
+Windows the prompt now goes over stdin — mirroring the Python SDK's
+_prompt_via_stdin fix (harness/providers/opencode.py). POSIX keeps the
+battle-tested positional-arg path. The provider's injectable runCLI seam moves
+from RunCLI to RunCLIWithStdin (which already existed for the claude
+provider).
+
+Verified live on Windows 11: pre-fix, a pr-af-go review of a 335-line PR
+produced a false-clean (plan.dimensions null); post-fix the same review runs
+its dimension reviewers with prompts delivered over stdin (argv ends at the
+model flag). TestOpenCodePromptDelivery pins both delivery paths; the
+harness suite shows no new failures against the pre-existing Windows baseline
+(22 fixture/path-separator failures unrelated to this change, green on Linux
+CI).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* chore: gitignore local dev binaries and harness output artifacts
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): inject undeclared node-scoped secrets at spawn; restart hint on set
+
+`af run` resolved only manifest-declared user_environment variables, so a
+secret stored with `af secrets set KEY --node <name>` that the manifest didn't
+declare was silently never injected — the store accepted it, `af secrets ls`
+showed it, and the node never saw it. Hit live while trying to raise
+AGENTFIELD_HARNESS_IDLE_SECONDS for a node: the override "took" twice with no
+effect before the cause surfaced.
+
+Node-scoped secrets are explicit per-node intent, so EnvResolver.Resolve now
+overlays them even when undeclared. Precedence is preserved: declared
+variables keep their full chain, process environment still wins for
+undeclared keys, and GLOBAL secrets stay manifest-driven — a shared key never
+leaks into nodes that don't declare it.
+
+`af secrets set --node` also now prints when the value takes effect
+("Applies on next start: af stop <name> && af run <name>") — env is decrypted
+into the process at spawn time only, and nothing previously said so.
+
+Three regression tests pin the new behavior (inject, global containment,
+process-env precedence).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(release): build and attach desktop installers to every release
+
+New desktop-installers job in release.yml: after the GitHub release is
+created, macos-14 builds the DMG + zip (Apple Silicon) and windows-latest
+builds the NSIS .exe (x64), and both attach to the same release the CLI
+binaries land on — staging (RC prereleases) and production alike, so users
+download whichever installer they want.
+
+Each installer carries an af CLI built from the release commit with
+`-tags "embedded sqlite_fts5"` (bundle-cli full — parity with
+build-single-binary.sh), so the installed app is fully self-contained on a
+fresh machine: web UI embedded, FTS search working, no separate CLI install.
+The desktop version is stamped from the release version before packaging so
+installer filenames and the About dialog follow the release rather than the
+static package.json version. Windows guards CGO with a mingw fallback
+install; packaging stays unsigned (CSC_IDENTITY_AUTO_DISCOVERY=false) until
+signing/notarization lands.
+
+NSIS artifactName loses its spaces (AgentField-Setup-<version>.exe) so
+release asset names are clean URLs.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): stable status badges, run failure messages, spinners, web-UI links
+
+Four Agents/Activity view improvements from live use:
+
+- No more running<->unknown flicker. The badge treated "node absent from
+  GET /api/v1/nodes" as unknown, but that endpoint default-filters to
+  health=active — any one-poll health dip (busy node, post-restart unknown,
+  late lease renewal) removed the node from the list and flipped the badge.
+  The snapshot now fetches ?show_all=true and keeps id -> health_status:
+  registration presence (stable) proves a running registry entry is live
+  regardless of momentary health; health only matters for stopped entries,
+  where an ACTIVE node contradicts the registry. Stopped nodes staying
+  registered as inactive/unknown still badge as plain Stopped. Truth-table
+  test extended to the health-aware contract.
+
+- Failed runs surface their error. /api/ui/v2/workflow-runs already carries
+  root_error_message; it now rides ExecutionSummary.errorMessage and renders
+  under failed/timeout activity rows (full text in the tooltip).
+
+- Running states animate. Live activity rows show a spinning ring instead of
+  the word "running"; running agents' status dots pulse like live runs.
+
+- Deep links into the web UI. New guarded IPC (agentfield:open-web-ui) opens
+  control-plane pages in the browser — absolute-path-only, joined server-side
+  to the known base URL, so the renderer cannot target arbitrary sites.
+  Agents rows get "Web UI" while running; every activity row (running,
+  succeeded, or failed) gets a hover affordance to its /ui/runs/<run_id>
+  detail page.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): Update button for installed agents — reinstall latest, restore run state
+
+Installed catalog entries gain an Update action next to Uninstall. It maps
+to `af install <source> --force` (the CLI's reinstall-in-place), so the
+registry entry and the agent's secrets survive — unlike an
+uninstall+install round trip, which deletes node-scoped secrets. The flow
+restores the agent's previous run state: a running agent is stopped first
+(Windows locks running executables, so the binary could not be replaced
+otherwise) and restarted after a successful update; a stopped agent stays
+stopped. A failed update says exactly what state it left behind ("was
+stopped and has not been restarted").
+
+Phase markers (Stopping…/Updating…/Restarting…) ride the existing install
+progress channel, and update shares the install mutex so the two can't
+interleave. The install view now also shows success messages ("pr-af-go
+updated and restarted"), not just failures.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* style(desktop): installed state moves into the row title
+
+The "Installed ✓" chip next to Update/Uninstall crowded the actions
+column. The title itself now carries the state — green name with a
+small tick — and the actions column is just buttons.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(control-plane): in-flight visibility — GET /executions/active + af ps
+
+Callers had no way to ask "what is running right now": GET
+/api/v1/executions and /executions/active were 404, batch-status needs
+execution IDs the caller must have tracked, and the data lived only on
+the UI-internal /api/ui/v2/workflow-runs. Live-tested tonight with three
+concurrent agent runs, the answer required scraping the UI API.
+
+GET /api/v1/executions/active returns every run with at least one
+non-terminal execution: run_id, root execution, target agent.reasoner,
+active/total execution counts, full status_counts, started_at and
+latest_activity (the wedge tell — active>0 with stale latest_activity
+means a run is likely dead, not working). Filters: agent_id, session_id,
+limit. `af ps` is the CLI face of the same endpoint.
+
+Storage: ExecutionFilter.ActiveOnly filters runs AFTER aggregation
+(HAVING on the active-count) so a surviving run's terminal children
+still show in status_counts — a Status="running" pre-filter both loses
+those rows and misses queued-only runs. AgentNodeID now also applies to
+QueryRunSummaries; the agentic query surface always accepted the filter
+but silently ignored it.
+
+Also fixes the auth-level hole that made agentic discover useless on
+default installs: with no API key configured, the middleware never set
+auth_level, so getAuthLevel fell back to "public" and FilterByAuth hid
+every api_key endpoint — discover returned zero results for every query
+in local mode. No-auth callers now get api_key level, matching their
+actual access.
+
+agentfield-use skill 0.1.0 → 0.2.0, rewritten from tonight's fresh-agent
+test findings: no-jq discovery fallback (fresh Windows boxes), corrected
+discovery-lists-inactive-agents claim (filter health_status=="active"),
+concurrency guidance (fire async calls together, ~3-4 heavy runs per
+node), af ps / executions/active, batch-status result-size warning
+(terminal entries embed full payloads — never pass through argv), and a
+wedge protocol: stale latest_activity + quiet logs → cancel-tree (NOT
+plain cancel, which orphans children) → restart agent → re-submit.
+
+Test flake fix: workflow_execution_events_test asserted
+CompletedAt.After(StartedAt), which fails when both events land within
+one coarse timer tick (Windows ~15ms); now asserts !Before.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(storage): clamp QueryRunSummaries limit before result pre-allocation
+
+CodeQL (go/uncontrolled-allocation-size, 3 high) flagged the result
+slice/map pre-allocations in QueryRunSummaries: their capacity is
+filter.Limit, which flows straight from request input, so a single call
+with limit=1<<30 would try to allocate gigabytes before reading a row.
+The allocations predate this PR (#46) — the scanner surfaced them here
+because this branch touched the function.
+
+Every live caller already clamps its page size (UI ≤200, agentic ≤100,
+af ps ≤200), but the storage layer now enforces its own ceiling
+(maxRunSummaryLimit=1000) instead of trusting callers. Regression test
+issues the query with Limit=math.MaxInt32.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(storage): size run-summary pre-allocations from the DB count, not the request limit
+
+CodeQL still flagged the three allocations after the previous clamp: it
+does not treat reassignment-style clamps (x = max when x > max) as
+sanitizers — the identical clamps in every HTTP caller were being
+ignored the same way. Instead of arguing with the guard recognizer,
+sever the flow: capacity now derives from totalRuns (the query's own
+COUNT, not caller input) clamped to maxRunSummaryLimit. Semantically
+better too — never reserve more than the query can return.
+
+The limit clamp stays; it bounds the SQL LIMIT itself.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): af stop reconciles stale records instead of erroring or signalling blind
+
+A "running" registry entry outlives reboots and crashes, and stop treated
+it as fact: os.FindProcess/kill on the recorded PID, /shutdown to the
+recorded port, no verification that either still belongs to the agent.
+After a reboot that meant (a) a dead PID errored out BEFORE the registry
+was reset, so stop-then-start flows — the desktop restart button and
+login autostart both abort when stop fails — wedged permanently, and
+(b) a reused PID or port could get an unrelated process signalled or
+shut down.
+
+Stop now verifies before it acts: a dead PID reconciles the record to
+"stopped" and succeeds; a recorded port whose /health answers as a
+DIFFERENT node marks the whole record stale and signals nothing (the
+live PID is almost certainly reused); a process that exits between the
+aliveness check and the kill (os.ErrProcessDone) counts as stopped. The
+identity probe reuses the packages.HealthNodeID/NodeIDsEquivalent
+helpers introduced for start readiness.
+
+Tests: dead-PID reconciliation (cross-platform via test-binary re-exec),
+foreign-node port never receives /shutdown and its process survives, and
+the two ops assertions that had encoded the old error behavior now
+assert reconciliation. Existing shutdown-path tests grew /health
+handlers for the new probe.
+
+Found by an independent pre-merge review (Codex).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): /executions/active honors its non-terminal contract
+
+Two gaps between the endpoint's documented contract ("every run with a
+non-terminal execution, with complete per-run status counts") and the
+SQL:
+
+- The active set was running/pending/queued/waiting — but paused and
+  unknown are canonical non-terminal statuses too. A pause-wedged run
+  (the exact failure this surface exists to expose) would vanish from
+  af ps. The ActiveOnly HAVING clause now matches
+  types.IsTerminalExecutionStatus; the handler's active_executions is
+  computed from status_counts the same way, deliberately leaving the
+  aggregation's narrower pre-existing ActiveExecutions column alone —
+  the UI's status derivation still depends on it.
+
+- The agent_id filter was a row-level WHERE applied before GROUP BY, so
+  a cross-agent run lost other agents' rows from its counts, lost its
+  root fields when the root ran elsewhere, and disappeared entirely when
+  its only execution on the filtered agent was already terminal. It is
+  now run-level membership (run_id IN (...)): every run that touched the
+  agent, aggregated over ALL of its rows.
+
+Tests cover a paused-only run and a cross-agent run whose agent-filtered
+result keeps complete counts and the foreign root.
+
+Found by an independent pre-merge review (Codex).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): version-stamp the bundled CLI; supersede stale dev copies; pin spawn port
+
+The release pipeline bundled an UNSTAMPED af: bundle-cli.mjs ran plain
+`go build`, so every shipped binary answered `Version: dev`. The app
+trusts unparseable versions and prefers the managed copy, so the first
+launch provisioned a dev binary into ~/.agentfield/bin that would win
+over every future release forever — no min-version gate, and Settings
+could never offer an update (both sides must be parseable). Upgrades
+were structurally broken.
+
+- bundle-cli.mjs stamps main.version/commit/date exactly like
+  goreleaser: AF_CLI_VERSION (release.yml now passes the tag) →
+  `git describe --tags` → dev fallback.
+- The selection floor is the bundle's own stamped version when it has
+  one — the app needs at least the features it shipped with — falling
+  back to MIN_AF_VERSION for unstamped dev bundles, so the constant no
+  longer has to predict release numbers.
+- Against a stamped bundle, dev-versioned managed/PATH copies are
+  superseded (chosen becomes the bundle, which then re-provisions the
+  managed location). Unstamped bundles keep trusting them, so
+  source-build dev workflows are unchanged.
+- The spawned `af server` is pinned to port 8080 — the port the app
+  polls. Without it a config-file custom port made the server bind
+  elsewhere while the app spun on 8080 forever. Custom-port/authed
+  control planes remain unsupported by the app (documented follow-up).
+
+Found by an independent pre-merge review (Codex).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): in-app updates from GitHub releases (banner + Settings)
+
+Users should never have to re-download the app from the releases page by
+hand. The public repo's releases feed is the update channel: packaged
+builds poll /releases/latest shortly after launch and every 4 hours
+(stable releases only — RC prereleases never surface; an RC install IS
+offered the stable build of its own version once it lands, via a
+prerelease-aware version compare), and a newer release shows an "Update
+available" banner across the top of the window plus a Settings → App
+updates card.
+
+- Install downloads this platform's installer asset (matched precisely:
+  AgentField-Setup-*.exe / *.dmg — releases also carry goreleaser CLI
+  archives) with streamed progress, then hands off: Windows quits into
+  the NSIS one-click installer (replaces the app in place, relaunches);
+  macOS opens the DMG for a drag-install (silent replacement needs
+  signed builds — known follow-up). No installer asset for the platform
+  falls back to the release page.
+- Dismissing the banner persists for that version only
+  (settings.dismissedUpdateVersion): the next release brings it back,
+  and Settings keeps offering the update regardless.
+- 404 from /releases/latest (no stable release yet) reads as up to
+  date, not an error. Dev builds never auto-check (static package.json
+  version); the manual check in Settings works everywhere.
+- main/updates.ts is electron-free (side effects injected by index.ts)
+  and covered by 21 unit tests; the check path was also smoke-tested
+  against the live GitHub API (found v0.1.108, correctly reported its
+  lack of installer assets and the release-page fallback).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(desktop): route fake fetch by parsed hostname, not substring
+
+CodeQL (js/incomplete-url-substring-sanitization) flagged the updater
+tests' fake fetch for routing on includes('api.github.com'). It is a
+stub, not sanitization, but hostname comparison is the canonical safe
+pattern and costs nothing.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): resolve the login-shell PATH for Finder-launched child processes
+
+A macOS app launched from Finder/Dock inherits launchd's minimal PATH
+(/usr/bin:/bin:/usr/sbin:/sbin), not the user's shell PATH. The af CLI
+itself still resolved (absolute paths), but everything af shells out to —
+go, uv, python3, claude, codex — was unfindable, killing installs, runs,
+and skill sync on a normal double-click launch. Windows never surfaced
+this: GUI apps inherit the full user PATH there.
+
+New main/env.ts resolves the real PATH once per launch (login shell probed
+with sentinel markers and a 3s cap, merged with process.env.PATH and the
+well-known bin dirs, deduped in that priority order; win32 passes through
+untouched) and every child spawn now uses childEnv(). The version probe in
+cli.ts and the secrets CLI runner are wired here; the remaining spawn sites
+ride with their own commits.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* fix(desktop): update flow — installer-gated offers, arch-aware DMG pick, surfaced DMG errors
+
+The updater polled the monorepo's /releases/latest and offered any newer
+tag as an app update. But that release train also ships CLI-only releases
+(wheels, goreleaser binaries, af-tray) — v0.1.108 has no desktop installer
+at all — so every fresh install saw a phantom 'Update available' whose only
+action was a 'View release' browser link, the manual flow in-app updates
+exist to replace. Same on Windows and macOS.
+
+A release is now only an app update when it carries this platform's
+installer asset; the browser fallback and its 'View release' label are
+gone. macOS asset selection is arch-aware (exact -arm64/-x64 match →
+suffix-less universal → any .dmg; .blockmap never matches), and
+shell.openPath's error-string result — it never rejects — is checked and
+routed to status.error instead of being dropped.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* fix(desktop): prefer kickstarting the launchd control plane over direct spawn
+
+Once af-tray installs its launchd agents, two owners could start the
+control plane: the app's detached 'af server' spawn and launchd's
+ai.agentfield.server (RunAtLoad + KeepAlive={SuccessfulExit:false}). On a
+net-new first launch the app spawns first, then the tray installs, and
+launchd's copy fails against the held resources and relaunch-loops every
+~10s for the whole session (observed live: runs climbing, last exit 1).
+
+startControlPlane now probes launchctl for the server agent on darwin and
+kickstarts it when loaded — one owner, launchd — falling back to the
+original direct spawn when the agent is absent (pre-tray first launch) or
+kickstart fails. Spawns inherit the resolved user PATH (main/env.ts).
+The other half of the fix — the server exiting clean when a healthy
+control plane already answers — lands control-plane-side.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* feat(desktop): provision the af-tray menu-bar companion on macOS
+
+A desktop-app-only install had no menu-bar icon: af-tray only shipped via
+the curl installer. The app now carries af-tray (bundle-cli builds it into
+vendor/ on darwin, stamped like the CLI) and provisions it the way it
+provisions af: staged into ~/.agentfield/bin/af-tray — the managed location
+both installers converge on — then 'af-tray install' builds the
+~/Applications bundle and launchd agents.
+
+Re-staging is version-gated via 'af-tray version' (dev-stamped copies are
+trusted, mirroring cli.ts), and 'af-tray install' only runs when the binary
+changed or its launchd agent isn't loaded — install reloads launchd via
+bootout+bootstrap and would blink the tray on every launch otherwise. A new
+macOS-only Settings toggle ('Show the menu bar icon', default on) drives
+it; off runs 'af-tray uninstall'. Pure logic in tray-companion.ts, DI'd and
+unit-tested.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* feat(desktop): install from a pasted GitHub repo, and readable af error lines
+
+The Install view gains an 'Install from repository' box: paste
+https://github.com/<owner>/<repo> (or the //subdir selector form) and the
+app runs 'af install <source>' with the same streamed progress, mutex, and
+registry convergence as catalog installs. Both platforms.
+
+This deliberately relaxes the renderer-sends-catalog-names-only rule for
+exactly one channel; the compensating control is strict main-process shape
+validation (parseRepoSource): https://github.com/ prefix required, owner/
+repo/subdir character classes with no leading dashes, no whitespace, query
+strings, fragments, or .. traversal — an accepted value can never read as a
+CLI flag. 23 accept/reject cases in tests.
+
+Also unwraps the af CLI's zerolog JSON error lines into their human message
+before display — an install failure now reads 'invalid package structure:
+…' instead of a wall of raw JSON.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* fix(desktop): macOS launch/chrome/packaging — deep-link readiness, login item, scroll, valid ad-hoc signature
+
+Wiring and the remaining macOS fixes, verified on a real Mac (the README's
+'needs one smoke run' debt is paid):
+
+- open-url can fire before app.whenReady() on a cold-start deep link;
+  building a BrowserWindow then throws. navigate() now stashes the view
+  until ready. Verified: 'open agentfield://dashboard' cold-starts clean.
+- Login items: args:['--hidden'] is Windows-only. darwin uses openAsHidden/
+  wasOpenedAsHidden (best-effort; SMAppService may ignore them on macOS
+  13+, documented), and setLoginItemSettings is skipped when state is
+  unchanged — unsigned apps outside /Applications log 'Operation not
+  permitted' on every launch otherwise.
+- Settings (any tall view) never scrolled: .view-body is a flex column, so
+  flex-shrink squeezed children to fit instead of overflowing into the
+  scrollbar. Children now keep natural height.
+- Unsigned packages carried only the linker's ad-hoc signature — no sealed
+  resources — which codesign/spctl reject as INVALID and which blocks
+  normal launches. New afterPack hook gives identity-less builds a full
+  ad-hoc signature (no-op once real signing lands). mac.icon pinned;
+  index.ts wires env/tray-companion/install-source/updater arch.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* fix(control-plane): server exits clean when a healthy control plane already answers
+
+Under a supervisor, a second 'agentfield server' racing an incumbent is not
+an error — the desired state (control plane up) is already true. But
+startup died non-zero on whichever shared resource it hit first (in local
+mode that's the BoltDB file lock during storage init, well before the port
+bind), and af-tray's launchd agent uses KeepAlive={SuccessfulExit:false}:
+non-zero exit meant a relaunch loop, throttled ~10s, for as long as the
+incumbent lived. Observed live on a net-new install where the desktop app
+started the server before the tray's launchd agent was bootstrapped.
+
+New startguard: on any server create/start failure, probe /health (2s cap)
+and accept only AgentField's payload shape — status healthy plus non-empty
+version and checks, so a foreign 200 on the port is rejected. A healthy
+incumbent logs 'control plane already running on port N — nothing to do'
+and exits 0, which SuccessfulExit:false correctly reads as a clean stop.
+Everything else keeps the non-zero exit. Both entry points (af server and
+agentfield-server) guard both their create and start paths.
+
+Verified live: with the launchd server healthy on :8080, a second
+'af server --open=false' fails storage init, logs the honest line, exit 0.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* fix(storage): session-filtered run summaries use run membership, not row filtering
+
+GET /api/v1/executions/active?session_id=X drove the documented wedge
+heuristic, but for any run doing its work in local child calls it reported
+active=1, total=1, latest_activity frozen at dispatch for the whole run —
+observed across a real 27-minute pr-af-go.review whose executions table
+held 21 progressively-updated rows the entire time.
+
+Root cause: workflow execution events carry no session_id, so child rows
+persist with it empty; only the dispatch-path root has one. The SessionID
+filter in QueryRunSummaries applied at the ROW level, dropping every
+session-less child before the GROUP BY and collapsing each run to its root
+— whose updated_at only moves on completion. The filter now selects runs by
+membership (run_id IN (SELECT run_id … WHERE session_id = ?)), the same
+shape the AgentNodeID filter above it already uses for exactly this reason.
+
+Verified live: a session-scoped poll over a fresh review run now shows
+total_executions growing 2→7, active 2→4→2, latest_activity advancing with
+the agent's log — where the identical query previously sat frozen at 1/1.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* docs(skills): agentfield-use — the registry command is 'af list', guard empty discovery
+
+Found by running the skill as written, as a coding agent, with no outside
+docs. Two places it lied or broke:
+
+- It said 'af ls' lists installed agents. 'af ls' lists REASONERS — against
+  a control plane with nothing running it prints {"reasoners":[],…} and a
+  fresh agent concludes nothing is installed. The registry command is
+  'af list'; all three references corrected, and the cheat sheet now names
+  both commands for what they are.
+- The jq-less discovery snippet crashed on a machine with zero registered
+  agents ('capabilities' is null, not []). Null-guarded.
+
+Both synced copies updated (skills/ and skillkit's embedded skill_data).
+The rest held up under a real end-to-end run — discovery, async execute,
+active-poll, and the wedge protocol's log-check correctly cleared a
+legitimately silent 27-minute run.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* fix(desktop): env PATH helpers are POSIX regardless of the host
+
+env.ts is a darwin/linux-only concern by design (win32 early-returns
+the process PATH everywhere), but its pure helpers leaned on the HOST
+path module: mergePaths defaulted to path.delimiter and
+wellKnownBinDirs used host join. On the windows-latest Desktop CI leg
+that merged POSIX PATHs with ';' and minted '\home\me\...' dirs,
+failing 6 env tests that (correctly) assert POSIX output. Pin the
+module to posix.delimiter / posix.join and strip host join from the
+test assertions. Suite green on a real Windows host.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (9b03715)
+
+## [0.1.109-rc.5] - 2026-07-15
+
+
+### Added
+
+- Feat(harness): add Python provider preflight (#756)
+
+* feat(harness): add Python provider preflight (#685)
+
+* fix(harness): restore Python 3.10 CI compatibility
+
+* fix(harness): align claude-code doctor spec with Python SDK, trim doc, KeyError fallback
+
+Address the three unresolved review threads on #756:
+
+- docs/harness-providers.md: drop the TypeScript/Go doctor examples — those
+  APIs (agent.harnessDoctor, harness.Doctor) do not exist yet. Document the
+  Python SDK + af CLI surface that actually ships and note TS/Go as planned
+  follow-ups of #685.
+
+- control-plane/internal/cli/harness_doctor.go: the claude-code row now
+  mirrors the Python doctor (_doctor.py::_claude_health). It probes a Python
+  interpreter for the claude_agent_sdk pip package (which bundles its own
+  CLI) instead of looking for a global `claude` binary, and hints
+  `pip install 'agentfield[harness-claude]'` instead of npm. Interpreter
+  candidates (python3/python/py) are run-probed so dead launcher stubs are
+  skipped; issues are wrapper_not_installed / python_not_found.
+
+- sdk/python/agentfield/harness/_availability.py: provider_unavailable()
+  falls back to a generic ProviderSpec via .get() so providers without a
+  PROVIDER_SPECS entry (claude-code, or any future provider) raise the
+  helpful HarnessProviderUnavailable instead of a bare KeyError. Regression
+  test added for both provider_unavailable and ensure_cli_available.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (ea8aaad)
+
+## [0.1.109-rc.4] - 2026-07-15
+
+
+### Added
+
+- Feat(sdk-python): accept scope kwargs on memory set/get/delete and reconcile memory.search (#707)
+
+* feat(sdk-python): accept scope kwargs on memory set/get/delete and correct README search API
+
+Add optional scope/scope_id kwargs to app.memory.set/get/delete so the
+developer-facing MemoryInterface matches what humans and LLMs naturally guess
+(app.memory.set(key, data, scope="global")) and mirrors the TypeScript SDK,
+which already accepts scope positionally. scope=None keeps today's hierarchical
+behavior unchanged; explicit scopes route to the existing accessor clients.
+Invalid scopes raise a ValueError listing valid scopes; non-global scopes
+without a scope_id raise a clear ValueError.
+
+No general memory search endpoint exists on the control plane (only
+/api/v1/memory/vector/search, already exposed as similarity_search), so the
+README's advertised app.memory.search(...) is corrected to similarity_search
+and the scope names are corrected from 'agent/run' to 'actor/workflow'.
+
+* fix(memory): allow context-derived explicit scopes
+
+* fix(memory): derive event history scope ids
+
+* feat(sdk-python): extend scope kwargs to memory.similarity_search
+
+Finish the memory-scope DX work for #712: the developer-facing
+MemoryInterface.similarity_search now accepts the same optional
+scope/scope_id kwargs as set/get/delete, dispatching through the shared
+_resolve_scope_target helper. This matches the TypeScript SDK, whose
+searchVector already takes scope/scopeId options. scope=None keeps
+today's behavior exactly.
+
+Also loosen ScopedMemoryClient/ScopedMemoryEventClient scope_id type
+hints to Optional[str] - the context-derived explicit-scope path passes
+None by design - and apply ruff format to memory_events.py.
+
+Verified end-to-end against a local control plane (local mode):
+set/get/delete with scope kwargs across global/session/workflow,
+hierarchical get, accessor-style reads, context-derived scope ids,
+similarity_search with scope="global", and ValueError on invalid
+scopes.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (31a90f2)
+
+- Feat(sdk/ts): add trigger types, factories, and registration plumbing (#743)
+
+* feat(sdk/ts): add trigger types, factories, and registration plumbing (#509)
+
+Implement the foundation layer for the TypeScript SDK trigger system,
+bringing it to parity with the Python SDK's triggers.py.
+
+New files:
+- src/triggers/types.ts — TriggerContext, EventTriggerSpec,
+  ScheduleTriggerSpec, TriggerBinding interfaces
+- src/triggers/factories.ts — eventTrigger() + scheduleTrigger() factory
+  functions + triggerToPayload() wire serializer
+- src/triggers/index.ts — public barrel re-exports
+
+Modified files:
+- src/types/reasoner.ts — add triggers?: TriggerBinding[] to
+  ReasonerOptions
+- src/agent/Agent.ts — reasonerDefinitions() now serializes triggers
+  array and auto-sets accepts_webhook=true when triggers are present
+- src/index.ts — re-export triggers module
+
+Tests:
+- 14 tests covering types, factories, async transform rejection,
+  payload serialization, and registration integration
+
+Fixes #509
+
+* fix(sdk/ts): send accepts_webhook as string not bool
+
+The control plane's ReasonerDefinition.accepts_webhook is typed as
+*string ("true" / "false" / "warn") and rejects bool literals with a 400.
+This was causing POST /api/v1/nodes/register to fail with:
+
+  json: cannot unmarshal bool into Go struct field
+  ReasonerDefinition.reasoners.accepts_webhook of type string
+
+Fix: emit "true" string when triggers are present, omit field (omitempty)
+when no triggers are declared — matching the Python SDK normalization in
+agent.py lines 914-926.
+
+* review: mark TriggerContext @experimental, omit empty triggers from wire
+
+Address review feedback:
+- TriggerContext: add @experimental tag noting runtime wiring lands in #510
+- Registration payload: omit triggers[] and accepts_webhook entirely when
+  no triggers are declared, keeping the wire format stable for older
+  control planes that don't know about trigger fields
+
+* feat(sdk/ts): 3-state acceptsWebhook on ReasonerOptions, parity with Python
+
+Replace the hardcoded 2-state webhook opt-in (accepts_webhook="true" only
+when triggers exist, otherwise absent) with the Python SDK's 3-state model:
+
+- ReasonerOptions gains acceptsWebhook?: boolean | 'warn'. An explicit
+  author value always wins, so a reasoner with triggers can opt OUT via
+  acceptsWebhook: false (mirrors resolve_reasoner_metadata in
+  sdk/python/agentfield/decorator_metadata.py).
+- Trigger auto-opt-in (true) is now the fallback, not the only path.
+- Trigger-less reasoners register with the explicit default "warn"
+  instead of omitting the field, matching Python's _entry_to_metadata.
+- Serialization normalizes to the wire strings "true"/"false"/"warn" —
+  the control plane types AcceptsWebhook as *string.
+
+Adds tests for explicit false-with-triggers (opt-out), explicit true,
+explicit 'warn' overriding the auto-set, default-with-triggers auto
+opt-in, trigger-less "warn" default, and string-typed serialization in
+the registration payload.
+
+Resolves review thread on PR #743.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (8c08186)
+
+## [0.1.109-rc.3] - 2026-07-15
+
+
+### Fixed
+
+- Fix(sdk/go): rewrite max_tokens to max_completion_tokens for newer OpenAI models (#724)
+
+* fix(sdk/go): rewrite max_tokens to max_completion_tokens for newer OpenAI models (#441)
+
+Newer OpenAI models (o1, o3, gpt-4o, gpt-4.x) dropped support for the
+legacy max_tokens parameter in favor of max_completion_tokens. The Go
+SDK was always emitting max_tokens, causing the output-length cap to be
+silently ignored.
+
+Changes:
+- Add model-aware marshalRequest() that detects newer OpenAI models and
+  rewrites max_tokens → max_completion_tokens at serialization time
+- Detection uses model prefix matching (o1, o3, o4, gpt-4o, gpt-4.)
+- Preserves backward compatibility: legacy models still use max_tokens
+- Request-level model override takes precedence over client default
+- Add 6 focused tests covering new models, legacy models, nil handling,
+  and request-level model override
+
+Closes #441
+
+* Potential fix for pull request finding
+
+Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
+
+* review: add tests for isOpenAICompatible and streaming path wire format
+
+Address reviewer feedback:
+- TestIsOpenAICompatible: pin down behavior for OpenAI, Azure, OpenRouter,
+  Anthropic, Cohere, and custom/self-hosted endpoints
+- TestMarshalRequest_NonOpenAIEndpointKeepsMaxTokens: verify non-OpenAI
+  endpoints keep max_tokens even for new model names
+- TestMarshalRequest_StreamingPathRewritesMaxTokens: verify the rewrite
+  works correctly when stream=true (same marshalRequest path)
+
+* fix(sdk/go): scope max_tokens rewrite to vouched endpoints, future-proof model matching
+
+Address review feedback on #724:
+
+- Invert the model check: instead of allowlisting o1/o3/o4/gpt-4o/gpt-4.x
+  (which missed gpt-5 and any future family), deny the closed legacy set
+  (gpt-4, gpt-4-*, gpt-3*) and rewrite for every other gpt-* model plus
+  any o<digit> reasoning model.
+- Invert the endpoint default: rewrite max_tokens -> max_completion_tokens
+  only for endpoints known to accept it (api.openai.com, *.openai.azure.com,
+  openrouter.ai), matched by parsed hostname rather than substring. Unknown
+  or self-hosted BaseURLs (Ollama, LM Studio, llama.cpp, vLLM) keep
+  max_tokens so servers that silently drop unknown fields never lose the
+  output cap (#441).
+- Tests: check the NewClient error instead of discarding it, pin BaseURL
+  explicitly so env vars cannot flip the endpoint gate, and add coverage
+  for gpt-5/o5 rewrites, unknown-host passthrough, host lookalikes, and
+  two end-to-end wire-body assertions (recording RoundTripper against
+  api.openai.com and a real httptest server for the self-hosted case).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (99f3e9f)
+
+## [0.1.109-rc.2] - 2026-07-15
+
+
+### Fixed
+
+- Fix(sdk/python): bound the harness subprocess exit wait — silent reasoner wedge (#778)
+
+A reasoner calling a CLI harness provider could wedge silently forever:
+stuck 'running' with no child process, no logs, and a healthy event loop.
+Root-caused from a production swe-planner run that sat 26 minutes in that
+state: run_cli's finally block ended with a bare `await proc.wait()`, which
+parks indefinitely in two real situations —
+
+1. Windows proactor loop loses the RegisterWaitWithQueue completion that
+   resolves proc.wait() even though the child already exited (CPython
+   gh-81562 / gh-111604). Both pipes are at EOF, no process remains, and
+   nothing ever wakes the coroutine.
+2. An orphaned grandchild outlives a killed parent while holding the
+   inherited output pipes: asyncio resolves proc.wait() only after every
+   pipe disconnects, and on Windows proc.kill() cannot reach grandchildren
+   (pre-fix, test_run_cli_idle_watchdog_aborts_stalled_child hangs >100s
+   on a real Windows machine because of exactly this).
+
+Fix:
+- _wait_process_exit(): bound the exit wait with a grace period; on
+  expiry, kill whatever remains and recover the real exit status from
+  proc.returncode or by polling the underlying Popen object, which needs
+  no event delivery.
+- _kill_group(): use `taskkill /F /T` on Windows as the killpg analog so
+  kills reach the whole tree (also guards os.killpg with hasattr — it
+  does not exist on Windows).
+- run_cli now also kills the child when the wait loop exits abnormally
+  (cancellation included); previously a cancelled run_cli left the CLI
+  subprocess running and awaited its natural exit.
+
+Tests: unit regressions for the lost-notification recovery and
+kill-on-cancellation, plus a real-subprocess regression where a grandchild
+holds the pipes — run_cli must conclude in bounded time on every platform.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (45a4d4d)
+
+## [0.1.109-rc.1] - 2026-07-14
+
+
+### Fixed
+
+- Fix(sdk): Windows harness reliability — opencode prompts over stdin, idle watchdog 120s→300s (#774)
+
+* fix(sdk/go): opencode prompts over stdin on Windows — argv blew cmd.exe's 8k cap
+
+On Windows the opencode CLI on PATH is an npm .cmd shim that CreateProcess
+routes through cmd.exe, whose ~8k command-line cap real prompts blow straight
+through ("The command line is too long."). The Go harness passed the prompt as
+a positional arg, so every call whose prompt embedded diff context died at
+spawn — and schema retries, which append more text, could never recover. The
+observable failure was silent and severe: pr-af-go on Windows "completed"
+reviews with zero dimensions planned, empty LLM fields, and a confident
+"Safe to merge — 0 findings" verdict manufactured from mechanical parsing
+alone (every failed call was downgraded to "0 findings for this dimension").
+
+opencode reads the prompt from stdin when the positional arg is absent, so on
+Windows the prompt now goes over stdin — mirroring the Python SDK's
+_prompt_via_stdin fix (harness/providers/opencode.py). POSIX keeps the
+battle-tested positional-arg path. The provider's injectable runCLI seam moves
+from RunCLI to RunCLIWithStdin (which already existed for the claude
+provider).
+
+Verified live on Windows 11: pre-fix, a pr-af-go review of a 335-line PR
+produced a false-clean (plan.dimensions null); post-fix the same review runs
+its dimension reviewers with prompts delivered over stdin (argv ends at the
+model flag). TestOpenCodePromptDelivery pins both delivery paths; the
+harness suite shows no new failures against the pre-existing Windows baseline
+(22 fixture/path-separator failures unrelated to this change, green on Linux
+CI).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk): raise harness idle-watchdog default 120s -> 300s (both SDKs)
+
+Provider CLIs in JSON mode emit events only at completion boundaries —
+opencode's `run --format json` writes a text event when a part carries
+`time.end`, never token-by-token — so one long reasoning completion over a
+large context is minutes of legitimate stdout silence. At 120s the watchdog
+routinely killed healthy runs on slower models (observed live: pr-af-go
+reviews on deepseek-v4-pro died with "CLI command made no progress for 120s"
+at 8-19 minutes into otherwise-progressing pipelines, while chatty
+tool-calling models like kimi-k2.5 sailed through because every tool_use
+event reset the window).
+
+300s tolerates a long single completion while still catching genuine hangs.
+AGENTFIELD_HARNESS_IDLE_SECONDS still overrides in both SDKs; <= 0 still
+disables. Go and Python defaults move together to keep parity.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (8f0e350)
+
 ## [0.1.108] - 2026-07-13
 
 ## [0.1.108-rc.1] - 2026-07-13

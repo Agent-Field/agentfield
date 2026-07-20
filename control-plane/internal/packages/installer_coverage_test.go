@@ -58,7 +58,7 @@ func TestInstallerCoverage(t *testing.T) {
 		t.Setenv("PATH", "")
 
 		err := pi.installDependencies(pkgPath, metadata)
-		if err == nil || !strings.Contains(err.Error(), "failed to create virtual environment") {
+		if err == nil || !strings.Contains(err.Error(), "no working Python interpreter found on PATH") {
 			t.Fatalf("expected python to fail, got %v", err)
 		}
 	})
@@ -72,10 +72,12 @@ func TestInstallerCoverage(t *testing.T) {
 			},
 		}
 
-		// create a fake python that will succeed, but no pip
+		// create a fake python that answers the version probe and "succeeds"
+		// at venv creation without producing a pip
 		fakebin := t.TempDir()
 		pythonPath := filepath.Join(fakebin, "python3")
-		if err := os.WriteFile(pythonPath, []byte("#!/bin/sh\nexit 0"), 0755); err != nil {
+		script := "#!/bin/sh\nif [ \"$1\" = \"-c\" ]; then echo \"3.12.0\"; fi\nexit 0"
+		if err := os.WriteFile(pythonPath, []byte(script), 0755); err != nil {
 			t.Fatal(err)
 		}
 		t.Setenv("PATH", fakebin)

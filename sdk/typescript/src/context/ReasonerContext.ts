@@ -9,6 +9,7 @@ import type { DidInterface } from '../did/DidInterface.js';
 import type { AIToolRequestOptions, ToolCallTrace } from '../ai/ToolCalling.js';
 import { buildToolConfig, executeToolCallLoop } from '../ai/ToolCalling.js';
 import type { ExecutionLogger } from '../observability/ExecutionLogger.js';
+import type { TriggerContext } from '../triggers/types.js';
 
 export class ReasonerContext<TInput = any> {
   readonly input: TInput;
@@ -40,6 +41,12 @@ export class ReasonerContext<TInput = any> {
    * CPU loops, check `ctx.signal.aborted` periodically and throw.
    */
   readonly signal: AbortSignal;
+  /**
+   * Trigger context populated when the reasoner was invoked by an inbound
+   * webhook event or cron schedule. `undefined` for direct calls via
+   * `app.call(...)` or HTTP POST without a dispatcher envelope.
+   */
+  readonly trigger?: TriggerContext;
 
   constructor(params: {
     input: TInput;
@@ -63,6 +70,7 @@ export class ReasonerContext<TInput = any> {
     workflow: WorkflowReporter;
     did: DidInterface;
     signal?: AbortSignal;
+    trigger?: TriggerContext;
   }) {
     this.input = params.input;
     this.executionId = params.executionId;
@@ -87,6 +95,7 @@ export class ReasonerContext<TInput = any> {
     // Default to a never-aborted signal when none provided so existing
     // call sites (tests, manual invocations) continue to work.
     this.signal = params.signal ?? new AbortController().signal;
+    this.trigger = params.trigger;
   }
 
   ai<T>(prompt: string, options: AIRequestOptions & { schema: ZodSchema<T> }): Promise<T>;

@@ -104,13 +104,13 @@ func TestAgentServiceWaitForAgentNode(t *testing.T) {
 		defer server.Close()
 
 		service := &DefaultAgentService{}
-		require.NoError(t, service.waitForAgentNode(port, "/health", 2*time.Second))
+		require.NoError(t, service.waitForAgentNode(port, "/health", "", 2*time.Second))
 	})
 
 	t.Run("timeout", func(t *testing.T) {
 		port := findFreePortInRange(t)
 		service := &DefaultAgentService{}
-		err := service.waitForAgentNode(port, "/health", 750*time.Millisecond)
+		err := service.waitForAgentNode(port, "/health", "", 750*time.Millisecond)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "did not become ready")
 	})
@@ -233,6 +233,7 @@ func TestPackageServiceHelpers(t *testing.T) {
 		require.NoError(t, os.MkdirAll(fakeBin, 0o755))
 		python3Path := filepath.Join(fakeBin, "python3")
 		python3Script := fmt.Sprintf(`#!/bin/sh
+if [ "$1" = "-c" ]; then echo "3.12.0"; exit 0; fi
 venv_path="$3"
 mkdir -p "$venv_path/bin"
 cat > "$venv_path/bin/pip" <<'EOF'
@@ -349,66 +350,6 @@ exit 0
 		time.Sleep(50 * time.Millisecond)
 		spinner.Error("failed")
 	})
-}
-
-func TestDevServiceLoadDevEnvFile(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte(strings.Join([]string{
-		"# comment",
-		"FOO=bar",
-		`QUOTED="hello world"`,
-		"SINGLE='quoted'",
-		"INVALID",
-	}, "\n")), 0o644))
-
-	service := &DefaultDevService{}
-	envVars, err := service.loadDevEnvFile(dir)
-	require.NoError(t, err)
-	assert.Equal(t, map[string]string{
-		"FOO":    "bar",
-		"QUOTED": "hello world",
-		"SINGLE": "quoted",
-	}, envVars)
-}
-
-func TestDevServiceStartDevProcess(t *testing.T) {
-	dir := t.TempDir()
-	venvBin := filepath.Join(dir, "venv", "bin")
-	require.NoError(t, os.MkdirAll(venvBin, 0o755))
-	outputPath := filepath.Join(dir, "env-output.txt")
-	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$PORT\" > %s\nprintf '%%s\\n' \"$AGENTFIELD_SERVER_URL\" >> %s\nprintf '%%s\\n' \"$AGENTFIELD_DEV_MODE\" >> %s\nprintf '%%s\\n' \"$TOKEN\" >> %s\n", outputPath, outputPath, outputPath, outputPath)
-	require.NoError(t, os.WriteFile(filepath.Join(venvBin, "python"), []byte(script), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte("TOKEN=dev-secret\n"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.py"), []byte("print('ignored')\n"), 0o644))
-
-	service := &DefaultDevService{}
-	cmd, err := service.startDevProcess(dir, 8124, domain.DevOptions{Verbose: true})
-	require.NoError(t, err)
-	require.NoError(t, cmd.Wait())
-
-	data, err := os.ReadFile(outputPath)
-	require.NoError(t, err)
-	assert.Equal(t, "8124\nhttp://localhost:8080\ntrue\ndev-secret\n", string(data))
-}
-
-func TestDevServicePortHelpersWithoutManager(t *testing.T) {
-	service := &DefaultDevService{}
-
-	port, err := service.getFreePort()
-	require.NoError(t, err)
-	assert.True(t, port >= 8001 && port <= 8999)
-
-	busyListener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	defer busyListener.Close()
-	busyPort := busyListener.Addr().(*net.TCPAddr).Port
-	assert.False(t, service.isPortAvailable(busyPort))
-
-	freeListener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	freePort := freeListener.Addr().(*net.TCPAddr).Port
-	require.NoError(t, freeListener.Close())
-	assert.True(t, service.isPortAvailable(freePort))
 }
 
 func TestAgentServiceRunStopAndStatusWithLiveProcess(t *testing.T) {

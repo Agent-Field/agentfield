@@ -82,8 +82,8 @@ func (c *Client) CompleteWithMessages(ctx context.Context, messages []Message, o
 }
 
 func (c *Client) doRequest(ctx context.Context, req *Request) (*Response, error) {
-	// Marshal request
-	body, err := json.Marshal(req)
+	// Apply provider-specific parameter rewrites before serialization.
+	body, err := c.marshalRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
@@ -176,8 +176,8 @@ func (c *Client) StreamComplete(ctx context.Context, prompt string, opts ...Opti
 			}
 		}
 
-		// Marshal request
-		body, err := json.Marshal(req)
+		// Apply provider-specific parameter rewrites before serialization.
+		body, err := c.marshalRequest(req)
 		if err != nil {
 			errCh <- fmt.Errorf("marshal request: %w", err)
 			return

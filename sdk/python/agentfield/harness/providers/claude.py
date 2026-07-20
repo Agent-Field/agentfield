@@ -10,6 +10,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from agentfield.harness._result import Metrics, RawResult
+from agentfield.exceptions import HarnessProviderUnavailable
 
 
 def _get_claude_sdk() -> Any:
@@ -36,7 +37,14 @@ class ClaudeCodeProvider:
 
     async def execute(self, prompt: str, options: dict[str, object]) -> RawResult:
         """Execute a prompt via Claude Code SDK."""
-        sdk = _get_claude_sdk()
+        try:
+            sdk = _get_claude_sdk()
+        except ImportError as exc:
+            raise HarnessProviderUnavailable(
+                "claude-code",
+                binary="claude_agent_sdk",
+                install_command="pip install 'agentfield[harness-claude]'",
+            ) from exc
 
         agent_options: dict[str, object] = {}
         if options.get("model") is not None:

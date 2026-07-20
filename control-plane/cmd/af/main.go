@@ -162,9 +162,17 @@ func runServer(cmd *cobra.Command, args []string) {
 		fmt.Println("UI is already embedded in binary, skipping build.")
 	}
 
-	// Create AgentField server instance
+	// Create AgentField server instance. An incumbent server (the desktop app
+	// direct-spawned one, say) makes this fail before any port bind — local
+	// storage init hits the incumbent's BoltDB/SQLite file locks. When a
+	// healthy AgentField already answers on our port, exit 0 instead of dying,
+	// so a launchd-managed second instance stops cleanly rather than
+	// relaunch-looping on the lock timeout.
 	agentfieldServer, err := server.NewAgentFieldServer(cfg)
 	if err != nil {
+		if server.ExitCleanIfAlreadyRunning(err, cfg.AgentField.Port) {
+			os.Exit(0)
+		}
 		log.Fatalf("Failed to create AgentField server: %v", err)
 	}
 
@@ -172,6 +180,11 @@ func runServer(cmd *cobra.Command, args []string) {
 	go func() {
 		fmt.Printf("AgentField server attempting to start on port %d...\n", cfg.AgentField.Port)
 		if err := agentfieldServer.Start(); err != nil {
+			// Same idempotency rule for a failure at the bind itself (storage
+			// somehow shared, port not): a healthy incumbent means exit 0.
+			if server.ExitCleanIfAlreadyRunning(err, cfg.AgentField.Port) {
+				os.Exit(0)
+			}
 			log.Fatalf("Failed to start AgentField server: %v", err)
 		}
 	}()
@@ -338,6 +351,14 @@ func loadConfig(configFile string) (*config.Config, error) {
 	// Set default storage mode to local if not specified
 	if cfg.Storage.Mode == "" {
 		cfg.Storage.Mode = "local"
+	}
+	// Default the local storage paths whenever they are unset — not only when
+	// the mode was defaulted. A config file may set mode: "local" while leaving
+	// the paths empty (the sample config/agentfield.yaml does exactly that,
+	// and it is picked up automatically when af runs next to it), which
+	// previously skipped this block and failed startup with "database path is
+	// empty". Mirrors cmd/agentfield-server.
+	if cfg.Storage.Mode == "local" {
 		// Use the universal path management system
 		if cfg.Storage.Local.DatabasePath == "" {
 			dbPath, err := utils.GetDatabasePath()

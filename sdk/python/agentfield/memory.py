@@ -113,6 +113,7 @@ from .memory_events import MemoryEventClient, ScopedMemoryEventClient
 if sys.version_info >= (3, 9):
     from asyncio import to_thread as _to_thread
 else:
+
     async def _to_thread(func, *args, **kwargs):
         """Compatibility shim for asyncio.to_thread on Python 3.8."""
         loop = asyncio.get_event_loop()
@@ -184,7 +185,11 @@ class MemoryClient:
             return await _to_thread(requests.request, method, url, **kwargs)
 
     async def set(
-        self, key: str, data: Any, scope: Optional[str] = None, scope_id: Optional[str] = None
+        self,
+        key: str,
+        data: Any,
+        scope: Optional[str] = None,
+        scope_id: Optional[str] = None,
     ) -> None:
         """
         Set a memory value with automatic scoping.
@@ -423,13 +428,9 @@ class MemoryClient:
         except MemoryAccessError:
             raise
         except Exception as e:
-            raise MemoryAccessError(
-                f"Failed to delete vector key '{key}': {e}"
-            ) from e
+            raise MemoryAccessError(f"Failed to delete vector key '{key}': {e}") from e
 
-    async def list_keys(
-        self, scope: str, scope_id: Optional[str] = None
-    ) -> List[str]:
+    async def list_keys(self, scope: str, scope_id: Optional[str] = None) -> List[str]:
         """
         List all keys in a specific scope.
 
@@ -518,7 +519,7 @@ class ScopedMemoryClient:
         self,
         memory_client: MemoryClient,
         scope: str,
-        scope_id: str,
+        scope_id: Optional[str],
         event_client: Optional[MemoryEventClient] = None,
     ):
         self.memory_client = memory_client
@@ -550,9 +551,7 @@ class ScopedMemoryClient:
 
     async def delete(self, key: str) -> None:
         """Delete a value from this specific scope."""
-        await self.memory_client.delete(
-            key, scope=self.scope, scope_id=self.scope_id
-        )
+        await self.memory_client.delete(key, scope=self.scope, scope_id=self.scope_id)
 
     async def list_keys(self) -> List[str]:
         """List all keys in this specific scope."""
@@ -720,34 +719,115 @@ class GlobalMemoryClient:
         return decorator
 
 
+# Scopes that a developer may target explicitly via the convenience kwargs on
+# MemoryInterface.set/get/delete/similarity_search. These are the canonical scope names the
+# control plane understands (see control-plane memory handlers). "global" is a
+# singleton scope and needs no scope_id; the other three may use scope_id or the
+# current execution context headers already carried by MemoryClient.
+_VALID_SCOPES = ("global", "session", "actor", "workflow")
+
+
 class MemoryInterface:
     """
     Developer-facing memory interface that provides the intuitive app.memory API.
 
     This class provides the main interface that developers interact with,
     offering automatic scoping, hierarchical lookup, and explicit scope access.
+
+    Scoped access is primarily expressed through the accessor API, which reads
+    the clearest at call sites::
+
+        await app.memory.global_scope.set("config", {...})
+        await app.memory.session(session_id).set("context", {...})
+        await app.memory.actor(actor_id).get("preferences")
+        await app.memory.workflow(workflow_id).set("step1", {...})
+
+    As a convenience (and to mirror the TypeScript SDK), ``set``/``get``/``delete``
+    and ``similarity_search`` also accept optional ``scope`` and ``scope_id``
+    keyword arguments. Passing ``scope=None`` (the default) keeps the automatic
+    hierarchical behavior; passing an explicit scope routes to the equivalent
+    accessor above.
     """
 
     def __init__(self, memory_client: MemoryClient, event_client: MemoryEventClient):
         self.memory_client = memory_client
         self.events = event_client
 
-    async def set(self, key: str, data: Any) -> None:
+    def _resolve_scope_target(
+        self, scope: str, scope_id: Optional[str]
+    ) -> Union["GlobalMemoryClient", "ScopedMemoryClient"]:
+        """
+        Map an explicit ``scope``/``scope_id`` pair to the equivalent scoped client.
+
+        This is the shared dispatch used by the ``scope`` kwargs on
+        ``set``/``get``/``delete``/``similarity_search``. It reuses the existing
+        accessor clients so the convenience layer stays a thin wrapper over one
+        code path.
+
+        Args:
+            scope: One of ``"global"``, ``"session"``, ``"actor"``, ``"workflow"``.
+            scope_id: Optional identifier for the scope. When omitted for
+                ``session``/``actor``/``workflow``, the current execution context
+                headers are used; ignored for ``global``.
+
+        Returns:
+            A ``GlobalMemoryClient`` or ``ScopedMemoryClient`` bound to the scope.
+
+        Raises:
+            ValueError: If ``scope`` is not a recognized scope name.
+        """
+        if scope not in _VALID_SCOPES:
+            valid = ", ".join(repr(s) for s in _VALID_SCOPES)
+            raise ValueError(
+                f"Invalid memory scope {scope!r}. Valid scopes are: {valid}."
+            )
+
+        if scope == "global":
+            return self.global_scope
+
+        return ScopedMemoryClient(self.memory_client, scope, scope_id, self.events)
+
+    async def set(
+        self,
+        key: str,
+        data: Any,
+        scope: Optional[str] = None,
+        scope_id: Optional[str] = None,
+    ) -> None:
         """
         Set a memory value with automatic scoping.
 
-        The value will be stored in the most specific available scope
-        based on the current execution context.
+        By default (``scope=None``) the value is stored in the most specific
+        available scope based on the current execution context.
+
+        The accessor API is the primary way to target a scope explicitly::
+
+            await app.memory.session(session_id).set("context", {...})
+
+        As a convenience, an explicit scope may also be passed here::
+
+            await app.memory.set("context", {...}, scope="session", scope_id=session_id)
+            await app.memory.set("config", {...}, scope="global")
 
         Args:
             key: The memory key
             data: The data to store
+            scope: Optional explicit scope. One of ``"global"``, ``"session"``,
+                ``"actor"``, ``"workflow"``. ``None`` keeps automatic scoping.
+            scope_id: Optional identifier for the scope. When omitted for
+                ``session``/``actor``/``workflow``, the current execution context
+                headers are used; ignored for ``global``.
 
         Raises:
+            ValueError: If ``scope`` is invalid.
             TypeError: If data is not JSON serializable.
             MemoryAccessError: If the memory backend request fails.
         """
-        await self.memory_client.set(key, data)
+        if scope is None:
+            await self.memory_client.set(key, data)
+            return
+
+        await self._resolve_scope_target(scope, scope_id).set(key, data)
 
     async def set_vector(
         self,
@@ -763,24 +843,48 @@ class MemoryInterface:
         """
         await self.memory_client.set_vector(key, embedding, metadata=metadata)
 
-    async def get(self, key: str, default: Any = None) -> Any:
+    async def get(
+        self,
+        key: str,
+        default: Any = None,
+        scope: Optional[str] = None,
+        scope_id: Optional[str] = None,
+    ) -> Any:
         """
-        Get a memory value with hierarchical lookup.
+        Get a memory value.
 
-        This will search through scopes in order: workflow -> session -> actor -> global
-        and return the first match found.
+        By default (``scope=None``) this performs a hierarchical lookup, searching
+        scopes in order ``workflow -> session -> actor -> global`` and returning the
+        first match found.
+
+        When an explicit ``scope`` is passed, only that scope is read (matching the
+        accessor API)::
+
+            await app.memory.get("context", scope="session", scope_id=session_id)
+            await app.memory.get("config", scope="global")
 
         Args:
             key: The memory key
-            default: Default value if key not found in any scope
+            default: Default value if key not found
+            scope: Optional explicit scope. One of ``"global"``, ``"session"``,
+                ``"actor"``, ``"workflow"``. ``None`` performs hierarchical lookup.
+            scope_id: Optional identifier for the scope. When omitted for
+                ``session``/``actor``/``workflow``, the current execution context
+                headers are used; ignored for ``global``.
 
         Returns:
             The stored value or default if not found
 
         Raises:
+            ValueError: If ``scope`` is invalid.
             MemoryAccessError: If the memory backend request fails.
         """
-        return await self.memory_client.get(key, default=default)
+        if scope is None:
+            return await self.memory_client.get(key, default=default)
+
+        return await self._resolve_scope_target(scope, scope_id).get(
+            key, default=default
+        )
 
     async def exists(self, key: str) -> bool:
         """
@@ -794,17 +898,39 @@ class MemoryInterface:
         """
         return await self.memory_client.exists(key)
 
-    async def delete(self, key: str) -> None:
+    async def delete(
+        self,
+        key: str,
+        scope: Optional[str] = None,
+        scope_id: Optional[str] = None,
+    ) -> None:
         """
-        Delete a memory value from the current scope.
+        Delete a memory value.
+
+        By default (``scope=None``) the value is deleted from the current scope.
+        When an explicit ``scope`` is passed, the value is deleted from that scope
+        (matching the accessor API)::
+
+            await app.memory.delete("context", scope="session", scope_id=session_id)
+            await app.memory.delete("config", scope="global")
 
         Args:
             key: The memory key
+            scope: Optional explicit scope. One of ``"global"``, ``"session"``,
+                ``"actor"``, ``"workflow"``. ``None`` uses the current scope.
+            scope_id: Optional identifier for the scope. When omitted for
+                ``session``/``actor``/``workflow``, the current execution context
+                headers are used; ignored for ``global``.
 
         Raises:
+            ValueError: If ``scope`` is invalid.
             MemoryAccessError: If the memory backend request fails.
         """
-        await self.memory_client.delete(key)
+        if scope is None:
+            await self.memory_client.delete(key)
+            return
+
+        await self._resolve_scope_target(scope, scope_id).delete(key)
 
     async def delete_vector(self, key: str) -> None:
         """
@@ -820,14 +946,45 @@ class MemoryInterface:
         query_embedding: Union[Sequence[float], Any],
         top_k: int = 10,
         filters: Optional[Dict[str, Any]] = None,
+        scope: Optional[str] = None,
+        scope_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Search stored vectors using similarity matching.
 
+        By default (``scope=None``) the search uses the current execution
+        context, matching today's behavior. When an explicit ``scope`` is
+        passed, only vectors in that scope are searched (matching the
+        accessor API and the TypeScript SDK's ``searchVector``)::
+
+            await app.memory.similarity_search(embedding, top_k=5, scope="global")
+            await app.memory.similarity_search(
+                embedding, scope="session", scope_id=session_id
+            )
+
+        Args:
+            query_embedding: The query vector to match against stored vectors.
+            top_k: Maximum number of results to return.
+            filters: Optional metadata filters applied to candidates.
+            scope: Optional explicit scope. One of ``"global"``, ``"session"``,
+                ``"actor"``, ``"workflow"``. ``None`` keeps the current behavior.
+            scope_id: Optional identifier for the scope. When omitted for
+                ``session``/``actor``/``workflow``, the current execution context
+                headers are used; ignored for ``global``.
+
+        Returns:
+            A list of match dictionaries ordered by similarity.
+
         Raises:
+            ValueError: If ``scope`` is invalid.
             MemoryAccessError: If the memory backend request fails.
         """
-        return await self.memory_client.similarity_search(
+        if scope is None:
+            return await self.memory_client.similarity_search(
+                query_embedding, top_k=top_k, filters=filters
+            )
+
+        return await self._resolve_scope_target(scope, scope_id).similarity_search(
             query_embedding, top_k=top_k, filters=filters
         )
 

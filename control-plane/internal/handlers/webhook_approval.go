@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"
+	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
@@ -192,8 +193,6 @@ func (c *webhookApprovalController) handleApprovalWebhook(ctx *gin.Context) {
 		return
 	}
 
-	reqCtx := ctx.Request.Context()
-
 	// Find the workflow execution by approval_request_id
 	executionID, wfExec, err := c.findExecutionByApprovalRequestID(ctx, payload.RequestID)
 	if err != nil {
@@ -206,6 +205,19 @@ func (c *webhookApprovalController) handleApprovalWebhook(ctx *gin.Context) {
 		ctx.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("no execution found for approval request %s", payload.RequestID)})
 		return
 	}
+
+	c.applyApprovalDecision(ctx, executionID, wfExec, payload, decision)
+}
+
+// applyApprovalDecision applies a validated approval decision to a waiting
+// execution: idempotency check, state transitions, approval bookkeeping,
+// observability events, and the async agent callback. Shared by the
+// HMAC-signed webhook and the authenticated
+// POST /executions/:execution_id/approval-response endpoint so both paths
+// resolve approvals identically. decision must already be normalized to one
+// of approved, rejected, request_changes, or expired.
+func (c *webhookApprovalController) applyApprovalDecision(ctx *gin.Context, executionID string, wfExec *types.WorkflowExecution, payload *ApprovalWebhookPayload, decision string) {
+	reqCtx := ctx.Request.Context()
 
 	// Idempotency: if execution is no longer in waiting state, it was already
 	// processed by a previous webhook delivery.  Return 200 so the sender
@@ -303,7 +315,7 @@ func (c *webhookApprovalController) handleApprovalWebhook(ctx *gin.Context) {
 	}
 
 	// Update the workflow execution with approval resolution (authoritative — must not lose the decision)
-	err = c.store.UpdateWorkflowExecution(reqCtx, executionID, func(current *types.WorkflowExecution) (*types.WorkflowExecution, error) {
+	err := c.store.UpdateWorkflowExecution(reqCtx, executionID, func(current *types.WorkflowExecution) (*types.WorkflowExecution, error) {
 		if current == nil {
 			return nil, fmt.Errorf("execution %s not found", executionID)
 		}
@@ -536,7 +548,9 @@ func (c *webhookApprovalController) notifyApprovalCallback(callbackURL, executio
 		return
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	// Use SSRF-safe client to prevent the control plane from being used as
+	// a proxy to internal services via a malicious callback_url (CWE-918).
+	client := services.NewSSRFSafeClient(5 * time.Second)
 	resp, err := client.Post(callbackURL, "application/json", bytes.NewReader(body))
 	if err != nil {
 		logger.Logger.Warn().Err(err).Str("callback_url", callbackURL).Str("execution_id", executionID).Msg("approval callback delivery failed")

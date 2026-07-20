@@ -39,6 +39,10 @@ exit 0
 
 	pythonImpl := `#!/usr/bin/env bash
 set -eu
+if [ "${1:-}" = "-c" ]; then
+  echo "3.12.0"
+  exit 0
+fi
 if [ "${1:-}" = "-m" ] && [ "${2:-}" = "venv" ]; then
   venv_path="${3:-}"
   mkdir -p "$venv_path/bin"
@@ -104,11 +108,14 @@ func TestInstallDependenciesAdditionalCoverage(t *testing.T) {
 			},
 		},
 		{
+			// Both candidates are dead stubs (the stock-Windows shape: Store
+			// aliases that exit non-zero) — interpreter selection must fail with
+			// the actionable no-working-interpreter error before venv creation.
 			name:             "venv creation failure",
 			withRequirements: true,
 			failPython3:      true,
 			failPython:       true,
-			wantErr:          "failed to create virtual environment",
+			wantErr:          "no working Python interpreter found on PATH",
 		},
 		{
 			name:             "requirements install failure",

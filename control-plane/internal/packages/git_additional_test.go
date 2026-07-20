@@ -132,7 +132,9 @@ func TestGitInstallerInstallFromGitAdditionalCoverage(t *testing.T) {
 		if pkg.Source != "gitlab" {
 			t.Fatalf("source = %q", pkg.Source)
 		}
-		if pkg.SourcePath != "https://gitlab.com/acme/repo@feature@feature" {
+		// The registry records the user's source string verbatim (the ref is
+		// already inside it — no doubled "@feature@feature" anymore).
+		if pkg.SourcePath != "https://gitlab.com/acme/repo@feature" {
 			t.Fatalf("source path = %q", pkg.SourcePath)
 		}
 		if _, err := os.Stat(filepath.Join(home, "packages", "git-installed", "main.py")); err != nil {

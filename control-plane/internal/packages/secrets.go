@@ -164,6 +164,19 @@ func (s *SecretStore) Set(scope, key, value string) error {
 	return s.save(scope, values)
 }
 
+// DeleteScope removes an entire scope's encrypted file — used when a node is
+// uninstalled so its node-scoped secrets don't outlive it. A missing file is
+// a no-op. The global scope is shared and never deleted this way.
+func (s *SecretStore) DeleteScope(scope string) error {
+	if scope == "" || scope == globalScope {
+		return fmt.Errorf("refusing to delete the %q scope", scope)
+	}
+	if err := os.Remove(s.scopeFile(scope)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 // Delete removes a secret from the given scope. Missing keys are a no-op.
 func (s *SecretStore) Delete(scope, key string) error {
 	values, err := s.load(scope)

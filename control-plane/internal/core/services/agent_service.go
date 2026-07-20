@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -118,10 +119,14 @@ func (as *DefaultAgentService) runAgentGuarded(name string, options domain.RunOp
 
 	// 5. Wait for agent node to be ready
 	healthPath := "/health"
+	expectedNodeID := name
 	if metadata, err := packages.ParsePackageMetadata(agentNode.Path); err == nil {
 		healthPath = metadata.HealthcheckPath()
+		if metadata.AgentNode.NodeID != "" {
+			expectedNodeID = metadata.AgentNode.NodeID
+		}
 	}
-	if err := as.waitForAgentNode(port, healthPath, nodeReadyTimeout()); err != nil {
+	if err := as.waitForAgentNode(port, healthPath, expectedNodeID, nodeReadyTimeout()); err != nil {
 		// Kill the process if it failed to start properly
 		if stopErr := as.processManager.Stop(pid); stopErr != nil {
 			return nil, fmt.Errorf("agent node failed to start: %w (additionally failed to stop process: %v)", err, stopErr)
@@ -521,6 +526,7 @@ func (as *DefaultAgentService) buildProcessConfig(agentNode packages.InstalledPa
 	env = append(env, "AGENTFIELD_STRICT_PORT=1")
 	env = append(env, fmt.Sprintf("AGENTFIELD_SERVER=%s", serverURL))
 	env = append(env, fmt.Sprintf("AGENTFIELD_SERVER_URL=%s", serverURL))
+	env = packages.PythonUTF8Env(env)
 
 	// Resolve declared variables from the encrypted secret store. Secrets are
 	// injected only into this child process — never written to disk in plaintext.
@@ -615,7 +621,7 @@ func (as *DefaultAgentService) buildProcessConfig(agentNode packages.InstalledPa
 // secret store, prompting for missing required ones.
 func (as *DefaultAgentService) resolveNodeEnvironment(nodeName string, metadata *packages.PackageMetadata) (map[string]string, error) {
 	env := metadata.UserEnvironment
-	if len(env.Required) == 0 && len(env.Optional) == 0 {
+	if len(env.Required) == 0 && len(env.Optional) == 0 && len(env.RequireOneOf) == 0 {
 		return map[string]string{}, nil
 	}
 	store, err := packages.NewSecretStore(as.agentfieldHome)
@@ -640,26 +646,39 @@ func nodeReadyTimeout() time.Duration {
 	return 30 * time.Second
 }
 
-// waitForAgentNode waits for the agent node to become ready
-func (as *DefaultAgentService) waitForAgentNode(port int, healthPath string, timeout time.Duration) error {
+// waitForAgentNode waits for the agent node to become ready. A 200 on the
+// health endpoint is only trusted when the payload's node_id (if it carries
+// one) matches the node just started — on Windows the port probe can miss an
+// existing listener (no SO_EXCLUSIVEADDRUSE), and without this check a
+// squatter's health response makes a dead agent look started. An empty
+// expectedNodeID or a payload without node_id skips the identity check.
+func (as *DefaultAgentService) waitForAgentNode(port int, healthPath, expectedNodeID string, timeout time.Duration) error {
 	if healthPath == "" {
 		healthPath = "/health"
 	}
 	client := &http.Client{Timeout: 1 * time.Second}
 	deadline := time.Now().Add(timeout)
 
+	impostor := ""
 	for time.Now().Before(deadline) {
 		resp, err := client.Get(fmt.Sprintf("http://localhost:%d%s", port, healthPath))
 		if err == nil && resp.StatusCode == 200 {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 			resp.Body.Close()
-			return nil
-		}
-		if resp != nil {
+			got := packages.HealthNodeID(body)
+			if got == "" || expectedNodeID == "" || packages.NodeIDsEquivalent(got, expectedNodeID) {
+				return nil
+			}
+			impostor = got
+		} else if resp != nil {
 			resp.Body.Close()
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 
+	if impostor != "" {
+		return fmt.Errorf("port %d is answering health checks as %q, not %q — another process is using the port", port, impostor, expectedNodeID)
+	}
 	return fmt.Errorf("agent node did not become ready within %v", timeout)
 }
 

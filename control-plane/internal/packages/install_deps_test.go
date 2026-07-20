@@ -9,11 +9,14 @@ import (
 
 // fakePythonOnPath installs a stub `python3` whose `-m venv <dir>` creates a
 // venv layout with a no-op `pip`, so dependency installation can be exercised
-// offline without invoking real Python/pip.
+// offline without invoking real Python/pip. It also answers the `-c` version
+// probe, since interpreter selection only accepts candidates that actually
+// run and report a version (the guard against Windows Store alias stubs).
 func fakePythonOnPath(t *testing.T) {
 	t.Helper()
 	binDir := t.TempDir()
 	py := "#!/bin/sh\n" +
+		"if [ \"$1\" = \"-c\" ]; then echo \"3.12.0\"; exit 0; fi\n" +
 		"if [ \"$1\" = \"-m\" ] && [ \"$2\" = \"venv\" ]; then\n" +
 		"  mkdir -p \"$3/bin\"\n" +
 		"  printf '#!/bin/sh\\nexit 0\\n' > \"$3/bin/pip\"\n" +

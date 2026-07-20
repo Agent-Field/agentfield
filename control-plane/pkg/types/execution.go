@@ -68,6 +68,12 @@ type ExecutionFilter struct {
 	// Set this for list/dashboard queries that do not need payload data to avoid
 	// transferring large TOAST columns over the wire.
 	ExcludePayloads bool
+	// ActiveOnly keeps only runs with at least one non-terminal execution
+	// (running/pending/queued/waiting). Unlike Status, which drops non-matching
+	// execution rows BEFORE aggregation (losing terminal children from the
+	// counts), ActiveOnly filters whole runs after aggregation, so a run's
+	// status_counts stay complete. Only honored by QueryRunSummaries.
+	ActiveOnly bool
 }
 
 // ExecutionDAGEdge captures a parent→child relationship inside a run. The UI uses

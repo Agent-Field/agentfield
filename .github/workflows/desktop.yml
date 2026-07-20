@@ -1,0 +1,70 @@
+name: Desktop CI
+
+# The desktop app ships to macOS and Windows, so it is checked on both: the
+# pure logic is covered by vitest anywhere, but packaging (electron-builder
+# config, extraResources, icons) and platform-guarded code paths only prove
+# out on their own runners.
+
+on:
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/desktop.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/desktop.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      # No signing identities in CI; validate packaging unsigned.
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: desktop
+        run: npm run typecheck
+
+      - name: Unit tests
+        working-directory: desktop
+        run: npm test
+
+      - name: Stub bundled CLI
+        working-directory: desktop
+        shell: bash
+        # A placeholder is enough to validate the extraResources wiring; the
+        # release pipeline drops the real per-platform af binary into vendor/.
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            printf 'stub' > vendor/af.exe
+          else
+            printf 'stub' > vendor/af
+          fi
+
+      - name: Package (unsigned, unpacked)
+        working-directory: desktop
+        run: npm run dist:dir

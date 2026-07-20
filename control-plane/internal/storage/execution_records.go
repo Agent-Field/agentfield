@@ -347,6 +347,11 @@ func (ls *LocalStorage) QueryExecutionRecords(ctx context.Context, filter types.
 	return executions, nil
 }
 
+// maxRunSummaryLimit caps filter.Limit in QueryRunSummaries. The limit
+// pre-sizes result slices, so an unchecked request-supplied value would let
+// one call allocate gigabytes up front (CodeQL go/uncontrolled-allocation-size).
+const maxRunSummaryLimit = 1000
+
 // QueryRunSummaries returns aggregated statistics for workflow runs without fetching all execution records.
 // The implementation uses a single GROUP BY query plus a lightweight COUNT for total runs to stay fast even
 // when page_size is large.
@@ -361,12 +366,29 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 		where = append(where, "run_id = ?")
 		args = append(args, *filter.RunID)
 	}
+	if filter.AgentNodeID != nil {
+		// Run-level membership: keep every row of any run that touched this
+		// agent. A plain agent_node_id = ? here would drop other agents' rows
+		// before GROUP BY, corrupting a cross-agent run's status_counts and
+		// losing its root fields when the root ran elsewhere.
+		where = append(where, "run_id IN (SELECT run_id FROM executions WHERE agent_node_id = ?)")
+		args = append(args, *filter.AgentNodeID)
+	}
 	if filter.Status != nil {
 		where = append(where, "status = ?")
 		args = append(args, *filter.Status)
 	}
 	if filter.SessionID != nil {
-		where = append(where, "session_id = ?")
+		// Run-level membership: keep every row of any run whose root is in this
+		// session. Only the root execution carries session_id — child records
+		// created through the workflow-execution-events path (SDK CallLocal /
+		// in-process composition) are persisted without one. A plain
+		// session_id = ? here would drop all those children before GROUP BY,
+		// collapsing a session-scoped active run to its root alone:
+		// total_/active_executions stuck at 1 and latest_activity frozen at the
+		// root's dispatch time for the whole run, false-alarming the wedge
+		// heuristic on every legitimate long run.
+		where = append(where, "run_id IN (SELECT run_id FROM executions WHERE session_id = ?)")
 		args = append(args, *filter.SessionID)
 	}
 	if filter.ActorID != nil {
@@ -392,10 +414,27 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 		whereClause = " WHERE " + strings.Join(where, " AND ")
 	}
 
+	// ActiveOnly filters at the run level (post-aggregation) so terminal
+	// children still contribute to status_counts — a Status="running" filter
+	// would instead drop those rows before grouping and also miss runs whose
+	// only in-flight executions are queued/pending/waiting. The set matches
+	// types.IsTerminalExecutionStatus: every canonical non-terminal status
+	// counts as in flight, including paused (a pause-wedged run must not
+	// vanish from af ps) and unknown. Deliberately wider than the query's
+	// active_executions column, whose narrower pre-existing set the UI's
+	// status derivation depends on.
+	havingClause := ""
+	if filter.ActiveOnly {
+		havingClause = " HAVING SUM(CASE WHEN LOWER(status) IN ('running','pending','queued','waiting','paused','unknown') THEN 1 ELSE 0 END) > 0"
+	}
+
 	db := ls.requireSQLDB()
 
 	// Query total run count up front so pagination metadata is accurate without extra round trips.
 	countQuery := "SELECT COUNT(DISTINCT run_id) FROM executions" + whereClause
+	if filter.ActiveOnly {
+		countQuery = "SELECT COUNT(*) FROM (SELECT run_id FROM executions" + whereClause + " GROUP BY run_id" + havingClause + ") active_runs"
+	}
 	var totalRuns int
 	if err := db.QueryRowContext(ctx, countQuery, args...).Scan(&totalRuns); err != nil {
 		return nil, 0, fmt.Errorf("count run_ids: %w", err)
@@ -404,9 +443,15 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 		return []*RunSummaryAggregation{}, 0, nil
 	}
 
+	// Every API caller clamps its page size (UI ≤200, agentic ≤100, af ps
+	// ≤200), but limit sizes the result pre-allocations below, so the
+	// storage layer enforces its own ceiling rather than trusting callers.
 	limit := filter.Limit
 	if limit <= 0 {
 		limit = 20
+	}
+	if limit > maxRunSummaryLimit {
+		limit = maxRunSummaryLimit
 	}
 	offset := filter.Offset
 	if offset < 0 {
@@ -450,10 +495,10 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 			END AS status_rank
 		FROM executions
 		%s
-		GROUP BY run_id
+		GROUP BY run_id%s
 		ORDER BY %s %s
 		LIMIT %d OFFSET %d`,
-		whereClause, orderColumn, orderDirection, limit, offset)
+		whereClause, havingClause, orderColumn, orderDirection, limit, offset)
 
 	logger.Logger.Debug().
 		Str("query", query).
@@ -467,9 +512,19 @@ func (ls *LocalStorage) QueryRunSummaries(ctx context.Context, filter types.Exec
 	}
 	defer rows.Close()
 
-	summaries := make([]*RunSummaryAggregation, 0, limit)
-	runIDsForDepth := make([]string, 0, limit)
-	summaryByRunID := make(map[string]*RunSummaryAggregation, limit)
+	// Capacity hint bounded by what the query can actually return (the DB's
+	// own run count) and the page ceiling — deliberately not by the
+	// request-supplied limit, so allocation size never depends on caller
+	// input (CodeQL go/uncontrolled-allocation-size; the reassignment-style
+	// clamp above is not recognized as a sanitizer).
+	capHint := totalRuns
+	if capHint > maxRunSummaryLimit {
+		capHint = maxRunSummaryLimit
+	}
+
+	summaries := make([]*RunSummaryAggregation, 0, capHint)
+	runIDsForDepth := make([]string, 0, capHint)
+	summaryByRunID := make(map[string]*RunSummaryAggregation, capHint)
 
 	for rows.Next() {
 		var (

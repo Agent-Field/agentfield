@@ -1,0 +1,17 @@
+node_modules/
+dist/
+out/
+release/
+*.log
+
+# bundled af CLI staging area (built by scripts/bundle-cli.mjs or dropped in
+# by the release pipeline); only the .gitkeep is tracked
+vendor/*
+!vendor/.gitkeep
+
+# The root .gitignore excludes build/, but electron-builder reads the app
+# icons from desktop/build — track exactly those.
+!build/
+build/*
+!build/icon.png
+!build/icon.icns

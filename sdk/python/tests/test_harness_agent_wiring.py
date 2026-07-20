@@ -4,6 +4,7 @@ from agentfield.agent import Agent
 from agentfield.types import HarnessConfig
 from agentfield.harness._runner import HarnessRunner
 from agentfield.harness._result import HarnessResult
+from agentfield.harness import ProviderHealth
 
 
 class TestAgentHarnessConfig:
@@ -32,6 +33,31 @@ class TestAgentHarnessConfig:
 
 
 class TestAgentHarnessMethod:
+    @pytest.mark.asyncio
+    async def test_harness_doctor_delegates_to_shared_preflight(self):
+        agent = Agent(node_id="test-agent", auto_register=False)
+        report = ProviderHealth(
+            provider="codex",
+            binary="/usr/bin/codex",
+            installed=True,
+            version="1.0.0",
+            auth="unknown",
+            usable=True,
+            install_command="install codex",
+            auth_env_vars=("OPENAI_API_KEY",),
+            issues=(),
+        )
+
+        with patch(
+            "agentfield.harness.harness_doctor",
+            new_callable=AsyncMock,
+            return_value=[report],
+        ) as doctor:
+            result = await agent.harness_doctor(providers=["codex"])
+
+        assert result == [report]
+        doctor.assert_awaited_once_with(providers=["codex"])
+
     @pytest.mark.asyncio
     async def test_harness_delegates_to_runner(self):
         config = HarnessConfig(provider="claude-code")
@@ -99,6 +125,11 @@ class TestAgentHarnessMethod:
 
 
 class TestAgentInitExports:
+    def test_harness_provider_unavailable_importable(self):
+        from agentfield import HarnessProviderUnavailable
+
+        assert HarnessProviderUnavailable is not None
+
     def test_harness_config_importable(self):
         from agentfield import HarnessConfig
 
