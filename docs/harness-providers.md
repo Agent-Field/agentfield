@@ -23,6 +23,31 @@ The extras install Python wrappers. They do not replace the runtime preflight:
 Gemini is CLI-only, and Codex or OpenCode may still require a separately
 available executable depending on the wrapper and platform.
 
+## Model selection and reasoning-effort variants
+
+Every provider accepts a `model` option on `.harness()` calls. The model string
+may carry a reasoning-effort variant after a `#` separator:
+
+```python
+result = await app.harness(
+    task,
+    provider="opencode",
+    model="openrouter/z-ai/glm-5.2#high",
+)
+```
+
+An explicit `variant="high"` keyword wins over the suffix. Per provider:
+
+| Provider | Model flag | Variant handling |
+| --- | --- | --- |
+| OpenCode | `-m <model>` | `--variant <v>` (provider-specific effort, e.g. `high`, `max`, `minimal`) |
+| Codex | `-m <model>` | `-c model_reasoning_effort=<v>` |
+| Claude Code | SDK `model` option | No effort control — variant is dropped with a debug log |
+| Gemini | `-m <model>` | No effort control — variant is dropped |
+
+The `#` separator is safe in model ids: `:` belongs to OpenRouter suffixes like
+`:free`, and `@` to Vertex-style ids, but no provider uses `#`.
+
 ## Verify
 
 Check selected providers in a container or CI job before any paid run:
