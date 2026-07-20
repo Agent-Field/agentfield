@@ -65,9 +65,15 @@ func (p *CodexProvider) Execute(ctx context.Context, prompt string, options Opti
 
 	// Pass the model through with -m. SWE-AF resolves gpt-5.5 vs gpt-5.3-codex by
 	// auth mode and relies on the value reaching the CLI; the old provider
-	// ignored options.Model entirely.
-	if options.Model != "" {
-		cmd = append(cmd, "-m", options.Model)
+	// ignored options.Model entirely. Reasoning effort has no dedicated flag —
+	// it's the model_reasoning_effort config key, fed by a "#variant" suffix
+	// on the model (or an explicit Options.Variant), e.g. "gpt-5.3-codex#high".
+	modelValue, variantValue := options.resolveModelAndVariant()
+	if modelValue != "" {
+		cmd = append(cmd, "-m", modelValue)
+	}
+	if variantValue != "" {
+		cmd = append(cmd, "-c", "model_reasoning_effort="+variantValue)
 	}
 
 	// permission_mode → sandbox policy (port of codex_harness_patch.py:165-170).

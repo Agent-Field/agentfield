@@ -46,8 +46,13 @@ func (p *ClaudeCodeProvider) Execute(ctx context.Context, prompt string, options
 	// stream-json ("--output-format=stream-json requires --verbose").
 	cmd := []string{p.BinPath, "--print", "--output-format", "stream-json", "--verbose"}
 
-	if options.Model != "" {
-		cmd = append(cmd, "--model", options.Model)
+	// Strip any "#variant" reasoning-effort suffix so the CLI receives a
+	// valid model id. claude-code has no effort flag, so the variant is
+	// dropped (the Python provider logs this at debug level; this package
+	// has no provider-level logger).
+	modelValue, _ := options.resolveModelAndVariant()
+	if modelValue != "" {
+		cmd = append(cmd, "--model", modelValue)
 	}
 
 	if options.MaxTurns > 0 {

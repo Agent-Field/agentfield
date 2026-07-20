@@ -300,4 +300,21 @@ func TestRecordHarnessUsage(t *testing.T) {
 		assert.Equal(t, "openrouter/qwen/qwen3-coder", entries[0]["model"])
 		assert.Equal(t, "openrouter", entries[0]["provider"])
 	})
+
+	t.Run("model variant suffix is stripped for attribution", func(t *testing.T) {
+		a := newAgentForTest(t)
+		tracker := NewCostTracker()
+		ctx := contextWithCostTracker(context.Background(), tracker)
+
+		a.recordHarnessUsage(ctx, &harness.Result{InputTokens: 1}, harness.Options{
+			Provider: "opencode",
+			Model:    "openrouter/z-ai/glm-5.2#high",
+		})
+
+		entries := tracker.Serialize()["entries"].([]map[string]any)
+		require.Len(t, entries, 1)
+		assert.Equal(t, "openrouter/z-ai/glm-5.2", entries[0]["model"],
+			"usage must attribute to the BASE model, not the #variant-suffixed string")
+		assert.Equal(t, "openrouter", entries[0]["provider"])
+	})
 }

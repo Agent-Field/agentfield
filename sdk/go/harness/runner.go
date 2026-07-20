@@ -190,6 +190,9 @@ func (r *Runner) mergeOptions(overrides Options) Options {
 	if overrides.Model != "" {
 		merged.Model = overrides.Model
 	}
+	if overrides.Variant != "" {
+		merged.Variant = overrides.Variant
+	}
 	if overrides.MaxTurns > 0 {
 		merged.MaxTurns = overrides.MaxTurns
 	}

@@ -89,9 +89,16 @@ func (p *OpenCodeProvider) Execute(ctx context.Context, prompt string, options O
 		cmd = append(cmd, "--dir", dir)
 	}
 
-	// Pass model via -m on the run subcommand when supplied.
-	if options.Model != "" {
-		cmd = append(cmd, "-m", options.Model)
+	// Pass model via -m on the run subcommand when supplied. A "#variant"
+	// suffix on the model (or an explicit Options.Variant) maps to
+	// --variant — opencode's provider-specific reasoning effort (e.g. high,
+	// max, minimal).
+	modelValue, variantValue := options.resolveModelAndVariant()
+	if modelValue != "" {
+		cmd = append(cmd, "-m", modelValue)
+	}
+	if variantValue != "" {
+		cmd = append(cmd, "--variant", variantValue)
 	}
 
 	// opencode v1.14 does not accept --dangerously-skip-permissions on the
@@ -125,11 +132,14 @@ func (p *OpenCodeProvider) Execute(ctx context.Context, prompt string, options O
 		env[k] = v
 	}
 
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(options.Model)), "openrouter/") {
+	// The attribution check keys off the BASE model — a "#variant" suffix
+	// must not defeat the openrouter/ prefix match nor leak into the
+	// per-model config overlay key.
+	if strings.HasPrefix(strings.ToLower(modelValue), "openrouter/") {
 		if _, callerSet := env["OPENCODE_CONFIG_CONTENT"]; !callerSet && os.Getenv("OPENCODE_CONFIG_CONTENT") == "" {
 			attributionEnv := mergedProcessEnv(env)
 			headers := openRouterAttributionHeaders(attributionEnv)
-			modelSlug := strings.TrimPrefix(options.Model, "openrouter/")
+			modelSlug := strings.TrimPrefix(modelValue, "openrouter/")
 			if modelSlug != "" && len(headers) > 0 {
 				content := map[string]any{
 					"provider": map[string]any{

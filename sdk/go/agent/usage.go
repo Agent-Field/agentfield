@@ -145,6 +145,10 @@ func (a *Agent) recordHarnessUsage(ctx context.Context, result *harness.Result, 
 	if model == "" && a.cfg.HarnessConfig != nil {
 		model = a.cfg.HarnessConfig.Model
 	}
+	// Attribute usage to the BASE model: a "#variant" reasoning-effort
+	// suffix is a harness dispatch detail, not part of the model id (the
+	// Python SDK likewise records the provider-reported base model).
+	model, _ = harness.SplitModelVariant(model)
 	if model == "" {
 		model = provider
 	}
