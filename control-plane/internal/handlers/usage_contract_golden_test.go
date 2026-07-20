@@ -64,9 +64,15 @@ const goldenPythonUsage = `{
   ]
 }`
 
-func TestUsageGoldenFromPythonSDK(t *testing.T) {
+// assertGoldenUsageRows pins the parsed form of the three canonical entries
+// every SDK's golden payload must contain. wantRow0CostSource differs by SDK:
+// Python prices via litellm ("litellm"); Go/TypeScript only carry
+// provider-native costs ("provider").
+func assertGoldenUsageRows(t *testing.T, golden string, wantRow0CostSource string) {
+	t.Helper()
+
 	var usage map[string]interface{}
-	if err := json.Unmarshal([]byte(goldenPythonUsage), &usage); err != nil {
+	if err := json.Unmarshal([]byte(golden), &usage); err != nil {
 		t.Fatalf("golden payload does not decode: %v", err)
 	}
 
@@ -86,7 +92,7 @@ func TestUsageGoldenFromPythonSDK(t *testing.T) {
 		llm.CacheCreationTokens != 64 || llm.TotalTokens != 150 {
 		t.Errorf("row 0 token mismatch: %+v", llm)
 	}
-	if llm.CostUSD == nil || *llm.CostUSD != 0.0123 || llm.CostSource != "litellm" {
+	if llm.CostUSD == nil || *llm.CostUSD != 0.0123 || llm.CostSource != wantRow0CostSource {
 		t.Errorf("row 0 cost mismatch: %v %q", llm.CostUSD, llm.CostSource)
 	}
 
@@ -114,6 +120,39 @@ func TestUsageGoldenFromPythonSDK(t *testing.T) {
 			t.Errorf("row %d execution linkage mismatch: %+v", i, r)
 		}
 	}
+}
+
+func TestUsageGoldenFromPythonSDK(t *testing.T) {
+	assertGoldenUsageRows(t, goldenPythonUsage, "litellm")
+}
+
+// goldenGoUsage is the verbatim output of the Go SDK's CostTracker.Serialize()
+// (sdk/go/agent/cost_tracker.go) for the same three canonical entries (Go's
+// only cost source is "provider" — there is no litellm equivalent). Go
+// marshals map keys alphabetically, so key order differs from the Python
+// fixture; the parser is map-based and order-insensitive. Regenerate by
+// recording the three entries from TestCostTrackerSerializeGolden's setup and
+// printing the Serialize() result.
+const goldenGoUsage = `{
+  "entries": [
+    {"cache_creation_tokens": 64, "cache_read_tokens": 2048, "cost_source": "provider", "cost_usd": 0.0123, "harness": null, "input_tokens": 100, "model": "claude-opus-4-8", "output_tokens": 50, "provider": "anthropic", "reasoner": "summarize", "source": "llm", "total_tokens": 150},
+    {"cache_creation_tokens": 0, "cache_read_tokens": 0, "cost_source": null, "cost_usd": null, "harness": null, "input_tokens": 500, "model": "openrouter/qwen/qwen3-coder", "output_tokens": 200, "provider": "openrouter", "reasoner": "code", "source": "llm", "total_tokens": 700},
+    {"cache_creation_tokens": 0, "cache_read_tokens": 0, "cost_source": "provider", "cost_usd": 0.5, "harness": "claude_code", "input_tokens": 0, "model": "claude-opus-4-8", "output_tokens": 0, "provider": "anthropic", "reasoner": null, "source": "harness", "total_tokens": 12345}
+  ],
+  "total_cost_usd": 0.5123, "total_input_tokens": 600, "total_output_tokens": 250, "total_tokens": 13195
+}`
+
+func TestUsageGoldenFromGoSDK(t *testing.T) {
+	assertGoldenUsageRows(t, goldenGoUsage, "provider")
+}
+
+// goldenTypeScriptUsage is the verbatim output of the TypeScript SDK's
+// CostTracker.serialize() (sdk/typescript/src/usage/costTracker.ts) for the
+// same three canonical entries (provider-native cost only, like Go).
+const goldenTypeScriptUsage = `{"total_cost_usd":0.5123,"total_input_tokens":600,"total_output_tokens":250,"total_tokens":13195,"entries":[{"source":"llm","provider":"anthropic","model":"claude-opus-4-8","harness":null,"reasoner":"summarize","input_tokens":100,"output_tokens":50,"cache_read_tokens":2048,"cache_creation_tokens":64,"total_tokens":150,"cost_usd":0.0123,"cost_source":"provider"},{"source":"llm","provider":"openrouter","model":"openrouter/qwen/qwen3-coder","harness":null,"reasoner":"code","input_tokens":500,"output_tokens":200,"cache_read_tokens":0,"cache_creation_tokens":0,"total_tokens":700,"cost_usd":null,"cost_source":null},{"source":"harness","provider":"anthropic","model":"claude-opus-4-8","harness":"claude_code","reasoner":null,"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"cache_creation_tokens":0,"total_tokens":12345,"cost_usd":0.5,"cost_source":"provider"}]}`
+
+func TestUsageGoldenFromTypeScriptSDK(t *testing.T) {
+	assertGoldenUsageRows(t, goldenTypeScriptUsage, "provider")
 }
 
 // TestUsageGoldenSyncBody exercises the sync-200 shape: the SDK merges the
