@@ -13,6 +13,7 @@ import {
   type ExecutionLogTransportPayload
 } from '../observability/ExecutionLogger.js';
 import { httpAgent, httpsAgent } from '../utils/httpAgents.js';
+import type { UsageSummaryWire } from '../usage/costTracker.js';
 import { DIDAuthenticator } from './DIDAuthenticator.js';
 import { normalizeStatus as normalizeExecutionStatus, isTerminal as isTerminalExecutionStatus } from '../status/ExecutionStatus.js';
 
@@ -597,6 +598,13 @@ this.http = axios.create({
       durationMs?: number;
       completedAt?: string;
       reasoner?: string;
+      /**
+       * Serialized token/cost usage summary for the execution (the
+       * CostTracker wire contract). Omitted entirely when the execution
+       * recorded no usage. Attached on failure/timeout/cancelled terminal
+       * reports too — a reasoner may have consumed tokens before ending.
+       */
+      usage?: UsageSummaryWire;
     },
     maxRetries = 5
   ): Promise<boolean> {
@@ -610,6 +618,7 @@ this.http = axios.create({
     if (payload.result !== undefined) body.result = wrapResult(payload.result);
     if (payload.error !== undefined) body.error = payload.error;
     if (payload.errorDetails !== undefined) body.error_details = payload.errorDetails;
+    if (payload.usage !== undefined) body.usage = payload.usage;
 
     const bodyStr = JSON.stringify(body);
     const authHeaders = this.didAuthenticator.signRequest(Buffer.from(bodyStr));

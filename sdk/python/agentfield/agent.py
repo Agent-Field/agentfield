@@ -48,7 +48,12 @@ from agentfield.memory_events import MemoryEventClient
 from agentfield.logger import log_debug, log_error, log_info, log_warn, set_cp_client
 from agentfield.router import AgentRouter
 from agentfield.connection_manager import ConnectionManager
-from agentfield.cost_tracker import CostTracker
+from agentfield.cost_tracker import (
+    USAGE_ENVELOPE_KEY,
+    CostTracker,
+    reset_current_cost_tracker,
+    set_current_cost_tracker,
+)
 from agentfield.decorator_metadata import (
     resolve_reasoner_metadata,
     split_direct_registration_arg,
@@ -71,6 +76,7 @@ from agentfield.sessions import (
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
+from starlette.responses import Response as StarletteResponse
 from pydantic import BaseModel, ValidationError
 from dataclasses import dataclass, field
 import weakref
@@ -841,6 +847,52 @@ class Agent(FastAPI):
     def execution_cost(self) -> dict:
         """Get the current execution's cost summary."""
         return self.cost_tracker.summary()
+
+    @staticmethod
+    def _usage_summary_or_none(tracker: Optional[CostTracker]) -> Optional[dict]:
+        """Return the transport ``usage`` object, or None when there's nothing.
+
+        Omitting the key entirely when there are no entries is part of the
+        usage contract, so callers should skip attaching ``usage`` on None.
+        """
+        if tracker is None or not tracker.has_entries:
+            return None
+        usage = tracker.serialize()
+        if not usage.get("entries"):
+            return None
+        return usage
+
+    def _wrap_sync_result_with_usage(
+        self, result: Any, tracker: Optional[CostTracker]
+    ) -> Any:
+        """Attach usage to the synchronous 200 body.
+
+        The control plane stores the whole sync body as the result and pulls
+        usage back out by stripping the reserved ``__agentfield_usage__`` key
+        (see the Go ``extractUsageFromResult``). The key is namespaced so a
+        user result that legitimately contains its own ``usage`` key is never
+        touched; ``__agentfield_``-prefixed keys are reserved for transport.
+        Usage is merged as a sibling key into the result *object* — NOT
+        wrapped in a ``{"result": ...}`` envelope, which would double-nest the
+        stored result.
+
+        Only dict results can carry usage this way; non-dict results (lists,
+        scalars) are returned unchanged and their usage flows via the async
+        status-callback path instead (the production path). No-usage results
+        are also returned unchanged (backward compatible). Response objects
+        (e.g. cancellation JSONResponse) pass through untouched.
+        """
+        usage = self._usage_summary_or_none(tracker)
+        if usage is None or isinstance(result, StarletteResponse):
+            return result
+        encoded = jsonable_encoder(result)
+        if isinstance(encoded, dict):
+            merged = dict(encoded)
+            merged[USAGE_ENVELOPE_KEY] = usage
+            return merged
+        # Non-dict result: cannot merge a top-level usage key without changing
+        # the result's type/shape. Leave it to the async callback path.
+        return result
 
     @property
     def harness_runner(self) -> "HarnessRunner":
@@ -2005,33 +2057,48 @@ class Agent(FastAPI):
                         },
                     )
 
-                # Sync path: wrap the coroutine in a Task so the cancel
-                # callback can call task.cancel() and have CancelledError
-                # propagate into the reasoner. Without this wrapping the
-                # await happens inside the FastAPI request handler frame
-                # directly and there's no Task handle to cancel.
-                if execution_id_header:
-                    from .cancel import (
-                        register_execution_task,
-                        deregister_execution,
-                    )
-                    sync_task = asyncio.create_task(run_reasoner())
-                    await register_execution_task(self, execution_id_header, sync_task)
-                    try:
-                        return await sync_task
-                    except asyncio.CancelledError:
-                        return JSONResponse(
-                            status_code=499,
-                            content={
-                                "status": "cancelled",
-                                "execution_id": execution_id_header,
-                                "reason": "cancelled_by_control_plane",
-                            },
+                # Sync path: bind a fresh per-execution cost tracker so LLM /
+                # harness usage recorded during the reasoner is isolated to this
+                # request (concurrent requests each get their own tracker) and
+                # can be attached to the 200 body afterward.
+                sync_tracker = CostTracker()
+                usage_token = set_current_cost_tracker(sync_tracker)
+                try:
+                    # Wrap the coroutine in a Task so the cancel callback can
+                    # call task.cancel() and have CancelledError propagate into
+                    # the reasoner. Without this wrapping the await happens
+                    # inside the FastAPI request handler frame directly and
+                    # there's no Task handle to cancel.
+                    if execution_id_header:
+                        from .cancel import (
+                            register_execution_task,
+                            deregister_execution,
                         )
-                    finally:
-                        await deregister_execution(self, execution_id_header)
+                        sync_task = asyncio.create_task(run_reasoner())
+                        await register_execution_task(
+                            self, execution_id_header, sync_task
+                        )
+                        try:
+                            result = await sync_task
+                            return self._wrap_sync_result_with_usage(
+                                result, sync_tracker
+                            )
+                        except asyncio.CancelledError:
+                            return JSONResponse(
+                                status_code=499,
+                                content={
+                                    "status": "cancelled",
+                                    "execution_id": execution_id_header,
+                                    "reason": "cancelled_by_control_plane",
+                                },
+                            )
+                        finally:
+                            await deregister_execution(self, execution_id_header)
 
-                return await run_reasoner()
+                    result = await run_reasoner()
+                    return self._wrap_sync_result_with_usage(result, sync_tracker)
+                finally:
+                    reset_current_cost_tracker(usage_token)
 
             # 🔥 ENHANCED: Comprehensive function replacement for unified tracking
             # Use weakref to avoid circular reference: Agent → tracked_func → Agent
@@ -2472,7 +2539,17 @@ class Agent(FastAPI):
         )
 
         start_time = time.time()
-        reasoner_task = asyncio.create_task(reasoner_coro())
+        # Bind a fresh per-execution cost tracker BEFORE spawning the reasoner
+        # task so the task's copied context inherits it. LLM / harness calls in
+        # the reasoner record into this tracker; we read it back to attach usage
+        # to the status callback. Concurrent executions each run in their own
+        # task context, so trackers never cross-contaminate.
+        usage_tracker = CostTracker()
+        usage_token = set_current_cost_tracker(usage_tracker)
+        try:
+            reasoner_task = asyncio.create_task(reasoner_coro())
+        finally:
+            reset_current_cost_tracker(usage_token)
 
         async def _watchdog() -> None:
             # Poll active-elapsed time and cancel the reasoner if the active
@@ -2517,6 +2594,9 @@ class Agent(FastAPI):
                 "execution_id": execution_id,
                 "reasoner": reasoner_name,
             }
+            usage_summary = self._usage_summary_or_none(usage_tracker)
+            if usage_summary is not None:
+                payload["usage"] = usage_summary
             log_info(f"Execution {execution_id} completed asynchronously")
         except asyncio.CancelledError:
             if pause_clock.timed_out:
@@ -2589,6 +2669,12 @@ class Agent(FastAPI):
             # Deregister the cancel hook regardless of outcome.
             from .cancel import deregister_execution
             await deregister_execution(self, execution_id)
+        # Attach usage on non-success terminal states too — a reasoner that
+        # failed or was cancelled may still have consumed tokens before ending.
+        if "usage" not in payload:
+            usage_summary = self._usage_summary_or_none(usage_tracker)
+            if usage_summary is not None:
+                payload["usage"] = usage_summary
         await self._post_execution_status(callback_url, payload, execution_id)
 
     async def _post_execution_status(
@@ -3525,7 +3611,7 @@ class Agent(FastAPI):
         Returns:
             HarnessResult with .result (text), .parsed (validated schema), .text property.
         """
-        return await self.harness_runner.run(
+        result = await self.harness_runner.run(
             prompt,
             schema=schema,
             provider=provider,
@@ -3541,6 +3627,89 @@ class Agent(FastAPI):
             schema_mode=schema_mode,
             **kwargs,
         )
+        # Record harness usage into the current execution's cost tracker so the
+        # per-reasoner usage rollup includes coding-agent runs alongside plain
+        # LLM calls. The runner call above executes within the reasoner's async
+        # context, so the tracker bound by the endpoint is still current here.
+        self._record_harness_usage(result, provider=provider, model=model)
+        return result
+
+    def _record_harness_usage(
+        self,
+        result: "HarnessResult",
+        *,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+    ) -> None:
+        """Record a harness run's token/cost usage into the current tracker.
+
+        No-op when the harness reported neither tokens nor cost (the common
+        case for providers that don't expose usage) so we don't emit empty
+        entries. Cost is threaded even when tokens are unknown, and vice versa.
+        """
+        try:
+            from agentfield.cost_tracker import (
+                derive_provider,
+                get_current_cost_tracker,
+            )
+
+            input_tokens = getattr(result, "input_tokens", 0) or 0
+            output_tokens = getattr(result, "output_tokens", 0) or 0
+            cache_read = getattr(result, "cache_read_tokens", 0) or 0
+            cache_creation = getattr(result, "cache_creation_tokens", 0) or 0
+            cost = getattr(result, "cost_usd", None)
+
+            if not any(
+                (input_tokens, output_tokens, cache_read, cache_creation)
+            ) and cost is None:
+                return
+
+            tracker = get_current_cost_tracker()
+            if tracker is None:
+                tracker = getattr(self, "cost_tracker", None)
+            if tracker is None:
+                return
+
+            resolved_provider = (
+                str(provider) if provider else self._harness_provider_name()
+            )
+            harness_name = (
+                resolved_provider.replace("-", "_") if resolved_provider else None
+            )
+            model_name = (
+                getattr(result, "model", None)
+                or model
+                or self._harness_model_name()
+                or (resolved_provider or "harness")
+            )
+            total = getattr(result, "total_tokens", 0) or (
+                input_tokens + output_tokens
+            )
+            ctx = self._get_current_execution_context()
+            tracker.record(
+                model=str(model_name),
+                prompt_tokens=input_tokens,
+                completion_tokens=output_tokens,
+                total_tokens=total,
+                cost_usd=cost,
+                reasoner_name=getattr(ctx, "reasoner_name", None) if ctx else None,
+                source="harness",
+                provider=derive_provider(str(model_name)),
+                harness=harness_name,
+                cache_read_tokens=cache_read,
+                cache_creation_tokens=cache_creation,
+                cost_source="provider" if cost is not None else None,
+            )
+        except Exception as exc:  # pragma: no cover - best effort, never fatal
+            log_debug(f"Failed to record harness usage: {exc}")
+
+    def _harness_provider_name(self) -> Optional[str]:
+        cfg = getattr(self, "harness_config", None)
+        return getattr(cfg, "provider", None) if cfg else None
+
+    def _harness_model_name(self) -> Optional[str]:
+        cfg = getattr(self, "harness_config", None)
+        return getattr(cfg, "model", None) if cfg else None
 
     async def harness_doctor(
         self, providers: Optional[List[str]] = None

@@ -306,3 +306,61 @@ func toStringSlice(v any) []string {
 		return nil
 	}
 }
+
+// TestCodexProvider_ModelVariantReasoningEffort pins the model#variant parity
+// matrix from the Python provider tests (test_harness_provider_codex.py):
+// -m always carries the BASE model, a "#variant" suffix (or an explicit
+// Options.Variant, which wins) becomes -c model_reasoning_effort=<v>, and a
+// bare model adds no -c at all.
+func TestCodexProvider_ModelVariantReasoningEffort(t *testing.T) {
+	run := func(t *testing.T, options Options) []string {
+		t.Helper()
+		var gotCmd []string
+		p := NewCodexProvider("codex")
+		p.runCLI = func(_ context.Context, cmd []string, _ map[string]string, _ string, _ int, _ []byte) (*CLIResult, error) {
+			gotCmd = append([]string(nil), cmd...)
+			return &CLIResult{Stdout: `{"type":"turn.completed","text":"ok"}`, ReturnCode: 0}, nil
+		}
+		raw, err := p.Execute(context.Background(), "hello", options)
+		require.NoError(t, err)
+		require.False(t, raw.IsError, "unexpected error: %s", raw.ErrorMessage)
+		return gotCmd
+	}
+
+	index := func(cmd []string, flag string) int {
+		for i, arg := range cmd {
+			if arg == flag {
+				return i
+			}
+		}
+		return -1
+	}
+
+	t.Run("suffix maps to model_reasoning_effort", func(t *testing.T) {
+		cmd := run(t, Options{Model: "gpt-5.3-codex#high"})
+		mIdx := index(cmd, "-m")
+		require.GreaterOrEqual(t, mIdx, 0)
+		assert.Equal(t, "gpt-5.3-codex", cmd[mIdx+1], "-m must carry the base model, never the suffixed string")
+		cIdx := index(cmd, "-c")
+		require.GreaterOrEqual(t, cIdx, 0)
+		assert.Equal(t, "model_reasoning_effort=high", cmd[cIdx+1])
+	})
+
+	t.Run("explicit variant wins over suffix", func(t *testing.T) {
+		cmd := run(t, Options{Model: "gpt-5.5#low", Variant: "max"})
+		mIdx := index(cmd, "-m")
+		require.GreaterOrEqual(t, mIdx, 0)
+		assert.Equal(t, "gpt-5.5", cmd[mIdx+1])
+		cIdx := index(cmd, "-c")
+		require.GreaterOrEqual(t, cIdx, 0)
+		assert.Equal(t, "model_reasoning_effort=max", cmd[cIdx+1])
+	})
+
+	t.Run("bare model has no effort config", func(t *testing.T) {
+		cmd := run(t, Options{Model: "gpt-5.5"})
+		mIdx := index(cmd, "-m")
+		require.GreaterOrEqual(t, mIdx, 0)
+		assert.Equal(t, "gpt-5.5", cmd[mIdx+1])
+		assert.NotContains(t, cmd, "-c")
+	})
+}

@@ -26,6 +26,7 @@ export * from './types/agent.js';
 export * from './types/reasoner.js';
 export * from './types/skill.js';
 export * from './harness/index.js';
+export * from './usage/costTracker.js';
 export * from './status/ExecutionStatus.js';
 export * from './approval/ApprovalClient.js';
 export * from './sessionTransport.js';

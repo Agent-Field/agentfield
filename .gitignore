@@ -27,6 +27,7 @@ examples/go_agent_nodes/multi_version
 control-plane/agentfield-server
 control-plane/af
 control-plane/af-tray
+control-plane/cmd/af-tray/af-tray
 scripts/lambda-rie-fake/lambda-rie-fake
 
 # Python

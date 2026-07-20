@@ -9,6 +9,7 @@ import type { DidInterface } from '../did/DidInterface.js';
 import type { AIToolRequestOptions, ToolCallTrace } from '../ai/ToolCalling.js';
 import { buildToolConfig, executeToolCallLoop } from '../ai/ToolCalling.js';
 import type { ExecutionLogger } from '../observability/ExecutionLogger.js';
+import { CostTracker } from '../usage/costTracker.js';
 import type { TriggerContext } from '../triggers/types.js';
 
 export class ReasonerContext<TInput = any> {
@@ -32,6 +33,13 @@ export class ReasonerContext<TInput = any> {
   readonly memory: MemoryInterface;
   readonly workflow: WorkflowReporter;
   readonly did: DidInterface;
+  /**
+   * Per-execution token/cost usage accumulator. LLM calls made through
+   * `ctx.ai()` / `ctx.aiWithTools()` and harness runs record into it
+   * automatically; reasoner authors may also `record()` custom entries. Its
+   * serialized summary is attached to the execution's terminal report.
+   */
+  readonly costTracker: CostTracker;
   /**
    * AbortSignal that fires when the control plane cancels this execution
    * (per-execution cancel, the bottom-up cancel-tree endpoint, or any
@@ -70,6 +78,7 @@ export class ReasonerContext<TInput = any> {
     workflow: WorkflowReporter;
     did: DidInterface;
     signal?: AbortSignal;
+    costTracker?: CostTracker;
     trigger?: TriggerContext;
   }) {
     this.input = params.input;
@@ -95,6 +104,10 @@ export class ReasonerContext<TInput = any> {
     // Default to a never-aborted signal when none provided so existing
     // call sites (tests, manual invocations) continue to work.
     this.signal = params.signal ?? new AbortController().signal;
+    // Fall back to the ambient execution's tracker (or a standalone one) so
+    // manually constructed contexts keep working.
+    this.costTracker =
+      params.costTracker ?? ExecutionContext.getCurrent()?.costTracker ?? new CostTracker();
     this.trigger = params.trigger;
   }
 
@@ -128,6 +141,14 @@ export class ReasonerContext<TInput = any> {
       maxToolCalls: options.maxToolCalls ?? config.maxToolCalls ?? 25
     };
 
+    // Resolve the provider/model pair once so the tool loop can attribute
+    // token/cost usage to the actual model it calls. Optional so partial
+    // AIClient doubles (tests, custom clients) keep working.
+    const modelChoice =
+      typeof this.aiClient.resolveModelChoice === 'function'
+        ? this.aiClient.resolveModelChoice(options)
+        : undefined;
+
     return executeToolCallLoop(
       this.agent,
       prompt,
@@ -135,7 +156,8 @@ export class ReasonerContext<TInput = any> {
       mergedConfig,
       needsLazyHydration,
       () => this.aiClient.getModel(options),
-      options
+      options,
+      modelChoice
     );
   }
 
@@ -211,6 +233,7 @@ export function getCurrentContext<TInput = any>(): ReasonerContext<TInput> | und
     aiClient: agent.getAIClient(),
     memory: agent.getMemoryInterface(metadata),
     workflow: agent.getWorkflowReporter(metadata),
-    did: agent.getDidInterface(metadata, input)
+    did: agent.getDidInterface(metadata, input),
+    costTracker: execution.costTracker
   });
 }
