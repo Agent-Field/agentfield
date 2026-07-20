@@ -15,8 +15,6 @@ async def test_agent_reasoner_routing_and_workflow(monkeypatch):
     agent, agentfield_client = create_test_agent(
         monkeypatch, callback_url="https://callback.example.com"
     )
-    # Manually start notification dispatcher
-    agent._notification_dispatcher.start()
     # Disable async execution for this test to get synchronous 200 responses
     agent.async_config.enable_async_execution = False
     # Disable agentfield_server to prevent async callback execution

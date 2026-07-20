@@ -102,9 +102,6 @@ class InlineTestingDispatcher:
     def start(self):
         self._started = True
 
-    def is_start(self):
-        return self._started
-
     def submit(self, coro_factory: Callable[[], Coroutine[Any, Any, None]]):
         coro = coro_factory()
         try:

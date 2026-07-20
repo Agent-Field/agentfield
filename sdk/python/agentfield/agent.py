@@ -515,16 +515,22 @@ class _NotificationDispatcher:
         self._queue = asyncio.Queue()
         self._dispatcher_task = asyncio.create_task(self._run())
 
-    def is_start(self):
-        return self._dispatcher_task is not None
-
     def submit(self, coro_factory: Callable[[], Coroutine[Any, Any, None]]):
         if self._queue is None:
-            if self._dev_mode:
-                log_error(
-                    "Coroutine factory submitted before _NotoficationDispatcher even start"
-                )
-            return
+            # Lazily start on first submit so execution paths that never run
+            # the server lifespan (CLI `call` mode, direct ASGI mounts) still
+            # deliver notifications. submit() is always invoked from a
+            # coroutine, so the dispatcher task binds to the running loop
+            # (uvicorn's uvloop when serving).
+            try:
+                self.start()
+            except RuntimeError:
+                if self._dev_mode:
+                    log_error(
+                        "Notification dropped: no running event loop to start "
+                        "the notification dispatcher"
+                    )
+                return
         self._queue.put_nowait(coro_factory)
 
     async def _run(self):
@@ -560,10 +566,6 @@ class _NotificationDispatcher:
                 log_error(f"Notification dispatcher shutdown failed: {e}")
         finally:
             self._dispatcher_task = None
-
-
-def _create_coro_factory(coro):
-    return lambda: coro
 
 
 class Agent(FastAPI):
