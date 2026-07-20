@@ -49,6 +49,7 @@ from agentfield.logger import log_debug, log_error, log_info, log_warn, set_cp_c
 from agentfield.router import AgentRouter
 from agentfield.connection_manager import ConnectionManager
 from agentfield.cost_tracker import (
+    USAGE_ENVELOPE_KEY,
     CostTracker,
     reset_current_cost_tracker,
     set_current_cost_tracker,
@@ -867,10 +868,13 @@ class Agent(FastAPI):
         """Attach usage to the synchronous 200 body.
 
         The control plane stores the whole sync body as the result and pulls
-        usage back out by stripping a top-level ``usage`` key (see the Go
-        ``extractUsageFromResult``). So usage is merged as a sibling key into
-        the result *object* — NOT wrapped in a ``{"result": ...}`` envelope,
-        which would double-nest the stored result.
+        usage back out by stripping the reserved ``__agentfield_usage__`` key
+        (see the Go ``extractUsageFromResult``). The key is namespaced so a
+        user result that legitimately contains its own ``usage`` key is never
+        touched; ``__agentfield_``-prefixed keys are reserved for transport.
+        Usage is merged as a sibling key into the result *object* — NOT
+        wrapped in a ``{"result": ...}`` envelope, which would double-nest the
+        stored result.
 
         Only dict results can carry usage this way; non-dict results (lists,
         scalars) are returned unchanged and their usage flows via the async
@@ -884,7 +888,7 @@ class Agent(FastAPI):
         encoded = jsonable_encoder(result)
         if isinstance(encoded, dict):
             merged = dict(encoded)
-            merged["usage"] = usage
+            merged[USAGE_ENVELOPE_KEY] = usage
             return merged
         # Non-dict result: cannot merge a top-level usage key without changing
         # the result's type/shape. Leave it to the async callback path.

@@ -7,6 +7,14 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+# Reserved envelope key used to attach the serialized usage summary to a
+# synchronous 200 result body. Namespaced so it cannot collide with user data:
+# a plain "usage" key in an agent's own result dict is user payload and must
+# never be touched. The control plane strips exactly this key back out (see the
+# Go extractUsageFromResult). ``__agentfield_``-prefixed keys are reserved for
+# SDK↔control-plane transport.
+USAGE_ENVELOPE_KEY = "__agentfield_usage__"
+
 
 @dataclass
 class CostEntry:

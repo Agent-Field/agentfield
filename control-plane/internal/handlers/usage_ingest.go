@@ -13,6 +13,13 @@ import (
 // we bound it defensively.
 const maxUsageEntriesPerExecution = 500
 
+// usageEnvelopeKey is the reserved key under which SDKs attach the serialized
+// usage summary to a synchronous 200 result body. It is namespaced so it can
+// never collide with user data: a plain "usage" key in an agent's own result
+// dict is user payload and must pass through untouched. "__agentfield_"-
+// prefixed keys are reserved for SDK↔control-plane transport.
+const usageEnvelopeKey = "__agentfield_usage__"
+
 // usageWriter is the narrow storage capability the ingest path needs. The
 // concrete *storage.LocalStorage satisfies it; test doubles that don't
 // implement it simply skip usage persistence.
@@ -100,12 +107,14 @@ func parseUsageEntries(exec *types.Execution, usageRaw map[string]interface{}) [
 	return rows
 }
 
-// extractUsageFromResult decodes an agent result body and returns the top-level
-// "usage" object (if present) along with a copy of the result with that key
-// stripped so it does not leak into the stored/returned payload. When the body
-// is not a JSON object or carries no usage key, the original bytes are returned
-// unchanged and usage is nil. As a defensive measure it also checks a top-level
-// "result" object for a nested "usage" key.
+// extractUsageFromResult decodes an agent result body and returns the reserved
+// top-level usage envelope object (if present) along with a copy of the result
+// with that key stripped so it does not leak into the stored/returned payload.
+// Only the namespaced usageEnvelopeKey is recognized — a user result carrying
+// its own "usage" key is user data and passes through untouched. When the body
+// is not a JSON object or carries no envelope key, the original bytes are
+// returned unchanged and usage is nil. As a defensive measure it also checks a
+// top-level "result" object for a nested envelope key.
 func extractUsageFromResult(result []byte) (usageRaw map[string]interface{}, stripped []byte) {
 	if len(result) == 0 {
 		return nil, result
@@ -117,15 +126,15 @@ func extractUsageFromResult(result []byte) (usageRaw map[string]interface{}, str
 		return nil, result
 	}
 
-	if u, ok := decoded["usage"].(map[string]interface{}); ok {
-		delete(decoded, "usage")
+	if u, ok := decoded[usageEnvelopeKey].(map[string]interface{}); ok {
+		delete(decoded, usageEnvelopeKey)
 		return u, remarshalOrOriginal(decoded, result)
 	}
 
-	// Defensive: the SDK could nest usage inside a "result" wrapper object.
+	// Defensive: the SDK could nest the envelope inside a "result" wrapper.
 	if inner, ok := decoded["result"].(map[string]interface{}); ok {
-		if u, ok := inner["usage"].(map[string]interface{}); ok {
-			delete(inner, "usage")
+		if u, ok := inner[usageEnvelopeKey].(map[string]interface{}); ok {
+			delete(inner, usageEnvelopeKey)
 			decoded["result"] = inner
 			return u, remarshalOrOriginal(decoded, result)
 		}

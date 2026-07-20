@@ -21,6 +21,7 @@ from unittest.mock import MagicMock, patch
 import pytest  # pyright: ignore[reportMissingImports]
 
 from agentfield.cost_tracker import (
+    USAGE_ENVELOPE_KEY,
     CostTracker,
     derive_provider,
     get_current_cost_tracker,
@@ -464,10 +465,23 @@ class TestEnvelopeTransport:
             cost_source="litellm",
         )
         body = agent._wrap_sync_result_with_usage({"answer": 42}, tracker)
-        # Usage merged as a top-level sibling; result keys preserved.
+        # Usage merged under the reserved namespaced envelope key as a
+        # top-level sibling; result keys preserved.
         assert body["answer"] == 42
-        assert body["usage"]["total_input_tokens"] == 100
-        assert body["usage"]["entries"][0]["provider"] == "anthropic"
+        assert body[USAGE_ENVELOPE_KEY]["total_input_tokens"] == 100
+        assert body[USAGE_ENVELOPE_KEY]["entries"][0]["provider"] == "anthropic"
+
+    def test_sync_preserves_user_usage_key(self):
+        # A user result that legitimately returns its own "usage" key is
+        # payload, not transport — it must never be overwritten or moved.
+        agent = self._agent()
+        tracker = CostTracker()
+        tracker.record(model="m", prompt_tokens=1, total_tokens=1)
+        body = agent._wrap_sync_result_with_usage(
+            {"answer": 42, "usage": {"user": "data"}}, tracker
+        )
+        assert body["usage"] == {"user": "data"}
+        assert body[USAGE_ENVELOPE_KEY]["entries"]
 
     def test_sync_non_dict_result_unchanged(self):
         agent = self._agent()
@@ -638,13 +652,14 @@ class TestEnvelopeEndToEnd:
 
         assert response.status_code == 200
         body = response.json()
-        # Usage is merged as a top-level sibling of the result object (the
-        # control plane strips the "usage" key back out); the rest is the
-        # original result unchanged.
+        # Usage is merged under the reserved namespaced envelope key as a
+        # top-level sibling of the result object (the control plane strips
+        # exactly that key back out); the rest is the original result
+        # unchanged — a user-owned "usage" key would be untouched.
         assert body["value"] == 9
-        assert body["usage"]["total_input_tokens"] == 10
-        assert body["usage"]["entries"][0]["provider"] == "openai"
-        rest = {k: v for k, v in body.items() if k != "usage"}
+        assert body[USAGE_ENVELOPE_KEY]["total_input_tokens"] == 10
+        assert body[USAGE_ENVELOPE_KEY]["entries"][0]["provider"] == "openai"
+        rest = {k: v for k, v in body.items() if k != USAGE_ENVELOPE_KEY}
         assert rest == {"value": 9}
 
     @pytest.mark.asyncio

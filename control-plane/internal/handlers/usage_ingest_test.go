@@ -159,7 +159,7 @@ func TestParseUsageEntriesAbsent(t *testing.T) {
 }
 
 func TestExtractUsageFromResultStrips(t *testing.T) {
-	body := []byte(`{"message":"hello","usage":{"entries":[{"model":"m"}]}}`)
+	body := []byte(`{"message":"hello","__agentfield_usage__":{"entries":[{"model":"m"}]}}`)
 	usage, stripped := extractUsageFromResult(body)
 	if usage == nil {
 		t.Fatal("usage not extracted")
@@ -168,8 +168,8 @@ func TestExtractUsageFromResultStrips(t *testing.T) {
 	if err := json.Unmarshal(stripped, &out); err != nil {
 		t.Fatalf("stripped body not valid JSON: %v", err)
 	}
-	if _, present := out["usage"]; present {
-		t.Errorf("usage key leaked into stripped body: %s", stripped)
+	if _, present := out[usageEnvelopeKey]; present {
+		t.Errorf("usage envelope key leaked into stripped body: %s", stripped)
 	}
 	if out["message"] != "hello" {
 		t.Errorf("stripped body lost result content: %s", stripped)
@@ -177,7 +177,7 @@ func TestExtractUsageFromResultStrips(t *testing.T) {
 }
 
 func TestExtractUsageFromResultNested(t *testing.T) {
-	body := []byte(`{"result":{"answer":42,"usage":{"entries":[{"model":"m"}]}}}`)
+	body := []byte(`{"result":{"answer":42,"__agentfield_usage__":{"entries":[{"model":"m"}]}}}`)
 	usage, stripped := extractUsageFromResult(body)
 	if usage == nil {
 		t.Fatal("nested usage not extracted")
@@ -188,8 +188,28 @@ func TestExtractUsageFromResultNested(t *testing.T) {
 	var out map[string]interface{}
 	_ = json.Unmarshal(stripped, &out)
 	inner, _ := out["result"].(map[string]interface{})
-	if _, present := inner["usage"]; present {
+	if _, present := inner[usageEnvelopeKey]; present {
 		t.Errorf("nested usage leaked: %s", stripped)
+	}
+}
+
+// TestExtractUsageFromResultPreservesUserUsageKey pins the compatibility
+// guarantee that motivated the namespaced envelope key: an agent whose result
+// legitimately contains a top-level (or nested) "usage" key is user payload
+// and must pass through byte-for-byte untouched.
+func TestExtractUsageFromResultPreservesUserUsageKey(t *testing.T) {
+	bodies := [][]byte{
+		[]byte(`{"usage":{"entries":[{"model":"user-data"}]},"answer":42}`),
+		[]byte(`{"result":{"usage":{"anything":true},"answer":42}}`),
+	}
+	for _, body := range bodies {
+		usage, stripped := extractUsageFromResult(body)
+		if usage != nil {
+			t.Errorf("user usage key misread as envelope: %s", body)
+		}
+		if string(stripped) != string(body) {
+			t.Errorf("user payload altered: %s -> %s", body, stripped)
+		}
 	}
 }
 

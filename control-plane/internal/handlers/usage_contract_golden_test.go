@@ -117,10 +117,12 @@ func TestUsageGoldenFromPythonSDK(t *testing.T) {
 }
 
 // TestUsageGoldenSyncBody exercises the sync-200 shape: the SDK merges the
-// usage object as a sibling key into the result dict, and the control plane
-// strips it back out without disturbing the rest of the result.
+// usage object under the reserved "__agentfield_usage__" envelope key as a
+// sibling into the result dict, and the control plane strips it back out
+// without disturbing the rest of the result — including a user-owned "usage"
+// key, which is payload, not transport.
 func TestUsageGoldenSyncBody(t *testing.T) {
-	body := []byte(`{"answer": 42, "detail": {"ok": true}, "usage": ` + goldenPythonUsage + `}`)
+	body := []byte(`{"answer": 42, "detail": {"ok": true}, "usage": {"user": "data"}, "__agentfield_usage__": ` + goldenPythonUsage + `}`)
 
 	usageRaw, stripped := extractUsageFromResult(body)
 	if usageRaw == nil {
@@ -134,10 +136,14 @@ func TestUsageGoldenSyncBody(t *testing.T) {
 	if err := json.Unmarshal(stripped, &result); err != nil {
 		t.Fatalf("stripped result does not decode: %v", err)
 	}
-	if _, leaked := result["usage"]; leaked {
-		t.Error("usage key leaked into stored result")
+	if _, leaked := result[usageEnvelopeKey]; leaked {
+		t.Error("usage envelope key leaked into stored result")
 	}
 	if result["answer"] != float64(42) {
 		t.Errorf("result content disturbed: %+v", result)
+	}
+	userUsage, ok := result["usage"].(map[string]interface{})
+	if !ok || userUsage["user"] != "data" {
+		t.Errorf("user-owned usage key was not preserved: %+v", result)
 	}
 }
