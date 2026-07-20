@@ -93,6 +93,7 @@ export class HarnessRunner {
       for (const key of [
         'provider',
         'model',
+        'variant',
         'maxTurns',
         'maxBudgetUsd',
         'maxRetries',

@@ -252,6 +252,26 @@ describe('harness usage capture', () => {
     ]);
   });
 
+  it('records the base model when the configured model carries a #variant suffix', async () => {
+    const agent = new Agent({
+      nodeId: 'harness-agent',
+      harnessConfig: { provider: 'opencode', model: 'openrouter/z-ai/glm-5.2#high' } as any
+    });
+    // Provider reported cost but no model — the recorded model falls back to
+    // the configured one, minus the reasoning-effort suffix.
+    vi.spyOn(HarnessRunner.prototype, 'run').mockResolvedValue(
+      createHarnessResult({ result: 'done', costUsd: 0.5 })
+    );
+
+    const ctx = makeContext('exec-h1b', { reasonerId: 'builder' });
+    await ExecutionContext.run(ctx, () => agent.harness('do the thing'));
+
+    expect(ctx.costTracker.serialize().entries[0]).toMatchObject({
+      model: 'openrouter/z-ai/glm-5.2',
+      provider: 'openrouter'
+    });
+  });
+
   it('records cost-only runs and skips runs that reported nothing', async () => {
     const agent = makeAgent();
     const runSpy = vi.spyOn(HarnessRunner.prototype, 'run');

@@ -1,6 +1,7 @@
 import type { HarnessProvider } from './base.js';
 import type { RawResult } from '../types.js';
 import { createMetrics, createRawResult } from '../types.js';
+import { resolveModelAndVariant } from '../modelVariant.js';
 
 type QueryInput = {
   prompt: string;
@@ -39,7 +40,10 @@ export class ClaudeCodeProvider implements HarnessProvider {
     }
 
     const agentOptions: Record<string, unknown> = {};
-    if (options.model !== undefined) agentOptions.model = options.model;
+    // claude-agent-sdk has no reasoning-effort knob; strip any "#variant"
+    // suffix so the SDK receives a valid model id, and drop the variant.
+    const { model: modelValue } = resolveModelAndVariant(options);
+    if (modelValue !== undefined) agentOptions.model = modelValue;
     if (options.cwd !== undefined) agentOptions.cwd = options.cwd;
     if (options.maxTurns !== undefined) agentOptions.max_turns = options.maxTurns;
     if (options.tools !== undefined) agentOptions.allowed_tools = options.tools;

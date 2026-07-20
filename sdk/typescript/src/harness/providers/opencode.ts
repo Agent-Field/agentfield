@@ -2,6 +2,7 @@ import type { HarnessProvider } from './base.js';
 import type { RawResult } from '../types.js';
 import { createRawResult, createMetrics } from '../types.js';
 import { runCli } from '../cli.js';
+import { resolveModelAndVariant } from '../modelVariant.js';
 import {
   isOpenRouterRequest,
   openRouterAttributionHeaders,
@@ -31,9 +32,16 @@ export class OpenCodeProvider implements HarnessProvider {
 
     const env: Record<string, string> = { ...(options.env as Record<string, string>) };
 
-    // Pass model via -m flag on the run subcommand (not env var).
-    if (options.model) {
-      cmd.push('-m', String(options.model));
+    // Pass model via -m flag on the run subcommand (not env var). A
+    // "#variant" suffix on the model (or an explicit options.variant) maps
+    // to --variant — opencode's provider-specific reasoning effort (e.g.
+    // high, max, minimal).
+    const { model: modelValue, variant: variantValue } = resolveModelAndVariant(options);
+    if (modelValue) {
+      cmd.push('-m', modelValue);
+    }
+    if (variantValue) {
+      cmd.push('--variant', variantValue);
     }
 
     // Handle system prompt - prepend to user prompt since OpenCode
@@ -46,14 +54,15 @@ export class OpenCodeProvider implements HarnessProvider {
     // Prompt is the positional `message` arg to `opencode run`.
     cmd.push(effectivePrompt);
 
-    const explicitModel = typeof options.model === 'string' ? options.model : undefined;
+    // The attribution overlay keys off the base model — a "#variant" suffix
+    // would otherwise leak into the config's model slug.
     if (
-      explicitModel &&
-      isOpenRouterRequest({ model: explicitModel }) &&
+      modelValue &&
+      isOpenRouterRequest({ model: modelValue }) &&
       !env.OPENCODE_CONFIG_CONTENT &&
       !process.env.OPENCODE_CONFIG_CONTENT
     ) {
-      const modelSlug = explicitModel.slice('openrouter/'.length);
+      const modelSlug = modelValue.slice('openrouter/'.length);
       const headers = openRouterAttributionHeaders({ env: { ...process.env, ...env } });
       if (modelSlug && Object.keys(headers).length > 0) {
         env.OPENCODE_CONFIG_CONTENT = JSON.stringify({
@@ -82,6 +91,7 @@ export class OpenCodeProvider implements HarnessProvider {
           durationApiMs: Date.now() - startApi,
           numTurns: resultText ? 1 : 0,
           sessionId: '',
+          model: modelValue,
         }),
         isError,
         errorMessage: isError ? stderr.trim() : undefined,

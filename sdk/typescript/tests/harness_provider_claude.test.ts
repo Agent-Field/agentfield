@@ -57,6 +57,30 @@ describe('ClaudeCodeProvider', () => {
     expect(raw.messages).toHaveLength(2);
   });
 
+  it('strips a #variant model suffix before handing the model to the SDK', async () => {
+    const captured: { options?: Record<string, unknown> } = {};
+
+    vi.doMock(
+      '@anthropic-ai/claude-agent-sdk',
+      () => ({
+        query: ({ options }: { prompt: string; options: Record<string, unknown> }) => {
+          captured.options = options;
+          return (async function* stream() {
+            yield { type: 'result', result: 'final', session_id: 'sess-1', cost_usd: 0.01, num_turns: 1 };
+          })();
+        },
+      }),
+      { virtual: true }
+    );
+
+    const { ClaudeCodeProvider } = await import('../src/harness/providers/claude.js');
+    const provider = new ClaudeCodeProvider();
+    const raw = await provider.execute('hello', { model: 'sonnet#high' });
+
+    expect(captured.options?.model).toBe('sonnet');
+    expect(raw.isError).toBe(false);
+  });
+
   it('extracts token usage and model from the result message', async () => {
     vi.doMock(
       '@anthropic-ai/claude-agent-sdk',

@@ -41,6 +41,7 @@ import { AIClient } from '../ai/AIClient.js';
 import { AgentFieldClient } from '../client/AgentFieldClient.js';
 import type { HarnessRunner } from '../harness/runner.js';
 import type { HarnessOptions, HarnessResult } from '../harness/types.js';
+import { splitModelVariant } from '../harness/modelVariant.js';
 import { MemoryClient } from '../memory/MemoryClient.js';
 import { MemoryEventClient } from '../memory/MemoryEventClient.js';
 import {
@@ -412,9 +413,13 @@ export class Agent {
 
       const providerName = options?.provider ?? this.config.harnessConfig?.provider;
       const harnessName = providerName ? String(providerName).replace(/-/g, '_') : null;
-      const modelName = String(
+      // Usage is recorded against the base model — a "#variant"
+      // reasoning-effort suffix on the configured model never reaches the
+      // provider and must not reach the tracker either.
+      const rawModelName = String(
         result.model ?? options?.model ?? this.config.harnessConfig?.model ?? providerName ?? 'harness'
       );
+      const modelName = splitModelVariant(rawModelName).model ?? rawModelName;
 
       tracker.record({
         model: modelName,
