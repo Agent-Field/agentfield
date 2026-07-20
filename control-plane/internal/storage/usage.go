@@ -167,7 +167,12 @@ func (ls *LocalStorage) GetUsageStats(ctx context.Context, since *time.Time) (*t
 			"SUM(cost_usd) AS cost_usd, " +
 			"COUNT(DISTINCT execution_id) AS executions_with_usage")
 	if since != nil {
-		totalsQuery = totalsQuery.Where("created_at >= ?", *since)
+		// Compare as unix epochs (usageEpochExpr), not as raw column values:
+		// SQLite stores timestamps as text and compares them lexicographically,
+		// so a row written with a non-UTC offset (e.g. "…10:03:47-04:00") would
+		// never match "created_at >= <UTC time>" even when the instant is in
+		// range. Epoch comparison is offset-proof and dialect-portable.
+		totalsQuery = totalsQuery.Where(ls.usageEpochExpr()+" >= ?", since.Unix())
 	}
 	var totals usageTotalsRow
 	if err := totalsQuery.Scan(&totals).Error; err != nil {
@@ -190,9 +195,11 @@ func (ls *LocalStorage) GetUsageStats(ctx context.Context, since *time.Time) (*t
 	// Last updated: the most recent created_at in the window. Queried through
 	// the typed model (rather than MAX()) so the driver returns a real
 	// time.Time on both SQLite and PostgreSQL.
-	latestQuery := gormDB.Model(&ExecutionUsageModel{}).Select("created_at").Order("created_at DESC").Limit(1)
+	// Order by epoch, not by the raw column: text timestamps with mixed UTC
+	// offsets sort lexicographically, which can pick the wrong "latest" row.
+	latestQuery := gormDB.Model(&ExecutionUsageModel{}).Select("created_at").Order(ls.usageEpochExpr() + " DESC").Limit(1)
 	if since != nil {
-		latestQuery = latestQuery.Where("created_at >= ?", *since)
+		latestQuery = latestQuery.Where(ls.usageEpochExpr()+" >= ?", since.Unix())
 	}
 	var latestRows []ExecutionUsageModel
 	if err := latestQuery.Find(&latestRows).Error; err != nil {
@@ -275,7 +282,7 @@ func (ls *LocalStorage) GetUsageTimeseries(ctx context.Context, since *time.Time
 		Select(bucketExpr+" AS bucket_idx, "+
 			"COALESCE(SUM(total_tokens),0) AS total_tokens, "+
 			"SUM(cost_usd) AS cost_usd").
-		Where("created_at >= ?", grid.seriesStart).
+		Where(ls.usageEpochExpr()+" >= ?", grid.seriesStart.Unix()).
 		Group(bucketExpr).
 		Scan(&rows).Error; err != nil {
 		return nil, fmt.Errorf("failed to aggregate usage timeseries: %w", err)
@@ -337,7 +344,7 @@ func (ls *LocalStorage) usageBucketGrid(gormDB *gorm.DB, since *time.Time, now t
 		// SQLite and PostgreSQL, matching GetUsageStats' last_updated pattern.
 		var oldestRows []ExecutionUsageModel
 		if err := gormDB.Model(&ExecutionUsageModel{}).
-			Select("created_at").Order("created_at ASC").Limit(1).
+			Select("created_at").Order(ls.usageEpochExpr() + " ASC").Limit(1).
 			Find(&oldestRows).Error; err != nil {
 			return usageBucketGridSpec{}, fmt.Errorf("failed to query oldest usage row: %w", err)
 		}
@@ -420,7 +427,7 @@ func (ls *LocalStorage) GetUsageTimeseriesByModel(ctx context.Context, since *ti
 	if err := gormDB.Table("execution_usage").
 		Select("model AS model, "+bucketExpr+" AS bucket_idx, "+
 			"COALESCE(SUM(total_tokens),0) AS total_tokens").
-		Where("created_at >= ?", grid.seriesStart).
+		Where(ls.usageEpochExpr()+" >= ?", grid.seriesStart.Unix()).
 		Where("model <> ''").
 		Group("model, " + bucketExpr).
 		Scan(&rows).Error; err != nil {
@@ -527,7 +534,7 @@ func (ls *LocalStorage) queryUsageGroups(ctx context.Context, keyCol string, inc
 		Select(strings.Join(selectParts, ", ")).
 		Where(keyCol + " <> ''")
 	if since != nil {
-		query = query.Where("created_at >= ?", *since)
+		query = query.Where(ls.usageEpochExpr()+" >= ?", since.Unix())
 	}
 	query = query.Group(strings.Join(groupParts, ", ")).Order("total_tokens DESC")
 

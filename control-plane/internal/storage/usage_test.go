@@ -190,6 +190,67 @@ func TestGetUsageStatsWindowFiltering(t *testing.T) {
 	}
 }
 
+// TestGetUsageStatsNonUTCOffsets pins the window filter against rows whose
+// created_at carries a non-UTC offset — what a control plane running in a
+// non-UTC timezone stores (GORM stamps time.Now() in server-local time).
+// SQLite keeps timestamps as text and compares them lexicographically, so a
+// naive "created_at >= <UTC since>" silently excludes such rows even when the
+// instant is in range; all window comparisons must go through the epoch
+// expression instead. Caught live on an EDT host: /usage/stats?window=1h
+// returned zeros while window=all showed the rows.
+func TestGetUsageStatsNonUTCOffsets(t *testing.T) {
+	ls, ctx := newUsageTestStorage(t)
+	now := time.Now().UTC()
+	edt := time.FixedZone("EDT", -4*3600)
+
+	rows := []*types.ExecutionUsage{
+		{
+			ExecutionID: "recent-local", WorkflowID: "wf", AgentNodeID: "agent-a",
+			Source: "llm", Model: "m1", InputTokens: 10, OutputTokens: 10, TotalTokens: 20,
+			CreatedAt: now.Add(-30 * time.Minute).In(edt),
+		},
+		{
+			ExecutionID: "old-local", WorkflowID: "wf", AgentNodeID: "agent-a",
+			Source: "llm", Model: "m1", InputTokens: 5, OutputTokens: 5, TotalTokens: 10,
+			CreatedAt: now.Add(-48 * time.Hour).In(edt),
+		},
+	}
+	if err := ls.CreateExecutionUsage(ctx, rows); err != nil {
+		t.Fatalf("create execution usage: %v", err)
+	}
+
+	since1h := now.Add(-time.Hour)
+	agg, err := ls.GetUsageStats(ctx, &since1h)
+	if err != nil {
+		t.Fatalf("get usage stats (1h): %v", err)
+	}
+	if agg.Totals.TotalTokens != 20 || agg.Totals.ExecutionsWithUsage != 1 {
+		t.Errorf("1h window missed offset-zoned row: tokens=%d execs=%d, want 20/1",
+			agg.Totals.TotalTokens, agg.Totals.ExecutionsWithUsage)
+	}
+	if len(agg.ByModel) != 1 || agg.ByModel[0].TotalTokens != 20 {
+		t.Errorf("1h by_model missed offset-zoned row: %+v", agg.ByModel)
+	}
+	if agg.LastUpdated == nil {
+		t.Error("1h last_updated missing for offset-zoned row")
+	} else if diff := agg.LastUpdated.Sub(now.Add(-30 * time.Minute)); diff < -time.Minute || diff > time.Minute {
+		t.Errorf("last_updated = %v, want ~%v", agg.LastUpdated, now.Add(-30*time.Minute))
+	}
+
+	// The recent offset-zoned row must land in the timeseries window too.
+	series, err := ls.GetUsageTimeseries(ctx, &since1h, now, 4)
+	if err != nil {
+		t.Fatalf("get usage timeseries (1h): %v", err)
+	}
+	var seriesTotal int64
+	for _, p := range series.Points {
+		seriesTotal += p.TotalTokens
+	}
+	if seriesTotal != 20 {
+		t.Errorf("1h timeseries missed offset-zoned row: total=%d, want 20", seriesTotal)
+	}
+}
+
 func TestGetUsageTimeseriesBucketing(t *testing.T) {
 	ls, ctx := newUsageTestStorage(t)
 	now := time.Now().UTC()
