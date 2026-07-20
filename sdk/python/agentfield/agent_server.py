@@ -229,7 +229,7 @@ class AgentServer:
                     log_error(f"Shutdown endpoint error: {e}")
                 return {
                     "status": "error",
-                    "message": f"Failed to initiate shutdown: {str(e)}",
+                    "message": "Failed to initiate shutdown",
                 }
 
         @self.agent.get("/status")
@@ -291,7 +291,7 @@ class AgentServer:
             except Exception as e:
                 if self.agent.dev_mode:
                     log_error(f"Status endpoint error: {e}")
-                return {"status": "error", "message": f"Failed to get status: {str(e)}"}
+                return {"status": "error", "message": "Failed to get status"}
 
         @self.agent.get("/info")
         async def node_info():

@@ -249,6 +249,20 @@ async def test_shutdown_notification_failure():
     assert resp.status_code == 200
 
 
+@pytest.mark.asyncio
+async def test_shutdown_endpoint_does_not_expose_exception_details():
+    app = make_agent_app()
+    _setup_server(app)
+
+    resp = await _post(app, "/shutdown", json=[])
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "error",
+        "message": "Failed to initiate shutdown",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Status endpoint
 # ---------------------------------------------------------------------------
@@ -314,6 +328,25 @@ async def test_status_endpoint_shutdown_requested():
         resp = await _get(app, "/status")
 
     assert resp.json()["status"] == "stopping"
+
+
+@pytest.mark.asyncio
+async def test_status_endpoint_does_not_expose_exception_details(monkeypatch):
+    app = make_agent_app()
+    server = _setup_server(app)
+
+    def raise_status_error(_uptime_seconds):
+        raise RuntimeError("internal status details")
+
+    monkeypatch.setattr(server, "_format_uptime", raise_status_error)
+
+    resp = await _get(app, "/status")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "error",
+        "message": "Failed to get status",
+    }
 
 
 # ---------------------------------------------------------------------------
