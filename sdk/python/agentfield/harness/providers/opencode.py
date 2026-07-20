@@ -14,6 +14,7 @@ from typing import ClassVar, Dict, Optional
 from agentfield.harness._cli import (
     estimate_cli_cost,
     extract_final_text,
+    resolve_model_and_variant,
     extract_token_usage,
     parse_jsonl,
     run_cli,
@@ -179,9 +180,14 @@ class OpenCodeProvider:
         if isinstance(dir_value, str):
             cmd.extend(["--dir", dir_value])
 
-        # Pass model via -m flag on the run subcommand
-        if options.get("model"):
-            cmd.extend(["-m", str(options["model"])])
+        # Pass model via -m. A "#variant" suffix on the model (or an explicit
+        # options["variant"]) maps to --variant — opencode's provider-specific
+        # reasoning effort (e.g. high, max, minimal).
+        model_value, variant_value = resolve_model_and_variant(options)
+        if model_value:
+            cmd.extend(["-m", model_value])
+        if variant_value:
+            cmd.extend(["--variant", variant_value])
 
         # opencode v1.14 does not accept --dangerously-skip-permissions on the
         # `run` subcommand — passing it makes yargs print the run-help screen
@@ -338,7 +344,7 @@ class OpenCodeProvider:
             estimated_cost = stream_cost
         else:
             estimated_cost = estimate_cli_cost(
-                model=str(options.get("model", "")),
+                model=model_value or "",
                 prompt=effective_prompt,
                 result_text=result_text,
             )
@@ -361,7 +367,7 @@ class OpenCodeProvider:
                 output_tokens=tokens["output_tokens"],
                 cache_read_tokens=tokens["cache_read_tokens"],
                 cache_creation_tokens=tokens["cache_creation_tokens"],
-                model=str(options.get("model", "")) or None,
+                model=model_value,
             ),
             is_error=is_error,
             error_message=error_message,
