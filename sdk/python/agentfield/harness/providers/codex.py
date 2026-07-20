@@ -10,6 +10,7 @@ from agentfield.harness._cli import (
     extract_final_text,
     extract_token_usage,
     parse_jsonl,
+    resolve_model_and_variant,
     run_cli,
     strip_ansi,
 )
@@ -45,6 +46,16 @@ class CodexProvider:
         elif permission_mode == "plan":
             cmd.extend(["--sandbox", "read-only"])
 
+        # Model via -m; reasoning effort has no dedicated flag — it's the
+        # model_reasoning_effort config key. The effort comes from a
+        # "#variant" suffix on the model (or an explicit options["variant"]),
+        # e.g. "gpt-5.3-codex#high".
+        model_value, variant_value = resolve_model_and_variant(options)
+        if model_value:
+            cmd.extend(["-m", model_value])
+        if variant_value:
+            cmd.extend(["-c", f"model_reasoning_effort={variant_value}"])
+
         cmd.append(prompt)
 
         env: Dict[str, str] = {}
@@ -77,7 +88,7 @@ class CodexProvider:
 
         num_turns = 0
         total_cost: Optional[float] = estimate_cli_cost(
-            model=str(options.get("model", "")),
+            model=model_value or "",
             prompt=prompt,
             result_text=result_text,
         )
@@ -127,7 +138,7 @@ class CodexProvider:
                 output_tokens=tokens["output_tokens"],
                 cache_read_tokens=tokens["cache_read_tokens"],
                 cache_creation_tokens=tokens["cache_creation_tokens"],
-                model=str(options.get("model", "")) or None,
+                model=model_value,
             ),
             is_error=is_error,
             error_message=error_message,
