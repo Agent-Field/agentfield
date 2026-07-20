@@ -206,3 +206,21 @@ async def test_gemini_auto_uses_yolo_not_sandbox(monkeypatch: pytest.MonkeyPatch
 
     assert "--yolo" in captured["cmd"]
     assert "--sandbox" not in captured["cmd"]
+
+
+@pytest.mark.asyncio
+async def test_gemini_strips_model_variant_suffix(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, Any] = {}
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+        _ = (env, cwd, timeout)
+        captured["cmd"] = cmd
+        return "final text\n", "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.gemini.run_cli", fake_run_cli)
+    provider = GeminiProvider()
+    await provider.execute("hello", {"model": "gemini-2.5-pro#high"})
+
+    m_idx = captured["cmd"].index("-m")
+    assert captured["cmd"][m_idx + 1] == "gemini-2.5-pro"
+    assert "--variant" not in captured["cmd"]

@@ -6,11 +6,15 @@ loaded when the claude-code provider is actually used.
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, Dict, List, Optional
 
+from agentfield.harness._cli import resolve_model_and_variant
 from agentfield.harness._result import Metrics, RawResult
 from agentfield.exceptions import HarnessProviderUnavailable
+
+logger = logging.getLogger("agentfield.harness.claude")
 
 
 def _get_claude_sdk() -> Any:
@@ -70,8 +74,16 @@ class ClaudeCodeProvider:
             ) from exc
 
         agent_options: dict[str, object] = {}
-        if options.get("model") is not None:
-            agent_options["model"] = options["model"]
+        model_value, variant_value = resolve_model_and_variant(options)
+        if model_value is not None:
+            agent_options["model"] = model_value
+        if variant_value:
+            # claude_agent_sdk has no reasoning-effort knob; drop the variant
+            # rather than passing an invalid "model#variant" model id.
+            logger.debug(
+                "Ignoring model variant %r: claude-code has no effort flag",
+                variant_value,
+            )
         # Agent root: project_dir is the canonical field, fall back to cwd
         # (agentfield#686). The SDK's cwd is both the process dir and the root
         # the agent operates in; the runner places the schema output file under
