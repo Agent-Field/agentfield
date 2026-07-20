@@ -28,6 +28,41 @@ def strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
 
 
+# Separator for the ``provider/model#variant`` model-string syntax. ``#`` is
+# safe because provider model ids never contain it (``:`` is taken by
+# OpenRouter suffixes like ``:free``, ``@`` by Vertex-style ids).
+MODEL_VARIANT_SEP = "#"
+
+
+def split_model_variant(model: object) -> Tuple[Optional[str], Optional[str]]:
+    """Split a ``provider/model#variant`` string into ``(model, variant)``.
+
+    The ``#variant`` suffix carries a provider-specific reasoning-effort
+    variant (e.g. ``high``, ``minimal``) through config surfaces that only
+    hold a model string. A bare model string passes through as
+    ``(model, None)``; non-string or empty input yields ``(None, None)``.
+    """
+    if not isinstance(model, str) or not model.strip():
+        return None, None
+    base, _, variant = model.partition(MODEL_VARIANT_SEP)
+    return base.strip() or None, variant.strip() or None
+
+
+def resolve_model_and_variant(
+    options: Dict[str, object],
+) -> Tuple[Optional[str], Optional[str]]:
+    """Resolve ``(model, variant)`` from harness options.
+
+    An explicit ``options["variant"]`` wins over a ``#variant`` suffix on
+    ``options["model"]``; the returned model never carries the suffix.
+    """
+    model, variant = split_model_variant(options.get("model"))
+    explicit = options.get("variant")
+    if isinstance(explicit, str) and explicit.strip():
+        variant = explicit.strip()
+    return model, variant
+
+
 def resolve_cli_command(name: str) -> str:
     """Resolve a bare CLI name to a spawnable path on Windows.
 

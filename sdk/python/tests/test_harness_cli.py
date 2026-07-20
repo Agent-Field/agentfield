@@ -11,13 +11,50 @@ from agentfield.harness._cli import (
     estimate_cli_cost,
     extract_final_text,
     parse_jsonl,
+    resolve_model_and_variant,
     run_cli,
+    split_model_variant,
     strip_ansi,
 )
 
 
 def test_strip_ansi_removes_colors():
     assert strip_ansi("\x1b[31mError\x1b[0m") == "Error"
+
+
+def test_split_model_variant_parses_suffix():
+    assert split_model_variant("openrouter/z-ai/glm-5.2#high") == (
+        "openrouter/z-ai/glm-5.2",
+        "high",
+    )
+
+
+def test_split_model_variant_passes_bare_model_through():
+    assert split_model_variant("deepseek/deepseek-v4-flash") == (
+        "deepseek/deepseek-v4-flash",
+        None,
+    )
+
+
+def test_split_model_variant_handles_missing_or_empty_model():
+    assert split_model_variant(None) == (None, None)
+    assert split_model_variant("") == (None, None)
+    assert split_model_variant("  ") == (None, None)
+    assert split_model_variant("model#") == ("model", None)
+    assert split_model_variant("#high") == (None, "high")
+
+
+def test_resolve_model_and_variant_explicit_option_wins_over_suffix():
+    assert resolve_model_and_variant(
+        {"model": "openai/gpt-5#low", "variant": "max"}
+    ) == ("openai/gpt-5", "max")
+
+
+def test_resolve_model_and_variant_uses_suffix_when_no_explicit_option():
+    assert resolve_model_and_variant({"model": "openai/gpt-5#minimal"}) == (
+        "openai/gpt-5",
+        "minimal",
+    )
 
 
 def _stream_reader(chunks: list[bytes]) -> MagicMock:
