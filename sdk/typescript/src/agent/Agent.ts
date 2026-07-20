@@ -29,6 +29,12 @@ import { unwrapEnvelope, applyTriggerTransform } from '../triggers/dispatch.js';
 import type { TriggerContext, EventTriggerSpec } from '../triggers/types.js';
 import type { SkillHandler, SkillOptions } from '../types/skill.js';
 import { ExecutionContext, type ExecutionMetadata } from '../context/ExecutionContext.js';
+import {
+  CostTracker,
+  attachUsageToSyncResult,
+  deriveProvider,
+  usageSummaryOrNull
+} from '../usage/costTracker.js';
 import { ReasonerContext } from '../context/ReasonerContext.js';
 import { SkillContext } from '../context/SkillContext.js';
 import { AIClient } from '../ai/AIClient.js';
@@ -368,7 +374,65 @@ export class Agent {
 
   async harness(prompt: string, options?: HarnessOptions): Promise<HarnessResult> {
     const runner = await this.getHarnessRunner();
-    return runner.run(prompt, options ?? {});
+    const result = await runner.run(prompt, options ?? {});
+    // The runner call executes within the reasoner's async context, so the
+    // tracker bound by the execution endpoint is still current here. Recording
+    // after the run puts coding-agent usage alongside plain LLM calls in the
+    // per-reasoner usage rollup.
+    this.recordHarnessUsage(result, options);
+    return result;
+  }
+
+  /**
+   * Record a harness run's token/cost usage into the current execution's
+   * tracker. Mirrors the Python SDK's `_record_harness_usage`: a no-op when
+   * the harness reported neither tokens nor cost (the common case for
+   * providers that don't expose usage) so empty entries are never emitted;
+   * cost is threaded even when tokens are unknown, and vice versa. Never
+   * throws — usage capture is best-effort.
+   */
+  private recordHarnessUsage(result: HarnessResult, options?: HarnessOptions): void {
+    try {
+      const current = ExecutionContext.getCurrent();
+      const tracker = current?.costTracker;
+      if (!tracker) return;
+
+      const inputTokens = result.inputTokens ?? 0;
+      const outputTokens = result.outputTokens ?? 0;
+      const cacheRead = result.cacheReadTokens ?? 0;
+      const cacheCreation = result.cacheCreationTokens ?? 0;
+      const reportedTotal = result.totalTokens ?? 0;
+      const cost =
+        typeof result.costUsd === 'number' && Number.isFinite(result.costUsd)
+          ? result.costUsd
+          : null;
+      if (!inputTokens && !outputTokens && !cacheRead && !cacheCreation && !reportedTotal && cost === null) {
+        return;
+      }
+
+      const providerName = options?.provider ?? this.config.harnessConfig?.provider;
+      const harnessName = providerName ? String(providerName).replace(/-/g, '_') : null;
+      const modelName = String(
+        result.model ?? options?.model ?? this.config.harnessConfig?.model ?? providerName ?? 'harness'
+      );
+
+      tracker.record({
+        model: modelName,
+        inputTokens,
+        outputTokens,
+        totalTokens: reportedTotal || inputTokens + outputTokens,
+        costUsd: cost,
+        reasonerName: current.metadata.reasonerId ?? null,
+        source: 'harness',
+        provider: deriveProvider(modelName),
+        harness: harnessName,
+        cacheReadTokens: cacheRead,
+        cacheCreationTokens: cacheCreation,
+        costSource: cost !== null ? 'provider' : null
+      });
+    } catch {
+      // Best effort — never let usage recording fail the harness call.
+    }
   }
 
   getMemoryInterface(metadata?: ExecutionMetadata) {
@@ -613,7 +677,8 @@ export class Agent {
 
   async call(target: string, input: any) {
     const { agentId, name } = this.parseTarget(target);
-    const parentMetadata = ExecutionContext.getCurrent()?.metadata;
+    const parentContext = ExecutionContext.getCurrent();
+    const parentMetadata = parentContext?.metadata;
     if (!agentId || agentId === this.config.nodeId) {
       const local = this.reasoners.get(name);
       if (!local) throw new Error(`Reasoner not found: ${name}`);
@@ -647,7 +712,11 @@ export class Agent {
         },
         req: dummyReq,
         res: dummyRes,
-        agent: this
+        agent: this,
+        // Nested local calls inherit the parent's cost tracker so their LLM /
+        // harness usage rolls up into the parent execution's usage report
+        // (entries still carry the child reasoner's name).
+        costTracker: parentContext?.costTracker
       });
       const startTime = Date.now();
       this.executionLogger.system('agent.call.started', 'Local agent call started', {
@@ -721,6 +790,7 @@ export class Agent {
               workflow: this.getWorkflowReporter(execCtx.metadata),
               did: this.getDidInterface(execCtx.metadata, resolvedInput, name),
               trigger: triggerContext,
+              costTracker: execCtx.costTracker
             })
           );
           this.executionLogger.system('reasoner.completed', 'Reasoner execution completed', {
@@ -1607,6 +1677,13 @@ export class Agent {
     watchdog.catch(() => {});
 
     const completedAt = () => new Date().toISOString();
+    // Fresh per-execution cost tracker, owned here so its accumulated usage
+    // can be read back AFTER the handler settles — including on failure /
+    // timeout / cancellation, where tokens may already have been consumed.
+    // Concurrent executions each get their own tracker, so usage never
+    // cross-contaminates.
+    const usageTracker = new CostTracker();
+    const usage = () => usageSummaryOrNull(usageTracker) ?? undefined;
     try {
       const result = await Promise.race([
         this.runReasoner(reasoner, {
@@ -1614,7 +1691,8 @@ export class Agent {
           input: params.input,
           metadata: params.metadata,
           respond: false,
-          controller
+          controller,
+          costTracker: usageTracker
         }),
         watchdog
       ]);
@@ -1623,7 +1701,8 @@ export class Agent {
         result,
         durationMs: Date.now() - start,
         completedAt: completedAt(),
-        reasoner: reasonerName
+        reasoner: reasonerName,
+        usage: usage()
       });
     } catch (err: any) {
       const durationMs = Date.now() - start;
@@ -1634,7 +1713,8 @@ export class Agent {
           errorDetails: { reason: 'reasoner_timeout' },
           durationMs,
           completedAt: completedAt(),
-          reasoner: reasonerName
+          reasoner: reasonerName,
+          usage: usage()
         });
       } else if (controller.signal.aborted) {
         // External cooperative cancel arrived via the cancel dispatcher.
@@ -1644,7 +1724,8 @@ export class Agent {
           errorDetails: { reason: 'cancelled' },
           durationMs,
           completedAt: completedAt(),
-          reasoner: reasonerName
+          reasoner: reasonerName,
+          usage: usage()
         });
       } else {
         await this.agentFieldClient.reportExecutionResult(executionId, {
@@ -1653,7 +1734,8 @@ export class Agent {
           errorDetails: err?.responseData,
           durationMs,
           completedAt: completedAt(),
-          reasoner: reasonerName
+          reasoner: reasonerName,
+          usage: usage()
         });
       }
     } finally {
@@ -1672,6 +1754,7 @@ export class Agent {
       res?: express.Response;
       respond?: boolean;
       controller?: AbortController;
+      costTracker?: CostTracker;
     }
   ) {
     const req = params.req ?? ({} as express.Request);
@@ -1682,6 +1765,10 @@ export class Agent {
         params.metadata.rootWorkflowId ?? params.metadata.workflowId ?? params.metadata.runId ?? params.metadata.executionId,
       reasonerId: params.metadata.reasonerId ?? params.targetName
     };
+    // In async-execution mode the caller supplies the tracker so it can read
+    // accumulated usage after the handler settles; the synchronous path binds
+    // a fresh one here and attaches its summary to the 200 body below.
+    const costTracker = params.costTracker ?? new CostTracker();
 
     // --- Phase 5: Trigger envelope unwrap + TriggerContext injection (#510) ---
     // Detect the dispatcher's {event, _meta} envelope shape. When present,
@@ -1699,7 +1786,8 @@ export class Agent {
       metadata: executionMetadata,
       req,
       res,
-      agent: this
+      agent: this,
+      costTracker
     });
 
     // Register an AbortController for this execution so the control-plane
@@ -1754,6 +1842,7 @@ export class Agent {
           did: this.getDidInterface(executionMetadata, resolvedInput, params.targetName),
           signal: controller.signal,
           trigger: triggerContext,
+          costTracker
         });
 
         const result = await reasoner.handler(ctx);
@@ -1773,7 +1862,11 @@ export class Agent {
           rootWorkflowId: executionMetadata.rootWorkflowId
         });
         if (params.respond && params.res) {
-          params.res.json(result);
+          // Synchronous 200 path: merge the usage summary into plain-object
+          // results under the reserved envelope key (the control plane strips
+          // it back out). Non-object results pass through unchanged; a user
+          // result's own "usage" key is never touched.
+          params.res.json(attachUsageToSyncResult(result, costTracker));
           return;
         }
         return result;

@@ -979,26 +979,37 @@ class AgentAI:
 
             multimodal_response = detect_multimodal_response(resp)
 
-            # Record cost in tracker before schema parsing strips multimodal metadata.
-            if (
-                hasattr(self.agent, "cost_tracker")
-                and multimodal_response.cost_usd is not None
-            ):
-                model_name = (
-                    getattr(resp, "model", "") or final_config.model or "unknown"
-                )
-                usage = multimodal_response.usage
-                from agentfield.execution_context import get_current_context
+            # Record usage in the tracker before schema parsing strips
+            # multimodal metadata. Token recording is decoupled from pricing:
+            # whenever token counts are available we record them, with
+            # cost_usd=None when the price is unknown. Cost failure must never
+            # discard tokens that were successfully extracted.
+            usage = multimodal_response.usage
+            if usage:
+                from agentfield.cost_tracker import get_current_cost_tracker
 
-                ctx = get_current_context()
-                self.agent.cost_tracker.record(
-                    model=model_name,
-                    prompt_tokens=usage.get("prompt_tokens", 0),
-                    completion_tokens=usage.get("completion_tokens", 0),
-                    total_tokens=usage.get("total_tokens", 0),
-                    cost_usd=multimodal_response.cost_usd,
-                    reasoner_name=ctx.reasoner_name if ctx else None,
-                )
+                tracker = get_current_cost_tracker()
+                if tracker is None and hasattr(self.agent, "cost_tracker"):
+                    tracker = self.agent.cost_tracker
+                if tracker is not None:
+                    model_name = (
+                        getattr(resp, "model", "") or final_config.model or "unknown"
+                    )
+                    from agentfield.execution_context import get_current_context
+
+                    ctx = get_current_context()
+                    tracker.record(
+                        model=model_name,
+                        prompt_tokens=usage.get("prompt_tokens", 0),
+                        completion_tokens=usage.get("completion_tokens", 0),
+                        total_tokens=usage.get("total_tokens", 0),
+                        cost_usd=multimodal_response.cost_usd,
+                        reasoner_name=ctx.reasoner_name if ctx else None,
+                        source="llm",
+                        cache_read_tokens=usage.get("cache_read_tokens", 0),
+                        cache_creation_tokens=usage.get("cache_creation_tokens", 0),
+                        cost_source=multimodal_response.cost_source,
+                    )
 
             if schema:
                 try:

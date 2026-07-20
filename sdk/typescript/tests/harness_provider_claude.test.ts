@@ -57,6 +57,75 @@ describe('ClaudeCodeProvider', () => {
     expect(raw.messages).toHaveLength(2);
   });
 
+  it('extracts token usage and model from the result message', async () => {
+    vi.doMock(
+      '@anthropic-ai/claude-agent-sdk',
+      () => ({
+        query: () =>
+          (async function* stream() {
+            yield {
+              type: 'assistant',
+              message: { model: 'claude-opus-4-8', content: [{ type: 'text', text: 'working' }] },
+            };
+            yield {
+              type: 'result',
+              result: 'final',
+              session_id: 'sess-2',
+              total_cost_usd: 0.5,
+              num_turns: 2,
+              usage: {
+                input_tokens: 900,
+                output_tokens: 100,
+                cache_read_input_tokens: 30,
+                cache_creation_input_tokens: 7,
+              },
+            };
+          })(),
+      }),
+      { virtual: true }
+    );
+
+    const { ClaudeCodeProvider } = await import('../src/harness/providers/claude.js');
+    const provider = new ClaudeCodeProvider();
+    const raw = await provider.execute('hello', {});
+
+    expect(raw.isError).toBe(false);
+    expect(raw.metrics.totalCostUsd).toBe(0.5);
+    expect(raw.metrics.inputTokens).toBe(900);
+    expect(raw.metrics.outputTokens).toBe(100);
+    expect(raw.metrics.cacheReadTokens).toBe(30);
+    expect(raw.metrics.cacheCreationTokens).toBe(7);
+    expect(raw.metrics.model).toBe('claude-opus-4-8');
+    expect(raw.metrics.usage).toEqual({
+      input_tokens: 900,
+      output_tokens: 100,
+      cache_read_input_tokens: 30,
+      cache_creation_input_tokens: 7,
+    });
+  });
+
+  it('leaves token metrics undefined when the result message has no usage', async () => {
+    vi.doMock(
+      '@anthropic-ai/claude-agent-sdk',
+      () => ({
+        query: () =>
+          (async function* stream() {
+            yield { type: 'result', result: 'final', session_id: 'sess-3' };
+          })(),
+      }),
+      { virtual: true }
+    );
+
+    const { ClaudeCodeProvider } = await import('../src/harness/providers/claude.js');
+    const provider = new ClaudeCodeProvider();
+    const raw = await provider.execute('hello', {});
+
+    expect(raw.isError).toBe(false);
+    expect(raw.metrics.inputTokens).toBeUndefined();
+    expect(raw.metrics.outputTokens).toBeUndefined();
+    expect(raw.metrics.usage).toBeUndefined();
+  });
+
   it('returns error result when SDK stream fails', async () => {
     vi.doMock(
       '@anthropic-ai/claude-agent-sdk',

@@ -275,6 +275,12 @@ func TestMetricSuccess(t *testing.T) {
 // there's nothing to average.
 func TestMetricResponse(t *testing.T) {
 	if got, want := metricResponse(execStats{OK: true, Total: 3, AvgMS: 42.4}), "Response — 42 ms avg"; got != want {
+		t.Errorf("metricResponse = %q, want %q", got, want)
+	}
+	if got, want := metricResponse(execStats{OK: true, Total: 3, AvgMS: 8340}), "Response — 8.3 s avg"; got != want {
+		t.Errorf("metricResponse = %q, want %q", got, want)
+	}
+	if got, want := metricResponse(execStats{OK: true, Total: 3, AvgMS: 162867}), "Response — 2m 43s avg"; got != want {
 		t.Errorf("metricResponse() = %q, want %q", got, want)
 	}
 	if got := metricResponse(execStats{OK: true, Total: 0}); got != "" {

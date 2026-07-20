@@ -6,6 +6,163 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.111-rc.2] - 2026-07-20
+
+
+### Other
+
+- Token/cost usage tracking end-to-end + tray usage UI (#795)
+
+* feat(sdk/python): capture and transport token/cost usage per execution
+
+Record token usage even when pricing fails (the OpenRouter gap: unknown
+model slugs made litellm.completion_cost return None and the tokens were
+discarded with the cost). Adds OpenRouter native cost accounting
+(usage.include), Anthropic-native usage-shape extraction incl. cache
+tokens, Claude Code harness token capture, and a per-execution
+contextvar-scoped CostTracker whose serialized summary is attached to
+the execution result envelope (sync 200 body and async status callback)
+under the "usage" key.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(control-plane): persist execution usage and serve stats/timeseries API
+
+New execution_usage table (goose migration 034 for Postgres, GORM
+auto-migrate covers SQLite) populated by tolerant ingestion of the SDK's
+"usage" envelope key on both the sync-200 and async-callback paths. New
+GET /api/ui/v1/usage/stats endpoint with window filtering, by-model /
+by-provider / by-agent / by-harness aggregation, zero-filled bucket
+timeseries (?buckets=N) and per-model series (&series_by=model).
+Existing execution-details responses now carry cost/total_tokens, which
+the web UI already renders. Includes a cross-language golden test
+pinning the Python SDK's serialized payload against the Go parser.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(af-tray): usage glance UI, lifecycle status badge, vendored systray fork
+
+The tray's menu-bar item now shows the af badge with a lifecycle glyph
+(green dot running, rotating arc starting, gray ring stopped). The Usage
+submenu is a minimal glance surface: a 48-bucket token histogram
+(stacked per model), top-3 model rows and Claude 5h/7d subscription
+quota gauges (read-only, via the user's existing Claude Code Keychain
+credentials), all on a uniform leading-slot grid so every title aligns.
+Success row gains a live sparkline icon; response latency is humanized.
+
+Vendors fyne.io/systray v1.12.2 as third_party/systray with two additive
+patches (SetImage / SetStatusImage) lifting the stock 16x16 menu-image
+clamp — see third_party/systray/PATCHES.md.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(docker): copy third_party module replacements before go mod download
+
+The go.mod replace directive for the vendored systray fork points at
+control-plane/third_party/systray, which was not present in the build
+context when Dockerfiles copied only go.mod/go.sum for the module
+download cache layer, failing the control-plane image and functional
+test builds.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(usage): namespace the sync-200 usage envelope key so user payloads survive
+
+The sync result path reserved a top-level "usage" key in dict results and
+relied on the control plane stripping it back out — silently mutating any
+agent result that legitimately returns its own "usage" key (review finding
+on #795).
+
+Usage now travels under the reserved "__agentfield_usage__" envelope key
+(USAGE_ENVELOPE_KEY / usageEnvelopeKey); the control plane extracts and
+strips exactly that key and never touches user data. Regression tests pin
+that a user-owned "usage" key — top-level or nested — passes through
+byte-for-byte. The async status-callback path already carried usage as a
+typed sibling field of "result" and is unchanged.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(sdk/typescript): capture and transport token/cost usage per execution
+
+Port of the Python SDK's usage tracking to the TypeScript SDK, emitting the
+same cross-language wire contract:
+
+- CostTracker bound to the ExecutionContext (AsyncLocalStorage-isolated per
+  execution; local agent.call() rolls child usage into the parent tracker).
+- LLM capture in AIClient generate paths (AI SDK v6 usage incl. cache token
+  details) and across ToolCalling loop turns; OpenRouter requests opt into
+  native cost accounting (usage: {include: true}) via a fetch wrapper, with
+  cost read from the provider's raw usage. stream() usage is intentionally
+  not captured — draining the usage promise would consume abandoned streams.
+- Claude Code harness runs record tokens + provider-reported cost.
+- Transport: "usage" field on all terminal async status reports;
+  "__agentfield_usage__" reserved sibling key on object-shaped sync-200
+  results (user payloads, including a user-owned "usage" key, untouched).
+
+44 new vitest tests; suite 730 green, tsc + tsup clean.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(sdk/go): capture and transport token/cost usage per execution
+
+Port of the Python SDK's usage tracking to the Go SDK, emitting the same
+cross-language wire contract:
+
+- CostTracker bound per execution via context (fresh tracker at every
+  handler entrypoint: execute, reasoner sync/async, skill), read back to
+  attach usage after the handler returns.
+- LLM capture at the Agent.AI / AIWithTools / AIStream chokepoints; ai.Usage
+  gains cache read/creation tokens (OpenAI prompt_tokens_details and
+  Anthropic-native shapes) and provider-reported cost. OpenRouter requests
+  opt into native cost accounting (usage: {include: true}) at the request
+  marshal chokepoint; tool-call loops capture per-turn usage.
+- Harness runs record tokens + cost: token fields threaded through
+  harness.Metrics/Result and populated from already-parsed provider output
+  (claude code, codex, opencode).
+- Transport: "usage" field on async terminal status payloads;
+  "__agentfield_usage__" reserved sibling key on object-shaped sync-200
+  results (user payloads, including a user-owned "usage" key, untouched).
+- Fixes a pre-existing SSE decoder bug that dropped bytes returned alongside
+  io.EOF — the read where a terminal usage-accounting chunk arrives.
+
+28 new tests; go build/vet/test green, -race clean on the new paths.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): pin Go and TypeScript SDK usage payloads as goldens
+
+Extends the cross-language golden contract test to all three SDKs: the
+verbatim Serialize()/serialize() outputs of the Go and TypeScript trackers
+(generated by running each SDK's serializer) parse to the same rows as the
+Python fixture. Row assertions are shared; only the priced entry's
+cost_source differs by design (litellm for Python, provider for Go/TS).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): compare usage windows by epoch, not raw timestamps
+
+Found by live end-to-end verification of the Go/TS SDK usage transport: on
+a control plane running in a non-UTC timezone, /usage/stats returned zeros
+for every bounded window (1h/24h/7d/30d) while window=all showed the rows.
+
+GORM stamps execution_usage.created_at with time.Now() in server-local
+time, SQLite stores timestamps as text, and text comparison across mixed
+UTC offsets is lexicographic — so "created_at >= <UTC since>" silently
+excluded in-range rows (and ORDER BY created_at could pick the wrong
+oldest/latest row). CI runners are UTC, which is why the existing window
+tests never caught it.
+
+All window filters and oldest/latest orderings now go through the existing
+dialect-portable epoch expression (SQLite strftime / PostgreSQL EXTRACT).
+The new regression test pins the behavior with rows whose created_at
+carries a fixed -04:00 offset; it fails on the old code even on UTC hosts.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (22e8cc0)
+
 ## [0.1.111-rc.1] - 2026-07-19
 
 

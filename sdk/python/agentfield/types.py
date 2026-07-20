@@ -3,7 +3,10 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, computed_field
 from enum import Enum
 
-from agentfield.openrouter_attribution import apply_litellm_attribution
+from agentfield.openrouter_attribution import (
+    apply_litellm_attribution,
+    apply_openrouter_usage_accounting,
+)
 
 
 class AgentStatus(str, Enum):
@@ -706,6 +709,9 @@ class AIConfig(BaseModel):
             site_url=self.openrouter_site_url,
             app_name=self.openrouter_app_name,
         )
+        # Opt into OpenRouter native cost accounting so responses carry
+        # usage.cost (read back in multimodal_response._resolve_cost).
+        apply_openrouter_usage_accounting(params)
 
         return params
 

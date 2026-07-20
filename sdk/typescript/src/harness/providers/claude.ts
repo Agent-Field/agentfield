@@ -57,6 +57,12 @@ export class ClaudeCodeProvider implements HarnessProvider {
     let totalCost: number | undefined;
     let numTurns = 0;
     let sessionId = '';
+    let usageObj: Record<string, unknown> | undefined;
+    let inputTokens: number | undefined;
+    let outputTokens: number | undefined;
+    let cacheReadTokens: number | undefined;
+    let cacheCreationTokens: number | undefined;
+    let modelName: string | undefined;
     const startApi = Date.now();
 
     try {
@@ -84,7 +90,26 @@ export class ClaudeCodeProvider implements HarnessProvider {
 
           const turns = getNumber(msgObj, 'num_turns');
           numTurns = turns === undefined ? messages.length : Math.trunc(turns);
-        } else if (msgType === 'assistant' && resultText === undefined) {
+
+          // The result message carries token usage alongside cost:
+          // {input_tokens, output_tokens, cache_read_input_tokens,
+          //  cache_creation_input_tokens}. Best effort — absent fields stay
+          // undefined so downstream recording can tell "unknown" from zero.
+          if (isRecord(msgObj.usage)) {
+            usageObj = msgObj.usage;
+            inputTokens = getNumber(usageObj, 'input_tokens');
+            outputTokens = getNumber(usageObj, 'output_tokens');
+            cacheReadTokens = getNumber(usageObj, 'cache_read_input_tokens');
+            cacheCreationTokens = getNumber(usageObj, 'cache_creation_input_tokens');
+          }
+          modelName = getString(msgObj, 'model') ?? modelName;
+        } else if (msgType === 'assistant') {
+          // Assistant messages carry the underlying API message, whose
+          // `model` identifies what actually ran.
+          if (modelName === undefined && isRecord(msgObj.message)) {
+            modelName = getString(msgObj.message, 'model');
+          }
+          if (resultText !== undefined) continue;
           let content: unknown = msgObj.content;
           if (content === undefined && isRecord(msgObj.message)) {
             content = msgObj.message.content;
@@ -110,6 +135,12 @@ export class ClaudeCodeProvider implements HarnessProvider {
           numTurns,
           totalCostUsd: totalCost,
           sessionId,
+          usage: usageObj,
+          inputTokens,
+          outputTokens,
+          cacheReadTokens,
+          cacheCreationTokens,
+          model: modelName,
         }),
         isError: false,
       });

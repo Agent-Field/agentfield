@@ -93,6 +93,21 @@ func (m *MockStorageProvider) StoreExecutionLogEntry(ctx context.Context, entry 
 func (m *MockStorageProvider) ListExecutionLogEntries(ctx context.Context, executionID string, afterSeq *int64, limit int, levels []string, nodeIDs []string, sources []string, query string) ([]*types.ExecutionLogEntry, error) {
 	return nil, nil
 }
+func (m *MockStorageProvider) CreateExecutionUsage(ctx context.Context, rows []*types.ExecutionUsage) error {
+	return nil
+}
+func (m *MockStorageProvider) GetUsageStats(ctx context.Context, since *time.Time) (*types.UsageStatsAggregation, error) {
+	return &types.UsageStatsAggregation{}, nil
+}
+func (m *MockStorageProvider) GetUsageTimeseries(ctx context.Context, since *time.Time, now time.Time, buckets int) (*types.UsageTimeseries, error) {
+	return &types.UsageTimeseries{}, nil
+}
+func (m *MockStorageProvider) GetUsageTimeseriesByModel(ctx context.Context, since *time.Time, now time.Time, buckets int) ([]types.UsageModelSeries, error) {
+	return nil, nil
+}
+func (m *MockStorageProvider) GetExecutionUsageTotals(ctx context.Context, executionID string) (*float64, int64, error) {
+	return nil, 0, nil
+}
 func (m *MockStorageProvider) PruneExecutionLogEntries(ctx context.Context, executionID string, maxEntries int, olderThan time.Time) error {
 	return nil
 }

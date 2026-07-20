@@ -32,6 +32,29 @@ _PERMISSION_MAP = {
 }
 
 
+def _parse_usage(usage: dict) -> Dict[str, int]:
+    """Normalize a Claude Code result-message ``usage`` object into token counts.
+
+    Claude Code emits Anthropic-native fields: ``input_tokens``,
+    ``output_tokens``, ``cache_read_input_tokens``,
+    ``cache_creation_input_tokens``.
+    """
+
+    def _int(name: str) -> int:
+        val = usage.get(name)
+        try:
+            return int(val) if val is not None else 0
+        except (TypeError, ValueError):
+            return 0
+
+    return {
+        "input_tokens": _int("input_tokens"),
+        "output_tokens": _int("output_tokens"),
+        "cache_read_tokens": _int("cache_read_input_tokens"),
+        "cache_creation_tokens": _int("cache_creation_input_tokens"),
+    }
+
+
 class ClaudeCodeProvider:
     """Claude Code provider using the native claude_agent_sdk."""
 
@@ -79,6 +102,8 @@ class ClaudeCodeProvider:
         total_cost: Optional[float] = None
         num_turns = 0
         session_id = ""
+        usage_tokens: Dict[str, int] = {}
+        result_model: Optional[str] = None
         start_api = time.monotonic()
 
         try:
@@ -124,6 +149,15 @@ class ClaudeCodeProvider:
                     )
                     if cost_info is not None:
                         total_cost = float(cost_info)
+                    # Claude Code result messages carry a full usage object:
+                    # input_tokens, output_tokens, cache_read_input_tokens,
+                    # cache_creation_input_tokens.
+                    usage_obj = msg_dict.get("usage")
+                    if isinstance(usage_obj, dict):
+                        usage_tokens = _parse_usage(usage_obj)
+                    model_field = msg_dict.get("model") or msg_dict.get("modelUsage")
+                    if isinstance(model_field, str):
+                        result_model = model_field
                     turns = msg_dict.get("num_turns")
                     num_turns = (
                         int(turns) if isinstance(turns, (int, float)) else len(messages)
@@ -154,6 +188,12 @@ class ClaudeCodeProvider:
                     num_turns=num_turns,
                     total_cost_usd=total_cost,
                     session_id=session_id,
+                    usage=usage_tokens or None,
+                    input_tokens=usage_tokens.get("input_tokens", 0),
+                    output_tokens=usage_tokens.get("output_tokens", 0),
+                    cache_read_tokens=usage_tokens.get("cache_read_tokens", 0),
+                    cache_creation_tokens=usage_tokens.get("cache_creation_tokens", 0),
+                    model=result_model,
                 ),
                 is_error=False,
             )

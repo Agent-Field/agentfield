@@ -1169,6 +1169,11 @@ func (a *Agent) handleExecute(w http.ResponseWriter, r *http.Request) {
 	cancellableCtx, releaseCancel := a.registerCancellableExecution(r.Context(), execCtx.ExecutionID)
 	defer releaseCancel()
 	ctx := contextWithExecution(cancellableCtx, execCtx)
+	// Fresh per-execution cost tracker: LLM/harness usage recorded during the
+	// reasoner is isolated to this request (concurrent requests each get
+	// their own tracker) and attached to the 200 body afterward.
+	tracker := NewCostTracker()
+	ctx = contextWithCostTracker(ctx, tracker)
 
 	start := time.Now()
 	a.logExecutionInfo(ctx, "reasoner.invoke.start", "starting reasoner execution", map[string]any{
@@ -1229,7 +1234,7 @@ func (a *Agent) handleExecute(w http.ResponseWriter, r *http.Request) {
 		"mode":        "http",
 		"duration_ms": durationMS,
 	})
-	writeJSON(w, http.StatusOK, result)
+	writeJSON(w, http.StatusOK, wrapSyncResultWithUsage(result, tracker))
 }
 
 func extractInputFromServerless(payload map[string]any) map[string]any {
@@ -1389,6 +1394,10 @@ func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
 	defer releaseCancel()
 
 	ctx := contextWithExecution(cancellableCtx, execCtx)
+	// Fresh per-execution cost tracker for the sync path; usage recorded by
+	// the reasoner is attached to the 200 body below.
+	tracker := NewCostTracker()
+	ctx = contextWithCostTracker(ctx, tracker)
 
 	start := time.Now()
 	a.logExecutionInfo(ctx, "reasoner.invoke.start", "starting reasoner execution", map[string]any{
@@ -1449,7 +1458,7 @@ func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
 		"mode":        "http",
 		"duration_ms": durationMS,
 	})
-	writeJSON(w, http.StatusOK, result)
+	writeJSON(w, http.StatusOK, wrapSyncResultWithUsage(result, tracker))
 }
 
 func (a *Agent) handleSkill(w http.ResponseWriter, r *http.Request) {
@@ -1483,13 +1492,17 @@ func (a *Agent) handleSkill(w http.ResponseWriter, r *http.Request) {
 	execCtx := a.buildExecutionContextFromServerless(r, map[string]any{"input": input}, name)
 	a.fillDIDContext(&execCtx)
 	ctx := contextWithExecution(r.Context(), execCtx)
+	// Fresh per-execution cost tracker so concurrent skill invocations are
+	// isolated; usage is attached to the 200 body below.
+	tracker := NewCostTracker()
+	ctx = contextWithCostTracker(ctx, tracker)
 	result, err := skill.Handler(ctx, input)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, result)
+	writeJSON(w, http.StatusOK, wrapSyncResultWithUsage(result, tracker))
 }
 
 func (a *Agent) executeReasonerAsync(reasoner *Reasoner, input map[string]any, execCtx ExecutionContext) {
@@ -1499,6 +1512,11 @@ func (a *Agent) executeReasonerAsync(reasoner *Reasoner, input map[string]any, e
 	cancellableCtx, release := a.registerCancellableExecution(context.Background(), execCtx.ExecutionID)
 	defer release()
 	ctx := contextWithExecution(cancellableCtx, execCtx)
+	// Fresh per-execution cost tracker: LLM/harness usage recorded while the
+	// reasoner runs is read back below and attached to the terminal status
+	// callback. Concurrent executions each get their own tracker.
+	tracker := NewCostTracker()
+	ctx = contextWithCostTracker(ctx, tracker)
 	start := time.Now()
 	a.logExecutionInfo(ctx, "reasoner.invoke.start", "starting asynchronous reasoner execution", map[string]any{
 		"reasoner_id": reasoner.Name,
@@ -1525,6 +1543,7 @@ func (a *Agent) executeReasonerAsync(reasoner *Reasoner, input map[string]any, e
 				"error":       errMsg,
 			})
 			a.maybeGenerateVC(execCtx, input, nil, "failed", errMsg, durationMS, reasoner)
+			attachUsageToPayload(payload, tracker)
 			if err := a.sendExecutionStatus(execCtx.ExecutionID, payload); err != nil {
 				a.logger.Printf("failed to send panic status: %v", err)
 				a.logExecutionWarn(ctx, "execution.status.failed", "failed to send panic status update", map[string]any{
@@ -1580,6 +1599,11 @@ func (a *Agent) executeReasonerAsync(reasoner *Reasoner, input map[string]any, e
 		})
 		a.maybeGenerateVC(execCtx, input, result, "succeeded", "", durationMS, reasoner)
 	}
+
+	// Attach the execution's usage rollup to the terminal status payload —
+	// success AND failure both carry it (usage was spent either way). The key
+	// is omitted entirely when nothing was recorded, per the usage contract.
+	attachUsageToPayload(payload, tracker)
 
 	if err := a.sendExecutionStatus(execCtx.ExecutionID, payload); err != nil {
 		a.logger.Printf("async status update failed: %v", err)
@@ -2521,7 +2545,11 @@ func (a *Agent) AI(ctx context.Context, prompt string, opts ...ai.Option) (*ai.R
 	if a.aiClient == nil {
 		return nil, errors.New("AI not configured for this agent; set AIConfig in agent Config")
 	}
-	return a.aiClient.Complete(ctx, prompt, opts...)
+	resp, err := a.aiClient.Complete(ctx, prompt, opts...)
+	if err == nil {
+		a.recordAIUsage(ctx, resp)
+	}
+	return resp, err
 }
 
 // AIWithTools makes an AI call with tool-calling support.
@@ -2576,7 +2604,11 @@ func (a *Agent) AIWithTools(ctx context.Context, prompt string, config ai.ToolCa
 		return a.Call(ctx, target, input)
 	}
 
-	return a.aiClient.ExecuteToolCallLoop(ctx, messages, tools, config, callFn)
+	resp, trace, err := a.aiClient.ExecuteToolCallLoop(ctx, messages, tools, config, callFn)
+	// Record usage even on error: intermediate turns that completed before
+	// the failure still consumed tokens.
+	a.recordToolLoopUsage(ctx, resp, trace)
+	return resp, trace, err
 }
 
 func normalizeToolInvocationTarget(target string) string {
@@ -2616,7 +2648,41 @@ func (a *Agent) AIStream(ctx context.Context, prompt string, opts ...ai.Option) 
 		close(chunkCh)
 		return chunkCh, errCh
 	}
-	return a.aiClient.StreamComplete(ctx, prompt, opts...)
+	chunks, errs := a.aiClient.StreamComplete(ctx, prompt, opts...)
+	tracker := costTrackerFromContext(ctx)
+	if tracker == nil {
+		return chunks, errs
+	}
+
+	// Forward chunks unchanged while watching for the terminal usage chunk
+	// (providers that stream usage accounting — e.g. OpenRouter with
+	// usage.include — attach it to the final chunk). Usage is recorded once
+	// the stream ends; when the provider streams no usage, nothing is
+	// recorded (best-effort, the stream itself is never disturbed).
+	out := make(chan ai.StreamChunk)
+	go func() {
+		defer close(out)
+		var usage *ai.Usage
+		model := ""
+	forward:
+		for chunk := range chunks {
+			if chunk.Model != "" {
+				model = chunk.Model
+			}
+			if chunk.Usage != nil {
+				usage = chunk.Usage
+			}
+			select {
+			case out <- chunk:
+			case <-ctx.Done():
+				break forward
+			}
+		}
+		if usage != nil {
+			a.recordLLMUsage(ctx, model, usage)
+		}
+	}()
+	return out, errs
 }
 
 // ExecutionContextFrom returns the execution context embedded in the provided context, if any.

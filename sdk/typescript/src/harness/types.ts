@@ -44,6 +44,14 @@ export interface Metrics {
   totalCostUsd?: number;
   usage?: Record<string, unknown>;
   sessionId: string;
+  /** Token counts parsed from the provider's result payload (best effort). */
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+  totalTokens?: number;
+  /** Model reported by the provider, when available. */
+  model?: string;
 }
 
 export interface RawResult {
@@ -64,6 +72,14 @@ export interface HarnessResult {
   durationMs: number;
   sessionId: string;
   messages: Array<Record<string, unknown>>;
+  /** Token counts reported by the harness provider, when available. */
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+  totalTokens?: number;
+  /** Model reported by the harness provider, when available. */
+  model?: string;
   readonly text: string;
 }
 

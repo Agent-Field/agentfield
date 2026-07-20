@@ -144,7 +144,7 @@ func (r *Runner) Run(ctx context.Context, prompt string, schema map[string]any, 
 	}
 
 	elapsed := int(time.Since(startTime).Milliseconds())
-	return &Result{
+	res := &Result{
 		Result:       raw.Result,
 		IsError:      raw.IsError,
 		ErrorMessage: raw.ErrorMessage,
@@ -154,7 +154,20 @@ func (r *Runner) Run(ctx context.Context, prompt string, schema map[string]any, 
 		DurationMS:   elapsed,
 		SessionID:    raw.Metrics.SessionID,
 		Messages:     raw.Messages,
-	}, nil
+	}
+	metricsTokens(raw.Metrics).applyTo(res)
+	return res, nil
+}
+
+// metricsTokens lifts a single execution's Metrics token counts into a
+// tokenUsage aggregate.
+func metricsTokens(m Metrics) tokenUsage {
+	return tokenUsage{
+		inputTokens:         m.InputTokens,
+		outputTokens:        m.OutputTokens,
+		cacheReadTokens:     m.CacheReadTokens,
+		cacheCreationTokens: m.CacheCreationTokens,
+	}
 }
 
 func (r *Runner) buildProvider(opts Options) (Provider, error) {
@@ -380,8 +393,8 @@ func (r *Runner) handleSchemaWithRetry(
 
 	if err == nil && data != nil {
 		elapsed := int(time.Since(startTime).Milliseconds())
-		cost, turns, sid, msgs := accumulateMetrics(allRaws)
-		return &Result{
+		cost, turns, sid, msgs, tok := accumulateMetrics(allRaws)
+		res := &Result{
 			Result:     initialRaw.Result,
 			Parsed:     dest,
 			CostUSD:    cost,
@@ -390,6 +403,8 @@ func (r *Runner) handleSchemaWithRetry(
 			SessionID:  sid,
 			Messages:   msgs,
 		}
+		tok.applyTo(res)
+		return res
 	}
 
 	// Check if the initial error is non-retryable
@@ -400,12 +415,12 @@ func (r *Runner) handleSchemaWithRetry(
 	}
 	if initialRaw.IsError && !fileExists(outputPath) && !retryableFailures[initialRaw.FailureType] {
 		elapsed := int(time.Since(startTime).Milliseconds())
-		cost, turns, sid, msgs := accumulateMetrics(allRaws)
+		cost, turns, sid, msgs, tok := accumulateMetrics(allRaws)
 		providerError := initialRaw.ErrorMessage
 		if providerError == "" {
 			providerError = "Provider execution failed."
 		}
-		return &Result{
+		res := &Result{
 			Result:       initialRaw.Result,
 			IsError:      true,
 			ErrorMessage: fmt.Sprintf("%s Output file was not created at %s.", providerError, outputPath),
@@ -416,6 +431,8 @@ func (r *Runner) handleSchemaWithRetry(
 			SessionID:    sid,
 			Messages:     msgs,
 		}
+		tok.applyTo(res)
+		return res
 	}
 
 	lastSessionID := initialRaw.Metrics.SessionID
@@ -429,8 +446,8 @@ func (r *Runner) handleSchemaWithRetry(
 			case <-ctx.Done():
 				timer.Stop()
 				elapsed := int(time.Since(startTime).Milliseconds())
-				cost, turns, sid, msgs := accumulateMetrics(allRaws)
-				return &Result{
+				cost, turns, sid, msgs, tok := accumulateMetrics(allRaws)
+				res := &Result{
 					IsError:      true,
 					ErrorMessage: "context cancelled during schema retry",
 					FailureType:  FailureTimeout,
@@ -440,6 +457,8 @@ func (r *Runner) handleSchemaWithRetry(
 					SessionID:    sid,
 					Messages:     msgs,
 				}
+				tok.applyTo(res)
+				return res
 			}
 		}
 
@@ -509,9 +528,9 @@ func (r *Runner) handleSchemaWithRetry(
 
 		if err == nil && data != nil {
 			elapsed := int(time.Since(startTime).Milliseconds())
-			cost, turns, sid, msgs := accumulateMetrics(allRaws)
+			cost, turns, sid, msgs, tok := accumulateMetrics(allRaws)
 			r.Logger.Printf("Schema validation succeeded on retry %d", retryNum+1)
-			return &Result{
+			res := &Result{
 				Result:     retryRaw.Result,
 				Parsed:     dest,
 				CostUSD:    cost,
@@ -520,13 +539,15 @@ func (r *Runner) handleSchemaWithRetry(
 				SessionID:  sid,
 				Messages:   msgs,
 			}
+			tok.applyTo(res)
+			return res
 		}
 	}
 
 	elapsed := int(time.Since(startTime).Milliseconds())
-	cost, turns, sid, msgs := accumulateMetrics(allRaws)
+	cost, turns, sid, msgs, tok := accumulateMetrics(allRaws)
 	finalDiagnosis := DiagnoseOutputFailure(outputPath, schema)
-	return &Result{
+	res := &Result{
 		Result:  allRaws[len(allRaws)-1].Result,
 		IsError: true,
 		ErrorMessage: fmt.Sprintf(
@@ -540,14 +561,17 @@ func (r *Runner) handleSchemaWithRetry(
 		SessionID:   sid,
 		Messages:    msgs,
 	}
+	tok.applyTo(res)
+	return res
 }
 
 // accumulateMetrics sums metrics across every provider execution that
 // contributed to a result — including failed retry attempts, mirroring the
 // Python _accumulate_metrics. CostUSD is summed only over executions that
 // reported a cost; the returned pointer is nil when none did (distinguishing
-// "unknown" from "$0.00").
-func accumulateMetrics(raws []*RawResult) (totalCost *float64, totalTurns int, sessionID string, allMessages []map[string]any) {
+// "unknown" from "$0.00"). Token counts are summed unconditionally (all-zero
+// means "unreported").
+func accumulateMetrics(raws []*RawResult) (totalCost *float64, totalTurns int, sessionID string, allMessages []map[string]any, tokens tokenUsage) {
 	for _, raw := range raws {
 		if raw.Metrics.CostUSD != nil {
 			if totalCost == nil {
@@ -561,6 +585,10 @@ func accumulateMetrics(raws []*RawResult) (totalCost *float64, totalTurns int, s
 			sessionID = raw.Metrics.SessionID
 		}
 		allMessages = append(allMessages, raw.Messages...)
+		tokens.inputTokens += raw.Metrics.InputTokens
+		tokens.outputTokens += raw.Metrics.OutputTokens
+		tokens.cacheReadTokens += raw.Metrics.CacheReadTokens
+		tokens.cacheCreationTokens += raw.Metrics.CacheCreationTokens
 	}
 	return
 }

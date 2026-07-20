@@ -371,7 +371,7 @@ def test_accumulate_metrics_sums_costs_across_retries():
         RawResult(result="b", metrics=Metrics(num_turns=2, total_cost_usd=0.02)),
         RawResult(result="c", metrics=Metrics(num_turns=1, total_cost_usd=0.005)),
     ]
-    cost, turns, sid, msgs = _accumulate_metrics(raws)
+    cost, turns, sid, msgs, tokens = _accumulate_metrics(raws)
     assert cost == pytest.approx(0.035)
     assert turns == 4
 
@@ -382,7 +382,7 @@ def test_accumulate_metrics_none_cost_skipped():
         RawResult(result="a", metrics=Metrics(num_turns=1, total_cost_usd=None)),
         RawResult(result="b", metrics=Metrics(num_turns=2, total_cost_usd=0.05)),
     ]
-    cost, turns, sid, msgs = _accumulate_metrics(raws)
+    cost, turns, sid, msgs, tokens = _accumulate_metrics(raws)
     assert cost == pytest.approx(0.05)
     assert turns == 3
 
@@ -393,7 +393,7 @@ def test_accumulate_metrics_all_none_returns_none():
         RawResult(result="a", metrics=Metrics(num_turns=1, total_cost_usd=None)),
         RawResult(result="b", metrics=Metrics(num_turns=2, total_cost_usd=None)),
     ]
-    cost, turns, sid, msgs = _accumulate_metrics(raws)
+    cost, turns, sid, msgs, tokens = _accumulate_metrics(raws)
     assert cost is None
     assert turns == 3
 

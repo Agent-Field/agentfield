@@ -14,6 +14,7 @@ from typing import ClassVar, Dict, Optional
 from agentfield.harness._cli import (
     estimate_cli_cost,
     extract_final_text,
+    extract_token_usage,
     parse_jsonl,
     run_cli,
     strip_ansi,
@@ -346,6 +347,8 @@ class OpenCodeProvider:
         if num_turns == 0 and result_text:
             num_turns = 1
 
+        tokens = extract_token_usage(events)
+
         return RawResult(
             result=result_text,
             messages=events,
@@ -354,6 +357,11 @@ class OpenCodeProvider:
                 num_turns=num_turns,
                 total_cost_usd=estimated_cost,
                 session_id="",
+                input_tokens=tokens["input_tokens"],
+                output_tokens=tokens["output_tokens"],
+                cache_read_tokens=tokens["cache_read_tokens"],
+                cache_creation_tokens=tokens["cache_creation_tokens"],
+                model=str(options.get("model", "")) or None,
             ),
             is_error=is_error,
             error_message=error_message,

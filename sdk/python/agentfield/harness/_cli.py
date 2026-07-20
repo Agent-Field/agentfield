@@ -348,6 +348,53 @@ def extract_final_text(events: List[Dict[str, Any]]) -> Optional[str]:
     return result_text
 
 
+def extract_token_usage(events: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Best-effort token counts from JSONL events, when the CLI reports them.
+
+    Scans events for a ``usage`` object and normalizes the common shapes:
+    OpenAI/Codex (``input_tokens`` / ``output_tokens`` / ``cached_input_tokens``)
+    and Anthropic-native (``cache_read_input_tokens`` /
+    ``cache_creation_input_tokens``). The last usage object seen wins (Codex
+    emits a cumulative usage on ``turn.completed``). Returns an all-zero dict
+    when no usage is present — callers treat that as "unknown", never as data.
+    """
+
+    def _int(obj: Dict[str, Any], *names: str) -> int:
+        for name in names:
+            val = obj.get(name)
+            if val is not None:
+                try:
+                    return int(val)
+                except (TypeError, ValueError):
+                    return 0
+        return 0
+
+    result = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+    }
+    for event in events:
+        usage = event.get("usage")
+        if not isinstance(usage, dict):
+            # Codex nests usage under item/turn payloads on some versions.
+            nested = event.get("item") or event.get("turn")
+            if isinstance(nested, dict) and isinstance(nested.get("usage"), dict):
+                usage = nested["usage"]
+            else:
+                continue
+        result = {
+            "input_tokens": _int(usage, "input_tokens", "prompt_tokens"),
+            "output_tokens": _int(usage, "output_tokens", "completion_tokens"),
+            "cache_read_tokens": _int(
+                usage, "cache_read_input_tokens", "cached_input_tokens"
+            ),
+            "cache_creation_tokens": _int(usage, "cache_creation_input_tokens"),
+        }
+    return result
+
+
 def estimate_cli_cost(
     model: str,
     prompt: str,
