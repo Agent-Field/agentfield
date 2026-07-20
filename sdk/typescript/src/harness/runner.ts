@@ -1,7 +1,14 @@
 import { buildPromptSuffix, cleanupTempFiles, getOutputPath, parseAndValidate } from './schema.js';
 import { buildProvider } from './providers/factory.js';
 import type { HarnessProvider } from './providers/base.js';
-import { createHarnessResult, createRawResult, type HarnessConfig, type HarnessOptions, type RawResult } from './types.js';
+import {
+  createHarnessResult,
+  createRawResult,
+  type HarnessConfig,
+  type HarnessOptions,
+  type HarnessResult,
+  type RawResult,
+} from './types.js';
 
 const TRANSIENT_PATTERNS = [
   'rate limit',
@@ -19,6 +26,15 @@ const TRANSIENT_PATTERNS = [
   'internal server error',
   '500',
 ];
+
+/** Copy provider-reported token/model metrics onto the harness result. */
+function tokenMetrics(raw: RawResult): Pick<
+  HarnessResult,
+  'inputTokens' | 'outputTokens' | 'cacheReadTokens' | 'cacheCreationTokens' | 'totalTokens' | 'model'
+> {
+  const { inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, totalTokens, model } = raw.metrics;
+  return { inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, totalTokens, model };
+}
 
 type RunnerOptions = Omit<HarnessOptions, 'schema'> & {
   maxRetries?: number;
@@ -62,6 +78,7 @@ export class HarnessRunner {
         durationMs: Date.now() - startTime,
         sessionId: raw.metrics.sessionId,
         messages: raw.messages,
+        ...tokenMetrics(raw),
       });
     } finally {
       if (schema !== undefined) {
@@ -166,6 +183,7 @@ export class HarnessRunner {
         durationMs: Date.now() - startTime,
         sessionId: raw.metrics.sessionId,
         messages: raw.messages,
+        ...tokenMetrics(raw),
       });
     }
 
@@ -178,6 +196,7 @@ export class HarnessRunner {
       durationMs: Date.now() - startTime,
       sessionId: raw.metrics.sessionId,
       messages: raw.messages,
+      ...tokenMetrics(raw),
     });
   }
 

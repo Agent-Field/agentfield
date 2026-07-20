@@ -16,6 +16,7 @@ import type {
 } from '../types/agent.js';
 import type { Agent } from '../agent/Agent.js';
 import type { AIRequestOptions } from './AIClient.js';
+import { recordAiSdkUsage } from '../usage/aiUsage.js';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -430,10 +431,21 @@ export async function executeToolCallLoop(
   config: ToolCallConfig,
   needsLazyHydration: boolean,
   buildModel: () => any,
-  options: AIRequestOptions = {}
+  options: AIRequestOptions = {},
+  modelChoice?: { provider?: string; modelName?: string }
 ): Promise<{ text: string; trace: ToolCallTrace }> {
   const maxTurns = config.maxTurns ?? DEFAULT_MAX_TURNS;
   const maxToolCalls = config.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
+
+  // Attribute usage to the resolved model when the caller supplied it; fall
+  // back to the per-request model override. Without either there is no model
+  // identity to record against, so usage capture is skipped.
+  const usageModel = modelChoice?.modelName ?? options.model;
+  const recordLoopUsage = (result: { usage?: unknown; totalUsage?: unknown; steps?: any[] }) => {
+    if (usageModel) {
+      recordAiSdkUsage({ source: result, model: usageModel, provider: modelChoice?.provider });
+    }
+  };
 
   const trace: ToolCallTrace = {
     calls: [],
@@ -466,6 +478,7 @@ export async function executeToolCallLoop(
       tools: selectionTools,
       stopWhen: stepCountIs(1)  // Stop after LLM's first response (tool selection)
     });
+    recordLoopUsage(selectionResult);
 
     // Extract which tools the LLM tried to call
     const selectedNames = new Set<string>();
@@ -510,6 +523,7 @@ export async function executeToolCallLoop(
       trace.totalTurns = currentTurn;
     }
   });
+  recordLoopUsage(result);
 
   trace.finalResponse = result.text;
   trace.totalTurns = result.steps.length;
