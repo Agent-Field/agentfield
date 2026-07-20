@@ -24,7 +24,9 @@ import {
 import { ApprovalClient } from '../approval/ApprovalClient.js';
 import { AgentRouter } from '../router/AgentRouter.js';
 import type { ReasonerHandler, ReasonerOptions } from '../types/reasoner.js';
-import { triggerToPayload } from '../triggers/factories.js';
+import { triggerToPayload, eventTrigger, scheduleTrigger } from '../triggers/factories.js';
+import { unwrapEnvelope, applyTriggerTransform } from '../triggers/dispatch.js';
+import type { TriggerContext, EventTriggerSpec } from '../triggers/types.js';
 import type { SkillHandler, SkillOptions } from '../types/skill.js';
 import { ExecutionContext, type ExecutionMetadata } from '../context/ExecutionContext.js';
 import {
@@ -248,6 +250,54 @@ export class Agent {
       this.realtimeValidationFunctions.add(name);
     }
     return this;
+  }
+
+  /**
+   * Sugar for registering an event-triggered reasoner.
+   *
+   * Equivalent to:
+   * ```ts
+   * app.reasoner(name, handler, { triggers: [eventTrigger(spec)] });
+   * ```
+   *
+   * The reasoner name defaults to `handler.name` when not provided.
+   */
+  onEvent<TInput = any, TOutput = any>(
+    spec: Omit<EventTriggerSpec, 'codeOrigin'> & { name?: string },
+    handler: ReasonerHandler<TInput, TOutput>,
+    options?: Omit<ReasonerOptions, 'triggers'>
+  ) {
+    const name = spec.name || handler.name || `on_${spec.source}`;
+    const { name: _discarded, ...triggerSpec } = spec;
+    const binding = eventTrigger(triggerSpec as EventTriggerSpec);
+    return this.reasoner(name, handler, {
+      ...options,
+      triggers: [...(options as ReasonerOptions | undefined)?.triggers ?? [], binding],
+    });
+  }
+
+  /**
+   * Sugar for registering a schedule-triggered (cron) reasoner.
+   *
+   * Equivalent to:
+   * ```ts
+   * app.reasoner(name, handler, { triggers: [scheduleTrigger({ cron })] });
+   * ```
+   *
+   * The reasoner name defaults to `handler.name` when not provided.
+   */
+  onSchedule<TInput = any, TOutput = any>(
+    cron: string,
+    handler: ReasonerHandler<TInput, TOutput>,
+    options?: Omit<ReasonerOptions, 'triggers'> & { name?: string; timezone?: string }
+  ) {
+    const name = options?.name || handler.name || 'on_schedule';
+    const binding = scheduleTrigger({ cron, timezone: options?.timezone });
+    const { name: _discarded, timezone: _tz, ...restOptions } = options ?? {};
+    return this.reasoner(name, handler, {
+      ...restOptions,
+      triggers: [...(restOptions as ReasonerOptions | undefined)?.triggers ?? [], binding],
+    });
   }
 
   skill<TInput = any, TOutput = any>(
@@ -632,6 +682,15 @@ export class Agent {
     if (!agentId || agentId === this.config.nodeId) {
       const local = this.reasoners.get(name);
       if (!local) throw new Error(`Reasoner not found: ${name}`);
+
+      // --- Phase 5: Trigger envelope unwrap in local call path (#510) ---
+      const { input: unwrappedInput, triggerContext } = unwrapEnvelope(input);
+      let resolvedInput = unwrappedInput;
+      if (triggerContext) {
+        const bindings = local.options?.triggers ?? [];
+        resolvedInput = applyTriggerTransform(triggerContext, bindings, unwrappedInput);
+      }
+
       const runId = parentMetadata?.runId ?? parentMetadata?.executionId ?? randomUUID();
       const rootWorkflowId = parentMetadata?.rootWorkflowId ?? parentMetadata?.workflowId ?? runId;
       const metadata = {
@@ -646,7 +705,7 @@ export class Agent {
       const dummyReq = {} as express.Request;
       const dummyRes = {} as express.Response;
       const execCtx = new ExecutionContext({
-        input,
+        input: resolvedInput,
         metadata: {
           ...metadata,
           executionId: metadata.executionId ?? randomUUID()
@@ -710,7 +769,7 @@ export class Agent {
         try {
           const result = await local.handler(
             new ReasonerContext({
-              input,
+              input: resolvedInput,
               executionId: execCtx.metadata.executionId,
               runId: execCtx.metadata.runId,
               sessionId: execCtx.metadata.sessionId,
@@ -729,7 +788,8 @@ export class Agent {
               aiClient: this.aiClient,
               memory: this.getMemoryInterface(execCtx.metadata),
               workflow: this.getWorkflowReporter(execCtx.metadata),
-              did: this.getDidInterface(execCtx.metadata, input, name),
+              did: this.getDidInterface(execCtx.metadata, resolvedInput, name),
+              trigger: triggerContext,
               costTracker: execCtx.costTracker
             })
           );
@@ -1584,7 +1644,7 @@ export class Agent {
    * reasoner hangs. Mirrors the Python SDK's `_execute_async_with_callback`.
    */
   private async runReasonerAsync(
-    reasoner: { handler: ReasonerHandler<any, any> },
+    reasoner: { handler: ReasonerHandler<any, any>; options?: import('../types/reasoner.js').ReasonerOptions },
     params: { targetName: string; input: any; metadata: ExecutionMetadata }
   ): Promise<void> {
     const executionId = params.metadata.executionId;
@@ -1685,7 +1745,7 @@ export class Agent {
   }
 
   private async runReasoner(
-    reasoner: { handler: ReasonerHandler<any, any> },
+    reasoner: { handler: ReasonerHandler<any, any>; options?: import('../types/reasoner.js').ReasonerOptions },
     params: {
       targetName: string;
       input: any;
@@ -1709,8 +1769,20 @@ export class Agent {
     // accumulated usage after the handler settles; the synchronous path binds
     // a fresh one here and attaches its summary to the 200 body below.
     const costTracker = params.costTracker ?? new CostTracker();
+
+    // --- Phase 5: Trigger envelope unwrap + TriggerContext injection (#510) ---
+    // Detect the dispatcher's {event, _meta} envelope shape. When present,
+    // unwrap the event payload, construct a TriggerContext, and apply the
+    // binding's transform (if declared). Direct calls pass through unchanged.
+    const { input: unwrappedInput, triggerContext } = unwrapEnvelope(params.input);
+    let resolvedInput = unwrappedInput;
+    if (triggerContext) {
+      const bindings = reasoner.options?.triggers ?? [];
+      resolvedInput = applyTriggerTransform(triggerContext, bindings, unwrappedInput);
+    }
+
     const execCtx = new ExecutionContext({
-      input: params.input,
+      input: resolvedInput,
       metadata: executionMetadata,
       req,
       res,
@@ -1748,7 +1820,7 @@ export class Agent {
       });
       try {
         const ctx = new ReasonerContext({
-          input: params.input,
+          input: resolvedInput,
           executionId: executionMetadata.executionId,
           runId: executionMetadata.runId,
           sessionId: executionMetadata.sessionId,
@@ -1767,8 +1839,9 @@ export class Agent {
           aiClient: this.aiClient,
           memory: this.getMemoryInterface(executionMetadata),
           workflow: this.getWorkflowReporter(executionMetadata),
-          did: this.getDidInterface(executionMetadata, params.input, params.targetName),
+          did: this.getDidInterface(executionMetadata, resolvedInput, params.targetName),
           signal: controller.signal,
+          trigger: triggerContext,
           costTracker
         });
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
@@ -109,6 +110,19 @@ func (c *approvalController) handleRequestApproval(ctx *gin.Context) {
 			"approval_request_id": *wfExec.ApprovalRequestID,
 		})
 		return
+	}
+
+	// SSRF protection: validate callback_url before storing it. Reject
+	// URLs targeting private/internal addresses (cloud metadata, localhost,
+	// RFC-1918) to prevent the control plane from being used as a proxy.
+	if req.CallbackURL != "" {
+		if err := services.ValidateWebhookURL(req.CallbackURL); err != nil {
+			ctx.JSON(http.StatusBadRequest, gin.H{
+				"error":   "invalid_callback_url",
+				"message": fmt.Sprintf("callback_url rejected: %v", err),
+			})
+			return
+		}
 	}
 
 	now := time.Now().UTC()

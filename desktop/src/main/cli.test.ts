@@ -5,6 +5,7 @@ import {
   compareVersions,
   effectiveMinVersion,
   parseAfVersion,
+  probeCli,
   selectCli
 } from './cli'
 
@@ -155,5 +156,18 @@ describe('cliCandidates', () => {
   it('omits the bundled candidate when the app has none', () => {
     const sources = cliCandidates(null).map((c) => c.source)
     expect(sources).toEqual(['managed', 'managed', 'path'])
+  })
+})
+
+describe('probeCli', () => {
+  it('resolves responds:false when spawn throws synchronously', async () => {
+    // An empty command makes spawn() throw before any listeners attach —
+    // the same shape as Windows throwing UNKNOWN for a non-PE binary on PATH.
+    // probeCli must swallow it: a rejection here fails the whole probeAll and
+    // the app never creates its tray or window.
+    await expect(probeCli({ command: '', source: 'path' })).resolves.toMatchObject({
+      responds: false,
+      version: null
+    })
   })
 })

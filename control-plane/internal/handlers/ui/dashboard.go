@@ -36,10 +36,12 @@ func NewDashboardHandler(storage storage.StorageProvider, agentService interface
 
 // DashboardSummaryResponse represents the dashboard summary response
 type DashboardSummaryResponse struct {
-	Agents      AgentsSummary     `json:"agents"`
-	Executions  ExecutionsSummary `json:"executions"`
-	SuccessRate float64           `json:"success_rate"`
-	Packages    PackagesSummary   `json:"packages"`
+	Agents     AgentsSummary     `json:"agents"`
+	Executions ExecutionsSummary `json:"executions"`
+	// SuccessRate is the percentage (0-100) of terminal executions started in
+	// the last 24 hours that succeeded; 100 when none have finished.
+	SuccessRate float64         `json:"success_rate"`
+	Packages    PackagesSummary `json:"packages"`
 }
 
 // AgentsSummary represents agent statistics

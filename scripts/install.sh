@@ -417,9 +417,14 @@ install_binary() {
   # Create install directory
   mkdir -p "$install_dir"
 
-  # Copy binary
-  cp "$binary_path" "$install_dir/agentfield"
-  chmod +x "$install_dir/agentfield"
+  # Stage to a temp file and rename into place. Overwriting an existing binary
+  # in place (cp onto the same inode) poisons the macOS kernel's cached
+  # code-signature state for that vnode, and every subsequent exec is killed
+  # with SIGKILL even though codesign --verify passes. mv gives upgrades a
+  # fresh inode and is atomic.
+  cp "$binary_path" "$install_dir/agentfield.tmp.$$"
+  chmod +x "$install_dir/agentfield.tmp.$$"
+  mv -f "$install_dir/agentfield.tmp.$$" "$install_dir/agentfield"
 
   # Create symlink for convenience (best effort)
   local symlink_created=0
@@ -652,9 +657,13 @@ install_tray() {
     fi
   fi
 
-  cp "$tray_path" "$INSTALL_DIR/af-tray"
-  chmod +x "$INSTALL_DIR/af-tray"
-  xattr -d com.apple.quarantine "$INSTALL_DIR/af-tray" 2>/dev/null || true
+  # Stage + rename for the same reason as install_binary: cp onto an existing
+  # inode makes the macOS kernel SIGKILL the binary on every exec after an
+  # upgrade.
+  cp "$tray_path" "$INSTALL_DIR/af-tray.tmp.$$"
+  chmod +x "$INSTALL_DIR/af-tray.tmp.$$"
+  xattr -d com.apple.quarantine "$INSTALL_DIR/af-tray.tmp.$$" 2>/dev/null || true
+  mv -f "$INSTALL_DIR/af-tray.tmp.$$" "$INSTALL_DIR/af-tray"
 
   # Delegate .app-bundle + launchd setup to the tray binary itself, so all of
   # that logic lives in one place (Go) and stays testable — mirroring how the

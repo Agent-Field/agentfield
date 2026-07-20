@@ -6,6 +6,227 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.111-rc.1] - 2026-07-19
+
+
+### Added
+
+- Feat(sdk/typescript): trigger system parity — dispatch, sugar, testing, demo (#510, #511, #512) (#796)
+
+Implements the three remaining sub-issues of the TypeScript SDK trigger
+parity epic (#507):
+
+#510 — Dispatch envelope unwrap + TriggerContext injection
+- New src/triggers/dispatch.ts: isTriggerEnvelope(), unwrapEnvelope(),
+  applyTriggerTransform() — detects {event, _meta} envelope shape from
+  the control plane dispatcher, constructs TriggerContext, applies the
+  matched binding's transform
+- ReasonerContext gains trigger?: TriggerContext field
+- Agent.ts runReasoner() and local call() path wired to unwrap envelopes
+- Direct calls (no envelope) pass through unchanged
+
+#511 — onEvent/onSchedule sugar + test helpers + fixtures
+- Agent.ts: app.onEvent(spec, handler) and app.onSchedule(cron, handler)
+  sugar methods that forward to app.reasoner() with triggers
+- New src/triggers/testing.ts: simulateTrigger(), simulateSchedule(),
+  loadFixture() for unit testing without a control plane
+- Copied 6 fixture JSONs from Python SDK (stripe, github, slack, cron,
+  generic_hmac, generic_bearer)
+
+#512 — examples/triggers-demo-ts + skill docs
+- New examples/triggers-demo-ts/: agent.ts (3 deterministic reasoners),
+  Dockerfile, docker-compose.yml, README.md, fire-events.sh
+- New skills/agentfield-multi-reasoner-builder/references/triggers.md
+  with Python + TypeScript scaffold reference
+
+Tests: 744 pass (75 files), including 74 new trigger-specific tests.
+Build: tsc clean, tsup ESM+DTS success. (95fe429)
+
+
+
+### Fixed
+
+- Fix(security): SSRF protection for approval callback_url (#435) (#790)
+
+* fix(security): SSRF protection for approval callback_url (#435)
+
+The approval callback_url field was accepted without SSRF validation and
+dispatched via a plain http.Client, allowing an attacker to use the
+control plane as a proxy to internal services (cloud metadata, RFC-1918,
+loopback).
+
+Changes:
+- Validate callback_url at registration time using services.ValidateWebhookURL()
+  to reject private/internal targets (localhost, 169.254.x, 10.x, 172.16.x,
+  192.168.x, ::1) before the URL is persisted.
+- Replace the plain http.Client in notifyApprovalCallback with
+  services.NewSSRFSafeClient() which enforces DNS-rebinding-safe private-IP
+  blocking at dial time.
+- Add comprehensive test coverage for both registration rejection and
+  runtime transport enforcement.
+
+Fixes #435
+
+* fix(test): allowlist loopback in webhook helper test for SSRF-safe client
+
+The existing TestExecuteReasonerAndWebhookHelpersCoverage test calls
+notifyApprovalCallback against a httptest server (127.0.0.1). After
+switching to NewSSRFSafeClient (#435), the SSRF transport rejects
+loopback as a private IP, causing the test to hang waiting for
+callbacks that never arrive.
+
+Fix: set services.SetWebhookAllowedHosts([]string{"127.0.0.1"})
+before the callback calls so the httptest server is reachable. (7fb1193)
+
+## [0.1.110] - 2026-07-18
+
+
+### Fixed
+
+- Fix(install): replace binaries atomically to avoid macOS SIGKILL on upgrade (#797)
+
+cp onto an existing binary reuses the inode, which poisons the macOS
+kernel's cached code-signature state for that vnode. Every exec after an
+upgrade is then killed with SIGKILL ("zsh: killed af") even though
+codesign --verify passes on disk. Stage to a temp file and mv into place
+so upgrades always land on a fresh inode. Applies to both the agentfield
+binary and the af-tray binary.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (1a55ddc)
+
+## [0.1.110-rc.5] - 2026-07-18
+
+
+### Fixed
+
+- Fix(desktop): survive a CLI probe candidate that throws on spawn (#793)
+
+spawn() can throw synchronously - on Windows it raises UNKNOWN when PATH
+resolves af to a non-PE file, e.g. the WSL Linux binary seen through the
+interop PATH of a dev launch. The throw happened inside probeCli's promise
+executor before any listeners attached, so the promise rejected, Promise.all
+in probeAll rejected with it, and app.whenReady's await initializeCli died
+before the tray or window were created: the app ran headless with no UI.
+
+Catch the throw and treat that candidate as not responding, matching
+probeCli's documented never-rejects contract.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (7784f32)
+
+
+
+### Testing
+
+- Test(sdk/python): expand verification.py coverage to 100% (#398) (#794)
+
+Add test_verification_extended.py covering:
+- _resolve_public_key: valid did:key resolution, invalid multicodec prefix,
+  admin key fallback, decode exceptions
+- _evaluate_constraints: all operators (==, >, <, >=, <=), invalid float
+  (fail-closed), missing params, None threshold, function-keyed constraints
+- refresh(): success path populating all caches, partial failure (one
+  endpoint 500), timestamp/initialized state, API key header propagation
+- verify_signature: full Ed25519 crypto with valid/invalid signatures,
+  nonce support, wrong key, admin key fallback
+
+Coverage on verification.py: 71% -> 100%
+
+Closes #398 (50d18c3)
+
+## [0.1.110-rc.4] - 2026-07-17
+
+
+### Fixed
+
+- Fix(control-plane): dashboard success rate defaults to 100% and actually covers 24h (#792)
+
+* fix(control-plane): dashboard success rate covers a rolling 24h window
+
+The summary endpoint computed success_rate from calendar-today (UTC)
+executions only, returned 0 when nothing had run, and counted in-flight
+executions as failures. An idle system therefore showed a red 0% under a
+label claiming "last 24 hours".
+
+Compute the rate over executions started in the rolling last-24h window,
+count only terminal executions in the denominator, and report 100 when
+none have finished - no completed runs means nothing has failed.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(web): stop double-scaling the dashboard success rate
+
+The summary endpoint returns success_rate as a 0-100 percentage, but the
+dashboard multiplied it by 100 again before display. The test fixtures
+mirrored the same wrong 0-1 scale, so the tautology passed while a real
+server response would have rendered 9100%. Align the fixtures with the
+actual API contract.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (623084e)
+
+- Fix(desktop): correct Windows tray icon theme and DPI rendering (#791)
+
+* feat(desktop): generate multi-size ICO tray glyphs
+
+The Windows tray ignores PNG scale-factor representations
+(electron/electron#33044) and upscales the 16px bitmap on >100% displays,
+so make-icons.mjs now also emits one .ico per tray variant with
+16/20/24/32/48 frames (20 covers the common 125% scaling). The PNGs stay
+for the Linux representation path.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): render the Windows tray glyph correctly
+
+Two fixes for the washed-out / blurry tray icon on Windows:
+
+- Pick the light/dark glyph from the *system* (taskbar) theme via
+  nativeTheme.shouldUseDarkColorsForSystemIntegratedUI instead of
+  shouldUseDarkColors, which tracks the separately-configurable *apps*
+  theme. With mixed themes (dark taskbar + light apps is common) the
+  tray wore a near-invisible glyph that read as the offline icon. The
+  poll re-checks the theme too, since Windows does not reliably emit
+  nativeTheme 'updated' for system-theme-only flips.
+- Load the tray image from the multi-size .ico on win32 so Electron
+  serves a DPI-correct frame; scale-factor PNG representations are
+  ignored by the Windows tray (electron/electron#33044) and the 16px
+  bitmap got upscaled on >100% displays.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (6da0607)
+
+## [0.1.110-rc.3] - 2026-07-17
+
+
+### Chores
+
+- Chore(deps): bump mcp in /sdk/python in the uv group across 1 directory (#785)
+
+Bumps the uv group with 1 update in the /sdk/python directory: [mcp](https://github.com/modelcontextprotocol/python-sdk).
+
+
+Updates `mcp` from 1.27.0 to 1.28.1
+- [Release notes](https://github.com/modelcontextprotocol/python-sdk/releases)
+- [Changelog](https://github.com/modelcontextprotocol/python-sdk/blob/main/RELEASE.md)
+- [Commits](https://github.com/modelcontextprotocol/python-sdk/compare/v1.27.0...v1.28.1)
+
+---
+updated-dependencies:
+- dependency-name: mcp
+  dependency-version: 1.28.1
+  dependency-type: indirect
+  dependency-group: uv
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (75e942a)
+
 ## [0.1.110-rc.2] - 2026-07-17
 
 

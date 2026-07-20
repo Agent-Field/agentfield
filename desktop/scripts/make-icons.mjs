@@ -12,8 +12,9 @@
 //   build/icon.icns                      macOS app icon (Apple-grid margins)
 //   build/icon.png                       Windows/Linux app icon source (1024)
 //   resources/icon.png                   runtime window icon (win/linux, 256)
-//   resources/tray/tray-<s>-<g>-<n>.png  Windows tray glyphs
+//   resources/tray/tray-<s>-<g>-<n>.png  Linux tray glyphs (1x/1.5x/2x reps)
 //                                        s: active|inactive  g: light|dark
+//   resources/tray/tray-<s>-<g>.ico      Windows tray glyphs (16…48 frames)
 //   ../control-plane/cmd/af-tray/assets/appicon.icns   same icns for af-tray
 
 import { BrowserWindow, app } from 'electron'
@@ -133,6 +134,36 @@ function buildIcns(pngBySize) {
   return Buffer.concat([head, body])
 }
 
+// ---- ICO container -----------------------------------------------------------
+// Same idea as icns: a directory of PNG blobs. ICONDIR (6 bytes), then one
+// 16-byte ICONDIRENTRY per frame, then the PNG bytes. Windows accepts
+// PNG-compressed frames at any size since Vista.
+
+function buildIco(pngBySize) {
+  const sizes = [...pngBySize.keys()].sort((a, b) => a - b)
+  const header = Buffer.alloc(6)
+  header.writeUInt16LE(0, 0) // reserved
+  header.writeUInt16LE(1, 2) // type: icon
+  header.writeUInt16LE(sizes.length, 4)
+  const entries = []
+  const blobs = []
+  let offset = 6 + 16 * sizes.length
+  for (const size of sizes) {
+    const png = pngBySize.get(size)
+    const entry = Buffer.alloc(16)
+    entry.writeUInt8(size >= 256 ? 0 : size, 0) // width (0 = 256)
+    entry.writeUInt8(size >= 256 ? 0 : size, 1) // height
+    entry.writeUInt16LE(1, 4) // color planes
+    entry.writeUInt16LE(32, 6) // bits per pixel
+    entry.writeUInt32LE(png.length, 8)
+    entry.writeUInt32LE(offset, 12)
+    offset += png.length
+    entries.push(entry)
+    blobs.push(png)
+  }
+  return Buffer.concat([header, ...entries, ...blobs])
+}
+
 // ---- Rasterizer ---------------------------------------------------------------
 
 app.disableHardwareAcceleration()
@@ -182,16 +213,21 @@ app.whenReady().then(async () => {
   writeFileSync(out('build', 'icon.png'), await rasterize(win, winIconSVG(1024), 1024))
   writeFileSync(out('resources', 'icon.png'), await rasterize(win, winIconSVG(256), 256))
 
-  // Tray glyphs: 16 (1x), 24 (1.5x), 32 (2x) per variant.
+  // Tray glyphs. Linux consumes the PNGs as 1x/1.5x/2x representations. The
+  // Windows tray ignores PNG scale representations (electron/electron#33044) —
+  // it only picks a DPI-correct frame from a path-loaded .ico, so each variant
+  // also ships as a multi-size ico (20 covers the common 125% scaling).
   for (const active of [true, false]) {
     for (const glyph of ['light', 'dark']) {
-      for (const size of [16, 24, 32]) {
-        const name = `tray-${active ? 'active' : 'inactive'}-${glyph}-${size}.png`
-        writeFileSync(
-          out('resources', 'tray', name),
-          await rasterize(win, traySVG(size, active, glyph), size)
-        )
+      const stem = `tray-${active ? 'active' : 'inactive'}-${glyph}`
+      const pngs = new Map()
+      for (const size of [16, 20, 24, 32, 48]) {
+        pngs.set(size, await rasterize(win, traySVG(size, active, glyph), size))
       }
+      for (const size of [16, 24, 32]) {
+        writeFileSync(out('resources', 'tray', `${stem}-${size}.png`), pngs.get(size))
+      }
+      writeFileSync(out('resources', 'tray', `${stem}.ico`), buildIco(pngs))
     }
   }
 

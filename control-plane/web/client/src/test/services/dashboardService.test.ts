@@ -7,7 +7,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 const SUMMARY_FIXTURE = {
   agents: { running: 3, total: 5 },
   executions: { today: 42, yesterday: 38 },
-  success_rate: 0.95,
+  success_rate: 95,
   packages: { available: 10, installed: 7 },
 };
 
@@ -98,7 +98,7 @@ describe('getDashboardSummary', () => {
     expect(result.agents.running).toBe(3);
     expect(result.agents.total).toBe(5);
     expect(result.executions.today).toBe(42);
-    expect(result.success_rate).toBe(0.95);
+    expect(result.success_rate).toBe(95);
     expect(result.packages.installed).toBe(7);
   });
 
