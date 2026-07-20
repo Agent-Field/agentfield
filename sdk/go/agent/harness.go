@@ -82,5 +82,12 @@ func (a *Agent) HarnessRunner() *harness.Runner {
 //	    Model: "sonnet",
 //	})
 func (a *Agent) Harness(ctx context.Context, prompt string, schema map[string]any, dest any, opts harness.Options) (*harness.Result, error) {
-	return a.HarnessRunner().Run(ctx, prompt, schema, dest, opts)
+	result, err := a.HarnessRunner().Run(ctx, prompt, schema, dest, opts)
+	if err == nil {
+		// Record the run's token/cost usage into the current execution's
+		// cost tracker so the per-reasoner usage rollup includes coding-agent
+		// runs alongside plain LLM calls.
+		a.recordHarnessUsage(ctx, result, opts)
+	}
+	return result, err
 }

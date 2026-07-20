@@ -256,6 +256,11 @@ func (p *OpenCodeProvider) Execute(ctx context.Context, prompt string, options O
 	}
 	raw.Metrics.NumTurns = numTurns
 	raw.Metrics.CostUSD = costFromEvents(events)
+	tokens := extractTokenUsage(events)
+	raw.Metrics.InputTokens = tokens.inputTokens
+	raw.Metrics.OutputTokens = tokens.outputTokens
+	raw.Metrics.CacheReadTokens = tokens.cacheReadTokens
+	raw.Metrics.CacheCreationTokens = tokens.cacheCreationTokens
 
 	return raw, nil
 }

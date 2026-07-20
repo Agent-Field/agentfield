@@ -30,6 +30,14 @@ type Metrics struct {
 	// counterparts derive cost via litellm token estimation leave it nil in Go
 	// because there is no Go equivalent of litellm's pricing database.
 	CostUSD *float64
+
+	// Token accounting parsed from the provider's output. Left at zero when
+	// the provider does not expose token counts. Mirrors the Python SDK's
+	// Metrics token fields.
+	InputTokens         int
+	OutputTokens        int
+	CacheReadTokens     int
+	CacheCreationTokens int
 }
 
 // RawResult is the output from a single provider execution before schema
@@ -68,6 +76,17 @@ type Result struct {
 	DurationMS int
 	SessionID  string
 	Messages   []map[string]any
+
+	// Token accounting aggregated across every provider execution that
+	// contributed to this result (including failed retry attempts). Zero when
+	// the provider does not report token counts. TotalTokens is
+	// input+output — cache tokens are accounted separately. Mirrors the
+	// Python SDK's HarnessResult token fields.
+	InputTokens         int
+	OutputTokens        int
+	CacheReadTokens     int
+	CacheCreationTokens int
+	TotalTokens         int
 }
 
 // Text returns the result text, or empty string if nil.

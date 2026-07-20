@@ -81,7 +81,7 @@ echo '{"type":"result","result":"ok","session_id":"s1","num_turns":1}'
 // when nothing reported a cost (Python _accumulate_metrics semantics).
 func TestAccumulateMetrics_Cost(t *testing.T) {
 	t.Run("nil when no attempt reports cost", func(t *testing.T) {
-		cost, _, _, _ := accumulateMetrics([]*RawResult{
+		cost, _, _, _, _ := accumulateMetrics([]*RawResult{
 			{Metrics: Metrics{NumTurns: 1}},
 			{Metrics: Metrics{NumTurns: 1}},
 		})
@@ -90,7 +90,7 @@ func TestAccumulateMetrics_Cost(t *testing.T) {
 
 	t.Run("sums present costs", func(t *testing.T) {
 		c1, c2 := 0.10, 0.25
-		cost, _, _, _ := accumulateMetrics([]*RawResult{
+		cost, _, _, _, _ := accumulateMetrics([]*RawResult{
 			{Metrics: Metrics{CostUSD: &c1}},
 			{Metrics: Metrics{NumTurns: 1}}, // no cost — skipped
 			{Metrics: Metrics{CostUSD: &c2}},

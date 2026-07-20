@@ -244,4 +244,9 @@ func (p *CodexProvider) parseJSONLOutput(stdout string, raw *RawResult) {
 	if numTurns == 0 && len(messages) > 0 {
 		raw.Metrics.NumTurns = len(messages)
 	}
+	tokens := extractTokenUsage(messages)
+	raw.Metrics.InputTokens = tokens.inputTokens
+	raw.Metrics.OutputTokens = tokens.outputTokens
+	raw.Metrics.CacheReadTokens = tokens.cacheReadTokens
+	raw.Metrics.CacheCreationTokens = tokens.cacheCreationTokens
 }

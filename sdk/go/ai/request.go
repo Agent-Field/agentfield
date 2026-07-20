@@ -40,6 +40,17 @@ type Request struct {
 
 	// ToolChoice controls how the model selects tools ("auto", "none", or specific)
 	ToolChoice interface{} `json:"tool_choice,omitempty"`
+
+	// Usage opts the request into provider-native usage accounting. For
+	// OpenRouter, {"usage": {"include": true}} makes the response's usage
+	// object carry the native cost of the call; the client sets it
+	// automatically for OpenRouter requests.
+	Usage *RequestUsage `json:"usage,omitempty"`
+}
+
+// RequestUsage is the request-body usage accounting opt-in (OpenRouter shape).
+type RequestUsage struct {
+	Include bool `json:"include"`
 }
 
 // ToolDefinition describes a tool available to the model.
