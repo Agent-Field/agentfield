@@ -128,6 +128,9 @@ class ReasonerEntry:
     input_types: Dict[str, tuple]  # (type, default) tuples - not Pydantic model
     output_type: type
     tags: List[str] = field(default_factory=list)
+    # Human/agent-facing summary sent to the control plane and surfaced by
+    # discovery + `af ls`. Defaults to the function docstring's first paragraph.
+    description: str = ""
     vc_enabled: Optional[bool] = None
     # Trigger bindings declared via @reasoner(triggers=[...]) or sugar
     # decorators @on_event / @on_schedule. The control plane upserts a
@@ -147,7 +150,21 @@ class SkillEntry:
     input_types: Dict[str, tuple]  # (type, default) tuples
     output_type: type
     tags: List[str] = field(default_factory=list)
+    # Same contract as ReasonerEntry.description.
+    description: str = ""
     vc_enabled: Optional[bool] = None
+
+
+def _docstring_summary(func: Callable) -> str:
+    """First paragraph of the function docstring, whitespace-collapsed.
+
+    Used as the default reasoner/skill description sent to the control plane —
+    a one-to-few-line summary reads well in discovery listings, while the rest
+    of the docstring (Args/Returns) stays local.
+    """
+    doc = inspect.getdoc(func) or ""
+    first_paragraph = doc.split("\n\n", 1)[0]
+    return " ".join(first_paragraph.split())
 
 
 # Import aiohttp for fire-and-forget HTTP calls
@@ -1034,6 +1051,9 @@ class Agent(FastAPI):
             if entry.vc_enabled is not None
             else self._agent_vc_enabled,
         }
+        description = getattr(entry, "description", "")
+        if description:
+            metadata["description"] = description
         triggers = getattr(entry, "triggers", None)
         accepts_webhook = getattr(entry, "accepts_webhook", "warn")
         if kind == "reasoner":
@@ -1940,6 +1960,7 @@ class Agent(FastAPI):
         name: Optional[str] = None,
         tags: Optional[List[str]] = None,
         *,
+        description: Optional[str] = None,
         vc_enabled: Optional[bool] = None,
         require_realtime_validation: bool = False,
         triggers: Optional[List[Any]] = None,
@@ -1953,6 +1974,7 @@ class Agent(FastAPI):
         name: Optional[str] = None,
         tags: Optional[List[str]] = None,
         *,
+        description: Optional[str] = None,
         vc_enabled: Optional[bool] = None,
         require_realtime_validation: bool = False,
         triggers: Optional[List[Any]] = None,
@@ -1965,6 +1987,7 @@ class Agent(FastAPI):
         name: Optional[str] = None,
         tags: Optional[List[str]] = None,
         *,
+        description: Optional[str] = None,
         vc_enabled: Optional[bool] = None,
         require_realtime_validation: bool = False,
         triggers: Optional[List[Any]] = None,
@@ -1980,6 +2003,11 @@ class Agent(FastAPI):
             path (str, optional): The API endpoint path for this reasoner. Defaults to /reasoners/{function_name}.
             name (str, optional): Explicit AgentField registration ID. Defaults to the function name.
             tags (List[str] | None, optional): Organizational tags that travel with the reasoner metadata.
+                The "entrypoint" tag marks a reasoner as an intended external entry point; discovery
+                and `af ls` surface those first.
+            description (str, optional): Caller-facing summary registered with the control plane and
+                shown by discovery / `af ls` — say what the reasoner does and when to call it.
+                Defaults to the first paragraph of the function docstring.
             vc_enabled (bool | None, optional): Override VC generation for this reasoner. True forces VC creation,
                 False disables it, and None inherits the agent-level policy.
             triggers (list, optional): EventTrigger / ScheduleTrigger declarations. Same shape as the
@@ -1990,6 +2018,7 @@ class Agent(FastAPI):
         direct_registration, decorator_path = split_direct_registration_arg(path)
         decorator_name = name
         decorator_tags = tags
+        decorator_description = description
         kwarg_triggers = list(triggers) if triggers else None
         kwarg_accepts_webhook = accepts_webhook
 
@@ -2230,6 +2259,8 @@ class Agent(FastAPI):
                 input_types=input_fields,  # Store (type, default) tuples, not Pydantic model
                 output_type=return_type,
                 tags=resolved_tags,
+                description=(decorator_description or "").strip()
+                or _docstring_summary(func),
                 vc_enabled=vc_setting,
                 triggers=list(merged_triggers or []),
                 accepts_webhook=resolved_accepts_webhook,
@@ -2892,6 +2923,7 @@ class Agent(FastAPI):
         path: Optional[str] = None,
         name: Optional[str] = None,
         *,
+        description: Optional[str] = None,
         vc_enabled: Optional[bool] = None,
         require_realtime_validation: bool = False,
     ) -> Callable[P, T]: ...
@@ -2903,6 +2935,7 @@ class Agent(FastAPI):
         path: Optional[str] = None,
         name: Optional[str] = None,
         *,
+        description: Optional[str] = None,
         vc_enabled: Optional[bool] = None,
         require_realtime_validation: bool = False,
     ) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
@@ -2913,6 +2946,7 @@ class Agent(FastAPI):
         path: Optional[str] = None,
         name: Optional[str] = None,
         *,
+        description: Optional[str] = None,
         vc_enabled: Optional[bool] = None,
         require_realtime_validation: bool = False,
     ):
@@ -2936,6 +2970,8 @@ class Agent(FastAPI):
             path (str, optional): Custom API endpoint path for this skill.
                                 Defaults to "/skills/{function_name}".
             name (str, optional): Explicit AgentField registration ID. Defaults to the function name.
+            description (str, optional): Caller-facing summary registered with the control plane and
+                shown by discovery. Defaults to the first paragraph of the function docstring.
             vc_enabled (bool | None, optional): Override VC generation for this skill. True forces VC creation,
                 False disables it, and None inherits the agent-level policy.
 
@@ -3015,6 +3051,7 @@ class Agent(FastAPI):
         direct_registration, decorator_tags = split_direct_registration_arg(tags)
         decorator_path = path
         decorator_name = name
+        decorator_description = description
 
         def decorator(func: Callable) -> Callable:
             # Extract function metadata
@@ -3274,6 +3311,8 @@ class Agent(FastAPI):
                 input_types=input_fields,  # Store (type, default) tuples, not Pydantic model
                 output_type=return_type,
                 tags=resolved_tags,
+                description=(decorator_description or "").strip()
+                or _docstring_summary(func),
                 vc_enabled=vc_setting,
             )
             # NOTE: Legacy self.skills.append() removed - skills property generates list on-demand
