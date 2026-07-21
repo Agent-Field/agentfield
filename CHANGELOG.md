@@ -6,6 +6,94 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.112-rc.1] - 2026-07-20
+
+
+### Other
+
+- Fix/fire and forget (#723)
+
+* fix: fixed the blocking fire and forget issue.
+
+- Wrapped all functions (`notify_call_start`, `notify_call_complete` and `notify_call_error`) into `asyncio.Task` so parent function don't have to await them.
+- Converted the `_emit_execution_transition_log` to sync as underlying code is sync and execute it to a separate thread.
+
+* revert: I reverted the execution of `_emit_execution_transition_log` method using `asyncio.to_thread()` because of mismatch order.
+
+- Considering the `log_execution` inside the function is a lightweight function which don't takeover the `event_loop` for long time.
+
+* lint: Removed unused import
+
+* fix: Added missing background task cleanup in `_cleanup_async_resources` method.
+
+* fix: Fixed the `F401` lint error from `test_did_auth_invariants` test.
+
+* test: Updated the test for updated `_cleanup_async_resources`.
+
+- Initially mock `Agent` is created through __new__ which by pass __init__ and it doesn't contain `_background_tasks` property.
+- I added `_background_tasks` property and added new assert in `test_cleanup_async_resources` test.
+
+* fix: Used a queue type notification dispatcher to maintain the order of notification.
+-  class used a queue internally to maintain order. It itself run as background task so it will not block it's parent coroutine.
+- Initialization is done inside life cycle (lazily) so that queue and task attached them self with the ASGI optimized event loop (uvloop)
+- Some tests are modified as a new property introduced, so a similar dummy class also introduced for tests.
+
+* test: fix  test and added test for
+- Previously I tested againest a blank  set which result true always but now 5 async tasks will be added to  to check is the set is empty or not after calling .
+- As notification dispatcher's shutdown method also linked to  so I created a dummpy class to check if it's shutdown is called properly or not.
+
+* fix(sdk/python): lazily start the notification dispatcher on first submit
+
+submit() previously dropped notifications silently whenever the queue was
+not yet initialized, and start() only ran inside the AgentServer lifespan.
+Any execution path that never runs that lifespan — CLI `call` mode
+(asyncio.run on a tracked function) or mounting the Agent app in uvicorn
+directly — lost all workflow telemetry, where the pre-#622 code delivered
+it inline.
+
+submit() now starts the dispatcher lazily on the running loop, so it still
+binds to uvicorn's uvloop when serving; the lifespan start() remains as an
+idempotent fast path. The no-running-loop fallback keeps the old
+drop-with-dev-log behavior.
+
+Also removes the unused _create_coro_factory helper and the unreferenced
+is_start() method (and its mirror in the test helper), and drops the
+now-unneeded manual dispatcher start in test_agent_integration so that
+test exercises the lazy path.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(sdk/python): behavior tests for the non-blocking notification path
+
+Four tests derived from the #622 validation contract rather than the
+implementation, using a fake control-plane client whose event POSTs are
+slow and recorded in arrival order:
+
+- execute_with_tracking returns without waiting for the start/complete
+  telemetry POSTs (the pre-fix inline awaits could never beat a single
+  POST delay)
+- events for each execution arrive running -> terminal, under concurrent
+  executions including a failing reasoner
+- _cleanup_async_resources delivers every queued event before the HTTP
+  client closes
+- a dispatcher that was never explicitly started still delivers
+  (regression test for the CLI-call-mode silent drop)
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* chore(sdk/python): fix typos and format nits in the dispatcher change
+
+- "dilivery" -> "delivery" in the dispatcher error log
+- ruff-format the two hunks the fix introduced (keyword spacing in
+  wait_for's timeout, range(1, 6) in the cleanup test)
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (b2a5eef)
+
 ## [0.1.111] - 2026-07-20
 
 ## [0.1.111-rc.3] - 2026-07-20

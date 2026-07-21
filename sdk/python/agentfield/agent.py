@@ -1,3 +1,4 @@
+from typing import Coroutine
 import asyncio
 import inspect
 import os
@@ -507,6 +508,73 @@ def _bind_trigger_payload(
     return (), {}
 
 
+class _NotificationDispatcher:
+    _SHUTDOWN = object()
+
+    def __init__(self, dev_mode: bool):
+        self._queue: asyncio.Queue[Any] | None = None
+        self._dispatcher_task: asyncio.Task[Any] | None = None
+        self._dev_mode = dev_mode
+
+    def start(self):
+        if self._dispatcher_task is not None:
+            return
+        self._queue = asyncio.Queue()
+        self._dispatcher_task = asyncio.create_task(self._run())
+
+    def submit(self, coro_factory: Callable[[], Coroutine[Any, Any, None]]):
+        if self._queue is None:
+            # Lazily start on first submit so execution paths that never run
+            # the server lifespan (CLI `call` mode, direct ASGI mounts) still
+            # deliver notifications. submit() is always invoked from a
+            # coroutine, so the dispatcher task binds to the running loop
+            # (uvicorn's uvloop when serving).
+            try:
+                self.start()
+            except RuntimeError:
+                if self._dev_mode:
+                    log_error(
+                        "Notification dropped: no running event loop to start "
+                        "the notification dispatcher"
+                    )
+                return
+        self._queue.put_nowait(coro_factory)
+
+    async def _run(self):
+        if self._queue is None or self._dispatcher_task is None:
+            return
+        while True:
+            coro_factory = await self._queue.get()
+            if coro_factory is _NotificationDispatcher._SHUTDOWN:
+                self._queue.task_done()
+                break
+            try:
+                await coro_factory()
+            except Exception as e:
+                if self._dev_mode:
+                    log_error(f"Notification delivery failed: {e}")
+            finally:
+                self._queue.task_done()
+
+    async def shutdown(self, timeout: int = 5):
+        if self._dispatcher_task is None or self._queue is None:
+            return
+        self._queue.put_nowait(_NotificationDispatcher._SHUTDOWN)
+        try:
+            await asyncio.wait_for(self._dispatcher_task, timeout=timeout)
+        except asyncio.TimeoutError:
+            self._dispatcher_task.cancel()
+            try:
+                await self._dispatcher_task
+            except asyncio.CancelledError:
+                pass
+        except Exception as e:
+            if self._dev_mode:
+                log_error(f"Notification dispatcher shutdown failed: {e}")
+        finally:
+            self._dispatcher_task = None
+
+
 class Agent(FastAPI):
     """
     AgentField Agent - FastAPI subclass for creating AI agent nodes.
@@ -717,6 +785,9 @@ class Agent(FastAPI):
 
         # prevent GC of fire-and-forget async execution tasks
         self._background_tasks: set[asyncio.Task] = set()
+
+        # Manage background notifications in order
+        self._notification_dispatcher = _NotificationDispatcher(dev_mode=self.dev_mode)
 
         # Cooperative cancel registry. The control plane's cancel dispatcher
         # POSTs /_internal/executions/{id}/cancel to signal that the user's
@@ -2313,12 +2384,15 @@ class Agent(FastAPI):
 
         if hasattr(self, "workflow_handler") and self.workflow_handler:
             execution_context.reasoner_name = reasoner_id
-            await self.workflow_handler.notify_call_start(
-                execution_context.execution_id,
-                execution_context,
-                reasoner_id,
-                payload_dict,
-                parent_execution_id=execution_context.parent_execution_id,
+
+            self._notification_dispatcher.submit(
+                lambda: self.workflow_handler.notify_call_start(
+                    execution_context.execution_id,
+                    execution_context,
+                    reasoner_id,
+                    payload_dict,
+                    parent_execution_id=execution_context.parent_execution_id,
+                )
             )
 
         start_time = time.time()
@@ -2426,29 +2500,36 @@ class Agent(FastAPI):
 
             if hasattr(self, "workflow_handler") and self.workflow_handler:
                 end_time = time.time()
-                await self.workflow_handler.notify_call_complete(
-                    execution_context.execution_id,
-                    execution_context.workflow_id,
-                    result,
-                    int((end_time - start_time) * 1000),
-                    execution_context,
-                    input_data=payload_dict,
-                    parent_execution_id=execution_context.parent_execution_id,
+
+                self._notification_dispatcher.submit(
+                    lambda: self.workflow_handler.notify_call_complete(
+                        execution_context.execution_id,
+                        execution_context.workflow_id,
+                        result,
+                        int((end_time - start_time) * 1000),
+                        execution_context,
+                        input_data=payload_dict,
+                        parent_execution_id=execution_context.parent_execution_id,
+                    )
                 )
 
             return result
         except asyncio.CancelledError as cancel_err:
             if hasattr(self, "workflow_handler") and self.workflow_handler:
                 end_time = time.time()
-                await self.workflow_handler.notify_call_error(
-                    execution_context.execution_id,
-                    execution_context.workflow_id,
-                    "Execution cancelled by upstream client",
-                    int((end_time - start_time) * 1000),
-                    execution_context,
-                    input_data=payload_dict,
-                    parent_execution_id=execution_context.parent_execution_id,
+
+                self._notification_dispatcher.submit(
+                    lambda: self.workflow_handler.notify_call_error(
+                        execution_context.execution_id,
+                        execution_context.workflow_id,
+                        "Execution cancelled by upstream client",
+                        int((end_time - start_time) * 1000),
+                        execution_context,
+                        input_data=payload_dict,
+                        parent_execution_id=execution_context.parent_execution_id,
+                    )
                 )
+
             raise cancel_err
         except ExecuteError as exec_err:
             # Propagate upstream HTTP status codes from cross-agent calls.
@@ -2456,15 +2537,20 @@ class Agent(FastAPI):
             # (unhandled exception) and then 502 at the outer control plane.
             if hasattr(self, "workflow_handler") and self.workflow_handler:
                 end_time = time.time()
-                await self.workflow_handler.notify_call_error(
-                    execution_context.execution_id,
-                    execution_context.workflow_id,
-                    str(exec_err),
-                    int((end_time - start_time) * 1000),
-                    execution_context,
-                    input_data=payload_dict,
-                    parent_execution_id=execution_context.parent_execution_id,
+                error_msg = str(exec_err)
+
+                self._notification_dispatcher.submit(
+                    lambda: self.workflow_handler.notify_call_error(
+                        execution_context.execution_id,
+                        execution_context.workflow_id,
+                        error_msg,
+                        int((end_time - start_time) * 1000),
+                        execution_context,
+                        input_data=payload_dict,
+                        parent_execution_id=execution_context.parent_execution_id,
+                    )
                 )
+
             detail = {"error": str(exec_err)}
             if exec_err.error_details:
                 detail["error_details"] = exec_err.error_details
@@ -2476,28 +2562,37 @@ class Agent(FastAPI):
             if hasattr(self, "workflow_handler") and self.workflow_handler:
                 end_time = time.time()
                 detail = getattr(http_exc, "detail", None) or str(http_exc)
-                await self.workflow_handler.notify_call_error(
-                    execution_context.execution_id,
-                    execution_context.workflow_id,
-                    detail,
-                    int((end_time - start_time) * 1000),
-                    execution_context,
-                    input_data=payload_dict,
-                    parent_execution_id=execution_context.parent_execution_id,
+
+                self._notification_dispatcher.submit(
+                    lambda: self.workflow_handler.notify_call_error(
+                        execution_context.execution_id,
+                        execution_context.workflow_id,
+                        detail,
+                        int((end_time - start_time) * 1000),
+                        execution_context,
+                        input_data=payload_dict,
+                        parent_execution_id=execution_context.parent_execution_id,
+                    )
                 )
+
             raise
         except Exception as exc:
             if hasattr(self, "workflow_handler") and self.workflow_handler:
                 end_time = time.time()
-                await self.workflow_handler.notify_call_error(
-                    execution_context.execution_id,
-                    execution_context.workflow_id,
-                    str(exc),
-                    int((end_time - start_time) * 1000),
-                    execution_context,
-                    input_data=payload_dict,
-                    parent_execution_id=execution_context.parent_execution_id,
+                error_msg = str(exc)
+
+                self._notification_dispatcher.submit(
+                    lambda: self.workflow_handler.notify_call_error(
+                        execution_context.execution_id,
+                        execution_context.workflow_id,
+                        error_msg,
+                        int((end_time - start_time) * 1000),
+                        execution_context,
+                        input_data=payload_dict,
+                        parent_execution_id=execution_context.parent_execution_id,
+                    )
                 )
+
             raise
         finally:
             reset_execution_context(context_token)
@@ -3198,39 +3293,50 @@ class Agent(FastAPI):
                 self._current_execution_context = child_context
                 input_payload = _build_invocation_payload(args, kwargs)
 
-                await self.workflow_handler.notify_call_start(
-                    child_context.execution_id,
-                    child_context,
-                    skill_id,
-                    input_payload,
-                    parent_execution_id=current_context.execution_id,
+                self._notification_dispatcher.submit(
+                    lambda: self.workflow_handler.notify_call_start(
+                        child_context.execution_id,
+                        child_context,
+                        skill_id,
+                        input_payload,
+                        parent_execution_id=current_context.execution_id,
+                    )
                 )
 
                 start_time = time.time()
                 try:
                     result = await original_func(*args, **kwargs)
                     duration_ms = int((time.time() - start_time) * 1000)
-                    await self.workflow_handler.notify_call_complete(
-                        child_context.execution_id,
-                        child_context.workflow_id,
-                        result,
-                        duration_ms,
-                        child_context,
-                        input_data=input_payload,
-                        parent_execution_id=current_context.execution_id,
+
+                    self._notification_dispatcher.submit(
+                        lambda: self.workflow_handler.notify_call_complete(
+                            child_context.execution_id,
+                            child_context.workflow_id,
+                            result,
+                            duration_ms,
+                            child_context,
+                            input_data=input_payload,
+                            parent_execution_id=current_context.execution_id,
+                        )
                     )
+
                     return result
                 except Exception as exc:
                     duration_ms = int((time.time() - start_time) * 1000)
-                    await self.workflow_handler.notify_call_error(
-                        child_context.execution_id,
-                        child_context.workflow_id,
-                        str(exc),
-                        duration_ms,
-                        child_context,
-                        input_data=input_payload,
-                        parent_execution_id=current_context.execution_id,
+                    error_msg = str(exc)
+
+                    self._notification_dispatcher.submit(
+                        lambda: self.workflow_handler.notify_call_error(
+                            child_context.execution_id,
+                            child_context.workflow_id,
+                            error_msg,
+                            duration_ms,
+                            child_context,
+                            input_data=input_payload,
+                            parent_execution_id=current_context.execution_id,
+                        )
                     )
+
                     raise
                 finally:
                     reset_execution_context(token)
@@ -4550,6 +4656,29 @@ class Agent(FastAPI):
             except Exception as e:
                 if self.dev_mode:
                     log_debug(f"Error cleaning up AsyncExecutionManager: {e}")
+
+        if self._background_tasks:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*self._background_tasks, return_exceptions=True),
+                    timeout=5,
+                )
+                if self.dev_mode:
+                    log_debug("Background tasks are cleaned up")
+            except Exception as e:
+                if self.dev_mode:
+                    log_error(f"Error cleaning up background tasks: {e}")
+            finally:
+                self._background_tasks.clear()
+        try:
+            await self._notification_dispatcher.shutdown()
+            if self.dev_mode:
+                log_debug(
+                    "Notification dispatcher queue cleared and dispatcher shutdown"
+                )
+        except Exception as e:
+            if self.dev_mode:
+                log_error(f"Error while shutdown notification dispatcher: {e}")
 
         if getattr(self, "client", None) is not None:
             try:
