@@ -78,6 +78,64 @@ func TestListReasonersHandlerRecencyAndFilters(t *testing.T) {
 	require.NotNil(t, body.Reasoners[0].LastRunAt)
 }
 
+// Validation contract: rows carry the reasoner's description (record field
+// first, legacy metadata map as fallback) and tags; entrypoints=true filters
+// to entrypoint-tagged reasoners; among never-run rows, entry points list
+// first so a fresh registry shows callable surfaces on top.
+func TestListReasonersHandlerDescriptionsAndEntrypoints(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := &reasonerCatalogStoreStub{
+		agents: []*types.AgentNode{
+			{
+				ID:           "swe-planner",
+				HealthStatus: types.HealthStatusActive,
+				Reasoners: []types.ReasonerDefinition{
+					{ID: "run_coder", Description: "Internal coding role"},
+					{
+						ID:          "implement_issue",
+						Description: "Implement one scoped issue on a branch",
+						Tags:        []string{"swe-issue", types.TagEntrypoint},
+					},
+					{ID: "legacy_only"},
+				},
+				Metadata: types.AgentMetadata{
+					Custom: map[string]interface{}{
+						"descriptions": map[string]interface{}{
+							"legacy_only": "From the metadata map",
+						},
+					},
+				},
+			},
+		},
+	}
+	router := gin.New()
+	router.GET("/api/v1/reasoners", ListReasonersHandler(store))
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/reasoners", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body ReasonerCatalogResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, 3, body.Total)
+	// No rows have runs -> the entrypoint-tagged reasoner sorts first.
+	require.Equal(t, "implement_issue", body.Reasoners[0].Reasoner)
+	require.Equal(t, "Implement one scoped issue on a branch", body.Reasoners[0].Description)
+	require.Contains(t, body.Reasoners[0].Tags, "entrypoint")
+	byName := map[string]ReasonerCatalogRow{}
+	for _, row := range body.Reasoners {
+		byName[row.Reasoner] = row
+	}
+	require.Equal(t, "From the metadata map", byName["legacy_only"].Description)
+
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/reasoners?entrypoints=true", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	body = ReasonerCatalogResponse{}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, 1, body.Total)
+	require.Equal(t, "implement_issue", body.Reasoners[0].Reasoner)
+}
+
 func TestListReasonersHandlerErrorsAndTruncation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

@@ -216,9 +216,16 @@ type CallbackTestResult struct {
 	LatencyMS int64  `json:"latency_ms,omitempty"`
 }
 
+// TagEntrypoint marks a reasoner as an intended external entry point of its
+// node (as opposed to internal plumbing other reasoners call). Discovery
+// surfaces and `af ls` can filter on it, so callers browsing a node see the
+// reasoners they are meant to invoke first.
+const TagEntrypoint = "entrypoint"
+
 // ReasonerDefinition defines a reasoner provided by an agent node.
 type ReasonerDefinition struct {
 	ID             string           `json:"id"`
+	Description    string           `json:"description,omitempty"`
 	InputSchema    json.RawMessage  `json:"input_schema"`
 	OutputSchema   json.RawMessage  `json:"output_schema"`
 	MemoryConfig   MemoryConfig     `json:"memory_config"`
@@ -232,6 +239,7 @@ type ReasonerDefinition struct {
 // SkillDefinition defines a skill provided by an agent node.
 type SkillDefinition struct {
 	ID           string          `json:"id"`
+	Description  string          `json:"description,omitempty"`
 	InputSchema  json.RawMessage `json:"input_schema"`
 	Tags         []string        `json:"tags"`
 	ProposedTags []string        `json:"proposed_tags,omitempty"`
