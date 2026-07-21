@@ -640,3 +640,73 @@ func TestInMemoryBackend_DeepCopyConcurrent(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestDeepCopyAny_SliceAny(t *testing.T) {
+	t.Run("shallow []any copy", func(t *testing.T) {
+		orig := []any{"a", "b", 42}
+		copied := deepCopyAny(orig)
+
+		assert.Equal(t, orig, copied)
+		orig[0] = "mutated"
+		assert.NotEqual(t, "mutated", copied.([]any)[0])
+	})
+
+	t.Run("nested []any recursion", func(t *testing.T) {
+		orig := []any{
+			"outer",
+			[]any{"inner1", "inner2"},
+			map[string]any{"key": "val"},
+		}
+		copied := deepCopyAny(orig).([]any)
+
+		orig[0] = "changed"
+		orig[1].([]any)[0] = "changed-inner"
+		orig[2].(map[string]any)["key"] = "changed-map"
+
+		assert.Equal(t, "outer", copied[0])
+		assert.Equal(t, "inner1", copied[1].([]any)[0])
+		assert.Equal(t, "val", copied[2].(map[string]any)["key"])
+	})
+
+	t.Run("empty []any", func(t *testing.T) {
+		orig := []any{}
+		copied := deepCopyAny(orig)
+		assert.Equal(t, []any{}, copied)
+	})
+}
+
+func TestDeepCopyAny_SliceFloat64(t *testing.T) {
+	t.Run("float64 slice is copied not shared", func(t *testing.T) {
+		orig := []float64{1.0, 2.0, 3.0}
+		copied := deepCopyAny(orig).([]float64)
+
+		orig[0] = 999.0
+		assert.Equal(t, []float64{1.0, 2.0, 3.0}, copied)
+	})
+
+	t.Run("empty []float64", func(t *testing.T) {
+		orig := []float64{}
+		copied := deepCopyAny(orig).([]float64)
+		assert.Equal(t, []float64{}, copied)
+	})
+}
+
+func TestDeepCopyAny_DefaultPassthrough(t *testing.T) {
+	assert.Equal(t, "hello", deepCopyAny("hello"))
+	assert.Equal(t, 42, deepCopyAny(42))
+	assert.Equal(t, 3.14, deepCopyAny(3.14))
+	assert.Equal(t, true, deepCopyAny(true))
+	assert.Nil(t, deepCopyAny(nil))
+}
+
+func TestDeepCopyFloat64Slice_Nil(t *testing.T) {
+	assert.Nil(t, deepCopyFloat64Slice(nil))
+}
+
+func TestDeepCopyFloat64Slice_Empty(t *testing.T) {
+	result := deepCopyFloat64Slice([]float64{})
+	assert.NotNil(t, result)
+	assert.Empty(t, result)
+}
+
+
