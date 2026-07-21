@@ -100,7 +100,10 @@ func WithCLIFormatter(formatter func(context.Context, any, error)) ReasonerOptio
 	}
 }
 
-// WithDescription adds a human-readable description for help/list commands.
+// WithDescription adds a caller-facing summary for the reasoner. It is shown
+// by local help/list commands AND registered with the control plane, where
+// discovery (`GET /api/v1/discovery/capabilities`) and `af ls` surface it —
+// say what the reasoner does and when a caller should pick it.
 func WithDescription(desc string) ReasonerOption {
 	return func(r *Reasoner) {
 		r.Description = desc

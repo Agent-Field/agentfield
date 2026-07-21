@@ -8,6 +8,7 @@ import (
 // ReasonerDefinition mirrors the AgentField server registration contract.
 type ReasonerDefinition struct {
 	ID             string           `json:"id"`
+	Description    string           `json:"description,omitempty"`
 	InputSchema    json.RawMessage  `json:"input_schema"`
 	OutputSchema   json.RawMessage  `json:"output_schema"`
 	Tags           []string         `json:"tags,omitempty"`
