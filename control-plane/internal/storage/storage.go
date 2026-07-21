@@ -95,6 +95,11 @@ type StorageProvider interface {
 	// The ctx scopes the read, and executionID selects the record to fetch.
 	// Returns the execution record or an error if it is missing or unreadable.
 	GetExecutionRecord(ctx context.Context, executionID string) (*types.Execution, error)
+	// GetExecutionRecordsBatch fetches multiple primary execution records in a
+	// single query. IDs that do not exist are absent from the returned map.
+	// The ctx scopes the read, and executionIDs lists the records to fetch.
+	// Returns executions keyed by execution_id or an error if the query fails.
+	GetExecutionRecordsBatch(ctx context.Context, executionIDs []string) (map[string]*types.Execution, error)
 	// UpdateExecutionRecord updates a primary execution record through a callback.
 	// The ctx scopes the operation, executionID selects the record, and update transforms it.
 	// Returns the updated execution or an error if the update cannot be completed.

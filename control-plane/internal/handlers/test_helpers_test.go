@@ -268,6 +268,21 @@ func (s *testExecutionStorage) GetExecutionRecord(ctx context.Context, execution
 	return &copy, nil
 }
 
+func (s *testExecutionStorage) GetExecutionRecordsBatch(ctx context.Context, executionIDs []string) (map[string]*types.Execution, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make(map[string]*types.Execution, len(executionIDs))
+	for _, id := range executionIDs {
+		execution, ok := s.executionRecords[id]
+		if !ok {
+			continue
+		}
+		copy := *execution
+		result[id] = &copy
+	}
+	return result, nil
+}
+
 func (s *testExecutionStorage) UpdateExecutionRecord(ctx context.Context, executionID string, update func(*types.Execution) (*types.Execution, error)) (*types.Execution, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

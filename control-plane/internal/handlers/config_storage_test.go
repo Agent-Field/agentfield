@@ -86,6 +86,9 @@ func (m *configStorageMock) CreateExecutionRecord(ctx context.Context, execution
 func (m *configStorageMock) GetExecutionRecord(ctx context.Context, executionID string) (*types.Execution, error) {
 	return nil, nil
 }
+func (m *configStorageMock) GetExecutionRecordsBatch(ctx context.Context, executionIDs []string) (map[string]*types.Execution, error) {
+	return map[string]*types.Execution{}, nil
+}
 func (m *configStorageMock) UpdateExecutionRecord(ctx context.Context, executionID string, update func(*types.Execution) (*types.Execution, error)) (*types.Execution, error) {
 	return nil, nil
 }

@@ -109,6 +109,70 @@ func (ls *LocalStorage) GetExecutionRecord(ctx context.Context, executionID stri
 	return exec, nil
 }
 
+// maxBatchExecutionIDs caps the number of execution IDs a single batch
+// fetch may query, guarding against unbounded IN-clause expansion.
+const maxBatchExecutionIDs = 500
+
+// GetExecutionRecordsBatch fetches multiple execution rows by execution_id in
+// a single query. IDs that do not exist are simply absent from the returned
+// map. An empty input returns an empty (non-nil) map without hitting the DB.
+func (ls *LocalStorage) GetExecutionRecordsBatch(ctx context.Context, executionIDs []string) (map[string]*types.Execution, error) {
+	result := make(map[string]*types.Execution, len(executionIDs))
+	if len(executionIDs) == 0 {
+		return result, nil
+	}
+	if len(executionIDs) > maxBatchExecutionIDs {
+		return nil, fmt.Errorf("batch fetch supports at most %d execution IDs, got %d", maxBatchExecutionIDs, len(executionIDs))
+	}
+
+	db := ls.requireSQLDB()
+
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(executionIDs)), ",")
+	query := fmt.Sprintf(`
+		SELECT execution_id, run_id, parent_execution_id,
+		       agent_node_id, reasoner_id, node_id,
+		       status, status_reason, input_payload, result_payload, error_message,
+		       input_uri, result_uri,
+		       session_id, actor_id,
+		       started_at, completed_at, duration_ms,
+		       notes,
+		       created_at, updated_at
+		FROM executions
+		WHERE execution_id IN (%s)`, placeholders)
+
+	args := make([]interface{}, len(executionIDs))
+	for i, id := range executionIDs {
+		args[i] = id
+	}
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("batch query executions: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		exec, err := scanExecution(rows)
+		if err != nil {
+			return nil, err
+		}
+		result[exec.ExecutionID] = exec
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate batch executions: %w", err)
+	}
+
+	// Reuse the batched webhook-registration lookup so we don't issue one
+	// HasExecutionWebhook query per execution (the same N+1 we're fixing).
+	found := make([]*types.Execution, 0, len(result))
+	for _, exec := range result {
+		found = append(found, exec)
+	}
+	ls.populateWebhookRegistration(ctx, found)
+
+	return result, nil
+}
+
 // UpdateExecutionRecord applies an update callback atomically. The callback mutates a
 // types.Execution copy and the result gets persisted.
 func (ls *LocalStorage) UpdateExecutionRecord(ctx context.Context, executionID string, updater func(*types.Execution) (*types.Execution, error)) (*types.Execution, error) {

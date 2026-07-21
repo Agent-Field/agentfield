@@ -141,6 +141,9 @@ func (m *mockStorage) CreateExecutionRecord(ctx context.Context, execution *type
 func (m *mockStorage) GetExecutionRecord(ctx context.Context, executionID string) (*types.Execution, error) {
 	return nil, nil
 }
+func (m *mockStorage) GetExecutionRecordsBatch(ctx context.Context, executionIDs []string) (map[string]*types.Execution, error) {
+	return map[string]*types.Execution{}, nil
+}
 func (m *mockStorage) UpdateExecutionRecord(ctx context.Context, executionID string, update func(*types.Execution) (*types.Execution, error)) (*types.Execution, error) {
 	return nil, nil
 }
