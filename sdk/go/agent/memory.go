@@ -352,6 +352,40 @@ func (s *ScopedMemory) GetTyped(ctx context.Context, key string, dest any) error
 	}
 }
 
+// deepCopyAny recursively copies maps and slices to break shared references.
+func deepCopyAny(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		m := make(map[string]any, len(val))
+		for k, vv := range val {
+			m[k] = deepCopyAny(vv)
+		}
+		return m
+	case []any:
+		s := make([]any, len(val))
+		for i, elem := range val {
+			s[i] = deepCopyAny(elem)
+		}
+		return s
+	case []float64:
+		dst := make([]float64, len(val))
+		copy(dst, val)
+		return dst
+	default:
+		return v
+	}
+}
+
+// deepCopyFloat64Slice returns a copy of a []float64 slice.
+func deepCopyFloat64Slice(src []float64) []float64 {
+	if src == nil {
+		return nil
+	}
+	dst := make([]float64, len(src))
+	copy(dst, src)
+	return dst
+}
+
 // InMemoryBackend provides a thread-safe in-memory implementation of MemoryBackend.
 // Data is lost when the process exits.
 type InMemoryBackend struct {
@@ -386,7 +420,7 @@ func (b *InMemoryBackend) Set(scope MemoryScope, scopeID, key string, value any)
 	if b.data[ck] == nil {
 		b.data[ck] = make(map[string]any)
 	}
-	b.data[ck][key] = value
+	b.data[ck][key] = deepCopyAny(value)
 	return nil
 }
 
@@ -400,7 +434,10 @@ func (b *InMemoryBackend) Get(scope MemoryScope, scopeID, key string) (any, bool
 		return nil, false, nil
 	}
 	val, found := b.data[ck][key]
-	return val, found, nil
+	if !found {
+		return nil, false, nil
+	}
+	return deepCopyAny(val), true, nil
 }
 
 // Delete removes a key.
@@ -441,8 +478,8 @@ func (b *InMemoryBackend) SetVector(scope MemoryScope, scopeID, key string, embe
 		b.vectorData[ck] = make(map[string]vectorRecord)
 	}
 	b.vectorData[ck][key] = vectorRecord{
-		embedding: embedding,
-		metadata:  metadata,
+		embedding: deepCopyFloat64Slice(embedding),
+		metadata:  deepCopyAny(metadata).(map[string]any),
 	}
 	return nil
 }
@@ -460,7 +497,7 @@ func (b *InMemoryBackend) GetVector(scope MemoryScope, scopeID, key string) ([]f
 	if !found {
 		return nil, nil, false, nil
 	}
-	return rec.embedding, rec.metadata, true, nil
+	return deepCopyFloat64Slice(rec.embedding), deepCopyAny(rec.metadata).(map[string]any), true, nil
 }
 
 // SearchVector performs similarity search (stubbed - returns empty list for in-memory).
