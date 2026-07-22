@@ -14,6 +14,32 @@ plane, which routes it, records the workflow, and returns the result.
 In local mode there is no auth. If the server has an API key configured, send it
 as `X-API-Key: <key>` on every request.
 
+## MCP (zero-setup)
+
+The control plane serves a built-in **MCP server at `<server>/mcp`** (default
+`http://localhost:8080/mcp`) — same port, no extra process, on by default. If
+your harness speaks MCP, this is the fastest way in.
+
+Claude Code:
+
+```bash
+claude mcp add --transport http agentfield http://localhost:8080/mcp
+```
+
+Other MCP clients: point them at the same streamable-HTTP URL
+(`http://<server>/mcp`, transport `http`). It's stateless JSON-RPC — no session
+setup. If the server has an API key, pass it as an `X-API-Key: <key>` header in
+the client's MCP config.
+
+Five tools are exposed: `discover_agents`, `get_reasoner_schema`,
+`execute_reasoner` (starts an async run, returns a `run_id`), `get_run`, and
+`wait_run`. Disable with `AGENTFIELD_MCP_ENABLED=false` (the route then 404s).
+
+The MCP tools cover the common discover → execute → poll loop. The `af` CLI and
+the raw HTTP API below remain the full-power path (sessions, streaming,
+cancel-tree, secrets, load-aware pacing); reach for them when a task needs more
+than the five tools give you.
+
 ## The flow
 
 1. Health-check the control plane.
