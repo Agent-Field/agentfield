@@ -907,9 +907,28 @@ func agentHelpData() map[string]interface{} {
 			"af agent discover -q run",
 			"af agent search \"review pull request\"",
 			"af agent query -r runs --limit 10",
+			"af call <node>.<reasoner> --schema",
+			"af call <node>.<reasoner> --async -o json",
+			"af wait <run_id> -o json",
+			"af tail <run_id>",
 			"af agent run --id <run_id>",
 			"af agent kb topics",
 			"af agent kb guide --goal 'build swe agent'",
+		},
+		// golden_path is the end-to-end loop a harness follows to go from a cold
+		// start to a result: discover → install → run → schema → call → wait.
+		// Each step is ordered and self-contained so an agent can execute them in
+		// sequence without prior context.
+		"golden_path": []map[string]interface{}{
+			{"step": 1, "command": "af doctor", "purpose": "Confirm the CLI can reach a running control plane and inspect the environment"},
+			{"step": 2, "command": "af catalog -o json", "purpose": "Browse installable agent nodes (name, description, install source)"},
+			{"step": 3, "command": "af install <source>", "purpose": "Install a node from the catalog, a git URL, or a local path"},
+			{"step": 4, "command": "af secrets set <KEY> <value>", "purpose": "Provide the API keys the node needs (e.g. model-provider keys)"},
+			{"step": 5, "command": "af run <node>", "purpose": "Start the node so its reasoners register with the control plane"},
+			{"step": 6, "command": "af ls   # or: af agent discover -q <term>", "purpose": "List the reasoners now available to call"},
+			{"step": 7, "command": "af call <node>.<reasoner> --schema", "purpose": "Fetch a reasoner's input schema before calling it"},
+			{"step": 8, "command": "af call <node>.<reasoner> --async -o json", "purpose": "Trigger the reasoner; get {\"run_id\":...,\"status\":\"accepted\"} back as JSON"},
+			{"step": 9, "command": "af wait <run_id> -o json   # or: af tail <run_id>", "purpose": "Block for the final status+result as JSON, or stream progress live"},
 		},
 		"auth": map[string]interface{}{
 			"method":           "Set X-API-Key header via --api-key or AGENTFIELD_API_KEY",

@@ -25,7 +25,26 @@ import type {
   UsageStats
 } from '../shared/types'
 
-export const DEFAULT_BASE_URL = 'http://localhost:8080'
+import { DEFAULT_CONTROL_PLANE_PORT, baseUrlForPort } from './ports'
+
+export const DEFAULT_BASE_URL = baseUrlForPort(DEFAULT_CONTROL_PLANE_PORT)
+
+// ---- Active control-plane URL --------------------------------------------
+// The one base URL the whole app is pointed at. It starts at the default and
+// moves when autostart adopts a running control plane on another port or
+// starts one there (see autostart.ts). Every consumer — snapshot polling,
+// the tray, open-web-ui, AGENTFIELD_SERVER for spawned `af` — reads it via
+// getBaseUrl() so nothing in the app hard-codes 8080.
+
+let activeBaseUrl = DEFAULT_BASE_URL
+
+export function getBaseUrl(): string {
+  return activeBaseUrl
+}
+
+export function setActiveControlPlanePort(port: number): void {
+  activeBaseUrl = baseUrlForPort(port)
+}
 
 const HTTP_TIMEOUT_MS = 3000
 
@@ -58,7 +77,7 @@ function errorMessage(err: unknown): string {
  *  - network error / timeout (3s)   -> { reachable: false, recognized: false, healthy: false, error }
  */
 export async function checkControlPlane(
-  baseUrl: string = DEFAULT_BASE_URL,
+  baseUrl: string = getBaseUrl(),
   fetchImpl: FetchLike = fetch
 ): Promise<ControlPlaneStatus> {
   try {
@@ -153,7 +172,7 @@ export async function readInstalledAgents(
  * status alone.
  */
 export async function fetchControlPlaneNodes(
-  baseUrl: string = DEFAULT_BASE_URL,
+  baseUrl: string = getBaseUrl(),
   fetchImpl: FetchLike = fetch
 ): Promise<Map<string, string> | null> {
   try {
@@ -241,7 +260,7 @@ function toExecutionSummary(row: Record<string, unknown>): ExecutionSummary | nu
  * failure — callers render "activity unavailable", never an error page.
  */
 export async function fetchExecutions(
-  baseUrl: string = DEFAULT_BASE_URL,
+  baseUrl: string = getBaseUrl(),
   fetchImpl: FetchLike = fetch
 ): Promise<ExecutionsResult | null> {
   try {
@@ -270,7 +289,7 @@ export async function fetchExecutions(
  * Returns null on any failure; the dashboard renders placeholders instead.
  */
 export async function fetchDashboardMetrics(
-  baseUrl: string = DEFAULT_BASE_URL,
+  baseUrl: string = getBaseUrl(),
   fetchImpl: FetchLike = fetch
 ): Promise<DashboardMetrics | null> {
   try {
@@ -351,7 +370,7 @@ export interface SnapshotOptions {
  * Options exist only for tests; production callers use the defaults.
  */
 export async function getSnapshot(options: SnapshotOptions = {}): Promise<AgentFieldSnapshot> {
-  const baseUrl = options.baseUrl ?? DEFAULT_BASE_URL
+  const baseUrl = options.baseUrl ?? getBaseUrl()
   const fetchImpl = options.fetchImpl ?? fetch
 
   const [controlPlane, registry] = await Promise.all([

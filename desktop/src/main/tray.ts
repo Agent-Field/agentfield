@@ -8,7 +8,7 @@
 
 import { readFileSync } from 'node:fs'
 import { Menu, Tray, nativeImage, nativeTheme, shell } from 'electron'
-import { DEFAULT_BASE_URL, checkControlPlane } from './agentfield'
+import { checkControlPlane, getBaseUrl } from './agentfield'
 import {
   type TrayState,
   darkTaskbar,
@@ -77,7 +77,9 @@ export interface TrayHost {
  * then keeps classic quit-on-close behavior instead of close-to-tray.
  */
 export function setupTray(host: TrayHost): boolean {
-  const hostLabel = new URL(DEFAULT_BASE_URL).host
+  // The base URL is re-read on every poll: autostart may adopt (or start)
+  // the control plane on a non-default port after the tray already exists.
+  let baseUrl = getBaseUrl()
   let state: TrayState = 'stopped'
   let dark = darkTaskbar(nativeTheme)
 
@@ -92,6 +94,7 @@ export function setupTray(host: TrayHost): boolean {
   }
 
   const apply = (): void => {
+    const hostLabel = new URL(baseUrl).host
     tray.setImage(trayImage(trayIconBase(state, dark)))
     tray.setToolTip(trayTooltip(state, hostLabel))
     tray.setContextMenu(
@@ -100,7 +103,7 @@ export function setupTray(host: TrayHost): boolean {
         {
           label: 'Open web UI',
           enabled: state === 'running',
-          click: () => void shell.openExternal(`${DEFAULT_BASE_URL}/ui/`)
+          click: () => void shell.openExternal(`${getBaseUrl()}/ui/`)
         },
         { type: 'separator' },
         { label: trayStatusLabel(state, hostLabel), enabled: false },
@@ -114,9 +117,11 @@ export function setupTray(host: TrayHost): boolean {
   // Re-render only on actual change — replacing the icon/menu every poll
   // would churn native tray APIs (and can dismiss an open menu on Windows).
   const update = (nextState: TrayState, nextDark: boolean): void => {
-    if (nextState === state && nextDark === dark) return
+    const nextUrl = getBaseUrl()
+    if (nextState === state && nextDark === dark && nextUrl === baseUrl) return
     state = nextState
     dark = nextDark
+    baseUrl = nextUrl
     apply()
   }
 

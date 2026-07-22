@@ -864,6 +864,14 @@ section > .section-title {
   font-family: var(--font-mono);
 }
 
+/* Control-plane port field: a short numeric input on a settings row. */
+.port-input {
+  width: 96px;
+  text-align: right;
+}
+
+/* Reserved slot: keeps the input column aligned across rows whether or not
+   a Revoke button is visible. */
 .action-button.ghost-slot {
   visibility: hidden;
   pointer-events: none;

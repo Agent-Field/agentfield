@@ -10,25 +10,25 @@ import (
 
 // InstallOptions controls how a skill is installed across targets.
 type InstallOptions struct {
-	SkillName string   // canonical skill name; empty = first in catalog
-	Version   string   // explicit version; empty = current binary's embedded version
-	Targets   []string // explicit target list; empty = use AllDetected/AllRegistered/Selection
-	AllDetected bool   // install into every target Detected() reports true
-	AllRegistered bool // install into every registered target (even undetected)
-	Force     bool    // re-install even if state shows the same version is already present
-	DryRun    bool    // print what would happen, don't write
+	SkillName     string   // canonical skill name; empty = first in catalog
+	Version       string   // explicit version; empty = current binary's embedded version
+	Targets       []string // explicit target list; empty = use AllDetected/AllRegistered/Selection
+	AllDetected   bool     // install into every target Detected() reports true
+	AllRegistered bool     // install into every registered target (even undetected)
+	Force         bool     // re-install even if state shows the same version is already present
+	DryRun        bool     // print what would happen, don't write
 }
 
 // InstallReport summarizes one install operation. The CLI uses this to print
 // a clean handoff message.
 type InstallReport struct {
-	Skill              Skill
-	CanonicalDir       string                       // ~/.agentfield/skills/<name>/<version>
-	CurrentLink        string                       // ~/.agentfield/skills/<name>/current
-	WroteCanonical     bool
-	TargetsInstalled   []InstalledTarget
-	TargetsSkipped     []SkipReason
-	TargetsFailed      []TargetError
+	Skill            Skill
+	CanonicalDir     string // ~/.agentfield/skills/<name>/<version>
+	CurrentLink      string // ~/.agentfield/skills/<name>/current
+	WroteCanonical   bool
+	TargetsInstalled []InstalledTarget
+	TargetsSkipped   []SkipReason
+	TargetsFailed    []TargetError
 }
 
 type SkipReason struct {
@@ -150,6 +150,26 @@ func Install(opts InstallOptions) (*InstallReport, error) {
 	}
 
 	return report, nil
+}
+
+// InstallAll installs every skill in the catalog into the resolved targets,
+// returning one report per skill in catalog order. It is what `af skill
+// install` runs when no skill name is given, so a first-time user gets both the
+// build skill (agentfield) and the drive skill (agentfield-use) — not just the
+// first catalog entry. opts.SkillName is ignored; every other field is applied
+// to each skill in turn.
+func InstallAll(opts InstallOptions) ([]*InstallReport, error) {
+	reports := make([]*InstallReport, 0, len(Catalog))
+	for _, s := range Catalog {
+		o := opts
+		o.SkillName = s.Name
+		report, err := Install(o)
+		if err != nil {
+			return reports, err
+		}
+		reports = append(reports, report)
+	}
+	return reports, nil
 }
 
 // Uninstall removes a skill from the named targets (or all if empty), and

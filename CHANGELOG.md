@@ -6,6 +6,158 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.114-rc.2] - 2026-07-22
+
+
+### Added
+
+- Feat(cli): surface the harness golden path (af wait, catalog, golden_path help, JSON envelopes) (#816)
+
+* feat(cli): emit a JSON envelope for af call --async under -o json
+
+`af call --async` printed a bare run-id string on stdout for every output
+format, so a harness parsing `-o json` got a non-JSON token. Under an
+explicitly requested machine format (-o json/-o yaml) it now emits
+{"run_id": "...", "status": "accepted"} so parsers get valid JSON/YAML.
+
+The default and pretty paths keep the bare run-id line that shell scripts
+capture via RUN_ID=$(af call node.reasoner --async), so that contract does
+not regress.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): surface the golden path in af agent help
+
+The machine-friendly `af agent help` payload taught discovery and
+introspection but never execution: quick_start omitted `af call` and
+`af tail` entirely, so a harness could find agents but was never shown how
+to run one.
+
+Add a `golden_path` field — an ordered array of {step, command, purpose}
+covering the full driving loop (doctor → catalog → install → secrets →
+run → ls/discover → call --schema → call --async → wait/tail) — and add
+`af call` and `af tail` entries to quick_start.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): install both AgentField skills when no skill name is given
+
+`af skill install` with no argument resolved to Catalog[0] and installed
+only the `agentfield` build skill, never `agentfield-use` — the drive
+skill that documents the discover → call → wait loop. A first-time user
+therefore never got the golden-loop docs.
+
+Add skillkit.InstallAll, which installs every catalog skill into the
+resolved targets, and call it from `af skill install` when no skill name
+is passed. Explicit `af skill install <name>` is unchanged. The
+interactive picker copy now names both skills (build + drive).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): add a shared control-plane-unreachable hint
+
+`af call`/`af ls`/`af tail` emitted a raw Go dial error when the control
+plane was down, with no guidance — while `af agent` commands already
+appended a reachability hint. Every CLI command that talks to the control
+plane routes through makeRequest, so wrap a transport-level failure there
+with a shared, actionable hint:
+
+  Control plane not reachable at <url>. Start it with `af server` or
+  launch the AgentField desktop app.
+
+A cancelled context (Ctrl-C / caller-handled timeout) is passed through
+unwrapped so only genuine connectivity failures get the hint.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): add af wait to block on an async run
+
+`af call --async` returns a run_id, but there was no first-class way to
+block until that run finished — a harness had to poll or tail. Add
+`af wait <run_id> [--timeout <sec, default 600>]`: it polls the run
+overview (the same /api/v1/agentic/run/:run_id API `af agent run --id`
+uses) until every execution is terminal, prints the final status and
+result as JSON, and maps outcomes to exit codes — 0 on succeeded, 1 on
+failed/cancelled, 2 on timeout.
+
+A 404 (records not yet written after an async accept) is treated as
+"not ready" so a freshly-accepted run keeps polling. The command also
+exercises the shared control-plane-unreachable hint, covered here by a
+cross-command test over call/ls/tail/wait.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): add af catalog to browse installable agent nodes
+
+There was no CLI way to discover installable nodes — the only curated
+catalog lived in the desktop app (desktop/src/shared/catalog.ts). Add
+`af catalog`, backed by an in-binary catalog seeded from that same
+curated list (name, description, install source, docs URL), so a harness
+can browse nodes before `af install` and works offline.
+
+Supports `-o json`/`-o yaml`; the human table ends with the hint
+`af install <source>`.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(cli): cover af wait/catalog command paths for the patch gate
+
+Add behavior tests for the previously-untested command wiring and
+error paths surfaced by the coverage patch gate:
+
+- af wait: pretty output, invalid-format/empty-id (exit 2), a control
+  plane 5xx (exit 3), the nil-opts default path, end-to-end command
+  execution, and rootExecutionResult (explicit root, last-execution
+  fallback, non-JSON, empty).
+- af catalog: end-to-end command execution under -o json.
+- af skill install <name>: the explicit-name path stays single-skill.
+- makeRequest: a cancelled context is passed through unwrapped, not
+  relabeled as an unreachable-control-plane error.
+
+Raises control-plane patch coverage back over the 80% floor.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (d6197f0)
+
+## [0.1.114-rc.1] - 2026-07-22
+
+
+### Fixed
+
+- Fix(sdk-go): survive OpenAI's strict validator on codex --output-schema (#818)
+
+The server behind codex exec now validates --output-schema against OpenAI
+strict-mode rules (probed live on codex-cli 0.144.1): every object node
+needs additionalProperties:false and a full required array, every node
+needs a type (or \$ref / anyOf), and free-form maps, typed maps, and
+boolean subschemas (invopop's output for `any` fields) are rejected with
+invalid_json_schema — killing every schema-enforced codex role
+(Agent-Field/SWE-AF#106).
+
+Three coordinated changes:
+
+- schema.go: codexSchemaStrictExpressible classifies a strict-rewritten
+  schema against the probed validator rules, so the runner knows when
+  --output-schema would be refused (map[string]any / any fields cannot be
+  expressed without forcing an empty object).
+- runner.go: for inexpressible schemas the runner still writes the schema
+  file and keeps the codex-native prompt, but hands the provider an empty
+  schemaPath — codex runs with --output-last-message only and the
+  existing local validation enforces the schema.
+- codex.go: --output-last-message is decoupled from --output-schema, and
+  a rejected schema (invalid_json_schema in the CLI output) triggers one
+  reactive rerun without the flag, so future validator tightening
+  degrades to local validation instead of failing the role.
+
+Live-verified: the real SWE-AF GitInitResult and Architecture strict
+schemas are ACCEPTED by the validator; PRD (boolean subschema via
+AskUserFormField.default_value) is correctly gated to the fallback path.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (d0dec79)
+
 ## [0.1.113] - 2026-07-21
 
 ## [0.1.113-rc.1] - 2026-07-21

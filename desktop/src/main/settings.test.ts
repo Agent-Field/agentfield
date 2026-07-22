@@ -12,6 +12,8 @@ describe('normalizeSettings', () => {
     const s = {
       openAtLogin: true,
       autostartControlPlane: false,
+      controlPlanePort: 9091,
+      lastControlPlanePort: 8081,
       autostartAgents: ['a', 'b'],
       installSkills: false,
       trayCompanion: false,
@@ -20,6 +22,17 @@ describe('normalizeSettings', () => {
       starPromptSnoozedUntil: '2026-08-01T00:00:00.000Z'
     }
     expect(normalizeSettings(s)).toEqual(s)
+  })
+
+  it('coerces bad ports to null (auto)', () => {
+    expect(normalizeSettings({}).controlPlanePort).toBeNull()
+    expect(normalizeSettings({ controlPlanePort: 8080 }).controlPlanePort).toBe(8080)
+    expect(normalizeSettings({ controlPlanePort: 0 }).controlPlanePort).toBeNull()
+    expect(normalizeSettings({ controlPlanePort: 65536 }).controlPlanePort).toBeNull()
+    expect(normalizeSettings({ controlPlanePort: 8080.5 }).controlPlanePort).toBeNull()
+    expect(normalizeSettings({ controlPlanePort: '8080' }).controlPlanePort).toBeNull()
+    expect(normalizeSettings({ lastControlPlanePort: -1 }).lastControlPlanePort).toBeNull()
+    expect(normalizeSettings({ lastControlPlanePort: 9091 }).lastControlPlanePort).toBe(9091)
   })
 
   it('defaults trayCompanion on and coerces non-booleans', () => {
@@ -98,6 +111,8 @@ describe('load/save round trip', () => {
     const s = {
       openAtLogin: true,
       autostartControlPlane: true,
+      controlPlanePort: null,
+      lastControlPlanePort: 9091,
       autostartAgents: ['swe-planner'],
       installSkills: true,
       trayCompanion: true,
