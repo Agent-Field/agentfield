@@ -48,7 +48,7 @@ export function SecretsSection(): ReactElement {
           <ul className="row-list">
             {data.secrets.map((secret) => (
               <SecretRow
-                key={`${secret.scope}${secret.key}`}
+                key={`${secret.scope}\0${secret.key}`}
                 secret={secret}
                 onChanged={load}
               />

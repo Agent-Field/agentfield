@@ -61,7 +61,7 @@ export type ParsedRepo = {
 
 // Sentinel `name` for the paste-a-repo flow so its progress/result routes to
 // the hero and never collides with a catalog entry name.
-const REPO_TARGET = 'install-from-repo'
+const REPO_TARGET = '\0install-from-repo'
 const MAX_PROGRESS_LINES = 12
 
 const GITHUB_PREFIX = 'https://github.com/'
