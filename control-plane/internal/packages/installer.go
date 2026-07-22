@@ -368,7 +368,10 @@ func (pi *PackageInstaller) InstallPackage(sourcePath string, force bool) error 
 	// 6. Check for required environment variables and provide guidance
 	pi.checkEnvironmentVariables(metadata)
 
-	fmt.Printf("\n%s %s\n", Blue("→"), Bold(fmt.Sprintf("Run: af run %s", metadata.Name)))
+	// 7. Explicit next steps so a first-time user is never left guessing.
+	fmt.Printf("\n%s\n", Bold("Next steps:"))
+	fmt.Printf("  %s  %s\n", Cyan(fmt.Sprintf("af run %s", metadata.Name)), Gray("start the node"))
+	fmt.Printf("  %s  %s\n", Cyan("af list"), Gray("see installed nodes and status"))
 
 	return nil
 }
@@ -400,9 +403,9 @@ func (pi *PackageInstaller) checkEnvironmentVariables(metadata *PackageMetadata)
 	}
 
 	if len(missingRequired) > 0 {
-		fmt.Printf("\n%s %s\n", Yellow("⚠"), Bold("Missing required environment variables:"))
+		fmt.Printf("\n%s %s\n", Yellow("⚠"), Bold("Missing required environment variables — set each with:"))
 		for _, envVar := range missingRequired {
-			fmt.Printf("  %s\n", Cyan(fmt.Sprintf("af config %s --set %s=your-value-here", metadata.Name, envVar.Name)))
+			fmt.Printf("  %s\n", Cyan(fmt.Sprintf("af secrets set %s --node %s", envVar.Name, metadata.Name)))
 		}
 	}
 
@@ -417,7 +420,7 @@ func (pi *PackageInstaller) checkEnvironmentVariables(metadata *PackageMetadata)
 		}
 		fmt.Printf("\n%s %s (%s):\n", Yellow("⚠"), Bold("Set at least one of"), label)
 		for _, opt := range g.Options {
-			fmt.Printf("  %s\n", Cyan(fmt.Sprintf("af config %s --set %s=your-value-here", metadata.Name, opt.Name)))
+			fmt.Printf("  %s\n", Cyan(fmt.Sprintf("af secrets set %s --node %s", opt.Name, metadata.Name)))
 		}
 	}
 
