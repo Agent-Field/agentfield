@@ -134,6 +134,7 @@ AI Agent? Run "af agent help" for structured JSON output optimized for programma
 	RootCmd.AddCommand(NewPsCommand())
 	RootCmd.AddCommand(NewTailCommand())
 	RootCmd.AddCommand(NewWaitCommand())
+	RootCmd.AddCommand(NewCatalogCommand())
 	RootCmd.AddCommand(NewShareCommand())
 
 	// Add version command
