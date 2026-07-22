@@ -87,7 +87,7 @@ func TestCheckEnvironmentVariables_ShowsGroups(t *testing.T) {
 		UserEnvironment: UserEnvironmentConfig{
 			Required: []UserEnvironmentVar{{Name: "UNSET_REQUIRED"}},
 			RequireOneOf: []RequireOneOfGroup{
-				{ID: "g1", Options: []UserEnvironmentVar{{Name: "A1"}, {Name: "A2"}}}, // unsatisfied, empty desc
+				{ID: "g1", Options: []UserEnvironmentVar{{Name: "A1"}, {Name: "A2"}}},                    // unsatisfied, empty desc
 				{ID: "g2", Description: "second", Options: []UserEnvironmentVar{{Name: "SET_PROVIDER"}}}, // satisfied
 			},
 			Optional: []UserEnvironmentVar{{Name: "OPT", Default: "d"}},
@@ -225,7 +225,7 @@ func TestResolve_OneOfGroupSingleOptionPromptsDirectly(t *testing.T) {
 
 // Contract: user-facing group enumeration joins option names with "or", not "|".
 func TestMissingEnvError_JoinsGroupOptionsWithOr(t *testing.T) {
-	err := missingEnvError(nil, []RequireOneOfGroup{{
+	err := missingEnvError("", nil, []RequireOneOfGroup{{
 		Options: []UserEnvironmentVar{{Name: "A"}, {Name: "B"}},
 	}})
 	if !strings.Contains(err.Error(), "A or B") {
@@ -233,6 +233,43 @@ func TestMissingEnvError_JoinsGroupOptionsWithOr(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "|") {
 		t.Fatalf("pipe separator should be gone: %q", err)
+	}
+}
+
+// Contract (item 2): a missing-secret failure names each missing variable with
+// the exact fix command `af secrets set <VAR> --node <name>`, and lists the same
+// command shape for every option of an unsatisfied require_one_of group.
+func TestMissingEnvError_IncludesActionableSecretsCommand(t *testing.T) {
+	err := missingEnvError("swe-planner",
+		[]string{"GH_TOKEN"},
+		[]RequireOneOfGroup{{
+			Options: []UserEnvironmentVar{{Name: "ANTHROPIC_API_KEY"}, {Name: "OPENROUTER_API_KEY"}},
+		}})
+	msg := err.Error()
+	for _, want := range []string{
+		"af secrets set GH_TOKEN --node swe-planner",
+		"af secrets set ANTHROPIC_API_KEY --node swe-planner",
+		"af secrets set OPENROUTER_API_KEY --node swe-planner",
+		"swe-planner", // the node name is named in the message
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("error must contain %q, got %q", want, msg)
+		}
+	}
+}
+
+// Contract: the fix command threads the resolver's node name through to the
+// error a non-interactive `af run` surfaces.
+func TestResolve_MissingSecretErrorCarriesFixCommand(t *testing.T) {
+	r := newResolver(t, "swe-planner", &fakePrompter{interactive: false})
+	_, err := r.Resolve(UserEnvironmentConfig{
+		Required: []UserEnvironmentVar{{Name: "GH_TOKEN", Type: "secret"}},
+	})
+	if err == nil {
+		t.Fatal("expected a missing-secret error")
+	}
+	if !strings.Contains(err.Error(), "af secrets set GH_TOKEN --node swe-planner") {
+		t.Fatalf("resolve error must carry the fix command: %q", err)
 	}
 }
 
