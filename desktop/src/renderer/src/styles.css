@@ -366,12 +366,12 @@ body[data-platform='darwin'] .main {
   padding: 0 var(--content-pad-x);
 }
 
-/* Electron's Window Controls Overlay can vary with Windows version, display
-   scale, and accessibility settings. Shrink only the Windows header by the
-   live native-controls inset; the 122px floor preserves the old safe area if
-   the CSS environment variables are unavailable during first paint. macOS
-   keeps its independent hidden-inset / traffic-light flow untouched. */
-.view-header.windows-titlebar-safe {
+/* Electron exposes the same Window Controls Overlay on Windows and Linux.
+   WSLg is process.platform=linux even though Windows draws the caption
+   buttons, so every non-macOS overlay must reserve this live safe area. The
+   122px floor covers first paint before the CSS environment variables land.
+   macOS keeps its independent hidden-inset / traffic-light flow untouched. */
+.view-header.window-controls-safe {
   margin-right: max(
     122px,
     calc(

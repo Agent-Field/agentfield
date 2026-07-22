@@ -208,7 +208,7 @@ export default function App() {
 
       <div className="main">
         <header
-          className={`view-header ${platform === 'win32' ? 'windows-titlebar-safe' : ''}`}
+          className={`view-header ${platform !== 'darwin' ? 'window-controls-safe' : ''}`}
         >
           <h1>{VIEW_TITLES[view]}</h1>
           {agentsSelected && !agentsAddMode && (

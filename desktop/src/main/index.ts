@@ -80,8 +80,8 @@ function createWindow(): void {
     // Windows/Linux window + taskbar icon; macOS uses the bundle's icns.
     icon: isMac ? undefined : appIcon,
     // Seamless titlebar: traffic lights float over the content on macOS,
-    // native window controls overlay on Windows. The renderer uses Electron's
-    // titlebar-area CSS environment variables to keep header actions clear.
+    // native window controls overlay on Windows/Linux. The renderer uses
+    // Electron's titlebar-area CSS environment variables to keep actions clear.
     titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
     trafficLightPosition: isMac ? { x: 18, y: 18 } : undefined,
     titleBarOverlay: isMac
