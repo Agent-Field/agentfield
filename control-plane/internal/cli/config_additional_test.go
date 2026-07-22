@@ -105,6 +105,54 @@ user_environment:
 	require.NotContains(t, envVars, "API_KEY")
 }
 
+// Contract (item 1): `af config <node> --set K=V` writes through to BOTH the
+// node-scoped encrypted secret store (what `af run` reads) and the package .env
+// (what `af dev` and the web UI editor read); `--unset` removes from both.
+func TestSetVariableWritesThroughToSecretStore(t *testing.T) {
+	homeDir := t.TempDir()
+	pkgDir := filepath.Join(homeDir, "packages", "demo")
+	require.NoError(t, os.MkdirAll(pkgDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(homeDir, "installed.yaml"), []byte(`
+installed:
+  demo:
+    name: demo
+    path: `+pkgDir+`
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "agentfield-package.yaml"), []byte(`
+name: demo
+user_environment:
+  required:
+    - name: API_KEY
+      description: api key
+      type: secret
+`), 0o644))
+
+	pcm := &PackageConfigManager{AgentFieldHome: homeDir}
+	require.NoError(t, pcm.SetVariable("demo", "API_KEY", "sk-123"))
+
+	// Destination 1: node-scoped secret store.
+	store, err := packages.NewSecretStore(homeDir)
+	require.NoError(t, err)
+	got, ok, err := store.Get("demo", "API_KEY")
+	require.NoError(t, err)
+	require.True(t, ok, "value must be present in the node-scoped secret store")
+	require.Equal(t, "sk-123", got)
+
+	// Destination 2: the package .env.
+	envVars, err := pcm.loadEnvFile(pkgDir)
+	require.NoError(t, err)
+	require.Equal(t, "sk-123", envVars["API_KEY"])
+
+	// Unset removes from both destinations.
+	require.NoError(t, pcm.UnsetVariable("demo", "API_KEY"))
+	_, ok, err = store.Get("demo", "API_KEY")
+	require.NoError(t, err)
+	require.False(t, ok, "value must be removed from the secret store on unset")
+	envVars, err = pcm.loadEnvFile(pkgDir)
+	require.NoError(t, err)
+	require.NotContains(t, envVars, "API_KEY")
+}
+
 func TestPackageConfigManagerListConfigAndErrors(t *testing.T) {
 	t.Run("list config prints required and optional values", func(t *testing.T) {
 		homeDir := t.TempDir()
@@ -215,12 +263,20 @@ user_environment:
 				require.NoError(t, pcm.InteractiveConfig("demo"))
 			})
 			require.Contains(t, output, "Configuring environment variables")
-			require.Contains(t, output, "Environment configuration saved")
+			require.Contains(t, output, "Saved configuration for demo")
 		})
 
 		envVars, err := pcm.loadEnvFile(pkgDir)
 		require.NoError(t, err)
 		require.Equal(t, "secret", envVars["API_KEY"])
+
+		// Write-through: interactive config also mirrors into the node-scoped store.
+		store, err := packages.NewSecretStore(homeDir)
+		require.NoError(t, err)
+		got, ok, err := store.Get("demo", "API_KEY")
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, "secret", got)
 	})
 
 	t.Run("run config command list set unset", func(t *testing.T) {
@@ -257,7 +313,7 @@ user_environment:
 		output = captureOutput(t, func() {
 			runConfigCommand(nil, []string{"demo"})
 		})
-		require.Contains(t, output, "Set API_KEY for package demo")
+		require.Contains(t, output, "Saved API_KEY for demo")
 
 		configList, configSet, configUnset = false, "", "API_KEY"
 		output = captureOutput(t, func() {
