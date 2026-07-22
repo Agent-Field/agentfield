@@ -398,6 +398,7 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 | Auto-REST from decorators | Every `@app.reasoner()` → `POST /api/v1/execute/...` |
 | Python, Go, TypeScript SDKs | Native patterns per language |
 | MCP server integration | `af add --mcp --url <server>` |
+| Zero-setup MCP for AI harnesses | Control plane serves MCP at `<server>/mcp` → [docs](docs/mcp-integration.md) |
 | Config storage API | `POST /api/v1/configs/:key` - database-backed |
 | Docker + Kubernetes ready | Stateless control plane, horizontal scaling |
 
