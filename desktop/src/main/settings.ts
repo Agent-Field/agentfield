@@ -9,10 +9,19 @@ import type { DesktopSettings } from '../shared/types'
 export const DEFAULT_SETTINGS: DesktopSettings = {
   openAtLogin: false,
   autostartControlPlane: true,
+  controlPlanePort: null,
+  lastControlPlanePort: null,
   autostartAgents: [],
   installSkills: true,
   trayCompanion: true,
   dismissedUpdateVersion: null
+}
+
+/** A usable TCP port, or null for anything else (auto mode / not recorded). */
+function normalizePort(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 65535
+    ? value
+    : null
 }
 
 /**
@@ -32,6 +41,8 @@ export function normalizeSettings(raw: unknown): DesktopSettings {
       typeof obj.autostartControlPlane === 'boolean'
         ? obj.autostartControlPlane
         : DEFAULT_SETTINGS.autostartControlPlane,
+    controlPlanePort: normalizePort(obj.controlPlanePort),
+    lastControlPlanePort: normalizePort(obj.lastControlPlanePort),
     autostartAgents: agents,
     installSkills:
       typeof obj.installSkills === 'boolean' ? obj.installSkills : DEFAULT_SETTINGS.installSkills,

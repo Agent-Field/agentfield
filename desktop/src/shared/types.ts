@@ -174,6 +174,19 @@ export interface DesktopSettings {
   openAtLogin: boolean
   /** Start the control plane on app launch when nothing is listening. */
   autostartControlPlane: boolean
+  /**
+   * Fixed control-plane port, or null for automatic (prefer 8080, else the
+   * next free port). A fixed port is used exactly: the app starts the control
+   * plane there and reports a conflict instead of silently moving elsewhere.
+   */
+  controlPlanePort: number | null
+  /**
+   * The port of the control plane this app last started or adopted. App-
+   * managed, not a user preference: it lets a restarted app rediscover a
+   * control plane it put on a non-default port instead of starting a second
+   * one somewhere else.
+   */
+  lastControlPlanePort: number | null
   /** Installed agent names to start once the control plane is healthy. */
   autostartAgents: string[]
   /**
