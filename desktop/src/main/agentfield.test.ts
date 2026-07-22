@@ -3,15 +3,19 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  DEFAULT_BASE_URL,
   checkControlPlane,
   deriveAgentBadge,
   fetchControlPlaneNodes,
   fetchExecutions,
   getAgentFieldHome,
+  getBaseUrl,
   getSnapshot,
   readInstalledAgents,
+  setActiveControlPlanePort,
   type FetchLike
 } from './agentfield'
+import { DEFAULT_CONTROL_PLANE_PORT } from './ports'
 import { installCommand, sanitizeInstallOutput } from './installer'
 import { CATALOG, catalogEntry } from '../shared/catalog'
 
@@ -65,6 +69,27 @@ const REGISTRY_FIXTURE = `installed:
       started_at: null
       log_file: /home/abir/.agentfield/logs/swe-af.log
 `
+
+describe('active base URL', () => {
+  afterEach(() => setActiveControlPlanePort(DEFAULT_CONTROL_PLANE_PORT))
+
+  it('starts at the default and follows the active port', () => {
+    expect(getBaseUrl()).toBe(DEFAULT_BASE_URL)
+    setActiveControlPlanePort(9091)
+    expect(getBaseUrl()).toBe('http://localhost:9091')
+  })
+
+  it('drives the default probe target — nothing hard-codes 8080', async () => {
+    setActiveControlPlanePort(9091)
+    const seen: string[] = []
+    const fetchImpl: FetchLike = async (input) => {
+      seen.push(String(input))
+      return jsonResponse({ status: 'healthy' })
+    }
+    await checkControlPlane(undefined, fetchImpl)
+    expect(seen).toEqual(['http://localhost:9091/health'])
+  })
+})
 
 describe('getAgentFieldHome', () => {
   it('is <homedir>/.agentfield', () => {
