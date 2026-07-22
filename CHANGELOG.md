@@ -6,6 +6,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.114] - 2026-07-22
+
+
+### Added
+
+- Feat(desktop): let the app own its control plane on a configurable / auto-picked free port (#815)
+
+* feat(desktop): free-port selection and a dynamic control-plane base URL
+
+New ports module: prefer 8080, walk to the next free port, fall back to an
+OS-assigned one. agentfield.ts gains an active base URL (getBaseUrl /
+setActiveControlPlanePort) that every HTTP helper now defaults to, so no
+consumer hard-codes 8080.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): controlPlanePort setting + last-used port persistence
+
+controlPlanePort pins the port exactly (null = automatic); the app-managed
+lastControlPlanePort records where the app last started/adopted a control
+plane so a restarted app can rediscover it. Both normalized to a valid TCP
+port or null.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): own the control plane on a chosen port
+
+Autostart now discovers before it starts: probe the candidate ports (the
+configured one, or default + last-used) and adopt any recognized AgentField;
+otherwise start af server on the configured port exactly, or in automatic
+mode on the first free port from 8080 up — so a squatted 8080 never blocks
+the app or spawns a duplicate control plane. The effective port is persisted
+for the next launch, every af invocation gets AGENTFIELD_SERVER so agents
+register with the app's control plane, the spawned server is pinned via
+AGENTFIELD_PORT, the macOS launchd path is only used for the default port,
+and the tray/open-web-ui follow the live base URL.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): control-plane port field in Settings
+
+Empty means automatic (8080 when free, else the next open port); a number
+pins the port. Committed on blur/Enter, invalid input reverts to the saved
+value.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (485712c)
+
 ## [0.1.114-rc.2] - 2026-07-22
 
 
