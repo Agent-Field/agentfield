@@ -249,6 +249,22 @@ type FeatureConfig struct {
 	Connector ConnectorConfig `yaml:"connector" mapstructure:"connector"`
 	Tracing   TracingConfig   `yaml:"tracing" mapstructure:"tracing"`
 	Knowledge KnowledgeConfig `yaml:"knowledge" mapstructure:"knowledge"`
+	MCP       MCPConfig       `yaml:"mcp" mapstructure:"mcp"`
+}
+
+// MCPConfig configures the embedded Model Context Protocol server that AI
+// harnesses (Claude Code, etc.) connect to at <server>/mcp. The MCP endpoint is
+// served on the same port and shares the same trust domain as the REST API.
+type MCPConfig struct {
+	// Enabled turns the /mcp endpoint on. Default: true. Set
+	// AGENTFIELD_MCP_ENABLED=false (or mcp.enabled: false) to disable — the
+	// route then returns 404.
+	Enabled *bool `yaml:"enabled" mapstructure:"enabled"`
+}
+
+// IsEnabled reports whether the embedded MCP server is enabled (default true).
+func (c MCPConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
 }
 
 // KnowledgeConfig configures the native, scope-aware RAG knowledge store and its
@@ -516,6 +532,13 @@ func ApplyEnvOverrides(cfg *Config) {
 	if val := os.Getenv("AGENTFIELD_KNOWLEDGE_ENABLED"); val != "" {
 		enabled := parseEnvBool(val)
 		cfg.Features.Knowledge.Enabled = &enabled
+	}
+
+	// Embedded MCP server toggle. Enabled by default; set to a falsey value to
+	// make the /mcp route return 404.
+	if val := os.Getenv("AGENTFIELD_MCP_ENABLED"); val != "" {
+		enabled := parseEnvBool(val)
+		cfg.Features.MCP.Enabled = &enabled
 	}
 
 	if val := os.Getenv("AGENTFIELD_ARD_ENABLED"); val != "" {
