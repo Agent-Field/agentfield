@@ -12,7 +12,9 @@ export const DEFAULT_SETTINGS: DesktopSettings = {
   autostartAgents: [],
   installSkills: true,
   trayCompanion: true,
-  dismissedUpdateVersion: null
+  dismissedUpdateVersion: null,
+  starPrompt: 'pending',
+  starPromptSnoozedUntil: null
 }
 
 /**
@@ -40,6 +42,13 @@ export function normalizeSettings(raw: unknown): DesktopSettings {
     dismissedUpdateVersion:
       typeof obj.dismissedUpdateVersion === 'string' && obj.dismissedUpdateVersion !== ''
         ? obj.dismissedUpdateVersion
+        : null,
+    starPrompt: obj.starPrompt === 'done' || obj.starPrompt === 'pending' ? obj.starPrompt : 'pending',
+    starPromptSnoozedUntil:
+      typeof obj.starPromptSnoozedUntil === 'string' &&
+      obj.starPromptSnoozedUntil !== '' &&
+      Number.isFinite(Date.parse(obj.starPromptSnoozedUntil))
+        ? obj.starPromptSnoozedUntil
         : null
   }
 }

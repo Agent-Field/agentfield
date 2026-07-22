@@ -5,7 +5,7 @@ import { DEEP_LINK_SCHEME, type View, deepLinkFromArgv, parseDeepLink } from '..
 import type { DesktopSettings } from '../shared/types'
 import { spawn } from 'node:child_process'
 import { DEFAULT_BASE_URL, getSnapshot } from './agentfield'
-import { type AgentAction, runAgentAction, uninstallAgent } from './agents'
+import { type AgentAction, runAgentAction, startControlPlane, uninstallAgent } from './agents'
 import { runAutostart } from './autostart'
 import { getCliCommand, initializeCli, installBundledCli, refreshCliStatus } from './cli'
 import { childEnv, initUserPath } from './env'
@@ -375,6 +375,7 @@ function main(): void {
       }
       return runAgentAction(action as AgentAction, name)
     })
+    ipcMain.handle('agentfield:start-control-plane', () => startControlPlane())
     ipcMain.handle('agentfield:env-reports', () => getEnvReports())
     ipcMain.handle(
       'agentfield:secret-set',

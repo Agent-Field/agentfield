@@ -7,6 +7,7 @@ import {
   deriveAgentBadge,
   fetchControlPlaneNodes,
   fetchExecutions,
+  fetchUsageStats,
   getAgentFieldHome,
   getSnapshot,
   readInstalledAgents,
@@ -380,6 +381,98 @@ describe('fetchExecutions', () => {
   })
 })
 
+describe('fetchUsageStats', () => {
+  // Contract: happy path maps totals + by_harness/by_agent, cost_usd → costUsd.
+  it('parses cost + by_harness (and by_agent) from a 200 payload', async () => {
+    const fetchImpl: FetchLike = async () =>
+      jsonResponse({
+        window: '24h',
+        totals: {
+          cost_usd: 1.23,
+          input_tokens: 1000,
+          output_tokens: 2000,
+          total_tokens: 3000,
+          executions_with_usage: 42
+        },
+        by_agent: [{ key: 'pr-af', cost_usd: 0.8, total_tokens: 2000, entries: 10 }],
+        by_harness: [{ key: 'claude-code', cost_usd: 1.0, total_tokens: 1500, entries: 8 }]
+      })
+    await expect(fetchUsageStats('http://localhost:8080', fetchImpl)).resolves.toEqual({
+      window: '24h',
+      costUsd: 1.23,
+      totalTokens: 3000,
+      byAgent: [{ key: 'pr-af', costUsd: 0.8, totalTokens: 2000 }],
+      byHarness: [{ key: 'claude-code', costUsd: 1.0, totalTokens: 1500 }]
+    })
+  })
+
+  // Contract: null cost_usd stays null; tokens still present (tokens-only UI).
+  it('maps null cost_usd to costUsd null while keeping tokens', async () => {
+    const fetchImpl: FetchLike = async () =>
+      jsonResponse({
+        window: '24h',
+        totals: { cost_usd: null, total_tokens: 4500, executions_with_usage: 3 },
+        by_agent: [],
+        by_harness: [{ key: 'codex', cost_usd: null, total_tokens: 4500 }]
+      })
+    const result = await fetchUsageStats('http://localhost:8080', fetchImpl)
+    expect(result).toEqual({
+      window: '24h',
+      costUsd: null,
+      totalTokens: 4500,
+      byAgent: [],
+      byHarness: [{ key: 'codex', costUsd: null, totalTokens: 4500 }]
+    })
+  })
+
+  // Contract: 404 (older CP without the endpoint) → null so UI hides usage.
+  it('returns null on 404', async () => {
+    const fetchImpl: FetchLike = async () => jsonResponse({ error: 'not found' }, 404)
+    expect(await fetchUsageStats('http://localhost:8080', fetchImpl)).toBeNull()
+  })
+
+  // Contract: bad JSON / unexpected body → null, never throws across IPC.
+  it('returns null on bad JSON', async () => {
+    const fetchImpl: FetchLike = async () =>
+      new Response('not json', { status: 200, headers: { 'content-type': 'application/json' } })
+    expect(await fetchUsageStats('http://localhost:8080', fetchImpl)).toBeNull()
+  })
+
+  it.each([401, 403, 500] as const)('returns null on %s', async (status) => {
+    const fetchImpl: FetchLike = async () => jsonResponse({ error: 'nope' }, status)
+    expect(await fetchUsageStats('http://localhost:8080', fetchImpl)).toBeNull()
+  })
+
+  it('returns null when fetch rejects', async () => {
+    const fetchImpl: FetchLike = async () => {
+      throw new TypeError('fetch failed')
+    }
+    expect(await fetchUsageStats('http://localhost:8080', fetchImpl)).toBeNull()
+  })
+
+  it('requests usage/stats?window=24h', async () => {
+    let requested = ''
+    const fetchImpl: FetchLike = async (input) => {
+      requested = String(input)
+      return jsonResponse({ window: '24h', totals: { total_tokens: 0 } })
+    }
+    await fetchUsageStats('http://example.test:1234', fetchImpl)
+    expect(requested).toBe('http://example.test:1234/api/ui/v1/usage/stats?window=24h')
+  })
+
+  it('tolerates missing by_agent / by_harness arrays as empty', async () => {
+    const fetchImpl: FetchLike = async () =>
+      jsonResponse({ window: '24h', totals: { cost_usd: 0.5, total_tokens: 100 } })
+    await expect(fetchUsageStats('http://localhost:8080', fetchImpl)).resolves.toEqual({
+      window: '24h',
+      costUsd: 0.5,
+      totalTokens: 100,
+      byAgent: [],
+      byHarness: []
+    })
+  })
+})
+
 describe('install catalog', () => {
   it('every entry has a name, description, and an https or af:// source', () => {
     expect(CATALOG.length).toBeGreaterThan(0)
@@ -469,6 +562,13 @@ describe('getSnapshot', () => {
           executions: { today: 4, yesterday: 2 },
           success_rate: 100,
           packages: { available: 1, installed: 0 }
+        }),
+      'usage/stats?window=24h': () =>
+        jsonResponse({
+          window: '24h',
+          totals: { cost_usd: 1.23, total_tokens: 3000 },
+          by_agent: [],
+          by_harness: [{ key: 'claude-code', cost_usd: 1.23, total_tokens: 3000 }]
         })
     })
 
@@ -485,6 +585,13 @@ describe('getSnapshot', () => {
       executionsToday: 4,
       executionsYesterday: 2,
       successRate: 100
+    })
+    expect(snapshot.usage).toEqual({
+      window: '24h',
+      costUsd: 1.23,
+      totalTokens: 3000,
+      byAgent: [],
+      byHarness: [{ key: 'claude-code', costUsd: 1.23, totalTokens: 3000 }]
     })
     expect(Date.parse(snapshot.fetchedAt)).not.toBeNaN()
 
@@ -534,6 +641,9 @@ describe('getSnapshot', () => {
     // Nor may its workflow runs show up as activity.
     expect(snapshot.executions).toBeNull()
     expect(requested.some((url) => url.includes('/workflow-runs'))).toBe(false)
+    // Usage is only fetched against a recognized control plane.
+    expect(snapshot.usage).toBeNull()
+    expect(requested.some((url) => url.includes('/usage/stats'))).toBe(false)
   })
 
   it('reports an unreachable control plane and an absent registry gracefully', async () => {
@@ -546,5 +656,6 @@ describe('getSnapshot', () => {
     const snapshot = await getSnapshot({ homeDir: missing, fetchImpl })
     expect(snapshot.controlPlane.reachable).toBe(false)
     expect(snapshot.registry).toEqual({ exists: false, agents: [], error: undefined })
+    expect(snapshot.usage).toBeNull()
   })
 })

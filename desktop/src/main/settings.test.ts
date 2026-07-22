@@ -15,7 +15,9 @@ describe('normalizeSettings', () => {
       autostartAgents: ['a', 'b'],
       installSkills: false,
       trayCompanion: false,
-      dismissedUpdateVersion: '0.1.110'
+      dismissedUpdateVersion: '0.1.110',
+      starPrompt: 'done' as const,
+      starPromptSnoozedUntil: '2026-08-01T00:00:00.000Z'
     }
     expect(normalizeSettings(s)).toEqual(s)
   })
@@ -47,6 +49,20 @@ describe('normalizeSettings', () => {
       '0.2.0'
     )
   })
+
+  it('defaults star prompt fields and coerces unknowns', () => {
+    expect(normalizeSettings({}).starPrompt).toBe('pending')
+    expect(normalizeSettings({}).starPromptSnoozedUntil).toBeNull()
+    expect(normalizeSettings({ starPrompt: 'done' }).starPrompt).toBe('done')
+    expect(normalizeSettings({ starPrompt: 'maybe' }).starPrompt).toBe('pending')
+    expect(normalizeSettings({ starPrompt: 1 }).starPrompt).toBe('pending')
+    expect(normalizeSettings({ starPromptSnoozedUntil: '' }).starPromptSnoozedUntil).toBeNull()
+    expect(normalizeSettings({ starPromptSnoozedUntil: 42 }).starPromptSnoozedUntil).toBeNull()
+    expect(normalizeSettings({ starPromptSnoozedUntil: 'not-a-date' }).starPromptSnoozedUntil).toBeNull()
+    expect(
+      normalizeSettings({ starPromptSnoozedUntil: '2026-08-01T12:00:00.000Z' }).starPromptSnoozedUntil
+    ).toBe('2026-08-01T12:00:00.000Z')
+  })
 })
 
 describe('mergeSettings', () => {
@@ -64,6 +80,16 @@ describe('mergeSettings', () => {
     expect(merged.autostartAgents).toEqual(['ok'])
     expect(merged.openAtLogin).toBe(false)
   })
+
+  it('merges star prompt patches', () => {
+    const done = mergeSettings(DEFAULT_SETTINGS, { starPrompt: 'done' })
+    expect(done.starPrompt).toBe('done')
+    const snoozed = mergeSettings(DEFAULT_SETTINGS, {
+      starPromptSnoozedUntil: '2026-08-08T00:00:00.000Z'
+    })
+    expect(snoozed.starPromptSnoozedUntil).toBe('2026-08-08T00:00:00.000Z')
+    expect(snoozed.starPrompt).toBe('pending')
+  })
 })
 
 describe('load/save round trip', () => {
@@ -75,7 +101,9 @@ describe('load/save round trip', () => {
       autostartAgents: ['swe-planner'],
       installSkills: true,
       trayCompanion: true,
-      dismissedUpdateVersion: null
+      dismissedUpdateVersion: null,
+      starPrompt: 'pending' as const,
+      starPromptSnoozedUntil: null
     }
     await saveSettings(file, s)
     expect(await loadSettings(file)).toEqual(s)

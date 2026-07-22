@@ -1,44 +1,128 @@
-/* AgentField — Mac-first desktop styles.
-   Sidebar + content layout, system font stack, light/dark from the OS,
-   hairline borders, a seamless draggable titlebar. Plain CSS, no framework. */
+/* AgentField Desktop — design tokens + component vocabulary.
+   Source of truth: DESIGN.md (§3–5). Pages use these classes/vars only —
+   never hard-code colors, radii, or type scales in components. */
+
+/* --- tokens ------------------------------------------------------------------ */
 
 :root {
-  --bg: #f5f5f7;
-  --sidebar-bg: rgba(0, 0, 0, 0.035);
-  --panel: rgba(255, 255, 255, 0.72);
-  --hairline: rgba(0, 0, 0, 0.09);
-  --text: #1d1d1f;
-  --text-secondary: #6e6e73;
-  --text-tertiary: #98989d;
-  --green: #28a745;
-  --yellow: #b58a00;
-  --red: #e0342b;
-  --gray: #98989d;
-  --accent: #0071e3;
-  --accent-pressed: #0060c0;
-  --pill-bg: rgba(0, 0, 0, 0.05);
-  --nav-active-bg: rgba(0, 0, 0, 0.07);
+  /* Surfaces — cool neutral, chroma toward accent hue (~250) */
+  --bg: oklch(0.97 0.005 250);
+  --bg-elevated: oklch(1 0 0);
+  /* Deeper than --bg so the rail reads as its own surface (§3.6). */
+  --sidebar: oklch(0.93 0.01 250);
+  --panel: oklch(1 0 0 / 0.72);
+  --hairline: oklch(0.2 0.01 250 / 0.1);
+
+  /* Ink */
+  --text: oklch(0.22 0.02 250);
+  --text-secondary: oklch(0.45 0.015 250);
+  --text-tertiary: oklch(0.58 0.01 250);
+
+  /* Brand accent — gold / amber (LOCKED). Never Apple blue. */
+  --accent: oklch(0.72 0.14 85);
+  --accent-pressed: oklch(0.62 0.15 85);
+  --accent-soft: oklch(0.78 0.12 85 / 0.14);
+  --accent-ink: oklch(0.28 0.06 85);
+  --accent-contrast: oklch(0.18 0.02 85);
+
+  /* Semantic */
+  --ok: oklch(0.55 0.16 145);
+  --warn: oklch(0.62 0.14 85);
+  --danger: oklch(0.55 0.2 25);
+  --neutral: oklch(0.55 0.01 250);
+
+  /* Interactive */
+  --nav-active: oklch(0.2 0.01 250 / 0.07);
+  --pill: oklch(0.2 0.01 250 / 0.05);
+  --focus-ring: var(--accent);
+
+  /* Layout */
+  --sidebar-width: 220px;
+  --content-max: 880px;
+  --content-pad-x: 28px;
+  --content-pad-b: 28px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --radius-panel: 10px;
+  --radius-control: 8px;
+  --radius-pill: 999px;
+  --row-height: 46px;
+
+  /* Type */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable', 'Segoe UI', system-ui,
+    sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --text-brand: 13.5px;
+  --text-title: 19px;
+  --text-section: 12px;
+  --text-body: 13px;
+  --text-secondary-size: 12px;
+  --text-metric: 26px;
+  --text-chip: 11px;
+  --weight-brand: 650;
+  --weight-title: 650;
+  --weight-section: 550;
+  --weight-body: 500;
+  --weight-chip: 600;
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 100ms;
+  --dur-normal: 160ms;
+  --dur-expand: 180ms;
+
+  /* Legacy aliases — keep until all class names migrate */
+  --sidebar-bg: var(--sidebar);
+  --pill-bg: var(--pill);
+  --nav-active-bg: var(--nav-active);
+  --green: var(--ok);
+  --yellow: var(--warn);
+  --red: var(--danger);
+  --gray: var(--neutral);
+  --text-primary: var(--text);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #1e1e20;
-    --sidebar-bg: rgba(255, 255, 255, 0.03);
-    --panel: rgba(255, 255, 255, 0.055);
-    --hairline: rgba(255, 255, 255, 0.1);
-    --text: #f5f5f7;
-    --text-secondary: #a1a1a6;
-    --text-tertiary: #6e6e73;
-    --green: #30d158;
-    --yellow: #ffd60a;
-    --red: #ff453a;
-    --gray: #8e8e93;
-    --accent: #0a84ff;
-    --accent-pressed: #0060c0;
-    --pill-bg: rgba(255, 255, 255, 0.08);
-    --nav-active-bg: rgba(255, 255, 255, 0.09);
+    --bg: oklch(0.19 0.01 250);
+    --bg-elevated: oklch(0.22 0.012 250);
+    --sidebar: oklch(0.14 0.012 250);
+    --panel: oklch(1 0 0 / 0.04);
+    --hairline: oklch(1 0 0 / 0.1);
+    --text: oklch(0.95 0.005 250);
+    --text-secondary: oklch(0.72 0.01 250);
+    --text-tertiary: oklch(0.55 0.01 250);
+    --accent: oklch(0.82 0.13 85);
+    --accent-pressed: oklch(0.74 0.14 85);
+    --accent-soft: oklch(0.82 0.13 85 / 0.16);
+    --accent-ink: oklch(0.92 0.04 85);
+    --accent-contrast: oklch(0.18 0.02 85);
+    --ok: oklch(0.72 0.17 145);
+    --warn: oklch(0.78 0.14 85);
+    --danger: oklch(0.68 0.2 25);
+    --neutral: oklch(0.6 0.01 250);
+    --nav-active: oklch(1 0 0 / 0.09);
+    --pill: oklch(1 0 0 / 0.07);
   }
 }
+
+/* Solid surfaces off macOS — panel translucency must not depend on vibrancy. */
+body:not([data-platform='darwin']) {
+  --panel: var(--bg-elevated);
+}
+
+@media (prefers-color-scheme: dark) {
+  body:not([data-platform='darwin']) {
+    --panel: var(--bg-elevated);
+  }
+}
+
+/* --- base -------------------------------------------------------------------- */
 
 * {
   box-sizing: border-box;
@@ -52,23 +136,16 @@ body,
 
 body {
   margin: 0;
-  font-family:
-    -apple-system,
-    BlinkMacSystemFont,
-    'SF Pro Text',
-    'Segoe UI Variable',
-    'Segoe UI',
-    system-ui,
-    sans-serif;
+  font-family: var(--font-sans);
   background: var(--bg);
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--text-body);
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
-  user-select: none;
+  /* Selection allowed on copyable content; chrome opts out via classes. */
+  user-select: text;
 }
 
-/* On macOS the window has sidebar vibrancy: let it show through. */
 body[data-platform='darwin'] {
   background: transparent;
 }
@@ -82,30 +159,84 @@ body[data-platform='darwin'] .sidebar {
   height: 100%;
 }
 
-/* --- sidebar --------------------------------------------------------------- */
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+button:focus:not(:focus-visible),
+input:focus:not(:focus-visible),
+a:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.selectable,
+code,
+.env-name,
+.mono,
+.repo-input,
+.callout,
+.error-text,
+.row-progress {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.sidebar,
+.nav-item,
+.view-header,
+.status-pill,
+.action-button,
+.install-button,
+.switch {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-secondary-size);
+}
+
+/* --- sidebar ----------------------------------------------------------------- */
 
 .sidebar {
   flex: none;
-  width: 200px;
+  width: var(--sidebar-width);
   display: flex;
   flex-direction: column;
-  background: var(--sidebar-bg);
+  background: var(--sidebar);
   border-right: 1px solid var(--hairline);
-  /* The whole rail drags the window; interactive children opt out. */
   -webkit-app-region: drag;
   padding: 14px 10px;
 }
 
-/* Clear the macOS traffic lights. */
 body[data-platform='darwin'] .sidebar {
   padding-top: 48px;
 }
 
 .sidebar-brand {
-  font-size: 13px;
-  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-brand);
+  font-weight: var(--weight-brand);
   letter-spacing: -0.01em;
   padding: 4px 10px 14px;
+}
+
+.sidebar-brand-mark {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+}
+
+.sidebar-brand-version {
+  margin-left: auto;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text-tertiary);
 }
 
 .sidebar-nav {
@@ -124,12 +255,15 @@ body[data-platform='darwin'] .sidebar {
   background: transparent;
   color: var(--text-secondary);
   font-family: inherit;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--text-body);
+  font-weight: var(--weight-body);
   text-align: left;
   padding: 7px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-control);
   cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 
 .nav-item svg {
@@ -138,12 +272,12 @@ body[data-platform='darwin'] .sidebar {
 }
 
 .nav-item:hover {
-  background: var(--pill-bg);
+  background: var(--pill);
   color: var(--text);
 }
 
 .nav-item.active {
-  background: var(--nav-active-bg);
+  background: var(--nav-active);
   color: var(--text);
 }
 
@@ -152,7 +286,20 @@ body[data-platform='darwin'] .sidebar {
   padding: 10px 6px 2px;
 }
 
-/* --- main column ------------------------------------------------------------ */
+.status-pill-button {
+  -webkit-app-region: no-drag;
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+}
+
+.status-pill-button:disabled {
+  cursor: default;
+}
+
+/* --- main column ------------------------------------------------------------- */
 
 .main {
   flex: 1;
@@ -161,64 +308,149 @@ body[data-platform='darwin'] .sidebar {
   flex-direction: column;
 }
 
+/* macOS: vibrancy is the sidebar's material only — the canvas stays solid so
+   system blur never bleeds under content (§3.6). */
+body[data-platform='darwin'] .main {
+  background: var(--bg);
+}
+
 .view-header {
   -webkit-app-region: drag;
   flex: none;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   height: 52px;
-  padding: 0 28px;
+  padding: 0 var(--content-pad-x);
 }
 
-/* Clear the Windows caption-button overlay. */
 body[data-platform='win32'] .view-header {
   padding-right: 150px;
 }
 
 .view-header h1 {
   margin: 0;
-  font-size: 17px;
-  font-weight: 700;
+  font-size: var(--text-title);
+  font-weight: var(--weight-title);
   letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+.view-header-action {
+  -webkit-app-region: no-drag;
 }
 
 .view-body {
   flex: 1;
   overflow-y: auto;
-  padding: 6px 28px 32px;
+  padding: var(--space-3) var(--content-pad-x) var(--content-pad-b);
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  max-width: 820px;
+  gap: var(--space-6);
+  max-width: var(--content-max);
   width: 100%;
 }
 
-/* Children keep their natural height. Without this, a view taller than the
-   window (Settings, long agent lists) gets its panels squeezed to fit —
-   flex-shrink compresses them instead of letting the column overflow into
-   .view-body's scrollbar. */
 .view-body > * {
   flex: none;
 }
 
 .view-lede {
-  margin: -6px 0 0;
+  /* §3.5 Rule 1: no negative top margin — every view starts at the same y.
+     Rule 3: 4px left optical inset for free-standing frame content. */
+  margin: 0 0 0 4px;
   color: var(--text-secondary);
   font-size: 12.5px;
+  max-width: 65ch;
 }
 
-/* --- dashboard tiles --------------------------------------------------------- */
+/* Views render fragments inside this crossfade wrapper — it carries the same
+   24px major-section rhythm as .view-body (§3.5). */
+.view-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  animation: view-fade var(--dur-normal) var(--ease-out);
+}
+
+.view-content > * {
+  flex: none;
+}
+
+@keyframes view-fade {
+  from {
+    opacity: 0.72;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* --- section titles (sentence case — never ALL CAPS eyebrows) ---------------- */
+
+/* One pattern: a section title sits in a .subhead, 8px above its panel.
+   The 4px left margin is an optical inset aligning with panel content. */
+.section-title {
+  margin: 0 0 0 4px;
+  font-size: var(--text-section);
+  font-weight: var(--weight-section);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-secondary);
+}
+
+/* Bare titles without a .subhead wrapper keep the same 8px title → panel gap. */
+section > .section-title {
+  margin-bottom: var(--space-2);
+}
+
+/* Bare title dropped straight into the 24px-gap flex flow: pull the following
+   panel back to the standard 8px title gap. */
+.view-body > .section-title,
+.view-content > .section-title {
+  margin-bottom: calc(var(--space-2) - var(--space-6));
+}
+
+.subhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
+}
+
+.link-button {
+  border: none;
+  background: none;
+  color: var(--accent-ink);
+  font-family: inherit;
+  font-size: var(--text-secondary-size);
+  font-weight: 500;
+  cursor: pointer;
+  padding: 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .link-button {
+    color: var(--accent);
+  }
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
+/* --- metric tiles ------------------------------------------------------------ */
 
 .tile-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .tile {
   background: var(--panel);
   border: 1px solid var(--hairline);
-  border-radius: 12px;
+  border-radius: var(--radius-panel);
   padding: 14px 16px 12px;
   display: flex;
   flex-direction: column;
@@ -226,29 +458,29 @@ body[data-platform='win32'] .view-header {
 }
 
 .tile-label {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--text-tertiary);
+  font-size: var(--text-section);
+  font-weight: var(--weight-section);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-secondary);
 }
 
 .tile-value {
-  font-size: 26px;
-  font-weight: 700;
+  font-size: var(--text-metric);
+  font-weight: var(--weight-title);
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
 }
 
 .tile-value.good {
-  color: var(--green);
+  color: var(--ok);
 }
 .tile-value.warn {
-  color: var(--yellow);
+  color: var(--warn);
 }
 .tile-value.bad {
-  color: var(--red);
+  color: var(--danger);
 }
 
 .tile-context {
@@ -256,39 +488,12 @@ body[data-platform='win32'] .view-header {
   color: var(--text-secondary);
 }
 
-.subhead {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-
-.section-title {
-  margin: 0 0 0 4px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-tertiary);
-}
-
-.link-button {
-  border: none;
-  background: none;
-  color: var(--accent);
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  padding: 0;
-}
-
-/* --- panels & rows ------------------------------------------------------------ */
+/* --- panels & rows ----------------------------------------------------------- */
 
 .panel {
   background: var(--panel);
   border: 1px solid var(--hairline);
-  border-radius: 12px;
+  border-radius: var(--radius-panel);
   overflow: hidden;
 }
 
@@ -301,8 +506,14 @@ body[data-platform='win32'] .view-header {
 .row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
   padding: 11px 16px;
+  min-height: var(--row-height);
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.row:hover {
+  background: var(--pill);
 }
 
 .row + .row {
@@ -314,16 +525,17 @@ body[data-platform='win32'] .view-header {
   width: 9px;
   height: 9px;
   border-radius: 50%;
+  background: var(--neutral);
 }
 
 .row-dot.running {
-  background: var(--green);
+  background: var(--ok);
 }
 .row-dot.stopped {
-  background: var(--gray);
+  background: var(--neutral);
 }
 .row-dot.unknown {
-  background: var(--yellow);
+  background: var(--warn);
 }
 
 .row-dot.pulse {
@@ -333,10 +545,10 @@ body[data-platform='win32'] .view-header {
 @keyframes pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(48, 209, 88, 0.45);
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--ok) 45%, transparent);
   }
   50% {
-    box-shadow: 0 0 0 5px rgba(48, 209, 88, 0);
+    box-shadow: 0 0 0 5px color-mix(in oklch, var(--ok) 0%, transparent);
   }
 }
 
@@ -348,12 +560,12 @@ body[data-platform='win32'] .view-header {
 }
 
 .row-title {
-  font-weight: 500;
+  font-weight: var(--weight-body);
   letter-spacing: -0.01em;
 }
 
 .row-sub {
-  font-size: 12px;
+  font-size: var(--text-secondary-size);
   color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
@@ -375,20 +587,18 @@ body[data-platform='win32'] .view-header {
 }
 
 .row-meta {
-  font-size: 12px;
+  font-size: var(--text-secondary-size);
   color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
 }
 
-/* In-flight run indicator: a small spinning ring instead of the word
-   "running" — the row already says what is running. */
 .spinner {
   flex: none;
   width: 13px;
   height: 13px;
   border-radius: 50%;
-  border: 2px solid color-mix(in srgb, var(--green) 30%, transparent);
-  border-top-color: var(--green);
+  border: 2px solid color-mix(in oklch, var(--ok) 30%, transparent);
+  border-top-color: var(--ok);
   animation: spin 0.9s linear infinite;
 }
 
@@ -398,13 +608,13 @@ body[data-platform='win32'] .view-header {
   }
 }
 
-/* Open-in-web-UI affordance on activity rows: quiet until the row is hovered. */
 .run-open {
-  opacity: 0;
-  transition: opacity 120ms ease;
+  opacity: 0.55;
+  transition: opacity var(--dur-fast) var(--ease-out);
 }
 
 .row:hover .run-open,
+.row:focus-within .run-open,
 .run-open:focus-visible {
   opacity: 1;
 }
@@ -422,14 +632,14 @@ body[data-platform='win32'] .view-header {
 }
 
 .run-glyph.succeeded {
-  color: var(--green);
+  color: var(--ok);
 }
 .run-glyph.failed,
 .run-glyph.timeout {
-  color: var(--red);
+  color: var(--danger);
 }
 
-/* --- status pill ---------------------------------------------------------------- */
+/* --- status chip / pill ------------------------------------------------------ */
 
 .status-pill {
   -webkit-app-region: no-drag;
@@ -437,8 +647,8 @@ body[data-platform='win32'] .view-header {
   align-items: center;
   gap: 6px;
   padding: 3px 10px;
-  border-radius: 999px;
-  background: var(--pill-bg);
+  border-radius: var(--radius-pill);
+  background: var(--pill);
   font-size: 11.5px;
   font-weight: 500;
   color: var(--text-secondary);
@@ -448,52 +658,60 @@ body[data-platform='win32'] .view-header {
   width: 7px;
   height: 7px;
   border-radius: 50%;
+  background: var(--neutral);
 }
 
 .status-pill.green .status-dot {
-  background: var(--green);
+  background: var(--ok);
 }
 .status-pill.yellow .status-dot {
-  background: var(--yellow);
+  background: var(--warn);
 }
 .status-pill.red .status-dot {
-  background: var(--red);
+  background: var(--danger);
 }
 .status-pill.gray .status-dot {
-  background: var(--gray);
+  background: var(--neutral);
 }
 
-/* --- badges / buttons -------------------------------------------------------- */
-
 .badge {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 2px 9px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-chip);
+  font-weight: var(--weight-chip);
 }
 
 .badge.running {
-  background: color-mix(in srgb, var(--green) 14%, transparent);
-  color: var(--green);
+  background: color-mix(in oklch, var(--ok) 14%, transparent);
+  color: var(--ok);
 }
 
 .badge.stopped {
-  background: var(--pill-bg);
+  background: var(--pill);
   color: var(--text-secondary);
 }
 
 .badge.unknown {
-  background: color-mix(in srgb, var(--yellow) 14%, transparent);
-  color: var(--yellow);
+  background: color-mix(in oklch, var(--warn) 14%, transparent);
+  color: var(--warn);
 }
 
 .badge.warn {
-  background: color-mix(in srgb, var(--yellow) 14%, transparent);
-  color: var(--yellow);
+  background: color-mix(in oklch, var(--warn) 14%, transparent);
+  color: var(--warn);
 }
 
-/* --- agent rows with an expandable keys editor -------------------------------- */
+.badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* --- agent rows / env editor ------------------------------------------------- */
 
 .row-item + .row-item {
   border-top: 1px solid var(--hairline);
@@ -501,21 +719,24 @@ body[data-platform='win32'] .view-header {
 
 .env-editor {
   padding: 4px 16px 14px 37px;
+  transition:
+    opacity var(--dur-expand) var(--ease-out),
+    max-height var(--dur-expand) var(--ease-out);
 }
 
 .env-section-title {
   margin: 12px 0 2px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-tertiary);
+  font-size: var(--text-section);
+  font-weight: var(--weight-section);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-secondary);
 }
 
 .env-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
   padding: 7px 0;
 }
 
@@ -537,8 +758,8 @@ body[data-platform='win32'] .view-header {
 }
 
 .env-name {
-  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: var(--text-secondary-size);
   font-weight: 600;
 }
 
@@ -550,25 +771,31 @@ body[data-platform='win32'] .view-header {
 .chip {
   display: inline-block;
   padding: 1px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 10.5px;
-  font-weight: 600;
+  font-weight: var(--weight-chip);
 }
 
 .chip.env,
 .chip.stored {
-  background: color-mix(in srgb, var(--green) 14%, transparent);
-  color: var(--green);
+  background: color-mix(in oklch, var(--ok) 14%, transparent);
+  color: var(--ok);
 }
 
 .chip.default {
-  background: var(--pill-bg);
+  background: var(--pill);
   color: var(--text-secondary);
 }
 
 .chip.missing {
-  background: color-mix(in srgb, var(--red) 12%, transparent);
-  color: var(--red);
+  background: color-mix(in oklch, var(--danger) 12%, transparent);
+  color: var(--danger);
+}
+
+.chip.lang {
+  background: var(--pill);
+  color: var(--text-secondary);
+  text-transform: capitalize;
 }
 
 .env-row-controls {
@@ -581,133 +808,384 @@ body[data-platform='win32'] .view-header {
 .env-input {
   -webkit-app-region: no-drag;
   width: 180px;
-  background: var(--pill-bg);
+  background: var(--pill);
   border: 1px solid var(--hairline);
-  border-radius: 7px;
-  padding: 4px 9px;
-  font-size: 12px;
+  border-radius: var(--radius-control);
+  padding: 5px 9px;
+  font-size: var(--text-secondary-size);
   font-family: inherit;
   color: var(--text);
   outline: none;
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
 
 .env-input:focus {
   border-color: var(--accent);
 }
 
-/* Install-from-repository field: the URL wants the full row width, unlike the
-   fixed-width secret inputs. */
-.repo-input {
-  width: 100%;
+.env-input::placeholder {
+  color: var(--text-tertiary);
 }
 
-/* Reserved slot: keeps the input column aligned across rows whether or not
-   a Revoke button is visible. */
+.repo-input {
+  width: 100%;
+  font-family: var(--font-mono);
+}
+
 .action-button.ghost-slot {
   visibility: hidden;
   pointer-events: none;
 }
 
-.action-button.danger {
-  background: color-mix(in srgb, var(--red) 14%, transparent);
-  color: var(--red);
-}
-
-.action-button.danger:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--red) 24%, transparent);
-}
-
 .warn-text {
-  color: var(--yellow);
+  color: var(--warn);
 }
 
 .footnote {
-  margin: 10px 4px 0;
+  /* Vertical rhythm from .view-body gap; 4px left optical inset (§3.5 Rule 3). */
+  margin: 0 0 0 4px;
   font-size: 11.5px;
   color: var(--text-tertiary);
 }
 
-.install-button {
-  -webkit-app-region: no-drag;
-  background: var(--accent);
-  color: #fff;
-  border: none;
-  border-radius: 999px;
-  padding: 4px 14px;
-  font-size: 12px;
-  font-weight: 600;
-  font-family: inherit;
-  cursor: pointer;
-}
-
-.install-button:hover:not(:disabled) {
-  background: var(--accent-pressed);
-}
-
-.install-button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-/* Installed catalog entries: the title itself carries the state — green name
-   plus a small tick — so the actions column stays just buttons. */
 .row-title.installed {
-  color: var(--green);
+  color: var(--ok);
 }
 
 .installed-tick {
   margin-left: 5px;
   font-size: 11px;
   font-weight: 600;
-  color: var(--green);
+  color: var(--ok);
   opacity: 0.85;
 }
 
-/* --- agent lifecycle controls ------------------------------------------------ */
+/* --- buttons ----------------------------------------------------------------- */
 
 .row-actions {
   display: flex;
   gap: 6px;
+  align-items: center;
 }
 
-.action-button {
+.action-button,
+.install-button {
   -webkit-app-region: no-drag;
-  background: var(--pill-bg);
-  color: var(--text-primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 12px;
   border: none;
-  border-radius: 999px;
-  padding: 4px 12px;
-  font-size: 12px;
+  border-radius: var(--radius-control);
+  background: var(--pill);
+  color: var(--text);
+  font-size: var(--text-secondary-size);
   font-weight: 600;
   font-family: inherit;
   cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out);
 }
 
-.action-button:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--text-primary) 14%, var(--pill-bg));
+.action-button:hover:not(:disabled),
+.install-button:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--text) 10%, var(--pill));
 }
 
-.action-button.primary {
+.action-button.primary,
+.install-button {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-contrast);
 }
 
-.action-button.primary:hover:not(:disabled) {
+.action-button.primary:hover:not(:disabled),
+.install-button:hover:not(:disabled) {
   background: var(--accent-pressed);
 }
 
-.action-button:disabled {
+.action-button.ghost {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.action-button.ghost:hover:not(:disabled) {
+  background: var(--pill);
+  color: var(--text);
+}
+
+.action-button.danger {
+  background: color-mix(in oklch, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
+.action-button.danger:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--danger) 24%, transparent);
+}
+
+.action-button.icon {
+  width: 28px;
+  padding: 0;
+  color: var(--text-secondary);
+}
+
+.action-button:disabled,
+.install-button:disabled {
   opacity: 0.5;
   cursor: default;
 }
 
-/* --- settings ----------------------------------------------------------------- */
+/* Overflow menu */
+.menu-anchor {
+  position: relative;
+}
 
-.section-title {
-  margin: 18px 0 0;
-  font-size: 13px;
-  font-weight: 600;
+.menu-popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 40;
+  min-width: 160px;
+  padding: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-control);
+  box-shadow: 0 8px 24px oklch(0 0 0 / 0.12);
+}
+
+.menu-item {
+  display: block;
+  width: 100%;
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 6px;
+  font: inherit;
+  font-size: var(--text-secondary-size);
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.menu-item:hover {
+  background: var(--pill);
+}
+
+.menu-item.danger {
+  color: var(--danger);
+}
+
+/* --- install hero ------------------------------------------------------------ */
+
+.install-hero {
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-panel);
+  padding: 18px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.install-hero-label {
+  font-size: var(--text-section);
+  font-weight: var(--weight-section);
   color: var(--text-secondary);
+}
+
+.install-hero-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.install-hero-row .env-input {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  min-height: 32px;
+  padding: 6px 12px;
+}
+
+.install-hero-echo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-secondary-size);
+  color: var(--text-secondary);
+}
+
+.install-hero-echo .mono {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.install-hero-hint,
+.install-hero-disclosure,
+.install-hero-error {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  margin: 0;
+}
+
+.install-hero-hint .mono {
+  color: var(--text-secondary);
+}
+
+.install-hero-error {
+  color: var(--danger);
+}
+
+.install-progress-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.install-progress-line {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  animation: line-in var(--dur-expand) var(--ease-out);
+}
+
+@keyframes line-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* --- connect clients / callers ----------------------------------------------- */
+
+.connect-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+}
+
+.connect-row {
+  display: grid;
+  grid-template-columns: 72px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  font-size: var(--text-secondary-size);
+}
+
+.connect-label {
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+
+.connect-value {
+  min-width: 0;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connect-value.mono {
+  font-family: var(--font-mono);
+}
+
+.callers-line {
+  padding: 10px 16px;
+  font-size: var(--text-secondary-size);
+  color: var(--text-secondary);
+  border-top: 1px solid var(--hairline);
+}
+
+.attention-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 16px;
+  font-size: var(--text-secondary-size);
+  color: var(--text-secondary);
+}
+
+.attention-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in oklch, var(--warn) 12%, transparent);
+  color: var(--accent-ink);
+  font-size: var(--text-chip);
+  font-weight: var(--weight-chip);
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+@media (prefers-color-scheme: dark) {
+  .attention-chip {
+    color: var(--warn);
+  }
+}
+
+/* --- filter chips ------------------------------------------------------------ */
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  /* §3.5 Rule 3: free-standing bars align with panel text column. */
+  margin-left: 4px;
+}
+
+.filter-chip {
+  -webkit-app-region: no-drag;
+  border: 1px solid var(--hairline);
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: var(--radius-pill);
+  padding: 4px 12px;
+  font-size: var(--text-chip);
+  font-weight: var(--weight-chip);
+  font-family: inherit;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.filter-chip:hover {
+  background: var(--pill);
+  color: var(--text);
+}
+
+.filter-chip.active {
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--accent-ink);
+}
+
+@media (prefers-color-scheme: dark) {
+  .filter-chip.active {
+    color: var(--accent);
+  }
+}
+
+/* --- settings ---------------------------------------------------------------- */
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* Flex gap already provides the 8px title → panel rhythm here. */
+.settings-section .subhead {
+  margin-bottom: 0;
 }
 
 .switch {
@@ -716,15 +1194,15 @@ body[data-platform='win32'] .view-header {
   width: 36px;
   height: 21px;
   border: none;
-  border-radius: 999px;
-  background: var(--pill-bg);
+  border-radius: var(--radius-pill);
+  background: var(--pill);
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background var(--dur-expand) var(--ease-out);
   flex: none;
 }
 
 .switch.on {
-  background: var(--green);
+  background: var(--ok);
 }
 
 .switch-thumb {
@@ -734,29 +1212,41 @@ body[data-platform='win32'] .view-header {
   width: 17px;
   height: 17px;
   border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
-  transition: transform 0.15s ease;
+  background: oklch(1 0 0);
+  box-shadow: 0 1px 2px oklch(0 0 0 / 0.25);
+  transition: transform var(--dur-expand) var(--ease-out);
 }
 
 .switch.on .switch-thumb {
   transform: translateX(15px);
 }
 
-/* --- app update banner ------------------------------------------------------ */
+/* --- update banner ----------------------------------------------------------- */
 
 .update-banner {
   flex: none;
   display: flex;
   align-items: center;
   gap: 10px;
-  margin: 0 28px 6px;
-  max-width: 820px;
+  margin: 0 var(--content-pad-x) 6px;
+  max-width: var(--content-max);
   padding: 8px 8px 8px 14px;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-radius: var(--radius-panel);
+  background: var(--accent-soft);
   color: var(--text);
   font-size: 12.5px;
+  animation: banner-in var(--dur-expand) var(--ease-out);
+}
+
+@keyframes banner-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .update-banner-text {
@@ -788,27 +1278,37 @@ body[data-platform='win32'] .view-header {
 }
 
 .update-banner-dismiss:hover {
-  background: var(--pill-bg);
+  background: var(--pill);
   color: var(--text);
 }
 
-/* --- misc ------------------------------------------------------------------ */
+/* --- callouts / empty -------------------------------------------------------- */
 
 .callout {
-  border-radius: 10px;
-  padding: 10px 14px;
+  border-radius: var(--radius-panel);
+  padding: 10px 16px;
   font-size: 12.5px;
-  background: var(--pill-bg);
+  background: var(--pill);
   color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .callout.error {
-  background: color-mix(in srgb, var(--red) 10%, transparent);
-  color: var(--red);
+  background: color-mix(in oklch, var(--danger) 10%, transparent);
+  color: var(--danger);
+}
+
+.callout-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
 }
 
 .error-text {
-  color: var(--red);
+  color: var(--danger);
 }
 
 .empty {
@@ -819,6 +1319,15 @@ body[data-platform='win32'] .view-header {
 
 .empty p {
   margin: 2px 0;
+  max-width: 42ch;
+  margin-inline: auto;
+}
+
+.empty-actions {
+  margin-top: 14px;
+  display: flex;
+  justify-content: center;
+  gap: 8px;
 }
 
 .secondary {
@@ -826,9 +1335,585 @@ body[data-platform='win32'] .view-header {
 }
 
 code {
-  font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', monospace;
-  font-size: 12px;
-  background: var(--pill-bg);
+  font-family: var(--font-mono);
+  font-size: var(--text-secondary-size);
+  background: var(--pill);
   padding: 1px 6px;
   border-radius: 4px;
+}
+
+/* --- reduced motion ---------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .row-dot.pulse {
+    animation: none;
+  }
+
+  .spinner {
+    animation: none;
+    border-top-color: color-mix(in oklch, var(--ok) 30%, transparent);
+    opacity: 0.85;
+  }
+
+  .view-content {
+    animation: none;
+  }
+}
+
+/* --- activity dense feed (v2) — DESIGN.md §4.12 (appended section; do not
+   fold into rules above — ActivityPanel.tsx owns these classes) -------------- */
+
+.activity-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* Summary strip: plain text, not metric tiles. */
+.activity-summary {
+  /* No negative top margin — first child of the view must sit on the frame (§3.5). */
+  margin: 0 0 0 4px;
+  font-size: var(--text-secondary-size);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-filters {
+  align-items: center;
+}
+
+.activity-agent-select {
+  -webkit-app-region: no-drag;
+  margin-left: auto;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--text-secondary-size);
+}
+
+.feed-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 2px;
+}
+
+/* Quiet group labels (Running / Today / Yesterday / date) inside the feed. */
+.feed-group-label {
+  padding: 10px 16px 4px;
+  font-size: var(--text-section);
+  font-weight: var(--weight-section);
+  color: var(--text-secondary);
+}
+
+.feed-list > .feed-group-label:not(:first-child) {
+  margin-top: 4px;
+  border-top: 1px solid var(--hairline);
+}
+
+/* Dense single-line rows, 34px. */
+.feed-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 34px;
+  padding: 0 10px 0 16px;
+  white-space: nowrap;
+  font-size: var(--text-body);
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.feed-row:hover,
+.feed-row:focus-within {
+  background: var(--pill);
+}
+
+.feed-glyph {
+  flex: none;
+  width: 9px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.feed-glyph.succeeded {
+  color: var(--ok);
+}
+.feed-glyph.failed,
+.feed-glyph.timeout {
+  color: var(--danger);
+}
+
+.feed-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: var(--weight-body);
+}
+
+.feed-agent {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--text-secondary-size);
+  color: var(--text-secondary);
+}
+
+.feed-meta {
+  flex: none;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-secondary-size);
+  color: var(--text-secondary);
+}
+
+.feed-meta-sep {
+  margin: 0 0.35em;
+  color: var(--text-tertiary);
+}
+
+/* Relative start time — hover brightens; exact time via .af-tooltip. */
+.feed-time {
+  font-variant-numeric: tabular-nums;
+  border-radius: 2px;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.feed-time:hover {
+  color: var(--text);
+}
+
+/* On-brand hover tip (menu-popover vocabulary). Portaled to body — not clipped. */
+.af-tooltip {
+  position: fixed;
+  z-index: 100;
+  transform: translate(-50%, calc(-100% - 6px));
+  padding: 5px 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px oklch(0 0 0 / 0.12);
+  font-family: var(--font-mono);
+  font-size: var(--text-chip);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  white-space: nowrap;
+  pointer-events: none;
+  animation: af-tooltip-in var(--dur-fast) var(--ease-out);
+}
+
+@keyframes af-tooltip-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-100% - 2px));
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, calc(-100% - 6px));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .af-tooltip {
+    animation: none;
+  }
+}
+
+.feed-duration {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ↗ appears on hover / keyboard focus only (same contract as .run-open). */
+.feed-row .run-open {
+  flex: none;
+  opacity: 0;
+}
+
+.feed-row:hover .run-open,
+.feed-row:focus-within .run-open,
+.feed-row .run-open:focus-visible {
+  opacity: 1;
+}
+
+/* Ghost pagination control pinned to the panel's bottom edge. */
+.feed-more {
+  width: 100%;
+  justify-content: center;
+  min-height: 36px;
+  border-top: 1px solid var(--hairline);
+  border-radius: 0 0 var(--radius-panel) var(--radius-panel);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- agents marketplace (v2) — DESIGN.md §4.11 (appended section; do not
+   fold into rules above — App.tsx / InstallPanel.tsx own these classes) ------ */
+
+/* Agents add-mode surface: back affordance + hero + featured grid, one
+   vertical rhythm (view-content itself has no layout). */
+.agents-add {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.agents-add-back {
+  align-self: flex-start;
+}
+
+/* Featured marketplace card grid — browsable cards, not a settings list. */
+.market-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.market-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-panel);
+}
+
+.market-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.market-card-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--weight-body);
+  letter-spacing: -0.01em;
+}
+
+.market-card-desc {
+  margin: 0;
+  font-size: var(--text-secondary-size);
+  color: var(--text-secondary);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Footer: mono source repo (trust cue) left, action right. */
+.market-card-foot {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.market-source {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  text-decoration: none;
+}
+
+a.market-source:hover,
+a.market-source:focus-visible {
+  color: var(--text-secondary);
+  text-decoration: underline;
+}
+
+/* Text + glyph, not color-only (the ✓ carries the label with it). */
+.market-installed {
+  flex: none;
+  font-size: var(--text-chip);
+  font-weight: var(--weight-chip);
+  color: var(--ok);
+  white-space: nowrap;
+}
+
+/* --- growth mechanics (v2) --- */
+
+/* Shared 4px optical inset for free-standing frame content (§3.5 Rule 3). */
+.frame-inset {
+  margin-left: 4px;
+}
+
+/* Anchor variant of .link-button — quiet inline docs / community links. */
+a.link-button {
+  display: inline;
+  text-decoration: none;
+}
+
+a.link-button:hover {
+  text-decoration: underline;
+}
+
+/* .community-banner shares .update-banner look (accent-soft, same height rhythm). */
+
+a.action-button {
+  text-decoration: none;
+}
+
+.connect-docs {
+  padding: 10px 16px;
+  border-top: 1px solid var(--hairline);
+}
+
+.empty-docs {
+  margin-top: 8px;
+}
+
+/* --- motion & polish (v2) — DESIGN.md §4.15–4.17, §5 (appended section; do
+   not fold into rules above — motion components own these classes) ---------- */
+
+/* View transitions are motion-managed now (AnimatePresence in App.tsx);
+   neutralize the legacy CSS view-fade so the two don't fight. */
+.view-content {
+  animation: none;
+}
+
+/* Sliding nav highlight (§5.2 signature): the active background is a shared
+   m.span with layoutId="nav-active" that springs between items. The button's
+   own active background goes transparent so the moving element is the only
+   paint. isolation keeps the negative-z child above ancestor surfaces. */
+.nav-item {
+  position: relative;
+  isolation: isolate;
+}
+
+.nav-item.active {
+  background: transparent;
+}
+
+.nav-active-bg {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: var(--radius-control);
+  background: var(--nav-active);
+}
+
+/* Press state (§5.2): transform-only 80ms scale. Redeclares the transition
+   shorthand to add transform alongside the original tint transitions. */
+.action-button,
+.install-button,
+.filter-chip,
+.nav-item {
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out),
+    transform 80ms var(--ease-out);
+}
+
+.action-button:active:not(:disabled),
+.install-button:active:not(:disabled),
+.filter-chip:active,
+.nav-item:active {
+  transform: scale(0.985);
+}
+
+/* Featured card hover (§5.2): quiet lift toward the accent, no shadow bloom. */
+.market-card {
+  transition:
+    transform 120ms var(--ease-out),
+    border-color 120ms var(--ease-out);
+}
+
+.market-card:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in oklch, var(--accent) 35%, var(--hairline));
+}
+
+/* Metric ticker (§5.2): the rolling value span needs a box for y-transform;
+   the container anchors the popLayout exit (absolutely positioned). */
+.tile-value {
+  position: relative;
+}
+
+.tile-value-inner {
+  display: inline-block;
+}
+
+/* Install success (§5.2): checkmark stroke-draws in ~400ms. pathLength=1 on
+   the SVG path normalizes the dash math. */
+.install-success {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--ok);
+}
+
+.check-draw {
+  flex: none;
+}
+
+.check-draw path {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: check-draw 400ms var(--ease-out) forwards;
+}
+
+@keyframes check-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* Install failure (§5.2): single subtle horizontal shake — 2px, 2 cycles. */
+.shake {
+  animation: shake-x 250ms linear;
+}
+
+@keyframes shake-x {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  12.5%,
+  62.5% {
+    transform: translateX(-2px);
+  }
+  37.5%,
+  87.5% {
+    transform: translateX(2px);
+  }
+}
+
+/* Skeleton rows (§4.15): layout-matched placeholders — dot circle + two text
+   bars — with a 1.4s linear shimmer sweep over the --pill base. */
+.skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 11px 16px;
+  min-height: var(--row-height);
+}
+
+.skeleton-row + .skeleton-row {
+  border-top: 1px solid var(--hairline);
+}
+
+.skeleton-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--pill);
+}
+
+.skeleton-bars {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.skeleton-bar {
+  height: 9px;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--pill) 25%,
+    color-mix(in oklch, var(--text) 7%, var(--pill)) 50%,
+    var(--pill) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s linear infinite;
+}
+
+@keyframes skeleton-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* Empty-state identity marks (§4.16): 44px schematic line-art, tertiary
+   stroke + one accent dot; optional 6s ambient opacity pulse. */
+.empty-mark {
+  display: block;
+  width: 44px;
+  height: 44px;
+  margin: 0 auto 10px;
+  color: var(--text-tertiary);
+}
+
+.empty-mark-ambient {
+  animation: empty-mark-pulse 6s ease-in-out infinite;
+}
+
+@keyframes empty-mark-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+/* Add-mode header mark (empty library) — centered above the lede. */
+.agents-add-mark {
+  display: flex;
+  justify-content: center;
+  padding-top: 4px;
+}
+
+.agents-add-mark .empty-mark {
+  margin: 0;
+}
+
+/* Reduced motion: static check, no shake, static skeleton tint, still mark.
+   (The global kill-switch above also collapses these; explicit is safer.) */
+@media (prefers-reduced-motion: reduce) {
+  .check-draw path {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+
+  .shake {
+    animation: none;
+  }
+
+  .skeleton-bar {
+    animation: none;
+    background: var(--pill);
+  }
+
+  .empty-mark-ambient {
+    animation: none;
+  }
 }

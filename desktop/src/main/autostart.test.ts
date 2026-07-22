@@ -23,6 +23,8 @@ function settings(overrides: Partial<DesktopSettings>): DesktopSettings {
     installSkills: true,
     trayCompanion: true,
     dismissedUpdateVersion: null,
+    starPrompt: 'pending',
+    starPromptSnoozedUntil: null,
     ...overrides
   }
 }
