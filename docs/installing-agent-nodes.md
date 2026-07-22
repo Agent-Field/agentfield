@@ -246,6 +246,26 @@ paths and paths that escape the root with `..` are rejected, and a missing manif
 is reported with the full expected path. A bare `af install <src>` (no `--path`) is
 unchanged — the root manifest is always what you get by default.
 
+## Previewing requirements before installing: `af show-requirements`
+
+To see what environment a node needs *before* committing to an install, run:
+
+```bash
+af show-requirements ./my-agent
+af show-requirements https://github.com/Agent-Field/pr-af
+af show-requirements https://github.com/Agent-Field/SWE-AF//go   # subdir selector
+af show-requirements ./my-agent -o json                          # machine-readable
+```
+
+It resolves the source **without installing anything** — a local path is parsed
+in place; a Git URL (with an optional `@ref` and `//subdir` selector) is
+shallow-cloned into a temporary directory that is removed afterwards, so nothing
+is written under `~/.agentfield`. The output lists the node's required variables,
+optional variables with their defaults, and `require_one_of` groups, and pairs
+each required variable with the exact `af secrets set <VAR> --node <name>` command
+that supplies it. `-o json` emits the same information as a machine-readable
+object for scripting.
+
 ## Secrets: encrypted, shared, runtime-only
 
 Secrets are never written to disk in plaintext and never baked into the package.
@@ -280,8 +300,31 @@ af secrets rm PR_AF_MODEL --node pr-af        # remove a node-scoped secret
 ```
 
 In a non-interactive session (CI, no TTY), missing required secrets are reported
-as an error listing the variable names instead of hanging on a prompt — set them
-ahead of time with `af secrets set` or by exporting them.
+as an error instead of hanging on a prompt. The error names the node and pairs
+each unset variable (and each option of an unsatisfied `require_one_of` group)
+with the exact command that fixes it — `af secrets set <VAR> --node <name>` — so
+you can copy-paste the fix. Set them ahead of time with `af secrets set` or by
+exporting them.
+
+### `af config` — configure an installed node
+
+`af config <node>` is a convenience wrapper for configuring an **installed**
+node. `af config <node> --set KEY=VALUE` (and the interactive `af config <node>`)
+**write through to both** the node-scoped encrypted secret store — the same one
+`af secrets set KEY --node <node>` writes to, and the one `af run` reads at start
+time — **and** the package's `.env` file (which `af dev` and the web UI env editor
+read). `af config <node> --unset KEY` removes the value from both. Because the
+value lands in the secret store, `af run <node>` picks it up immediately:
+
+```bash
+af config my-agent --set OPENROUTER_API_KEY=sk-or-...  # secret store + .env
+af config my-agent --list                              # show configured values
+af config my-agent --unset OPENROUTER_API_KEY          # remove from both
+```
+
+Use `af secrets` when you want a **global** secret shared across every node, or to
+configure a node before it is installed; use `af config` when you want to
+configure a single installed node and keep its `.env` in sync for `af dev`.
 
 ## Control-plane connection
 
@@ -293,6 +336,7 @@ server URL is resolved from your local configuration.
 
 | Command                     | Does                                                            |
 | --------------------------- | -------------------------------------------------------------- |
+| `af show-requirements <src>` | Print the environment a node needs, without installing it     |
 | `af install <src>`          | Install from a local path, git URL, or registry name + node deps |
 | `af install <src> --path <subdir>` | Install the node in `<subdir>` (one repo shipping multiple nodes) |
 | `af run <node>`             | Start a node (and its node deps) in the background              |
@@ -300,4 +344,5 @@ server URL is resolved from your local configuration.
 | `af logs <node>`            | Tail a node's process log                                      |
 | `af stop <node>`            | Stop a running node                                            |
 | `af uninstall <node>`       | Stop and remove a node                                         |
+| `af config <node>`          | Configure an installed node (writes secret store + `.env`)     |
 | `af secrets set/ls/rm`      | Manage the encrypted secret store                              |
