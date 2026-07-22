@@ -366,8 +366,19 @@ body[data-platform='darwin'] .main {
   padding: 0 var(--content-pad-x);
 }
 
-body[data-platform='win32'] .view-header {
-  padding-right: 150px;
+/* Electron's Window Controls Overlay can vary with Windows version, display
+   scale, and accessibility settings. Shrink only the Windows header by the
+   live native-controls inset; the 122px floor preserves the old safe area if
+   the CSS environment variables are unavailable during first paint. macOS
+   keeps its independent hidden-inset / traffic-light flow untouched. */
+.view-header.windows-titlebar-safe {
+  margin-right: max(
+    122px,
+    calc(
+      100vw - env(titlebar-area-x, 0px) -
+        env(titlebar-area-width, calc(100vw - 122px))
+    )
+  );
 }
 
 .view-header h1 {

@@ -61,6 +61,7 @@ function isEditableTarget(target: EventTarget | null): boolean {
 }
 
 export default function App() {
+  const platform = window.agentfield.platform
   const reducedMotion = useReducedMotion()
   const [snapshot, setSnapshot] = useState<AgentFieldSnapshot | null>(null)
   const [ipcError, setIpcError] = useState<string | null>(null)
@@ -74,8 +75,8 @@ export default function App() {
   useEffect(() => {
     // Lets styles.css inset window chrome for macOS traffic lights vs the
     // Windows caption-button overlay.
-    document.body.dataset.platform = window.agentfield.platform
-  }, [])
+    document.body.dataset.platform = platform
+  }, [platform])
 
   useEffect(() => {
     // agentfield://<view> deep links land here via the main process. Deep
@@ -206,7 +207,9 @@ export default function App() {
       />
 
       <div className="main">
-        <header className="view-header">
+        <header
+          className={`view-header ${platform === 'win32' ? 'windows-titlebar-safe' : ''}`}
+        >
           <h1>{VIEW_TITLES[view]}</h1>
           {agentsSelected && !agentsAddMode && (
             <div className="view-header-action">
