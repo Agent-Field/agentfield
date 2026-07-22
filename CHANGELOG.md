@@ -6,6 +6,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.114-rc.1] - 2026-07-22
+
+
+### Fixed
+
+- Fix(sdk-go): survive OpenAI's strict validator on codex --output-schema (#818)
+
+The server behind codex exec now validates --output-schema against OpenAI
+strict-mode rules (probed live on codex-cli 0.144.1): every object node
+needs additionalProperties:false and a full required array, every node
+needs a type (or \$ref / anyOf), and free-form maps, typed maps, and
+boolean subschemas (invopop's output for `any` fields) are rejected with
+invalid_json_schema — killing every schema-enforced codex role
+(Agent-Field/SWE-AF#106).
+
+Three coordinated changes:
+
+- schema.go: codexSchemaStrictExpressible classifies a strict-rewritten
+  schema against the probed validator rules, so the runner knows when
+  --output-schema would be refused (map[string]any / any fields cannot be
+  expressed without forcing an empty object).
+- runner.go: for inexpressible schemas the runner still writes the schema
+  file and keeps the codex-native prompt, but hands the provider an empty
+  schemaPath — codex runs with --output-last-message only and the
+  existing local validation enforces the schema.
+- codex.go: --output-last-message is decoupled from --output-schema, and
+  a rejected schema (invalid_json_schema in the CLI output) triggers one
+  reactive rerun without the flag, so future validator tightening
+  degrades to local validation instead of failing the role.
+
+Live-verified: the real SWE-AF GitInitResult and Architecture strict
+schemas are ACCEPTED by the validator; PRD (boolean subschema via
+AskUserFormField.default_value) is correctly gated to the fallback path.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (d0dec79)
+
 ## [0.1.113] - 2026-07-21
 
 ## [0.1.113-rc.1] - 2026-07-21
