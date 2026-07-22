@@ -65,6 +65,10 @@ export function SettingsPanel({ agents }: SettingsPanelProps) {
             checked={settings.autostartControlPlane}
             onChange={(on) => update({ autostartControlPlane: on })}
           />
+          <PortRow
+            value={settings.controlPlanePort}
+            onCommit={(port) => update({ controlPlanePort: port })}
+          />
           <ToggleRow
             title="Keep coding-agent skills installed"
             sub="Teach Claude Code, Codex, and friends how to use AgentField (via `af skill install`)."
@@ -259,6 +263,67 @@ function CliCard() {
         </li>
       </ul>
     </div>
+  )
+}
+
+/**
+ * Control-plane port choice. Empty = automatic (8080 when free, else the
+ * next open port); a number pins the port exactly. Committed on blur/Enter —
+ * per-keystroke persistence would save half-typed ports.
+ */
+function PortRow({
+  value,
+  onCommit
+}: {
+  value: number | null
+  onCommit: (port: number | null) => void
+}) {
+  const [text, setText] = useState(value === null ? '' : String(value))
+
+  // Reflect what main actually persisted (it normalizes hostile values).
+  useEffect(() => {
+    setText(value === null ? '' : String(value))
+  }, [value])
+
+  const commit = () => {
+    const trimmed = text.trim()
+    if (trimmed === '') {
+      if (value !== null) onCommit(null)
+      return
+    }
+    const port = Number(trimmed)
+    if (Number.isInteger(port) && port >= 1 && port <= 65535) {
+      if (port !== value) onCommit(port)
+    } else {
+      // Invalid input reverts to the last saved value rather than persisting.
+      setText(value === null ? '' : String(value))
+    }
+  }
+
+  return (
+    <li className="row">
+      <div className="row-main">
+        <span className="row-title">Control plane port</span>
+        <span className="row-sub">
+          Leave empty to choose automatically — 8080 when free, otherwise the next open port.
+          Applies the next time the control plane starts.
+        </span>
+      </div>
+      <div className="row-side">
+        <input
+          className="env-input port-input"
+          type="text"
+          inputMode="numeric"
+          placeholder="auto"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+          }}
+        />
+      </div>
+    </li>
   )
 }
 

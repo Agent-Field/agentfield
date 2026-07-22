@@ -601,6 +601,12 @@ body[data-platform='win32'] .view-header {
   width: 100%;
 }
 
+/* Control-plane port field: a short numeric input on a settings row. */
+.port-input {
+  width: 96px;
+  text-align: right;
+}
+
 /* Reserved slot: keeps the input column aligned across rows whether or not
    a Revoke button is visible. */
 .action-button.ghost-slot {
