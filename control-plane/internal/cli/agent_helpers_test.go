@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -174,6 +175,30 @@ func TestAgentHelpDataShape(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(raw), `"quick_start"`)
 	require.Contains(t, string(raw), `"response_schemas"`)
+
+	// Contract: quick_start teaches execution, not just introspection — it must
+	// surface `af call` and `af tail` (the audit found these were omitted).
+	quickStart, ok := data["quick_start"].([]string)
+	require.True(t, ok)
+	joined := strings.Join(quickStart, "\n")
+	require.Contains(t, joined, "af call")
+	require.Contains(t, joined, "af tail")
+
+	// Contract: golden_path is the ordered driving loop a harness follows.
+	golden, ok := data["golden_path"].([]map[string]interface{})
+	require.True(t, ok)
+	require.GreaterOrEqual(t, len(golden), 8)
+	var commands []string
+	for i, step := range golden {
+		require.Equal(t, i+1, step["step"], "steps must be ordered starting at 1")
+		require.NotEmpty(t, step["command"])
+		require.NotEmpty(t, step["purpose"])
+		commands = append(commands, step["command"].(string))
+	}
+	loop := strings.Join(commands, "\n")
+	for _, want := range []string{"af doctor", "af catalog", "af install", "af secrets set", "af run", "af call", "--schema", "--async", "af wait", "af tail"} {
+		require.Contains(t, loop, want, "golden_path must cover %q", want)
+	}
 }
 
 func TestListCommandAndLogViewer(t *testing.T) {
