@@ -2312,7 +2312,7 @@ class Agent(FastAPI):
                 if received_at_str:
                     received_at = datetime.fromisoformat(received_at_str.replace('Z', '+00:00'))
                 else:
-                    received_at = datetime.utcnow()
+                    received_at = datetime.now(timezone.utc)
                 
                 trigger_ctx = TriggerContext(
                     trigger_id=meta_data.get("trigger_id", ""),

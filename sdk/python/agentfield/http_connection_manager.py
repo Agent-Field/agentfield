@@ -268,7 +268,7 @@ class ConnectionManager:
 
         except asyncio.TimeoutError:
             timeout_occurred = True
-            logger.warn(f"Request timeout for {method} {url}")
+            logger.warning(f"Request timeout for {method} {url}")
             raise
         except Exception as e:
             self.health.mark_unhealthy(str(e))
@@ -284,7 +284,7 @@ class ConnectionManager:
                 self.config.log_slow_executions
                 and duration > self.config.slow_execution_threshold
             ):
-                logger.warn(f"Slow request: {method} {url} took {duration:.2f}s")
+                logger.warning(f"Slow request: {method} {url} took {duration:.2f}s")
 
     async def batch_request(
         self, requests: List[Dict[str, Any]]
@@ -356,7 +356,7 @@ class ConnectionManager:
 
                 # Log health status if unhealthy
                 if not self.health.is_healthy:
-                    logger.warn(f"Connection pool unhealthy: {self.health.last_error}")
+                    logger.warning(f"Connection pool unhealthy: {self.health.last_error}")
 
             except asyncio.CancelledError:
                 break

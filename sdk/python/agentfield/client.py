@@ -1436,7 +1436,7 @@ class AgentFieldClient:
 
             # Fallback to sync execution if enabled
             if self.async_config.fallback_to_sync:
-                logger.warn(f"Falling back to sync execution for target {target}")
+                logger.warning(f"Falling back to sync execution for target {target}")
                 try:
                     await self.execute(target, input_data, headers)
                     # Create a synthetic execution ID for consistency

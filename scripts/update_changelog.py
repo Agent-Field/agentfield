@@ -7,7 +7,7 @@ import argparse
 import re
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -113,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
         ) from exc
 
     if not rendered:
-        today = datetime.utcnow().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         rendered = (
             f"## [{args.version}] - {today}\n\n"
             "- No notable changes were recorded for this release.\n"

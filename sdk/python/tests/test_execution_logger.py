@@ -203,7 +203,7 @@ def test_logger_network_output(base_logger, caplog):
 
 @pytest.mark.unit
 def test_logger_severity_levels(base_logger, caplog):
-    base_logger.warn("Warning msg")
+    base_logger.warning("Warning msg")
     base_logger.error("Error msg")
     base_logger.critical("Failure msg")
     out = caplog.text
