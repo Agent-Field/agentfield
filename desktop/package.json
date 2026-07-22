@@ -66,6 +66,7 @@
     }
   },
   "dependencies": {
+    "@lobehub/icons-static-svg": "^1.94.0",
     "js-yaml": "^4.1.0",
     "motion": "^12.42.2"
   },

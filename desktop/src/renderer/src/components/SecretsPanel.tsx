@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import type { SecretsListResult, StoredSecret } from '../../../shared/types'
+import { EmptyState } from './EmptyMark'
 
 /**
  * Top-level Secrets view (still reachable via deep link / legacy nav).
@@ -38,9 +39,11 @@ export function SecretsSection(): ReactElement {
       {data.error && <div className="callout error">{data.error}</div>}
       <div className="panel">
         {data.secrets.length === 0 ? (
-          <div className="empty">
-            <p>Keys you set on an agent appear here. Values stay encrypted and are never shown again.</p>
-          </div>
+          <EmptyState
+            variant="orbit"
+            title="No keys stored"
+            description="Keys you set on an agent appear here. Values stay encrypted and are never shown again."
+          />
         ) : (
           <ul className="row-list">
             {data.secrets.map((secret) => (

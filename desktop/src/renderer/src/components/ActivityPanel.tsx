@@ -3,7 +3,7 @@ import type { ReactElement } from "react";
 import { createPortal } from "react-dom";
 import { m, useReducedMotion } from "motion/react";
 import type { ExecutionsResult, ExecutionSummary } from "../../../shared/types";
-import { PulseMark } from "./EmptyMark";
+import { EmptyState } from "./EmptyMark";
 import {
     formatDuration,
     formatElapsed,
@@ -160,9 +160,12 @@ export function ActivityPanel({
     if (!controlPlaneUp || executions === null) {
         return (
             <div className="panel">
-                <div className="empty secondary">
-                    Activity appears here once the AgentField server is running.
-                </div>
+                <EmptyState
+                    size="hero"
+                    variant="pulse"
+                    title="Waiting for the server"
+                    description="Activity will begin collecting here as soon as the AgentField server is running."
+                />
             </div>
         );
     }
@@ -172,11 +175,12 @@ export function ActivityPanel({
     if (empty) {
         return (
             <div className="panel">
-                <div className="empty secondary">
-                    <PulseMark />
-                    Runs appear here when an agent is called — from Claude Code,
-                    Codex, or any client.
-                    <div className="empty-docs">
+                <EmptyState
+                    size="hero"
+                    variant="pulse"
+                    title="The signal is quiet"
+                    description="Runs will gather here when an agent is called — from Claude Code, Codex, or any client."
+                    action={
                         <a
                             className="link-button"
                             href={COMMUNITY_LINKS.docs}
@@ -185,8 +189,8 @@ export function ActivityPanel({
                         >
                             See how agents get called
                         </a>
-                    </div>
-                </div>
+                    }
+                />
             </div>
         );
     }

@@ -503,19 +503,24 @@ Text placeholders (“Loading…”, “Checking…”) make the app feel like a
 - Shimmer: 1.4s linear sweep of a slightly brighter tint across the `--pill` base; `prefers-reduced-motion` → static tint, no sweep.
 - Skeletons appear only when data is genuinely absent (first load); poll refreshes never flash skeletons over real content.
 
-### 4.16 Empty-state identity marks (v2)
+### 4.16 Empty-state dot fields (v2)
 
-Empty states currently carry copy only. Add a small **brand-consistent line-art mark** (40–48px) above the copy — same visual family as the sidebar `•af` orbit mark (circle + dot, hairline stroke, `--text-tertiary` stroke with one `--accent` dot):
+True no-data states use a shared **dot-field system** above a clear headline and one short supporting sentence. The field is a sparse grid of 4px `--accent` circles whose opacity forms a contextual motif. It is the same vocabulary on every page, with a different composition so the views remain distinct:
 
 | Surface | Motif |
 |---------|-------|
-| Agents library empty | No mark — add-mode is already full of content (paste hero + featured grid); a mark above it reads as unexplained decoration |
-| Activity empty | Flat pulse line that rises once into a heartbeat blip |
-| Keys/secrets empty | Orbit mark with a keyhole dot |
+| Home empty | A broad flowing constellation; full hero scale and one “Browse agents” action |
+| Agents library empty | Compact orbit; normally add-mode replaces this state |
+| Activity empty | A pulse-line constellation; full hero scale with the integration-doc action |
+| Settings startup / keys empty | Compact orbit composition |
 
-- Monochrome, stroke 1.5, never illustration-y or cutesy; think schematic.
-- Optional ambient motion: one 6s drift/pulse loop, opacity ≤ 0.9 → 1; reduced-motion → static.
-- One mark per view maximum; marks never appear next to real content.
+- Plain dots only: no gradient mask, glow, blur, illustration, or decorative line art.
+- Hero fields sit on the theme-tokenized `--empty-surface`, a single flat surface slightly deeper than the page in both themes; do not nest another card inside the panel.
+- Ambient motion is deliberately slow and variant-specific: Home flows horizontally over 11–14s, Activity emits a center-out pulse over 13–16s, and configuration orbits over 15–18s. Brightness peaks stay below 0.7 and scale only shifts from 0.82→1. Treat the whole field as one moving element; reduced-motion → static motif.
+- Hierarchy is always: motif → 15–20px semibold headline → smaller secondary copy (44–48ch max) → optional action.
+- Dot fields only represent genuine absence; filtered zero-results use a plain inline message.
+
+Home’s empty hero uses “Give your coding agent a specialist.” Its supporting copy begins “Install a sub-harness for the job you need done” and uses two intentional lines. The second line begins with a fixed 96px × 1.6em harness-name viewport (Claude Code → Codex → Cursor) followed by stable copy. Rotating words are absolutely layered and right-aligned inside that viewport, then animate only opacity plus a 4px internal offset. Every name therefore ends at the same point and neither line position nor height changes during the 2.4s rotation. Reduced-motion holds on Claude Code while the accessible label names all three. Below it, show a static, theme-aware monochrome compatibility rail of official Kimi, MiniMax, GLM, Qwen, DeepSeek, and Mistral marks sourced from `@lobehub/icons-static-svg`. A separate quiet line below the real provider marks reads “…or any open or closed model”; it has no invented logo or badge. The rail is width-constrained and wraps into centered rows instead of clipping. Do not auto-marquee the logos—the harness rotation and dot field already consume the region’s motion budget.
 
 ### 4.17 Keyboard ergonomics (v2 — promoted from P3)
 
@@ -562,6 +567,7 @@ macOS leans on vibrancy + af-tray; Win/Linux get solid surfaces + in-app tray. A
 | Install progress lines | Per-line fade-in (existing) | |
 | Banner enter/exit | 180ms opacity + 4px translateY, exit reversed via `AnimatePresence` | |
 | Skeleton shimmer | 1.4s linear sweep on `--pill` tint | Reduced-motion → static tint (§4.15) |
+| Empty dot field | Variant-specific staggered opacity/scale flow over 11–18s | Decorative but restrained; peak opacity <0.7, no glow/gradient; reduced-motion → static motif (§4.16) |
 
 ### 5.3 Rules
 
@@ -701,7 +707,7 @@ V2-8. **Layout grid enforcement** (§3.5) — every view starts at the same y in
 V2-9. **Growth mechanics** (§4.13) — milestone star banner with Later / Don’t-ask-again persistence; Settings About section (Star / Docs / Report issue); contextual docs links on Install hero, Connect clients, Activity empty state
 V2-10. **Motion system** (§5) — adopt `motion` (LazyMotion + m.); sliding nav highlight; view crossfade via AnimatePresence; metric ticker; diff-only feed-row entrances; spring expanders; press scale; card hover lift; install success stroke-draw; reduced-motion first-class
 V2-11. **Skeleton loading** (§4.15) — replace all “Loading…/Checking…” text with layout-matched shimmer skeletons
-V2-12. **Empty-state marks** (§4.16) — schematic orbit-family SVG marks on Agents/Activity/Keys empty states
+V2-12. **Empty-state dot fields** (§4.16) — shared plain-dot system with flow, pulse, and orbit compositions across true no-data states
 V2-13. **Keyboard ergonomics** (§4.17) — ⌘1–4 views, ⌘R refresh, Esc closes menus/add-mode, tooltip hints
 
 ### P3 — Polish

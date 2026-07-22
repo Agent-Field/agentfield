@@ -244,8 +244,7 @@ export default function App() {
 
           {/* View change (DESIGN.md §5.2): 160ms opacity crossfade + 4px
               rise on enter, exit-then-enter. `initial={false}` keeps the
-              first paint settled; motion owns this now, not the CSS
-              view-fade keyframe. */}
+              first paint settled. */}
           <AnimatePresence mode="wait" initial={false}>
             <m.div
               className="view-content"

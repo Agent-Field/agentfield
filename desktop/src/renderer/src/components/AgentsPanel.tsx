@@ -4,7 +4,7 @@ import { AnimatePresence, m, useReducedMotion } from 'motion/react'
 import type { AgentEnvReport, AgentFieldSnapshot, SnapshotAgent } from '../../../shared/types'
 import { EnvEditor } from './EnvEditor'
 import { SkeletonRows } from './Skeleton'
-import { OrbitMark } from './EmptyMark'
+import { EmptyState } from './EmptyMark'
 
 type AgentAction = 'start' | 'stop' | 'restart' | 'uninstall'
 
@@ -85,13 +85,11 @@ function AgentsBody({ registry, onChanged }: AgentsPanelProps) {
   // library is empty, so this only covers odd registry states mid-refresh.
   if (!registry.exists || registry.agents.length === 0) {
     return (
-      <div className="empty">
-        <OrbitMark />
-        <p>
-          Install your first agent node from GitHub. Coding agents on this machine can then call
-          it through AgentField.
-        </p>
-      </div>
+      <EmptyState
+        variant="orbit"
+        title="No agents installed"
+        description="Install your first agent node from GitHub to make it available to coding agents on this machine."
+      />
     )
   }
 

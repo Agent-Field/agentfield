@@ -10,10 +10,84 @@ import type { View } from './Sidebar'
 import { ExecutionRow } from './ActivityPanel'
 import { SkeletonRows } from './Skeleton'
 import { COMMUNITY_LINKS } from './communityLinks'
+import { EmptyState } from './EmptyMark'
+import kimiLogo from '@lobehub/icons-static-svg/icons/kimi-color.svg'
+import minimaxLogo from '@lobehub/icons-static-svg/icons/minimax-color.svg'
+import chatGlmLogo from '@lobehub/icons-static-svg/icons/chatglm-color.svg'
+import qwenLogo from '@lobehub/icons-static-svg/icons/qwen-color.svg'
+import deepSeekLogo from '@lobehub/icons-static-svg/icons/deepseek-color.svg'
+import mistralLogo from '@lobehub/icons-static-svg/icons/mistral-color.svg'
 
 interface DashboardViewProps {
   snapshot: AgentFieldSnapshot | null
   onNavigate: (view: View) => void
+}
+
+const HARNESS_NAMES = ['Claude Code', 'Codex', 'Cursor'] as const
+
+const OPEN_MODEL_LOGOS = [
+  { name: 'Kimi', src: kimiLogo },
+  { name: 'MiniMax', src: minimaxLogo },
+  { name: 'GLM', src: chatGlmLogo },
+  { name: 'Qwen', src: qwenLogo },
+  { name: 'DeepSeek', src: deepSeekLogo },
+  { name: 'Mistral', src: mistralLogo }
+] as const
+
+function HarnessRotator(): ReactElement {
+  const reducedMotion = useReducedMotion()
+  const [index, setIndex] = useState(0)
+
+  useEffect(() => {
+    if (reducedMotion) return
+    const timer = window.setInterval(() => {
+      setIndex((current) => (current + 1) % HARNESS_NAMES.length)
+    }, 2400)
+    return () => window.clearInterval(timer)
+  }, [reducedMotion])
+
+  if (reducedMotion) {
+    return (
+      <span className="harness-rotator" aria-label="Claude Code, Codex, or Cursor">
+        <span className="harness-rotator-word" aria-hidden="true">Claude Code</span>
+      </span>
+    )
+  }
+
+  return (
+    <span className="harness-rotator" aria-label="Claude Code, Codex, or Cursor">
+      <AnimatePresence mode="sync" initial={false}>
+        <m.span
+          aria-hidden="true"
+          className="harness-rotator-word"
+          key={HARNESS_NAMES[index]}
+          initial={{ opacity: 0, y: 4 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -4 }}
+          transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+        >
+          {HARNESS_NAMES[index]}
+        </m.span>
+      </AnimatePresence>
+    </span>
+  )
+}
+
+function OpenModelRail(): ReactElement {
+  return (
+    <div className="open-model-rail" aria-label="Works with open model ecosystems">
+      <span className="open-model-label">Bring the model you trust</span>
+      <ul className="open-model-list">
+        {OPEN_MODEL_LOGOS.map((model) => (
+          <li key={model.name} className="open-model-item" title={model.name}>
+            <img src={model.src} alt="" aria-hidden="true" />
+            <span>{model.name}</span>
+          </li>
+        ))}
+      </ul>
+      <span className="open-model-any">…or any open or closed model</span>
+    </div>
+  )
 }
 
 function Tile({
@@ -204,12 +278,21 @@ export function DashboardView({ snapshot, onNavigate }: DashboardViewProps): Rea
           <div className="callout">AgentField server isn’t running.</div>
         ) : null}
         <div className="panel">
-          <div className="empty">
-            <p>
-              Install your first agent node from GitHub. Coding agents on this machine can then call
-              it through AgentField.
-            </p>
-            <div className="empty-actions">
+          <EmptyState
+            size="hero"
+            variant="flow"
+            title="Give your coding agent a specialist"
+            description={
+              <span className="specialist-copy">
+                <span>Install a sub-harness for the job you need done.</span>
+                <span className="specialist-copy-harness-line">
+                  <HarnessRotator />
+                  <span>or any harness you already use can call it.</span>
+                </span>
+              </span>
+            }
+            supporting={<OpenModelRail />}
+            action={
               <button
                 type="button"
                 className="action-button primary"
@@ -217,8 +300,8 @@ export function DashboardView({ snapshot, onNavigate }: DashboardViewProps): Rea
               >
                 Browse agents
               </button>
-            </div>
-          </div>
+            }
+          />
         </div>
       </>
     )
@@ -291,9 +374,11 @@ export function DashboardView({ snapshot, onNavigate }: DashboardViewProps): Rea
             // First load only — poll refreshes never flash skeletons (§4.15).
             <SkeletonRows count={2} />
           ) : !cpHealthy || executions === null || recentRows.length === 0 ? (
-            <div className="empty secondary">
-              Runs appear here when an agent is called — from Claude Code, Codex, or any client.
-            </div>
+            <EmptyState
+              variant="pulse"
+              title="No runs yet"
+              description="Runs appear here when an agent is called — from Claude Code, Codex, or any client."
+            />
           ) : (
             <ul className="row-list">
               {recentRows.map(({ run, live }) => (

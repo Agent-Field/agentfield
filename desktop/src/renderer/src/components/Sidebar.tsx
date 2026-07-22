@@ -2,6 +2,7 @@ import type { ReactElement } from 'react'
 import { m, useReducedMotion } from 'motion/react'
 import type { View } from '../../../shared/deeplink'
 import type { CpTone } from '../App'
+import { AgentFieldDesktopBrand } from './AgentFieldDesktopBrand'
 
 // Re-exported so view components keep one import site; the canonical list
 // lives in shared/deeplink.ts, where agentfield:// URLs resolve to views.
@@ -85,16 +86,7 @@ export function Sidebar({
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
-        <svg
-          className="sidebar-brand-mark"
-          viewBox="0 0 18 18"
-          fill="none"
-          aria-hidden="true"
-        >
-          <circle cx="9" cy="9" r="7" stroke="currentColor" strokeWidth="1.5" />
-          <circle cx="9" cy="9" r="2.5" fill="currentColor" />
-        </svg>
-        AgentField
+        <AgentFieldDesktopBrand />
       </div>
       <nav className="sidebar-nav">
         {NAV.map((item, index) => {

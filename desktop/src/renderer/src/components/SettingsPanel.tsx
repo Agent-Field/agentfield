@@ -8,6 +8,7 @@ import type {
 import { COMMUNITY_LINKS } from './communityLinks'
 import { SecretsSection } from './SecretsPanel'
 import { updateActionLabel } from './UpdateBanner'
+import { EmptyState } from './EmptyMark'
 
 interface SettingsPanelProps {
   agents: InstalledAgent[]
@@ -95,9 +96,11 @@ export function SettingsPanel({ agents }: SettingsPanelProps) {
         </div>
         <div className="panel">
           {agents.length === 0 ? (
-            <div className="empty secondary">
-              Install an agent first — then pick which ones start with the app.
-            </div>
+            <EmptyState
+              variant="orbit"
+              title="No startup agents"
+              description="Installed agents will appear here so you can choose which ones start with the app."
+            />
           ) : (
             <ul className="row-list">
               {agents.map((agent) => (
