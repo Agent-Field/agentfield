@@ -66,6 +66,10 @@ export function SettingsPanel({ agents }: SettingsPanelProps) {
               checked={settings.openAtLogin}
               onChange={(on) => update({ openAtLogin: on })}
             />
+            <AppearanceRow
+              value={settings.appearance}
+              onChange={(appearance) => update({ appearance })}
+            />
             <ToggleRow
               title="Start the AgentField server automatically"
               sub="When nothing is listening yet, launch the AgentField server on app start."
@@ -423,6 +427,62 @@ function PortRow({
             if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
           }}
         />
+      </div>
+    </li>
+  )
+}
+
+/**
+ * Follows the OS until the user flips the switch. Once overridden, the quiet
+ * reset restores system behavior without forcing a third state into a switch.
+ */
+function AppearanceRow({
+  value,
+  onChange
+}: {
+  value: DesktopSettings['appearance']
+  onChange: (appearance: DesktopSettings['appearance']) => void
+}) {
+  const [systemDark, setSystemDark] = useState(
+    () => window.matchMedia('(prefers-color-scheme: dark)').matches
+  )
+
+  useEffect(() => {
+    const query = window.matchMedia('(prefers-color-scheme: dark)')
+    const changed = (event: MediaQueryListEvent) => setSystemDark(event.matches)
+    setSystemDark(query.matches)
+    query.addEventListener('change', changed)
+    return () => query.removeEventListener('change', changed)
+  }, [])
+
+  const dark = value === 'dark' || (value === 'system' && systemDark)
+  const detail =
+    value === 'system'
+      ? 'Follows your system appearance. Toggle to override it.'
+      : `Using ${value} appearance instead of the system setting.`
+
+  return (
+    <li className="row">
+      <div className="row-main">
+        <span className="row-title">Dark mode</span>
+        <span className="row-sub">{detail}</span>
+      </div>
+      <div className="row-side">
+        {value !== 'system' && (
+          <button className="link-button" type="button" onClick={() => onChange('system')}>
+            Use system
+          </button>
+        )}
+        <button
+          type="button"
+          role="switch"
+          aria-label="Dark mode"
+          aria-checked={dark}
+          className={`switch ${dark ? 'on' : ''}`}
+          onClick={() => onChange(dark ? 'light' : 'dark')}
+        >
+          <span className="switch-thumb" aria-hidden="true" />
+        </button>
       </div>
     </li>
   )

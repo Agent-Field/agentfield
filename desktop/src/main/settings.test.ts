@@ -11,6 +11,7 @@ describe('normalizeSettings', () => {
   it('accepts a valid shape as-is', () => {
     const s = {
       openAtLogin: true,
+      appearance: 'dark' as const,
       autostartControlPlane: false,
       controlPlanePort: 9091,
       lastControlPlanePort: 8081,
@@ -39,6 +40,14 @@ describe('normalizeSettings', () => {
     expect(normalizeSettings({}).trayCompanion).toBe(true)
     expect(normalizeSettings({ trayCompanion: false }).trayCompanion).toBe(false)
     expect(normalizeSettings({ trayCompanion: 'yes' }).trayCompanion).toBe(true)
+  })
+
+  it('normalizes appearance overrides', () => {
+    expect(normalizeSettings({}).appearance).toBe('system')
+    expect(normalizeSettings({ appearance: 'system' }).appearance).toBe('system')
+    expect(normalizeSettings({ appearance: 'light' }).appearance).toBe('light')
+    expect(normalizeSettings({ appearance: 'dark' }).appearance).toBe('dark')
+    expect(normalizeSettings({ appearance: 'sepia' }).appearance).toBe('system')
   })
 
   it('falls back to defaults for garbage', () => {
@@ -110,6 +119,7 @@ describe('load/save round trip', () => {
     const file = join(dir, 'nested', 'settings.json')
     const s = {
       openAtLogin: true,
+      appearance: 'light' as const,
       autostartControlPlane: true,
       controlPlanePort: null,
       lastControlPlanePort: 9091,

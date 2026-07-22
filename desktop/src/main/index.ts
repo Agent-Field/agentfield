@@ -1,5 +1,5 @@
 import { join, resolve } from 'node:path'
-import { BrowserWindow, Menu, app, ipcMain, shell } from 'electron'
+import { BrowserWindow, Menu, app, ipcMain, nativeTheme, shell } from 'electron'
 import { CATALOG } from '../shared/catalog'
 import { DEEP_LINK_SCHEME, type View, deepLinkFromArgv, parseDeepLink } from '../shared/deeplink'
 import type { DesktopSettings } from '../shared/types'
@@ -278,6 +278,7 @@ function main(): void {
   app.whenReady().then(async () => {
     installAppMenu()
     settings = await loadSettings(settingsFile())
+    nativeTheme.themeSource = settings.appearance
     applyLoginItem(settings)
 
     // Resolve the user's real login-shell PATH once (Finder/Dock launches
@@ -466,6 +467,9 @@ function main(): void {
       const prev = settings
       settings = mergeSettings(settings, patch)
       applyLoginItem(settings)
+      if (settings.appearance !== prev.appearance) {
+        nativeTheme.themeSource = settings.appearance
+      }
       // macOS: reflect a flipped tray toggle (install ↔ uninstall) right away.
       if (settings.trayCompanion !== prev.trayCompanion) syncTray(settings.trayCompanion)
       await saveSettings(settingsFile(), settings)

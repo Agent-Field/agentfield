@@ -172,6 +172,8 @@ export interface CliStatus {
 export interface DesktopSettings {
   /** Launch the app when you log in (starts hidden, in the tray). */
   openAtLogin: boolean
+  /** Follow the OS appearance, or explicitly force the light/dark palette. */
+  appearance: 'system' | 'light' | 'dark'
   /** Start the control plane on app launch when nothing is listening. */
   autostartControlPlane: boolean
   /**

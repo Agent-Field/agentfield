@@ -23,6 +23,7 @@ function agent(name: string, badge: SnapshotAgent['badge']): SnapshotAgent {
 function settings(overrides: Partial<DesktopSettings>): DesktopSettings {
   return {
     openAtLogin: false,
+    appearance: 'system',
     autostartControlPlane: true,
     controlPlanePort: null,
     lastControlPlanePort: null,
