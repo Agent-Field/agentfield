@@ -207,6 +207,9 @@ func runServer(cmd *cobra.Command, args []string) {
 	// healthy AgentField already answers on our port, exit 0 instead of dying,
 	// so a launchd-managed second instance stops cleanly rather than
 	// relaunch-looping on the lock timeout.
+	// Surface the build version on runtime introspection surfaces (e.g. the
+	// embedded MCP server's serverInfo).
+	server.SetBuildVersion(version)
 	agentfieldServer, err := newAgentFieldServerFunc(cfg)
 	if err != nil {
 		if server.ExitCleanIfAlreadyRunning(err, cfg.AgentField.Port) {

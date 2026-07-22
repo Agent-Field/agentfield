@@ -885,6 +885,7 @@ func (s *AgentFieldServer) setupRoutes() {
 	}
 
 	s.registerKBRoutes()
+	s.registerMCPRoutes()
 	s.register404()
 }
 
