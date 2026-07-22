@@ -101,3 +101,16 @@ func TestUnreachableControlPlaneHintAcrossCommands(t *testing.T) {
 		})
 	}
 }
+
+// TestMakeRequestCancelledContextPassthrough pins that a request failing because
+// the caller cancelled the context is surfaced as-is — NOT dressed up as an
+// unreachable-control-plane error, which would mislead a harness that
+// deliberately cancelled (Ctrl-C / its own timeout).
+func TestMakeRequestCancelledContextPassthrough(t *testing.T) {
+	withUnreachableServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := makeRequest(ctx, http.MethodGet, "/api/v1/agentic/run/x", nil, "application/json")
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "af server")
+}

@@ -36,3 +36,14 @@ func TestRunCatalogRejectsUnknownFormat(t *testing.T) {
 	err := runCatalog(&stdout, "csv")
 	require.Equal(t, 2, ExitCode(err))
 }
+
+func TestNewCatalogCommandExecute(t *testing.T) {
+	cmd := NewCatalogCommand()
+	cmd.SetArgs([]string{"-o", "json"})
+	out := captureOutput(t, func() {
+		require.NoError(t, cmd.Execute())
+	})
+	var entries []map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(out), &entries))
+	require.GreaterOrEqual(t, len(entries), 5)
+}

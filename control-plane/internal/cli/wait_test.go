@@ -108,3 +108,110 @@ func TestRunWait(t *testing.T) {
 		require.Contains(t, stderr.String(), "timed out")
 	})
 }
+
+// waitTestOpts builds waitOptions with sub-second budgets so command-level and
+// error-path tests never sleep a real second.
+func waitTestOpts(stdout, stderr *bytes.Buffer, format string) *waitOptions {
+	return &waitOptions{
+		timeout:      2 * time.Second,
+		pollInterval: 5 * time.Millisecond,
+		outputFormat: format,
+		stdout:       stdout,
+		stderr:       stderr,
+		stdoutTTY:    false,
+	}
+}
+
+func TestRunWaitOutputAndErrorPaths(t *testing.T) {
+	t.Run("pretty output prints status and result", func(t *testing.T) {
+		withTriggerTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(runOverviewJSON("run-p", "succeeded", `{"answer":7}`)))
+		})
+		var stdout, stderr bytes.Buffer
+		require.NoError(t, runWait(context.Background(), "run-p", waitTestOpts(&stdout, &stderr, "pretty")))
+		require.Contains(t, stdout.String(), "succeeded")
+		require.Contains(t, stdout.String(), "answer")
+	})
+
+	t.Run("invalid output format exits 2", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		err := runWait(context.Background(), "run-x", waitTestOpts(&stdout, &stderr, "csv"))
+		require.Equal(t, 2, ExitCode(err))
+	})
+
+	t.Run("empty run id exits 2", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		err := runWait(context.Background(), "   ", waitTestOpts(&stdout, &stderr, "json"))
+		require.Equal(t, 2, ExitCode(err))
+	})
+
+	t.Run("server error surfaces exit code 3", func(t *testing.T) {
+		withTriggerTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"ok":false,"error":{"code":"boom"}}`))
+		})
+		var stdout, stderr bytes.Buffer
+		err := runWait(context.Background(), "run-e", waitTestOpts(&stdout, &stderr, "json"))
+		require.Equal(t, 3, ExitCode(err))
+	})
+
+	t.Run("nil opts falls back to defaults and still prints", func(t *testing.T) {
+		withTriggerTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(runOverviewJSON("run-d", "succeeded", `{"ok":true}`)))
+		})
+		out := captureOutput(t, func() {
+			require.NoError(t, runWait(context.Background(), "run-d", nil))
+		})
+		require.Contains(t, out, "succeeded")
+	})
+}
+
+func TestRootExecutionResult(t *testing.T) {
+	ptr := func(s string) *string { return &s }
+
+	t.Run("prefers the root execution (no parent)", func(t *testing.T) {
+		execs := []waitExecution{
+			{ExecutionID: "child", ParentExecutionID: ptr("root"), Result: json.RawMessage(`{"who":"child"}`)},
+			{ExecutionID: "root", ParentExecutionID: nil, Result: json.RawMessage(`{"who":"root"}`)},
+		}
+		got, ok := rootExecutionResult(execs).(map[string]interface{})
+		require.True(t, ok)
+		require.Equal(t, "root", got["who"])
+	})
+
+	t.Run("falls back to the last execution when no explicit root", func(t *testing.T) {
+		execs := []waitExecution{
+			{ExecutionID: "a", ParentExecutionID: ptr("x"), Result: json.RawMessage(`{"n":1}`)},
+			{ExecutionID: "b", ParentExecutionID: ptr("y"), Result: json.RawMessage(`{"n":2}`)},
+		}
+		got, ok := rootExecutionResult(execs).(map[string]interface{})
+		require.True(t, ok)
+		require.EqualValues(t, 2, got["n"])
+	})
+
+	t.Run("non-JSON result is returned verbatim as a string", func(t *testing.T) {
+		execs := []waitExecution{{ParentExecutionID: nil, Result: json.RawMessage(`not-json`)}}
+		require.Equal(t, "not-json", rootExecutionResult(execs))
+	})
+
+	t.Run("empty result is nil", func(t *testing.T) {
+		execs := []waitExecution{{ParentExecutionID: nil}}
+		require.Nil(t, rootExecutionResult(execs))
+	})
+}
+
+func TestNewWaitCommandExecute(t *testing.T) {
+	withTriggerTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/agentic/run/run-cmd", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(runOverviewJSON("run-cmd", "succeeded", `{"ok":true}`)))
+	})
+	cmd := NewWaitCommand()
+	cmd.SetArgs([]string{"run-cmd", "-o", "json"})
+	out := captureOutput(t, func() {
+		require.NoError(t, cmd.Execute())
+	})
+	require.Contains(t, out, `"succeeded"`)
+}
