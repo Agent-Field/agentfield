@@ -92,7 +92,8 @@ If discovery finds a stopped-but-capable installed agent, explain that it can be
 started with `af run <name>`; do not offer a replacement build. If those checks
 establish that no installed reasoner supports the requested job, say explicitly:
 **"No capable installed agent was found for this job."** Then offer to build one
-with the canonical **`agentfield`** skill.
+with the canonical **`agentfield`** skill: "I can build the missing capability
+with `agentfield` if you want."
 
 Do not infer that offer as permission to build. List, inspect, and diagnose-only
 requests never authorize building an agent. Hand off to `agentfield` only when
@@ -107,7 +108,8 @@ agentfield: coverage_precheck_complete = true
 ```
 
 That flag means installed-agent coverage has already been completed for this
-request. `agentfield` must enter its deliverable-selection path rather than
+request. Switch directly to `agentfield`'s deliverable-selection path. `agentfield`
+must enter its deliverable-selection path rather than
 repeat discovery. A request may traverse `agentfield -> agentfield-use ->
 agentfield` at most once: after this handoff, never re-enter discovery or bounce
 recursively between `agentfield-use` and `agentfield`.
