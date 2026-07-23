@@ -121,6 +121,16 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	agentAPI.GET("/executions/:execution_id/events", handlers.StreamExecutionEventsHandler(s.storage))
 	agentAPI.POST("/executions/batch-status", handlers.BatchExecutionStatusHandler(s.storage))
 	agentAPI.POST("/executions/:execution_id/status", handlers.UpdateExecutionStatusHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout))
+
+	// Workspace-artifacts transport: the control plane serves the same content
+	// store endpoints the spec defines for nodes, so the CLI can seal a folder
+	// and push/pull blobs over HTTP regardless of whether the control plane is
+	// local or remote.
+	workspaceGroup := agentAPI.Group("/workspace")
+	workspaceGroup.POST("/prepare", handlers.WorkspacePrepareHandler())
+	workspaceGroup.PUT("/blobs/:sha", handlers.WorkspaceBlobPutHandler())
+	workspaceGroup.GET("/blobs/:sha", handlers.WorkspaceBlobGetHandler())
+	workspaceGroup.GET("/staged/:run_id", handlers.WorkspaceStagedHandler())
 	agentAPI.POST("/executions/:execution_id/logs", handlers.StructuredExecutionLogsHandler(s.storage, func() config.ExecutionLogsConfig {
 		return s.config.AgentField.ExecutionLogs
 	}))
