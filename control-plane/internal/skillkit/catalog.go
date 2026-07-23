@@ -30,7 +30,7 @@ var Catalog = []Skill{
 	{
 		Name:        "agentfield",
 		Aliases:     []string{"agentfield-multi-reasoner-builder"},
-		Version:     "0.5.0",
+		Version:     "0.6.0",
 		Description: "Design and ship a multi-agent system on AgentField. Derive the orchestration from the problem: decompose by cognitive jobs, place each slot on the autonomy spectrum, assign a verification rung, choose the dynamism rung with budgets. Composite intelligence, deep dynamic call graphs, live SDK docs from agentfield.ai, async-first smoke tests.",
 		EmbedRoot:   "skill_data/agentfield",
 		EntryFile:   "SKILL.md",
@@ -41,7 +41,7 @@ read this skill first`,
 	},
 	{
 		Name:        "agentfield-use",
-		Version:     "0.3.0",
+		Version:     "0.4.0",
 		Description: "Discover and call agents already running on a local AgentField control plane. Health check, capability discovery, ranked reasoner search (af agent search), concurrent sync/async execution, load-aware pacing (meta.load), in-flight visibility (af ps / executions/active), wedged-run triage (cancel-tree), sessions, and the af CLI ops (run/stop/logs/secrets) that keep installed agents answering.",
 		EmbedRoot:   "skill_data/agentfield-use",
 		EntryFile:   "SKILL.md",
