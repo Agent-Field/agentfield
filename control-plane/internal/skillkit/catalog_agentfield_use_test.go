@@ -100,15 +100,20 @@ func TestAgentfieldUseSourceFallbackContract(t *testing.T) {
 		"ranked search for the requested job",
 		"No capable installed agent was found for this job.",
 		"canonical **`agentfield`** skill",
+		"I can build the missing capability\nwith `agentfield` if you want.",
 		"List, inspect, and diagnose-only\nrequests never authorize building an agent.",
 		"original request already authorized creating an agent, or when the user\nexplicitly accepts this offer",
 		"agentfield: coverage_precheck_complete = true",
+		"Switch directly to `agentfield`'s deliverable-selection path.",
 		"must enter its deliverable-selection path rather than\nrepeat discovery",
 		"at most once: after this handoff, never re-enter discovery or bounce\nrecursively",
 	} {
 		if !strings.Contains(content, needle) {
 			t.Fatalf("agentfield-use source SKILL.md is missing fallback contract text %q", needle)
 		}
+	}
+	if got := strings.Count(content, "I can build the missing capability"); got != 1 {
+		t.Fatalf("explicit builder offer count = %d, want exactly 1", got)
 	}
 
 	// The receiving skill must consume the same-request signal and proceed to
@@ -125,6 +130,51 @@ func TestAgentfieldUseSourceFallbackContract(t *testing.T) {
 	}
 }
 
+// The fallback is intentionally instruction-level rather than Go state. Keep
+// the two boundary conditions explicit: no coverage alone cannot authorize a
+// build, while an accepted/authorized build must skip discovery on return.
+func TestAgentfieldUseFallbackAuthorizationAndCoverageCompletionBoundaries(t *testing.T) {
+	usage := string(skillSource(t, "agentfield-use"))
+	for _, needle := range []string{
+		"a completed no-coverage result is\nevidence for the offer, not authorization to create anything.",
+		"do not convert a list, inspect, or diagnose-only request into a build merely\nbecause the requested capability is absent.",
+		"For an accepted or already-authorized build, hand off with this request-local,\nnon-persisted instruction:",
+		"agentfield: coverage_precheck_complete = true",
+	} {
+		if !strings.Contains(usage, needle) {
+			t.Fatalf("agentfield-use source SKILL.md is missing authorization boundary %q", needle)
+		}
+	}
+
+	builder := string(skillSource(t, "agentfield"))
+	for _, needle := range []string{
+		"Mark `coverage_precheck_complete` for this same-request handoff; it is not persisted.",
+		"Do not repeat this pre-check when `agentfield-use` returns here after finding no coverage.",
+		"Only after the one-time pre-check establishes that no installed agent covers the request, choose the delivery:",
+	} {
+		if !strings.Contains(builder, needle) {
+			t.Fatalf("agentfield source SKILL.md is missing coverage-completion boundary %q", needle)
+		}
+	}
+	if !strings.Contains(usage, "treat `coverage_precheck_complete = true` as authoritative\nfor this request") {
+		t.Fatal("agentfield-use must make completed coverage authoritative for the same request")
+	}
+}
+
+func TestAgentfieldUseEmbeddedFallbackContractMatchesSource(t *testing.T) {
+	skill, err := CatalogByName("agentfield-use")
+	if err != nil {
+		t.Fatalf("CatalogByName(agentfield-use): %v", err)
+	}
+	embedded, err := skill.EntryContent()
+	if err != nil {
+		t.Fatalf("read embedded agentfield-use skill: %v", err)
+	}
+	if got, want := string(embedded), string(skillSource(t, "agentfield-use")); got != want {
+		t.Fatal("embedded agentfield-use SKILL.md differs from its canonical source; run scripts/sync-embedded-skills.sh")
+	}
+}
+
 func TestParseSkillFrontmatterEdgeCases(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -134,10 +184,18 @@ func TestParseSkillFrontmatterEdgeCases(t *testing.T) {
 		{name: "empty", content: "", wantErr: "missing opening"},
 		{name: "missing closing delimiter", content: "---\nname: agentfield-use\n", wantErr: "missing closing"},
 		{name: "malformed yaml", content: "---\nname: [\n---\n", wantErr: "parse frontmatter"},
+		{name: "empty frontmatter", content: "---\n---\n", wantErr: "missing closing"},
+		{name: "null values", content: "---\nname: null\nversion: null\n---\n"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := parseSkillFrontmatter([]byte(tc.content))
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("parseSkillFrontmatter(%q): %v", tc.content, err)
+				}
+				return
+			}
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("parseSkillFrontmatter(%q) error = %v, want containing %q", tc.content, err, tc.wantErr)
 			}

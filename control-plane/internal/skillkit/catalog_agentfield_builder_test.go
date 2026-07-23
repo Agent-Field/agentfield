@@ -38,6 +38,7 @@ func TestParseBuilderSkillFrontmatterEdgeCases(t *testing.T) {
 		{name: "empty", content: "", wantErr: "missing opening"},
 		{name: "missing closing delimiter", content: "---\nname: agentfield\n", wantErr: "missing closing"},
 		{name: "malformed yaml", content: "---\nname: [\n---\n", wantErr: "parse frontmatter"},
+		{name: "missing version", content: "---\nname: agentfield\naliases: null\n---\n", want: builderSkillFrontmatter{Name: "agentfield"}},
 		{name: "no aliases", content: "---\nname: agentfield\nversion: 0.6.0\naliases: []\n---\n", want: builderSkillFrontmatter{Name: "agentfield", Version: "0.6.0"}},
 		{name: "null aliases", content: "---\nname: agentfield\nversion: 0.6.0\naliases: null\n---\n", want: builderSkillFrontmatter{Name: "agentfield", Version: "0.6.0"}},
 	}
@@ -85,6 +86,15 @@ func TestAgentfieldBuilderCoverageAndRoutingContract(t *testing.T) {
 	}
 	if got := strings.Count(content, "Which deliverable do you want:"); got != 1 {
 		t.Fatalf("ambiguous-deliverable question count = %d, want exactly 1", got)
+	}
+	precheck := "use the `agentfield-use` skill's health, discovery, and reasoner-capability search flow exactly once"
+	if got := strings.Count(content, precheck); got != 1 {
+		t.Fatalf("installed-agent coverage pre-check directive count = %d, want exactly 1", got)
+	}
+	precheckAt := strings.Index(content, precheck)
+	hardGateAt := strings.Index(content, "## Hard gate")
+	if precheckAt < 0 || hardGateAt < 0 || precheckAt >= hardGateAt {
+		t.Fatalf("coverage pre-check must precede hard gate: precheck=%d hard-gate=%d", precheckAt, hardGateAt)
 	}
 }
 
