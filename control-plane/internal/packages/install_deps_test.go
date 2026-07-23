@@ -77,11 +77,51 @@ func TestInstallDependencies_TypeScript(t *testing.T) {
 	}
 }
 
+// The public installer must run npm only after it has copied the source into
+// AgentField's managed package root. This keeps a newly installed scaffold
+// runnable without modifying the author's source tree.
+func TestPackageInstallerInstallPackage_TypeScriptInstallsManagedCopy(t *testing.T) {
+	source := t.TempDir()
+	manifest := `config_version: v1
+name: typescript-managed-copy
+version: 1.0.0
+language: typescript
+entrypoint:
+  start: npm run start
+`
+	if err := os.WriteFile(filepath.Join(source, "agentfield-package.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "package.json"), []byte(`{"name":"demo"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	record := fakeNPMOnPath(t, 0)
+	home := t.TempDir()
+	if err := (&PackageInstaller{AgentFieldHome: home}).InstallPackage(source, false); err != nil {
+		t.Fatalf("InstallPackage: %v", err)
+	}
+	managed := filepath.Join(home, "packages", "typescript-managed-copy")
+	got, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), managed) || !strings.Contains(string(got), "install") {
+		t.Fatalf("npm invocation record = %q, want npm install in managed package root %q", got, managed)
+	}
+	if _, err := os.Stat(filepath.Join(managed, "venv")); !os.IsNotExist(err) {
+		t.Fatalf("managed TypeScript install created Python venv")
+	}
+}
+
 func TestInstallTypeScriptDependenciesFailures(t *testing.T) {
 	t.Run("missing package json", func(t *testing.T) {
-		err := InstallDependencies(t.TempDir(), &PackageMetadata{Language: "typescript"})
+		pkg := t.TempDir()
+		err := InstallDependencies(pkg, &PackageMetadata{Language: "typescript"})
 		if err == nil || !strings.Contains(err.Error(), "package.json not found") {
 			t.Fatalf("error = %v, want actionable missing package.json", err)
+		}
+		if _, statErr := os.Stat(filepath.Join(pkg, "venv")); !os.IsNotExist(statErr) {
+			t.Fatalf("missing package.json fell back to Python venv")
 		}
 	})
 	t.Run("missing npm", func(t *testing.T) {
@@ -93,6 +133,9 @@ func TestInstallTypeScriptDependenciesFailures(t *testing.T) {
 		err := InstallDependencies(pkg, &PackageMetadata{Language: "typescript"})
 		if err == nil || !strings.Contains(err.Error(), "npm executable not found") {
 			t.Fatalf("error = %v, want actionable missing npm", err)
+		}
+		if _, statErr := os.Stat(filepath.Join(pkg, "venv")); !os.IsNotExist(statErr) {
+			t.Fatalf("missing npm fell back to Python venv")
 		}
 	})
 	t.Run("npm failure includes output", func(t *testing.T) {
