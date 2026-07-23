@@ -235,6 +235,58 @@ func TestReconcileAliasOrphansMarkerReadFailureRetainsStateAndNamesTarget(t *tes
 	}
 }
 
+func TestReconcileAliasOrphansMarkerRewriteFailuresRetainStateAndNameTarget(t *testing.T) {
+	for _, failure := range []struct {
+		name string
+		set  func() func()
+	}{
+		{
+			name: "write",
+			set: func() func() {
+				old := reconcileWriteFile
+				reconcileWriteFile = func(string, []byte, os.FileMode) error {
+					return errors.New("forced write failure")
+				}
+				return func() { reconcileWriteFile = old }
+			},
+		},
+		{
+			name: "rename",
+			set: func() func() {
+				old := reconcileRename
+				reconcileRename = func(string, string) error { return errors.New("forced rename failure") }
+				return func() { reconcileRename = old }
+			},
+		},
+	} {
+		t.Run(failure.name, func(t *testing.T) {
+			home := t.TempDir()
+			path := filepath.Join(home, "codex.md")
+			data := []byte("before\n<!-- agentfield-skill:" + legacyBuilder + " v0.5.0 -->\nold\n<!-- /agentfield-skill:" + legacyBuilder + " -->\nafter\n")
+			if err := os.WriteFile(path, data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			setupReconciliation(t, reconciliationState(map[string]InstalledTarget{
+				"codex": {Method: "marker-block", Path: path},
+			}))
+			restore := failure.set()
+			t.Cleanup(restore)
+
+			err := reconcileAliasOrphans()
+			if err == nil || !strings.Contains(err.Error(), legacyBuilder) || !strings.Contains(err.Error(), "codex") {
+				t.Fatalf("error = %v, want orphan and target", err)
+			}
+			state, loadErr := LoadState()
+			if loadErr != nil {
+				t.Fatal(loadErr)
+			}
+			if _, ok := state.Skills[legacyBuilder]; !ok {
+				t.Fatal("marker rewrite failure removed retryable orphan state")
+			}
+		})
+	}
+}
+
 func TestInstallStopsBeforeCanonicalMutationWhenRecordedCleanupFails(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, "alias")
@@ -262,6 +314,82 @@ func TestInstallStopsBeforeCanonicalMutationWhenRecordedCleanupFails(t *testing.
 	}
 	if _, ok := state.Skills[legacyBuilder]; !ok {
 		t.Fatal("failed cleanup removed retryable orphan state")
+	}
+}
+
+func TestInstallStopsBeforeCanonicalMutationWhenRecordedPathCleanupFails(t *testing.T) {
+	for _, failure := range []struct {
+		name      string
+		makePath  func(t *testing.T) string
+		intercept func() func()
+	}{
+		{
+			name:     "lstat",
+			makePath: func(t *testing.T) string { return filepath.Join(t.TempDir(), "alias") },
+			intercept: func() func() {
+				old := reconcileLstat
+				reconcileLstat = func(string) (os.FileInfo, error) { return nil, errors.New("forced lstat failure") }
+				return func() { reconcileLstat = old }
+			},
+		},
+		{
+			name: "remove",
+			makePath: func(t *testing.T) string {
+				path := filepath.Join(t.TempDir(), "alias")
+				if err := os.WriteFile(path, []byte("legacy"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+			intercept: func() func() {
+				old := reconcileRemove
+				reconcileRemove = func(string) error { return errors.New("forced remove failure") }
+				return func() { reconcileRemove = old }
+			},
+		},
+		{
+			name: "remove-all",
+			makePath: func(t *testing.T) string {
+				path := filepath.Join(t.TempDir(), "alias")
+				if err := os.MkdirAll(path, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+			intercept: func() func() {
+				old := reconcileRemoveAll
+				reconcileRemoveAll = func(string) error { return errors.New("forced remove-all failure") }
+				return func() { reconcileRemoveAll = old }
+			},
+		},
+	} {
+		t.Run(failure.name, func(t *testing.T) {
+			path := failure.makePath(t)
+			setupReconciliation(t, reconciliationState(map[string]InstalledTarget{
+				"claude": {Method: "symlink", Path: path},
+			}))
+			restore := failure.intercept()
+			t.Cleanup(restore)
+
+			_, err := Install(InstallOptions{SkillName: "agentfield", Targets: []string{"codex"}, Force: true})
+			if err == nil || !strings.Contains(err.Error(), legacyBuilder) || !strings.Contains(err.Error(), "claude") {
+				t.Fatalf("Install error = %v, want orphan and target", err)
+			}
+			root, rootErr := CanonicalRoot()
+			if rootErr != nil {
+				t.Fatal(rootErr)
+			}
+			if _, err := os.Lstat(filepath.Join(root, "agentfield")); !os.IsNotExist(err) {
+				t.Fatalf("canonical mutation occurred before failed cleanup: %v", err)
+			}
+			state, err := LoadState()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := state.Skills[legacyBuilder]; !ok {
+				t.Fatal("failed cleanup removed retryable orphan state")
+			}
+		})
 	}
 }
 
@@ -379,7 +507,12 @@ func TestReconcileAliasOrphansSaveFailureLeavesSerializedState(t *testing.T) {
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	setupReconciliation(t, reconciliationState(map[string]InstalledTarget{"claude": {Method: "symlink", Path: path}}))
+	home := setupReconciliation(t, reconciliationState(map[string]InstalledTarget{"claude": {Method: "symlink", Path: path}}))
+	statePath := filepath.Join(home, "skills", ".state.json")
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	oldSave := reconcileSaveState
 	reconcileSaveState = func(*State) error { return errors.New("forced save failure") }
 	t.Cleanup(func() { reconcileSaveState = oldSave })
@@ -395,6 +528,13 @@ func TestReconcileAliasOrphansSaveFailureLeavesSerializedState(t *testing.T) {
 	}
 	if _, ok := state.Skills[legacyBuilder]; !ok {
 		t.Fatal("on-disk state changed after save failure")
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatal("serialized state changed after save failure")
 	}
 }
 
