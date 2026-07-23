@@ -24,6 +24,7 @@ type callOptions struct {
 	interactive    bool
 	outputFormat   string
 	fieldPath      string
+	dir            string
 	stdinTTY       bool
 	stdoutTTY      bool
 	stdin          io.Reader
@@ -67,6 +68,7 @@ func NewCallCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.interactive, "interactive", false, "Force interactive prompts")
 	cmd.Flags().StringVarP(&opts.outputFormat, "output", "o", "", "Output format: pretty, json, yaml")
 	cmd.Flags().StringVar(&opts.fieldPath, "field", "", "Extract a single field from the result, e.g. .findings[0].score")
+	cmd.Flags().StringVar(&opts.dir, "dir", "", "Attach a local folder as a workspace; changes come back as a staged diff (af diff/af apply <run_id>)")
 	return cmd
 }
 
@@ -119,14 +121,24 @@ func runCall(ctx context.Context, target string, opts *callOptions) error {
 		}
 	}
 
+	// Seal the attached folder (if any) into the shared content store before
+	// dispatch, so the control plane can transport it to the node.
+	workspaceArtifacts, sealed, err := sealWorkspaceForCall(ctx, opts.dir)
+	if err != nil {
+		return err
+	}
+
 	if opts.async {
-		resp, err := executeReasoner(ctx, target, input, true)
+		resp, err := executeReasoner(ctx, target, input, true, workspaceArtifacts)
 		if err != nil {
 			return err
 		}
 		runID := firstNonEmptyString(resp.RunID, resp.WorkflowID, resp.ExecutionID)
 		if runID == "" {
 			return cliExitError{Code: 3, Err: fmt.Errorf("server accepted async execution without run_id")}
+		}
+		if err := stageWorkspaceCall(opts.stderr, runID, resp.ExecutionID, sealed); err != nil {
+			return err
 		}
 		// When a machine format is explicitly requested (-o json/-o yaml), emit a
 		// structured envelope so a harness parsing stdout gets valid JSON instead
@@ -140,7 +152,7 @@ func runCall(ctx context.Context, target string, opts *callOptions) error {
 	}
 
 	if opts.stdoutTTY {
-		resp, err := executeReasoner(ctx, target, input, true)
+		resp, err := executeReasoner(ctx, target, input, true, workspaceArtifacts)
 		if err != nil {
 			return err
 		}
@@ -148,6 +160,9 @@ func runCall(ctx context.Context, target string, opts *callOptions) error {
 		executionID := firstNonEmptyString(resp.ExecutionID, runID)
 		if runID == "" {
 			return cliExitError{Code: 3, Err: fmt.Errorf("server accepted execution without run_id")}
+		}
+		if err := stageWorkspaceCall(opts.stderr, runID, executionID, sealed); err != nil {
+			return err
 		}
 		tailErr := streamExecutionEvents(ctx, runID, 0, "pretty", opts.stderr)
 		if tailErr != nil {
@@ -164,8 +179,12 @@ func runCall(ctx context.Context, target string, opts *callOptions) error {
 		return printCallResult(opts.stdout, opts.stderr, status, format, opts.fieldPath)
 	}
 
-	resp, err := executeReasoner(ctx, target, input, false)
+	resp, err := executeReasoner(ctx, target, input, false, workspaceArtifacts)
 	if err != nil {
+		return err
+	}
+	runID := firstNonEmptyString(resp.RunID, resp.WorkflowID, resp.ExecutionID)
+	if err := stageWorkspaceCall(opts.stderr, runID, resp.ExecutionID, sealed); err != nil {
 		return err
 	}
 	return printCallResult(opts.stdout, opts.stderr, resp, format, opts.fieldPath)
@@ -218,12 +237,16 @@ func resolveCallInput(opts *callOptions, schema map[string]interface{}, schemaEr
 	return input, nil
 }
 
-func executeReasoner(ctx context.Context, target string, input map[string]interface{}, async bool) (*callResponse, error) {
+func executeReasoner(ctx context.Context, target string, input map[string]interface{}, async bool, artifacts map[string]interface{}) (*callResponse, error) {
 	path := "/api/v1/execute/" + url.PathEscape(target)
 	if async {
 		path = "/api/v1/execute/async/" + url.PathEscape(target)
 	}
-	resp, err := makeRequest(ctx, http.MethodPost, path, map[string]interface{}{"input": input}, "application/json")
+	requestBody := map[string]interface{}{"input": input}
+	if len(artifacts) > 0 {
+		requestBody["artifacts"] = artifacts
+	}
+	resp, err := makeRequest(ctx, http.MethodPost, path, requestBody, "application/json")
 	if err != nil {
 		return nil, cliExitError{Code: 3, Err: err}
 	}
