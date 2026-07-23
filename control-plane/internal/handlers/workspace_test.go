@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -17,10 +19,135 @@ func workspaceTestRouter() *gin.Engine {
 	r := gin.New()
 	g := r.Group("/api/v1/workspace")
 	g.POST("/prepare", WorkspacePrepareHandler())
+	g.POST("/blobs/batch", WorkspaceBlobBatchHandler())
 	g.PUT("/blobs/:sha", WorkspaceBlobPutHandler())
 	g.GET("/blobs/:sha", WorkspaceBlobGetHandler())
 	g.GET("/staged/:run_id", WorkspaceStagedHandler())
 	return r
+}
+
+// gzTarBatch builds the wire body for the batch endpoint: a gzip-compressed tar
+// whose entries are named by sha with the given contents. names[i] pairs with
+// contents[i]; a name may deliberately mismatch its content to exercise
+// rejection.
+func gzTarBatch(t *testing.T, names []string, contents [][]byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for i, name := range names {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(contents[i])), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatalf("write header: %v", err)
+		}
+		if _, err := tw.Write(contents[i]); err != nil {
+			t.Fatalf("write body: %v", err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func TestWorkspaceBlobBatchRoundTrip(t *testing.T) {
+	t.Setenv("AGENTFIELD_HOME", t.TempDir())
+	r := workspaceTestRouter()
+
+	blobs := [][]byte{
+		[]byte("batch blob one"),
+		[]byte("batch blob two, a little longer"),
+		[]byte("third"),
+	}
+	names := make([]string, len(blobs))
+	for i, b := range blobs {
+		names[i] = workspace.HashBytes(b)
+	}
+	body := gzTarBatch(t, names, blobs)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workspace/blobs/batch", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-tar")
+	req.Header.Set("Content-Encoding", "gzip")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("batch status = %d, body %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Stored   int `json:"stored"`
+		Rejected []struct {
+			SHA256 string `json:"sha256"`
+			Error  string `json:"error"`
+		} `json:"rejected"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode batch response: %v", err)
+	}
+	if resp.Stored != len(blobs) || len(resp.Rejected) != 0 {
+		t.Fatalf("expected stored=%d rejected=0, got stored=%d rejected=%+v", len(blobs), resp.Stored, resp.Rejected)
+	}
+
+	// Every blob must now be retrievable with byte-exact CAS contents.
+	for i, name := range names {
+		gw := httptest.NewRecorder()
+		r.ServeHTTP(gw, httptest.NewRequest(http.MethodGet, "/api/v1/workspace/blobs/"+name, nil))
+		if gw.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d", name, gw.Code)
+		}
+		if got, _ := io.ReadAll(gw.Body); !bytes.Equal(got, blobs[i]) {
+			t.Fatalf("CAS content mismatch for %s: %q", name, got)
+		}
+	}
+}
+
+func TestWorkspaceBlobBatchRejectsHashMismatch(t *testing.T) {
+	t.Setenv("AGENTFIELD_HOME", t.TempDir())
+	r := workspaceTestRouter()
+
+	good := []byte("a valid blob")
+	goodSha := workspace.HashBytes(good)
+	bad := []byte("content that does not match its claimed name")
+	badSha := workspace.HashBytes([]byte("something else entirely"))
+
+	body := gzTarBatch(t, []string{goodSha, badSha}, [][]byte{good, bad})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workspace/blobs/batch", bytes.NewReader(body))
+	req.Header.Set("Content-Encoding", "gzip")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("batch status = %d", w.Code)
+	}
+	var resp struct {
+		Stored   int `json:"stored"`
+		Rejected []struct {
+			SHA256 string `json:"sha256"`
+			Error  string `json:"error"`
+		} `json:"rejected"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// The good entry is stored; only the mismatched one is rejected.
+	if resp.Stored != 1 {
+		t.Fatalf("expected stored=1, got %d", resp.Stored)
+	}
+	if len(resp.Rejected) != 1 || resp.Rejected[0].SHA256 != badSha {
+		t.Fatalf("expected one rejection for %s, got %+v", badSha, resp.Rejected)
+	}
+
+	// The good blob is retrievable; the rejected one is absent.
+	gw := httptest.NewRecorder()
+	r.ServeHTTP(gw, httptest.NewRequest(http.MethodGet, "/api/v1/workspace/blobs/"+goodSha, nil))
+	if gw.Code != http.StatusOK {
+		t.Fatalf("good blob GET = %d", gw.Code)
+	}
+	bw := httptest.NewRecorder()
+	r.ServeHTTP(bw, httptest.NewRequest(http.MethodGet, "/api/v1/workspace/blobs/"+badSha, nil))
+	if bw.Code != http.StatusNotFound {
+		t.Fatalf("rejected blob should be absent, GET = %d", bw.Code)
+	}
 }
 
 func TestWorkspacePrepareUploadFetch(t *testing.T) {

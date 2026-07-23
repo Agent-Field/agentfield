@@ -123,7 +123,7 @@ func runCall(ctx context.Context, target string, opts *callOptions) error {
 
 	// Seal the attached folder (if any) into the shared content store before
 	// dispatch, so the control plane can transport it to the node.
-	workspaceArtifacts, sealed, err := sealWorkspaceForCall(ctx, opts.dir)
+	workspaceArtifacts, sealed, err := sealWorkspaceForCall(ctx, opts.dir, opts.stderr)
 	if err != nil {
 		return err
 	}

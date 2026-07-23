@@ -150,6 +150,42 @@ func TestCLIWorkspaceHTTPRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCLIUploadBlobsFallback(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AGENTFIELD_HOME", home)
+	// startWorkspaceServer serves per-blob PUT but no batch route, so the shared
+	// uploader must transparently fall back to parallel PUTs.
+	srv := startWorkspaceServer(t)
+	t.Setenv("AGENTFIELD_SERVER", srv.URL)
+
+	cas := workspace.NewCAS(workspace.DefaultCASDir())
+	shas := make([]string, 0, 6)
+	for i := 0; i < 6; i++ {
+		sha, err := cas.PutBytes([]byte("cli fallback blob " + string(rune('a'+i))))
+		if err != nil {
+			t.Fatalf("seed blob: %v", err)
+		}
+		shas = append(shas, sha)
+	}
+
+	stats, err := cpUploadBlobs(context.Background(), cas, shas)
+	if err != nil {
+		t.Fatalf("cpUploadBlobs: %v", err)
+	}
+	if stats.Mode != "parallel-fallback" {
+		t.Fatalf("mode = %q, want parallel-fallback", stats.Mode)
+	}
+	if stats.Blobs != len(shas) {
+		t.Fatalf("uploaded %d, want %d", stats.Blobs, len(shas))
+	}
+	// Each blob is now downloadable from the server.
+	for _, sha := range shas {
+		if _, err := cpDownloadBlob(context.Background(), sha); err != nil {
+			t.Fatalf("blob %s not on server after upload: %v", sha, err)
+		}
+	}
+}
+
 func TestCLIDiffAndApplyEndToEnd(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("AGENTFIELD_HOME", home)

@@ -1,8 +1,11 @@
 package handlers
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/workspace"
@@ -96,6 +99,83 @@ func WorkspaceBlobPutHandler() gin.HandlerFunc {
 			return
 		}
 		ctx.Status(http.StatusNoContent)
+	}
+}
+
+// workspaceBlobRejection reports a single blob the batch could not store.
+type workspaceBlobRejection struct {
+	SHA256 string `json:"sha256"`
+	Error  string `json:"error"`
+}
+
+// workspaceBatchResponse is the batch endpoint's 200 body.
+type workspaceBatchResponse struct {
+	Stored   int                      `json:"stored"`
+	Rejected []workspaceBlobRejection `json:"rejected"`
+}
+
+// WorkspaceBlobBatchHandler stores many blobs from a single request. The body is
+// a gzip-compressed tar stream whose every entry is a regular file named by the
+// blob's sha256 hex with the raw blob bytes as its contents. Entries are read
+// and verified one at a time (the tar is streamed, never buffered whole); a blob
+// whose content does not hash to its claimed name is rejected individually while
+// the rest are still stored. This collapses the per-blob round-trip latency that
+// dominated cold transfers into a handful of batched requests.
+func WorkspaceBlobBatchHandler() gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		var reader io.Reader = ctx.Request.Body
+		if strings.Contains(strings.ToLower(ctx.GetHeader("Content-Encoding")), "gzip") {
+			gz, err := gzip.NewReader(ctx.Request.Body)
+			if err != nil {
+				ctx.JSON(http.StatusBadRequest, gin.H{"error": "open gzip stream: " + err.Error()})
+				return
+			}
+			defer gz.Close()
+			reader = gz
+		}
+
+		cas := controlPlaneCAS()
+		tr := tar.NewReader(reader)
+		stored := 0
+		rejected := make([]workspaceBlobRejection, 0)
+
+		for {
+			hdr, err := tr.Next()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				ctx.JSON(http.StatusBadRequest, gin.H{"error": "read tar stream: " + err.Error()})
+				return
+			}
+			if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeRegA {
+				continue
+			}
+			sha := strings.TrimSpace(hdr.Name)
+			if sha == "" {
+				continue
+			}
+			if hdr.Size > maxWorkspaceBlobBytes {
+				rejected = append(rejected, workspaceBlobRejection{SHA256: sha, Error: "blob exceeds maximum size"})
+				continue
+			}
+			data, err := io.ReadAll(io.LimitReader(tr, maxWorkspaceBlobBytes+1))
+			if err != nil {
+				ctx.JSON(http.StatusBadRequest, gin.H{"error": "read blob entry " + sha + ": " + err.Error()})
+				return
+			}
+			if int64(len(data)) > maxWorkspaceBlobBytes {
+				rejected = append(rejected, workspaceBlobRejection{SHA256: sha, Error: "blob exceeds maximum size"})
+				continue
+			}
+			if err := cas.PutVerified(sha, data); err != nil {
+				rejected = append(rejected, workspaceBlobRejection{SHA256: sha, Error: err.Error()})
+				continue
+			}
+			stored++
+		}
+
+		ctx.JSON(http.StatusOK, workspaceBatchResponse{Stored: stored, Rejected: rejected})
 	}
 }
 

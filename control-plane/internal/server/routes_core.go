@@ -128,6 +128,7 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	// local or remote.
 	workspaceGroup := agentAPI.Group("/workspace")
 	workspaceGroup.POST("/prepare", handlers.WorkspacePrepareHandler())
+	workspaceGroup.POST("/blobs/batch", handlers.WorkspaceBlobBatchHandler())
 	workspaceGroup.PUT("/blobs/:sha", handlers.WorkspaceBlobPutHandler())
 	workspaceGroup.GET("/blobs/:sha", handlers.WorkspaceBlobGetHandler())
 	workspaceGroup.GET("/staged/:run_id", handlers.WorkspaceStagedHandler())
