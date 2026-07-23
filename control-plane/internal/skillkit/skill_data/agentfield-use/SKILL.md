@@ -80,7 +80,7 @@ Each hit carries `reasoner_id`, `agent_id`, `invocation_target`, `tags`,
 lookup. Build the execute target straight from `invocation_target` (colon → dot)
 and only dispatch to hits whose `agent_health` is `"active"`.
 
-### No coverage: offer the builder once, with authorization
+### No coverage: offer to build it
 
 Only decide that there is **no coverage** after completing the health check,
 capability discovery (including each candidate's description and input schema),
@@ -91,34 +91,16 @@ job; a similar name or tag alone is not coverage.
 If discovery finds a stopped-but-capable installed agent, explain that it can be
 started with `af run <name>`; do not offer a replacement build. If those checks
 establish that no installed reasoner supports the requested job, say explicitly:
-**"No capable installed agent was found for this job."** Then offer to build one
-with the canonical **`agentfield`** skill: "I can build the missing capability
-with `agentfield` if you want."
+**"No capable installed agent was found for this job."** Then offer to build the
+missing capability: with the `agentfield-personal` skill when the user wants an
+agent installed on this machine, or with the `agentfield` skill for a standalone
+project repository.
 
-Do not infer that offer as permission to build. List, inspect, and diagnose-only
-requests never authorize building an agent. Hand off to `agentfield` only when
-the original request already authorized creating an agent, or when the user
-explicitly accepts this offer.
-
-Keep authorization and discovery separate: a completed no-coverage result is
-evidence for the offer, not authorization to create anything. In particular,
-do not convert a list, inspect, or diagnose-only request into a build merely
-because the requested capability is absent.
-
-For an accepted or already-authorized build, hand off with this request-local,
-non-persisted instruction:
-
-```text
-agentfield: coverage_precheck_complete = true
-```
-
-That flag means installed-agent coverage has already been completed for this
-request. Switch directly to `agentfield`'s deliverable-selection path. `agentfield`
-must enter its deliverable-selection path rather than
-repeat discovery: treat `coverage_precheck_complete = true` as authoritative
-for this request. A request may traverse `agentfield -> agentfield-use ->
-agentfield` at most once: after this handoff, never re-enter discovery or bounce
-recursively between `agentfield-use` and `agentfield`.
+A completed no-coverage result is evidence for the offer, not authorization to
+create anything. List, inspect, and diagnose-only requests never authorize
+building an agent. Hand off to a builder skill only when the original request
+already authorized creating an agent, or when the user explicitly accepts this
+offer.
 
 ## 3. Call a reasoner
 
