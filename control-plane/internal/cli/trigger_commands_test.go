@@ -264,16 +264,16 @@ func TestCallExecutionErrorBranches(t *testing.T) {
 		}
 	})
 
-	_, err := executeReasoner(context.Background(), "failed-status", map[string]interface{}{}, false)
+	_, err := executeReasoner(context.Background(), "failed-status", map[string]interface{}{}, false, nil)
 	var exitErr cliExitError
 	require.ErrorAs(t, err, &exitErr)
 	require.Equal(t, 1, exitErr.Code)
 
-	_, err = executeReasoner(context.Background(), "failed-http", map[string]interface{}{}, false)
+	_, err = executeReasoner(context.Background(), "failed-http", map[string]interface{}{}, false, nil)
 	require.ErrorAs(t, err, &exitErr)
 	require.Equal(t, 1, exitErr.Code)
 
-	_, err = executeReasoner(context.Background(), "bad-request", map[string]interface{}{}, false)
+	_, err = executeReasoner(context.Background(), "bad-request", map[string]interface{}{}, false, nil)
 	require.ErrorAs(t, err, &exitErr)
 	require.Equal(t, 2, exitErr.Code)
 

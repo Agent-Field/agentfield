@@ -51,6 +51,10 @@ type ExecuteRequest struct {
 	Input   map[string]interface{} `json:"input"`
 	Context map[string]interface{} `json:"context,omitempty"`
 	Webhook *WebhookRequest        `json:"webhook,omitempty"`
+	// Artifacts optionally attaches a sealed workspace folder to the execution.
+	// When present, the control plane transports the folder to the node before
+	// dispatch and stages the returned diff. Omitted for ordinary executions.
+	Artifacts *ExecuteArtifacts `json:"artifacts,omitempty"`
 }
 
 // WebhookRequest represents webhook registration parameters supplied by the client.
@@ -383,6 +387,10 @@ func (c *executionController) handleSync(ctx *gin.Context) {
 			resultBody = stripped
 			c.ingestUsage(reqCtx, plan.exec, usageRaw)
 		}
+		// Fetch changed blobs and stage the workspace diff (no-op when the
+		// execution carried no workspace). Strips workspace_diff from the
+		// stored result so it never leaks into the reasoner's output payload.
+		resultBody = c.processWorkspaceResult(reqCtx, plan, resultBody)
 	}
 
 	// Process completion normally
@@ -1374,6 +1382,8 @@ type preparedExecution struct {
 	replayBeforeExecutionID string
 	replayMode              string
 	replayHit               *replayHit
+	// workspace is the sealed folder attached to this execution, if any.
+	workspace *WorkspaceArtifact
 }
 
 func (c *executionController) prepareExecution(ctx context.Context, ginCtx *gin.Context) (*preparedExecution, error) {
@@ -1507,10 +1517,35 @@ func (c *executionController) prepareExecutionForTarget(ctx context.Context, tar
 		agentPayload[key] = value
 	}
 
+	// Resolve any workspace artifact attached to the request. When present the
+	// dispatched body is wrapped in an envelope so the node receives the
+	// artifacts alongside the input; non-workspace executions keep their exact
+	// existing wire shape (bare input map, or serverless envelope) byte-for-byte.
+	var workspaceArtifact *WorkspaceArtifact
+	if req.Artifacts != nil {
+		workspaceArtifact = req.Artifacts.Workspace
+	}
+
 	var agentPayloadBytes []byte
-	if agent.DeploymentType == "serverless" {
-		agentPayloadBytes, err = json.Marshal(buildServerlessPayload(target, exec, headers, agentPayload))
-	} else {
+	switch {
+	case agent.DeploymentType == "serverless":
+		serverlessPayload := buildServerlessPayload(target, exec, headers, agentPayload)
+		if workspaceArtifact != nil {
+			serverlessPayload["artifacts"] = buildArtifactsEnvelope(workspaceArtifact)
+		}
+		agentPayloadBytes, err = json.Marshal(serverlessPayload)
+	case workspaceArtifact != nil:
+		// The node SDK expects the workspace envelope as a top-level sibling of
+		// the forwarded reasoner input fields (it lifts "artifacts" out before
+		// input validation), so spread the input at the top level and attach
+		// artifacts alongside it — not wrapped under an "input" key.
+		body := make(map[string]interface{}, len(agentPayload)+1)
+		for key, value := range agentPayload {
+			body[key] = value
+		}
+		body["artifacts"] = buildArtifactsEnvelope(workspaceArtifact)
+		agentPayloadBytes, err = json.Marshal(body)
+	default:
 		agentPayloadBytes, err = json.Marshal(agentPayload)
 	}
 	if err != nil {
@@ -1581,6 +1616,7 @@ func (c *executionController) prepareExecutionForTarget(ctx context.Context, tar
 		replayBeforeExecutionID: headers.replayBeforeExecutionID,
 		replayMode:              headers.replayMode,
 		replayHit:               hit,
+		workspace:               workspaceArtifact,
 	}, nil
 }
 
@@ -1772,6 +1808,12 @@ func (c *executionController) callAgent(ctx context.Context, plan *preparedExecu
 				return nil, 0, false, fmt.Errorf("execution paused and then cancelled or timed out: %w", err)
 			}
 		}
+	}
+
+	// Transport the sealed workspace to the node before dispatch: prepare the
+	// manifest and upload any blobs the node is missing from the shared CAS.
+	if err := c.prepareWorkspaceOnNode(ctx, plan); err != nil {
+		return nil, time.Since(start), false, fmt.Errorf("prepare workspace: %w", err)
 	}
 
 	url := buildAgentURL(plan.agent, plan.target)
@@ -2724,6 +2766,7 @@ func (j asyncExecutionJob) process() {
 			resultBody = stripped
 			j.controller.ingestUsage(bgCtx, j.plan.exec, usageRaw)
 		}
+		resultBody = j.controller.processWorkspaceResult(bgCtx, &j.plan, resultBody)
 	}
 
 	job := completionJob{
