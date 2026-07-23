@@ -45,9 +45,21 @@ type TargetError struct {
 // write first, switches the `current` symlink, then installs into each
 // selected target. Idempotent and safe to re-run.
 func Install(opts InstallOptions) (*InstallReport, error) {
+	return install(opts, true)
+}
+
+// install is the shared implementation for public install operations. The
+// reconcile flag lets InstallAll and Update perform their single preflight
+// reconciliation without recursively repeating it for each catalog skill.
+func install(opts InstallOptions, reconcile bool) (*InstallReport, error) {
 	skill, err := resolveSkill(opts.SkillName, opts.Version)
 	if err != nil {
 		return nil, err
+	}
+	if reconcile && !opts.DryRun {
+		if err := reconcileAliasOrphans(); err != nil {
+			return nil, err
+		}
 	}
 
 	root, err := CanonicalRoot()
@@ -159,11 +171,16 @@ func Install(opts InstallOptions) (*InstallReport, error) {
 // first catalog entry. opts.SkillName is ignored; every other field is applied
 // to each skill in turn.
 func InstallAll(opts InstallOptions) ([]*InstallReport, error) {
+	if !opts.DryRun {
+		if err := reconcileAliasOrphans(); err != nil {
+			return nil, err
+		}
+	}
 	reports := make([]*InstallReport, 0, len(Catalog))
 	for _, s := range Catalog {
 		o := opts
 		o.SkillName = s.Name
-		report, err := Install(o)
+		report, err := install(o, false)
 		if err != nil {
 			return reports, err
 		}
@@ -250,11 +267,27 @@ func Update(skillName string) (*InstallReport, error) {
 		targets = append(targets, name)
 	}
 	sort.Strings(targets)
-	return Install(InstallOptions{
+	if err := reconcileAliasOrphans(); err != nil {
+		return nil, err
+	}
+	state, err = LoadState()
+	if err != nil {
+		return nil, err
+	}
+	skillState, ok = state.Skills[skill.Name]
+	if !ok {
+		return nil, fmt.Errorf("skill %q is not installed (run `af skill install` first)", skill.Name)
+	}
+	targets = targets[:0]
+	for name := range skillState.Targets {
+		targets = append(targets, name)
+	}
+	sort.Strings(targets)
+	return install(InstallOptions{
 		SkillName: skill.Name,
 		Targets:   targets,
 		Force:     true,
-	})
+	}, false)
 }
 
 // ListInstalled returns the on-disk state for `af skill list`.
