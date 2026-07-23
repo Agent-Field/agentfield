@@ -1,7 +1,7 @@
 ---
 name: agentfield
 version: 0.6.0
-description: Design and ship a multi-agent system on AgentField. Use when the user asks to build, scaffold, design, or run an agent, reasoner network, multi-agent backend, or "an agent that does X" — whenever the work would otherwise be a single LLM call or a flat LangChain/CrewAI/AutoGen chain. The skill produces composite intelligence: a deep, dynamic, parallel reasoner graph with a working `docker compose up` smoke test.
+description: "Design and ship a multi-agent system on AgentField. Use when the user asks to build, scaffold, design, or run an agent, reasoner network, multi-agent backend, or 'an agent that does X' — whenever the work would otherwise be a single LLM call or a flat LangChain/CrewAI/AutoGen chain. The skill produces composite intelligence: a deep, dynamic, parallel reasoner graph with a working `docker compose up` smoke test."
 aliases: [agentfield-multi-reasoner-builder]
 ---
 
