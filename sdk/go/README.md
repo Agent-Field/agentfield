@@ -122,9 +122,10 @@ directory, runs your reasoner against it, and returns the file changes as a
 staged diff the caller applies explicitly. **Reasoner authors write no
 folder-handling code.**
 
-The three transport endpoints — `POST /api/v1/workspace/prepare`,
-`PUT/GET /api/v1/workspace/blobs/{sha256}` — are **registered automatically** on
-every node server. There is nothing to wire up.
+The transport endpoints — `POST /api/v1/workspace/prepare`,
+`PUT/GET /api/v1/workspace/blobs/{sha256}`, and the one-shot
+`POST /api/v1/workspace/blobs/batch` (a gzip tar of many blobs) — are
+**registered automatically** on every node server. There is nothing to wire up.
 
 Inside a reasoner, read the workspace path from the context and set it as the
 working directory of any subprocess you spawn:

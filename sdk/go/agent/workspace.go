@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -86,12 +88,15 @@ func (a *Agent) workspaceStore() *workspace.CAS {
 //   - POST /api/v1/workspace/prepare        {"manifest": <manifest>} → {"missing": [...]}
 //   - PUT  /api/v1/workspace/blobs/{sha256}  raw bytes → 204 (400 on hash mismatch)
 //   - GET  /api/v1/workspace/blobs/{sha256}  → raw bytes (404 if absent)
+//   - POST /api/v1/workspace/blobs/batch     gzip tar stream → {"stored", "rejected"}
 //
-// They share one ContentStore at ~/.agentfield/cas. All three are exercised by
-// the control plane before/after dispatch (they work when the control plane is
-// behind NAT and the node is remote).
+// They share one ContentStore at ~/.agentfield/cas. All are exercised by the
+// control plane before/after dispatch (they work when the control plane is
+// behind NAT and the node is remote). The exact "blobs/batch" pattern is more
+// specific than the "blobs/" subtree, so it wins for that path.
 func (a *Agent) installWorkspaceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/workspace/prepare", a.handleWorkspacePrepare)
+	mux.HandleFunc("/api/v1/workspace/blobs/batch", a.handleWorkspaceBlobBatch)
 	mux.HandleFunc("/api/v1/workspace/blobs/", a.handleWorkspaceBlob)
 }
 
@@ -158,6 +163,64 @@ func (a *Agent) handleWorkspaceBlob(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// handleWorkspaceBlobBatch stores many blobs from a single gzip tar stream.
+//
+// Body: gzip-compressed tar; each regular-file entry is named by the blob's
+// sha256 hex and its contents are the raw blob bytes. Every entry is
+// hash-verified: mismatches are rejected individually while the rest are
+// stored. Response: {"stored": <int>, "rejected": [{"sha256","error"}, ...]}.
+//
+// The endpoint is additive — a sender that gets 404/405 (older node without
+// this route, or a wrong method) falls back to parallel per-blob PUTs.
+func (a *Agent) handleWorkspaceBlobBatch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	defer r.Body.Close()
+
+	// gzip.NewReader reads the gzip header eagerly, so a body that is not gzip
+	// fails cleanly here (400) rather than crashing mid-stream.
+	gz, err := gzip.NewReader(r.Body)
+	if err != nil {
+		http.Error(w, "expected a gzip-compressed tar body", http.StatusBadRequest)
+		return
+	}
+	defer gz.Close()
+
+	store := a.workspaceStore()
+	tr := tar.NewReader(gz)
+
+	stored := 0
+	rejected := make([]map[string]string, 0)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			// Truncated/corrupt gzip or tar stream — clean 4xx, never a 500.
+			http.Error(w, "malformed gzip tar stream", http.StatusBadRequest)
+			return
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+		sha := hdr.Name
+		data, err := io.ReadAll(tr)
+		if err != nil {
+			http.Error(w, "malformed gzip tar stream", http.StatusBadRequest)
+			return
+		}
+		if err := store.PutVerified(sha, data); err != nil {
+			rejected = append(rejected, map[string]string{"sha256": sha, "error": err.Error()})
+			continue
+		}
+		stored++
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"stored": stored, "rejected": rejected})
 }
 
 // isSHA256Hex reports whether s is a 64-character lowercase hex string.
