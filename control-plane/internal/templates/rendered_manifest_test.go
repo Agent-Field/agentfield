@@ -132,3 +132,43 @@ func TestRenderedScaffoldManifestRejectsEmptyNodeID(t *testing.T) {
 		t.Fatal("ParsePackageMetadata accepted an empty rendered node ID")
 	}
 }
+
+// String template values may come from user-entered project metadata. Exercise
+// control characters as well as punctuation so the YAML quoting helper cannot
+// accidentally turn a newline or tab into YAML structure.
+func TestRenderedScaffoldManifestEscapesControlCharacters(t *testing.T) {
+	data := TemplateData{
+		ProjectName: "project: first line\nsecond line # &",
+		NodeID:      "control-character-node",
+		AuthorName:  "Author\t\"quoted\"",
+		AgentPort:   1,
+	}
+
+	for _, language := range GetSupportedLanguages() {
+		t.Run(language, func(t *testing.T) {
+			tmpl, err := GetTemplate(language + "/agentfield-package.yaml.tmpl")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var rendered bytes.Buffer
+			if err := tmpl.Execute(&rendered, data); err != nil {
+				t.Fatal(err)
+			}
+
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "agentfield-package.yaml"), rendered.Bytes(), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			metadata, err := packages.ParsePackageMetadata(dir)
+			if err != nil {
+				t.Fatalf("ParsePackageMetadata: %v\n%s", err, rendered.String())
+			}
+			if metadata.Author != data.AuthorName {
+				t.Errorf("author = %q, want %q", metadata.Author, data.AuthorName)
+			}
+			if !strings.Contains(metadata.Description, data.ProjectName) {
+				t.Errorf("description = %q, want it to retain %q", metadata.Description, data.ProjectName)
+			}
+		})
+	}
+}

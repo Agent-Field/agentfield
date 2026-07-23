@@ -393,6 +393,60 @@ func TestInstallStopsBeforeCanonicalMutationWhenRecordedPathCleanupFails(t *test
 	}
 }
 
+func TestPublicOperationsStopBeforeCanonicalMutationWhenFilesystemCleanupFails(t *testing.T) {
+	for _, op := range []struct {
+		name string
+		run  func() error
+	}{
+		{"install", func() error {
+			_, err := Install(InstallOptions{SkillName: "agentfield", Targets: []string{"codex"}, Force: true})
+			return err
+		}},
+		{"install-all", func() error {
+			_, err := InstallAll(InstallOptions{Targets: []string{"codex"}, Force: true})
+			return err
+		}},
+		{"update", func() error {
+			_, err := Update("agentfield")
+			return err
+		}},
+	} {
+		t.Run(op.name, func(t *testing.T) {
+			aliasPath := filepath.Join(t.TempDir(), "legacy-integration")
+			if err := os.WriteFile(aliasPath, []byte("legacy"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			state := reconciliationState(map[string]InstalledTarget{
+				"claude-code": {Method: "symlink", Path: aliasPath},
+			})
+			if op.name == "update" {
+				state.Skills["agentfield"] = InstalledSkill{Targets: map[string]InstalledTarget{
+					"codex": {Method: "marker-block", Path: filepath.Join(t.TempDir(), "codex.md")},
+				}}
+			}
+			home := setupReconciliation(t, state)
+			oldRemove := reconcileRemove
+			reconcileRemove = func(string) error { return errors.New("forced filesystem remove failure") }
+			t.Cleanup(func() { reconcileRemove = oldRemove })
+
+			err := op.run()
+			if err == nil || !strings.Contains(err.Error(), legacyBuilder) || !strings.Contains(err.Error(), "claude-code") {
+				t.Fatalf("%s error = %v, want orphan and target", op.name, err)
+			}
+			if _, err := os.Lstat(filepath.Join(home, "skills", "agentfield")); !os.IsNotExist(err) {
+				t.Fatalf("%s mutated canonical skill before filesystem cleanup failure: %v", op.name, err)
+			}
+			got, err := LoadState()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := got.Skills[legacyBuilder]; !ok {
+				t.Fatalf("%s removed retryable orphan state after filesystem cleanup failure", op.name)
+			}
+		})
+	}
+}
+
 func TestPublicOperationsStopBeforeCanonicalMutationOnUnsupportedOrphan(t *testing.T) {
 	for _, op := range []struct {
 		name string

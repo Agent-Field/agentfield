@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -74,6 +75,29 @@ func TestDeprecatedBuilderAliasRemainsOnlyAnAlias(t *testing.T) {
 	}
 	if _, err := os.Stat(skillEmbeddedDirectory(t, alias)); !os.IsNotExist(err) {
 		t.Fatalf("deprecated embedded alias directory exists or cannot be checked: %v", err)
+	}
+}
+
+// Keep the repository's generation check executable from the Go suite as well
+// as comparing the resulting trees above. This catches a future mismatch
+// between the catalog's shipped skills and the sync script's mirror list.
+func TestEmbeddedSkillSyncCheck(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skipf("bash unavailable; sync checker is exercised in Bash-capable CI: %v", err)
+	}
+	repoRoot := filepath.Dir(filepath.Dir(skillSourceDirectory(t, "agentfield")))
+	command := exec.Command(bash, "scripts/sync-embedded-skills.sh", "--check")
+	command.Dir = repoRoot
+	output, err := command.CombinedOutput()
+	if err != nil {
+		if strings.Contains(string(output), "execvpe(/bin/bash) failed") {
+			t.Skipf("Bash launcher is present but its WSL runtime is unavailable; sync checker is exercised in Bash-capable CI: %s", output)
+		}
+		t.Fatalf("scripts/sync-embedded-skills.sh --check failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "All embedded skills are in sync with sources.") {
+		t.Fatalf("scripts/sync-embedded-skills.sh --check output = %q, want success confirmation", output)
 	}
 }
 
