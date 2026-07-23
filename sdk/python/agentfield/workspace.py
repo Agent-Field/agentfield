@@ -27,12 +27,15 @@ from __future__ import annotations
 
 import asyncio
 import fnmatch
+import gzip
 import hashlib
+import io
 import json
 import logging
 import os
 import shutil
 import stat
+import tarfile
 import traceback
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -570,8 +573,13 @@ def install_workspace_routes(agent: Any) -> None:
     * ``PUT  /api/v1/workspace/blobs/{sha256}`` — raw bytes, 204 on success,
       verifies the uploaded content hashes to ``{sha256}``.
     * ``GET  /api/v1/workspace/blobs/{sha256}`` — raw bytes, 404 if absent.
+    * ``POST /api/v1/workspace/blobs/batch`` — a gzip tar stream (each entry a
+      regular file named by its sha256, contents the raw blob) uploaded in one
+      request. Returns ``{"stored": <int>, "rejected": [{"sha256","error"}]}``;
+      each entry is hash-verified and rejected individually. Purely additive —
+      senders fall back to per-blob PUTs against nodes that answer 404/405 here.
 
-    All three are control-plane-initiated (they work when the control plane
+    All are control-plane-initiated (they work when the control plane
     is behind NAT and the node is remote). The target gets one shared
     :class:`ContentStore` bound to ``~/.agentfield/cas``.
 
@@ -620,6 +628,44 @@ def install_workspace_routes(agent: Any) -> None:
             media_type="application/octet-stream",
         )
 
+    @agent.post("/api/v1/workspace/blobs/batch")
+    async def _workspace_put_blobs_batch(request: Request):
+        # Body: gzip-compressed tar; each regular-file entry is named by the
+        # blob's sha256 hex, its contents the raw blob bytes. We decompress and
+        # untar as a stream (bounded memory beyond the compressed body itself),
+        # hash-verify every entry, store the good ones, and report the rest.
+        raw = await request.body()
+        stored = 0
+        rejected: List[Dict[str, str]] = []
+        try:
+            gz = gzip.GzipFile(fileobj=io.BytesIO(raw), mode="rb")
+            # ``r|`` is the streaming (non-seekable) reader; it pulls the first
+            # block eagerly, so a body that is not gzip fails here, not later.
+            with tarfile.open(fileobj=gz, mode="r|") as tar:
+                for member in tar:
+                    if not member.isfile():
+                        continue
+                    sha256 = member.name
+                    extracted = tar.extractfile(member)
+                    data = extracted.read() if extracted is not None else b""
+                    try:
+                        store.put_verified(sha256, data)
+                    except ValueError as exc:
+                        rejected.append({"sha256": sha256, "error": str(exc)})
+                        continue
+                    stored += 1
+        except HTTPException:
+            raise
+        except (tarfile.TarError, OSError, EOFError):
+            # Not a gzip tar (or a truncated/corrupt stream) — clean 4xx, never
+            # a 500. Senders treat this like a node that lacks the endpoint.
+            raise HTTPException(
+                status_code=400, detail="expected a gzip-compressed tar body"
+            )
+        return JSONResponse(
+            status_code=200, content={"stored": stored, "rejected": rejected}
+        )
+
 
 def attach_workspace_routes(api: Any) -> None:
     """Mount the three workspace endpoints on an external FastAPI app.
@@ -632,6 +678,7 @@ def attach_workspace_routes(api: Any) -> None:
         POST /api/v1/workspace/prepare
         PUT  /api/v1/workspace/blobs/{sha256}
         GET  /api/v1/workspace/blobs/{sha256}
+        POST /api/v1/workspace/blobs/batch
 
     The routes share the node's content store at ``~/.agentfield/cas``, so blobs
     the control plane uploads here are exactly the ones a workspace-bearing

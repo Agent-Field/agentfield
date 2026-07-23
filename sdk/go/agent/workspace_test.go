@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
@@ -88,6 +90,120 @@ func TestWorkspaceBlobEndpointsRoundTrip(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, resp.Code)
 	resp = doReq(handler, http.MethodPut, "/api/v1/workspace/blobs/not-a-sha", content)
 	assert.Equal(t, http.StatusBadRequest, resp.Code)
+}
+
+// gzipTar builds a gzip-compressed tar body from name -> content entries, the
+// on-the-wire shape the batch endpoint consumes.
+func gzipTar(t *testing.T, entries map[string][]byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for name, data := range entries {
+		require.NoError(t, tw.WriteHeader(&tar.Header{
+			Name:     name,
+			Mode:     0o644,
+			Size:     int64(len(data)),
+			Typeflag: tar.TypeReg,
+		}))
+		_, err := tw.Write(data)
+		require.NoError(t, err)
+	}
+	require.NoError(t, tw.Close())
+	require.NoError(t, gz.Close())
+	return buf.Bytes()
+}
+
+type batchResponse struct {
+	Stored   int `json:"stored"`
+	Rejected []struct {
+		SHA256 string `json:"sha256"`
+		Error  string `json:"error"`
+	} `json:"rejected"`
+}
+
+// TestWorkspaceBlobBatchRoundTrip stores several blobs in one gzip tar upload
+// and verifies each one lands in the node CAS.
+func TestWorkspaceBlobBatchRoundTrip(t *testing.T) {
+	a := newWorkspaceAgent(t)
+	handler := a.Handler()
+
+	entries := map[string][]byte{}
+	for _, text := range [][]byte{[]byte("alpha"), []byte("beta"), []byte("gamma-blob")} {
+		entries[workspace.HashBytes(text)] = text
+	}
+
+	resp := doReq(handler, http.MethodPost, "/api/v1/workspace/blobs/batch", gzipTar(t, entries))
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+
+	var out batchResponse
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+	assert.Equal(t, len(entries), out.Stored)
+	assert.Empty(t, out.Rejected)
+
+	cas := workspace.NewCAS(workspace.DefaultCASDir())
+	for sha, text := range entries {
+		require.True(t, cas.Has(sha), "blob %s must be stored", sha)
+		got, err := cas.Get(sha)
+		require.NoError(t, err)
+		assert.Equal(t, text, got)
+	}
+}
+
+// TestWorkspaceBlobBatchRejectsCorruptEntry proves one entry whose content does
+// not hash to its name is rejected individually while the good ones are stored.
+func TestWorkspaceBlobBatchRejectsCorruptEntry(t *testing.T) {
+	a := newWorkspaceAgent(t)
+	handler := a.Handler()
+
+	good := []byte("honest-content")
+	goodSHA := workspace.HashBytes(good)
+	// A valid-looking sha the tampered content does not hash to.
+	badSHA := workspace.HashBytes([]byte("the-claimed-content"))
+
+	body := gzipTar(t, map[string][]byte{
+		goodSHA: good,
+		badSHA:  []byte("tampered-content"),
+	})
+	resp := doReq(handler, http.MethodPost, "/api/v1/workspace/blobs/batch", body)
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+
+	var out batchResponse
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+	assert.Equal(t, 1, out.Stored)
+	require.Len(t, out.Rejected, 1)
+	assert.Equal(t, badSHA, out.Rejected[0].SHA256)
+	assert.NotEmpty(t, out.Rejected[0].Error)
+
+	cas := workspace.NewCAS(workspace.DefaultCASDir())
+	assert.True(t, cas.Has(goodSHA), "the honest blob must be stored")
+	assert.False(t, cas.Has(badSHA), "the tampered blob must be rejected")
+}
+
+// TestWorkspaceBlobBatchRequiresGzip confirms a non-gzip body is a clean 4xx
+// rather than a crash, and that GET/other verbs are refused.
+func TestWorkspaceBlobBatchRequiresGzip(t *testing.T) {
+	a := newWorkspaceAgent(t)
+	handler := a.Handler()
+
+	// Not a gzip stream at all.
+	resp := doReq(handler, http.MethodPost, "/api/v1/workspace/blobs/batch", []byte("not gzip at all"))
+	assert.GreaterOrEqual(t, resp.Code, http.StatusBadRequest)
+	assert.Less(t, resp.Code, http.StatusInternalServerError)
+
+	// An uncompressed tar is likewise rejected — gzip is required.
+	var plain bytes.Buffer
+	tw := tar.NewWriter(&plain)
+	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "deadbeef", Mode: 0o644, Size: 3, Typeflag: tar.TypeReg}))
+	_, _ = tw.Write([]byte("abc"))
+	require.NoError(t, tw.Close())
+	resp = doReq(handler, http.MethodPost, "/api/v1/workspace/blobs/batch", plain.Bytes())
+	assert.GreaterOrEqual(t, resp.Code, http.StatusBadRequest)
+	assert.Less(t, resp.Code, http.StatusInternalServerError)
+
+	// Wrong method -> 405 (so senders fall back to per-blob PUTs).
+	resp = doReq(handler, http.MethodGet, "/api/v1/workspace/blobs/batch", nil)
+	assert.Equal(t, http.StatusMethodNotAllowed, resp.Code)
 }
 
 // TestWorkspaceExecutionHook proves a reasoner invoked with an attached

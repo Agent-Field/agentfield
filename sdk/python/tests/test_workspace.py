@@ -268,6 +268,105 @@ def test_prepare_bad_body(endpoint_client):
 
 
 # ---------------------------------------------------------------------------
+# Batch blob upload (gzip tar stream)
+# ---------------------------------------------------------------------------
+
+
+def _gzip_tar(entries):
+    """Build a gzip tar body: ``entries`` maps entry-name -> raw bytes."""
+    import io
+    import tarfile
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for name, data in entries.items():
+            info = tarfile.TarInfo(name=name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
+_BATCH_HEADERS = {
+    "Content-Type": "application/x-tar",
+    "Content-Encoding": "gzip",
+}
+
+
+@pytest.mark.unit
+def test_batch_upload_round_trip(endpoint_client, af_home):
+    blobs = {
+        hashlib.sha256(text).hexdigest(): text
+        for text in (b"alpha", b"beta", b"gamma-blob")
+    }
+    body = _gzip_tar(blobs)
+
+    r = endpoint_client.post(
+        "/api/v1/workspace/blobs/batch", content=body, headers=_BATCH_HEADERS
+    )
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["stored"] == 3
+    assert payload["rejected"] == []
+
+    # Every blob is now materializable from the node CAS.
+    store = ContentStore()
+    for sha, text in blobs.items():
+        assert store.has(sha)
+        assert store.read(sha) == text
+
+
+@pytest.mark.unit
+def test_batch_upload_rejects_corrupt_entry_stores_rest(endpoint_client, af_home):
+    good = b"honest-content"
+    good_sha = hashlib.sha256(good).hexdigest()
+    # Name this entry by a valid-looking sha the content does NOT hash to.
+    bad_sha = hashlib.sha256(b"the-claimed-content").hexdigest()
+
+    body = _gzip_tar({good_sha: good, bad_sha: b"tampered-content"})
+    r = endpoint_client.post(
+        "/api/v1/workspace/blobs/batch", content=body, headers=_BATCH_HEADERS
+    )
+    assert r.status_code == 200
+    payload = r.json()
+
+    assert payload["stored"] == 1
+    assert len(payload["rejected"]) == 1
+    assert payload["rejected"][0]["sha256"] == bad_sha
+    assert payload["rejected"][0]["error"]
+
+    store = ContentStore()
+    assert store.has(good_sha)
+    assert not store.has(bad_sha)
+
+
+@pytest.mark.unit
+def test_batch_upload_requires_gzip(endpoint_client):
+    # A body that is not a gzip stream must be a clean 4xx, never a crash.
+    r = endpoint_client.post(
+        "/api/v1/workspace/blobs/batch",
+        content=b"this is not gzip at all",
+        headers=_BATCH_HEADERS,
+    )
+    assert 400 <= r.status_code < 500
+
+    # An uncompressed tar is likewise rejected (gzip is required).
+    import io
+    import tarfile
+
+    plain = io.BytesIO()
+    with tarfile.open(fileobj=plain, mode="w") as tar:
+        info = tarfile.TarInfo(name="deadbeef")
+        info.size = 3
+        tar.addfile(info, io.BytesIO(b"abc"))
+    r2 = endpoint_client.post(
+        "/api/v1/workspace/blobs/batch",
+        content=plain.getvalue(),
+        headers=_BATCH_HEADERS,
+    )
+    assert 400 <= r2.status_code < 500
+
+
+# ---------------------------------------------------------------------------
 # Integration: real reasoner running inside a materialized workspace
 # ---------------------------------------------------------------------------
 
@@ -541,6 +640,28 @@ def test_serverless_workspace_round_trip(af_home, tmp_path):
     got = client.get(f"/api/v1/workspace/blobs/{out_entry['sha256']}")
     assert got.status_code == 200
     assert got.content == b"HELLO"
+
+
+@pytest.mark.integration
+def test_serverless_wrapper_serves_batch_endpoint(af_home):
+    """attach_workspace_routes must mount the batch endpoint too, so serverless
+    wrappers get the one-shot upload path exactly like auto-registered nodes."""
+    agent = _serverless_agent("batch-serverless")
+    client = TestClient(_serverless_wrapper(agent))
+
+    blobs = {
+        hashlib.sha256(text).hexdigest(): text for text in (b"one", b"two", b"three")
+    }
+    r = client.post(
+        "/api/v1/workspace/blobs/batch",
+        content=_gzip_tar(blobs),
+        headers=_BATCH_HEADERS,
+    )
+    assert r.status_code == 200
+    assert r.json()["stored"] == 3
+    store = ContentStore()
+    for sha, text in blobs.items():
+        assert store.read(sha) == text
 
 
 @pytest.mark.integration
