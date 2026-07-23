@@ -100,6 +100,11 @@ requests never authorize building an agent. Hand off to `agentfield` only when
 the original request already authorized creating an agent, or when the user
 explicitly accepts this offer.
 
+Keep authorization and discovery separate: a completed no-coverage result is
+evidence for the offer, not authorization to create anything. In particular,
+do not convert a list, inspect, or diagnose-only request into a build merely
+because the requested capability is absent.
+
 For an accepted or already-authorized build, hand off with this request-local,
 non-persisted instruction:
 
@@ -110,7 +115,8 @@ agentfield: coverage_precheck_complete = true
 That flag means installed-agent coverage has already been completed for this
 request. Switch directly to `agentfield`'s deliverable-selection path. `agentfield`
 must enter its deliverable-selection path rather than
-repeat discovery. A request may traverse `agentfield -> agentfield-use ->
+repeat discovery: treat `coverage_precheck_complete = true` as authoritative
+for this request. A request may traverse `agentfield -> agentfield-use ->
 agentfield` at most once: after this handoff, never re-enter discovery or bounce
 recursively between `agentfield-use` and `agentfield`.
 
