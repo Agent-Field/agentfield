@@ -25,6 +25,7 @@ import (
 	"github.com/Agent-Field/agentfield/sdk/go/did"
 	"github.com/Agent-Field/agentfield/sdk/go/harness"
 	"github.com/Agent-Field/agentfield/sdk/go/types"
+	"github.com/Agent-Field/agentfield/sdk/go/workspace"
 )
 
 type executionContextKey struct{}
@@ -514,6 +515,12 @@ type Agent struct {
 
 	harnessRunner *harness.Runner
 
+	// Workspace-artifacts content store, shared by the node's prepare/put/get
+	// blob endpoints and the per-execution materialize/diff hook. Bound lazily
+	// to ~/.agentfield/cas (honoring AGENTFIELD_HOME).
+	wsStore     *workspace.CAS
+	wsStoreOnce sync.Once
+
 	serverMu sync.RWMutex
 	server   *http.Server
 
@@ -867,6 +874,11 @@ func (a *Agent) handler() http.Handler {
 		mux.HandleFunc("/_internal/executions/", a.handleInternalCancel)
 		mux.HandleFunc("/webhooks/approval", a.handleApprovalWebhook)
 
+		// Workspace-artifact transport endpoints (prepare / put-blob / get-blob).
+		// Auto-registered on every node server; additive and inert for nodes that
+		// never receive a workspace-bearing execution.
+		a.installWorkspaceRoutes(mux)
+
 		var handler http.Handler = mux
 
 		// Apply local verification middleware if enabled
@@ -1166,6 +1178,11 @@ func (a *Agent) handleExecute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Lift the reserved top-level "artifacts" envelope (workspace transport)
+	// out of the payload before input extraction, so it never leaks into the
+	// reasoner's input fields. Nil for every non-workspace execution.
+	artifacts := liftWorkspaceArtifacts(payload)
+
 	input := extractInputFromServerless(payload)
 	execCtx := a.buildExecutionContextFromServerless(r, payload, reasonerName)
 	a.fillDIDContext(&execCtx)
@@ -1183,7 +1200,7 @@ func (a *Agent) handleExecute(w http.ResponseWriter, r *http.Request) {
 		"reasoner_id": reasonerName,
 		"mode":        "http",
 	})
-	result, err := reasoner.Handler(ctx, input)
+	result, err := a.invokeWithWorkspace(ctx, reasoner.Handler, input, artifacts)
 	durationMS := time.Since(start).Milliseconds()
 
 	if err != nil {
@@ -1255,7 +1272,7 @@ func extractInputFromServerless(payload map[string]any) map[string]any {
 	filtered := make(map[string]any)
 	for k, v := range payload {
 		switch strings.ToLower(k) {
-		case "target", "reasoner", "skill", "type", "target_type", "path", "execution_context", "executioncontext", "context":
+		case "target", "reasoner", "skill", "type", "target_type", "path", "execution_context", "executioncontext", "context", "artifacts":
 			continue
 		default:
 			filtered[k] = v
@@ -1345,6 +1362,11 @@ func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The control plane dispatches a workspace-bearing execution to this
+	// endpoint with the reserved "artifacts" envelope spread alongside the
+	// reasoner input fields. Lift it out before the reasoner sees its input.
+	artifacts := liftWorkspaceArtifacts(input)
+
 	execCtx := ExecutionContext{
 		RunID:             r.Header.Get("X-Run-ID"),
 		ExecutionID:       r.Header.Get("X-Execution-ID"),
@@ -1379,7 +1401,7 @@ func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
 			"reasoner_id": name,
 			"mode":        "async",
 		})
-		go a.executeReasonerAsync(reasoner, cloneInputMap(input), execCtx)
+		go a.executeReasonerAsync(reasoner, cloneInputMap(input), execCtx, artifacts)
 		writeJSON(w, http.StatusAccepted, map[string]any{
 			"status":        "processing",
 			"execution_id":  execCtx.ExecutionID,
@@ -1407,7 +1429,7 @@ func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
 		"reasoner_id": name,
 		"mode":        "http",
 	})
-	result, err := reasoner.Handler(ctx, input)
+	result, err := a.invokeWithWorkspace(ctx, reasoner.Handler, input, artifacts)
 	durationMS := time.Since(start).Milliseconds()
 
 	if err != nil {
@@ -1492,6 +1514,10 @@ func (a *Agent) handleSkill(w http.ResponseWriter, r *http.Request) {
 		input = map[string]any{}
 	}
 
+	// Lift the reserved "artifacts" envelope out of the input before the skill
+	// sees it (symmetrical with the reasoner endpoints).
+	artifacts := liftWorkspaceArtifacts(input)
+
 	execCtx := a.buildExecutionContextFromServerless(r, map[string]any{"input": input}, name)
 	a.fillDIDContext(&execCtx)
 	ctx := contextWithExecution(r.Context(), execCtx)
@@ -1499,7 +1525,7 @@ func (a *Agent) handleSkill(w http.ResponseWriter, r *http.Request) {
 	// isolated; usage is attached to the 200 body below.
 	tracker := NewCostTracker()
 	ctx = contextWithCostTracker(ctx, tracker)
-	result, err := skill.Handler(ctx, input)
+	result, err := a.invokeWithWorkspace(ctx, skill.Handler, input, artifacts)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1508,7 +1534,7 @@ func (a *Agent) handleSkill(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, wrapSyncResultWithUsage(result, tracker))
 }
 
-func (a *Agent) executeReasonerAsync(reasoner *Reasoner, input map[string]any, execCtx ExecutionContext) {
+func (a *Agent) executeReasonerAsync(reasoner *Reasoner, input map[string]any, execCtx ExecutionContext, artifacts any) {
 	// Register a cancel hook keyed on execution_id so a control-plane
 	// cancel reaches the still-running reasoner. release fires both on
 	// natural completion (deferred) and on cancel (via ctx.Done()).
@@ -1557,7 +1583,7 @@ func (a *Agent) executeReasonerAsync(reasoner *Reasoner, input map[string]any, e
 		}
 	}()
 
-	result, err := reasoner.Handler(ctx, input)
+	result, err := a.invokeWithWorkspace(ctx, reasoner.Handler, input, artifacts)
 	durationMS := time.Since(start).Milliseconds()
 	payload := map[string]any{
 		"execution_id":  execCtx.ExecutionID,

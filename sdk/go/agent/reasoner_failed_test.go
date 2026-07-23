@@ -79,7 +79,7 @@ func TestReasonerFailed_AsyncCarriesResultAndDetails(t *testing.T) {
 				ErrorDetails: map[string]any{"reason": "no_merge"},
 			}
 		},
-	}, map[string]any{"x": 1}, ExecutionContext{ExecutionID: "exec-1", RunID: "run-1", WorkflowID: "wf-1"})
+	}, map[string]any{"x": 1}, ExecutionContext{ExecutionID: "exec-1", RunID: "run-1", WorkflowID: "wf-1"}, nil)
 
 	select {
 	case payload := <-statusCh:
@@ -109,7 +109,7 @@ func TestReasonerFailed_AsyncPlainErrorHasNoResultKey(t *testing.T) {
 		Handler: func(_ context.Context, _ map[string]any) (any, error) {
 			return nil, fmt.Errorf("boom")
 		},
-	}, map[string]any{"x": 1}, ExecutionContext{ExecutionID: "exec-2", RunID: "run-2", WorkflowID: "wf-2"})
+	}, map[string]any{"x": 1}, ExecutionContext{ExecutionID: "exec-2", RunID: "run-2", WorkflowID: "wf-2"}, nil)
 
 	select {
 	case payload := <-statusCh:
@@ -137,7 +137,7 @@ func TestReasonerFailed_AsyncRetriesOn5xxAndDeliversResult(t *testing.T) {
 		Handler: func(_ context.Context, _ map[string]any) (any, error) {
 			return nil, &ReasonerFailed{Message: "x", Result: map[string]any{"k": "v"}}
 		},
-	}, map[string]any{"x": 1}, ExecutionContext{ExecutionID: "exec-3", RunID: "run-3", WorkflowID: "wf-3"})
+	}, map[string]any{"x": 1}, ExecutionContext{ExecutionID: "exec-3", RunID: "run-3", WorkflowID: "wf-3"}, nil)
 
 	select {
 	case payload := <-statusCh:
