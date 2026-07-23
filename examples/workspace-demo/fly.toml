@@ -1,0 +1,33 @@
+# fly.toml template for the workspace-demo agent.
+#
+# This is one example of deploying a node behind a public https URL so a
+# control plane can reach it -- not a dependency of the demo itself. Any host
+# that gives you a stable https URL works equally well with the
+# register-serverless flow documented in deploy.md.
+#
+# Copy this file, replace `app` with a unique name, and deploy with:
+#   flyctl deploy --config fly.toml --dockerfile Dockerfile
+# (run from examples/workspace-demo/ -- see deploy.md for the full build
+# context caveat, since the Dockerfile needs the repo root as build context).
+
+app = "workspace-demo-CHANGEME"
+primary_region = "iad"
+
+[build]
+
+[env]
+  AGENTFIELD_SERVERLESS = "true"
+  AGENT_NODE_ID = "workspace-demo"
+  PORT = "8001"
+
+[http_service]
+  internal_port = 8001
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
