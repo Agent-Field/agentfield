@@ -1,6 +1,7 @@
 ---
 name: agentfield-use
-description: Discover and call agents already running on a local AgentField control plane. Use when the user asks to use, call, query, run, or delegate work to an installed AgentField agent (swe-planner, pr-af, sec-af, …), to list what agents or reasoners are available, or to check on an execution. Not for building new agents — that is the agentfield skill.
+version: 0.4.0
+description: "Discover and call agents already running on a local AgentField control plane. Use when the user asks to use, call, query, run, or delegate work to an installed AgentField agent (swe-planner, pr-af, sec-af, …), to list what agents or reasoners are available, or to check on an execution. Not for building new agents — that is the agentfield skill."
 ---
 
 # Using AgentField agents
@@ -78,6 +79,38 @@ Each hit carries `reasoner_id`, `agent_id`, `invocation_target`, `tags`,
 `score`, and `agent_health` — everything you need to dispatch with no second
 lookup. Build the execute target straight from `invocation_target` (colon → dot)
 and only dispatch to hits whose `agent_health` is `"active"`.
+
+### No coverage: offer the builder once, with authorization
+
+Only decide that there is **no coverage** after completing the health check,
+capability discovery (including each candidate's description and input schema),
+and a ranked search for the requested job. Coverage requires a healthy active
+installed agent whose reasoner description **and** input schema support that
+job; a similar name or tag alone is not coverage.
+
+If discovery finds a stopped-but-capable installed agent, explain that it can be
+started with `af run <name>`; do not offer a replacement build. If those checks
+establish that no installed reasoner supports the requested job, say explicitly:
+**"No capable installed agent was found for this job."** Then offer to build one
+with the canonical **`agentfield`** skill.
+
+Do not infer that offer as permission to build. List, inspect, and diagnose-only
+requests never authorize building an agent. Hand off to `agentfield` only when
+the original request already authorized creating an agent, or when the user
+explicitly accepts this offer.
+
+For an accepted or already-authorized build, hand off with this request-local,
+non-persisted instruction:
+
+```text
+agentfield: coverage_precheck_complete = true
+```
+
+That flag means installed-agent coverage has already been completed for this
+request. `agentfield` must enter its deliverable-selection path rather than
+repeat discovery. A request may traverse `agentfield -> agentfield-use ->
+agentfield` at most once: after this handoff, never re-enter discovery or bounce
+recursively between `agentfield-use` and `agentfield`.
 
 ## 3. Call a reasoner
 
