@@ -45,6 +45,9 @@ func TestRenderedScaffoldManifestIsInstallable(t *testing.T) {
 			if err := tmpl.Execute(&rendered, data); err != nil {
 				t.Fatalf("render manifest: %v", err)
 			}
+			if !strings.Contains(rendered.String(), "user_environment:\n  required: []") {
+				t.Fatalf("rendered manifest must explicitly declare an empty required environment list:\n%s", rendered.String())
+			}
 
 			dir := t.TempDir()
 			if err := os.WriteFile(filepath.Join(dir, "agentfield-package.yaml"), rendered.Bytes(), 0o644); err != nil {
@@ -96,7 +99,7 @@ func TestTypeScriptScaffoldPackageScripts(t *testing.T) {
 		Scripts map[string]string `json:"scripts"`
 	}
 	if err := json.Unmarshal(rendered.Bytes(), &pkg); err != nil {
-		 t.Fatalf("rendered package.json is invalid: %v\n%s", err, rendered.String())
+		t.Fatalf("rendered package.json is invalid: %v\n%s", err, rendered.String())
 	}
 	if pkg.Name != `typescript: "quoted" & punctuated` {
 		t.Errorf("package name = %q, want punctuation preserved", pkg.Name)
