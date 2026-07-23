@@ -1,7 +1,7 @@
 ---
 name: agentfield-use
 version: 0.4.0
-description: Discover and call agents already running on a local AgentField control plane. Use when the user asks to use, call, query, run, or delegate work to an installed AgentField agent (swe-planner, pr-af, sec-af, …), to list what agents or reasoners are available, or to check on an execution. Not for building new agents — that is the agentfield skill.
+description: "Discover and call agents already running on a local AgentField control plane. Use when the user asks to use, call, query, run, or delegate work to an installed AgentField agent (swe-planner, pr-af, sec-af, …), to list what agents or reasoners are available, or to check on an execution. Not for building new agents — that is the agentfield skill."
 ---
 
 # Using AgentField agents
