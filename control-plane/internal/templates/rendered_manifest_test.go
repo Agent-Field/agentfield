@@ -88,14 +88,18 @@ func TestTypeScriptScaffoldPackageScripts(t *testing.T) {
 		t.Fatal(err)
 	}
 	var rendered bytes.Buffer
-	if err := tmpl.Execute(&rendered, TemplateData{ProjectName: "typescript-scaffold"}); err != nil {
+	if err := tmpl.Execute(&rendered, TemplateData{ProjectName: `typescript: "quoted" & punctuated`}); err != nil {
 		t.Fatal(err)
 	}
 	var pkg struct {
+		Name    string            `json:"name"`
 		Scripts map[string]string `json:"scripts"`
 	}
 	if err := json.Unmarshal(rendered.Bytes(), &pkg); err != nil {
-		t.Fatalf("rendered package.json is invalid: %v\n%s", err, rendered.String())
+		 t.Fatalf("rendered package.json is invalid: %v\n%s", err, rendered.String())
+	}
+	if pkg.Name != `typescript: "quoted" & punctuated` {
+		t.Errorf("package name = %q, want punctuation preserved", pkg.Name)
 	}
 	for script, want := range map[string]string{
 		"start": "tsx main.ts",

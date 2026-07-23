@@ -34,6 +34,9 @@ type TemplateData struct {
 func GetTemplate(name string) (*template.Template, error) {
 	tmpl, err := template.New("").Funcs(template.FuncMap{
 		"yamlQuote": strconv.Quote,
+		// strconv.Quote produces a JSON string literal too, so project names
+		// containing punctuation remain safe in package.json templates.
+		"jsonQuote": strconv.Quote,
 	}).ParseFS(content, name)
 	if err != nil {
 		return nil, err
