@@ -250,11 +250,20 @@ func Uninstall(opts UninstallOptions) error {
 // Update is a convenience wrapper that re-installs the skill into every
 // target it's currently installed at, using the binary's embedded version.
 func Update(skillName string) (*InstallReport, error) {
-	state, err := LoadState()
-	if err != nil {
+	if _, err := LoadState(); err != nil {
 		return nil, err
 	}
 	skill, err := resolveSkill(skillName, "")
+	if err != nil {
+		return nil, err
+	}
+	// Do not reject an alias-only legacy installation before reconciliation.
+	// Update must be able to remove that obsolete state even when the current
+	// canonical skill has not yet been installed.
+	if err := reconcileAliasOrphans(); err != nil {
+		return nil, err
+	}
+	state, err := LoadState()
 	if err != nil {
 		return nil, err
 	}
@@ -263,22 +272,6 @@ func Update(skillName string) (*InstallReport, error) {
 		return nil, fmt.Errorf("skill %q is not installed (run `af skill install` first)", skill.Name)
 	}
 	var targets []string
-	for name := range skillState.Targets {
-		targets = append(targets, name)
-	}
-	sort.Strings(targets)
-	if err := reconcileAliasOrphans(); err != nil {
-		return nil, err
-	}
-	state, err = LoadState()
-	if err != nil {
-		return nil, err
-	}
-	skillState, ok = state.Skills[skill.Name]
-	if !ok {
-		return nil, fmt.Errorf("skill %q is not installed (run `af skill install` first)", skill.Name)
-	}
-	targets = targets[:0]
 	for name := range skillState.Targets {
 		targets = append(targets, name)
 	}

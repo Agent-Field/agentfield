@@ -124,6 +124,55 @@ func TestReconcileAliasOrphansFailureRetainsState(t *testing.T) {
 	}
 }
 
+func TestReconcileAliasOrphansMissingPathsAndMarkerBlocksAreIdempotent(t *testing.T) {
+	home := t.TempDir()
+	markerPath := filepath.Join(home, "codex.md")
+	canonicalBlock := "<!-- agentfield-skill:agentfield v0.6.0 -->\nread: /tmp/agentfield\n<!-- /agentfield-skill:agentfield -->\n"
+	if err := os.WriteFile(markerPath, []byte("prefix\n"+canonicalBlock+"suffix\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	missingPath := filepath.Join(home, "does-not-exist")
+	setupReconciliation(t, reconciliationState(map[string]InstalledTarget{
+		"codex":  {Method: "marker-block", Path: markerPath, Version: "0.1.0"},
+		"claude": {Method: "symlink", Path: missingPath},
+	}))
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		if err := reconcileAliasOrphans(); err != nil {
+			t.Fatalf("attempt %d: %v", attempt, err)
+		}
+	}
+	data, err := os.ReadFile(markerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(data), "prefix\n"+canonicalBlock+"suffix\n"; got != want {
+		t.Fatalf("unrelated marker content changed:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestReconcileAliasOrphansMarkerReadFailureRetainsStateAndNamesTarget(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "codex.md")
+	setupReconciliation(t, reconciliationState(map[string]InstalledTarget{
+		"codex": {Method: "marker-block", Path: path},
+	}))
+	oldRead := reconcileReadFile
+	reconcileReadFile = func(string) ([]byte, error) { return nil, errors.New("forced read failure") }
+	t.Cleanup(func() { reconcileReadFile = oldRead })
+
+	err := reconcileAliasOrphans()
+	if err == nil || !strings.Contains(err.Error(), legacyBuilder) || !strings.Contains(err.Error(), "codex") {
+		t.Fatalf("error = %v", err)
+	}
+	state, loadErr := LoadState()
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if _, ok := state.Skills[legacyBuilder]; !ok {
+		t.Fatal("marker read failure removed retryable orphan state")
+	}
+}
+
 func TestInstallStopsBeforeCanonicalMutationWhenRecordedCleanupFails(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, "alias")
@@ -151,6 +200,35 @@ func TestInstallStopsBeforeCanonicalMutationWhenRecordedCleanupFails(t *testing.
 	}
 	if _, ok := state.Skills[legacyBuilder]; !ok {
 		t.Fatal("failed cleanup removed retryable orphan state")
+	}
+}
+
+func TestUpdateReconcilesAliasOnlyLegacyInstallation(t *testing.T) {
+	home := t.TempDir()
+	aliasPath := filepath.Join(home, "legacy-claude")
+	if err := os.MkdirAll(aliasPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state := &State{Version: stateFileVersion, Skills: map[string]InstalledSkill{
+		legacyBuilder: {Targets: map[string]InstalledTarget{
+			"claude-code": {Method: "symlink", Path: aliasPath},
+		}},
+	}}
+	setupReconciliation(t, state)
+
+	_, err := Update("agentfield")
+	if err == nil || !strings.Contains(err.Error(), "agentfield") || !strings.Contains(err.Error(), "not installed") {
+		t.Fatalf("Update error = %v, want canonical not-installed error after cleanup", err)
+	}
+	if _, err := os.Lstat(aliasPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy alias integration remains: %v", err)
+	}
+	got, err := LoadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got.Skills[legacyBuilder]; ok {
+		t.Fatal("legacy alias state remains after Update reconciliation")
 	}
 }
 
@@ -214,11 +292,25 @@ func TestPublicOperationsReconcileAndDryRunsDoNot(t *testing.T) {
 			if err == nil && len(reports) != len(Catalog) {
 				return errors.New("wrong report count")
 			}
+			for i, report := range reports {
+				if err == nil && report.Skill.Name != Catalog[i].Name {
+					return errors.New("reports are not in catalog order")
+				}
+			}
 			return err
 		}},
 		{"update", func() error { _, err := Update("agentfield"); return err }},
 	} {
 		t.Run(op.name, func(t *testing.T) {
+			reconcileSaves := 0
+			if op.name == "install-all" {
+				oldSave := reconcileSaveState
+				reconcileSaveState = func(state *State) error {
+					reconcileSaves++
+					return oldSave(state)
+				}
+				t.Cleanup(func() { reconcileSaveState = oldSave })
+			}
 			home := t.TempDir()
 			aliasPath := filepath.Join(home, "alias")
 			if err := os.MkdirAll(aliasPath, 0o755); err != nil {
@@ -235,30 +327,59 @@ func TestPublicOperationsReconcileAndDryRunsDoNot(t *testing.T) {
 			if _, err := os.Lstat(aliasPath); !os.IsNotExist(err) {
 				t.Fatalf("orphan was not reconciled: %v", err)
 			}
+			if op.name == "install-all" && reconcileSaves != 1 {
+				t.Fatalf("InstallAll reconciled %d times, want once", reconcileSaves)
+			}
 		})
 	}
-	for _, run := range []func() error{
-		func() error { _, err := Install(InstallOptions{SkillName: "agentfield", DryRun: true}); return err },
-		func() error { _, err := InstallAll(InstallOptions{DryRun: true}); return err },
+	for _, op := range []struct {
+		name string
+		run  func() error
+	}{
+		{"install", func() error { _, err := Install(InstallOptions{SkillName: "agentfield", DryRun: true}); return err }},
+		{"install-all", func() error { _, err := InstallAll(InstallOptions{DryRun: true}); return err }},
 	} {
-		home := t.TempDir()
-		path := filepath.Join(home, "alias")
-		if err := os.MkdirAll(path, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		setupReconciliation(t, reconciliationState(map[string]InstalledTarget{"old": {Method: "symlink", Path: path}}))
-		if err := run(); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := os.Lstat(path); err != nil {
-			t.Fatalf("dry run changed orphan path: %v", err)
-		}
-		state, err := LoadState()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, ok := state.Skills[legacyBuilder]; !ok {
-			t.Fatal("dry run changed state")
-		}
+		t.Run("dry-run-"+op.name, func(t *testing.T) {
+			home := t.TempDir()
+			path := filepath.Join(home, "alias")
+			markerPath := filepath.Join(home, "codex.md")
+			if err := os.MkdirAll(path, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			markerData := []byte("before\n<!-- agentfield-skill:" + legacyBuilder + " v0.5.0 -->\nold\n<!-- /agentfield-skill:" + legacyBuilder + " -->\nafter\n")
+			if err := os.WriteFile(markerPath, markerData, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			home = setupReconciliation(t, reconciliationState(map[string]InstalledTarget{
+				"old":   {Method: "symlink", Path: path},
+				"codex": {Method: "marker-block", Path: markerPath},
+			}))
+			root := filepath.Join(home, "skills")
+			orphanDir := filepath.Join(root, legacyBuilder)
+			if err := os.MkdirAll(orphanDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			statePath := filepath.Join(root, ".state.json")
+			stateBefore, err := os.ReadFile(statePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if err := op.run(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Lstat(path); err != nil {
+				t.Fatalf("dry run changed orphan integration: %v", err)
+			}
+			if _, err := os.Lstat(orphanDir); err != nil {
+				t.Fatalf("dry run changed orphan canonical directory: %v", err)
+			}
+			if got, err := os.ReadFile(markerPath); err != nil || !reflect.DeepEqual(got, markerData) {
+				t.Fatalf("dry run changed marker file: %q, %v", got, err)
+			}
+			if got, err := os.ReadFile(statePath); err != nil || !reflect.DeepEqual(got, stateBefore) {
+				t.Fatalf("dry run changed serialized state: %q, %v", got, err)
+			}
+		})
 	}
 }
