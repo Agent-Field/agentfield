@@ -302,6 +302,7 @@ func TestAsyncStatusCarriesUsage(t *testing.T) {
 				&Reasoner{Name: "worker", Handler: tt.handler},
 				map[string]any{},
 				ExecutionContext{ExecutionID: "exec-u1", RunID: "run-u1", WorkflowID: "wf-u1"},
+				nil,
 			)
 
 			select {

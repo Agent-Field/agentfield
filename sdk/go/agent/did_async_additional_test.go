@@ -204,7 +204,7 @@ func TestExecuteReasonerAsync_ReportsErrorAndPanicStatuses(t *testing.T) {
 		Handler: func(ctx context.Context, input map[string]any) (any, error) {
 			return nil, fmt.Errorf("boom")
 		},
-	}, map[string]any{"x": 1}, baseExecCtx)
+	}, map[string]any{"x": 1}, baseExecCtx, nil)
 
 	a.executeReasonerAsync(&Reasoner{
 		Name: "panics",
@@ -215,7 +215,7 @@ func TestExecuteReasonerAsync_ReportsErrorAndPanicStatuses(t *testing.T) {
 		ExecutionID: "exec-2",
 		RunID:       "run-2",
 		WorkflowID:  "wf-2",
-	})
+	}, nil)
 
 	var got []map[string]any
 	for i := 0; i < 2; i++ {
