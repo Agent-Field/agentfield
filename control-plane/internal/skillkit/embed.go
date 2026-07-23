@@ -34,5 +34,6 @@ import "embed"
 //go:embed skill_data/agentfield/SKILL.md
 //go:embed skill_data/agentfield/references/*.md
 //go:embed skill_data/agentfield/commands/*.md
+//go:embed skill_data/agentfield-personal/SKILL.md
 //go:embed skill_data/agentfield-use/SKILL.md
 var SkillData embed.FS

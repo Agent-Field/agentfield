@@ -4,6 +4,8 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"path"
+	"strconv"
 	"strings"
 	"text/template"
 )
@@ -13,14 +15,14 @@ var content embed.FS
 
 // TemplateData holds the data to be passed to the templates.
 type TemplateData struct {
-	ProjectName       string // "my-awesome-agent"
-	NodeID            string // "my-awesome-agent" (same as ProjectName)
-	GoModule          string // "my-awesome-agent" (Go module name)
-	AuthorName        string // "John Doe"
-	AuthorEmail       string // "john@example.com"
-	CurrentYear       int    // 2025
-	CreatedAt         string // "2025-01-05 10:30:00 EST"
-	Language          string // "python", "go", or "typescript"
+	ProjectName string // "my-awesome-agent"
+	NodeID      string // "my-awesome-agent" (same as ProjectName)
+	GoModule    string // "my-awesome-agent" (Go module name)
+	AuthorName  string // "John Doe"
+	AuthorEmail string // "john@example.com"
+	CurrentYear int    // 2025
+	CreatedAt   string // "2025-01-05 10:30:00 EST"
+	Language    string // "python", "go", or "typescript"
 	// Docker scaffold fields (used only when --docker is set on `af init`)
 	ControlPlaneImage string // "agentfield/control-plane:latest"
 	ControlPlanePort  int    // 8080
@@ -30,11 +32,16 @@ type TemplateData struct {
 
 // GetTemplate retrieves a specific template by its path.
 func GetTemplate(name string) (*template.Template, error) {
-	tmpl, err := template.ParseFS(content, name)
+	tmpl, err := template.New("").Funcs(template.FuncMap{
+		"yamlQuote": strconv.Quote,
+		// strconv.Quote produces a JSON string literal too, so project names
+		// containing punctuation remain safe in package.json templates.
+		"jsonQuote": strconv.Quote,
+	}).ParseFS(content, name)
 	if err != nil {
 		return nil, err
 	}
-	return tmpl, nil
+	return tmpl.Lookup(path.Base(name)), nil
 }
 
 // GetTemplateFiles returns a map of template file paths for the specified language.

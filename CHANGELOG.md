@@ -6,6 +6,107 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.115-rc.1] - 2026-07-23
+
+
+### Added
+
+- Feat: user-built subharness agents — personal-agent skill path, installable scaffolds, skill routing + cleanup (#822)
+
+* docs: add builder delivery routing
+
+* docs: add usage skill builder fallback
+
+* fix(skill): quote agentfield frontmatter description
+
+* fix(skills): harden agentfield-use frontmatter
+
+* feat: make generated language scaffolds installable
+
+* fix(skill): clarify builder coverage evidence
+
+* fix(skillkit): sync agentfield skill embeds
+
+* feat(skillkit): reconcile obsolete alias installs
+
+* fix(skill): make builder fallback handoff explicit
+
+* fix(skillkit): reconcile aliases before update validation
+
+* test(packages): cover managed TypeScript installs
+
+* test(skillkit): strengthen alias reconciliation coverage
+
+* test(skillkit): verify reconciliation runs once per operation
+
+* test(skillkit): cover reconciliation failure seams
+
+* test(templates): preserve punctuated scaffold metadata
+
+* fix(skill): clarify fallback authorization guard
+
+* fix(templates): quote generated TypeScript package name
+
+* test(templates): require explicit empty scaffold environment
+
+* test(templates): enforce one scaffold manifest per language
+
+* Align skill catalog mirrors
+
+* test(skillkit): strengthen catalog routing contracts
+
+* test: verify integrated repository contracts
+
+* refactor(skills): split personal-agent flow into its own agentfield-personal skill
+
+The 0.6.0 builder skill routed every request through a coverage pre-check
+and a deliverable question before the original repo workflow could start —
+a behavior change for everyone already using the skill. Split instead:
+
+- skills/agentfield: reverted to the pre-gate body (byte-identical to
+  main); frontmatter gains version 0.5.1 and a one-sentence description
+  pointer to agentfield-personal. Existing repo-builder behavior unchanged.
+- skills/agentfield-personal (new, 0.1.0): standalone personal-agent
+  skill — stable source in ~/agentfield-agents, v1 manifest, scoped
+  secrets via the af CLI, install/run, registration + live-call
+  verification, Desktop handoff. Selection happens at skill-routing
+  level via its description, not via an in-skill gate.
+- skills/agentfield-use: the no-coverage fallback keeps the offer and
+  authorization boundaries but drops the coverage_precheck_complete
+  marker protocol and bounce-limit that served the removed gate.
+
+Catalog/embed register the new skill; contract tests pin the reverted
+builder (routing-gate text banned), the personal lifecycle contract, and
+the simplified use-skill offer.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (f69b2c3)
+
+- Feat(desktop): redesign UI around install and usage jobs (#814)
+
+* feat(desktop): redesign UI around install and usage jobs
+
+Align the Electron app with the product/design specs: marketplace-style agents, denser activity, home usage totals, and shared theme tokens so the local sub-harness is clearer at a glance.
+
+* feat(desktop): polish onboarding and empty states
+
+* Delete PRODUCT.md
+
+* feat(desktop): add appearance override
+
+* fix(desktop): keep Windows controls clear of header
+
+* fix(desktop): reserve Linux overlay controls
+
+* fix(desktop): preserve collision-free UI keys
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (20955b2)
+
 ## [0.1.114] - 2026-07-22
 
 

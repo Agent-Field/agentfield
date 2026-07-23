@@ -30,8 +30,8 @@ var Catalog = []Skill{
 	{
 		Name:        "agentfield",
 		Aliases:     []string{"agentfield-multi-reasoner-builder"},
-		Version:     "0.5.0",
-		Description: "Design and ship a multi-agent system on AgentField. Derive the orchestration from the problem: decompose by cognitive jobs, place each slot on the autonomy spectrum, assign a verification rung, choose the dynamism rung with budgets. Composite intelligence, deep dynamic call graphs, live SDK docs from agentfield.ai, async-first smoke tests.",
+		Version:     "0.5.1",
+		Description: "Design and ship a multi-agent system on AgentField. Derive the orchestration from the problem: decompose by cognitive jobs, place each slot on the autonomy spectrum, assign a verification rung, choose the dynamism rung with budgets. Composite intelligence, deep dynamic call graphs, live SDK docs from agentfield.ai, async-first smoke tests. For an agent installed on this machine via af/Desktop, use agentfield-personal instead.",
 		EmbedRoot:   "skill_data/agentfield",
 		EntryFile:   "SKILL.md",
 		Trigger: `When the user asks you to architect or build a multi-agent system on
@@ -40,8 +40,19 @@ financial reviewer / clinical triage / research agent / etc.), you MUST
 read this skill first`,
 	},
 	{
+		Name:        "agentfield-personal",
+		Version:     "0.1.0",
+		Description: "Build and install a personal AI agent on this machine's AgentField: real source in ~/agentfield-agents, an agentfield-package.yaml manifest, af install + af run, verified control-plane registration and a live reasoner call, visible in AgentField Desktop with a keys form and auto-start toggle. For a standalone project repository with Docker Compose, use the agentfield skill instead.",
+		EmbedRoot:   "skill_data/agentfield-personal",
+		EntryFile:   "SKILL.md",
+		Trigger: `When the user asks you to build an agent that lives on this machine —
+installed through af, managed in AgentField Desktop, available as a
+persistent local capability rather than a project repository — you MUST
+read this skill first`,
+	},
+	{
 		Name:        "agentfield-use",
-		Version:     "0.3.0",
+		Version:     "0.4.0",
 		Description: "Discover and call agents already running on a local AgentField control plane. Health check, capability discovery, ranked reasoner search (af agent search), concurrent sync/async execution, load-aware pacing (meta.load), in-flight visibility (af ps / executions/active), wedged-run triage (cancel-tree), sessions, and the af CLI ops (run/stop/logs/secrets) that keep installed agents answering.",
 		EmbedRoot:   "skill_data/agentfield-use",
 		EntryFile:   "SKILL.md",
