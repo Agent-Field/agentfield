@@ -831,6 +831,13 @@ class Agent(FastAPI):
         from .cancel import install_cancel_route
         install_cancel_route(self)
 
+        # Auto-register the workspace-artifact endpoints (prepare / put-blob /
+        # get-blob) so any node can receive an attached folder and serve its
+        # content store. Additive: nodes that never receive a workspace-bearing
+        # execution simply never exercise these routes.
+        from .workspace import install_workspace_routes
+        install_workspace_routes(self)
+
         # Initialize async execution manager (will be lazily created when needed)
         self._async_execution_manager: Optional[AsyncExecutionManager] = None
 
@@ -2098,6 +2105,14 @@ class Agent(FastAPI):
                 # — the envelope is unwrapped further down and the reasoner's
                 # first positional gets the unwrapped (or transformed) value
                 # by way of _execute_reasoner_endpoint.
+                # Workspace artifacts ride alongside the reasoner input as a
+                # reserved top-level "artifacts" envelope. Lift it out before
+                # input validation (which only keeps declared fields) so the
+                # reasoner's own signature is unaffected.
+                workspace_artifacts = (
+                    body.get("artifacts") if isinstance(body, dict) else None
+                )
+
                 is_trigger_envelope = (
                     isinstance(body, dict)
                     and "event" in body
@@ -2129,6 +2144,7 @@ class Agent(FastAPI):
                         input_data=validated_input,
                         request=request,
                         trigger_bindings=handler_trigger_bindings,
+                        workspace_artifacts=workspace_artifacts,
                     )
 
                 execution_id_header = request.headers.get("X-Execution-ID")
@@ -2389,6 +2405,20 @@ class Agent(FastAPI):
         
         return input_data
 
+    @staticmethod
+    def _attach_workspace_diff(result: Any, workspace_diff: Dict[str, Any]) -> Any:
+        """Attach the staged ``workspace_diff`` to a reasoner result.
+
+        Dict results gain a ``workspace_diff`` key in place. Any other result
+        shape is wrapped as ``{"result": <original>, "workspace_diff": ...}`` so
+        the diff always reaches the caller without losing the payload.
+        """
+        if isinstance(result, dict):
+            enriched = dict(result)
+            enriched["workspace_diff"] = workspace_diff
+            return enriched
+        return {"result": result, "workspace_diff": workspace_diff}
+
     async def _execute_reasoner_endpoint(
         self,
         *,
@@ -2398,6 +2428,7 @@ class Agent(FastAPI):
         input_data: Dict[str, Any],
         request: Request,
         trigger_bindings: Optional[list] = None,
+        workspace_artifacts: Optional[Dict[str, Any]] = None,
     ) -> Any:
         import asyncio
         import time
@@ -2502,7 +2533,27 @@ class Agent(FastAPI):
             if "webhook" in signature.parameters:
                 kwargs["webhook"] = execution_context.trigger
 
-            if asyncio.iscoroutinefunction(func):
+            # Workspace-bearing executions run in a dedicated worker process
+            # whose cwd is the materialized folder; every other execution keeps
+            # the original in-process invocation byte-for-byte unchanged.
+            workspace_manifest = None
+            if workspace_artifacts is not None:
+                from .workspace import extract_workspace_manifest
+
+                workspace_manifest = extract_workspace_manifest(workspace_artifacts)
+
+            if workspace_manifest is not None:
+                from .workspace import run_reasoner_in_workspace
+
+                result, workspace_diff = await run_reasoner_in_workspace(
+                    func=func,
+                    args=args,
+                    kwargs=kwargs,
+                    manifest=workspace_manifest,
+                    execution_id=execution_context.execution_id,
+                )
+                result = self._attach_workspace_diff(result, workspace_diff)
+            elif asyncio.iscoroutinefunction(func):
                 result = await func(*args, **kwargs)
             else:
                 result = func(*args, **kwargs)
