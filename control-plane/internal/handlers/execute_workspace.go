@@ -11,6 +11,7 @@ import (
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/workspace"
+	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
 // ExecuteArtifacts is the optional artifacts block on an execute request. Only a
@@ -196,6 +197,78 @@ func (c *executionController) processWorkspaceResult(ctx context.Context, plan *
 		Int("deleted", len(diff.Deleted)).
 		Msg("staged workspace diff")
 	return stripped
+}
+
+// stageWorkspaceFromStatus stages a workspace diff that arrived via an async
+// status callback (the default SDK path, where the reasoner self-acknowledges
+// and reports its result asynchronously rather than on the synchronous
+// response). It resolves the node base URL from the execution's node id, fetches
+// any missing changed blobs into the content store, and records the staged entry
+// keyed by run_id. Best-effort: failures are logged, never propagated.
+func (c *executionController) stageWorkspaceFromStatus(ctx context.Context, exec *types.Execution, diff *workspace.Diff) {
+	if exec == nil || diff == nil {
+		return
+	}
+
+	base := c.nodeBaseURLForExecution(ctx, exec)
+	cas := workspaceCAS()
+	for _, sha := range diff.Blobs() {
+		if cas.Has(sha) {
+			continue
+		}
+		if base == "" {
+			logger.Logger.Warn().
+				Str("execution_id", exec.ExecutionID).
+				Str("sha256", sha).
+				Msg("cannot fetch workspace diff blob: node base URL unknown")
+			continue
+		}
+		if err := c.fetchWorkspaceBlob(ctx, base, sha, cas); err != nil {
+			logger.Logger.Error().
+				Err(err).
+				Str("execution_id", exec.ExecutionID).
+				Str("sha256", sha).
+				Msg("failed to fetch workspace diff blob from node")
+		}
+	}
+
+	if err := workspace.MergeStaged(exec.RunID, func(rec *workspace.StagedRecord) {
+		rec.ExecutionID = exec.ExecutionID
+		rec.Diff = diff
+		rec.NodeBaseURL = base
+		rec.NodeID = exec.NodeID
+	}); err != nil {
+		logger.Logger.Error().
+			Err(err).
+			Str("execution_id", exec.ExecutionID).
+			Str("run_id", exec.RunID).
+			Msg("failed to write staged workspace record from status callback")
+		return
+	}
+
+	logger.Logger.Info().
+		Str("execution_id", exec.ExecutionID).
+		Str("run_id", exec.RunID).
+		Int("changed", len(diff.Changed)).
+		Int("deleted", len(diff.Deleted)).
+		Msg("staged workspace diff from status callback")
+}
+
+// nodeBaseURLForExecution resolves the node's base URL for an execution so the
+// control plane can fetch diff blobs. It tries the node id first, then the agent
+// node id.
+func (c *executionController) nodeBaseURLForExecution(ctx context.Context, exec *types.Execution) string {
+	for _, id := range []string{exec.NodeID, exec.AgentNodeID} {
+		if strings.TrimSpace(id) == "" {
+			continue
+		}
+		if agent, err := c.store.GetAgent(ctx, id); err == nil && agent != nil {
+			if base := strings.TrimRight(strings.TrimSpace(agent.BaseURL), "/"); base != "" {
+				return base
+			}
+		}
+	}
+	return ""
 }
 
 func (c *executionController) fetchWorkspaceBlob(ctx context.Context, base, sha string, cas *workspace.CAS) error {

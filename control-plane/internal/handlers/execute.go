@@ -24,6 +24,7 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/internal/utils"
+	"github.com/Agent-Field/agentfield/control-plane/internal/workspace"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
@@ -870,6 +871,18 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 		}
 	}
 
+	// Workspace-bearing reasoners on the default (async) SDK path deliver their
+	// result — and its attached workspace_diff — here, via the status callback,
+	// not on the synchronous response. Extract the diff, strip it from the
+	// stored result, and stage it after the record is persisted (see below).
+	var stagedWorkspaceDiff *workspace.Diff
+	if len(resultBytes) > 0 {
+		if diff, stripped, present := extractWorkspaceDiff(resultBytes); present {
+			resultBytes = stripped
+			stagedWorkspaceDiff = diff
+		}
+	}
+
 	resultURI := c.savePayload(reqCtx, resultBytes)
 	isTerminal := types.IsTerminalExecutionStatus(normalizedStatus)
 	var elapsed time.Duration
@@ -981,6 +994,13 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 	// Persist token/cost usage reported alongside the status callback.
 	// Best-effort: failures are logged and never fail the status update.
 	c.ingestUsage(reqCtx, updated, req.Usage)
+
+	// Stage any workspace diff that arrived with this callback: fetch changed
+	// blobs from the node into the content store and record the staged entry so
+	// `af diff` / `af apply` can serve it. Best-effort; never fails the update.
+	if stagedWorkspaceDiff != nil {
+		c.stageWorkspaceFromStatus(reqCtx, updated, stagedWorkspaceDiff)
+	}
 
 	c.updateWorkflowExecutionStatus(reqCtx, executionID, normalizedStatus, req.StatusReason)
 
