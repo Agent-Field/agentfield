@@ -17,7 +17,7 @@ This skill is the workflow for getting that done.
 
 ## Coverage pre-check and deliverable routing — do this once, first
 
-Before selecting a deliverable, entering the hard gate, designing, or scaffolding, use the `agentfield-use` skill's health, discovery, and reasoner-capability search flow exactly once for this request. Mark `coverage_precheck_complete` for this same-request handoff; it is not persisted. Do not repeat this pre-check when `agentfield-use` returns here after finding no coverage.
+Before selecting a deliverable, entering the hard gate, designing, or scaffolding, use the `agentfield-use` skill's health, discovery, and reasoner-capability search flow exactly once for this request. Check control-plane health, query discovery, and inspect the discovered reasoner's documented capability (description and input schema); these are the coverage evidence, not name similarity. Mark `coverage_precheck_complete` for this same-request handoff; it is not persisted. Do not repeat this pre-check when `agentfield-use` returns here after finding no coverage.
 
 Coverage is real only when a **healthy, active** installed agent has a reasoner whose documented description and input schema support the user's requested job. Never infer coverage from an agent or reasoner name alone. When coverage exists, do not build a duplicate: switch to `agentfield-use` and offer or perform the requested invocation.
 
