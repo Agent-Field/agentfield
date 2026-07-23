@@ -148,7 +148,10 @@ What you need to know as a reasoner author:
   attached folder are unaffected and run in-process exactly as before.
 
 The node keeps a content-addressed store at `~/.agentfield/cas` and materializes
-each execution into `~/.agentfield/workspaces/<execution_id>/`. See
+each execution into `~/.agentfield/workspaces/<execution_id>/`. The transport
+endpoints (`prepare`, per-blob `PUT/GET`, and the one-shot
+`POST /api/v1/workspace/blobs/batch` gzip-tar upload) are registered
+automatically on every node — nothing to wire up. See
 `docs/design/workspace-artifacts.md` for the transport contract.
 
 See `docs/DEVELOPMENT.md` for instructions on wiring agents to the control plane.
