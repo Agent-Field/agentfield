@@ -1,5 +1,6 @@
 ---
 name: agentfield
+version: 0.6.0
 description: Design and ship a multi-agent system on AgentField. Use when the user asks to build, scaffold, design, or run an agent, reasoner network, multi-agent backend, or "an agent that does X" — whenever the work would otherwise be a single LLM call or a flat LangChain/CrewAI/AutoGen chain. The skill produces composite intelligence: a deep, dynamic, parallel reasoner graph with a working `docker compose up` smoke test.
 aliases: [agentfield-multi-reasoner-builder]
 ---
@@ -11,6 +12,24 @@ You are a **systems architect**. Your job is to design a cognitive graph for the
 The intelligence is in the composition. Individual LLM calls reason at ~0.3 — a deliberately-shaped graph of ten of them can reach 0.8 on a real problem. Frameworks like LangChain, CrewAI, AutoGen give you tools to wire a chain. AgentField gives you a **control plane** that records every cross-reasoner call, generates verifiable credentials, and lets the call graph emerge at runtime.
 
 This skill is the workflow for getting that done.
+
+---
+
+## Coverage pre-check and deliverable routing — do this once, first
+
+Before selecting a deliverable, entering the hard gate, designing, or scaffolding, use the `agentfield-use` skill's health, discovery, and reasoner-capability search flow exactly once for this request. Mark `coverage_precheck_complete` for this same-request handoff; it is not persisted. Do not repeat this pre-check when `agentfield-use` returns here after finding no coverage.
+
+Coverage is real only when a **healthy, active** installed agent has a reasoner whose documented description and input schema support the user's requested job. Never infer coverage from an agent or reasoner name alone. When coverage exists, do not build a duplicate: switch to `agentfield-use` and offer or perform the requested invocation.
+
+If the control plane is unavailable, follow `agentfield-use` local lifecycle guidance (`af list` and its health/lifecycle checks) to distinguish a capable installed-but-stopped agent from an absent capability. A stopped capable installation is not proof that a duplicate is needed; report it and offer to start or diagnose it.
+
+Only after the one-time pre-check establishes that no installed agent covers the request, choose the delivery:
+
+- Infer **Project repository** when the request explicitly asks for a source repository, Docker Compose stack, or live curl smoke test.
+- Infer **Personal agent** when it explicitly asks for an agent on this machine, installation through `af`, or AgentField Desktop visibility.
+- If the request is ambiguous, ask exactly this one question, then wait for the answer: **Which deliverable do you want: Project repository — source repository, Docker Compose stack, and live curl smoke test; or Personal agent — source stored stably on this machine, installed through `af`, started locally, and surfaced in AgentField Desktop?** Do not ask other questions before this choice unless a required user-owned secret later blocks the selected personal-agent path.
+
+Both branches retain the architecture, model-selection, live-document, topology, safety, and code-quality gates below. Their packaging, execution, verification, and handoff differ.
 
 ---
 
@@ -118,7 +137,9 @@ This tree is the autonomy spectrum (procedure step 2) turned into questions. Eac
 
 ---
 
-## Workflow
+## Project repository workflow
+
+Use this workflow only after routing selected **Project repository**. It preserves the repository, Docker Compose, and live-curl deliverable; do not apply it to **Personal agent**.
 
 1. **Announce** — tell the user you're using the `agentfield` skill.
 2. **Fetch live docs** — `WebFetch https://agentfield.ai/llms.txt` (small index). Pull `/llms-full.txt` or per-page `/llm/docs/<slug>` only when you need depth. Cache. See `references/live-docs.md`.
@@ -130,6 +151,21 @@ This tree is the autonomy spectrum (procedure step 2) turned into questions. Eac
 8. **Verify** — `python3 -m py_compile`, `docker compose config`, then `docker compose up --build`. Run the build checks in `references/verification.md`. Use `af agent discover -q "<slug>"` and `af agent query --resource executions` for live introspection — see `references/cli-toolkit.md`.
 9. **Smoke test live** — fire the canonical **async** curl (multi-reasoner pipelines exceed the 90s sync limit). Poll until `status: succeeded` with a real `result`. Static checks alone are not a green light. See "Mandatory live smoke test" below.
 10. **Hand off** — use the output contract at the bottom of this file.
+
+---
+
+## Personal agent workflow
+
+Use this workflow only after routing selected **Personal agent**. It retains every architecture, model-selection, live-document, topology, safety, and code-quality gate in this skill, but uses a local-install deliverable instead of Docker, Compose, a new repository, or project-level `CLAUDE.md` unless independently requested.
+
+1. **Build stable real source.** Choose one filesystem-safe kebab-case package/name/node ID, `<name>`, and create or use `~/agentfield-agents/<name>` as the authoring source. Build the real agent there and run language-native syntax checks and tests. Do not author in a temporary directory, a disposable checkout, or the generated `~/.agentfield` installation copy.
+2. **Package the source.** At `~/agentfield-agents/<name>/agentfield-package.yaml`, author the manifest consumed by `packages.ParsePackageMetadata`. Put `config_version: v1` at the top; it is distinct from the agent release `version`. Declare `name`, release `version`, description, author, language, a runnable `entrypoint.start` matching the source and language, `entrypoint.healthcheck: /health`, `agent_node.node_id` equal to `<name>`, its matching `agent_node.default_port`, and only install dependencies the source needs.
+3. **Declare secrets safely.** For every runtime external key actually used, declare `user_environment` with `name`, an actionable `description`, `type: secret`, and explicit `scope`. Use `scope: global` only for deliberately reusable credentials such as a model-provider key; use `scope: node` for this agent's credentials or configuration. Do not declare invented keys.
+4. **Install and configure.** Run `af install ~/agentfield-agents/<name>`. Configure each declared global key with `af secrets set KEY` and each node key with `af secrets set --node <name> KEY`; accept values through the CLI prompt/stdin behavior. Never invent, echo, commit, put into `agentfield-package.yaml`, or include secret values in a handoff.
+5. **Start and verify registration.** Run `af run <name>`, then poll `GET ${AGENTFIELD_SERVER:-http://localhost:8080}/api/v1/nodes` until the expected node ID is registered in an active/healthy state. An install entry, `af list` entry, or successful process spawn alone is not success.
+6. **Invoke live.** Invoke the public entry reasoner through the control plane with a representative request. For nontrivial work, use the existing asynchronous execution/polling rules; require a terminal successful result before completion.
+7. **Handle failures honestly.** Diagnose and safely retry correctable failures from installation, secret setup, startup, registration, or invocation. If a required secret value is known only to the user, stop with a blocking handoff that names the needed key and scope but never its value. Do not claim completion until healthy registration and a live reasoner result both succeed.
+8. **Hand off locally.** State that the personal agent is installed, running, and now appears in the AgentField Desktop app, where its declared keys are presented as a form and its lifecycle has an auto-start toggle. Include the stable source path, manifest path, installed name, public entry reasoner invocation target, registration and live-call verification results, and commands to restart (`af stop <name> && af run <name>`), stop (`af stop <name>`), inspect logs (`af logs <name>`), and update after source edits (`af install ~/agentfield-agents/<name>` followed by `af run <name>`). Do not require Docker, Docker Compose, a new Git repository, or a project `CLAUDE.md` unless independently requested.
 
 ---
 
@@ -219,7 +255,7 @@ Common runtime failures that only surface here: `AttributeError: 'dict' has no a
 
 ---
 
-## Output contract
+## Project repository output contract
 
 Final message to the user — clean, copy-pasteable, in this order:
 
