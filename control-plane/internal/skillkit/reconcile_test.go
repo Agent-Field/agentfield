@@ -40,6 +40,39 @@ func TestAliasOrphanNamesSelectsOnlyCurrentExactAliases(t *testing.T) {
 	}
 }
 
+func TestAliasOrphanNamesHandlesEmptyState(t *testing.T) {
+	if got := aliasOrphanNames(&State{}); len(got) != 0 {
+		t.Fatalf("aliasOrphanNames(empty state) = %v, want no aliases", got)
+	}
+}
+
+func TestReconcileAliasOrphansRemovesEmptyTargetStateAtomically(t *testing.T) {
+	home := setupReconciliation(t, reconciliationState(map[string]InstalledTarget{}))
+	root := filepath.Join(home, "skills")
+	orphanDir := filepath.Join(root, legacyBuilder)
+	if err := os.MkdirAll(orphanDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := reconcileAliasOrphans(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(orphanDir); !os.IsNotExist(err) {
+		t.Fatalf("empty-target orphan directory remains: %v", err)
+	}
+	statePath := filepath.Join(root, ".state.json")
+	if _, err := os.Lstat(statePath + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("atomic state temporary remains: %v", err)
+	}
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"agentfield"`) || strings.Contains(string(data), legacyBuilder) {
+		t.Fatalf("serialized state did not atomically retain only current entries: %s", data)
+	}
+}
+
 func TestReconcileAliasOrphansRemovesOnlyRecordedIntegrations(t *testing.T) {
 	home := t.TempDir()
 	claudeAlias := filepath.Join(home, "claude-alias")
@@ -103,6 +136,9 @@ func TestReconcileAliasOrphansRemovesOnlyRecordedIntegrations(t *testing.T) {
 	}
 	if _, ok := got.Skills["removed-unknown"]; !ok {
 		t.Fatal("unknown state entry removed")
+	}
+	if _, err := os.Lstat(unknownDir); err != nil {
+		t.Fatalf("unknown removed-skill integration was affected: %v", err)
 	}
 	if err := reconcileAliasOrphans(); err != nil {
 		t.Fatalf("second reconciliation: %v", err)
@@ -203,6 +239,58 @@ func TestInstallStopsBeforeCanonicalMutationWhenRecordedCleanupFails(t *testing.
 	}
 }
 
+func TestPublicOperationsStopBeforeCanonicalMutationOnUnsupportedOrphan(t *testing.T) {
+	for _, op := range []struct {
+		name string
+		run  func() error
+	}{
+		{"install", func() error {
+			_, err := Install(InstallOptions{SkillName: "agentfield", Targets: []string{"codex"}, Force: true})
+			return err
+		}},
+		{"install-all", func() error {
+			_, err := InstallAll(InstallOptions{Targets: []string{"codex"}, Force: true})
+			return err
+		}},
+		{"update", func() error {
+			_, err := Update("agentfield")
+			return err
+		}},
+	} {
+		t.Run(op.name, func(t *testing.T) {
+			state := reconciliationState(map[string]InstalledTarget{
+				"manual-target": {Method: "manual", Path: filepath.Join(t.TempDir(), "legacy")},
+			})
+			if op.name == "update" {
+				state.Skills["agentfield"] = InstalledSkill{Targets: map[string]InstalledTarget{
+					"codex": {Method: "marker-block", Path: filepath.Join(t.TempDir(), "codex.md")},
+				}}
+			}
+			home := setupReconciliation(t, state)
+			statePath := filepath.Join(home, "skills", ".state.json")
+			before, err := os.ReadFile(statePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = op.run()
+			if err == nil || !strings.Contains(err.Error(), legacyBuilder) || !strings.Contains(err.Error(), "manual-target") {
+				t.Fatalf("error = %v, want orphan and target", err)
+			}
+			if _, err := os.Lstat(filepath.Join(home, "skills", "agentfield")); !os.IsNotExist(err) {
+				t.Fatalf("%s mutated canonical skill before cleanup failure: %v", op.name, err)
+			}
+			after, err := os.ReadFile(statePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(after, before) {
+				t.Fatalf("%s changed retryable serialized state on cleanup failure", op.name)
+			}
+		})
+	}
+}
+
 func TestUpdateReconcilesAliasOnlyLegacyInstallation(t *testing.T) {
 	home := t.TempDir()
 	aliasPath := filepath.Join(home, "legacy-claude")
@@ -232,15 +320,21 @@ func TestUpdateReconcilesAliasOnlyLegacyInstallation(t *testing.T) {
 	}
 }
 
-func TestRemoveRecordedPathHandlesFilesAndDirectories(t *testing.T) {
+func TestRemoveRecordedPathHandlesFilesDirectoriesAndSymlinks(t *testing.T) {
 	root := t.TempDir()
-	for _, name := range []string{"file", "directory"} {
+	for _, name := range []string{"file", "directory", "symlink"} {
 		path := filepath.Join(root, name)
 		var err error
-		if name == "file" {
+		switch name {
+		case "file":
 			err = os.WriteFile(path, []byte("x"), 0o644)
-		} else {
+		case "directory":
 			err = os.MkdirAll(filepath.Join(path, "child"), 0o755)
+		case "symlink":
+			target := filepath.Join(root, "symlink-target")
+			if err = os.MkdirAll(target, 0o755); err == nil {
+				err = os.Symlink(target, path)
+			}
 		}
 		if err != nil {
 			t.Fatal(err)
