@@ -87,6 +87,7 @@ from .tool_calling import (
     capability_to_tool_schema,
     capabilities_to_tool_schemas,
 )
+from .workspace import attach_workspace_routes
 
 __all__ = [
     "Agent",
@@ -179,6 +180,8 @@ __all__ = [
     "on_event",
     "on_schedule",
     "reasoner",
+    # Workspace artifacts
+    "attach_workspace_routes",
 ]
 
 __version__ = "0.1.114"
