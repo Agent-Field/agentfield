@@ -160,6 +160,32 @@ func TestReconcileAliasOrphansFailureRetainsState(t *testing.T) {
 	}
 }
 
+func TestReconcileAliasOrphansSortsTargetsBeforeCleanup(t *testing.T) {
+	latePath := filepath.Join(t.TempDir(), "late-recorded-path")
+	if err := os.WriteFile(latePath, []byte("legacy integration"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	setupReconciliation(t, reconciliationState(map[string]InstalledTarget{
+		"z-last":  {Method: "symlink", Path: latePath},
+		"a-first": {Method: "manual", Path: filepath.Join(t.TempDir(), "manual")},
+	}))
+
+	err := reconcileAliasOrphans()
+	if err == nil || !strings.Contains(err.Error(), "a-first") {
+		t.Fatalf("error = %v, want first sorted target", err)
+	}
+	if _, err := os.Lstat(latePath); err != nil {
+		t.Fatalf("later target was cleaned before sorted failure: %v", err)
+	}
+	state, err := LoadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := state.Skills[legacyBuilder]; !ok {
+		t.Fatal("sorted target failure removed retryable state")
+	}
+}
+
 func TestReconcileAliasOrphansMissingPathsAndMarkerBlocksAreIdempotent(t *testing.T) {
 	home := t.TempDir()
 	markerPath := filepath.Join(home, "codex.md")
@@ -397,14 +423,12 @@ func TestPublicOperationsReconcileAndDryRunsDoNot(t *testing.T) {
 	} {
 		t.Run(op.name, func(t *testing.T) {
 			reconcileSaves := 0
-			if op.name == "install-all" {
-				oldSave := reconcileSaveState
-				reconcileSaveState = func(state *State) error {
-					reconcileSaves++
-					return oldSave(state)
-				}
-				t.Cleanup(func() { reconcileSaveState = oldSave })
+			oldSave := reconcileSaveState
+			reconcileSaveState = func(state *State) error {
+				reconcileSaves++
+				return oldSave(state)
 			}
+			t.Cleanup(func() { reconcileSaveState = oldSave })
 			home := t.TempDir()
 			aliasPath := filepath.Join(home, "alias")
 			if err := os.MkdirAll(aliasPath, 0o755); err != nil {
@@ -421,8 +445,8 @@ func TestPublicOperationsReconcileAndDryRunsDoNot(t *testing.T) {
 			if _, err := os.Lstat(aliasPath); !os.IsNotExist(err) {
 				t.Fatalf("orphan was not reconciled: %v", err)
 			}
-			if op.name == "install-all" && reconcileSaves != 1 {
-				t.Fatalf("InstallAll reconciled %d times, want once", reconcileSaves)
+			if reconcileSaves != 1 {
+				t.Fatalf("%s reconciled %d times, want once", op.name, reconcileSaves)
 			}
 		})
 	}
