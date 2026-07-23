@@ -151,6 +151,15 @@ func TestGetTemplateFiles(t *testing.T) {
 					t.Fatalf("GetTemplateFiles(%q)[%q] = %q, want %q", tt.language, wantPath, got[wantPath], wantDest)
 				}
 			}
+			manifestCount := 0
+			for _, destination := range got {
+				if destination == "agentfield-package.yaml" {
+					manifestCount++
+				}
+			}
+			if manifestCount != 1 {
+				t.Fatalf("GetTemplateFiles(%q) mapped %d manifests to the scaffold root, want 1", tt.language, manifestCount)
+			}
 		})
 	}
 }
