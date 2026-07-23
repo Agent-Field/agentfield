@@ -118,6 +118,39 @@ async def deploy(environment: str) -> dict:
 
 See `examples/python_agent_nodes/waiting_state/` for a complete working example.
 
+## Workspace Artifacts
+
+A caller can attach a local folder to any reasoner execution. The platform
+transports the folder to your node, **your reasoner runs *inside* that folder**,
+and the file changes it makes come back to the caller as a staged diff. You
+write no folder-handling code.
+
+```python
+@app.reasoner()
+def build_report() -> dict:
+    # cwd is the caller's folder — just use relative paths.
+    data = open("input.csv").read()
+    open("report.txt", "w").write(summarize(data))   # new file -> staged
+    return {"rows": data.count("\n")}
+```
+
+What you need to know as a reasoner author:
+
+- **Your reasoner runs inside the caller's folder.** Use **relative paths**;
+  the current working directory is already the workspace.
+- `AGENTFIELD_WORKSPACE` holds the **absolute path** to that folder if you ever
+  need it (e.g. to hand a path to a subprocess).
+- Files you create, modify, or delete are detected automatically and returned to
+  the caller as `workspace_diff` on the result — you never assemble it yourself.
+- Workspace-bearing calls run in a **dedicated worker process** (its own event
+  loop, cwd set to the workspace), so concurrent executions never see each
+  other's files and a crash can't take down the node. Executions with no
+  attached folder are unaffected and run in-process exactly as before.
+
+The node keeps a content-addressed store at `~/.agentfield/cas` and materializes
+each execution into `~/.agentfield/workspaces/<execution_id>/`. See
+`docs/design/workspace-artifacts.md` for the transport contract.
+
 See `docs/DEVELOPMENT.md` for instructions on wiring agents to the control plane.
 
 ## Testing
