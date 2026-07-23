@@ -36,7 +36,7 @@ func localWorkspaceCAS() *workspace.CAS {
 // sealWorkspaceForCall seals dir into the local content store and uploads any
 // blobs the control plane is missing, returning the artifacts block to attach to
 // the execute request. When dir is empty it is a no-op returning nil artifacts.
-func sealWorkspaceForCall(ctx context.Context, dir string) (map[string]interface{}, *sealedWorkspace, error) {
+func sealWorkspaceForCall(ctx context.Context, dir string, stderr io.Writer) (map[string]interface{}, *sealedWorkspace, error) {
 	if dir == "" {
 		return nil, nil, nil
 	}
@@ -53,29 +53,39 @@ func sealWorkspaceForCall(ctx context.Context, dir string) (map[string]interface
 	}
 
 	cas := localWorkspaceCAS()
+	sealStart := time.Now()
 	manifest, err := workspace.Seal(absDir, cas)
 	if err != nil {
 		return nil, nil, cliExitError{Code: 3, Err: fmt.Errorf("seal workspace: %w", err)}
 	}
+	sealSeconds := time.Since(sealStart).Seconds()
 	manifestID, err := workspace.ManifestID(manifest)
 	if err != nil {
 		return nil, nil, cliExitError{Code: 3, Err: fmt.Errorf("compute manifest id: %w", err)}
 	}
 
+	var sealedBytes int64
+	for _, f := range manifest.Files {
+		sealedBytes += f.Size
+	}
+
 	// Transport the sealed blobs to the control plane: ask which it is missing,
-	// then upload only those.
+	// then upload just those in batched, compressed requests (falling back to
+	// bounded-parallel PUTs against an older control plane).
 	missing, err := cpPrepareWorkspace(ctx, manifest)
 	if err != nil {
 		return nil, nil, cliExitError{Code: 3, Err: fmt.Errorf("prepare workspace on control plane: %w", err)}
 	}
-	for _, sha := range missing {
-		data, getErr := cas.Get(sha)
-		if getErr != nil {
-			return nil, nil, cliExitError{Code: 3, Err: fmt.Errorf("read local blob %s: %w", sha, getErr)}
-		}
-		if err := cpUploadBlob(ctx, sha, data); err != nil {
-			return nil, nil, cliExitError{Code: 3, Err: fmt.Errorf("upload blob %s: %w", sha, err)}
-		}
+	uploadStart := time.Now()
+	stats, err := cpUploadBlobs(ctx, cas, missing)
+	if err != nil {
+		return nil, nil, cliExitError{Code: 3, Err: fmt.Errorf("upload workspace blobs: %w", err)}
+	}
+	uploadSeconds := time.Since(uploadStart).Seconds()
+
+	if stderr != nil {
+		fmt.Fprintf(stderr, "sealed %d files (%.1f MB) in %.1fs; uploaded %d blobs in %.1fs\n",
+			len(manifest.Files), float64(sealedBytes)/(1<<20), sealSeconds, stats.Blobs, uploadSeconds)
 	}
 
 	artifacts := map[string]interface{}{
@@ -316,6 +326,24 @@ func cpPrepareWorkspace(ctx context.Context, manifest *workspace.Manifest) ([]st
 		return nil, fmt.Errorf("prepare failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	return decoded.Missing, nil
+}
+
+// cpUploadBlobs transports the given blobs from the local content store to the
+// control plane using the shared batch uploader (with automatic parallel PUT
+// fallback for older control planes). It is the single sender used by the
+// CLI→control-plane hop, mirroring the control-plane→node hop.
+func cpUploadBlobs(ctx context.Context, cas *workspace.CAS, shas []string) (workspace.UploadStats, error) {
+	server := strings.TrimRight(GetServerURL(), "/")
+	apiKey := strings.TrimSpace(GetAPIKey())
+	return workspace.UploadBlobs(ctx, cas, shas, workspace.UploadOptions{
+		BaseURL: server,
+		Client:  &http.Client{Timeout: 5 * time.Minute},
+		Decorate: func(req *http.Request) {
+			if apiKey != "" {
+				req.Header.Set("X-API-Key", apiKey)
+			}
+		},
+	})
 }
 
 // cpUploadBlob PUTs a raw blob to the control plane.

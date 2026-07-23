@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/workspace"
@@ -94,41 +95,25 @@ func (c *executionController) prepareWorkspaceOnNode(ctx context.Context, plan *
 		}
 	}
 
-	for _, sha := range prepared.Missing {
-		blob, err := cas.Get(sha)
-		if err != nil {
-			return fmt.Errorf("read blob %s from content store: %w", sha, err)
-		}
-		if err := c.putWorkspaceBlob(ctx, base, sha, blob); err != nil {
-			return err
-		}
+	uploadStart := time.Now()
+	stats, err := workspace.UploadBlobs(ctx, cas, prepared.Missing, workspace.UploadOptions{
+		BaseURL:  base,
+		Client:   c.httpClient,
+		Decorate: c.applyInternalAuth,
+	})
+	if err != nil {
+		return err
 	}
 
-	logger.Logger.Debug().
+	logger.Logger.Info().
 		Str("execution_id", plan.exec.ExecutionID).
 		Str("node", plan.target.NodeID).
-		Int("uploaded_blobs", len(prepared.Missing)).
-		Msg("workspace prepared on node")
-	return nil
-}
-
-func (c *executionController) putWorkspaceBlob(ctx context.Context, base, sha string, blob []byte) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, base+"/api/v1/workspace/blobs/"+sha, bytes.NewReader(blob))
-	if err != nil {
-		return fmt.Errorf("build blob upload for %s: %w", sha, err)
-	}
-	req.Header.Set("Content-Type", "application/octet-stream")
-	c.applyInternalAuth(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("upload blob %s: %w", sha, err)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode >= http.StatusBadRequest {
-		return fmt.Errorf("node rejected blob %s (%d): %s", sha, resp.StatusCode, truncateForLog(body))
-	}
+		Int("missing_blobs", stats.Blobs).
+		Int64("uncompressed_bytes", stats.UncompressedBytes).
+		Int64("compressed_bytes", stats.CompressedBytes).
+		Str("mode", stats.Mode).
+		Int64("duration_ms", time.Since(uploadStart).Milliseconds()).
+		Msg("workspace blobs transported to node")
 	return nil
 }
 
