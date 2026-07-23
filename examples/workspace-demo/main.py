@@ -296,7 +296,16 @@ def _run_serverless() -> None:
     from fastapi import FastAPI, Request
     from fastapi.responses import JSONResponse
 
+    from agentfield import attach_workspace_routes
+
     api = FastAPI()
+
+    # Serve the workspace transport (prepare / put-blob / get-blob) on the same
+    # URL the control plane reaches this node by. Without these, workspace-bearing
+    # calls to a serverless node have nowhere to upload sealed blobs to or fetch
+    # the diff back from. handle_serverless materializes + diffs the workspace
+    # synchronously and returns workspace_diff on the /execute response body.
+    attach_workspace_routes(api)
 
     @api.get("/discover")
     async def discover():

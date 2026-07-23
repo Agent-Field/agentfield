@@ -572,8 +572,12 @@ def install_workspace_routes(agent: Any) -> None:
     * ``GET  /api/v1/workspace/blobs/{sha256}`` — raw bytes, 404 if absent.
 
     All three are control-plane-initiated (they work when the control plane
-    is behind NAT and the node is remote). The agent gets one shared
+    is behind NAT and the node is remote). The target gets one shared
     :class:`ContentStore` bound to ``~/.agentfield/cas``.
+
+    ``agent`` only needs FastAPI's ``.post``/``.put``/``.get`` decorators, so
+    this also mounts the routes on a standalone FastAPI app — see
+    :func:`attach_workspace_routes`, the name serverless wrappers use.
     """
     store = getattr(agent, "_workspace_store", None)
     if store is None:
@@ -615,6 +619,25 @@ def install_workspace_routes(agent: Any) -> None:
             status_code=200,
             media_type="application/octet-stream",
         )
+
+
+def attach_workspace_routes(api: Any) -> None:
+    """Mount the three workspace endpoints on an external FastAPI app.
+
+    Public helper for serverless wrappers (nodes the control plane reaches
+    purely by URL — e.g. a PaaS deployment — that can never dial back). The
+    wrapper serves ``/discover`` + ``/execute`` itself; call this so the same
+    server also serves the workspace transport the control plane needs:
+
+        POST /api/v1/workspace/prepare
+        PUT  /api/v1/workspace/blobs/{sha256}
+        GET  /api/v1/workspace/blobs/{sha256}
+
+    The routes share the node's content store at ``~/.agentfield/cas``, so blobs
+    the control plane uploads here are exactly the ones a workspace-bearing
+    ``/execute`` materializes from — no wrapper-side CAS code required.
+    """
+    install_workspace_routes(api)
 
 
 def _is_sha256_hex(value: str) -> bool:

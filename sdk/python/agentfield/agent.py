@@ -1340,6 +1340,11 @@ class Agent(FastAPI):
                     reasoner_name = parts[-1]
 
         input_data = event.get("input") or event.get("input_data", {})
+        # Workspace artifacts ride as a reserved top-level "artifacts" sibling of
+        # the input, exactly as on the long-lived server path. In serverless mode
+        # the control plane cannot dial back, so materialization + diff must both
+        # happen synchronously inside this call and ride out on the response body.
+        workspace_artifacts = event.get("artifacts")
         execution_context_data = (
             event.get("execution_context") or event.get("executionContext") or {}
         )
@@ -1385,21 +1390,52 @@ class Agent(FastAPI):
 
         try:
             # Find and execute the target function
-            if hasattr(self, reasoner_name):
-                func = getattr(self, reasoner_name)
-
-                # Execute function (sync or async)
-                if asyncio.iscoroutinefunction(func):
-                    result = asyncio.run(func(**input_data))
-                else:
-                    result = func(**input_data)
-
-                return {"statusCode": 200, "body": result}
-            else:
+            if not hasattr(self, reasoner_name):
                 return {
                     "statusCode": 404,
                     "body": {"error": f"Function '{reasoner_name}' not found"},
                 }
+
+            workspace_manifest = None
+            if workspace_artifacts is not None:
+                from .workspace import extract_workspace_manifest
+
+                workspace_manifest = extract_workspace_manifest(workspace_artifacts)
+
+            if workspace_manifest is not None:
+                # Workspace-bearing serverless execution: materialize the folder,
+                # run the reasoner in a worker process (cwd = the folder), and
+                # return the result with workspace_diff attached synchronously so
+                # the control plane parses it off this response body — it can
+                # never reach us via the async status-callback path. Use the
+                # originally registered function (not the tracking wrapper) so the
+                # forked worker never tries to reach the control plane.
+                from .workspace import run_reasoner_in_workspace
+
+                entry = getattr(self, "_reasoner_registry", {}).get(reasoner_name)
+                target_func = (
+                    entry.func if entry is not None else getattr(self, reasoner_name)
+                )
+                result, workspace_diff = asyncio.run(
+                    run_reasoner_in_workspace(
+                        func=target_func,
+                        args=(),
+                        kwargs=dict(input_data),
+                        manifest=workspace_manifest,
+                        execution_id=exec_id,
+                    )
+                )
+                result = self._attach_workspace_diff(result, workspace_diff)
+                return {"statusCode": 200, "body": result}
+
+            # Non-workspace serverless execution: unchanged.
+            func = getattr(self, reasoner_name)
+            if asyncio.iscoroutinefunction(func):
+                result = asyncio.run(func(**input_data))
+            else:
+                result = func(**input_data)
+
+            return {"statusCode": 200, "body": result}
 
         except Exception as e:
             return {"statusCode": 500, "body": {"error": str(e)}}

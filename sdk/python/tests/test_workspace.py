@@ -16,7 +16,7 @@ import hashlib
 import threading
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from agentfield.workspace import (
@@ -425,3 +425,138 @@ def test_workspace_reasoner_error_preserves_dir(af_home, tmp_path):
     assert workspaces_dir().exists()
     leftovers = list(workspaces_dir().iterdir())
     assert leftovers, "expected the failed workspace to be preserved"
+
+
+# ---------------------------------------------------------------------------
+# Integration: serverless-mode round trip (GET /discover + POST /execute)
+# ---------------------------------------------------------------------------
+
+
+def _serverless_agent(node_id):
+    from agentfield import Agent
+
+    # Serverless nodes never dial back to the control plane, so no auto-register.
+    return Agent(node_id=node_id, auto_register=False)
+
+
+def _serverless_wrapper(agent):
+    """Mirror examples/workspace-demo/main.py::_run_serverless as a TestClient app."""
+    import asyncio
+
+    from fastapi.responses import JSONResponse
+
+    from agentfield import attach_workspace_routes
+
+    api = FastAPI()
+    attach_workspace_routes(api)
+
+    @api.post("/execute")
+    async def execute(request: Request):
+        payload = await request.json()
+        result = await asyncio.to_thread(
+            agent.handle_serverless, {"path": "/execute", **payload}
+        )
+        return JSONResponse(
+            content=result.get("body", result),
+            status_code=result.get("statusCode", 200),
+        )
+
+    return api
+
+
+@pytest.mark.integration
+def test_serverless_workspace_round_trip(af_home, tmp_path):
+    """prepare + upload via the wrapper, POST /execute with a workspace, and
+    assert the reasoner ran with cwd == the workspace and the response body
+    carries a correct top-level workspace_diff (the control plane parses it
+    synchronously — the serverless node cannot call back)."""
+    agent = _serverless_agent("ws-serverless")
+
+    @agent.reasoner()
+    def transform() -> dict:
+        import os as _os
+
+        data = open("input.txt").read()
+        open("out.txt", "w").write(data.upper())  # new file
+        open("existing.txt", "w").write("MODIFIED")  # modify existing
+        _os.remove("stale.txt")  # delete existing
+        return {"read": data, "cwd_env": _os.environ.get("AGENTFIELD_WORKSPACE")}
+
+    # Build the sealed source and its blob bytes (as the CLI would).
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "input.txt").write_text("hello")
+    (src / "existing.txt").write_text("ORIGINAL")
+    (src / "stale.txt").write_text("obsolete")
+    manifest = build_manifest(src)
+    blob_bytes = {
+        e["sha256"]: (src / e["path"]).read_bytes() for e in manifest["files"]
+    }
+
+    client = TestClient(_serverless_wrapper(agent))
+
+    # 1. Control plane asks the node which blobs it is missing...
+    prep = client.post("/api/v1/workspace/prepare", json={"manifest": manifest})
+    assert prep.status_code == 200
+    missing = prep.json()["missing"]
+    assert set(missing) == set(blob_bytes)  # node has nothing yet
+
+    # 2. ...and uploads each missing blob to the node's CAS.
+    for sha in missing:
+        up = client.put(f"/api/v1/workspace/blobs/{sha}", content=blob_bytes[sha])
+        assert up.status_code == 204
+
+    # 3. Dispatch /execute in the serverless shape the control plane sends.
+    exec_id = "exec_serverless_1"
+    resp = client.post(
+        "/execute",
+        json={
+            "path": "/execute/transform",
+            "target": "transform",
+            "reasoner": "transform",
+            "input": {},
+            "execution_context": {
+                "execution_id": exec_id,
+                "run_id": "run_serverless_1",
+                "workflow_id": "run_serverless_1",
+            },
+            "artifacts": {"workspace": {"manifest": manifest}},
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    # Reasoner ran inside the materialized folder for THIS execution.
+    assert body["read"] == "hello"
+    assert body["cwd_env"] and body["cwd_env"].endswith(exec_id)
+
+    # workspace_diff is a top-level sibling of the result (what execute.go parses).
+    diff = body["workspace_diff"]
+    changed = {e["path"] for e in diff["changed"]}
+    assert changed == {"out.txt", "existing.txt"}
+    assert diff["deleted"] == ["stale.txt"]
+
+    # 4. Control plane can fetch the produced blob back from the same node URL.
+    out_entry = next(e for e in diff["changed"] if e["path"] == "out.txt")
+    got = client.get(f"/api/v1/workspace/blobs/{out_entry['sha256']}")
+    assert got.status_code == 200
+    assert got.content == b"HELLO"
+
+
+@pytest.mark.integration
+def test_serverless_non_workspace_execution_is_unchanged(af_home):
+    agent = _serverless_agent("plain-serverless")
+
+    @agent.reasoner()
+    def echo(msg: str) -> dict:
+        return {"echo": msg}
+
+    client = TestClient(_serverless_wrapper(agent))
+    resp = client.post(
+        "/execute",
+        json={"reasoner": "echo", "input": {"msg": "hi"}},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["echo"] == "hi"
+    assert "workspace_diff" not in body
