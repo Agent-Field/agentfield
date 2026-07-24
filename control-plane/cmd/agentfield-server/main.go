@@ -73,6 +73,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
+	cfg.Telemetry.AgentFieldVersion = version
 
 	// Re-initialize logger with configured level now that config is loaded.
 	// The CLI root command sets a default (info/debug based on --verbose),

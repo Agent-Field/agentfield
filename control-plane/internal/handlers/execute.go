@@ -262,6 +262,7 @@ func (c *executionController) handleSync(ctx *gin.Context) {
 		writeExecutionError(ctx, err)
 		return
 	}
+	plan.executionMode = "sync"
 
 	if plan.replayHit != nil {
 		if err := c.completeReplayHit(reqCtx, plan); err != nil {
@@ -692,6 +693,7 @@ func (c *executionController) handleAsync(ctx *gin.Context) {
 		writeExecutionError(ctx, err)
 		return
 	}
+	plan.executionMode = "async"
 
 	if plan.replayHit != nil {
 		if err := c.completeReplayHit(reqCtx, plan); err != nil {
@@ -984,8 +986,9 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 	}
 
 	eventData := map[string]interface{}{
-		"error":    req.Error,
-		"progress": req.Progress,
+		"error":             req.Error,
+		"progress":          req.Progress,
+		"transition_source": "status_callback",
 	}
 	if req.StatusReason != nil && strings.TrimSpace(*req.StatusReason) != "" {
 		eventData["status_reason"] = strings.TrimSpace(*req.StatusReason)
@@ -1053,6 +1056,65 @@ func (c *executionController) publishExecutionEvent(exec *types.Execution, statu
 	c.publishExecutionEventWithReasonerInfo(exec, status, data, nil, nil)
 }
 
+// enrichExecutionLifecycleData adds low-cardinality lifecycle dimensions used by
+// observability consumers. It does not mutate execution state or include payloads.
+func enrichExecutionLifecycleData(data map[string]interface{}, exec *types.Execution, status string) {
+	if data == nil || exec == nil {
+		return
+	}
+
+	data["is_root_execution"] = exec.ParentExecutionID == nil || strings.TrimSpace(*exec.ParentExecutionID) == ""
+	if _, ok := data["workflow_depth"]; !ok {
+		if data["is_root_execution"] == true {
+			data["workflow_depth"] = 0
+		}
+	}
+	if exec.DurationMS != nil {
+		data["duration_ms"] = *exec.DurationMS
+	}
+
+	switch status {
+	case string(types.ExecutionStatusSucceeded):
+		data["outcome"] = "succeeded"
+	case string(types.ExecutionStatusFailed):
+		data["outcome"] = "failed"
+		data["failure_category"] = canonicalFailureCategory(exec.StatusReason, "unknown")
+	case string(types.ExecutionStatusCancelled):
+		data["outcome"] = "cancelled"
+		data["failure_category"] = "cancelled"
+	case string(types.ExecutionStatusTimeout):
+		data["outcome"] = "timeout"
+		data["failure_category"] = "timeout"
+	}
+}
+
+func canonicalFailureCategory(statusReason *string, fallback string) string {
+	if statusReason == nil {
+		return fallback
+	}
+	category := strings.TrimSpace(*statusReason)
+	if separator := strings.Index(category, ":"); separator >= 0 {
+		category = strings.TrimSpace(category[:separator])
+	}
+	switch category {
+	case string(ErrorCategoryLLMUnavailable),
+		string(ErrorCategoryConcurrencyLimit),
+		string(ErrorCategoryAgentTimeout),
+		string(ErrorCategoryAgentError),
+		string(ErrorCategoryAgentUnreachable),
+		string(ErrorCategoryBadResponse),
+		string(ErrorCategoryInternal),
+		"agent_restart_orphaned",
+		"validation",
+		"permission_denied",
+		"node_unavailable",
+		"target_not_found":
+		return category
+	default:
+		return fallback
+	}
+}
+
 func (c *executionController) publishExecutionEventWithReasonerInfo(exec *types.Execution, status string, data map[string]interface{}, agent *types.AgentNode, reasonerID *string) {
 	if exec == nil {
 		return
@@ -1074,6 +1136,7 @@ func (c *executionController) publishExecutionEventWithReasonerInfo(exec *types.
 	if data == nil {
 		data = make(map[string]interface{})
 	}
+	enrichExecutionLifecycleData(data, exec, status)
 
 	// Add reasoner_id to the event data
 	rID := exec.ReasonerID
@@ -1114,6 +1177,7 @@ func (c *executionController) publishExecutionEventWithReasonerInfo(exec *types.
 	}
 	if workflowExec, err := c.store.GetWorkflowExecution(context.Background(), exec.ExecutionID); err == nil && workflowExec != nil {
 		data["retry_count"] = workflowExec.RetryCount
+		data["workflow_depth"] = workflowExec.WorkflowDepth
 	}
 
 	// Add reasoner definitions if agent info is available
@@ -1200,7 +1264,9 @@ func (c *executionController) publishExecutionStartedEvent(plan *preparedExecuti
 	}
 
 	data := map[string]interface{}{
-		"target_type": plan.targetType,
+		"target_type":       plan.targetType,
+		"execution_mode":    plan.executionMode,
+		"transition_source": "execution_controller",
 	}
 
 	// Include input payload info (not the full payload, just metadata)
@@ -1362,6 +1428,7 @@ type preparedExecution struct {
 	agent             *types.AgentNode
 	target            *parsedTarget
 	targetType        string
+	executionMode     string
 	llmEndpoint       string
 	webhookRegistered bool
 	webhookError      *string
@@ -1723,6 +1790,9 @@ func (c *executionController) completeReplayHit(ctx context.Context, plan *prepa
 	}
 
 	eventData := map[string]interface{}{
+		"target_type":       plan.targetType,
+		"execution_mode":    plan.executionMode,
+		"transition_source": "replay",
 		"replay": map[string]interface{}{
 			"source_execution_id": plan.replayHit.SourceExecutionID,
 			"source_run_id":       plan.replayHit.SourceRunID,
@@ -1905,7 +1975,11 @@ func (c *executionController) completeExecution(ctx context.Context, plan *prepa
 			if plan.webhookRegistered || (updated != nil && updated.WebhookRegistered) {
 				c.triggerWebhook(plan.exec.ExecutionID)
 			}
-			eventData := map[string]interface{}{}
+			eventData := map[string]interface{}{
+				"target_type":       plan.targetType,
+				"execution_mode":    plan.executionMode,
+				"transition_source": "execution_controller",
+			}
 			if !c.redactPayloads {
 				if payload := decodeJSON(result); payload != nil {
 					eventData["result"] = payload
@@ -1990,7 +2064,11 @@ func (c *executionController) failExecution(ctx context.Context, plan *preparedE
 				c.triggerWebhook(plan.exec.ExecutionID)
 			}
 			eventData := map[string]interface{}{
-				"error": errMsg,
+				"error":             errMsg,
+				"target_type":       plan.targetType,
+				"execution_mode":    plan.executionMode,
+				"failure_category":  string(category),
+				"transition_source": "execution_controller",
 			}
 			if !c.redactPayloads {
 				if payload := decodeJSON(result); payload != nil {

@@ -26,8 +26,8 @@ services:
       AGENTFIELD_STORAGE_POSTGRES_URL: postgres://agentfield:agentfield@postgres:5432/agentfield?sslmode=disable
       AGENTFIELD_DATABASE_URL: postgres://agentfield:agentfield@postgres:5432/agentfield?sslmode=disable
       AGENTFIELD_HTTP_ADDR: 0.0.0.0:8080
-      AGENTFIELD_TELEMETRY_ENABLED: "true"
-      AGENTFIELD_TELEMETRY_ENDPOINT: https://agentfield.ai/api/oss/telemetry
+      AGENTFIELD_TELEMETRY_ENABLED: "${AGENTFIELD_TELEMETRY_ENABLED:-true}"
+      AGENTFIELD_TELEMETRY_ENDPOINT: "${AGENTFIELD_TELEMETRY_ENDPOINT:-https://agentfield.ai/api/oss/telemetry}"
     ports:
       - "8080:8080"
     restart: unless-stopped

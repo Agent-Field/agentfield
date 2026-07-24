@@ -442,7 +442,7 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 
 	var telemetryService *observability.TelemetryService
 	if cfg.Telemetry.IsEnabled() {
-		service, err := observability.NewTelemetryService(cfg.Telemetry, agentfieldHome, cfg.Storage.Mode, "unknown")
+		service, err := observability.NewTelemetryService(cfg.Telemetry, agentfieldHome, cfg.Storage.Mode, cfg.Telemetry.AgentFieldVersion)
 		if err != nil {
 			logger.Logger.Warn().Err(err).Msg("failed to initialize anonymous OSS telemetry")
 		} else {

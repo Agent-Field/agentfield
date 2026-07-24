@@ -128,6 +128,13 @@ func runCall(ctx context.Context, target string, opts *callOptions) error {
 		if runID == "" {
 			return cliExitError{Code: 3, Err: fmt.Errorf("server accepted async execution without run_id")}
 		}
+		// When a machine format is explicitly requested (-o json/-o yaml), emit a
+		// structured envelope so a harness parsing stdout gets valid JSON instead
+		// of a bare token. The default/pretty path keeps the bare run-id line that
+		// shell scripts capture via `RUN_ID=$(af call node.reasoner --async)`.
+		if requested := strings.ToLower(strings.TrimSpace(opts.outputFormat)); requested == "json" || requested == "yaml" {
+			return writeValue(opts.stdout, map[string]interface{}{"run_id": runID, "status": "accepted"}, requested)
+		}
 		_, _ = fmt.Fprintln(opts.stdout, runID)
 		return nil
 	}
