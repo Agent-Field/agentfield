@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
@@ -27,6 +28,11 @@ type MCPStore interface {
 	AgentLister
 	ExecutionStore
 }
+
+// MCPAuthorizer applies the control plane's target-aware authorization policy
+// before an MCP execution is created. It returns the resolved target DID for
+// forwarding to the target agent.
+type MCPAuthorizer func(ctx context.Context, callerDID, target string, input map[string]interface{}) (string, error)
 
 // JSON-RPC 2.0 error codes (subset used by the MCP transport).
 const (
@@ -100,12 +106,13 @@ type mcpServer struct {
 	timeout       time.Duration
 	internalToken string
 	version       string
+	authorize     MCPAuthorizer
 }
 
 // MCPHandler builds the streamable-HTTP MCP endpoint handler. It speaks JSON-RPC
 // 2.0 over a single POST /mcp, stateless (no session requirement), and exposes
 // AgentField discovery + execution as MCP tools.
-func MCPHandler(store MCPStore, payloads services.PayloadStore, webhooks services.WebhookDispatcher, timeout time.Duration, internalToken, version string) gin.HandlerFunc {
+func MCPHandler(store MCPStore, payloads services.PayloadStore, webhooks services.WebhookDispatcher, timeout time.Duration, internalToken, version string, authorize MCPAuthorizer) gin.HandlerFunc {
 	srv := &mcpServer{
 		store:         store,
 		payloads:      payloads,
@@ -113,6 +120,7 @@ func MCPHandler(store MCPStore, payloads services.PayloadStore, webhooks service
 		timeout:       timeout,
 		internalToken: internalToken,
 		version:       strings.TrimSpace(version),
+		authorize:     authorize,
 	}
 	if srv.version == "" {
 		srv.version = "dev"
@@ -208,11 +216,11 @@ func (s *mcpServer) handleToolsCall(c *gin.Context, req jsonrpcRequest) {
 	case "get_reasoner_schema":
 		result, err = s.toolGetReasonerSchema(ctx, params.Arguments)
 	case "execute_reasoner":
-		result, err = s.toolExecuteReasoner(ctx, params.Arguments)
+		result, err = s.toolExecuteReasoner(c, params.Arguments)
 	case "get_run":
-		result, err = s.toolGetRun(ctx, params.Arguments)
+		result, err = s.toolGetRun(c, params.Arguments)
 	case "wait_run":
-		result, err = s.toolWaitRun(ctx, params.Arguments)
+		result, err = s.toolWaitRun(c, params.Arguments)
 	default:
 		s.writeError(c, req.ID, mcpErrInvalidParams, "unknown tool: "+params.Name, nil)
 		return
@@ -356,7 +364,7 @@ func (s *mcpServer) toolGetReasonerSchema(ctx context.Context, rawArgs json.RawM
 		reasoner, node)), nil
 }
 
-func (s *mcpServer) toolExecuteReasoner(ctx context.Context, rawArgs json.RawMessage) (map[string]interface{}, error) {
+func (s *mcpServer) toolExecuteReasoner(c *gin.Context, rawArgs json.RawMessage) (map[string]interface{}, error) {
 	var args struct {
 		Target string                 `json:"target"`
 		Input  map[string]interface{} `json:"input"`
@@ -375,6 +383,7 @@ func (s *mcpServer) toolExecuteReasoner(ctx context.Context, rawArgs json.RawMes
 			target, err)), nil
 	}
 
+	ctx := c.Request.Context()
 	agents, err := s.store.ListAgents(ctx, types.AgentFilters{})
 	if err != nil {
 		return nil, fmt.Errorf("list agents: %w", err)
@@ -390,7 +399,23 @@ func (s *mcpServer) toolExecuteReasoner(ctx context.Context, rawArgs json.RawMes
 		input = map[string]interface{}{}
 	}
 
-	runID, execID, err := s.startAsyncRun(ctx, target, input)
+	callerDID := middleware.GetVerifiedCallerDID(c)
+	targetDID := ""
+	if s.authorize != nil {
+		targetDID, err = s.authorize(ctx, callerDID, target, input)
+		if err != nil {
+			return mcpToolError("access denied: " + err.Error()), nil
+		}
+	}
+
+	headers := readExecutionHeaders(c)
+	// A verified DID is the authoritative MCP run owner. This both forwards the
+	// caller identity and prevents a client-supplied actor header from granting
+	// access to another principal's MCP runs.
+	if callerDID != "" {
+		headers.actorID = &callerDID
+	}
+	runID, execID, err := s.startAsyncRun(ctx, target, input, headers, callerDID, targetDID)
 	if err != nil {
 		return mcpToolError("failed to start execution: " + err.Error()), nil
 	}
@@ -403,7 +428,8 @@ func (s *mcpServer) toolExecuteReasoner(ctx context.Context, rawArgs json.RawMes
 	}), nil
 }
 
-func (s *mcpServer) toolGetRun(ctx context.Context, rawArgs json.RawMessage) (map[string]interface{}, error) {
+func (s *mcpServer) toolGetRun(c *gin.Context, rawArgs json.RawMessage) (map[string]interface{}, error) {
+	ctx := c.Request.Context()
 	var args struct {
 		RunID string `json:"run_id"`
 	}
@@ -415,7 +441,7 @@ func (s *mcpServer) toolGetRun(ctx context.Context, rawArgs json.RawMessage) (ma
 		return mcpToolError(`"run_id" is required`), nil
 	}
 
-	view, _, found, err := s.buildRunView(ctx, runID)
+	view, _, found, err := s.buildRunViewForCaller(ctx, runID, middleware.GetVerifiedCallerDID(c))
 	if err != nil {
 		return nil, err
 	}
@@ -425,7 +451,8 @@ func (s *mcpServer) toolGetRun(ctx context.Context, rawArgs json.RawMessage) (ma
 	return mcpToolText(view), nil
 }
 
-func (s *mcpServer) toolWaitRun(ctx context.Context, rawArgs json.RawMessage) (map[string]interface{}, error) {
+func (s *mcpServer) toolWaitRun(c *gin.Context, rawArgs json.RawMessage) (map[string]interface{}, error) {
+	ctx := c.Request.Context()
 	var args struct {
 		RunID          string `json:"run_id"`
 		TimeoutSeconds *int   `json:"timeout_seconds"`
@@ -454,7 +481,7 @@ func (s *mcpServer) toolWaitRun(ctx context.Context, rawArgs json.RawMessage) (m
 	defer ticker.Stop()
 
 	for {
-		view, terminal, found, err := s.buildRunView(ctx, runID)
+		view, terminal, found, err := s.buildRunViewForCaller(ctx, runID, middleware.GetVerifiedCallerDID(c))
 		if err != nil {
 			return nil, err
 		}
@@ -483,9 +510,9 @@ func (s *mcpServer) toolWaitRun(ctx context.Context, rawArgs json.RawMessage) (m
 // startAsyncRun starts an asynchronous execution of target ("node.reasoner")
 // with the given input, mirroring the /execute/async handler but driven from
 // the MCP tool. It returns as soon as the job is enqueued.
-func (s *mcpServer) startAsyncRun(ctx context.Context, target string, input map[string]interface{}) (runID, execID string, err error) {
+func (s *mcpServer) startAsyncRun(ctx context.Context, target string, input map[string]interface{}, headers executionHeaders, callerDID, targetDID string) (runID, execID string, err error) {
 	controller := newExecutionController(s.store, s.payloads, s.webhooks, s.timeout, s.internalToken)
-	plan, err := controller.prepareExecutionForTarget(ctx, target, ExecuteRequest{Input: input}, executionHeaders{}, "", "")
+	plan, err := controller.prepareExecutionForTarget(ctx, target, ExecuteRequest{Input: input}, headers, callerDID, targetDID)
 	if err != nil {
 		return "", "", err
 	}
@@ -513,12 +540,25 @@ func (s *mcpServer) startAsyncRun(ctx context.Context, target string, input map[
 // wait_run return. terminal reports whether every execution has reached a
 // terminal state; found reports whether the run exists at all.
 func (s *mcpServer) buildRunView(ctx context.Context, runID string) (view map[string]interface{}, terminal, found bool, err error) {
+	return s.buildRunViewForCaller(ctx, runID, "")
+}
+
+// buildRunViewForCaller limits DID-authenticated callers to runs they own. MCP
+// executions record that ownership in ActorID when started; old or non-MCP runs
+// without the matching owner are intentionally indistinguishable from missing.
+func (s *mcpServer) buildRunViewForCaller(ctx context.Context, runID, callerDID string) (view map[string]interface{}, terminal, found bool, err error) {
 	execs, err := s.store.QueryExecutionRecords(ctx, types.ExecutionFilter{RunID: &runID})
 	if err != nil {
 		return nil, false, false, fmt.Errorf("query executions: %w", err)
 	}
 	if len(execs) == 0 {
 		return nil, false, false, nil
+	}
+	if callerDID != "" {
+		root := rootExecution(execs)
+		if root == nil || root.ActorID == nil || *root.ActorID != callerDID {
+			return nil, false, false, nil
+		}
 	}
 
 	terminal = true

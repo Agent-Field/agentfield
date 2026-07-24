@@ -116,6 +116,11 @@ func mergeDBConfig(target, dbCfg *config.Config) {
 	if dbCfg.Features.DID.Method != "" {
 		target.Features.DID = dbCfg.Features.DID
 	}
+	// MCP's default is enabled, so the pointer distinguishes an omitted setting
+	// from an explicit database-backed `features.mcp.enabled: false` kill switch.
+	if dbCfg.Features.MCP.Enabled != nil {
+		target.Features.MCP.Enabled = dbCfg.Features.MCP.Enabled
+	}
 	// NOTE: Connector config (token, capabilities) is intentionally NOT merged
 	// from DB. These are security-sensitive and must come from file/env config,
 	// similar to how storage config is protected from the bootstrap problem.

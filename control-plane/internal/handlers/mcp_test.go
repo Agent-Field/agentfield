@@ -79,11 +79,25 @@ func mcpDeadAgent() *types.AgentNode {
 }
 
 func newMCPTestRouter(t *testing.T, store MCPStore) *gin.Engine {
+	return newMCPTestRouterWithAuthorizer(t, store, nil)
+}
+
+func newMCPTestRouterWithAuthorizer(t *testing.T, store MCPStore, authorize MCPAuthorizer) *gin.Engine {
+	return newMCPTestRouterWithCaller(t, store, authorize, "")
+}
+
+func newMCPTestRouterWithCaller(t *testing.T, store MCPStore, authorize MCPAuthorizer, callerDID string) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
+	if callerDID != "" {
+		r.Use(func(c *gin.Context) {
+			c.Set("verified_caller_did", callerDID)
+			c.Next()
+		})
+	}
 	payloads := services.NewFilePayloadStore(t.TempDir())
-	r.POST("/mcp", MCPHandler(store, payloads, nil, 5*time.Second, "", "1.2.3-test"))
+	r.POST("/mcp", MCPHandler(store, payloads, nil, 5*time.Second, "", "1.2.3-test", authorize))
 	return r
 }
 
@@ -326,6 +340,35 @@ func TestMCP_ExecuteReasoner(t *testing.T) {
 		require.NotEmpty(t, execs)
 		require.Equal(t, "plan", execs[0].ReasonerID)
 	})
+}
+
+func TestMCP_ExecuteReasonerAuthorizesAndBindsRunToVerifiedCaller(t *testing.T) {
+	store := newMCPTestStore(mcpActiveAgent())
+	var gotCaller, gotTarget string
+	router := newMCPTestRouterWithCaller(t, store, func(_ context.Context, callerDID, target string, input map[string]interface{}) (string, error) {
+		gotCaller, gotTarget = callerDID, target
+		require.Equal(t, map[string]interface{}{"goal": "ship"}, input)
+		return "did:web:example.com:agents:planner", nil
+	}, "did:web:example.com:agents:caller")
+
+	payload, isErr := mcpCallTool(t, router, "execute_reasoner", map[string]interface{}{
+		"target": "planner.plan",
+		"input":  map[string]interface{}{"goal": "ship"},
+	})
+	require.False(t, isErr)
+	require.Equal(t, "did:web:example.com:agents:caller", gotCaller)
+	require.Equal(t, "planner.plan", gotTarget)
+	runID := payload["run_id"].(string)
+	execs, err := store.QueryExecutionRecords(context.Background(), types.ExecutionFilter{RunID: &runID})
+	require.NoError(t, err)
+	require.NotNil(t, execs[0].ActorID)
+	require.Equal(t, "did:web:example.com:agents:caller", *execs[0].ActorID)
+
+	// A different DID cannot turn a known run ID into a read capability.
+	router = newMCPTestRouterWithCaller(t, store, nil, "did:web:example.com:agents:other")
+	read, readErr := mcpCallTool(t, router, "get_run", map[string]interface{}{"run_id": runID})
+	require.True(t, readErr)
+	require.Contains(t, read["text"], "not found")
 }
 
 func TestMCP_GetRun(t *testing.T) {
