@@ -58,7 +58,9 @@ telemetry:
   enabled: true
   mode: "anonymous"
   endpoint: "https://agentfield.ai/api/oss/telemetry"
-  install_id_path: "/data/telemetry/install_id"
+  # Empty uses $AGENTFIELD_HOME/telemetry/install_id. In Docker,
+  # AGENTFIELD_HOME=/data and the data volume keeps this stable across restarts.
+  install_id_path: ""
   timeout: 800ms
 
 logging:

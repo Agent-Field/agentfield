@@ -59,6 +59,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	if err != nil {
 		logger.Logger.Fatal().Err(err).Msg("Failed to load configuration")
 	}
+	cfg.Telemetry.AgentFieldVersion = version
 
 	// Override port from flag if provided
 	if cmd.Flags().Lookup("port").Changed {

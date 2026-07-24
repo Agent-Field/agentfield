@@ -322,7 +322,31 @@ func makeRequest(ctx context.Context, method, path string, body interface{}, acc
 	}
 
 	client := triggerHTTPClient(accept)
-	return client.Do(req)
+	resp, err := client.Do(req)
+	if err != nil {
+		// A cancelled context (Ctrl-C / timeout the caller already handles)
+		// should surface as-is; only a genuine transport failure gets the
+		// "start the control plane" guidance.
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		return nil, controlPlaneUnreachableError(err)
+	}
+	return resp, nil
+}
+
+// controlPlaneUnreachableError wraps a transport-level failure to reach the
+// control plane with a consistent, actionable hint. Every CLI command that
+// talks to the control plane (call/ls/tail/wait) routes through makeRequest,
+// so wrapping here surfaces the same guidance everywhere instead of leaking a
+// bare Go dial error to a harness driving the CLI.
+func controlPlaneUnreachableError(err error) error {
+	// The trailing period and embedded newline are deliberate: this is a
+	// top-level, user-facing CLI hint printed to a harness, not an error meant
+	// to be wrapped mid-sentence, so ST1005 does not apply here.
+	//nolint:staticcheck // deliberate multi-line user-facing hint
+	return fmt.Errorf("%w\nControl plane not reachable at %s. Start it with `af server` or launch the AgentField desktop app.",
+		err, strings.TrimRight(GetServerURL(), "/"))
 }
 
 func triggerHTTPClient(accept string) *http.Client {

@@ -10,25 +10,25 @@ import (
 
 // InstallOptions controls how a skill is installed across targets.
 type InstallOptions struct {
-	SkillName string   // canonical skill name; empty = first in catalog
-	Version   string   // explicit version; empty = current binary's embedded version
-	Targets   []string // explicit target list; empty = use AllDetected/AllRegistered/Selection
-	AllDetected bool   // install into every target Detected() reports true
-	AllRegistered bool // install into every registered target (even undetected)
-	Force     bool    // re-install even if state shows the same version is already present
-	DryRun    bool    // print what would happen, don't write
+	SkillName     string   // canonical skill name; empty = first in catalog
+	Version       string   // explicit version; empty = current binary's embedded version
+	Targets       []string // explicit target list; empty = use AllDetected/AllRegistered/Selection
+	AllDetected   bool     // install into every target Detected() reports true
+	AllRegistered bool     // install into every registered target (even undetected)
+	Force         bool     // re-install even if state shows the same version is already present
+	DryRun        bool     // print what would happen, don't write
 }
 
 // InstallReport summarizes one install operation. The CLI uses this to print
 // a clean handoff message.
 type InstallReport struct {
-	Skill              Skill
-	CanonicalDir       string                       // ~/.agentfield/skills/<name>/<version>
-	CurrentLink        string                       // ~/.agentfield/skills/<name>/current
-	WroteCanonical     bool
-	TargetsInstalled   []InstalledTarget
-	TargetsSkipped     []SkipReason
-	TargetsFailed      []TargetError
+	Skill            Skill
+	CanonicalDir     string // ~/.agentfield/skills/<name>/<version>
+	CurrentLink      string // ~/.agentfield/skills/<name>/current
+	WroteCanonical   bool
+	TargetsInstalled []InstalledTarget
+	TargetsSkipped   []SkipReason
+	TargetsFailed    []TargetError
 }
 
 type SkipReason struct {
@@ -45,9 +45,21 @@ type TargetError struct {
 // write first, switches the `current` symlink, then installs into each
 // selected target. Idempotent and safe to re-run.
 func Install(opts InstallOptions) (*InstallReport, error) {
+	return install(opts, true)
+}
+
+// install is the shared implementation for public install operations. The
+// reconcile flag lets InstallAll and Update perform their single preflight
+// reconciliation without recursively repeating it for each catalog skill.
+func install(opts InstallOptions, reconcile bool) (*InstallReport, error) {
 	skill, err := resolveSkill(opts.SkillName, opts.Version)
 	if err != nil {
 		return nil, err
+	}
+	if reconcile && !opts.DryRun {
+		if err := reconcileAliasOrphans(); err != nil {
+			return nil, err
+		}
 	}
 
 	root, err := CanonicalRoot()
@@ -152,6 +164,31 @@ func Install(opts InstallOptions) (*InstallReport, error) {
 	return report, nil
 }
 
+// InstallAll installs every skill in the catalog into the resolved targets,
+// returning one report per skill in catalog order. It is what `af skill
+// install` runs when no skill name is given, so a first-time user gets both the
+// build skill (agentfield) and the drive skill (agentfield-use) — not just the
+// first catalog entry. opts.SkillName is ignored; every other field is applied
+// to each skill in turn.
+func InstallAll(opts InstallOptions) ([]*InstallReport, error) {
+	if !opts.DryRun {
+		if err := reconcileAliasOrphans(); err != nil {
+			return nil, err
+		}
+	}
+	reports := make([]*InstallReport, 0, len(Catalog))
+	for _, s := range Catalog {
+		o := opts
+		o.SkillName = s.Name
+		report, err := install(o, false)
+		if err != nil {
+			return reports, err
+		}
+		reports = append(reports, report)
+	}
+	return reports, nil
+}
+
 // Uninstall removes a skill from the named targets (or all if empty), and
 // optionally drops the canonical store entirely (if RemoveCanonical=true).
 type UninstallOptions struct {
@@ -213,11 +250,20 @@ func Uninstall(opts UninstallOptions) error {
 // Update is a convenience wrapper that re-installs the skill into every
 // target it's currently installed at, using the binary's embedded version.
 func Update(skillName string) (*InstallReport, error) {
-	state, err := LoadState()
-	if err != nil {
+	if _, err := LoadState(); err != nil {
 		return nil, err
 	}
 	skill, err := resolveSkill(skillName, "")
+	if err != nil {
+		return nil, err
+	}
+	// Do not reject an alias-only legacy installation before reconciliation.
+	// Update must be able to remove that obsolete state even when the current
+	// canonical skill has not yet been installed.
+	if err := reconcileAliasOrphans(); err != nil {
+		return nil, err
+	}
+	state, err := LoadState()
 	if err != nil {
 		return nil, err
 	}
@@ -230,11 +276,11 @@ func Update(skillName string) (*InstallReport, error) {
 		targets = append(targets, name)
 	}
 	sort.Strings(targets)
-	return Install(InstallOptions{
+	return install(InstallOptions{
 		SkillName: skill.Name,
 		Targets:   targets,
 		Force:     true,
-	})
+	}, false)
 }
 
 // ListInstalled returns the on-disk state for `af skill list`.
