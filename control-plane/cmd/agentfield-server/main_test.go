@@ -302,6 +302,9 @@ func TestRunServer_AppliesFlagOverrides(t *testing.T) {
 	if gotCfg.AgentField.Port != 12345 {
 		t.Fatalf("expected env override port 12345, got %d", gotCfg.AgentField.Port)
 	}
+	if gotCfg.Telemetry.AgentFieldVersion != version {
+		t.Fatalf("expected telemetry build version %q, got %q", version, gotCfg.Telemetry.AgentFieldVersion)
+	}
 	if gotCfg.UI.Enabled {
 		t.Fatal("backend-only flag should disable UI")
 	}

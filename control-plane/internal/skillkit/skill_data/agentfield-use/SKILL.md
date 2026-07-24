@@ -1,6 +1,7 @@
 ---
 name: agentfield-use
-description: Discover and call agents already running on a local AgentField control plane. Use when the user asks to use, call, query, run, or delegate work to an installed AgentField agent (swe-planner, pr-af, sec-af, …), to list what agents or reasoners are available, or to check on an execution. Not for building new agents — that is the agentfield skill.
+version: 0.4.0
+description: "Discover and call agents already running on a local AgentField control plane. Use when the user asks to use, call, query, run, or delegate work to an installed AgentField agent (swe-planner, pr-af, sec-af, …), to list what agents or reasoners are available, or to check on an execution. Not for building new agents — that is the agentfield skill."
 ---
 
 # Using AgentField agents
@@ -78,6 +79,28 @@ Each hit carries `reasoner_id`, `agent_id`, `invocation_target`, `tags`,
 `score`, and `agent_health` — everything you need to dispatch with no second
 lookup. Build the execute target straight from `invocation_target` (colon → dot)
 and only dispatch to hits whose `agent_health` is `"active"`.
+
+### No coverage: offer to build it
+
+Only decide that there is **no coverage** after completing the health check,
+capability discovery (including each candidate's description and input schema),
+and a ranked search for the requested job. Coverage requires a healthy active
+installed agent whose reasoner description **and** input schema support that
+job; a similar name or tag alone is not coverage.
+
+If discovery finds a stopped-but-capable installed agent, explain that it can be
+started with `af run <name>`; do not offer a replacement build. If those checks
+establish that no installed reasoner supports the requested job, say explicitly:
+**"No capable installed agent was found for this job."** Then offer to build the
+missing capability: with the `agentfield-personal` skill when the user wants an
+agent installed on this machine, or with the `agentfield` skill for a standalone
+project repository.
+
+A completed no-coverage result is evidence for the offer, not authorization to
+create anything. List, inspect, and diagnose-only requests never authorize
+building an agent. Hand off to a builder skill only when the original request
+already authorized creating an agent, or when the user explicitly accepts this
+offer.
 
 ## 3. Call a reasoner
 

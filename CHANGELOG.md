@@ -6,6 +6,371 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.116] - 2026-07-24
+
+## [0.1.116-rc.1] - 2026-07-24
+
+
+### Fixed
+
+- Fix(skills): sync the full catalog, unblock legacy reconcile, retire the /agentfield shim (#826)
+
+* fix(skillkit): retire the /agentfield command shim, clean up stale links
+
+The shim predates slash-invocable skills: Claude Code now registers
+/agentfield from the skill itself, so the bundled commands/agentfield.md
+only produced a duplicate picker entry. Drop it from the package (skill
+bumped to 0.5.2 so machines already on 0.5.1 actually reinstall), and
+teach the claude-code target to remove command links whose target lives
+under the skill's canonical store but is no longer shipped — so existing
+machines lose the shim on their next skill update instead of keeping a
+dangling symlink. User files, live links, and other skills' commands are
+untouched; a blocked commands dir still surfaces through installCommands'
+existing error path.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop,installer): install the full skill catalog, not a hardcoded list
+
+Both the desktop syncSkills and install.sh looped over a hardcoded
+[agentfield, agentfield-use], so agentfield-personal (new in v0.1.115)
+never reached existing installs — updates bumped the two known skills
+and silently skipped new catalog entries. A no-name `af skill install`
+already installs the binary's entire catalog in one process, so call
+that instead everywhere; future catalog additions now propagate without
+touching the desktop app or the installer script.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(skillkit): reconcile tolerates legacy manual-method targets
+
+Legacy standalone agentfield-multi-reasoner-builder installs recorded
+cursor/windsurf integrations with method "manual" — nothing on disk, the
+user pasted rules into the app's settings UI. removeRecordedTarget only
+knew symlink and marker-block, so reconciliation errored and blocked
+every `af skill install` on such machines (hit in the wild upgrading to
+v0.1.115). Manual targets are now removable no-ops; genuinely unknown
+methods still fail loud.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (bac67d0)
+
+## [0.1.115] - 2026-07-23
+
+## [0.1.115-rc.2] - 2026-07-23
+
+
+### Other
+
+- Improve anonymous OSS telemetry (#823) (809fb86)
+
+## [0.1.115-rc.1] - 2026-07-23
+
+
+### Added
+
+- Feat: user-built subharness agents — personal-agent skill path, installable scaffolds, skill routing + cleanup (#822)
+
+* docs: add builder delivery routing
+
+* docs: add usage skill builder fallback
+
+* fix(skill): quote agentfield frontmatter description
+
+* fix(skills): harden agentfield-use frontmatter
+
+* feat: make generated language scaffolds installable
+
+* fix(skill): clarify builder coverage evidence
+
+* fix(skillkit): sync agentfield skill embeds
+
+* feat(skillkit): reconcile obsolete alias installs
+
+* fix(skill): make builder fallback handoff explicit
+
+* fix(skillkit): reconcile aliases before update validation
+
+* test(packages): cover managed TypeScript installs
+
+* test(skillkit): strengthen alias reconciliation coverage
+
+* test(skillkit): verify reconciliation runs once per operation
+
+* test(skillkit): cover reconciliation failure seams
+
+* test(templates): preserve punctuated scaffold metadata
+
+* fix(skill): clarify fallback authorization guard
+
+* fix(templates): quote generated TypeScript package name
+
+* test(templates): require explicit empty scaffold environment
+
+* test(templates): enforce one scaffold manifest per language
+
+* Align skill catalog mirrors
+
+* test(skillkit): strengthen catalog routing contracts
+
+* test: verify integrated repository contracts
+
+* refactor(skills): split personal-agent flow into its own agentfield-personal skill
+
+The 0.6.0 builder skill routed every request through a coverage pre-check
+and a deliverable question before the original repo workflow could start —
+a behavior change for everyone already using the skill. Split instead:
+
+- skills/agentfield: reverted to the pre-gate body (byte-identical to
+  main); frontmatter gains version 0.5.1 and a one-sentence description
+  pointer to agentfield-personal. Existing repo-builder behavior unchanged.
+- skills/agentfield-personal (new, 0.1.0): standalone personal-agent
+  skill — stable source in ~/agentfield-agents, v1 manifest, scoped
+  secrets via the af CLI, install/run, registration + live-call
+  verification, Desktop handoff. Selection happens at skill-routing
+  level via its description, not via an in-skill gate.
+- skills/agentfield-use: the no-coverage fallback keeps the offer and
+  authorization boundaries but drops the coverage_precheck_complete
+  marker protocol and bounce-limit that served the removed gate.
+
+Catalog/embed register the new skill; contract tests pin the reverted
+builder (routing-gate text banned), the personal lifecycle contract, and
+the simplified use-skill offer.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (f69b2c3)
+
+- Feat(desktop): redesign UI around install and usage jobs (#814)
+
+* feat(desktop): redesign UI around install and usage jobs
+
+Align the Electron app with the product/design specs: marketplace-style agents, denser activity, home usage totals, and shared theme tokens so the local sub-harness is clearer at a glance.
+
+* feat(desktop): polish onboarding and empty states
+
+* Delete PRODUCT.md
+
+* feat(desktop): add appearance override
+
+* fix(desktop): keep Windows controls clear of header
+
+* fix(desktop): reserve Linux overlay controls
+
+* fix(desktop): preserve collision-free UI keys
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (20955b2)
+
+## [0.1.114] - 2026-07-22
+
+
+### Added
+
+- Feat(desktop): let the app own its control plane on a configurable / auto-picked free port (#815)
+
+* feat(desktop): free-port selection and a dynamic control-plane base URL
+
+New ports module: prefer 8080, walk to the next free port, fall back to an
+OS-assigned one. agentfield.ts gains an active base URL (getBaseUrl /
+setActiveControlPlanePort) that every HTTP helper now defaults to, so no
+consumer hard-codes 8080.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): controlPlanePort setting + last-used port persistence
+
+controlPlanePort pins the port exactly (null = automatic); the app-managed
+lastControlPlanePort records where the app last started/adopted a control
+plane so a restarted app can rediscover it. Both normalized to a valid TCP
+port or null.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): own the control plane on a chosen port
+
+Autostart now discovers before it starts: probe the candidate ports (the
+configured one, or default + last-used) and adopt any recognized AgentField;
+otherwise start af server on the configured port exactly, or in automatic
+mode on the first free port from 8080 up — so a squatted 8080 never blocks
+the app or spawns a duplicate control plane. The effective port is persisted
+for the next launch, every af invocation gets AGENTFIELD_SERVER so agents
+register with the app's control plane, the spawned server is pinned via
+AGENTFIELD_PORT, the macOS launchd path is only used for the default port,
+and the tray/open-web-ui follow the live base URL.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): control-plane port field in Settings
+
+Empty means automatic (8080 when free, else the next open port); a number
+pins the port. Committed on blur/Enter, invalid input reverts to the saved
+value.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (485712c)
+
+## [0.1.114-rc.2] - 2026-07-22
+
+
+### Added
+
+- Feat(cli): surface the harness golden path (af wait, catalog, golden_path help, JSON envelopes) (#816)
+
+* feat(cli): emit a JSON envelope for af call --async under -o json
+
+`af call --async` printed a bare run-id string on stdout for every output
+format, so a harness parsing `-o json` got a non-JSON token. Under an
+explicitly requested machine format (-o json/-o yaml) it now emits
+{"run_id": "...", "status": "accepted"} so parsers get valid JSON/YAML.
+
+The default and pretty paths keep the bare run-id line that shell scripts
+capture via RUN_ID=$(af call node.reasoner --async), so that contract does
+not regress.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): surface the golden path in af agent help
+
+The machine-friendly `af agent help` payload taught discovery and
+introspection but never execution: quick_start omitted `af call` and
+`af tail` entirely, so a harness could find agents but was never shown how
+to run one.
+
+Add a `golden_path` field — an ordered array of {step, command, purpose}
+covering the full driving loop (doctor → catalog → install → secrets →
+run → ls/discover → call --schema → call --async → wait/tail) — and add
+`af call` and `af tail` entries to quick_start.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): install both AgentField skills when no skill name is given
+
+`af skill install` with no argument resolved to Catalog[0] and installed
+only the `agentfield` build skill, never `agentfield-use` — the drive
+skill that documents the discover → call → wait loop. A first-time user
+therefore never got the golden-loop docs.
+
+Add skillkit.InstallAll, which installs every catalog skill into the
+resolved targets, and call it from `af skill install` when no skill name
+is passed. Explicit `af skill install <name>` is unchanged. The
+interactive picker copy now names both skills (build + drive).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): add a shared control-plane-unreachable hint
+
+`af call`/`af ls`/`af tail` emitted a raw Go dial error when the control
+plane was down, with no guidance — while `af agent` commands already
+appended a reachability hint. Every CLI command that talks to the control
+plane routes through makeRequest, so wrap a transport-level failure there
+with a shared, actionable hint:
+
+  Control plane not reachable at <url>. Start it with `af server` or
+  launch the AgentField desktop app.
+
+A cancelled context (Ctrl-C / caller-handled timeout) is passed through
+unwrapped so only genuine connectivity failures get the hint.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): add af wait to block on an async run
+
+`af call --async` returns a run_id, but there was no first-class way to
+block until that run finished — a harness had to poll or tail. Add
+`af wait <run_id> [--timeout <sec, default 600>]`: it polls the run
+overview (the same /api/v1/agentic/run/:run_id API `af agent run --id`
+uses) until every execution is terminal, prints the final status and
+result as JSON, and maps outcomes to exit codes — 0 on succeeded, 1 on
+failed/cancelled, 2 on timeout.
+
+A 404 (records not yet written after an async accept) is treated as
+"not ready" so a freshly-accepted run keeps polling. The command also
+exercises the shared control-plane-unreachable hint, covered here by a
+cross-command test over call/ls/tail/wait.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): add af catalog to browse installable agent nodes
+
+There was no CLI way to discover installable nodes — the only curated
+catalog lived in the desktop app (desktop/src/shared/catalog.ts). Add
+`af catalog`, backed by an in-binary catalog seeded from that same
+curated list (name, description, install source, docs URL), so a harness
+can browse nodes before `af install` and works offline.
+
+Supports `-o json`/`-o yaml`; the human table ends with the hint
+`af install <source>`.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(cli): cover af wait/catalog command paths for the patch gate
+
+Add behavior tests for the previously-untested command wiring and
+error paths surfaced by the coverage patch gate:
+
+- af wait: pretty output, invalid-format/empty-id (exit 2), a control
+  plane 5xx (exit 3), the nil-opts default path, end-to-end command
+  execution, and rootExecutionResult (explicit root, last-execution
+  fallback, non-JSON, empty).
+- af catalog: end-to-end command execution under -o json.
+- af skill install <name>: the explicit-name path stays single-skill.
+- makeRequest: a cancelled context is passed through unwrapped, not
+  relabeled as an unreachable-control-plane error.
+
+Raises control-plane patch coverage back over the 80% floor.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (d6197f0)
+
+## [0.1.114-rc.1] - 2026-07-22
+
+
+### Fixed
+
+- Fix(sdk-go): survive OpenAI's strict validator on codex --output-schema (#818)
+
+The server behind codex exec now validates --output-schema against OpenAI
+strict-mode rules (probed live on codex-cli 0.144.1): every object node
+needs additionalProperties:false and a full required array, every node
+needs a type (or \$ref / anyOf), and free-form maps, typed maps, and
+boolean subschemas (invopop's output for `any` fields) are rejected with
+invalid_json_schema — killing every schema-enforced codex role
+(Agent-Field/SWE-AF#106).
+
+Three coordinated changes:
+
+- schema.go: codexSchemaStrictExpressible classifies a strict-rewritten
+  schema against the probed validator rules, so the runner knows when
+  --output-schema would be refused (map[string]any / any fields cannot be
+  expressed without forcing an empty object).
+- runner.go: for inexpressible schemas the runner still writes the schema
+  file and keeps the codex-native prompt, but hands the provider an empty
+  schemaPath — codex runs with --output-last-message only and the
+  existing local validation enforces the schema.
+- codex.go: --output-last-message is decoupled from --output-schema, and
+  a rejected schema (invalid_json_schema in the CLI output) triggers one
+  reactive rerun without the flag, so future validator tightening
+  degrades to local validation instead of failing the role.
+
+Live-verified: the real SWE-AF GitInitResult and Architecture strict
+schemas are ACCEPTED by the validator; PRD (boolean subschema via
+AskUserFormField.default_value) is correctly gated to the fallback path.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (d0dec79)
+
 ## [0.1.113] - 2026-07-21
 
 ## [0.1.113-rc.1] - 2026-07-21

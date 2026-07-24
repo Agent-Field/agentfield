@@ -115,7 +115,15 @@ func CancelExecutionHandler(store ExecutionStore) gin.HandlerFunc {
 			}
 		}
 
-		events.PublishExecutionCancelled(executionID, exec.RunID, exec.AgentNodeID, map[string]interface{}{"reason": reason})
+		eventData := map[string]interface{}{
+			"reason":            reason,
+			"transition_source": "cancel_api",
+		}
+		enrichExecutionLifecycleData(eventData, exec, string(types.ExecutionStatusCancelled))
+		if wfExec != nil {
+			eventData["workflow_depth"] = wfExec.WorkflowDepth
+		}
+		events.PublishExecutionCancelled(executionID, exec.RunID, exec.AgentNodeID, eventData)
 
 		payload, marshalErr := json.Marshal(map[string]interface{}{
 			"reason": reason,

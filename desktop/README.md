@@ -146,12 +146,13 @@ all, first launch auto-provisions `~/.agentfield/bin` (both `agentfield`
 and the `af` alias, Windows user PATH registered) so terminals and coding
 agents get a working `af` too.
 
-Unless switched off in Settings, the app also installs both bundled skills
-on launch (`af skill install <name> --non-interactive`, sequentially):
-**agentfield** (how to build agents) and **agentfield-use** (how to discover
-and call the agents installed here) — so detected coding agents (Claude
-Code, Codex, Gemini, …) can drive this machine's agents without extra
-setup. Idempotent via skillkit's state file, shared with the curl installer.
+Unless switched off in Settings, the app also installs the CLI's full skill
+catalog on launch (`af skill install --non-interactive` with no name):
+**agentfield** (building agents), **agentfield-personal** (agents installed
+on this machine), and **agentfield-use** (discovering and calling them) —
+plus any skill a future CLI ships — so detected coding agents (Claude Code,
+Codex, Gemini, …) can drive this machine's agents without extra setup.
+Idempotent via skillkit's state file, shared with the curl installer.
 
 ## App updates
 

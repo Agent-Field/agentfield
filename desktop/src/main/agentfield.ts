@@ -20,10 +20,31 @@ import type {
   ExecutionsResult,
   ExecutionSummary,
   InstalledAgent,
-  RegistryResult
+  RegistryResult,
+  UsageGroup,
+  UsageStats
 } from '../shared/types'
 
-export const DEFAULT_BASE_URL = 'http://localhost:8080'
+import { DEFAULT_CONTROL_PLANE_PORT, baseUrlForPort } from './ports'
+
+export const DEFAULT_BASE_URL = baseUrlForPort(DEFAULT_CONTROL_PLANE_PORT)
+
+// ---- Active control-plane URL --------------------------------------------
+// The one base URL the whole app is pointed at. It starts at the default and
+// moves when autostart adopts a running control plane on another port or
+// starts one there (see autostart.ts). Every consumer — snapshot polling,
+// the tray, open-web-ui, AGENTFIELD_SERVER for spawned `af` — reads it via
+// getBaseUrl() so nothing in the app hard-codes 8080.
+
+let activeBaseUrl = DEFAULT_BASE_URL
+
+export function getBaseUrl(): string {
+  return activeBaseUrl
+}
+
+export function setActiveControlPlanePort(port: number): void {
+  activeBaseUrl = baseUrlForPort(port)
+}
 
 const HTTP_TIMEOUT_MS = 3000
 
@@ -56,7 +77,7 @@ function errorMessage(err: unknown): string {
  *  - network error / timeout (3s)   -> { reachable: false, recognized: false, healthy: false, error }
  */
 export async function checkControlPlane(
-  baseUrl: string = DEFAULT_BASE_URL,
+  baseUrl: string = getBaseUrl(),
   fetchImpl: FetchLike = fetch
 ): Promise<ControlPlaneStatus> {
   try {
@@ -151,7 +172,7 @@ export async function readInstalledAgents(
  * status alone.
  */
 export async function fetchControlPlaneNodes(
-  baseUrl: string = DEFAULT_BASE_URL,
+  baseUrl: string = getBaseUrl(),
   fetchImpl: FetchLike = fetch
 ): Promise<Map<string, string> | null> {
   try {
@@ -239,7 +260,7 @@ function toExecutionSummary(row: Record<string, unknown>): ExecutionSummary | nu
  * failure — callers render "activity unavailable", never an error page.
  */
 export async function fetchExecutions(
-  baseUrl: string = DEFAULT_BASE_URL,
+  baseUrl: string = getBaseUrl(),
   fetchImpl: FetchLike = fetch
 ): Promise<ExecutionsResult | null> {
   try {
@@ -268,7 +289,7 @@ export async function fetchExecutions(
  * Returns null on any failure; the dashboard renders placeholders instead.
  */
 export async function fetchDashboardMetrics(
-  baseUrl: string = DEFAULT_BASE_URL,
+  baseUrl: string = getBaseUrl(),
   fetchImpl: FetchLike = fetch
 ): Promise<DashboardMetrics | null> {
   try {
@@ -293,6 +314,51 @@ export async function fetchDashboardMetrics(
   }
 }
 
+function toUsageGroup(entry: unknown): UsageGroup | null {
+  if (!isRecord(entry) || typeof entry.key !== 'string' || entry.key === '') return null
+  return {
+    key: entry.key,
+    costUsd: typeof entry.cost_usd === 'number' ? entry.cost_usd : null,
+    totalTokens: typeof entry.total_tokens === 'number' ? entry.total_tokens : 0
+  }
+}
+
+function parseUsageGroups(value: unknown): UsageGroup[] {
+  if (!Array.isArray(value)) return []
+  return value.map(toUsageGroup).filter((g): g is UsageGroup => g !== null)
+}
+
+/**
+ * GET {baseUrl}/api/ui/v1/usage/stats?window=24h → 24h spend/tokens roll-up.
+ * Mirrors af-tray's graceful contract: 404 (older CP) / 401/403 / network /
+ * parse failures all return null so the UI can hide usage instead of erroring
+ * the whole Home. Never throws across IPC.
+ */
+export async function fetchUsageStats(
+  baseUrl: string = DEFAULT_BASE_URL,
+  fetchImpl: FetchLike = fetch
+): Promise<UsageStats | null> {
+  try {
+    const res = await fetchImpl(`${baseUrl}/api/ui/v1/usage/stats?window=24h`, {
+      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS)
+    })
+    if (res.status === 404 || res.status === 401 || res.status === 403) return null
+    if (!res.ok) return null
+    const body: unknown = await res.json()
+    if (!isRecord(body)) return null
+    const totals = isRecord(body.totals) ? body.totals : {}
+    return {
+      window: '24h',
+      costUsd: typeof totals.cost_usd === 'number' ? totals.cost_usd : null,
+      totalTokens: typeof totals.total_tokens === 'number' ? totals.total_tokens : 0,
+      byAgent: parseUsageGroups(body.by_agent),
+      byHarness: parseUsageGroups(body.by_harness)
+    }
+  } catch {
+    return null
+  }
+}
+
 export interface SnapshotOptions {
   baseUrl?: string
   homeDir?: string
@@ -304,7 +370,7 @@ export interface SnapshotOptions {
  * Options exist only for tests; production callers use the defaults.
  */
 export async function getSnapshot(options: SnapshotOptions = {}): Promise<AgentFieldSnapshot> {
-  const baseUrl = options.baseUrl ?? DEFAULT_BASE_URL
+  const baseUrl = options.baseUrl ?? getBaseUrl()
   const fetchImpl = options.fetchImpl ?? fetch
 
   const [controlPlane, registry] = await Promise.all([
@@ -314,13 +380,14 @@ export async function getSnapshot(options: SnapshotOptions = {}): Promise<AgentF
 
   // Only consult a recognized control plane; an unrelated service on the
   // port must not influence badges or show foreign runs as activity.
-  const [nodeHealth, executions, metrics] = controlPlane.recognized
+  const [nodeHealth, executions, metrics, usage] = controlPlane.recognized
     ? await Promise.all([
         fetchControlPlaneNodes(baseUrl, fetchImpl),
         fetchExecutions(baseUrl, fetchImpl),
-        fetchDashboardMetrics(baseUrl, fetchImpl)
+        fetchDashboardMetrics(baseUrl, fetchImpl),
+        fetchUsageStats(baseUrl, fetchImpl)
       ])
-    : [null, null, null]
+    : [null, null, null, null]
   const hasControlPlaneView = nodeHealth !== null
 
   const agents = registry.agents.map((agent) => ({
@@ -337,6 +404,7 @@ export async function getSnapshot(options: SnapshotOptions = {}): Promise<AgentF
     registry: { exists: registry.exists, agents, error: registry.error },
     executions,
     metrics,
+    usage,
     fetchedAt: new Date().toISOString()
   }
 }

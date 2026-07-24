@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -69,6 +70,15 @@ func (t claudeCodeTarget) Install(skill Skill, canonicalCurrentDir string) (Inst
 		return InstalledTarget{}, fmt.Errorf("symlink %s -> %s: %w", link, canonicalCurrentDir, err)
 	}
 
+	// Remove command links installed by an older version of this skill that
+	// the current version no longer ships (e.g. the retired /agentfield shim
+	// — redundant since Claude Code invokes skills directly). Links are
+	// matched by their target living under this skill's canonical store
+	// directory, so user files and other skills' commands are never touched.
+	if err := t.cleanupStaleCommands(skill); err != nil {
+		return InstalledTarget{}, fmt.Errorf("clean stale commands: %w", err)
+	}
+
 	// Also expose any shipped slash commands (skills/<name>/commands/*.md)
 	// at ~/.claude/commands/<file>.md so Claude Code picks them up. This is
 	// best-effort: a missing commands dir in the skill is not an error.
@@ -83,6 +93,42 @@ func (t claudeCodeTarget) Install(skill Skill, canonicalCurrentDir string) (Inst
 		Version:     skill.Version,
 		InstalledAt: time.Now().UTC(),
 	}, nil
+}
+
+// cleanupStaleCommands removes ~/.claude/commands/*.md symlinks that point
+// under this skill's canonical store directory but whose target no longer
+// exists — i.e. commands a previous version shipped and the current one
+// dropped. Symlinks with live targets and non-symlink entries are left alone.
+func (claudeCodeTarget) cleanupStaleCommands(skill Skill) error {
+	root, err := CanonicalRoot()
+	if err != nil {
+		return nil
+	}
+	skillStore := filepath.Join(root, skill.Name) + string(filepath.Separator)
+	dst := filepath.Join(homeDir(), ".claude", "commands")
+	entries, err := os.ReadDir(dst)
+	if err != nil {
+		// Missing or unreadable destination: nothing to clean. If the path is
+		// genuinely blocked, installCommands reports it as the install error.
+		return nil
+	}
+	for _, e := range entries {
+		link := filepath.Join(dst, e.Name())
+		info, err := os.Lstat(link)
+		if err != nil || info.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		dest, err := os.Readlink(link)
+		if err != nil || !strings.HasPrefix(dest, skillStore) {
+			continue
+		}
+		if _, err := os.Stat(dest); os.IsNotExist(err) {
+			if err := os.Remove(link); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("remove stale command %s: %w", link, err)
+			}
+		}
+	}
+	return nil
 }
 
 // installCommands symlinks every .md file under <skillDir>/commands/ into

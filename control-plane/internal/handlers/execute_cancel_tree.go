@@ -212,10 +212,16 @@ func cancelOneExecution(
 		}
 	}
 
-	events.PublishExecutionCancelled(updated.ExecutionID, updated.RunID, updated.AgentNodeID, map[string]interface{}{
-		"reason": reasonRaw,
-		"source": "cancel_tree",
-	})
+	eventData := map[string]interface{}{
+		"reason":            reasonRaw,
+		"source":            "cancel_tree",
+		"transition_source": "cancel_tree",
+	}
+	enrichExecutionLifecycleData(eventData, updated, string(types.ExecutionStatusCancelled))
+	if wfExec != nil {
+		eventData["workflow_depth"] = wfExec.WorkflowDepth
+	}
+	events.PublishExecutionCancelled(updated.ExecutionID, updated.RunID, updated.AgentNodeID, eventData)
 
 	payload, marshalErr := json.Marshal(map[string]interface{}{
 		"reason": reasonRaw,
