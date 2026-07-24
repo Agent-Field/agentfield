@@ -817,16 +817,33 @@ func (c *executionController) handleBatchStatus(ctx *gin.Context) {
 		return
 	}
 
-	// One storage fetch regardless of how many IDs were requested — the
-	// previous loop issued one GetExecutionRecord per ID (N+1).
+	// Use one storage fetch for the normal path. If it fails, fall back to
+	// individual reads so the established per-ID error contract is preserved.
 	records, err := c.store.GetExecutionRecordsBatch(reqCtx, request.ExecutionIDs)
-	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to load executions: %v", err)})
-		return
-	}
 
 	response := make(BatchStatusResponse, len(request.ExecutionIDs))
 	for _, id := range request.ExecutionIDs {
+		if err != nil {
+			exec, getErr := c.store.GetExecutionRecord(reqCtx, id)
+			if getErr != nil {
+				response[id] = ExecutionStatusResponse{
+					ExecutionID: id,
+					Status:      "error",
+					Error:       pointerString(fmt.Sprintf("load execution: %v", getErr)),
+				}
+				continue
+			}
+			if exec == nil {
+				response[id] = ExecutionStatusResponse{
+					ExecutionID: id,
+					Status:      "not_found",
+				}
+				continue
+			}
+			response[id] = c.renderStatusWithApproval(reqCtx, exec)
+			continue
+		}
+
 		exec, ok := records[id]
 		if !ok || exec == nil {
 			// Missing IDs preserve the prior per-ID response behavior.

@@ -22,9 +22,10 @@ var errBatchStorageBoom = errors.New("storage unavailable")
 // the batch fetch method is invoked, so tests can assert the N+1 fix.
 type batchCountingStorage struct {
 	*testExecutionStorage
-	batchCalls               int
-	singleGetCalls          int
+	batchCalls                  int
+	singleGetCalls              int
 	getExecutionRecordsBatchErr error
+	getExecutionRecordErrs      map[string]error
 }
 
 func newBatchCountingStorage() *batchCountingStorage {
@@ -37,6 +38,9 @@ func newBatchCountingStorage() *batchCountingStorage {
 // touch this path for batch status.
 func (s *batchCountingStorage) GetExecutionRecord(ctx context.Context, executionID string) (*types.Execution, error) {
 	s.singleGetCalls++
+	if err := s.getExecutionRecordErrs[executionID]; err != nil {
+		return nil, err
+	}
 	return s.testExecutionStorage.GetExecutionRecord(ctx, executionID)
 }
 
@@ -141,13 +145,15 @@ func TestHandleBatchStatus_RejectsOversizedBatch(t *testing.T) {
 	require.Equal(t, 0, store.batchCalls, "oversized batch must not hit storage")
 }
 
-func TestHandleBatchStatus_StorageErrorReturns500(t *testing.T) {
+func TestHandleBatchStatus_BatchStorageErrorPreservesPerIDResults(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	store := newBatchCountingStorage()
 	store.getExecutionRecordsBatchErr = errBatchStorageBoom
+	store.getExecutionRecordErrs = map[string]error{"bad": errBatchStorageBoom}
+	seedBatchExecution(t, store, "good", string(types.ExecutionStatusSucceeded))
 
-	body, _ := json.Marshal(BatchStatusRequest{ExecutionIDs: []string{"exec-a"}})
+	body, _ := json.Marshal(BatchStatusRequest{ExecutionIDs: []string{"bad", "good"}})
 	router := gin.New()
 	router.POST("/batch", BatchExecutionStatusHandler(store))
 
@@ -156,6 +162,45 @@ func TestHandleBatchStatus_StorageErrorReturns500(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	require.Equal(t, http.StatusInternalServerError, w.Code)
+	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, 1, store.batchCalls)
+	require.Equal(t, 2, store.singleGetCalls)
+
+	var response BatchStatusResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	require.Equal(t, "error", response["bad"].Status)
+	require.Contains(t, *response["bad"].Error, "load execution: storage unavailable")
+	require.Equal(t, string(types.ExecutionStatusSucceeded), response["good"].Status)
+}
+
+func TestHandleBatchStatus_BatchStorageErrorWithCanceledContextReturnsPerIDErrors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := newBatchCountingStorage()
+	store.getExecutionRecordsBatchErr = context.Canceled
+	store.getExecutionRecordErrs = map[string]error{
+		"exec-a": context.Canceled,
+		"exec-b": context.Canceled,
+	}
+	body, _ := json.Marshal(BatchStatusRequest{ExecutionIDs: []string{"exec-a", "exec-b"}})
+	router := gin.New()
+	router.POST("/batch", BatchExecutionStatusHandler(store))
+
+	reqCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodPost, "/batch", bytes.NewReader(body)).WithContext(reqCtx)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, 1, store.batchCalls)
+	require.Equal(t, 2, store.singleGetCalls)
+
+	var response BatchStatusResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	for _, id := range []string{"exec-a", "exec-b"} {
+		require.Equal(t, "error", response[id].Status)
+		require.Contains(t, *response[id].Error, "load execution: context canceled")
+	}
 }
