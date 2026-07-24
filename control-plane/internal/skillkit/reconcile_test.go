@@ -147,7 +147,7 @@ func TestReconcileAliasOrphansRemovesOnlyRecordedIntegrations(t *testing.T) {
 
 func TestReconcileAliasOrphansFailureRetainsState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "orphan")
-	setupReconciliation(t, reconciliationState(map[string]InstalledTarget{"broken": {Method: "manual", Path: path}}))
+	setupReconciliation(t, reconciliationState(map[string]InstalledTarget{"broken": {Method: "carrier-pigeon", Path: path}}))
 	if err := reconcileAliasOrphans(); err == nil || !strings.Contains(err.Error(), legacyBuilder) || !strings.Contains(err.Error(), "broken") {
 		t.Fatalf("error = %v", err)
 	}
@@ -167,7 +167,7 @@ func TestReconcileAliasOrphansSortsTargetsBeforeCleanup(t *testing.T) {
 	}
 	setupReconciliation(t, reconciliationState(map[string]InstalledTarget{
 		"z-last":  {Method: "symlink", Path: latePath},
-		"a-first": {Method: "manual", Path: filepath.Join(t.TempDir(), "manual")},
+		"a-first": {Method: "carrier-pigeon", Path: filepath.Join(t.TempDir(), "manual")},
 	}))
 
 	err := reconcileAliasOrphans()
@@ -467,7 +467,7 @@ func TestPublicOperationsStopBeforeCanonicalMutationOnUnsupportedOrphan(t *testi
 	} {
 		t.Run(op.name, func(t *testing.T) {
 			state := reconciliationState(map[string]InstalledTarget{
-				"manual-target": {Method: "manual", Path: filepath.Join(t.TempDir(), "legacy")},
+				"manual-target": {Method: "carrier-pigeon", Path: filepath.Join(t.TempDir(), "legacy")},
 			})
 			if op.name == "update" {
 				state.Skills["agentfield"] = InstalledSkill{Targets: map[string]InstalledTarget{
@@ -693,5 +693,30 @@ func TestPublicOperationsReconcileAndDryRunsDoNot(t *testing.T) {
 				t.Fatalf("dry run changed serialized state: %q, %v", got, err)
 			}
 		})
+	}
+}
+
+// Regression: legacy installs recorded cursor/windsurf integrations with
+// method "manual" — nothing on disk, the user pasted rules into the app's
+// settings UI. Reconciliation must treat those as removable no-ops; erroring
+// blocked every `af skill install` on such machines (seen in the wild on a
+// v0.1.115 upgrade).
+func TestReconcileAliasOrphansSkipsManualMethodTargets(t *testing.T) {
+	home := setupReconciliation(t, reconciliationState(map[string]InstalledTarget{
+		"cursor": {TargetName: "cursor", Method: "manual", Path: "Cursor Settings → Rules for AI (manual)"},
+	}))
+
+	if err := reconcileAliasOrphans(); err != nil {
+		t.Fatalf("reconcileAliasOrphans with a manual-method target: %v", err)
+	}
+	state, err := LoadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := state.Skills[legacyBuilder]; ok {
+		t.Fatal("legacy alias-orphan entry with a manual target was not removed from state")
+	}
+	if _, err := os.Lstat(filepath.Join(home, "skills", legacyBuilder)); !os.IsNotExist(err) {
+		t.Fatalf("orphan canonical directory remains: %v", err)
 	}
 }

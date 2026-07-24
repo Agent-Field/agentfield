@@ -84,6 +84,12 @@ func removeRecordedTarget(orphanName, targetName string, installed InstalledTarg
 	case "marker-block":
 		// The empty version is intentional: marker matching is name based.
 		return uninstallMarkerBlock(Skill{Name: orphanName}, installed.Path)
+	case "manual":
+		// Manual targets (cursor, windsurf) never wrote anything to disk — the
+		// user pasted rules into the app's own settings UI. Nothing to remove;
+		// erroring here would block every install on machines whose legacy
+		// state recorded one.
+		return nil
 	default:
 		return fmt.Errorf("unsupported install method %q", installed.Method)
 	}
