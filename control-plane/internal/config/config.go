@@ -327,7 +327,8 @@ type AuthorizationConfig struct {
 	// DefaultApprovalDurationHours is the default duration for permission approvals
 	DefaultApprovalDurationHours int `yaml:"default_approval_duration_hours" mapstructure:"default_approval_duration_hours" default:"720"`
 	// AdminToken is a separate token required for admin operations (tag approval,
-	// policy management). If empty, admin routes fall back to the standard API key.
+	// policy management) and /debug/pprof endpoints. Send it with X-Admin-Token.
+	// If empty, these routes fall back to the standard API key.
 	AdminToken string `yaml:"admin_token" mapstructure:"admin_token"`
 	// InternalToken is sent as Authorization: Bearer header when the control plane
 	// forwards execution requests to agents. Agents with RequireOriginAuth enabled

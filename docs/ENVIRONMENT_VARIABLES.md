@@ -68,7 +68,7 @@ These map to `api.cors.*` in config. When set via env, use comma-separated value
 
 - `AGENTFIELD_API_CORS_ALLOWED_ORIGINS` (comma-separated)
 - `AGENTFIELD_API_CORS_ALLOWED_METHODS` (comma-separated)
-- `AGENTFIELD_API_CORS_ALLOWED_HEADERS` (comma-separated)
+- `AGENTFIELD_API_CORS_ALLOWED_HEADERS` (comma-separated): Include `X-Admin-Token` when browser clients access admin or `/debug/pprof/*` endpoints.
 - `AGENTFIELD_API_CORS_EXPOSED_HEADERS` (comma-separated)
 - `AGENTFIELD_API_CORS_ALLOW_CREDENTIALS` (`true`/`false`)
 
@@ -77,6 +77,7 @@ These map to `api.cors.*` in config. When set via env, use comma-separated value
 When enabled, the control plane issues DID identities to agents and enforces tag-based access policies on agent-to-agent calls.
 
 - `AGENTFIELD_AUTHORIZATION_ENABLED` (default: `false`): Enable VC-based authorization.
+- `AGENTFIELD_AUTHORIZATION_ADMIN_TOKEN` (recommended): Separate token for admin operations and `/debug/pprof/*`; clients send it in `X-Admin-Token`. Without it, those endpoints rely on the global API key, so do not expose pprof outside trusted networks unless authentication is configured.
 - `AGENTFIELD_AUTHORIZATION_MASTER_SEED` (required when enabled): Master seed for deriving Ed25519 keypairs for agent DIDs. Keep this secret and consistent across restarts — changing it invalidates all existing DID signatures.
 - `AGENTFIELD_AUTHORIZATION_TAG_APPROVAL_MODE` (default: `auto`): `auto` (tags approved immediately) or `admin` (tags require admin approval before the agent becomes ready).
 - `AGENTFIELD_AUTHORIZATION_DEFAULT_DENY` (default: `false`): When `true`, the tag policy middleware returns HTTP 403 for any request where no access policy matches the `(caller_tags, target_tags, function)` tuple. Default is `false`, preserving the existing behavior of allowing unmatched requests. The unmatched tuple is logged at `DEBUG` in both modes for diagnosis. Equivalent YAML: `features.did.authorization.default_deny`.
