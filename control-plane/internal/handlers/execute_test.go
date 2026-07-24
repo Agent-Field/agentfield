@@ -391,7 +391,7 @@ func TestBatchExecutionStatusHandler(t *testing.T) {
 		{
 			name: "too many execution IDs",
 			requestBody: BatchStatusRequest{
-				ExecutionIDs: make([]string, 51), // Exceeds max batch size of 50
+				ExecutionIDs: make([]string, 501), // Exceeds max batch size of 500
 			},
 			setupMocks:     func(mockStorage *MockStorageProvider) {},
 			expectedStatus: http.StatusBadRequest,

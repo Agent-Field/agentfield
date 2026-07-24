@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -420,9 +421,13 @@ func (ds *DefaultDevService) loadDevEnvFile(packagePath string) (map[string]stri
 			key := strings.TrimSpace(parts[0])
 			value := strings.TrimSpace(parts[1])
 
-			// Remove quotes if present
-			if (strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"")) ||
-				(strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'")) {
+			// Match the config writer: decode quoted escape sequences instead of
+			// passing them through to the launched process.
+			if strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"") {
+				if unquoted, err := strconv.Unquote(value); err == nil {
+					value = unquoted
+				}
+			} else if strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'") {
 				value = value[1 : len(value)-1]
 			}
 

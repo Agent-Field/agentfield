@@ -32,7 +32,7 @@ func (s *AgentFieldServer) applyGlobalMiddleware() {
 		corsConfig.AllowMethods = []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}
 	}
 	if len(corsConfig.AllowHeaders) == 0 {
-		corsConfig.AllowHeaders = []string{"Origin", "Content-Type", "Accept", "Authorization", "X-API-Key"}
+		corsConfig.AllowHeaders = []string{"Origin", "Content-Type", "Accept", "Authorization", "X-API-Key", "X-Admin-Token"}
 	}
 
 	s.Router.Use(cors.New(corsConfig))

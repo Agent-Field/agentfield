@@ -35,6 +35,7 @@ type ExecutionStore interface {
 	ListAgentVersions(ctx context.Context, id string) ([]*types.AgentNode, error)
 	CreateExecutionRecord(ctx context.Context, execution *types.Execution) error
 	GetExecutionRecord(ctx context.Context, executionID string) (*types.Execution, error)
+	GetExecutionRecordsBatch(ctx context.Context, executionIDs []string) (map[string]*types.Execution, error)
 	UpdateExecutionRecord(ctx context.Context, executionID string, update func(*types.Execution) (*types.Execution, error)) (*types.Execution, error)
 	QueryExecutionRecords(ctx context.Context, filter types.ExecutionFilter) ([]*types.Execution, error)
 	RegisterExecutionWebhook(ctx context.Context, webhook *types.ExecutionWebhook) error
@@ -188,6 +189,10 @@ const (
 	maxWebhookHeaders      = 20
 	maxWebhookHeaderLength = 512
 	maxWebhookSecretLength = 4096
+
+	// maxBatchStatusIDs caps the number of execution IDs a single
+	// batch-status request may fetch, matching the storage-layer cap.
+	maxBatchStatusIDs = 500
 )
 
 // ExecuteHandler handles synchronous execution requests.
@@ -807,19 +812,41 @@ func (c *executionController) handleBatchStatus(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if len(request.ExecutionIDs) > maxBatchStatusIDs {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("batch status supports at most %d execution IDs, got %d", maxBatchStatusIDs, len(request.ExecutionIDs))})
+		return
+	}
+
+	// Use one storage fetch for the normal path. If it fails, fall back to
+	// individual reads so the established per-ID error contract is preserved.
+	records, err := c.store.GetExecutionRecordsBatch(reqCtx, request.ExecutionIDs)
 
 	response := make(BatchStatusResponse, len(request.ExecutionIDs))
 	for _, id := range request.ExecutionIDs {
-		exec, err := c.store.GetExecutionRecord(reqCtx, id)
 		if err != nil {
-			response[id] = ExecutionStatusResponse{
-				ExecutionID: id,
-				Status:      "error",
-				Error:       pointerString(fmt.Sprintf("load execution: %v", err)),
+			exec, getErr := c.store.GetExecutionRecord(reqCtx, id)
+			if getErr != nil {
+				response[id] = ExecutionStatusResponse{
+					ExecutionID: id,
+					Status:      "error",
+					Error:       pointerString(fmt.Sprintf("load execution: %v", getErr)),
+				}
+				continue
 			}
+			if exec == nil {
+				response[id] = ExecutionStatusResponse{
+					ExecutionID: id,
+					Status:      "not_found",
+				}
+				continue
+			}
+			response[id] = c.renderStatusWithApproval(reqCtx, exec)
 			continue
 		}
-		if exec == nil {
+
+		exec, ok := records[id]
+		if !ok || exec == nil {
+			// Missing IDs preserve the prior per-ID response behavior.
 			response[id] = ExecutionStatusResponse{
 				ExecutionID: id,
 				Status:      "not_found",

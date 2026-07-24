@@ -368,7 +368,10 @@ func (pi *PackageInstaller) InstallPackage(sourcePath string, force bool) error 
 	// 6. Check for required environment variables and provide guidance
 	pi.checkEnvironmentVariables(metadata)
 
-	fmt.Printf("\n%s %s\n", Blue("→"), Bold(fmt.Sprintf("Run: af run %s", metadata.Name)))
+	// 7. Explicit next steps so a first-time user is never left guessing.
+	fmt.Printf("\n%s\n", Bold("Next steps:"))
+	fmt.Printf("  %s  %s\n", Cyan(fmt.Sprintf("af run %s", metadata.Name)), Gray("start the node"))
+	fmt.Printf("  %s  %s\n", Cyan("af list"), Gray("see installed nodes and status"))
 
 	return nil
 }
@@ -400,9 +403,9 @@ func (pi *PackageInstaller) checkEnvironmentVariables(metadata *PackageMetadata)
 	}
 
 	if len(missingRequired) > 0 {
-		fmt.Printf("\n%s %s\n", Yellow("⚠"), Bold("Missing required environment variables:"))
+		fmt.Printf("\n%s %s\n", Yellow("⚠"), Bold("Missing required environment variables — set each with:"))
 		for _, envVar := range missingRequired {
-			fmt.Printf("  %s\n", Cyan(fmt.Sprintf("af config %s --set %s=your-value-here", metadata.Name, envVar.Name)))
+			fmt.Printf("  %s\n", Cyan(fmt.Sprintf("af secrets set %s --node %s", envVar.Name, metadata.Name)))
 		}
 	}
 
@@ -417,7 +420,7 @@ func (pi *PackageInstaller) checkEnvironmentVariables(metadata *PackageMetadata)
 		}
 		fmt.Printf("\n%s %s (%s):\n", Yellow("⚠"), Bold("Set at least one of"), label)
 		for _, opt := range g.Options {
-			fmt.Printf("  %s\n", Cyan(fmt.Sprintf("af config %s --set %s=your-value-here", metadata.Name, opt.Name)))
+			fmt.Printf("  %s\n", Cyan(fmt.Sprintf("af secrets set %s --node %s", opt.Name, metadata.Name)))
 		}
 	}
 
@@ -1015,11 +1018,33 @@ func ResolvePackageSubdir(root, subdir string) (string, error) {
 		rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("--path %q resolves outside the package root", subdir)
 	}
-	manifest := filepath.Join(target, "agentfield-package.yaml")
+	// A lexical containment check is not sufficient: target may be a symlink
+	// that escapes the cloned package root. Resolve both paths before reading the
+	// manifest and require the physical target to remain inside the physical root.
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve package root: %w", err)
+	}
+	resolvedTarget, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// The selector names a directory absent from the clone. Keep the
+			// pre-hardening error contract: report the manifest we expected at
+			// the lexical path rather than a raw lstat failure.
+			return "", fmt.Errorf("no agentfield-package.yaml found for --path %q (expected at %s)",
+				subdir, filepath.Join(target, "agentfield-package.yaml"))
+		}
+		return "", fmt.Errorf("failed to resolve --path %q: %w", subdir, err)
+	}
+	if rel, err := filepath.Rel(resolvedRoot, resolvedTarget); err != nil ||
+		rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("--path %q resolves outside the package root", subdir)
+	}
+	manifest := filepath.Join(resolvedTarget, "agentfield-package.yaml")
 	if _, err := os.Stat(manifest); err != nil {
 		return "", fmt.Errorf("no agentfield-package.yaml found for --path %q (expected at %s)", subdir, manifest)
 	}
-	return target, nil
+	return resolvedTarget, nil
 }
 
 // hasRequirementsFile checks if requirements.txt exists
