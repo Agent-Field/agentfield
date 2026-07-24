@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"reflect"
 	"sync"
 )
 
@@ -352,27 +354,63 @@ func (s *ScopedMemory) GetTyped(ctx context.Context, key string, dest any) error
 	}
 }
 
+// ErrCyclicMemoryValue is returned when an in-memory value contains a cycle.
+// Cyclic values cannot be safely isolated through copying.
+var ErrCyclicMemoryValue = errors.New("memory values must not contain cycles")
+
+type copyReference struct {
+	kind reflect.Kind
+	ptr  uintptr
+}
+
 // deepCopyAny recursively copies maps and slices to break shared references.
-func deepCopyAny(v any) any {
+// It rejects cycles rather than recursing indefinitely.
+func deepCopyAny(v any) (any, error) {
+	return deepCopyAnyWithPath(v, make(map[copyReference]struct{}))
+}
+
+func deepCopyAnyWithPath(v any, path map[copyReference]struct{}) (any, error) {
 	switch val := v.(type) {
 	case map[string]any:
+		ref := copyReference{kind: reflect.Map, ptr: reflect.ValueOf(val).Pointer()}
+		if _, found := path[ref]; found {
+			return nil, ErrCyclicMemoryValue
+		}
+		path[ref] = struct{}{}
+		defer delete(path, ref)
+
 		m := make(map[string]any, len(val))
 		for k, vv := range val {
-			m[k] = deepCopyAny(vv)
+			copied, err := deepCopyAnyWithPath(vv, path)
+			if err != nil {
+				return nil, err
+			}
+			m[k] = copied
 		}
-		return m
+		return m, nil
 	case []any:
+		ref := copyReference{kind: reflect.Slice, ptr: reflect.ValueOf(val).Pointer()}
+		if _, found := path[ref]; found {
+			return nil, ErrCyclicMemoryValue
+		}
+		path[ref] = struct{}{}
+		defer delete(path, ref)
+
 		s := make([]any, len(val))
 		for i, elem := range val {
-			s[i] = deepCopyAny(elem)
+			copied, err := deepCopyAnyWithPath(elem, path)
+			if err != nil {
+				return nil, err
+			}
+			s[i] = copied
 		}
-		return s
+		return s, nil
 	case []float64:
 		dst := make([]float64, len(val))
 		copy(dst, val)
-		return dst
+		return dst, nil
 	default:
-		return v
+		return v, nil
 	}
 }
 
@@ -389,8 +427,8 @@ func deepCopyFloat64Slice(src []float64) []float64 {
 // InMemoryBackend provides a thread-safe in-memory implementation of MemoryBackend.
 // Data is lost when the process exits.
 type InMemoryBackend struct {
-	mu   sync.RWMutex
-	data map[string]map[string]any // "scope:scopeID" -> key -> value
+	mu         sync.RWMutex
+	data       map[string]map[string]any          // "scope:scopeID" -> key -> value
 	vectorData map[string]map[string]vectorRecord // "scope:scopeID" -> key -> vectorRecord
 }
 
@@ -413,6 +451,11 @@ func (b *InMemoryBackend) compositeKey(scope MemoryScope, scopeID string) string
 
 // Set stores a value.
 func (b *InMemoryBackend) Set(scope MemoryScope, scopeID, key string, value any) error {
+	copied, err := deepCopyAny(value)
+	if err != nil {
+		return err
+	}
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -420,24 +463,29 @@ func (b *InMemoryBackend) Set(scope MemoryScope, scopeID, key string, value any)
 	if b.data[ck] == nil {
 		b.data[ck] = make(map[string]any)
 	}
-	b.data[ck][key] = deepCopyAny(value)
+	b.data[ck][key] = copied
 	return nil
 }
 
 // Get retrieves a value.
 func (b *InMemoryBackend) Get(scope MemoryScope, scopeID, key string) (any, bool, error) {
 	b.mu.RLock()
-	defer b.mu.RUnlock()
 
 	ck := b.compositeKey(scope, scopeID)
 	if b.data[ck] == nil {
+		b.mu.RUnlock()
 		return nil, false, nil
 	}
 	val, found := b.data[ck][key]
+	b.mu.RUnlock()
 	if !found {
 		return nil, false, nil
 	}
-	return deepCopyAny(val), true, nil
+	copied, err := deepCopyAny(val)
+	if err != nil {
+		return nil, false, err
+	}
+	return copied, true, nil
 }
 
 // Delete removes a key.
@@ -470,6 +518,11 @@ func (b *InMemoryBackend) List(scope MemoryScope, scopeID string) ([]string, err
 
 // SetVector stores a vector.
 func (b *InMemoryBackend) SetVector(scope MemoryScope, scopeID, key string, embedding []float64, metadata map[string]any) error {
+	copiedMetadata, err := deepCopyAny(metadata)
+	if err != nil {
+		return err
+	}
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -479,7 +532,7 @@ func (b *InMemoryBackend) SetVector(scope MemoryScope, scopeID, key string, embe
 	}
 	b.vectorData[ck][key] = vectorRecord{
 		embedding: deepCopyFloat64Slice(embedding),
-		metadata:  deepCopyAny(metadata).(map[string]any),
+		metadata:  copiedMetadata.(map[string]any),
 	}
 	return nil
 }
@@ -487,17 +540,22 @@ func (b *InMemoryBackend) SetVector(scope MemoryScope, scopeID, key string, embe
 // GetVector retrieves a vector.
 func (b *InMemoryBackend) GetVector(scope MemoryScope, scopeID, key string) ([]float64, map[string]any, bool, error) {
 	b.mu.RLock()
-	defer b.mu.RUnlock()
 
 	ck := b.compositeKey(scope, scopeID)
 	if b.vectorData[ck] == nil {
+		b.mu.RUnlock()
 		return nil, nil, false, nil
 	}
 	rec, found := b.vectorData[ck][key]
+	b.mu.RUnlock()
 	if !found {
 		return nil, nil, false, nil
 	}
-	return deepCopyFloat64Slice(rec.embedding), deepCopyAny(rec.metadata).(map[string]any), true, nil
+	copiedMetadata, err := deepCopyAny(rec.metadata)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	return deepCopyFloat64Slice(rec.embedding), copiedMetadata.(map[string]any), true, nil
 }
 
 // SearchVector performs similarity search (stubbed - returns empty list for in-memory).

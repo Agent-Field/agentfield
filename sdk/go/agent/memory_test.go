@@ -644,7 +644,8 @@ func TestInMemoryBackend_DeepCopyConcurrent(t *testing.T) {
 func TestDeepCopyAny_SliceAny(t *testing.T) {
 	t.Run("shallow []any copy", func(t *testing.T) {
 		orig := []any{"a", "b", 42}
-		copied := deepCopyAny(orig)
+		copied, err := deepCopyAny(orig)
+		require.NoError(t, err)
 
 		assert.Equal(t, orig, copied)
 		orig[0] = "mutated"
@@ -657,7 +658,9 @@ func TestDeepCopyAny_SliceAny(t *testing.T) {
 			[]any{"inner1", "inner2"},
 			map[string]any{"key": "val"},
 		}
-		copied := deepCopyAny(orig).([]any)
+		copiedAny, err := deepCopyAny(orig)
+		require.NoError(t, err)
+		copied := copiedAny.([]any)
 
 		orig[0] = "changed"
 		orig[1].([]any)[0] = "changed-inner"
@@ -670,7 +673,8 @@ func TestDeepCopyAny_SliceAny(t *testing.T) {
 
 	t.Run("empty []any", func(t *testing.T) {
 		orig := []any{}
-		copied := deepCopyAny(orig)
+		copied, err := deepCopyAny(orig)
+		require.NoError(t, err)
 		assert.Equal(t, []any{}, copied)
 	})
 }
@@ -678,7 +682,9 @@ func TestDeepCopyAny_SliceAny(t *testing.T) {
 func TestDeepCopyAny_SliceFloat64(t *testing.T) {
 	t.Run("float64 slice is copied not shared", func(t *testing.T) {
 		orig := []float64{1.0, 2.0, 3.0}
-		copied := deepCopyAny(orig).([]float64)
+		copiedAny, err := deepCopyAny(orig)
+		require.NoError(t, err)
+		copied := copiedAny.([]float64)
 
 		orig[0] = 999.0
 		assert.Equal(t, []float64{1.0, 2.0, 3.0}, copied)
@@ -686,17 +692,56 @@ func TestDeepCopyAny_SliceFloat64(t *testing.T) {
 
 	t.Run("empty []float64", func(t *testing.T) {
 		orig := []float64{}
-		copied := deepCopyAny(orig).([]float64)
+		copiedAny, err := deepCopyAny(orig)
+		require.NoError(t, err)
+		copied := copiedAny.([]float64)
 		assert.Equal(t, []float64{}, copied)
 	})
 }
 
 func TestDeepCopyAny_DefaultPassthrough(t *testing.T) {
-	assert.Equal(t, "hello", deepCopyAny("hello"))
-	assert.Equal(t, 42, deepCopyAny(42))
-	assert.Equal(t, 3.14, deepCopyAny(3.14))
-	assert.Equal(t, true, deepCopyAny(true))
-	assert.Nil(t, deepCopyAny(nil))
+	for _, tc := range []struct {
+		name  string
+		value any
+	}{
+		{"string", "hello"},
+		{"integer", 42},
+		{"float", 3.14},
+		{"boolean", true},
+		{"nil", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			copied, err := deepCopyAny(tc.value)
+			require.NoError(t, err)
+			assert.Equal(t, tc.value, copied)
+		})
+	}
+}
+
+func TestInMemoryBackendRejectsCyclicValues(t *testing.T) {
+	backend := NewInMemoryBackend()
+	cycle := map[string]any{}
+	cycle["self"] = cycle
+
+	err := backend.Set(ScopeSession, "session", "key", cycle)
+	require.ErrorIs(t, err, ErrCyclicMemoryValue)
+
+	_, found, err := backend.Get(ScopeSession, "session", "key")
+	require.NoError(t, err)
+	assert.False(t, found)
+}
+
+func TestInMemoryBackendRejectsCyclicVectorMetadata(t *testing.T) {
+	backend := NewInMemoryBackend()
+	cycle := []any{nil}
+	cycle[0] = cycle
+
+	err := backend.SetVector(ScopeSession, "session", "key", []float64{1}, map[string]any{"cycle": cycle})
+	require.ErrorIs(t, err, ErrCyclicMemoryValue)
+
+	_, _, found, err := backend.GetVector(ScopeSession, "session", "key")
+	require.NoError(t, err)
+	assert.False(t, found)
 }
 
 func TestDeepCopyFloat64Slice_Nil(t *testing.T) {
@@ -708,5 +753,3 @@ func TestDeepCopyFloat64Slice_Empty(t *testing.T) {
 	assert.NotNil(t, result)
 	assert.Empty(t, result)
 }
-
-
