@@ -364,3 +364,260 @@ func TestCodexProvider_ModelVariantReasoningEffort(t *testing.T) {
 		assert.NotContains(t, cmd, "-c")
 	})
 }
+
+// codexSchemaRejectionEvent is the real error event codex exec --json emits
+// when the server's strict validator refuses --output-schema (captured live on
+// codex-cli 0.144.1, issue: invalid_json_schema for codex_output_schema).
+const codexSchemaRejectionEvent = `{"type":"error","message":"{\n  \"type\": \"error\",\n  \"error\": {\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_json_schema\",\n    \"message\": \"Invalid schema for response_format 'codex_output_schema'. Please ensure it is a valid JSON Schema.\",\n    \"param\": \"text.format.schema\"\n  },\n  \"status\": 400\n}"}`
+
+// TestCodexSchemaStrictExpressible pins the live-probed strict-validator rules:
+// which schema shapes may be sent through --output-schema and which must fall
+// back to last-message + local validation.
+func TestCodexSchemaStrictExpressible(t *testing.T) {
+	strictObject := func(props map[string]any) map[string]any {
+		return codexStrictJSONSchema(map[string]any{
+			"type":       "object",
+			"properties": props,
+		})
+	}
+
+	cases := []struct {
+		name   string
+		schema map[string]any
+		want   bool
+	}{
+		{
+			name:   "flat strict object",
+			schema: strictObject(map[string]any{"status": map[string]any{"type": "string"}}),
+			want:   true,
+		},
+		{
+			name:   "empty properties object",
+			schema: strictObject(map[string]any{}),
+			want:   true,
+		},
+		{
+			name: "free-form map property",
+			schema: strictObject(map[string]any{
+				"meta": map[string]any{"type": "object"},
+			}),
+			want: false,
+		},
+		{
+			name: "typed map property",
+			schema: strictObject(map[string]any{
+				"meta": map[string]any{
+					"type":                 "object",
+					"additionalProperties": map[string]any{"type": "string"},
+				},
+			}),
+			want: false,
+		},
+		{
+			name: "bare Any node",
+			schema: strictObject(map[string]any{
+				"value": map[string]any{},
+			}),
+			want: false,
+		},
+		{
+			name: "anyOf with null",
+			schema: strictObject(map[string]any{
+				"note": map[string]any{"anyOf": []any{
+					map[string]any{"type": "string"},
+					map[string]any{"type": "null"},
+				}},
+			}),
+			want: true,
+		},
+		{
+			name: "array of strict objects via $defs ref",
+			schema: codexStrictJSONSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"items": map[string]any{
+						"type":  "array",
+						"items": map[string]any{"$ref": "#/$defs/Sub"},
+					},
+				},
+				"$defs": map[string]any{
+					"Sub": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"x": map[string]any{"type": "string"},
+						},
+					},
+				},
+			}),
+			want: true,
+		},
+		{
+			name: "inexpressible $defs entry poisons the schema",
+			schema: codexStrictJSONSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"sub": map[string]any{"$ref": "#/$defs/Sub"},
+				},
+				"$defs": map[string]any{
+					"Sub": map[string]any{"type": "object"},
+				},
+			}),
+			want: false,
+		},
+		{
+			name: "array without items",
+			schema: strictObject(map[string]any{
+				"xs": map[string]any{"type": "array"},
+			}),
+			want: false,
+		},
+		{
+			name: "type list of primitives",
+			schema: strictObject(map[string]any{
+				"a": map[string]any{"type": []any{"string", "null"}},
+			}),
+			want: true,
+		},
+		{
+			name: "type list containing object",
+			schema: strictObject(map[string]any{
+				"a": map[string]any{"type": []any{"object", "null"}},
+			}),
+			want: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, codexSchemaStrictExpressible(tc.schema))
+		})
+	}
+}
+
+// TestCodexProvider_LastMessageOnlyArgv verifies the not-strict-expressible
+// contract: an empty schemaPath with a non-empty outputPath yields
+// --output-last-message but NO --output-schema.
+func TestCodexProvider_LastMessageOnlyArgv(t *testing.T) {
+	dir := t.TempDir()
+	outputPath := OutputPath(dir)
+
+	var gotCmd []string
+	p := NewCodexProvider("codex")
+	p.SetSchema("", outputPath)
+	p.runCLI = func(_ context.Context, cmd []string, _ map[string]string, _ string, _ int, _ []byte) (*CLIResult, error) {
+		gotCmd = cmd
+		return &CLIResult{Stdout: `{"type":"result","result":"{}"}`, ReturnCode: 0}, nil
+	}
+
+	_, err := p.Execute(context.Background(), "prompt", Options{})
+	require.NoError(t, err)
+	assert.NotContains(t, gotCmd, "--output-schema")
+	assert.Contains(t, strings.Join(gotCmd, " "), "--output-last-message "+outputPath)
+}
+
+// TestCodexProvider_OutputSchemaRejectionFallback verifies the reactive
+// fallback: a run whose --output-schema is refused server-side
+// (invalid_json_schema) is rerun exactly once without the flag, keeping
+// --output-last-message, and the retry's result is returned.
+func TestCodexProvider_OutputSchemaRejectionFallback(t *testing.T) {
+	dir := t.TempDir()
+	schemaPath := SchemaPath(dir)
+	outputPath := OutputPath(dir)
+	require.NoError(t, os.WriteFile(schemaPath, []byte(`{"type":"object","properties":{},"required":[],"additionalProperties":false}`), 0o600))
+
+	var calls [][]string
+	p := NewCodexProvider("codex")
+	p.SetSchema(schemaPath, outputPath)
+	p.runCLI = func(_ context.Context, cmd []string, _ map[string]string, _ string, _ int, _ []byte) (*CLIResult, error) {
+		calls = append(calls, cmd)
+		if len(calls) == 1 {
+			return &CLIResult{Stdout: codexSchemaRejectionEvent, ReturnCode: 1}, nil
+		}
+		return &CLIResult{
+			Stdout:     `{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"{\"ok\":true}"}}`,
+			ReturnCode: 0,
+		}, nil
+	}
+
+	raw, err := p.Execute(context.Background(), "prompt", Options{})
+	require.NoError(t, err)
+	require.Len(t, calls, 2)
+
+	first := strings.Join(calls[0], " ")
+	assert.Contains(t, first, "--output-schema "+schemaPath)
+	second := strings.Join(calls[1], " ")
+	assert.NotContains(t, calls[1], "--output-schema")
+	assert.Contains(t, second, "--output-last-message "+outputPath)
+
+	assert.False(t, raw.IsError)
+	assert.Equal(t, `{"ok":true}`, raw.Result)
+}
+
+// TestCodexProvider_NonSchemaFailureNoFallbackRetry verifies an ordinary
+// failure (no invalid_json_schema marker) is NOT rerun.
+func TestCodexProvider_NonSchemaFailureNoFallbackRetry(t *testing.T) {
+	dir := t.TempDir()
+	schemaPath := SchemaPath(dir)
+	outputPath := OutputPath(dir)
+	require.NoError(t, os.WriteFile(schemaPath, []byte(`{"type":"object","properties":{},"required":[],"additionalProperties":false}`), 0o600))
+
+	callCount := 0
+	p := NewCodexProvider("codex")
+	p.SetSchema(schemaPath, outputPath)
+	p.runCLI = func(_ context.Context, _ []string, _ map[string]string, _ string, _ int, _ []byte) (*CLIResult, error) {
+		callCount++
+		return &CLIResult{Stderr: "stream error: something unrelated", ReturnCode: 1}, nil
+	}
+
+	raw, err := p.Execute(context.Background(), "prompt", Options{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, callCount)
+	assert.True(t, raw.IsError)
+}
+
+// TestRunner_Run_CodexInexpressibleSchemaSkipsFlag drives the runner end-to-end
+// with a schema containing a free-form map field: the codex argv must carry
+// --output-last-message but not --output-schema, and the answer written to the
+// last-message file must still parse and validate locally.
+func TestRunner_Run_CodexInexpressibleSchemaSkipsFlag(t *testing.T) {
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "captured-args.txt")
+
+	script := writeTestScript(t, dir, "codex",
+		"#!/bin/sh\n"+
+			"cat > /dev/null\n"+
+			"printf '%s\\n' \"$@\" > \""+argsFile+"\"\n"+
+			"out=\"\"\n"+
+			"prev=\"\"\n"+
+			"for a in \"$@\"; do\n"+
+			"  if [ \"$prev\" = \"--output-last-message\" ]; then out=\"$a\"; fi\n"+
+			"  prev=\"$a\"\n"+
+			"done\n"+
+			"if [ -n \"$out\" ]; then printf '%s' '{\"status\":\"ok\",\"meta\":{\"k\":\"v\"}}' > \"$out\"; fi\n"+
+			"printf '%s\\n' '{\"type\":\"result\",\"result\":\"\"}'\n")
+
+	runner := NewRunner(Options{Provider: ProviderCodex, BinPath: script})
+
+	var dest struct {
+		Status string         `json:"status"`
+		Meta   map[string]any `json:"meta"`
+	}
+	result, err := runner.Run(context.Background(), "do the work", map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"status": map[string]any{"type": "string"},
+			"meta":   map[string]any{"type": "object"},
+		},
+	}, &dest, Options{ProjectDir: dir})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.False(t, result.IsError, "expected success, got: %s", result.ErrorMessage)
+	assert.Equal(t, "ok", dest.Status)
+	assert.Equal(t, map[string]any{"k": "v"}, dest.Meta)
+
+	captured, err := os.ReadFile(argsFile)
+	require.NoError(t, err)
+	args := string(captured)
+	assert.NotContains(t, args, "--output-schema")
+	assert.Contains(t, args, "--output-last-message")
+}

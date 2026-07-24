@@ -596,6 +596,11 @@ func (m *PackageMetadata) IsGo() bool {
 	return strings.EqualFold(strings.TrimSpace(m.Language), "go")
 }
 
+// IsTypeScript reports whether this node is a TypeScript node.
+func (m *PackageMetadata) IsTypeScript() bool {
+	return strings.EqualFold(strings.TrimSpace(m.Language), "typescript")
+}
+
 // StartCommand returns the tokens used to launch the node. It prefers the
 // manifest entrypoint.start; otherwise it falls back to a language-appropriate
 // default: "go run ." for a Go node, "python <main>" (default main.py) for a
@@ -832,14 +837,42 @@ func (pi *PackageInstaller) installDependencies(packagePath string, metadata *Pa
 }
 
 // InstallDependencies resolves and installs a node's dependencies for its
-// implementation language: it builds the Go binary for a Go node, or provisions
-// the Python venv + pip installs for a Python node. It is the single entry point
-// shared by the CLI installer and the package service so both stay in lockstep.
+// implementation language. It is the single entry point shared by the CLI
+// installer and the package service so both stay in lockstep.
 func InstallDependencies(packagePath string, metadata *PackageMetadata) error {
 	if metadata.IsGo() {
 		return InstallGoDependencies(packagePath, metadata)
 	}
+	if metadata.IsTypeScript() {
+		return InstallTypeScriptDependencies(packagePath, metadata.Dependencies.System)
+	}
 	return InstallPythonDependencies(packagePath, metadata.Dependencies.Python, metadata.Dependencies.System)
+}
+
+// InstallTypeScriptDependencies installs package.json dependencies with npm in
+// the package root. TypeScript dependencies remain declared by package.json;
+// manifest system dependencies are reported for manual installation.
+func InstallTypeScriptDependencies(packagePath string, systemDeps []string) error {
+	if !fileExistsAt(packagePath, "package.json") {
+		return fmt.Errorf("cannot install TypeScript dependencies for package %s: package.json not found", packagePath)
+	}
+
+	npmPath, err := exec.LookPath("npm")
+	if err != nil {
+		return fmt.Errorf("cannot install TypeScript dependencies for package %s: npm executable not found on PATH: %w", packagePath, err)
+	}
+
+	cmd := exec.Command(npmPath, "install")
+	cmd.Dir = packagePath
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to run npm install for TypeScript package %s: %w\nOutput: %s", packagePath, err, output)
+	}
+
+	for _, dep := range systemDeps {
+		fmt.Printf("System dependency required: %s (please install manually)\n", dep)
+	}
+
+	return nil
 }
 
 // InstallPythonDependencies sets up a per-package virtual environment and

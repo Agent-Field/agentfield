@@ -100,10 +100,21 @@ func (r *Runner) Run(ctx context.Context, prompt string, schema map[string]any, 
 			}
 			nativeSchemaPath = SchemaPath(absDir)
 			nativeOutputPath = OutputPath(absDir)
-			if strictJSON, mErr := json.MarshalIndent(codexStrictJSONSchema(schema), "", "  "); mErr == nil {
+			strictSchema := codexStrictJSONSchema(schema)
+			if strictJSON, mErr := json.MarshalIndent(strictSchema, "", "  "); mErr == nil {
 				if mkErr := os.MkdirAll(filepath.Dir(nativeSchemaPath), 0o700); mkErr == nil {
 					if wErr := os.WriteFile(nativeSchemaPath, strictJSON, 0o600); wErr == nil {
-						sa.SetSchema(nativeSchemaPath, nativeOutputPath)
+						if codexSchemaStrictExpressible(strictSchema) {
+							sa.SetSchema(nativeSchemaPath, nativeOutputPath)
+						} else {
+							// OpenAI's strict validator would 400 this schema
+							// (free-form map / Any nodes — invalid_json_schema),
+							// so skip --output-schema: the schema file stays on
+							// disk for the model to read via the prompt suffix,
+							// --output-last-message still captures the answer,
+							// and schema enforcement falls to local validation.
+							sa.SetSchema("", nativeOutputPath)
+						}
 						useNativeSchema = true
 						// Clean up unconditionally: CleanupTempFiles no-ops when
 						// outputDir is "." so the strict schema / native output

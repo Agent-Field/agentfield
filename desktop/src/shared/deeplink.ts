@@ -8,15 +8,14 @@
 export const DEEP_LINK_SCHEME = 'agentfield'
 
 /** The app's views, also the vocabulary of deep-link targets. */
-export const VIEWS = [
-  'dashboard',
-  'agents',
-  'activity',
-  'install',
-  'secrets',
-  'settings'
-] as const
+export const VIEWS = ['home', 'install', 'agents', 'activity', 'settings'] as const
 export type View = (typeof VIEWS)[number]
+
+/** Pre-IA rename hosts that still open the app on the successor view. */
+const LEGACY_VIEWS: Record<string, View> = {
+  dashboard: 'home',
+  secrets: 'settings'
+}
 
 export function isView(value: string): value is View {
   return (VIEWS as readonly string[]).includes(value)
@@ -26,8 +25,9 @@ export function isView(value: string): value is View {
  * Parse an agentfield:// URL into the view it addresses.
  *
  * Returns null for anything that is not an agentfield: URL at all. A bare
- * `agentfield://` and any unknown view fall back to 'dashboard', so links
+ * `agentfield://` and any unknown view fall back to 'home', so links
  * minted by newer (or older) senders still open the app instead of dying.
+ * Legacy hosts `dashboard` and `secrets` migrate to `home` and `settings`.
  */
 export function parseDeepLink(url: string): View | null {
   let parsed: URL
@@ -40,7 +40,9 @@ export function parseDeepLink(url: string): View | null {
   // agentfield://agents parses the view as the host; agentfield:agents (no
   // slashes) parses it as an opaque pathname. Accept both spellings.
   const target = (parsed.host || parsed.pathname).replace(/^\/+/, '').split('/')[0].toLowerCase()
-  return isView(target) ? target : 'dashboard'
+  if (isView(target)) return target
+  if (target in LEGACY_VIEWS) return LEGACY_VIEWS[target]
+  return 'home'
 }
 
 /**

@@ -52,13 +52,13 @@ If set, the control plane requires an API key for most endpoints.
 
 ### Anonymous Telemetry
 
-Anonymous usage telemetry is enabled by default to help us improve AgentField. It records coarse product signals such as startup, agent registration, SDK language, runtime type, storage mode, and execution status buckets.
+Anonymous usage telemetry is enabled by default to help us improve AgentField. It records coarse product signals such as startup, agent registration, SDK language, runtime type, storage mode, and execution status buckets. Events use a pseudonymous, installation-scoped identifier; it represents an AgentField installation, not a person or account.
 
-It does not collect prompts, inputs, outputs, logs, secrets, API keys, raw IP addresses, hostnames, user IDs, DIDs, or raw error text.
+The telemetry payload does not include prompts, inputs, outputs, logs, secrets, API keys, IP addresses, hostnames, user IDs, DIDs, or raw error text. Sending is best-effort and does not affect control-plane or execution behavior.
 
 - `AGENTFIELD_TELEMETRY_ENABLED` (default: `true`): Set to `false` to disable anonymous usage telemetry.
 - `AGENTFIELD_TELEMETRY_ENDPOINT` (default: `https://agentfield.ai/api/oss/telemetry`): Hosted anonymous telemetry endpoint.
-- `AGENTFIELD_TELEMETRY_INSTALL_ID` (optional): Stable externally managed anonymous install ID. The control plane hashes it before sending.
+- `AGENTFIELD_TELEMETRY_INSTALL_ID` (optional): Stable externally managed installation ID. Use a random, opaque value—not an email, account name, hostname, or other identifying value. The control plane hashes it before sending.
 - `AGENTFIELD_TELEMETRY_INSTALL_ID_PATH` (optional): Path for the persisted local install ID.
 - `AGENTFIELD_TELEMETRY_TIMEOUT` (default: `800ms`): Per-event send timeout. Failures are ignored.
 
