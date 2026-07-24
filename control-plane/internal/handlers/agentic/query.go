@@ -134,8 +134,12 @@ func queryExecutions(c *gin.Context, ctx context.Context, store storage.StorageP
 	total := len(execs)
 
 	// Apply offset and limit
-	if req.Offset > 0 && req.Offset < len(execs) {
-		execs = execs[req.Offset:]
+	if req.Offset > 0 {
+		if req.Offset < len(execs) {
+			execs = execs[req.Offset:]
+		} else {
+			execs = execs[:0]
+		}
 	}
 	if len(execs) > req.Limit {
 		execs = execs[:req.Limit]
@@ -160,8 +164,12 @@ func queryAgents(c *gin.Context, ctx context.Context, store storage.StorageProvi
 	}
 
 	total := len(agents)
-	if req.Offset > 0 && req.Offset < len(agents) {
-		agents = agents[req.Offset:]
+	if req.Offset > 0 {
+		if req.Offset < len(agents) {
+			agents = agents[req.Offset:]
+		} else {
+			agents = agents[:0]
+		}
 	}
 	if len(agents) > req.Limit {
 		agents = agents[:req.Limit]
@@ -205,8 +213,12 @@ func queryWorkflows(c *gin.Context, ctx context.Context, store storage.StoragePr
 	}
 
 	total := len(workflows)
-	if req.Offset > 0 && req.Offset < len(workflows) {
-		workflows = workflows[req.Offset:]
+	if req.Offset > 0 {
+		if req.Offset < len(workflows) {
+			workflows = workflows[req.Offset:]
+		} else {
+			workflows = workflows[:0]
+		}
 	}
 	if len(workflows) > req.Limit {
 		workflows = workflows[:req.Limit]
@@ -334,8 +346,12 @@ func querySessions(c *gin.Context, ctx context.Context, store storage.StoragePro
 	}
 
 	total := len(sessions)
-	if req.Offset > 0 && req.Offset < len(sessions) {
-		sessions = sessions[req.Offset:]
+	if req.Offset > 0 {
+		if req.Offset < len(sessions) {
+			sessions = sessions[req.Offset:]
+		} else {
+			sessions = sessions[:0]
+		}
 	}
 	if len(sessions) > req.Limit {
 		sessions = sessions[:req.Limit]

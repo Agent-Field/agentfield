@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -246,4 +247,34 @@ func TestBatchHandler_ConcurrentResultIntegrity(t *testing.T) {
 		result := r.(map[string]interface{})
 		assert.Equal(t, float64(200), result["status"])
 	}
+}
+
+func TestBatchHandler_PreservesCallerIdentityThroughAuthenticatedRoute(t *testing.T) {
+	router := gin.New()
+	router.Use(middleware.APIKeyAuth(middleware.AuthConfig{APIKey: "test-api-key"}))
+	router.GET("/api/v1/protected", func(c *gin.Context) {
+		callerAgentID, ok := c.Get(string(middleware.CallerAgentIDKey))
+		if !ok {
+			c.JSON(http.StatusForbidden, gin.H{"error": "caller identity missing"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"caller_agent_id": callerAgentID})
+	})
+	router.POST("/api/v1/agentic/batch", BatchHandler(router))
+
+	body := `{"operations":[{"id":"protected","method":"GET","path":"/api/v1/protected"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agentic/batch", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "test-api-key")
+	req.Header.Set("X-Caller-Agent-ID", "calling-agent")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp AgenticResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	results := resp.Data.(map[string]interface{})["results"].([]interface{})
+	result := results[0].(map[string]interface{})
+	assert.Equal(t, float64(http.StatusOK), result["status"])
+	assert.Equal(t, "calling-agent", result["body"].(map[string]interface{})["caller_agent_id"])
 }

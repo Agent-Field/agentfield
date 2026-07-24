@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
@@ -188,7 +189,40 @@ func TestQueryHandler_AgentOffsetOutOfBounds(t *testing.T) {
 	require.True(t, resp.OK)
 	data := resp.Data.(map[string]interface{})
 	assert.Equal(t, float64(2), data["total"])
+	assert.Empty(t, data["results"])
 	store.AssertExpectations(t)
+}
+
+func TestQueryHandler_ValidRFC3339FiltersAreForwarded(t *testing.T) {
+	since := "2026-01-02T03:04:05Z"
+	until := "2026-01-03T04:05:06Z"
+	store := &handlerTestStorage{mockStatusStorage: &mockStatusStorage{}}
+	store.On("QueryExecutionRecords", mock.Anything, mock.MatchedBy(func(filter types.ExecutionFilter) bool {
+		return filter.Status != nil && *filter.Status == "completed" &&
+			filter.AgentNodeID != nil && *filter.AgentNodeID == "agent-1" &&
+			filter.RunID != nil && *filter.RunID == "run-1" &&
+			filter.SessionID != nil && *filter.SessionID == "session-1" &&
+			filter.ActorID != nil && *filter.ActorID == "actor-1" &&
+			filter.StartTime != nil && filter.StartTime.Equal(parseRFC3339(t, since)) &&
+			filter.EndTime != nil && filter.EndTime.Equal(parseRFC3339(t, until))
+	})).Return([]*types.Execution{}, nil)
+
+	router := gin.New()
+	router.POST("/query", QueryHandler(store))
+	req := httptest.NewRequest(http.MethodPost, "/query", bytes.NewBufferString(`{"resource":"executions","filters":{"status":"completed","agent_id":"agent-1","run_id":"run-1","session_id":"session-1","actor_id":"actor-1","since":"`+since+`","until":"`+until+`"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	store.AssertExpectations(t)
+}
+
+func parseRFC3339(t *testing.T, value string) time.Time {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339, value)
+	require.NoError(t, err)
+	return parsed
 }
 
 func TestQueryHandler_ResourceRequiresField(t *testing.T) {

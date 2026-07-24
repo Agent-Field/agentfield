@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/server/apicatalog"
+	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -127,6 +128,46 @@ func TestSmart404Handler_SuggestionsAreAuthFiltered(t *testing.T) {
 		assert.Contains(t, entry, "summary")
 		assert.Contains(t, entry, "score")
 	}
+}
+
+func TestDiscoverAndSmart404_UseAuthenticatedCatalogVisibility(t *testing.T) {
+	catalog := apicatalog.New()
+	catalog.RegisterBatch([]apicatalog.EndpointEntry{
+		{Method: http.MethodGet, Path: "/api/v1/visible", Group: "test", Summary: "Visible endpoint", AuthLevel: "api_key"},
+		{Method: http.MethodGet, Path: "/api/v1/admin-only", Group: "test", Summary: "Admin endpoint", AuthLevel: "admin"},
+	})
+	router := gin.New()
+	router.Use(middleware.APIKeyAuth(middleware.AuthConfig{APIKey: "test-api-key"}))
+	router.GET("/api/v1/agentic/discover", DiscoverHandler(catalog))
+	router.NoRoute(Smart404Handler(catalog, nil))
+
+	t.Run("discover exposes only API-key-accessible endpoints", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/agentic/discover?group=test", nil)
+		req.Header.Set("X-API-Key", "test-api-key")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		var resp AgenticResponse
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+		endpoints := resp.Data.(map[string]interface{})["endpoints"].([]interface{})
+		require.Len(t, endpoints, 1)
+		assert.Equal(t, "/api/v1/visible", endpoints[0].(map[string]interface{})["path"])
+	})
+
+	t.Run("smart 404 excludes admin-only suggestions", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/admin-onli", nil)
+		req.Header.Set("X-API-Key", "test-api-key")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusNotFound, rec.Code)
+		var body map[string]interface{}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+		for _, suggestion := range body["suggestions"].([]interface{}) {
+			assert.NotEqual(t, "/api/v1/admin-only", suggestion.(map[string]interface{})["path"])
+		}
+	})
 }
 
 func TestSmart404Handler_HelpLinksContainExpectedKeys(t *testing.T) {
