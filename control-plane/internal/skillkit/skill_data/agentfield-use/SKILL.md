@@ -128,7 +128,9 @@ curl -s -X POST http://localhost:8080/api/v1/execute/swe-planner.plan \
 
 Async dispatch is cheap: fire all independent calls up front, then poll them
 together. Do NOT serialize multi-agent work — the whole point of the control
-plane is managing many agents at once. What to know:
+plane is managing many agents at once. When a batch of independent jobs arrives
+(ten PRs to review, five repos to scan), the default is to dispatch the whole
+batch now and poll as a group — not one-at-a-time. What to know:
 
 - Concurrent calls to the **same reasoner** are safe when the agent is (e.g.
   pr-af isolates concurrent reviews per PR). If an agent's docs don't say it's
@@ -146,6 +148,17 @@ recommended_max_concurrent}` (the recommendation is CPU-based). Read it before
 launching more heavy runs — if `active_executions >= recommended_max_concurrent`,
 finish or await in-flight work first rather than starting more, and tell the
 user you're throttling to avoid overloading the machine.
+
+**Canary after reconfiguration, then fan out.** The one exception to
+fire-everything-up-front: you just changed a node's runtime config (provider,
+model, bin path — `af secrets set` + restart). A misconfigured harness can fail
+*silently* — the run reports `succeeded` with empty results in seconds, and an
+agent that posts externally (GitHub reviews, Slack, tickets) will publish that
+garbage under the user's identity, once per dispatched call. So after any
+config change: send ONE representative call, confirm it did real work (nonzero
+cost/duration, plausible output — not just `succeeded`), then fan out the rest
+at full width. This is a gate on the first call after a config change, not a
+reason to serialize steady-state work.
 
 ## 4. Get the result
 
