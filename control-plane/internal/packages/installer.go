@@ -1027,6 +1027,13 @@ func ResolvePackageSubdir(root, subdir string) (string, error) {
 	}
 	resolvedTarget, err := filepath.EvalSymlinks(target)
 	if err != nil {
+		if os.IsNotExist(err) {
+			// The selector names a directory absent from the clone. Keep the
+			// pre-hardening error contract: report the manifest we expected at
+			// the lexical path rather than a raw lstat failure.
+			return "", fmt.Errorf("no agentfield-package.yaml found for --path %q (expected at %s)",
+				subdir, filepath.Join(target, "agentfield-package.yaml"))
+		}
 		return "", fmt.Errorf("failed to resolve --path %q: %w", subdir, err)
 	}
 	if rel, err := filepath.Rel(resolvedRoot, resolvedTarget); err != nil ||
