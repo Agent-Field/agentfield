@@ -3,10 +3,19 @@ import { deepLinkFromArgv, isView, parseDeepLink } from './deeplink'
 
 describe('parseDeepLink', () => {
   it('maps each view URL to its view', () => {
-    expect(parseDeepLink('agentfield://dashboard')).toBe('dashboard')
+    expect(parseDeepLink('agentfield://home')).toBe('home')
+    expect(parseDeepLink('agentfield://install')).toBe('install')
     expect(parseDeepLink('agentfield://agents')).toBe('agents')
     expect(parseDeepLink('agentfield://activity')).toBe('activity')
-    expect(parseDeepLink('agentfield://install')).toBe('install')
+    expect(parseDeepLink('agentfield://settings')).toBe('settings')
+  })
+
+  it('migrates legacy dashboard and secrets hosts', () => {
+    expect(parseDeepLink('agentfield://dashboard')).toBe('home')
+    expect(parseDeepLink('agentfield://secrets')).toBe('settings')
+    expect(parseDeepLink('agentfield://secrets#secrets')).toBe('settings')
+    expect(parseDeepLink('agentfield:dashboard')).toBe('home')
+    expect(parseDeepLink('agentfield:secrets')).toBe('settings')
   })
 
   it('is case-insensitive and tolerates trailing slashes and subpaths', () => {
@@ -17,11 +26,12 @@ describe('parseDeepLink', () => {
 
   it('accepts the no-slash (opaque path) spelling', () => {
     expect(parseDeepLink('agentfield:agents')).toBe('agents')
+    expect(parseDeepLink('agentfield:home')).toBe('home')
   })
 
-  it('falls back to dashboard for a bare or unknown target', () => {
-    expect(parseDeepLink('agentfield://')).toBe('dashboard')
-    expect(parseDeepLink('agentfield://marketplace')).toBe('dashboard')
+  it('falls back to home for a bare or unknown target', () => {
+    expect(parseDeepLink('agentfield://')).toBe('home')
+    expect(parseDeepLink('agentfield://marketplace')).toBe('home')
   })
 
   it('returns null for other schemes and non-URLs', () => {
@@ -47,9 +57,11 @@ describe('deepLinkFromArgv', () => {
 
 describe('isView', () => {
   it('accepts exactly the app views', () => {
-    for (const v of ['dashboard', 'agents', 'activity', 'install', 'secrets', 'settings']) {
+    for (const v of ['home', 'install', 'agents', 'activity', 'settings']) {
       expect(isView(v)).toBe(true)
     }
+    expect(isView('dashboard')).toBe(false)
+    expect(isView('secrets')).toBe(false)
     expect(isView('marketplace')).toBe(false)
     expect(isView('')).toBe(false)
   })

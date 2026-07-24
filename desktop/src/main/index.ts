@@ -1,11 +1,11 @@
 import { join, resolve } from 'node:path'
-import { BrowserWindow, Menu, app, ipcMain, shell } from 'electron'
+import { BrowserWindow, Menu, app, ipcMain, nativeTheme, shell } from 'electron'
 import { CATALOG } from '../shared/catalog'
 import { DEEP_LINK_SCHEME, type View, deepLinkFromArgv, parseDeepLink } from '../shared/deeplink'
 import type { DesktopSettings } from '../shared/types'
 import { spawn } from 'node:child_process'
-import { DEFAULT_BASE_URL, getSnapshot } from './agentfield'
-import { type AgentAction, runAgentAction, uninstallAgent } from './agents'
+import { getBaseUrl, getSnapshot, setActiveControlPlanePort } from './agentfield'
+import { type AgentAction, runAgentAction, startControlPlane, uninstallAgent } from './agents'
 import { runAutostart } from './autostart'
 import { getCliCommand, initializeCli, installBundledCli, refreshCliStatus } from './cli'
 import { childEnv, initUserPath } from './env'
@@ -18,6 +18,7 @@ import {
   setAgentSecret
 } from './secrets'
 import { loadSettings, mergeSettings, saveSettings } from './settings'
+import { pickFreePort } from './ports'
 import { setupTray } from './tray'
 import { syncTrayCompanion } from './tray-companion'
 import { AppUpdater } from './updates'
@@ -79,8 +80,8 @@ function createWindow(): void {
     // Windows/Linux window + taskbar icon; macOS uses the bundle's icns.
     icon: isMac ? undefined : appIcon,
     // Seamless titlebar: traffic lights float over the content on macOS,
-    // native window controls overlay on Windows. The renderer reserves a
-    // draggable strip at the top (see styles.css .titlebar).
+    // native window controls overlay on Windows/Linux. The renderer uses
+    // Electron's titlebar-area CSS environment variables to keep actions clear.
     titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
     trafficLightPosition: isMac ? { x: 18, y: 18 } : undefined,
     titleBarOverlay: isMac
@@ -215,22 +216,19 @@ function syncTray(enabled: boolean): void {
 }
 
 // Keep the AgentField skills present in detected coding agents (Claude Code,
-// Codex, Gemini, …): the builder skill (agentfield) and the consumer skill
-// (agentfield-use — how to discover and call installed agents). One install
-// per skill, sequential so concurrent runs never race on skillkit's state
-// file. Idempotent — skillkit tracks versions in ~/.agentfield/skills/
-// .state.json — and pure best-effort: an older CLI without agentfield-use in
-// its catalog fails that one invocation and nothing else.
-function syncSkills(names = ['agentfield', 'agentfield-use']): void {
-  const [head, ...rest] = names
-  if (!head) return
-  spawn(getCliCommand(), ['skill', 'install', head, '--non-interactive'], {
+// Codex, Gemini, …). A no-name `af skill install` installs the CLI's ENTIRE
+// skill catalog (builder, personal-agent, consumer, and whatever ships next),
+// so new catalog skills reach existing installs without a desktop release —
+// hardcoding names here is how agentfield-personal was silently missed. One
+// process, so concurrent runs never race on skillkit's state file. Idempotent
+// — skillkit tracks versions in ~/.agentfield/skills/.state.json — and pure
+// best-effort: failures are ignored.
+function syncSkills(): void {
+  spawn(getCliCommand(), ['skill', 'install', '--non-interactive'], {
     windowsHide: true,
     stdio: 'ignore',
     env: childEnv()
-  })
-    .on('error', () => {})
-    .on('close', () => syncSkills(rest))
+  }).on('error', () => {})
 }
 
 // Register (or clear) the OS login item. Dev builds skip it — registering
@@ -277,6 +275,7 @@ function main(): void {
   app.whenReady().then(async () => {
     installAppMenu()
     settings = await loadSettings(settingsFile())
+    nativeTheme.themeSource = settings.appearance
     applyLoginItem(settings)
 
     // Resolve the user's real login-shell PATH once (Finder/Dock launches
@@ -375,6 +374,16 @@ function main(): void {
       }
       return runAgentAction(action as AgentAction, name)
     })
+    ipcMain.handle('agentfield:start-control-plane', async () => {
+      const port = settings.controlPlanePort ?? (await pickFreePort())
+      setActiveControlPlanePort(port)
+      const result = await startControlPlane(port)
+      if (result.ok && port !== settings.lastControlPlanePort) {
+        settings = mergeSettings(settings, { lastControlPlanePort: port })
+        await saveSettings(settingsFile(), settings)
+      }
+      return result
+    })
     ipcMain.handle('agentfield:env-reports', () => getEnvReports())
     ipcMain.handle(
       'agentfield:secret-set',
@@ -414,7 +423,7 @@ function main(): void {
       if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//')) {
         return false
       }
-      void shell.openExternal(`${DEFAULT_BASE_URL}${path}`)
+      void shell.openExternal(`${getBaseUrl()}${path}`)
       return true
     })
     ipcMain.handle('agentfield:cli-status', () => refreshCliStatus(bundledCliPath()))
@@ -455,6 +464,9 @@ function main(): void {
       const prev = settings
       settings = mergeSettings(settings, patch)
       applyLoginItem(settings)
+      if (settings.appearance !== prev.appearance) {
+        nativeTheme.themeSource = settings.appearance
+      }
       // macOS: reflect a flipped tray toggle (install ↔ uninstall) right away.
       if (settings.trayCompanion !== prev.trayCompanion) syncTray(settings.trayCompanion)
       await saveSettings(settingsFile(), settings)
@@ -485,10 +497,18 @@ function main(): void {
 
     // Bring the control plane and the selected agents up in the background,
     // once the real PATH is resolved so af's subprocesses (go, uv, …) resolve.
+    // The port autostart ends up on (adopted or freshly picked) is persisted
+    // so the next app start finds this control plane again instead of
+    // spawning a second one somewhere else.
     void userPathReady.finally(() =>
-      runAutostart(settings, (message) => console.log(message)).catch((err) =>
-        console.error('autostart failed:', err)
-      )
+      runAutostart(
+        settings,
+        (message) => console.log(message),
+        async (port) => {
+          settings = mergeSettings(settings, { lastControlPlanePort: port })
+          await saveSettings(settingsFile(), settings)
+        }
+      ).catch((err) => console.error('autostart failed:', err))
     )
 
     app.on('activate', () => {

@@ -102,11 +102,28 @@ func TestRunCallSyncSchemaAndAsync(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, stdout.String(), `"message"`)
 
+	// With -o json, async emits a structured envelope so parsers get valid JSON
+	// (a harness driving the golden path pipes this straight into `af wait`).
 	stdout.Reset()
 	err = runCall(context.Background(), "node.echo", &callOptions{
 		inputSource:  `{"message":"queued"}`,
 		async:        true,
 		outputFormat: "json",
+		stdin:        bytes.NewBuffer(nil),
+		stdout:       &stdout,
+		stderr:       bytes.NewBuffer(nil),
+		stdinTTY:     false,
+	})
+	require.NoError(t, err)
+	require.JSONEq(t, `{"run_id":"run-2","status":"accepted"}`, stdout.String())
+
+	// The default/pretty path keeps the bare run-id line scripts capture with
+	// $(af call --async) — this contract must not regress.
+	stdout.Reset()
+	err = runCall(context.Background(), "node.echo", &callOptions{
+		inputSource:  `{"message":"queued"}`,
+		async:        true,
+		outputFormat: "pretty",
 		stdin:        bytes.NewBuffer(nil),
 		stdout:       &stdout,
 		stderr:       bytes.NewBuffer(nil),

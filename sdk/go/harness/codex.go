@@ -43,10 +43,39 @@ func NewCodexProvider(binPath string) *CodexProvider {
 // computation and file writing; the provider only needs the paths so it can
 // point codex's native --output-schema / --output-last-message flags at them.
 //
+// An empty schemaPath with a non-empty outputPath means "last-message only":
+// the runner determined the schema cannot be expressed in OpenAI strict mode
+// (codexSchemaStrictExpressible, schema.go), so --output-schema must not be
+// sent — the server would reject it with invalid_json_schema — but codex still
+// persists its final JSON answer to outputPath for local validation.
+//
 // This implements the schemaAware interface the runner detects (see runner.go).
 func (p *CodexProvider) SetSchema(schemaPath, outputPath string) {
 	p.schemaPath = schemaPath
 	p.outputPath = outputPath
+}
+
+// isOutputSchemaRejection reports whether CLI output carries the server-side
+// strict-schema validator's 400 for --output-schema. The error event embeds
+// `"code": "invalid_json_schema"` and `Invalid schema for response_format
+// 'codex_output_schema'` (both observed live on codex-cli 0.144.1).
+func isOutputSchemaRejection(output string) bool {
+	lower := strings.ToLower(output)
+	return strings.Contains(lower, "invalid_json_schema") ||
+		strings.Contains(lower, "invalid schema for response_format")
+}
+
+// withoutFlagValue returns cmd with one `flag value` pair removed.
+func withoutFlagValue(cmd []string, flag string) []string {
+	out := make([]string, 0, len(cmd))
+	for i := 0; i < len(cmd); i++ {
+		if cmd[i] == flag && i+1 < len(cmd) {
+			i++
+			continue
+		}
+		out = append(out, cmd[i])
+	}
+	return out
 }
 
 func (p *CodexProvider) Execute(ctx context.Context, prompt string, options Options) (*RawResult, error) {
@@ -90,14 +119,20 @@ func (p *CodexProvider) Execute(ctx context.Context, prompt string, options Opti
 	}
 
 	// Native structured output: when the runner has set a schema, point codex at
-	// the strict schema file and the last-message output file (patch lines
-	// 176-178). codex writes its final message to the last-message file, which
-	// the runner reads back.
+	// the strict schema file (patch lines 176-178). Kept independent of the
+	// last-message flag below: the runner passes an empty schemaPath when the
+	// schema is not strict-expressible (see SetSchema), and the reactive
+	// fallback after execution needs the answer file even when the server
+	// rejects the schema flag.
+	usedOutputSchema := false
 	if p.schemaPath != "" && fileExists(p.schemaPath) {
 		cmd = append(cmd, "--output-schema", p.schemaPath)
-		if p.outputPath != "" {
-			cmd = append(cmd, "--output-last-message", p.outputPath)
-		}
+		usedOutputSchema = true
+	}
+	// codex writes its final message to the last-message file, which the
+	// runner reads back.
+	if p.outputPath != "" {
+		cmd = append(cmd, "--output-last-message", p.outputPath)
 	}
 
 	env := make(map[string]string)
@@ -117,6 +152,21 @@ func (p *CodexProvider) Execute(ctx context.Context, prompt string, options Opti
 	// prompt from stdin, and delivering it there keeps large prompts off the
 	// argv and out of process listings.
 	cliResult, err := runCLI(ctx, cmd, env, cwd, options.timeout(), []byte(prompt))
+
+	// Reactive fallback: if the server's strict-schema validator refused the
+	// schema we sent (invalid_json_schema 400 — the validator's rules can
+	// tighten upstream at any time), rerun once WITHOUT --output-schema. The
+	// prompt suffix still pins the JSON contract and --output-last-message
+	// still captures the final answer, so the runner's local validation takes
+	// over exactly as in the not-strict-expressible path.
+	if err == nil && usedOutputSchema && cliResult.ReturnCode != 0 &&
+		isOutputSchemaRejection(cliResult.Stdout+cliResult.Stderr) {
+		retryCmd := withoutFlagValue(cmd, "--output-schema")
+		if retryResult, retryErr := runCLI(ctx, retryCmd, env, cwd, options.timeout(), []byte(prompt)); retryErr == nil {
+			cliResult = retryResult
+		}
+	}
+
 	apiMS := int(time.Since(startAPI).Milliseconds())
 
 	if err != nil {
