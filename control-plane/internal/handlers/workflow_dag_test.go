@@ -127,9 +127,9 @@ func TestBuildExecutionDAG_DeepHierarchy(t *testing.T) {
 	executions := []*types.Execution{
 		{
 			ExecutionID:       rootID,
-			RunID:            "run-1",
-			Status:           "succeeded",
-			StartedAt:        time.Now(),
+			RunID:             "run-1",
+			Status:            "succeeded",
+			StartedAt:         time.Now(),
 			ParentExecutionID: nil,
 		},
 		{
@@ -417,8 +417,8 @@ func TestBuildExecutionDAG_MixedStatuses(t *testing.T) {
 
 	_, _, status, _, _, _, _ := buildExecutionDAG(executions)
 
-	// deriveOverallStatus priority: running > failed > succeeded
-	// Running has highest priority as it indicates active workflow
+	// deriveOverallStatus priority: paused > running > failed > succeeded
+	// Running has high priority as it indicates active workflow
 	require.Equal(t, "running", status)
 }
 
@@ -497,21 +497,65 @@ func TestBuildExecutionDAG_WithSessionAndActor(t *testing.T) {
 }
 
 func TestDeriveOverallStatus_PriorityOrder(t *testing.T) {
-	// Test status priority: running > failed > succeeded
 	tests := []struct {
 		name     string
 		statuses []string
 		expected string
 	}{
 		{
-			name:     "running has highest priority",
+			name:     "paused has highest priority",
+			statuses: []string{"succeeded", "paused", "running"},
+			expected: "paused",
+		},
+		{
+			name:     "paused beats running and failed",
+			statuses: []string{"paused", "running", "failed"},
+			expected: "paused",
+		},
+		{
+			name:     "running beats failed when no paused",
 			statuses: []string{"succeeded", "running", "failed"},
+			expected: "running",
+		},
+		{
+			name:     "waiting counts as running",
+			statuses: []string{"succeeded", "waiting", "succeeded"},
+			expected: "running",
+		},
+		{
+			name:     "waiting counts as running over failed",
+			statuses: []string{"succeeded", "waiting", "failed"},
+			expected: "running",
+		},
+		{
+			name:     "waiting counts as running over timeout",
+			statuses: []string{"timeout", "waiting"},
 			expected: "running",
 		},
 		{
 			name:     "failed has priority over succeeded",
 			statuses: []string{"succeeded", "failed", "succeeded"},
 			expected: "failed",
+		},
+		{
+			name:     "failed has priority over timeout",
+			statuses: []string{"succeeded", "failed", "timeout"},
+			expected: "failed",
+		},
+		{
+			name:     "timeout has priority over succeeded",
+			statuses: []string{"succeeded", "timeout", "succeeded"},
+			expected: "timeout",
+		},
+		{
+			name:     "timeout has priority over cancelled",
+			statuses: []string{"cancelled", "timeout"},
+			expected: "timeout",
+		},
+		{
+			name:     "cancelled has priority over succeeded",
+			statuses: []string{"succeeded", "cancelled", "succeeded"},
+			expected: "cancelled",
 		},
 		{
 			name:     "all succeeded",
@@ -527,6 +571,16 @@ func TestDeriveOverallStatus_PriorityOrder(t *testing.T) {
 			name:     "mixed with pending",
 			statuses: []string{"succeeded", "pending", "succeeded"},
 			expected: "running",
+		},
+		{
+			name:     "all timeout returns timeout not succeeded",
+			statuses: []string{"timeout", "timeout"},
+			expected: "timeout",
+		},
+		{
+			name:     "all cancelled returns cancelled not succeeded",
+			statuses: []string{"cancelled", "cancelled"},
+			expected: "cancelled",
 		},
 	}
 
@@ -646,6 +700,68 @@ func TestExecutionToLightweightNode(t *testing.T) {
 	require.Equal(t, 2, node.WorkflowDepth)
 	require.NotNil(t, node.CompletedAt)
 	require.Equal(t, duration, *node.DurationMS)
+}
+
+func TestExternalAnnotationFromExecutionUsesBoundaryContract(t *testing.T) {
+	exec := &types.Execution{
+		ExecutionID: "exec-external",
+		ResultPayload: []byte(`{
+			"external": {
+				"kind": "ard",
+				"local_target": "external.market_data.pricing_benchmark",
+				"provider": "MarketDataCo",
+				"entry_identifier": "urn:ai:marketdata.local:agentfield:market-data:reasoner:pricing_benchmark",
+				"adapter": "agentfield",
+				"policy": "aggregate-only",
+				"remote_run_id": "run-provider"
+			},
+			"market_context": {"answer": {"sample_size": 12}}
+		}`),
+	}
+
+	annotation := externalAnnotationFromExecution(exec)
+
+	require.NotNil(t, annotation)
+	require.Equal(t, "ard", annotation.Kind)
+	require.Equal(t, "external.market_data.pricing_benchmark", annotation.LocalTarget)
+	require.Equal(t, "MarketDataCo", annotation.Provider)
+	require.Equal(t, "run-provider", annotation.RemoteRunID)
+}
+
+func TestExternalAnnotationFromExecutionDoesNotMarkSummaryBorrowedCapability(t *testing.T) {
+	exec := &types.Execution{
+		ExecutionID: "exec-summary",
+		ResultPayload: []byte(`{
+			"borrowed_capability": {
+				"kind": "ard",
+				"local_target": "external.market_data.pricing_benchmark",
+				"provider": "MarketDataCo"
+			},
+			"recommendation": {"risk_decision": "proceed"}
+		}`),
+	}
+
+	require.Nil(t, externalAnnotationFromExecution(exec))
+}
+
+func TestExternalAnnotationFromExecutionAllowsLegacyBorrowedCapabilityOptIn(t *testing.T) {
+	exec := &types.Execution{
+		ExecutionID: "exec-legacy-boundary",
+		ResultPayload: []byte(`{
+			"external_call_boundary": true,
+			"borrowed_capability": {
+				"kind": "ard",
+				"local_target": "external.market_data.pricing_benchmark",
+				"provider": "MarketDataCo"
+			}
+		}`),
+	}
+
+	annotation := externalAnnotationFromExecution(exec)
+
+	require.NotNil(t, annotation)
+	require.Equal(t, "external.market_data.pricing_benchmark", annotation.LocalTarget)
+	require.Equal(t, "MarketDataCo", annotation.Provider)
 }
 
 func TestIsLightweightRequest(t *testing.T) {

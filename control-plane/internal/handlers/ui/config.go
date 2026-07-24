@@ -20,39 +20,34 @@ func NewConfigHandler(storage storage.StorageProvider) *ConfigHandler {
 	return &ConfigHandler{storage: storage}
 }
 
-// ErrorResponse represents an error response structure
-type ErrorResponse struct {
-	Error string `json:"error"`
-}
-
 // GetConfigSchemaHandler handles requests for getting configuration schema for an agent
 // GET /api/ui/v1/agents/:agentId/config/schema
 func (h *ConfigHandler) GetConfigSchemaHandler(c *gin.Context) {
 	ctx := c.Request.Context()
 	agentID := c.Param("agentId")
 	if agentID == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "agentId is required"})
+		RespondBadRequest(c, "agentId is required")
 		return
 	}
 
 	// Get packageId from query parameter
 	packageID := c.Query("packageId")
 	if packageID == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "packageId query parameter is required"})
+		RespondBadRequest(c, "packageId query parameter is required")
 		return
 	}
 
 	// Get the agent package to retrieve the configuration schema
 	agentPackage, err := h.storage.GetAgentPackage(ctx, packageID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, ErrorResponse{Error: "package not found"})
+		RespondNotFound(c, "package not found")
 		return
 	}
 
 	// Parse the configuration schema
 	var schema map[string]interface{}
 	if err := json.Unmarshal(agentPackage.ConfigurationSchema, &schema); err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to parse configuration schema"})
+		RespondInternalError(c, "failed to parse configuration schema")
 		return
 	}
 
@@ -76,14 +71,14 @@ func (h *ConfigHandler) GetConfigHandler(c *gin.Context) {
 	ctx := c.Request.Context()
 	agentID := c.Param("agentId")
 	if agentID == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "agentId is required"})
+		RespondBadRequest(c, "agentId is required")
 		return
 	}
 
 	// Get packageId from query parameter
 	packageID := c.Query("packageId")
 	if packageID == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "packageId query parameter is required"})
+		RespondBadRequest(c, "packageId query parameter is required")
 		return
 	}
 
@@ -130,28 +125,28 @@ func (h *ConfigHandler) SetConfigHandler(c *gin.Context) {
 	ctx := c.Request.Context()
 	agentID := c.Param("agentId")
 	if agentID == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "agentId is required"})
+		RespondBadRequest(c, "agentId is required")
 		return
 	}
 
 	// Get packageId from query parameter
 	packageID := c.Query("packageId")
 	if packageID == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "packageId query parameter is required"})
+		RespondBadRequest(c, "packageId query parameter is required")
 		return
 	}
 
 	// Parse request body
 	var req SetConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid request body: " + err.Error()})
+		RespondBadRequest(c, "invalid request body: "+err.Error())
 		return
 	}
 
 	// Validate configuration against package schema
 	validationResult, err := h.storage.ValidateAgentConfiguration(ctx, agentID, packageID, req.Configuration)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to validate configuration"})
+		RespondInternalError(c, "failed to validate configuration")
 		return
 	}
 
@@ -183,7 +178,7 @@ func (h *ConfigHandler) SetConfigHandler(c *gin.Context) {
 		}
 
 		if err := h.storage.StoreAgentConfiguration(ctx, newConfig); err != nil {
-			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to store configuration"})
+			RespondInternalError(c, "failed to store configuration")
 			return
 		}
 
@@ -204,7 +199,7 @@ func (h *ConfigHandler) SetConfigHandler(c *gin.Context) {
 		existingConfig.Version++
 
 		if err := h.storage.UpdateAgentConfiguration(ctx, existingConfig); err != nil {
-			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to update configuration"})
+			RespondInternalError(c, "failed to update configuration")
 			return
 		}
 

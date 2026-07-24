@@ -6,7 +6,10 @@ import contextvars
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
+if TYPE_CHECKING:
+    from .triggers import TriggerContext
 
 
 _RUN_HEADER = "X-Run-ID"
@@ -17,6 +20,10 @@ _ACTOR_HEADER = "X-Actor-ID"
 _CALLER_DID_HEADER = "X-Caller-DID"
 _TARGET_DID_HEADER = "X-Target-DID"
 _AGENT_DID_HEADER = "X-Agent-Node-DID"
+_PARENT_VC_HEADER = "X-Parent-VC-ID"
+_REPLAY_SOURCE_RUN_HEADER = "X-AgentField-Replay-Source-Run-ID"
+_REPLAY_BEFORE_EXECUTION_HEADER = "X-AgentField-Replay-Before-Execution-ID"
+_REPLAY_MODE_HEADER = "X-AgentField-Replay-Mode"
 
 
 @dataclass
@@ -36,6 +43,11 @@ class ExecutionContext:
     caller_did: Optional[str] = None
     target_did: Optional[str] = None
     agent_node_did: Optional[str] = None
+    parent_vc_id: Optional[str] = None
+    replay_source_run_id: Optional[str] = None
+    replay_before_execution_id: Optional[str] = None
+    replay_mode: Optional[str] = None
+    trigger: Optional["TriggerContext"] = None
     # Compatibility fields retained for existing integrations
     workflow_id: Optional[str] = None
     parent_workflow_id: Optional[str] = None
@@ -47,6 +59,8 @@ class ExecutionContext:
             self.started_at = time.time()
         if not self.workflow_id:
             self.workflow_id = self.run_id
+        if not self.root_workflow_id:
+            self.root_workflow_id = self.workflow_id
 
     # ------------------------------------------------------------------
     # Header helpers
@@ -59,12 +73,10 @@ class ExecutionContext:
         The AgentField backend issues fresh execution IDs for child nodes.
         """
 
-        parent_execution = self.parent_execution_id or self.execution_id
-
         headers: Dict[str, str] = {
             _RUN_HEADER: self.run_id,
             "X-Workflow-ID": self.workflow_id or self.run_id,
-            _PARENT_EXECUTION_HEADER: parent_execution,
+            _PARENT_EXECUTION_HEADER: self.execution_id,
             _EXECUTION_HEADER: self.execution_id,
             "X-Workflow-Run-ID": self.run_id,
         }
@@ -87,12 +99,63 @@ class ExecutionContext:
             headers[_TARGET_DID_HEADER] = self.target_did
         if self.agent_node_did:
             headers[_AGENT_DID_HEADER] = self.agent_node_did
+        if self.parent_vc_id:
+            headers[_PARENT_VC_HEADER] = self.parent_vc_id
+        if self.replay_source_run_id:
+            headers[_REPLAY_SOURCE_RUN_HEADER] = self.replay_source_run_id
+        if self.replay_before_execution_id:
+            headers[_REPLAY_BEFORE_EXECUTION_HEADER] = self.replay_before_execution_id
+        if self.replay_mode:
+            headers[_REPLAY_MODE_HEADER] = self.replay_mode
         agent_instance = getattr(self, "agent_instance", None)
         agent_node_id = self.agent_node_id or getattr(agent_instance, "node_id", None)
         if agent_node_id:
             headers["X-Agent-Node-ID"] = agent_node_id
 
         return headers
+
+    def to_log_identity(self) -> Dict[str, Optional[str]]:
+        """Return the core execution correlation fields for structured logs."""
+
+        agent_node_id = self.agent_node_id or getattr(
+            self.agent_instance, "node_id", None
+        )
+
+        return {
+            "execution_id": self.execution_id,
+            "workflow_id": self.workflow_id or self.run_id,
+            "run_id": self.run_id,
+            "root_workflow_id": self.root_workflow_id
+            or self.workflow_id
+            or self.run_id,
+            "parent_execution_id": self.parent_execution_id,
+            "agent_node_id": agent_node_id,
+            "reasoner_id": self.reasoner_name,
+        }
+
+    def to_log_attributes(self) -> Dict[str, Any]:
+        """Return supplemental execution metadata for structured log attributes."""
+
+        attributes: Dict[str, Any] = {
+            "depth": self.depth,
+        }
+        if self.parent_workflow_id:
+            attributes["parent_workflow_id"] = self.parent_workflow_id
+        if self.session_id:
+            attributes["session_id"] = self.session_id
+        if self.actor_id:
+            attributes["actor_id"] = self.actor_id
+        if self.caller_did:
+            attributes["caller_did"] = self.caller_did
+        if self.target_did:
+            attributes["target_did"] = self.target_did
+        if self.agent_node_did:
+            attributes["agent_node_did"] = self.agent_node_did
+        if self.parent_vc_id:
+            attributes["parent_vc_id"] = self.parent_vc_id
+        if self.started_at:
+            attributes["started_at"] = self.started_at
+        return attributes
 
     def child_context(self) -> "ExecutionContext":
         """
@@ -116,6 +179,11 @@ class ExecutionContext:
             caller_did=self.caller_did,
             target_did=self.target_did,
             agent_node_did=self.agent_node_did,
+            parent_vc_id=self.parent_vc_id,
+            replay_source_run_id=self.replay_source_run_id,
+            replay_before_execution_id=self.replay_before_execution_id,
+            replay_mode=self.replay_mode,
+            trigger=self.trigger,
             workflow_id=self.workflow_id,
             parent_workflow_id=self.workflow_id,
             root_workflow_id=self.root_workflow_id or self.workflow_id,
@@ -157,6 +225,10 @@ class ExecutionContext:
         caller_did = _read(_CALLER_DID_HEADER)
         target_did = _read(_TARGET_DID_HEADER)
         agent_node_did = _read(_AGENT_DID_HEADER)
+        parent_vc_id = _read(_PARENT_VC_HEADER)
+        replay_source_run_id = _read(_REPLAY_SOURCE_RUN_HEADER)
+        replay_before_execution_id = _read(_REPLAY_BEFORE_EXECUTION_HEADER)
+        replay_mode = _read(_REPLAY_MODE_HEADER)
         parent_workflow_id = _read("X-Parent-Workflow-ID")
         root_workflow_id = _read("X-Root-Workflow-ID")
 
@@ -174,6 +246,10 @@ class ExecutionContext:
             caller_did=caller_did,
             target_did=target_did,
             agent_node_did=agent_node_did,
+            parent_vc_id=parent_vc_id,
+            replay_source_run_id=replay_source_run_id,
+            replay_before_execution_id=replay_before_execution_id,
+            replay_mode=replay_mode,
             workflow_id=workflow_id,
             parent_workflow_id=parent_workflow_id,
             root_workflow_id=root_workflow_id,

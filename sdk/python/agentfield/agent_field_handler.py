@@ -131,13 +131,28 @@ class AgentFieldHandler:
                 vc_metadata=self.agent._build_vc_metadata(),
                 version=self.agent.version,
                 agent_metadata=self.agent._build_agent_metadata(),
+                tags=self.agent.agent_tags,
+                instance_id=getattr(self.agent, "agent_instance_id", "") or "",
             )
             if success:
                 if payload:
                     self.agent._apply_discovery_response(payload)
-                log_success(
-                    f"Registered node '{self.agent.node_id}' with AgentField server"
-                )
+
+                # Check for pending_approval status
+                if payload and payload.get("status") == "pending_approval":
+                    pending_tags = payload.get("pending_tags", [])
+                    log_info(
+                        f"Node '{self.agent.node_id}' registered but awaiting tag approval "
+                        f"(pending tags: {pending_tags})"
+                    )
+                    await self._wait_for_approval()
+                    log_success(
+                        f"Node '{self.agent.node_id}' tag approval granted"
+                    )
+                else:
+                    log_success(
+                        f"Registered node '{self.agent.node_id}' with AgentField server"
+                    )
                 self.agent.agentfield_connected = True
 
                 # Attempt DID registration after successful AgentField registration
@@ -168,6 +183,46 @@ class AgentFieldHandler:
                     log_warn(f"Response status: {e.response.status_code}")
                     log_warn(f"Response text: {e.response.text}")
                 raise
+
+    async def _wait_for_approval(self, timeout: int = 300):
+        """Poll the control plane until the agent is no longer in pending_approval status.
+
+        Args:
+            timeout: Maximum seconds to wait for approval before raising an error.
+                     Defaults to 300 (5 minutes).
+        """
+        import asyncio
+
+        poll_interval = 5  # seconds
+        elapsed = 0
+        while elapsed < timeout:
+            await asyncio.sleep(poll_interval)
+            elapsed += poll_interval
+            try:
+                resp = await self.agent.client._async_request(
+                    "GET",
+                    f"{self.agent.client.api_base}/nodes/{self.agent.node_id}",
+                    headers=self.agent.client._get_auth_headers(),
+                    timeout=10.0,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    status = data.get("lifecycle_status", "")
+                    if status and status != "pending_approval":
+                        return
+                log_debug(
+                    f"Node '{self.agent.node_id}' still pending approval..."
+                )
+            except Exception as e:
+                log_debug(f"Polling for approval status failed: {e}")
+
+        log_error(
+            f"Node '{self.agent.node_id}' approval timed out after {timeout}s"
+        )
+        raise TimeoutError(
+            f"Agent '{self.agent.node_id}' tag approval timed out after {timeout} seconds. "
+            "Please approve the agent's tags in the control plane admin UI."
+        )
 
     def send_heartbeat(self):
         """Send heartbeat to AgentField server"""
@@ -231,7 +286,7 @@ class AgentFieldHandler:
 
     async def send_enhanced_heartbeat(self) -> bool:
         """
-        Send enhanced heartbeat with current status and MCP information.
+        Send enhanced heartbeat with current status information.
 
         Returns:
             True if heartbeat was successful, False otherwise
@@ -240,14 +295,12 @@ class AgentFieldHandler:
             return False
 
         try:
-            # Get MCP server health information
-            mcp_servers = self.agent.mcp_handler._get_mcp_server_health()
-
             # Create heartbeat data
             heartbeat_data = HeartbeatData(
                 status=self.agent._current_status,
-                mcp_servers=mcp_servers,
                 timestamp=datetime.now().isoformat(),
+                version=getattr(self.agent, 'version', '') or '',
+                instance_id=getattr(self.agent, 'agent_instance_id', '') or '',
             )
 
             # Send enhanced heartbeat
@@ -431,6 +484,8 @@ class AgentFieldHandler:
                 vc_metadata=self.agent._build_vc_metadata(),
                 version=self.agent.version,
                 agent_metadata=self.agent._build_agent_metadata(),
+                tags=self.agent.agent_tags,
+                instance_id=getattr(self.agent, "agent_instance_id", "") or "",
             )
 
             if success:
@@ -465,7 +520,7 @@ class AgentFieldHandler:
 
     async def enhanced_heartbeat_loop(self, interval: int) -> None:
         """
-        Background loop for sending enhanced heartbeats with status and MCP information.
+        Background loop for sending enhanced heartbeats with status information.
 
         Args:
             interval: Heartbeat interval in seconds

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -295,9 +296,13 @@ func (h *EnvHandler) GetEnvHandler(c *gin.Context) {
 				if len(parts) == 2 {
 					key := strings.TrimSpace(parts[0])
 					value := strings.TrimSpace(parts[1])
-					// Remove quotes if present
-					if (strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"")) ||
-						(strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'")) {
+					// Decode values emitted by the CLI writer so the editor shows
+					// the original value rather than its escaped .env representation.
+					if strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"") {
+						if unquoted, err := strconv.Unquote(value); err == nil {
+							value = unquoted
+						}
+					} else if strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'") {
 						value = value[1 : len(value)-1]
 					}
 					vars[key] = value

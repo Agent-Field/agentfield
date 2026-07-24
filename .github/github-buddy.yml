@@ -1,0 +1,25 @@
+# Per-repo github-buddy configuration.
+# Read from the default branch by github-buddy's load_repo_config reasoner.
+
+# CLA reminder / auto-close tuning for the cla_reminder_sweep scheduled reasoner.
+#
+# NOTE: this block only *tunes* behaviour. The on/off switch is the
+# GITHUB_BUDDY_CLA_REPOS env roster on the github-buddy deployment — a repo is
+# only ever acted on if it is listed there.
+cla_reminders:
+  # This repo's CLA gate is the hosted cla-assistant.io app, which publishes a
+  # classic commit *status* with context "license/cla". This is deliberately
+  # different from github-buddy's own repo, whose self-hosted
+  # contributor-assistant action reports a *check-run* named "cla". Pin the
+  # context explicitly so the sweep reads the right signal (and nobody copies
+  # the "cla" override over from github-buddy's config by mistake).
+  status_context: "license/cla"
+
+  # Days after a PR opens before the gentle reminder / auto-close fire, if the
+  # CLA is still unsigned. Defaults shown explicitly.
+  reminder_days: 2
+  close_days: 7
+
+  # PRs carrying any of these labels are skipped entirely.
+  exempt_labels:
+    - cla-exempt

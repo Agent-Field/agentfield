@@ -66,7 +66,7 @@ const EmptyTitle = React.forwardRef<
   return (
     <h3
       ref={ref}
-      className={cn("text-heading-2 text-text-primary", className)}
+      className={cn("text-xl font-semibold text-foreground", className)}
       {...props}
     />
   );
@@ -80,7 +80,7 @@ const EmptyDescription = React.forwardRef<
   return (
     <p
       ref={ref}
-      className={cn("text-body text-muted-foreground", className)}
+      className={cn("text-sm text-muted-foreground", className)}
       {...props}
     />
   );

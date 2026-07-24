@@ -57,7 +57,7 @@ jobs:
         id: tests
         working-directory: sdk/python
         run: |
-          if python -m pytest tests/ --ignore=tests/integration -q 2>&1; then
+          if ./scripts/run_pytest.sh tests/ --ignore=tests/integration -q 2>&1; then
             echo "status=pass" >> $GITHUB_OUTPUT
           else
             echo "status=fail" >> $GITHUB_OUTPUT
@@ -80,7 +80,7 @@ jobs:
           gc.collect()
           tracemalloc.start()
 
-          agent = Agent('bench', agentfield_server='http://localhost:8080', auto_register=False, enable_mcp=False)
+          agent = Agent('bench', agentfield_server='http://localhost:8080', auto_register=False)
 
           for i in range(1000):
               idx = i

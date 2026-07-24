@@ -29,6 +29,7 @@ type GitHubPackageInfo struct {
 type GitHubInstaller struct {
 	AgentFieldHome string
 	Verbose        bool
+	HTTPClient     *http.Client // optional; defaults to http.DefaultClient
 }
 
 // newSpinner creates a new spinner with the given message
@@ -216,7 +217,11 @@ func (gi *GitHubInstaller) downloadAndExtract(info *GitHubPackageInfo) (string, 
 	}
 
 	// Download archive
-	resp, err := http.Get(info.ArchiveURL)
+	client := gi.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Get(info.ArchiveURL)
 	if err != nil {
 		os.RemoveAll(tempDir)
 		return "", fmt.Errorf("failed to download archive: %w", err)
@@ -336,10 +341,10 @@ func (gi *GitHubInstaller) findPackageRoot(extractDir string) (string, error) {
 		return "", fmt.Errorf("agentfield-package.yaml not found in the repository")
 	}
 
-	// Also check for main.py
-	mainPyPath := filepath.Join(packageRoot, "main.py")
-	if _, err := os.Stat(mainPyPath); os.IsNotExist(err) {
-		return "", fmt.Errorf("main.py not found in package root")
+	// The node must declare how to start: a manifest entrypoint.start or a
+	// top-level main.py. Real nodes use a module entrypoint and have no main.py.
+	if err := ValidatePackage(packageRoot); err != nil {
+		return "", err
 	}
 
 	return packageRoot, nil

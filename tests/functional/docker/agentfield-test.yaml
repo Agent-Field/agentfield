@@ -1,5 +1,13 @@
 agentfield:
   port: 8080
+  registration:
+    serverless_discovery_allowed_hosts:
+      - "test-runner"
+  approval:
+    # Functional tests exercise /api/v1/webhooks/approval-response directly.
+    # The control plane requires HMAC signatures when this is set.
+    webhook_secret: "test-approval-webhook-secret"
+    default_expiry_hours: 72
   mode: "local"
   max_concurrent_requests: 512
   request_timeout: 180s
@@ -26,6 +34,29 @@ agentfield:
     webhook_max_attempts: 3
     webhook_retry_backoff: 1s
     webhook_max_retry_backoff: 5s
+  ard:
+    enabled: true
+    public_base_url: "http://control-plane:8080"
+    publisher_domain: "functional.agentfield.local"
+    host:
+      display_name: "AgentField Functional Control Plane"
+      identifier: "did:web:functional.agentfield.local"
+      documentation_url: "https://agentfield.ai/docs"
+    publish:
+      enabled: true
+      include_health_statuses:
+        - "active"
+        - "unknown"
+      default_type: "application/openapi+json"
+    registry:
+      enabled: true
+      public: true
+    external:
+      search_enabled: true
+      invocation_enabled: true
+      allowed_registries:
+        - "http://test-runner:9777/api/v1/ard"
+      default_search_limit: 20
 
 ui:
   enabled: true

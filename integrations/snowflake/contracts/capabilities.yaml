@@ -1,0 +1,156 @@
+version: 2026-06-11-v1
+node:
+  default_id: snowflake-prod
+  tags:
+    - snowflake
+    - data
+    - warehouse
+    - cortex
+
+principles:
+  - Capability IDs are stable contracts. Implementation may use SQL API,
+    Snowflake REST APIs, drivers, or Cortex APIs behind the same callable
+    surface.
+  - All raw SQL capabilities are read-only unless a separate write capability
+    is added and explicitly enabled.
+  - AI-backed reasoners must load prompts from configuration. Default prompts
+    can ship with the package, but operators can override them without
+    recompiling the node.
+  - Every response includes enough provenance for downstream reasoners to cite
+    database, schema, table, query ID, semantic model, or search service.
+
+skills:
+  query_readonly:
+    tags: [snowflake, data, read, sql]
+    input:
+      sql: string
+      database: optional string
+      schema: optional string
+      warehouse: optional string
+      role: optional string
+      max_rows: optional integer
+      timeout_seconds: optional integer
+    output:
+      query_id: string
+      columns: list
+      rows: list
+      row_count: integer
+      truncated: boolean
+      provenance: object
+    guardrails:
+      - one statement only
+      - allow SELECT, WITH, SHOW, DESCRIBE, EXPLAIN
+      - deny DDL, DML, COPY, CALL, PUT, GET, USE ROLE
+      - enforce max rows and timeout
+
+  describe_table:
+    tags: [snowflake, catalog, read]
+    input:
+      object: string
+      include_columns: optional boolean
+      include_grants: optional boolean
+      include_comments: optional boolean
+    output:
+      database: string
+      schema: string
+      table: string
+      columns: list
+      comments: object
+      provenance: object
+
+  search_columns:
+    tags: [snowflake, catalog, search]
+    input:
+      query: string
+      database: optional string
+      schema: optional string
+      tags: optional list
+      limit: optional integer
+    output:
+      matches: list
+      provenance: object
+
+  cortex_analyst_message:
+    tags: [snowflake, cortex, semantic, ai]
+    input:
+      question: string
+      semantic_model: optional string
+      semantic_view: optional string
+      conversation: optional list
+      model_preferences: optional list
+    output:
+      answer: string
+      generated_sql: optional string
+      suggestions: list
+      citations: list
+      snowflake_request_id: optional string
+
+  cortex_search_query:
+    tags: [snowflake, cortex, search]
+    input:
+      service: string
+      query: string
+      columns: optional list
+      filter: optional object
+      limit: optional integer
+    output:
+      results: list
+      service: string
+      snowflake_request_id: optional string
+
+  cortex_complete:
+    tags: [snowflake, cortex, ai]
+    input:
+      model: string
+      system: optional string
+      prompt: string
+      max_tokens: optional integer
+      temperature: optional number
+    output:
+      text: string
+      model: string
+      snowflake_request_id: optional string
+      usage: optional object
+
+reasoners:
+  semantic_ask:
+    tags: [snowflake, data, semantic, ai]
+    prompt_keys:
+      - semantic_ask.system
+      - semantic_ask.answer_policy
+    calls:
+      - cortex_analyst_message
+      - query_readonly
+      - explain_result
+    dynamic_behavior:
+      - If Cortex Analyst returns generated SQL, optionally execute read-only
+        SQL and use explain_result to summarize the result.
+      - If confidence is low, return NEEDS_REVIEW with suggested follow-up
+        questions rather than inventing an answer.
+
+  explain_result:
+    tags: [snowflake, data, explanation, ai]
+    prompt_keys:
+      - explain_result.system
+      - explain_result.caveat_policy
+    calls:
+      - cortex_complete
+    dynamic_behavior:
+      - Prefer Snowflake Cortex for explanation when configured.
+      - Fall back to AgentField .ai when Cortex is disabled by node config.
+
+  investigate_metric_change:
+    tags: [snowflake, data, investigation, ai]
+    prompt_keys:
+      - investigate_metric_change.system
+      - investigate_metric_change.followup_policy
+    calls:
+      - describe_table
+      - search_columns
+      - semantic_ask
+      - query_readonly
+      - explain_result
+    dynamic_behavior:
+      - Fan out catalog search and metric context lookup in parallel.
+      - Generate and run only bounded read-only follow-up queries.
+      - Escalate to NEEDS_REVIEW when metric definitions are ambiguous.

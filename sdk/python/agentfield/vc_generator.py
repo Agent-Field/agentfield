@@ -8,7 +8,7 @@ import json
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .logger import get_logger
 from .status import normalize_status
@@ -123,6 +123,10 @@ class VCGenerator:
                     "caller_did": execution_context.caller_did,
                     "target_did": execution_context.target_did,
                     "agent_node_did": execution_context.agent_node_did,
+                    # parent_vc_id is optional — older ExecutionContext shapes
+                    # (and the SimpleNamespace test doubles in
+                    # test_vc_generator.py) don't carry it. Read defensively.
+                    "parent_vc_id": getattr(execution_context, "parent_vc_id", None),
                     "timestamp": execution_context.timestamp.isoformat() + "Z"
                     if execution_context.timestamp.tzinfo is None
                     else execution_context.timestamp.isoformat(),
@@ -411,7 +415,7 @@ class VCContext:
 
     def __enter__(self):
         """Enter the context manager."""
-        self.start_time = datetime.utcnow()
+        self.start_time = datetime.now(timezone.utc)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -422,7 +426,7 @@ class VCContext:
         # Calculate duration
         if self.start_time:
             duration_ms = int(
-                (datetime.utcnow() - self.start_time).total_seconds() * 1000
+                (datetime.now(timezone.utc) - self.start_time).total_seconds() * 1000
             )
         else:
             duration_ms = 0

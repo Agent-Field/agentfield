@@ -11,6 +11,7 @@ type ExecutionRecordModel struct {
 	ReasonerID        string     `gorm:"column:reasoner_id;not null;index"`
 	NodeID            string     `gorm:"column:node_id;not null;index"`
 	Status            string     `gorm:"column:status;not null;index"`
+	StatusReason      *string    `gorm:"column:status_reason"`
 	InputPayload      []byte     `gorm:"column:input_payload"`
 	ResultPayload     []byte     `gorm:"column:result_payload"`
 	ErrorMessage      *string    `gorm:"column:error_message"`
@@ -51,9 +52,11 @@ func (AgentExecutionModel) TableName() string { return "agent_executions" }
 
 type AgentNodeModel struct {
 	ID                  string     `gorm:"column:id;primaryKey"`
+	Version             string     `gorm:"column:version;primaryKey;not null;default:''"`
+	GroupID             string     `gorm:"column:group_id;not null;default:'';index"`
 	TeamID              string     `gorm:"column:team_id;not null;index"`
 	BaseURL             string     `gorm:"column:base_url;not null"`
-	Version             string     `gorm:"column:version;not null"`
+	TrafficWeight       int        `gorm:"column:traffic_weight;not null;default:100"`
 	DeploymentType      string     `gorm:"column:deployment_type;default:'long_running';index"`
 	InvocationURL       *string    `gorm:"column:invocation_url"`
 	Reasoners           []byte     `gorm:"column:reasoners"`
@@ -65,6 +68,12 @@ type AgentNodeModel struct {
 	RegisteredAt        time.Time  `gorm:"column:registered_at;autoCreateTime"`
 	Features            []byte     `gorm:"column:features"`
 	Metadata            []byte     `gorm:"column:metadata"`
+	ProposedTags        []byte     `gorm:"column:proposed_tags"`
+	ApprovedTags        []byte     `gorm:"column:approved_tags"`
+	// InstanceID is a per-process identifier emitted by the SDK on every
+	// startup. A change in this value across registrations is the signal the
+	// control plane uses to fail orphaned in-flight executions.
+	InstanceID string `gorm:"column:instance_id;default:''"`
 }
 
 func (AgentNodeModel) TableName() string { return "agent_nodes" }
@@ -137,6 +146,14 @@ type WorkflowExecutionModel struct {
 	LeaseExpiresAt        *time.Time `gorm:"column:lease_expires_at"`
 	ErrorMessage          *string    `gorm:"column:error_message"`
 	RetryCount            int        `gorm:"column:retry_count;default:0"`
+	ApprovalRequestID     *string    `gorm:"column:approval_request_id;index:idx_workflow_executions_approval_request_id"`
+	ApprovalRequestURL    *string    `gorm:"column:approval_request_url"`
+	ApprovalStatus        *string    `gorm:"column:approval_status"`
+	ApprovalResponse      *string    `gorm:"column:approval_response"`
+	ApprovalRequestedAt   *time.Time `gorm:"column:approval_requested_at"`
+	ApprovalRespondedAt   *time.Time `gorm:"column:approval_responded_at"`
+	ApprovalCallbackURL   *string    `gorm:"column:approval_callback_url"`
+	ApprovalExpiresAt     *time.Time `gorm:"column:approval_expires_at"`
 	Notes                 string     `gorm:"column:notes;default:'[]'"`
 	CreatedAt             time.Time  `gorm:"column:created_at;autoCreateTime"`
 	UpdatedAt             time.Time  `gorm:"column:updated_at;autoUpdateTime"`
@@ -161,6 +178,33 @@ type WorkflowExecutionEventModel struct {
 }
 
 func (WorkflowExecutionEventModel) TableName() string { return "workflow_execution_events" }
+
+type ExecutionLogEntryModel struct {
+	EventID           int64     `gorm:"column:event_id;primaryKey;autoIncrement"`
+	ExecutionID       string    `gorm:"column:execution_id;not null;index:idx_execution_logs_execution,priority:1"`
+	WorkflowID        string    `gorm:"column:workflow_id;not null;index"`
+	RunID             *string   `gorm:"column:run_id;index"`
+	RootWorkflowID    *string   `gorm:"column:root_workflow_id;index"`
+	ParentExecutionID *string   `gorm:"column:parent_execution_id;index"`
+	Sequence          int64     `gorm:"column:sequence;not null;index:idx_execution_logs_execution,priority:2"`
+	AgentNodeID       string    `gorm:"column:agent_node_id;not null;index"`
+	ReasonerID        *string   `gorm:"column:reasoner_id;index"`
+	Level             string    `gorm:"column:level;not null;index"`
+	Source            string    `gorm:"column:source;not null;index"`
+	EventType         *string   `gorm:"column:event_type;index"`
+	Message           string    `gorm:"column:message;not null"`
+	Attributes        string    `gorm:"column:attributes;default:'{}'"`
+	SystemGenerated   bool      `gorm:"column:system_generated;not null;default:false"`
+	SDKLanguage       *string   `gorm:"column:sdk_language;index"`
+	Attempt           *int      `gorm:"column:attempt"`
+	SpanID            *string   `gorm:"column:span_id;index"`
+	StepID            *string   `gorm:"column:step_id;index"`
+	ErrorCategory     *string   `gorm:"column:error_category;index"`
+	EmittedAt         time.Time `gorm:"column:emitted_at;not null;index"`
+	RecordedAt        time.Time `gorm:"column:recorded_at;autoCreateTime"`
+}
+
+func (ExecutionLogEntryModel) TableName() string { return "execution_logs" }
 
 type WorkflowRunEventModel struct {
 	EventID          int64     `gorm:"column:event_id;primaryKey;autoIncrement"`
@@ -321,6 +365,11 @@ type ExecutionVCModel struct {
 	Status            string    `gorm:"column:status;not null;default:'pending';index"`
 	ParentVCID        *string   `gorm:"column:parent_vc_id;index"`
 	ChildVCIDs        string    `gorm:"column:child_vc_ids;default:'[]'"`
+	Kind              string    `gorm:"column:kind;not null;default:'execution';index"`
+	TriggerID         *string   `gorm:"column:trigger_id;index"`
+	SourceName        *string   `gorm:"column:source_name"`
+	EventType         *string   `gorm:"column:event_type"`
+	EventID           *string   `gorm:"column:event_id;index"`
 	CreatedAt         time.Time `gorm:"column:created_at;autoCreateTime;index"`
 	UpdatedAt         time.Time `gorm:"column:updated_at;autoUpdateTime"`
 }
@@ -397,9 +446,13 @@ type ObservabilityWebhookModel struct {
 
 func (ObservabilityWebhookModel) TableName() string { return "observability_webhooks" }
 
-// ObservabilityDeadLetterQueueModel represents failed observability events for retry.
+// ObservabilityDeadLetterQueueModel represents failed events for retry. The
+// Kind discriminator distinguishes the original "observability" forwarder
+// queue from "inbound_dispatch" failures emitted by the trigger dispatcher,
+// so a single DLQ table serves both pipelines.
 type ObservabilityDeadLetterQueueModel struct {
 	ID             int64     `gorm:"column:id;primaryKey;autoIncrement"`
+	Kind           string    `gorm:"column:kind;not null;default:'observability';index"`
 	EventType      string    `gorm:"column:event_type;not null"`
 	EventSource    string    `gorm:"column:event_source;not null"`
 	EventTimestamp time.Time `gorm:"column:event_timestamp;not null"`
@@ -410,3 +463,151 @@ type ObservabilityDeadLetterQueueModel struct {
 }
 
 func (ObservabilityDeadLetterQueueModel) TableName() string { return "observability_dead_letter_queue" }
+
+// TriggerModel persists a Trigger row. Each row is one binding from a Source
+// instance to a target reasoner; code-managed rows are upserted on agent
+// registration and cannot be deleted via the UI.
+type TriggerModel struct {
+	ID             string    `gorm:"column:id;primaryKey"`
+	SourceName     string    `gorm:"column:source_name;not null;index"`
+	ConfigJSON     string    `gorm:"column:config_json;not null;default:'{}'"`
+	SecretEnvVar   string    `gorm:"column:secret_env_var;not null;default:''"`
+	TargetNodeID   string    `gorm:"column:target_node_id;not null;index"`
+	TargetReasoner string    `gorm:"column:target_reasoner;not null"`
+	EventTypes     string    `gorm:"column:event_types;not null;default:'[]'"`
+	ManagedBy      string    `gorm:"column:managed_by;not null;default:'ui'"`
+	Enabled        bool      `gorm:"column:enabled;not null;default:true"`
+	CreatedAt      time.Time `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt      time.Time `gorm:"column:updated_at;autoUpdateTime"`
+
+	// Phase 3 source-of-truth columns. Defaults match migration 031.
+	ManualOverrideEnabled bool       `gorm:"column:manual_override_enabled;not null;default:false;index"`
+	ManualOverrideAt      *time.Time `gorm:"column:manual_override_at"`
+	CodeOrigin            *string    `gorm:"column:code_origin"`
+	LastRegisteredAt      *time.Time `gorm:"column:last_registered_at"`
+	Orphaned              bool       `gorm:"column:orphaned;not null;default:false;index"`
+}
+
+func (TriggerModel) TableName() string { return "triggers" }
+
+// InboundEventModel persists one delivery from a Source. The unique index on
+// (source_name, idempotency_key) is enforced at the SQL level via the
+// migration; here we let GORM auto-create the indexes used for browsing.
+type InboundEventModel struct {
+	ID                string     `gorm:"column:id;primaryKey"`
+	TriggerID         string     `gorm:"column:trigger_id;not null;index"`
+	SourceName        string     `gorm:"column:source_name;not null;index:idx_inbound_events_idempotency,priority:1"`
+	EventType         string     `gorm:"column:event_type;not null;default:''"`
+	RawPayload        string     `gorm:"column:raw_payload;not null;default:''"`
+	NormalizedPayload string     `gorm:"column:normalized_payload;not null;default:''"`
+	IdempotencyKey    string     `gorm:"column:idempotency_key;not null;default:'';index:idx_inbound_events_idempotency,priority:2"`
+	VCID              string     `gorm:"column:vc_id;not null;default:''"`
+	Status            string     `gorm:"column:status;not null;default:'received'"`
+	ErrorMessage      string     `gorm:"column:error_message;not null;default:''"`
+	ReceivedAt        time.Time  `gorm:"column:received_at;not null;index"`
+	ProcessedAt       *time.Time `gorm:"column:processed_at"`
+	// DispatchedWorkflowID is the X-Workflow-ID the dispatcher generated for
+	// the outbound HTTP request. Recorded so the runs-list and run-dag
+	// handlers can correlate a run back to its triggering event without
+	// depending on the DID/VC chain being fully wired (which requires
+	// the agent SDK to relay X-Parent-VC-ID and emit signed execution VCs).
+	DispatchedWorkflowID string `gorm:"column:dispatched_workflow_id;not null;default:'';index"`
+	// ReplayOf is the ID of the original inbound_event this row was cloned
+	// from. Set by ReplayEvent so UI consumers (and `af verify` audit walks)
+	// can show "this event is a replay of X" instead of guessing from
+	// payload-equality heuristics. Empty for fresh deliveries.
+	ReplayOf string `gorm:"column:replay_of;not null;default:'';index:idx_inbound_events_replay_of"`
+}
+
+func (InboundEventModel) TableName() string { return "inbound_events" }
+
+// DIDDocumentModel represents a DID document record for did:web resolution.
+type DIDDocumentModel struct {
+	DID          string     `gorm:"column:did;primaryKey"`
+	AgentID      string     `gorm:"column:agent_id;not null;index"`
+	DIDDocument  []byte     `gorm:"column:did_document;type:jsonb;not null"` // JSONB in PostgreSQL, TEXT in SQLite
+	PublicKeyJWK string     `gorm:"column:public_key_jwk;not null"`
+	RevokedAt    *time.Time `gorm:"column:revoked_at;index"`
+	CreatedAt    time.Time  `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt    time.Time  `gorm:"column:updated_at;autoUpdateTime"`
+}
+
+func (DIDDocumentModel) TableName() string { return "did_documents" }
+
+// AccessPolicyModel represents a tag-based access policy for cross-agent calls.
+type AccessPolicyModel struct {
+	ID             int64     `gorm:"column:id;primaryKey;autoIncrement"`
+	Name           string    `gorm:"column:name;not null;uniqueIndex"`
+	CallerTags     string    `gorm:"column:caller_tags;type:text;not null"` // JSON array
+	TargetTags     string    `gorm:"column:target_tags;type:text;not null"` // JSON array
+	AllowFunctions string    `gorm:"column:allow_functions;type:text"`      // JSON array
+	DenyFunctions  string    `gorm:"column:deny_functions;type:text"`       // JSON array
+	Constraints    string    `gorm:"column:constraints;type:text"`          // JSON object
+	Action         string    `gorm:"column:action;not null;default:'allow'"`
+	Priority       int       `gorm:"column:priority;not null;default:0;index"`
+	Enabled        bool      `gorm:"column:enabled;not null;default:true;index"`
+	Description    *string   `gorm:"column:description"`
+	CreatedAt      time.Time `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt      time.Time `gorm:"column:updated_at;autoUpdateTime"`
+}
+
+func (AccessPolicyModel) TableName() string { return "access_policies" }
+
+// AgentTagVCModel stores signed Agent Tag VCs issued on tag approval.
+type AgentTagVCModel struct {
+	ID         int64      `gorm:"column:id;primaryKey;autoIncrement"`
+	AgentID    string     `gorm:"column:agent_id;uniqueIndex;not null"`
+	AgentDID   string     `gorm:"column:agent_did;not null;index"`
+	VCID       string     `gorm:"column:vc_id;uniqueIndex;not null"`
+	VCDocument string     `gorm:"column:vc_document;type:text;not null"`
+	Signature  string     `gorm:"column:signature;type:text"`
+	IssuedAt   time.Time  `gorm:"column:issued_at;not null"`
+	ExpiresAt  *time.Time `gorm:"column:expires_at"`
+	RevokedAt  *time.Time `gorm:"column:revoked_at"`
+	CreatedAt  time.Time  `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt  time.Time  `gorm:"column:updated_at;autoUpdateTime"`
+}
+
+func (AgentTagVCModel) TableName() string { return "agent_tag_vcs" }
+
+// ConfigStorageModel stores configuration files in the database.
+// Each record represents a named configuration (e.g. "agentfield.yaml")
+// with versioning for audit trail.
+type ConfigStorageModel struct {
+	ID        int64     `gorm:"column:id;primaryKey;autoIncrement"`
+	Key       string    `gorm:"column:key;not null;uniqueIndex"`
+	Value     string    `gorm:"column:value;type:text;not null"`
+	Version   int       `gorm:"column:version;not null;default:1"`
+	CreatedBy *string   `gorm:"column:created_by"`
+	UpdatedBy *string   `gorm:"column:updated_by"`
+	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt time.Time `gorm:"column:updated_at;autoUpdateTime"`
+}
+
+func (ConfigStorageModel) TableName() string { return "config_storage" }
+
+// ExecutionUsageModel persists one token/cost usage entry reported by an agent
+// SDK in an execution result envelope's "usage" object. Multiple rows may share
+// an execution_id (one per LLM/harness entry). Costs are nullable — an entry may
+// report tokens without a resolvable cost.
+type ExecutionUsageModel struct {
+	ID                  int64     `gorm:"column:id;primaryKey;autoIncrement"`
+	ExecutionID         string    `gorm:"column:execution_id;not null;index:idx_execution_usage_execution"`
+	WorkflowID          string    `gorm:"column:workflow_id;not null;index:idx_execution_usage_workflow"`
+	AgentNodeID         string    `gorm:"column:agent_node_id;not null;index:idx_execution_usage_agent_node_id"`
+	Reasoner            string    `gorm:"column:reasoner;not null;default:''"`
+	Source              string    `gorm:"column:source;not null;default:''"`
+	Provider            string    `gorm:"column:provider;not null;default:''"`
+	Model               string    `gorm:"column:model;not null;default:'';index:idx_execution_usage_model"`
+	Harness             string    `gorm:"column:harness;not null;default:''"`
+	InputTokens         int64     `gorm:"column:input_tokens;not null;default:0"`
+	OutputTokens        int64     `gorm:"column:output_tokens;not null;default:0"`
+	CacheReadTokens     int64     `gorm:"column:cache_read_tokens;not null;default:0"`
+	CacheCreationTokens int64     `gorm:"column:cache_creation_tokens;not null;default:0"`
+	TotalTokens         int64     `gorm:"column:total_tokens;not null;default:0"`
+	CostUSD             *float64  `gorm:"column:cost_usd"`
+	CostSource          string    `gorm:"column:cost_source;not null;default:''"`
+	CreatedAt           time.Time `gorm:"column:created_at;autoCreateTime;index:idx_execution_usage_created_at"`
+}
+
+func (ExecutionUsageModel) TableName() string { return "execution_usage" }

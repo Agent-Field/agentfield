@@ -1,11 +1,30 @@
 // Enhanced types for the new workflow-centric execution page
 
-import type { CanonicalStatus } from '../utils/status';
+import type { CanonicalStatus } from "../utils/status";
+
+export interface TriggerInfo {
+  trigger_id: string;
+  source_name: string;
+  event_type: string;
+  event_id: string;
+  received_at: string;
+  idempotency_key?: string;
+  payload?: Record<string, unknown>;
+}
 
 export interface WorkflowSummary {
   run_id: string;
   workflow_id: string;
   root_execution_id?: string;
+  root_error_category?: string;
+  root_error_message?: string;
+  /**
+   * Status of the root execution row, which is the unit the user actually
+   * controls via Pause/Resume/Cancel. The aggregate `status` field can
+   * drift from this when in-flight children are still running after the
+   * user pauses or cancels the root.
+   */
+  root_execution_status?: CanonicalStatus;
   status: CanonicalStatus;
   root_reasoner: string;
   current_task: string;
@@ -23,6 +42,25 @@ export interface WorkflowSummary {
   status_counts: Record<string, number>;
   active_executions: number;
   terminal: boolean;
+  trigger?: TriggerInfo;
+  lineage?: RunLineageMetadata;
+  golden?: GoldenRunMetadata;
+}
+
+export interface RunLineageMetadata {
+  kind?: string;
+  source_run_id?: string;
+  source_execution_id?: string;
+  restarted_execution_id?: string;
+  reuse?: string;
+  scope?: string;
+}
+
+export interface GoldenRunMetadata {
+  name?: string;
+  tags?: string[];
+  saved_by?: string;
+  saved_at?: string;
 }
 
 export interface EnhancedExecution {
@@ -43,7 +81,7 @@ export interface EnhancedExecution {
 }
 
 export interface ViewMode {
-  id: 'executions' | 'workflows' | 'sessions' | 'agents';
+  id: "executions" | "workflows" | "sessions" | "agents";
   label: string;
   description: string;
   icon: string;
@@ -77,10 +115,10 @@ export interface EnhancedExecutionsResponse {
 }
 
 export interface ExecutionViewState {
-  viewMode: ViewMode['id'];
+  viewMode: ViewMode["id"];
   filters: ExecutionViewFilters;
   sortBy: string;
-  sortOrder: 'asc' | 'desc';
+  sortOrder: "asc" | "desc";
   page: number;
   pageSize: number;
 }
@@ -116,16 +154,56 @@ export interface WorkflowTimelineNode {
   }[];
 }
 
+export interface WorkflowDAGExternal {
+  kind: "ard" | string;
+  local_target?: string;
+  provider?: string;
+  entry_identifier?: string;
+  adapter?: string;
+  policy?: string;
+  transport?: string;
+  mode?: string;
+  remote_run_id?: string;
+  remote_execution_id?: string;
+  remote_control_plane_url?: string;
+}
+
 export interface WorkflowDAGLightweightNode {
   execution_id: string;
   parent_execution_id?: string;
   agent_node_id: string;
   reasoner_id: string;
   status: string;
+  status_reason?: string;
+  reuse?: ExecutionReuseMetadata;
   started_at: string;
   completed_at?: string;
   duration_ms?: number;
   workflow_depth: number;
+  external?: WorkflowDAGExternal;
+}
+
+export interface ExecutionReuseMetadata {
+  hit: boolean;
+  source_execution_id: string;
+  source_run_id?: string;
+}
+
+/** Aggregated webhook deliveries for a run (from lightweight DAG). */
+export interface WebhookRunSummary {
+  steps_with_webhook: number;
+  total_deliveries: number;
+  failed_deliveries: number;
+}
+
+/** Latest failed webhook attempt for an execution (run strip + retry). */
+export interface WebhookFailurePreview {
+  execution_id: string;
+  agent_node_id?: string;
+  reasoner_id?: string;
+  event_type?: string;
+  http_status?: number | null;
+  created_at?: string;
 }
 
 export interface WorkflowDAGLightweightResponse {
@@ -137,5 +215,14 @@ export interface WorkflowDAGLightweightResponse {
   total_nodes: number;
   max_depth: number;
   timeline: WorkflowDAGLightweightNode[];
-  mode: 'lightweight';
+  mode: "lightweight";
+  unique_agent_node_ids?: string[];
+  /** Issuer DID from stored execution VCs for this workflow (server-issued), when present. */
+  workflow_issuer_did?: string;
+  webhook_summary?: WebhookRunSummary;
+  /** Executions with a failed delivery (capped); for run-level retry / focus step. */
+  webhook_failures?: WebhookFailurePreview[];
+  trigger?: TriggerInfo;
+  lineage?: RunLineageMetadata;
+  golden?: GoldenRunMetadata;
 }

@@ -137,13 +137,13 @@ export function CompactActivityStream({ className }: CompactActivityStreamProps)
 
         <div className="flex flex-col items-center justify-center py-6 space-y-2">
           <WarningAlt className="h-4 w-4" style={{ color: "var(--status-error)" }} />
-          <p className="text-body-small text-center">
+          <p className="text-sm text-muted-foreground text-center">
             Failed to load activity
           </p>
           {error && (
             <button
               onClick={clearError}
-              className="text-body-small hover:text-foreground"
+              className="text-sm text-muted-foreground hover:text-foreground"
             >
               Dismiss
             </button>
@@ -176,7 +176,7 @@ export function CompactActivityStream({ className }: CompactActivityStreamProps)
 
         <div className="flex flex-col items-center justify-center py-6 space-y-2">
           <Time className="h-4 w-4 text-muted-foreground" />
-          <p className="text-body-small text-center">
+          <p className="text-sm text-muted-foreground text-center">
             No recent activity
           </p>
         </div>
@@ -210,8 +210,8 @@ export function CompactActivityStream({ className }: CompactActivityStreamProps)
         <div
           className="flex items-center justify-between p-2 mb-3 rounded border"
           style={{
-            backgroundColor: "var(--status-warning-bg)",
-            borderColor: "var(--status-warning-border)"
+            backgroundColor: "hsl(var(--status-warning) / 0.1)",
+            borderColor: "hsl(var(--status-warning) / 0.3)"
           }}
         >
           <div className="flex items-center space-x-2">
@@ -260,18 +260,18 @@ export function CompactActivityStream({ className }: CompactActivityStreamProps)
                   <span className="text-xs font-medium text-foreground truncate">
                     {execution.reasoner_name}
                   </span>
-                  <span className="text-body-small">·</span>
-                  <span className="text-body-small truncate">
+                  <span className="text-sm text-muted-foreground">·</span>
+                  <span className="text-sm text-muted-foreground truncate">
                     {execution.agent_name}
                   </span>
                 </div>
-                <div className="text-[10px] text-muted-foreground">
+                <div className="text-micro text-muted-foreground">
                   {label}
                 </div>
               </div>
 
               {/* Timestamp */}
-              <div className="text-body-small flex-shrink-0">
+              <div className="text-sm text-muted-foreground flex-shrink-0">
                 {execution.relative_time}
               </div>
             </div>

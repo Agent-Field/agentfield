@@ -6,10 +6,10 @@ export function ModeToggle() {
 
   return (
     <div className="flex items-center gap-2">
-      <span className="text-body hidden sm:inline">Mode:</span>
+      <span className="text-sm hidden sm:inline">Mode:</span>
       <button
         onClick={toggleMode}
-        className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-border-secondary bg-bg-tertiary hover:bg-bg-elevated transition-colors duration-200"
+        className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-border bg-muted hover:bg-card transition-colors duration-200"
         title={`Switch to ${mode === 'developer' ? 'user' : 'developer'} mode`}
       >
         {mode === 'developer' ? (

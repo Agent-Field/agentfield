@@ -1,454 +1,602 @@
 <div align="center">
 
-<img src="assets/github hero.png" alt="AgentField - Kubernetes, for AI Agents" width="100%" />
+# AgentField — The AI Backend
 
-# Kubernetes for AI Agents
+### **Build agents like APIs. Run ten thousand of them like microservices.**
 
-### **Deploy, Scale, Observe, and Prove.**
+*One request fans out to thousands of agents. The control plane queues, retries, and traces every branch.*
 
-*When AI moves from chatbots into backends, making decisions, not just answering questions, it needs infrastructure, not frameworks.*
+[![Stars](https://img.shields.io/github/stars/Agent-Field/agentfield?style=flat&logo=github&logoColor=e8e5dc&color=0c0b09&labelColor=8b7355)](https://github.com/Agent-Field/agentfield/stargazers)
+[![License](https://img.shields.io/badge/license-Apache%202.0-0c0b09.svg?style=flat&labelColor=8b7355)](LICENSE)
+[![Downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fgist.githubusercontent.com%2Fsantoshkumarradha%2Fd98e2ad73502b4075f6a5f0ae4f5cae5%2Fraw%2Fbadge.json&style=flat&logo=download&logoColor=e8e5dc&color=0c0b09&labelColor=8b7355&cacheSeconds=3600)](https://github.com/Agent-Field/agentfield)
+[![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fgist.githubusercontent.com%2Fsantoshkumarradha%2F433fb09c2d54c3c2589125cfd3eb14a2%2Fraw%2Fbadge.json&style=flat&logo=github&logoColor=e8e5dc&color=0c0b09&labelColor=8b7355&cacheSeconds=3600)](https://github.com/Agent-Field/agentfield/actions/workflows/coverage.yml)
+[![Last Commit](https://img.shields.io/github/last-commit/Agent-Field/agentfield?style=flat&logo=git&logoColor=e8e5dc&color=0c0b09&labelColor=8b7355)](https://github.com/Agent-Field/agentfield/commits/main)
+[![Discord](https://img.shields.io/badge/discord-join%20us-0c0b09.svg?style=flat&labelColor=8b7355&logo=discord&logoColor=e8e5dc)](https://discord.gg/aBHaXMkpqh)
 
-[![License](https://img.shields.io/badge/license-Apache%202.0-7c3aed.svg?style=flat&labelColor=1e1e2e)](LICENSE)
-[![Downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fgist.githubusercontent.com%2Fsantoshkumarradha%2Fd98e2ad73502b4075f6a5f0ae4f5cae5%2Fraw%2Fbadge.json&style=flat&logo=download&logoColor=white&labelColor=1e1e2e&cacheSeconds=3600)](https://github.com/Agent-Field/agentfield)
-[![Last Commit](https://img.shields.io/github/last-commit/Agent-Field/agentfield?style=flat&logo=git&logoColor=white&color=7c3aed&labelColor=1e1e2e)](https://github.com/Agent-Field/agentfield/commits/main)
-[![Go](https://img.shields.io/badge/go-1.21+-00ADD8.svg?style=flat&labelColor=1e1e2e&logo=go&logoColor=white)](https://go.dev/)
-[![Python](https://img.shields.io/badge/python-3.9+-3776AB.svg?style=flat&labelColor=1e1e2e&logo=python&logoColor=white)](https://www.python.org/)
-[![Deploy with Docker](https://img.shields.io/badge/deploy-docker-2496ED.svg?style=flat&labelColor=1e1e2e&logo=docker&logoColor=white)](https://docs.docker.com/)
-[![Discord](https://img.shields.io/badge/discord-join%20us-5865F2.svg?style=flat&labelColor=1e1e2e&logo=discord&logoColor=white)](https://discord.gg/aBHaXMkpqh)
-
-**[Docs](https://agentfield.ai/docs)** | **[Quick Start](https://agentfield.ai/docs/quick-start)** | **[Python SDK](https://agentfield.ai/api/python-sdk/overview)** | **[Go SDK](https://agentfield.ai/api/go-sdk/overview)** | **[TypeScript SDK](https://agentfield.ai/api/typescript-sdk/overview)** | **[REST API](https://agentfield.ai/api/rest-api/overview)** | **[Discord](https://discord.gg/aBHaXMkpqh)**
+<!-- All outbound agentfield.ai links must use UTM parameters, not direct URLs. See assets/utm-links.csv for the full list — target URLs there are for verification and reference only, always use the UTM version in the README. Update both the README and the CSV when adding or changing links. -->
+**[Docs](https://agentfield.ai/docs/learn?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-docs)** · **[Quick Start](https://agentfield.ai/docs/learn/quickstart?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-quickstart)** · **[Python SDK](https://agentfield.ai/docs/reference/sdks/python?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-python-sdk)** · **[Go SDK](https://agentfield.ai/docs/reference/sdks/go?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-go-sdk)** · **[TypeScript SDK](https://agentfield.ai/docs/reference/sdks/typescript?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-typescript-sdk)** · **[REST API](https://agentfield.ai/docs/reference/sdks/rest-api?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-rest-api)** · **[Examples](#built-with-agentfield)** · **[Discord](https://discord.gg/aBHaXMkpqh)**
 
 </div>
-
-## What is AgentField?
-
-**AgentField is the backend infrastructure layer for autonomous AI.**
-
-AI has outgrown frameworks and is moving from chatbots into backends—making decisions about refunds, coordinating supply chains, managing portfolios. These agents need infrastructure, not prompt wrappers.
-
-AgentField is an open-source **control plane** that treats AI agents as first-class backend services and makes agents production-ready.
-
-**Scale Infrastructure** *(think: Kubernetes)*
-- **Routing & Discovery**: Agents find and call each other through standard REST APIs
-- **Async Execution**: Fire-and-forget tasks that run for minutes, hours, or days
-- **Durable State**: Built-in memory with vector search—no Redis or Pinecone required
-- **Observability**: Automatic workflow DAGs, Prometheus metrics, structured logs
-
-**Trust Infrastructure** *(think: Okta, rebuilt for agents)*
-- **W3C DIDs**: Every agent gets a cryptographic identity—not a shared API key
-- **Verifiable Credentials**: Tamper-proof audit trails for every action
-- **Policy Enforcement**: Boundaries enforced by infrastructure, not prompts
-
-Write [Python](https://agentfield.ai/api/python-sdk/overview), [Go](https://agentfield.ai/api/go-sdk/overview), [TypeScript](https://agentfield.ai/api/typescript-sdk/overview), or call via [REST](https://agentfield.ai/api/rest-api/overview). Get production infrastructure automatically.
-
----
-
-## The AI Backend
-
-Software keeps adding layers when complexity demands it. Frontend/backend separation. Data lakes and pipelines. Now: a **reasoning layer** that sits alongside your services, making decisions that used to be hardcoded.
-
-We call this the AI Backend. Not a chatbot, not a copilot—infrastructure for software that can think.
-
-**Guided autonomy:** Agents that reason freely within boundaries you define. Predictable enough to trust. Flexible enough to be useful.
-
-📖 **[Read: The AI Backend](https://agentfield.ai/blog/posts/ai-backend/?utm_source=github-readme)** — Our thesis on why every serious backend will need a reasoning layer.
-
----
-
-## See It In Action
 
 <div align="center">
-<img src="assets/UI.png" alt="AgentField Dashboard" width="100%" />
-<br/>
-<i>Real-time Observability • Execution Flow • Audit Trails</i>
+<a href="https://agentfield.ai/docs/build/intelligence/harness?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-harness-banner">
+<img src="assets/harness-banner.png" alt="Now includes Harness Orchestration — multi-turn coding agents with Claude Code, Codex, Gemini CLI, and OpenCode" width="100%" />
+</a>
 </div>
 
----
+AgentField is an open-source control plane that lets you build AI agents callable by any service in your stack - frontends, backends, other agents, cron jobs - just like any other API. You write agent logic in Python, Go, or TypeScript. AgentField turns it into production infrastructure: routing, coordination, memory, async execution, and observability. Every function becomes a REST endpoint, and the same code scales from one agent on your laptop to ten thousand in a single workflow: the control plane handles the fan-out, the queues, and the retries.
 
-## Build Agents in Any Language
+<div align="center">
 
-<details open>
-<summary><strong>Python</strong></summary>
+https://github.com/user-attachments/assets/9fb7b1cf-26de-4b9b-9ba2-917252cc26ec
 
-```python
-from agentfield import Agent, AIConfig
+<sub><b>One prompt → a running containerized production ready multi-agent backend.</b> No glue code, start using the agent API!</sub>
 
-app = Agent(node_id="researcher", ai_config=AIConfig(model="gpt-4o"))
+</div>
 
-@app.skill()
-def fetch_url(url: str) -> str:
-    return requests.get(url).text
+## Build production agents with a prompt.
 
-@app.reasoner()
-async def summarize(url: str) -> dict:
-    content = fetch_url(url)
-    return await app.ai(f"Summarize: {content}")
-
-app.run()  # → POST /api/v1/execute/researcher.summarize
-```
-
-[Full Python SDK Documentation →](https://agentfield.ai/api/python-sdk/overview)
-</details>
-
-<details>
-<summary><strong>Go</strong></summary>
-
-```go
-agent, _ := agentfieldagent.New(agentfieldagent.Config{
-    NodeID:        "researcher",
-    AgentFieldURL: "http://localhost:8080",
-})
-
-agent.RegisterSkill("summarize", func(ctx context.Context, input map[string]any) (any, error) {
-    url := input["url"].(string)
-    // Your agent logic here
-    return map[string]any{"summary": "..."}, nil
-})
-
-agent.Run(context.Background())
-```
-
-[Full Go SDK Documentation →](https://agentfield.ai/api/go-sdk/overview)
-</details>
-
-<details>
-<summary><strong>TypeScript</strong></summary>
-
-```typescript
-import { Agent } from '@agentfield/sdk';
-
-const agent = new Agent({
-  nodeId: 'researcher',
-  agentFieldUrl: 'http://localhost:8080',
-});
-
-agent.reasoner('summarize', async (ctx, input: { url: string }) => {
-  const content = await fetch(input.url).then(r => r.text());
-  return await ctx.ai(`Summarize: ${content}`);
-});
-
-agent.run();  // → POST /api/v1/execute/researcher.summarize
-```
-
-[Full TypeScript SDK Documentation →](https://agentfield.ai/api/typescript-sdk/overview)
-</details>
-
-<details>
-<summary><strong>REST / Any Language</strong></summary>
-
-```bash
-# Call any agent from anywhere—no SDK required
-curl -X POST http://localhost:8080/api/v1/execute/researcher.summarize \
-  -H "Content-Type: application/json" \
-  -d '{"input": {"url": "https://example.com"}}'
-```
-
-```javascript
-// Frontend (React, Next.js, etc.)
-const result = await fetch("http://localhost:8080/api/v1/execute/researcher.summarize", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ input: { url: "https://example.com" } }),
-}).then(r => r.json());
-```
-
-[REST API Reference →](https://agentfield.ai/api/rest-api/overview)
-</details>
-
----
-
-## Quick Start
-
-### 1. Install
+**Describe the system in one line. Get a production-ready multi-agent backend.** Works in Claude Code, Codex, Gemini CLI, OpenCode, Aider, Windsurf, and Cursor.
 
 ```bash
 curl -fsSL https://agentfield.ai/install.sh | bash
 ```
 
-### 2. Create Your Agent
+Then in your coding agent, paste any spec with /agentfield :
+
+```text
+/agentfield Build a claims processor with risk scoring, pattern detection,
+and human approval for low-confidence decisions.
+```
+
+You get a Docker Compose stack wired up end-to-end — the agent, the control plane, and a production ready REST API endpoint you can paste and `curl` into a terminal to try it. [See it in action →](https://agentfield.ai/docs/learn/build-with-claude-code?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-prompt-to-production)
+
+## The DX you get
+
+*Plain Python (or Go / TypeScript) functions. No DSL, no YAML, no graph wiring.*
+
+```python
+import asyncio
+from agentfield import Agent, AIConfig
+from pydantic import BaseModel
+
+app = Agent(
+    node_id="researcher",
+    version="1.0.0",# Canary deploys, A/B testing, blue-green rollouts
+    ai_config=AIConfig(model="anthropic/claude-sonnet-4-20250514"),
+)
+
+class SubQuestions(BaseModel):
+    questions: list[str]
+
+@app.reasoner(tags=["research"])
+async def research(question: str, depth: int = 0, model: str | None = None) -> dict:
+
+    if depth >= 3:  # depth cap keeps fan-out bounded
+        answer = await app.ai(system="Answer directly and concisely.", user=question, model=model)
+        return {"question": question, "answer": answer}
+
+    # Break the question into sub-questions
+    plan = await app.ai(
+        system="Break this into 3-5 independent sub-questions.",
+        user=question, schema=SubQuestions, model=model,
+    )
+
+    # Fan out: each sub-question recurses on this same agent, through the control plane
+    branches = await asyncio.gather(*[
+        app.call(f"{app.node_id}.research", question=q, depth=depth + 1, model=model)
+        for q in plan.questions
+    ])
+
+    # Synthesize the branches back into one answer
+    synthesis = await app.ai(system="Synthesize these findings.", user=str(branches), model=model)
+    return {"question": question, "answer": synthesis, "branches": branches}
+
+app.run()
+# This single line exposes: POST /api/v1/execute/researcher.research
+# One request fans out to thousands of agents. The control plane queues, retries, and traces
+# every branch. No broker, no queue setup, no timeout.
+```
+
+> **What you just saw:** `app.ai()` calls an LLM and returns structured output. `app.call()` routes to other agents (or back to itself) through the control plane, so recursion becomes distributed fan-out. `asyncio.gather()` runs every branch in parallel. `app.run()` auto-exposes everything as REST. [Read the full docs →](https://agentfield.ai/docs/learn?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-read-full-docs)
+
+<details>
+<summary><b>Need approvals, audit trails, and governance? (the enterprise sample)</b></summary>
+
+```python
+from agentfield import Agent, AIConfig
+from pydantic import BaseModel
+
+app = Agent(
+    node_id="claims-processor",
+    version="2.1.0",# Canary deploys, A/B testing, blue-green rollouts
+    ai_config=AIConfig(model="anthropic/claude-sonnet-4-20250514"),
+)
+
+class Decision(BaseModel):
+    action: str# "approve", "deny", "escalate"
+    confidence: float
+    reasoning: str
+
+@app.reasoner(tags=["insurance", "critical"])
+async def evaluate_claim(claim: dict) -> dict:
+
+    # Structured AI judgment - returns typed Pydantic output
+    decision = await app.ai(
+        system="Insurance claims adjuster. Evaluate and decide.",
+        user=f"Claim #{claim['id']}: {claim['description']}",
+        schema=Decision,
+    )
+
+    if decision.confidence < 0.85:
+        # Human approval - suspends execution, notifies via webhook, resumes when approved
+        await app.pause(
+            approval_request_id=f"claim-{claim['id']}",
+            approval_request_url=f"https://internal.acme.com/approvals/claim-{claim['id']}",
+            expires_in_hours=48,
+        )
+
+    # Route to the next agent - traced through the control plane
+    await app.call("notifier.send_decision", input={
+        "claim_id": claim["id"],
+        "decision": decision.model_dump(),
+    })
+
+    return decision.model_dump()
+
+app.run()
+# This single line exposes: POST /api/v1/execute/claims-processor.evaluate_claim
+# The agent auto-registers with the control plane, gets a cryptographic identity, and every
+# execution produces a verifiable, tamper-proof audit trail.
+```
+
+> **What you just saw:** `app.ai()` calls an LLM and returns structured output. `app.pause()` suspends for [human approval](https://agentfield.ai/docs/build/execution/human-in-the-loop?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-human-in-the-loop). `app.call()` routes to other agents through the control plane. `app.run()` auto-exposes everything as REST. [Read the full docs →](https://agentfield.ai/docs/learn?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-read-full-docs)
+
+</details>
+
+<details>
+<summary><b>Prefer to scaffold by hand? (Python / Go / TypeScript / Docker)</b></summary>
 
 ```bash
-af init my-agent --defaults
+af init my-agent --defaults                            # Scaffold agent
 cd my-agent && pip install -r requirements.txt
+af server          # Terminal 1 → Dashboard at http://localhost:8080
+python main.py     # Terminal 2 → Agent auto-registers
 ```
 
-### 3. Start (Two Terminals Required)
-
-AgentField uses a **control plane + agent node** architecture. You'll need two terminal windows:
-
-**Terminal 1 – Start the Control Plane:**
 ```bash
-af server
-```
-> Opens the dashboard at http://localhost:8080
-
-**Terminal 2 – Start Your Agent:**
-```bash
-python main.py
-```
-> Agent auto-registers with the control plane
-
-### 4. Test It
-
-```bash
+# Call your agent
 curl -X POST http://localhost:8080/api/v1/execute/my-agent.demo_echo \
   -H "Content-Type: application/json" \
   -d '{"input": {"message": "Hello!"}}'
 ```
 
-<details>
-<summary><strong>Other Languages / Options</strong></summary>
-
-**Go:**
 ```bash
-af init my-agent --defaults --language go
-cd my-agent && go mod download
-go run .
-```
+# Go
+af init my-agent --defaults --language go && cd my-agent && go run .
 
-**TypeScript:**
-```bash
-af init my-agent --defaults --language typescript
-cd my-agent && npm install
-npm run dev
-```
+# TypeScript
+af init my-agent --defaults --language typescript && cd my-agent && npm install && npm run dev
 
-**Interactive mode** (choose language, set author info):
-```bash
-af init my-agent  # No --defaults flag
-```
-</details>
-
-<details>
-<summary><strong>Docker / Troubleshooting</strong></summary>
-
-If running the **control plane in Docker** and your **agent node runs outside that container**, make sure the control plane can reach the agent at the URL it registers.
-
-**Option A (agent on your host, control plane in Docker):**
-```bash
+# Docker (control plane only)
 docker run -p 8080:8080 agentfield/control-plane:latest
-
-# Python agents (recommended)
-export AGENTFIELD_URL="http://localhost:8080"
-export AGENT_CALLBACK_URL="http://host.docker.internal:8001"
-python main.py
-
-# Go agents
-export AGENTFIELD_URL="http://localhost:8080"
-export AGENT_PUBLIC_URL="http://host.docker.internal:8001"
 ```
 
-**Option B (agent + control plane both in Docker Compose / same network):**
-- Set the agent callback/public URL to the agent container's service name, e.g. `http://my-agent:8001`.
+[Deployment guide →](https://agentfield.ai/docs/reference/deploy?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-deploy) for Docker Compose, Kubernetes, and production setups.
 
-**Linux note:** `host.docker.internal` may require `--add-host=host.docker.internal:host-gateway` or using a Compose setup where both containers share a network.
 </details>
 
-**Next Steps:** [Build Your First Agent](https://agentfield.ai/guides/getting-started/build-your-first-agent) | [Deploy to Production](https://agentfield.ai/guides/deployment/overview) | [Examples](https://agentfield.ai/examples)
+## See it in action
 
----
+<!-- TODO: replace static UI.png with a short gif of a live fan-out run in the DAG view -->
 
-## Production Examples
+<div align="center">
+<img src="assets/UI.png" alt="AgentField Dashboard" width="100%" />
+<br/>
+<sub>Real-time workflow DAGs · Execution traces · Agent fleet management · Audit trails</sub>
+</div>
 
-Real-world patterns built on AgentField:
+## How AgentField fits in your stack
 
-| Example | Description | Links |
-|---------|-------------|-------|
-| **SWE-AF** | Autonomous software engineering factory. One API call spins up a full engineering fleet — PM, architect, coders, QA, reviewers, merger — that plans, builds, tests, and ships complex software end-to-end. Scored **95/100** with haiku, outperforming Claude Code sonnet (73) and Codex (62) on the same benchmark. Ships real PRs: [PR #179](https://github.com/Agent-Field/agentfield/pull/179) was built entirely by SWE-AF (10 issues, 217 tests passing, $19.23 total cost). | [GitHub](https://github.com/Agent-Field/SWE-AF) |
-| **Deep Research API** | Massively parallel research backend. Fans out to 10k+ agents, synthesizing verifiable strategies with deep citation chains. | [GitHub](https://github.com/Agent-Field/af-deep-research) • [Docs](https://agentfield.ai/examples) |
-| **RAG Evaluator** | Production monitoring for LLM responses. Scores across 4 dimensions to identify reliability issues. | [Architecture](https://agentfield.ai/examples/complete-agents/rag-evaluator) |
+Most agent tools help you **write** agent logic. AgentField is what **runs** it in production: the layer that makes agents callable by other software, durable across failures, and observable when one request fans out to a thousand branches. Keep the framework you already use for authoring; a reasoner is a plain function, so existing LangGraph or CrewAI code can run inside one.
 
-[See all examples →](https://agentfield.ai/examples)
+|  | **Frameworks**<br><sub>LangChain · CrewAI · PydanticAI · OpenAI Agents SDK</sub> | **Workflow engines**<br><sub>Temporal · Airflow</sub> | **Visual builders**<br><sub>n8n · Zapier</sub> | **AgentField** |
+|---|:-:|:-:|:-:|:-:|
+| Build agent logic (prompts, tools, structured output) | ● | — | — | ● |
+| Prebuilt chains, retrievers, integrations | ● | — | ◐ | [◐](https://agentfield.ai/docs/integrations?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-integrations) |
+| Production REST APIs out of the box | — | ◐ | ● | ● |
+| Async + retries + webhooks | — | ● | ◐ | **●** |
+| Memory scopes (global · actor · session · workflow) | ◐ | — | — | ● |
+| Service discovery + cross-agent calls | — | — | — | **●** |
+| Distributed agents (register from anywhere, one mesh) | — | ◐ | — | **●** |
+| Coding agents as functions (Claude Code · Codex · CLI) | — | — | — | **●** |
+| Agent identity, access policies, signed audit trails | — | — | — | ● |
+| Fleet observability (DAGs · metrics · traces) | — | ◐ | — | ● |
+| Multi-language SDKs (Python · Go · TypeScript) | ◐ | ● | — | ● |
 
----
+<sub>● full · ◐ partial · — not the focus</sub>
 
-## The Production Gap
+**Prototype in whatever you like. The moment a second service needs to call your agent, put it on AgentField.** That is the point where you would otherwise start writing queues, retries, discovery, and tracing by hand.
 
-Most frameworks stop at "make the LLM call." But production agents need:
+[Full comparison & decision guide →](https://agentfield.ai/docs/learn/vs-frameworks?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-vs-frameworks)
 
-[See the production-ready feature set →](https://agentfield.ai/docs/why-agentfield/production-ready-features)
+## How it scales
 
-### Scale & Reliability
-Agents that run for hours or days. Webhooks with automatic retries. Backpressure handling when downstream services are slow.
+The control plane is a stateless Go service. You put more of them behind a load balancer and the fleet grows horizontally. Work lands in a durable PostgreSQL queue with lease-based processing, so a crash or a restart resumes where it left off instead of dropping the job.
 
-```python
-# Fire-and-forget: webhook called when done
-result = await app.call(
-    "research_agent.deep_dive",
-    input={"topic": "quantum computing"},
-    async_config=AsyncConfig(
-        webhook_url="https://myapp.com/webhook",
-        timeout_hours=6
-    )
-)
-```
+| Property | What it means |
+|---|---|
+| Stateless Go control plane | Horizontal scaling behind a load balancer. Add replicas to add capacity. |
+| Durable PostgreSQL queue | Lease-based processing. Jobs survive crashes and restarts. |
+| Async execution | Webhooks and SSE, no timeout limits. A single run can go for hours or days. |
+| Backpressure | Queue-depth limits and circuit breakers keep a fan-out from overwhelming downstream agents. |
+| Routing overhead | Roughly 100-200ms per cross-agent hop. It matters when a branch does little work per hop, so keep hops coarse when latency is tight. |
 
-### Multi-Agent Coordination
-Agents that discover and invoke each other through the control plane. Every call tracked. Every workflow visualized as a DAG.
+Two examples already run at this load. The [deep-research engine](https://agentfield.ai/github/deepresearch/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-deepresearch-repo) fanned out 10,000+ agent invocations in one workflow. The [security auditor](https://agentfield.ai/github/sec-af/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-sec-af-repo) runs 250 coordinated agents per audit.
 
-```python
-# Agent A calls Agent B—routed through control plane, fully traced
-analysis = await app.call("analyst.evaluate", input={"data": dataset})
-report = await app.call("writer.summarize", input={"analysis": analysis})
-```
+[Deployment guide →](https://agentfield.ai/docs/reference/deploy?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-deploy-scale) for Docker Compose, Kubernetes, and production setups.
 
-### Developer Experience
-Standard REST APIs. No magic abstractions. Build agents the way you build microservices.
+## What You Get
+
+**Build** - Python, Go, or TypeScript. Every function becomes a REST endpoint.
+
+- **[Reasoners & Skills](https://agentfield.ai/docs/build/building-blocks/reasoners?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-reasoners)** - `@app.reasoner()` for AI judgment, `@app.skill()` for deterministic code
+- **[Structured AI](https://agentfield.ai/docs/reference/sdks/python?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-structured-ai)** - `app.ai(schema=MyModel)` → typed Pydantic/Zod output from any LLM
+- **[Harness](https://agentfield.ai/docs/build/intelligence/harness?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-harness)** - `app.harness("Fix the bug")` dispatches multi-turn tasks to Claude Code, Codex, Gemini CLI, or OpenCode
+- **[Cross-Agent Calls](https://agentfield.ai/docs/build/coordination/cross-agent-calls?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-cross-agent-calls)** - `app.call("other-agent.func")` routes through the control plane with full tracing
+- **[Discovery](https://agentfield.ai/docs/reference/sdks/python?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-discovery)** - `app.discover(tags=["ml*"])` finds agents and capabilities across the mesh. `tools="discover"` lets LLMs auto-invoke them.
+- **[Memory](https://agentfield.ai/docs/build/coordination/shared-memory?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-memory)** - `app.memory.set()` / `.get()` / `.similarity_search()` - KV + vector search, four scopes, no Redis needed
+
+**Scale** - Production infrastructure for non-deterministic AI.
+
+- **[Async Execution](https://agentfield.ai/docs/build/execution/async?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-async-execution)** - Fire-and-forget with webhooks, SSE streaming, retries. No timeout limits - agents run for hours or days.
+- **[Canary Deployments](https://agentfield.ai/docs/learn/features?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-canary-deployments)** - Traffic weight routing, A/B testing, blue-green deploys. Roll out agent versions at 5% → 50% → 100%.
+- **[Human-in-the-Loop](https://agentfield.ai/docs/build/execution/human-in-the-loop?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-human-in-the-loop)** - `app.pause()` suspends execution for human approval. Crash-safe, durable, audited.
+- **[Observability](https://agentfield.ai/docs/learn/features?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-observability)** - Automatic workflow DAGs, Prometheus `/metrics`, structured logs, execution timeline.
+
+**Govern** - IAM for AI agents. Every agent gets a cryptographic identity. Identity, access control, and audit trails - built in.
+
+- **[Cryptographic Identity](https://agentfield.ai/docs/build/governance/identity?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-crypto-identity)** - Every agent gets a W3C DID (decentralized identifier) - not a shared API key. Agents authenticate to each other the way services authenticate with mTLS, but with cryptographic signatures that travel with the agent.
+- **[Verifiable Credentials](https://agentfield.ai/docs/build/governance/credentials?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-verifiable-credentials)** - Tamper-proof receipt for every execution. Offline-verifiable: `af vc verify audit.json`.
+- **[Policy Enforcement](https://agentfield.ai/docs/build/governance/policy?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-policy-enforcement)** - Tag-based policy gates with cryptographic verification. "Only agents tagged 'finance' can call this" - enforced by infrastructure, not prompts.
+
+[See the full production-ready feature set →](https://agentfield.ai/docs/learn/features?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-full-features)
+
+<div align="center">
+<img src="assets/features-strip.png" alt="90+ Production Features" width="100%" />
+</div>
+
+<details>
+<summary><h4 align="center">▼ Click to expand full capabilities</h4></summary>
+
+#### AI & LLM
+
+| Feature | How |
+|---|---|
+| Structured output (Pydantic/Zod) | `app.ai(schema=MyModel)` |
+| Multi-turn coding agents | `app.harness("task", provider="claude-code")` |
+| LLM auto-discovers agents and tools | `app.ai(tools="discover")` |
+| Multimodal (text, image, audio) | `app.ai("Describe", image_url="...")` |
+| Streaming responses | `app.ai("...", stream=True)` |
+| 100+ LLMs via LiteLLM | `AIConfig(model="anthropic/claude-sonnet-4-20250514")` |
+| Temperature, max tokens, format | `app.ai(..., temperature=0.2)` |
+
+#### Agent Mesh & Discovery
+
+| Feature | How |
+|---|---|
+| Cross-agent calls with tracing | `app.call("agent.func", input={...})` |
+| Discover agents by tag (wildcards) | `app.discover(tags=["ml*"])` |
+| Discover by health status | `app.discover(health_status="active")` |
+| Agent routers (namespacing) | `AgentRouter(prefix="billing")` |
+| Auto context propagation | Workflow, session, actor IDs forwarded |
+| Parallel agent execution | `asyncio.gather(app.call(...), ...)` |
+| Auto-registration on startup | Service mesh with zero config |
+
+#### Execution Engine
+
+| Feature | How |
+|---|---|
+| Sync execution (REST) | `POST /api/v1/execute/{agent}.{func}` |
+| Async (fire-and-forget) | `POST /api/v1/execute/async/{agent}.{func}` |
+| Webhooks + HMAC-SHA256 signing | `AsyncConfig(webhook_url="...", secret="...")` |
+| SSE streaming (real-time) | `/api/v1/execute/stream/{id}` |
+| No timeout limits (hours/days) | Control plane allows unlimited duration |
+| Execution polling | `GET /api/v1/executions/{id}` |
+| Batch status checks | `POST /api/v1/executions/batch-status` |
+| Progress updates mid-execution | Intermediate payloads during long tasks |
+| Auto retries + exponential backoff | Transparent - control plane handles |
+| Backpressure + queue depth limits | Fair scheduling, circuit breakers |
+| Durable queue (PostgreSQL) | Atomic lease-based processing |
+
+#### Memory (Distributed State)
+
+| Feature | How |
+|---|---|
+| Key-value storage | `app.memory.set(key, value)` / `.get(key)` |
+| Vector search (semantic) | `app.memory.similarity_search(embedding, top_k=5)` |
+| Four scopes | Global, actor, session, workflow |
+| Reactive memory events | `@app.memory.on_change("order_*")` |
+| Metadata filtering | Filter stored values by metadata |
+| Zero dependencies | Built into control plane - no Redis |
+
+#### Human-in-the-Loop
+
+| Feature | How |
+|---|---|
+| Durable pause/resume | `await app.pause(reason="...")` |
+| Approval workflows with UI | `approval_request_url` for reviewers |
+| Configurable timeouts | `expires_in_hours=24` + auto-escalation |
+| Crash-safe state | Survives agent restarts |
+
+#### Canary Deployments & Versioning
+
+| Feature | How |
+|---|---|
+| Traffic weight routing | 5% → 50% → 100% rollouts |
+| A/B testing | 50/50 splits with `X-Routed-Version` |
+| Blue-green deployments | Instant weight switch, zero downtime |
+| Per-version health tracking | Unhealthy versions auto-removed |
+| Agent lifecycle states | pending → starting → ready → degraded → offline |
+
+#### Identity & Governance
+
+| Feature | How |
+|---|---|
+| Cryptographic identity per agent | Auto-generated W3C DID + Ed25519 keys |
+| Verifiable Credentials | Tamper-proof receipt per execution |
+| Offline VC verification | `af vc verify audit.json` |
+| Tag-based access policies | ALLOW/DENY rules on caller → target tags |
+| Cryptographically signed requests | Ed25519 signatures on cross-agent calls |
+| VC hierarchy (3 tiers) | Platform → Node → Function control |
+| Agent notes (audit log) | `app.note("Decision", tags=["critical"])` |
+| Non-repudiation | Cryptographic proof of actions |
+| Permission request workflows | Auto-created when access denied |
+
+#### Observability & Fleet Management
+
+| Feature | How |
+|---|---|
+| Automatic DAG visualization | Workflow graphs in dashboard |
+| Prometheus metrics | `/metrics` out of the box |
+| Structured JSON logging | Automatic from SDK |
+| Execution timeline | Chronological decision trace |
+| Health checks (K8s-ready) | `/health`, `/ready` endpoints |
+| Correlation IDs | `X-Workflow-ID`, `X-Execution-ID` |
+| Workflow DAG API | `GET /api/v1/workflows/{id}/dag` |
+| Agent heartbeat monitoring | Auto health status transitions |
+
+#### Harness (Multi-turn Coding Agents)
+
+| Feature | How |
+|---|---|
+| 4 providers | Claude Code, Codex, Gemini CLI, OpenCode |
+| Schema-constrained output | `schema=ResultModel` (Pydantic/Zod) |
+| Cost capping | `max_budget_usd=3.0` |
+| Turn limiting | `max_turns=100` |
+| Tool access control | `tools=["Read", "Write", "Bash"]` |
+| Environment injection | `env={"KEY": "value"}` |
+| System prompt override | `system_prompt="..."` |
+| Multi-layer output recovery | Cosmetic repair → retry → full retry |
+
+#### Connector API (Fleet Management)
+
+| Feature | How |
+|---|---|
+| Remote agent management | `/connector/reasoners` |
+| Version traffic control | `/connector/.../weight` |
+| Bearer token auth | `AGENTFIELD_CONNECTOR_TOKEN` |
+| Air-gapped deployment | Outbound WebSocket only |
+
+#### Developer Experience
+
+| Feature | How |
+|---|---|
+| CLI scaffolding | `af init my-agent --defaults --language python\|go\|typescript` |
+| Local dev with dashboard | `af server` → http://localhost:8080 |
+| Hot reload | `af dev` auto-detects changes |
+| Auto-REST from decorators | Every `@app.reasoner()` → `POST /api/v1/execute/...` |
+| Python, Go, TypeScript SDKs | Native patterns per language |
+| MCP server integration | `af add --mcp --url <server>` |
+| Config storage API | `POST /api/v1/configs/:key` - database-backed |
+| Docker + Kubernetes ready | Stateless control plane, horizontal scaling |
+
+[Explore all features in detail →](https://agentfield.ai/docs/learn/features?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-explore-features)
+
+</details>
+
+## Built With AgentField
+
+Each of these is a real, installable agent node. With a control plane running, drop any of them into your setup with a single command — `af install <repo-url>` clones the repo, isolates its dependencies, and registers the node. You're prompted once for shared secrets like `OPENROUTER_API_KEY` (stored encrypted and reused across every node), then the node's reasoners are callable over REST or with `af call`:
 
 ```bash
-# Every agent is an API endpoint
-curl -X POST http://localhost:8080/api/v1/execute/researcher.summarize \
-  -H "Content-Type: application/json" \
-  -d '{"input": {"url": "https://example.com"}}'
+af install https://github.com/Agent-Field/SWE-AF              # autonomous engineering team  → node: swe-planner
+af install https://github.com/Agent-Field/sec-af             # security auditor              → node: sec-af
+af install https://github.com/Agent-Field/cloudsecurity-af   # cloud / IaC security scanner  → node: cloudsecurity
+af install https://github.com/Agent-Field/pr-af              # agentic code review           → node: pr-af
+
+af run swe-planner                                           # start a node (prompts once for required secrets)
+af call swe-planner.build --in '{"goal": "Add JWT auth", "repo_url": "https://github.com/user/my-repo"}'
 ```
 
-### Enterprise Ready
-Cryptographic identity for every agent. Tamper-proof audit trails for every action. [Learn more about Identity & Trust](https://agentfield.ai/docs/core-concepts/identity-and-trust).
+Full walkthrough — authoring, installing, and configuring nodes: [Installing agent nodes →](docs/installing-agent-nodes.md).
 
----
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <a href="https://agentfield.ai/github/swe-af/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-swe-af-repo">
+        <img src="assets/examples/autonomous-engineering-team.png" alt="Autonomous Engineering Team" />
+      </a>
+      <br/>
+      <b>Autonomous Engineering Team</b>
+      <br/>
+      <sub>One API call spins up PM, architect, coders, QA, reviewers - hundreds of coordinated agents that plan, build, test, and ship.</sub>
+      <br/><br/>
+      <a href="https://agentfield.ai/github/swe-af/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-swe-af-repo">View project →</a>
+    </td>
+    <td align="center" width="50%">
+      <a href="https://agentfield.ai/github/deepresearch/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-deepresearch-repo">
+        <img src="assets/examples/deep-research-engine.png" alt="Deep Research Engine" />
+      </a>
+      <br/>
+      <b>Deep Research Engine</b>
+      <br/>
+      <sub>Recursive research backend. Spawns parallel agents, evaluates quality, generates deeper agents, and recurses -10,000+ agents per query.</sub>
+      <br/><br/>
+      <a href="https://agentfield.ai/github/deepresearch/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-deepresearch-repo">View project →</a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <a href="https://agentfield.ai/github/mongodb/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-mongodb-repo">
+        <img src="assets/examples/reactive-database-layer.png" alt="Reactive MongoDB Intelligence" />
+      </a>
+      <br/>
+      <b>Reactive MongoDB Intelligence</b>
+      <br/>
+      <sub>Atlas Triggers + agent reasoning. Documents arrive raw and leave enriched - risk scores, pattern detection, evidence chains.</sub>
+      <br/><br/>
+      <a href="https://agentfield.ai/github/mongodb/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-mongodb-repo">View project →</a>
+    </td>
+    <td align="center" width="50%">
+      <a href="https://agentfield.ai/github/sec-af/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-sec-af-repo">
+        <img src="assets/examples/ai-security-auditor.png" alt="Autonomous Security Audit" />
+      </a>
+      <br/>
+      <b>Autonomous Security Audit</b>
+      <br/>
+      <sub>250 coordinated agents trace every vulnerability source-to-sink and adversarially verify each finding. Confirmed exploits, not pattern flags.</sub>
+      <br/><br/>
+      <a href="https://agentfield.ai/github/sec-af/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-sec-af-repo">View project →</a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <a href="https://agentfield.ai/github/cloudsecurity/?utm_source=github-readme&utm_campaign=github-readme&utm_content=cloudsec&utm_id=github-readme-cloudsec-repo">
+        <img src="assets/examples/cloud-security.png" alt="CloudSecurity AF" />
+      </a>
+      <br/>
+      <b>CloudSecurity AF</b>
+      <br/>
+      <sub>AI-native cloud infrastructure security scanner that performs shift-left attack path analysis directly from IaC, prioritizing the most dangerous risk chains before deployment.</sub>
+      <br/><br/>
+      <a href="https://agentfield.ai/github/cloudsecurity/?utm_source=github-readme&utm_campaign=github-readme&utm_content=cloudsec&utm_id=github-readme-cloudsec-repo">View project →</a>
+    </td>
+    <td align="center" width="50%">
+      <a href="https://agentfield.ai/pr-af/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-pr-af-repo">
+        <img src="assets/examples/agentic-pr-reviewer.png" alt="Agentic PR Reviewer" />
+      </a>
+      <br/>
+      <b>Agentic PR Reviewer</b>
+      <br/>
+      <sub>Builds a custom review strategy for every PR - spawns parallel reviewer agents with runtime-crafted prompts, adversarially challenges its own findings, and posts evidence-grounded inline comments.</sub>
+      <br/><br/>
+      <a href="https://agentfield.ai/pr-af/?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-pr-af-repo">View project →</a>
+    </td>
+  </tr>
+</table>
 
-## A New Backend Paradigm
+[See all examples →](https://www.agentfield.ai/examples?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-see-all-examples)
 
-AgentField isn't a framework you extend. It's infrastructure you deploy on.
-
-[See how AgentField compares to agent frameworks →](https://agentfield.ai/docs/why-agentfield/vs-agent-frameworks)
-
-|                    | Agent Frameworks           | DAG/Workflow Engines    | AgentField                              |
-| ------------------ | -------------------------- | ----------------------- | --------------------------------------- |
-| **Architecture**   | Monolithic scripts         | Predetermined pipelines | Distributed microservices               |
-| **Execution**      | Synchronous, blocking      | Scheduled, batch        | Async-native (webhooks, SSE, WebSocket) |
-| **Coordination**   | Manual message passing     | Central scheduler       | Service mesh with discovery             |
-| **Memory**         | External (Redis, Pinecone) | External                | Built-in + vector search                |
-| **Multi-language** | SDK-locked                 | Config files            | Native REST APIs (any language)         |
-| **Long-running**   | Timeouts, hacks            | Designed for batch      | Hours/days, durable execution           |
-| **Audit**          | Logs (trust me)            | Logs                    | Cryptographic proofs (W3C DIDs/VCs)     |
-
-### Performance
-
-**AgentField SDKs at Scale** (100,000 handlers)
-
-| | Go | TypeScript | Python |
-|---|---:|---:|---:|
-| Registration | 17 ms | 14 ms | ~5.7 s |
-| Memory/Handler | 280 B | 276 B | 7.5 KB |
-| Throughput | 8.2M req/s | 4.0M req/s | 6.7M req/s |
-
-**vs Other Frameworks** (1,000 handlers, same language)
-
-| | AgentField | LangChain | CrewAI | Mastra |
-|---|---:|---:|---:|---:|
-| Registration | 57 ms (py) / 14 ms (ts) | 483 ms | 200 ms | 365 ms |
-| Memory/Handler | 7.5 KB (py) / 276 B (ts) | 10.8 KB | 14.3 KB | 1.8 KB |
-
-<sub>Apple M1. Handler registration + invocation overhead (no LLM). [Methodology →](examples/benchmarks/100k-scale/)</sub>
-
-**Not a DAG builder.** Agents decide what to do next—dynamically. The control plane tracks the execution graph automatically.
-
-**Not tool attachment.** You don't just give an LLM a bag of MCP tools and hope. You define **Reasoners** (AI logic) and **Skills** (deterministic code) with explicit boundaries. [Learn more](https://agentfield.ai/docs/core-concepts/reasoners-and-skills).
-
----
-
-## Key Features
-
-### Scale Infrastructure
-- **Control Plane**: Stateless Go service that routes, tracks, and orchestrates
-- **Async by Default**: Fire-and-forget or wait. Webhooks with retries. SSE streaming.
-- **Long-Running**: Tasks that run for hours or days with durable checkpointing
-- **Backpressure**: Built-in queuing and circuit breakers
-
-### Multi-Agent Native
-- **Discovery**: Agents register capabilities. Others find them via API.
-- **Cross-Agent Calls**: `app.call("other.reasoner", input={...})` routed through control plane
-- **Workflow DAGs**: Every execution path visualized automatically
-- **Shared Memory**: Scoped to global, agent, session, or run—with vector search
-
-### Enterprise Ready
-- **W3C DIDs**: Every agent gets a cryptographic identity
-- **Verifiable Credentials**: Tamper-proof receipts for every action
-- **Prometheus Metrics**: `/metrics` endpoint out of the box
-- **Policy Enforcement**: "Only agents signed by 'Finance' can access this tool"
-
-[Explore the full feature set →](https://agentfield.ai/docs/features)
-
-
-## Identity & Trust
-
-When agents move from answering questions to making decisions, approving refunds, coordinating supply chains, moving money, "check the logs" isn't enough.
-
-AgentField gives every agent a [W3C Decentralized Identifier (DID)](https://www.w3.org/TR/did-core/)—a cryptographic identity. Every execution produces a Verifiable Credential: a tamper-proof receipt showing exactly what happened, who authorized it, and the full delegation chain.
-
-```bash
-# Export audit trail for any workflow
-curl http://localhost:8080/api/ui/v1/workflows/{workflow_id}/vc-chain
-```
-
-For compliance teams: mathematical proof, not trust.
-
-📖 **[Read: IAM for AI Backends](https://agentfield.ai/blog/posts/iam-ai-backends)** — Why OAuth can't secure autonomous software, and what replaces it.
-
-[Full documentation →](https://agentfield.ai/docs/core-concepts/identity-and-trust)
-
-
+Built something with AgentField? [Submit your project to be featured on the examples page](https://github.com/Agent-Field/agentfield/issues/new?template=community-project.md).
 
 ## Architecture
 
 <div align="center">
-<img src="assets/arch.png" alt="AgentField Architecture Diagram" width="80%" />
+<img src="assets/arch.png" alt="AgentField Architecture" width="100%" />
 </div>
 
-[Learn more about the core architecture →](https://agentfield.ai/docs/why-agentfield/core-architecture)
-
-
-
-## Is AgentField for you?
-
-### Yes if:
-- You're building an **AI backend** - agents that make decisions, not just answer questions
-- You're building **multi-agent systems** that need to coordinate
-- You need **production infrastructure**: async, retries, observability
-- You want agents as **standard backend services** with REST APIs
-- You need **audit trails** for compliance or debugging
-- You have **multiple teams** deploying agents independently
-
-### Not yet if:
-- You're building a **single chatbot** (prompt orchestration frameworks like LangChain, CrewAI, LlamaIndex etc.. are great for that)
-- You're **prototyping** and don't need production concerns yet
-
-*When you're ready to ship agents to production, we'll be here.*
-
----
-
-If you are **Backend Engineers** shipping AI into production who want standard APIs, not magic or **Platform Teams** who don't want to build another homegrown orchestrator or **Enterprise Teams** in regulated industries (Finance, Health) needing audit trails or **Frontend Developers** who just want to `fetch()` an agent without Python headaches, AgentField is built for you.
-
----
+The control plane is a stateless Go service. Agents connect from anywhere - your laptop, Docker, Kubernetes. They register capabilities, the control plane routes calls between them, tracks execution as DAGs, and enforces policies. [Full architecture docs →](https://agentfield.ai/docs/learn/architecture?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-architecture)
 
 ## Learn More
 
-- 📖 **[The AI Backend](https://agentfield.ai/blog/posts/ai-backend)** — Why every backend needs a reasoning layer
-- 📖 **[IAM for AI Backends](https://agentfield.ai/blog/posts/iam-ai-backends)** — Why agents need identity, not just API keys
-- 📚 **[Documentation](https://agentfield.ai/docs)** — Full technical reference
-- 🚀 **[Examples](https://agentfield.ai/examples)** — Production patterns and use cases
+AgentField sends privacy-minimized installation and lifecycle telemetry by default; no prompts or execution payloads are sent. Set `AGENTFIELD_TELEMETRY_ENABLED=false` to disable it. [Telemetry details](docs/ENVIRONMENT_VARIABLES.md#anonymous-telemetry).
 
----
+The thinking behind AgentField - essays on AI backends, harness orchestration, and the infrastructure production agents actually need.
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <a href="https://agentfield.ai/blog/what-is-harness-orchestration?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-blog-what-is-harness-orchestration">
+        <img src="assets/blog/what-is-harness-orchestration.webp" alt="What is harness orchestration?" />
+      </a>
+      <br/>
+      <b>What is harness orchestration?</b>
+      <br/>
+      <sub>The atomic unit of intelligence is climbing from the model call to the autonomous harness - and what changes when it does.</sub>
+      <br/><br/>
+      <a href="https://agentfield.ai/blog/what-is-harness-orchestration?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-blog-what-is-harness-orchestration">Read post →</a>
+    </td>
+    <td align="center" width="50%">
+      <a href="https://agentfield.ai/blog/harness-as-black-box?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-blog-harness-black-box">
+        <img src="assets/blog/harness-black-box.webp" alt="Part 1: The Black Box" />
+      </a>
+      <br/>
+      <b>Part 1: The Black Box</b>
+      <br/>
+      <sub>Treating harnesses like Claude Code and Codex as autonomous, embodied, persistent computational entities.</sub>
+      <br/><br/>
+      <a href="https://agentfield.ai/blog/harness-as-black-box?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-blog-harness-black-box">Read post →</a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <a href="https://agentfield.ai/blog/harness-as-membrane?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-blog-harness-membrane">
+        <img src="assets/blog/harness-membrane.webp" alt="Part 2: Engineering the Membrane" />
+      </a>
+      <br/>
+      <b>Part 2: Engineering the Membrane</b>
+      <br/>
+      <sub>Shaping the boundary surface of a harness across four engineerable dimensions: workspace, drift, verifier placement, and recovery budget.</sub>
+      <br/><br/>
+      <a href="https://agentfield.ai/blog/harness-as-membrane?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-blog-harness-membrane">Read post →</a>
+    </td>
+    <td align="center" width="50%">
+      <a href="https://agentfield.ai/blog/ai-backend?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-blog-ai-backend">
+        <img src="assets/blog/ai-backend.webp" alt="The AI Backend" />
+      </a>
+      <br/>
+      <b>The AI Backend</b>
+      <br/>
+      <sub>Our thesis: in five years every serious software company will run an AI backend - a reasoning layer that makes the decisions that used to be hardcoded.</sub>
+      <br/><br/>
+      <a href="https://agentfield.ai/blog/ai-backend?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-blog-ai-backend">Read post →</a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <b>Fan out 1,000 parallel agents from one request</b>
+      <br/>
+      <sub>A tutorial on turning a single call into a bounded fan-out across the control plane, with queues, retries, and traces on every branch.</sub>
+      <br/><br/>
+      <a href="https://agentfield.ai/blog/fan-out-1000-agents?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-blog-fan-out-1000-agents">Read post →</a>
+    </td>
+    <td align="center" width="50%">
+      <b>Claude Code as a function</b>
+      <br/>
+      <sub>Wrap a multi-turn coding harness behind a REST endpoint and call Claude Code the same way you call any other agent.</sub>
+      <br/><br/>
+      <a href="https://agentfield.ai/blog/claude-code-as-a-function?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-blog-claude-code-as-a-function">Read post →</a>
+    </td>
+  </tr>
+</table>
+
+### Documentation
+
+- **[vs Agent Frameworks](https://agentfield.ai/docs/learn/vs-frameworks?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-vs-frameworks)** - How AgentField compares to LangChain, CrewAI, and workflow engines
+- **[Full Documentation](https://agentfield.ai/docs/learn?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-full-docs)**
 
 ## Community
 
-**Agents are becoming part of production backends. They need identity, governance, and infrastructure. That's why AgentField exists.**
-
 <div align="center">
 
-[![Discord](https://img.shields.io/badge/Join%20our%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/aBHaXMkpqh)
+[![Discord](https://img.shields.io/badge/Join%20Discord-d4a24a?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/aBHaXMkpqh)
+[![Twitter](https://img.shields.io/badge/Follow%20on%20X-0c0b09?style=for-the-badge&logo=x&logoColor=white)](https://x.com/agentfield_ai)
 
-*Ask questions, share what you're building, get help from the team*
+**[GitHub Issues](https://github.com/Agent-Field/agentfield/issues)** · **[Documentation](https://agentfield.ai/docs/learn?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-community-docs)** · **[Examples](https://agentfield.ai/docs/learn/examples?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-community-examples)**
 
 </div>
 
-- **[Documentation](https://agentfield.ai/docs)**
-- **[GitHub Issues](https://github.com/Agent-Field/agentfield/issues)**
-- **[Twitter/X](https://x.com/agentfield_ai)**
-- **[Examples](https://agentfield.ai/examples)**
+## License
 
-<p align="center">
-  <strong>Built by developers who got tired of duct-taping agents together.</strong><br>
-  <a href="https://agentfield.ai">agentfield.ai</a>
-</p>
+[Apache 2.0](LICENSE)

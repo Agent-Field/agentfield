@@ -5,6 +5,7 @@ export interface AgentNode {
   health_status: string;
   deployment_type?: string; // "long_running" or "serverless"
   invocation_url?: string; // For serverless agents
+  origin_auth_required?: boolean; // Whether the node enforces auth on inbound execute calls (serverless only)
 }
 
 export interface Execution {

@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { statusTone } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { AlertTriangle, RefreshCw } from "@/components/ui/icon-bridge";
 import type { IconComponent } from "@/components/ui/icon-bridge";
@@ -19,29 +20,29 @@ interface ErrorStateProps {
 
 const severityConfig = {
   error: {
-    card: "border-red-500/20 bg-red-500/5",
-    inline: "border-red-500/30 bg-red-500/5",
-    banner: "border-red-500/40 bg-red-500/5",
-    icon: "text-red-500",
-    title: "text-red-600",
-    text: "text-red-600/80"
+    card: cn(statusTone.error.bg, statusTone.error.border),
+    inline: cn(statusTone.error.bg, statusTone.error.border),
+    banner: cn(statusTone.error.bg, statusTone.error.border),
+    icon: statusTone.error.accent,
+    title: statusTone.error.fg,
+    text: cn(statusTone.error.fg, "opacity-80"),
   },
   warning: {
-    card: "border-amber-500/20 bg-amber-500/5",
-    inline: "border-amber-500/30 bg-amber-500/5",
-    banner: "border-amber-500/40 bg-amber-500/5",
-    icon: "text-amber-500",
-    title: "text-amber-600",
-    text: "text-amber-600/80"
+    card: cn(statusTone.warning.bg, statusTone.warning.border),
+    inline: cn(statusTone.warning.bg, statusTone.warning.border),
+    banner: cn(statusTone.warning.bg, statusTone.warning.border),
+    icon: statusTone.warning.accent,
+    title: statusTone.warning.fg,
+    text: cn(statusTone.warning.fg, "opacity-80"),
   },
   info: {
-    card: "border-blue-500/20 bg-blue-500/5",
-    inline: "border-blue-500/30 bg-blue-500/5",
-    banner: "border-blue-500/40 bg-blue-500/5",
-    icon: "text-blue-500",
-    title: "text-blue-600",
-    text: "text-blue-600/80"
-  }
+    card: cn(statusTone.info.bg, statusTone.info.border),
+    inline: cn(statusTone.info.bg, statusTone.info.border),
+    banner: cn(statusTone.info.bg, statusTone.info.border),
+    icon: statusTone.info.accent,
+    title: statusTone.info.fg,
+    text: cn(statusTone.info.fg, "opacity-80"),
+  },
 };
 
 export function ErrorState({

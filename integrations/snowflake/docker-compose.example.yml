@@ -1,0 +1,10 @@
+services:
+  snowflake-node:
+    build:
+      context: ../..
+      dockerfile: integrations/snowflake/node/Dockerfile
+    env_file:
+      - node/.env
+    ports:
+      - "8012:8012"
+    restart: unless-stopped

@@ -1,0 +1,24 @@
+config_version: v1
+name: requirements-demo
+version: 1.2.3
+description: A demo node exercising every user_environment category.
+main: app.py
+user_environment:
+  required:
+    - name: API_KEY
+      description: Primary API key for the upstream service.
+      type: secret
+  optional:
+    - name: REGION
+      description: Deployment region.
+      default: us-east-1
+  require_one_of:
+    - id: llm_provider
+      description: an LLM provider key
+      options:
+        - name: ANTHROPIC_API_KEY
+          description: Anthropic API key.
+          type: secret
+        - name: OPENROUTER_API_KEY
+          description: OpenRouter API key.
+          type: secret

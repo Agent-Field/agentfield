@@ -1,9 +1,12 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/gin-gonic/gin"
 
@@ -11,11 +14,41 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
+// normalizeDIDWeb re-encodes port separators that Gin URL-decoded in did:web identifiers.
+// Gin decodes %3A → : in path params, but the database stores the canonical form with %3A.
+// e.g. did:web:localhost:8080:agents:foo → did:web:localhost%3A8080:agents:foo
+func normalizeDIDWeb(did string) string {
+	if !strings.HasPrefix(did, "did:web:") {
+		return did
+	}
+	parts := strings.Split(did, ":")
+	// Canonical: ["did", "web", "domain%3Aport", "agents", "id"] → 5 parts
+	// Decoded:   ["did", "web", "domain", "port", "agents", "id"] → 6+ parts
+	if len(parts) >= 6 && isAllDigits(parts[3]) {
+		parts[2] = parts[2] + "%3A" + parts[3]
+		parts = append(parts[:3], parts[4:]...)
+	}
+	return strings.Join(parts, ":")
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if !unicode.IsDigit(r) {
+			return false
+		}
+	}
+	return true
+}
+
 // DIDService defines the DID operations required by handlers.
 type DIDService interface {
 	RegisterAgent(req *types.DIDRegistrationRequest) (*types.DIDRegistrationResponse, error)
 	ResolveDID(did string) (*types.DIDIdentity, error)
 	ListAllAgentDIDs() ([]string, error)
+	RotateAgentX25519Key(did string) (newPubJWK string, newEpoch int, err error)
 }
 
 // VCService defines the VC operations required by handlers.
@@ -27,12 +60,19 @@ type VCService interface {
 	QueryExecutionVCs(filters *types.VCFilters) ([]types.ExecutionVC, error)
 	ListWorkflowVCs() ([]*types.WorkflowVC, error)
 	GetExecutionVCByExecutionID(executionID string) (*types.ExecutionVC, error)
+	ListAgentTagVCs() ([]*types.AgentTagVCRecord, error)
+}
+
+// DIDWebResolverService defines did:web resolution operations.
+type DIDWebResolverService interface {
+	ResolveDID(ctx context.Context, did string) (*types.DIDResolutionResult, error)
 }
 
 // DIDHandlers handles DID-related HTTP requests.
 type DIDHandlers struct {
-	didService DIDService
-	vcService  VCService
+	didService    DIDService
+	vcService     VCService
+	didWebService DIDWebResolverService
 }
 
 // NewDIDHandlers creates a new DID handlers instance.
@@ -41,6 +81,11 @@ func NewDIDHandlers(didService DIDService, vcService VCService) *DIDHandlers {
 		didService: didService,
 		vcService:  vcService,
 	}
+}
+
+// SetDIDWebService sets the did:web resolver for hybrid DID resolution.
+func (h *DIDHandlers) SetDIDWebService(svc DIDWebResolverService) {
+	h.didWebService = svc
 }
 
 // RegisterAgent handles agent DID registration requests.
@@ -71,25 +116,101 @@ func (h *DIDHandlers) RegisterAgent(c *gin.Context) {
 // ResolveDID handles DID resolution requests.
 // GET /api/v1/did/resolve/:did
 func (h *DIDHandlers) ResolveDID(c *gin.Context) {
-	did := c.Param("did")
+	did := normalizeDIDWeb(c.Param("did"))
 	if did == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "DID parameter is required"})
 		return
 	}
 
+	// Try did:web resolution first (database-stored documents)
+	if h.didWebService != nil && strings.HasPrefix(did, "did:web:") {
+		result, err := h.didWebService.ResolveDID(c.Request.Context(), did)
+		if err == nil && result.DIDDocument != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"did":            result.DIDDocument.ID,
+				"did_document":   result.DIDDocument,
+				"component_type": "agent_node",
+			})
+			return
+		}
+		if err == nil && result.DIDResolutionMetadata.Error == "deactivated" {
+			c.JSON(http.StatusGone, gin.H{"error": "DID has been revoked"})
+			return
+		}
+	}
+
+	// Fall back to did:key resolution (in-memory registry)
 	identity, err := h.didService.ResolveDID(did)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "DID not found"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"did":             identity.DID,
 		"public_key_jwk":  identity.PublicKeyJWK,
 		"component_type":  identity.ComponentType,
 		"function_name":   identity.FunctionName,
 		"derivation_path": identity.DerivationPath,
-	})
+	}
+
+	// Expose the X25519 keyAgreement public key as a parsed JSON object so callers
+	// can encrypt payloads to this DID (mirrors how did:key resolve responses are
+	// consumed by the SDK crypto layer).
+	if identity.X25519PublicKeyJWK != "" {
+		var keyAgreementJWK map[string]interface{}
+		if err := json.Unmarshal([]byte(identity.X25519PublicKeyJWK), &keyAgreementJWK); err == nil {
+			resp["key_agreement"] = keyAgreementJWK
+		} else {
+			logger.Logger.Warn().Err(err).Str("did", identity.DID).Msg("Failed to parse X25519 keyAgreement JWK for resolve response")
+		}
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
+// RotateX25519Key rotates an agent's X25519 keyAgreement (encryption) key.
+// POST /api/v1/did/key-agreement/rotate  body: {"did": "<did>"}
+//
+// On success it returns the NEW keyAgreement public key as a parsed JSON object
+// (mirroring the `key_agreement` shape of the resolve response) plus the new
+// rotation epoch. The private scalar is never returned.
+func (h *DIDHandlers) RotateX25519Key(c *gin.Context) {
+	var req struct {
+		DID string `json:"did"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+	if req.DID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "did is required"})
+		return
+	}
+
+	newPubJWK, newEpoch, err := h.didService.RotateAgentX25519Key(req.DID)
+	if err != nil {
+		logger.Logger.Warn().Err(err).Str("did", req.DID).Msg("Failed to rotate X25519 keyAgreement key")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to rotate keyAgreement key", "details": err.Error()})
+		return
+	}
+
+	resp := gin.H{
+		"did":   req.DID,
+		"epoch": newEpoch,
+	}
+
+	// Surface the new public key as a parsed JSON object, matching how the
+	// resolve handler emits `key_agreement`.
+	var keyAgreementJWK map[string]interface{}
+	if err := json.Unmarshal([]byte(newPubJWK), &keyAgreementJWK); err == nil {
+		resp["x25519_public_key_jwk"] = keyAgreementJWK
+	} else {
+		logger.Logger.Warn().Err(err).Str("did", req.DID).Msg("Failed to parse rotated X25519 keyAgreement JWK for response")
+		resp["x25519_public_key_jwk"] = newPubJWK
+	}
+
+	c.JSON(http.StatusOK, resp)
 }
 
 // VerifyVC handles VC verification requests.
@@ -108,6 +229,13 @@ func (h *DIDHandlers) VerifyVC(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+// VerifyAuditBundle verifies exported provenance JSON (same logic as `af vc verify`).
+// POST /api/v1/did/verify-audit
+// Query: resolve_web=true, did_resolver=<url>, verbose=true
+func (h *DIDHandlers) VerifyAuditBundle(c *gin.Context) {
+	HandleVerifyAuditBundle(c)
 }
 
 // GetWorkflowVCChain handles workflow VC chain requests.
@@ -201,6 +329,7 @@ func (h *DIDHandlers) CreateExecutionVC(c *gin.Context) {
 			TargetDID    string `json:"target_did"`
 			AgentNodeDID string `json:"agent_node_did"`
 			Timestamp    string `json:"timestamp"`
+			ParentVCID   string `json:"parent_vc_id,omitempty"`
 		} `json:"execution_context"`
 		InputData    []byte  `json:"input_data"`
 		OutputData   []byte  `json:"output_data"`
@@ -238,7 +367,10 @@ func (h *DIDHandlers) CreateExecutionVC(c *gin.Context) {
 		return
 	}
 
-	// Create execution context
+	// Create execution context. ParentVCID is optional and forwarded to
+	// GenerateExecutionVC so the resulting VC's parent_vc_id is populated
+	// and the chain extends across system boundaries (e.g. trigger event VC
+	// → reasoner execution VC).
 	execCtx := &types.ExecutionContext{
 		ExecutionID:  req.ExecutionContext.ExecutionID,
 		WorkflowID:   req.ExecutionContext.WorkflowID,
@@ -247,6 +379,7 @@ func (h *DIDHandlers) CreateExecutionVC(c *gin.Context) {
 		TargetDID:    req.ExecutionContext.TargetDID,
 		AgentNodeDID: req.ExecutionContext.AgentNodeDID,
 		Timestamp:    timestamp,
+		ParentVCID:   req.ExecutionContext.ParentVCID,
 	}
 
 	// Generate execution VC
@@ -364,11 +497,19 @@ func (h *DIDHandlers) ExportVCs(c *gin.Context) {
 		})
 	}
 
+	// Query agent tag VCs
+	agentTagVCs, err := h.vcService.ListAgentTagVCs()
+	if err != nil {
+		logger.Logger.Debug().Err(err).Msg("Failed to list agent tag VCs")
+		agentTagVCs = []*types.AgentTagVCRecord{}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"agent_dids":      agentDIDs,
 		"execution_vcs":   executionVCsExport,
 		"workflow_vcs":    workflowVCs,
-		"total_count":     len(executionVCs) + len(workflowVCs),
+		"agent_tag_vcs":   agentTagVCs,
+		"total_count":     len(executionVCs) + len(workflowVCs) + len(agentTagVCs),
 		"filters_applied": filters,
 	})
 }
@@ -376,7 +517,7 @@ func (h *DIDHandlers) ExportVCs(c *gin.Context) {
 // GetDIDDocument handles DID document requests (W3C DID standard).
 // GET /api/v1/did/document/:did
 func (h *DIDHandlers) GetDIDDocument(c *gin.Context) {
-	did := c.Param("did")
+	did := normalizeDIDWeb(c.Param("did"))
 	if did == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "DID parameter is required",
@@ -384,7 +525,20 @@ func (h *DIDHandlers) GetDIDDocument(c *gin.Context) {
 		return
 	}
 
-	// Resolve DID to get identity information
+	// Try did:web resolution first (database-stored documents)
+	if h.didWebService != nil && strings.HasPrefix(did, "did:web:") {
+		result, err := h.didWebService.ResolveDID(c.Request.Context(), did)
+		if err == nil && result.DIDDocument != nil {
+			c.JSON(http.StatusOK, result.DIDDocument)
+			return
+		}
+		if err == nil && result.DIDResolutionMetadata.Error == "deactivated" {
+			c.JSON(http.StatusGone, gin.H{"error": "DID has been revoked"})
+			return
+		}
+	}
+
+	// Fall back to did:key resolution (in-memory registry)
 	identity, err := h.didService.ResolveDID(did)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
@@ -404,12 +558,15 @@ func (h *DIDHandlers) GetDIDDocument(c *gin.Context) {
 		return
 	}
 
+	// W3C contexts. Add the X25519-2020 suite context only when the document
+	// actually carries a keyAgreement key.
+	contexts := []string{
+		"https://www.w3.org/ns/did/v1",
+		"https://w3id.org/security/suites/ed25519-2020/v1",
+	}
+
 	// Create W3C DID Document
 	didDocument := map[string]interface{}{
-		"@context": []string{
-			"https://www.w3.org/ns/did/v1",
-			"https://w3id.org/security/suites/ed25519-2020/v1",
-		},
 		"id": did,
 		"verificationMethod": []map[string]interface{}{
 			{
@@ -435,16 +592,39 @@ func (h *DIDHandlers) GetDIDDocument(c *gin.Context) {
 		},
 	}
 
+	// Add the X25519 keyAgreement verification method when present so callers can
+	// encrypt payloads to this DID.
+	if identity.X25519PublicKeyJWK != "" {
+		var keyAgreementJWK map[string]interface{}
+		if err := json.Unmarshal([]byte(identity.X25519PublicKeyJWK), &keyAgreementJWK); err == nil {
+			contexts = append(contexts, "https://w3id.org/security/suites/x25519-2020/v1")
+			didDocument["keyAgreement"] = []map[string]interface{}{
+				{
+					"id":           did + "#key-agreement-1",
+					"type":         "X25519KeyAgreementKey2020",
+					"controller":   did,
+					"publicKeyJwk": keyAgreementJWK,
+				},
+			}
+		} else {
+			logger.Logger.Warn().Err(err).Str("did", did).Msg("Failed to parse X25519 keyAgreement JWK for DID document")
+		}
+	}
+
+	didDocument["@context"] = contexts
+
 	c.JSON(http.StatusOK, didDocument)
 }
 
 // RegisterRoutes registers all DID-related routes.
-func (h *DIDHandlers) RegisterRoutes(router *gin.RouterGroup) {
+func (h *DIDHandlers) RegisterRoutes(router gin.IRouter) {
 	didGroup := router.Group("/did")
 	{
 		didGroup.POST("/register", h.RegisterAgent)
 		didGroup.GET("/resolve/:did", h.ResolveDID)
+		didGroup.POST("/key-agreement/rotate", h.RotateX25519Key)
 		didGroup.POST("/verify", h.VerifyVC)
+		didGroup.POST("/verify-audit", h.VerifyAuditBundle)
 		didGroup.GET("/workflow/:workflow_id/vc-chain", h.GetWorkflowVCChain)
 		didGroup.POST("/workflow/:workflow_id/vc", h.CreateWorkflowVC)
 		didGroup.GET("/status", h.GetDIDStatus)

@@ -1,18 +1,22 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/cli"
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/server"
 	"github.com/Agent-Field/agentfield/control-plane/internal/utils"
 	"github.com/Agent-Field/agentfield/control-plane/web/client"
@@ -35,7 +39,7 @@ var (
 	buildUIFunc               = buildUI
 	openBrowserFunc           = openBrowser
 	sleepFunc                 = time.Sleep
-	waitForShutdownFunc       = func() { select {} }
+	waitForShutdownFunc       = defaultWaitForShutdown
 	commandRunner             = defaultCommandRunner
 	browserLauncher           = defaultBrowserLauncher
 	startAgentFieldServerFunc = defaultStartAgentFieldServer
@@ -52,9 +56,8 @@ func main() {
 
 	rootCmd := cli.NewRootCommand(runServer, versionInfo) // Initialize RootCmd and add subcommands
 
-	// Execute the root command
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, cli.AgentHintJSON(err.Error()))
 		os.Exit(1)
 	}
 }
@@ -69,6 +72,14 @@ func runServer(cmd *cobra.Command, args []string) {
 	cfg, err := loadConfigFunc(cfgFilePath)
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
+	}
+	cfg.Telemetry.AgentFieldVersion = version
+
+	// Re-initialize logger with configured level now that config is loaded.
+	// The CLI root command sets a default (info/debug based on --verbose),
+	// but the YAML/env-based level takes precedence once available.
+	if cfg.Logging.Level != "" {
+		logger.InitLoggerWithLevel(cfg.Logging.Level)
 	}
 
 	// Override port from flag if provided
@@ -191,9 +202,17 @@ func runServer(cmd *cobra.Command, args []string) {
 		fmt.Println("UI is already embedded in binary, skipping build.")
 	}
 
-	// Create AgentField server instance
+	// Create AgentField server instance. An incumbent server (the desktop app
+	// direct-spawned one, say) makes this fail before any port bind — local
+	// storage init hits the incumbent's BoltDB/SQLite file locks. When a
+	// healthy AgentField already answers on our port, exit 0 instead of dying,
+	// so a launchd-managed second instance stops cleanly rather than
+	// relaunch-looping on the lock timeout.
 	agentfieldServer, err := newAgentFieldServerFunc(cfg)
 	if err != nil {
+		if server.ExitCleanIfAlreadyRunning(err, cfg.AgentField.Port) {
+			os.Exit(0)
+		}
 		log.Fatalf("Failed to create AgentField server: %v", err)
 	}
 
@@ -201,6 +220,11 @@ func runServer(cmd *cobra.Command, args []string) {
 	go func() {
 		fmt.Printf("AgentField server attempting to start on port %d...\n", cfg.AgentField.Port)
 		if err := startAgentFieldServerFunc(agentfieldServer); err != nil {
+			// Same idempotency rule for a failure at the bind itself (storage
+			// somehow shared, port not): a healthy incumbent means exit 0.
+			if server.ExitCleanIfAlreadyRunning(err, cfg.AgentField.Port) {
+				os.Exit(0)
+			}
 			log.Fatalf("Failed to start AgentField server: %v", err)
 		}
 	}()
@@ -229,10 +253,17 @@ func runServer(cmd *cobra.Command, args []string) {
 	}
 
 	fmt.Printf("AgentField server running. Press Ctrl+C to exit.\n")
-	// Keep main goroutine alive
+
+	// Wait for shutdown signal
 	waitForShutdownFunc()
 
-	// TODO: Implement graceful shutdown
+	// Graceful shutdown
+	fmt.Println("\nShutdown signal received, draining connections...")
+	if err := agentfieldServer.Stop(); err != nil {
+		log.Printf("Error during shutdown: %v", err)
+		os.Exit(1)
+	}
+	fmt.Println("Server stopped gracefully.")
 }
 
 // loadConfig loads configuration from file and environment variables.
@@ -246,6 +277,13 @@ func loadConfig(configFile string) (*config.Config, error) {
 	// This is needed because Viper's AutomaticEnv only works for keys that exist in config
 	_ = viper.BindEnv("api.auth.api_key", "AGENTFIELD_API_KEY")
 	_ = viper.BindEnv("api.auth.api_key", "AGENTFIELD_API_AUTH_API_KEY")
+	// AutomaticEnv makes viper.IsSet("features.did.enabled") return true once
+	// AGENTFIELD_FEATURES_DID_ENABLED is set, but Unmarshal won't actually
+	// populate the struct field unless the key is bound. Without this, setting
+	// the env var quietly leaves DID at its zero value (false) and skips the
+	// "default to true" branch below — i.e. the env var would silently turn DID
+	// off instead of on.
+	_ = viper.BindEnv("features.did.enabled", "AGENTFIELD_FEATURES_DID_ENABLED")
 
 	// Skip config file reading if explicitly set to /dev/null or empty
 	if configFile != "/dev/null" && configFile != "" {
@@ -283,6 +321,15 @@ func loadConfig(configFile string) (*config.Config, error) {
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
+
+	config.ApplyDefaults(&cfg)
+
+	// Apply environment variable overrides using shorter env var names
+	// (e.g. AGENTFIELD_CONNECTOR_ENABLED instead of AGENTFIELD_FEATURES_CONNECTOR_ENABLED).
+	// Viper's AutomaticEnv only works for keys it already knows about from config files,
+	// so when no config file is present (e.g. Railway deployments), these overrides are
+	// the only way to set connector config, capabilities, etc. from environment variables.
+	config.ApplyEnvOverrides(&cfg)
 
 	// Apply defaults if not set
 	if cfg.AgentField.Port == 0 {
@@ -473,6 +520,13 @@ func defaultBrowserLauncher(name string, args ...string) error {
 
 func defaultStartAgentFieldServer(s *server.AgentFieldServer) error {
 	return s.Start()
+}
+
+// defaultWaitForShutdown blocks until SIGINT or SIGTERM is received.
+func defaultWaitForShutdown() {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	<-ctx.Done()
 }
 
 func openBrowser(url string) {

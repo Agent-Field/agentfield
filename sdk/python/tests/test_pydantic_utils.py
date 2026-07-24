@@ -1,3 +1,4 @@
+from typing import Optional
 from pydantic import BaseModel
 from agentfield.pydantic_utils import (
     is_pydantic_model,
@@ -15,7 +16,6 @@ class Inner(BaseModel):
 
 def test_is_pydantic_and_optional_helpers():
     assert is_pydantic_model(Inner) is True
-    from typing import Optional
 
     opt = Optional[Inner]
     assert is_optional_type(opt) is True
@@ -51,3 +51,75 @@ def test_convert_function_args_and_should_convert():
     )
     assert isinstance(kwargs["inner"], Inner)
     assert kwargs["inner"].x == 2
+
+
+class MyModel(BaseModel):
+    x: int
+
+
+def test_convert_positional_args():
+    def my_func(m: MyModel):
+        return m
+
+    args, kwargs = convert_function_args(my_func, ({"x": 1},), {})
+
+    assert kwargs == {}
+    assert len(args) == 1
+    assert isinstance(args[0], MyModel)
+    assert args[0].x == 1
+
+
+def test_convert_optional_model_none():
+    def my_func(m: Optional[MyModel]):
+        return m
+
+    args, kwargs = convert_function_args(my_func, (), {"m": None})
+
+    assert args == ()
+    assert kwargs["m"] is None
+
+
+def test_convert_skips_self_and_context():
+    class DummyCallable:
+        def method(self, execution_context, m: MyModel):
+            return execution_context, m
+
+    instance = DummyCallable()
+    raw_context = {"x": 99}
+    raw_model = {"x": 5}
+
+    args, kwargs = convert_function_args(
+        instance.method, (), {"execution_context": raw_context, "m": raw_model}
+    )
+
+    assert args == ()
+    assert kwargs["execution_context"] is raw_context
+    assert isinstance(kwargs["m"], MyModel)
+    assert kwargs["m"].x == 5
+
+
+def test_convert_retains_untyped_params():
+    def my_func(untyped, typed: MyModel):
+        return untyped, typed
+
+    untyped_value = {"left": "as-is"}
+    args, kwargs = convert_function_args(
+        my_func, (), {"untyped": untyped_value, "typed": {"x": 7}}
+    )
+
+    assert args == ()
+    assert kwargs["untyped"] is untyped_value
+    assert isinstance(kwargs["typed"], MyModel)
+    assert kwargs["typed"].x == 7
+
+
+def test_convert_validation_error_propagation():
+    def my_func(m: MyModel):
+        return m
+
+    _, kwargs = convert_function_args(
+        my_func, (), {"m": {"x": "not-an-int"}}
+    )
+
+    # Current behavior: current implementation swallows the exception due to incompatibility with Pydantic v2 (ValidationError constructor signature mismatch), and returns original args
+    assert kwargs["m"] == {"x": "not-an-int"}

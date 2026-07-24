@@ -1,5 +1,7 @@
 import socket
 
+from .exceptions import AgentFieldError
+
 
 def get_free_port(start_port=8001, end_port=8999):
     """
@@ -13,7 +15,7 @@ def get_free_port(start_port=8001, end_port=8999):
         int: Available port number
 
     Raises:
-        RuntimeError: If no free port found in range
+        AgentFieldError: If no free port found in range
     """
     for port in range(start_port, end_port + 1):
         try:
@@ -23,4 +25,4 @@ def get_free_port(start_port=8001, end_port=8999):
         except OSError:
             continue
 
-    raise RuntimeError(f"No free port found in range {start_port}-{end_port}")
+    raise AgentFieldError(f"No free port found in range {start_port}-{end_port}")

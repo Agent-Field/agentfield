@@ -113,32 +113,44 @@ func (h *MemoryEventsHandler) WebSocketHandler(c *gin.Context) {
 // SSEHandler handles Server-Sent Events connections for memory events.
 func (h *MemoryEventsHandler) SSEHandler(c *gin.Context) {
 	ctx := c.Request.Context()
-	// Set headers for SSE
-	c.Writer.Header().Set("Content-Type", "text/event-stream")
-	c.Writer.Header().Set("Cache-Control", "no-cache")
-	c.Writer.Header().Set("Connection", "keep-alive")
 
 	// Parse query parameters for filtering
 	scope := c.Query("scope")
 	scopeID := c.Query("scope_id")
 	patterns := normalizePatterns(c.Query("patterns"))
 
-	// Subscribe to memory changes
+	// Subscribe to memory changes before flushing headers so we can still
+	// return a proper HTTP error status on failure.
 	eventChan, err := h.storage.SubscribeToMemoryChanges(ctx, scope, scopeID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to subscribe to events"})
 		return
 	}
 
-	// Create a channel to notify when the client disconnects
-	clientClosed := c.Writer.CloseNotify()
+	// Set headers for SSE and flush immediately so the client receives the
+	// response and can begin reading the body without waiting for the first event.
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.WriteHeader(http.StatusOK)
+	c.Writer.Flush()
+
+	// Send an initial comment frame as a keepalive marker so clients know
+	// the connection is established.
+	_, _ = c.Writer.WriteString(": connected\n\n")
+	c.Writer.Flush()
 
 	for {
 		select {
-		case <-clientClosed:
+		case <-ctx.Done():
 			// Client disconnected
 			return
-		case event := <-eventChan:
+		case event, ok := <-eventChan:
+			if !ok {
+				// Channel closed
+				return
+			}
+
 			// Apply pattern matching
 			if len(patterns) > 0 {
 				match := false

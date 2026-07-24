@@ -6,14 +6,29 @@
 *.swo
 test-reports/
 .env
+.worktrees/
+.artifacts/
 
 # Go
 bin/
 dist/
 **/dist/
 coverage.out
+coverage*.out
+*_cov.txt
+coverage*.txt
 *.test
 tmp/
+examples/go_agent_nodes/permission_agent_*
+examples/go_agent_nodes/go_agent_nodes
+examples/go_agent_nodes/multi_version
+
+# Compiled binaries
+control-plane/agentfield-server
+control-plane/af
+control-plane/af-tray
+control-plane/cmd/af-tray/af-tray
+scripts/lambda-rie-fake/lambda-rie-fake
 
 # Python
 __pycache__/
@@ -21,6 +36,7 @@ __pycache__/
 .venv/
 .mypy_cache/
 .pytest_cache/
+.hypothesis/
 *.egg-info/
 build/
 dist/
@@ -36,7 +52,12 @@ node_modules/
 # IDE / Tooling
 .idea/
 .vscode/
+.cursor/
 *.code-workspace
+.opencode/
+.agit/
+.claude/
+.codex
 
 # Generated assets
 coverage/
@@ -48,4 +69,14 @@ reports/
 .docker/
 
 # Typescript
-.env
+.plandb.db
+
+# Local dev builds of the control plane / bundled CLI (never commit binaries)
+/control-plane/af.exe
+/control-plane/af.exe~
+/control-plane/agentfield.exe
+/desktop/af.exe
+/desktop/agentfield.exe
+# Harness schema-output artifacts from local agent runs
+.agentfield_output.json
+.agentfield_schema.json

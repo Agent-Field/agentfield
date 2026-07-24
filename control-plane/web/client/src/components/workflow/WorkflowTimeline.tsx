@@ -178,11 +178,11 @@ export function WorkflowTimeline({
       <Card className={className}>
         <CardContent className="py-12">
           <div className="text-center">
-            <div className="rounded-full bg-bg-tertiary p-4 mb-4 mx-auto w-fit">
-              <Events size={32} className="text-text-tertiary" />
+            <div className="rounded-full bg-muted p-4 mb-4 mx-auto w-fit">
+              <Events size={32} className="text-muted-foreground" />
             </div>
-            <h3 className="text-heading-3 mb-2">No workflow nodes</h3>
-            <p className="text-body text-text-secondary">
+            <h3 className="text-base font-semibold mb-2">No workflow nodes</h3>
+            <p className="text-sm text-muted-foreground">
               Timeline will appear here when workflow nodes are available.
             </p>
           </div>
@@ -197,11 +197,11 @@ export function WorkflowTimeline({
       <Card className={className}>
         <CardContent className="py-12">
           <div className="text-center">
-            <div className="rounded-full bg-status-error-bg p-4 mb-4 mx-auto w-fit">
+            <div className="rounded-full bg-status-error/10 p-4 mb-4 mx-auto w-fit">
               <Events size={32} className="text-status-error" />
             </div>
-            <h3 className="text-heading-3 mb-2">Failed to load timeline</h3>
-            <p className="text-body text-text-secondary mb-4">{error}</p>
+            <h3 className="text-base font-semibold mb-2">Failed to load timeline</h3>
+            <p className="text-sm text-muted-foreground mb-4">{error}</p>
             <Button variant="outline" onClick={fetchNotesForNodes}>
               Try Again
             </Button>
@@ -215,7 +215,7 @@ export function WorkflowTimeline({
     <Card className={className}>
       <CardHeader className="pb-4">
         <div className="flex items-center justify-between">
-          <CardTitle className="flex items-center gap-2 text-heading-3">
+          <CardTitle className="flex items-center gap-2 text-base font-semibold">
             <Events size={20} />
             Workflow Timeline
             {totalNotesCount > 0 && (
@@ -264,13 +264,13 @@ export function WorkflowTimeline({
         {availableTags.length > 0 && (
           <div className="mt-4">
             <div className="flex items-center gap-2 mb-2">
-              <span className="text-body font-medium">Filter by tags:</span>
+              <span className="text-sm font-medium">Filter by tags:</span>
               {selectedTags.length > 0 && (
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={() => handleTagsChange([])}
-                  className="h-6 px-2 text-xs text-text-tertiary hover:text-text-secondary"
+                  className="h-6 px-2 text-xs text-muted-foreground hover:text-muted-foreground"
                 >
                   Clear all
                 </Button>
@@ -291,8 +291,8 @@ export function WorkflowTimeline({
                   }}
                   className={`cursor-pointer transition-all ${
                     selectedTags.includes(tag)
-                      ? 'bg-bg-tertiary border-text-secondary'
-                      : 'hover:bg-bg-hover'
+                      ? 'bg-muted border-text-secondary'
+                      : 'hover:bg-accent'
                   }`}
                 />
               ))}
@@ -310,10 +310,10 @@ export function WorkflowTimeline({
           </div>
         ) : filteredAndSortedNodes.length === 0 ? (
           <div className="text-center py-8">
-            <div className="rounded-full bg-bg-tertiary p-4 mb-4 mx-auto w-fit">
-              <Filter size={24} className="text-text-tertiary" />
+            <div className="rounded-full bg-muted p-4 mb-4 mx-auto w-fit">
+              <Filter size={24} className="text-muted-foreground" />
             </div>
-            <p className="text-body text-text-secondary mb-2">
+            <p className="text-sm text-muted-foreground mb-2">
               No nodes match the selected filters.
             </p>
             <Button

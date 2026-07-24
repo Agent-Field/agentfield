@@ -7,16 +7,42 @@ import (
 
 // ReasonerDefinition mirrors the AgentField server registration contract.
 type ReasonerDefinition struct {
-	ID           string          `json:"id"`
-	InputSchema  json.RawMessage `json:"input_schema"`
-	OutputSchema json.RawMessage `json:"output_schema"`
+	ID             string           `json:"id"`
+	Description    string           `json:"description,omitempty"`
+	InputSchema    json.RawMessage  `json:"input_schema"`
+	OutputSchema   json.RawMessage  `json:"output_schema"`
+	Tags           []string         `json:"tags,omitempty"`
+	ProposedTags   []string         `json:"proposed_tags,omitempty"`
+	Triggers       []TriggerBinding `json:"triggers,omitempty"`
+	AcceptsWebhook *string          `json:"accepts_webhook,omitempty"`
+}
+
+// TriggerBinding declares that a reasoner should fire when an external Source
+// emits a matching event. Bindings are sent at agent registration time and
+// the control plane upserts a code-managed Trigger row per binding so the
+// agent does not need to provision webhooks itself.
+//
+// Source is the registered Source name ("stripe", "github", "cron", etc.).
+// EventTypes filters which event types from that source dispatch to this
+// reasoner — empty matches all. Config is Source-specific JSON (passed through
+// the Source's Validate). SecretEnvVar names an env var on the control plane
+// that holds the provider secret used for signature verification.
+// CodeOrigin captures the caller's file and line number where the trigger
+// was declared, for observability and debugging purposes.
+type TriggerBinding struct {
+	Source       string          `json:"source"`
+	EventTypes   []string        `json:"event_types,omitempty"`
+	Config       json.RawMessage `json:"config,omitempty"`
+	SecretEnvVar string          `json:"secret_env_var,omitempty"`
+	CodeOrigin   string          `json:"code_origin,omitempty"`
 }
 
 // SkillDefinition is included for completeness.
 type SkillDefinition struct {
-	ID          string          `json:"id"`
-	InputSchema json.RawMessage `json:"input_schema"`
-	Tags        []string        `json:"tags,omitempty"`
+	ID           string          `json:"id"`
+	InputSchema  json.RawMessage `json:"input_schema"`
+	Tags         []string        `json:"tags,omitempty"`
+	ProposedTags []string        `json:"proposed_tags,omitempty"`
 }
 
 // CommunicationConfig declares supported protocols for the agent.
@@ -54,13 +80,30 @@ type NodeRegistrationResponse struct {
 	Message           string    `json:"message,omitempty"`
 	Success           bool      `json:"success"`
 	RegisteredAt      time.Time `json:"-"`
+	Status            string    `json:"status,omitempty"`
+	ProposedTags      []string  `json:"proposed_tags,omitempty"`
+	PendingTags       []string  `json:"pending_tags,omitempty"`
+	AutoApprovedTags  []string  `json:"auto_approved_tags,omitempty"`
 }
 
 // NodeStatusUpdate is used for lease renewals.
 type NodeStatusUpdate struct {
 	Phase       string `json:"phase"`
+	Version     string `json:"version,omitempty"`
 	HealthScore *int   `json:"health_score,omitempty"`
 }
+
+// Canonical execution status values used by the control plane.
+const (
+	ExecutionStatusPending   = "pending"
+	ExecutionStatusQueued    = "queued"
+	ExecutionStatusWaiting   = "waiting"
+	ExecutionStatusRunning   = "running"
+	ExecutionStatusSucceeded = "succeeded"
+	ExecutionStatusFailed    = "failed"
+	ExecutionStatusCancelled = "cancelled"
+	ExecutionStatusTimeout   = "timeout"
+)
 
 // LeaseResponse informs the agent how long the lease lasts.
 type LeaseResponse struct {
@@ -83,6 +126,7 @@ type ActionAckRequest struct {
 // ShutdownRequest notifies the control plane that the node is draining.
 type ShutdownRequest struct {
 	Reason          string `json:"reason,omitempty"`
+	Version         string `json:"version,omitempty"`
 	ExpectedRestart string `json:"expected_restart,omitempty"`
 }
 
@@ -97,6 +141,7 @@ type WorkflowExecutionEvent struct {
 	Type              string                 `json:"type,omitempty"`
 	AgentNodeID       string                 `json:"agent_node_id,omitempty"`
 	Status            string                 `json:"status"`
+	StatusReason      *string                `json:"status_reason,omitempty"`
 	ParentExecutionID *string                `json:"parent_execution_id,omitempty"`
 	ParentWorkflowID  *string                `json:"parent_workflow_id,omitempty"`
 	InputData         map[string]interface{} `json:"input_data,omitempty"`

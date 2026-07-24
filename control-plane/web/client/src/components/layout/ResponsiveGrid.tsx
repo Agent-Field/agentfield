@@ -257,7 +257,7 @@ const SPAN_CLASSES: Record<Breakpoint, Record<ColumnCount, string>> = {
 };
 
 export interface ResponsiveGridItemProps
-  extends HTMLAttributes<HTMLDivElement> {
+  extends HTMLAttributes<HTMLElement> {
   as?: ElementType;
   span?: Partial<Record<Breakpoint, ColumnCount>>;
 }
@@ -314,7 +314,7 @@ const BaseResponsiveGrid = forwardRef<HTMLDivElement, ResponsiveGridProps>(
   }
 );
 
-const ResponsiveGridItem = forwardRef<HTMLDivElement, ResponsiveGridItemProps>(
+const ResponsiveGridItem = forwardRef<HTMLElement, ResponsiveGridItemProps>(
   function ResponsiveGridItem(
     { as: Component = "div", span, className, children, ...props },
     ref
@@ -330,7 +330,7 @@ const ResponsiveGridItem = forwardRef<HTMLDivElement, ResponsiveGridItemProps>(
 
     return (
       <Component
-        ref={ref as any}
+        ref={ref}
         className={cn(spanClasses, className)}
         {...props}
       >

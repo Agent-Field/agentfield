@@ -3,75 +3,20 @@
 package services
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// Mock FileSystemAdapter for testing
-type mockFileSystemAdapter struct {
-	readFileFunc      func(string) ([]byte, error)
-	writeFileFunc     func(string, []byte) error
-	existsFunc        func(string) bool
-	createDirFunc     func(string) error
-	listDirectoryFunc func(string) ([]string, error)
-	files             map[string][]byte
-	directories       map[string]bool
-}
-
-func newMockFileSystemAdapter() *mockFileSystemAdapter {
-	return &mockFileSystemAdapter{
-		files:       make(map[string][]byte),
-		directories: make(map[string]bool),
-	}
-}
-
-func (m *mockFileSystemAdapter) ReadFile(path string) ([]byte, error) {
-	if m.readFileFunc != nil {
-		return m.readFileFunc(path)
-	}
-	if data, ok := m.files[path]; ok {
-		return data, nil
-	}
-	return nil, errors.New("file not found")
-}
-
-func (m *mockFileSystemAdapter) WriteFile(path string, data []byte) error {
-	if m.writeFileFunc != nil {
-		return m.writeFileFunc(path, data)
-	}
-	m.files[path] = data
-	return nil
-}
-
-func (m *mockFileSystemAdapter) Exists(path string) bool {
-	if m.existsFunc != nil {
-		return m.existsFunc(path)
-	}
-	_, fileExists := m.files[path]
-	_, dirExists := m.directories[path]
-	return fileExists || dirExists
-}
-
-func (m *mockFileSystemAdapter) CreateDirectory(path string) error {
-	if m.createDirFunc != nil {
-		return m.createDirFunc(path)
-	}
-	m.directories[path] = true
-	return nil
-}
-
-func (m *mockFileSystemAdapter) ListDirectory(path string) ([]string, error) {
-	if m.listDirectoryFunc != nil {
-		return m.listDirectoryFunc(path)
-	}
-	return []string{}, nil
-}
 
 func TestNewDevService(t *testing.T) {
 	processManager := newMockProcessManager()
@@ -117,6 +62,14 @@ func TestRunInDevMode_NoAgentfieldYaml(t *testing.T) {
 }
 
 func TestRunInDevMode_AgentfieldYamlExists(t *testing.T) {
+	// This test verifies that RunInDevMode gets past the agentfield.yaml check.
+	// It will fail at startDevProcess or discoverAgentPort since we can't easily mock exec.Cmd.
+	// Use a short timeout to avoid hanging for 10+ minutes when discoverAgentPort
+	// scans ports endlessly after the subprocess fails to start.
+	if testing.Short() {
+		t.Skip("skipping slow dev mode test in short mode")
+	}
+
 	tmpDir := t.TempDir()
 	packagePath := filepath.Join(tmpDir, "test-package")
 	require.NoError(t, os.MkdirAll(packagePath, 0755))
@@ -143,12 +96,23 @@ func TestRunInDevMode_AgentfieldYamlExists(t *testing.T) {
 		WatchFiles: false,
 	}
 
-	// This will fail at startDevProcess or discoverAgentPort since we can't easily mock exec.Cmd
-	// But we verify it gets past the agentfield.yaml check
-	err := service.RunInDevMode(packagePath, options)
-	// The error should be about process startup or port discovery, not about agentfield.yaml
-	if err != nil {
-		assert.NotContains(t, err.Error(), "no agentfield.yaml found")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- service.RunInDevMode(packagePath, options)
+	}()
+
+	select {
+	case err := <-done:
+		// The error should be about process startup or port discovery, not about agentfield.yaml
+		if err != nil {
+			assert.NotContains(t, err.Error(), "no agentfield.yaml found")
+		}
+	case <-ctx.Done():
+		// Expected: discoverAgentPort hangs because no real agent is running.
+		// The test already proved agentfield.yaml was accepted (we got past that check).
 	}
 }
 
@@ -288,6 +252,8 @@ KEY2=value2
 # Comment line
 KEY3="quoted value"
 KEY4='single quoted'
+KEY5="a\"b"
+KEY6="first\nsecond"
 `
 	require.NoError(t, os.WriteFile(envPath, []byte(envContent), 0644))
 
@@ -303,6 +269,8 @@ KEY4='single quoted'
 	assert.Equal(t, "value2", envVars["KEY2"])
 	assert.Equal(t, "quoted value", envVars["KEY3"])
 	assert.Equal(t, "single quoted", envVars["KEY4"])
+	assert.Equal(t, `a"b`, envVars["KEY5"])
+	assert.Equal(t, "first\nsecond", envVars["KEY6"])
 	assert.NotContains(t, envVars, "# Comment line")
 }
 
@@ -343,4 +311,70 @@ KEY=value
 	require.NoError(t, err)
 	assert.Equal(t, "value", envVars["KEY"])
 	assert.NotContains(t, envVars, "INVALID_LINE_WITHOUT_EQUALS")
+}
+
+// The three tests below were moved from coverage_additional_test.go: they
+// exercise Unix-only DefaultDevService methods (loadDevEnvFile,
+// startDevProcess, port helpers) that the Windows stub does not define, so
+// they must live in this !windows-tagged file for the services package to
+// compile under GOOS=windows.
+
+func TestDevServiceLoadDevEnvFile(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte(strings.Join([]string{
+		"# comment",
+		"FOO=bar",
+		`QUOTED="hello world"`,
+		"SINGLE='quoted'",
+		"INVALID",
+	}, "\n")), 0o644))
+
+	service := &DefaultDevService{}
+	envVars, err := service.loadDevEnvFile(dir)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{
+		"FOO":    "bar",
+		"QUOTED": "hello world",
+		"SINGLE": "quoted",
+	}, envVars)
+}
+
+func TestDevServiceStartDevProcess(t *testing.T) {
+	dir := t.TempDir()
+	venvBin := filepath.Join(dir, "venv", "bin")
+	require.NoError(t, os.MkdirAll(venvBin, 0o755))
+	outputPath := filepath.Join(dir, "env-output.txt")
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$PORT\" > %s\nprintf '%%s\\n' \"$AGENTFIELD_SERVER_URL\" >> %s\nprintf '%%s\\n' \"$AGENTFIELD_DEV_MODE\" >> %s\nprintf '%%s\\n' \"$TOKEN\" >> %s\n", outputPath, outputPath, outputPath, outputPath)
+	require.NoError(t, os.WriteFile(filepath.Join(venvBin, "python"), []byte(script), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte("TOKEN=dev-secret\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.py"), []byte("print('ignored')\n"), 0o644))
+
+	service := &DefaultDevService{}
+	cmd, err := service.startDevProcess(dir, 8124, domain.DevOptions{Verbose: true})
+	require.NoError(t, err)
+	require.NoError(t, cmd.Wait())
+
+	data, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+	assert.Equal(t, "8124\nhttp://localhost:8080\ntrue\ndev-secret\n", string(data))
+}
+
+func TestDevServicePortHelpersWithoutManager(t *testing.T) {
+	service := &DefaultDevService{}
+
+	port, err := service.getFreePort()
+	require.NoError(t, err)
+	assert.True(t, port >= 8001 && port <= 8999)
+
+	busyListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer busyListener.Close()
+	busyPort := busyListener.Addr().(*net.TCPAddr).Port
+	assert.False(t, service.isPortAvailable(busyPort))
+
+	freeListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	freePort := freeListener.Addr().(*net.TCPAddr).Port
+	require.NoError(t, freeListener.Close())
+	assert.True(t, service.isPortAvailable(freePort))
 }

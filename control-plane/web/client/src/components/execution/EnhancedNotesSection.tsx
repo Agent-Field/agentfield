@@ -89,7 +89,7 @@ function ExpandableNote({ note }: ExpandableNoteProps) {
               <Clock className="w-3 h-3 text-muted-foreground" />
               <span className="font-medium text-foreground">{time}</span>
               <span className="text-muted-foreground">·</span>
-              <span className="text-body-small">{relative}</span>
+              <span className="text-sm text-muted-foreground">{relative}</span>
             </div>
           </div>
 
@@ -117,7 +117,7 @@ function ExpandableNote({ note }: ExpandableNoteProps) {
           {isLongNote && (
             <button
               onClick={() => setIsExpanded(!isExpanded)}
-              className="inline-flex items-center gap-1 mt-2 text-body-small hover:text-foreground transition-colors"
+              className="inline-flex items-center gap-1 mt-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
             >
               {isExpanded ? (
                 <>
@@ -227,7 +227,7 @@ export function EnhancedNotesSection({
 
   const badge = (
     <div className="flex items-center gap-2">
-      <span className="text-body-small bg-blue-500/10 text-blue-600 px-2 py-0.5 rounded">
+      <span className="text-sm text-muted-foreground bg-blue-500/10 text-blue-600 px-2 py-0.5 rounded">
         {execution.notes?.length || 0}{" "}
         {execution.notes?.length === 1 ? "Event" : "Events"}
       </span>
@@ -267,7 +267,7 @@ export function EnhancedNotesSection({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <FileText className="w-5 h-5" />
-          <h3 className="text-heading-3 text-foreground">
+          <h3 className="text-base font-semibold text-foreground">
             Execution Events
           </h3>
           {badge}
@@ -288,7 +288,7 @@ export function EnhancedNotesSection({
       {/* Summary footer */}
       {sortedNotes.length > 3 && (
         <div className="mt-4 pt-3 border-t border-border">
-          <div className="text-body-small text-center">
+          <div className="text-sm text-muted-foreground text-center">
             {sortedNotes.length} events • Sorted by{" "}
             {getSortLabel().toLowerCase()}
           </div>

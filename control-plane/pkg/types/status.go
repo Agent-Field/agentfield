@@ -9,7 +9,9 @@ const (
 	ExecutionStatusUnknown   ExecutionStatus = "unknown"
 	ExecutionStatusPending   ExecutionStatus = "pending"
 	ExecutionStatusQueued    ExecutionStatus = "queued"
+	ExecutionStatusWaiting   ExecutionStatus = "waiting"
 	ExecutionStatusRunning   ExecutionStatus = "running"
+	ExecutionStatusPaused    ExecutionStatus = "paused"
 	ExecutionStatusSucceeded ExecutionStatus = "succeeded"
 	ExecutionStatusFailed    ExecutionStatus = "failed"
 	ExecutionStatusCancelled ExecutionStatus = "cancelled"
@@ -20,7 +22,9 @@ var canonicalExecutionStatuses = map[ExecutionStatus]struct{}{
 	ExecutionStatusUnknown:   {},
 	ExecutionStatusPending:   {},
 	ExecutionStatusQueued:    {},
+	ExecutionStatusWaiting:   {},
 	ExecutionStatusRunning:   {},
+	ExecutionStatusPaused:    {},
 	ExecutionStatusSucceeded: {},
 	ExecutionStatusFailed:    {},
 	ExecutionStatusCancelled: {},
@@ -28,22 +32,28 @@ var canonicalExecutionStatuses = map[ExecutionStatus]struct{}{
 }
 
 var executionStatusAliases = map[string]ExecutionStatus{
-	"success":     ExecutionStatusSucceeded,
-	"successful":  ExecutionStatusSucceeded,
-	"completed":   ExecutionStatusSucceeded,
-	"complete":    ExecutionStatusSucceeded,
-	"done":        ExecutionStatusSucceeded,
-	"ok":          ExecutionStatusSucceeded,
-	"error":       ExecutionStatusFailed,
-	"failure":     ExecutionStatusFailed,
-	"errored":     ExecutionStatusFailed,
-	"canceled":    ExecutionStatusCancelled,
-	"cancel":      ExecutionStatusCancelled,
-	"timed_out":   ExecutionStatusTimeout,
-	"wait":        ExecutionStatusQueued,
-	"waiting":     ExecutionStatusQueued,
-	"in_progress": ExecutionStatusRunning,
-	"processing":  ExecutionStatusRunning,
+	"success":           ExecutionStatusSucceeded,
+	"successful":        ExecutionStatusSucceeded,
+	"completed":         ExecutionStatusSucceeded,
+	"complete":          ExecutionStatusSucceeded,
+	"done":              ExecutionStatusSucceeded,
+	"ok":                ExecutionStatusSucceeded,
+	"error":             ExecutionStatusFailed,
+	"failure":           ExecutionStatusFailed,
+	"errored":           ExecutionStatusFailed,
+	"canceled":          ExecutionStatusCancelled,
+	"cancel":            ExecutionStatusCancelled,
+	"pause":             ExecutionStatusPaused,
+	"hold":              ExecutionStatusPaused,
+	"on_hold":           ExecutionStatusPaused,
+	"suspended":         ExecutionStatusPaused,
+	"timed_out":         ExecutionStatusTimeout,
+	"wait":              ExecutionStatusQueued,
+	"awaiting_approval": ExecutionStatusWaiting,
+	"awaiting_human":    ExecutionStatusWaiting,
+	"approval_pending":  ExecutionStatusWaiting,
+	"in_progress":       ExecutionStatusRunning,
+	"processing":        ExecutionStatusRunning,
 }
 
 // NormalizeExecutionStatus maps arbitrary status strings onto the canonical execution statuses used by the AgentField platform.

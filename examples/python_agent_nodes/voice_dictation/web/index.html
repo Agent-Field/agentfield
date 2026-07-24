@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AgentField Voice Dictation</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+    background: #0b0d12; color: #e6e8ee; display: flex; min-height: 100vh;
+    align-items: center; justify-content: center; padding: 24px;
+  }
+  .card {
+    width: 100%; max-width: 760px; background: #141821; border: 1px solid #232a37;
+    border-radius: 16px; padding: 28px; box-shadow: 0 10px 40px rgba(0,0,0,.4);
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: #8a93a6; font-size: 13px; margin: 0 0 20px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+  label { font-size: 12px; color: #8a93a6; display: block; margin-bottom: 4px; }
+  input {
+    background: #0e121a; border: 1px solid #2a3344; color: #e6e8ee; border-radius: 8px;
+    padding: 8px 10px; font-size: 13px; width: 100%;
+  }
+  .field { flex: 1; min-width: 140px; }
+  button {
+    border: 0; border-radius: 10px; padding: 10px 16px; font-size: 14px; font-weight: 600;
+    cursor: pointer; transition: opacity .15s;
+  }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .primary { background: #4f7cff; color: #fff; }
+  .stop { background: #ff5470; color: #fff; }
+  .ghost { background: #222a38; color: #cdd3df; }
+  textarea {
+    width: 100%; height: 230px; background: #0e121a; border: 1px solid #2a3344;
+    color: #e6e8ee; border-radius: 10px; padding: 14px; font-size: 15px; line-height: 1.5;
+    resize: vertical; font-family: ui-monospace, monospace;
+  }
+  .interim { color: #8a93a6; font-style: italic; }
+  #status { font-size: 12px; padding: 6px 10px; border-radius: 999px; background: #1c2330; color: #8a93a6; }
+  #status.live { background: #14361f; color: #6ee7a0; }
+  #status.err { background: #3a1620; color: #ff97a8; }
+  .hint { font-size: 11px; color: #6b7488; margin-top: 14px; line-height: 1.5; }
+  code { background: #0e121a; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>🎙️ AgentField Voice Dictation</h1>
+    <p class="sub">Wispr-Flow-style live transcription, routed through an AgentField realtime session. Mic → WebRTC → control-plane SDP proxy → OpenAI Realtime. Your provider key never leaves the server.</p>
+
+    <div class="row">
+      <div class="field">
+        <label>Control plane</label>
+        <input id="cp" value="http://localhost:8080" />
+      </div>
+      <div class="field">
+        <label>Realtime model</label>
+        <input id="model" value="gpt-realtime" />
+      </div>
+    </div>
+
+    <div class="row">
+      <button id="start" class="primary">Start dictation</button>
+      <button id="stop" class="stop" disabled>Stop</button>
+      <button id="copy" class="ghost">Copy</button>
+      <button id="clear" class="ghost">Clear</button>
+      <span id="status">idle</span>
+    </div>
+
+    <textarea id="out" placeholder="Start dictation and talk — your words appear here…"></textarea>
+
+    <p class="hint">
+      The browser POSTs its SDP offer to <code>/api/v1/sessions/&lt;id&gt;/realtime-offer?provider=openai&amp;transport=webrtc</code>;
+      the control plane forwards it to OpenAI with its server key and returns the answer SDP.
+      Once connected, the page sends a <code>session.update</code> over the data channel to enable input transcription
+      and disable model replies (pure dictation) — a client-side stand-in until session-level VAD/transcription config lands (issue&nbsp;#663).
+    </p>
+  </div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const out = $("out");
+let pc = null, dc = null, micStream = null;
+let finalText = "";   // committed transcript
+let interim = "";     // in-flight delta for the current utterance
+
+function setStatus(text, cls) {
+  const s = $("status"); s.textContent = text; s.className = cls || "";
+}
+function render() {
+  out.value = finalText + (interim ? (finalText ? " " : "") + interim : "");
+  out.scrollTop = out.scrollHeight;
+}
+
+async function start() {
+  $("start").disabled = true;
+  try {
+    setStatus("requesting mic…");
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+    pc = new RTCPeerConnection();
+    micStream.getTracks().forEach(t => pc.addTrack(t, micStream));
+    // Realtime requires an audio transceiver to receive too (even if we mute it).
+    pc.addTransceiver("audio", { direction: "sendrecv" });
+
+    dc = pc.createDataChannel("oai-events");
+    dc.onopen = () => {
+      // Client-side session config: transcribe my speech, don't talk back.
+      dc.send(JSON.stringify({
+        type: "session.update",
+        session: {
+          type: "realtime",
+          audio: {
+            input: {
+              transcription: { model: "gpt-4o-mini-transcribe" },
+              turn_detection: { type: "server_vad", create_response: false, interrupt_response: false },
+            },
+          },
+        },
+      }));
+      setStatus("listening", "live");
+    };
+    dc.onmessage = onEvent;
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    setStatus("negotiating…");
+    const cp = $("cp").value.replace(/\/$/, "");
+    const model = encodeURIComponent($("model").value.trim());
+    const sid = "demo_" + Math.random().toString(36).slice(2, 10);
+
+    // The realtime-offer route was renamed in #655 (/sessions -> /session-instances).
+    // Try the newer route first, fall back to the original so this page works
+    // against #654 alone and #654+#655.
+    const routes = [
+      `/api/v1/session-instances/${sid}/realtime-offer`,  // #655+
+      `/api/v1/sessions/${sid}/realtime-offer`,            // #654
+    ];
+    let answer = null, lastErr = "";
+    for (const path of routes) {
+      const resp = await fetch(`${cp}${path}?provider=openai&transport=webrtc&model=${model}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/sdp" },
+        body: offer.sdp,
+      });
+      const body = await resp.text();
+      if (resp.status === 404) { lastErr = `404 at ${path}`; continue; } // route not present, try next
+      if (!resp.ok) throw new Error(`control plane ${resp.status}: ${body}`);
+      answer = body; break;
+    }
+    if (answer === null) throw new Error(`no session route found (${lastErr})`);
+
+    await pc.setRemoteDescription({ type: "answer", sdp: answer });
+    $("stop").disabled = false;
+  } catch (e) {
+    setStatus(String(e.message || e), "err");
+    cleanup();
+    $("start").disabled = false;
+  }
+}
+
+function onEvent(ev) {
+  let msg; try { msg = JSON.parse(ev.data); } catch { return; }
+  switch (msg.type) {
+    // Incremental transcript of the user's speech (gpt-4o-transcribe family).
+    case "conversation.item.input_audio_transcription.delta":
+      interim += msg.delta || "";
+      render();
+      break;
+    // A completed user utterance — commit it.
+    case "conversation.item.input_audio_transcription.completed":
+      finalText = (finalText ? finalText + " " : "") + (msg.transcript || interim).trim();
+      interim = "";
+      render();
+      break;
+    case "error":
+      setStatus("openai: " + (msg.error?.message || "error"), "err");
+      break;
+  }
+}
+
+function cleanup() {
+  try { dc && dc.close(); } catch {}
+  try { pc && pc.close(); } catch {}
+  try { micStream && micStream.getTracks().forEach(t => t.stop()); } catch {}
+  dc = pc = micStream = null;
+}
+
+function stop() {
+  cleanup();
+  interim = ""; render();
+  setStatus("stopped");
+  $("start").disabled = false;
+  $("stop").disabled = true;
+}
+
+$("start").onclick = start;
+$("stop").onclick = stop;
+$("clear").onclick = () => { finalText = ""; interim = ""; render(); };
+$("copy").onclick = async () => {
+  try { await navigator.clipboard.writeText(out.value); setStatus("copied ✓", "live"); }
+  catch { out.select(); document.execCommand("copy"); setStatus("copied ✓", "live"); }
+};
+</script>
+</body>
+</html>

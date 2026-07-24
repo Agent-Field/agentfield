@@ -27,6 +27,7 @@ var (
 		string(types.ExecutionStatusTimeout),
 		string(types.ExecutionStatusCancelled),
 		string(types.ExecutionStatusRunning),
+		string(types.ExecutionStatusWaiting),
 		string(types.ExecutionStatusQueued),
 		string(types.ExecutionStatusPending),
 		string(types.ExecutionStatusSucceeded),
@@ -90,7 +91,7 @@ func AggregateExecutions(executions []*types.WorkflowExecution, steps []*types.W
 		}
 
 		switch normalized {
-		case string(types.ExecutionStatusRunning), string(types.ExecutionStatusQueued), string(types.ExecutionStatusPending):
+		case string(types.ExecutionStatusRunning), string(types.ExecutionStatusWaiting), string(types.ExecutionStatusQueued), string(types.ExecutionStatusPending):
 			result.ActiveExecutions++
 		}
 
@@ -152,7 +153,7 @@ func AggregateExecutions(executions []*types.WorkflowExecution, steps []*types.W
 
 	if result.ActiveExecutions > 0 {
 		switch baseStatus {
-		case string(types.ExecutionStatusQueued), string(types.ExecutionStatusPending), string(types.ExecutionStatusRunning):
+		case string(types.ExecutionStatusQueued), string(types.ExecutionStatusPending), string(types.ExecutionStatusWaiting), string(types.ExecutionStatusRunning):
 			result.Status = baseStatus
 		default:
 			result.Status = string(types.ExecutionStatusRunning)

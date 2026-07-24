@@ -14,8 +14,7 @@ import { Badge } from "../ui/badge";
 import { CopyButton } from "../ui/copy-button";
 import { SegmentedControl } from "../ui/segmented-control";
 import type { SegmentedControlOption } from "../ui/segmented-control";
-import { EnhancedJsonViewer } from "../reasoners/EnhancedJsonViewer";
-import { JsonViewer } from "../execution/JsonViewer";
+import { UnifiedJsonViewer } from "@/components/ui/UnifiedJsonViewer";
 import { DataModal } from "../execution/EnhancedModal";
 import { useMainNodeExecution } from "../../hooks/useMainNodeExecution";
 
@@ -133,15 +132,10 @@ function CompactDataView({
 
       {/* Compact Preview - Fixed scrollability */}
       <div className="border border-border rounded-md max-h-[200px] overflow-y-auto bg-card">
-        {viewMode === "formatted" ? (
-          <EnhancedJsonViewer
-            data={data}
-            className="p-3 text-xs"
-            maxInlineHeight={180}
-          />
-        ) : (
-          <JsonViewer data={data} collapsed={1} className="p-3 text-xs" />
-        )}
+        <UnifiedJsonViewer
+          data={data}
+          className="p-3 text-xs"
+        />
       </div>
     </div>
   );

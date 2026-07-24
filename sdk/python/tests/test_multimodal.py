@@ -1,4 +1,9 @@
-from agentfield.multimodal import image_from_file, audio_from_file, file_from_path
+from agentfield.multimodal import (
+    audio_from_file,
+    file_from_path,
+    image_from_file,
+    video_from_file,
+)
 
 
 def test_image_from_file_and_audio_from_file(tmp_path):
@@ -16,6 +21,12 @@ def test_image_from_file_and_audio_from_file(tmp_path):
     au = audio_from_file(wav)
     assert au.type == "input_audio"
     assert "data" in au.input_audio
+
+    mp4 = tmp_path / "v.mp4"
+    mp4.write_bytes(b"\x00\x00\x00\x18ftypmp42")
+    vi = video_from_file(mp4)
+    assert vi.type == "video_url"
+    assert vi.video_url["url"].startswith("data:video/mp4;base64,")
 
 
 def test_file_from_path(tmp_path):

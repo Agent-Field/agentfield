@@ -30,7 +30,7 @@ export const KPICard = React.memo(function KPICard({
       case 'error':
         return 'var(--status-error)';
       default:
-        return 'var(--text-tertiary)';
+        return 'hsl(var(--muted-foreground))';
     }
   };
 
@@ -83,13 +83,13 @@ export const KPICard = React.memo(function KPICard({
           >
             <Icon className="h-5 w-5" />
           </div>
-          <span className="text-body-small font-medium text-text-tertiary tracking-tight">
+          <span className="text-sm text-muted-foreground font-medium text-muted-foreground tracking-tight">
             {label}
           </span>
         </div>
 
         {/* Primary Value */}
-        <div className="text-heading-1 leading-tight tracking-tight">
+        <div className="text-2xl font-semibold tracking-tight leading-tight tracking-tight">
           {primaryValue === '—' ? (
             <span className="text-muted-foreground">—</span>
           ) : (
@@ -99,7 +99,7 @@ export const KPICard = React.memo(function KPICard({
 
         {/* Secondary Info */}
         {secondaryInfo && (
-          <div className="text-body-small text-muted-foreground/80 leading-relaxed">
+          <div className="text-sm text-muted-foreground text-muted-foreground/80 leading-relaxed">
             {secondaryInfo}
           </div>
         )}

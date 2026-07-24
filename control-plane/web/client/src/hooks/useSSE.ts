@@ -19,6 +19,8 @@ interface SSEOptions {
   onConnectionChange?: (connected: boolean) => void;
   /** Callback for errors */
   onError?: (error: Event) => void;
+  /** Whether to accumulate events in the events array (default: false) */
+  trackEvents?: boolean;
 }
 
 /**
@@ -64,7 +66,8 @@ export function useSSE<T = any>(
     exponentialBackoff = true,
     eventTypes = [],
     onConnectionChange,
-    onError
+    onError,
+    trackEvents = false
   } = options;
 
   const [state, setState] = useState<SSEState>({
@@ -157,7 +160,6 @@ export function useSSE<T = any>(
       let actualEventType = eventType;
       if (data.type && typeof data.type === 'string') {
         actualEventType = data.type;
-        console.log('🔍 SSE: Extracted event type from data:', actualEventType);
       }
 
       const sseEvent: SSEEvent<T> = {
@@ -166,10 +168,10 @@ export function useSSE<T = any>(
         timestamp: new Date(),
         id: event.lastEventId || undefined
       };
-
-      console.log('🔄 SSE: Processing event:', { type: actualEventType, hasData: !!data });
       setLatestEvent(sseEvent);
-      setEvents(prev => [...prev.slice(-99), sseEvent]); // Keep last 100 events
+      if (trackEvents) {
+        setEvents(prev => [...prev.slice(-99), sseEvent]); // Keep last 100 events
+      }
     } catch (error) {
       console.warn('🚨 SSE: Failed to parse event data:', error, 'Raw data:', event.data);
     }
@@ -180,8 +182,6 @@ export function useSSE<T = any>(
    */
   const connect = useCallback(() => {
     if (!url || !mountedRef.current) return;
-
-    console.log('🔄 SSE: connect() called for URL:', url);
     closeConnection();
 
     try {
@@ -194,12 +194,9 @@ export function useSSE<T = any>(
 
       const eventSource = new EventSource(finalUrl);
       eventSourceRef.current = eventSource;
-      console.log('🔌 SSE: EventSource created for URL:', finalUrl);
 
       eventSource.onopen = () => {
         if (!mountedRef.current) return;
-
-        console.log('✅ SSE: Connection opened for URL:', url);
         setState(prev => ({
           ...prev,
           connected: true,
@@ -213,8 +210,6 @@ export function useSSE<T = any>(
 
       eventSource.onerror = (error) => {
         if (!mountedRef.current) return;
-
-        console.log('❌ SSE: Connection error for URL:', url, error);
         setState(prev => ({
           ...prev,
           connected: false,
@@ -227,7 +222,6 @@ export function useSSE<T = any>(
         // Only attempt reconnect if the connection was previously established
         // or if this is not a permanent failure
         if (eventSource.readyState === EventSource.CLOSED) {
-          console.log('🔄 SSE: Attempting reconnect for URL:', url);
           attemptReconnect();
         }
       };
@@ -277,20 +271,14 @@ export function useSSE<T = any>(
 
   // Initialize connection when URL changes
   useEffect(() => {
-    console.log('🚀 SSE: Main useEffect triggered for URL:', url, 'Connected:', state.connected);
     if (url && !state.connected && !eventSourceRef.current) {
-      console.log('🔗 SSE: Calling connect() for URL:', url);
       connect();
     } else if (!url) {
-      console.log('🔌 SSE: No URL, closing connection');
       closeConnection();
       setState(prev => ({ ...prev, connected: false }));
-    } else {
-      console.log('🔄 SSE: Skipping connect - already connected or connecting');
     }
 
     return () => {
-      console.log('🧹 SSE: Cleanup called for URL:', url);
       closeConnection();
     };
   }, [url]); // Only depend on URL changes, not the functions
@@ -327,21 +315,6 @@ export function useSSE<T = any>(
 }
 
 /**
- * Specialized hook for MCP health events
- */
-export function useMCPHealthSSE(nodeId: string | null) {
-  const url = nodeId ? `/api/ui/v1/nodes/${nodeId}/mcp/events` : null;
-
-  return useSSE(url, {
-    eventTypes: ['server_status_change', 'tool_execution', 'health_update', 'error'],
-    autoReconnect: true,
-    maxReconnectAttempts: 3,
-    reconnectDelayMs: 2000,
-    exponentialBackoff: true
-  });
-}
-
-/**
  * Specialized hook for agent node events including status changes
  */
 export function useNodeEventsSSE() {
@@ -355,8 +328,6 @@ export function useNodeEventsSSE() {
       'node_status_updated',
       'node_health_changed',
       'node_removed',
-      'mcp_health_changed',
-      // New unified status events
       'node_unified_status_changed',
       'node_state_transition',
       'node_status_refreshed',
@@ -408,5 +379,19 @@ export function useNodeUnifiedStatusSSE(_nodeId: string | null) {
     maxReconnectAttempts: 3,
     reconnectDelayMs: 2000,
     exponentialBackoff: true
+  });
+}
+
+/**
+ * MCP health stream for a node (reserved for control-plane MCP SSE; no-op URL until wired).
+ */
+export function useMCPHealthSSE(nodeId: string | null) {
+  const url = nodeId ? `/api/ui/v1/nodes/${nodeId}/mcp/health/stream` : null;
+  return useSSE(url, {
+    eventTypes: ['mcp_health_changed', 'mcp_server_status'],
+    autoReconnect: false,
+    maxReconnectAttempts: 0,
+    reconnectDelayMs: 5000,
+    exponentialBackoff: false,
   });
 }

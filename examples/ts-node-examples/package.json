@@ -10,7 +10,10 @@
     "dev:simulation": "tsx simulation/main.ts",
     "dev:init-example": "tsx init-example/main.ts",
     "dev:serverless": "tsx serverless-hello/main.ts",
-    "dev:vc": "tsx verifiable-credentials/main.ts"
+    "dev:vc": "tsx verifiable-credentials/main.ts",
+    "dev:perm-a": "tsx permission-agent-a/main.ts",
+    "dev:perm-b": "tsx permission-agent-b/main.ts",
+    "dev:multi-version": "tsx multi-version/main.ts"
   },
   "dependencies": {
     "@agentfield/sdk": "file:../../sdk/typescript",
@@ -20,8 +23,11 @@
   "devDependencies": {
     "@types/node": "^20.10.0",
     "ts-node": "^10.9.2",
-    "tsx": "^4.19.2",
     "tsup": "^8.0.0",
+    "tsx": "^4.19.2",
     "typescript": "^5.3.0"
+  },
+  "overrides": {
+    "esbuild": "0.28.1"
   }
 }

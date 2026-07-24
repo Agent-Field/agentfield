@@ -111,3 +111,15 @@ export {
   tabsListVariants,
   tabsTriggerVariants,
 };
+
+/* ═══════════════════════════════════════════════════════════════
+   Animated tabs aliases (previously in animated-tabs.tsx)
+   These re-export the standard Tabs components so callers that
+   used AnimatedTabs* names continue to compile.
+   ═══════════════════════════════════════════════════════════════ */
+export {
+  Tabs as AnimatedTabs,
+  TabsList as AnimatedTabsList,
+  TabsTrigger as AnimatedTabsTrigger,
+  TabsContent as AnimatedTabsContent,
+};

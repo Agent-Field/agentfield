@@ -54,6 +54,15 @@ func WorkflowExecutionEventHandler(store ExecutionStore) gin.HandlerFunc {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create execution: %v", err)})
 				return
 			}
+			// Also ensure a workflow_executions record exists so that
+			// approval endpoints (which query workflow_executions) work
+			// for executions reported through this event-based path.
+			wfExec := buildWorkflowExecutionFromEvent(&req, now)
+			if storeErr := store.StoreWorkflowExecution(ctx, wfExec); storeErr != nil {
+				// Non-fatal: the lightweight record was already created.
+				// Log but don't fail the request.
+				fmt.Printf("WARN: failed to create workflow execution record for %s: %v\n", req.ExecutionID, storeErr)
+			}
 			c.JSON(http.StatusOK, gin.H{"success": true, "created": true})
 			return
 		}
@@ -119,7 +128,22 @@ func buildExecutionRecordFromEvent(req *WorkflowExecutionEventRequest, now time.
 }
 
 func applyEventToExecution(current *types.Execution, req *WorkflowExecutionEventRequest, now time.Time) {
-	current.Status = types.NormalizeExecutionStatus(req.Status)
+	incomingStatus := types.NormalizeExecutionStatus(req.Status)
+
+	// Terminal-state regression guard. Fire-and-forget workflow events from
+	// the SDK are not strictly ordered — a late "running" event can race past
+	// a "failed"/"succeeded" event for the same execution_id (e.g. when the
+	// outer reasoner errors while inner reasoners are still emitting). Once
+	// an execution has reached a terminal state, treat the row as immutable
+	// for status/result/error/completion purposes; the UI and callers polling
+	// /api/v1/executions/:id will keep seeing the correct terminal status
+	// instead of a phantom "running".
+	if types.IsTerminalExecutionStatus(current.Status) {
+		current.UpdatedAt = now
+		return
+	}
+
+	current.Status = incomingStatus
 	current.UpdatedAt = now
 
 	if current.StartedAt.IsZero() {
@@ -155,14 +179,56 @@ func applyEventToExecution(current *types.Execution, req *WorkflowExecutionEvent
 	if req.Error != "" {
 		errCopy := req.Error
 		current.ErrorMessage = &errCopy
-	} else if types.NormalizeExecutionStatus(req.Status) == string(types.ExecutionStatusSucceeded) {
+	} else if incomingStatus == string(types.ExecutionStatusSucceeded) {
 		current.ErrorMessage = nil
 	}
 
-	if types.IsTerminalExecutionStatus(req.Status) {
+	if types.IsTerminalExecutionStatus(incomingStatus) {
 		completed := now
 		current.CompletedAt = &completed
 	}
+}
+
+func buildWorkflowExecutionFromEvent(req *WorkflowExecutionEventRequest, now time.Time) *types.WorkflowExecution {
+	runID := firstNonEmpty(req.RunID, req.WorkflowID, req.ExecutionID)
+	agentNodeID := firstNonEmpty(req.AgentNodeID, req.Type)
+	reasonerID := firstNonEmpty(req.ReasonerID, req.Type, "reasoner")
+	status := types.NormalizeExecutionStatus(req.Status)
+	inputPayload := marshalJSON(req.InputData)
+	outputPayload := marshalJSON(req.Result)
+	workflowName := fmt.Sprintf("%s.%s", agentNodeID, reasonerID)
+
+	wfExec := &types.WorkflowExecution{
+		WorkflowID:  runID,
+		ExecutionID: req.ExecutionID,
+		RunID:       &runID,
+		AgentNodeID: agentNodeID,
+		ReasonerID:  reasonerID,
+		Status:      status,
+		InputData:   inputPayload,
+		OutputData:  outputPayload,
+		StartedAt:   now,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		WorkflowName: &workflowName,
+	}
+
+	if req.ParentExecutionID != nil {
+		wfExec.ParentExecutionID = req.ParentExecutionID
+	}
+	if req.ParentWorkflowID != nil {
+		wfExec.ParentWorkflowID = req.ParentWorkflowID
+	}
+	if req.Error != "" {
+		errCopy := req.Error
+		wfExec.ErrorMessage = &errCopy
+	}
+	if types.IsTerminalExecutionStatus(status) {
+		completed := now
+		wfExec.CompletedAt = &completed
+	}
+
+	return wfExec
 }
 
 func marshalJSON(value interface{}) json.RawMessage {

@@ -109,6 +109,7 @@ func TestIntegration_EndToEndWebhookDelivery(t *testing.T) {
 		BatchTimeout: 100 * time.Millisecond,
 		WorkerCount:  1,
 		MaxAttempts:  2,
+		HTTPClient:   testHTTPClient(),
 	}
 	forwarder := NewObservabilityForwarder(store, cfg)
 
@@ -182,6 +183,7 @@ func TestIntegration_DeadLetterQueueFlow(t *testing.T) {
 		MaxAttempts:     2,
 		RetryBackoff:    10 * time.Millisecond,
 		MaxRetryBackoff: 50 * time.Millisecond,
+		HTTPClient:      testHTTPClient(),
 	}
 	forwarder := NewObservabilityForwarder(store, cfg)
 
@@ -236,6 +238,7 @@ func TestIntegration_ConfigReload(t *testing.T) {
 		BatchSize:    1,
 		BatchTimeout: 50 * time.Millisecond,
 		WorkerCount:  1,
+		HTTPClient:   testHTTPClient(),
 	}
 	forwarder := NewObservabilityForwarder(store, cfg)
 
@@ -309,6 +312,7 @@ func TestIntegration_HeartbeatFiltering(t *testing.T) {
 		BatchSize:    10,
 		BatchTimeout: 200 * time.Millisecond,
 		WorkerCount:  1,
+		HTTPClient:   testHTTPClient(),
 	}
 	forwarder := NewObservabilityForwarder(store, cfg)
 
@@ -374,6 +378,7 @@ func TestIntegration_SignatureVerification(t *testing.T) {
 		BatchSize:    1,
 		BatchTimeout: 50 * time.Millisecond,
 		WorkerCount:  1,
+		HTTPClient:   testHTTPClient(),
 	}
 	forwarder := NewObservabilityForwarder(store, cfg)
 
@@ -431,6 +436,7 @@ func TestIntegration_BatchAggregation(t *testing.T) {
 		BatchSize:    5,                     // Wait for 5 events
 		BatchTimeout: 10 * time.Second,      // Long timeout
 		WorkerCount:  1,
+		HTTPClient:   testHTTPClient(),
 	}
 	forwarder := NewObservabilityForwarder(store, cfg)
 
@@ -482,6 +488,7 @@ func TestIntegration_StoragePersistence(t *testing.T) {
 		BatchSize:    1,
 		BatchTimeout: 50 * time.Millisecond,
 		WorkerCount:  1,
+		HTTPClient:   testHTTPClient(),
 	}
 
 	// Start first forwarder instance

@@ -106,7 +106,7 @@ export function FastTableSearch({
 
       {/* Search Results Stats */}
       {showResultStats && (
-        <div className="flex items-center justify-between text-body-small">
+        <div className="flex items-center justify-between text-sm text-muted-foreground">
           <div className="flex items-center gap-2">
             <span>
               {resultCount === totalCount

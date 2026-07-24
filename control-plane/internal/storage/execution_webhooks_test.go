@@ -286,10 +286,11 @@ func TestListDueExecutionWebhooks_Limit(t *testing.T) {
 func TestListDueExecutionWebhooks_DefaultLimit(t *testing.T) {
 	provider, ctx := setupTestStorage(t)
 
-	// Pass zero limit to test default
+	// Pass zero limit to test default - should not error even with no webhooks
 	webhooks, err := provider.ListDueExecutionWebhooks(ctx, 0)
 	require.NoError(t, err)
-	assert.NotNil(t, webhooks)
+	// No webhooks registered, so result is empty (nil slice from SQL iteration)
+	assert.Empty(t, webhooks)
 }
 
 func TestTryMarkExecutionWebhookInFlight_Success(t *testing.T) {

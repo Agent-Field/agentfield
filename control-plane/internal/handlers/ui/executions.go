@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/handlers"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
@@ -57,12 +58,10 @@ func (h *ExecutionHandler) StreamWorkflowNodeNotesHandler(c *gin.Context) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
-	c.Header("Access-Control-Allow-Origin", "*")
-	c.Header("Access-Control-Allow-Headers", "Cache-Control")
 
 	workflowID := c.Param("workflowId")
 	if workflowID == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "workflowId is required"})
+		RespondBadRequest(c, "workflowId is required")
 		return
 	}
 
@@ -132,6 +131,7 @@ type ExecutionSummary struct {
 	AgentNodeID  string               `json:"agent_node_id"`
 	ReasonerID   string               `json:"reasoner_id"`
 	Status       string               `json:"status"`
+	StatusReason *string              `json:"status_reason,omitempty"`
 	DurationMS   int                  `json:"duration_ms"`
 	InputSize    int                  `json:"input_size"`
 	OutputSize   int                  `json:"output_size"`
@@ -172,11 +172,18 @@ type ExecutionDetailsResponse struct {
 	WorkflowName        *string                        `json:"workflow_name,omitempty"`
 	WorkflowTags        []string                       `json:"workflow_tags"`
 	Status              string                         `json:"status"`
+	StatusReason        *string                        `json:"status_reason,omitempty"`
 	StartedAt           *string                        `json:"started_at,omitempty"`
 	CompletedAt         *string                        `json:"completed_at,omitempty"`
 	DurationMS          *int                           `json:"duration_ms,omitempty"`
 	ErrorMessage        *string                        `json:"error_message,omitempty"`
 	RetryCount          int                            `json:"retry_count"`
+	ApprovalRequestID   *string                        `json:"approval_request_id,omitempty"`
+	ApprovalRequestURL  *string                        `json:"approval_request_url,omitempty"`
+	ApprovalStatus      *string                        `json:"approval_status,omitempty"`
+	ApprovalResponse    *string                        `json:"approval_response,omitempty"`
+	ApprovalRequestedAt *string                        `json:"approval_requested_at,omitempty"`
+	ApprovalRespondedAt *string                        `json:"approval_responded_at,omitempty"`
 	CreatedAt           string                         `json:"created_at"`
 	UpdatedAt           *string                        `json:"updated_at,omitempty"`
 	Notes               []types.ExecutionNote          `json:"notes"`
@@ -184,6 +191,17 @@ type ExecutionDetailsResponse struct {
 	LatestNote          *types.ExecutionNote           `json:"latest_note,omitempty"`
 	WebhookRegistered   bool                           `json:"webhook_registered"`
 	WebhookEvents       []*types.ExecutionWebhookEvent `json:"webhook_events,omitempty"`
+	// Provenance (from execution_vcs when DID/VC is enabled for this execution)
+	CallerDID  *string                     `json:"caller_did,omitempty"`
+	TargetDID  *string                     `json:"target_did,omitempty"`
+	InputHash  *string                     `json:"input_hash,omitempty"`
+	OutputHash *string                     `json:"output_hash,omitempty"`
+	Trigger    *types.TriggerEventMetadata `json:"trigger,omitempty"`
+	// Token/cost usage summed from execution_usage rows for this execution
+	// (populated only when the agent SDK reported usage). The web UI renders
+	// `cost` when present.
+	Cost        *float64 `json:"cost,omitempty"`
+	TotalTokens *int64   `json:"total_tokens,omitempty"`
 }
 
 type EnhancedExecution struct {
@@ -218,7 +236,7 @@ func (h *ExecutionHandler) ListExecutionsHandler(c *gin.Context) {
 	ctx := c.Request.Context()
 	agentID := strings.TrimSpace(c.Param("agentId"))
 	if agentID == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "agentId is required"})
+		RespondBadRequest(c, "agentId is required")
 		return
 	}
 
@@ -230,11 +248,12 @@ func (h *ExecutionHandler) ListExecutionsHandler(c *gin.Context) {
 	sortDesc := strings.ToLower(c.DefaultQuery("sortOrder", "desc")) != "asc"
 
 	filter := types.ExecutionFilter{
-		AgentNodeID:    &agentID,
-		Limit:          pageSize,
-		Offset:         (page - 1) * pageSize,
-		SortBy:         sortField,
-		SortDescending: sortDesc,
+		AgentNodeID:     &agentID,
+		Limit:           pageSize,
+		Offset:          (page - 1) * pageSize,
+		SortBy:          sortField,
+		SortDescending:  sortDesc,
+		ExcludePayloads: true,
 	}
 	if status != "" {
 		filter.Status = &status
@@ -245,7 +264,7 @@ func (h *ExecutionHandler) ListExecutionsHandler(c *gin.Context) {
 
 	execs, err := h.store.QueryExecutionRecords(ctx, filter)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to query executions: " + err.Error()})
+		RespondInternalError(c, "failed to query executions: "+err.Error())
 		return
 	}
 
@@ -276,23 +295,23 @@ func (h *ExecutionHandler) GetExecutionDetailsHandler(c *gin.Context) {
 	ctx := c.Request.Context()
 	agentID := strings.TrimSpace(c.Param("agentId"))
 	if agentID == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "agentId is required"})
+		RespondBadRequest(c, "agentId is required")
 		return
 	}
 
 	executionID := strings.TrimSpace(c.Param("executionId"))
 	if executionID == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "executionId is required"})
+		RespondBadRequest(c, "executionId is required")
 		return
 	}
 
 	exec, err := h.store.GetExecutionRecord(ctx, executionID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to load execution: " + err.Error()})
+		RespondInternalError(c, "failed to load execution: "+err.Error())
 		return
 	}
 	if exec == nil || exec.AgentNodeID != agentID {
-		c.JSON(http.StatusNotFound, ErrorResponse{Error: "execution not found for this agent"})
+		RespondNotFound(c, "execution not found for this agent")
 		return
 	}
 
@@ -312,22 +331,23 @@ func (h *ExecutionHandler) GetExecutionsSummaryHandler(c *gin.Context) {
 	groupBy := strings.TrimSpace(c.Query("group_by"))
 	startTime, err := parseTimePtrValue(c.Query("start_time"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid start_time format, expected RFC3339"})
+		RespondBadRequest(c, "invalid start_time format, expected RFC3339")
 		return
 	}
 	endTime, err := parseTimePtrValue(c.Query("end_time"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid end_time format, expected RFC3339"})
+		RespondBadRequest(c, "invalid end_time format, expected RFC3339")
 		return
 	}
 
 	filter := types.ExecutionFilter{
-		Limit:          pageSize,
-		Offset:         (page - 1) * pageSize,
-		SortBy:         "started_at",
-		SortDescending: true,
-		StartTime:      startTime,
-		EndTime:        endTime,
+		Limit:           pageSize,
+		Offset:          (page - 1) * pageSize,
+		SortBy:          "started_at",
+		SortDescending:  true,
+		StartTime:       startTime,
+		EndTime:         endTime,
+		ExcludePayloads: true,
 	}
 	if status != "" {
 		filter.Status = &status
@@ -344,7 +364,7 @@ func (h *ExecutionHandler) GetExecutionsSummaryHandler(c *gin.Context) {
 
 	execs, queryErr := h.store.QueryExecutionRecords(ctx, filter)
 	if queryErr != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to query executions: " + queryErr.Error()})
+		RespondInternalError(c, "failed to query executions: "+queryErr.Error())
 		return
 	}
 
@@ -392,9 +412,10 @@ func (h *ExecutionHandler) GetExecutionStatsHandler(c *gin.Context) {
 	runID := strings.TrimSpace(c.Query("workflow_id"))
 
 	filter := types.ExecutionFilter{
-		Limit:          1000,
-		SortBy:         "started_at",
-		SortDescending: true,
+		Limit:           1000,
+		SortBy:          "started_at",
+		SortDescending:  true,
+		ExcludePayloads: true,
 	}
 	if agentID != "" {
 		filter.AgentNodeID = &agentID
@@ -408,7 +429,7 @@ func (h *ExecutionHandler) GetExecutionStatsHandler(c *gin.Context) {
 
 	execs, err := h.store.QueryExecutionRecords(ctx, filter)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to query executions: " + err.Error()})
+		RespondInternalError(c, "failed to query executions: "+err.Error())
 		return
 	}
 
@@ -429,7 +450,7 @@ func (h *ExecutionHandler) GetExecutionStatsHandler(c *gin.Context) {
 			stats.SuccessfulCount++
 		case string(types.ExecutionStatusFailed):
 			stats.FailedCount++
-		case string(types.ExecutionStatusRunning), string(types.ExecutionStatusPending), string(types.ExecutionStatusQueued):
+		case string(types.ExecutionStatusRunning), string(types.ExecutionStatusWaiting), string(types.ExecutionStatusPending), string(types.ExecutionStatusQueued):
 			stats.RunningCount++
 		}
 
@@ -455,10 +476,11 @@ func (h *ExecutionHandler) GetEnhancedExecutionsHandler(c *gin.Context) {
 	offset := (page - 1) * limit
 
 	filter := types.ExecutionFilter{
-		Limit:          limit,
-		Offset:         offset,
-		SortBy:         sanitizeExecutionSortField(c.DefaultQuery("sort_by", "started_at")),
-		SortDescending: strings.ToLower(c.DefaultQuery("sort_order", "desc")) != "asc",
+		Limit:           limit,
+		Offset:          offset,
+		SortBy:          sanitizeExecutionSortField(c.DefaultQuery("sort_by", "started_at")),
+		SortDescending:  strings.ToLower(c.DefaultQuery("sort_order", "desc")) != "asc",
+		ExcludePayloads: true,
 	}
 
 	if status := strings.TrimSpace(c.Query("status")); status != "" {
@@ -485,7 +507,7 @@ func (h *ExecutionHandler) GetEnhancedExecutionsHandler(c *gin.Context) {
 
 	executions, err := h.store.QueryExecutionRecords(ctx, filter)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to query executions: " + err.Error()})
+		RespondInternalError(c, "failed to query executions: "+err.Error())
 		return
 	}
 
@@ -542,17 +564,17 @@ func (h *ExecutionHandler) GetExecutionDetailsGlobalHandler(c *gin.Context) {
 	ctx := c.Request.Context()
 	executionID := strings.TrimSpace(c.Param("execution_id"))
 	if executionID == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "execution_id is required"})
+		RespondBadRequest(c, "execution_id is required")
 		return
 	}
 
 	exec, err := h.store.GetExecutionRecord(ctx, executionID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to load execution: " + err.Error()})
+		RespondInternalError(c, "failed to load execution: "+err.Error())
 		return
 	}
 	if exec == nil {
-		c.JSON(http.StatusNotFound, ErrorResponse{Error: "execution not found"})
+		RespondNotFound(c, "execution not found")
 		return
 	}
 
@@ -568,7 +590,7 @@ func (h *ExecutionHandler) RetryExecutionWebhookHandler(c *gin.Context) {
 
 	executionID := strings.TrimSpace(c.Param("execution_id"))
 	if executionID == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "execution_id is required"})
+		RespondBadRequest(c, "execution_id is required")
 		return
 	}
 
@@ -576,28 +598,28 @@ func (h *ExecutionHandler) RetryExecutionWebhookHandler(c *gin.Context) {
 	exec, err := h.store.GetExecutionRecord(ctx, executionID)
 	if err != nil {
 		logger.Logger.Error().Err(err).Str("execution_id", executionID).Msg("failed to load execution for webhook retry")
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to load execution: " + err.Error()})
+		RespondInternalError(c, "failed to load execution: "+err.Error())
 		return
 	}
 	if exec == nil {
-		c.JSON(http.StatusNotFound, ErrorResponse{Error: "execution not found"})
+		RespondNotFound(c, "execution not found")
 		return
 	}
 
 	hasWebhook, err := h.storage.HasExecutionWebhook(ctx, executionID)
 	if err != nil {
 		logger.Logger.Error().Err(err).Str("execution_id", executionID).Msg("failed to check webhook registration")
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to check webhook registration"})
+		RespondInternalError(c, "failed to check webhook registration")
 		return
 	}
 	if !hasWebhook {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "no webhook registered for this execution"})
+		RespondBadRequest(c, "no webhook registered for this execution")
 		return
 	}
 
 	if err := h.webhooks.Notify(ctx, executionID); err != nil {
 		logger.Logger.Warn().Err(err).Str("execution_id", executionID).Msg("failed to enqueue webhook retry")
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to enqueue webhook retry"})
+		RespondInternalError(c, "failed to enqueue webhook retry")
 		return
 	}
 
@@ -610,12 +632,23 @@ func (h *ExecutionHandler) StreamExecutionEventsHandler(c *gin.Context) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
-	c.Header("Access-Control-Allow-Origin", "*")
 
 	subscriberID := fmt.Sprintf("ui_exec_events_%d", time.Now().UnixNano())
 	eventBus := h.storage.GetExecutionEventBus()
 	eventChan := eventBus.Subscribe(subscriberID)
 	defer eventBus.Unsubscribe(subscriberID)
+
+	// Send an initial connected event so the browser EventSource detects the open.
+	connectedEvt := map[string]interface{}{
+		"type":      "connected",
+		"message":   "Execution events stream connected",
+		"timestamp": time.Now().Format(time.RFC3339),
+	}
+	if payload, err := json.Marshal(connectedEvt); err == nil {
+		if !writeSSE(c, payload) {
+			return
+		}
+	}
 
 	ctx := c.Request.Context()
 	ticker := time.NewTicker(30 * time.Second)
@@ -664,6 +697,7 @@ func (h *ExecutionHandler) toExecutionSummary(exec *types.Execution) ExecutionSu
 		AgentNodeID:  exec.AgentNodeID,
 		ReasonerID:   exec.ReasonerID,
 		Status:       types.NormalizeExecutionStatus(exec.Status),
+		StatusReason: exec.StatusReason,
 		DurationMS:   duration,
 		InputSize:    len(exec.InputPayload),
 		OutputSize:   len(exec.ResultPayload),
@@ -672,6 +706,20 @@ func (h *ExecutionHandler) toExecutionSummary(exec *types.Execution) ExecutionSu
 		NotesCount:   0,
 		LatestNote:   nil,
 	}
+}
+
+// enrichExecutionWithTrigger resolves the parent trigger event VC and populates
+// the response with trigger metadata if available. The traversal logic itself
+// lives in handlers.TriggerForExecution so the runs-list and run-dag handlers
+// can reuse it.
+func (h *ExecutionHandler) enrichExecutionWithTrigger(ctx context.Context, exec *types.Execution, resp *ExecutionDetailsResponse) error {
+	if h.storage == nil {
+		return nil
+	}
+	if meta := handlers.TriggerForExecution(ctx, h.storage, exec.ExecutionID); meta != nil {
+		resp.Trigger = meta
+	}
+	return nil
 }
 
 func (h *ExecutionHandler) toExecutionDetails(ctx context.Context, exec *types.Execution) ExecutionDetailsResponse {
@@ -701,7 +749,16 @@ func (h *ExecutionHandler) toExecutionDetails(ctx context.Context, exec *types.E
 	webhookRegistered := exec.WebhookRegistered
 	webhookEvents := exec.WebhookEvents
 
-	return ExecutionDetailsResponse{
+	notes := exec.Notes
+	if notes == nil {
+		notes = []types.ExecutionNote{}
+	}
+	var latestNote *types.ExecutionNote
+	if n := len(notes); n > 0 {
+		latestNote = &notes[n-1]
+	}
+
+	resp := ExecutionDetailsResponse{
 		ID:                  0,
 		ExecutionID:         exec.ExecutionID,
 		WorkflowID:          exec.RunID,
@@ -720,6 +777,7 @@ func (h *ExecutionHandler) toExecutionDetails(ctx context.Context, exec *types.E
 		WorkflowName:        nil,
 		WorkflowTags:        nil,
 		Status:              types.NormalizeExecutionStatus(exec.Status),
+		StatusReason:        exec.StatusReason,
 		StartedAt:           startedAt,
 		CompletedAt:         completedAt,
 		DurationMS:          durationPtr,
@@ -727,12 +785,70 @@ func (h *ExecutionHandler) toExecutionDetails(ctx context.Context, exec *types.E
 		RetryCount:          0,
 		CreatedAt:           exec.StartedAt.Format(time.RFC3339),
 		UpdatedAt:           &updated,
-		Notes:               nil,
-		NotesCount:          0,
-		LatestNote:          nil,
+		Notes:               notes,
+		NotesCount:          len(notes),
+		LatestNote:          latestNote,
 		WebhookRegistered:   webhookRegistered,
 		WebhookEvents:       webhookEvents,
 	}
+
+	// Enrich with approval fields from workflow execution (if available)
+	if h.storage != nil {
+		if wfExec, err := h.storage.GetWorkflowExecution(ctx, exec.ExecutionID); err == nil && wfExec != nil {
+			resp.ApprovalRequestID = wfExec.ApprovalRequestID
+			resp.ApprovalRequestURL = wfExec.ApprovalRequestURL
+			resp.ApprovalStatus = wfExec.ApprovalStatus
+			resp.ApprovalResponse = wfExec.ApprovalResponse
+			if wfExec.ApprovalRequestedAt != nil {
+				formatted := wfExec.ApprovalRequestedAt.Format(time.RFC3339)
+				resp.ApprovalRequestedAt = &formatted
+			}
+			if wfExec.ApprovalRespondedAt != nil {
+				formatted := wfExec.ApprovalRespondedAt.Format(time.RFC3339)
+				resp.ApprovalRespondedAt = &formatted
+			}
+		}
+
+		execID := exec.ExecutionID
+		if vcs, err := h.storage.ListExecutionVCs(ctx, types.VCFilters{ExecutionID: &execID, Limit: 1}); err == nil && len(vcs) > 0 && vcs[0] != nil {
+			vc := vcs[0]
+			if t := strings.TrimSpace(vc.CallerDID); t != "" {
+				v := t
+				resp.CallerDID = &v
+			}
+			if t := strings.TrimSpace(vc.TargetDID); t != "" {
+				v := t
+				resp.TargetDID = &v
+			}
+			if t := strings.TrimSpace(vc.InputHash); t != "" {
+				v := t
+				resp.InputHash = &v
+			}
+			if t := strings.TrimSpace(vc.OutputHash); t != "" {
+				v := t
+				resp.OutputHash = &v
+			}
+		}
+	}
+
+	// Enrich with trigger metadata if this execution was triggered by a webhook
+	if err := h.enrichExecutionWithTrigger(ctx, exec, &resp); err != nil {
+		logger.Logger.Warn().Err(err).Str("execution_id", exec.ExecutionID).Msg("failed to enrich execution with trigger metadata")
+	}
+
+	// Enrich with token/cost usage summed from execution_usage rows (best-effort).
+	if h.storage != nil {
+		if cost, totalTokens, err := h.storage.GetExecutionUsageTotals(ctx, exec.ExecutionID); err != nil {
+			logger.Logger.Warn().Err(err).Str("execution_id", exec.ExecutionID).Msg("failed to load execution usage totals")
+		} else {
+			resp.Cost = cost
+			if totalTokens > 0 {
+				tt := totalTokens
+				resp.TotalTokens = &tt
+			}
+		}
+	}
+	return resp
 }
 
 func (h *ExecutionHandler) resolveExecutionData(ctx context.Context, raw []byte, uri *string) (interface{}, int) {

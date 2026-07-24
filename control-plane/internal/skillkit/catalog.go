@@ -1,0 +1,130 @@
+package skillkit
+
+import (
+	"fmt"
+	"io/fs"
+	"path"
+	"strings"
+)
+
+// Skill describes a skill that ships with the af binary. The catalog below
+// is the only place new skills get registered. Bump Version on every change
+// so `af skill update` knows there's a new build.
+type Skill struct {
+	Name        string   // canonical skill name (kebab-case, used as directory name)
+	Aliases     []string // legacy names that should resolve to this skill (back-compat)
+	Version     string   // semver-ish version string baked into the binary
+	Description string   // one-line description for `af skill list`
+	EmbedRoot   string   // root path inside SkillData where this skill's files live
+	EntryFile   string   // relative path to the skill's main file (usually SKILL.md)
+	// Trigger is the "when must the agent read this skill" sentence rendered
+	// into marker-block targets' rules files (see renderPointerBlock) — each
+	// skill fires on different requests, so each carries its own trigger.
+	Trigger string
+}
+
+// Catalog is the registry of every skill the binary ships. Add a new entry
+// here when adding a new skill, and drop the source files into
+// skill_data/<name>/ so the embed picks them up.
+var Catalog = []Skill{
+	{
+		Name:        "agentfield",
+		Aliases:     []string{"agentfield-multi-reasoner-builder"},
+		Version:     "0.5.2",
+		Description: "Design and ship a multi-agent system on AgentField. Derive the orchestration from the problem: decompose by cognitive jobs, place each slot on the autonomy spectrum, assign a verification rung, choose the dynamism rung with budgets. Composite intelligence, deep dynamic call graphs, live SDK docs from agentfield.ai, async-first smoke tests. For an agent installed on this machine via af/Desktop, use agentfield-personal instead.",
+		EmbedRoot:   "skill_data/agentfield",
+		EntryFile:   "SKILL.md",
+		Trigger: `When the user asks you to architect or build a multi-agent system on
+AgentField (composite-intelligence backends, multi-reasoner pipelines,
+financial reviewer / clinical triage / research agent / etc.), you MUST
+read this skill first`,
+	},
+	{
+		Name:        "agentfield-personal",
+		Version:     "0.1.0",
+		Description: "Build and install a personal AI agent on this machine's AgentField: real source in ~/agentfield-agents, an agentfield-package.yaml manifest, af install + af run, verified control-plane registration and a live reasoner call, visible in AgentField Desktop with a keys form and auto-start toggle. For a standalone project repository with Docker Compose, use the agentfield skill instead.",
+		EmbedRoot:   "skill_data/agentfield-personal",
+		EntryFile:   "SKILL.md",
+		Trigger: `When the user asks you to build an agent that lives on this machine —
+installed through af, managed in AgentField Desktop, available as a
+persistent local capability rather than a project repository — you MUST
+read this skill first`,
+	},
+	{
+		Name:        "agentfield-use",
+		Version:     "0.4.0",
+		Description: "Discover and call agents already running on a local AgentField control plane. Health check, capability discovery, ranked reasoner search (af agent search), concurrent sync/async execution, load-aware pacing (meta.load), in-flight visibility (af ps / executions/active), wedged-run triage (cancel-tree), sessions, and the af CLI ops (run/stop/logs/secrets) that keep installed agents answering.",
+		EmbedRoot:   "skill_data/agentfield-use",
+		EntryFile:   "SKILL.md",
+		Trigger: `When the user asks you to use, call, query, or delegate work to an
+installed AgentField agent, to list available agents or reasoners, or to
+check on a running execution, you MUST read this skill first`,
+	},
+}
+
+// CatalogByName returns the skill with the given name, or an error if it
+// is not in the registry. Aliases are resolved transparently — a query for a
+// legacy name returns the current canonical skill.
+func CatalogByName(name string) (Skill, error) {
+	for _, s := range Catalog {
+		if s.Name == name {
+			return s, nil
+		}
+		for _, alias := range s.Aliases {
+			if alias == name {
+				return s, nil
+			}
+		}
+	}
+	available := make([]string, len(Catalog))
+	for i, s := range Catalog {
+		available[i] = s.Name
+	}
+	return Skill{}, fmt.Errorf("skill %q not found in the af binary catalog (available: %s)", name, strings.Join(available, ", "))
+}
+
+// EnumerateFiles walks the embedded skill data and returns every file path
+// relative to the skill's EmbedRoot, paired with its raw bytes. Used by the
+// installer to write the canonical on-disk copy.
+func (s Skill) EnumerateFiles() (map[string][]byte, error) {
+	files := make(map[string][]byte)
+	err := fs.WalkDir(SkillData, s.EmbedRoot, func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := relativeUnderEmbed(s.EmbedRoot, p)
+		if err != nil {
+			return err
+		}
+		data, err := fs.ReadFile(SkillData, p)
+		if err != nil {
+			return fmt.Errorf("read embedded %s: %w", p, err)
+		}
+		files[rel] = data
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("enumerate embedded skill %q: %w", s.Name, err)
+	}
+	if len(files) == 0 {
+		return nil, fmt.Errorf("embedded skill %q is empty — did the embed directive in embed.go include this skill's files?", s.Name)
+	}
+	return files, nil
+}
+
+// EntryContent returns the raw bytes of the skill's entry file (SKILL.md).
+// Used by `af skill install --print` and by Cursor's clipboard fallback.
+func (s Skill) EntryContent() ([]byte, error) {
+	return fs.ReadFile(SkillData, path.Join(s.EmbedRoot, s.EntryFile))
+}
+
+func relativeUnderEmbed(root, p string) (string, error) {
+	rootSlash := strings.TrimSuffix(root, "/") + "/"
+	if !strings.HasPrefix(p, rootSlash) {
+		return "", fmt.Errorf("path %q is not under embed root %q", p, root)
+	}
+	return strings.TrimPrefix(p, rootSlash), nil
+}

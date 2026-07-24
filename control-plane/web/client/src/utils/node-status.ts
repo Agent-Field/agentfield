@@ -4,63 +4,53 @@ import type {
   LifecycleStatus,
 } from "@/types/agentfield";
 import {
-  getStatusTheme,
-  type CanonicalStatus,
-  type StatusTheme,
-} from "./status";
-
-type NodeStatusKind =
-  | "ready"
-  | "running"
-  | "starting"
-  | "degraded"
-  | "offline"
-  | "error"
-  | "unknown";
-
-interface NodeStatusConfig {
-  canonical: CanonicalStatus;
-  label: string;
-  pulse?: boolean;
-}
-
-const NODE_STATUS_CONFIG: Record<NodeStatusKind, NodeStatusConfig> = {
-  ready: { canonical: "running", label: "Ready" },
-  running: { canonical: "running", label: "Running" },
-  starting: { canonical: "pending", label: "Starting", pulse: true },
-  degraded: { canonical: "pending", label: "Degraded", pulse: true },
-  offline: { canonical: "failed", label: "Offline" },
-  error: { canonical: "failed", label: "Error" },
-  unknown: { canonical: "unknown", label: "Unknown" },
-};
+  getLifecycleTheme,
+  type LifecycleTheme,
+  normalizeLifecycleStatus,
+} from "./lifecycle-status";
 
 export interface NodeStatusPresentation {
-  kind: NodeStatusKind;
+  kind: LifecycleStatus;
   label: string;
-  theme: StatusTheme;
+  theme: LifecycleTheme;
   shouldPulse: boolean;
-  canonical: CanonicalStatus;
+  online: boolean;
 }
 
-const lifecycleToKind = (
+const resolveNodeLifecycleStatus = (
   lifecycle?: LifecycleStatus | null,
   health?: HealthStatus | null
-): NodeStatusKind => {
-  if (health === "inactive" || lifecycle === "offline" || lifecycle === "stopped") {
+): LifecycleStatus => {
+  const normalizedLifecycle = normalizeLifecycleStatus(lifecycle);
+
+  if (
+    health === "inactive" ||
+    normalizedLifecycle === "offline" ||
+    normalizedLifecycle === "stopped"
+  ) {
     return "offline";
   }
-  if (lifecycle === "error" || health === "degraded") {
+
+  if (normalizedLifecycle === "error" || health === "degraded") {
     return "error";
   }
-  if (lifecycle === "degraded") {
+
+  if (normalizedLifecycle === "degraded") {
     return "degraded";
   }
-  if (lifecycle === "starting" || health === "starting") {
+
+  if (normalizedLifecycle === "starting" || health === "starting") {
     return "starting";
   }
-  if (lifecycle === "ready" || lifecycle === "running") {
+
+  if (normalizedLifecycle === "running") {
+    return "running";
+  }
+
+  if (normalizedLifecycle === "ready") {
     return "ready";
   }
+
   return "unknown";
 };
 
@@ -68,14 +58,15 @@ export const getNodeStatusPresentation = (
   lifecycle?: LifecycleStatus | null,
   health?: HealthStatus | null
 ): NodeStatusPresentation => {
-  const kind = lifecycleToKind(lifecycle, health);
-  const config = NODE_STATUS_CONFIG[kind] ?? NODE_STATUS_CONFIG.unknown;
+  const kind = resolveNodeLifecycleStatus(lifecycle, health);
+  const theme = getLifecycleTheme(kind);
+
   return {
     kind,
-    label: config.label,
-    canonical: config.canonical,
-    theme: getStatusTheme(config.canonical),
-    shouldPulse: Boolean(config.pulse),
+    label: theme.label,
+    theme,
+    shouldPulse: theme.motion !== "none",
+    online: theme.online,
   };
 };
 
@@ -93,33 +84,32 @@ export const summarizeNodeStatuses = (
 ): NodeStatusBuckets => {
   return nodes.reduce<NodeStatusBuckets>(
     (acc, node) => {
-      const { kind } = getNodeStatusPresentation(
+      const presentation = getNodeStatusPresentation(
         node.lifecycle_status,
         node.health_status
       );
 
       acc.total += 1;
 
-      switch (kind) {
+      if (presentation.online) {
+        acc.online += 1;
+      } else {
+        acc.offline += 1;
+      }
+
+      switch (presentation.kind) {
         case "ready":
         case "running":
-          acc.online += 1;
           acc.ready += 1;
           break;
         case "starting":
-          acc.online += 1;
           acc.starting += 1;
           break;
         case "degraded":
-          acc.online += 1;
           acc.degraded += 1;
           break;
-        case "error":
-        case "offline":
-          acc.offline += 1;
-          break;
         default:
-          acc.offline += 1;
+          break;
       }
 
       return acc;

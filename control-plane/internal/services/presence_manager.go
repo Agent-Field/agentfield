@@ -20,16 +20,18 @@ type presenceLease struct {
 	LastSeen      time.Time
 	LastExpired   time.Time
 	MarkedOffline bool
+	Version       string
 }
 
 type PresenceManager struct {
 	statusManager *StatusManager
 	config        PresenceManagerConfig
 
-	leases   map[string]*presenceLease
-	mu       sync.RWMutex
-	stopCh   chan struct{}
-	stopOnce sync.Once
+	leases    map[string]*presenceLease
+	mu        sync.RWMutex
+	stopCh    chan struct{}
+	stopOnce  sync.Once
+	startOnce sync.Once
 
 	expireCallback func(string)
 }
@@ -57,7 +59,9 @@ func NewPresenceManager(statusManager *StatusManager, config PresenceManagerConf
 }
 
 func (pm *PresenceManager) Start() {
-	go pm.loop()
+	pm.startOnce.Do(func() {
+		go pm.loop()
+	})
 }
 
 func (pm *PresenceManager) Stop() {
@@ -66,7 +70,7 @@ func (pm *PresenceManager) Stop() {
 	})
 }
 
-func (pm *PresenceManager) Touch(nodeID string, seenAt time.Time) {
+func (pm *PresenceManager) Touch(nodeID string, version string, seenAt time.Time) {
 	pm.mu.Lock()
 	lease, exists := pm.leases[nodeID]
 	if !exists {
@@ -75,6 +79,9 @@ func (pm *PresenceManager) Touch(nodeID string, seenAt time.Time) {
 	}
 	lease.LastSeen = seenAt
 	lease.MarkedOffline = false
+	if version != "" {
+		lease.Version = version
+	}
 	pm.mu.Unlock()
 }
 
@@ -89,6 +96,19 @@ func (pm *PresenceManager) HasLease(nodeID string) bool {
 	defer pm.mu.RUnlock()
 	_, exists := pm.leases[nodeID]
 	return exists
+}
+
+// HasFreshLease returns true if the agent has a lease with a heartbeat
+// received within the HeartbeatTTL. This is used by the health monitor
+// to avoid marking agents inactive when heartbeats are still flowing.
+func (pm *PresenceManager) HasFreshLease(nodeID string) bool {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	lease, exists := pm.leases[nodeID]
+	if !exists {
+		return false
+	}
+	return !lease.MarkedOffline && time.Since(lease.LastSeen) < pm.config.HeartbeatTTL
 }
 
 func (pm *PresenceManager) SetExpireCallback(fn func(string)) {
@@ -125,6 +145,7 @@ func (pm *PresenceManager) RecoverFromDatabase(ctx context.Context, storageProvi
 		pm.leases[node.ID] = &presenceLease{
 			LastSeen:      node.LastHeartbeat,
 			MarkedOffline: time.Since(node.LastHeartbeat) > pm.config.HeartbeatTTL,
+			Version:       node.Version,
 		}
 	}
 
@@ -174,6 +195,23 @@ func (pm *PresenceManager) markInactive(nodeID string) {
 		return
 	}
 
+	// Re-check lease freshness under lock. Between collecting expired nodes in
+	// checkExpirations() and calling this callback, a Touch() may have refreshed
+	// the lease (e.g., agent re-registered). If so, skip the inactive transition.
+	pm.mu.RLock()
+	lease, ok := pm.leases[nodeID]
+	if !ok {
+		pm.mu.RUnlock()
+		return
+	}
+	if !lease.MarkedOffline {
+		// Lease was refreshed by Touch() after we collected it as expired
+		pm.mu.RUnlock()
+		return
+	}
+	version := lease.Version
+	pm.mu.RUnlock()
+
 	ctx := context.Background()
 	inactive := types.AgentStateInactive
 	zero := 0
@@ -182,6 +220,7 @@ func (pm *PresenceManager) markInactive(nodeID string) {
 		HealthScore: &zero,
 		Source:      types.StatusSourcePresence,
 		Reason:      "presence lease expired",
+		Version:     version,
 	}
 
 	if err := pm.statusManager.UpdateAgentStatus(ctx, nodeID, update); err != nil {

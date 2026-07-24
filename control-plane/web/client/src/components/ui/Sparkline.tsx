@@ -74,7 +74,7 @@ export function Sparkline({
         className={cn("flex items-center justify-center", className)}
         style={{ width, height }}
       >
-        <span className="text-[10px] text-muted-foreground">—</span>
+        <span className="text-micro text-muted-foreground">—</span>
       </div>
     );
   }

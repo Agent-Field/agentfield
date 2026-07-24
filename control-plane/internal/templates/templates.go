@@ -4,11 +4,13 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"path"
+	"strconv"
 	"strings"
 	"text/template"
 )
 
-//go:embed python/*.tmpl go/*.tmpl typescript/*.tmpl
+//go:embed python/*.tmpl go/*.tmpl typescript/*.tmpl docker/*.tmpl
 var content embed.FS
 
 // TemplateData holds the data to be passed to the templates.
@@ -21,15 +23,25 @@ type TemplateData struct {
 	CurrentYear int    // 2025
 	CreatedAt   string // "2025-01-05 10:30:00 EST"
 	Language    string // "python", "go", or "typescript"
+	// Docker scaffold fields (used only when --docker is set on `af init`)
+	ControlPlaneImage string // "agentfield/control-plane:latest"
+	ControlPlanePort  int    // 8080
+	AgentPort         int    // 8001
+	DefaultModel      string // "openrouter/google/gemini-2.5-flash"
 }
 
 // GetTemplate retrieves a specific template by its path.
 func GetTemplate(name string) (*template.Template, error) {
-	tmpl, err := template.ParseFS(content, name)
+	tmpl, err := template.New("").Funcs(template.FuncMap{
+		"yamlQuote": strconv.Quote,
+		// strconv.Quote produces a JSON string literal too, so project names
+		// containing punctuation remain safe in package.json templates.
+		"jsonQuote": strconv.Quote,
+	}).ParseFS(content, name)
 	if err != nil {
 		return nil, err
 	}
-	return tmpl, nil
+	return tmpl.Lookup(path.Base(name)), nil
 }
 
 // GetTemplateFiles returns a map of template file paths for the specified language.
@@ -73,4 +85,26 @@ func ReadTemplateContent(path string) ([]byte, error) {
 // GetSupportedLanguages returns the list of supported languages.
 func GetSupportedLanguages() []string {
 	return []string{"python", "go", "typescript"}
+}
+
+// GetDockerTemplateFiles returns the minimal Docker infrastructure scaffold for a
+// given language. Deliberately scoped to the four files an agent will NEVER need
+// to customize: Dockerfile, docker-compose.yml, .env.example, .dockerignore.
+//
+// CLAUDE.md and README.md are NOT generated here — those are produced by the
+// agentfield skill AFTER the agent has written the real reasoner architecture
+// in main.py, so they can contain real reasoner names, real curl examples,
+// and a real architectural justification instead of placeholders that ship
+// with TODO markers.
+func GetDockerTemplateFiles(language string) map[string]string {
+	files := map[string]string{
+		"docker/docker-compose.yml.tmpl": "docker-compose.yml",
+		"docker/.env.example.tmpl":       ".env.example",
+		"docker/.dockerignore.tmpl":      ".dockerignore",
+	}
+	switch language {
+	case "python":
+		files["docker/python.Dockerfile.tmpl"] = "Dockerfile"
+	}
+	return files
 }

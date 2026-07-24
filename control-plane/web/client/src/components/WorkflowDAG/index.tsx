@@ -14,118 +14,63 @@ import {
   useReactFlow,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 import { AgentLegend } from "./AgentLegend";
+import { WorkflowGraphControls } from "./WorkflowGraphControls";
 import FloatingConnectionLine from "./FloatingConnectionLine";
 import FloatingEdge from "./FloatingEdge";
-import { LayoutControls } from "./LayoutControls";
 import { NodeDetailSidebar } from "./NodeDetailSidebar";
 import { VirtualizedDAG } from "./VirtualizedDAG";
 import { WorkflowNode } from "./WorkflowNode";
 import { LayoutManager, type AllLayoutType } from "./layouts/LayoutManager";
 import {
+  adaptLightweightResponse,
+  applySimpleGridLayout,
+  decorateEdgesWithStatus,
+  decorateNodesWithViewMode,
+  isLightweightDAGResponse,
+  LARGE_GRAPH_LAYOUT_THRESHOLD,
+  PERFORMANCE_THRESHOLD,
+  type WorkflowDAGNode,
+  type WorkflowDAGResponse,
+} from "./workflowDagUtils";
+import {
   WorkflowDeckGLView,
-  buildDeckGraph,
-  type DeckGraphData,
+  WorkflowDeckGraphControls,
+  type WorkflowDeckGLViewHandle,
 } from "./DeckGLView";
+import { buildDeckGraph, type DeckGraphData } from "./DeckGLGraph";
 
 import { getWorkflowDAG } from "../../services/workflowsApi";
-import type {
-  WorkflowDAGLightweightNode,
-  WorkflowDAGLightweightResponse,
-} from "../../types/workflows";
+import type { WorkflowDAGLightweightResponse } from "../../types/workflows";
+import { X } from "@/components/ui/icon-bridge";
+import { Button } from "../ui/button";
 import { Card, CardContent } from "../ui/card";
 import { cn } from "../../lib/utils";
 import { formatNumberWithCommas } from "../../utils/numberFormat";
 
-interface WorkflowDAGNode {
-  workflow_id: string;
-  execution_id: string;
-  agent_node_id: string;
-  reasoner_id: string;
-  status: string;
-  started_at: string;
-  completed_at?: string;
-  duration_ms?: number;
-  parent_workflow_id?: string;
-  parent_execution_id?: string;
-  workflow_depth: number;
-  agent_name?: string;
-  task_name?: string;
-  children?: WorkflowDAGNode[];
-}
+export type { WorkflowDAGNode, WorkflowDAGResponse } from "./workflowDagUtils";
 
-export interface WorkflowDAGResponse {
-  root_workflow_id: string;
-  session_id?: string;
-  actor_id?: string;
-  total_nodes: number;
-  displayed_nodes?: number;
-  max_depth: number;
-  dag?: WorkflowDAGNode;
-  timeline: WorkflowDAGNode[];
-  workflow_status?: string;
-  workflow_name?: string;
-  mode?: "lightweight";
-  status_counts?: Record<string, number>;
+export interface LayoutInfo {
+  currentLayout: AllLayoutType;
+  availableLayouts: AllLayoutType[];
+  isSlowLayout: (layout: AllLayoutType) => boolean;
+  isLargeGraph: boolean;
+  isApplyingLayout: boolean;
 }
 
 export interface WorkflowDAGControls {
   fitToView: (options?: FitViewOptions) => void;
   focusOnNodes: (nodeIds: string[], options?: { padding?: number }) => void;
-}
-
-function isLightweightDAGResponse(
-  data: WorkflowDAGResponse | WorkflowDAGLightweightResponse | null
-): data is WorkflowDAGLightweightResponse {
-  if (!data) {
-    return false;
-  }
-  return (data as WorkflowDAGLightweightResponse).mode === "lightweight";
-}
-
-function mapLightweightNode(
-  node: WorkflowDAGLightweightNode,
-  workflowId: string
-): WorkflowDAGNode {
-  return {
-    workflow_id: workflowId,
-    execution_id: node.execution_id,
-    agent_node_id: node.agent_node_id,
-    reasoner_id: node.reasoner_id,
-    status: node.status,
-    started_at: node.started_at,
-    completed_at: node.completed_at,
-    duration_ms: node.duration_ms,
-    parent_execution_id: node.parent_execution_id,
-    workflow_depth: node.workflow_depth,
-  };
-}
-
-function adaptLightweightResponse(
-  response: WorkflowDAGLightweightResponse
-): WorkflowDAGResponse {
-  const timeline = response.timeline.map((node) =>
-    mapLightweightNode(node, response.root_workflow_id)
-  );
-
-  const dag = timeline.length > 0 ? { ...timeline[0] } : undefined;
-
-  return {
-    root_workflow_id: response.root_workflow_id,
-    session_id: response.session_id,
-    actor_id: response.actor_id,
-    total_nodes: response.total_nodes,
-    displayed_nodes: timeline.length,
-    max_depth: response.max_depth,
-    dag,
-    timeline,
-    workflow_status: response.workflow_status,
-    workflow_name: response.workflow_name,
-    mode: "lightweight",
-  };
+  changeLayout: (layout: AllLayoutType) => void;
 }
 
 interface WorkflowDAGViewerProps {
@@ -135,6 +80,9 @@ interface WorkflowDAGViewerProps {
   error?: string | null;
   onClose?: () => void;
   onExecutionClick?: (execution: WorkflowDAGNode) => void;
+  onRestartWorkflowFromNode?: (execution: WorkflowDAGNode) => void;
+  onRerunNodeOnly?: (execution: WorkflowDAGNode) => void;
+  onForkFromNode?: (execution: WorkflowDAGNode) => void;
   className?: string;
   searchQuery?: string;
   focusMode?: boolean;
@@ -146,6 +94,83 @@ interface WorkflowDAGViewerProps {
     firstMatchId?: string;
   }) => void;
   viewMode?: "standard" | "performance" | "debug";
+  onLayoutInfoChange?: (info: LayoutInfo) => void;
+}
+
+function WorkflowGraphViewport({
+  expanded,
+  onCollapse,
+  workflowTitle,
+  children,
+}: {
+  expanded: boolean;
+  onCollapse: () => void;
+  workflowTitle?: string | null;
+  children: ReactNode;
+}) {
+  useEffect(() => {
+    if (!expanded) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [expanded]);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCollapse();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [expanded, onCollapse]);
+
+  // Non-expanded: avoid `absolute inset-0` — it removes the pane from document flow so the
+  // outer `relative h-full` box can collapse to 0 height when `%` heights don't resolve,
+  // which triggers React Flow error #004 (parent needs width and height).
+  return (
+    <div
+      className={cn(
+        "flex h-full w-full min-h-0 flex-1 flex-col",
+        expanded && "relative min-h-[min(380px,40vh)]",
+      )}
+    >
+      <div
+        className={cn(
+          expanded
+            ? "fixed inset-0 z-[100] flex flex-col bg-background"
+            : "flex min-h-0 flex-1 flex-col",
+        )}
+      >
+        {expanded ? (
+          <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-border bg-card px-3 shadow-sm sm:h-14 sm:px-4">
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-semibold leading-tight text-foreground">
+                Workflow graph
+              </p>
+              {workflowTitle ? (
+                <p className="truncate text-xs text-muted-foreground">
+                  {workflowTitle}
+                </p>
+              ) : null}
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="shrink-0"
+              onClick={onCollapse}
+              aria-label="Exit full screen"
+            >
+              <X className="size-4" />
+            </Button>
+          </header>
+        ) : null}
+        <div className="flex min-h-[280px] flex-1 flex-col">{children}</div>
+      </div>
+    </div>
+  );
 }
 
 function WorkflowDAGViewerInner({
@@ -161,17 +186,23 @@ function WorkflowDAGViewerInner({
   onReady,
   onSearchResultsChange,
   viewMode = "standard",
+  onLayoutInfoChange,
+  onExecutionClick,
+  onRestartWorkflowFromNode,
+  onRerunNodeOnly,
+  onForkFromNode,
 }: WorkflowDAGViewerProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState([] as Node[]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([] as Edge[]);
   const [currentLayout, setCurrentLayout] = useState<AllLayoutType>("tree");
   const [selectedNode, setSelectedNode] = useState<WorkflowDAGNode | null>(
-    null
+    null,
   );
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+  const [graphExpanded, setGraphExpanded] = useState(false);
   const [isApplyingLayout, setIsApplyingLayout] = useState(false);
-  const [layoutProgress, setLayoutProgress] = useState(0);
+  const [_layoutProgress, setLayoutProgress] = useState(0);
   const [visualEpoch, setVisualEpoch] = useState(0);
   const hasInitialLayoutRef = useRef(false);
   const nodesRef = useRef<Node[]>([]);
@@ -180,7 +211,12 @@ function WorkflowDAGViewerInner({
   const [internalDagData, setInternalDagData] =
     useState<WorkflowDAGResponse | null>(null);
   const largeGraphRef = useRef(false);
-  const [deckGraphData, setDeckGraphData] = useState<DeckGraphData | null>(null);
+  const [deckGraphData, setDeckGraphData] = useState<DeckGraphData | null>(
+    null,
+  );
+  const handleLayoutChangeRef = useRef<(layout: AllLayoutType) => void>(
+    () => {},
+  );
 
   const externalDagData = useMemo<WorkflowDAGResponse | null>(() => {
     if (dagData === undefined || dagData === null) {
@@ -225,10 +261,8 @@ function WorkflowDAGViewerInner({
     const max = Math.max(...durations);
     const min = Math.min(...durations);
     const avg =
-      durations.reduce(
-        (sum: number, value: number) => sum + value,
-        0
-      ) / durations.length;
+      durations.reduce((sum: number, value: number) => sum + value, 0) /
+      durations.length;
     return { max, min, avg };
   }, [effectiveDagData]);
 
@@ -238,7 +272,7 @@ function WorkflowDAGViewerInner({
       new LayoutManager({
         enableWorker: import.meta.env?.VITE_ENABLE_LAYOUT_WORKER === "true",
       }),
-    []
+    [],
   );
 
   // Memoized objects to prevent unnecessary re-renders
@@ -246,14 +280,14 @@ function WorkflowDAGViewerInner({
     () => ({
       workflow: WorkflowNode,
     }),
-    []
+    [],
   );
 
   const edgeTypes = useMemo(
     () => ({
       floating: FloatingEdge,
     }),
-    []
+    [],
   );
 
   const fitViewOptions = useMemo(
@@ -263,7 +297,7 @@ function WorkflowDAGViewerInner({
       minZoom: 0, // Allow unlimited zoom out for large graphs
       maxZoom: 2,
     }),
-    []
+    [],
   );
 
   const defaultViewport = useMemo(
@@ -272,7 +306,7 @@ function WorkflowDAGViewerInner({
       y: 0,
       zoom: 0.8,
     }),
-    []
+    [],
   );
 
   // Use external loading/error states if provided, otherwise fall back to internal fetching
@@ -287,101 +321,44 @@ function WorkflowDAGViewerInner({
     externalLoading !== undefined ? externalLoading : internalLoading;
   const error = externalError !== undefined ? externalError : internalError;
 
-  const { fitView, setViewport, getNodes, fitBounds } = useReactFlow();
+  const { fitView, setViewport, getNodes, fitBounds, zoomIn, zoomOut } =
+    useReactFlow();
   const viewportRef = useRef<{ x: number; y: number; zoom: number }>({
     x: 0,
     y: 0,
     zoom: 0.8,
   });
   const hasInitializedViewportRef = useRef(false);
+  /** Sentinel: skip reset on first mount (only reset when switching workflows). */
+  const prevWorkflowIdForResetRef = useRef<string | undefined>(undefined);
   const viewportStorageKey = useMemo(
     () => `workflowDAGViewport:${workflowId}`,
-    [workflowId]
+    [workflowId],
   );
 
-  // Performance threshold for switching to virtualized rendering
-const PERFORMANCE_THRESHOLD = 300;
-const LARGE_GRAPH_LAYOUT_THRESHOLD = 2000;
-const SIMPLE_LAYOUT_COLUMNS = 40;
-const SIMPLE_LAYOUT_X_SPACING = 240;
-const SIMPLE_LAYOUT_Y_SPACING = 120;
+  function isValidSavedViewport(
+    v: unknown,
+  ): v is { x: number; y: number; zoom: number } {
+    if (!v || typeof v !== "object") return false;
+    const o = v as Record<string, unknown>;
+    return (
+      typeof o.x === "number" &&
+      Number.isFinite(o.x) &&
+      typeof o.y === "number" &&
+      Number.isFinite(o.y) &&
+      typeof o.zoom === "number" &&
+      Number.isFinite(o.zoom) &&
+      o.zoom > 0
+    );
+  }
 
-function applySimpleGridLayout(
-  nodes: Node[],
-  executionMap: Map<string, WorkflowDAGNode>
-): Node[] {
-  const sortedNodes = [...nodes].sort((a, b) => {
-    const depthA =
-      (executionMap.get(a.id)?.workflow_depth as number | undefined) ?? 0;
-    const depthB =
-      (executionMap.get(b.id)?.workflow_depth as number | undefined) ?? 0;
-    if (depthA !== depthB) {
-      return depthA - depthB;
-    }
-    const startedA =
-      executionMap.get(a.id)?.started_at ?? "1970-01-01T00:00:00Z";
-    const startedB =
-      executionMap.get(b.id)?.started_at ?? "1970-01-01T00:00:00Z";
-    if (startedA !== startedB) {
-      return startedA.localeCompare(startedB);
-    }
-    return a.id.localeCompare(b.id);
-  });
-
-  const columns = Math.max(1, SIMPLE_LAYOUT_COLUMNS);
-
-  return sortedNodes.map((node, index) => {
-    const column = index % columns;
-    const row = Math.floor(index / columns);
-    return {
-      ...node,
-      position: {
-        x: column * SIMPLE_LAYOUT_X_SPACING,
-        y: row * SIMPLE_LAYOUT_Y_SPACING,
-      },
-    };
-  });
-}
-
-function decorateNodesWithViewMode(nodes: Node[], viewMode: string): Node[] {
-  return nodes.map((node) => ({
-    ...node,
-    data: {
-      ...(node.data as object),
-      viewMode,
-    },
-  }));
-}
-
-function decorateEdgesWithStatus(
-  edges: Edge[],
-  executionMap: Map<string, WorkflowDAGNode>
-): Edge[] {
-  return edges.map((edge) => {
-    const targetExecution = executionMap.get(edge.target);
-    if (!targetExecution) {
-      return edge;
-    }
-    const animated = targetExecution.status === "running";
-    return {
-      ...edge,
-      animated,
-      data: {
-        ...(edge.data as object),
-        status: targetExecution.status,
-        duration: targetExecution.duration_ms,
-        animated,
-      },
-    } as Edge;
-  });
-}
   const shouldUseVirtualizedDAG = useMemo(() => {
     return nodes.length > PERFORMANCE_THRESHOLD;
   }, [nodes.length]);
   const MAX_FOCUS_DEPTH = 2;
 
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState(
-    searchQuery ?? ""
+    searchQuery ?? "",
   );
 
   useEffect(() => {
@@ -400,6 +377,27 @@ function decorateEdgesWithStatus(
       hasInitialLayoutRef.current = false;
     }
   }, [workflowId, dagData]);
+
+  // New run / workflow: must reset layout and viewport; otherwise we keep the previous
+  // graph's pan/zoom and the new nodes render off-screen (empty-looking graph).
+  useEffect(() => {
+    const prev = prevWorkflowIdForResetRef.current;
+    if (prev === workflowId) {
+      return;
+    }
+    prevWorkflowIdForResetRef.current = workflowId;
+    if (prev !== undefined) {
+      hasInitialLayoutRef.current = false;
+      hasInitializedViewportRef.current = false;
+      viewportRef.current = { x: 0, y: 0, zoom: 0.8 };
+      largeGraphRef.current = false;
+      setDeckGraphData(null);
+      setNodes([]);
+      setEdges([]);
+      nodesRef.current = [];
+      edgesRef.current = [];
+    }
+  }, [workflowId, setEdges, setNodes]);
 
   useEffect(() => {
     nodesRef.current = nodes;
@@ -431,7 +429,7 @@ function decorateEdgesWithStatus(
         }
 
         const nodesToFocus = getNodes().filter((node) =>
-          nodeIds.includes(node.id)
+          nodeIds.includes(node.id),
         );
         if (nodesToFocus.length === 0) {
           return;
@@ -459,7 +457,7 @@ function decorateEdgesWithStatus(
             minY: Number.POSITIVE_INFINITY,
             maxX: Number.NEGATIVE_INFINITY,
             maxY: Number.NEGATIVE_INFINITY,
-          }
+          },
         );
 
         if (
@@ -480,6 +478,9 @@ function decorateEdgesWithStatus(
 
         fitBounds(rect, { padding: options?.padding ?? 0.2 });
       },
+      changeLayout: (layout: AllLayoutType) => {
+        handleLayoutChangeRef.current(layout);
+      },
     };
 
     controlsRegisteredRef.current = true;
@@ -496,9 +497,7 @@ function decorateEdgesWithStatus(
     }
 
     const edgesSnapshot = edgesRef.current;
-    const normalizedSearch = (debouncedSearchQuery || "")
-      .trim()
-      .toLowerCase();
+    const normalizedSearch = (debouncedSearchQuery || "").trim().toLowerCase();
     const focusIds = focusMode
       ? new Set(focusedNodeIds ?? [])
       : new Set<string>();
@@ -647,8 +646,8 @@ function decorateEdgesWithStatus(
         ? Boolean(
             (sourceInfo?.focusDistance !== undefined &&
               sourceInfo.focusDistance <= 1) ||
-              (targetInfo?.focusDistance !== undefined &&
-                targetInfo.focusDistance <= 1)
+            (targetInfo?.focusDistance !== undefined &&
+              targetInfo.focusDistance <= 1),
           )
         : false;
 
@@ -660,7 +659,7 @@ function decorateEdgesWithStatus(
       const shouldDimByAgent = selectedAgent
         ? Boolean(
             (sourceInfo && sourceInfo.agentLabel !== selectedAgent) ||
-              (targetInfo && targetInfo.agentLabel !== selectedAgent)
+            (targetInfo && targetInfo.agentLabel !== selectedAgent),
           )
         : false;
 
@@ -716,7 +715,7 @@ function decorateEdgesWithStatus(
       if (!isDimmed && viewMode === "performance") {
         updatedStyle.strokeWidth = Math.max(
           Number(updatedStyle.strokeWidth ?? 2.5),
-          2.4 + targetIntensity * 2.2
+          2.4 + targetIntensity * 2.2,
         );
         const heat = Math.min(80, 35 + targetIntensity * 45);
         updatedStyle.stroke = `color-mix(in srgb, var(--status-info) ${heat}%, transparent)`;
@@ -764,27 +763,65 @@ function decorateEdgesWithStatus(
     durationStats,
   ]);
 
-  // Handle node click to open sidebar - properly memoized
+  // Handle node click — keep parent selection in sync and open the debugger sidebar.
   const handleNodeClick = useCallback(
     (_event: React.MouseEvent, node: Node) => {
       const nodeData = node.data as unknown as WorkflowDAGNode;
-      setSelectedNode(nodeData);
-      setSidebarOpen(true);
+      if (onExecutionClick && nodeData) {
+        onExecutionClick(nodeData);
+      }
+      if (nodeData) {
+        setSelectedNode(nodeData);
+        setSidebarOpen(true);
+      }
     },
-    []
+    [onExecutionClick],
   );
 
   // Handle sidebar close
+  const closeSidebarTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const handleCloseSidebar = useCallback(() => {
     setSidebarOpen(false);
-    // Optionally clear selected node after animation
-    setTimeout(() => setSelectedNode(null), 300);
+    if (closeSidebarTimeoutRef.current) {
+      clearTimeout(closeSidebarTimeoutRef.current);
+    }
+    // Clear selected node after animation
+    closeSidebarTimeoutRef.current = setTimeout(() => {
+      setSelectedNode(null);
+      closeSidebarTimeoutRef.current = null;
+    }, 300);
+  }, []);
+  useEffect(() => {
+    return () => {
+      if (closeSidebarTimeoutRef.current) {
+        clearTimeout(closeSidebarTimeoutRef.current);
+      }
+    };
   }, []);
 
   // Handle agent filter - optimized to avoid dependency on nodes array
   const handleAgentFilter = useCallback((agentName: string | null) => {
     setSelectedAgent(agentName);
   }, []);
+
+  const handleDeckNodeClick = useCallback(
+    (node: WorkflowDAGNode) => {
+      const localNode: WorkflowDAGNode = {
+        ...node,
+        workflow_id: node.workflow_id || workflowId,
+      };
+      if (onExecutionClick && localNode) {
+        onExecutionClick(localNode);
+      }
+      if (localNode) {
+        setSelectedNode(localNode);
+        setSidebarOpen(true);
+      }
+    },
+    [onExecutionClick, workflowId],
+  );
 
   const buildGraphElements = useCallback(
     (timeline: WorkflowDAGNode[]) => {
@@ -827,7 +864,7 @@ function decorateEdgesWithStatus(
 
       return { nodesForLayout, edgesForLayout, executionMap };
     },
-    [viewMode]
+    [viewMode],
   );
 
   // Handle layout change
@@ -850,7 +887,7 @@ function decorateEdgesWithStatus(
               nodes,
               edges,
               newLayout,
-              (progress) => setLayoutProgress(progress)
+              (progress) => setLayoutProgress(progress),
             );
 
           setNodes(layoutedNodes);
@@ -881,8 +918,30 @@ function decorateEdgesWithStatus(
       setEdges,
       layoutManager,
       setViewport,
-    ]
+    ],
   );
+
+  // Keep the ref in sync so controls.changeLayout() always uses latest
+  handleLayoutChangeRef.current = handleLayoutChange;
+
+  // Notify parent of layout state changes
+  useEffect(() => {
+    if (!onLayoutInfoChange) return;
+    onLayoutInfoChange({
+      currentLayout,
+      availableLayouts: layoutManager.getAvailableLayouts(nodes.length),
+      isSlowLayout: (layout: AllLayoutType) =>
+        layoutManager.isSlowLayout(layout),
+      isLargeGraph: layoutManager.isLargeGraph(nodes.length),
+      isApplyingLayout,
+    });
+  }, [
+    currentLayout,
+    isApplyingLayout,
+    nodes.length,
+    layoutManager,
+    onLayoutInfoChange,
+  ]);
 
   // Utility: merge new DAG data incrementally without resetting positions
   const mergeIncrementalUpdate = useCallback(
@@ -892,14 +951,11 @@ function decorateEdgesWithStatus(
         buildGraphElements(timeline);
 
       if (largeGraphRef.current) {
-        const flowNodes = applySimpleGridLayout(
-          nodesForLayout,
-          executionMap
-        );
+        const flowNodes = applySimpleGridLayout(nodesForLayout, executionMap);
         const nodesWithMode = decorateNodesWithViewMode(flowNodes, viewMode);
         const edgesWithStatus = decorateEdgesWithStatus(
           edgesForLayout,
-          executionMap
+          executionMap,
         );
         nodesRef.current = nodesWithMode;
         edgesRef.current = edgesWithStatus;
@@ -913,10 +969,10 @@ function decorateEdgesWithStatus(
       const timelineIds = new Set(timeline.map((node) => node.execution_id));
 
       const hasNewNodes = nodesForLayout.some(
-        (node) => !existingIds.has(node.id)
+        (node) => !existingIds.has(node.id),
       );
       const hasRemovedNodes = nodesRef.current.some(
-        (node) => !timelineIds.has(node.id)
+        (node) => !timelineIds.has(node.id),
       );
 
       if (hasNewNodes || hasRemovedNodes) {
@@ -925,7 +981,7 @@ function decorateEdgesWithStatus(
             await layoutManager.applyLayout(
               nodesForLayout,
               edgesForLayout,
-              currentLayout
+              currentLayout,
             );
 
           const nodesWithMode = layoutedNodes.map((node) => ({
@@ -1013,7 +1069,7 @@ function decorateEdgesWithStatus(
       setNodes,
       setVisualEpoch,
       viewMode,
-    ]
+    ],
   );
 
   // Process DAG data (either from props or internal fetch)
@@ -1050,9 +1106,6 @@ function decorateEdgesWithStatus(
 
       // Process the data if we have it
       if (data) {
-        console.log("🔍 DAG DEBUG: Processing data:", data);
-        console.log("🔍 DAG DEBUG: Timeline executions:", data.timeline);
-
         const timeline = data.timeline ?? [];
 
         // Determine the appropriate default layout based on graph size
@@ -1065,14 +1118,11 @@ function decorateEdgesWithStatus(
 
         // For large graphs, build DeckGL data instead of React Flow layout
         if (useSimpleLayout) {
-          const flowNodes = applySimpleGridLayout(
-            nodesForLayout,
-            executionMap
-          );
+          const flowNodes = applySimpleGridLayout(nodesForLayout, executionMap);
           const nodesWithMode = decorateNodesWithViewMode(flowNodes, viewMode);
           const edgesWithStatus = decorateEdgesWithStatus(
             edgesForLayout,
-            executionMap
+            executionMap,
           );
           setNodes(nodesWithMode);
           setEdges(edgesWithStatus);
@@ -1086,7 +1136,11 @@ function decorateEdgesWithStatus(
         }
 
         // Update current layout if it's still the initial "tree" value
-        if (!useSimpleLayout && currentLayout === "tree" && defaultLayout !== "tree") {
+        if (
+          !useSimpleLayout &&
+          currentLayout === "tree" &&
+          defaultLayout !== "tree"
+        ) {
           setCurrentLayout(defaultLayout);
         }
 
@@ -1102,7 +1156,7 @@ function decorateEdgesWithStatus(
             await layoutManager.applyLayout(
               nodesForLayout,
               edgesForLayout,
-              layoutToUse
+              layoutToUse,
             );
           flowNodes = layoutedNodes;
           flowEdges = layoutedEdges;
@@ -1110,7 +1164,7 @@ function decorateEdgesWithStatus(
           const nodesWithMode = decorateNodesWithViewMode(flowNodes, viewMode);
           const edgesWithStatus = decorateEdgesWithStatus(
             flowEdges,
-            executionMap
+            executionMap,
           );
 
           setNodes(nodesWithMode);
@@ -1123,26 +1177,10 @@ function decorateEdgesWithStatus(
           await mergeIncrementalUpdate(data);
         }
 
-        // Initialize viewport only once: restore saved viewport if present,
-        // otherwise do a single fitView on first render.
-        if (!hasInitializedViewportRef.current) {
-          const saved = localStorage.getItem(viewportStorageKey);
-          if (saved) {
-            try {
-              const parsed = JSON.parse(saved);
-              viewportRef.current = parsed;
-              setTimeout(() => setViewport(parsed), 0);
-            } catch {
-              setTimeout(() => fitView({ padding: 0.2 }), 100);
-            }
-          } else {
-            setTimeout(() => fitView({ padding: 0.2 }), 100);
-          }
-          hasInitializedViewportRef.current = true;
-        } else {
-          // On subsequent data refreshes, preserve current viewport
+        // After incremental updates, keep the user's pan/zoom (nodes already laid out).
+        if (hasInitializedViewportRef.current) {
           const vp = viewportRef.current;
-          setTimeout(() => setViewport(vp), 0);
+          requestAnimationFrame(() => setViewport(vp));
         }
       }
     };
@@ -1154,15 +1192,106 @@ function decorateEdgesWithStatus(
     currentLayout,
     shouldUseFallback,
     layoutManager,
-    fitView,
     buildGraphElements,
     mergeIncrementalUpdate,
     setNodes,
     setEdges,
     setViewport,
     viewMode,
-    viewportStorageKey,
   ]);
+
+  const shouldUseDeckGL = nodes.length >= LARGE_GRAPH_LAYOUT_THRESHOLD;
+
+  const graphLayout = graphExpanded ? "fullscreen" : "embedded";
+
+  const handleFitView = useCallback(() => {
+    void fitView({
+      padding: 0.2,
+      includeHiddenNodes: false,
+      duration: 220,
+    });
+  }, [fitView]);
+
+  const handleZoomIn = useCallback(() => {
+    void zoomIn({ duration: 200 });
+  }, [zoomIn]);
+
+  const handleZoomOut = useCallback(() => {
+    void zoomOut({ duration: 200 });
+  }, [zoomOut]);
+
+  // Apply viewport only after React Flow has committed measured nodes. Running fitView /
+  // setViewport inside processDAGData right after setNodes() races the render and often
+  // fits an empty graph, leaving the real nodes off-screen.
+  useEffect(() => {
+    if (
+      loading ||
+      error ||
+      nodes.length >= LARGE_GRAPH_LAYOUT_THRESHOLD ||
+      nodes.length === 0
+    ) {
+      return;
+    }
+
+    if (hasInitializedViewportRef.current) {
+      return;
+    }
+
+    let rafOuter = 0;
+    let rafInner = 0;
+
+    const apply = () => {
+      const saved = localStorage.getItem(viewportStorageKey);
+      if (saved) {
+        try {
+          const parsed: unknown = JSON.parse(saved);
+          if (isValidSavedViewport(parsed)) {
+            viewportRef.current = parsed;
+            setViewport(parsed);
+            hasInitializedViewportRef.current = true;
+            return;
+          }
+        } catch {
+          /* fall through to fitView */
+        }
+      }
+      fitView({ padding: 0.2, duration: 0 });
+      hasInitializedViewportRef.current = true;
+    };
+
+    rafOuter = requestAnimationFrame(() => {
+      rafInner = requestAnimationFrame(apply);
+    });
+
+    return () => {
+      cancelAnimationFrame(rafOuter);
+      cancelAnimationFrame(rafInner);
+    };
+  }, [loading, error, nodes.length, viewportStorageKey, fitView, setViewport]);
+
+  const flowContainerRef = useRef<HTMLDivElement>(null);
+  const deckGlRef = useRef<WorkflowDeckGLViewHandle>(null);
+  const lastFlowHeightRef = useRef(0);
+
+  // React Flow measures the pane on mount; if the flex parent had no height yet (e.g. after
+  // switching from trace), refit when the container gains usable height.
+  useEffect(() => {
+    if (loading || error || shouldUseDeckGL) return;
+    const el = flowContainerRef.current;
+    if (!el) return;
+
+    lastFlowHeightRef.current = el.getBoundingClientRect().height;
+    const ro = new ResizeObserver(() => {
+      const h = el.getBoundingClientRect().height;
+      const prev = lastFlowHeightRef.current;
+      lastFlowHeightRef.current = h;
+      if (prev < 72 && h >= 72) {
+        requestAnimationFrame(() => fitView({ padding: 0.2, duration: 0 }));
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [fitView, loading, error, shouldUseDeckGL, nodes.length]);
 
   if (loading) {
     return <WorkflowDAGSkeleton className={className} />;
@@ -1174,37 +1303,12 @@ function decorateEdgesWithStatus(
         <CardContent className="flex flex-1 items-center justify-center px-6 py-12 text-center">
           <div>
             <div className="mb-2 text-red-600">Failed to load workflow DAG</div>
-            <div className="text-body-small">{error}</div>
+            <div className="text-sm text-muted-foreground">{error}</div>
           </div>
         </CardContent>
       </Card>
     );
   }
-
-  const isLargeGraph = nodes.length > LARGE_GRAPH_LAYOUT_THRESHOLD;
-  const shouldUseDeckGL = nodes.length >= LARGE_GRAPH_LAYOUT_THRESHOLD;
-
-  // Handler for DeckGL node clicks - convert DeckGL node type to local type
-  const handleDeckNodeClick = useCallback(
-    (node: any) => {
-      // Ensure workflow_id is set
-      const localNode: WorkflowDAGNode = {
-        ...node,
-        workflow_id: node.workflow_id || workflowId,
-      };
-      setSelectedNode(localNode);
-      setSidebarOpen(true);
-    },
-    [workflowId]
-  );
-
-  // Handler for DeckGL node hover
-  const handleDeckNodeHover = useCallback(
-    (_node: any) => {
-      // Optional: Add hover state handling if needed
-    },
-    []
-  );
 
   // Render DeckGL view for large graphs
   if (shouldUseDeckGL && deckGraphData) {
@@ -1215,185 +1319,212 @@ function decorateEdgesWithStatus(
     const hasTruncation = totalNodes > displayedNodes;
 
     return (
-      <div className={cn("relative h-full w-full", className)}>
-        <div className="flex h-full w-full flex-col">
-          <div className="flex-1 overflow-hidden min-h-0">
-            <div className="relative flex h-full w-full flex-1 overflow-hidden min-h-0">
-              <WorkflowDeckGLView
-                nodes={deckGraphData.nodes}
-                edges={deckGraphData.edges}
-                onNodeClick={handleDeckNodeClick}
-                onNodeHover={handleDeckNodeHover}
-              />
-
-              {/* Agent Legend - positioned in top-left */}
-              <div className="absolute top-4 left-4 z-30">
-                <AgentLegend
-                  onAgentFilter={handleAgentFilter}
-                  selectedAgent={selectedAgent}
-                  compact={false}
-                  nodes={nodes}
+      <WorkflowGraphViewport
+        expanded={graphExpanded}
+        onCollapse={() => setGraphExpanded(false)}
+        workflowTitle={effectiveDagData?.workflow_name}
+      >
+        <div
+          className={cn(
+            "relative flex h-full w-full min-h-0 flex-1 flex-col",
+            className,
+          )}
+        >
+          <div className="flex min-h-[280px] flex-1 flex-col">
+            <div className="flex min-h-[280px] flex-1 flex-col overflow-hidden">
+              <div
+                ref={flowContainerRef}
+                className="relative flex w-full flex-1 flex-col overflow-hidden"
+                style={{
+                  minHeight: "max(280px, min(50vh, 24rem))",
+                  width: "100%",
+                  flex: "1 1 0%",
+                }}
+              >
+                <WorkflowDeckGLView
+                  ref={deckGlRef}
+                  nodes={deckGraphData.nodes}
+                  edges={deckGraphData.edges}
+                  onNodeClick={
+                    handleDeckNodeClick as unknown as (
+                      node: import("./DeckGLGraph").WorkflowDAGNode,
+                    ) => void
+                  }
                 />
-              </div>
 
-              {/* Large Graph Indicator - positioned in top-right */}
-              <div className="absolute top-4 right-4 z-30">
-                <Card className="bg-card/95 backdrop-blur-sm border-border shadow-lg">
-                  <CardContent className="p-3">
-                    <div className="flex items-center gap-2 text-sm">
-                      <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
+                {graphExpanded ? (
+                  <div className="absolute bottom-4 right-4 z-30">
+                    <WorkflowDeckGraphControls deckRef={deckGlRef} />
+                  </div>
+                ) : null}
+
+                <div className="absolute left-4 top-4 z-30">
+                  <AgentLegend
+                    layout={graphLayout}
+                    onFitView={() => deckGlRef.current?.fitToContent()}
+                    onZoomIn={() => deckGlRef.current?.zoomIn()}
+                    onZoomOut={() => deckGlRef.current?.zoomOut()}
+                    onAgentFilter={handleAgentFilter}
+                    selectedAgent={selectedAgent}
+                    compact={false}
+                    nodes={nodes}
+                    onExpandGraph={() => setGraphExpanded(true)}
+                  />
+                </div>
+
+                <div className="absolute right-4 top-4 z-30">
+                  <Card className="border-border/80 bg-card/95 shadow-md backdrop-blur-sm">
+                    <CardContent className="flex items-center gap-2 p-3 text-sm">
+                      <div className="size-2 shrink-0 animate-pulse rounded-full bg-primary" />
                       <span className="font-medium text-foreground">
-                        Large Graph Mode
+                        Large graph
                       </span>
                       <span className="text-muted-foreground">
                         {hasTruncation
                           ? `(${formatNumberWithCommas(
-                              displayedNodes
+                              displayedNodes,
                             )} shown / ${formatNumberWithCommas(totalNodes)} total)`
                           : `(${formatNumberWithCommas(totalNodes)} nodes)`}
                       </span>
-                    </div>
-                  </CardContent>
-                </Card>
+                    </CardContent>
+                  </Card>
+                </div>
               </div>
             </div>
           </div>
-        </div>
 
-        {/* Node Detail Sidebar */}
-        <NodeDetailSidebar
-          node={selectedNode}
-          isOpen={sidebarOpen}
-          onClose={handleCloseSidebar}
-        />
-      </div>
+          <NodeDetailSidebar
+            node={selectedNode}
+            isOpen={sidebarOpen}
+            onClose={handleCloseSidebar}
+            onRestartWorkflowFromNode={onRestartWorkflowFromNode}
+            onRerunNodeOnly={onRerunNodeOnly}
+            onForkFromNode={onForkFromNode}
+          />
+        </div>
+      </WorkflowGraphViewport>
     );
   }
 
   // Render React Flow for normal-sized graphs
   return (
-    <div className={cn("relative h-full w-full", className)}>
-      <div className="flex h-full w-full flex-col">
-        <div className="flex-1 overflow-hidden min-h-0">
-          <div className="relative flex h-full w-full flex-1 overflow-hidden bg-muted/30 min-h-0">
-            {shouldUseVirtualizedDAG ? (
-              <VirtualizedDAG
-                nodes={nodes}
-                edges={edges}
-                onNodeClick={handleNodeClick}
-                nodeTypes={nodeTypes}
-                edgeTypes={edgeTypes}
-                className="h-full w-full"
-                threshold={PERFORMANCE_THRESHOLD}
-                workflowId={workflowId}
-                // Layout-related props
-                currentLayout={currentLayout}
-                onLayoutChange={handleLayoutChange}
-                availableLayouts={
-                  isLargeGraph
-                    ? []
-                    : layoutManager.getAvailableLayouts(nodes.length)
-                }
-                isSlowLayout={(layout) =>
-                  isLargeGraph ? false : layoutManager.isSlowLayout(layout)
-                }
-                getLayoutDescription={(layout) =>
-                  layoutManager.getLayoutDescription(layout)
-                }
-                isLargeGraph={
-                  isLargeGraph || layoutManager.isLargeGraph(nodes.length)
-                }
-                isApplyingLayout={isApplyingLayout}
-                layoutProgress={layoutProgress}
-                // Agent filtering props
-                onAgentFilter={handleAgentFilter}
-                selectedAgent={selectedAgent}
-              />
-            ) : (
-              <ReactFlow
-                className="h-full w-full"
-                nodes={nodes}
-                edges={edges}
-                onNodesChange={onNodesChange}
-                onEdgesChange={onEdgesChange}
-                onNodeClick={handleNodeClick}
-                onMoveEnd={(_, viewport) => {
-                  viewportRef.current = viewport;
-                  try {
-                    localStorage.setItem(
-                      viewportStorageKey,
-                      JSON.stringify(viewport)
-                    );
-                  } catch (storageError) {
-                    console.warn(
-                      "Failed to persist workflow DAG viewport",
-                      storageError
-                    );
+    <WorkflowGraphViewport
+      expanded={graphExpanded}
+      onCollapse={() => setGraphExpanded(false)}
+      workflowTitle={effectiveDagData?.workflow_name}
+    >
+      <div
+        className={cn(
+          "relative flex h-full w-full min-h-0 flex-1 flex-col",
+          className,
+        )}
+      >
+        <div className="flex min-h-[280px] flex-1 flex-col">
+          <div className="flex min-h-[280px] flex-1 flex-col overflow-hidden">
+            <div
+              ref={flowContainerRef}
+              className="relative flex w-full flex-1 flex-col overflow-hidden bg-muted/30"
+              style={{
+                minHeight: "max(280px, min(50vh, 24rem))",
+                width: "100%",
+                flex: "1 1 0%",
+              }}
+            >
+              {shouldUseVirtualizedDAG ? (
+                <VirtualizedDAG
+                  nodes={nodes}
+                  edges={edges}
+                  onNodeClick={handleNodeClick}
+                  nodeTypes={
+                    nodeTypes as Record<string, React.ComponentType<object>>
                   }
-                }}
-                nodeTypes={nodeTypes}
-                edgeTypes={edgeTypes}
-                connectionLineComponent={FloatingConnectionLine}
-                connectionMode={ConnectionMode.Strict}
-                // Allow node dragging but disable edge creation
-                nodesDraggable={true}
-                nodesConnectable={false}
-                elementsSelectable={true}
-                fitViewOptions={fitViewOptions}
-                defaultViewport={defaultViewport}
-                minZoom={0}
-                maxZoom={2}
-                proOptions={{ hideAttribution: true }}
-              >
-                <Background
-                  variant={BackgroundVariant.Dots}
-                  gap={20}
-                  size={1}
-                  color="var(--border)"
+                  edgeTypes={
+                    edgeTypes as Record<string, React.ComponentType<object>>
+                  }
+                  className="min-h-[280px] w-full flex-1"
+                  style={{ width: "100%", height: "100%", minHeight: 280 }}
+                  threshold={PERFORMANCE_THRESHOLD}
+                  workflowId={workflowId}
+                  graphLayout={graphLayout}
+                  onAgentFilter={handleAgentFilter}
+                  selectedAgent={selectedAgent}
+                  onExpandGraph={() => setGraphExpanded(true)}
                 />
-
-                {/* Agent Legend */}
-                <Panel position="top-left" className="z-30">
-                  <AgentLegend
-                    onAgentFilter={handleAgentFilter}
-                    selectedAgent={selectedAgent}
-                    compact={nodes.length <= 20}
-                    nodes={nodes}
-                  />
-                </Panel>
-
-                {/* Enhanced Layout Controls */}
-                <Panel position="top-right" className="z-30 flex gap-2">
-                  <LayoutControls
-                    availableLayouts={layoutManager.getAvailableLayouts(
-                      nodes.length
-                    )}
-                    currentLayout={currentLayout}
-                    onLayoutChange={handleLayoutChange}
-                    isSlowLayout={(layout) =>
-                      layoutManager.isSlowLayout(layout)
+              ) : (
+                <ReactFlow
+                  className="min-h-[280px] w-full flex-1"
+                  style={{ width: "100%", height: "100%", minHeight: 280 }}
+                  nodes={nodes}
+                  edges={edges}
+                  onNodesChange={onNodesChange}
+                  onEdgesChange={onEdgesChange}
+                  onNodeClick={handleNodeClick}
+                  onMoveEnd={(_, viewport) => {
+                    viewportRef.current = viewport;
+                    try {
+                      localStorage.setItem(
+                        viewportStorageKey,
+                        JSON.stringify(viewport),
+                      );
+                    } catch (storageError) {
+                      console.warn(
+                        "Failed to persist workflow DAG viewport",
+                        storageError,
+                      );
                     }
-                    getLayoutDescription={(layout) =>
-                      layoutManager.getLayoutDescription(layout)
-                    }
-                    isLargeGraph={layoutManager.isLargeGraph(nodes.length)}
-                    isApplyingLayout={isApplyingLayout}
-                    layoutProgress={layoutProgress}
+                  }}
+                  nodeTypes={nodeTypes}
+                  edgeTypes={edgeTypes}
+                  connectionLineComponent={FloatingConnectionLine}
+                  connectionMode={ConnectionMode.Strict}
+                  // Allow node dragging but disable edge creation
+                  nodesDraggable={true}
+                  nodesConnectable={false}
+                  elementsSelectable={true}
+                  fitViewOptions={fitViewOptions}
+                  defaultViewport={defaultViewport}
+                  minZoom={0}
+                  maxZoom={2}
+                  proOptions={{ hideAttribution: true }}
+                >
+                  <Background
+                    variant={BackgroundVariant.Dots}
+                    gap={20}
+                    size={1}
+                    color="var(--border)"
                   />
-                </Panel>
-              </ReactFlow>
-            )}
+
+                  {/* Agent Legend */}
+                  <Panel position="top-left" className="z-30">
+                    <AgentLegend
+                      layout={graphLayout}
+                      onFitView={handleFitView}
+                      onZoomIn={handleZoomIn}
+                      onZoomOut={handleZoomOut}
+                      onAgentFilter={handleAgentFilter}
+                      selectedAgent={selectedAgent}
+                      compact={nodes.length <= 20}
+                      nodes={nodes}
+                      onExpandGraph={() => setGraphExpanded(true)}
+                    />
+                  </Panel>
+                  <WorkflowGraphControls show={graphExpanded} />
+                </ReactFlow>
+              )}
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* Node Detail Sidebar - Rendered at root level with high z-index */}
-      <NodeDetailSidebar
-        node={selectedNode}
-        isOpen={sidebarOpen}
-        onClose={handleCloseSidebar}
-      />
-    </div>
+        <NodeDetailSidebar
+          node={selectedNode}
+          isOpen={sidebarOpen}
+          onClose={handleCloseSidebar}
+          onRestartWorkflowFromNode={onRestartWorkflowFromNode}
+          onRerunNodeOnly={onRerunNodeOnly}
+          onForkFromNode={onForkFromNode}
+        />
+      </div>
+    </WorkflowGraphViewport>
   );
 }
 
@@ -1408,7 +1539,7 @@ function WorkflowDAGSkeleton({ className }: WorkflowDAGSkeletonProps) {
         <div className="flex h-full w-full items-center justify-center bg-muted/20">
           <div className="space-y-4 text-center">
             <div className="mx-auto h-8 w-8 animate-spin rounded-full border-b-2 border-primary"></div>
-            <div className="text-body-small">
+            <div className="text-sm text-muted-foreground">
               Loading workflow DAG...
             </div>
           </div>

@@ -69,9 +69,8 @@ type PackageConfiguration struct {
 
 // PackageCapabilities represents package capabilities
 type PackageCapabilities struct {
-	Reasoners  []ReasonerDefinition  `json:"reasoners"`
-	Skills     []SkillDefinition     `json:"skills"`
-	MCPServers []MCPServerDefinition `json:"mcp_servers"`
+	Reasoners []ReasonerDefinition `json:"reasoners"`
+	Skills    []SkillDefinition    `json:"skills"`
 }
 
 // ReasonerDefinition represents a reasoner definition
@@ -91,14 +90,6 @@ type SkillDefinition struct {
 	Description string                 `json:"description"`
 	InputSchema map[string]interface{} `json:"input_schema"`
 	Tags        []string               `json:"tags"`
-}
-
-// MCPServerDefinition represents an MCP server definition
-type MCPServerDefinition struct {
-	Alias       string   `json:"alias"`
-	Command     []string `json:"command"`
-	Description string   `json:"description"`
-	Tools       []string `json:"tools"`
 }
 
 // PackageRuntime represents runtime information
@@ -121,7 +112,7 @@ func (h *PackageHandler) ListPackagesHandler(c *gin.Context) {
 	ctx := c.Request.Context()
 	packages, err := h.storage.QueryAgentPackages(ctx, types.PackageFilters{})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to list packages"})
+		RespondInternalError(c, "failed to list packages")
 		return
 	}
 
@@ -185,7 +176,7 @@ func (h *PackageHandler) ListPackagesHandler(c *gin.Context) {
 func (h *PackageHandler) GetPackageDetailsHandler(c *gin.Context) {
 	packageID := c.Param("packageId")
 	if packageID == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "packageId is required"})
+		RespondBadRequest(c, "packageId is required")
 		return
 	}
 
@@ -193,7 +184,7 @@ func (h *PackageHandler) GetPackageDetailsHandler(c *gin.Context) {
 	ctx := c.Request.Context()
 	pkg, err := h.storage.GetAgentPackage(ctx, packageID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, ErrorResponse{Error: "package not found"})
+		RespondNotFound(c, "package not found")
 		return
 	}
 
@@ -204,7 +195,7 @@ func (h *PackageHandler) GetPackageDetailsHandler(c *gin.Context) {
 	var schema map[string]interface{}
 	if len(pkg.ConfigurationSchema) > 0 {
 		if err := json.Unmarshal(pkg.ConfigurationSchema, &schema); err != nil {
-			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to parse configuration schema"})
+			RespondInternalError(c, "failed to parse configuration schema")
 			return
 		}
 	}
@@ -245,7 +236,7 @@ func (h *PackageHandler) GetPackageDetailsHandler(c *gin.Context) {
 	}
 
 	// TODO: Add capabilities parsing when agent introspection is implemented
-	// This would parse reasoners, skills, and MCP servers from the package
+	// This would parse reasoners and skills from the package
 
 	// TODO: Add runtime information when agent lifecycle management is implemented
 	// This would include process information, logs, etc.

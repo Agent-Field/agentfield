@@ -1,131 +1,111 @@
-import { Route, BrowserRouter as Router, Routes } from "react-router-dom";
-import { SidebarNew } from "./components/Navigation/SidebarNew";
-import { TopNavigation } from "./components/Navigation/TopNavigation";
+import { Navigate, Route, BrowserRouter as Router, Routes, useParams } from "react-router-dom";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { RootRedirect } from "./components/RootRedirect";
-import { navigationSections } from "./config/navigation";
 import { ModeProvider } from "./contexts/ModeContext";
 import { ThemeProvider } from "./components/theme-provider";
-import { useFocusManagement } from "./hooks/useFocusManagement";
-import { SidebarProvider, SidebarInset } from "./components/ui/sidebar";
-import { AllReasonersPage } from "./pages/AllReasonersPage.tsx";
-import { EnhancedDashboardPage } from "./pages/EnhancedDashboardPage";
-import { ExecutionsPage } from "./pages/ExecutionsPage";
-import { EnhancedExecutionDetailPage } from "./pages/EnhancedExecutionDetailPage";
-import { EnhancedWorkflowDetailPage } from "./pages/EnhancedWorkflowDetailPage";
-import { NodeDetailPage } from "./pages/NodeDetailPage";
-import { NodesPage } from "./pages/NodesPage";
-import { PackagesPage } from "./pages/PackagesPage";
-import { ReasonerDetailPage } from "./pages/ReasonerDetailPage.tsx";
-import { WorkflowsPage } from "./pages/WorkflowsPage.tsx";
-import { WorkflowDeckGLTestPage } from "./pages/WorkflowDeckGLTestPage";
-import { DIDExplorerPage } from "./pages/DIDExplorerPage";
-import { CredentialsPage } from "./pages/CredentialsPage";
-import { ObservabilityWebhookSettingsPage } from "./pages/ObservabilityWebhookSettingsPage";
+import { AppLayout } from "./components/AppLayout";
+import { NewDashboardPage } from "./pages/NewDashboardPage";
+import { NewSettingsPage } from "./pages/NewSettingsPage";
+import { AgentsPage } from "./pages/AgentsPage";
+import { RunsPage } from "./pages/RunsPage";
+import { RunDetailPage } from "./pages/RunDetailPage";
+import { VerifyProvenancePage } from "./pages/VerifyProvenancePage";
+import { ComparisonPage } from "./pages/ComparisonPage";
+import { PlaygroundPage } from "./pages/PlaygroundPage";
+import { AccessManagementPage } from "./pages/AccessManagementPage";
+import { TriggersPage } from "./pages/TriggersPage";
+import { IntegrationsPage } from "./pages/IntegrationsPage";
+import { DiscoveryPage } from "./pages/DiscoveryPage";
 import { AuthProvider } from "./contexts/AuthContext";
 import { AuthGuard } from "./components/AuthGuard";
+import { queryClient } from "./lib/query-client";
+import { ErrorBoundary } from "./components/ErrorBoundary";
+import { NotificationProvider } from "./components/ui/notification";
 
-// Placeholder pages for new routes
+function getRouterBasename(): string {
+  const configuredBase = import.meta.env.VITE_BASE_PATH;
+  if (configuredBase && configuredBase !== "/") {
+    return configuredBase;
+  }
 
-function AgentsPage() {
-  return (
-    <div className="flex items-center justify-center h-64">
-      <div className="text-center">
-        <h2 className="text-heading-1 mb-2">
-          My Agents
-        </h2>
-        <p className="text-body">
-          Your configured and running agents
-        </p>
-      </div>
-    </div>
-  );
+  if (typeof window !== "undefined" && window.location.pathname.startsWith("/ui")) {
+    return "/ui";
+  }
+
+  return "/";
 }
 
-function SettingsPage() {
-  return (
-    <div className="flex items-center justify-center h-64">
-      <div className="text-center">
-        <h2 className="text-heading-1 mb-2">
-          Settings
-        </h2>
-        <p className="text-body">
-          System configuration and preferences
-        </p>
-      </div>
-    </div>
-  );
+function NavigateToPlayground() {
+  const { reasonerId } = useParams();
+  return <Navigate to={`/playground/${reasonerId}`} replace />;
 }
 
 function AppContent() {
-  // Use focus management hook to ensure trackpad navigation works
-  useFocusManagement();
-
   return (
-    <SidebarProvider defaultOpen={true}>
-      <div className="flex h-screen w-full bg-background text-foreground transition-colors">
-        {/* Sidebar */}
-        <SidebarNew sections={navigationSections} />
+    <Routes>
+      <Route element={<AppLayout />}>
+        <Route path="/" element={<RootRedirect />} />
+        <Route path="/dashboard" element={<NewDashboardPage />} />
+        <Route path="/settings" element={<NewSettingsPage />} />
+        <Route path="/settings/observability-webhook" element={<Navigate to="/settings" replace />} />
+        <Route path="/agents" element={<AgentsPage />} />
+        <Route path="/runs" element={<RunsPage />} />
+        <Route path="/runs/compare" element={<ComparisonPage />} />
+        <Route path="/runs/:runId" element={<RunDetailPage />} />
+        <Route path="/verify" element={<VerifyProvenancePage />} />
+        <Route path="/playground" element={<PlaygroundPage />} />
+        <Route path="/playground/:reasonerId" element={<PlaygroundPage />} />
+        <Route path="/access" element={<AccessManagementPage />} />
+        <Route path="/triggers" element={<TriggersPage />} />
+        <Route path="/integrations" element={<IntegrationsPage />} />
+        <Route path="/discovery" element={<DiscoveryPage />} />
+        <Route path="/settings/ard" element={<Navigate to="/discovery" replace />} />
 
-        {/* Main Content */}
-        <SidebarInset>
-          {/* Top Navigation */}
-          <TopNavigation />
-
-          {/* Main Content Area */}
-          <main className="flex flex-1 min-w-0 flex-col overflow-y-auto overflow-x-hidden">
-            <Routes>
-              <Route path="/" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><RootRedirect /></div>} />
-              <Route path="/dashboard" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><EnhancedDashboardPage /></div>} />
-              <Route path="/nodes" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><NodesPage /></div>} />
-              <Route path="/nodes/:nodeId" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><NodeDetailPage /></div>} />
-              <Route path="/reasoners/all" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><AllReasonersPage /></div>} />
-              <Route
-                path="/reasoners/:fullReasonerId"
-                element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><ReasonerDetailPage /></div>}
-              />
-              <Route path="/executions" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><ExecutionsPage /></div>} />
-              <Route
-                path="/executions/:executionId"
-                element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><EnhancedExecutionDetailPage /></div>}
-              />
-              <Route path="/workflows" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><WorkflowsPage /></div>} />
-              <Route
-                path="/workflows/:workflowId"
-                element={<EnhancedWorkflowDetailPage />}
-              />
-              <Route path="/packages" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><PackagesPage /></div>} />
-              <Route path="/settings" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><SettingsPage /></div>} />
-              <Route path="/agents" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><AgentsPage /></div>} />
-              <Route path="/identity/dids" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><DIDExplorerPage /></div>} />
-              <Route path="/identity/credentials" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><CredentialsPage /></div>} />
-              <Route path="/settings/observability-webhook" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><ObservabilityWebhookSettingsPage /></div>} />
-              <Route path="/test/deckgl" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><WorkflowDeckGLTestPage /></div>} />
-            </Routes>
-          </main>
-        </SidebarInset>
-      </div>
-    </SidebarProvider>
+        {/* Old → New redirects */}
+        <Route path="/executions" element={<Navigate to="/runs" replace />} />
+        <Route path="/executions/:executionId" element={<Navigate to="/runs" replace />} />
+        <Route path="/workflows" element={<Navigate to="/runs" replace />} />
+        <Route path="/workflows/:workflowId" element={<Navigate to="/runs" replace />} />
+        <Route path="/nodes" element={<Navigate to="/agents" replace />} />
+        <Route path="/nodes/:nodeId" element={<Navigate to="/agents" replace />} />
+        <Route path="/reasoners/all" element={<Navigate to="/agents" replace />} />
+        <Route path="/reasoners/:reasonerId" element={<NavigateToPlayground />} />
+        <Route path="/identity/dids" element={<Navigate to="/settings" replace />} />
+        <Route path="/identity/credentials" element={<Navigate to="/settings" replace />} />
+        <Route path="/governance" element={<Navigate to="/access" replace />} />
+        <Route path="/authorization" element={<Navigate to="/access" replace />} />
+        <Route path="/packages" element={<Navigate to="/settings" replace />} />
+      </Route>
+    </Routes>
   );
 }
 
 function App() {
+  const basename = getRouterBasename();
+
   return (
-    <ThemeProvider
-      attribute="class"
-      defaultTheme="system"
-      enableSystem
-      disableTransitionOnChange
-    >
-      <ModeProvider>
-        <AuthProvider>
-          <AuthGuard>
-            <Router basename={import.meta.env.VITE_BASE_PATH || "/ui"}>
-              <AppContent />
-            </Router>
-          </AuthGuard>
-        </AuthProvider>
-      </ModeProvider>
-    </ThemeProvider>
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider
+        attribute="class"
+        defaultTheme="dark"
+        enableSystem
+        disableTransitionOnChange
+      >
+        <ModeProvider>
+          <NotificationProvider>
+            <AuthProvider>
+              <AuthGuard>
+                <Router basename={basename}>
+                  <ErrorBoundary>
+                    <AppContent />
+                  </ErrorBoundary>
+                </Router>
+              </AuthGuard>
+            </AuthProvider>
+          </NotificationProvider>
+        </ModeProvider>
+      </ThemeProvider>
+    </QueryClientProvider>
   );
 }
 

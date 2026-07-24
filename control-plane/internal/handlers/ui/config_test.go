@@ -242,6 +242,22 @@ func (m *MockStorageProvider) GetAgent(ctx context.Context, id string) (*types.A
 	return args.Get(0).(*types.AgentNode), args.Error(1)
 }
 
+func (m *MockStorageProvider) GetAgentVersion(ctx context.Context, id string, version string) (*types.AgentNode, error) {
+	args := m.Called(ctx, id, version)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*types.AgentNode), args.Error(1)
+}
+
+func (m *MockStorageProvider) ListAgentVersions(ctx context.Context, id string) ([]*types.AgentNode, error) {
+	args := m.Called(ctx, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*types.AgentNode), args.Error(1)
+}
+
 func (m *MockStorageProvider) ListAgents(ctx context.Context, filters types.AgentFilters) ([]*types.AgentNode, error) {
 	args := m.Called(ctx, filters)
 	if args.Get(0) == nil {
@@ -260,8 +276,8 @@ func (m *MockStorageProvider) UpdateAgentHealthAtomic(ctx context.Context, id st
 	return args.Error(0)
 }
 
-func (m *MockStorageProvider) UpdateAgentHeartbeat(ctx context.Context, id string, heartbeatTime time.Time) error {
-	args := m.Called(ctx, id, heartbeatTime)
+func (m *MockStorageProvider) UpdateAgentHeartbeat(ctx context.Context, id string, version string, heartbeatTime time.Time) error {
+	args := m.Called(ctx, id, version, heartbeatTime)
 	return args.Error(0)
 }
 
@@ -432,6 +448,47 @@ func (m *MockStorageProvider) GetExecutionEventBus() *events.ExecutionEventBus {
 	return args.Get(0).(*events.ExecutionEventBus)
 }
 
+func (m *MockStorageProvider) StoreExecutionLogEntry(ctx context.Context, entry *types.ExecutionLogEntry) error {
+	args := m.Called(ctx, entry)
+	return args.Error(0)
+}
+
+func (m *MockStorageProvider) ListExecutionLogEntries(ctx context.Context, executionID string, afterSeq *int64, limit int, levels []string, nodeIDs []string, sources []string, query string) ([]*types.ExecutionLogEntry, error) {
+	args := m.Called(ctx, executionID, afterSeq, limit, levels, nodeIDs, sources, query)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*types.ExecutionLogEntry), args.Error(1)
+}
+
+func (m *MockStorageProvider) CreateExecutionUsage(ctx context.Context, rows []*types.ExecutionUsage) error {
+	return nil
+}
+func (m *MockStorageProvider) GetUsageStats(ctx context.Context, since *time.Time) (*types.UsageStatsAggregation, error) {
+	return &types.UsageStatsAggregation{}, nil
+}
+func (m *MockStorageProvider) GetUsageTimeseries(ctx context.Context, since *time.Time, now time.Time, buckets int) (*types.UsageTimeseries, error) {
+	return &types.UsageTimeseries{}, nil
+}
+func (m *MockStorageProvider) GetUsageTimeseriesByModel(ctx context.Context, since *time.Time, now time.Time, buckets int) ([]types.UsageModelSeries, error) {
+	return nil, nil
+}
+func (m *MockStorageProvider) GetExecutionUsageTotals(ctx context.Context, executionID string) (*float64, int64, error) {
+	return nil, 0, nil
+}
+func (m *MockStorageProvider) PruneExecutionLogEntries(ctx context.Context, executionID string, maxEntries int, olderThan time.Time) error {
+	args := m.Called(ctx, executionID, maxEntries, olderThan)
+	return args.Error(0)
+}
+
+func (m *MockStorageProvider) GetExecutionLogEventBus() *events.EventBus[*types.ExecutionLogEntry] {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil
+	}
+	return args.Get(0).(*events.EventBus[*types.ExecutionLogEntry])
+}
+
 // DID Registry operations
 func (m *MockStorageProvider) StoreDID(ctx context.Context, did string, didDocument, publicKey, privateKeyRef, derivationPath string) error {
 	args := m.Called(ctx, did, didDocument, publicKey, privateKeyRef, derivationPath)
@@ -523,6 +580,10 @@ func (m *MockStorageProvider) ListComponentDIDs(ctx context.Context, agentDID st
 // Execution VC operations
 func (m *MockStorageProvider) StoreExecutionVC(ctx context.Context, vcID, executionID, workflowID, sessionID, issuerDID, targetDID, callerDID, inputHash, outputHash, status string, vcDocument []byte, signature string, storageURI string, documentSizeBytes int64) error {
 	args := m.Called(ctx, vcID, executionID, workflowID, sessionID, issuerDID, targetDID, callerDID, inputHash, outputHash, status, vcDocument, signature)
+	return args.Error(0)
+}
+func (m *MockStorageProvider) StoreExecutionVCRecord(ctx context.Context, vc *types.ExecutionVC) error {
+	args := m.Called(ctx, vc)
 	return args.Error(0)
 }
 

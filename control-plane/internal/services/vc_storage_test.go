@@ -328,8 +328,8 @@ func TestVCStorage_StoreWorkflowVC_Success(t *testing.T) {
 	err := vcStorage.StoreWorkflowVC(ctx, workflowVC)
 	require.NoError(t, err)
 
-	// Verify workflow VC was stored
-	storedVC, err := provider.GetWorkflowVC(ctx, "workflow-store")
+	// Verify workflow VC was stored - GetWorkflowVC looks up by workflow_vc_id
+	storedVC, err := provider.GetWorkflowVC(ctx, "workflow-vc-store")
 	require.NoError(t, err)
 	require.NotNil(t, storedVC)
 	require.Equal(t, workflowVC.WorkflowVCID, storedVC.WorkflowVCID)
@@ -372,8 +372,8 @@ func TestVCStorage_StoreWorkflowVC_AutoSizeCalculation(t *testing.T) {
 	err := vcStorage.StoreWorkflowVC(ctx, workflowVC)
 	require.NoError(t, err)
 
-	// Verify size was calculated
-	storedVC, err := provider.GetWorkflowVC(ctx, "workflow-auto-size")
+	// Verify size was calculated - GetWorkflowVC looks up by workflow_vc_id
+	storedVC, err := provider.GetWorkflowVC(ctx, "workflow-vc-auto")
 	require.NoError(t, err)
 	require.Equal(t, int64(len(vcDocBytes)), storedVC.DocumentSize)
 }
@@ -482,10 +482,10 @@ func TestVCStorage_ListWorkflowVCStatusSummaries(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, summaries)
 
-	// Test with workflow IDs
+	// Test with workflow IDs that don't exist in storage - should return empty, no error
 	summaries, err = vcStorage.ListWorkflowVCStatusSummaries(ctx, []string{"workflow-1", "workflow-2"})
 	require.NoError(t, err)
-	require.NotNil(t, summaries)
+	require.Empty(t, summaries)
 }
 
 func TestVCStorage_ListWorkflowVCStatusSummaries_NilProvider(t *testing.T) {

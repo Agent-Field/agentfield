@@ -58,7 +58,7 @@ func TestExecuteAsyncHandler_QueueSaturation(t *testing.T) {
 	// We submit more than capacity to ensure queue stays full
 	for i := 0; i < queueCapacity*2; i++ {
 		job := asyncExecutionJob{
-			controller: newExecutionController(store, payloads, nil, 90*time.Second),
+			controller: newExecutionController(store, payloads, nil, 90*time.Second, ""),
 			plan: preparedExecution{
 				exec: &types.Execution{
 					ExecutionID: "test-exec-fill",
@@ -76,7 +76,7 @@ func TestExecuteAsyncHandler_QueueSaturation(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	router := gin.New()
-	router.POST("/api/v1/execute/async/:target", ExecuteAsyncHandler(store, payloads, nil, 90*time.Second))
+	router.POST("/api/v1/execute/async/:target", ExecuteAsyncHandler(store, payloads, nil, 90*time.Second, ""))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/async/node-1.reasoner-a", strings.NewReader(`{"input":{"foo":"bar"}}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -131,7 +131,7 @@ func TestExecuteAsyncHandler_WithWebhook(t *testing.T) {
 	payloads := services.NewFilePayloadStore(t.TempDir())
 
 	router := gin.New()
-	router.POST("/api/v1/execute/async/:target", ExecuteAsyncHandler(store, payloads, nil, 90*time.Second))
+	router.POST("/api/v1/execute/async/:target", ExecuteAsyncHandler(store, payloads, nil, 90*time.Second, ""))
 
 	reqBody := `{
 		"input": {"foo": "bar"},
@@ -180,7 +180,7 @@ func TestExecuteAsyncHandler_InvalidWebhook(t *testing.T) {
 	payloads := services.NewFilePayloadStore(t.TempDir())
 
 	router := gin.New()
-	router.POST("/api/v1/execute/async/:target", ExecuteAsyncHandler(store, payloads, nil, 90*time.Second))
+	router.POST("/api/v1/execute/async/:target", ExecuteAsyncHandler(store, payloads, nil, 90*time.Second, ""))
 
 	// Webhook with invalid URL (too long)
 	longURL := strings.Repeat("a", 4097)
@@ -226,7 +226,7 @@ func TestHandleSync_AsyncAcknowledgment(t *testing.T) {
 	payloads := services.NewFilePayloadStore(t.TempDir())
 
 	router := gin.New()
-	router.POST("/api/v1/execute/:target", ExecuteHandler(store, payloads, nil, 90*time.Second))
+	router.POST("/api/v1/execute/:target", ExecuteHandler(store, payloads, nil, 90*time.Second, ""))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/node-1.reasoner-a", strings.NewReader(`{"input":{"foo":"bar"}}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -307,7 +307,7 @@ func TestCallAgent_HTTP202Response(t *testing.T) {
 	}
 
 	store := newTestExecutionStorage(agent)
-	controller := newExecutionController(store, nil, nil, 90*time.Second)
+	controller := newExecutionController(store, nil, nil, 90*time.Second, "")
 
 	plan := &preparedExecution{
 		exec: &types.Execution{
@@ -346,7 +346,7 @@ func TestCallAgent_ErrorResponse(t *testing.T) {
 	}
 
 	store := newTestExecutionStorage(agent)
-	controller := newExecutionController(store, nil, nil, 90*time.Second)
+	controller := newExecutionController(store, nil, nil, 90*time.Second, "")
 
 	plan := &preparedExecution{
 		exec: &types.Execution{
@@ -387,7 +387,7 @@ func TestCallAgent_Timeout(t *testing.T) {
 	}
 
 	store := newTestExecutionStorage(agent)
-	controller := newExecutionController(store, nil, nil, 90*time.Second)
+	controller := newExecutionController(store, nil, nil, 90*time.Second, "")
 	// Set shorter timeout for test
 	controller.httpClient.Timeout = 100 * time.Millisecond
 
@@ -439,7 +439,7 @@ func TestCallAgent_ReadResponseError(t *testing.T) {
 	}
 
 	store := newTestExecutionStorage(agent)
-	controller := newExecutionController(store, nil, nil, 90*time.Second)
+	controller := newExecutionController(store, nil, nil, 90*time.Second, "")
 
 	plan := &preparedExecution{
 		exec: &types.Execution{
@@ -481,7 +481,7 @@ func TestCallAgent_HeaderPropagation(t *testing.T) {
 	}
 
 	store := newTestExecutionStorage(agent)
-	controller := newExecutionController(store, nil, nil, 90*time.Second)
+	controller := newExecutionController(store, nil, nil, 90*time.Second, "")
 
 	parentID := "parent-exec-123"
 	sessionID := "session-456"

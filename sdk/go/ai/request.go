@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strings"
 )
 
 // Message represents a chat message.
@@ -33,17 +34,65 @@ type Request struct {
 
 	// Response format for structured outputs
 	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
+
+	// Tools available for the model to call
+	Tools []ToolDefinition `json:"tools,omitempty"`
+
+	// ToolChoice controls how the model selects tools ("auto", "none", or specific)
+	ToolChoice interface{} `json:"tool_choice,omitempty"`
+
+	// Usage opts the request into provider-native usage accounting. For
+	// OpenRouter, {"usage": {"include": true}} makes the response's usage
+	// object carry the native cost of the call; the client sets it
+	// automatically for OpenRouter requests.
+	Usage *RequestUsage `json:"usage,omitempty"`
+}
+
+// RequestUsage is the request-body usage accounting opt-in (OpenRouter shape).
+type RequestUsage struct {
+	Include bool `json:"include"`
+}
+
+// ToolDefinition describes a tool available to the model.
+type ToolDefinition struct {
+	Type     string       `json:"type"` // "function"
+	Function ToolFunction `json:"function"`
+}
+
+// ToolFunction describes the function within a tool definition.
+type ToolFunction struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	Parameters  map[string]interface{} `json:"parameters"`
+}
+
+// ToolCall represents a tool call made by the model.
+type ToolCall struct {
+	ID       string           `json:"id"`
+	Type     string           `json:"type"` // "function"
+	Function ToolCallFunction `json:"function"`
+}
+
+// ToolCallFunction contains the function name and arguments from a tool call.
+type ToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 type Message struct {
-	Role    string        `json:"role"`
-	Content []ContentPart `json:"content"`
+	Role       string        `json:"role"`
+	Content    []ContentPart `json:"content"`
+	ToolCalls  []ToolCall    `json:"tool_calls,omitempty"`
+	ToolCallID string        `json:"tool_call_id,omitempty"`
 }
 
 type ContentPart struct {
-	Type     string        `json:"type"` // "text" or "image_url"
-	Text     string        `json:"text,omitempty"`
-	ImageURL *ImageURLData `json:"image_url,omitempty"`
+	Type       string          `json:"type"` // "text" or "image_url" or "input_audio" or "file"
+	Text       string          `json:"text,omitempty"`
+	ImageURL   *ImageURLData   `json:"image_url,omitempty"`
+	VideoURL   *VideoURLData   `json:"video_url,omitempty"`
+	InputAudio *InputAudioData `json:"input_audio,omitempty"`
+	InputFile  *InputFileData  `json:"file,omitempty"`
 }
 
 // ImageURLData holds the URL and optional detail level for image content parts.
@@ -52,9 +101,49 @@ type ImageURLData struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// VideoURLData holds the URL or data URL for video content parts.
+type VideoURLData struct {
+	URL string `json:"url"`
+}
+
+// InputAudioData holds the encoded data and the format for the audio content parts.
+type InputAudioData struct {
+	Data   string `json:"data"`
+	Format string `json:"format"`
+}
+
+// InputFileData holds the file data for a generic file content parts.
+type InputFileData struct {
+	FileData string `json:"file_data"`
+}
+
 // MarshalJSON serializes a Message. If the content is a single text part,
 // it serializes content as a plain string for maximum API compatibility.
 func (m Message) MarshalJSON() ([]byte, error) {
+	// Tool result messages have a simple string content + tool_call_id
+	if m.Role == "tool" && m.ToolCallID != "" {
+		content := ""
+		if len(m.Content) == 1 && m.Content[0].Type == "text" {
+			content = m.Content[0].Text
+		}
+		return json.Marshal(struct {
+			Role       string `json:"role"`
+			Content    string `json:"content"`
+			ToolCallID string `json:"tool_call_id"`
+		}{Role: m.Role, Content: content, ToolCallID: m.ToolCallID})
+	}
+	// Assistant messages with tool calls
+	if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+		content := ""
+		if len(m.Content) == 1 && m.Content[0].Type == "text" {
+			content = m.Content[0].Text
+		}
+		return json.Marshal(struct {
+			Role      string     `json:"role"`
+			Content   *string    `json:"content"`
+			ToolCalls []ToolCall `json:"tool_calls"`
+		}{Role: m.Role, Content: &content, ToolCalls: m.ToolCalls})
+	}
 	if len(m.Content) == 1 && m.Content[0].Type == "text" && m.Content[0].ImageURL == nil {
 		return json.Marshal(struct {
 			Role    string `json:"role"`
@@ -66,16 +155,25 @@ func (m Message) MarshalJSON() ([]byte, error) {
 }
 
 func (m *Message) UnmarshalJSON(data []byte) error {
-	type Alias Message
+	// First, extract non-content fields
 	aux := &struct {
-		Content json.RawMessage `json:"content"`
-		*Alias
-	}{
-		Alias: (*Alias)(m),
+		Role       string          `json:"role"`
+		Content    json.RawMessage `json:"content"`
+		ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
+		ToolCallID string          `json:"tool_call_id,omitempty"`
+	}{}
+
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
 	}
 
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
+	m.Role = aux.Role
+	m.ToolCalls = aux.ToolCalls
+	m.ToolCallID = aux.ToolCallID
+
+	// Handle null content (common in tool-call assistant messages)
+	if len(aux.Content) == 0 || string(aux.Content) == "null" {
+		return nil
 	}
 
 	var s string
@@ -215,6 +313,15 @@ func WithSchema(schema interface{}) Option {
 	}
 }
 
+// WithTools sets tool definitions for the request.
+func WithTools(tools []ToolDefinition) Option {
+	return func(r *Request) error {
+		r.Tools = tools
+		r.ToolChoice = "auto"
+		return nil
+	}
+}
+
 // Image options
 func WithImageFile(path string) Option {
 	return func(r *Request) error {
@@ -289,6 +396,68 @@ func WithImageBytes(data []byte, mimeType string) Option {
 			ImageURL: &ImageURLData{
 				URL: "data:" + mimeType + ";base64," + encoded,
 			},
+		})
+
+		return nil
+	}
+}
+
+// WithVideoFile attaches a video from a local file.
+func WithVideoFile(path string) Option {
+	return func(r *Request) error {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read video file: %w", err)
+		}
+
+		mimeType := detectMIMEType(path)
+		if !strings.HasPrefix(mimeType, "video/") {
+			mimeType = "video/mp4"
+		}
+		return WithVideoBytes(data, mimeType)(r)
+	}
+}
+
+// WithVideoURL attaches a video from a remote URL or data URL.
+func WithVideoURL(url string) Option {
+	return func(r *Request) error {
+		if len(r.Messages) == 0 {
+			r.Messages = append(r.Messages, Message{
+				Role:    "user",
+				Content: []ContentPart{},
+			})
+		}
+
+		last := &r.Messages[len(r.Messages)-1]
+		last.Content = append(last.Content, ContentPart{
+			Type:     "video_url",
+			VideoURL: &VideoURLData{URL: url},
+		})
+
+		return nil
+	}
+}
+
+// WithVideoBytes attaches a video from raw bytes.
+func WithVideoBytes(data []byte, mimeType string) Option {
+	return func(r *Request) error {
+		if len(data) == 0 {
+			return nil
+		}
+
+		encoded := base64.StdEncoding.EncodeToString(data)
+
+		if len(r.Messages) == 0 {
+			r.Messages = append(r.Messages, Message{
+				Role:    "user",
+				Content: []ContentPart{},
+			})
+		}
+
+		last := &r.Messages[len(r.Messages)-1]
+		last.Content = append(last.Content, ContentPart{
+			Type:     "video_url",
+			VideoURL: &VideoURLData{URL: "data:" + mimeType + ";base64," + encoded},
 		})
 
 		return nil

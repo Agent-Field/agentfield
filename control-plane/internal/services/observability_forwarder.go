@@ -53,6 +53,7 @@ type ObservabilityForwarderConfig struct {
 	QueueSize         int           // Internal queue size (default: 1000)
 	ResponseBodyLimit int           // Max response body to capture (default: 16KB)
 	SnapshotInterval  time.Duration // Interval for system state snapshots (default: 60s, 0 to disable)
+	HTTPClient        *http.Client  // Optional; defaults to SSRF-safe client. Override in tests only.
 }
 
 type observabilityForwarder struct {
@@ -82,12 +83,14 @@ type observabilityForwarder struct {
 // NewObservabilityForwarder creates a new observability forwarder.
 func NewObservabilityForwarder(store ObservabilityWebhookStore, cfg ObservabilityForwarderConfig) ObservabilityForwarder {
 	normalized := normalizeObservabilityConfig(cfg)
+	client := normalized.HTTPClient
+	if client == nil {
+		client = NewSSRFSafeClient(normalized.HTTPTimeout)
+	}
 	return &observabilityForwarder{
-		store: store,
-		cfg:   normalized,
-		client: &http.Client{
-			Timeout: normalized.HTTPTimeout,
-		},
+		store:  store,
+		cfg:    normalized,
+		client: client,
 	}
 }
 
@@ -530,12 +533,12 @@ func (f *observabilityForwarder) publishSnapshot() {
 	}
 
 	snapshotData := map[string]interface{}{
-		"agents":          agentSnapshots,
-		"total_agents":    len(agents),
-		"healthy_agents":  healthyCount,
+		"agents":           agentSnapshots,
+		"total_agents":     len(agents),
+		"healthy_agents":   healthyCount,
 		"unhealthy_agents": unhealthyCount,
-		"active_agents":   activeCount,
-		"inactive_agents": inactiveCount,
+		"active_agents":    activeCount,
+		"inactive_agents":  inactiveCount,
 	}
 
 	// Create and enqueue the observability event directly
@@ -758,7 +761,11 @@ func (f *observabilityForwarder) transformExecutionEvent(e events.ExecutionEvent
 		"agent_node_id": e.AgentNodeID,
 		"status":        e.Status,
 	}
-	if e.Data != nil {
+	if payload, ok := e.Data.(map[string]interface{}); ok {
+		for key, value := range payload {
+			data[key] = value
+		}
+	} else if e.Data != nil {
 		data["payload"] = e.Data
 	}
 

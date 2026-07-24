@@ -7,6 +7,7 @@ from typing import Optional, Set, Tuple
 CANONICAL_STATUSES: Tuple[str, ...] = (
     "pending",
     "queued",
+    "waiting",
     "running",
     "succeeded",
     "failed",
@@ -31,7 +32,9 @@ _STATUS_ALIASES = {
     "cancel": "cancelled",
     "timed_out": "timeout",
     "wait": "queued",
-    "waiting": "queued",
+    "awaiting_approval": "waiting",
+    "awaiting_human": "waiting",
+    "approval_pending": "waiting",
     "in_progress": "running",
     "processing": "running",
 }

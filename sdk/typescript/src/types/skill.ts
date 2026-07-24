@@ -16,4 +16,6 @@ export interface SkillOptions {
   description?: string;
   inputSchema?: any;
   outputSchema?: any;
+  /** Force control-plane verification instead of local verification for this skill. */
+  requireRealtimeValidation?: boolean;
 }

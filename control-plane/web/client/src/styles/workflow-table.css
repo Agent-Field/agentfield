@@ -6,14 +6,14 @@
   font-size: 14px;
   font-weight: 600;
   line-height: 1.2;
-  color: var(--text-primary);
+  color: hsl(var(--foreground));
 }
 
 .workflow-info-secondary {
   font-size: 11px;
   font-weight: 400;
-  color: var(--text-tertiary);
-  font-family: var(--font-mono); /* For counts and IDs */
+  color: hsl(var(--muted-foreground));
+  font-family: 'SF Mono', Monaco, Inconsolata, monospace; /* For counts and IDs */
 }
 
 /* Enhanced Status Column - Single Line Design */
@@ -86,20 +86,20 @@
 
 /* Status indicators with Linear precision */
 .status-dot-success {
-  background-color: var(--status-success-light); /* Slightly more saturated green in dark mode */
+  background-color: hsl(var(--status-success));
 }
 
 .status-dot-failed {
-  background-color: var(--status-error-light); /* Better contrast red for accessibility */
+  background-color: hsl(var(--status-error));
 }
 
 .status-dot-running {
-  background-color: var(--status-running);
-  animation: gentle-pulse 2s ease-in-out infinite; /* Gentle pulse animation */
+  background-color: hsl(var(--status-info));
+  animation: gentle-pulse 2s ease-in-out infinite;
 }
 
 .status-dot-pending {
-  background-color: var(--status-pending);
+  background-color: hsl(var(--status-warning));
 }
 
 /* Gentle pulse animation for running states */
@@ -120,14 +120,14 @@
 }
 
 .workflow-row:hover {
-  background: var(--bg-hover); /* Linear's subtle precision */
+  background: hsl(var(--accent)); /* Linear's subtle precision */
   border-color: var(--border);
   transition: all 150ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 
 /* Table row hover states for Linear precision */
 .table-row:hover {
-  background: var(--bg-hover); /* Linear's subtle precision */
+  background: hsl(var(--accent)); /* Linear's subtle precision */
   border-color: var(--border);
   transition: all 150ms cubic-bezier(0.23, 1, 0.32, 1);
 }
@@ -174,33 +174,33 @@
 
 /* Status-specific node styling - Dark theme compatible */
 .node-status-completed {
-  border-color: var(--status-success);
-  background-color: var(--status-success-bg);
+  border-color: hsl(var(--status-success));
+  background-color: hsl(var(--status-success) / 0.1);
 }
 
 .node-status-failed {
-  border-color: var(--status-error);
-  background-color: var(--status-error-bg);
+  border-color: hsl(var(--status-error));
+  background-color: hsl(var(--status-error) / 0.1);
 }
 
 .node-status-running {
-  border-color: var(--status-running);
-  background-color: var(--status-info-bg);
+  border-color: hsl(var(--status-info));
+  background-color: hsl(var(--status-info) / 0.1);
   animation: pulse-border 2s ease-in-out infinite;
 }
 
 .node-status-pending {
-  border-color: var(--status-pending);
-  background-color: var(--status-warning-bg);
+  border-color: hsl(var(--status-warning));
+  background-color: hsl(var(--status-warning) / 0.1);
 }
 
 @keyframes pulse-border {
   0%, 100% {
-    border-color: var(--status-running);
-    box-shadow: 0 0 0 0 color-mix(in oklch, var(--status-running) 40%, transparent);
+    border-color: hsl(var(--status-info));
+    box-shadow: 0 0 0 0 hsl(var(--status-info) / 0.4);
   }
   50% {
-    border-color: var(--status-info-light);
-    box-shadow: 0 0 0 4px color-mix(in oklch, var(--status-running) 10%, transparent);
+    border-color: hsl(var(--status-info));
+    box-shadow: 0 0 0 4px hsl(var(--status-info) / 0.1);
   }
 }

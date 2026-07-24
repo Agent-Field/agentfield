@@ -357,3 +357,32 @@ func TestGatherCallbackCandidates_WhitespaceInCandidates(t *testing.T) {
 		assert.Equal(t, len(c), len(c), "Should not have leading/trailing whitespace")
 	}
 }
+
+func TestResolveCallbackCandidates_SelectsFirstNormalizedCandidate(t *testing.T) {
+	resolved, normalized, probeResults := resolveCallbackCandidates([]string{" test-runner:8080 ", "http://second:8080"}, "8080")
+
+	require.Equal(t, "http://test-runner:8080", resolved)
+	require.Equal(t, []string{"http://test-runner:8080", "http://second:8080"}, normalized)
+	require.Nil(t, probeResults)
+}
+
+func TestNormalizeServerlessDiscoveryURL_NormalizesWildcardBindAddress(t *testing.T) {
+	normalized, err := normalizeServerlessDiscoveryURL("http://0.0.0.0:7000/invoke", nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, "http://localhost:7000/invoke", normalized)
+}
+
+func TestNormalizeServerlessDiscoveryURL_RejectsUnlistedHost(t *testing.T) {
+	_, err := normalizeServerlessDiscoveryURL("https://example.com/invoke", nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not allowlisted")
+}
+
+func TestNormalizeServerlessDiscoveryURL_AllowsConfiguredHost(t *testing.T) {
+	normalized, err := normalizeServerlessDiscoveryURL("https://agents.internal/invoke", []string{"*.trusted.example", "agents.internal", "10.0.0.0/8"})
+
+	require.NoError(t, err)
+	assert.Equal(t, "https://agents.internal/invoke", normalized)
+}

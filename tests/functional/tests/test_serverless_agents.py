@@ -29,7 +29,7 @@ from fastapi.responses import JSONResponse
 
 from utils import run_go_agent, unique_node_id
 
-TEST_BIND_HOST = os.environ.get("TEST_AGENT_BIND_HOST", "0.0.0.0")
+TEST_BIND_HOST = os.environ.get("TEST_AGENT_BIND_HOST", "127.0.0.1")
 TEST_CALLBACK_HOST = os.environ.get("TEST_AGENT_CALLBACK_HOST", "test-runner")
 
 
@@ -190,6 +190,7 @@ async def run_python_serverless_agent(node_id: str, control_plane_url: str) -> A
         port=port,
         log_level="warning",
         access_log=True,
+        ws="websockets-sansio",
     )
     server = uvicorn.Server(config)
     loop = asyncio.new_event_loop()

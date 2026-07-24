@@ -89,7 +89,7 @@ export function RecentActivityStream({ className }: RecentActivityStreamProps) {
     return (
       <div className={cn("space-y-4", className)}>
         <div className="flex items-center justify-between">
-          <h2 className="text-heading-3 text-foreground">
+          <h2 className="text-base font-semibold text-foreground">
             Recent Activity
           </h2>
           <div className="w-4 h-4 animate-spin rounded-full border-2 border-current border-t-transparent text-muted-foreground" />
@@ -119,7 +119,7 @@ export function RecentActivityStream({ className }: RecentActivityStreamProps) {
     return (
       <div className={cn("space-y-4", className)}>
         <div className="flex items-center justify-between">
-          <h2 className="text-heading-3 text-foreground">
+          <h2 className="text-base font-semibold text-foreground">
             Recent Activity
           </h2>
           <button
@@ -142,14 +142,14 @@ export function RecentActivityStream({ className }: RecentActivityStreamProps) {
             <WarningAlt className="h-6 w-6" style={{ color: "var(--status-error)" }} />
             <h3 className="font-medium" style={{ color: "var(--status-error)" }}>Failed to load recent activity</h3>
           </div>
-          <p className="text-text-secondary text-center text-sm max-w-md">
+          <p className="text-muted-foreground text-center text-sm max-w-md">
             {error?.message ||
               "An unexpected error occurred while fetching recent activity."}
           </p>
           {error && (
             <button
               onClick={clearError}
-              className="text-body-small hover:text-foreground"
+              className="text-sm text-muted-foreground hover:text-foreground"
             >
               Dismiss
             </button>
@@ -164,7 +164,7 @@ export function RecentActivityStream({ className }: RecentActivityStreamProps) {
     return (
       <div className={cn("space-y-4", className)}>
         <div className="flex items-center justify-between">
-          <h2 className="text-heading-3 text-foreground">
+          <h2 className="text-base font-semibold text-foreground">
             Recent Activity
           </h2>
           <button
@@ -188,7 +188,7 @@ export function RecentActivityStream({ className }: RecentActivityStreamProps) {
           </div>
           <div className="text-center space-y-2">
             <h3 className="font-medium text-foreground">No recent activity</h3>
-            <p className="text-text-secondary text-sm">
+            <p className="text-muted-foreground text-sm">
               Recent executions will appear here once agents start running.
             </p>
           </div>
@@ -201,7 +201,7 @@ export function RecentActivityStream({ className }: RecentActivityStreamProps) {
     <div className={cn("space-y-4", className)}>
       {/* Header with refresh button */}
       <div className="flex items-center justify-between">
-        <h2 className="text-heading-3 text-foreground">Recent Activity</h2>
+        <h2 className="text-base font-semibold text-foreground">Recent Activity</h2>
         <button
           onClick={refresh}
           disabled={isRefreshing}
@@ -223,8 +223,8 @@ export function RecentActivityStream({ className }: RecentActivityStreamProps) {
         <div
           className="flex items-center justify-between p-3 rounded-lg border"
           style={{
-            backgroundColor: "var(--status-warning-bg)",
-            borderColor: "var(--status-warning-border)"
+            backgroundColor: "hsl(var(--status-warning) / 0.1)",
+            borderColor: "hsl(var(--status-warning) / 0.3)"
           }}
         >
           <div className="flex items-center space-x-3">
@@ -233,7 +233,7 @@ export function RecentActivityStream({ className }: RecentActivityStreamProps) {
               <p className="text-sm font-medium text-foreground">
                 Unable to refresh data
               </p>
-              <p className="text-body-small">
+              <p className="text-sm text-muted-foreground">
                 Showing cached data. {error?.message}
               </p>
             </div>
@@ -282,18 +282,18 @@ export function RecentActivityStream({ className }: RecentActivityStreamProps) {
                     {execution.agent_name}
                   </span>
                   <span className="text-muted-foreground">·</span>
-                  <span className="text-text-secondary truncate">
+                  <span className="text-muted-foreground truncate">
                     {execution.reasoner_name}
                   </span>
                 </div>
                 <div className="flex items-center space-x-2 mt-1">
-                  <span className="text-body-small">
+                  <span className="text-sm text-muted-foreground">
                     {execution.relative_time}
                   </span>
                   {duration && (
                     <>
-                      <span className="text-body-small">·</span>
-                      <span className="text-body-small">
+                      <span className="text-sm text-muted-foreground">·</span>
+                      <span className="text-sm text-muted-foreground">
                         {duration}
                       </span>
                     </>

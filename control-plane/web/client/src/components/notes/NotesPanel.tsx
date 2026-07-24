@@ -132,11 +132,11 @@ export function NotesPanel({ executionId, className = "" }: NotesPanelProps) {
   // Empty state component
   const EmptyState = () => (
     <div className="flex flex-col items-center justify-center py-12 text-center">
-      <div className="rounded-full bg-bg-tertiary p-4 mb-4">
-        <Document size={32} className="text-text-tertiary" />
+      <div className="rounded-full bg-muted p-4 mb-4">
+        <Document size={32} className="text-muted-foreground" />
       </div>
-      <h3 className="text-heading-3 mb-2">No notes yet</h3>
-      <p className="text-text-secondary mb-4 max-w-sm">
+      <h3 className="text-base font-semibold mb-2">No notes yet</h3>
+      <p className="text-muted-foreground mb-4 max-w-sm">
         Notes will appear here as they are added during execution.
         Use app.note() in your code to add notes.
       </p>
@@ -154,11 +154,11 @@ export function NotesPanel({ executionId, className = "" }: NotesPanelProps) {
   // Error state component
   const ErrorState = () => (
     <div className="flex flex-col items-center justify-center py-12 text-center">
-      <div className="rounded-full bg-status-error-bg p-4 mb-4">
+      <div className="rounded-full bg-status-error/10 p-4 mb-4">
         <Document size={32} className="text-status-error" />
       </div>
-      <h3 className="text-heading-3 mb-2">Failed to load notes</h3>
-      <p className="text-text-secondary mb-4 max-w-sm">
+      <h3 className="text-base font-semibold mb-2">Failed to load notes</h3>
+      <p className="text-muted-foreground mb-4 max-w-sm">
         {state.error}
       </p>
       <Button variant="outline" onClick={() => fetchNotes()}>
@@ -181,11 +181,11 @@ export function NotesPanel({ executionId, className = "" }: NotesPanelProps) {
     <Card className={`${className}`}>
       <CardHeader className="pb-4">
         <div className="flex items-center justify-between">
-          <CardTitle className="flex items-center gap-2 text-heading-3">
+          <CardTitle className="flex items-center gap-2 text-base font-semibold">
             <Chat size={20} />
             Execution Notes
             {state.notes.length > 0 && (
-              <span className="text-text-tertiary font-normal">
+              <span className="text-muted-foreground font-normal">
                 ({filteredAndSortedNotes.length} of {state.notes.length})
               </span>
             )}
@@ -233,7 +233,7 @@ export function NotesPanel({ executionId, className = "" }: NotesPanelProps) {
 
         {/* Last updated indicator */}
         {state.lastUpdated && (
-          <div className="text-text-tertiary mt-2">
+          <div className="text-muted-foreground mt-2">
             Last updated: {state.lastUpdated.toLocaleTimeString()}
           </div>
         )}
@@ -249,7 +249,7 @@ export function NotesPanel({ executionId, className = "" }: NotesPanelProps) {
             <EmptyState />
           ) : (
             <div className="text-center py-8">
-              <p className="text-text-secondary">
+              <p className="text-muted-foreground">
                 No notes match the selected filters.
               </p>
               <Button

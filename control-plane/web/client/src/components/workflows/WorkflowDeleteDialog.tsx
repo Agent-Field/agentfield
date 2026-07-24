@@ -132,7 +132,7 @@ export function WorkflowDeleteDialog({
               {isSingleWorkflow ? 'Workflow to delete' : `${workflowIds.length} workflows to delete`}
             </h4>
             {workflowIds.length === 0 ? (
-              <p className="text-body-small">Select at least one workflow to delete.</p>
+              <p className="text-sm text-muted-foreground">Select at least one workflow to delete.</p>
             ) : (
               <div className="space-y-2">
                 {workflows.map((workflow) => {
@@ -151,10 +151,10 @@ export function WorkflowDeleteDialog({
                         <div className="font-medium text-sm truncate">
                           {workflow.display_name || 'Unnamed Workflow'}
                         </div>
-                        <div className="text-body-small truncate">
+                        <div className="text-sm text-muted-foreground truncate">
                           {workflowIdentifier ?? "unknown"} • {workflow.agent_name}
                         </div>
-                        <div className="flex flex-wrap items-center gap-2 text-body-small text-muted-foreground mt-1">
+                        <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground text-muted-foreground mt-1">
                           <span>{workflow.total_executions} nodes</span>
                           <span>•</span>
                           <span>{counts.succeeded ?? 0} succeeded</span>
@@ -180,12 +180,12 @@ export function WorkflowDeleteDialog({
                           {normalizedStatus}
                         </Badge>
                         {active > 0 && (
-                          <Badge variant="running" className="text-body-small h-5 px-2">
+                          <Badge variant="running" className="text-sm text-muted-foreground h-5 px-2">
                             {active} active
                           </Badge>
                         )}
                         {failed > 0 && (
-                          <Badge variant="failed" className="text-body-small h-5 px-2">
+                          <Badge variant="failed" className="text-sm text-muted-foreground h-5 px-2">
                             {failed} issues
                           </Badge>
                         )}

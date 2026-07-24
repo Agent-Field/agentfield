@@ -4,6 +4,7 @@ import { MemoryClient } from '../src/memory/MemoryClient.js';
 import { MemoryInterface } from '../src/memory/MemoryInterface.js';
 import { AgentFieldClient } from '../src/client/AgentFieldClient.js';
 import { WorkflowReporter } from '../src/workflow/WorkflowReporter.js';
+import { MemoryEventClient } from '../src/memory/MemoryEventClient.js';
 
 vi.mock('axios', () => {
   const create = vi.fn(() => ({
@@ -292,5 +293,45 @@ describe('MemoryInterface helpers', () => {
         scopeId: 's1'
       })
     );
+  });
+});
+
+describe('MemoryEventClient history operations', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('gets MemoryEvent history', async () => {
+    const client = new MemoryEventClient('http://localhost:8080');
+    const http = getCreatedClient();
+    const get = vi.fn().mockResolvedValue({
+      data: [
+        {
+          scope: "session",
+          scope_id: "s1",
+          key: "cart.total",
+          action: "set",
+          data: 10,
+        },
+      ]
+    });
+    http.get = get;
+
+    const result = await client.history({ patterns: ["cart.*"], limit: 1, since: new Date(Date.parse("2050-11-22T05:00:00.000Z")) });
+
+    expect(get).toHaveBeenCalledWith(
+      '/api/v1/memory/events/history',
+      expect.objectContaining({
+        params: expect.objectContaining({
+          limit: 1,
+          since: "2050-11-22T05:00:00.000Z",
+          patterns: "cart.*"
+        })
+      })
+    );
+
+    expect(result).not.null;
+    expect(result.length).toEqual(1);
+    expect(result[0].key).toEqual("cart.total");
   });
 });

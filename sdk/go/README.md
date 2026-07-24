@@ -46,6 +46,74 @@ func main() {
 - `types`: Shared data structures and contracts.
 - `ai`: Helpers for interacting with AI providers via the control plane.
 
+## AI Tool Calling
+
+Execute LLM tool-call loops with automatic capability discovery:
+
+```go
+import (
+    "github.com/Agent-Field/agentfield/sdk/go/ai"
+    "github.com/Agent-Field/agentfield/sdk/go/agent"
+)
+
+// Convert discovered capabilities to LLM tool definitions
+tools := ai.CapabilitiesToToolDefinitions(discoveryResult.Capabilities)
+
+// Execute tool-call loop with guardrails
+response, trace, err := aiClient.ExecuteToolCallLoop(
+    ctx,
+    messages,
+    tools,
+    ai.ToolCallConfig{MaxTurns: 10, MaxToolCalls: 25},
+    func(ctx context.Context, target string, input map[string]interface{}) (map[string]interface{}, error) {
+        return agent.Call(ctx, target, input)
+    },
+)
+
+fmt.Printf("Final: %s\n", response.Text())
+fmt.Printf("Tool calls: %d, Turns: %d\n", trace.TotalToolCalls, trace.TotalTurns)
+```
+
+**Key features:**
+- `CapabilitiesToToolDefinitions` — Convert discovery results to OpenAI tool schemas
+- `ExecuteToolCallLoop` — Automatic LLM tool-call loop with turn/call limits
+- `ToolCallTrace` — Per-call latency tracking and observability
+
+## Human-in-the-Loop Approvals
+
+The `client` package provides methods for requesting human approval, checking status, and waiting for decisions:
+
+```go
+import "github.com/Agent-Field/agentfield/sdk/go/client"
+
+approvalClient := client.New("http://localhost:8080", nil)
+approvalRequestID := "req-abc123"
+
+// Create the human-facing approval request in your approval service first,
+// then pass its ID/URL to AgentField so the execution transitions to "waiting".
+_, err := approvalClient.RequestApproval(ctx, nodeID, executionID,
+    client.RequestApprovalRequest{
+        ApprovalRequestID:  approvalRequestID,
+        ApprovalRequestURL: "https://approvals.example.com/review/" + approvalRequestID,
+        ExpiresInHours:     24,
+    },
+)
+
+// Wait for human decision (uses context.Context for timeout)
+waitCtx, cancel := context.WithTimeout(ctx, 1*time.Hour)
+defer cancel()
+
+result, err := approvalClient.WaitForApproval(waitCtx, nodeID, executionID,
+    &client.WaitForApprovalOptions{
+        PollInterval: 5 * time.Second,
+        MaxInterval:  30 * time.Second,
+    },
+)
+// result.Status is "approved", "rejected", or "expired"
+```
+
+**Methods:** `RequestApproval()`, `GetApprovalStatus()`, `WaitForApproval()`
+
 ## Testing
 
 ```bash

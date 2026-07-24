@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -55,6 +56,27 @@ func TestAPIKeyAuth_NoAuthConfigured(t *testing.T) {
 	assert.Equal(t, "success", resp["message"])
 }
 
+func TestAPIKeyAuth_NoAuthConfiguredGrantsAPIKeyLevel(t *testing.T) {
+	// In no-auth mode callers have full access, so downstream auth-level
+	// filtering (agentic discover, smart 404) must see them as api_key —
+	// "public" would hide every api_key endpoint on default local installs.
+	router := gin.New()
+	router.Use(APIKeyAuth(AuthConfig{APIKey: ""}))
+	router.GET("/api/v1/test", func(c *gin.Context) {
+		level, _ := c.Get("auth_level")
+		c.JSON(http.StatusOK, gin.H{"auth_level": level})
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "api_key", resp["auth_level"])
+}
+
 func TestAPIKeyAuth_ValidXAPIKeyHeader(t *testing.T) {
 	router := setupRouter(AuthConfig{APIKey: "secret-key"})
 
@@ -79,7 +101,7 @@ func TestAPIKeyAuth_ValidBearerToken(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
-func TestAPIKeyAuth_ValidQueryParam(t *testing.T) {
+func TestAPIKeyAuth_QueryParamRejectedOnStandardRESTRoute(t *testing.T) {
 	router := setupRouter(AuthConfig{APIKey: "secret-key"})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/test?api_key=secret-key", nil)
@@ -87,7 +109,139 @@ func TestAPIKeyAuth_ValidQueryParam(t *testing.T) {
 
 	router.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	msg, _ := resp["message"].(string)
+	assert.NotContains(t, msg, "?api_key=", "standard REST 401s must not advertise query-string auth")
+}
+
+func TestAPIKeyAuth_QueryParamAllowedOnConfiguredStreamingRoutes(t *testing.T) {
+	router := gin.New()
+	router.Use(APIKeyAuth(AuthConfig{
+		APIKey: "secret-key",
+		QueryAPIKeyAllowedPaths: []string{
+			"/api/v1/stream/events",
+			"/api/v1/executions/:execution_id/events",
+		},
+	}))
+	router.GET("/api/v1/stream/events", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"message": "stream"})
+	})
+	router.GET("/api/v1/executions/:execution_id/events", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"message": "dynamic stream"})
+	})
+
+	for _, url := range []string{
+		"/api/v1/stream/events?api_key=secret-key",
+		"/api/v1/executions/exec-1/events?api_key=secret-key",
+	} {
+		req := httptest.NewRequest(http.MethodGet, url, nil)
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code, "url %s should accept query auth because the streaming route is allowlisted", url)
+	}
+}
+
+func TestAPIKeyAuth_QueryParamRejectedWhenRouteNotAllowlisted(t *testing.T) {
+	router := gin.New()
+	router.Use(APIKeyAuth(AuthConfig{
+		APIKey:                  "secret-key",
+		QueryAPIKeyAllowedPaths: []string{"/api/v1/stream/events"},
+	}))
+	router.GET("/api/v1/test", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"message": "success"})
+	})
+	router.GET("/api/v1/stream/events/history", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"message": "history"})
+	})
+
+	for _, url := range []string{
+		"/api/v1/test?api_key=secret-key",
+		"/api/v1/stream/events/history?api_key=secret-key",
+	} {
+		req := httptest.NewRequest(http.MethodGet, url, nil)
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusUnauthorized, w.Code, "url %s should reject query auth because the route is not allowlisted", url)
+	}
+}
+
+func TestAPIKeyAuth_SkipPrefixes(t *testing.T) {
+	router := gin.New()
+	router.Use(APIKeyAuth(AuthConfig{
+		APIKey:       "secret-key",
+		SkipPrefixes: []string{"/.well-known/", "/api/v1/ard/artifacts/"},
+	}))
+	router.GET("/.well-known/ai-catalog.json", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"catalog": true})
+	})
+	router.GET("/api/v1/ard/artifacts/node-1.review", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"artifact": true})
+	})
+
+	for _, path := range []string{"/.well-known/ai-catalog.json", "/api/v1/ard/artifacts/node-1.review"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code, "path %s should be skipped by prefix", path)
+	}
+}
+
+func TestAPIKeyAuth_SetsCallerAgentIDContext(t *testing.T) {
+	tests := []struct {
+		name     string
+		headers  map[string]string
+		expected string
+	}{
+		{
+			name: "caller header takes precedence",
+			headers: map[string]string{
+				"X-Caller-Agent-ID": "agent-from-caller",
+				"X-Agent-Node-ID":   "agent-from-node",
+			},
+			expected: "agent-from-caller",
+		},
+		{
+			name: "agent node header fallback",
+			headers: map[string]string{
+				"X-Agent-Node-ID": "agent-from-node",
+			},
+			expected: "agent-from-node",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			router := gin.New()
+			router.Use(APIKeyAuth(AuthConfig{APIKey: "secret-key"}))
+			router.GET("/api/v1/test", func(c *gin.Context) {
+				callerID, _ := c.Get(string(CallerAgentIDKey))
+				c.JSON(http.StatusOK, gin.H{"caller_agent_id": callerID})
+			})
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
+			req.Header.Set("X-API-Key", "secret-key")
+			for key, value := range tt.headers {
+				req.Header.Set(key, value)
+			}
+			w := httptest.NewRecorder()
+
+			router.ServeHTTP(w, req)
+
+			require.Equal(t, http.StatusOK, w.Code)
+			var resp map[string]string
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+			assert.Equal(t, tt.expected, resp["caller_agent_id"])
+		})
+	}
 }
 
 func TestAPIKeyAuth_InvalidKey(t *testing.T) {
@@ -110,7 +264,7 @@ func TestAPIKeyAuth_InvalidKey(t *testing.T) {
 			headerValue: "Bearer wrong-key",
 		},
 		{
-			name:       "wrong query param",
+			name:       "query param on standard route",
 			queryParam: "wrong-key",
 		},
 		{
@@ -135,11 +289,13 @@ func TestAPIKeyAuth_InvalidKey(t *testing.T) {
 
 			assert.Equal(t, http.StatusUnauthorized, w.Code)
 
-			var resp map[string]string
+			var resp map[string]interface{}
 			err := json.Unmarshal(w.Body.Bytes(), &resp)
 			require.NoError(t, err)
 			assert.Equal(t, "unauthorized", resp["error"])
-			assert.Contains(t, resp["message"], "invalid or missing API key")
+			msg, _ := resp["message"].(string)
+			assert.Contains(t, msg, "invalid or missing API key")
+			assert.Contains(t, resp, "help", "401 should include help hints for agents")
 		})
 	}
 }
@@ -208,6 +364,40 @@ func TestAPIKeyAuth_SkipUIPath(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// TestAPIKeyAuth_SkipPublicWebhookIngest pins that the public webhook
+// ingest endpoint at /sources/:trigger_id is reachable without the global
+// API key. Webhook providers (Stripe / GitHub / Slack / generic HMAC /
+// generic Bearer) cannot be reconfigured to forward AGENTFIELD_API_KEY,
+// so requiring it here would 401 every real delivery before signature
+// verification ran. Each Source plugin enforces its own constant-time
+// signature check inside the handler.
+//
+// Regression target: production deployments that set AGENTFIELD_API_KEY
+// previously rejected every signed webhook with HTTP 401 before the
+// trigger handler had a chance to verify the payload.
+func TestAPIKeyAuth_SkipPublicWebhookIngest(t *testing.T) {
+	router := gin.New()
+	router.Use(APIKeyAuth(AuthConfig{APIKey: "secret-key"}))
+	router.POST("/sources/:trigger_id", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"received": 1, "status": "ok"})
+	})
+
+	// No API key on the request — simulating a real webhook from a
+	// provider that doesn't know our internal API key.
+	req := httptest.NewRequest(http.MethodPost, "/sources/trig-abc",
+		strings.NewReader(`{"id":"evt_1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Stripe-Signature", "t=123,v1=fake")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code,
+		"public webhook ingest must bypass global API key auth so providers "+
+			"can reach the trigger handler; signature verification happens "+
+			"inside the handler, not in this middleware")
 }
 
 func TestAPIKeyAuth_CustomSkipPaths(t *testing.T) {

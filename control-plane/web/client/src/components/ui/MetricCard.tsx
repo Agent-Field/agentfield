@@ -19,25 +19,25 @@ const sizeConfig = {
   sm: {
     container: "h-20",
     padding: "p-3",
-    labelText: "text-caption tracking-wider",
-    valueText: "text-heading-3 leading-none",
-    deltaText: "text-body-small mt-1",
+    labelText: "text-xs font-medium text-muted-foreground uppercase tracking-wider tracking-wider",
+    valueText: "text-base font-semibold leading-none",
+    deltaText: "text-sm text-muted-foreground mt-1",
     icon: "h-3 w-3"
   },
   md: {
     container: "h-24",
     padding: "p-4",
-    labelText: "text-caption tracking-wider",
-    valueText: "text-heading-2 leading-none",
-    deltaText: "text-body-small mt-1",
+    labelText: "text-xs font-medium text-muted-foreground uppercase tracking-wider tracking-wider",
+    valueText: "text-xl font-semibold leading-none",
+    deltaText: "text-sm text-muted-foreground mt-1",
     icon: "h-3.5 w-3.5"
   },
   lg: {
     container: "h-32",
     padding: "p-6",
-    labelText: "text-caption tracking-wide",
-    valueText: "text-heading-1 leading-none",
-    deltaText: "text-body-small mt-2",
+    labelText: "text-xs font-medium text-muted-foreground uppercase tracking-wider tracking-wide",
+    valueText: "text-2xl font-semibold tracking-tight leading-none",
+    deltaText: "text-sm text-muted-foreground mt-2",
     icon: "h-4 w-4"
   }
 };
@@ -77,9 +77,9 @@ export function MetricCard({
       sizeClasses.container,
       sizeClasses.padding
     )}>
-      <div className="flex items-center justify-between text-text-tertiary">
+      <div className="flex items-center justify-between text-muted-foreground">
         <span className={sizeClasses.labelText}>{label}</span>
-        {Icon && <Icon className={cn(sizeClasses.icon, "text-text-tertiary")} />}
+        {Icon && <Icon className={cn(sizeClasses.icon, "text-muted-foreground")} />}
       </div>
       <div>
         {loading ? (
@@ -93,7 +93,7 @@ export function MetricCard({
               {value}
             </p>
             {delta && (
-              <p className={cn(sizeClasses.deltaText, "text-text-secondary")}>
+              <p className={cn(sizeClasses.deltaText, "text-muted-foreground")}>
                 {delta}
               </p>
             )}

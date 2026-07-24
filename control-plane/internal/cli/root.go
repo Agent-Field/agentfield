@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"runtime"
@@ -24,6 +25,10 @@ var (
 	forceVCExecution bool
 	storageModeFlag  string
 	postgresURLFlag  string
+	serverURL        string
+	apiKey           string
+	outputFormat     string
+	requestTimeout   int
 )
 
 // NewRootCommand creates and returns the root Cobra command for the AgentField CLI.
@@ -32,7 +37,15 @@ func NewRootCommand(runServerFunc func(cmd *cobra.Command, args []string), versi
 		Use:     "af",
 		Aliases: []string{"agentfield"},
 		Short:   "AgentField AI Agent Platform",
-		Long:    `AgentField is a comprehensive AI agent platform for building, managing, and deploying AI agent capabilities.`,
+		Long: `AgentField is a comprehensive AI agent platform for building, managing, and deploying AI agent capabilities.
+
+AI Agent? Run "af agent help" for structured JSON output optimized for programmatic use.`,
+		// Don't dump the full usage/help block when a command fails at runtime
+		// (e.g. `af run` failing to start an agent). Usage text is for
+		// mis-invocation, not runtime errors; main.go already surfaces the
+		// error message itself. Set on the root so it applies to every
+		// subcommand (cobra suppresses usage when the root has this set).
+		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			// Initialize logging based on verbose flag
 			logger.InitLogger(verbose)
@@ -75,11 +88,20 @@ func NewRootCommand(runServerFunc func(cmd *cobra.Command, args []string), versi
 	RootCmd.PersistentFlags().BoolVar(&forceVCExecution, "vc-execution", false, "Force-enable generating verifiable credentials for executions")
 	RootCmd.PersistentFlags().StringVar(&storageModeFlag, "storage-mode", "", "Override the storage backend (local or postgres)")
 	RootCmd.PersistentFlags().StringVar(&postgresURLFlag, "postgres-url", "", "PostgreSQL connection URL or DSN (implies --storage-mode=postgres)")
+	RootCmd.PersistentFlags().StringVarP(&serverURL, "server", "s", "", "Control plane URL (env: AGENTFIELD_SERVER, default: http://localhost:8080)")
+	RootCmd.PersistentFlags().StringVarP(&apiKey, "api-key", "k", "", "API key for authenticated endpoints (env: AGENTFIELD_API_KEY)")
 
 	cobra.OnInitialize(initConfig)
 
 	// Add init command
 	RootCmd.AddCommand(NewInitCommand())
+
+	// Add doctor command — environment introspection for skills/coding agents
+	RootCmd.AddCommand(NewDoctorCommand())
+	RootCmd.AddCommand(NewHarnessCommand())
+
+	// Add skill command — install/manage AgentField skills across coding agents
+	RootCmd.AddCommand(NewSkillCommand())
 
 	// Create service container for framework commands
 	cfg := &config.Config{} // Use default config for now
@@ -97,17 +119,28 @@ func NewRootCommand(runServerFunc func(cmd *cobra.Command, args []string), versi
 
 	// Add remaining old commands (not yet migrated)
 	RootCmd.AddCommand(NewUninstallCommand())
+	RootCmd.AddCommand(NewSecretsCommand())
 	RootCmd.AddCommand(NewListCommand())
 	RootCmd.AddCommand(NewStopCommand())
 	RootCmd.AddCommand(NewLogsCommand())
 	RootCmd.AddCommand(NewConfigCommand())
-	RootCmd.AddCommand(NewAddCommand())
-	RootCmd.AddCommand(NewMCPCommand())
+	RootCmd.AddCommand(NewShowRequirementsCommand())
 	RootCmd.AddCommand(NewVCCommand())
+	RootCmd.AddCommand(NewVerifyAliasCommand())
 	RootCmd.AddCommand(NewNodesCommand())
+	RootCmd.AddCommand(NewExecutionCommand())
+	RootCmd.AddCommand(NewSessionCommand())
+	RootCmd.AddCommand(NewCallCommand())
+	RootCmd.AddCommand(NewReasonerListCommand())
+	RootCmd.AddCommand(NewPsCommand())
+	RootCmd.AddCommand(NewTailCommand())
+	RootCmd.AddCommand(NewWaitCommand())
+	RootCmd.AddCommand(NewCatalogCommand())
+	RootCmd.AddCommand(NewShareCommand())
 
 	// Add version command
 	RootCmd.AddCommand(NewVersionCommand(versionInfo))
+	RootCmd.AddCommand(NewAgentCommand())
 
 	// Add the server command
 	serverCmd := &cobra.Command{
@@ -119,6 +152,22 @@ func NewRootCommand(runServerFunc func(cmd *cobra.Command, args []string), versi
 	RootCmd.AddCommand(serverCmd)
 
 	return RootCmd
+}
+
+const AgentHint = `AI Agent? Run "af agent help" for structured JSON output.`
+
+// AgentHintJSON returns a structured JSON hint on stderr for agents that ran a wrong root command.
+func AgentHintJSON(errMsg string) string {
+	hint := map[string]interface{}{
+		"ok": false,
+		"error": map[string]string{
+			"code":    "invalid_command",
+			"message": errMsg,
+			"hint":    `Use "af agent <subcommand>" for machine-friendly JSON output. Run "af agent help" for the full command reference.`,
+		},
+	}
+	b, _ := json.Marshal(hint)
+	return string(b)
 }
 
 // initConfig reads in config file and ENV variables if set.
@@ -160,4 +209,32 @@ func GetBackendOnlyFlag() bool {
 
 func GetPortFlag() int {
 	return portFlag
+}
+
+func GetServerURL() string {
+	if serverURL != "" {
+		return serverURL
+	}
+	if env := os.Getenv("AGENTFIELD_SERVER"); env != "" {
+		return env
+	}
+	if env := os.Getenv("AGENTFIELD_SERVER_URL"); env != "" {
+		return env
+	}
+	return "http://localhost:8080"
+}
+
+func GetAPIKey() string {
+	if apiKey != "" {
+		return apiKey
+	}
+	return os.Getenv("AGENTFIELD_API_KEY")
+}
+
+func GetOutputFormat() string {
+	return outputFormat
+}
+
+func GetRequestTimeout() int {
+	return requestTimeout
 }

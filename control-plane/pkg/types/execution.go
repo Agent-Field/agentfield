@@ -26,10 +26,11 @@ type Execution struct {
 	ResultURI     *string         `json:"result_uri,omitempty" db:"result_uri"`
 
 	// Lifecycle
-	Status      string     `json:"status" db:"status"`
-	StartedAt   time.Time  `json:"started_at" db:"started_at"`
-	CompletedAt *time.Time `json:"completed_at,omitempty" db:"completed_at"`
-	DurationMS  *int64     `json:"duration_ms,omitempty" db:"duration_ms"`
+	Status       string     `json:"status" db:"status"`
+	StatusReason *string    `json:"status_reason,omitempty" db:"status_reason"`
+	StartedAt    time.Time  `json:"started_at" db:"started_at"`
+	CompletedAt  *time.Time `json:"completed_at,omitempty" db:"completed_at"`
+	DurationMS   *int64     `json:"duration_ms,omitempty" db:"duration_ms"`
 
 	// Optional metadata
 	SessionID *string `json:"session_id,omitempty" db:"session_id"`
@@ -60,8 +61,19 @@ type ExecutionFilter struct {
 	Offset            int
 	StartTime         *time.Time
 	EndTime           *time.Time
+	Search            *string
 	SortBy            string
 	SortDescending    bool
+	// ExcludePayloads omits input_payload and result_payload from the query result.
+	// Set this for list/dashboard queries that do not need payload data to avoid
+	// transferring large TOAST columns over the wire.
+	ExcludePayloads bool
+	// ActiveOnly keeps only runs with at least one non-terminal execution
+	// (running/pending/queued/waiting). Unlike Status, which drops non-matching
+	// execution rows BEFORE aggregation (losing terminal children from the
+	// counts), ActiveOnly filters whole runs after aggregation, so a run's
+	// status_counts stay complete. Only honored by QueryRunSummaries.
+	ActiveOnly bool
 }
 
 // ExecutionDAGEdge captures a parent→child relationship inside a run. The UI uses

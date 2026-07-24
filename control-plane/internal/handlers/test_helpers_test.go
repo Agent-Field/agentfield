@@ -3,9 +3,12 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"
+	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
@@ -14,11 +17,14 @@ type testExecutionStorage struct {
 	agent                     *types.AgentNode
 	workflowExecutions        map[string]*types.WorkflowExecution
 	executionRecords          map[string]*types.Execution
+	executionLogs             map[string][]*types.ExecutionLogEntry
 	runs                      map[string]*types.WorkflowRun
 	steps                     map[string]*types.WorkflowStep
 	webhooks                  map[string]*types.ExecutionWebhook
+	config                    map[string]string
 	eventBus                  *events.ExecutionEventBus
 	workflowExecutionEventBus *events.EventBus[*types.WorkflowExecutionEvent]
+	executionLogEventBus      *events.EventBus[*types.ExecutionLogEntry]
 	workflowRunEventBus       *events.EventBus[*types.WorkflowRunEvent]
 	updateCh                  chan string
 }
@@ -28,20 +34,44 @@ func newTestExecutionStorage(agent *types.AgentNode) *testExecutionStorage {
 		agent:                     agent,
 		workflowExecutions:        make(map[string]*types.WorkflowExecution),
 		executionRecords:          make(map[string]*types.Execution),
+		executionLogs:             make(map[string][]*types.ExecutionLogEntry),
 		runs:                      make(map[string]*types.WorkflowRun),
 		steps:                     make(map[string]*types.WorkflowStep),
 		webhooks:                  make(map[string]*types.ExecutionWebhook),
+		config:                    make(map[string]string),
 		eventBus:                  events.NewExecutionEventBus(),
 		workflowExecutionEventBus: events.NewEventBus[*types.WorkflowExecutionEvent](),
+		executionLogEventBus:      events.NewEventBus[*types.ExecutionLogEntry](),
 		workflowRunEventBus:       events.NewEventBus[*types.WorkflowRunEvent](),
 		updateCh:                  make(chan string, 10),
 	}
+}
+
+func (s *testExecutionStorage) GetConfig(_ context.Context, key string) (*storage.ConfigEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	value, ok := s.config[key]
+	if !ok {
+		return nil, nil
+	}
+	return &storage.ConfigEntry{Key: key, Value: value}, nil
+}
+
+func (s *testExecutionStorage) SetConfig(_ context.Context, key string, value string, _ string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.config[key] = value
+	return nil
 }
 
 func (s *testExecutionStorage) GetAgent(ctx context.Context, id string) (*types.AgentNode, error) {
 	if s.agent != nil && s.agent.ID == id {
 		return s.agent, nil
 	}
+	return nil, nil
+}
+
+func (s *testExecutionStorage) ListAgentVersions(ctx context.Context, id string) ([]*types.AgentNode, error) {
 	return nil, nil
 }
 
@@ -194,6 +224,10 @@ func (s *testExecutionStorage) GetWorkflowExecutionEventBus() *events.EventBus[*
 	return s.workflowExecutionEventBus
 }
 
+func (s *testExecutionStorage) GetExecutionLogEventBus() *events.EventBus[*types.ExecutionLogEntry] {
+	return s.executionLogEventBus
+}
+
 func (s *testExecutionStorage) GetWorkflowRunEventBus() *events.EventBus[*types.WorkflowRunEvent] {
 	return s.workflowRunEventBus
 }
@@ -234,6 +268,21 @@ func (s *testExecutionStorage) GetExecutionRecord(ctx context.Context, execution
 	return &copy, nil
 }
 
+func (s *testExecutionStorage) GetExecutionRecordsBatch(ctx context.Context, executionIDs []string) (map[string]*types.Execution, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make(map[string]*types.Execution, len(executionIDs))
+	for _, id := range executionIDs {
+		execution, ok := s.executionRecords[id]
+		if !ok {
+			continue
+		}
+		copy := *execution
+		result[id] = &copy
+	}
+	return result, nil
+}
+
 func (s *testExecutionStorage) UpdateExecutionRecord(ctx context.Context, executionID string, update func(*types.Execution) (*types.Execution, error)) (*types.Execution, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -258,6 +307,117 @@ func (s *testExecutionStorage) UpdateExecutionRecord(ctx context.Context, execut
 	}
 	out := cloned
 	return &out, nil
+}
+
+func (s *testExecutionStorage) QueryWorkflowExecutions(ctx context.Context, filters types.WorkflowExecutionFilters) ([]*types.WorkflowExecution, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var results []*types.WorkflowExecution
+	for _, wfExec := range s.workflowExecutions {
+		if filters.ApprovalRequestID != nil && (wfExec.ApprovalRequestID == nil || *wfExec.ApprovalRequestID != *filters.ApprovalRequestID) {
+			continue
+		}
+		results = append(results, wfExec)
+	}
+	return results, nil
+}
+
+func (s *testExecutionStorage) StoreWorkflowExecutionEvent(ctx context.Context, event *types.WorkflowExecutionEvent) error {
+	return nil
+}
+
+func (s *testExecutionStorage) StoreExecutionLogEntry(ctx context.Context, entry *types.ExecutionLogEntry) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if entry == nil {
+		return fmt.Errorf("execution log entry cannot be nil")
+	}
+
+	copy := *entry
+	copy.Sequence = int64(len(s.executionLogs[copy.ExecutionID]) + 1)
+	s.executionLogs[copy.ExecutionID] = append(s.executionLogs[copy.ExecutionID], &copy)
+	s.executionLogEventBus.Publish(&copy)
+	return nil
+}
+
+func (s *testExecutionStorage) ListExecutionLogEntries(ctx context.Context, executionID string, afterSeq *int64, limit int, levels []string, nodeIDs []string, sources []string, query string) ([]*types.ExecutionLogEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	matchesString := func(needle string, haystack []string) bool {
+		if len(haystack) == 0 {
+			return true
+		}
+		for _, value := range haystack {
+			if value == needle {
+				return true
+			}
+		}
+		return false
+	}
+
+	out := make([]*types.ExecutionLogEntry, 0)
+	for _, entry := range s.executionLogs[executionID] {
+		if afterSeq != nil && entry.Sequence <= *afterSeq {
+			continue
+		}
+		if !matchesString(entry.Level, levels) {
+			continue
+		}
+		if !matchesString(entry.AgentNodeID, nodeIDs) {
+			continue
+		}
+		if !matchesString(entry.Source, sources) {
+			continue
+		}
+		if trimmed := strings.TrimSpace(query); trimmed != "" &&
+			!strings.Contains(entry.Message, trimmed) &&
+			!strings.Contains(string(entry.Attributes), trimmed) {
+			continue
+		}
+		copy := *entry
+		out = append(out, &copy)
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (s *testExecutionStorage) CreateExecutionUsage(ctx context.Context, rows []*types.ExecutionUsage) error {
+	return nil
+}
+func (s *testExecutionStorage) GetUsageStats(ctx context.Context, since *time.Time) (*types.UsageStatsAggregation, error) {
+	return &types.UsageStatsAggregation{}, nil
+}
+func (s *testExecutionStorage) GetUsageTimeseries(ctx context.Context, since *time.Time, now time.Time, buckets int) (*types.UsageTimeseries, error) {
+	return &types.UsageTimeseries{}, nil
+}
+func (s *testExecutionStorage) GetUsageTimeseriesByModel(ctx context.Context, since *time.Time, now time.Time, buckets int) ([]types.UsageModelSeries, error) {
+	return nil, nil
+}
+func (s *testExecutionStorage) GetExecutionUsageTotals(ctx context.Context, executionID string) (*float64, int64, error) {
+	return nil, 0, nil
+}
+func (s *testExecutionStorage) PruneExecutionLogEntries(ctx context.Context, executionID string, maxEntries int, olderThan time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	current := s.executionLogs[executionID]
+	filtered := make([]*types.ExecutionLogEntry, 0, len(current))
+	for _, entry := range current {
+		if !olderThan.IsZero() && entry.EmittedAt.Before(olderThan) {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	if maxEntries > 0 && len(filtered) > maxEntries {
+		filtered = filtered[len(filtered)-maxEntries:]
+	}
+	s.executionLogs[executionID] = filtered
+	return nil
 }
 
 func (s *testExecutionStorage) QueryExecutionRecords(ctx context.Context, filter types.ExecutionFilter) ([]*types.Execution, error) {

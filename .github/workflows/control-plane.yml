@@ -25,7 +25,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24.2'
+          go-version: '1.25.x'
 
       - name: Cache Go modules
         uses: actions/cache@v4
@@ -54,9 +54,11 @@ jobs:
         working-directory: control-plane
         run: GOFLAGS=-buildvcs=false go build ./...
 
-      - name: Run tests
-        working-directory: control-plane
-        run: go test ./...
+      # NOTE: `go test` lives in .github/workflows/coverage.yml so we only
+      # run the control-plane suite once per PR. The coverage workflow is a
+      # required status check on main, so a test regression still blocks
+      # merge. This job continues to validate that the code *builds*, which
+      # is the contract the downstream compile-matrix job depends on.
 
       - name: Lint
         working-directory: control-plane
@@ -84,7 +86,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24.2'
+          go-version: '1.25.x'
 
       - name: Cache Go modules
         uses: actions/cache@v4
@@ -116,16 +118,39 @@ jobs:
           echo "Building for ${GOOS}/${GOARCH}"
           go build -o /tmp/agentfield-server-${GOOS}-${GOARCH} ./cmd/agentfield-server
 
+  # The macOS menu-bar tray (cmd/af-tray) is darwin-only CGO code: the Linux
+  # jobs compile its !darwin stub and the CGO_ENABLED=0 matrix can't build it,
+  # so without this job a type error in tray_darwin.go would only surface at
+  # release time on the goreleaser macOS runner.
+  tray-darwin:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+          cache-dependency-path: control-plane/go.sum
+
+      - name: Compile and vet the macOS tray
+        working-directory: control-plane
+        run: |
+          go build ./cmd/af-tray/
+          go vet ./cmd/af-tray/
+
   # Summary job that depends on all critical checks
   required-checks:
     name: All Required Checks Passed
     runs-on: ubuntu-latest
-    needs: [linux-tests, compile-matrix]
+    needs: [linux-tests, compile-matrix, tray-darwin]
     if: always()
     steps:
       - name: Check all jobs
         run: |
-          if [ "${{ needs.linux-tests.result }}" != "success" ] || [ "${{ needs.compile-matrix.result }}" != "success" ]; then
+          if [ "${{ needs.linux-tests.result }}" != "success" ] || [ "${{ needs.compile-matrix.result }}" != "success" ] || [ "${{ needs.tray-darwin.result }}" != "success" ]; then
             echo "One or more required checks failed"
             exit 1
           fi

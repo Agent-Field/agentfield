@@ -1,56 +1,69 @@
 import { cn } from "../../lib/utils";
+import type { LucideIcon } from "lucide-react";
 import {
-  SquaresFour,
-  Stack,
+  Activity,
+  LayoutGrid,
+  Layers,
   Cpu,
   Play,
-  FlowArrow,
+  Workflow,
   Settings,
   UserCircle,
-  GridFour,
   Package,
-  Pulse,
   Sun,
   Moon,
   Monitor,
   ShieldCheck,
-  Identification,
+  Shield,
+  IdCard,
   FileText,
-  GithubLogo,
-  Question,
-} from "@/components/ui/icon-bridge";
-import type { IconComponent, IconWeight } from "@/components/ui/icon-bridge";
+  Github,
+  HelpCircle,
+  Clock,
+  Server,
+  Lightbulb,
+  FunctionSquare,
+} from "lucide-react";
 
 const icons = {
-  activity: Pulse,
-  dashboard: SquaresFour,
-  "data-center": Stack,
+  activity: Activity,
+  dashboard: LayoutGrid,
+  "data-center": Layers,
+  /** Agent nodes (microservice-style processes) */
+  "agent-node": Server,
+  /** Thinking / LLM-capable API endpoints */
+  reasoner: Lightbulb,
+  /** Deterministic callable APIs */
+  skill: FunctionSquare,
   function: Cpu,
   run: Play,
-  "flow-data": FlowArrow,
+  "flow-data": Workflow,
   settings: Settings,
   user: UserCircle,
-  grid: GridFour,
+  grid: LayoutGrid,
   package: Package,
   sun: Sun,
   moon: Moon,
   monitor: Monitor,
   "shield-check": ShieldCheck,
-  identification: Identification,
+  shield: Shield,
+  identification: IdCard,
   documentation: FileText,
-  github: GithubLogo,
-  support: Question,
+  github: Github,
+  support: HelpCircle,
+  hourglass: Clock,
+  history: Clock,
+  lock: Shield,
 } as const;
 
 export interface IconProps {
   name: keyof typeof icons;
   className?: string;
   size?: number;
-  weight?: IconWeight;
 }
 
-export function Icon({ name, className, size = 16, weight = "regular" }: IconProps) {
-  const IconComponent = icons[name] as IconComponent;
+export function Icon({ name, className, size = 16 }: IconProps) {
+  const IconComponent = icons[name] as LucideIcon;
 
   if (!IconComponent) {
     console.warn(`Icon "${name}" not found`);
@@ -61,7 +74,6 @@ export function Icon({ name, className, size = 16, weight = "regular" }: IconPro
     <IconComponent
       className={cn("shrink-0", className)}
       size={size}
-      weight={weight}
     />
   );
 }

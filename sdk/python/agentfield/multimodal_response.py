@@ -88,47 +88,32 @@ class ImageOutput(BaseModel):
 
     def save(self, path: Union[str, Path]) -> None:
         """Save image to file."""
+        if not self.b64_json and not self.url:
+            raise ValueError("No image data or URL available to save")
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-
-        if self.b64_json:
-            # Save from base64 data
-            image_bytes = base64.b64decode(self.b64_json)
-            with open(path, "wb") as f:
-                f.write(image_bytes)
-        elif self.url:
-            # Download from URL
-            try:
-                import requests
-
-                response = requests.get(self.url)
-                response.raise_for_status()
-                with open(path, "wb") as f:
-                    f.write(response.content)
-            except ImportError:
-                raise ImportError(
-                    "URL download requires requests: pip install requests"
-                )
-        else:
-            raise ValueError("No image data or URL available to save")
+        with open(path, "wb") as f:
+            f.write(self.get_bytes())
 
     def get_bytes(self) -> bytes:
-        """Get raw image bytes."""
+        """Get raw image bytes from b64_json, a data: URL, or an http(s) URL."""
         if self.b64_json:
             return base64.b64decode(self.b64_json)
-        elif self.url:
+        if self.url:
+            if self.url.startswith("data:"):
+                # data:image/jpeg;base64,<payload>
+                _, _, payload = self.url.partition(",")
+                return base64.b64decode(payload)
             try:
                 import requests
-
-                response = requests.get(self.url)
-                response.raise_for_status()
-                return response.content
             except ImportError:
                 raise ImportError(
                     "URL download requires requests: pip install requests"
                 )
-        else:
-            raise ValueError("No image data or URL available")
+            response = requests.get(self.url)
+            response.raise_for_status()
+            return response.content
+        raise ValueError("No image data or URL available")
 
     def show(self) -> None:
         """Display image if possible (requires PIL/Pillow)."""
@@ -198,6 +183,62 @@ class FileOutput(BaseModel):
             raise ValueError("No file data or URL available")
 
 
+class VideoOutput(BaseModel):
+    """Represents video output from generation models."""
+
+    url: Optional[str] = Field(None, description="URL to video file")
+    data: Optional[str] = Field(None, description="Base64-encoded video data")
+    mime_type: str = Field("video/mp4", description="MIME type")
+    filename: Optional[str] = Field(None, description="Suggested filename")
+    duration: Optional[float] = Field(None, description="Duration in seconds")
+    resolution: Optional[str] = Field(None, description="Resolution (e.g., '1080p')")
+    aspect_ratio: Optional[str] = Field(None, description="Aspect ratio (e.g., '16:9')")
+    has_audio: Optional[bool] = Field(None, description="Whether video has audio track")
+    cost_usd: Optional[float] = Field(None, description="Generation cost in USD")
+
+    def save(self, path: Union[str, Path]) -> None:
+        """Save video to file."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        if self.data:
+            video_bytes = base64.b64decode(self.data)
+            with open(path, "wb") as f:
+                f.write(video_bytes)
+        elif self.url:
+            try:
+                import requests
+
+                response = requests.get(self.url, timeout=120)
+                response.raise_for_status()
+                with open(path, "wb") as f:
+                    f.write(response.content)
+            except ImportError:
+                raise ImportError(
+                    "URL download requires requests: pip install requests"
+                )
+        else:
+            raise ValueError("No video data or URL available to save")
+
+    def get_bytes(self) -> bytes:
+        """Get raw video bytes."""
+        if self.data:
+            return base64.b64decode(self.data)
+        elif self.url:
+            try:
+                import requests
+
+                response = requests.get(self.url, timeout=120)
+                response.raise_for_status()
+                return response.content
+            except ImportError:
+                raise ImportError(
+                    "URL download requires requests: pip install requests"
+                )
+        else:
+            raise ValueError("No video data or URL available")
+
+
 class MultimodalResponse:
     """
     Enhanced response object that provides seamless access to multimodal content
@@ -210,13 +251,21 @@ class MultimodalResponse:
         audio: Optional[AudioOutput] = None,
         images: Optional[List[ImageOutput]] = None,
         files: Optional[List[FileOutput]] = None,
+        videos: Optional[List["VideoOutput"]] = None,
         raw_response: Optional[Any] = None,
+        cost_usd: Optional[float] = None,
+        usage: Optional[Dict[str, int]] = None,
+        cost_source: Optional[str] = None,
     ):
         self._text = text
         self._audio = audio
         self._images = images or []
         self._files = files or []
+        self._videos = videos or []
         self._raw_response = raw_response
+        self._cost_usd = cost_usd
+        self._usage = usage or {}
+        self._cost_source = cost_source
 
     def __str__(self) -> str:
         """Backward compatibility: return text content when used as string."""
@@ -229,8 +278,12 @@ class MultimodalResponse:
             parts.append(f"audio={self._audio.format}")
         if self._images:
             parts.append(f"images={len(self._images)}")
+        if self._videos:
+            parts.append(f"videos={len(self._videos)}")
         if self._files:
             parts.append(f"files={len(self._files)}")
+        if self._videos:
+            parts.append(f"videos={len(self._videos)}")
         return f"MultimodalResponse({', '.join(parts)})"
 
     @property
@@ -254,6 +307,11 @@ class MultimodalResponse:
         return self._files
 
     @property
+    def videos(self) -> List["VideoOutput"]:
+        """Get list of video outputs."""
+        return self._videos
+
+    @property
     def has_audio(self) -> bool:
         """Check if response contains audio."""
         return self._audio is not None
@@ -269,14 +327,38 @@ class MultimodalResponse:
         return len(self._files) > 0
 
     @property
+    def has_videos(self) -> bool:
+        """Check if response contains videos."""
+        return len(self._videos) > 0
+
+    @property
     def is_multimodal(self) -> bool:
         """Check if response contains any multimodal content."""
-        return self.has_audio or self.has_images or self.has_files
+        return self.has_audio or self.has_images or self.has_files or self.has_videos
 
     @property
     def raw_response(self) -> Optional[Any]:
         """Get the raw LiteLLM response object."""
         return self._raw_response
+
+    @property
+    def cost_usd(self) -> Optional[float]:
+        """Estimated cost of this LLM call in USD, if available."""
+        return self._cost_usd
+
+    @property
+    def usage(self) -> Dict[str, int]:
+        """Token usage breakdown (prompt_tokens, completion_tokens, total_tokens).
+
+        May also carry ``cache_read_tokens``/``cache_creation_tokens`` when the
+        provider reports prompt-cache accounting.
+        """
+        return self._usage
+
+    @property
+    def cost_source(self) -> Optional[str]:
+        """Where ``cost_usd`` came from: 'provider' | 'litellm' | None."""
+        return self._cost_source
 
     def save_all(
         self, directory: Union[str, Path], prefix: str = "output"
@@ -306,10 +388,23 @@ class MultimodalResponse:
             image.save(image_path)
             saved_files[f"image_{i}"] = str(image_path)
 
+        # Save videos
+        for i, video in enumerate(self._videos):
+            ext = video.mime_type.split("/")[-1] if video.mime_type else "mp4"
+            raw_filename = video.filename or f"{prefix}_video_{i}.{ext}"
+            safe_filename = os.path.basename(raw_filename)  # Strip path components
+            video_path = directory / safe_filename
+            video.save(video_path)
+            saved_files[f"video_{i}"] = str(video_path)
+
         # Save files
         for i, file in enumerate(self._files):
-            filename = file.filename or f"{prefix}_file_{i}"
-            file_path = directory / filename
+            # Skip video files — they're saved in the videos loop
+            if file.mime_type and file.mime_type.startswith("video/"):
+                continue
+            raw_filename = file.filename or f"{prefix}_file_{i}"
+            safe_filename = os.path.basename(raw_filename)  # Strip path components
+            file_path = directory / safe_filename
             file.save(file_path)
             saved_files[f"file_{i}"] = str(file_path)
 
@@ -345,7 +440,11 @@ def _extract_image_from_data(data: Any) -> Optional[ImageOutput]:
     # OpenRouter/Gemini pattern: {"type": "image_url", "image_url": {"url": "..."}}
     if hasattr(data, "image_url"):
         image_url_obj = data.image_url
-        url = getattr(image_url_obj, "url", None) if hasattr(image_url_obj, "url") else None
+        url = (
+            getattr(image_url_obj, "url", None)
+            if hasattr(image_url_obj, "url")
+            else None
+        )
         if url:
             # Handle data URLs (base64 encoded)
             if url.startswith("data:image"):
@@ -380,9 +479,13 @@ def _extract_image_from_data(data: Any) -> Optional[ImageOutput]:
                     if url.startswith("data:image"):
                         try:
                             b64_data = url.split(",", 1)[1] if "," in url else None
-                            return ImageOutput(url=url, b64_json=b64_data, revised_prompt=None)
+                            return ImageOutput(
+                                url=url, b64_json=b64_data, revised_prompt=None
+                            )
                         except Exception:
-                            return ImageOutput(url=url, b64_json=None, revised_prompt=None)
+                            return ImageOutput(
+                                url=url, b64_json=None, revised_prompt=None
+                            )
                     return ImageOutput(url=url, b64_json=None, revised_prompt=None)
 
     return None
@@ -427,6 +530,123 @@ def _find_images_recursive(obj: Any, max_depth: int = 10) -> List[ImageOutput]:
                 continue
 
     return images
+
+
+def _coerce_int(value: Any) -> int:
+    """Best-effort int coercion for token counts (None/str/float -> int)."""
+    if value is None:
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _extract_usage(usage_obj: Any) -> Dict[str, int]:
+    """Normalize a provider usage object into a canonical token dict.
+
+    Handles both the OpenAI/LiteLLM shape (``prompt_tokens`` /
+    ``completion_tokens``) and the Anthropic-native shape (``input_tokens`` /
+    ``output_tokens``), plus prompt-cache accounting when present
+    (``cache_read_input_tokens`` / ``cache_creation_input_tokens`` and their
+    LiteLLM-normalized ``*_details`` variants).
+
+    Cache keys are only added when the provider reports them, so responses
+    without caching keep the historical 3-key shape.
+    """
+
+    def _get(obj: Any, *names: str) -> Any:
+        for name in names:
+            if isinstance(obj, dict):
+                if name in obj and obj[name] is not None:
+                    return obj[name]
+            else:
+                val = getattr(obj, name, None)
+                if val is not None:
+                    return val
+        return None
+
+    # Accept OpenAI/LiteLLM (prompt/completion) or Anthropic-native (input/output).
+    prompt = _get(usage_obj, "prompt_tokens", "input_tokens")
+    completion = _get(usage_obj, "completion_tokens", "output_tokens")
+    total = _get(usage_obj, "total_tokens")
+
+    prompt_tokens = _coerce_int(prompt)
+    completion_tokens = _coerce_int(completion)
+    total_tokens = _coerce_int(total)
+    if not total_tokens:
+        total_tokens = prompt_tokens + completion_tokens
+
+    usage: Dict[str, int] = {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+    }
+
+    # Prompt-cache accounting. Anthropic exposes these top-level; LiteLLM may
+    # nest read tokens under prompt_tokens_details.cached_tokens.
+    cache_read = _get(usage_obj, "cache_read_input_tokens")
+    if cache_read is None:
+        details = _get(usage_obj, "prompt_tokens_details")
+        if details is not None:
+            cache_read = _get(details, "cached_tokens")
+    cache_creation = _get(usage_obj, "cache_creation_input_tokens")
+
+    if cache_read is not None:
+        usage["cache_read_tokens"] = _coerce_int(cache_read)
+    if cache_creation is not None:
+        usage["cache_creation_tokens"] = _coerce_int(cache_creation)
+
+    return usage
+
+
+def _resolve_cost(response: Any, usage_obj: Any) -> tuple[Optional[float], Optional[str]]:
+    """Resolve a call's cost and where the figure came from.
+
+    Order of preference (never lets a failure discard tokens):
+      1. Provider-native cost (OpenRouter ``usage.cost`` when the request opted
+         into usage accounting) -> ``cost_source="provider"``.
+      2. LiteLLM's ``_hidden_params["response_cost"]`` -> ``"litellm"``.
+      3. ``litellm.completion_cost(completion_response=response)`` -> ``"litellm"``.
+    Returns ``(None, None)`` when no cost can be determined.
+    """
+    # 1. Provider-native cost (e.g. OpenRouter returns usage.cost in USD/credits).
+    if usage_obj is not None:
+        native = getattr(usage_obj, "cost", None)
+        if native is None and isinstance(usage_obj, dict):
+            native = usage_obj.get("cost")
+        if native is not None:
+            try:
+                cost = float(native)
+                if cost > 0:
+                    return cost, "provider"
+            except (TypeError, ValueError):
+                pass
+
+    # 2. LiteLLM pre-computed cost on hidden params.
+    hidden = getattr(response, "_hidden_params", None)
+    if isinstance(hidden, dict):
+        response_cost = hidden.get("response_cost")
+        if response_cost is not None:
+            try:
+                cost = float(response_cost)
+                if cost > 0:
+                    return cost, "litellm"
+            except (TypeError, ValueError):
+                pass
+
+    # 3. LiteLLM pricing DB lookup.
+    if hasattr(response, "model") and response.model:
+        try:
+            import litellm as _litellm
+
+            cost = _litellm.completion_cost(completion_response=response)
+            if cost is not None and cost > 0:
+                return float(cost), "litellm"
+        except Exception:
+            pass
+
+    return None, None
 
 
 def detect_multimodal_response(response: Any) -> MultimodalResponse:
@@ -516,6 +736,26 @@ def detect_multimodal_response(response: Any) -> MultimodalResponse:
     if not images:
         images = _find_images_recursive(response, max_depth=5)
 
+    # Extract usage (token counts) and resolve cost. These are decoupled: a
+    # cost-resolution failure must never discard token counts that were
+    # successfully extracted.
+    usage_dict: Dict[str, int] = {}
+    cost_usd: Optional[float] = None
+    cost_source: Optional[str] = None
+    usage_obj = getattr(response, "usage", None)
+    if usage_obj:
+        usage_dict = _extract_usage(usage_obj)
+    if usage_dict:
+        cost_usd, cost_source = _resolve_cost(response, usage_obj)
+
     return MultimodalResponse(
-        text=text, audio=audio, images=images, files=files, raw_response=response
+        text=text,
+        audio=audio,
+        images=images,
+        files=files,
+        videos=[],
+        raw_response=response,
+        cost_usd=cost_usd,
+        usage=usage_dict,
+        cost_source=cost_source,
     )

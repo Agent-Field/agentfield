@@ -48,7 +48,7 @@ export function TechnicalDetailsPanel({ execution }: TechnicalDetailsPanelProps)
       <CardContent className="p-6">
         <div className="flex items-center gap-2 mb-6">
           <Settings className="w-4 h-4" />
-          <span className="text-heading-3">Technical Details</span>
+          <span className="text-base font-semibold">Technical Details</span>
         </div>
 
         <ResponsiveGrid

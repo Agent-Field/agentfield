@@ -156,10 +156,12 @@ type AccessControlMetadata struct {
 
 // AgentNode represents a registered agent service.
 type AgentNode struct {
-	ID      string `json:"id" db:"id"`
-	TeamID  string `json:"team_id" db:"team_id"`
-	BaseURL string `json:"base_url" db:"base_url"`
-	Version string `json:"version" db:"version"`
+	ID            string `json:"id" db:"id" validate:"required,min=1"`
+	GroupID       string `json:"group_id" db:"group_id"`
+	TeamID        string `json:"team_id" db:"team_id"`
+	BaseURL       string `json:"base_url" db:"base_url"`
+	Version       string `json:"version" db:"version"`
+	TrafficWeight int    `json:"traffic_weight" db:"traffic_weight"` // Weight for A/B traffic distribution (default 100)
 
 	// Serverless support
 	DeploymentType string  `json:"deployment_type" db:"deployment_type"`         // "long_running" or "serverless"
@@ -169,6 +171,7 @@ type AgentNode struct {
 
 	Reasoners           []ReasonerDefinition `json:"reasoners" db:"reasoners"`
 	Skills              []SkillDefinition    `json:"skills" db:"skills"`
+	Sessions            []SessionDefinition  `json:"sessions,omitempty" db:"-"`
 	CommunicationConfig CommunicationConfig  `json:"communication_config" db:"communication_config"`
 
 	HealthStatus    HealthStatus         `json:"health_status" db:"health_status"`
@@ -176,8 +179,21 @@ type AgentNode struct {
 	LastHeartbeat   time.Time            `json:"last_heartbeat" db:"last_heartbeat"`
 	RegisteredAt    time.Time            `json:"registered_at" db:"registered_at"`
 
+	// InstanceID identifies the specific OS process running this agent. The SDK
+	// generates a fresh value on every startup. When the control plane sees a
+	// re-registration with a different InstanceID, every still-running execution
+	// owned by the previous instance is failed with status_reason
+	// "agent_restart_orphaned" — the previous process is gone and its in-memory
+	// wait-for-result polls cannot be revived. Empty string for SDKs that
+	// pre-date this field (treated as opt-out for backward compatibility).
+	InstanceID string `json:"instance_id,omitempty" db:"instance_id"`
+
 	Features AgentFeatures `json:"features" db:"features"`
 	Metadata AgentMetadata `json:"metadata" db:"metadata"`
+
+	// Tag approval fields
+	ProposedTags []string `json:"proposed_tags,omitempty" db:"proposed_tags"`
+	ApprovedTags []string `json:"approved_tags,omitempty" db:"approved_tags"`
 }
 
 // CallbackDiscoveryInfo captures how the AgentField server resolved an agent callback URL.
@@ -200,20 +216,85 @@ type CallbackTestResult struct {
 	LatencyMS int64  `json:"latency_ms,omitempty"`
 }
 
+// TagEntrypoint marks a reasoner as an intended external entry point of its
+// node (as opposed to internal plumbing other reasoners call). Discovery
+// surfaces and `af ls` can filter on it, so callers browsing a node see the
+// reasoners they are meant to invoke first.
+const TagEntrypoint = "entrypoint"
+
 // ReasonerDefinition defines a reasoner provided by an agent node.
 type ReasonerDefinition struct {
-	ID           string          `json:"id"`
-	InputSchema  json.RawMessage `json:"input_schema"`
-	OutputSchema json.RawMessage `json:"output_schema"`
-	MemoryConfig MemoryConfig    `json:"memory_config"`
-	Tags         []string        `json:"tags,omitempty"`
+	ID             string           `json:"id"`
+	Description    string           `json:"description,omitempty"`
+	InputSchema    json.RawMessage  `json:"input_schema"`
+	OutputSchema   json.RawMessage  `json:"output_schema"`
+	MemoryConfig   MemoryConfig     `json:"memory_config"`
+	Tags           []string         `json:"tags,omitempty"`
+	ProposedTags   []string         `json:"proposed_tags,omitempty"`
+	ApprovedTags   []string         `json:"approved_tags,omitempty"`
+	Triggers       []TriggerBinding `json:"triggers,omitempty"`
+	AcceptsWebhook *string          `json:"accepts_webhook,omitempty"`
 }
 
 // SkillDefinition defines a skill provided by an agent node.
 type SkillDefinition struct {
-	ID          string          `json:"id"`
-	InputSchema json.RawMessage `json:"input_schema"`
-	Tags        []string        `json:"tags"`
+	ID           string          `json:"id"`
+	Description  string          `json:"description,omitempty"`
+	InputSchema  json.RawMessage `json:"input_schema"`
+	Tags         []string        `json:"tags"`
+	ProposedTags []string        `json:"proposed_tags,omitempty"`
+	ApprovedTags []string        `json:"approved_tags,omitempty"`
+}
+
+// SessionDefinition defines a realtime session ingress provided by an agent node.
+type SessionDefinition struct {
+	Name         string                 `json:"name"`
+	Provider     string                 `json:"provider"`
+	Transport    string                 `json:"transport"`
+	Model        string                 `json:"model,omitempty"`
+	Modalities   []string               `json:"modalities,omitempty"`
+	Voice        string                 `json:"voice,omitempty"`
+	Tools        []string               `json:"tools,omitempty"`
+	Metadata     map[string]interface{} `json:"metadata,omitempty"`
+	Tags         []string               `json:"tags,omitempty"`
+	ProposedTags []string               `json:"proposed_tags,omitempty"`
+	ApprovedTags []string               `json:"approved_tags,omitempty"`
+}
+
+// HydrateAgentSessions copies session definitions from metadata.custom.sessions
+// into the typed AgentNode.Sessions field. SDKs currently register sessions in
+// metadata for storage compatibility, while the control plane and UI consume a
+// first-class field.
+func HydrateAgentSessions(agent *AgentNode) {
+	if agent == nil || len(agent.Sessions) > 0 || agent.Metadata.Custom == nil {
+		return
+	}
+	raw, ok := agent.Metadata.Custom["sessions"]
+	if !ok || raw == nil {
+		return
+	}
+	bytes, err := json.Marshal(raw)
+	if err != nil {
+		return
+	}
+	var sessions []SessionDefinition
+	if err := json.Unmarshal(bytes, &sessions); err != nil {
+		return
+	}
+	agent.Sessions = sessions
+}
+
+// SyncAgentSessionsToMetadata stores the typed session list back under
+// metadata.custom.sessions so existing storage rows and older SDK payloads keep
+// working without an agent_nodes schema migration.
+func SyncAgentSessionsToMetadata(agent *AgentNode) {
+	if agent == nil || len(agent.Sessions) == 0 {
+		return
+	}
+	if agent.Metadata.Custom == nil {
+		agent.Metadata.Custom = map[string]interface{}{}
+	}
+	agent.Metadata.Custom["sessions"] = agent.Sessions
 }
 
 // MemoryConfig defines memory configuration for a reasoner.
@@ -244,10 +325,11 @@ const (
 type AgentLifecycleStatus string
 
 const (
-	AgentStatusStarting AgentLifecycleStatus = "starting" // Initializing (covers registering + initializing)
-	AgentStatusReady    AgentLifecycleStatus = "ready"    // Fully operational
-	AgentStatusDegraded AgentLifecycleStatus = "degraded" // Partial functionality
-	AgentStatusOffline  AgentLifecycleStatus = "offline"  // Not responding
+	AgentStatusStarting        AgentLifecycleStatus = "starting"         // Initializing (covers registering + initializing)
+	AgentStatusReady           AgentLifecycleStatus = "ready"            // Fully operational
+	AgentStatusDegraded        AgentLifecycleStatus = "degraded"         // Partial functionality
+	AgentStatusOffline         AgentLifecycleStatus = "offline"          // Not responding
+	AgentStatusPendingApproval AgentLifecycleStatus = "pending_approval" // Waiting for admin tag approval
 )
 
 // AgentStatus represents the unified status model for agent nodes.
@@ -261,9 +343,6 @@ type AgentStatus struct {
 	// Lifecycle information
 	LifecycleStatus AgentLifecycleStatus `json:"lifecycle_status"` // Backward compatibility
 	HealthStatus    HealthStatus         `json:"health_status"`    // Backward compatibility
-
-	// MCP status (optional)
-	MCPStatus *MCPStatusInfo `json:"mcp_status,omitempty"` // MCP server status if available
 
 	// Transition tracking
 	StateTransition *StateTransition `json:"state_transition,omitempty"` // Current transition if any
@@ -283,16 +362,6 @@ const (
 	AgentStateStarting AgentState = "starting" // Agent is initializing
 	AgentStateStopping AgentState = "stopping" // Agent is shutting down
 )
-
-// MCPStatusInfo represents MCP server status information
-type MCPStatusInfo struct {
-	TotalServers   int       `json:"total_servers"`
-	RunningServers int       `json:"running_servers"`
-	TotalTools     int       `json:"total_tools"`
-	OverallHealth  float64   `json:"overall_health"`
-	ServiceStatus  string    `json:"service_status"` // "ready", "degraded", "unavailable"
-	LastChecked    time.Time `json:"last_checked"`
-}
 
 // StateTransition represents an ongoing state transition
 type StateTransition struct {
@@ -318,9 +387,9 @@ type AgentStatusUpdate struct {
 	State           *AgentState           `json:"state,omitempty"`
 	HealthScore     *int                  `json:"health_score,omitempty"`
 	LifecycleStatus *AgentLifecycleStatus `json:"lifecycle_status,omitempty"`
-	MCPStatus       *MCPStatusInfo        `json:"mcp_status,omitempty"`
 	Source          StatusSource          `json:"source"`
 	Reason          string                `json:"reason,omitempty"`
+	Version         string                `json:"version,omitempty"`
 }
 
 // Helper methods for AgentStatus
@@ -440,7 +509,7 @@ func FromLegacyStatus(healthStatus HealthStatus, lifecycleStatus AgentLifecycleS
 }
 
 // UpdateFromHeartbeat updates the status based on heartbeat data
-func (as *AgentStatus) UpdateFromHeartbeat(lifecycleStatus *AgentLifecycleStatus, mcpStatus *MCPStatusInfo) {
+func (as *AgentStatus) UpdateFromHeartbeat(lifecycleStatus *AgentLifecycleStatus) {
 	now := time.Now()
 	as.LastSeen = now
 	as.LastUpdated = now
@@ -466,17 +535,6 @@ func (as *AgentStatus) UpdateFromHeartbeat(lifecycleStatus *AgentLifecycleStatus
 		case AgentStatusOffline:
 			as.State = AgentStateInactive
 			as.HealthScore = 0
-		}
-	}
-
-	// Update MCP status if provided
-	if mcpStatus != nil {
-		as.MCPStatus = mcpStatus
-
-		// Adjust health score based on MCP health
-		if mcpStatus.OverallHealth > 0 {
-			mcpHealthContribution := int(mcpStatus.OverallHealth * 20) // Up to 20 points from MCP
-			as.HealthScore = min(100, as.HealthScore+mcpHealthContribution)
 		}
 	}
 
@@ -565,8 +623,17 @@ type ExecutionFilters struct {
 // AgentFilters holds filters for querying agent nodes.
 type AgentFilters struct {
 	TeamID       *string       `json:"team_id,omitempty"`
+	GroupID      *string       `json:"group_id,omitempty"`
 	HealthStatus *HealthStatus `json:"health_status,omitempty"`
 	Features     []string      `json:"features,omitempty"`
+}
+
+// AgentGroupSummary provides aggregate info about an agent group.
+type AgentGroupSummary struct {
+	GroupID   string   `json:"group_id"`
+	TeamID    string   `json:"team_id"`
+	NodeCount int      `json:"node_count"`
+	Versions  []string `json:"versions"`
 }
 
 // EventFilter holds filters for querying memory events.
@@ -670,6 +737,16 @@ type WorkflowExecution struct {
 	ErrorMessage *string `json:"error_message,omitempty" db:"error_message"`
 	RetryCount   int     `json:"retry_count" db:"retry_count"`
 
+	// Approval tracking (populated when status is "waiting" with reason "waiting_for_approval")
+	ApprovalRequestID   *string    `json:"approval_request_id,omitempty" db:"approval_request_id"`
+	ApprovalRequestURL  *string    `json:"approval_request_url,omitempty" db:"approval_request_url"`
+	ApprovalStatus      *string    `json:"approval_status,omitempty" db:"approval_status"`
+	ApprovalResponse    *string    `json:"approval_response,omitempty" db:"approval_response"`
+	ApprovalRequestedAt *time.Time `json:"approval_requested_at,omitempty" db:"approval_requested_at"`
+	ApprovalRespondedAt *time.Time `json:"approval_responded_at,omitempty" db:"approval_responded_at"`
+	ApprovalCallbackURL *string    `json:"approval_callback_url,omitempty" db:"approval_callback_url"`
+	ApprovalExpiresAt   *time.Time `json:"approval_expires_at,omitempty" db:"approval_expires_at"`
+
 	// Webhook observability (non-persisted)
 	WebhookRegistered bool                     `json:"webhook_registered,omitempty" db:"-"`
 	WebhookEvents     []*ExecutionWebhookEvent `json:"webhook_events,omitempty" db:"-"`
@@ -696,6 +773,32 @@ type WorkflowExecutionEvent struct {
 	StatusReason      *string         `json:"status_reason,omitempty" db:"status_reason"`
 	Payload           json.RawMessage `json:"payload" db:"payload"`
 	EmittedAt         time.Time       `json:"emitted_at" db:"emitted_at"`
+	RecordedAt        time.Time       `json:"recorded_at" db:"recorded_at"`
+}
+
+// ExecutionLogEntry captures structured execution-correlated logs emitted by SDK runtimes.
+type ExecutionLogEntry struct {
+	EventID           int64           `json:"event_id" db:"event_id"`
+	ExecutionID       string          `json:"execution_id" db:"execution_id"`
+	WorkflowID        string          `json:"workflow_id" db:"workflow_id"`
+	RunID             *string         `json:"run_id,omitempty" db:"run_id"`
+	RootWorkflowID    *string         `json:"root_workflow_id,omitempty" db:"root_workflow_id"`
+	ParentExecutionID *string         `json:"parent_execution_id,omitempty" db:"parent_execution_id"`
+	Sequence          int64           `json:"seq" db:"sequence"`
+	AgentNodeID       string          `json:"agent_node_id" db:"agent_node_id"`
+	ReasonerID        *string         `json:"reasoner_id,omitempty" db:"reasoner_id"`
+	Level             string          `json:"level" db:"level"`
+	Source            string          `json:"source" db:"source"`
+	EventType         *string         `json:"event_type,omitempty" db:"event_type"`
+	Message           string          `json:"message" db:"message"`
+	Attributes        json.RawMessage `json:"attributes,omitempty" db:"attributes"`
+	SystemGenerated   bool            `json:"system_generated,omitempty" db:"system_generated"`
+	SDKLanguage       *string         `json:"sdk_language,omitempty" db:"sdk_language"`
+	Attempt           *int            `json:"attempt,omitempty" db:"attempt"`
+	SpanID            *string         `json:"span_id,omitempty" db:"span_id"`
+	StepID            *string         `json:"step_id,omitempty" db:"step_id"`
+	ErrorCategory     *string         `json:"error_category,omitempty" db:"error_category"`
+	EmittedAt         time.Time       `json:"ts" db:"emitted_at"`
 	RecordedAt        time.Time       `json:"recorded_at" db:"recorded_at"`
 }
 
@@ -834,6 +937,11 @@ type Session struct {
 	SessionName *string `json:"session_name,omitempty" db:"session_name"`
 
 	// DAG Relationship Fields
+	// TODO(session-linking): Define explicit session edge semantics before exposing
+	// session-to-session APIs. Parent/root IDs should support lifecycle edges such
+	// as transfer, bridge, companion, and escalation, while agent work inside each
+	// session continues to use app.call/session.call so reasoner executions remain
+	// normal workflow DAG nodes under the session.
 	ParentSessionID *string `json:"parent_session_id,omitempty" db:"parent_session_id"`
 	RootSessionID   *string `json:"root_session_id,omitempty" db:"root_session_id"`
 
@@ -857,6 +965,7 @@ type WorkflowExecutionFilters struct {
 	ActorID           *string    `json:"actor_id,omitempty"`
 	AgentNodeID       *string    `json:"agent_node_id,omitempty"`
 	Status            *string    `json:"status,omitempty"`
+	ApprovalRequestID *string    `json:"approval_request_id,omitempty"`
 	StartTime         *time.Time `json:"start_time,omitempty"`
 	EndTime           *time.Time `json:"end_time,omitempty"`
 	Search            *string    `json:"search,omitempty"`
@@ -934,13 +1043,23 @@ type ReasonerExecutionHistory struct {
 
 // ReasonerExecutionRecord represents a single execution record for reasoner history
 type ReasonerExecutionRecord struct {
-	ExecutionID string                 `json:"execution_id"`
-	Status      string                 `json:"status"`
-	Input       map[string]interface{} `json:"input"`
-	Output      map[string]interface{} `json:"output,omitempty"`
-	Error       string                 `json:"error,omitempty"`
-	DurationMs  int64                  `json:"duration_ms"`
-	Timestamp   time.Time              `json:"timestamp"`
+	ExecutionID   string                 `json:"execution_id"`
+	AgentNodeID   string                 `json:"agent_node_id"`
+	ReasonerID    string                 `json:"reasoner_id"`
+	Status        string                 `json:"status"`
+	StatusReason  *string                `json:"status_reason,omitempty"`
+	Input         map[string]interface{} `json:"input,omitempty"`
+	Context       map[string]interface{} `json:"context,omitempty"`
+	Output        map[string]interface{} `json:"output,omitempty"`
+	Error         string                 `json:"error,omitempty"`
+	ErrorCategory *string                `json:"error_category,omitempty"`
+	DurationMs    int64                  `json:"duration_ms"`
+	RetryCount    int                    `json:"retry_count"`
+	SessionID     *string                `json:"session_id,omitempty"`
+	ActorID       *string                `json:"actor_id,omitempty"`
+	StartedAt     time.Time              `json:"started_at"`
+	CompletedAt   *time.Time             `json:"completed_at,omitempty"`
+	Timestamp     time.Time              `json:"timestamp"`
 }
 
 // WorkflowSummaryData represents pre-aggregated workflow summary data from database

@@ -3,6 +3,7 @@ import type { ReasonerDefinition } from './reasoner.js';
 import type { SkillDefinition } from './skill.js';
 import type { MemoryChangeEvent, MemoryWatchHandler } from '../memory/MemoryInterface.js';
 import type { ExecutionMetadata } from '../context/ExecutionContext.js';
+import type { HarnessConfig } from '../harness/types.js';
 
 export type DeploymentType = 'long_running' | 'serverless';
 
@@ -15,14 +16,41 @@ export interface AgentConfig {
   host?: string;
   publicUrl?: string;
   aiConfig?: AIConfig;
+  harnessConfig?: HarnessConfig;
   memoryConfig?: MemoryConfig;
   didEnabled?: boolean;
   devMode?: boolean;
   heartbeatIntervalMs?: number;
   defaultHeaders?: Record<string, string | number | boolean | undefined>;
   apiKey?: string;
-  mcp?: MCPConfig;
+  did?: string;
+  privateKeyJwk?: string;
   deploymentType?: DeploymentType;
+  /** Enable decentralized local verification of incoming DID signatures. */
+  localVerification?: boolean;
+  /** Cache refresh interval for local verification in seconds (default: 300). */
+  verificationRefreshInterval?: number;
+  /** Agent-level tags for tag-based authorization policies. */
+  tags?: string[];
+  /**
+   * Enable async-execution dispatch (default: true). When enabled, a reasoner
+   * invoked by the control plane (i.e. carrying an `X-Execution-ID` header) is
+   * acknowledged immediately with `202 Accepted` and run detached; its terminal
+   * result is delivered out-of-band via `POST /executions/{id}/status`. This is
+   * what lets a reasoner call `ctx.pause()` and wait far longer than the
+   * control plane's synchronous dispatch ceiling. Set to `false` to keep the
+   * legacy behaviour of holding the HTTP connection open until the reasoner
+   * returns (in which case `ctx.pause()` is bounded by that ceiling).
+   */
+  asyncExecution?: boolean;
+  /**
+   * Active-time wall-clock budget for a detached reasoner, in milliseconds
+   * (default: 7_200_000 = 2h). Time spent inside `ctx.pause()` (and waiting on
+   * a paused descendant) is excluded from this budget. When active time exceeds
+   * it, the reasoner is aborted and reported as failed with reason
+   * `reasoner_timeout`. Only applies when `asyncExecution` is enabled.
+   */
+  executionBudgetMs?: number;
 }
 
 export interface AIConfig {
@@ -41,6 +69,9 @@ export interface AIConfig {
   embeddingModel?: string;
   apiKey?: string;
   baseUrl?: string;
+  openRouterSiteUrl?: string;
+  openRouterAppName?: string;
+  openRouterHeaders?: Record<string, string>;
   temperature?: number;
   maxTokens?: number;
   enableRateLimitRetry?: boolean;
@@ -58,21 +89,6 @@ export interface MemoryConfig {
 }
 
 export type MemoryScope = 'workflow' | 'session' | 'actor' | 'global';
-
-export interface MCPServerConfig {
-  alias: string;
-  url?: string;
-  port?: number;
-  transport?: 'http' | 'bridge';
-  headers?: Record<string, string>;
-}
-
-export interface MCPConfig {
-  servers?: MCPServerConfig[];
-  autoRegisterTools?: boolean;
-  namespace?: string;
-  tags?: string[];
-}
 
 export interface AgentCapability {
   agentId: string;
@@ -187,8 +203,8 @@ export interface ServerlessEvent {
   type?: 'reasoner' | 'skill';
   body?: any;
   input?: any;
-  executionContext?: Partial<ExecutionMetadata>;
-  execution_context?: Partial<ExecutionMetadata>;
+  executionContext?: RawExecutionContext;
+  execution_context?: RawExecutionContext;
 }
 
 export interface ServerlessResponse {
@@ -205,3 +221,30 @@ export type AgentHandler = (
 ) => Promise<ServerlessResponse | void> | ServerlessResponse | void;
 
 export type Awaitable<T> = T | Promise<T>;
+
+export interface RawExecutionContext {
+  executionId?: string;
+  runId?: string;
+  workflowId?: string;
+  rootWorkflowId?: string;
+  parentExecutionId?: string;
+  reasonerId?: string;
+  sessionId?: string;
+  actorId?: string;
+  callerDid?: string;
+  targetDid?: string;
+  agentNodeDid?: string;
+
+  // snake_case variants
+  execution_id?: string;
+  run_id?: string;
+  workflow_id?: string;
+  root_workflow_id?: string;
+  parent_execution_id?: string;
+  reasoner_id?: string;
+  session_id?: string;
+  actor_id?: string;
+  caller_did?: string;
+  target_did?: string;
+  agent_node_did?: string;
+}

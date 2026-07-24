@@ -281,15 +281,3 @@ func TestWorkflowUnitOfWork_UpdateWorkflowStatus(t *testing.T) {
 	}
 }
 
-// Helper functions
-func ptrString(s string) *string {
-	return &s
-}
-
-func ptrTime(t time.Time) *time.Time {
-	return &t
-}
-
-func ptrInt64(i int64) *int64 {
-	return &i
-}

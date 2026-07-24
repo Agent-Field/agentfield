@@ -24,6 +24,9 @@ def mock_client(monkeypatch):
         async def notify_graceful_shutdown_sync(self, *args, **kwargs):
             return True
 
+        async def post_execution_logs(self, execution_id, entries):
+            pass
+
         async def aclose(self):
             pass
 

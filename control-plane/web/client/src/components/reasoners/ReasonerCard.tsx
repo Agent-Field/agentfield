@@ -2,10 +2,10 @@ import type { KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import type { ReasonerCardProps } from '../../types/reasoners';
-import { StatusIndicator } from './StatusIndicator';
+import { ReasonerStatusDot } from './ReasonerStatusDot';
 import { CompositeDIDStatus } from '../did/DIDStatusBadge';
 import { useDIDStatus } from '../../hooks/useDIDInfo';
-import { Bot, Layers, Timer, Tag, Flash, CheckCircle, BarChart3, Identification } from '@/components/ui/icon-bridge';
+import { ReasonerIcon, Layers, Timer, Tag, Flash, CheckCircle, BarChart3, Identification } from '@/components/ui/icon-bridge';
 import { Card } from '@/components/ui/card';
 
 export function ReasonerCard({ reasoner, onClick }: ReasonerCardProps) {
@@ -80,7 +80,7 @@ export function ReasonerCard({ reasoner, onClick }: ReasonerCardProps) {
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 flex-1 items-start gap-3">
           <div className="mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-            <Bot className="h-4 w-4" weight="fill" />
+            <ReasonerIcon className="h-4 w-4" aria-hidden />
           </div>
           <div className="min-w-0 space-y-1">
             <h3
@@ -89,7 +89,7 @@ export function ReasonerCard({ reasoner, onClick }: ReasonerCardProps) {
             >
               {reasoner.name}
             </h3>
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-body-small">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
               <span className="truncate">{reasoner.node_id}</span>
               <span className="text-muted-foreground/50">•</span>
               <span className="whitespace-nowrap">
@@ -99,10 +99,10 @@ export function ReasonerCard({ reasoner, onClick }: ReasonerCardProps) {
           </div>
         </div>
         <div className="mt-0.5 flex flex-shrink-0 items-center gap-2">
-          <StatusIndicator status={status} size="sm" />
+          <ReasonerStatusDot status={status} size="sm" />
           {didStatus && didStatus.has_did && (
-            <div className="flex items-center gap-1 text-body-small">
-              <Identification className="h-3 w-3" weight="bold" />
+            <div className="flex items-center gap-1 text-sm text-muted-foreground">
+              <Identification className="h-3 w-3" />
               <CompositeDIDStatus
                 status={didStatus.did_status}
                 reasonerCount={didStatus.reasoner_count}
@@ -119,11 +119,10 @@ export function ReasonerCard({ reasoner, onClick }: ReasonerCardProps) {
         {reasoner.description}
       </p>
 
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-body-small">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted-foreground">
         <div className="flex items-center gap-1.5">
           <Layers
             className="h-3 w-3 flex-shrink-0"
-            weight={reasoner.memory_config?.cache_results ? "fill" : "regular"}
           />
           <span className="whitespace-nowrap">
             {reasoner.memory_config?.cache_results ? "Cached" : "No cache"}
@@ -131,14 +130,14 @@ export function ReasonerCard({ reasoner, onClick }: ReasonerCardProps) {
         </div>
         {reasoner.memory_config?.memory_retention && (
           <div className="flex items-center gap-1.5">
-            <Timer className="h-3 w-3 flex-shrink-0" weight="regular" />
+            <Timer className="h-3 w-3 flex-shrink-0" />
             <span className="whitespace-nowrap">
               {reasoner.memory_config.memory_retention}
             </span>
           </div>
         )}
         <div className="flex items-center gap-1.5">
-          <Tag className="h-3 w-3 flex-shrink-0" weight="regular" />
+          <Tag className="h-3 w-3 flex-shrink-0" />
           <span className="whitespace-nowrap">v{reasoner.node_version}</span>
         </div>
       </div>
@@ -146,10 +145,10 @@ export function ReasonerCard({ reasoner, onClick }: ReasonerCardProps) {
       {(reasoner.avg_response_time_ms ||
         reasoner.success_rate ||
         reasoner.total_runs) && (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-body-small">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted-foreground">
           {reasoner.avg_response_time_ms && (
             <div className="flex items-center gap-1">
-              <Flash className="h-3 w-3 flex-shrink-0" weight="bold" />
+              <Flash className="h-3 w-3 flex-shrink-0" />
               <span className="whitespace-nowrap">
                 {reasoner.avg_response_time_ms}ms avg
               </span>
@@ -159,7 +158,6 @@ export function ReasonerCard({ reasoner, onClick }: ReasonerCardProps) {
             <div className="flex items-center gap-1">
               <CheckCircle
                 className="h-3 w-3 flex-shrink-0 text-status-success"
-                weight="fill"
               />
               <span className="whitespace-nowrap">
                 {(reasoner.success_rate * 100).toFixed(1)}% success
@@ -168,7 +166,7 @@ export function ReasonerCard({ reasoner, onClick }: ReasonerCardProps) {
           )}
           {reasoner.total_runs && (
             <div className="flex items-center gap-1">
-              <BarChart3 className="h-3 w-3 flex-shrink-0" weight="bold" />
+              <BarChart3 className="h-3 w-3 flex-shrink-0" />
               <span className="whitespace-nowrap">
                 {reasoner.total_runs.toLocaleString()} runs
               </span>

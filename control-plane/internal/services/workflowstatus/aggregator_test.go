@@ -103,6 +103,24 @@ func TestAggregateExecutions_QueuedOnly(t *testing.T) {
 	}
 }
 
+func TestAggregateExecutions_WaitingIsActiveNonTerminal(t *testing.T) {
+	now := time.Now()
+	executions := []*types.WorkflowExecution{
+		makeExecution("waiting", now, nil, true),
+	}
+
+	agg := AggregateExecutions(executions, nil)
+	if agg.Status != string(types.ExecutionStatusWaiting) {
+		t.Fatalf("expected waiting, got %s", agg.Status)
+	}
+	if agg.ActiveExecutions != 1 {
+		t.Fatalf("expected active executions, got %d", agg.ActiveExecutions)
+	}
+	if agg.Terminal {
+		t.Fatal("expected non-terminal workflow")
+	}
+}
+
 func TestAggregateExecutions_TimeoutBeatsCancelled(t *testing.T) {
 	now := time.Now()
 	executions := []*types.WorkflowExecution{

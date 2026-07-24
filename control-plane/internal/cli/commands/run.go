@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/cli/framework"
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
@@ -37,6 +38,7 @@ func (cmd *RunCommand) BuildCobraCommand() *cobra.Command {
 	var port int
 	var detach bool
 	var verbose bool
+	var jsonOutput bool
 
 	cobraCmd := &cobra.Command{
 		Use:   "run <agent-node-name>",
@@ -52,6 +54,9 @@ Examples:
   af run my-agent --detach=false`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cobraCmd *cobra.Command, args []string) error {
+			if jsonOutput {
+				return cmd.executeJSON(args[0], port, detach)
+			}
 			// Update output formatter with verbose setting
 			cmd.output.SetVerbose(verbose)
 			return cmd.execute(args[0], port, detach, verbose)
@@ -61,8 +66,39 @@ Examples:
 	cobraCmd.Flags().IntVarP(&port, "port", "p", 0, "Specific port to use (auto-assigned if not specified)")
 	cobraCmd.Flags().BoolVarP(&detach, "detach", "d", true, "Run in background (default: true)")
 	cobraCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output")
+	cobraCmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit a machine-readable JSON envelope (diagnostics go to stderr)")
 
 	return cobraCmd
+}
+
+// executeJSON starts the agent node and emits a JSON envelope on stdout.
+// Service-layer progress output is redirected to stderr for the duration.
+func (cmd *RunCommand) executeJSON(agentName string, port int, detach bool) error {
+	stdout, restore := redirectStdoutToStderr()
+	defer restore()
+
+	options := domain.RunOptions{Port: port, Detach: detach}
+	runningAgent, err := cmd.Services.AgentService.RunAgent(agentName, options)
+	if err != nil {
+		printJSONError(stdout, "run_failed", err.Error(), "Run 'af list --json' to check the node is installed and not already running.")
+		return err
+	}
+
+	data := map[string]interface{}{
+		"node":   agentName,
+		"pid":    runningAgent.PID,
+		"port":   runningAgent.Port,
+		"status": runningAgent.Status,
+		"detach": detach,
+	}
+	if runningAgent.LogFile != "" {
+		data["log_file"] = runningAgent.LogFile
+	}
+	if !runningAgent.StartedAt.IsZero() {
+		data["started_at"] = runningAgent.StartedAt.UTC().Format(time.RFC3339)
+	}
+
+	return printJSONSuccess(stdout, data)
 }
 
 // execute performs the actual agent execution

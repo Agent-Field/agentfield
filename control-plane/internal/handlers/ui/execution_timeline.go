@@ -114,7 +114,7 @@ func (h *ExecutionTimelineHandler) GetExecutionTimelineHandler(c *gin.Context) {
 	timelineData, summary, err := h.generateTimelineData(ctx)
 	if err != nil {
 		logger.Logger.Error().Err(err).Msg("Failed to generate timeline data")
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to generate timeline data"})
+		RespondInternalError(c, "failed to generate timeline data")
 		return
 	}
 
@@ -141,11 +141,12 @@ func (h *ExecutionTimelineHandler) generateTimelineData(ctx context.Context) ([]
 
 	// Get all executions for the last 24 hours
 	filters := types.ExecutionFilter{
-		StartTime:      &startTime,
-		EndTime:        &endTime,
-		Limit:          50000,
-		SortBy:         "started_at",
-		SortDescending: false,
+		StartTime:       &startTime,
+		EndTime:         &endTime,
+		Limit:           50000,
+		SortBy:          "started_at",
+		SortDescending:  false,
+		ExcludePayloads: true,
 	}
 
 	executions, err := h.store.QueryExecutionRecords(ctx, filters)
@@ -193,7 +194,7 @@ func (h *ExecutionTimelineHandler) generateTimelineData(ctx context.Context) ([]
 				dataPoint.Successful++
 			case string(types.ExecutionStatusFailed):
 				dataPoint.Failed++
-			case string(types.ExecutionStatusRunning), string(types.ExecutionStatusPending), string(types.ExecutionStatusQueued):
+			case string(types.ExecutionStatusRunning), string(types.ExecutionStatusWaiting), string(types.ExecutionStatusPending), string(types.ExecutionStatusQueued):
 				dataPoint.Running++
 			}
 

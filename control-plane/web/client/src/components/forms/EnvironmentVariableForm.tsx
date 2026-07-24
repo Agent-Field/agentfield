@@ -230,7 +230,7 @@ export const EnvironmentVariableForm: React.FC<EnvironmentVariableFormProps> = (
           {field.required && <span className="text-red-500 ml-1">*</span>}
         </Label>
         {field.description && (
-          <p className="text-body-small">{field.description}</p>
+          <p className="text-sm text-muted-foreground">{field.description}</p>
         )}
 
         {isSecret ? (
@@ -338,7 +338,7 @@ export const EnvironmentVariableForm: React.FC<EnvironmentVariableFormProps> = (
           <div className="space-y-4">
             <div className="border-b pb-2">
               <h3 className="text-sm font-semibold text-foreground">Required Variables</h3>
-              <p className="text-body-small">These variables must be configured</p>
+              <p className="text-sm text-muted-foreground">These variables must be configured</p>
             </div>
             <div className="space-y-4">
               {requiredFields.map(renderField)}
@@ -351,7 +351,7 @@ export const EnvironmentVariableForm: React.FC<EnvironmentVariableFormProps> = (
           <div className="space-y-4">
             <div className="border-b pb-2">
               <h3 className="text-sm font-semibold text-foreground">Optional Variables</h3>
-              <p className="text-body-small">These variables are optional but may enhance functionality</p>
+              <p className="text-sm text-muted-foreground">These variables are optional but may enhance functionality</p>
             </div>
             <div className="space-y-4">
               {optionalFields.map(renderField)}

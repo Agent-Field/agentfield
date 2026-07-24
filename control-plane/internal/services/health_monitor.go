@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
@@ -17,7 +16,7 @@ import (
 // Health score constants for status updates.
 const (
 	// healthScoreActive is the score assigned when an HTTP health check passes.
-	// Below 100 to leave room for "excellent" states (e.g. agent + all MCP servers healthy).
+	// Below 100 to leave room for "excellent" states.
 	healthScoreActive = 85
 
 	// healthScoreInactive is the score when an agent fails consecutive health checks.
@@ -59,9 +58,6 @@ type HealthMonitor struct {
 	activeAgents map[string]*ActiveAgent
 	agentsMutex  sync.RWMutex
 
-	// MCP health tracking
-	mcpHealthCache map[string]*domain.MCPSummaryData
-	mcpCacheMutex  sync.RWMutex
 }
 
 // NewHealthMonitor creates a new HTTP-first health monitor service
@@ -90,17 +86,27 @@ func NewHealthMonitor(storage storage.StorageProvider, config HealthMonitorConfi
 		stopCh:         make(chan struct{}),
 		activeAgents:   make(map[string]*ActiveAgent),
 		agentsMutex:    sync.RWMutex{},
-		mcpHealthCache: make(map[string]*domain.MCPSummaryData),
-		mcpCacheMutex:  sync.RWMutex{},
 	}
 }
 
-// RegisterAgent adds an agent to the active monitoring list
+// RegisterAgent adds an agent to the active monitoring list.
+// Idempotent: keep-alive handlers call this on every DB-updating heartbeat or
+// lease renewal, so an agent already tracked at the same BaseURL keeps its
+// state (LastStatus, consecutive failures, last transition) — resetting to
+// "unknown" on each call would discard the promote/demote history the checker
+// relies on. A changed BaseURL means the agent moved; tracking starts over.
 func (hm *HealthMonitor) RegisterAgent(nodeID, baseURL string) {
 	hm.agentsMutex.Lock()
 	defer hm.agentsMutex.Unlock()
 
 	seenAt := time.Now()
+
+	if existing, ok := hm.activeAgents[nodeID]; ok && existing.BaseURL == baseURL {
+		if hm.presence != nil {
+			hm.presence.Touch(nodeID, "", seenAt)
+		}
+		return
+	}
 
 	hm.activeAgents[nodeID] = &ActiveAgent{
 		NodeID:         nodeID,
@@ -111,10 +117,18 @@ func (hm *HealthMonitor) RegisterAgent(nodeID, baseURL string) {
 	}
 
 	if hm.presence != nil {
-		hm.presence.Touch(nodeID, seenAt)
+		hm.presence.Touch(nodeID, "", seenAt)
 	}
 
 	logger.Logger.Debug().Msgf("🏥 Registered agent %s for HTTP health monitoring", nodeID)
+}
+
+// IsMonitoring reports whether the node is in the active HTTP-polling registry.
+func (hm *HealthMonitor) IsMonitoring(nodeID string) bool {
+	hm.agentsMutex.RLock()
+	defer hm.agentsMutex.RUnlock()
+	_, ok := hm.activeAgents[nodeID]
+	return ok
 }
 
 // UnregisterAgent removes an agent from the active monitoring list
@@ -188,10 +202,19 @@ func (hm *HealthMonitor) RecoverFromDatabase(ctx context.Context) error {
 
 	logger.Logger.Info().Int("count", len(nodes)).Msg("🏥 Recovering nodes from database for health monitoring")
 
-	// Register all nodes with the health monitor
+	// Register all nodes with the health monitor. Serverless nodes are
+	// excluded: they have no heartbeat loop (DisableLeaseLoop) and no
+	// guaranteed /status implementation, so during live operation only the
+	// heartbeat handler ever adds a node to this registry - never
+	// registration itself. Registering them here would make a CP restart
+	// the only time they get HTTP-polled, spuriously flipping them to
+	// HealthStatusInactive on the first failed/missing check.
 	for _, node := range nodes {
 		if node == nil || node.BaseURL == "" {
 			continue // Skip nodes without callback URL
+		}
+		if node.DeploymentType == "serverless" {
+			continue
 		}
 
 		hm.RegisterAgent(node.ID, node.BaseURL)
@@ -331,9 +354,8 @@ func (hm *HealthMonitor) checkAgentHealth(nodeID string) {
 			hm.markAgentActive(nodeID)
 			return
 		}
-		// Already active, no status change needed — still refresh MCP health
+		// Already active, no status change needed
 		hm.agentsMutex.Unlock()
-		hm.checkMCPHealthForNode(nodeID)
 	} else {
 		// FAILURE: Increment consecutive failure counter (capped to prevent unbounded growth)
 		if activeAgent.ConsecutiveFailures < hm.config.ConsecutiveFailures+1 {
@@ -345,6 +367,27 @@ func (hm *HealthMonitor) checkAgentHealth(nodeID string) {
 
 		// Only mark inactive after reaching the consecutive failure threshold
 		if activeAgent.ConsecutiveFailures >= hm.config.ConsecutiveFailures {
+			// HEARTBEAT GATE: Before marking inactive, check if the agent has sent
+			// a recent heartbeat. Heartbeats are direct proof of agent liveness —
+			// if the agent is sending heartbeats, HTTP check failures are transient
+			// and should not trigger an inactive transition. We check the storage
+			// heartbeat timestamp rather than the presence lease because the presence
+			// lease is also set by RegisterAgent (not just heartbeats).
+			if hm.statusManager != nil {
+				staleThreshold := hm.statusManager.config.HeartbeatStaleThreshold
+				if staleThreshold == 0 {
+					staleThreshold = 60 * time.Second
+				}
+				if agent, err := hm.storage.GetAgent(context.Background(), nodeID); err == nil && agent != nil {
+					if time.Since(agent.LastHeartbeat) < staleThreshold {
+						logger.Logger.Debug().Msgf("🏥 Agent %s has %d HTTP failures but heartbeat is fresh (%v ago) — not marking inactive",
+							nodeID, activeAgent.ConsecutiveFailures, time.Since(agent.LastHeartbeat))
+						hm.agentsMutex.Unlock()
+						return
+					}
+				}
+			}
+
 			if activeAgent.LastStatus != types.HealthStatusInactive {
 				activeAgent.LastStatus = types.HealthStatusInactive
 				activeAgent.LastTransition = time.Now()
@@ -383,11 +426,9 @@ func (hm *HealthMonitor) markAgentActive(nodeID string) {
 		}
 
 		if hm.presence != nil {
-			hm.presence.Touch(nodeID, time.Now())
+			hm.presence.Touch(nodeID, "", time.Now())
 		}
 
-		// Check MCP health for active agents
-		hm.checkMCPHealthForNode(nodeID)
 	} else {
 		// Legacy fallback
 		if err := hm.storage.UpdateAgentHealth(ctx, nodeID, types.HealthStatusActive); err != nil {
@@ -400,14 +441,13 @@ func (hm *HealthMonitor) markAgentActive(nodeID string) {
 		if updatedAgent, err := hm.storage.GetAgent(ctx, nodeID); err == nil {
 			events.PublishNodeOnline(nodeID, updatedAgent)
 			if hm.presence != nil {
-				hm.presence.Touch(nodeID, time.Now())
+				hm.presence.Touch(nodeID, "", time.Now())
 			}
 			events.PublishNodeHealthChanged(nodeID, string(types.HealthStatusActive), updatedAgent)
 			if hm.uiService != nil {
 				hm.uiService.OnNodeStatusChanged(updatedAgent)
 			}
 		}
-		hm.checkMCPHealthForNode(nodeID)
 	}
 }
 
@@ -450,102 +490,3 @@ func (hm *HealthMonitor) markAgentInactive(nodeID string, failCount int) {
 	}
 }
 
-// checkMCPHealthForNode checks MCP health for a specific node
-func (hm *HealthMonitor) checkMCPHealthForNode(nodeID string) {
-	if hm.agentClient == nil {
-		return
-	}
-
-	// Create context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	// Fetch MCP health from agent
-	healthResponse, err := hm.agentClient.GetMCPHealth(ctx, nodeID)
-	if err != nil {
-		// Silently continue - agent might not support MCP
-		return
-	}
-
-	// Convert to domain model
-	newMCPSummary := &domain.MCPSummaryData{
-		TotalServers:   healthResponse.Summary.TotalServers,
-		RunningServers: healthResponse.Summary.RunningServers,
-		TotalTools:     healthResponse.Summary.TotalTools,
-		OverallHealth:  healthResponse.Summary.OverallHealth,
-	}
-
-	// Check if MCP health has changed
-	if hm.hasMCPHealthChanged(nodeID, newMCPSummary) {
-		// Update cache
-		hm.updateMCPHealthCache(nodeID, newMCPSummary)
-
-		// Transform for UI
-		uiSummary := &domain.MCPSummaryForUI{
-			TotalServers:          newMCPSummary.TotalServers,
-			RunningServers:        newMCPSummary.RunningServers,
-			TotalTools:            newMCPSummary.TotalTools,
-			OverallHealth:         newMCPSummary.OverallHealth,
-			CapabilitiesAvailable: newMCPSummary.RunningServers > 0,
-		}
-
-		if newMCPSummary.TotalServers > 0 {
-			uiSummary.HasIssues = newMCPSummary.RunningServers < newMCPSummary.TotalServers || newMCPSummary.OverallHealth < 0.8
-		}
-
-		// Set service status for user mode
-		if newMCPSummary.OverallHealth >= 0.9 {
-			uiSummary.ServiceStatus = string(domain.MCPServiceStatusReady)
-		} else if newMCPSummary.OverallHealth >= 0.5 {
-			uiSummary.ServiceStatus = string(domain.MCPServiceStatusDegraded)
-		} else {
-			uiSummary.ServiceStatus = string(domain.MCPServiceStatusUnavailable)
-		}
-
-		// Broadcast MCP health change event
-		if hm.uiService != nil {
-			hm.uiService.OnMCPHealthChanged(nodeID, uiSummary)
-		}
-
-		logger.Logger.Debug().Msgf("🔧 MCP health changed for node %s: %d/%d servers running, health: %.2f",
-			nodeID, newMCPSummary.RunningServers, newMCPSummary.TotalServers, newMCPSummary.OverallHealth)
-	}
-}
-
-// hasMCPHealthChanged checks if MCP health has changed for a node
-func (hm *HealthMonitor) hasMCPHealthChanged(nodeID string, newSummary *domain.MCPSummaryData) bool {
-	hm.mcpCacheMutex.RLock()
-	defer hm.mcpCacheMutex.RUnlock()
-
-	cached, exists := hm.mcpHealthCache[nodeID]
-	if !exists {
-		return true // First time checking this node
-	}
-
-	// Compare key metrics
-	return cached.TotalServers != newSummary.TotalServers ||
-		cached.RunningServers != newSummary.RunningServers ||
-		cached.TotalTools != newSummary.TotalTools ||
-		cached.OverallHealth != newSummary.OverallHealth
-}
-
-// updateMCPHealthCache updates the cached MCP health data for a node
-func (hm *HealthMonitor) updateMCPHealthCache(nodeID string, summary *domain.MCPSummaryData) {
-	hm.mcpCacheMutex.Lock()
-	defer hm.mcpCacheMutex.Unlock()
-
-	hm.mcpHealthCache[nodeID] = summary
-}
-
-// GetMCPHealthCache returns the current MCP health cache (for debugging/monitoring)
-func (hm *HealthMonitor) GetMCPHealthCache() map[string]*domain.MCPSummaryData {
-	hm.mcpCacheMutex.RLock()
-	defer hm.mcpCacheMutex.RUnlock()
-
-	// Return a copy to avoid race conditions
-	cache := make(map[string]*domain.MCPSummaryData)
-	for nodeID, summary := range hm.mcpHealthCache {
-		cache[nodeID] = summary
-	}
-	return cache
-}

@@ -3,6 +3,11 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, computed_field
 from enum import Enum
 
+from agentfield.openrouter_attribution import (
+    apply_litellm_attribution,
+    apply_openrouter_usage_accounting,
+)
+
 
 class AgentStatus(str, Enum):
     """Agent lifecycle status enum matching the Go backend"""
@@ -14,34 +19,23 @@ class AgentStatus(str, Enum):
 
 
 @dataclass
-class MCPServerHealth:
-    """MCP server health information for heartbeat reporting"""
-
-    alias: str
-    status: str
-    tool_count: int = 0
-    port: Optional[int] = None
-    process_id: Optional[int] = None
-    started_at: Optional[str] = None
-    last_health_check: Optional[str] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass
 class HeartbeatData:
-    """Enhanced heartbeat data with status and MCP information"""
+    """Enhanced heartbeat data with status information"""
 
     status: AgentStatus
-    mcp_servers: List[MCPServerHealth]
     timestamp: str
+    version: str = ""
+    # Per-process identifier. Sent on every heartbeat so the control plane
+    # can detect a redeploy even if the post-restart re-registration step
+    # was missed (e.g. dropped while the new process was still booting).
+    instance_id: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "status": self.status.value,
-            "mcp_servers": [server.to_dict() for server in self.mcp_servers],
             "timestamp": self.timestamp,
+            "version": self.version,
+            "instance_id": self.instance_id,
         }
 
 
@@ -92,6 +86,7 @@ class ExecutionHeaders:
     session_id: Optional[str] = None
     actor_id: Optional[str] = None
     parent_execution_id: Optional[str] = None
+    parent_vc_id: Optional[str] = None
 
     def to_headers(self) -> Dict[str, str]:
         headers = {"X-Run-ID": self.run_id}
@@ -99,6 +94,8 @@ class ExecutionHeaders:
             headers["X-Parent-Execution-ID"] = self.parent_execution_id
         if self.session_id:
             headers["X-Session-ID"] = self.session_id
+        if self.parent_vc_id:
+            headers["X-Parent-VC-ID"] = self.parent_vc_id
         if self.actor_id:
             headers["X-Actor-ID"] = self.actor_id
         return headers
@@ -228,8 +225,7 @@ class DiscoveryResponse:
             total_skills=int(data.get("total_skills", 0)),
             pagination=DiscoveryPagination.from_dict(data.get("pagination") or {}),
             capabilities=[
-                AgentCapability.from_dict(cap)
-                for cap in data.get("capabilities") or []
+                AgentCapability.from_dict(cap) for cap in data.get("capabilities") or []
             ],
         )
 
@@ -275,6 +271,65 @@ class DiscoveryResult:
     json: Optional[DiscoveryResponse] = None
     compact: Optional[CompactDiscoveryResponse] = None
     xml: Optional[str] = None
+
+
+class HarnessConfig(BaseModel):
+    provider: str = Field(
+        ...,
+        description='Coding agent provider: "claude-code" | "codex" | "gemini" | "opencode"',
+    )
+    model: str = Field(default="sonnet", description="Default model identifier.")
+    max_turns: int = Field(default=30, description="Maximum agent iterations.")
+    max_budget_usd: Optional[float] = Field(
+        default=None, description="Cost cap in USD."
+    )
+    max_retries: int = Field(
+        default=3, description="Maximum retry attempts for transient errors."
+    )
+    initial_delay: float = Field(
+        default=1.0, description="Initial retry delay in seconds."
+    )
+    max_delay: float = Field(
+        default=30.0, description="Maximum retry delay in seconds."
+    )
+    backoff_factor: float = Field(default=2.0, description="Retry backoff multiplier.")
+    tools: List[str] = Field(
+        default_factory=lambda: ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
+        description="Default allowed tools.",
+    )
+    permission_mode: Optional[str] = Field(
+        default=None, description='Permission mode: "plan" | "auto" | None'
+    )
+    system_prompt: Optional[str] = Field(
+        default=None, description="Default system prompt."
+    )
+    env: Dict[str, str] = Field(
+        default_factory=dict, description="Environment variables for the agent."
+    )
+    cwd: Optional[str] = Field(default=None, description="Default working directory.")
+    project_dir: Optional[str] = Field(
+        default=None,
+        description=(
+            "Project directory for the coding agent to explore (e.g. a target "
+            "repository path). Maps to --dir in opencode. When set, cwd is used "
+            "only for output file placement while project_dir controls the "
+            "agent's working context."
+        ),
+    )
+    codex_bin: str = Field(default="codex", description="Path to codex binary.")
+    gemini_bin: str = Field(default="gemini", description="Path to gemini binary.")
+    opencode_bin: str = Field(
+        default="opencode", description="Path to opencode binary."
+    )
+    schema_mode: str = Field(
+        default="single",
+        description=(
+            'How schema output is produced: "single" (one Write of the whole '
+            'object, default), "incremental" (build it one top-level field at a '
+            "time with field-level recovery — robust for large/deep schemas), or "
+            '"auto" (incremental only when the schema is large).'
+        ),
+    )
 
 
 class AIConfig(BaseModel):
@@ -374,27 +429,27 @@ class AIConfig(BaseModel):
 
     # Rate limiting configuration
     rate_limit_max_retries: int = Field(
-        default=20,
-        description="Maximum number of retries for rate limit errors (allows up to ~20 minutes of retries).",
+        default=5,
+        description="Maximum number of retries for rate limit errors.",
     )
     rate_limit_base_delay: float = Field(
-        default=1.0,
+        default=0.5,
         description="Base delay for rate limit exponential backoff in seconds.",
     )
     rate_limit_max_delay: float = Field(
-        default=300.0,
-        description="Maximum delay for rate limit backoff in seconds (5 minutes).",
+        default=30.0,
+        description="Maximum delay for rate limit backoff in seconds.",
     )
     rate_limit_jitter_factor: float = Field(
         default=0.25,
         description="Jitter factor for rate limit backoff (±25% randomization).",
     )
     rate_limit_circuit_breaker_threshold: int = Field(
-        default=10,
+        default=5,
         description="Number of consecutive rate limit failures before opening circuit breaker.",
     )
     rate_limit_circuit_breaker_timeout: int = Field(
-        default=300, description="Circuit breaker timeout in seconds (5 minutes)."
+        default=30, description="Circuit breaker timeout in seconds."
     )
     enable_rate_limit_retry: bool = Field(
         default=True, description="Enable automatic retry for rate limit errors."
@@ -431,6 +486,14 @@ class AIConfig(BaseModel):
     )
     organization: Optional[str] = Field(
         default=None, description="Organization ID (for OpenAI)"
+    )
+    openrouter_site_url: Optional[str] = Field(
+        default=None,
+        description="OpenRouter attribution site URL. Defaults to https://agentfield.ai.",
+    )
+    openrouter_app_name: Optional[str] = Field(
+        default=None,
+        description="OpenRouter attribution app title. Defaults to AgentField AI.",
     )
 
     # Additional LiteLLM parameters that can be overridden
@@ -479,6 +542,9 @@ class AIConfig(BaseModel):
         "gpt-4o-mini": 128000,
         "gpt-4": 8192,
         "gpt-3.5-turbo": 16385,
+        # GLM models
+        "openrouter/z-ai/glm-5.2": 131072,
+        "z-ai/glm-5.2": 131072,
         # Claude models
         "openrouter/anthropic/claude-3.5-sonnet": 200000,
         "openrouter/anthropic/claude-3-opus": 200000,
@@ -637,6 +703,15 @@ class AIConfig(BaseModel):
         )
         if provider == "openai" and "max_tokens" in params:
             params["max_completion_tokens"] = params.pop("max_tokens")
+
+        apply_litellm_attribution(
+            params,
+            site_url=self.openrouter_site_url,
+            app_name=self.openrouter_app_name,
+        )
+        # Opt into OpenRouter native cost accounting so responses carry
+        # usage.cost (read back in multimodal_response._resolve_cost).
+        apply_openrouter_usage_accounting(params)
 
         return params
 

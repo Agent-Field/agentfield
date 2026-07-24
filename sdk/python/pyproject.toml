@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentfield"
-version = "0.1.42-rc.1"
+version = "0.1.117-rc.4"
 description = "Python SDK for the AgentField control plane"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -17,15 +17,13 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-requires-python = ">=3.8,<3.14"
+requires-python = ">=3.10, <3.14"
 dependencies = [
     "fastapi",
     "uvicorn",
@@ -36,7 +34,9 @@ dependencies = [
     "PyYAML>=6.0",
     "aiohttp>=3.8",
     "websockets",
-    "fal-client>=0.5.0"
+    "fal-client>=0.5.0",
+    "cryptography>=41.0",
+    "joserfc>=1.0"
 ]
 keywords = ["agentfield", "sdk", "agents"]
 
@@ -51,14 +51,35 @@ include = ["agentfield*"]
 exclude = ["tests*", "examples*"]
 
 [project.optional-dependencies]
+harness-claude = [
+    "claude-agent-sdk>=0.1",
+]
+harness-codex = [
+    "openai-codex>=0.1.0b3",
+    "openai-codex-cli-bin==0.137.0a4",
+]
+harness-opencode = [
+    "opencode-ai>=0.1.0a36",
+]
+harness-all = [
+    "claude-agent-sdk>=0.1",
+    "openai-codex>=0.1.0b3",
+    "openai-codex-cli-bin==0.137.0a4",
+    "opencode-ai>=0.1.0a36",
+]
+harness = [
+    "claude-agent-sdk>=0.1",
+]
 dev = [
-    "pytest>=7.4,<9",
-    "pytest-asyncio>=0.21,<0.24",
+    "tomli>=2.0; python_version < '3.11'",
+    "pytest>=9.0.3,<10",
+    "pytest-asyncio>=1.3,<2",
     "pytest-cov>=4.1,<5",
+    "pytest-httpx>=0.30,<1",
     "responses>=0.23,<0.26",
     "respx>=0.20,<0.22",
     "freezegun>=1.2,<2",
-    "syrupy>=4,<5",
+    "syrupy>=5,<6",
     "hypothesis>=6.88,<7",
     "pytest-socket>=0.6,<0.8",
 ]
@@ -74,19 +95,15 @@ markers = [
     "contract: API/interface stability tests",
     "unit: isolated unit tests",
     "integration: tests that can touch network/services",
-    "mcp: tests that exercise MCP/network interactions"
+    "harness_live: live tests that invoke real coding agents (claude, codex, opencode) — costs real money",
+    "httpx_mock: pytest-httpx marker for configuring mock behavior"
 ]
-addopts = "-ra -q -m \"not mcp\" --strict-markers --strict-config --cov=agentfield.client --cov=agentfield.agent_field_handler --cov=agentfield.execution_context --cov=agentfield.execution_state --cov=agentfield.memory --cov=agentfield.rate_limiter --cov=agentfield.result_cache --cov-report=term-missing:skip-covered"
+addopts = "-ra -q -m \"not harness_live and not functional\" --strict-markers --strict-config --cov=agentfield.client --cov=agentfield.agent_field_handler --cov=agentfield.execution_context --cov=agentfield.execution_state --cov=agentfield.memory --cov=agentfield.rate_limiter --cov=agentfield.result_cache --cov-report=term-missing:skip-covered"
 asyncio_mode = "auto"
 
 [tool.coverage.run]
 source = ["agentfield"]
 omit = [
-    "agentfield/agent_mcp.py",
-    "agentfield/dynamic_skills.py",
-    "agentfield/mcp_client.py",
-    "agentfield/mcp_manager.py",
-    "agentfield/mcp_stdio_bridge.py",
     "agentfield/logger.py",
     "agentfield/types.py",
 ]

@@ -31,10 +31,10 @@ export interface TagColorMap {
 
 // Predefined tag colors using theme variables for dark mode compatibility
 export const TAG_COLORS = [
-  'bg-status-info-bg text-status-info-light border-status-info-border',
-  'bg-status-success-bg text-status-success-light border-status-success-border',
-  'bg-status-warning-bg text-status-warning-light border-status-warning-border',
-  'bg-status-neutral-bg text-status-neutral-light border-status-neutral-border',
+  'bg-status-info/10 text-status-info border-status-info/30',
+  'bg-status-success/10 text-status-success border-status-success/30',
+  'bg-status-warning/10 text-status-warning border-status-warning/30',
+  'bg-muted text-muted-foreground border-border',
   'bg-chart-1/10 text-chart-1 border-chart-1/20',
   'bg-chart-2/10 text-chart-2 border-chart-2/20',
   'bg-chart-3/10 text-chart-3 border-chart-3/20',

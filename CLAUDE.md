@@ -252,6 +252,12 @@ Storage interface is unified—services call storage layer methods, storage laye
 2. Config file (`config/agentfield.yaml` or `AGENTFIELD_CONFIG_FILE` path)
 3. Defaults in code
 
+### Agent-node manifest (`agentfield-package.yaml`)
+- Every installable node has this manifest at its repo root. It's parsed by `packages.ParsePackageMetadata` (`control-plane/internal/packages/installer.go`) — the single loader used by `af install`/`af run` and the package/agent services. Full authoring guide: [docs/installing-agent-nodes.md](docs/installing-agent-nodes.md); a real example is Agent-Field/SWE-AF's `agentfield-package.yaml`.
+- **`config_version`** declares the manifest *schema* version (e.g. `v1`) — distinct from `version:`, which is the node's own release. Absent means `v0` (legacy, pre-versioning). `CurrentConfigVersion` in `installer.go` is the highest version the binary reads; a manifest declaring a higher version is **refused** with an upgrade hint rather than mis-parsed. New manifests should set `config_version: v1`.
+- **When to bump `config_version`:** only for **breaking** format changes (a field renamed/removed, or its shape/meaning changed). Adding a new *optional* field is additive — `yaml.Unmarshal` ignores unknown keys and new readers fall back to defaults, so it does **not** need a bump. If you do change the format in a breaking way: bump `CurrentConfigVersion`, add a `case` in the `ParsePackageMetadata` version switch, and record the change in the version table in `docs/installing-agent-nodes.md`.
+- **Golden-fixture tests are the spec:** `control-plane/internal/packages/config_version_fixtures_test.go` holds one canonical manifest + structure assertion per version, with a coverage guard that fails CI if a version has no fixture. Maintenance rule (also documented in that file): grow the *current* version's fixture for additive fields; **add a net-new fixture** for a net-new version and **never rewrite old fixtures** into the new shape — they guard backwards compatibility.
+
 ### Agent-to-Agent Communication
 - Agents call each other via control plane: `await agent.call("other-agent.function", input={...})`
 - Control plane routes requests, tracks workflow DAG, injects metrics

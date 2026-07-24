@@ -18,7 +18,7 @@ import (
 const DefaultLeaseTTL = 5 * time.Minute
 
 // NodeStatusLeaseHandler processes lease-based status updates from agents.
-func NodeStatusLeaseHandler(storageProvider storage.StorageProvider, statusManager *services.StatusManager, presenceManager *services.PresenceManager, leaseTTL time.Duration) gin.HandlerFunc {
+func NodeStatusLeaseHandler(storageProvider storage.StorageProvider, statusManager *services.StatusManager, healthMonitor *services.HealthMonitor, presenceManager *services.PresenceManager, leaseTTL time.Duration) gin.HandlerFunc {
 	if leaseTTL <= 0 {
 		leaseTTL = DefaultLeaseTTL
 	}
@@ -33,6 +33,7 @@ func NodeStatusLeaseHandler(storageProvider storage.StorageProvider, statusManag
 
 		var payload struct {
 			Phase       string `json:"phase"`
+			Version     string `json:"version"`
 			HealthScore *int   `json:"health_score"`
 			// Conditions are accepted for future use but currently ignored by the control plane.
 			Conditions []map[string]interface{} `json:"conditions"`
@@ -43,14 +44,46 @@ func NodeStatusLeaseHandler(storageProvider storage.StorageProvider, statusManag
 			return
 		}
 
-		agent, err := storageProvider.GetAgent(ctx, nodeID)
+		var agent *types.AgentNode
+		var err error
+		if payload.Version != "" {
+			agent, err = storageProvider.GetAgentVersion(ctx, nodeID, payload.Version)
+		} else {
+			agent, err = storageProvider.GetAgent(ctx, nodeID)
+		}
 		if err != nil || agent == nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "node not found"})
 			return
 		}
 
+		// Protect pending_approval from being overwritten by agent status updates.
+		// Skip all status changes — only renew the lease heartbeat timestamp.
+		if agent.LifecycleStatus == types.AgentStatusPendingApproval {
+			logger.Logger.Debug().Str("node_id", nodeID).Msg("ignoring status update: agent is pending_approval")
+			now := time.Now().UTC()
+			_ = storageProvider.UpdateAgentHeartbeat(ctx, nodeID, agent.Version, now)
+			if presenceManager != nil {
+				presenceManager.Touch(nodeID, agent.Version, now)
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"lease_seconds":      int(leaseTTL.Seconds()),
+				"next_lease_renewal": now.Add(leaseTTL).Format(time.RFC3339),
+			})
+			return
+		}
+
+		// Lease renewals are these nodes' only keep-alive (the Go SDK never
+		// POSTs /heartbeat), so this is also where they must enter HTTP health
+		// monitoring — otherwise the monitor never polls them and their
+		// health_status never leaves "unknown". Serverless nodes are excluded
+		// for the same reason as in RecoverFromDatabase: no /status endpoint.
+		if healthMonitor != nil && agent.BaseURL != "" && agent.DeploymentType != "serverless" {
+			healthMonitor.RegisterAgent(nodeID, agent.BaseURL)
+		}
+
 		update := &types.AgentStatusUpdate{
-			Source: types.StatusSourceManual,
+			Source:  types.StatusSourceManual,
+			Version: agent.Version,
 		}
 
 		if payload.HealthScore != nil {
@@ -80,12 +113,12 @@ func NodeStatusLeaseHandler(storageProvider storage.StorageProvider, statusManag
 		}
 
 		now := time.Now().UTC()
-		if err := storageProvider.UpdateAgentHeartbeat(ctx, nodeID, now); err != nil {
+		if err := storageProvider.UpdateAgentHeartbeat(ctx, nodeID, agent.Version, now); err != nil {
 			logger.Logger.Warn().Err(err).Str("node_id", nodeID).Msg("failed to persist heartbeat during status update")
 		}
 
 		if presenceManager != nil {
-			presenceManager.Touch(nodeID, now)
+			presenceManager.Touch(nodeID, agent.Version, now)
 		}
 
 		c.JSON(http.StatusOK, gin.H{
@@ -129,7 +162,8 @@ func NodeActionAckHandler(storageProvider storage.StorageProvider, presenceManag
 			return
 		}
 
-		if _, err := storageProvider.GetAgent(ctx, nodeID); err != nil {
+		agent, err := storageProvider.GetAgent(ctx, nodeID)
+		if err != nil || agent == nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "node not found"})
 			return
 		}
@@ -142,11 +176,11 @@ func NodeActionAckHandler(storageProvider storage.StorageProvider, presenceManag
 			Msg("action acknowledgement received")
 
 		now := time.Now().UTC()
-		if err := storageProvider.UpdateAgentHeartbeat(ctx, nodeID, now); err != nil {
+		if err := storageProvider.UpdateAgentHeartbeat(ctx, nodeID, agent.Version, now); err != nil {
 			logger.Logger.Warn().Err(err).Str("node_id", nodeID).Msg("failed to persist heartbeat during action ack")
 		}
 		if presenceManager != nil {
-			presenceManager.Touch(nodeID, now)
+			presenceManager.Touch(nodeID, agent.Version, now)
 		}
 
 		c.JSON(http.StatusOK, gin.H{
@@ -186,17 +220,18 @@ func ClaimActionsHandler(storageProvider storage.StorageProvider, presenceManage
 			payload.MaxItems = 1
 		}
 
-		if _, err := storageProvider.GetAgent(ctx, payload.NodeID); err != nil {
+		agent, err := storageProvider.GetAgent(ctx, payload.NodeID)
+		if err != nil || agent == nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "node not found"})
 			return
 		}
 
 		now := time.Now().UTC()
-		if err := storageProvider.UpdateAgentHeartbeat(ctx, payload.NodeID, now); err != nil {
+		if err := storageProvider.UpdateAgentHeartbeat(ctx, payload.NodeID, agent.Version, now); err != nil {
 			logger.Logger.Warn().Err(err).Str("node_id", payload.NodeID).Msg("failed to persist heartbeat during claim")
 		}
 		if presenceManager != nil {
-			presenceManager.Touch(payload.NodeID, now)
+			presenceManager.Touch(payload.NodeID, agent.Version, now)
 		}
 
 		nextPoll := payload.WaitSeconds
@@ -223,22 +258,30 @@ func NodeShutdownHandler(storageProvider storage.StorageProvider, statusManager 
 			return
 		}
 
-		if _, err := storageProvider.GetAgent(ctx, nodeID); err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "node not found"})
-			return
-		}
-
 		var payload struct {
 			Reason          string `json:"reason"`
+			Version         string `json:"version"`
 			ExpectedRestart string `json:"expected_restart"`
 		}
 		_ = c.ShouldBindJSON(&payload) // best-effort parse; optional fields
+
+		var agent *types.AgentNode
+		var err error
+		if payload.Version != "" {
+			agent, err = storageProvider.GetAgentVersion(ctx, nodeID, payload.Version)
+		} else {
+			agent, err = storageProvider.GetAgent(ctx, nodeID)
+		}
+		if err != nil || agent == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "node not found"})
+			return
+		}
 
 		now := time.Now().UTC()
 		if presenceManager != nil {
 			presenceManager.Forget(nodeID)
 		}
-		if err := storageProvider.UpdateAgentHeartbeat(ctx, nodeID, now); err != nil {
+		if err := storageProvider.UpdateAgentHeartbeat(ctx, nodeID, agent.Version, now); err != nil {
 			logger.Logger.Warn().Err(err).Str("node_id", nodeID).Msg("failed to persist heartbeat during shutdown")
 		}
 
@@ -250,6 +293,7 @@ func NodeShutdownHandler(storageProvider storage.StorageProvider, statusManager 
 				LifecycleStatus: &lifecycle,
 				Source:          types.StatusSourceManual,
 				Reason:          "agent shutdown",
+				Version:         agent.Version,
 			}
 			if err := statusManager.UpdateAgentStatus(ctx, nodeID, update); err != nil {
 				logger.Logger.Error().Err(err).Str("node_id", nodeID).Msg("failed to update status during shutdown")

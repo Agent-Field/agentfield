@@ -104,7 +104,7 @@ class TestAPIKeyAuthentication:
         """execute_sync should include X-API-Key header in requests."""
         captured = {}
 
-        def fake_post(url, json, headers, timeout):
+        def fake_post(url, data=None, json=None, headers=None, timeout=None, **kwargs):
             captured["post_headers"] = headers
             return DummyResponse(
                 {
@@ -142,7 +142,7 @@ class TestAPIKeyAuthentication:
         """execute_sync should not include X-API-Key when not configured."""
         captured = {}
 
-        def fake_post(url, json, headers, timeout):
+        def fake_post(url, data=None, json=None, headers=None, timeout=None, **kwargs):
             captured["post_headers"] = headers
             return DummyResponse(
                 {
@@ -237,7 +237,7 @@ class TestAPIKeyAuthentication:
         """API key should be merged with user-provided headers."""
         captured = {}
 
-        def fake_post(url, json, headers, timeout):
+        def fake_post(url, data=None, json=None, headers=None, timeout=None, **kwargs):
             captured["headers"] = headers
             return DummyResponse(
                 {
@@ -277,7 +277,7 @@ class TestAPIKeyAuthentication:
         """User-provided X-API-Key header should not override configured key."""
         captured = {}
 
-        def fake_post(url, json, headers, timeout):
+        def fake_post(url, data=None, json=None, headers=None, timeout=None, **kwargs):
             captured["headers"] = headers
             return DummyResponse(
                 {
@@ -333,7 +333,7 @@ class TestAPIKeyAuthentication:
         from agentfield.types import AgentStatus, HeartbeatData
 
         client = AgentFieldClient(base_url="http://example.com", api_key="heartbeat-key")
-        heartbeat = HeartbeatData(status=AgentStatus.READY, mcp_servers=[], timestamp="now")
+        heartbeat = HeartbeatData(status=AgentStatus.READY, timestamp="now")
 
         result = await client.send_enhanced_heartbeat("node-1", heartbeat)
 
@@ -360,7 +360,7 @@ class TestAPIKeyAuthentication:
         from agentfield.types import AgentStatus, HeartbeatData
 
         client = AgentFieldClient(base_url="http://example.com", api_key="heartbeat-key")
-        heartbeat = HeartbeatData(status=AgentStatus.READY, mcp_servers=[], timestamp="now")
+        heartbeat = HeartbeatData(status=AgentStatus.READY, timestamp="now")
 
         result = client.send_enhanced_heartbeat_sync("node-1", heartbeat)
 
@@ -487,8 +487,9 @@ class TestAgentAPIKey:
     def test_unattached_router_raises_error(self):
         """AgentRouter should raise error when accessing api_key without agent."""
         from agentfield.router import AgentRouter
+        from agentfield.exceptions import AgentFieldClientError
 
         router = AgentRouter(prefix="/test")
 
-        with pytest.raises(RuntimeError, match="Router not attached to an agent"):
+        with pytest.raises(AgentFieldClientError, match="Router not attached to an agent"):
             _ = router.api_key

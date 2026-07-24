@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -9,12 +10,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io"
+	"strconv"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
+	"golang.org/x/crypto/hkdf"
 )
 
 // DIDService handles DID generation, management, and resolution.
@@ -95,6 +99,27 @@ func (s *DIDService) GetAgentFieldServerID() (string, error) {
 // getAgentFieldServerID is an internal helper that returns the af server ID.
 func (s *DIDService) getAgentFieldServerID() (string, error) {
 	return s.GetAgentFieldServerID()
+}
+
+// GetControlPlaneIssuerDID returns the root DID (did:key format) for the
+// control plane, suitable for signing VCs. This DID is resolvable via
+// ResolveDID(), unlike the did:web URI returned by GenerateDIDWeb().
+func (s *DIDService) GetControlPlaneIssuerDID() (string, error) {
+	if !s.config.Enabled {
+		return "", fmt.Errorf("DID system is disabled")
+	}
+	agentfieldServerID, err := s.getAgentFieldServerID()
+	if err != nil {
+		return "", err
+	}
+	registry, err := s.registry.GetRegistry(agentfieldServerID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get DID registry: %w", err)
+	}
+	if registry.RootDID == "" {
+		return "", fmt.Errorf("root DID not initialized")
+	}
+	return registry.RootDID, nil
 }
 
 // validateAgentFieldServerRegistry ensures that the af server registry exists before operations.
@@ -218,6 +243,18 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 		}, nil
 	}
 
+	// Derive the agent's X25519 keyAgreement (encryption) keypair from the same
+	// master seed and derivation path (distinct HKDF salt => independent key).
+	// New agents start at rotation epoch 0.
+	agentX25519Epoch := 0
+	agentX25519PubKey, agentX25519PrivKey, err := s.regenerateX25519KeyPairJWKAtEpoch(registry.MasterSeed, agentPath, agentX25519Epoch)
+	if err != nil {
+		return &types.DIDRegistrationResponse{
+			Success: false,
+			Error:   fmt.Sprintf("failed to generate agent X25519 keyAgreement key: %v", err),
+		}, nil
+	}
+
 	// Generate reasoner DIDs
 	reasonerDIDs := make(map[string]types.DIDIdentity)
 	reasonerInfos := make(map[string]types.ReasonerDIDInfo)
@@ -314,14 +351,16 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 
 	// Create agent DID info
 	agentDIDInfo := types.AgentDIDInfo{
-		DID:            agentDID,
-		AgentNodeID:    req.AgentNodeID,
-		PublicKeyJWK:   json.RawMessage(agentPubKey),
-		DerivationPath: agentPath,
-		Reasoners:      reasonerInfos,
-		Skills:         skillInfos,
-		Status:         types.AgentDIDStatusActive,
-		RegisteredAt:   time.Now(),
+		DID:                agentDID,
+		AgentNodeID:        req.AgentNodeID,
+		PublicKeyJWK:       json.RawMessage(agentPubKey),
+		X25519PublicKeyJWK: json.RawMessage(agentX25519PubKey),
+		X25519Epoch:        agentX25519Epoch,
+		DerivationPath:     agentPath,
+		Reasoners:          reasonerInfos,
+		Skills:             skillInfos,
+		Status:             types.AgentDIDStatusActive,
+		RegisteredAt:       time.Now(),
 	}
 
 	// Update registry
@@ -339,11 +378,14 @@ func (s *DIDService) handleNewRegistration(req *types.DIDRegistrationRequest) (*
 	// Create identity package
 	identityPackage := types.DIDIdentityPackage{
 		AgentDID: types.DIDIdentity{
-			DID:            agentDID,
-			PrivateKeyJWK:  agentPrivKey,
-			PublicKeyJWK:   agentPubKey,
-			DerivationPath: agentPath,
-			ComponentType:  "agent",
+			DID:                 agentDID,
+			PrivateKeyJWK:       agentPrivKey,
+			PublicKeyJWK:        agentPubKey,
+			X25519PublicKeyJWK:  agentX25519PubKey,
+			X25519PrivateKeyJWK: agentX25519PrivKey,
+			X25519Epoch:         agentX25519Epoch,
+			DerivationPath:      agentPath,
+			ComponentType:       "agent",
 		},
 		ReasonerDIDs:       reasonerDIDs,
 		SkillDIDs:          skillDIDs,
@@ -419,12 +461,28 @@ func (s *DIDService) ResolveDID(did string) (*types.DIDIdentity, error) {
 				return nil, fmt.Errorf("failed to regenerate private key for agent DID %s: %w", did, err)
 			}
 
+			// Regenerate the X25519 keyAgreement keypair at the agent's CURRENT
+			// rotation epoch so resolution exposes the public encryption key and
+			// re-derives the matching private key for the owner.
+			x25519PubKey, x25519PrivKey, err := s.regenerateX25519KeyPairJWKAtEpoch(registry.MasterSeed, agentInfo.DerivationPath, agentInfo.X25519Epoch)
+			if err != nil {
+				return nil, fmt.Errorf("failed to regenerate X25519 keyAgreement key for agent DID %s: %w", did, err)
+			}
+			// Prefer the stored public key when present (it is kept in lockstep
+			// with the epoch on rotation); fall back to the freshly derived one.
+			if len(agentInfo.X25519PublicKeyJWK) > 0 {
+				x25519PubKey = string(agentInfo.X25519PublicKeyJWK)
+			}
+
 			return &types.DIDIdentity{
-				DID:            agentInfo.DID,
-				PrivateKeyJWK:  privateKeyJWK,
-				PublicKeyJWK:   string(agentInfo.PublicKeyJWK),
-				DerivationPath: agentInfo.DerivationPath,
-				ComponentType:  "agent",
+				DID:                 agentInfo.DID,
+				PrivateKeyJWK:       privateKeyJWK,
+				PublicKeyJWK:        string(agentInfo.PublicKeyJWK),
+				X25519PublicKeyJWK:  x25519PubKey,
+				X25519PrivateKeyJWK: x25519PrivKey,
+				X25519Epoch:         agentInfo.X25519Epoch,
+				DerivationPath:      agentInfo.DerivationPath,
+				ComponentType:       "agent",
 			}, nil
 		}
 
@@ -472,6 +530,28 @@ func (s *DIDService) ResolveDID(did string) (*types.DIDIdentity, error) {
 	return nil, fmt.Errorf("DID not found: %s", did)
 }
 
+// ResolveAgentIDByDID looks up the agent node ID for any DID (including did:key)
+// by searching the in-memory DID registry. Returns empty string if not found.
+func (s *DIDService) ResolveAgentIDByDID(did string) string {
+	if !s.config.Enabled {
+		return ""
+	}
+	agentfieldServerID, err := s.getAgentFieldServerID()
+	if err != nil {
+		return ""
+	}
+	registry, err := s.registry.GetRegistry(agentfieldServerID)
+	if err != nil {
+		return ""
+	}
+	for _, agentInfo := range registry.AgentNodes {
+		if agentInfo.DID == did {
+			return agentInfo.AgentNodeID
+		}
+	}
+	return ""
+}
+
 // generateDIDWithKeys generates a DID with private and public keys from master seed and derivation path.
 func (s *DIDService) generateDIDWithKeys(masterSeed []byte, derivationPath string) (string, string, string, error) {
 	// Derive private key using simplified BIP32-style derivation
@@ -511,15 +591,19 @@ func (s *DIDService) generateDIDFromSeed(masterSeed []byte, derivationPath strin
 	return s.generateDIDKey(publicKey), nil
 }
 
-// derivePrivateKey derives a private key from master seed using simplified BIP32-style derivation.
+// derivePrivateKey derives a private key from master seed using HKDF (RFC 5869).
+// Uses domain-separated derivation with SHA-256, the derivation path as info,
+// and a fixed salt for domain separation.
 func (s *DIDService) derivePrivateKey(masterSeed []byte, derivationPath string) (ed25519.PrivateKey, error) {
-	// Simplified derivation: hash master seed with derivation path
-	h := sha256.New()
-	h.Write(masterSeed)
-	h.Write([]byte(derivationPath))
-	derivedSeed := h.Sum(nil)
+	salt := []byte("agentfield-did-key-derivation-v1")
+	info := []byte(derivationPath)
 
-	// Generate Ed25519 private key from derived seed
+	hkdfReader := hkdf.New(sha256.New, masterSeed, salt, info)
+	derivedSeed := make([]byte, ed25519.SeedSize) // 32 bytes
+	if _, err := io.ReadFull(hkdfReader, derivedSeed); err != nil {
+		return nil, fmt.Errorf("HKDF key derivation failed: %w", err)
+	}
+
 	privateKey := ed25519.NewKeyFromSeed(derivedSeed)
 	return privateKey, nil
 }
@@ -596,6 +680,190 @@ func (s *DIDService) regeneratePrivateKeyJWK(masterSeed []byte, derivationPath s
 	}
 
 	return privateKeyJWK, nil
+}
+
+// deriveX25519PrivateKeyAtEpoch derives an X25519 keyAgreement private key from
+// the master seed using HKDF (RFC 5869). It uses a DISTINCT salt from the
+// Ed25519 signing-key derivation so the encryption key is cryptographically
+// independent of the signing key. The rotation epoch is folded into the HKDF
+// `info` (`<derivationPath>/enc/<epoch>`) so each epoch yields a fresh,
+// independent keypair — rotating the epoch retires the prior key entirely.
+func (s *DIDService) deriveX25519PrivateKeyAtEpoch(masterSeed []byte, derivationPath string, epoch int) (*ecdh.PrivateKey, error) {
+	salt := []byte("agentfield-did-keyagreement-v1")
+	info := []byte(derivationPath + "/enc/" + strconv.Itoa(epoch))
+
+	hkdfReader := hkdf.New(sha256.New, masterSeed, salt, info)
+	derivedSeed := make([]byte, 32)
+	if _, err := io.ReadFull(hkdfReader, derivedSeed); err != nil {
+		return nil, fmt.Errorf("HKDF X25519 key derivation failed: %w", err)
+	}
+
+	privateKey, err := ecdh.X25519().NewPrivateKey(derivedSeed)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create X25519 private key: %w", err)
+	}
+	return privateKey, nil
+}
+
+// x25519PublicKeyToJWK converts an X25519 public key to JWK format (RFC 8037).
+func (s *DIDService) x25519PublicKeyToJWK(pub *ecdh.PublicKey) (string, error) {
+	jwk := map[string]interface{}{
+		"kty": "OKP",
+		"crv": "X25519",
+		"x":   base64.RawURLEncoding.EncodeToString(pub.Bytes()),
+		"use": "enc",
+		"alg": "ECDH-ES",
+	}
+
+	jwkBytes, err := json.Marshal(jwk)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal X25519 public JWK: %w", err)
+	}
+
+	return string(jwkBytes), nil
+}
+
+// x25519PrivateKeyToJWK converts an X25519 private key to JWK format (RFC 8037),
+// including the private `d` component.
+func (s *DIDService) x25519PrivateKeyToJWK(priv *ecdh.PrivateKey) (string, error) {
+	jwk := map[string]interface{}{
+		"kty": "OKP",
+		"crv": "X25519",
+		"x":   base64.RawURLEncoding.EncodeToString(priv.PublicKey().Bytes()),
+		"d":   base64.RawURLEncoding.EncodeToString(priv.Bytes()),
+		"use": "enc",
+		"alg": "ECDH-ES",
+	}
+
+	jwkBytes, err := json.Marshal(jwk)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal X25519 private JWK: %w", err)
+	}
+
+	return string(jwkBytes), nil
+}
+
+// regenerateX25519KeyPairJWK derives the X25519 keyAgreement keypair from the
+// master seed and derivation path at the default rotation epoch (0) and returns
+// both the public and private JWKs.
+func (s *DIDService) regenerateX25519KeyPairJWK(masterSeed []byte, derivationPath string) (pubJWK string, privJWK string, err error) {
+	return s.regenerateX25519KeyPairJWKAtEpoch(masterSeed, derivationPath, 0)
+}
+
+// regenerateX25519KeyPairJWKAtEpoch derives the X25519 keyAgreement keypair from
+// the master seed and derivation path at the given rotation epoch and returns
+// both the public and private JWKs.
+func (s *DIDService) regenerateX25519KeyPairJWKAtEpoch(masterSeed []byte, derivationPath string, epoch int) (pubJWK string, privJWK string, err error) {
+	priv, err := s.deriveX25519PrivateKeyAtEpoch(masterSeed, derivationPath, epoch)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to derive X25519 private key: %w", err)
+	}
+
+	pubJWK, err = s.x25519PublicKeyToJWK(priv.PublicKey())
+	if err != nil {
+		return "", "", fmt.Errorf("failed to convert X25519 public key to JWK: %w", err)
+	}
+
+	privJWK, err = s.x25519PrivateKeyToJWK(priv)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to convert X25519 private key to JWK: %w", err)
+	}
+
+	return pubJWK, privJWK, nil
+}
+
+// RotateAgentX25519Key rotates the X25519 keyAgreement (encryption) key of the
+// agent-node identified by did. It increments the agent's stored rotation epoch,
+// re-derives the keypair at the new epoch, updates the stored public key, and
+// persists the registry. The new public key and epoch are returned so callers
+// can re-publish the encryption key.
+//
+// After rotation, ResolveDID returns the NEW keypair; a payload encrypted to the
+// OLD public key can no longer be decrypted with the re-derived private key — the
+// old key is retired (the derivation no longer produces it at the new epoch).
+//
+// Only agent-node DIDs are supported. Reasoner/skill/root DIDs do not carry an
+// independent keyAgreement key and return a clear error.
+func (s *DIDService) RotateAgentX25519Key(did string) (newPubJWK string, newEpoch int, err error) {
+	if did == "" {
+		return "", 0, fmt.Errorf("did is required")
+	}
+
+	if err := s.validateAgentFieldServerRegistry(); err != nil {
+		return "", 0, fmt.Errorf("af server registry validation failed: %w", err)
+	}
+
+	agentfieldServerID, err := s.getAgentFieldServerID()
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to get af server ID: %w", err)
+	}
+
+	registry, err := s.registry.GetRegistry(agentfieldServerID)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to get DID registry: %w", err)
+	}
+	if registry == nil {
+		return "", 0, fmt.Errorf("DID registry not found for af server %s", agentfieldServerID)
+	}
+
+	// The root af-server DID and component (reasoner/skill) DIDs do not own a
+	// rotatable keyAgreement key — reject them with a clear error.
+	if did == registry.RootDID {
+		return "", 0, fmt.Errorf("cannot rotate keyAgreement key for af server root DID %s: not an agent-node DID", did)
+	}
+
+	// Locate the agent node owning this DID.
+	var (
+		agentNodeID string
+		agentInfo   types.AgentDIDInfo
+		found       bool
+	)
+	for nodeID, info := range registry.AgentNodes {
+		if info.DID == did {
+			agentNodeID, agentInfo, found = nodeID, info, true
+			break
+		}
+		// Surface a precise error for component DIDs rather than a generic
+		// "not found" so callers know rotation is unsupported for them.
+		for _, reasonerInfo := range info.Reasoners {
+			if reasonerInfo.DID == did {
+				return "", 0, fmt.Errorf("cannot rotate keyAgreement key for reasoner DID %s: rotation is only supported for agent-node DIDs", did)
+			}
+		}
+		for _, skillInfo := range info.Skills {
+			if skillInfo.DID == did {
+				return "", 0, fmt.Errorf("cannot rotate keyAgreement key for skill DID %s: rotation is only supported for agent-node DIDs", did)
+			}
+		}
+	}
+	if !found {
+		return "", 0, fmt.Errorf("agent-node DID %s not found in registry", did)
+	}
+
+	// Increment the rotation epoch and re-derive the keyAgreement keypair.
+	newEpoch = agentInfo.X25519Epoch + 1
+	pubJWK, _, err := s.regenerateX25519KeyPairJWKAtEpoch(registry.MasterSeed, agentInfo.DerivationPath, newEpoch)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to re-derive X25519 keyAgreement key at epoch %d for agent DID %s: %w", newEpoch, did, err)
+	}
+
+	// Persist the new epoch + public key.
+	agentInfo.X25519Epoch = newEpoch
+	agentInfo.X25519PublicKeyJWK = json.RawMessage(pubJWK)
+	registry.AgentNodes[agentNodeID] = agentInfo
+	registry.LastKeyRotation = time.Now()
+
+	if err := s.registry.StoreRegistry(registry); err != nil {
+		return "", 0, fmt.Errorf("failed to persist registry after keyAgreement rotation: %w", err)
+	}
+
+	logger.Logger.Info().
+		Str("did", did).
+		Str("agent_node_id", agentNodeID).
+		Int("epoch", newEpoch).
+		Msg("Rotated agent X25519 keyAgreement key")
+
+	return pubJWK, newEpoch, nil
 }
 
 // regeneratePublicKeyJWK regenerates a public key JWK from master seed and derivation path.
@@ -945,12 +1213,35 @@ func (s *DIDService) buildExistingIdentityPackage(existingAgent *types.AgentDIDI
 		agentfieldServerID = "unknown"
 	}
 
+	// Retrieve master seed to re-derive private keys for the requesting agent.
+	// Agents need their private keys to sign cross-agent requests (DID auth).
+	var masterSeed []byte
+	registry, err := s.registry.GetRegistry(agentfieldServerID)
+	if err != nil {
+		logger.Logger.Error().Err(err).Msg("Failed to get registry for key re-derivation")
+	} else {
+		masterSeed = registry.MasterSeed
+	}
+
+	// Helper to re-derive private key JWK from master seed and derivation path.
+	rederivePrivKey := func(derivationPath string) string {
+		if masterSeed == nil || derivationPath == "" {
+			return ""
+		}
+		_, privKeyJWK, _, err := s.generateDIDWithKeys(masterSeed, derivationPath)
+		if err != nil {
+			logger.Logger.Error().Err(err).Str("path", derivationPath).Msg("Failed to re-derive private key")
+			return ""
+		}
+		return privKeyJWK
+	}
+
 	// Build reasoner DIDs map
 	reasonerDIDs := make(map[string]types.DIDIdentity)
 	for id, reasonerInfo := range existingAgent.Reasoners {
 		reasonerDIDs[id] = types.DIDIdentity{
 			DID:            reasonerInfo.DID,
-			PrivateKeyJWK:  "", // Don't include private keys in existing package
+			PrivateKeyJWK:  rederivePrivKey(reasonerInfo.DerivationPath),
 			PublicKeyJWK:   string(reasonerInfo.PublicKeyJWK),
 			DerivationPath: reasonerInfo.DerivationPath,
 			ComponentType:  "reasoner",
@@ -963,7 +1254,7 @@ func (s *DIDService) buildExistingIdentityPackage(existingAgent *types.AgentDIDI
 	for id, skillInfo := range existingAgent.Skills {
 		skillDIDs[id] = types.DIDIdentity{
 			DID:            skillInfo.DID,
-			PrivateKeyJWK:  "", // Don't include private keys in existing package
+			PrivateKeyJWK:  rederivePrivKey(skillInfo.DerivationPath),
 			PublicKeyJWK:   string(skillInfo.PublicKeyJWK),
 			DerivationPath: skillInfo.DerivationPath,
 			ComponentType:  "skill",
@@ -971,13 +1262,34 @@ func (s *DIDService) buildExistingIdentityPackage(existingAgent *types.AgentDIDI
 		}
 	}
 
+	// Re-derive the agent's X25519 keyAgreement keypair so re-registering agents
+	// still receive their encryption keys. Best-effort: empty if the seed is
+	// unavailable, mirroring the Ed25519 re-derivation above.
+	// Re-derive at the agent's CURRENT rotation epoch so re-registration preserves
+	// (never resets) any prior keyAgreement rotation.
+	var agentX25519PubKey, agentX25519PrivKey string
+	if masterSeed != nil && existingAgent.DerivationPath != "" {
+		pubJWK, privJWK, err := s.regenerateX25519KeyPairJWKAtEpoch(masterSeed, existingAgent.DerivationPath, existingAgent.X25519Epoch)
+		if err != nil {
+			logger.Logger.Error().Err(err).Str("path", existingAgent.DerivationPath).Msg("Failed to re-derive X25519 keyAgreement key")
+		} else {
+			agentX25519PubKey, agentX25519PrivKey = pubJWK, privJWK
+		}
+	}
+	if len(existingAgent.X25519PublicKeyJWK) > 0 {
+		agentX25519PubKey = string(existingAgent.X25519PublicKeyJWK)
+	}
+
 	return types.DIDIdentityPackage{
 		AgentDID: types.DIDIdentity{
-			DID:            existingAgent.DID,
-			PrivateKeyJWK:  "", // Don't include private keys in existing package
-			PublicKeyJWK:   string(existingAgent.PublicKeyJWK),
-			DerivationPath: existingAgent.DerivationPath,
-			ComponentType:  "agent",
+			DID:                 existingAgent.DID,
+			PrivateKeyJWK:       rederivePrivKey(existingAgent.DerivationPath),
+			PublicKeyJWK:        string(existingAgent.PublicKeyJWK),
+			X25519PublicKeyJWK:  agentX25519PubKey,
+			X25519PrivateKeyJWK: agentX25519PrivKey,
+			X25519Epoch:         existingAgent.X25519Epoch,
+			DerivationPath:      existingAgent.DerivationPath,
+			ComponentType:       "agent",
 		},
 		ReasonerDIDs:       reasonerDIDs,
 		SkillDIDs:          skillDIDs,
@@ -1200,6 +1512,22 @@ func (s *DIDService) PartialRegisterAgent(req *types.PartialDIDRegistrationReque
 		existingAgent.Skills[id] = info
 	}
 
+	// Derive the agent's X25519 keyAgreement keypair from the same master seed +
+	// derivation path. Backfill the stored public key for agents registered before
+	// keyAgreement support so resolution and the returned package stay consistent.
+	agentX25519PubKey, agentX25519PrivKey, err := s.regenerateX25519KeyPairJWKAtEpoch(registry.MasterSeed, existingAgent.DerivationPath, existingAgent.X25519Epoch)
+	if err != nil {
+		return &types.DIDRegistrationResponse{
+			Success: false,
+			Error:   fmt.Sprintf("failed to generate agent X25519 keyAgreement key: %v", err),
+		}, nil
+	}
+	if len(existingAgent.X25519PublicKeyJWK) == 0 {
+		existingAgent.X25519PublicKeyJWK = json.RawMessage(agentX25519PubKey)
+	} else {
+		agentX25519PubKey = string(existingAgent.X25519PublicKeyJWK)
+	}
+
 	// Update registry
 	registry.AgentNodes[req.AgentNodeID] = existingAgent
 	registry.TotalDIDs += len(newReasonerDIDs) + len(newSkillDIDs)
@@ -1214,11 +1542,14 @@ func (s *DIDService) PartialRegisterAgent(req *types.PartialDIDRegistrationReque
 	// Build response with only new DIDs
 	identityPackage := types.DIDIdentityPackage{
 		AgentDID: types.DIDIdentity{
-			DID:            existingAgent.DID,
-			PrivateKeyJWK:  "", // Don't regenerate existing agent key
-			PublicKeyJWK:   string(existingAgent.PublicKeyJWK),
-			DerivationPath: existingAgent.DerivationPath,
-			ComponentType:  "agent",
+			DID:                 existingAgent.DID,
+			PrivateKeyJWK:       "", // Don't regenerate existing agent signing key
+			PublicKeyJWK:        string(existingAgent.PublicKeyJWK),
+			X25519PublicKeyJWK:  agentX25519PubKey,
+			X25519PrivateKeyJWK: agentX25519PrivKey,
+			X25519Epoch:         existingAgent.X25519Epoch,
+			DerivationPath:      existingAgent.DerivationPath,
+			ComponentType:       "agent",
 		},
 		ReasonerDIDs:       newReasonerDIDs,
 		SkillDIDs:          newSkillDIDs,

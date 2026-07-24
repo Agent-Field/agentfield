@@ -47,7 +47,7 @@ export function WorkflowDAGWithSidebar({
       <div className="w-full h-full">
         {/* Example DAG rendering - replace with your actual DAG component */}
         <div className="p-4 space-y-4">
-          <h3 className="text-heading-3 text-foreground">
+          <h3 className="text-base font-semibold text-foreground">
             Workflow DAG
           </h3>
 
@@ -62,7 +62,7 @@ export function WorkflowDAGWithSidebar({
                 <div className="text-sm font-medium text-foreground">
                   {node.task_name || node.reasoner_id}
                 </div>
-                <div className="text-body-small mt-1">
+                <div className="text-sm text-muted-foreground mt-1">
                   Status: {node.status} | Agent:{" "}
                   {node.agent_name || node.agent_node_id}
                 </div>

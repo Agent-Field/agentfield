@@ -110,6 +110,7 @@ In rare cases (critical hotfixes, CI infrastructure issues), an admin may approv
 2. Fix failures promptly
 3. Don't push new commits while CI is running (wait for results)
 4. Keep your branch up to date if `main` changes
+5. Review the coverage summary artifact when changes materially affect test-sensitive surfaces
 
 ### When CI Fails
 1. Read the error message carefully
@@ -117,6 +118,14 @@ In rare cases (critical hotfixes, CI infrastructure issues), an admin may approv
 3. Fix the issue
 4. Test locally before pushing
 5. Push the fix and wait for CI to re-run
+
+### Coverage Summary
+
+The repository also publishes a non-blocking coverage summary workflow:
+
+- It uploads per-surface coverage artifacts rather than a single blended monorepo number.
+- It is intended to support reporting and badge generation, not to replace functional tests.
+- The local equivalent is `./scripts/coverage-summary.sh`.
 
 ## Understanding the "All Required Checks Passed" Job
 
@@ -162,6 +171,18 @@ Workflows only run if you changed relevant files:
 - Your changes may not have triggered the workflow
 - Manually trigger the workflow from GitHub Actions tab
 - Or make a trivial change to trigger it (e.g., add a comment)
+
+### `license/cla` is stuck pending on a bot PR
+- This repository uses the hosted `cla-assistant.io` integration for the
+  `license/cla` status.
+- Bot PRs such as Dependabot cannot sign the CLA interactively.
+- Maintainers must update the hosted CLA Assistant allowlist for approved bot
+  accounts such as `dependabot[bot]`, `github-actions[bot]`, and
+  `renovate[bot]`.
+- Workflow changes in this repo do not update the hosted CLA Assistant
+  configuration. If `license/cla` remains pending after code checks are green,
+  update the external CLA Assistant settings or recheck the PR from the
+  CLA Assistant UI.
 
 ## Getting Help
 

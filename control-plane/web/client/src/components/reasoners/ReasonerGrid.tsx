@@ -7,7 +7,7 @@ import { Skeleton } from "../ui/skeleton";
 import { DIDIdentityBadge } from "../did/DIDDisplay";
 import { EmptyReasonersState } from "./EmptyReasonersState";
 import { ReasonerCard } from "./ReasonerCard";
-import { StatusIndicator } from "./StatusIndicator";
+import { ReasonerStatusDot } from "./ReasonerStatusDot";
 
 export function ReasonerGrid({
   reasoners,
@@ -133,27 +133,27 @@ function ReasonerTable({
   };
 
   return (
-    <div className="card-elevated overflow-hidden">
+    <div className="bg-card border border-border rounded-lg shadow-sm overflow-hidden">
       <div className="overflow-x-auto">
         <table className="w-full">
-          <thead className="bg-bg-tertiary border-b border-border">
+          <thead className="bg-muted border-b border-border">
             <tr>
-              <th className="text-left py-2 px-3 text-xs font-medium text-text-tertiary uppercase tracking-wide">
+              <th className="text-left py-2 px-3 text-xs font-medium text-muted-foreground uppercase tracking-wide">
                 Name
               </th>
-              <th className="text-left py-2 px-3 text-xs font-medium text-text-tertiary uppercase tracking-wide">
+              <th className="text-left py-2 px-3 text-xs font-medium text-muted-foreground uppercase tracking-wide">
                 Node
               </th>
-              <th className="text-left py-2 px-3 text-xs font-medium text-text-tertiary uppercase tracking-wide">
+              <th className="text-left py-2 px-3 text-xs font-medium text-muted-foreground uppercase tracking-wide">
                 Status
               </th>
-              <th className="text-left py-2 px-3 text-xs font-medium text-text-tertiary uppercase tracking-wide">
+              <th className="text-left py-2 px-3 text-xs font-medium text-muted-foreground uppercase tracking-wide">
                 Performance
               </th>
-              <th className="text-left py-2 px-3 text-xs font-medium text-text-tertiary uppercase tracking-wide">
+              <th className="text-left py-2 px-3 text-xs font-medium text-muted-foreground uppercase tracking-wide">
                 Updated
               </th>
-              <th className="text-right py-2 px-3 text-xs font-medium text-text-tertiary uppercase tracking-wide">
+              <th className="text-right py-2 px-3 text-xs font-medium text-muted-foreground uppercase tracking-wide">
                 Actions
               </th>
             </tr>
@@ -167,7 +167,7 @@ function ReasonerTable({
                 <tr
                   key={reasoner.reasoner_id}
                   className={`
-                    hover:bg-bg-tertiary transition-colors cursor-pointer
+                    hover:bg-muted transition-colors cursor-pointer
                     ${isOffline ? "opacity-75" : ""}
                   `}
                   onClick={() => onReasonerClick?.(reasoner)}
@@ -176,20 +176,20 @@ function ReasonerTable({
                     <div>
                       <div>
                         <span
-                          className="font-medium text-text-primary text-sm line-clamp-2 break-words max-w-xs"
+                          className="font-medium text-foreground text-sm line-clamp-2 break-words max-w-xs"
                           title={reasoner.name}
                         >
                           {reasoner.name}
                         </span>
                       </div>
-                      <div className="text-xs text-text-tertiary truncate max-w-xs mt-0.5">
+                      <div className="text-xs text-muted-foreground truncate max-w-xs mt-0.5">
                         {reasoner.description}
                       </div>
                     </div>
                   </td>
                   <td className="py-2 px-3">
                     <div className="space-y-0.5">
-                      <div className="text-xs text-text-tertiary">
+                      <div className="text-xs text-muted-foreground">
                         {reasoner.node_id}
                       </div>
                       <DIDIdentityBadge
@@ -200,7 +200,7 @@ function ReasonerTable({
                     </div>
                   </td>
                   <td className="py-2 px-3">
-                    <StatusIndicator
+                    <ReasonerStatusDot
                       status={status}
                       showText={false}
                       size="sm"
@@ -209,19 +209,19 @@ function ReasonerTable({
                   <td className="py-2 px-3">
                     <div className="text-xs space-y-0.5">
                       {reasoner.avg_response_time_ms && (
-                        <div className="text-text-tertiary">
+                        <div className="text-muted-foreground">
                           {reasoner.avg_response_time_ms}ms
                         </div>
                       )}
                       {reasoner.success_rate && (
-                        <div className="text-status-success-light">
+                        <div className="text-status-success">
                           {(reasoner.success_rate * 100).toFixed(1)}%
                         </div>
                       )}
                     </div>
                   </td>
                   <td className="py-2 px-3">
-                    <div className="text-xs text-text-tertiary">
+                    <div className="text-xs text-muted-foreground">
                       {formatTimeAgo(reasoner.last_updated)}
                     </div>
                   </td>
@@ -248,27 +248,27 @@ function ReasonerTable({
 
 function ReasonerTableSkeleton() {
   return (
-    <div className="card-elevated overflow-hidden">
+    <div className="bg-card border border-border rounded-lg shadow-sm overflow-hidden">
       <div className="overflow-x-auto">
         <table className="w-full">
-          <thead className="bg-bg-tertiary border-b border-border">
+          <thead className="bg-muted border-b border-border">
             <tr>
-              <th className="text-left py-2 px-3 text-xs font-medium text-text-tertiary uppercase tracking-wide">
+              <th className="text-left py-2 px-3 text-xs font-medium text-muted-foreground uppercase tracking-wide">
                 Name
               </th>
-              <th className="text-left py-2 px-3 text-xs font-medium text-text-tertiary uppercase tracking-wide">
+              <th className="text-left py-2 px-3 text-xs font-medium text-muted-foreground uppercase tracking-wide">
                 Node
               </th>
-              <th className="text-left py-2 px-3 text-xs font-medium text-text-tertiary uppercase tracking-wide">
+              <th className="text-left py-2 px-3 text-xs font-medium text-muted-foreground uppercase tracking-wide">
                 Status
               </th>
-              <th className="text-left py-2 px-3 text-xs font-medium text-text-tertiary uppercase tracking-wide">
+              <th className="text-left py-2 px-3 text-xs font-medium text-muted-foreground uppercase tracking-wide">
                 Performance
               </th>
-              <th className="text-left py-2 px-3 text-xs font-medium text-text-tertiary uppercase tracking-wide">
+              <th className="text-left py-2 px-3 text-xs font-medium text-muted-foreground uppercase tracking-wide">
                 Updated
               </th>
-              <th className="text-right py-2 px-3 text-xs font-medium text-text-tertiary uppercase tracking-wide">
+              <th className="text-right py-2 px-3 text-xs font-medium text-muted-foreground uppercase tracking-wide">
                 Actions
               </th>
             </tr>

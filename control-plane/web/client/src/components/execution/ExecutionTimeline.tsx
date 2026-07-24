@@ -1,44 +1,12 @@
 import { Play, CheckCircle, XCircle, Clock } from '@/components/ui/icon-bridge';
+import { formatCompactRelativeTime } from '@/utils/dateFormat';
 import type { WorkflowExecution } from '../../types/executions';
 
 interface ExecutionTimelineProps {
   execution: WorkflowExecution;
 }
 
-function formatRelativeTime(timestamp?: string): string {
-  if (!timestamp) return 'N/A';
-
-  const date = new Date(timestamp);
-
-  if (Number.isNaN(date.getTime())) {
-    return 'Invalid date';
-  }
-
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-
-  if (diffMs < 0) {
-    return 'in the future';
-  }
-
-  const seconds = Math.floor(diffMs / 1000);
-  if (seconds < 60) {
-    return seconds <= 1 ? 'just now' : `${seconds}s ago`;
-  }
-
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) {
-    return `${minutes}m ago`;
-  }
-
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) {
-    return `${hours}h ago`;
-  }
-
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
+const formatRelativeTime = formatCompactRelativeTime;
 
 function normalizeStatus(status: string): string {
   switch (status?.toLowerCase()) {
@@ -67,7 +35,7 @@ export function ExecutionTimeline({ execution }: ExecutionTimelineProps) {
   const status = normalizeStatus(execution.status);
 
   return (
-    <div className="flex items-center gap-4 text-body-small">
+    <div className="flex items-center gap-4 text-sm text-muted-foreground">
       <div className="flex items-center gap-2">
         <Play className="w-3 h-3" />
         <span>Started {startedTime}</span>

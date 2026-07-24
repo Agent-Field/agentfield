@@ -7,7 +7,7 @@ import {
   AnimatedTabs,
   AnimatedTabsList,
   AnimatedTabsTrigger,
-} from "./animated-tabs";
+} from "./tabs";
 
 export interface SegmentedControlOption {
   value: string;
@@ -46,7 +46,7 @@ export function SegmentedControl({
     >
       <AnimatedTabsList
         className={cn(
-          "gap-1 rounded-lg bg-muted/80 p-[3px]",
+          "gap-1 rounded-lg bg-muted/80 p-1",
           listHeight
         )}
       >
@@ -57,7 +57,7 @@ export function SegmentedControl({
               key={option.value}
               value={option.value}
               className={cn(
-                "gap-2 px-3 py-2 text-sm font-medium",
+                "gap-1.5 px-3 py-2 text-sm font-medium",
                 triggerPadding,
                 optionClassName
               )}

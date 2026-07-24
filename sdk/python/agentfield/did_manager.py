@@ -8,7 +8,7 @@ for agent nodes, reasoners, and skills.
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .logger import get_logger
 
@@ -20,7 +20,7 @@ class DIDIdentity:
     """Represents a DID identity with cryptographic keys."""
 
     did: str
-    private_key_jwk: str
+    private_key_jwk: Optional[str]
     public_key_jwk: str
     derivation_path: str
     component_type: str
@@ -48,6 +48,12 @@ class DIDExecutionContext:
     target_did: str
     agent_node_did: str
     timestamp: datetime
+    # Chain pointer for trigger-driven runs. Populated by the agent runtime
+    # from the dispatcher's X-Parent-VC-ID header (which carries the trigger
+    # event VC's ID). VCGenerator forwards this in the execution_context body
+    # so the resulting reasoner execution VC can link back to the trigger
+    # event VC, letting `af vc verify` walk the chain to a CP-rooted credential.
+    parent_vc_id: Optional[str] = None
 
 
 class DIDManager:
@@ -151,6 +157,7 @@ class DIDManager:
         session_id: str,
         caller_function: str,
         target_function: str,
+        parent_vc_id: Optional[str] = None,
     ) -> Optional[DIDExecutionContext]:
         """
         Create execution context for DID-enabled execution.
@@ -192,7 +199,8 @@ class DIDManager:
                 caller_did=caller_did,
                 target_did=target_did,
                 agent_node_did=self.identity_package.agent_did.did,
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(timezone.utc),
+                parent_vc_id=parent_vc_id,
             )
 
         except Exception as e:
@@ -282,7 +290,7 @@ class DIDManager:
         agent_data = package_data["agent_did"]
         agent_did = DIDIdentity(
             did=agent_data["did"],
-            private_key_jwk=agent_data["private_key_jwk"],
+            private_key_jwk=agent_data.get("private_key_jwk"),
             public_key_jwk=agent_data["public_key_jwk"],
             derivation_path=agent_data["derivation_path"],
             component_type=agent_data["component_type"],
@@ -294,7 +302,7 @@ class DIDManager:
         for name, reasoner_data in package_data["reasoner_dids"].items():
             reasoner_dids[name] = DIDIdentity(
                 did=reasoner_data["did"],
-                private_key_jwk=reasoner_data["private_key_jwk"],
+                private_key_jwk=reasoner_data.get("private_key_jwk"),
                 public_key_jwk=reasoner_data["public_key_jwk"],
                 derivation_path=reasoner_data["derivation_path"],
                 component_type=reasoner_data["component_type"],
@@ -306,7 +314,7 @@ class DIDManager:
         for name, skill_data in package_data["skill_dids"].items():
             skill_dids[name] = DIDIdentity(
                 did=skill_data["did"],
-                private_key_jwk=skill_data["private_key_jwk"],
+                private_key_jwk=skill_data.get("private_key_jwk"),
                 public_key_jwk=skill_data["public_key_jwk"],
                 derivation_path=skill_data["derivation_path"],
                 component_type=skill_data["component_type"],

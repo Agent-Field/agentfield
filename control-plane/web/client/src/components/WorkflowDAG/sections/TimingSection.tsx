@@ -96,13 +96,13 @@ export function TimingSection({ node, details }: TimingSectionProps) {
               className="text-muted-foreground flex-shrink-0 mt-0.5"
             />
             <div>
-              <span className="text-body-small/70 block">
+              <span className="text-sm text-muted-foreground/70 block">
                 Started
               </span>
               <span className="text-sm text-foreground font-medium">
                 {startedAt.time}
               </span>
-              <span className="text-body-small block">
+              <span className="text-sm text-muted-foreground block">
                 {startedAt.date}
               </span>
             </div>
@@ -118,13 +118,13 @@ export function TimingSection({ node, details }: TimingSectionProps) {
                 className="text-muted-foreground flex-shrink-0 mt-0.5"
               />
               <div>
-                <span className="text-body-small/70 block">
+                <span className="text-sm text-muted-foreground/70 block">
                   Completed
                 </span>
                 <span className="text-sm text-foreground font-medium">
                   {completedAt.time}
                 </span>
-                <span className="text-body-small block">
+                <span className="text-sm text-muted-foreground block">
                   {completedAt.date}
                 </span>
               </div>
@@ -136,7 +136,7 @@ export function TimingSection({ node, details }: TimingSectionProps) {
         <div className="pt-4 border-t border-border">
           <div className="flex items-center gap-2 mb-3">
             <Timer size={14} className="text-muted-foreground" />
-            <span className="text-body-small/70">
+            <span className="text-sm text-muted-foreground/70">
               Duration
             </span>
           </div>
@@ -144,20 +144,20 @@ export function TimingSection({ node, details }: TimingSectionProps) {
           <div className="grid grid-cols-2 gap-4">
             {/* Execution Duration */}
             <div>
-              <span className="text-body-small text-muted-foreground/70 block mb-1">
+              <span className="text-sm text-muted-foreground text-muted-foreground/70 block mb-1">
                 Execution Time
               </span>
-              <span className="text-heading-3 font-mono text-foreground">
+              <span className="text-base font-semibold font-mono text-foreground">
                 {formatDuration(node.duration_ms)}
               </span>
             </div>
 
             {/* Total Elapsed Time */}
             <div>
-              <span className="text-body-small text-muted-foreground/70 block mb-1">
+              <span className="text-sm text-muted-foreground text-muted-foreground/70 block mb-1">
                 {node.status === "running" ? "Elapsed Time" : "Total Time"}
               </span>
-              <span className="text-heading-3 font-mono text-foreground">
+              <span className="text-base font-semibold font-mono text-foreground">
                 {formatDuration(elapsedTime || undefined)}
               </span>
             </div>
@@ -166,7 +166,7 @@ export function TimingSection({ node, details }: TimingSectionProps) {
           {/* Performance Metrics */}
           {details?.performance_metrics && (
             <div className="mt-4 pt-4 border-t border-border">
-              <div className="grid grid-cols-2 gap-4 text-body-small">
+              <div className="grid grid-cols-2 gap-4 text-sm text-muted-foreground">
                 <div>
                   <span className="text-muted-foreground/70 block mb-1">
                     Response Time
@@ -204,7 +204,7 @@ export function TimingSection({ node, details }: TimingSectionProps) {
                   Execution in progress
                 </span>
               </div>
-              <div className="text-body-small mt-1">
+              <div className="text-sm text-muted-foreground mt-1">
                 Started{" "}
                 {Math.floor(
                   (Date.now() - new Date(node.started_at).getTime()) / 1000

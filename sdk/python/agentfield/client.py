@@ -18,14 +18,71 @@ from .types import (
     WebhookConfig,
 )
 from .async_config import AsyncConfig
-from .execution_state import ExecutionStatus
+from .execution_state import ExecuteError, ExecutionStatus
 from .result_cache import ResultCache
 from .async_execution_manager import AsyncExecutionManager
 from .logger import get_logger
 from .status import normalize_status
 from .execution_context import generate_run_id
+from .did_auth import DIDAuthenticator
+from .exceptions import (
+    AgentFieldError,
+    AgentFieldClientError,
+    ExecutionTimeoutError,
+    RegistrationError,
+    ValidationError,
+)
 
 httpx = None  # type: ignore
+
+
+def _utc_now_iso() -> str:
+    """Return current UTC time as an ISO 8601 string with Z suffix.
+
+    Use this for all outbound timestamps to ensure consistent UTC-aware
+    formatting across the client rather than naive local datetimes.
+    """
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+# ---------------------------------------------------------------------------
+# Typed response models for approval helpers
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ApprovalRequestResponse:
+    """Response from requesting approval for an execution."""
+    approval_request_id: str
+    approval_request_url: str
+
+
+@dataclass
+class ApprovalStatusResponse:
+    """Response from polling approval status."""
+    status: str  # pending, approved, rejected, expired
+    response: Optional[Dict[str, Any]] = None
+    request_url: Optional[str] = None
+    requested_at: Optional[str] = None
+    responded_at: Optional[str] = None
+
+
+@dataclass
+class ApprovalResult:
+    """Outcome of a human approval request, returned by ``Agent.pause()``."""
+
+    decision: str  # "approved", "rejected", "request_changes", "expired", "error"
+    feedback: str = ""
+    execution_id: str = ""
+    approval_request_id: str = ""
+    raw_response: Optional[Dict[str, Any]] = None
+
+    @property
+    def approved(self) -> bool:
+        return self.decision == "approved"
+
+    @property
+    def changes_requested(self) -> bool:
+        return self.decision == "request_changes"
 
 
 # Python 3.8 compatibility: asyncio.to_thread was added in Python 3.9
@@ -92,26 +149,33 @@ class AgentFieldClient:
         base_url: str = "http://localhost:8080",
         api_key: Optional[str] = None,
         async_config: Optional[AsyncConfig] = None,
+        did: Optional[str] = None,
+        private_key_jwk: Optional[str] = None,
     ):
         self.base_url = base_url
         self.api_base = f"{base_url}/api/v1"
         self.api_key = api_key
 
+        # DID authentication for agent-to-agent calls
+        self._did_authenticator = DIDAuthenticator(did=did, private_key_jwk=private_key_jwk)
+
         # Async execution components
-        self.async_config = async_config or AsyncConfig()
+        self.async_config = async_config or AsyncConfig.from_environment()
         self._async_execution_manager: Optional[AsyncExecutionManager] = None
         self._async_http_client: Optional["httpx.AsyncClient"] = None
         self._async_http_client_lock: Optional[asyncio.Lock] = None
         self._result_cache = ResultCache(self.async_config)
         self._latest_event_stream_headers: Dict[str, str] = {}
         self._current_workflow_context = None
+        # Caller agent ID for cross-agent call identification (set by Agent after init)
+        self.caller_agent_id: Optional[str] = None
 
         # Initialize shared sync session if not already created
         if AgentFieldClient._shared_sync_session is None:
             AgentFieldClient._init_shared_sync_session()
 
     def _generate_id(self, prefix: str) -> str:
-        timestamp = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
         random_suffix = f"{random.getrandbits(32):08x}"
         return f"{prefix}_{timestamp}_{random_suffix}"
 
@@ -156,6 +220,42 @@ class AgentFieldClient:
         if not self.api_key:
             return {}
         return {"X-API-Key": self.api_key}
+
+    def set_did_credentials(self, did: str, private_key_jwk: str) -> bool:
+        """
+        Set DID authentication credentials for agent-to-agent calls.
+
+        Args:
+            did: The agent's DID identifier (e.g., 'did:web:example.com:agents:my-agent')
+            private_key_jwk: JWK-formatted Ed25519 private key for signing
+
+        Returns:
+            True if credentials were set successfully, False otherwise
+        """
+        return self._did_authenticator.set_credentials(did, private_key_jwk)
+
+    def get_did_auth_headers(self, body: bytes) -> Dict[str, str]:
+        """
+        Get DID authentication headers for signing a request.
+
+        Args:
+            body: Request body bytes to sign
+
+        Returns:
+            Dictionary with DID auth headers (X-Caller-DID, X-DID-Signature, X-DID-Timestamp)
+            Empty dict if DID auth is not configured
+        """
+        return self._did_authenticator.sign_headers(body)
+
+    @property
+    def did(self) -> Optional[str]:
+        """Get the configured DID identifier."""
+        return self._did_authenticator.did
+
+    @property
+    def did_auth_configured(self) -> bool:
+        """Check if DID authentication is configured."""
+        return self._did_authenticator.is_configured
 
     def _get_headers_with_context(
         self, headers: Optional[Dict[str, str]] = None
@@ -313,7 +413,7 @@ class AgentFieldClient:
         reload_needed = httpx is None or current_module is not httpx
         httpx_module = _ensure_httpx(force_reload=reload_needed)
         if httpx_module is None:
-            raise RuntimeError("httpx is required for async HTTP operations")
+            raise AgentFieldClientError("httpx is required for async HTTP operations")
 
         if self._async_http_client and not getattr(
             self._async_http_client, "is_closed", False
@@ -374,7 +474,7 @@ class AgentFieldClient:
 
         try:
             client = await self.get_async_http_client()
-        except RuntimeError:
+        except AgentFieldClientError:
             return await _to_thread(self._sync_request, method, url, **kwargs)
 
         return await client.request(method, url, **kwargs)
@@ -476,14 +576,24 @@ class AgentFieldClient:
                 self._async_http_client_lock = None
 
     def register_node(self, node_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Register agent node with AgentField server"""
-        response = requests.post(
-            f"{self.api_base}/nodes/register",
-            json=node_data,
-            headers=self._get_auth_headers(),
-        )
-        response.raise_for_status()  # Raise an exception for bad status codes
-        return response.json()
+        """
+        Register agent node with AgentField server.
+
+        Raises:
+            RegistrationError: If registration fails.
+        """
+        try:
+            response = requests.post(
+                f"{self.api_base}/nodes/register",
+                json=node_data,
+                headers=self._get_auth_headers(),
+            )
+            response.raise_for_status()
+            return response.json()
+        except RegistrationError:
+            raise
+        except Exception as exc:
+            raise RegistrationError(f"Failed to register node: {exc}") from exc
 
     def update_health(
         self, node_id: str, health_data: Dict[str, Any]
@@ -527,6 +637,8 @@ class AgentFieldClient:
         vc_metadata: Optional[Dict[str, Any]] = None,
         version: str = "1.0.0",
         agent_metadata: Optional[Dict[str, Any]] = None,
+        tags: Optional[List[str]] = None,
+        instance_id: Optional[str] = None,
     ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """Register or update agent information with AgentField server."""
         try:
@@ -534,6 +646,7 @@ class AgentFieldClient:
             if agent_metadata:
                 custom_metadata.update(agent_metadata)
 
+            agent_tags = tags or []
             registration_data = {
                 "id": node_id,
                 "team_id": "default",
@@ -541,14 +654,19 @@ class AgentFieldClient:
                 "version": version,
                 "reasoners": reasoners,
                 "skills": skills,
+                "proposed_tags": agent_tags,
+                # instance_id distinguishes this OS process from any prior one.
+                # Empty string is the back-compat sentinel; the control plane
+                # treats empty as "no orphan-reap on this re-registration".
+                "instance_id": instance_id or "",
                 "communication_config": {
                     "protocols": ["http"],
                     "websocket_endpoint": "",
                     "heartbeat_interval": "5s",
                 },
                 "health_status": "healthy",
-                "last_heartbeat": datetime.datetime.now().isoformat() + "Z",
-                "registered_at": datetime.datetime.now().isoformat() + "Z",
+                "last_heartbeat": _utc_now_iso(),
+                "registered_at": _utc_now_iso(),
                 "features": {
                     "ab_testing": False,
                     "advanced_metrics": False,
@@ -609,6 +727,10 @@ class AgentFieldClient:
         The public signature remains unchanged, but internally we now submit the
         execution, poll for completion with adaptive backoff, and return the final
         result once the worker finishes processing.
+
+        Raises:
+            AgentFieldClientError: If submission or polling fails.
+            ExecutionTimeoutError: If execution does not complete in time.
         """
 
         execution_headers = self._prepare_execution_headers(headers)
@@ -625,6 +747,63 @@ class AgentFieldClient:
             submission, status_payload, result_value, metadata
         )
 
+    async def restart_execution(
+        self,
+        execution_id: str,
+        *,
+        scope: str = "workflow",
+        reuse: str = "succeeded-before",
+        fork: bool = False,
+        reason: Optional[str] = None,
+        input_data: Optional[Dict[str, Any]] = None,
+        context: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """Start a new run from an existing execution point.
+
+        The restarted workflow runs normally; matching successful downstream
+        app.call outputs from the source run are replayed by the control plane.
+        """
+
+        if not execution_id:
+            raise ValidationError("execution_id is required")
+
+        payload: Dict[str, Any] = {
+            "scope": scope,
+            "reuse": reuse,
+        }
+        if fork:
+            payload["fork"] = True
+        if reason:
+            payload["reason"] = reason
+        if input_data is not None:
+            payload["input"] = input_data
+        if context is not None:
+            payload["context"] = context
+
+        request_headers = self._get_headers_with_context(headers)
+        request_headers["Content-Type"] = "application/json"
+        sanitized_headers = self._sanitize_header_values(request_headers)
+
+        response = await self._async_request(
+            "POST",
+            f"{self.api_base}/executions/{execution_id}/restart",
+            json=payload,
+            headers=sanitized_headers,
+            timeout=self.async_config.polling_timeout,
+        )
+        if response.status_code >= 400:
+            try:
+                error_body = response.json()
+            except Exception:
+                error_body = None
+            body_msg = ""
+            if isinstance(error_body, dict):
+                body_msg = error_body.get("message") or error_body.get("error") or ""
+            msg = f"{response.status_code}, {body_msg}" if body_msg else str(response.status_code)
+            raise ExecuteError(response.status_code, msg, error_body)
+        return response.json()
+
     def execute_sync(
         self,
         target: str,
@@ -633,6 +812,10 @@ class AgentFieldClient:
     ) -> Dict[str, Any]:
         """
         Blocking version of execute used by synchronous callers.
+
+        Raises:
+            AgentFieldClientError: If submission or polling fails.
+            ExecutionTimeoutError: If execution does not complete in time.
         """
 
         execution_headers = self._prepare_execution_headers(headers)
@@ -672,6 +855,10 @@ class AgentFieldClient:
         if actor_id:
             final_headers["X-Actor-ID"] = actor_id
 
+        # Include caller agent ID for permission middleware identification
+        if self.caller_agent_id and "X-Caller-Agent-ID" not in final_headers:
+            final_headers["X-Caller-Agent-ID"] = self.caller_agent_id
+
         sanitized_headers = self._sanitize_header_values(final_headers)
         self._maybe_update_event_stream_headers(sanitized_headers)
         return sanitized_headers
@@ -682,19 +869,40 @@ class AgentFieldClient:
         input_data: Dict[str, Any],
         headers: Dict[str, str],
     ) -> _Submission:
+        import json as json_module
+
         payload = {"input": input_data}
+        # Serialize once so the signed bytes are exactly what gets sent.
+        body_bytes = json_module.dumps(payload, separators=(",", ":")).encode("utf-8")
+
+        # Add DID authentication headers if configured
+        final_headers = dict(headers)
+        final_headers["Content-Type"] = "application/json"
+        if self._did_authenticator.is_configured:
+            did_headers = self._did_authenticator.sign_headers(body_bytes)
+            final_headers.update(did_headers)
+
         try:
             response = requests.post(
                 f"{self.api_base}/execute/async/{target}",
-                json=payload,
-                headers=headers,
+                data=body_bytes,
+                headers=final_headers,
                 timeout=self.async_config.polling_timeout,
             )
         except requests.RequestException as exc:
-            raise RuntimeError(f"Failed to submit execution: {exc}") from exc
-        response.raise_for_status()
+            raise AgentFieldClientError(f"Failed to submit execution: {exc}") from exc
+        if response.status_code >= 400:
+            try:
+                error_body = response.json()
+            except Exception:
+                error_body = None
+            body_msg = ""
+            if isinstance(error_body, dict):
+                body_msg = error_body.get("message") or error_body.get("error") or ""
+            msg = f"{response.status_code}, {body_msg}" if body_msg else str(response.status_code)
+            raise ExecuteError(response.status_code, msg, error_body)
         body = response.json()
-        return self._parse_submission(body, headers, target)
+        return self._parse_submission(body, final_headers, target)
 
     async def _submit_execution_async(
         self,
@@ -702,17 +910,40 @@ class AgentFieldClient:
         input_data: Dict[str, Any],
         headers: Dict[str, str],
     ) -> _Submission:
+        import json as json_module
+
         payload = {"input": input_data}
+        # Serialize once so the signed bytes are exactly what gets sent.
+        # httpx uses compact separators (',', ':') which differ from
+        # json.dumps() defaults (', ', ': '), causing signature mismatch.
+        body_bytes = json_module.dumps(payload, separators=(",", ":")).encode("utf-8")
+
+        # Add DID authentication headers if configured
+        final_headers = dict(headers)
+        final_headers["Content-Type"] = "application/json"
+        if self._did_authenticator.is_configured:
+            did_headers = self._did_authenticator.sign_headers(body_bytes)
+            final_headers.update(did_headers)
+
         response = await self._async_request(
             "POST",
             f"{self.api_base}/execute/async/{target}",
-            json=payload,
-            headers=headers,
+            content=body_bytes,
+            headers=final_headers,
             timeout=self.async_config.polling_timeout,
         )
-        response.raise_for_status()
+        if response.status_code >= 400:
+            try:
+                error_body = response.json()
+            except Exception:
+                error_body = None
+            body_msg = ""
+            if isinstance(error_body, dict):
+                body_msg = error_body.get("message") or error_body.get("error") or ""
+            msg = f"{response.status_code}, {body_msg}" if body_msg else str(response.status_code)
+            raise ExecuteError(response.status_code, msg, error_body)
         body = response.json()
-        return self._parse_submission(body, headers, target)
+        return self._parse_submission(body, final_headers, target)
 
     def _parse_submission(
         self,
@@ -726,7 +957,7 @@ class AgentFieldClient:
         target_type = body.get("type") or body.get("target_type")
 
         if not execution_id or not run_id:
-            raise RuntimeError("Execution submission missing identifiers")
+            raise AgentFieldClientError("Execution submission missing identifiers")
 
         return _Submission(
             execution_id=execution_id,
@@ -772,7 +1003,7 @@ class AgentFieldClient:
                 return payload
 
             if (time.time() - start) > self.async_config.max_execution_timeout:
-                raise TimeoutError(
+                raise ExecutionTimeoutError(
                     f"Execution {submission.execution_id} exceeded timeout"
                 )
 
@@ -816,7 +1047,7 @@ class AgentFieldClient:
                 return payload
 
             if (time.time() - start) > self.async_config.max_execution_timeout:
-                raise TimeoutError(
+                raise ExecutionTimeoutError(
                     f"Execution {submission.execution_id} exceeded timeout"
                 )
 
@@ -849,6 +1080,7 @@ class AgentFieldClient:
             "completed_at": payload.get("completed_at"),
             "node_id": node_id,
             "error_message": payload.get("error_message") or payload.get("error"),
+            "error_details": payload.get("error_details"),
         }
 
         if metadata.get("completed_at"):
@@ -856,7 +1088,7 @@ class AgentFieldClient:
         elif metadata.get("started_at"):
             metadata["timestamp"] = metadata["started_at"]
         else:
-            metadata["timestamp"] = datetime.datetime.utcnow().isoformat()
+            metadata["timestamp"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
         # Cache successful results for reuse
         if normalized_status in SUCCESS_STATUSES:
@@ -886,6 +1118,8 @@ class AgentFieldClient:
         else:
             response_result = result_value
 
+        error_details = metadata.get("error_details")
+
         response = {
             "execution_id": metadata.get("execution_id"),
             "run_id": metadata.get("run_id"),
@@ -895,9 +1129,10 @@ class AgentFieldClient:
             "status": normalized_status,
             "duration_ms": metadata.get("duration_ms"),
             "timestamp": metadata.get("timestamp")
-            or datetime.datetime.utcnow().isoformat(),
+            or datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "result": response_result,
             "error_message": error_message,
+            "error_details": error_details,
             "cost": payload.get("cost"),
         }
 
@@ -911,11 +1146,11 @@ class AgentFieldClient:
         self, node_id: str, heartbeat_data: HeartbeatData
     ) -> bool:
         """
-        Send enhanced heartbeat with status and MCP information to AgentField server.
+        Send enhanced heartbeat with status information to AgentField server.
 
         Args:
             node_id: The agent node ID
-            heartbeat_data: Enhanced heartbeat data with status and MCP info
+            heartbeat_data: Enhanced heartbeat data with status info
 
         Returns:
             True if heartbeat was successful, False otherwise
@@ -943,7 +1178,7 @@ class AgentFieldClient:
 
         Args:
             node_id: The agent node ID
-            heartbeat_data: Enhanced heartbeat data with status and MCP info
+            heartbeat_data: Enhanced heartbeat data with status info
 
         Returns:
             True if heartbeat was successful, False otherwise
@@ -1021,6 +1256,8 @@ class AgentFieldClient:
         vc_metadata: Optional[Dict[str, Any]] = None,
         version: str = "1.0.0",
         agent_metadata: Optional[Dict[str, Any]] = None,
+        tags: Optional[List[str]] = None,
+        instance_id: Optional[str] = None,
     ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """Register agent with immediate status reporting for fast lifecycle."""
         try:
@@ -1028,6 +1265,7 @@ class AgentFieldClient:
             if agent_metadata:
                 custom_metadata.update(agent_metadata)
 
+            agent_tags = tags or []
             registration_data = {
                 "id": node_id,
                 "team_id": "default",
@@ -1035,6 +1273,9 @@ class AgentFieldClient:
                 "version": version,
                 "reasoners": reasoners,
                 "skills": skills,
+                "proposed_tags": agent_tags,
+                # See register_agent for instance_id semantics.
+                "instance_id": instance_id or "",
                 "lifecycle_status": status.value,
                 "communication_config": {
                     "protocols": ["http"],
@@ -1042,8 +1283,8 @@ class AgentFieldClient:
                     "heartbeat_interval": "2s",
                 },
                 "health_status": "healthy",
-                "last_heartbeat": datetime.datetime.now().isoformat() + "Z",
-                "registered_at": datetime.datetime.now().isoformat() + "Z",
+                "last_heartbeat": _utc_now_iso(),
+                "registered_at": _utc_now_iso(),
                 "features": {
                     "ab_testing": False,
                     "advanced_metrics": False,
@@ -1128,6 +1369,7 @@ class AgentFieldClient:
                 base_url=self.base_url,
                 config=self.async_config,
                 auth_headers=self._get_auth_headers(),
+                did_authenticator=self._did_authenticator,
             )
             await self._async_execution_manager.start()
             self._maybe_update_event_stream_headers(None)
@@ -1156,11 +1398,11 @@ class AgentFieldClient:
             str: Execution ID for tracking the execution
 
         Raises:
-            RuntimeError: If async execution is disabled or at capacity
-            aiohttp.ClientError: For HTTP-related errors
+            AgentFieldClientError: If async execution is disabled or request setup fails.
+            ExecutionTimeoutError: If fallback execution exceeds timeout.
         """
         if not self.async_config.enable_async_execution:
-            raise RuntimeError("Async execution is disabled in configuration")
+            raise AgentFieldClientError("Async execution is disabled in configuration")
 
         try:
             final_headers = self._prepare_execution_headers(headers)
@@ -1182,6 +1424,15 @@ class AgentFieldClient:
 
         except Exception as e:
             logger.error(f"Failed to submit async execution for target {target}: {e}")
+            if isinstance(e, AgentFieldError):
+                raise
+
+            # Never fall back on authorization errors (401/403) — these are
+            # permanent failures that retrying won't fix and would hit replay
+            # protection (Ed25519 signatures are deterministic within the same second).
+            _status = getattr(e, "status", None)
+            if _status in (401, 403):
+                raise
 
             # Fallback to sync execution if enabled
             if self.async_config.fallback_to_sync:
@@ -1196,9 +1447,15 @@ class AgentFieldClient:
                     return synthetic_id
                 except Exception as sync_error:
                     logger.error(f"Sync fallback also failed: {sync_error}")
-                    raise e
+                    if isinstance(sync_error, AgentFieldError):
+                        raise
+                    raise AgentFieldClientError(
+                        f"Async execution failed for target {target}"
+                    ) from sync_error
             else:
-                raise
+                raise AgentFieldClientError(
+                    f"Async execution failed for target {target}"
+                ) from e
 
     async def poll_execution_status(
         self, execution_id: str
@@ -1213,11 +1470,10 @@ class AgentFieldClient:
             Optional[Dict]: Execution status dictionary or None if not found
 
         Raises:
-            RuntimeError: If async execution is disabled
-            aiohttp.ClientError: For HTTP-related errors
+            AgentFieldClientError: If async execution is disabled.
         """
         if not self.async_config.enable_async_execution:
-            raise RuntimeError("Async execution is disabled in configuration")
+            raise AgentFieldClientError("Async execution is disabled in configuration")
 
         try:
             manager = await self._get_async_execution_manager()
@@ -1232,11 +1488,15 @@ class AgentFieldClient:
 
             return status
 
+        except AgentFieldError:
+            raise
         except Exception as e:
             logger.error(
                 f"Failed to poll execution status for {execution_id[:8]}...: {e}"
             )
-            raise
+            raise AgentFieldClientError(
+                f"Failed to poll execution status: {e}"
+            ) from e
 
     async def batch_check_statuses(
         self, execution_ids: List[str]
@@ -1251,14 +1511,14 @@ class AgentFieldClient:
             Dict[str, Optional[Dict]]: Mapping of execution_id to status dict
 
         Raises:
-            RuntimeError: If async execution is disabled
-            ValueError: If execution_ids list is empty
+            AgentFieldClientError: If async execution is disabled.
+            ValidationError: If execution_ids is empty.
         """
         if not self.async_config.enable_async_execution:
-            raise RuntimeError("Async execution is disabled in configuration")
+            raise AgentFieldClientError("Async execution is disabled in configuration")
 
         if not execution_ids:
-            raise ValueError("execution_ids list cannot be empty")
+            raise ValidationError("execution_ids list cannot be empty")
 
         try:
             manager = await self._get_async_execution_manager()
@@ -1291,12 +1551,21 @@ class AgentFieldClient:
 
             return results
 
+        except AgentFieldError:
+            raise
         except Exception as e:
             logger.error(f"Failed to batch check execution statuses: {e}")
-            raise
+            raise AgentFieldClientError(
+                f"Failed to batch check execution statuses: {e}"
+            ) from e
 
     async def wait_for_execution_result(
-        self, execution_id: str, timeout: Optional[float] = None
+        self,
+        execution_id: str,
+        timeout: Optional[float] = None,
+        pause_clock: Optional[Any] = None,
+        on_child_waiting: Optional[Any] = None,
+        on_child_running: Optional[Any] = None,
     ) -> Any:
         """
         Wait for execution completion with polling.
@@ -1304,30 +1573,55 @@ class AgentFieldClient:
         Args:
             execution_id: Execution ID to wait for
             timeout: Optional timeout override (uses config default if None)
+            pause_clock: Optional ``PauseClock`` whose accumulated paused
+                seconds are subtracted from elapsed wall-clock when checking
+                ``timeout`` — used by ``Agent.call`` to keep the wait alive
+                across child pauses.
+            on_child_waiting / on_child_running: Optional async callables
+                fired when the awaited child transitions in/out of WAITING.
+                ``Agent.call`` wires these to push the AWAITER's own status
+                upstream so multi-hop pause propagation works (a child two+
+                hops below WAITING wouldn't pause anything otherwise).
 
         Returns:
             Any: Execution result
 
         Raises:
-            RuntimeError: If async execution is disabled or execution fails
-            TimeoutError: If execution times out
-            KeyError: If execution_id is not found
+            AgentFieldClientError: If async execution is disabled.
+            ExecutionTimeoutError: If execution times out.
         """
         if not self.async_config.enable_async_execution:
-            raise RuntimeError("Async execution is disabled in configuration")
+            raise AgentFieldClientError("Async execution is disabled in configuration")
 
         try:
             manager = await self._get_async_execution_manager()
-            result = await manager.wait_for_result(execution_id, timeout)
+            result = await manager.wait_for_result(
+                execution_id,
+                timeout,
+                pause_clock=pause_clock,
+                on_child_waiting=on_child_waiting,
+                on_child_running=on_child_running,
+            )
 
             logger.debug(f"Execution {execution_id[:8]}... completed successfully")
             return result
 
+        except TimeoutError as exc:
+            logger.error(
+                f"Failed to wait for execution result {execution_id[:8]}...: {exc}"
+            )
+            raise ExecutionTimeoutError(
+                f"Execution {execution_id} exceeded timeout"
+            ) from exc
+        except AgentFieldError:
+            raise
         except Exception as e:
             logger.error(
                 f"Failed to wait for execution result {execution_id[:8]}...: {e}"
             )
-            raise
+            raise AgentFieldClientError(
+                f"Failed to wait for execution result: {e}"
+            ) from e
 
     async def cancel_async_execution(
         self, execution_id: str, reason: Optional[str] = None
@@ -1343,10 +1637,10 @@ class AgentFieldClient:
             bool: True if execution was cancelled, False if not found or already terminal
 
         Raises:
-            RuntimeError: If async execution is disabled
+            AgentFieldClientError: If async execution is disabled.
         """
         if not self.async_config.enable_async_execution:
-            raise RuntimeError("Async execution is disabled in configuration")
+            raise AgentFieldClientError("Async execution is disabled in configuration")
 
         try:
             manager = await self._get_async_execution_manager()
@@ -1363,9 +1657,13 @@ class AgentFieldClient:
 
             return cancelled
 
+        except AgentFieldError:
+            raise
         except Exception as e:
             logger.error(f"Failed to cancel execution {execution_id[:8]}...: {e}")
-            raise
+            raise AgentFieldClientError(
+                f"Failed to cancel execution: {e}"
+            ) from e
 
     async def list_async_executions(
         self, status_filter: Optional[str] = None, limit: Optional[int] = None
@@ -1381,10 +1679,10 @@ class AgentFieldClient:
                     List[Dict]: List of execution status dictionaries
 
                 Raises:
-                    RuntimeError: If async execution is disabled
+                    AgentFieldClientError: If async execution is disabled.
         """
         if not self.async_config.enable_async_execution:
-            raise RuntimeError("Async execution is disabled in configuration")
+            raise AgentFieldClientError("Async execution is disabled in configuration")
 
         try:
             manager = await self._get_async_execution_manager()
@@ -1403,9 +1701,13 @@ class AgentFieldClient:
 
             return executions
 
+        except AgentFieldError:
+            raise
         except Exception as e:
             logger.error(f"Failed to list async executions: {e}")
-            raise
+            raise AgentFieldClientError(
+                f"Failed to list async executions: {e}"
+            ) from e
 
     async def get_async_execution_metrics(self) -> Dict[str, Any]:
         """
@@ -1415,10 +1717,10 @@ class AgentFieldClient:
             Dict[str, Any]: Metrics dictionary with execution statistics
 
         Raises:
-            RuntimeError: If async execution is disabled
+            AgentFieldClientError: If async execution is disabled.
         """
         if not self.async_config.enable_async_execution:
-            raise RuntimeError("Async execution is disabled in configuration")
+            raise AgentFieldClientError("Async execution is disabled in configuration")
 
         try:
             if self._async_execution_manager is None:
@@ -1432,9 +1734,13 @@ class AgentFieldClient:
 
             return metrics
 
+        except AgentFieldError:
+            raise
         except Exception as e:
             logger.error(f"Failed to get async execution metrics: {e}")
-            raise
+            raise AgentFieldClientError(
+                f"Failed to get async execution metrics: {e}"
+            ) from e
 
     async def cleanup_async_executions(self) -> int:
         """
@@ -1444,10 +1750,10 @@ class AgentFieldClient:
             int: Number of executions cleaned up
 
         Raises:
-            RuntimeError: If async execution is disabled
+            AgentFieldClientError: If async execution is disabled.
         """
         if not self.async_config.enable_async_execution:
-            raise RuntimeError("Async execution is disabled in configuration")
+            raise AgentFieldClientError("Async execution is disabled in configuration")
 
         try:
             if self._async_execution_manager is None:
@@ -1460,9 +1766,260 @@ class AgentFieldClient:
 
             return cleanup_count
 
+        except AgentFieldError:
+            raise
         except Exception as e:
             logger.error(f"Failed to cleanup async executions: {e}")
-            raise
+            raise AgentFieldClientError(
+                f"Failed to cleanup async executions: {e}"
+            ) from e
+
+    # ------------------------------------------------------------------ #
+    # Approval helpers                                                     #
+    # ------------------------------------------------------------------ #
+
+    async def request_approval(
+        self,
+        execution_id: str,
+        approval_request_id: str,
+        approval_request_url: str = "",
+        callback_url: str = "",
+        expires_in_hours: int = 72,
+    ) -> ApprovalRequestResponse:
+        """Request human approval for an execution, transitioning it to ``waiting``.
+
+        Calls ``POST /api/v1/agents/{node}/executions/{id}/request-approval``
+        on the control plane.  The agent is responsible for creating the
+        approval request on an external service (e.g. hax-sdk) first and
+        passing the resulting IDs here so the CP can track it.
+
+        Args:
+            execution_id: The execution to pause for approval.
+            approval_request_id: ID of the approval request on the external service.
+            approval_request_url: URL where the human can review the request.
+            callback_url: URL the CP should POST to when the approval resolves.
+            expires_in_hours: Time before the request expires.
+
+        Returns:
+            ApprovalRequestResponse with ``approval_request_id`` and ``approval_request_url``.
+
+        Raises:
+            AgentFieldClientError: If the request fails.
+        """
+        node_id = self.caller_agent_id or ""
+        body: Dict[str, Any] = {
+            "approval_request_id": approval_request_id,
+            "expires_in_hours": expires_in_hours,
+        }
+        if approval_request_url:
+            body["approval_request_url"] = approval_request_url
+        if callback_url:
+            body["callback_url"] = callback_url
+        url = f"{self.api_base}/agents/{node_id}/executions/{execution_id}/request-approval"
+
+        try:
+            client = await self.get_async_http_client()
+            response = await client.post(
+                url,
+                json=body,
+                headers=self._sanitize_header_values(self._get_headers_with_context(None)),
+                timeout=30,
+            )
+        except Exception as exc:
+            raise AgentFieldClientError(
+                f"Failed to request approval: {exc}"
+            ) from exc
+
+        if response.status_code >= 400:
+            raise AgentFieldClientError(
+                f"Approval request failed ({response.status_code}): {response.text[:500]}"
+            )
+
+        data = response.json()
+        return ApprovalRequestResponse(
+            approval_request_id=data.get("approval_request_id", ""),
+            approval_request_url=data.get("approval_request_url", ""),
+        )
+
+    async def notify_awaiter_status(
+        self,
+        execution_id: str,
+        status: str,
+        reason: str = "",
+    ) -> None:
+        """Notify the control plane that this execution is now WAITING or
+        RUNNING because of its awaited child's state — propagation hook.
+
+        Calls ``POST /api/v1/agents/{node}/executions/{id}/awaiter-status``.
+        Distinct from ``request_approval``: there's no approval ID, no
+        webhook callback, no human in the loop. It exists only so that
+        ancestors watching this execution see WAITING transitively when
+        any descendant is paused. The control plane validates that the
+        execution is non-terminal and the transition is RUNNING<->WAITING.
+
+        Fire-and-forget from the caller's perspective: failures are swallowed
+        by the caller. We still want to know on the server side if a bad
+        transition was attempted, hence the response check here for logs.
+
+        Args:
+            execution_id: The awaiter's own execution_id (NOT the child's).
+            status: ``"waiting"`` or ``"running"``.
+            reason: Optional free-text reason for observability (e.g.
+                ``"awaiting child exec_abc"``).
+
+        Raises:
+            AgentFieldClientError: If the control plane returns 4xx/5xx.
+        """
+        if status not in {"waiting", "running"}:
+            raise AgentFieldClientError(
+                f"notify_awaiter_status: status must be 'waiting' or 'running', got {status!r}"
+            )
+
+        node_id = self.caller_agent_id or ""
+        body: Dict[str, Any] = {"status": status}
+        if reason:
+            body["reason"] = reason
+        url = f"{self.api_base}/agents/{node_id}/executions/{execution_id}/awaiter-status"
+
+        try:
+            client = await self.get_async_http_client()
+            response = await client.post(
+                url,
+                json=body,
+                headers=self._sanitize_header_values(self._get_headers_with_context(None)),
+                timeout=10,
+            )
+        except Exception as exc:
+            raise AgentFieldClientError(
+                f"Failed to notify awaiter status: {exc}"
+            ) from exc
+
+        if response.status_code >= 400:
+            raise AgentFieldClientError(
+                f"Awaiter-status update failed ({response.status_code}): "
+                f"{response.text[:500]}"
+            )
+
+    async def get_approval_status(
+        self,
+        execution_id: str,
+    ) -> ApprovalStatusResponse:
+        """Get the current approval status for an execution.
+
+        Calls ``GET /api/v1/agents/{node}/executions/{id}/approval-status``.
+
+        Returns:
+            ApprovalStatusResponse with ``status`` (pending/approved/rejected/expired),
+            ``response``, ``request_url``, ``requested_at``, ``responded_at``.
+
+        Raises:
+            AgentFieldClientError: If the request fails.
+        """
+        node_id = self.caller_agent_id or ""
+        url = f"{self.api_base}/agents/{node_id}/executions/{execution_id}/approval-status"
+
+        try:
+            client = await self.get_async_http_client()
+            response = await client.get(
+                url,
+                headers=self._sanitize_header_values(self._get_headers_with_context(None)),
+                timeout=30,
+            )
+        except Exception as exc:
+            raise AgentFieldClientError(
+                f"Failed to get approval status: {exc}"
+            ) from exc
+
+        if response.status_code >= 400:
+            raise AgentFieldClientError(
+                f"Approval status request failed ({response.status_code}): {response.text[:500]}"
+            )
+
+        data = response.json()
+        return ApprovalStatusResponse(
+            status=data.get("status", "unknown"),
+            response=data.get("response"),
+            request_url=data.get("request_url"),
+            requested_at=data.get("requested_at"),
+            responded_at=data.get("responded_at"),
+        )
+
+    async def wait_for_approval(
+        self,
+        execution_id: str,
+        poll_interval: float = 5.0,
+        max_interval: float = 60.0,
+        timeout: Optional[float] = None,
+    ) -> ApprovalStatusResponse:
+        """Poll approval status with exponential backoff until resolved.
+
+        Args:
+            execution_id: Execution ID to wait for.
+            poll_interval: Initial polling interval in seconds.
+            max_interval: Maximum polling interval in seconds.
+            timeout: Total timeout in seconds (None = wait indefinitely).
+
+        Returns:
+            ApprovalStatusResponse with the final approval status (approved/rejected/expired).
+
+        Raises:
+            AgentFieldClientError: If polling encounters a non-retryable error.
+            ExecutionTimeoutError: If timeout is reached.
+        """
+        start_time = time.time()
+        interval = poll_interval
+        backoff_factor = 2.0
+
+        while True:
+            if timeout is not None and (time.time() - start_time) >= timeout:
+                raise ExecutionTimeoutError(
+                    f"Approval for execution {execution_id} timed out after {timeout}s"
+                )
+
+            await asyncio.sleep(interval)
+
+            try:
+                result = await self.get_approval_status(execution_id)
+            except AgentFieldClientError:
+                # Transient failure — back off and retry
+                interval = min(interval * backoff_factor, max_interval)
+                continue
+
+            if result.status != "pending":
+                return result
+
+            interval = min(interval * backoff_factor, max_interval)
+
+    async def post_execution_logs(
+        self,
+        execution_id: str,
+        entries: Any,
+    ) -> None:
+        """POST structured execution log entries to the control plane.
+
+        Args:
+            execution_id: The execution these logs belong to.
+            entries: A single log entry dict or a list of entry dicts.
+        """
+        if not execution_id:
+            return
+        url = f"{self.api_base}/executions/{execution_id}/logs"
+        body: Dict[str, Any]
+        if isinstance(entries, list):
+            body = {"entries": entries}
+        else:
+            body = {"entries": [entries]}
+        try:
+            client = await self.get_async_http_client()
+            await client.post(
+                url,
+                json=body,
+                headers=self._get_auth_headers(),
+                timeout=5.0,
+            )
+        except Exception:
+            # Best-effort: don't break execution if log dispatch fails
+            pass
 
     async def close_async_execution_manager(self) -> None:
         """

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -19,6 +20,7 @@ type fakeDIDService struct {
 	registerFn func(*types.DIDRegistrationRequest) (*types.DIDRegistrationResponse, error)
 	resolveFn  func(string) (*types.DIDIdentity, error)
 	listFn     func() ([]string, error)
+	rotateFn   func(string) (string, int, error)
 }
 
 func (f *fakeDIDService) RegisterAgent(req *types.DIDRegistrationRequest) (*types.DIDRegistrationResponse, error) {
@@ -46,6 +48,13 @@ func (f *fakeDIDService) ListAllAgentDIDs() ([]string, error) {
 		return f.listFn()
 	}
 	return []string{"did:example:agent"}, nil
+}
+
+func (f *fakeDIDService) RotateAgentX25519Key(did string) (string, int, error) {
+	if f.rotateFn != nil {
+		return f.rotateFn(did)
+	}
+	return "{\"kty\":\"OKP\",\"crv\":\"X25519\",\"x\":\"abc\"}", 1, nil
 }
 
 type fakeVCService struct {
@@ -128,6 +137,10 @@ func (f *fakeVCService) ListWorkflowVCs() ([]*types.WorkflowVC, error) {
 	return []*types.WorkflowVC{}, nil
 }
 
+func (f *fakeVCService) ListAgentTagVCs() ([]*types.AgentTagVCRecord, error) {
+	return []*types.AgentTagVCRecord{}, nil
+}
+
 func TestRegisterAgentHandler_Success(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -189,6 +202,80 @@ func TestResolveDIDHandler(t *testing.T) {
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &payload))
 	require.Equal(t, "did:example:123", payload["did"])
+}
+
+type fakeDIDWebService struct {
+	resolveFn func(ctx context.Context, did string) (*types.DIDResolutionResult, error)
+}
+
+func (f *fakeDIDWebService) ResolveDID(ctx context.Context, did string) (*types.DIDResolutionResult, error) {
+	if f.resolveFn != nil {
+		return f.resolveFn(ctx, did)
+	}
+	return &types.DIDResolutionResult{
+		DIDResolutionMetadata: types.DIDResolutionMetadata{Error: "notFound"},
+	}, nil
+}
+
+func TestResolveDIDHandler_DIDWeb(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	handler := NewDIDHandlers(&fakeDIDService{}, &fakeVCService{})
+	handler.SetDIDWebService(&fakeDIDWebService{
+		resolveFn: func(ctx context.Context, did string) (*types.DIDResolutionResult, error) {
+			return &types.DIDResolutionResult{
+				DIDDocument: &types.DIDWebDocument{
+					Context: []string{"https://www.w3.org/ns/did/v1"},
+					ID:      did,
+					VerificationMethod: []types.VerificationMethod{{
+						ID:           did + "#key-1",
+						Type:         "Ed25519VerificationKey2020",
+						Controller:   did,
+						PublicKeyJwk: json.RawMessage(`{"kty":"OKP","crv":"Ed25519","x":"abc"}`),
+					}},
+					Authentication: []string{did + "#key-1"},
+				},
+				DIDResolutionMetadata: types.DIDResolutionMetadata{ContentType: "application/did+ld+json"},
+			}, nil
+		},
+	})
+
+	router := gin.New()
+	router.GET("/api/v1/did/resolve/:did", handler.ResolveDID)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/did/resolve/did:web:localhost%3A8080:agents:test-agent", nil)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &payload))
+	require.Contains(t, payload["did"], "did:web:")
+	require.NotNil(t, payload["did_document"])
+}
+
+func TestResolveDIDHandler_DIDWebRevoked(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	handler := NewDIDHandlers(&fakeDIDService{}, &fakeVCService{})
+	handler.SetDIDWebService(&fakeDIDWebService{
+		resolveFn: func(ctx context.Context, did string) (*types.DIDResolutionResult, error) {
+			return &types.DIDResolutionResult{
+				DIDResolutionMetadata: types.DIDResolutionMetadata{Error: "deactivated"},
+				DIDDocumentMetadata:   types.DIDDocumentMetadata{Deactivated: true},
+			}, nil
+		},
+	})
+
+	router := gin.New()
+	router.GET("/api/v1/did/resolve/:did", handler.ResolveDID)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/did/resolve/did:web:localhost%3A8080:agents:revoked-agent", nil)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusGone, resp.Code)
 }
 
 func TestGetWorkflowVCChainHandler(t *testing.T) {
@@ -265,6 +352,8 @@ func TestExportVCsHandler(t *testing.T) {
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &payload))
 	require.Equal(t, float64(2), payload["total_count"])
+	// D11 fix: Verify agent_tag_vcs field is present in export
+	require.Contains(t, payload, "agent_tag_vcs", "export should include agent_tag_vcs field")
 }
 
 func TestGetDIDStatusHandler(t *testing.T) {

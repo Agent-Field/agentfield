@@ -6,15 +6,17 @@ import (
 	"log"
 	"sync"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/encryption"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
 // DIDRegistry manages the storage and retrieval of DID registries using database-only operations.
 type DIDRegistry struct {
-	mu              sync.RWMutex
-	registries      map[string]*types.DIDRegistry
-	storageProvider storage.StorageProvider
+	mu                sync.RWMutex
+	registries        map[string]*types.DIDRegistry
+	storageProvider   storage.StorageProvider
+	encryptionService *encryption.EncryptionService
 }
 
 // NewDIDRegistryWithStorage creates a new DID registry instance with database storage.
@@ -23,6 +25,11 @@ func NewDIDRegistryWithStorage(storageProvider storage.StorageProvider) *DIDRegi
 		registries:      make(map[string]*types.DIDRegistry),
 		storageProvider: storageProvider,
 	}
+}
+
+// SetEncryptionService sets the encryption service for encrypting master seeds at rest.
+func (r *DIDRegistry) SetEncryptionService(svc *encryption.EncryptionService) {
+	r.encryptionService = svc
 }
 
 // Initialize initializes the DID registry storage.
@@ -228,10 +235,25 @@ func (r *DIDRegistry) loadRegistriesFromDatabase() error {
 
 	// Create registries for each af server
 	for _, agentfieldServerDIDInfo := range agentfieldServerDIDs {
+		// Decrypt master seed if encryption is configured
+		masterSeed := agentfieldServerDIDInfo.MasterSeed
+		if r.encryptionService != nil {
+			decrypted, err := r.encryptionService.DecryptBytes(masterSeed)
+			if err != nil {
+				// Backward compatibility: if decryption fails, the seed may be stored
+				// as plaintext from before encryption was configured. Use it as-is and
+				// it will be encrypted on the next save.
+				log.Printf("Warning: master seed decryption failed for %s (may be plaintext from before encryption was enabled), using raw bytes",
+					agentfieldServerDIDInfo.AgentFieldServerID)
+				decrypted = masterSeed
+			}
+			masterSeed = decrypted
+		}
+
 		registry := &types.DIDRegistry{
 			AgentFieldServerID: agentfieldServerDIDInfo.AgentFieldServerID,
 			RootDID:            agentfieldServerDIDInfo.RootDID,
-			MasterSeed:         agentfieldServerDIDInfo.MasterSeed,
+			MasterSeed:         masterSeed,
 			AgentNodes:         make(map[string]types.AgentDIDInfo),
 			TotalDIDs:          0,
 			CreatedAt:          agentfieldServerDIDInfo.CreatedAt,
@@ -310,12 +332,23 @@ func (r *DIDRegistry) saveRegistryToDatabase(registry *types.DIDRegistry) error 
 	}
 
 	ctx := context.Background()
+
+	// Encrypt master seed before storing if encryption is configured
+	seedToStore := registry.MasterSeed
+	if r.encryptionService != nil {
+		encrypted, err := r.encryptionService.EncryptBytes(registry.MasterSeed)
+		if err != nil {
+			return fmt.Errorf("failed to encrypt master seed: %w", err)
+		}
+		seedToStore = encrypted
+	}
+
 	// Store af server DID information
 	err := r.storageProvider.StoreAgentFieldServerDID(
 		ctx,
 		registry.AgentFieldServerID,
 		registry.RootDID,
-		registry.MasterSeed,
+		seedToStore,
 		registry.CreatedAt,
 		registry.LastKeyRotation,
 	)

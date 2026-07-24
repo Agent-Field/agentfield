@@ -5,7 +5,8 @@ import {
   Copy,
   WarningFilled,
   Launch,
-  InProgress
+  InProgress,
+  PauseFilled
 } from '@/components/ui/icon-bridge';
 import type { ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -95,6 +96,14 @@ export function ExecutionHistoryList({ history, onLoadMore }: ExecutionHistoryLi
       icon: <Time className="h-4 w-4 text-yellow-500" />,
       variant: 'secondary'
     },
+    waiting: {
+      icon: <Time className="h-4 w-4 text-amber-500 animate-pulse" />,
+      variant: 'secondary'
+    },
+    paused: {
+      icon: <PauseFilled className="h-4 w-4 text-amber-500" />,
+      variant: 'secondary'
+    },
     cancelled: {
       icon: <WarningFilled className="h-4 w-4 text-muted-foreground" />,
       variant: 'outline'
@@ -142,7 +151,7 @@ export function ExecutionHistoryList({ history, onLoadMore }: ExecutionHistoryLi
     <div className="space-y-4">
       {/* Summary */}
       <div className="flex items-center justify-between">
-        <p className="text-body-small">
+        <p className="text-sm text-muted-foreground">
           Showing {executions.length} of {history.total} executions
         </p>
       </div>
@@ -205,7 +214,7 @@ export function ExecutionHistoryList({ history, onLoadMore }: ExecutionHistoryLi
                     {execution.cost ? (
                       <span className="text-sm">${execution.cost.toFixed(4)}</span>
                     ) : (
-                      <span className="text-body-small">-</span>
+                      <span className="text-sm text-muted-foreground">-</span>
                     )}
                   </TableCell>
                   <TableCell>
@@ -328,7 +337,7 @@ export function ExecutionHistoryList({ history, onLoadMore }: ExecutionHistoryLi
       )}
 
       {/* Pagination Info */}
-      <div className="text-center text-body-small">
+      <div className="text-center text-sm text-muted-foreground">
         Page {history.page} • {executions.length} of {history.total} executions
       </div>
     </div>

@@ -2,9 +2,10 @@
 
 export interface AgentDIDInfo {
   did: string;
+  did_web?: string;
   agent_node_id: string;
   agentfield_server_id: string;
-  public_key_jwk: any;
+  public_key_jwk: unknown;
   derivation_path: string;
   reasoners: Record<string, ReasonerDIDInfo>;
   skills: Record<string, SkillDIDInfo>;
@@ -15,7 +16,7 @@ export interface AgentDIDInfo {
 export interface ReasonerDIDInfo {
   did: string;
   function_name: string;
-  public_key_jwk: any;
+  public_key_jwk: unknown;
   derivation_path: string;
   capabilities: string[];
   exposure_level: string;
@@ -25,7 +26,7 @@ export interface ReasonerDIDInfo {
 export interface SkillDIDInfo {
   did: string;
   function_name: string;
-  public_key_jwk: any;
+  public_key_jwk: unknown;
   derivation_path: string;
   tags: string[];
   exposure_level: string;
@@ -42,7 +43,7 @@ export interface ExecutionVC {
   issuer_did: string;
   target_did: string;
   caller_did: string;
-  vc_document: any;
+  vc_document: unknown;
   signature: string;
   storage_uri?: string;
   document_size_bytes?: number;
@@ -64,7 +65,7 @@ export interface WorkflowVC {
   end_time?: string;
   total_steps: number;
   completed_steps: number;
-  vc_document?: any;
+  vc_document?: unknown;
   signature?: string;
   issuer_did?: string;
   snapshot_time?: string;
@@ -81,7 +82,7 @@ export interface DIDIdentityPackage {
 
 export interface DIDIdentity {
   did: string;
-  private_key_jwk: string;
+  private_key_jwk?: string;
   public_key_jwk: string;
   derivation_path: string;
   component_type: string;
@@ -104,6 +105,8 @@ export interface VCDocument {
   id: string;
   issuer: string;
   issuanceDate: string;
+  expirationDate?: string;
+  notBefore?: string;
   credentialSubject: VCCredentialSubject;
   proof: VCProof;
 }
@@ -142,7 +145,7 @@ export interface VCExecution {
 export interface VCAudit {
   inputDataHash: string;
   outputDataHash: string;
-  metadata: Record<string, any>;
+  metadata: Record<string, unknown>;
 }
 
 export interface VCProof {
@@ -180,13 +183,14 @@ export interface DIDRegistrationResponse {
 }
 
 export interface VCVerificationRequest {
-  vc_document: any;
+  vc_document: unknown;
 }
 
 export interface VCVerificationResponse {
   valid: boolean;
   issuer_did?: string;
   issued_at?: string;
+  reason?: string;
   message?: string;
   error?: string;
 }
@@ -258,7 +262,7 @@ export interface DIDResolutionBundle {
 
 export interface DIDResolutionEntry {
   method: string;
-  public_key_jwk: any;
+  public_key_jwk: unknown;
   resolved_from: string;
   resolved_at: string;
   error?: string;
@@ -330,6 +334,14 @@ export interface VCStatusSummary {
   verification_status: 'verified' | 'pending' | 'failed' | 'none';
 }
 
+export interface VCStatusData {
+  has_vc: boolean;
+  vc_id?: string;
+  status: string;
+  created_at?: string;
+  vc_document?: unknown;
+}
+
 export interface WorkflowVCStatusSummaryResponse extends VCStatusSummary {
   workflow_id: string;
 }
@@ -348,4 +360,77 @@ export interface AuditTrailEntry {
   input_hash: string;
   output_hash: string;
   signature: string;
+}
+
+/** Response from POST /did/verify-audit (matches cli.VCVerificationResult JSON). */
+export interface ProvenanceVerificationSummary {
+  total_components: number;
+  valid_components: number;
+  total_dids: number;
+  resolved_dids: number;
+  total_signatures: number;
+  valid_signatures: number;
+}
+
+export interface ProvenanceVerificationStep {
+  step: number;
+  description: string;
+  success: boolean;
+  details?: string;
+  error?: string;
+}
+
+export interface ProvenanceDIDResolution {
+  did: string;
+  method: string;
+  resolved_from: string;
+  success: boolean;
+  error?: string;
+  web_url?: string;
+}
+
+export interface ProvenanceComponentVerification {
+  vc_id: string;
+  execution_id: string;
+  issuer_did: string;
+  valid: boolean;
+  signature_valid: boolean;
+  format_valid: boolean;
+  status: string;
+  duration_ms?: number;
+  timestamp?: string;
+  error?: string;
+}
+
+export interface WorkflowVCVerification {
+  workflow_id: string;
+  valid: boolean;
+  signature_valid: boolean;
+  component_consistency: boolean;
+  timestamp_consistency: boolean;
+  status_consistency: boolean;
+  chain_integrity: boolean;
+  issues: VerificationIssue[];
+}
+
+/** Extended comprehensive block returned with verify-audit (CLI shape). */
+export interface ProvenanceComprehensiveResult extends ComprehensiveVCVerificationResult {
+  component_results?: ProvenanceComponentVerification[];
+  workflow_verification?: WorkflowVCVerification;
+}
+
+export interface ProvenanceVerificationResponse {
+  valid: boolean;
+  type: string;
+  workflow_id?: string;
+  signature_valid: boolean;
+  format_valid: boolean;
+  message: string;
+  error?: string;
+  verified_at: string;
+  component_results?: ProvenanceComponentVerification[];
+  did_resolutions?: ProvenanceDIDResolution[];
+  verification_steps?: ProvenanceVerificationStep[];
+  summary: ProvenanceVerificationSummary;
+  comprehensive?: ProvenanceComprehensiveResult;
 }

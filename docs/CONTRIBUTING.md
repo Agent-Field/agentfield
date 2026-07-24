@@ -44,6 +44,24 @@ When opening a PR:
 - Include screenshots for UI changes.
 - Link to the issue being resolved.
 
+### CLA Requirements
+
+This repository currently uses the hosted `cla-assistant.io` integration for the
+`license/cla` status check.
+
+- Human contributors must sign the CLA through the link shown on the pull request.
+- Bot-authored pull requests do not have a human signer, so maintainers must
+  allowlist approved bot accounts in the hosted CLA Assistant repository
+  settings.
+- Recommended bot allowlist entries:
+  - `dependabot[bot]`
+  - `github-actions[bot]`
+  - `renovate[bot]`
+
+Important: this CLA gate is not managed from `.github/workflows`. Updating
+repository workflows alone will not clear a pending `license/cla` status from
+the hosted integration.
+
 ## Issue Reporting
 
 - Search existing issues to avoid duplicates.

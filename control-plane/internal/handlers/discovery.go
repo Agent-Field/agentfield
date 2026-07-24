@@ -74,6 +74,7 @@ type DiscoveryResponse struct {
 // AgentCapability describes a single agent and its reasoners/skills.
 type AgentCapability struct {
 	AgentID        string               `json:"agent_id"`
+	GroupID        string               `json:"group_id"`
 	BaseURL        string               `json:"base_url"`
 	Version        string               `json:"version"`
 	HealthStatus   string               `json:"health_status"`
@@ -487,6 +488,7 @@ func buildDiscoveryResponse(agents []*types.AgentNode, filters DiscoveryFilters)
 
 		capability := AgentCapability{
 			AgentID:        agent.ID,
+			GroupID:        agent.GroupID,
 			BaseURL:        agent.BaseURL,
 			Version:        agent.Version,
 			HealthStatus:   string(agent.HealthStatus),
@@ -515,7 +517,7 @@ func buildDiscoveryResponse(agents []*types.AgentNode, filters DiscoveryFilters)
 				reasonerCap.OutputSchema = decodeSchema(reasoner.OutputSchema)
 			}
 			if filters.IncludeDescriptions {
-				reasonerCap.Description = extractDescription(agent.Metadata, reasoner.ID)
+				reasonerCap.Description = reasonerDescription(agent.Metadata, reasoner)
 			}
 			if filters.IncludeExamples {
 				reasonerCap.Examples = extractExamples(agent.Metadata, reasoner.ID)
@@ -542,7 +544,11 @@ func buildDiscoveryResponse(agents []*types.AgentNode, filters DiscoveryFilters)
 				skillCap.InputSchema = decodeSchema(skill.InputSchema)
 			}
 			if filters.IncludeDescriptions {
-				skillCap.Description = extractDescription(agent.Metadata, skill.ID)
+				if desc := strings.TrimSpace(skill.Description); desc != "" {
+					skillCap.Description = &desc
+				} else {
+					skillCap.Description = extractDescription(agent.Metadata, skill.ID)
+				}
 			}
 
 			capability.Skills = append(capability.Skills, skillCap)
@@ -591,6 +597,16 @@ func decodeSchema(raw json.RawMessage) map[string]interface{} {
 		return nil
 	}
 	return schema
+}
+
+// reasonerDescription resolves a reasoner's description: the field the SDK
+// registered on the reasoner record wins; the legacy agent-level
+// metadata.Custom["descriptions"] map remains as a fallback for older SDKs.
+func reasonerDescription(metadata types.AgentMetadata, reasoner types.ReasonerDefinition) *string {
+	if desc := strings.TrimSpace(reasoner.Description); desc != "" {
+		return &desc
+	}
+	return extractDescription(metadata, reasoner.ID)
 }
 
 func extractDescription(metadata types.AgentMetadata, id string) *string {

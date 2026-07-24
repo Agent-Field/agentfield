@@ -8,6 +8,7 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/internal/cli/framework"
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/services"
+	"github.com/Agent-Field/agentfield/control-plane/internal/encryption"
 	"github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/process"
 	"github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/storage"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
@@ -55,6 +56,9 @@ func CreateServiceContainer(cfg *config.Config, agentfieldHome string) *framewor
 		// Create DID registry with database storage (required)
 		if storageProvider != nil {
 			didRegistry = didServices.NewDIDRegistryWithStorage(storageProvider)
+			if passphrase := cfg.Features.DID.Keystore.EncryptionPassphrase; passphrase != "" {
+				didRegistry.SetEncryptionService(encryption.NewEncryptionService(passphrase))
+			}
 		} else {
 			// DID registry requires database storage, skip if not available
 			didRegistry = nil
@@ -112,11 +116,13 @@ func CreateServiceContainerWithDefaults(agentfieldHome string) *framework.Servic
 	return CreateServiceContainer(cfg, agentfieldHome)
 }
 
+var absPathForAgentFieldServerID = filepath.Abs
+
 // generateAgentFieldServerID creates a deterministic af server ID based on the agentfield home directory.
 // This ensures each agentfield instance has a unique ID while being deterministic for the same installation.
 func generateAgentFieldServerID(agentfieldHome string) string {
 	// Use the absolute path of agentfield home to generate a deterministic ID
-	absPath, err := filepath.Abs(agentfieldHome)
+	absPath, err := absPathForAgentFieldServerID(agentfieldHome)
 	if err != nil {
 		// Fallback to the original path if absolute path fails
 		absPath = agentfieldHome

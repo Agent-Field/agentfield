@@ -38,18 +38,6 @@ func (f *fakeAgentClient) GetAgentStatus(ctx context.Context, nodeID string) (*i
 	return f.statusResponse, nil
 }
 
-func (f *fakeAgentClient) GetMCPHealth(ctx context.Context, nodeID string) (*interfaces.MCPHealthResponse, error) {
-	return nil, nil
-}
-
-func (f *fakeAgentClient) RestartMCPServer(ctx context.Context, nodeID, alias string) error {
-	return nil
-}
-
-func (f *fakeAgentClient) GetMCPTools(ctx context.Context, nodeID, alias string) (*interfaces.MCPToolsResponse, error) {
-	return nil, nil
-}
-
 func (f *fakeAgentClient) ShutdownAgent(ctx context.Context, nodeID string, graceful bool, timeoutSeconds int) (*interfaces.AgentShutdownResponse, error) {
 	return nil, nil
 }
@@ -522,7 +510,7 @@ func TestStatusManager_UpdateFromHeartbeat_NeverDropped(t *testing.T) {
 	// Now send a heartbeat IMMEDIATELY (within what used to be the 10s drop window).
 	// Previously this heartbeat would be silently ignored. Now it MUST be processed.
 	readyStatus := types.AgentStatusReady
-	err = sm.UpdateFromHeartbeat(ctx, "node-heartbeat-priority", &readyStatus, nil)
+	err = sm.UpdateFromHeartbeat(ctx, "node-heartbeat-priority", &readyStatus, "")
 	require.NoError(t, err, "Heartbeat should never be dropped")
 
 	// Verify the heartbeat was processed — agent should no longer be inactive
@@ -569,4 +557,266 @@ func TestStatusManager_Reconciliation_UsesConfiguredThreshold(t *testing.T) {
 	}
 	assert.False(t, sm.needsReconciliation(inactiveAgent),
 		"Already inactive agent should not need reconciliation")
+
+	// Agent stuck in "starting" with stale heartbeat beyond MaxTransitionTime — SHOULD need reconciliation
+	stuckStartingAgent := &types.AgentNode{
+		ID:              "node-stuck-starting",
+		HealthStatus:    types.HealthStatusUnknown,
+		LifecycleStatus: types.AgentStatusStarting,
+		LastHeartbeat:   time.Now().Add(-3 * time.Minute),
+	}
+	assert.True(t, sm.needsReconciliation(stuckStartingAgent),
+		"Agent stuck in 'starting' beyond MaxTransitionTime should need reconciliation")
+
+	// Agent recently registered and still in "starting" with a recent heartbeat — should NOT
+	// need reconciliation (still within the startup grace period).
+	freshStartingAgent := &types.AgentNode{
+		ID:              "node-fresh-starting",
+		HealthStatus:    types.HealthStatusUnknown,
+		LifecycleStatus: types.AgentStatusStarting,
+		RegisteredAt:    time.Now().Add(-30 * time.Second),
+		LastHeartbeat:   time.Now().Add(-2 * time.Second),
+	}
+	assert.False(t, sm.needsReconciliation(freshStartingAgent),
+		"Agent registered 30s ago in 'starting' with fresh heartbeat should be within startup grace")
+
+	// Issue #484: Agent registered long ago, still in "starting", but sending fresh heartbeats.
+	// This is the SDK-never-transitions-to-ready case — reconciliation MUST rescue it.
+	stuckStartingFreshHeartbeat := &types.AgentNode{
+		ID:              "node-stuck-starting-fresh-hb",
+		HealthStatus:    types.HealthStatusUnknown,
+		LifecycleStatus: types.AgentStatusStarting,
+		RegisteredAt:    time.Now().Add(-10 * time.Minute),
+		LastHeartbeat:   time.Now().Add(-2 * time.Second),
+	}
+	assert.True(t, sm.needsReconciliation(stuckStartingFreshHeartbeat),
+		"Agent past startup grace with fresh heartbeat but still 'starting' should need reconciliation (issue #484)")
+}
+
+// TestStatusManager_StuckStartingIsReconciledToReady reproduces issue #484 end-to-end:
+// an agent registers, sends heartbeats indefinitely with status="starting" (the Python SDK's
+// default, since it never transitions _current_status to READY), and is expected to be
+// promoted to "ready" by the reconciliation loop once past the startup grace period — then
+// stay "ready" across subsequent "starting" heartbeats.
+func TestStatusManager_StuckStartingIsReconciledToReady(t *testing.T) {
+	provider, ctx := setupStatusManagerStorage(t)
+
+	// Register an agent that registered 10 minutes ago (long past any reasonable
+	// startup grace period) and is still in "starting" with a fresh heartbeat.
+	node := &types.AgentNode{
+		ID:              "stuck-starter",
+		TeamID:          "team",
+		BaseURL:         "http://localhost",
+		Version:         "1.0.0",
+		HealthStatus:    types.HealthStatusUnknown,
+		LifecycleStatus: types.AgentStatusStarting,
+		RegisteredAt:    time.Now().Add(-10 * time.Minute),
+		LastHeartbeat:   time.Now().Add(-1 * time.Second),
+		Reasoners:       []types.ReasonerDefinition{},
+		Skills:          []types.SkillDefinition{{ID: "greet"}},
+	}
+	require.NoError(t, provider.RegisterAgent(ctx, node))
+
+	// Use short timings so the test is deterministic.
+	sm := NewStatusManager(provider, StatusManagerConfig{
+		ReconcileInterval:       30 * time.Second,
+		HeartbeatStaleThreshold: 60 * time.Second,
+		MaxTransitionTime:       2 * time.Minute,
+	}, nil, nil)
+
+	// Sanity: the agent is indeed stuck and needs reconciliation.
+	persisted, err := provider.GetAgent(ctx, "stuck-starter")
+	require.NoError(t, err)
+	require.Equal(t, types.AgentStatusStarting, persisted.LifecycleStatus)
+	require.True(t, sm.needsReconciliation(persisted),
+		"Agent registered past grace period with fresh heartbeat should need reconciliation")
+
+	// Reconciliation should promote "starting" → "ready".
+	sm.performReconciliation()
+
+	promoted, err := provider.GetAgent(ctx, "stuck-starter")
+	require.NoError(t, err)
+	assert.Equal(t, types.AgentStatusReady, promoted.LifecycleStatus,
+		"Reconciliation must promote stuck 'starting' with fresh heartbeat to 'ready' (issue #484)")
+
+	// Now simulate what the Python SDK does: keep sending heartbeats with
+	// status="starting". These must NOT regress the lifecycle status back to
+	// "starting" — otherwise the agent would oscillate forever.
+	starting := types.AgentStatusStarting
+	for i := 0; i < 5; i++ {
+		require.NoError(t, sm.UpdateFromHeartbeat(ctx, "stuck-starter", &starting, ""))
+	}
+
+	stable, err := provider.GetAgent(ctx, "stuck-starter")
+	require.NoError(t, err)
+	assert.Equal(t, types.AgentStatusReady, stable.LifecycleStatus,
+		"Subsequent heartbeats carrying status='starting' must not regress a promoted agent (issue #484)")
+}
+
+// TestStatusManager_UpdateAgentStatus_ActivePromotesStarting verifies the other half of the
+// fix: when the health monitor marks an agent active (e.g. a successful HTTP /status check),
+// the lifecycle status should be promoted out of "starting" too — not only out of
+// offline/empty as before.
+func TestStatusManager_UpdateAgentStatus_ActivePromotesStarting(t *testing.T) {
+	provider, ctx := setupStatusManagerStorage(t)
+
+	node := &types.AgentNode{
+		ID:              "active-transition",
+		TeamID:          "team",
+		BaseURL:         "http://localhost",
+		Version:         "1.0.0",
+		HealthStatus:    types.HealthStatusUnknown,
+		LifecycleStatus: types.AgentStatusStarting,
+		RegisteredAt:    time.Now().Add(-5 * time.Minute),
+		LastHeartbeat:   time.Now(),
+		Reasoners:       []types.ReasonerDefinition{},
+		Skills:          []types.SkillDefinition{},
+	}
+	require.NoError(t, provider.RegisterAgent(ctx, node))
+
+	sm := NewStatusManager(provider, StatusManagerConfig{}, nil, nil)
+
+	// Simulate the health monitor marking the agent active (what happens after a
+	// successful HTTP health check).
+	active := types.AgentStateActive
+	require.NoError(t, sm.UpdateAgentStatus(ctx, "active-transition", &types.AgentStatusUpdate{
+		State:  &active,
+		Source: types.StatusSourceHealthCheck,
+		Reason: "HTTP /status succeeded",
+	}))
+
+	after, err := provider.GetAgent(ctx, "active-transition")
+	require.NoError(t, err)
+	assert.Equal(t, types.AgentStatusReady, after.LifecycleStatus,
+		"Transitioning to AgentStateActive must promote 'starting' → 'ready' (issue #484)")
+}
+
+// TestStatusManager_ReadyLeaseRenewalPromotesHealthImmediately reproduces the Go SDK
+// "unknown forever" wedge: an agent registers (health "unknown", lifecycle "starting")
+// and its ONLY keep-alive is the status lease (PATCH /nodes/:id/status with
+// phase=ready → State=active + lifecycle=ready, Source=manual). The starting→active
+// transition used to be held open as "pending" instead of completing, so State stayed
+// "starting" and health persisted as "unknown" while lifecycle said "ready" — and
+// because the Go SDK renews the lease every 2 minutes (exactly MaxTransitionTime),
+// each renewal re-created the pending transition and the timeout sweeper never
+// rescued it. The state claim IS the evidence, so it must take effect immediately.
+func TestStatusManager_ReadyLeaseRenewalPromotesHealthImmediately(t *testing.T) {
+	provider, ctx := setupStatusManagerStorage(t)
+
+	node := &types.AgentNode{
+		ID:              "lease-node",
+		TeamID:          "team",
+		BaseURL:         "http://localhost:8002",
+		Version:         "1.0.0",
+		HealthStatus:    types.HealthStatusUnknown,
+		LifecycleStatus: types.AgentStatusStarting,
+		RegisteredAt:    time.Now(),
+		LastHeartbeat:   time.Now(),
+		Reasoners:       []types.ReasonerDefinition{},
+		Skills:          []types.SkillDefinition{},
+	}
+	require.NoError(t, provider.RegisterAgent(ctx, node))
+
+	sm := NewStatusManager(provider, StatusManagerConfig{}, nil, nil)
+
+	// Exactly what NodeStatusLeaseHandler submits for phase=ready.
+	active := types.AgentStateActive
+	ready := types.AgentStatusReady
+	renewal := &types.AgentStatusUpdate{
+		State:           &active,
+		LifecycleStatus: &ready,
+		Source:          types.StatusSourceManual,
+		Version:         "1.0.0",
+	}
+	require.NoError(t, sm.UpdateAgentStatus(ctx, "lease-node", renewal))
+
+	after, err := provider.GetAgent(ctx, "lease-node")
+	require.NoError(t, err)
+	assert.Equal(t, types.HealthStatusActive, after.HealthStatus,
+		"a ready lease renewal must flip health to active immediately — not park it in a pending transition")
+	assert.Equal(t, types.AgentStatusReady, after.LifecycleStatus)
+
+	// Renewals keep arriving every lease interval; the state must stay settled.
+	require.NoError(t, sm.UpdateAgentStatus(ctx, "lease-node", renewal))
+	stable, err := provider.GetAgent(ctx, "lease-node")
+	require.NoError(t, err)
+	assert.Equal(t, types.HealthStatusActive, stable.HealthStatus)
+}
+
+// TestStatusManager_NeedsReconciliation_UnknownHealthFreshHeartbeat covers the
+// reconciler's sweep rule for rows already wedged in the shape the lease-renewal
+// trap left behind: health "unknown", fresh heartbeat, past the startup grace.
+func TestStatusManager_NeedsReconciliation_UnknownHealthFreshHeartbeat(t *testing.T) {
+	sm := NewStatusManager(nil, StatusManagerConfig{
+		HeartbeatStaleThreshold: 60 * time.Second,
+		MaxTransitionTime:       2 * time.Minute,
+	}, nil, nil)
+
+	// The wedge shape: unknown health, lifecycle ready, heartbeats flowing,
+	// registered long ago — MUST reconcile.
+	wedged := &types.AgentNode{
+		ID:              "wedged",
+		HealthStatus:    types.HealthStatusUnknown,
+		LifecycleStatus: types.AgentStatusReady,
+		RegisteredAt:    time.Now().Add(-10 * time.Minute),
+		LastHeartbeat:   time.Now().Add(-2 * time.Second),
+	}
+	assert.True(t, sm.needsReconciliation(wedged),
+		"unknown health with fresh heartbeat past startup grace is wedged and must reconcile")
+
+	// Still inside the startup grace period — leave it alone.
+	justRegistered := &types.AgentNode{
+		ID:              "just-registered",
+		HealthStatus:    types.HealthStatusUnknown,
+		LifecycleStatus: types.AgentStatusReady,
+		RegisteredAt:    time.Now().Add(-30 * time.Second),
+		LastHeartbeat:   time.Now().Add(-2 * time.Second),
+	}
+	assert.False(t, sm.needsReconciliation(justRegistered),
+		"unknown health within the startup grace period is normal startup, not a wedge")
+
+	// Stale heartbeat: liveness is unproven, this rule must not promote it.
+	staleUnknown := &types.AgentNode{
+		ID:              "stale-unknown",
+		HealthStatus:    types.HealthStatusUnknown,
+		LifecycleStatus: types.AgentStatusReady,
+		RegisteredAt:    time.Now().Add(-10 * time.Minute),
+		LastHeartbeat:   time.Now().Add(-10 * time.Minute),
+	}
+	assert.False(t, sm.needsReconciliation(staleUnknown),
+		"unknown health with a stale heartbeat has no liveness evidence — not this rule's business")
+}
+
+// TestStatusManager_WedgedUnknownIsReconciledToActive is the end-to-end sweep: a row
+// persisted in the wedged shape (as pre-fix control planes left them) is promoted to
+// active/ready by one reconciliation pass, on heartbeat-freshness evidence alone.
+func TestStatusManager_WedgedUnknownIsReconciledToActive(t *testing.T) {
+	provider, ctx := setupStatusManagerStorage(t)
+
+	node := &types.AgentNode{
+		ID:              "wedged-go-node",
+		TeamID:          "team",
+		BaseURL:         "http://localhost:8002",
+		Version:         "1.0.0",
+		HealthStatus:    types.HealthStatusUnknown,
+		LifecycleStatus: types.AgentStatusReady,
+		RegisteredAt:    time.Now().Add(-10 * time.Minute),
+		LastHeartbeat:   time.Now().Add(-2 * time.Second),
+		Reasoners:       []types.ReasonerDefinition{},
+		Skills:          []types.SkillDefinition{},
+	}
+	require.NoError(t, provider.RegisterAgent(ctx, node))
+
+	sm := NewStatusManager(provider, StatusManagerConfig{
+		HeartbeatStaleThreshold: 60 * time.Second,
+		MaxTransitionTime:       2 * time.Minute,
+	}, nil, nil)
+
+	sm.performReconciliation()
+
+	after, err := provider.GetAgent(ctx, "wedged-go-node")
+	require.NoError(t, err)
+	assert.Equal(t, types.HealthStatusActive, after.HealthStatus,
+		"reconciliation must promote a wedged unknown-health node with fresh heartbeats to active")
+	assert.Equal(t, types.AgentStatusReady, after.LifecycleStatus)
 }

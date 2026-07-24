@@ -4,6 +4,7 @@ import {
   CheckmarkFilled,
   ErrorFilled,
   InProgress,
+  Network,
   PauseFilled,
   Time,
 } from "@/components/ui/icon-bridge";
@@ -16,7 +17,7 @@ import {
   type CanonicalStatus,
 } from "../../utils/status";
 import { AgentBadge } from "./AgentBadge";
-import type { WorkflowDAGNode } from "./DeckGLView";
+import type { WorkflowDAGNode } from "./DeckGLGraph";
 
 interface HoverDetailPanelProps {
   node: WorkflowDAGNode | null;
@@ -28,6 +29,8 @@ const STATUS_TONE_TOKEN_MAP: Record<CanonicalStatus, keyof typeof statusTone> = 
   succeeded: "success",
   failed: "error",
   running: "info",
+  paused: "warning",
+  waiting: "warning",
   queued: "warning",
   pending: "warning",
   timeout: "neutral",
@@ -141,8 +144,8 @@ export const HoverDetailPanel = memo(({ node, position, visible }: HoverDetailPa
   const tone = statusTone[toneKey];
 
   // Handle optional fields that may not exist on WorkflowDAGLightweightNode
-  const agentNameField = (node as any).agent_name;
-  const taskNameField = (node as any).task_name;
+  const agentNameField = node.agent_name;
+  const taskNameField = node.task_name;
 
   const agentColor = agentColorManager.getAgentColor(
     agentNameField || node.agent_node_id,
@@ -151,6 +154,7 @@ export const HoverDetailPanel = memo(({ node, position, visible }: HoverDetailPa
 
   const taskName = humanizeText(taskNameField || node.reasoner_id || "Unknown Task");
   const agentName = humanizeText(agentNameField || node.agent_node_id || "Unknown Agent");
+  const external = node.external;
 
   return (
     <div
@@ -184,6 +188,14 @@ export const HoverDetailPanel = memo(({ node, position, visible }: HoverDetailPa
               size="sm"
               showTooltip={false}
             />
+            {external && (
+              <div className="mt-2 inline-flex max-w-full items-center gap-1 rounded border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 text-nano font-semibold uppercase tracking-wide text-sky-700 dark:text-sky-300">
+                <Network className="size-2.5 shrink-0" />
+                <span className="truncate">
+                  {external.provider ? `External · ${external.provider}` : "External capability"}
+                </span>
+              </div>
+            )}
           </div>
           <div className="flex-shrink-0">
             {getStatusIcon(normalizedStatus)}
@@ -239,16 +251,47 @@ export const HoverDetailPanel = memo(({ node, position, visible }: HoverDetailPa
           )}
         </div>
 
+        {external && (
+          <div className="space-y-1.5 rounded-md border border-sky-500/20 bg-sky-500/5 p-2">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-sky-700 dark:text-sky-300">
+              <Network className="size-3" />
+              External capability
+            </div>
+            {external.local_target && (
+              <div className="flex justify-between gap-4 text-micro">
+                <span className="text-muted-foreground">Local target:</span>
+                <span className="max-w-[12rem] truncate font-mono text-foreground">
+                  {external.local_target}
+                </span>
+              </div>
+            )}
+            {external.provider && (
+              <div className="flex justify-between gap-4 text-micro">
+                <span className="text-muted-foreground">Provider:</span>
+                <span className="font-medium text-foreground">{external.provider}</span>
+              </div>
+            )}
+            {external.remote_run_id && (
+              <div className="flex justify-between gap-4 text-micro">
+                <span className="text-muted-foreground">Remote run:</span>
+                <span className="max-w-[12rem] truncate font-mono text-foreground">
+                  {external.remote_run_id}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Technical Details */}
         <div className="space-y-1.5 border-t border-border/60 pt-3">
-          <div className="flex justify-between gap-4 text-[10px]">
+          <div className="flex justify-between gap-4 text-micro">
             <span className="text-muted-foreground">Execution ID:</span>
             <span className="font-mono text-foreground">
               {node.execution_id.slice(0, 12)}...
             </span>
           </div>
           {node.workflow_id && (
-            <div className="flex justify-between gap-4 text-[10px]">
+            <div className="flex justify-between gap-4 text-micro">
               <span className="text-muted-foreground">Workflow ID:</span>
               <span className="font-mono text-foreground">
                 {node.workflow_id.slice(0, 12)}...
@@ -256,7 +299,7 @@ export const HoverDetailPanel = memo(({ node, position, visible }: HoverDetailPa
             </div>
           )}
           {node.workflow_depth !== undefined && (
-            <div className="flex justify-between gap-4 text-[10px]">
+            <div className="flex justify-between gap-4 text-micro">
               <span className="text-muted-foreground">Depth:</span>
               <span className="font-mono text-foreground">
                 Level {node.workflow_depth}

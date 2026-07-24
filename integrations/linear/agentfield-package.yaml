@@ -1,0 +1,64 @@
+name: linear
+version: 0.1.0
+description: Linear trigger source and deterministic capability node for issue, team, and project workflows.
+author: AgentField
+type: agent_node
+main: node/linear-node
+
+agent_node:
+  node_id: linear-prod
+  default_port: 8013
+
+dependencies:
+  python: []
+  system: []
+
+capabilities:
+  skills:
+    - name: health
+      description: Confirm Linear API connectivity for the configured token.
+    - name: get_issue
+      description: Read one Linear issue by UUID or identifier.
+    - name: list_issues
+      description: List recent Linear issues visible to the token.
+    - name: create_issue
+      description: Create a Linear issue from IssueCreateInput fields.
+    - name: update_issue
+      description: Update a Linear issue from IssueUpdateInput fields.
+    - name: comment_issue
+      description: Add a comment to a Linear issue.
+    - name: list_teams
+      description: List Linear teams visible to the token.
+    - name: list_projects
+      description: List Linear projects visible to the token.
+
+runtime:
+  auto_port: true
+  heartbeat_interval: 30
+  dev_mode: false
+
+environment:
+  AGENTFIELD_NODE_ID: linear-prod
+  AGENTFIELD_SERVER: http://localhost:8080
+
+user_environment:
+  required:
+    - name: LINEAR_API_KEY
+      description: Linear API key used for GraphQL API calls.
+      type: secret
+  optional:
+    - name: LINEAR_API_URL
+      description: Override GraphQL endpoint for tests or Linear-compatible mocks.
+      type: string
+      default: https://api.linear.app/graphql
+    - name: LINEAR_WEBHOOK_SECRET
+      description: Signing secret used by the control-plane linear source.
+      type: secret
+
+metadata:
+  created_at: "2026-06-15"
+  sdk_version: ">=0.1.92"
+  language: go
+  platform: linear
+  integration_kind: trigger_source_and_capability_node
+  control_plane_source: built_in

@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: ['18', '20']
+        node-version: ['20']
 
     defaults:
       run:

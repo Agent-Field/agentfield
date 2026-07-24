@@ -13,6 +13,7 @@ import { SegmentedControl, type SegmentedControlOption } from '../ui/segmented-c
 import { Badge } from '../ui/badge';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { JsonHighlightedPre } from '@/components/ui/json-syntax-highlight';
 
 interface JsonModalProps {
   isOpen: boolean;
@@ -50,9 +51,14 @@ export function JsonModal({ isOpen, onClose, content, path, title }: JsonModalPr
   const renderContent = () => {
     if (viewMode === 'raw') {
       return (
-        <pre className="bg-bg-secondary p-6 rounded-lg text-sm overflow-auto font-mono border border-border-secondary max-h-[70vh] text-text-primary">
-          {typeof content === 'string' ? content : JSON.stringify(content, null, 2)}
-        </pre>
+        <JsonHighlightedPre
+          text={
+            typeof content === 'string'
+              ? content
+              : JSON.stringify(content, null, 2)
+          }
+          className="bg-muted p-6 rounded-lg text-sm overflow-auto font-mono border border-border max-h-[70vh]"
+        />
       );
     }
 
@@ -60,22 +66,22 @@ export function JsonModal({ isOpen, onClose, content, path, title }: JsonModalPr
       // Check if it's markdown-like content
       if (content.includes('#') || content.includes('*') || content.includes('`') || content.includes('\n')) {
         return (
-          <div className="max-w-none text-text-secondary">
+          <div className="max-w-none text-muted-foreground">
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               components={{
-                h1: ({children}) => <h1 className="text-heading-1 mb-4 border-b border-border-secondary pb-2">{children}</h1>,
-                h2: ({children}) => <h2 className="text-heading-2 mb-3">{children}</h2>,
-                h3: ({children}) => <h3 className="text-heading-3 mb-2">{children}</h3>,
-                h4: ({children}) => <h4 className="text-body-large font-medium text-text-primary mb-2">{children}</h4>,
-                p: ({children}) => <p className="mb-4 text-body leading-relaxed">{children}</p>,
-                ul: ({children}) => <ul className="list-disc list-inside mb-4 text-body space-y-1">{children}</ul>,
-                ol: ({children}) => <ol className="list-decimal list-inside mb-4 text-body space-y-1">{children}</ol>,
-                li: ({children}) => <li className="leading-relaxed text-body">{children}</li>,
+                h1: ({children}) => <h1 className="text-2xl font-semibold tracking-tight mb-4 border-b border-border pb-2">{children}</h1>,
+                h2: ({children}) => <h2 className="text-xl font-semibold mb-3">{children}</h2>,
+                h3: ({children}) => <h3 className="text-base font-semibold mb-2">{children}</h3>,
+                h4: ({children}) => <h4 className="text-base font-medium text-foreground mb-2">{children}</h4>,
+                p: ({children}) => <p className="mb-4 text-sm leading-relaxed">{children}</p>,
+                ul: ({children}) => <ul className="list-disc list-inside mb-4 text-sm space-y-1">{children}</ul>,
+                ol: ({children}) => <ol className="list-decimal list-inside mb-4 text-sm space-y-1">{children}</ol>,
+                li: ({children}) => <li className="leading-relaxed text-sm">{children}</li>,
                 code: ({children, className}) => {
                   const isInline = !className;
                   return isInline ? (
-                    <code className="bg-bg-secondary px-1.5 py-0.5 rounded text-sm font-mono text-text-primary border border-border-secondary">
+                    <code className="bg-muted px-1.5 py-0.5 rounded text-sm font-mono text-foreground border border-border">
                       {children}
                     </code>
                   ) : (
@@ -83,12 +89,12 @@ export function JsonModal({ isOpen, onClose, content, path, title }: JsonModalPr
                   );
                 },
                 pre: ({children}) => (
-                  <pre className="bg-bg-secondary p-4 rounded-lg text-sm overflow-auto border border-border-secondary mb-4 font-mono text-text-primary">
+                  <pre className="json-hl-root bg-muted p-4 rounded-lg text-sm overflow-auto border border-border mb-4 font-mono">
                     {children}
                   </pre>
                 ),
                 blockquote: ({children}) => (
-                  <blockquote className="border-l-4 border-accent-primary pl-4 italic text-text-tertiary mb-4 bg-bg-secondary/30 py-2 rounded-r">
+                  <blockquote className="border-l-4 border-accent-primary pl-4 italic text-muted-foreground mb-4 bg-muted/30 py-2 rounded-r">
                     {children}
                   </blockquote>
                 ),
@@ -103,25 +109,25 @@ export function JsonModal({ isOpen, onClose, content, path, title }: JsonModalPr
                   </a>
                 ),
                 table: ({children}) => (
-                  <div className="overflow-auto mb-4 border border-border-secondary rounded-lg">
+                  <div className="overflow-auto mb-4 border border-border rounded-lg">
                     <table className="min-w-full">{children}</table>
                   </div>
                 ),
                 thead: ({children}) => (
-                  <thead className="bg-bg-secondary">{children}</thead>
+                  <thead className="bg-muted">{children}</thead>
                 ),
                 th: ({children}) => (
-                  <th className="border-b border-border-secondary px-4 py-3 text-left text-sm font-medium text-text-primary">
+                  <th className="border-b border-border px-4 py-3 text-left text-sm font-medium text-foreground">
                     {children}
                   </th>
                 ),
                 td: ({children}) => (
-                  <td className="border-b border-border-secondary px-4 py-3 text-body">
+                  <td className="border-b border-border px-4 py-3 text-sm">
                     {children}
                   </td>
                 ),
                 hr: () => (
-                  <hr className="my-6 border-border-secondary" />
+                  <hr className="my-6 border-border" />
                 ),
               }}
             >
@@ -132,7 +138,7 @@ export function JsonModal({ isOpen, onClose, content, path, title }: JsonModalPr
       } else {
         // Plain text with proper formatting
         return (
-          <div className="text-text-secondary leading-relaxed whitespace-pre-wrap font-sans">
+          <div className="text-muted-foreground leading-relaxed whitespace-pre-wrap font-sans">
             {content}
           </div>
         );
@@ -141,24 +147,25 @@ export function JsonModal({ isOpen, onClose, content, path, title }: JsonModalPr
 
     // For non-string content, show formatted JSON
     return (
-      <pre className="bg-bg-secondary p-6 rounded-lg text-sm overflow-auto font-mono border border-border-secondary max-h-[70vh] whitespace-pre-wrap break-words text-text-primary">
-        {JSON.stringify(content, null, 2)}
-      </pre>
+      <JsonHighlightedPre
+        data={content}
+        className="bg-muted p-6 rounded-lg text-sm overflow-auto font-mono border border-border max-h-[70vh] break-words"
+      />
     );
   };
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="max-w-4xl max-h-[90vh] flex flex-col">
-        <DialogHeader className="flex-shrink-0 border-b border-border-secondary pb-4">
+        <DialogHeader className="flex-shrink-0 border-b border-border pb-4">
           <div className="flex items-center justify-between">
             <div className="flex-1 min-w-0">
-              <DialogTitle className="text-heading-3 text-text-primary mb-2">
+              <DialogTitle className="text-base font-semibold text-foreground mb-2">
                 {title}
               </DialogTitle>
 
               {/* Breadcrumb */}
-              <div className="flex items-center gap-1 text-sm text-text-tertiary">
+              <div className="flex items-center gap-1 text-sm text-muted-foreground">
                 <span>Result</span>
                 {path.map((segment, index) => (
                   <div key={index} className="flex items-center gap-1">
@@ -217,8 +224,8 @@ export function JsonModal({ isOpen, onClose, content, path, title }: JsonModalPr
         </div>
 
         {/* Footer with metadata */}
-        <div className="flex-shrink-0 border-t border-border-secondary pt-3 px-6 pb-4">
-          <div className="flex items-center justify-between text-xs text-text-tertiary">
+        <div className="flex-shrink-0 border-t border-border pt-3 px-6 pb-4">
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
             <div className="flex items-center gap-4">
               <span>Type: {typeof content}</span>
               {typeof content === 'string' && (

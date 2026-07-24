@@ -39,6 +39,9 @@ func (s *stubStorage) CreateExecutionRecord(ctx context.Context, execution *type
 func (s *stubStorage) GetExecutionRecord(ctx context.Context, executionID string) (*types.Execution, error) {
 	return nil, nil
 }
+func (s *stubStorage) GetExecutionRecordsBatch(ctx context.Context, executionIDs []string) (map[string]*types.Execution, error) {
+	return map[string]*types.Execution{}, nil
+}
 func (s *stubStorage) UpdateExecutionRecord(ctx context.Context, executionID string, update func(*types.Execution) (*types.Execution, error)) (*types.Execution, error) {
 	return nil, nil
 }
@@ -59,6 +62,33 @@ func (s *stubStorage) GetWorkflowExecution(ctx context.Context, executionID stri
 }
 func (s *stubStorage) GetExecutionEventBus() *events.ExecutionEventBus {
 	return s.eventBus
+}
+
+func (s *stubStorage) StoreExecutionLogEntry(ctx context.Context, entry *types.ExecutionLogEntry) error {
+	return nil
+}
+
+func (s *stubStorage) ListExecutionLogEntries(ctx context.Context, executionID string, afterSeq *int64, limit int, levels []string, nodeIDs []string, sources []string, query string) ([]*types.ExecutionLogEntry, error) {
+	return nil, nil
+}
+
+func (s *stubStorage) CreateExecutionUsage(ctx context.Context, rows []*types.ExecutionUsage) error {
+	return nil
+}
+func (s *stubStorage) GetUsageStats(ctx context.Context, since *time.Time) (*types.UsageStatsAggregation, error) {
+	return &types.UsageStatsAggregation{}, nil
+}
+func (s *stubStorage) GetUsageTimeseries(ctx context.Context, since *time.Time, now time.Time, buckets int) (*types.UsageTimeseries, error) {
+	return &types.UsageTimeseries{}, nil
+}
+func (s *stubStorage) GetUsageTimeseriesByModel(ctx context.Context, since *time.Time, now time.Time, buckets int) ([]types.UsageModelSeries, error) {
+	return nil, nil
+}
+func (s *stubStorage) GetExecutionUsageTotals(ctx context.Context, executionID string) (*float64, int64, error) {
+	return nil, 0, nil
+}
+func (s *stubStorage) PruneExecutionLogEntries(ctx context.Context, executionID string, maxEntries int, olderThan time.Time) error {
+	return nil
 }
 
 // Stub implementations for remaining StorageProvider methods
@@ -119,6 +149,15 @@ func (s *stubStorage) CleanupOldExecutions(ctx context.Context, retentionPeriod 
 func (s *stubStorage) MarkStaleExecutions(ctx context.Context, staleAfter time.Duration, limit int) (int, error) {
 	return 0, nil
 }
+func (s *stubStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAfter time.Duration, limit int) (int, error) {
+	return 0, nil
+}
+func (s *stubStorage) RetryStaleWorkflowExecutions(ctx context.Context, staleAfter time.Duration, maxRetries int, limit int) ([]string, error) {
+	return nil, nil
+}
+func (s *stubStorage) MarkAgentExecutionsOrphaned(ctx context.Context, agentNodeID string, reasonMessage string) (int, error) {
+	return 0, nil
+}
 func (s *stubStorage) CleanupWorkflow(ctx context.Context, workflowID string, dryRun bool) (*types.WorkflowCleanupResult, error) {
 	return &types.WorkflowCleanupResult{
 		Success:        true,
@@ -158,7 +197,7 @@ func (s *stubStorage) DeleteMemory(ctx context.Context, scope, scopeID, key stri
 func (s *stubStorage) ListMemory(ctx context.Context, scope, scopeID string) ([]*types.Memory, error) {
 	return nil, nil
 }
-func (s *stubStorage) SetVector(ctx context.Context, record *types.VectorRecord) error    { return nil }
+func (s *stubStorage) SetVector(ctx context.Context, record *types.VectorRecord) error { return nil }
 func (s *stubStorage) GetVector(ctx context.Context, scope, scopeID, key string) (*types.VectorRecord, error) {
 	return nil, nil
 }
@@ -192,6 +231,12 @@ func (s *stubStorage) GetLockStatus(ctx context.Context, key string) (*types.Dis
 
 // Agent registry
 func (s *stubStorage) RegisterAgent(ctx context.Context, agent *types.AgentNode) error { return nil }
+func (s *stubStorage) GetAgentVersion(ctx context.Context, id string, version string) (*types.AgentNode, error) {
+	return nil, nil
+}
+func (s *stubStorage) ListAgentVersions(ctx context.Context, id string) ([]*types.AgentNode, error) {
+	return nil, nil
+}
 func (s *stubStorage) ListAgents(ctx context.Context, filters types.AgentFilters) ([]*types.AgentNode, error) {
 	return nil, nil
 }
@@ -201,18 +246,39 @@ func (s *stubStorage) UpdateAgentHealth(ctx context.Context, id string, status t
 func (s *stubStorage) UpdateAgentHealthAtomic(ctx context.Context, id string, status types.HealthStatus, expectedLastHeartbeat *time.Time) error {
 	return nil
 }
-func (s *stubStorage) UpdateAgentHeartbeat(ctx context.Context, id string, heartbeatTime time.Time) error {
+func (s *stubStorage) UpdateAgentHeartbeat(ctx context.Context, id string, version string, heartbeatTime time.Time) error {
 	return nil
 }
 func (s *stubStorage) UpdateAgentLifecycleStatus(ctx context.Context, id string, status types.AgentLifecycleStatus) error {
 	return nil
 }
-
-// Configuration
-func (s *stubStorage) SetConfig(ctx context.Context, key string, value interface{}) error { return nil }
-func (s *stubStorage) GetConfig(ctx context.Context, key string) (interface{}, error) {
+func (s *stubStorage) UpdateAgentVersion(ctx context.Context, id string, version string) error {
+	return nil
+}
+func (s *stubStorage) DeleteAgentVersion(ctx context.Context, id string, version string) error {
+	return nil
+}
+func (s *stubStorage) UpdateAgentTrafficWeight(ctx context.Context, id string, version string, weight int) error {
+	return nil
+}
+func (s *stubStorage) ListAgentsByGroup(ctx context.Context, groupID string) ([]*types.AgentNode, error) {
 	return nil, nil
 }
+func (s *stubStorage) ListAgentGroups(ctx context.Context, teamID string) ([]types.AgentGroupSummary, error) {
+	return nil, nil
+}
+
+// Configuration
+func (s *stubStorage) SetConfig(ctx context.Context, key string, value string, updatedBy string) error {
+	return nil
+}
+func (s *stubStorage) GetConfig(ctx context.Context, key string) (*storage.ConfigEntry, error) {
+	return nil, nil
+}
+func (s *stubStorage) ListConfigs(ctx context.Context) ([]*storage.ConfigEntry, error) {
+	return nil, nil
+}
+func (s *stubStorage) DeleteConfig(ctx context.Context, key string) error { return nil }
 
 // Reasoner Performance and History
 func (s *stubStorage) GetReasonerPerformanceMetrics(ctx context.Context, reasonerID string) (*types.ReasonerPerformanceMetrics, error) {
@@ -268,6 +334,10 @@ func (s *stubStorage) GetWorkflowExecutionEventBus() *events.EventBus[*types.Wor
 	return nil
 }
 
+func (s *stubStorage) GetExecutionLogEventBus() *events.EventBus[*types.ExecutionLogEntry] {
+	return events.NewEventBus[*types.ExecutionLogEntry]()
+}
+
 // DID Registry operations
 func (s *stubStorage) StoreDID(ctx context.Context, did string, didDocument, publicKey, privateKeyRef, derivationPath string) error {
 	return nil
@@ -321,6 +391,9 @@ func (s *stubStorage) StoreAgentDIDWithComponents(ctx context.Context, agentID, 
 func (s *stubStorage) StoreExecutionVC(ctx context.Context, vcID, executionID, workflowID, sessionID, issuerDID, targetDID, callerDID, inputHash, outputHash, status string, vcDocument []byte, signature string, storageURI string, documentSizeBytes int64) error {
 	return nil
 }
+func (s *stubStorage) StoreExecutionVCRecord(ctx context.Context, vc *types.ExecutionVC) error {
+	return nil
+}
 func (s *stubStorage) GetExecutionVC(ctx context.Context, vcID string) (*types.ExecutionVCInfo, error) {
 	return nil, nil
 }
@@ -364,6 +437,53 @@ func (s *stubStorage) GetDeadLetterQueue(ctx context.Context, limit, offset int)
 }
 func (s *stubStorage) DeleteFromDeadLetterQueue(ctx context.Context, ids []int64) error { return nil }
 func (s *stubStorage) ClearDeadLetterQueue(ctx context.Context) error                   { return nil }
+
+// DID document operations
+func (s *stubStorage) StoreDIDDocument(ctx context.Context, record *types.DIDDocumentRecord) error {
+	return nil
+}
+func (s *stubStorage) GetDIDDocument(ctx context.Context, did string) (*types.DIDDocumentRecord, error) {
+	return nil, nil
+}
+func (s *stubStorage) GetDIDDocumentByAgentID(ctx context.Context, agentID string) (*types.DIDDocumentRecord, error) {
+	return nil, nil
+}
+func (s *stubStorage) RevokeDIDDocument(ctx context.Context, did string) error { return nil }
+func (s *stubStorage) ListDIDDocuments(ctx context.Context) ([]*types.DIDDocumentRecord, error) {
+	return nil, nil
+}
+
+// Agent lifecycle stub
+func (s *stubStorage) ListAgentsByLifecycleStatus(ctx context.Context, status types.AgentLifecycleStatus) ([]*types.AgentNode, error) {
+	return nil, nil
+}
+
+// Access policy stubs
+func (s *stubStorage) GetAccessPolicies(ctx context.Context) ([]*types.AccessPolicy, error) {
+	return nil, nil
+}
+func (s *stubStorage) GetAccessPolicyByID(ctx context.Context, id int64) (*types.AccessPolicy, error) {
+	return nil, nil
+}
+func (s *stubStorage) CreateAccessPolicy(ctx context.Context, policy *types.AccessPolicy) error {
+	return nil
+}
+func (s *stubStorage) UpdateAccessPolicy(ctx context.Context, policy *types.AccessPolicy) error {
+	return nil
+}
+func (s *stubStorage) DeleteAccessPolicy(ctx context.Context, id int64) error { return nil }
+
+// Agent Tag VC stubs
+func (s *stubStorage) StoreAgentTagVC(ctx context.Context, agentID, agentDID, vcID, vcDocument, signature string, issuedAt time.Time, expiresAt *time.Time) error {
+	return nil
+}
+func (s *stubStorage) GetAgentTagVC(ctx context.Context, agentID string) (*types.AgentTagVCRecord, error) {
+	return nil, nil
+}
+func (s *stubStorage) RevokeAgentTagVC(ctx context.Context, agentID string) error { return nil }
+func (s *stubStorage) ListAgentTagVCs(ctx context.Context) ([]*types.AgentTagVCRecord, error) {
+	return nil, nil
+}
 
 // stubPayloadStore implements services.PayloadStore
 type stubPayloadStore struct{}
@@ -583,4 +703,41 @@ func TestUnregisterAgentFromMonitoringResponses(t *testing.T) {
 		srv.unregisterAgentFromMonitoring(c)
 		require.Equal(t, http.StatusOK, w.Code)
 	})
+}
+
+// Trigger plugin system stubs — interface fillers for the test mock; not exercised.
+func (s *stubStorage) CreateTrigger(context.Context, *types.Trigger) error        { return nil }
+func (s *stubStorage) GetTrigger(context.Context, string) (*types.Trigger, error) { return nil, nil }
+func (s *stubStorage) ListTriggers(context.Context, string, string) ([]*types.Trigger, error) {
+	return nil, nil
+}
+func (s *stubStorage) UpdateTrigger(context.Context, *types.Trigger) error { return nil }
+func (s *stubStorage) DeleteTrigger(context.Context, string) error         { return nil }
+func (s *stubStorage) UpsertCodeManagedTrigger(context.Context, *types.Trigger) (string, error) {
+	return "", nil
+}
+func (s *stubStorage) MarkOrphanedTriggers(context.Context, string, []string) error  { return nil }
+func (s *stubStorage) SetTriggerOverride(context.Context, string, bool, bool) error  { return nil }
+func (s *stubStorage) ConvertTriggerToUIManaged(context.Context, string) error       { return nil }
+func (s *stubStorage) InsertInboundEvent(context.Context, *types.InboundEvent) error { return nil }
+func (s *stubStorage) InboundEventExistsByIdempotency(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+func (s *stubStorage) GetInboundEvent(context.Context, string) (*types.InboundEvent, error) {
+	return nil, nil
+}
+func (s *stubStorage) ListInboundEvents(context.Context, string, int) ([]*types.InboundEvent, error) {
+	return nil, nil
+}
+func (s *stubStorage) MarkInboundEventProcessed(context.Context, string, string, string, string) error {
+	return nil
+}
+func (m *stubStorage) SetInboundEventDispatchedWorkflow(context.Context, string, string) error {
+	return nil
+}
+func (m *stubStorage) GetInboundEventByWorkflowID(context.Context, string) (*types.InboundEvent, error) {
+	return nil, nil
+}
+func (s *stubStorage) TriggerMetrics(context.Context) (*types.TriggerMetrics, error) {
+	return &types.TriggerMetrics{}, nil
 }

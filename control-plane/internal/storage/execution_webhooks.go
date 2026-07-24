@@ -59,7 +59,7 @@ func (ls *LocalStorage) RegisterExecutionWebhook(ctx context.Context, webhook *t
 			last_attempt_at = excluded.last_attempt_at,
 			last_error = excluded.last_error,
 			updated_at = excluded.updated_at
-	`, webhook.ExecutionID, webhook.URL, secret, headersJSON, types.ExecutionWebhookStatusPending, nextAttempt, now, now)
+	`, webhook.ExecutionID, webhook.URL, secret, headersJSON, webhook.Status, nextAttempt, now, now)
 	if err != nil {
 		return fmt.Errorf("register execution webhook: %w", err)
 	}

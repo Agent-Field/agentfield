@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/Agent-Field/agentfield/sdk/go/agent"
 )
@@ -32,6 +33,7 @@ func main() {
 		Version:       "1.0.0",
 		AgentFieldURL: agentFieldURL, // optional for CLI-only
 		Token:         os.Getenv("AGENTFIELD_TOKEN"),
+		InternalToken: strings.TrimSpace(os.Getenv("AGENTFIELD_AUTHORIZATION_INTERNAL_TOKEN")),
 		ListenAddress: listenAddr,
 		PublicURL:     publicURL,
 		CLIConfig: &agent.CLIConfig{
@@ -132,6 +134,17 @@ func main() {
 			fmt.Println(result)
 		}),
 	)
+
+	go func() {
+		t := time.NewTicker(3 * time.Second)
+		defer t.Stop()
+		n := 0
+		for range t.C {
+			log.Printf("[%s] demo stdout-class log %d", nodeID, n)
+			_, _ = fmt.Fprintf(os.Stderr, "[%s] demo stderr line %d\n", nodeID, n)
+			n++
+		}
+	}()
 
 	if err := hello.Run(context.Background()); err != nil {
 		if cliErr, ok := err.(*agent.CLIError); ok {

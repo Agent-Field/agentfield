@@ -3,6 +3,56 @@ import { Time, DataBase } from "@/components/ui/icon-bridge";
 import { cn } from "../../lib/utils";
 
 /**
+ * Format milliseconds into human-readable duration string.
+ * Examples: "230ms", "42s", "3m 28s", "1h 2m", "1d 2h"
+ */
+export function formatDurationHumanReadable(ms: number | undefined | null): string {
+  if (ms === undefined || ms === null || ms <= 0) return "—";
+
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+
+  const totalSeconds = Math.floor(ms / 1000);
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+/**
+ * Live elapsed duration display for running items.
+ * Computes elapsed time from startedAt and ticks every second.
+ */
+interface LiveElapsedDurationProps {
+  startedAt: string;
+  className?: string;
+}
+
+export function LiveElapsedDuration({ startedAt, className }: LiveElapsedDurationProps) {
+  const [elapsed, setElapsed] = React.useState(() => Date.now() - new Date(startedAt).getTime());
+
+  React.useEffect(() => {
+    setElapsed(Date.now() - new Date(startedAt).getTime());
+
+    const interval = setInterval(() => {
+      setElapsed(Date.now() - new Date(startedAt).getTime());
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [startedAt]);
+
+  return (
+    <span className={cn("tabular-nums", className)}>
+      {formatDurationHumanReadable(elapsed)}
+    </span>
+  );
+}
+
+/**
  * Reusable data formatting components for consistent data display
  * across the AgentField application. These components ensure uniform
  * formatting of timestamps, durations, file sizes, and other common data types.

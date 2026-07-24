@@ -95,6 +95,42 @@ class Audio(BaseModel):
             raise ImportError("URL download requires requests: pip install requests")
 
 
+class Video(BaseModel):
+    """Represents video content in a multimodal prompt."""
+
+    type: Literal["video_url"] = "video_url"
+    video_url: dict = Field(
+        ...,
+        description="Video input data with a 'url' field containing an http(s) URL or data URL.",
+    )
+
+    @classmethod
+    def from_file(cls, file_path: Union[str, Path]) -> "Video":
+        """Create Video from local file by converting to a base64 data URL."""
+        file_path = Path(file_path)
+        if not file_path.exists():
+            raise FileNotFoundError(f"Video file not found: {file_path}")
+
+        with open(file_path, "rb") as f:
+            video_data = base64.b64encode(f.read()).decode()
+
+        ext = file_path.suffix.lower()
+        mime_types = {
+            ".mp4": "video/mp4",
+            ".mpeg": "video/mpeg",
+            ".mpg": "video/mpeg",
+            ".mov": "video/quicktime",
+            ".webm": "video/webm",
+        }
+        mime_type = mime_types.get(ext, "video/mp4")
+        return cls(video_url={"url": f"data:{mime_type};base64,{video_data}"})
+
+    @classmethod
+    def from_url(cls, url: str) -> "Video":
+        """Create Video from URL."""
+        return cls(video_url={"url": url})
+
+
 class File(BaseModel):
     """Represents a generic file content in a multimodal prompt."""
 
@@ -132,7 +168,7 @@ class File(BaseModel):
 
 
 # Union type for all multimodal content types
-MultimodalContent = Union[Text, Image, Audio, File]
+MultimodalContent = Union[Text, Image, Audio, Video, File]
 
 
 # Convenience functions for creating multimodal content
@@ -159,6 +195,16 @@ def audio_from_file(file_path: Union[str, Path], format: Optional[str] = None) -
 def audio_from_url(url: str, format: str = "wav") -> Audio:
     """Create audio content from URL."""
     return Audio.from_url(url, format)
+
+
+def video_from_file(file_path: Union[str, Path]) -> Video:
+    """Create video content from local file."""
+    return Video.from_file(file_path)
+
+
+def video_from_url(url: str) -> Video:
+    """Create video content from URL."""
+    return Video.from_url(url)
 
 
 def file_from_path(

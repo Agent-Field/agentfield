@@ -7,7 +7,18 @@ import asyncio
 import functools
 import inspect
 import time
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    ParamSpec,
+    TypeVar,
+    Union,
+    overload,
+)
 
 from agentfield.logger import log_warn
 
@@ -18,45 +29,102 @@ from .execution_context import (
     reset_execution_context,
 )
 from .agent_registry import get_current_agent_instance
+from .decorator_metadata import (
+    code_origin,
+    resolve_reasoner_metadata,
+    stage_trigger,
+)
+from .triggers import EventTrigger, ScheduleTrigger, Trigger
 from .types import ReasonerDefinition
 from .pydantic_utils import convert_function_args, should_convert_args
 from pydantic import ValidationError
 
+# Type variables for decorator signature preservation
+F = TypeVar("F", bound=Callable[..., Any])
+P = ParamSpec("P")
+T = TypeVar("T")
+R = TypeVar("R")
 
+
+@overload
 def reasoner(
-    func=None,
+    func: Callable[P, Awaitable[T]],
     *,
     path: Optional[str] = None,
     tags: Optional[List[str]] = None,
     description: Optional[str] = None,
     track_workflow: bool = True,
-    **kwargs,
-):
-    """
-    Enhanced reasoner decorator with automatic workflow tracking and full feature support.
+    triggers: Optional[List[Trigger]] = None,
+    accepts_webhook: Optional[Union[bool, str]] = None,
+    **kwargs: Any,
+) -> Callable[P, Awaitable[T]]: ...
 
-    Supports both:
-    @reasoner                           # Default: track_workflow=True
-    @reasoner(track_workflow=False)     # Explicit: disable tracking
-    @reasoner(path="/custom/path")      # Custom endpoint path
-    @reasoner(tags=["ai", "nlp"])       # Tags for organization
-    @reasoner(description="...")        # Custom description
+
+@overload
+def reasoner(
+    func: None = None,
+    *,
+    path: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    description: Optional[str] = None,
+    track_workflow: bool = True,
+    triggers: Optional[List[Trigger]] = None,
+    accepts_webhook: Optional[Union[bool, str]] = None,
+    **kwargs: Any,
+) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Awaitable[T]]]: ...
+
+
+def reasoner(
+    func: Any = None,
+    *,
+    path: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    description: Optional[str] = None,
+    track_workflow: bool = True,
+    triggers: Optional[List[Trigger]] = None,
+    accepts_webhook: Optional[Union[bool, str]] = None,
+    **kwargs: Any,
+):
+    """Enhanced reasoner decorator with automatic workflow tracking and triggers.
+
+    Examples:
+        @reasoner
+        async def hello(input, ctx): ...
+
+        @reasoner(tags=["payments"])
+        @reasoner(triggers=[EventTrigger(source="stripe", types=["payment_intent.succeeded"], secret_env="STRIPE_SECRET")])
+        async def handle_payment(input, ctx): ...
+
+        # Sugar (desugars to triggers=[...] internally):
+        @reasoner()
+        @on_schedule("*/5 * * * *")
+        async def poll(input, ctx): ...
+
+        # Explicitly opt into/out of webhook input:
+        @reasoner(accepts_webhook=True)
+        async def webhook_ready(input, ctx): ...
+
+        @reasoner(accepts_webhook=False)
+        async def not_for_webhooks(input, ctx): ...
 
     Args:
-        func: The function to decorate (when used without parentheses)
-        path: Custom API endpoint path for this reasoner
-        tags: List of tags for organizing and categorizing reasoners
-        description: Description of what this reasoner does
-        track_workflow: Whether to enable automatic workflow tracking (default: True)
-        **kwargs: Additional metadata to store with the reasoner
-
-    Returns:
-        Decorated function with workflow tracking capabilities and full metadata support
+        triggers: Typed trigger bindings (EventTrigger / ScheduleTrigger) that
+            cause this reasoner to fire when the named external Source emits
+            a matching event. The control plane upserts a code-managed Trigger
+            row per binding at agent registration time.
+        path: Custom API endpoint path.
+        tags: Tags for grouping and authorization.
+        description: Human-readable description (defaults to the docstring).
+        track_workflow: Whether to enable automatic workflow tracking.
+        accepts_webhook: Controls whether UI-managed triggers can invoke this reasoner.
+            True = explicitly opt in; False = explicitly refuse; None (default) = auto-detect
+            from triggers (True if any declared) or default to "warn".
+        **kwargs: Additional metadata stored on the function.
     """
 
-    def decorator(f: Callable) -> Callable:
+    def decorator(f: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T]]:
         @functools.wraps(f)
-        async def wrapper(*args, **kwargs):
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
             if track_workflow:
                 # Execute with automatic workflow tracking
                 return await _execute_with_tracking(f, *args, **kwargs)
@@ -68,15 +136,23 @@ def reasoner(
                     return f(*args, **kwargs)
 
         # Store comprehensive metadata on the function
-        wrapper._is_reasoner = True
-        wrapper._track_workflow = track_workflow
-        wrapper._reasoner_name = f.__name__
-        wrapper._original_func = f
-        wrapper._reasoner_path = path
-        wrapper._reasoner_tags = tags or []
-        wrapper._reasoner_description = (
+        wrapper._is_reasoner = True  # type: ignore[attr-defined]
+        wrapper._track_workflow = track_workflow  # type: ignore[attr-defined]
+        wrapper._reasoner_name = f.__name__  # type: ignore[attr-defined]
+        wrapper._original_func = f  # type: ignore[attr-defined]
+        wrapper._reasoner_path = path  # type: ignore[attr-defined]
+        wrapper._reasoner_tags = tags or []  # type: ignore[attr-defined]
+        wrapper._reasoner_description = (  # type: ignore[attr-defined]
             description or f.__doc__ or f"Reasoner: {f.__name__}"
         )
+
+        merged, resolved_accepts_webhook = resolve_reasoner_metadata(
+            f,
+            triggers=triggers,
+            accepts_webhook=accepts_webhook,
+        )
+        wrapper._reasoner_triggers = merged  # type: ignore[attr-defined]
+        wrapper._accepts_webhook = resolved_accepts_webhook  # type: ignore[attr-defined]
 
         # Store any additional metadata
         for key, value in kwargs.items():
@@ -93,7 +169,59 @@ def reasoner(
         return decorator(func)
 
 
-async def _execute_with_tracking(func: Callable, *args, **kwargs) -> Any:
+def on_event(
+    source: str,
+    *,
+    types: Optional[List[str]] = None,
+    secret_env: Optional[str] = None,
+    config: Optional[Dict[str, Any]] = None,
+) -> Callable[[Callable[P, T]], Callable[P, T]]:
+    """Sugar that stages an :class:`EventTrigger` for the next outer ``@reasoner``.
+
+    Equivalent to passing ``triggers=[EventTrigger(...)]`` on ``@reasoner``.
+    Order matters: ``@reasoner`` MUST be the outermost decorator. Use the
+    canonical ``triggers=[...]`` form when you prefer to keep all reasoner
+    config in a single place.
+    """
+
+    def decorator(func: Callable[P, T]) -> Callable[P, T]:
+        binding = EventTrigger(
+            source=source,
+            types=list(types or []),
+            secret_env=secret_env,
+            config=dict(config or {}),
+        )
+        # Capture code origin automatically
+        if not binding.code_origin:
+            binding.code_origin = code_origin(func)
+        stage_trigger(func, binding)
+        return func
+
+    return decorator
+
+
+def on_schedule(
+    cron: str, *, timezone: str = "UTC"
+) -> Callable[[Callable[P, T]], Callable[P, T]]:
+    """Sugar that stages a :class:`ScheduleTrigger` for the next outer ``@reasoner``.
+
+    Equivalent to ``triggers=[ScheduleTrigger(cron=cron, timezone=timezone)]``.
+    """
+
+    def decorator(func: Callable[P, T]) -> Callable[P, T]:
+        binding = ScheduleTrigger(cron=cron, timezone=timezone)
+        # Capture code origin automatically
+        if not binding.code_origin:
+            binding.code_origin = code_origin(func)
+        stage_trigger(func, binding)
+        return func
+
+    return decorator
+
+
+async def _execute_with_tracking(
+    func: Callable[P, R], *args: P.args, **kwargs: P.kwargs
+) -> R:
     """
     Core function that handles automatic workflow tracking for reasoner calls.
 
@@ -184,6 +312,7 @@ async def _execute_with_tracking(func: Callable, *args, **kwargs) -> Any:
                 session_id,
                 "agent",
                 reasoner_name,
+                parent_vc_id=getattr(execution_context, "parent_vc_id", None),
             )
             if did_execution_context and hasattr(
                 agent_instance, "_populate_execution_context_with_did"
@@ -231,13 +360,19 @@ async def _execute_with_tracking(func: Callable, *args, **kwargs) -> Any:
         if "execution_context" in sig.parameters:
             call_kwargs.setdefault("execution_context", execution_context)
 
+        # Phase 5: Inject trigger context (webhook metadata)
+        if "trigger" in sig.parameters:
+            call_kwargs.setdefault("trigger", execution_context.trigger)
+        if "webhook" in sig.parameters:
+            call_kwargs.setdefault("webhook", execution_context.trigger)
+
         # 🔥 NEW: Automatic Pydantic model conversion (FastAPI-like behavior)
         try:
             if should_convert_args(func):
                 converted_args, converted_kwargs = convert_function_args(
                     func, args, call_kwargs
                 )
-                args = converted_args
+                args = converted_args  # type: ignore[assignment]
                 call_kwargs = converted_kwargs
         except ValidationError as e:
             # Re-raise validation errors with context
@@ -268,9 +403,9 @@ async def _execute_with_tracking(func: Callable, *args, **kwargs) -> Any:
         )
 
         if asyncio.iscoroutinefunction(func):
-            result = await func(*args, **call_kwargs)
+            result = await func(*args, **call_kwargs)  # type: ignore[arg-type]
         else:
-            result = func(*args, **call_kwargs)
+            result = func(*args, **call_kwargs)  # type: ignore[arg-type]
 
         duration_ms = int((time.time() - start_time) * 1000)
         completion_payload = {
@@ -360,7 +495,9 @@ def _compose_event_payload(
     return event
 
 
-def on_change(pattern: Union[str, List[str]]):
+def on_change(
+    pattern: Union[str, List[str]],
+) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Awaitable[T]]]:
     """
     Decorator to mark a function as a memory event listener.
 
@@ -371,14 +508,14 @@ def on_change(pattern: Union[str, List[str]]):
         Decorated function with memory event listener metadata
     """
 
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T]]:
         @functools.wraps(func)
-        async def wrapper(*args, **kwargs):
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
             return await func(*args, **kwargs)
 
         # Attach metadata to the function
-        wrapper._memory_event_listener = True
-        wrapper._memory_event_patterns = (
+        wrapper._memory_event_listener = True  # type: ignore[attr-defined]
+        wrapper._memory_event_patterns = (  # type: ignore[attr-defined]
             pattern if isinstance(pattern, list) else [pattern]
         )
         return wrapper
@@ -505,7 +642,9 @@ async def _send_workflow_error(
             log_warn(f"Failed to emit workflow error: {exc}")
 
 
-def legacy_reasoner(reasoner_id: str, input_schema: dict, output_schema: dict):
+def legacy_reasoner(
+    reasoner_id: str, input_schema: dict, output_schema: dict
+) -> Callable[[F], F]:
     """
     Legacy reasoner decorator for backward compatibility.
 
@@ -513,15 +652,15 @@ def legacy_reasoner(reasoner_id: str, input_schema: dict, output_schema: dict):
     New code should use the enhanced @reasoner decorator.
     """
 
-    def decorator(func):
+    def decorator(func: F) -> F:
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             return func(*args, **kwargs)
 
         # Attach metadata to the function
-        wrapper._reasoner_def = ReasonerDefinition(
+        wrapper._reasoner_def = ReasonerDefinition(  # type: ignore[attr-defined]
             id=reasoner_id, input_schema=input_schema, output_schema=output_schema
         )
-        return wrapper
+        return wrapper  # type: ignore[return-value]
 
     return decorator

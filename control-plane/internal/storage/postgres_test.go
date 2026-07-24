@@ -43,9 +43,10 @@ func TestPostgresStorage_ConnectionPooling(t *testing.T) {
 	defer ls.Close(ctx)
 
 	// Test that we can create and retrieve records
+	execID := fmt.Sprintf("exec-pg-pool-%d", time.Now().UnixNano())
 	exec := &types.Execution{
-		ExecutionID: "exec-pg-1",
-		RunID:       "run-pg-1",
+		ExecutionID: execID,
+		RunID:       fmt.Sprintf("run-pg-pool-%d", time.Now().UnixNano()),
 		AgentNodeID: "agent-1",
 		ReasonerID:  "reasoner-1",
 		NodeID:      "node-1",
@@ -56,7 +57,7 @@ func TestPostgresStorage_ConnectionPooling(t *testing.T) {
 	err = ls.CreateExecutionRecord(ctx, exec)
 	require.NoError(t, err)
 
-	retrieved, err := ls.GetExecutionRecord(ctx, "exec-pg-1")
+	retrieved, err := ls.GetExecutionRecord(ctx, execID)
 	require.NoError(t, err)
 	require.NotNil(t, retrieved)
 	require.Equal(t, exec.ExecutionID, retrieved.ExecutionID)
@@ -187,8 +188,8 @@ func TestPostgresStorage_ConnectionSettings(t *testing.T) {
 
 	// Verify storage is functional
 	exec := &types.Execution{
-		ExecutionID: "exec-pg-conn",
-		RunID:       "run-pg-conn",
+		ExecutionID: fmt.Sprintf("exec-pg-conn-%d", time.Now().UnixNano()),
+		RunID:       fmt.Sprintf("run-pg-conn-%d", time.Now().UnixNano()),
 		AgentNodeID: "agent-1",
 		ReasonerID:  "reasoner-1",
 		NodeID:      "node-1",
@@ -228,12 +229,13 @@ func TestPostgresStorage_ConcurrentOperations(t *testing.T) {
 	// Create multiple executions concurrently
 	const numExecutions = 10
 	done := make(chan error, numExecutions)
+	runID := fmt.Sprintf("run-pg-concurrent-%d", time.Now().UnixNano())
 
 	for i := 0; i < numExecutions; i++ {
 		go func(id int) {
 			exec := &types.Execution{
-				ExecutionID: "exec-pg-concurrent-" + string(rune(id)),
-				RunID:       "run-pg-concurrent",
+				ExecutionID: fmt.Sprintf("exec-pg-concurrent-%d-%d", time.Now().UnixNano(), id),
+				RunID:       runID,
 				AgentNodeID: "agent-1",
 				ReasonerID:  "reasoner-1",
 				NodeID:      "node-1",
@@ -252,7 +254,7 @@ func TestPostgresStorage_ConcurrentOperations(t *testing.T) {
 
 	// Verify all executions were created
 	results, err := ls.QueryExecutionRecords(ctx, types.ExecutionFilter{
-		RunID: stringPtr("run-pg-concurrent"),
+		RunID: &runID,
 	})
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(results), numExecutions)

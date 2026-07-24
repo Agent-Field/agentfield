@@ -30,10 +30,12 @@ const {
   const makeMockProvider = (name: string) => {
     const embeddingFn = vi.fn((modelId: string) => ({ id: `${name}-embed-${modelId}` }));
     const textEmbeddingFn = vi.fn((modelId: string) => ({ id: `${name}-text-embed-${modelId}` }));
+    const chatFn = vi.fn((modelId: string) => ({ id: `${name}-chat-${modelId}` }));
     const modelFn = vi.fn((modelId: string) => ({ id: `${name}-${modelId}` })) as any;
     modelFn.embedding = embeddingFn;
     modelFn.textEmbeddingModel = textEmbeddingFn;
-    return { factory: vi.fn(() => modelFn), modelFn, embeddingFn, textEmbeddingFn };
+    modelFn.chat = chatFn;
+    return { factory: vi.fn(() => modelFn), modelFn, embeddingFn, textEmbeddingFn, chatFn };
   };
 
   return {
@@ -186,7 +188,33 @@ describe('AIClient', () => {
       expect(createOpenAIMock.factory).toHaveBeenCalledWith(
         expect.objectContaining({
           apiKey: 'test-key',
-          baseURL: 'https://openrouter.ai/api/v1'
+          baseURL: 'https://openrouter.ai/api/v1',
+          headers: {
+            'HTTP-Referer': 'https://agentfield.ai',
+            'X-OpenRouter-Title': 'AgentField AI',
+            'X-Title': 'AgentField AI'
+          }
+        })
+      );
+    });
+
+    it('uses explicit OpenRouter attribution config', async () => {
+      const client = new AIClient({
+        provider: 'openrouter',
+        apiKey: 'test-key',
+        openRouterSiteUrl: 'https://caller.example',
+        openRouterAppName: 'Caller App',
+        openRouterHeaders: { 'X-Title': 'Header Title' }
+      });
+      await client.generate('test prompt');
+
+      expect(createOpenAIMock.factory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          headers: {
+            'X-Title': 'Header Title',
+            'HTTP-Referer': 'https://caller.example',
+            'X-OpenRouter-Title': 'Caller App'
+          }
         })
       );
     });

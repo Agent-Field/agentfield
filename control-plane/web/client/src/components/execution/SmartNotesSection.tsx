@@ -29,7 +29,7 @@ export function SmartNotesSection({ execution }: SmartNotesSectionProps) {
       icon={FileText}
       defaultOpen={false}
       badge={
-        <span className="text-body-small bg-blue-500/10 text-blue-600 px-2 py-0.5 rounded">
+        <span className="text-sm text-muted-foreground bg-blue-500/10 text-blue-600 px-2 py-0.5 rounded">
           {execution.notes?.length || 0} {execution.notes?.length === 1 ? 'Note' : 'Notes'}
         </span>
       }
@@ -55,7 +55,7 @@ export function SmartNotesSection({ execution }: SmartNotesSectionProps) {
                   </div>
                 )}
               </div>
-              <span className="text-body-small">
+              <span className="text-sm text-muted-foreground">
                 {formatTimestamp(note.timestamp)}
               </span>
             </div>

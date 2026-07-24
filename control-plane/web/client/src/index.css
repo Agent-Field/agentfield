@@ -2,788 +2,188 @@
 @import "tailwindcss/components";
 @import "tailwindcss/utilities";
 
-/* Import ReactFlow styles */
+/* ReactFlow styles */
 @import "@xyflow/react/dist/style.css";
-
-/* Import Inter font for Linear-like typography */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-
-/* Import Visual Foundation System */
-@import "./styles/foundation.css";
-
-:root {
-  /* Transition system - Linear-inspired easing */
-  --transition-fast: 150ms cubic-bezier(0.23, 1, 0.32, 1);
-  --transition-base: 200ms cubic-bezier(0.23, 1, 0.32, 1);
-  --transition-slow: 300ms cubic-bezier(0.23, 1, 0.32, 1);
-  --transition-bounce: 400ms cubic-bezier(0.34, 1.56, 0.64, 1);
-
-  /* Spacing scale - Professional 4px base unit (Linear/GitHub standard) */
-  --space-0: 0;
-  --space-1: 0.25rem;  /* 4px */
-  --space-2: 0.5rem;   /* 8px */
-  --space-3: 0.75rem;  /* 12px - Professional standard */
-  --space-4: 1rem;     /* 16px - Industry standard */
-  --space-5: 1.25rem;  /* 20px */
-  --space-6: 1.5rem;   /* 24px */
-  --space-8: 2rem;     /* 32px */
-  --space-10: 2.5rem;  /* 40px */
-  --space-12: 3rem;    /* 48px */
-  --space-16: 4rem;    /* 64px */
-  --space-20: 5rem;    /* 80px */
-  --space-24: 6rem;    /* 96px */
-
-  /* Border radius scale */
-  --radius-xs: 0.125rem;  /* 2px */
-  --radius-sm: 0.25rem;   /* 4px */
-  --radius-md: 0.375rem;  /* 6px */
-  --radius-lg: 0.5rem;    /* 8px */
-  --radius-xl: 0.75rem;   /* 12px */
-  --radius-2xl: 1rem;     /* 16px */
-
-  /* Typography scale - Professional developer tool sizing */
-  --font-size-xs: 0.75rem;     /* 12px - Industry standard small */
-  --font-size-sm: 0.8125rem;   /* 13px - Professional secondary */
-  --font-size-base: 0.875rem;  /* 14px - Industry standard base */
-  --font-size-lg: 1rem;        /* 16px - Large text */
-  --font-size-xl: 1.125rem;    /* 18px - Headers */
-  --font-size-2xl: 1.25rem;    /* 20px - Large headers */
-  --font-size-3xl: 1.5rem;     /* 24px - Display text */
-  --font-size-4xl: 1.75rem;    /* 28px - Large display */
-
-  /* Line heights - Professional readability */
-  --line-height-tight: 1.15;
-  --line-height-snug: 1.2;
-  --line-height-normal: 1.2;
-  --line-height-relaxed: 1.3;
-  --line-height-loose: 1.5;
-
-  /* Font weights */
-  --font-weight-light: 300;
-  --font-weight-normal: 400;
-  --font-weight-medium: 500;
-  --font-weight-semibold: 600;
-  --font-weight-bold: 700;
-
-  /* Shadow system - Linear-inspired */
-  --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-  --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
-  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
-  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
-  --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
-  --shadow-2xl: 0 25px 50px -12px rgb(0 0 0 / 0.25);
-}
-
-/* Global styles */
-* {
-  border-color: var(--border);
-}
-
-html {
-  /* Prevent elastic scrolling on macOS */
-  overscroll-behavior: none;
-  background-color: var(--background);
-  min-height: 100vh;
-  /* Improve text rendering */
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
-  font-size: var(--font-size-base); /* Professional base size (14px) */
-  line-height: var(--line-height-normal); /* Professional 1.2 */
-  font-weight: var(--font-weight-normal);
-  color: var(--foreground);
-  background-color: var(--background);
-  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
-  font-variant-numeric: tabular-nums;
-
-  /* Prevent scroll bounce */
-  overscroll-behavior: none;
-  -webkit-overflow-scrolling: touch;
-  min-height: 100vh;
-
-  /* Ensure proper focus handling for trackpad navigation without visible outline */
-  outline: none;
-
-  /* Allow text selection by default - remove user-select: none */
-  -webkit-user-select: text;
-  -moz-user-select: text;
-  -ms-user-select: text;
-  user-select: text;
-}
-
-/* Ensure no focus outlines appear on body or main elements */
-body:focus,
-main:focus,
-[role="main"]:focus {
-  outline: none !important;
-  box-shadow: none !important;
-}
-
-#root {
-  background-color: var(--background);
-  min-height: 100vh;
-}
-
-/* Typography utilities - Professional developer tool hierarchy */
-.text-display {
-  font-size: var(--font-size-4xl); /* 28px - Professional display size */
-  line-height: var(--line-height-tight); /* 1.15 */
-  font-weight: var(--font-weight-bold);
-  letter-spacing: -0.025em;
-  color: var(--text-primary);
-}
-
-.text-heading-1 {
-  font-size: var(--font-size-3xl); /* 24px - Professional large heading */
-  line-height: var(--line-height-tight); /* 1.15 */
-  font-weight: var(--font-weight-semibold);
-  letter-spacing: -0.02em;
-  color: var(--text-primary);
-}
-
-.text-heading-2 {
-  font-size: var(--font-size-2xl); /* 20px - Professional heading */
-  line-height: var(--line-height-snug); /* 1.2 */
-  font-weight: var(--font-weight-semibold);
-  letter-spacing: -0.015em;
-  color: var(--text-primary);
-}
-
-.text-heading-3 {
-  font-size: var(--font-size-lg); /* 16px - Professional subheading */
-  line-height: var(--line-height-snug); /* 1.2 */
-  font-weight: var(--font-weight-medium);
-  color: var(--text-primary);
-}
-
-.text-body-large {
-  font-size: var(--font-size-lg); /* 16px - Professional large text */
-  line-height: var(--line-height-normal); /* 1.2 */
-  color: var(--text-secondary);
-}
-
-.text-body {
-  font-size: var(--font-size-base); /* 14px - Professional base text */
-  line-height: var(--line-height-normal); /* 1.2 */
-  color: var(--text-secondary);
-}
-
-.text-body-small {
-  font-size: var(--font-size-sm); /* 13px - Professional small text */
-  line-height: var(--line-height-normal); /* 1.2 */
-  color: var(--text-tertiary);
-}
-
-.text-caption {
-  font-size: var(--font-size-xs); /* 12px - Professional caption */
-  line-height: var(--line-height-normal); /* 1.2 */
-  color: var(--text-quaternary);
-  font-weight: var(--font-weight-medium);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.text-label {
-  font-size: 10px;
-  line-height: 1.2;
-  color: var(--text-tertiary);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-/* Interactive elements */
-.interactive-hover {
-  transition: all var(--transition-fast);
-  cursor: pointer;
-}
-
-.interactive-hover:hover {
-  background-color: var(--bg-hover);
-}
-
-.interactive-hover:active {
-  background-color: var(--bg-active);
-  transform: translateY(0.5px);
-}
-
-/* Focus styles */
-.focus-ring {
-  outline: 2px solid transparent;
-  outline-offset: 2px;
-}
-
-.focus-ring:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
-}
-
-/* Card styles */
-.card-elevated {
-  background-color: var(--card);
-  border: 1px solid var(--card-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
-  transition: all var(--transition-base);
-}
-
-.card-elevated:hover {
-  background-color: var(--card-hover);
-  border-color: var(--border);
-  box-shadow: var(--shadow-md);
-}
-
-/* Status indicators */
-.status-success {
-  color: var(--status-success-light);
-  background-color: var(--status-success-bg);
-  border-color: var(--status-success-border);
-}
-
-.status-warning {
-  color: var(--status-warning-light);
-  background-color: var(--status-warning-bg);
-  border-color: var(--status-warning-border);
-}
-
-.status-error {
-  color: var(--status-error-light);
-  background-color: var(--status-error-bg);
-  border-color: var(--status-error-border);
-}
-
-.status-info {
-  color: var(--status-info-light);
-  background-color: var(--status-info-bg);
-  border-color: var(--status-info-border);
-}
-
-.status-neutral {
-  color: var(--status-neutral-light);
-  background-color: var(--status-neutral-bg);
-  border-color: var(--status-neutral-border);
-}
-
-/* Scrollbar styling */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 3px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: var(--text-quaternary);
-}
-
-/* Tailwind scrollbar utilities for auto-expanding textarea */
-.scrollbar-thin {
-  scrollbar-width: thin;
-}
-
-.scrollbar-track-transparent {
-  scrollbar-color: transparent transparent;
-}
-
-.scrollbar-thumb-border {
-  scrollbar-color: var(--border) transparent;
-}
-
-.scrollbar-thumb-muted-foreground {
-  scrollbar-color: var(--muted-foreground) transparent;
-}
-
-/* Webkit scrollbar for auto-expanding textarea */
-.scrollbar-thin::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
-}
-
-.scrollbar-track-transparent::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.scrollbar-thumb-border::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 2px;
-}
-
-.scrollbar-thumb-border::-webkit-scrollbar-thumb:hover {
-  background: var(--muted-foreground);
-}
-
-/* Selection styling */
-::selection {
-  background-color: color-mix(in oklch, var(--accent-primary) 20%, transparent);
-  color: var(--text-primary);
-}
-
-/* Animations */
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes slideIn {
-  from {
-    opacity: 0;
-    transform: translateX(-8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-.animate-fade-in {
-  animation: fadeIn var(--transition-base) ease-out;
-}
-
-.animate-slide-in {
-  animation: slideIn var(--transition-base) ease-out;
-}
-
-/* Gradient utilities */
-.gradient-accent {
-  background: var(--accent-gradient);
-}
-
-.gradient-text {
-  background: var(--accent-gradient);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-/* Line clamp utilities for text truncation */
-.line-clamp-1 {
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 1;
-}
-
-.line-clamp-2 {
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.line-clamp-3 {
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-}
-
-.line-clamp-none {
-  overflow: visible;
-  display: block;
-  -webkit-box-orient: horizontal;
-  -webkit-line-clamp: none;
-}
-
-/* Text selection utilities */
-.select-none {
-  -webkit-user-select: none;
-  -moz-user-select: none;
-  -ms-user-select: none;
-  user-select: none;
-}
-
-.select-text {
-  -webkit-user-select: text;
-  -moz-user-select: text;
-  -ms-user-select: text;
-  user-select: text;
-}
-
-.select-all {
-  -webkit-user-select: all;
-  -moz-user-select: all;
-  -ms-user-select: all;
-  user-select: all;
-}
-
-.select-auto {
-  -webkit-user-select: auto;
-  -moz-user-select: auto;
-  -ms-user-select: auto;
-  user-select: auto;
-}
-
-/* Apply select-none to interactive elements that shouldn't be selectable */
-button,
-[role="button"],
-.btn,
-nav,
-.nav,
-.navbar,
-.sidebar,
-.menu,
-.dropdown,
-.tooltip,
-.modal-header,
-.tab,
-.tabs,
-.pagination,
-.breadcrumb,
-.badge,
-.chip,
-.tag,
-.icon,
-.logo,
-.avatar {
-  -webkit-user-select: none;
-  -moz-user-select: none;
-  -ms-user-select: none;
-  user-select: none;
-}
-
-/* Ensure text content areas are selectable */
-p,
-span,
-div[role="text"],
-.text-content,
-.content,
-.description,
-.message,
-.comment,
-.note,
-.body,
-.summary,
-.details,
-pre,
-code,
-.code,
-.code-block,
-table td,
-.table-cell,
-.data-cell,
-.value,
-.label-text,
-.form-text,
-.help-text,
-.error-text,
-.success-text,
-.warning-text,
-.info-text {
-  -webkit-user-select: text;
-  -moz-user-select: text;
-  -ms-user-select: text;
-  user-select: text;
-}
 
 @layer base {
   :root {
-    /* Core palette */
-    --background: oklch(0.9900 0 0);
-    --foreground: oklch(0 0 0);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0 0 0);
-    --popover: oklch(0.9900 0 0);
-    --popover-foreground: oklch(0 0 0);
-    --primary: oklch(0 0 0);
-    --primary-foreground: oklch(1 0 0);
-    --secondary: oklch(0.9400 0 0);
-    --secondary-foreground: oklch(0 0 0);
-    --muted: oklch(0.9700 0 0);
-    --muted-foreground: oklch(0.4400 0 0);
-    --accent: oklch(0.9400 0 0);
-    --accent-foreground: oklch(0 0 0);
-    --destructive: oklch(0.6300 0.1900 23.0300);
-    --destructive-foreground: oklch(1 0 0);
-    --primary-hover: color-mix(in oklch, var(--primary) 85%, var(--background) 15%);
-    --secondary-hover: color-mix(in oklch, var(--secondary) 92%, var(--foreground) 8%);
-    --border: oklch(0.9200 0 0);
-    --input: oklch(0.9400 0 0);
-    --ring: oklch(0 0 0);
-    --chart-1: oklch(0.8100 0.1700 75.3500);
-    --chart-2: oklch(0.5500 0.2200 264.5300);
-    --chart-3: oklch(0.7200 0 0);
-    --chart-4: oklch(0.9200 0 0);
-    --chart-5: oklch(0.5600 0 0);
     --radius: 0.5rem;
-    --sidebar: oklch(0.9900 0 0);
-    --sidebar-foreground: oklch(0 0 0);
-    --sidebar-primary: oklch(0 0 0);
-    --sidebar-primary-foreground: oklch(1 0 0);
-    --sidebar-accent: oklch(0.9400 0 0);
-    --sidebar-accent-foreground: oklch(0 0 0);
-    --sidebar-border: oklch(0.9400 0 0);
-    --sidebar-ring: oklch(0 0 0);
-    --font-sans: Geist, sans-serif;
-    --font-serif: Georgia, serif;
-    --font-mono: Geist Mono, monospace;
-    --shadow-color: hsl(0 0% 0%);
-    --shadow-opacity: 0.18;
-    --shadow-x: 0px;
-    --shadow-y: 1px;
-    --shadow-blur: 2px;
-    --shadow-spread: 0px;
-    --shadow-2xs: 0px 1px 2px 0px hsl(0 0% 0% / 0.09);
-    --shadow-xs: 0px 1px 2px 0px hsl(0 0% 0% / 0.09);
-    --shadow-sm: 0px 1px 2px 0px hsl(0 0% 0% / 0.18), 0px 1px 2px -1px hsl(0 0% 0% / 0.18);
-    --shadow: 0px 1px 2px 0px hsl(0 0% 0% / 0.18), 0px 1px 2px -1px hsl(0 0% 0% / 0.18);
-    --shadow-md: 0px 1px 2px 0px hsl(0 0% 0% / 0.18), 0px 2px 4px -1px hsl(0 0% 0% / 0.18);
-    --shadow-lg: 0px 1px 2px 0px hsl(0 0% 0% / 0.18), 0px 4px 6px -1px hsl(0 0% 0% / 0.18);
-    --shadow-xl: 0px 1px 2px 0px hsl(0 0% 0% / 0.18), 0px 8px 10px -1px hsl(0 0% 0% / 0.18);
-    --shadow-2xl: 0px 1px 2px 0px hsl(0 0% 0% / 0.45);
-    --tracking-normal: 0em;
-    --spacing: 0.25rem;
 
-    /* Aliases & derived tokens */
-    --sidebar-background: var(--sidebar);
-    --sidebar-muted: color-mix(in oklch, var(--sidebar) 88%, var(--sidebar-foreground) 12%);
-    --sidebar-hover: color-mix(in oklch, var(--sidebar) 82%, var(--sidebar-foreground) 18%);
-    --sidebar-active-bg: color-mix(in oklch, var(--sidebar) 76%, var(--sidebar-foreground) 24%);
+    /* Figma / shadcn create kit alignment (see docs/FIGMA_SHADCN_AUDIT.md) */
+    --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.1);
+    --command-list-max-height: 18.75rem; /* 300px */
 
-    --bg-primary: var(--background);
-    --bg-secondary: var(--secondary);
-    --bg-tertiary: var(--muted);
-    --bg-elevated: color-mix(in oklch, var(--background) 88%, var(--foreground) 12%);
-    --bg-overlay: color-mix(in oklch, var(--background) 82%, var(--foreground) 18%);
-    --bg-hover: color-mix(in oklch, var(--background) 78%, var(--foreground) 22%);
-    --bg-active: color-mix(in oklch, var(--background) 70%, var(--foreground) 30%);
-    --row-hover-bg: color-mix(in oklch, var(--foreground) 18%, var(--background) 82%);
-    --dark-row-hover-bg: color-mix(in oklch, var(--foreground) 12%, var(--background) 88%);
+    /*
+     * Theme knobs (change these to re-tint the whole app).
+     * --shell-*  = neutral slate chrome (backgrounds, borders, sidebar gray).
+     * --brand-*  = product accent (logo, focus rings, sidebar primary in dark).
+     */
+    --shell-h: 222.2;
+    --shell-s: 14%;
+    --brand-h: 224.3;
+    --brand-s: 76.3%;
+    --brand-l: 48%;
 
-    --text-primary: var(--foreground);
-    --text-secondary: var(--muted-foreground);
-    --text-tertiary: color-mix(in oklch, var(--muted-foreground) 78%, transparent);
-    --text-quaternary: color-mix(in oklch, var(--muted-foreground) 64%, transparent);
-    --text-disabled: color-mix(in oklch, var(--muted-foreground) 38%, transparent);
-    --text-inverse: color-mix(in oklch, var(--background) 10%, var(--foreground) 90%);
+    --background: 0 0% 100%;
+    --foreground: var(--shell-h) 47.4% 11.2%;
+    --card: 0 0% 100%;
+    --card-foreground: var(--shell-h) 47.4% 11.2%;
+    --popover: 0 0% 100%;
+    --popover-foreground: var(--shell-h) 47.4% 11.2%;
+    --primary: var(--shell-h) 47.4% 11.2%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: var(--shell-h) 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 210 40% 96.1%;
+    --accent-foreground: var(--shell-h) 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: var(--shell-h) 47.4% 11.2%;
+    --chart-1: 12 76% 61%;
+    --chart-2: 173 58% 39%;
+    --chart-3: 197 37% 24%;
+    --chart-4: 43 74% 66%;
+    --chart-5: 27 87% 67%;
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: var(--shell-h) 35% 26%;
+    --sidebar-primary: var(--shell-h) 47.4% 11.2%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: var(--shell-h) 40% 96.1%;
+    --sidebar-accent-foreground: var(--shell-h) 47.4% 11.2%;
+    --sidebar-border: var(--shell-h) 32% 91%;
+    --sidebar-ring: var(--brand-h) var(--brand-s) var(--brand-l);
+    --sidebar-logo: var(--brand-h) var(--brand-s) var(--brand-l);
+    --sidebar-logo-foreground: 0 0% 100%;
+    /* shadcn sidebar menu button hover/active (see ui/sidebar.tsx) */
+    --sidebar-hover: hsl(var(--sidebar-accent));
+    --sidebar-active-bg: hsl(var(--sidebar-accent));
 
-    --accent-primary: var(--primary);
-    --accent-secondary: var(--chart-1);
-    --accent-primary-hover: color-mix(in oklch, var(--accent-primary) 88%, var(--background) 12%);
-    --accent-gradient: linear-gradient(135deg, var(--primary), var(--chart-1));
+    /* Status colors (domain-specific extension) */
+    --status-success: 142 76% 36%;
+    --status-warning: 38 92% 50%;
+    --status-error: 0 84.2% 60.2%;
+    --status-info: 199 89% 48%;
 
-    --border-primary: var(--border);
-    --border-secondary: color-mix(in oklch, var(--border) 82%, transparent);
-    --border-tertiary: color-mix(in oklch, var(--border) 68%, transparent);
-    --input-focus: var(--ring);
-    --ring-offset: color-mix(in oklch, var(--background) 94%, var(--ring) 6%);
-
-    /* Status palette */
-    --status-success: #16a34a;
-    --status-success-light: #22c55e;
-    --status-success-bg: color-mix(in srgb, #16a34a 16%, transparent);
-    --status-success-border: color-mix(in srgb, #16a34a 38%, transparent);
-
-    --status-warning: #f59e0b;
-    --status-warning-light: #fbbf24;
-    --status-warning-bg: color-mix(in srgb, #f59e0b 18%, transparent);
-    --status-warning-border: color-mix(in srgb, #f59e0b 40%, transparent);
-
-    --status-error: #ef4444;
-    --status-error-light: #f87171;
-    --status-error-bg: color-mix(in srgb, #ef4444 16%, transparent);
-    --status-error-border: color-mix(in srgb, #ef4444 36%, transparent);
-
-    --status-info: #2563eb;
-    --status-info-light: #60a5fa;
-    --status-info-bg: color-mix(in srgb, #2563eb 18%, transparent);
-    --status-info-border: color-mix(in srgb, #2563eb 38%, transparent);
-
-    --status-neutral: #737373;
-    --status-neutral-light: #9ca3af;
-    --status-neutral-bg: color-mix(in srgb, #737373 14%, transparent);
-    --status-neutral-border: color-mix(in srgb, #737373 34%, transparent);
-
-    --status-running: #2563eb;
-    --status-pending: #fbbf24;
-    --status-failed: #ef4444;
-
-    --nav-background: var(--sidebar);
-    --nav-elevated: color-mix(in oklch, var(--sidebar) 86%, var(--sidebar-foreground) 14%);
-    --nav-border: color-mix(in oklch, var(--sidebar-border) 78%, transparent);
-    --nav-text-primary: var(--sidebar-foreground);
-    --nav-text-secondary: color-mix(in oklch, var(--sidebar-foreground) 72%, var(--sidebar) 28%);
-    --nav-text-tertiary: color-mix(in oklch, var(--sidebar-foreground) 58%, var(--sidebar) 42%);
-    --nav-text-active: var(--sidebar-primary-foreground);
-    --nav-text-hover: color-mix(in oklch, var(--sidebar-foreground) 80%, var(--sidebar) 20%);
-    --nav-active-bg: var(--sidebar-active-bg);
-    --nav-hover-bg: var(--sidebar-hover);
-    --nav-focus-ring: var(--ring);
-    --hover-overlay: color-mix(in oklch, var(--bg-overlay) 85%, transparent);
-    --dark-hover-overlay: color-mix(in oklch, var(--bg-overlay) 80%, var(--foreground) 20%);
+    /* JSON / code preview syntax (shared: runs hover preview, step detail, modals) */
+    --code-json-punctuation: 215 16% 47%;
+    --code-json-key: 221 83% 53%;
+    --code-json-string: 142 76% 30%;
+    --code-json-number: 32 95% 40%;
+    --code-json-boolean: 271 81% 48%;
+    --code-json-null: 0 72% 48%;
   }
 
   .dark {
-    /* CRITICAL CHANGES - Professional dark mode (10% background, not pure black) */
-    --background: oklch(0.1000 0 0);
-    --foreground: oklch(0.9600 0 0);
-    --card: oklch(0.1200 0 0);
-    --card-foreground: oklch(0.9600 0 0);
-    --popover: oklch(0.1400 0 0);
-    --popover-foreground: oklch(0.9600 0 0);
-    --primary: oklch(1 0 0);
-    --primary-foreground: oklch(0 0 0);
-    --secondary: oklch(0.2500 0 0);
-    --secondary-foreground: oklch(1 0 0);
-    --muted: oklch(0.1800 0 0);
-    --muted-foreground: oklch(0.6800 0 0);
-    --accent: oklch(0.2600 0 0);
-    --accent-foreground: oklch(1 0 0);
-    --destructive: oklch(0.6900 0.2000 23.9100);
-    --destructive-foreground: oklch(0 0 0);
-    --primary-hover: color-mix(in oklch, var(--primary) 70%, var(--background) 30%);
-    --secondary-hover: color-mix(in oklch, var(--secondary) 78%, var(--foreground) 22%);
-    --border: oklch(0.2200 0 0);
-    --input: oklch(0.2600 0 0);
-    --ring: oklch(0.7200 0 0);
-    --chart-1: oklch(0.8100 0.1700 75.3500);
-    --chart-2: oklch(0.5800 0.2100 260.8400);
-    --chart-3: oklch(0.5600 0 0);
-    --chart-4: oklch(0.4400 0 0);
-    --chart-5: oklch(0.9200 0 0);
-    --sidebar: oklch(0.1600 0 0);
-    --sidebar-foreground: oklch(0.9600 0 0);
-    --sidebar-primary: oklch(1 0 0);
-    --sidebar-primary-foreground: oklch(0 0 0);
-    --sidebar-accent: oklch(0.2600 0 0);
-    --sidebar-accent-foreground: oklch(1 0 0);
-    --sidebar-border: oklch(0.2400 0 0);
-    --sidebar-ring: oklch(0.7200 0 0);
+    /*
+     * Dark shell: one neutral family (--shell-h / --shell-s) for gutter + inset + cards.
+     * Inset main (--background) sits slightly above gutter (--sidebar-background) in lightness.
+     * Brand blue is only --brand-* (logo, sidebar-primary, rings) — not mixed into grays.
+     */
+    --shell-h: 222.2;
+    --shell-s: 14%;
+    --brand-h: 224.3;
+    --brand-s: 76.3%;
+    --brand-l: 48%;
 
-    --sidebar-background: var(--sidebar);
-    --sidebar-muted: color-mix(in oklch, var(--sidebar) 84%, var(--sidebar-foreground) 16%);
-    --sidebar-hover: color-mix(in oklch, var(--sidebar) 78%, var(--sidebar-foreground) 22%);
-    --sidebar-active-bg: color-mix(in oklch, var(--sidebar) 72%, var(--sidebar-foreground) 28%);
+    --sidebar-background: var(--shell-h) var(--shell-s) 5.4%;
+    --background: var(--shell-h) var(--shell-s) 8.6%;
+    --foreground: var(--shell-h) 8% 96%;
+    --card: var(--shell-h) var(--shell-s) 8.6%;
+    --card-foreground: var(--shell-h) 8% 96%;
+    --popover: var(--shell-h) var(--shell-s) 8.6%;
+    --popover-foreground: var(--shell-h) 8% 96%;
+    --primary: var(--shell-h) 8% 96%;
+    --primary-foreground: var(--shell-h) var(--shell-s) 8.6%;
+    --secondary: var(--shell-h) var(--shell-s) 14%;
+    --secondary-foreground: var(--shell-h) 8% 96%;
+    --muted: var(--shell-h) var(--shell-s) 14%;
+    --muted-foreground: var(--shell-h) 10% 64%;
+    --accent: var(--shell-h) var(--shell-s) 14%;
+    --accent-foreground: var(--shell-h) 8% 96%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: var(--shell-h) var(--shell-s) 18%;
+    --input: var(--shell-h) var(--shell-s) 18%;
+    --ring: var(--brand-h) var(--brand-s) var(--brand-l);
+    --chart-1: 220 70% 50%;
+    --chart-2: 160 60% 45%;
+    --chart-3: 30 80% 55%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 340 75% 55%;
+    --sidebar-foreground: var(--shell-h) 6% 94%;
+    --sidebar-primary: var(--brand-h) var(--brand-s) var(--brand-l);
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: var(--shell-h) var(--shell-s) 12%;
+    --sidebar-accent-foreground: var(--shell-h) 6% 94%;
+    --sidebar-border: var(--shell-h) var(--shell-s) 16%;
+    --sidebar-ring: var(--brand-h) var(--brand-s) var(--brand-l);
+    --sidebar-logo: var(--brand-h) var(--brand-s) var(--brand-l);
+    --sidebar-logo-foreground: 0 0% 100%;
+    --sidebar-hover: hsl(var(--sidebar-accent));
+    --sidebar-active-bg: hsl(var(--sidebar-accent));
 
-    --bg-primary: var(--background);
-    --bg-secondary: color-mix(in oklch, var(--background) 86%, var(--foreground) 14%);
-    --bg-tertiary: color-mix(in oklch, var(--background) 80%, var(--foreground) 20%);
-    --bg-elevated: color-mix(in oklch, var(--background) 74%, var(--foreground) 26%);
-    --bg-overlay: color-mix(in oklch, var(--background) 70%, var(--foreground) 30%);
-    --bg-hover: color-mix(in oklch, var(--background) 66%, var(--foreground) 34%);
-    --bg-active: color-mix(in oklch, var(--background) 62%, var(--foreground) 38%);
-    --row-hover-bg: color-mix(in oklch, var(--foreground) 28%, var(--background) 72%);
-    --dark-row-hover-bg: color-mix(in oklch, var(--foreground) 36%, var(--background) 64%);
+    /* Status colors dark mode */
+    --status-success: 142 72% 29%;
+    --status-warning: 32 95% 44%;
+    --status-error: 0 62.8% 30.6%;
+    --status-info: 199 84% 55%;
 
-    --text-primary: var(--foreground);
-    --text-secondary: var(--muted-foreground);
-    --text-tertiary: color-mix(in oklch, var(--muted-foreground) 80%, transparent);
-    --text-quaternary: color-mix(in oklch, var(--muted-foreground) 66%, transparent);
-    --text-disabled: color-mix(in oklch, var(--muted-foreground) 42%, transparent);
-    --text-inverse: color-mix(in oklch, var(--background) 15%, var(--foreground) 85%);
-
-    --border-primary: var(--border);
-    --border-secondary: color-mix(in oklch, var(--border) 72%, transparent);
-    --border-tertiary: color-mix(in oklch, var(--border) 58%, transparent);
-    --input-focus: var(--ring);
-    --ring-offset: color-mix(in oklch, var(--background) 78%, var(--ring) 22%);
-
-    --nav-background: var(--sidebar);
-    --nav-elevated: color-mix(in oklch, var(--sidebar) 70%, var(--sidebar-foreground) 30%);
-    --nav-border: color-mix(in oklch, var(--sidebar-border) 80%, transparent);
-    --nav-text-primary: var(--sidebar-foreground);
-    --nav-text-secondary: color-mix(in oklch, var(--sidebar-foreground) 72%, var(--sidebar) 28%);
-    --nav-text-tertiary: color-mix(in oklch, var(--sidebar-foreground) 58%, var(--sidebar) 42%);
-    --nav-text-active: var(--sidebar-primary-foreground);
-    --nav-text-hover: color-mix(in oklch, var(--sidebar-foreground) 80%, var(--sidebar) 20%);
-    --nav-active-bg: var(--sidebar-active-bg);
-    --nav-hover-bg: var(--sidebar-hover);
-    --nav-focus-ring: var(--ring);
-    --hover-overlay: color-mix(in oklch, var(--bg-overlay) 80%, transparent);
-    --dark-hover-overlay: color-mix(in oklch, var(--bg-overlay) 74%, var(--foreground) 26%);
+    --code-json-punctuation: 215 20% 65%;
+    --code-json-key: 199 89% 48%;
+    --code-json-string: 142 69% 58%;
+    --code-json-number: 38 92% 55%;
+    --code-json-boolean: 263 70% 75%;
+    --code-json-null: 0 91% 71%;
   }
 
-  .theme {
-    --font-sans: Geist, sans-serif;
-    --font-mono: Geist Mono, monospace;
-    --font-serif: Georgia, serif;
-    --radius: 0.5rem;
-    --tracking-tighter: calc(var(--tracking-normal) - 0.05em);
-    --tracking-tight: calc(var(--tracking-normal) - 0.025em);
-    --tracking-wide: calc(var(--tracking-normal) + 0.025em);
-    --tracking-wider: calc(var(--tracking-normal) + 0.05em);
-    --tracking-widest: calc(var(--tracking-normal) + 0.1em);
-  }
-
-  body {
-    letter-spacing: var(--tracking-normal);
-  }
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-destructive: var(--destructive);
-  --color-destructive-foreground: var(--destructive-foreground);
-  --color-border: var(--border);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
-  --color-chart-1: var(--chart-1);
-  --color-chart-2: var(--chart-2);
-  --color-chart-3: var(--chart-3);
-  --color-chart-4: var(--chart-4);
-  --color-chart-5: var(--chart-5);
-  --color-sidebar: var(--sidebar);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-ring: var(--sidebar-ring);
-
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-mono);
-  --font-serif: var(--font-serif);
-
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
-
-  --shadow-2xs: var(--shadow-2xs);
-  --shadow-xs: var(--shadow-xs);
-  --shadow-sm: var(--shadow-sm);
-  --shadow: var(--shadow);
-  --shadow-md: var(--shadow-md);
-  --shadow-lg: var(--shadow-lg);
-  --shadow-xl: var(--shadow-xl);
-  --shadow-2xl: var(--shadow-2xl);
-}
-
-@layer base {
   * {
     @apply border-border;
   }
+
+  html {
+    overscroll-behavior: none;
+  }
+
   body {
     @apply bg-background text-foreground;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+@layer components {
+  .json-hl-root {
+    color: hsl(var(--foreground) / 0.92);
+  }
+
+  .json-hl-punct {
+    color: hsl(var(--code-json-punctuation));
+  }
+
+  .json-hl-key {
+    color: hsl(var(--code-json-key));
+  }
+
+  .json-hl-string {
+    color: hsl(var(--code-json-string));
+  }
+
+  .json-hl-number {
+    color: hsl(var(--code-json-number));
+  }
+
+  .json-hl-boolean {
+    color: hsl(var(--code-json-boolean));
+  }
+
+  .json-hl-null {
+    color: hsl(var(--code-json-null));
   }
 }

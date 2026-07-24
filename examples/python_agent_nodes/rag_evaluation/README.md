@@ -2,7 +2,7 @@
 
 Multi-reasoner evaluation system for RAG-generated responses featuring adversarial debate, jury consensus, and hybrid ML+LLM verification.
 
-> **[Full Documentation](https://agentfield.ai/examples/complete-agents/rag-evaluator)** — Detailed architecture diagrams, API examples, and deployment guides.
+> **[Full Documentation](https://agentfield.ai/docs/learn/examples)** — Detailed architecture diagrams, API examples, and deployment guides.
 
 ## Features
 
@@ -94,7 +94,7 @@ The system runs four evaluation metrics in parallel:
 3. **Hallucination** - Hybrid: ML verification (fast) -> LLM escalation (uncertain cases only)
 4. **Constitutional** - Parallel principle checks -> weighted aggregation
 
-See the [documentation](https://agentfield.dev/examples/complete-agents/rag-evaluator) for detailed diagrams and explanations.
+See the [documentation](https://agentfield.ai/docs/learn/examples) for detailed diagrams and explanations.
 
 ## Endpoints
 

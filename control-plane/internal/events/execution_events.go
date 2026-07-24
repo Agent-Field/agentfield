@@ -13,11 +13,18 @@ import (
 type ExecutionEventType string
 
 const (
-	ExecutionCreated   ExecutionEventType = "execution_created"
-	ExecutionStarted   ExecutionEventType = "execution_started"
-	ExecutionUpdated   ExecutionEventType = "execution_updated"
-	ExecutionCompleted ExecutionEventType = "execution_completed"
-	ExecutionFailed    ExecutionEventType = "execution_failed"
+	ExecutionCreated          ExecutionEventType = "execution_created"
+	ExecutionStarted          ExecutionEventType = "execution_started"
+	ExecutionUpdated          ExecutionEventType = "execution_updated"
+	ExecutionCompleted        ExecutionEventType = "execution_completed"
+	ExecutionFailed           ExecutionEventType = "execution_failed"
+	ExecutionWaiting          ExecutionEventType = "execution_waiting"
+	ExecutionPaused           ExecutionEventType = "execution_paused"
+	ExecutionResumed          ExecutionEventType = "execution_resumed"
+	ExecutionCancelledEvent   ExecutionEventType = "execution_cancelled"
+	ExecutionApprovalResolved ExecutionEventType = "execution_approval_resolved"
+	ExecutionLogEntry         ExecutionEventType = "execution_log"
+	ExecutionRetried          ExecutionEventType = "execution_retried"
 )
 
 // ExecutionEvent represents an execution state change event
@@ -172,6 +179,76 @@ func PublishExecutionFailed(executionID, workflowID, agentNodeID string, data in
 		WorkflowID:  workflowID,
 		AgentNodeID: agentNodeID,
 		Status:      "failed",
+		Timestamp:   time.Now(),
+		Data:        data,
+	}
+	GlobalExecutionEventBus.Publish(event)
+}
+
+// PublishExecutionWaiting publishes an event when an execution enters the waiting state.
+func PublishExecutionWaiting(executionID, workflowID, agentNodeID string, data interface{}) {
+	event := ExecutionEvent{
+		Type:        ExecutionWaiting,
+		ExecutionID: executionID,
+		WorkflowID:  workflowID,
+		AgentNodeID: agentNodeID,
+		Status:      types.ExecutionStatusWaiting,
+		Timestamp:   time.Now(),
+		Data:        data,
+	}
+	GlobalExecutionEventBus.Publish(event)
+}
+
+// PublishExecutionPaused publishes an event when an execution is externally paused.
+func PublishExecutionPaused(executionID, workflowID, agentNodeID string, data interface{}) {
+	event := ExecutionEvent{
+		Type:        ExecutionPaused,
+		ExecutionID: executionID,
+		WorkflowID:  workflowID,
+		AgentNodeID: agentNodeID,
+		Status:      types.ExecutionStatusPaused,
+		Timestamp:   time.Now(),
+		Data:        data,
+	}
+	GlobalExecutionEventBus.Publish(event)
+}
+
+// PublishExecutionResumed publishes an event when a paused execution is resumed.
+func PublishExecutionResumed(executionID, workflowID, agentNodeID string, data interface{}) {
+	event := ExecutionEvent{
+		Type:        ExecutionResumed,
+		ExecutionID: executionID,
+		WorkflowID:  workflowID,
+		AgentNodeID: agentNodeID,
+		Status:      types.ExecutionStatusRunning,
+		Timestamp:   time.Now(),
+		Data:        data,
+	}
+	GlobalExecutionEventBus.Publish(event)
+}
+
+// PublishExecutionCancelled publishes an event when an execution is externally cancelled.
+func PublishExecutionCancelled(executionID, workflowID, agentNodeID string, data interface{}) {
+	event := ExecutionEvent{
+		Type:        ExecutionCancelledEvent,
+		ExecutionID: executionID,
+		WorkflowID:  workflowID,
+		AgentNodeID: agentNodeID,
+		Status:      types.ExecutionStatusCancelled,
+		Timestamp:   time.Now(),
+		Data:        data,
+	}
+	GlobalExecutionEventBus.Publish(event)
+}
+
+// PublishExecutionApprovalResolved publishes an event when an approval decision is received.
+func PublishExecutionApprovalResolved(executionID, workflowID, agentNodeID, newStatus string, data interface{}) {
+	event := ExecutionEvent{
+		Type:        ExecutionApprovalResolved,
+		ExecutionID: executionID,
+		WorkflowID:  workflowID,
+		AgentNodeID: agentNodeID,
+		Status:      newStatus,
 		Timestamp:   time.Now(),
 		Data:        data,
 	}

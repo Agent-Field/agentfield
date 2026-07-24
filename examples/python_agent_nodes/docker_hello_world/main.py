@@ -9,6 +9,9 @@ It is intentionally deterministic (no LLM credentials required).
 """
 
 import os
+import sys
+import threading
+import time
 
 from agentfield import Agent
 
@@ -30,7 +33,18 @@ async def demo_echo(message: str = "Hello!") -> dict:
     return {"echo": message, "node_id": app.node_id}
 
 
+def _log_heartbeat() -> None:
+    n = 0
+    node = app.node_id
+    while True:
+        print(f"[{node}] demo stdout heartbeat {n}", flush=True)
+        print(f"[{node}] demo stderr heartbeat {n}", file=sys.stderr, flush=True)
+        n += 1
+        time.sleep(3)
+
+
 if __name__ == "__main__":
+    threading.Thread(target=_log_heartbeat, daemon=True).start()
     port = int(os.getenv("PORT", "8001"))
     # For containerized runs, set AGENT_CALLBACK_URL so the control plane can call back:
     #   AGENT_CALLBACK_URL=http://<service-name>:<port>

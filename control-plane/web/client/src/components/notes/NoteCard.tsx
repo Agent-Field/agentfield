@@ -65,11 +65,11 @@ export function NoteCard({ note, onTagClick, className = "" }: NoteCardProps) {
   };
 
   return (
-    <Card className={`group card-elevated ${className}`}>
+    <Card className={`group bg-card border border-border rounded-lg shadow-sm ${className}`}>
       <CardContent className="p-4">
         {/* Header with timestamp and actions */}
         <div className="flex items-start justify-between gap-3 mb-3">
-          <div className="flex items-center gap-2 text-text-tertiary">
+          <div className="flex items-center gap-2 text-muted-foreground">
             <Time size={16} />
             <span title={formatFullTimestamp(note.timestamp)}>
               {formatTimestamp(note.timestamp)}
@@ -95,7 +95,7 @@ export function NoteCard({ note, onTagClick, className = "" }: NoteCardProps) {
 
         {/* Note message */}
         <div className="mb-3">
-          <div className="text-sm text-text-primary leading-relaxed prose prose-sm max-w-none prose-headings:text-sm prose-headings:font-semibold prose-headings:text-text-primary prose-headings:mt-3 prose-headings:mb-2 prose-h1:text-base prose-h1:font-semibold prose-h2:text-sm prose-h2:font-semibold prose-h3:text-sm prose-h3:font-medium prose-p:text-sm prose-p:text-text-primary prose-p:leading-relaxed prose-p:my-2 prose-ul:text-sm prose-ul:text-text-primary prose-ul:my-2 prose-ol:text-sm prose-ol:text-text-primary prose-ol:my-2 prose-li:text-sm prose-li:text-text-primary prose-code:text-sm prose-code:bg-bg-tertiary prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-pre:text-sm prose-pre:bg-bg-tertiary prose-pre:p-3 prose-pre:rounded prose-pre:my-3 prose-blockquote:text-sm prose-blockquote:text-text-secondary prose-blockquote:border-l-border-secondary prose-blockquote:my-3 prose-strong:text-text-primary prose-strong:font-medium prose-em:text-text-primary">
+          <div className="text-sm text-foreground leading-relaxed prose prose-sm max-w-none prose-headings:text-sm prose-headings:font-semibold prose-headings:text-foreground prose-headings:mt-3 prose-headings:mb-2 prose-h1:text-base prose-h1:font-semibold prose-h2:text-sm prose-h2:font-semibold prose-h3:text-sm prose-h3:font-medium prose-p:text-sm prose-p:text-foreground prose-p:leading-relaxed prose-p:my-2 prose-ul:text-sm prose-ul:text-foreground prose-ul:my-2 prose-ol:text-sm prose-ol:text-foreground prose-ol:my-2 prose-li:text-sm prose-li:text-foreground prose-code:text-sm prose-code:bg-muted prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-pre:text-sm prose-pre:bg-muted prose-pre:p-3 prose-pre:rounded prose-pre:my-3 prose-blockquote:text-sm prose-blockquote:text-muted-foreground prose-blockquote:border-l-border-secondary prose-blockquote:my-3 prose-strong:text-foreground prose-strong:font-medium prose-em:text-foreground">
             <ReactMarkdown>
               {note.message}
             </ReactMarkdown>

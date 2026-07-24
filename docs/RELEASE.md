@@ -196,8 +196,8 @@ agentfield-X.Y.Z.tar.gz             # Python source distribution
 # Latest stable version
 curl -fsSL https://agentfield.ai/install.sh | bash
 
-# Specific version
-VERSION=v0.1.28 curl -fsSL https://agentfield.ai/install.sh | bash
+# Specific version (VERSION must be set on the bash side of the pipe)
+curl -fsSL https://agentfield.ai/install.sh | VERSION=v0.1.28 bash
 ```
 
 ### Staging Install
@@ -206,11 +206,11 @@ VERSION=v0.1.28 curl -fsSL https://agentfield.ai/install.sh | bash
 # Latest prerelease version (using --staging flag)
 curl -fsSL https://agentfield.ai/install.sh | bash -s -- --staging
 
-# Or using environment variable
-STAGING=1 curl -fsSL https://agentfield.ai/install.sh | bash
+# Or using environment variable (must be on the bash side of the pipe)
+curl -fsSL https://agentfield.ai/install.sh | STAGING=1 bash
 
 # Specific prerelease version
-VERSION=v0.1.28-rc.4 curl -fsSL https://agentfield.ai/install.sh | bash -s -- --staging
+curl -fsSL https://agentfield.ai/install.sh | VERSION=v0.1.28-rc.4 bash -s -- --staging
 ```
 
 **Key differences when using `--staging`:**

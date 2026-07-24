@@ -35,6 +35,8 @@ class DummyAIConfig:
         self.model_limits_cache = {}
         self.audio_model = "tts-1"
         self.vision_model = "dall-e-3"
+        self.video_model = "fal-ai/minimax-video/image-to-video"
+        self.fal_api_key = None
 
     def copy(self, deep=False):
         """Create a copy of the config."""

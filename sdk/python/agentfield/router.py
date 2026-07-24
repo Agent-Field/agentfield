@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from .exceptions import AgentFieldClientError
+from .decorator_metadata import split_direct_registration_arg
+
 import asyncio
 import functools
-import inspect
 
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
@@ -39,16 +41,9 @@ class AgentRouter:
         between reasoners go through workflow tracking.
         """
 
-        direct_registration: Optional[Callable] = None
-        decorator_path = path
+        direct_registration, decorator_path = split_direct_registration_arg(path)
         decorator_tags = tags
         decorator_kwargs = dict(kwargs)
-
-        if decorator_path and (
-            inspect.isfunction(decorator_path) or inspect.ismethod(decorator_path)
-        ):
-            direct_registration = decorator_path
-            decorator_path = None
 
         router_ref = self
 
@@ -69,8 +64,8 @@ class AgentRouter:
                 return func(*args, **kw)
 
             # Store metadata on the wrapper
-            wrapper._is_router_reasoner = True
-            wrapper._original_func = func
+            wrapper._is_router_reasoner = True  # type: ignore[attr-defined]
+            wrapper._original_func = func  # type: ignore[attr-defined]
 
             router_ref.reasoners.append(
                 {
@@ -97,16 +92,9 @@ class AgentRouter:
     ) -> Callable[[Callable], Callable]:
         """Store a skill definition, merging router and local tags."""
 
-        direct_registration: Optional[Callable] = None
-        decorator_tags = tags
+        direct_registration, decorator_tags = split_direct_registration_arg(tags)
         decorator_path = path
         decorator_kwargs = dict(kwargs)
-
-        if decorator_tags and (
-            inspect.isfunction(decorator_tags) or inspect.ismethod(decorator_tags)
-        ):
-            direct_registration = decorator_tags
-            decorator_tags = None
 
         def decorator(func: Callable) -> Callable:
             merged_tags = self.tags + (decorator_tags or [])
@@ -143,19 +131,19 @@ class AgentRouter:
             The attribute/method from the attached agent
 
         Raises:
-            RuntimeError: If router is not attached to an agent
+            AgentFieldClientError: If router is not attached to an agent
             AttributeError: If the agent doesn't have the requested attribute
         """
         # Avoid infinite recursion by accessing _agent through object.__getattribute__
         try:
             agent = object.__getattribute__(self, '_agent')
         except AttributeError:
-            raise RuntimeError(
+            raise AgentFieldClientError(
                 "Router not attached to an agent. Call Agent.include_router(router) first."
             )
 
         if agent is None:
-            raise RuntimeError(
+            raise AgentFieldClientError(
                 "Router not attached to an agent. Call Agent.include_router(router) first."
             )
 
@@ -166,7 +154,7 @@ class AgentRouter:
     def app(self) -> "Agent":
         """Access the underlying Agent instance."""
         if not self._agent:
-            raise RuntimeError(
+            raise AgentFieldClientError(
                 "Router not attached to an agent. Call Agent.include_router(router) first."
             )
         return self._agent

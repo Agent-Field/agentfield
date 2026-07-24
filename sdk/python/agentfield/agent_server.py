@@ -3,6 +3,7 @@ import importlib.util
 import os
 import signal
 import urllib.parse
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import datetime
 from typing import Optional
 
@@ -10,7 +11,8 @@ import uvicorn
 from agentfield.agent_utils import AgentUtils
 from agentfield.logger import log_debug, log_error, log_info, log_success, log_warn
 from agentfield.utils import get_free_port
-from fastapi import Request
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.routing import APIRoute
 
 
@@ -25,9 +27,119 @@ class AgentServer:
             agent_instance: The Agent instance this server manages
         """
         self.agent = agent_instance
+        self._in_flight_tasks: set[asyncio.Task] = set()
+
+    def _track_task(self, task: asyncio.Task) -> asyncio.Task:
+        """Track an in-flight task until completion."""
+        self._in_flight_tasks.add(task)
+        task.add_done_callback(self._in_flight_tasks.discard)
+        return task
 
     def setup_agentfield_routes(self):
         """Setup standard routes that AgentField server expects"""
+        from agentfield.node_logs import install_stdio_tee
+
+        install_stdio_tee()
+
+        @self.agent.get("/agentfield/v1/logs")
+        async def agentfield_process_logs(request: Request):
+            """NDJSON tail/stream of captured stdout/stderr (control plane proxy)."""
+            from agentfield import node_logs
+
+            if not node_logs.logs_enabled():
+                return JSONResponse(
+                    status_code=404,
+                    content={
+                        "error": "logs_disabled",
+                        "message": "Process logs API is disabled",
+                    },
+                )
+            auth = request.headers.get("authorization") or request.headers.get(
+                "Authorization"
+            )
+            if not node_logs.verify_internal_bearer(auth):
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "error": "unauthorized",
+                        "message": "Valid Authorization Bearer required",
+                    },
+                )
+            qp = request.query_params
+            try:
+                tail_lines = int(qp.get("tail_lines") or "0")
+            except ValueError:
+                tail_lines = 0
+            try:
+                since_seq = int(qp.get("since_seq") or "0")
+            except ValueError:
+                since_seq = 0
+            follow = (qp.get("follow") or "").lower() in ("1", "true", "yes")
+            max_tail = int(os.getenv("AGENTFIELD_LOG_MAX_TAIL_LINES", "50000"))
+            if tail_lines > max_tail:
+                return JSONResponse(
+                    status_code=413,
+                    content={
+                        "error": "tail_too_large",
+                        "message": f"tail_lines exceeds max {max_tail}",
+                    },
+                )
+            if tail_lines <= 0 and since_seq <= 0 and not follow:
+                tail_lines = 200
+            gen = node_logs.iter_tail_ndjson(tail_lines, since_seq, follow)
+            return StreamingResponse(
+                gen,
+                media_type="application/x-ndjson",
+                headers={
+                    "Cache-Control": "no-store",
+                    "X-Content-Type-Options": "nosniff",
+                },
+            )
+
+        @self.agent.get("/debug/tasks")
+        async def debug_tasks():
+            """Dump every live asyncio task with its current stack frames.
+
+            Use this to find deadlocked workflows: any task whose stack stays
+            the same across two calls is suspended on an await that never
+            resolves.
+            """
+            import io
+
+            tasks = list(asyncio.all_tasks())
+            out = []
+            for t in tasks:
+                buf = io.StringIO()
+                try:
+                    name = t.get_name()
+                except Exception:
+                    name = "?"
+                buf.write(
+                    f"=== Task {name} done={t.done()} cancelled={t.cancelled()} ===\n"
+                )
+                try:
+                    coro = t.get_coro()
+                    buf.write(f"coro: {coro!r}\n")
+                except Exception:
+                    pass
+                try:
+                    stack = t.get_stack(limit=30)
+                    if stack:
+                        for frame in stack:
+                            buf.write(
+                                f"  {frame.f_code.co_filename}:{frame.f_lineno} in {frame.f_code.co_name}\n"
+                            )
+                    else:
+                        buf.write(
+                            "  <no stack — task is suspended on a Future/awaitable>\n"
+                        )
+                except Exception as e:
+                    buf.write(f"  <stack error: {e}>\n")
+                out.append(buf.getvalue())
+            return JSONResponse(
+                content={"count": len(tasks), "tasks": out},
+                media_type="application/json",
+            )
 
         @self.agent.get("/health")
         async def health():
@@ -37,58 +149,6 @@ class AgentServer:
                 "version": self.agent.version,
                 "timestamp": datetime.now().isoformat(),
             }
-
-            # Add MCP server status if manager is available
-            if self.agent.mcp_manager:
-                try:
-                    all_status = self.agent.mcp_manager.get_all_status()
-
-                    # Calculate summary statistics
-                    total_servers = len(all_status)
-                    running_servers = sum(
-                        1
-                        for server in all_status.values()
-                        if server.get("status") == "running"
-                    )
-                    failed_servers = sum(
-                        1
-                        for server in all_status.values()
-                        if server.get("status") == "failed"
-                    )
-
-                    # Determine overall health status
-                    if failed_servers > 0:
-                        health_response["status"] = "degraded"
-
-                    # Add MCP information to health response
-                    mcp_server_info = {
-                        "total": total_servers,
-                        "running": running_servers,
-                        "failed": failed_servers,
-                        "servers": {},
-                    }
-
-                    # Add individual server details
-                    for alias, server_process in all_status.items():
-                        process = server_process.get("process")
-                        server_info = {
-                            "status": server_process.get("status"),
-                            "port": server_process.get("port"),
-                            "pid": process.pid if process else None,
-                        }
-                        mcp_server_info["servers"][alias] = server_info
-
-                    health_response["mcp_servers"] = mcp_server_info
-
-                except Exception as e:
-                    if self.agent.dev_mode:
-                        log_warn(f"Error getting MCP status for health check: {e}")
-                    health_response["mcp_servers"] = {
-                        "error": "Failed to get MCP status",
-                        "total": 0,
-                        "running": 0,
-                        "failed": 0,
-                    }
 
             return health_response
 
@@ -143,7 +203,9 @@ class AgentServer:
 
                 # Schedule graceful shutdown
                 if graceful:
-                    asyncio.create_task(self._graceful_shutdown(timeout_seconds))
+                    self._track_task(
+                        asyncio.create_task(self._graceful_shutdown(timeout_seconds))
+                    )
 
                     return {
                         "status": "shutting_down",
@@ -154,7 +216,7 @@ class AgentServer:
                     }
                 else:
                     # Immediate shutdown
-                    asyncio.create_task(self._immediate_shutdown())
+                    self._track_task(asyncio.create_task(self._immediate_shutdown()))
 
                     return {
                         "status": "shutting_down",
@@ -167,7 +229,7 @@ class AgentServer:
                     log_error(f"Shutdown endpoint error: {e}")
                 return {
                     "status": "error",
-                    "message": f"Failed to initiate shutdown: {str(e)}",
+                    "message": "Failed to initiate shutdown",
                 }
 
         @self.agent.get("/status")
@@ -210,24 +272,6 @@ class AgentServer:
                     },
                 }
 
-                # Add MCP server information if available
-                if self.agent.mcp_manager:
-                    try:
-                        all_status = self.agent.mcp_manager.get_all_status()
-                        status_response["mcp_servers"] = {
-                            "total": len(all_status),
-                            "running": sum(
-                                1
-                                for s in all_status.values()
-                                if s.get("status") == "running"
-                            ),
-                            "servers": all_status,
-                        }
-                    except Exception as e:
-                        if self.agent.dev_mode:
-                            log_warn(f"Error getting MCP status: {e}")
-                        status_response["mcp_servers"] = {"error": str(e)}
-
                 return status_response
 
             except ImportError:
@@ -247,7 +291,7 @@ class AgentServer:
             except Exception as e:
                 if self.agent.dev_mode:
                     log_error(f"Status endpoint error: {e}")
-                return {"status": "error", "message": f"Failed to get status: {str(e)}"}
+                return {"status": "error", "message": "Failed to get status"}
 
         @self.agent.get("/info")
         async def node_info():
@@ -260,285 +304,71 @@ class AgentServer:
                 "registered_at": datetime.now().isoformat(),
             }
 
-        @self.agent.get("/mcp/status")
-        async def mcp_status():
-            """Get status of all MCP servers"""
-            if not self.agent.mcp_manager:
-                return {
-                    "error": "MCP Manager not available",
-                    "servers": {},
-                    "total": 0,
-                    "running": 0,
-                    "failed": 0,
-                }
-
-            # MCP functionality disabled
-            return {
-                "error": "MCP functionality disabled - old modules removed",
-                "servers": {},
-                "total": 0,
-                "running": 0,
-                "failed": 0,
-            }
-
-        @self.agent.post("/mcp/{alias}/start")
-        async def start_mcp_server(alias: str):
-            """Start a specific MCP server"""
-            if not self.agent.mcp_manager:
-                return {
-                    "success": False,
-                    "error": "MCP Process Manager not available",
-                    "alias": alias,
-                }
+        # -----------------------------------------------------------------
+        # Approval webhook — receives callbacks from the control plane when
+        # an execution's approval state resolves.  Auto-registered so every
+        # agent gets this endpoint at ``POST /webhooks/approval``.
+        # -----------------------------------------------------------------
+        @self.agent.post("/webhooks/approval")
+        async def approval_webhook(request: Request):
+            """Receive approval resolution callback from the control plane."""
+            from agentfield.client import ApprovalResult
+            import json as _json
 
             try:
-                success = await self.agent.mcp_manager.start_server_by_alias(alias)
-                if success:
-                    # Get updated status
-                    status = self.agent.mcp_manager.get_server_status(alias)
-                    return {
-                        "success": True,
-                        "message": f"MCP server '{alias}' started successfully",
-                        "alias": alias,
-                        "status": status,
-                        "timestamp": datetime.now().isoformat(),
-                    }
-                else:
-                    return {
-                        "success": False,
-                        "error": f"Failed to start MCP server '{alias}'",
-                        "alias": alias,
-                        "timestamp": datetime.now().isoformat(),
-                    }
+                body = await request.json()
+            except Exception:
+                return {"error": "invalid JSON"}, 400
 
-            except Exception as e:
+            execution_id = body.get("execution_id", "")
+            decision = body.get("decision", "")
+            feedback = body.get("feedback", "")
+            approval_request_id = body.get("approval_request_id", "")
+
+            if not execution_id or not decision:
                 return {
-                    "success": False,
-                    "error": f"Error starting MCP server '{alias}': {str(e)}",
-                    "alias": alias,
-                    "timestamp": datetime.now().isoformat(),
+                    "error": "execution_id and decision are required",
+                    "status": 400,
                 }
 
-        @self.agent.post("/mcp/{alias}/stop")
-        async def stop_mcp_server(alias: str):
-            """Stop a specific MCP server"""
-            if not self.agent.mcp_manager:
-                return {
-                    "success": False,
-                    "error": "MCP Process Manager not available",
-                    "alias": alias,
-                }
+            # Parse the raw response field (may be a JSON string or dict)
+            raw_response = None
+            resp_field = body.get("response")
+            if resp_field:
+                if isinstance(resp_field, str):
+                    try:
+                        raw_response = _json.loads(resp_field)
+                    except (ValueError, _json.JSONDecodeError):
+                        raw_response = {"raw": resp_field}
+                elif isinstance(resp_field, dict):
+                    raw_response = resp_field
 
-            try:
-                success = self.agent.mcp_manager.stop_server(alias)
-                if success:
-                    return {
-                        "success": True,
-                        "message": f"MCP server '{alias}' stopped successfully",
-                        "alias": alias,
-                        "timestamp": datetime.now().isoformat(),
-                    }
-                else:
-                    return {
-                        "success": False,
-                        "error": f"Failed to stop MCP server '{alias}' (may not be running)",
-                        "alias": alias,
-                        "timestamp": datetime.now().isoformat(),
-                    }
+            result = ApprovalResult(
+                decision=decision,
+                feedback=feedback,
+                execution_id=execution_id,
+                approval_request_id=approval_request_id,
+                raw_response=raw_response,
+            )
 
-            except Exception as e:
-                return {
-                    "success": False,
-                    "error": f"Error stopping MCP server '{alias}': {str(e)}",
-                    "alias": alias,
-                    "timestamp": datetime.now().isoformat(),
-                }
+            # Try to resolve by approval_request_id first, then by execution_id
+            resolved = False
+            if approval_request_id:
+                resolved = await self.agent._pause_manager.resolve(
+                    approval_request_id, result
+                )
+            if not resolved and execution_id:
+                resolved = await self.agent._pause_manager.resolve_by_execution_id(
+                    execution_id, result
+                )
 
-        @self.agent.post("/mcp/{alias}/restart")
-        async def restart_mcp_server(alias: str):
-            """Restart a specific MCP server"""
-            if not self.agent.mcp_manager:
-                return {
-                    "success": False,
-                    "error": "MCP Process Manager not available",
-                    "alias": alias,
-                }
+            if self.agent.dev_mode:
+                log_debug(
+                    f"Approval webhook: execution_id={execution_id} "
+                    f"decision={decision} resolved={resolved}"
+                )
 
-            try:
-                success = await self.agent.mcp_manager.restart_server(alias)
-                if success:
-                    # Get updated status
-                    status = self.agent.mcp_manager.get_server_status(alias)
-                    return {
-                        "success": True,
-                        "message": f"MCP server '{alias}' restarted successfully",
-                        "alias": alias,
-                        "status": status,
-                        "timestamp": datetime.now().isoformat(),
-                    }
-                else:
-                    return {
-                        "success": False,
-                        "error": f"Failed to restart MCP server '{alias}'",
-                        "alias": alias,
-                        "timestamp": datetime.now().isoformat(),
-                    }
-
-            except Exception as e:
-                return {
-                    "success": False,
-                    "error": f"Error restarting MCP server '{alias}': {str(e)}",
-                    "alias": alias,
-                    "timestamp": datetime.now().isoformat(),
-                }
-
-        @self.agent.get("/health/mcp")
-        async def mcp_health():
-            """Get MCP health information in the format expected by AgentField server"""
-            if not self.agent.mcp_manager:
-                # Return empty response when MCP manager is not available
-                return {
-                    "servers": [],
-                    "summary": {
-                        "total_servers": 0,
-                        "running_servers": 0,
-                        "total_tools": 0,
-                        "overall_health": 0.0,
-                    },
-                }
-
-            try:
-                # Get all server status from MCP manager
-                all_status = self.agent.mcp_manager.get_all_status()
-                servers = []
-                total_tools = 0
-                running_servers = 0
-
-                # Process each server to get detailed health information
-                for alias, server_info in all_status.items():
-                    server_health = {
-                        "alias": alias,
-                        "status": server_info.get("status", "unknown"),
-                        "tool_count": 0,
-                        "started_at": None,
-                        "last_health_check": datetime.now().isoformat(),
-                        "port": server_info.get("port"),
-                        "process_id": None,
-                    }
-
-                    # Get process ID if available
-                    if alias in self.agent.mcp_manager.servers:
-                        server_process = self.agent.mcp_manager.servers[alias]
-                        if server_process.process:
-                            server_health["process_id"] = server_process.process.pid
-
-                    # Count running servers
-                    if server_health["status"] == "running":
-                        running_servers += 1
-
-                        # Try to get tool count from MCP client
-                        try:
-                            if self.agent.mcp_client_registry:
-                                client = self.agent.mcp_client_registry.get_client(
-                                    alias
-                                )
-                                if client:
-                                    tools = await client.list_tools()
-                                    server_health["tool_count"] = len(tools)
-                                    total_tools += len(tools)
-
-                                    # Set started_at time (approximate)
-                                    server_health["started_at"] = (
-                                        datetime.now().isoformat()
-                                    )
-
-                        except Exception as e:
-                            if self.agent.dev_mode:
-                                log_warn(f"Failed to get tools for {alias}: {e}")
-
-                    servers.append(server_health)
-
-                # Calculate overall health score
-                total_servers = len(servers)
-                if total_servers == 0:
-                    overall_health = 0.0
-                else:
-                    # Health score based on running servers ratio
-                    health_ratio = running_servers / total_servers
-                    # Adjust for any servers with errors
-                    error_servers = sum(1 for s in servers if s["status"] == "error")
-                    if error_servers > 0:
-                        health_ratio *= 1 - (
-                            error_servers * 0.2
-                        )  # Reduce health for errors
-                    overall_health = max(0.0, min(1.0, health_ratio))
-
-                # Build summary
-                summary = {
-                    "total_servers": total_servers,
-                    "running_servers": running_servers,
-                    "total_tools": total_tools,
-                    "overall_health": overall_health,
-                }
-
-                return {"servers": servers, "summary": summary}
-
-            except Exception as e:
-                if self.agent.dev_mode:
-                    log_error(f"Error getting MCP health: {e}")
-
-                # Return error response in expected format
-                return {
-                    "servers": [],
-                    "summary": {
-                        "total_servers": 0,
-                        "running_servers": 0,
-                        "total_tools": 0,
-                        "overall_health": 0.0,
-                    },
-                }
-
-        @self.agent.post("/mcp/servers/{alias}/restart")
-        async def restart_mcp_server_alt(alias: str):
-            """Alternative restart endpoint for AgentField server compatibility"""
-            return await restart_mcp_server(alias)
-
-        @self.agent.get("/mcp/servers/{alias}/tools")
-        async def get_mcp_server_tools(alias: str):
-            """Get tools from a specific MCP server"""
-            if not self.agent.mcp_client_registry:
-                return {"error": "MCP Client Registry not available", "tools": []}
-
-            try:
-                client = self.agent.mcp_client_registry.get_client(alias)
-                if not client:
-                    return {
-                        "error": f"MCP server '{alias}' not found or not running",
-                        "tools": [],
-                    }
-
-                tools = await client.list_tools()
-
-                # Transform tools to match expected format
-                formatted_tools = []
-                for tool in tools:
-                    formatted_tool = {
-                        "name": tool.get("name", ""),
-                        "description": tool.get("description", ""),
-                        "input_schema": tool.get("inputSchema", {}),
-                    }
-                    formatted_tools.append(formatted_tool)
-
-                return {"tools": formatted_tools}
-
-            except Exception as e:
-                if self.agent.dev_mode:
-                    log_error(f"Error getting tools for {alias}: {e}")
-
-                return {
-                    "error": f"Failed to get tools from MCP server '{alias}': {str(e)}",
-                    "tools": [],
-                }
+            return {"status": "received", "resolved": resolved}
 
     async def _graceful_shutdown(self, timeout_seconds: int = 30):
         """
@@ -550,16 +380,6 @@ class AgentServer:
         try:
             if self.agent.dev_mode:
                 log_info(f"Starting graceful shutdown (timeout: {timeout_seconds}s)")
-
-            # Stop MCP servers first
-            try:
-                if hasattr(self.agent, "mcp_handler") and self.agent.mcp_handler:
-                    self.agent.mcp_handler._cleanup_mcp_servers()
-                    if self.agent.dev_mode:
-                        log_info("MCP servers stopped")
-            except Exception as e:
-                if self.agent.dev_mode:
-                    log_error(f"MCP shutdown error: {e}")
 
             # Stop heartbeat
             try:
@@ -583,8 +403,36 @@ class AgentServer:
                 if self.agent.dev_mode:
                     log_error(f"Registry clear error: {e}")
 
-            # Wait a moment for cleanup to complete
-            await asyncio.sleep(1)
+            # Drain in-flight tasks, then force-cancel anything that misses the deadline.
+            tracked_tasks: set[asyncio.Task] = set(self._in_flight_tasks)
+
+            current_task = asyncio.current_task()
+            tracked_tasks = {
+                task
+                for task in tracked_tasks
+                if task is not None and task is not current_task and not task.done()
+            }
+
+            if tracked_tasks:
+                done, pending = await asyncio.wait(
+                    tracked_tasks,
+                    timeout=max(0, timeout_seconds),
+                )
+                if self.agent.dev_mode:
+                    log_debug(
+                        f"Graceful shutdown drain: done={len(done)} pending={len(pending)}"
+                    )
+
+                if pending:
+                    for task in list(pending):
+                        task.cancel()
+                    await asyncio.gather(*pending, return_exceptions=True)
+
+            # Clear tracked registries after drain/cancel pass.
+            self._in_flight_tasks.clear()
+
+            # Small yield so cancellations/cleanup callbacks run before process exit.
+            await asyncio.sleep(0)
 
             if self.agent.dev_mode:
                 log_success("Graceful shutdown completed")
@@ -605,13 +453,6 @@ class AgentServer:
         try:
             if self.agent.dev_mode:
                 log_warn("Immediate shutdown initiated")
-
-            # Quick cleanup attempt
-            try:
-                if hasattr(self.agent, "mcp_handler") and self.agent.mcp_handler:
-                    self.agent.mcp_handler._cleanup_mcp_servers()
-            except Exception:
-                pass  # Ignore errors in immediate shutdown
 
             # Exit immediately
             os._exit(0)
@@ -760,7 +601,7 @@ class AgentServer:
         Setup signal handlers for graceful shutdown.
 
         This method registers signal handlers for SIGTERM and SIGINT
-        to ensure MCP servers are properly stopped when the agent shuts down.
+        to ensure proper cleanup when the agent shuts down.
         """
         try:
             # Register signal handlers for graceful shutdown
@@ -787,9 +628,6 @@ class AgentServer:
 
         if self.agent.dev_mode:
             log_warn(f"{signal_name} received, shutting down gracefully...")
-
-        # Perform cleanup
-        self.agent.mcp_handler._cleanup_mcp_servers()
 
         # Exit gracefully
         os._exit(0)
@@ -839,7 +677,26 @@ class AgentServer:
             env_port = os.getenv("PORT")
             if env_port and env_port.isdigit():
                 suggested_port = int(env_port)
-                if AgentUtils.is_port_available(suggested_port):
+                if os.getenv("AGENTFIELD_STRICT_PORT") == "1":
+                    # The AgentField runner assigned this exact port and polls it
+                    # for readiness. Bind it authoritatively — never silently move
+                    # to another port, or the runner would poll a port nothing is
+                    # listening on and kill us for "not becoming ready". If it is
+                    # genuinely unavailable, exit fast with a clear error so the
+                    # runner surfaces a real failure instead of a phantom timeout.
+                    if not AgentUtils.is_port_available(suggested_port):
+                        log_error(
+                            f"AGENTFIELD_STRICT_PORT set but the assigned port "
+                            f"{suggested_port} is unavailable; exiting so the "
+                            f"control plane can reallocate and retry"
+                        )
+                        raise RuntimeError(
+                            f"assigned port {suggested_port} is unavailable"
+                        )
+                    port = suggested_port
+                    if self.agent.dev_mode:
+                        log_debug(f"Using assigned port from AgentField CLI: {port}")
+                elif AgentUtils.is_port_available(suggested_port):
                     port = suggested_port
                     if self.agent.dev_mode:
                         log_debug(f"Using port from AgentField CLI: {port}")
@@ -946,8 +803,27 @@ class AgentServer:
         # Setup fast lifecycle signal handlers
         self.agent.agentfield_handler.setup_fast_lifecycle_signal_handlers()
 
-        # Add startup event handler for resilient lifecycle
-        @self.agent.on_event("startup")
+        @asynccontextmanager
+        async def internal_lifespan(app: FastAPI):
+            # Add startup event handler for resilient lifecycle
+            await startup_resilient_lifecycle()
+            try:
+                yield
+            finally:
+                # Add shutdown event handler for cleanup
+                await shutdown_cleanup()
+
+        existing_lifespan = self.agent.router.lifespan_context
+
+        @asynccontextmanager
+        async def merged_lifespan(app: FastAPI):
+            async with AsyncExitStack() as stack:
+                await stack.enter_async_context(internal_lifespan(app))
+                await stack.enter_async_context(existing_lifespan(app))
+                yield
+
+        self.agent.router.lifespan_context = merged_lifespan
+
         async def startup_resilient_lifecycle():
             """Resilient lifecycle startup: connection manager handles AgentField server connectivity"""
 
@@ -974,8 +850,10 @@ class AgentServer:
                     )
                 # Kick a heartbeat immediately so the control plane renews the lease
                 try:
-                    asyncio.create_task(
-                        self.agent.agentfield_handler.send_enhanced_heartbeat()
+                    self._track_task(
+                        asyncio.create_task(
+                            self.agent.agentfield_handler.send_enhanced_heartbeat()
+                        )
                     )
                 except RuntimeError:
                     # Event loop not running; the heartbeat worker will recover shortly
@@ -985,9 +863,11 @@ class AgentServer:
                     not hasattr(self.agent, "_heartbeat_task")
                     or self.agent._heartbeat_task.done()
                 ):
-                    self.agent._heartbeat_task = asyncio.create_task(
-                        self.agent.agentfield_handler.enhanced_heartbeat_loop(
-                            heartbeat_interval
+                    self.agent._heartbeat_task = self._track_task(
+                        asyncio.create_task(
+                            self.agent.agentfield_handler.enhanced_heartbeat_loop(
+                                heartbeat_interval
+                            )
                         )
                     )
 
@@ -1007,17 +887,16 @@ class AgentServer:
             # Start connection manager (non-blocking)
             connected = await self.agent.connection_manager.start()
 
-            # Always connect memory event client and start MCP initialization
-            # These work independently of AgentField server connection
+            # Start notification dispatcher
+            self.agent._notification_dispatcher.start()
+
+            # Connect memory event client - works independently of AgentField server connection
             if self.agent.memory_event_client:
                 try:
                     await self.agent.memory_event_client.connect()
                 except Exception as e:
                     if self.agent.dev_mode:
                         log_error(f"Memory event client connection failed: {e}")
-
-            # Start background MCP initialization (non-blocking)
-            asyncio.create_task(self.agent.mcp_handler._background_mcp_initialization())
 
             if connected:
                 if self.agent.dev_mode:
@@ -1028,8 +907,6 @@ class AgentServer:
                         "Agent started in local mode - will connect to AgentField server when available"
                     )
 
-        # Add shutdown event handler for cleanup
-        @self.agent.on_event("shutdown")
         async def shutdown_cleanup():
             """Cleanup all resources when FastAPI shuts down"""
 
@@ -1040,23 +917,6 @@ class AgentServer:
             # Close memory event client
             if self.agent.memory_event_client:
                 await self.agent.memory_event_client.close()
-
-            # Stop MCP servers
-            if self.agent.mcp_manager:
-                try:
-                    await self.agent.mcp_manager.shutdown_all()
-                    if self.agent.dev_mode:
-                        log_info("MCP servers stopped")
-                except Exception as e:
-                    if self.agent.dev_mode:
-                        log_error(f"MCP shutdown error: {e}")
-
-            if self.agent.mcp_client_registry:
-                try:
-                    await self.agent.mcp_client_registry.close_all()
-                except Exception as e:
-                    if self.agent.dev_mode:
-                        log_error(f"MCP client shutdown error: {e}")
 
             if getattr(self.agent, "client", None):
                 try:
@@ -1078,6 +938,7 @@ class AgentServer:
             and workers is None,  # Only enable reload in dev mode with single worker
             "access_log": access_log,
             "log_level": log_level,
+            "ws": "websockets-sansio",
             "timeout_graceful_shutdown": 30,  # Allow 30 seconds for graceful shutdown
             **kwargs,
         }
@@ -1171,15 +1032,12 @@ class AgentServer:
             log_error(f"Unexpected server error: {e}")
             raise
         finally:
-            # Phase 5: Graceful shutdown - stop heartbeat and MCP servers
+            # Phase 5: Graceful shutdown - stop heartbeat
             if self.agent.dev_mode:
                 log_info("Agent shutdown initiated...")
 
             # Stop heartbeat worker
             self.agent.agentfield_handler.stop_heartbeat()
-
-            # Stop all MCP servers
-            self.agent.mcp_handler._cleanup_mcp_servers()
 
             if self.agent.dev_mode:
                 log_success("Agent shutdown complete")

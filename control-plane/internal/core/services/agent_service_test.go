@@ -20,11 +20,11 @@ import (
 // Mock implementations for testing
 
 type mockProcessManager struct {
-	startFunc    func(interfaces.ProcessConfig) (int, error)
-	stopFunc     func(int) error
-	statusFunc   func(int) (interfaces.ProcessInfo, error)
-	startedPIDs  map[int]bool
-	stoppedPIDs  map[int]bool
+	startFunc   func(interfaces.ProcessConfig) (int, error)
+	stopFunc    func(int) error
+	statusFunc  func(int) (interfaces.ProcessInfo, error)
+	startedPIDs map[int]bool
+	stoppedPIDs map[int]bool
 }
 
 func newMockProcessManager() *mockProcessManager {
@@ -117,9 +117,9 @@ func (m *mockPortManager) ReleasePort(port int) error {
 type mockRegistryStorage struct {
 	loadRegistryFunc func() (*domain.InstallationRegistry, error)
 	saveRegistryFunc func(*domain.InstallationRegistry) error
-	getPackageFunc    func(string) (*domain.InstalledPackage, error)
-	savePackageFunc   func(string, *domain.InstalledPackage) error
-	registry          *domain.InstallationRegistry
+	getPackageFunc   func(string) (*domain.InstalledPackage, error)
+	savePackageFunc  func(string, *domain.InstalledPackage) error
+	registry         *domain.InstallationRegistry
 }
 
 func newMockRegistryStorage() *mockRegistryStorage {
@@ -172,18 +172,6 @@ type mockAgentClient struct {
 
 func newMockAgentClient() *mockAgentClient {
 	return &mockAgentClient{}
-}
-
-func (m *mockAgentClient) GetMCPHealth(ctx context.Context, nodeID string) (*interfaces.MCPHealthResponse, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (m *mockAgentClient) RestartMCPServer(ctx context.Context, nodeID, alias string) error {
-	return errors.New("not implemented")
-}
-
-func (m *mockAgentClient) GetMCPTools(ctx context.Context, nodeID, alias string) (*interfaces.MCPToolsResponse, error) {
-	return nil, errors.New("not implemented")
 }
 
 func (m *mockAgentClient) ShutdownAgent(ctx context.Context, nodeID string, graceful bool, timeoutSeconds int) (*interfaces.AgentShutdownResponse, error) {
@@ -881,7 +869,8 @@ func TestBuildProcessConfig(t *testing.T) {
 		tmpDir,
 	).(*DefaultAgentService)
 
-	config := service.buildProcessConfig(agentNode, 8001)
+	config, err := service.buildProcessConfig(agentNode, 8001)
+	require.NoError(t, err)
 	// Check for any Python command (python, python3, or full path to python3)
 	assert.True(t, config.Command == "python" || config.Command == "python3" ||
 		strings.Contains(config.Command, "python3"),
@@ -890,5 +879,12 @@ func TestBuildProcessConfig(t *testing.T) {
 	assert.Equal(t, agentPath, config.WorkDir)
 	assert.Equal(t, "/tmp/test-agent.log", config.LogFile)
 	assert.Contains(t, config.Env, "PORT=8001")
-	assert.Contains(t, config.Env, "AGENTFIELD_SERVER_URL=http://localhost:8080")
+	found := false
+	for _, e := range config.Env {
+		if strings.HasPrefix(e, "AGENTFIELD_SERVER_URL=") {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "Expected AGENTFIELD_SERVER_URL in env")
 }

@@ -3,7 +3,7 @@
 # Usage:
 #   Production:  curl -fsSL https://agentfield.ai/install.sh | bash
 #   Staging:     curl -fsSL https://agentfield.ai/install.sh | bash -s -- --staging
-#   Version pin: VERSION=v1.0.0 curl -fsSL https://agentfield.ai/install.sh | bash
+#   Version pin: curl -fsSL https://agentfield.ai/install.sh | VERSION=v1.0.0 bash
 
 set -e
 
@@ -15,6 +15,32 @@ SKIP_PATH_CONFIG="${SKIP_PATH_CONFIG:-0}"
 # Channel configuration (production vs staging)
 # Can be set via --staging flag or STAGING=1 environment variable
 STAGING="${STAGING:-0}"
+
+# Skill install mode (all | all-targets | interactive | none)
+#
+# Defaults to "all" — installs the agentfield skill
+# into every coding agent the binary detects on the user's machine, without
+# any prompts. This is the right default for `curl … | bash` because there
+# is no TTY for an interactive picker to read from, and the whole point of
+# the one-line install is to just work.
+#
+# Override with:
+#   --no-skill            → SKILL_MODE=none           (skip the skill install)
+#   --interactive-skill   → SKILL_MODE=interactive    (run the picker)
+#   --all-skill-targets   → SKILL_MODE=all-targets    (install into every
+#                                                      registered target,
+#                                                      even ones we did not detect)
+#   SKILL_MODE=<mode>     → env var override
+SKILL_MODE="${SKILL_MODE:-all}"
+
+# Desktop tray mode (auto | none)
+#
+# On macOS (production channel), the installer also drops the AgentField
+# menu-bar tray and registers it — plus the control plane — to auto-start via
+# launchd. It is a small, separate binary from the control-plane binary and is
+# never installed on Linux/headless/container hosts. Opt out with --no-tray or
+# TRAY_MODE=none.
+TRAY_MODE="${TRAY_MODE:-auto}"
 
 # Color codes
 RED='\033[0;31m'
@@ -42,24 +68,61 @@ parse_args() {
         VERBOSE=1
         shift
         ;;
+      --no-skill)
+        SKILL_MODE="none"
+        shift
+        ;;
+      --all-skills)
+        # Backwards-compat alias — "all" is now the default, but the flag
+        # stays so existing scripts and READMEs keep working.
+        SKILL_MODE="all"
+        shift
+        ;;
+      --all-skill-targets)
+        SKILL_MODE="all-targets"
+        shift
+        ;;
+      --interactive-skill)
+        SKILL_MODE="interactive"
+        shift
+        ;;
+      --no-tray)
+        TRAY_MODE="none"
+        shift
+        ;;
       --help|-h)
         echo "AgentField CLI Installer"
         echo ""
         echo "Usage:"
-        echo "  curl -fsSL https://agentfield.ai/install.sh | bash"
-        echo "  curl -fsSL https://agentfield.ai/install.sh | bash -s -- --staging"
+        echo "  curl -fsSL https://agentfield.ai/install.sh | bash                  # binary + skill into all detected agents (no prompts)"
+        echo "  curl -fsSL https://agentfield.ai/install.sh | bash -s -- --no-skill # binary only, skip the skill install"
+        echo "  curl -fsSL https://agentfield.ai/install.sh | bash -s -- --staging  # latest prerelease"
         echo ""
         echo "Options:"
-        echo "  --staging    Install latest prerelease/staging version"
-        echo "  --verbose    Enable verbose output"
-        echo "  --help       Show this help message"
+        echo "  --staging              Install latest prerelease/staging version"
+        echo "  --verbose              Enable verbose output"
+        echo "  --no-skill             Skip the agentfield skill install step"
+        echo "                         (binary only)"
+        echo "  --all-skills           Install the skill into every detected coding"
+        echo "                         agent (default behaviour — flag kept for"
+        echo "                         backwards compatibility with older docs)"
+        echo "  --all-skill-targets    Install the skill into every registered"
+        echo "                         coding agent target, even if not detected"
+        echo "  --interactive-skill    Run the interactive skill picker (only useful"
+        echo "                         when you run install.sh from a real terminal,"
+        echo "                         not from 'curl … | bash')"
+        echo "  --no-tray              Skip the macOS desktop tray / auto-start setup"
+        echo "                         (control-plane binary only)"
+        echo "  --help                 Show this help message"
         echo ""
         echo "Environment variables:"
-        echo "  VERSION              Specific version to install (e.g., v0.1.19)"
-        echo "  STAGING=1            Same as --staging flag"
-        echo "  VERBOSE=1            Same as --verbose flag"
-        echo "  SKIP_PATH_CONFIG=1   Skip PATH configuration"
+        echo "  VERSION                 Specific version to install (e.g., v0.1.19)"
+        echo "  STAGING=1               Same as --staging flag"
+        echo "  VERBOSE=1               Same as --verbose flag"
+        echo "  SKIP_PATH_CONFIG=1      Skip PATH configuration"
         echo "  AGENTFIELD_INSTALL_DIR  Custom install directory"
+        echo "  SKILL_MODE              all (default) | all-targets | interactive | none"
+        echo "  TRAY_MODE               auto (default, macOS only) | none"
         exit 0
         ;;
       *)
@@ -226,19 +289,20 @@ get_latest_prerelease_version() {
 
   if command -v curl >/dev/null 2>&1; then
     # Get all releases and find the first prerelease
+    # Note: Use [[:space:]]* instead of \s* for macOS BSD sed compatibility
     version=$(curl -fsSL "$releases_url" 2>/dev/null | \
       grep -E '"tag_name"|"prerelease"' | \
       paste - - | \
       grep '"prerelease": true' | \
       head -1 | \
-      sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/')
+      sed -E 's/.*"tag_name":[[:space:]]*"([^"]+)".*/\1/')
   elif command -v wget >/dev/null 2>&1; then
     version=$(wget -qO- "$releases_url" 2>/dev/null | \
       grep -E '"tag_name"|"prerelease"' | \
       paste - - | \
       grep '"prerelease": true' | \
       head -1 | \
-      sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/')
+      sed -E 's/.*"tag_name":[[:space:]]*"([^"]+)".*/\1/')
   else
     print_error "Neither curl nor wget found. Please install one of them."
     exit 1
@@ -353,9 +417,14 @@ install_binary() {
   # Create install directory
   mkdir -p "$install_dir"
 
-  # Copy binary
-  cp "$binary_path" "$install_dir/agentfield"
-  chmod +x "$install_dir/agentfield"
+  # Stage to a temp file and rename into place. Overwriting an existing binary
+  # in place (cp onto the same inode) poisons the macOS kernel's cached
+  # code-signature state for that vnode, and every subsequent exec is killed
+  # with SIGKILL even though codesign --verify passes. mv gives upgrades a
+  # fresh inode and is atomic.
+  cp "$binary_path" "$install_dir/agentfield.tmp.$$"
+  chmod +x "$install_dir/agentfield.tmp.$$"
+  mv -f "$install_dir/agentfield.tmp.$$" "$install_dir/agentfield"
 
   # Create symlink for convenience (best effort)
   local symlink_created=0
@@ -478,6 +547,126 @@ verify_installation() {
     print_error "Installation verification failed"
     print_error "Binary not found or not executable: $install_dir/agentfield"
     exit 1
+  fi
+}
+
+# Install the agentfield skills into coding-agent integrations (Claude Code,
+# Codex, Gemini, OpenCode, Aider, Windsurf, Cursor). Delegated to the
+# freshly-installed `af` binary so the install logic stays in one place.
+# A no-name `af skill install` installs the binary's ENTIRE skill catalog
+# (agentfield, agentfield-personal, agentfield-use, and whatever ships next)
+# — never hardcode skill names here, or new catalog skills silently miss
+# existing installs.
+# Honors $SKILL_MODE: all (default) | all-targets | interactive | none.
+install_skill() {
+  local install_dir="$1"
+  local af_bin="$install_dir/agentfield"
+
+  if [[ ! -x "$af_bin" ]]; then
+    print_warning "af binary not executable, skipping skill install"
+    return 0
+  fi
+
+  case "$SKILL_MODE" in
+    none|skip)
+      printf "\n"
+      print_info "Skipping skill install (SKILL_MODE=none)"
+      printf "       ${DIM}Run later: ${CYAN}af skill install${NC}\n" 2>/dev/null || \
+      printf "       Run later: af skill install\n"
+      return 0
+      ;;
+    all)
+      printf "\n"
+      print_info "Installing the skill catalog into all detected coding agents..."
+      "$af_bin" skill install --all || print_warning "Skill install reported errors"
+      ;;
+    all-targets)
+      printf "\n"
+      print_info "Installing the skill catalog into all registered coding agents (even undetected)..."
+      "$af_bin" skill install --all-targets || print_warning "Skill install reported errors"
+      ;;
+    interactive|*)
+      printf "\n"
+      "$af_bin" skill install || print_warning "Skill install reported errors"
+      ;;
+  esac
+}
+
+# Install the AgentField desktop tray (menu-bar app) and register it — plus the
+# control plane — to auto-start via launchd. macOS + production channel only.
+#
+# The tray is a small, SEPARATE binary from the control-plane binary: it carries
+# the GUI dependency so the server never has to, and it is simply never fetched
+# on Linux/headless/container hosts. Every step here is best-effort — a failure
+# to set up the tray must never fail the overall install, because the control
+# plane itself is already installed and working by this point.
+install_tray() {
+  local os="$1"
+  local arch="$2"
+  local version="$3"
+
+  if [[ "$os" != "darwin" ]]; then
+    return 0
+  fi
+  if [[ "$TRAY_MODE" == "none" ]]; then
+    print_info "Skipping desktop tray (TRAY_MODE=none)"
+    return 0
+  fi
+  # Staging uses a separate install dir and would collide with the production
+  # launchd agents (same labels), so leave the tray to the production channel.
+  if [[ "$STAGING" == "1" ]]; then
+    print_info "Skipping desktop tray on staging channel (run 'af-tray install' manually to test)"
+    return 0
+  fi
+
+  printf "\n"
+  print_info "Installing AgentField desktop tray (menu-bar app)..."
+
+  local tray_name="agentfield-tray-$os-$arch"
+  local tray_url="https://github.com/$REPO/releases/download/$version/$tray_name"
+  local tray_path="$TMP_DIR/$tray_name"
+
+  # Soft download — do not let a missing tray asset abort the installer.
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$tray_url" -o "$tray_path" 2>/dev/null || {
+      print_warning "Desktop tray asset unavailable ($tray_name); skipping. Control plane is unaffected."
+      return 0
+    }
+  else
+    wget -q -O "$tray_path" "$tray_url" 2>/dev/null || {
+      print_warning "Desktop tray asset unavailable ($tray_name); skipping. Control plane is unaffected."
+      return 0
+    }
+  fi
+
+  # Best-effort checksum verification (soft — warn and skip on mismatch).
+  if [[ -f "$TMP_DIR/checksums.txt" ]] && command -v shasum >/dev/null 2>&1; then
+    local expected actual
+    expected=$(grep "$tray_name" "$TMP_DIR/checksums.txt" | awk '{print $1}')
+    actual=$(shasum -a 256 "$tray_path" | awk '{print $1}')
+    if [[ -n "$expected" && "$expected" != "$actual" ]]; then
+      print_warning "Desktop tray checksum mismatch; skipping tray install."
+      return 0
+    fi
+  fi
+
+  # Stage + rename for the same reason as install_binary: cp onto an existing
+  # inode makes the macOS kernel SIGKILL the binary on every exec after an
+  # upgrade.
+  cp "$tray_path" "$INSTALL_DIR/af-tray.tmp.$$"
+  chmod +x "$INSTALL_DIR/af-tray.tmp.$$"
+  xattr -d com.apple.quarantine "$INSTALL_DIR/af-tray.tmp.$$" 2>/dev/null || true
+  mv -f "$INSTALL_DIR/af-tray.tmp.$$" "$INSTALL_DIR/af-tray"
+
+  # Delegate .app-bundle + launchd setup to the tray binary itself, so all of
+  # that logic lives in one place (Go) and stays testable — mirroring how the
+  # skill install is delegated to `af skill install`. Idempotent: safe to re-run
+  # on every update, and it force-restarts a stale running tray onto the new
+  # binary so a `curl … | bash` update is fully hands-off.
+  if "$INSTALL_DIR/af-tray" install; then
+    print_success "Desktop tray installed — look for the AgentField icon in your menu bar"
+  else
+    print_warning "Desktop tray setup reported an issue; the control plane is unaffected"
   fi
 }
 
@@ -620,6 +809,16 @@ main() {
 
   # Verify installation
   verify_installation "$INSTALL_DIR"
+
+  # Install the agentfield skill into coding agents. Default mode is `all` —
+  # installs into every detected coding agent without any prompts (the right
+  # behaviour for `curl … | bash`). Override via --no-skill /
+  # --all-skill-targets / --interactive-skill or SKILL_MODE.
+  install_skill "$INSTALL_DIR"
+
+  # Install the desktop tray + auto-start (macOS, production channel). Best-effort:
+  # never fails the overall install, and never runs on Linux/headless/container hosts.
+  install_tray "$os" "$arch" "$VERSION"
 
   # Print success message
   print_success_message

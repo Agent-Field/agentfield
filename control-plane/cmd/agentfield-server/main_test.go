@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -301,6 +302,9 @@ func TestRunServer_AppliesFlagOverrides(t *testing.T) {
 	if gotCfg.AgentField.Port != 12345 {
 		t.Fatalf("expected env override port 12345, got %d", gotCfg.AgentField.Port)
 	}
+	if gotCfg.Telemetry.AgentFieldVersion != version {
+		t.Fatalf("expected telemetry build version %q, got %q", version, gotCfg.Telemetry.AgentFieldVersion)
+	}
 	if gotCfg.UI.Enabled {
 		t.Fatal("backend-only flag should disable UI")
 	}
@@ -385,5 +389,35 @@ func TestOpenBrowserUsesLauncher(t *testing.T) {
 
 	if !called {
 		t.Fatal("expected browserLauncher to be invoked")
+	}
+}
+
+func TestDefaultWaitForShutdown(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sending SIGINT to self is not supported on Windows")
+	}
+
+	// defaultWaitForShutdown should unblock when SIGINT is sent to the process
+	done := make(chan struct{})
+	go func() {
+		defaultWaitForShutdown()
+		close(done)
+	}()
+
+	// Send SIGINT to self
+	time.Sleep(50 * time.Millisecond)
+	p, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Fatalf("failed to find self process: %v", err)
+	}
+	if err := p.Signal(syscall.SIGINT); err != nil {
+		t.Fatalf("failed to send SIGINT: %v", err)
+	}
+
+	select {
+	case <-done:
+		// success
+	case <-time.After(3 * time.Second):
+		t.Fatal("defaultWaitForShutdown did not unblock after SIGINT")
 	}
 }

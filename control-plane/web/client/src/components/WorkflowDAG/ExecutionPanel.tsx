@@ -78,16 +78,16 @@ export function ExecutionPanel({ execution, onClose, isOpen, task_name, agent_na
   return (
     <div
       className={cn(
-        'fixed top-0 right-0 z-50 h-full w-96 border-l border-border-secondary bg-background shadow-xl',
+        'fixed top-0 right-0 z-50 h-full w-96 border-l border-border bg-background shadow-xl',
         'transform transition-transform duration-300 ease-in-out',
         isOpen ? 'translate-x-0' : 'translate-x-full'
       )}
     >
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-border-tertiary p-4">
+      <div className="flex items-center justify-between border-b border-border/50 p-4">
         <div className="flex items-center gap-2">
           <Activity className="h-5 w-5 text-muted-foreground" />
-          <h2 className="text-heading-3 text-foreground">Execution Details</h2>
+          <h2 className="text-base font-semibold text-foreground">Execution Details</h2>
         </div>
         <Button variant="ghost" size="sm" onClick={onClose} className="h-8 w-8 p-0">
           <Close className="h-4 w-4" />
@@ -106,10 +106,10 @@ export function ExecutionPanel({ execution, onClose, isOpen, task_name, agent_na
           </div>
 
           <div className="space-y-2">
-            <h3 className="text-heading-3 text-foreground">
+            <h3 className="text-base font-semibold text-foreground">
               {task_name || execution.reasoner_id}
             </h3>
-            <p className="text-body-small">
+            <p className="text-sm text-muted-foreground">
               {agent_name || execution.agent_node_id}
             </p>
           </div>
@@ -124,21 +124,21 @@ export function ExecutionPanel({ execution, onClose, isOpen, task_name, agent_na
 
           <div className="space-y-3 pl-6">
             <div className="space-y-1">
-              <div className="text-body-small">Started</div>
+              <div className="text-sm text-muted-foreground">Started</div>
               <div className="text-sm font-mono text-foreground">{startTime.time} • {startTime.date}</div>
-              <div className="text-body-small">{startTime.relative}</div>
+              <div className="text-sm text-muted-foreground">{startTime.relative}</div>
             </div>
 
             {endTime && (
               <div className="space-y-1">
-                <div className="text-body-small">Completed</div>
+                <div className="text-sm text-muted-foreground">Completed</div>
                 <div className="text-sm font-mono text-foreground">{endTime.time} • {endTime.date}</div>
-                <div className="text-body-small">{endTime.relative}</div>
+                <div className="text-sm text-muted-foreground">{endTime.relative}</div>
               </div>
             )}
 
             <div className="space-y-1">
-              <div className="text-body-small">Duration</div>
+              <div className="text-sm text-muted-foreground">Duration</div>
               <div className="text-sm font-mono font-medium text-foreground">
                 {formatDuration(execution.duration_ms)}
               </div>
@@ -155,13 +155,13 @@ export function ExecutionPanel({ execution, onClose, isOpen, task_name, agent_na
 
           <div className="space-y-3 pl-6">
             <div className="space-y-1">
-              <div className="text-body-small">Depth Level</div>
+              <div className="text-sm text-muted-foreground">Depth Level</div>
               <div className="text-sm font-medium text-foreground">{execution.workflow_depth}</div>
             </div>
 
             {execution.parent_workflow_id && (
               <div className="space-y-1">
-                <div className="text-body-small">Parent Workflow</div>
+                <div className="text-sm text-muted-foreground">Parent Workflow</div>
                 <div className="flex items-center gap-2">
                   <code className="rounded bg-muted px-2 py-1 text-xs font-mono text-foreground">
                     {execution.parent_workflow_id.slice(0, 12)}...
@@ -190,7 +190,7 @@ export function ExecutionPanel({ execution, onClose, isOpen, task_name, agent_na
 
           <div className="space-y-3 pl-6">
             <div className="space-y-1">
-              <div className="text-body-small">Execution ID</div>
+              <div className="text-sm text-muted-foreground">Execution ID</div>
               <div className="flex items-center gap-2">
                 <code className="flex-1 rounded bg-muted px-2 py-1 text-xs font-mono text-foreground">
                   {execution.execution_id}
@@ -211,7 +211,7 @@ export function ExecutionPanel({ execution, onClose, isOpen, task_name, agent_na
             </div>
 
             <div className="space-y-1">
-              <div className="text-body-small">Workflow ID</div>
+              <div className="text-sm text-muted-foreground">Workflow ID</div>
               <div className="flex items-center gap-2">
                 <code className="flex-1 rounded bg-muted px-2 py-1 text-xs font-mono text-foreground">
                   {execution.workflow_id}
@@ -232,7 +232,7 @@ export function ExecutionPanel({ execution, onClose, isOpen, task_name, agent_na
             </div>
 
             <div className="space-y-1">
-              <div className="text-body-small">Agent Node ID</div>
+              <div className="text-sm text-muted-foreground">Agent Node ID</div>
               <div className="flex items-center gap-2">
                 <code className="flex-1 rounded bg-muted px-2 py-1 text-xs font-mono text-foreground">
                   {execution.agent_node_id}
@@ -253,7 +253,7 @@ export function ExecutionPanel({ execution, onClose, isOpen, task_name, agent_na
             </div>
 
             <div className="space-y-1">
-              <div className="text-body-small">Reasoner ID</div>
+              <div className="text-sm text-muted-foreground">Reasoner ID</div>
               <div className="flex items-center gap-2">
                 <code className="flex-1 rounded bg-muted px-2 py-1 text-xs font-mono text-foreground">
                   {execution.reasoner_id}
@@ -280,7 +280,7 @@ export function ExecutionPanel({ execution, onClose, isOpen, task_name, agent_na
           <div className="space-y-4">
             <h4 className="text-sm font-medium text-foreground">Child Executions</h4>
             <div className="pl-6">
-              <div className="text-body-small">
+              <div className="text-sm text-muted-foreground">
                 {execution.children.length} child execution{execution.children.length !== 1 ? 's' : ''}
               </div>
               <div className="mt-2 space-y-1">
@@ -290,7 +290,7 @@ export function ExecutionPanel({ execution, onClose, isOpen, task_name, agent_na
                   </div>
                 ))}
                 {execution.children.length > 3 && (
-                  <div className="text-body-small">
+                  <div className="text-sm text-muted-foreground">
                     +{execution.children.length - 3} more
                   </div>
                 )}

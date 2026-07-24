@@ -9,8 +9,21 @@ Supported Providers:
 - OpenRouter: Gemini image generation, etc.
 """
 
-from typing import Any, Optional
-from agentfield.logger import log_error
+import asyncio
+import os
+from typing import Any, Dict, Optional
+from agentfield.logger import log_error, log_warn
+
+
+# Substring identifying OpenRouter's transient "no upstream provider" 404
+# (issues #3 and #5 in reel-af AGENTFIELD_SDK_ISSUES.md).
+_NO_ENDPOINTS_MARKER = "No endpoints found that support the requested output modalities"
+# Sleeps between the 3 in-loop attempts; index 0 is before the strip attempt.
+# Sequence: attempt 1 → sleep 1s → attempt 2 → sleep 2s → attempt 3 → (sleep 4s
+# → strip-and-retry) if image_config was set, else give up.
+_NO_ENDPOINTS_TOTAL_ATTEMPTS = 3
+_NO_ENDPOINTS_INTER_SLEEPS = (1.0, 2.0)
+_NO_ENDPOINTS_STRIP_SLEEP = 4.0
 
 
 async def generate_image_litellm(
@@ -90,6 +103,7 @@ async def generate_image_openrouter(
     quality: str,
     style: Optional[str],
     response_format: str,
+    image_config: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> Any:
     """
@@ -100,7 +114,7 @@ async def generate_image_openrouter(
     LiteLLM's dedicated image generation API.
 
     Supported models:
-    - google/gemini-2.5-flash-image-preview
+    - google/gemini-3.1-flash-image-preview
     - And other OpenRouter models with image generation capabilities
 
     Args:
@@ -110,7 +124,10 @@ async def generate_image_openrouter(
         quality: Image quality (may not be used by all OpenRouter models)
         style: Image style (may not be used by all OpenRouter models)
         response_format: Response format (may not be used by all OpenRouter models)
-        **kwargs: Additional OpenRouter-specific parameters (e.g., image_config)
+        image_config: Optional dict of OpenRouter image generation settings
+            (e.g., {"aspect_ratio": "16:9"}). Pass an empty dict to use
+            provider defaults explicitly.
+        **kwargs: Additional OpenRouter-specific parameters
 
     Returns:
         MultimodalResponse with generated image(s)
@@ -118,10 +135,6 @@ async def generate_image_openrouter(
     Raises:
         ImportError: If litellm is not installed
         Exception: If image generation fails
-
-    Note:
-        OpenRouter-specific parameters like `image_config` should be passed via kwargs.
-        Example: image_config={"aspect_ratio": "16:9"}
     """
     try:
         import litellm
@@ -132,21 +145,78 @@ async def generate_image_openrouter(
 
     from agentfield.multimodal_response import ImageOutput, MultimodalResponse
 
+    # Pull image_urls out of kwargs so we can build a multi-part user message
+    # for image+text→image models (e.g. x-ai/grok-imagine-image-quality).
+    image_urls = kwargs.pop("image_urls", None) or []
+    if image_urls:
+        user_content: Any = [{"type": "text", "text": prompt}] + [
+            {"type": "image_url", "image_url": {"url": u}} for u in image_urls
+        ]
+    else:
+        user_content = prompt
+
     # Build messages for OpenRouter chat completions
-    messages = [{"role": "user", "content": prompt}]
+    messages = [{"role": "user", "content": user_content}]
 
     # Prepare parameters for OpenRouter
     # OpenRouter uses chat completions with modalities parameter
+    # Request only image output — works for both image-only models (e.g.
+    # x-ai/grok-imagine-image-quality) and dual-output models (e.g.
+    # google/gemini-3.1-flash-image-preview). Image-only models 404 when "text" is
+    # also requested.
     completion_params = {
         "model": model,
         "messages": messages,
-        "modalities": ["image", "text"],
-        **kwargs,  # Pass through any additional kwargs (e.g., image_config)
+        "modalities": ["image"],
+        **kwargs,
     }
 
+    # Add image_config if provided
+    if image_config is not None:
+        completion_params["image_config"] = image_config
+
     try:
-        # Use LiteLLM's completion function (OpenRouter uses chat API)
-        response = await litellm.acompletion(**completion_params)
+        # Use LiteLLM's completion function (OpenRouter uses chat API).
+        # Wrap each attempt with timeout to prevent silent hangs.
+        # Retry OpenRouter's "No endpoints found" 404 (issues #3, #5): transient
+        # under load; if image_config caused it, drop image_config on a final
+        # attempt and warn.
+        timeout = float(os.getenv("AGENTFIELD_LLM_CALL_TIMEOUT", "120.0"))
+        response = None
+        last_exc: Optional[BaseException] = None
+        for attempt in range(_NO_ENDPOINTS_TOTAL_ATTEMPTS):
+            try:
+                response = await asyncio.wait_for(
+                    litellm.acompletion(**completion_params),
+                    timeout=timeout,
+                )
+                break
+            except Exception as e:
+                if _NO_ENDPOINTS_MARKER not in str(e):
+                    raise
+                last_exc = e
+                if attempt < len(_NO_ENDPOINTS_INTER_SLEEPS):
+                    await asyncio.sleep(_NO_ENDPOINTS_INTER_SLEEPS[attempt])
+        if response is None:
+            # All in-loop attempts exhausted. If image_config was set, try once
+            # without it before giving up. Falsy check (not `is not None`) is
+            # intentional: image_config={} produces an identical wire call
+            # whether stripped or not, so we skip the useless extra attempt.
+            if completion_params.get("image_config"):
+                log_warn(
+                    "OpenRouter returned 'No endpoints found' after retries; "
+                    "retrying once with image_config stripped (no upstream provider "
+                    "accepted the requested image_config)."
+                )
+                completion_params.pop("image_config", None)
+                await asyncio.sleep(_NO_ENDPOINTS_STRIP_SLEEP)
+                response = await asyncio.wait_for(
+                    litellm.acompletion(**completion_params),
+                    timeout=timeout,
+                )
+            else:
+                assert last_exc is not None
+                raise last_exc
 
         # Extract images from OpenRouter response
         # OpenRouter returns images in choices[0].message.images

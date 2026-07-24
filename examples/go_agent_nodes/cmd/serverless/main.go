@@ -28,33 +28,51 @@ func main() {
 		DisableLeaseLoop:     true,
 	}
 
+	// Origin auth is opt-in: set AGENTFIELD_AUTHORIZATION_INTERNAL_TOKEN to the
+	// same value the control plane uses (Features.DID.Authorization.InternalToken)
+	// to require it on incoming /execute calls. Left unset, this node accepts
+	// any caller who can reach its URL - fine for local trying-out, not for a
+	// publicly reachable deployment.
+	if token := strings.TrimSpace(os.Getenv("AGENTFIELD_AUTHORIZATION_INTERNAL_TOKEN")); token != "" {
+		cfg.InternalToken = token
+		cfg.RequireOriginAuth = true
+	} else {
+		log.Printf("warning: AGENTFIELD_AUTHORIZATION_INTERNAL_TOKEN not set - /execute is unauthenticated")
+	}
+
 	srv, err := agent.New(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	srv.RegisterReasoner("hello", func(ctx context.Context, input map[string]any) (any, error) {
+		exec := agent.ExecutionContextFrom(ctx)
 		name := strings.TrimSpace(defaultString(toString(input["name"]), "AgentField"))
 		return map[string]any{
-			"greeting": "Hello, " + name + "!",
-			"name":     name,
+			"greeting":            "Hello, " + name + "!",
+			"name":                name,
+			"execution_id":        exec.ExecutionID,
+			"parent_execution_id": exec.ParentExecutionID,
 		}, nil
 	})
 
 	srv.RegisterReasoner("relay", func(ctx context.Context, input map[string]any) (any, error) {
+		exec := agent.ExecutionContextFrom(ctx)
 		target := strings.TrimSpace(defaultString(toString(input["target"]), os.Getenv("CHILD_TARGET")))
 		if target == "" {
 			return map[string]any{"error": "target is required"}, nil
 		}
 		message := strings.TrimSpace(defaultString(toString(input["message"]), "ping"))
 
-		res, err := srv.Call(ctx, target, map[string]any{"message": message})
+		res, err := srv.Call(ctx, target, map[string]any{"name": message})
 		if err != nil {
 			return nil, err
 		}
 		return map[string]any{
-			"target":     target,
-			"downstream": res,
+			"target":              target,
+			"downstream":          res,
+			"execution_id":        exec.ExecutionID,
+			"parent_execution_id": exec.ParentExecutionID,
 		}, nil
 	})
 

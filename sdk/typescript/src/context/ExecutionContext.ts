@@ -1,6 +1,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type express from 'express';
 import type { Agent } from '../agent/Agent.js';
+import type { ExecutionLogger } from '../observability/ExecutionLogger.js';
+import { CostTracker } from '../usage/costTracker.js';
 
 export interface ExecutionMetadata {
   executionId: string;
@@ -8,10 +10,15 @@ export interface ExecutionMetadata {
   sessionId?: string;
   actorId?: string;
   workflowId?: string;
+  rootWorkflowId?: string;
   parentExecutionId?: string;
+  reasonerId?: string;
   callerDid?: string;
   targetDid?: string;
   agentNodeDid?: string;
+  replaySourceRunId?: string;
+  replayBeforeExecutionId?: string;
+  replayMode?: string;
 }
 
 const store = new AsyncLocalStorage<ExecutionContext>();
@@ -22,6 +29,14 @@ export class ExecutionContext {
   readonly req: express.Request;
   readonly res: express.Response;
   readonly agent: Agent;
+  /**
+   * Per-execution LLM/harness usage accumulator. Each top-level execution
+   * binds a fresh tracker (isolated across concurrent executions via the
+   * AsyncLocalStorage this context lives in); nested local `agent.call()`
+   * executions inherit the parent's tracker so their usage rolls up into the
+   * parent's report.
+   */
+  readonly costTracker: CostTracker;
 
   constructor(params: {
     input: any;
@@ -29,12 +44,18 @@ export class ExecutionContext {
     req: express.Request;
     res: express.Response;
     agent: Agent;
+    costTracker?: CostTracker;
   }) {
     this.input = params.input;
     this.metadata = params.metadata;
     this.req = params.req;
     this.res = params.res;
     this.agent = params.agent;
+    this.costTracker = params.costTracker ?? new CostTracker();
+  }
+
+  get logger(): ExecutionLogger {
+    return this.agent.getExecutionLogger();
   }
 
   static run<T>(ctx: ExecutionContext, fn: () => T): T {

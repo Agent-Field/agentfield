@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -14,13 +15,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type executionRecordProvider interface {
-	QueryExecutionRecords(ctx context.Context, filter types.ExecutionFilter) ([]*types.Execution, error)
-	GetExecutionRecord(ctx context.Context, executionID string) (*types.Execution, error)
-}
-
 type executionGraphService struct {
-	store executionRecordProvider
+	store storage.StorageProvider
 }
 
 func newExecutionGraphService(storageProvider storage.StorageProvider) *executionGraphService {
@@ -33,6 +29,7 @@ type WorkflowDAGNode struct {
 	AgentNodeID       string                `json:"agent_node_id"`
 	ReasonerID        string                `json:"reasoner_id"`
 	Status            string                `json:"status"`
+	StatusReason      *string               `json:"status_reason,omitempty"`
 	StartedAt         string                `json:"started_at"`
 	CompletedAt       *string               `json:"completed_at,omitempty"`
 	DurationMS        *int64                `json:"duration_ms,omitempty"`
@@ -42,6 +39,14 @@ type WorkflowDAGNode struct {
 	Notes             []types.ExecutionNote `json:"notes"`
 	NotesCount        int                   `json:"notes_count"`
 	LatestNote        *types.ExecutionNote  `json:"latest_note,omitempty"`
+	Reuse             *ExecutionReuseInfo   `json:"reuse,omitempty"`
+	External          *WorkflowDAGExternal  `json:"external,omitempty"`
+}
+
+type ExecutionReuseInfo struct {
+	Hit               bool   `json:"hit"`
+	SourceExecutionID string `json:"source_execution_id"`
+	SourceRunID       string `json:"source_run_id,omitempty"`
 }
 
 type WorkflowDAGResponse struct {
@@ -54,6 +59,28 @@ type WorkflowDAGResponse struct {
 	MaxDepth       int               `json:"max_depth"`
 	DAG            WorkflowDAGNode   `json:"dag"`
 	Timeline       []WorkflowDAGNode `json:"timeline"`
+	// Trigger describes the inbound webhook (or schedule) that originated
+	// this run, when one exists. Populated by walking the root execution's
+	// VC chain back to the parent trigger_event VC.
+	Trigger *types.TriggerEventMetadata `json:"trigger,omitempty"`
+	Lineage *RunLineageMetadata         `json:"lineage,omitempty"`
+	Golden  *GoldenRunMetadata          `json:"golden,omitempty"`
+}
+
+type RunLineageMetadata struct {
+	Kind                 string `json:"kind,omitempty"`
+	SourceRunID          string `json:"source_run_id,omitempty"`
+	SourceExecutionID    string `json:"source_execution_id,omitempty"`
+	RestartedExecutionID string `json:"restarted_execution_id,omitempty"`
+	Reuse                string `json:"reuse,omitempty"`
+	Scope                string `json:"scope,omitempty"`
+}
+
+type GoldenRunMetadata struct {
+	Name    string   `json:"name,omitempty"`
+	Tags    []string `json:"tags,omitempty"`
+	SavedBy string   `json:"saved_by,omitempty"`
+	SavedAt string   `json:"saved_at,omitempty"`
 }
 
 type SessionWorkflowsResponse struct {
@@ -65,15 +92,53 @@ type SessionWorkflowsResponse struct {
 }
 
 type WorkflowDAGLightweightNode struct {
-	ExecutionID       string  `json:"execution_id"`
-	ParentExecutionID *string `json:"parent_execution_id,omitempty"`
-	AgentNodeID       string  `json:"agent_node_id"`
-	ReasonerID        string  `json:"reasoner_id"`
-	Status            string  `json:"status"`
-	StartedAt         string  `json:"started_at"`
-	CompletedAt       *string `json:"completed_at,omitempty"`
-	DurationMS        *int64  `json:"duration_ms,omitempty"`
-	WorkflowDepth     int     `json:"workflow_depth"`
+	ExecutionID       string               `json:"execution_id"`
+	ParentExecutionID *string              `json:"parent_execution_id,omitempty"`
+	AgentNodeID       string               `json:"agent_node_id"`
+	ReasonerID        string               `json:"reasoner_id"`
+	Status            string               `json:"status"`
+	StatusReason      *string              `json:"status_reason,omitempty"`
+	StartedAt         string               `json:"started_at"`
+	CompletedAt       *string              `json:"completed_at,omitempty"`
+	DurationMS        *int64               `json:"duration_ms,omitempty"`
+	WorkflowDepth     int                  `json:"workflow_depth"`
+	Reuse             *ExecutionReuseInfo  `json:"reuse,omitempty"`
+	External          *WorkflowDAGExternal `json:"external,omitempty"`
+}
+
+// WorkflowDAGExternal marks a local execution as a call through an external
+// discovery binding, such as an ARD-imported capability. The local execution
+// remains the source of truth for this control plane; remote run IDs are links
+// into the provider plane when the caller captured them.
+type WorkflowDAGExternal struct {
+	Kind                  string `json:"kind"`
+	LocalTarget           string `json:"local_target,omitempty"`
+	Provider              string `json:"provider,omitempty"`
+	EntryIdentifier       string `json:"entry_identifier,omitempty"`
+	Adapter               string `json:"adapter,omitempty"`
+	Policy                string `json:"policy,omitempty"`
+	Transport             string `json:"transport,omitempty"`
+	Mode                  string `json:"mode,omitempty"`
+	RemoteRunID           string `json:"remote_run_id,omitempty"`
+	RemoteExecutionID     string `json:"remote_execution_id,omitempty"`
+	RemoteControlPlaneURL string `json:"remote_control_plane_url,omitempty"`
+}
+
+// WebhookRunSummary aggregates callback delivery attempts for a workflow run (UI strip).
+type WebhookRunSummary struct {
+	StepsWithWebhook int `json:"steps_with_webhook"`
+	TotalDeliveries  int `json:"total_deliveries"`
+	FailedDeliveries int `json:"failed_deliveries"`
+}
+
+// WebhookFailurePreview is one execution whose latest failed webhook attempt is shown for run-level retry UX.
+type WebhookFailurePreview struct {
+	ExecutionID string `json:"execution_id"`
+	AgentNodeID string `json:"agent_node_id,omitempty"`
+	ReasonerID  string `json:"reasoner_id,omitempty"`
+	EventType   string `json:"event_type,omitempty"`
+	HTTPStatus  *int   `json:"http_status,omitempty"`
+	CreatedAt   string `json:"created_at,omitempty"`
 }
 
 type WorkflowDAGLightweightResponse struct {
@@ -86,6 +151,22 @@ type WorkflowDAGLightweightResponse struct {
 	MaxDepth       int                          `json:"max_depth"`
 	Timeline       []WorkflowDAGLightweightNode `json:"timeline"`
 	Mode           string                       `json:"mode"`
+	// UniqueAgentNodeIDs lists distinct agent node IDs participating in this run (nodes strip).
+	UniqueAgentNodeIDs []string `json:"unique_agent_node_ids,omitempty"`
+	// WorkflowIssuerDID is the issuer DID from the newest execution VC for this workflow, when VC data exists.
+	WorkflowIssuerDID *string            `json:"workflow_issuer_did,omitempty"`
+	WebhookSummary    *WebhookRunSummary `json:"webhook_summary,omitempty"`
+	// WebhookFailures lists executions with a failed delivery (latest failure per execution), capped for the run strip.
+	WebhookFailures []WebhookFailurePreview `json:"webhook_failures,omitempty"`
+	// Trigger describes the inbound webhook (or schedule) that originated
+	// this run, when one exists.
+	Trigger *types.TriggerEventMetadata `json:"trigger,omitempty"`
+	Lineage *RunLineageMetadata         `json:"lineage,omitempty"`
+	Golden  *GoldenRunMetadata          `json:"golden,omitempty"`
+}
+
+type workflowRunMetadataGetter interface {
+	GetWorkflowRun(ctx context.Context, runID string) (*types.WorkflowRun, error)
 }
 
 func GetWorkflowDAGHandler(storageProvider storage.StorageProvider) gin.HandlerFunc {
@@ -114,19 +195,35 @@ func (s *executionGraphService) handleGetWorkflowDAG(c *gin.Context) {
 		return
 	}
 
+	rootExecID := findRootExecutionID(executions)
+	lineage, golden := s.loadRunMetadata(ctx, runID)
+
 	if isLightweightRequest(c) {
 		timeline, workflowStatus, workflowName, sessionID, actorID, maxDepth := buildLightweightExecutionDAG(executions)
+		if lineage != nil && lineage.SourceRunID != "" {
+			for i := range timeline {
+				fillReuseSourceRunNode(timeline[i].Reuse, lineage.SourceRunID)
+			}
+		}
 
+		wh := aggregateWebhookRunData(ctx, s.store, executions)
 		response := WorkflowDAGLightweightResponse{
-			RootWorkflowID: runID,
-			WorkflowStatus: workflowStatus,
-			WorkflowName:   workflowName,
-			SessionID:      sessionID,
-			ActorID:        actorID,
-			TotalNodes:     len(executions),
-			MaxDepth:       maxDepth,
-			Timeline:       timeline,
-			Mode:           "lightweight",
+			RootWorkflowID:     runID,
+			WorkflowStatus:     workflowStatus,
+			WorkflowName:       workflowName,
+			SessionID:          sessionID,
+			ActorID:            actorID,
+			TotalNodes:         len(executions),
+			MaxDepth:           maxDepth,
+			Timeline:           timeline,
+			Mode:               "lightweight",
+			UniqueAgentNodeIDs: collectUniqueAgentNodeIDs(executions),
+			WorkflowIssuerDID:  lookupWorkflowIssuerDID(ctx, s.store, runID),
+			WebhookSummary:     wh.summary,
+			WebhookFailures:    wh.failures,
+			Trigger:            TriggerForRun(ctx, s.store, runID, rootExecID),
+			Lineage:            lineage,
+			Golden:             golden,
 		}
 
 		c.JSON(http.StatusOK, response)
@@ -134,6 +231,12 @@ func (s *executionGraphService) handleGetWorkflowDAG(c *gin.Context) {
 	}
 
 	dag, timeline, workflowStatus, workflowName, sessionID, actorID, maxDepth := buildExecutionDAG(executions)
+	if lineage != nil && lineage.SourceRunID != "" {
+		fillReuseSourceRunDAG(&dag, lineage.SourceRunID)
+		for i := range timeline {
+			fillReuseSourceRunNode(timeline[i].Reuse, lineage.SourceRunID)
+		}
+	}
 
 	response := WorkflowDAGResponse{
 		RootWorkflowID: runID,
@@ -145,9 +248,65 @@ func (s *executionGraphService) handleGetWorkflowDAG(c *gin.Context) {
 		MaxDepth:       maxDepth,
 		DAG:            dag,
 		Timeline:       timeline,
+		Trigger:        TriggerForRun(ctx, s.store, runID, rootExecID),
+		Lineage:        lineage,
+		Golden:         golden,
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+func (s *executionGraphService) loadRunMetadata(ctx context.Context, runID string) (*RunLineageMetadata, *GoldenRunMetadata) {
+	getter, ok := s.store.(workflowRunMetadataGetter)
+	if !ok {
+		return nil, nil
+	}
+	run, err := getter.GetWorkflowRun(ctx, runID)
+	if err != nil || run == nil || len(run.Metadata) == 0 {
+		return nil, nil
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(run.Metadata, &raw); err != nil {
+		return nil, nil
+	}
+	var lineage *RunLineageMetadata
+	if value, ok := raw["lineage"]; ok {
+		if encoded, err := json.Marshal(value); err == nil {
+			var parsed RunLineageMetadata
+			if err := json.Unmarshal(encoded, &parsed); err == nil {
+				lineage = &parsed
+			}
+		}
+	}
+	var golden *GoldenRunMetadata
+	if value, ok := raw["golden"]; ok {
+		if encoded, err := json.Marshal(value); err == nil {
+			var parsed GoldenRunMetadata
+			if err := json.Unmarshal(encoded, &parsed); err == nil {
+				golden = &parsed
+			}
+		}
+	}
+	return lineage, golden
+}
+
+// findRootExecutionID returns the execution_id of the root node — the
+// execution whose ParentExecutionID is nil/empty. Used to anchor trigger
+// enrichment to the run's originating step. Falls back to the first
+// execution when nothing has a clear nil parent (older rows).
+func findRootExecutionID(executions []*types.Execution) string {
+	for _, exec := range executions {
+		if exec == nil {
+			continue
+		}
+		if exec.ParentExecutionID == nil || *exec.ParentExecutionID == "" {
+			return exec.ExecutionID
+		}
+	}
+	if len(executions) > 0 && executions[0] != nil {
+		return executions[0].ExecutionID
+	}
+	return ""
 }
 
 func GetWorkflowChildrenHandler(storageProvider storage.StorageProvider) gin.HandlerFunc {
@@ -263,6 +422,148 @@ func (s *executionGraphService) loadRunExecutions(ctx context.Context, runID str
 		SortDescending: false,
 	}
 	return s.store.QueryExecutionRecords(ctx, filter)
+}
+
+func collectUniqueAgentNodeIDs(executions []*types.Execution) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0)
+	for _, e := range executions {
+		if e == nil {
+			continue
+		}
+		id := strings.TrimSpace(e.AgentNodeID)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+const maxWebhookFailurePreviews = 20
+
+type webhookRunAggregates struct {
+	summary  *WebhookRunSummary
+	failures []WebhookFailurePreview
+}
+
+// aggregateWebhookRunData always returns a non-nil summary so UIs can show an explicit
+// “no webhooks” state. Failures are optional (latest failed attempt per execution).
+func aggregateWebhookRunData(ctx context.Context, store storage.StorageProvider, executions []*types.Execution) webhookRunAggregates {
+	empty := &WebhookRunSummary{}
+	if len(executions) == 0 {
+		return webhookRunAggregates{summary: empty, failures: nil}
+	}
+	ids := make([]string, 0, len(executions))
+	execByID := make(map[string]*types.Execution, len(executions))
+	for _, e := range executions {
+		if e == nil {
+			continue
+		}
+		ids = append(ids, e.ExecutionID)
+		execByID[e.ExecutionID] = e
+	}
+	reg, err := store.ListExecutionWebhooksRegistered(ctx, ids)
+	if err != nil {
+		return webhookRunAggregates{summary: empty, failures: nil}
+	}
+	evMap, err := store.ListExecutionWebhookEventsBatch(ctx, ids)
+	if err != nil {
+		evMap = nil
+	}
+	steps := 0
+	for _, ok := range reg {
+		if ok {
+			steps++
+		}
+	}
+	total := 0
+	failed := 0
+	for _, evs := range evMap {
+		total += len(evs)
+		for _, ev := range evs {
+			if ev == nil {
+				continue
+			}
+			st := strings.ToLower(strings.TrimSpace(ev.Status))
+			if st == "failed" {
+				failed++
+			}
+		}
+	}
+	failures := buildWebhookFailurePreviews(execByID, evMap)
+	return webhookRunAggregates{
+		summary: &WebhookRunSummary{
+			StepsWithWebhook: steps,
+			TotalDeliveries:  total,
+			FailedDeliveries: failed,
+		},
+		failures: failures,
+	}
+}
+
+func buildWebhookFailurePreviews(
+	execByID map[string]*types.Execution,
+	evMap map[string][]*types.ExecutionWebhookEvent,
+) []WebhookFailurePreview {
+	if len(evMap) == 0 {
+		return nil
+	}
+	previews := make([]WebhookFailurePreview, 0)
+	for execID, evs := range evMap {
+		var latestFail *types.ExecutionWebhookEvent
+		for _, ev := range evs {
+			if ev == nil {
+				continue
+			}
+			if strings.ToLower(strings.TrimSpace(ev.Status)) != "failed" {
+				continue
+			}
+			if latestFail == nil || ev.CreatedAt.After(latestFail.CreatedAt) {
+				latestFail = ev
+			}
+		}
+		if latestFail == nil {
+			continue
+		}
+		var agent, reasoner string
+		if ex := execByID[execID]; ex != nil {
+			agent = strings.TrimSpace(ex.AgentNodeID)
+			reasoner = strings.TrimSpace(ex.ReasonerID)
+		}
+		previews = append(previews, WebhookFailurePreview{
+			ExecutionID: execID,
+			AgentNodeID: agent,
+			ReasonerID:  reasoner,
+			EventType:   latestFail.EventType,
+			HTTPStatus:  latestFail.HTTPStatus,
+			CreatedAt:   latestFail.CreatedAt.UTC().Format(time.RFC3339),
+		})
+	}
+	sort.Slice(previews, func(i, j int) bool {
+		return previews[i].CreatedAt > previews[j].CreatedAt
+	})
+	if len(previews) > maxWebhookFailurePreviews {
+		previews = previews[:maxWebhookFailurePreviews]
+	}
+	return previews
+}
+
+func lookupWorkflowIssuerDID(ctx context.Context, store storage.StorageProvider, workflowID string) *string {
+	wf := workflowID
+	vcs, err := store.ListExecutionVCs(ctx, types.VCFilters{WorkflowID: &wf, Limit: 1})
+	if err != nil || len(vcs) == 0 || vcs[0] == nil {
+		return nil
+	}
+	iss := strings.TrimSpace(vcs[0].IssuerDID)
+	if iss == "" {
+		return nil
+	}
+	return &iss
 }
 
 func buildExecutionDAG(executions []*types.Execution) (WorkflowDAGNode, []WorkflowDAGNode, string, string, *string, *string, int) {
@@ -485,6 +786,7 @@ func executionToDAGNode(exec *types.Execution, depth int) WorkflowDAGNode {
 		AgentNodeID:       exec.AgentNodeID,
 		ReasonerID:        exec.ReasonerID,
 		Status:            types.NormalizeExecutionStatus(exec.Status),
+		StatusReason:      exec.StatusReason,
 		StartedAt:         started,
 		CompletedAt:       completed,
 		DurationMS:        exec.DurationMS,
@@ -492,27 +794,46 @@ func executionToDAGNode(exec *types.Execution, depth int) WorkflowDAGNode {
 		WorkflowDepth:     depth,
 		Notes:             []types.ExecutionNote{},
 		NotesCount:        0,
+		Reuse:             executionReuseInfo(exec),
+		External:          externalAnnotationFromExecution(exec),
 	}
 }
 
 func deriveOverallStatus(executions []*types.Execution) string {
 	hasRunning := false
+	hasPaused := false
 	hasFailed := false
+	hasTimeout := false
+	hasCancelled := false
 	for _, exec := range executions {
 		status := types.NormalizeExecutionStatus(exec.Status)
 		switch status {
-		case string(types.ExecutionStatusRunning), string(types.ExecutionStatusPending), string(types.ExecutionStatusQueued):
+		case string(types.ExecutionStatusRunning), string(types.ExecutionStatusWaiting), string(types.ExecutionStatusPending), string(types.ExecutionStatusQueued):
 			hasRunning = true
+		case string(types.ExecutionStatusPaused):
+			hasPaused = true
 		case string(types.ExecutionStatusFailed):
 			hasFailed = true
+		case string(types.ExecutionStatusTimeout):
+			hasTimeout = true
+		case string(types.ExecutionStatusCancelled):
+			hasCancelled = true
 		}
 	}
-	// Priority: running > failed > succeeded
+	if hasPaused {
+		return string(types.ExecutionStatusPaused)
+	}
 	if hasRunning {
 		return string(types.ExecutionStatusRunning)
 	}
 	if hasFailed {
 		return string(types.ExecutionStatusFailed)
+	}
+	if hasTimeout {
+		return string(types.ExecutionStatusTimeout)
+	}
+	if hasCancelled {
+		return string(types.ExecutionStatusCancelled)
 	}
 	return string(types.ExecutionStatusSucceeded)
 }
@@ -531,11 +852,135 @@ func executionToLightweightNode(exec *types.Execution, depth int) WorkflowDAGLig
 		AgentNodeID:       exec.AgentNodeID,
 		ReasonerID:        exec.ReasonerID,
 		Status:            types.NormalizeExecutionStatus(exec.Status),
+		StatusReason:      exec.StatusReason,
 		StartedAt:         started,
 		CompletedAt:       completed,
 		DurationMS:        exec.DurationMS,
 		WorkflowDepth:     depth,
+		Reuse:             executionReuseInfo(exec),
+		External:          externalAnnotationFromExecution(exec),
 	}
+}
+
+func executionReuseInfo(exec *types.Execution) *ExecutionReuseInfo {
+	if exec == nil || exec.StatusReason == nil {
+		return nil
+	}
+	const prefix = "replayed_from_execution:"
+	sourceExecutionID := strings.TrimSpace(strings.TrimPrefix(*exec.StatusReason, prefix))
+	if sourceExecutionID == "" || sourceExecutionID == *exec.StatusReason {
+		return nil
+	}
+	return &ExecutionReuseInfo{
+		Hit:               true,
+		SourceExecutionID: sourceExecutionID,
+	}
+}
+
+// fillReuseSourceRunDAG back-fills the source run id on a node's reuse marker and
+// its descendants. The per-node reuse info is derived from the execution status
+// reason, which only records the source execution id; every reused node in a
+// restarted run shares the run's single replay source, so the run id is taken
+// from the run lineage rather than re-queried per node.
+func fillReuseSourceRunDAG(node *WorkflowDAGNode, sourceRunID string) {
+	if node == nil {
+		return
+	}
+	if node.Reuse != nil && node.Reuse.Hit && node.Reuse.SourceRunID == "" {
+		node.Reuse.SourceRunID = sourceRunID
+	}
+	for i := range node.Children {
+		fillReuseSourceRunDAG(&node.Children[i], sourceRunID)
+	}
+}
+
+// fillReuseSourceRunNode back-fills the source run id on a single reuse marker.
+func fillReuseSourceRunNode(reuse *ExecutionReuseInfo, sourceRunID string) {
+	if reuse != nil && reuse.Hit && reuse.SourceRunID == "" {
+		reuse.SourceRunID = sourceRunID
+	}
+}
+
+func externalAnnotationFromExecution(exec *types.Execution) *WorkflowDAGExternal {
+	if exec == nil || len(exec.ResultPayload) == 0 {
+		return nil
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(exec.ResultPayload, &payload); err != nil {
+		return nil
+	}
+
+	for _, key := range []string{"external", "external_capability", "borrowed_capability", "ard_external"} {
+		if candidate, ok := payload[key]; ok {
+			if key == "borrowed_capability" && !externalBoundaryOptIn(payload) {
+				continue
+			}
+			if annotation := externalAnnotationFromValue(candidate); annotation != nil {
+				return annotation
+			}
+		}
+	}
+
+	return nil
+}
+
+func externalBoundaryOptIn(payload map[string]any) bool {
+	for _, key := range []string{"external_call_boundary", "external_boundary", "ard_external_boundary"} {
+		if value, ok := payload[key].(bool); ok && value {
+			return true
+		}
+	}
+	return false
+}
+
+func externalAnnotationFromValue(value any) *WorkflowDAGExternal {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	kind := firstString(object, "kind")
+	if kind == "" {
+		kind = "ard"
+	}
+
+	annotation := &WorkflowDAGExternal{
+		Kind:                  kind,
+		LocalTarget:           firstString(object, "local_target", "logical_id", "target", "callable"),
+		Provider:              firstString(object, "provider", "publisher", "provider_name"),
+		EntryIdentifier:       firstString(object, "entry_identifier", "identifier", "ard_identifier"),
+		Adapter:               firstString(object, "adapter"),
+		Policy:                firstString(object, "policy"),
+		Transport:             firstString(object, "transport"),
+		Mode:                  firstString(object, "mode"),
+		RemoteRunID:           firstString(object, "remote_run_id", "provider_run_id", "run_id"),
+		RemoteExecutionID:     firstString(object, "remote_execution_id", "provider_execution_id", "execution_id"),
+		RemoteControlPlaneURL: firstString(object, "remote_control_plane_url", "provider_control_plane_url", "control_plane_url"),
+	}
+
+	if annotation.LocalTarget == "" &&
+		annotation.Provider == "" &&
+		annotation.EntryIdentifier == "" &&
+		annotation.RemoteRunID == "" &&
+		annotation.RemoteExecutionID == "" {
+		return nil
+	}
+
+	return annotation
+}
+
+func firstString(object map[string]any, keys ...string) string {
+	for _, key := range keys {
+		value, ok := object[key]
+		if !ok {
+			continue
+		}
+		if s, ok := value.(string); ok {
+			return strings.TrimSpace(s)
+		}
+	}
+	return ""
 }
 
 func isLightweightRequest(c *gin.Context) bool {

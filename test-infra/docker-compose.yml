@@ -1,0 +1,47 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: agentfield_test
+      POSTGRES_PASSWORD: test_password
+      POSTGRES_DB: agentfield_test
+    ports:
+      - "5433:5432"  # Different port to avoid conflicts with local postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentfield_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+
+  control-plane:
+    build:
+      context: ..
+      dockerfile: deployments/docker/Dockerfile.control-plane
+    environment:
+      AGENTFIELD_PORT: 8080
+      AGENTFIELD_STORAGE_MODE: postgres
+      AGENTFIELD_POSTGRES_URL: postgresql://agentfield_test:test_password@postgres:5432/agentfield_test?sslmode=disable
+      AGENTFIELD_UI_ENABLED: "true"
+      LOG_LEVEL: debug
+      GIN_MODE: debug
+    ports:
+      - "8080:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres_test_data:
+
+networks:
+  default:
+    name: agentfield_test_network

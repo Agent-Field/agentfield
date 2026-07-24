@@ -14,6 +14,7 @@ export interface ExecutionSummary {
   input_size: number;
   output_size: number;
   error_message?: string;
+  error_category?: string;
   created_at: string;
   // Computed fields for frontend compatibility
   started_at?: string;
@@ -89,9 +90,38 @@ export interface ExecutionStats {
 }
 
 export interface ExecutionEvent {
-  type: "execution_started" | "execution_completed" | "execution_failed";
+  type: "execution_started" | "execution_completed" | "execution_failed" | "execution_waiting" | "execution_approval_resolved" | "execution_updated";
   execution: ExecutionSummary;
   timestamp: string;
+}
+
+export interface ExecutionLogEntry {
+  event_id: number;
+  execution_id: string;
+  workflow_id: string;
+  run_id?: string;
+  root_workflow_id?: string;
+  parent_execution_id?: string;
+  seq: number;
+  agent_node_id: string;
+  reasoner_id?: string;
+  level: string;
+  source: string;
+  event_type?: string;
+  message: string;
+  attributes?: Record<string, unknown> | unknown[] | string | number | boolean | null;
+  system_generated?: boolean;
+  sdk_language?: string;
+  attempt?: number;
+  span_id?: string;
+  step_id?: string;
+  error_category?: string;
+  ts: string;
+  recorded_at: string;
+}
+
+export interface ExecutionLogsResponse {
+  entries: ExecutionLogEntry[];
 }
 
 export interface WorkflowExecution {
@@ -115,16 +145,29 @@ export interface WorkflowExecution {
   workflow_name?: string;
   workflow_tags: string[];
   status: CanonicalStatus;
+  status_reason?: string;
   started_at: string;
   completed_at?: string;
   duration_ms?: number;
   error_message?: string;
+  error_category?: string;
   retry_count: number;
+  approval_request_id?: string;
+  approval_request_url?: string;
+  approval_status?: string;
+  approval_response?: string;
+  approval_requested_at?: string;
+  approval_responded_at?: string;
   created_at: string;
   updated_at: string;
   notes?: ExecutionNote[];
   webhook_registered?: boolean;
   webhook_events?: ExecutionWebhookEvent[];
+  /** From execution_vcs when VC/DID is enabled */
+  caller_did?: string;
+  target_did?: string;
+  input_hash?: string;
+  output_hash?: string;
 }
 
 // Import ExecutionNote type

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/handlers"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
@@ -17,17 +18,19 @@ import (
 
 // DIDHandler provides handlers for UI-related DID operations.
 type DIDHandler struct {
-	storage    storage.StorageProvider
-	didService *services.DIDService
-	vcService  *services.VCService
+	storage       storage.StorageProvider
+	didService    *services.DIDService
+	vcService     *services.VCService
+	didWebService *services.DIDWebService
 }
 
 // NewDIDHandler creates a new DIDHandler.
-func NewDIDHandler(storage storage.StorageProvider, didService *services.DIDService, vcService *services.VCService) *DIDHandler {
+func NewDIDHandler(storage storage.StorageProvider, didService *services.DIDService, vcService *services.VCService, didWebService *services.DIDWebService) *DIDHandler {
 	return &DIDHandler{
-		storage:    storage,
-		didService: didService,
-		vcService:  vcService,
+		storage:       storage,
+		didService:    didService,
+		vcService:     vcService,
+		didWebService: didWebService,
 	}
 }
 
@@ -97,8 +100,18 @@ func (h *DIDHandler) GetNodeDIDHandler(c *gin.Context) {
 		status = "inactive"
 	}
 
+	// Look up the did:web identifier for this agent (if available)
+	var didWeb string
+	if h.didWebService != nil {
+		result, err := h.didWebService.ResolveDIDByAgentID(c.Request.Context(), nodeID)
+		if err == nil && result != nil && result.DIDDocument != nil {
+			didWeb = h.didWebService.GenerateDIDWeb(nodeID)
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"did":                  agentInfo.DID,
+		"did_web":              didWeb,
 		"agent_node_id":        nodeID,
 		"agentfield_server_id": registry.AgentFieldServerID,
 		"public_key_jwk":       agentInfo.PublicKeyJWK,
@@ -206,12 +219,8 @@ func (h *DIDHandler) GetExecutionVCStatusHandler(c *gin.Context) {
 		return
 	}
 
-	// DEBUG: Log the execution ID being requested
-	fmt.Printf("DEBUG: GetExecutionVCStatusHandler called for execution_id: %s\n", executionID)
-
 	// If VC service is not available, return empty response
 	if h.vcService == nil {
-		fmt.Printf("DEBUG: VC service is nil for execution_id: %s\n", executionID)
 		c.JSON(http.StatusOK, gin.H{
 			"has_vc":     false,
 			"status":     "none",
@@ -222,7 +231,6 @@ func (h *DIDHandler) GetExecutionVCStatusHandler(c *gin.Context) {
 
 	executionVC, err := h.vcService.GetExecutionVCByExecutionID(executionID)
 	if err != nil {
-		fmt.Printf("DEBUG: Execution VC lookup failed for %s: %v\n", executionID, err)
 		c.JSON(http.StatusOK, gin.H{
 			"has_vc":     false,
 			"status":     "none",
@@ -231,16 +239,12 @@ func (h *DIDHandler) GetExecutionVCStatusHandler(c *gin.Context) {
 		return
 	}
 
-	fmt.Printf("DEBUG: Found VC for execution_id %s: vc_id=%s, status=%s, vc_document_type=%T\n",
-		executionID, executionVC.VCID, executionVC.Status, executionVC.VCDocument)
-
 	var vcDocumentForResponse interface{}
 	documentStatus := executionVC.Status
 
 	if len(executionVC.VCDocument) > 0 {
 		var parsed interface{}
 		if err := json.Unmarshal(executionVC.VCDocument, &parsed); err != nil {
-			fmt.Printf("DEBUG: VC document parsing failed for %s: %v\n", executionID, err)
 			vcDocumentForResponse = map[string]interface{}{
 				"parse_error": true,
 				"error":       err.Error(),
@@ -250,7 +254,6 @@ func (h *DIDHandler) GetExecutionVCStatusHandler(c *gin.Context) {
 			documentStatus = "malformed"
 		} else {
 			vcDocumentForResponse = parsed
-			fmt.Printf("DEBUG: VC document is valid JSON (%d bytes)\n", len(executionVC.VCDocument))
 		}
 	} else if executionVC.StorageURI != "" {
 		vcDocumentForResponse = map[string]interface{}{
@@ -288,26 +291,20 @@ func (h *DIDHandler) GetExecutionVCHandler(c *gin.Context) {
 		return
 	}
 
-	// DEBUG: Log the execution ID being requested
-	fmt.Printf("DEBUG: GetExecutionVCHandler called for execution_id: %s\n", executionID)
-
 	// If VC service is not available, return error
 	if h.vcService == nil {
-		fmt.Printf("DEBUG: VC service is nil for execution_id: %s\n", executionID)
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "VC service not available"})
 		return
 	}
 
 	executionVC, err := h.vcService.GetExecutionVCByExecutionID(executionID)
 	if err != nil {
-		fmt.Printf("DEBUG: No VC found for execution_id: %s (err=%v)\n", executionID, err)
 		c.JSON(http.StatusNotFound, gin.H{"error": "VC not found for this execution"})
 		return
 	}
 
 	if len(executionVC.VCDocument) == 0 {
 		if executionVC.StorageURI == "" {
-			fmt.Printf("DEBUG: VC document is empty for execution_id: %s\n", executionID)
 			c.JSON(http.StatusNotFound, gin.H{"error": "VC document not found or empty"})
 			return
 		}
@@ -466,6 +463,13 @@ func (h *DIDHandler) VerifyVCHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+// VerifyAuditBundleHandler verifies exported provenance JSON (workflow chain, enhanced export, or bare W3C VC).
+// POST /api/ui/v1/did/verify-audit
+// Query: resolve_web=true, did_resolver=<url>, verbose=true
+func (h *DIDHandler) VerifyAuditBundleHandler(c *gin.Context) {
+	handlers.HandleVerifyAuditBundle(c)
 }
 
 // VerifyExecutionVCComprehensiveHandler handles requests for comprehensive VC verification.

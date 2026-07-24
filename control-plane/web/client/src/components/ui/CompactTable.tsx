@@ -20,7 +20,7 @@ import {
 } from "./empty";
 import { Button } from "./button";
 
-const ROW_HEIGHT = 32; // Using foundation's compact row height
+const DEFAULT_ROW_HEIGHT = 32; // Using foundation's compact row height
 const CHEVRON_COLUMN_WIDTH = "28px";
 
 interface SortableHeaderCellProps {
@@ -145,13 +145,14 @@ interface CompactTableProps<T> {
   };
   className?: string;
   getRowKey: (item: T) => string;
+  rowHeight?: number;
 }
 
-function LoadingRow({ gridTemplate }: { gridTemplate: string }) {
+function LoadingRow({ gridTemplate, rowHeight }: { gridTemplate: string; rowHeight: number }) {
   return (
     <div
       className="absolute left-0 right-0"
-      style={{ height: ROW_HEIGHT }}
+      style={{ height: rowHeight }}
     >
       <div
         className="grid items-center h-full px-3 bg-muted/20 rounded-sm"
@@ -159,7 +160,7 @@ function LoadingRow({ gridTemplate }: { gridTemplate: string }) {
       >
         <div className="flex items-center justify-center col-span-full">
           <SpinnerGap className="h-3 w-3 animate-spin text-muted-foreground" />
-          <span className="ml-2 text-body-small">
+          <span className="ml-2 text-sm text-muted-foreground">
             Loading more…
           </span>
         </div>
@@ -266,7 +267,9 @@ export function CompactTable<T>({
   },
   className,
   getRowKey,
+  rowHeight: rowHeightProp,
 }: CompactTableProps<T>) {
+  const ROW_HEIGHT = rowHeightProp ?? DEFAULT_ROW_HEIGHT;
   const [hoveredRow, setHoveredRow] = useState<string | null>(null);
   const parentRef = useRef<HTMLDivElement>(null);
 
@@ -386,6 +389,7 @@ export function CompactTable<T>({
                   <LoadingRow
                     key={`loading-${virtualRow.key}`}
                     gridTemplate={resolvedGridTemplate}
+                    rowHeight={ROW_HEIGHT}
                   />
                 );
               }
@@ -406,7 +410,7 @@ export function CompactTable<T>({
                       "grid h-full items-center content-center px-4 transition-colors duration-150 border-l-2 border-transparent foundation-transition",
                       "hover:bg-[var(--row-hover-bg)] dark:hover:bg-[var(--dark-row-hover-bg)] hover:border-l-muted-foreground/30",
                       hasRowClick &&
-                        "cursor-pointer active:bg-[var(--bg-active)] dark:active:bg-[var(--dark-row-hover-bg)]"
+                        "cursor-pointer active:bg-[hsl(var(--accent))] dark:active:bg-[var(--dark-row-hover-bg)]"
                     )}
                     style={{ gridTemplateColumns: resolvedGridTemplate }}
                     onMouseEnter={() => setHoveredRow(rowKey)}
@@ -451,7 +455,7 @@ export function CompactTable<T>({
         {isFetchingMore && (
           <div className="flex items-center justify-center gap-2 border-t border-border/50 bg-muted/20 py-2">
             <SpinnerGap className="h-3 w-3 animate-spin" />
-            <span className="text-body-small">
+            <span className="text-sm text-muted-foreground">
               Loading more…
             </span>
           </div>

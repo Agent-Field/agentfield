@@ -34,7 +34,7 @@ def test_send_enhanced_heartbeat_sync_success_and_failure(monkeypatch):
     monkeypatch.setattr(client_mod.requests, "post", ok_post)
 
     bc = AgentFieldClient(base_url="http://example")
-    hb = HeartbeatData(status=AgentStatus.READY, mcp_servers=[], timestamp="now")
+    hb = HeartbeatData(status=AgentStatus.READY, timestamp="now")
     assert bc.send_enhanced_heartbeat_sync("node1", hb) is True
 
     def bad_post(url, json, headers, timeout):

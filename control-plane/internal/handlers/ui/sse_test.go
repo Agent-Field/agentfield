@@ -54,6 +54,8 @@ func TestStreamExecutionEventsHandler(t *testing.T) {
 	router.GET("/api/ui/v1/executions/events", handler.StreamExecutionEventsHandler)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/ui/v1/executions/events", nil)
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
 	resp := httptest.NewRecorder()
 
 	// Start handler in goroutine with timeout
@@ -85,7 +87,7 @@ func TestStreamExecutionEventsHandler(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Cancel context to close connection (simulates client disconnect)
-	req.Context().Done()
+	cancel()
 
 	// Wait for handler to finish
 	select {
@@ -94,8 +96,6 @@ func TestStreamExecutionEventsHandler(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 		// Handler may still be running, that's okay for SSE
 	}
-
-	// Real storage doesn't need expectations
 }
 
 // TestStreamExecutionEventsHandler_Headers tests that SSE headers are set correctly
@@ -175,6 +175,8 @@ func TestSSEEventDelivery(t *testing.T) {
 	router.GET("/api/ui/v1/executions/events", handler.StreamExecutionEventsHandler)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/ui/v1/executions/events", nil)
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
 	resp := httptest.NewRecorder()
 
 	done := make(chan bool)
@@ -203,14 +205,12 @@ func TestSSEEventDelivery(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Cancel connection
-	req.Context().Done()
+	cancel()
 
 	select {
 	case <-done:
 	case <-time.After(200 * time.Millisecond):
 	}
-
-	// Real storage doesn't need expectations
 }
 
 // TestSSEHeartbeatMechanism tests that heartbeats keep connection alive
@@ -223,6 +223,8 @@ func TestSSEHeartbeatMechanism(t *testing.T) {
 	router.GET("/api/ui/v1/executions/events", handler.StreamExecutionEventsHandler)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/ui/v1/executions/events", nil)
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
 	resp := httptest.NewRecorder()
 
 	done := make(chan bool)
@@ -242,7 +244,7 @@ func TestSSEHeartbeatMechanism(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Cancel
-	req.Context().Done()
+	cancel()
 
 	select {
 	case <-done:
@@ -260,13 +262,15 @@ func TestSSEMultipleConnections(t *testing.T) {
 	router := gin.New()
 	router.GET("/api/ui/v1/executions/events", handler.StreamExecutionEventsHandler)
 
-	// Create multiple connections
+	// Create multiple connections with a shared cancel
 	connections := 3
+	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan bool, connections)
 
 	for i := 0; i < connections; i++ {
 		go func() {
 			req := httptest.NewRequest(http.MethodGet, "/api/ui/v1/executions/events", nil)
+			req = req.WithContext(ctx)
 			resp := httptest.NewRecorder()
 			router.ServeHTTP(resp, req)
 			done <- true
@@ -288,8 +292,16 @@ func TestSSEMultipleConnections(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	// All connections should have been established
-	// (In real scenario, we'd verify all received the event)
+	// Cancel all connections
+	cancel()
+
+	// Wait for all to finish
+	for i := 0; i < connections; i++ {
+		select {
+		case <-done:
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
 }
 
 // TestSSEErrorHandling tests error handling in SSE handlers
@@ -303,6 +315,8 @@ func TestSSEErrorHandling(t *testing.T) {
 	router.GET("/api/ui/v1/executions/events", handler.StreamExecutionEventsHandler)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/ui/v1/executions/events", nil)
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
 	resp := httptest.NewRecorder()
 
 	// Test that handler works correctly with valid storage
@@ -316,7 +330,7 @@ func TestSSEErrorHandling(t *testing.T) {
 	// Verify headers are set
 	assert.Equal(t, "text/event-stream", resp.Header().Get("Content-Type"))
 
-	req.Context().Done()
+	cancel()
 	select {
 	case <-done:
 	case <-time.After(100 * time.Millisecond):
@@ -345,15 +359,32 @@ func TestSSERequestValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.method, func(t *testing.T) {
 			req := httptest.NewRequest(tt.method, tt.path, nil)
+			ctx, cancel := context.WithCancel(req.Context())
+			req = req.WithContext(ctx)
 			resp := httptest.NewRecorder()
 
-			router.ServeHTTP(resp, req)
+			done := make(chan bool, 1)
+			go func() {
+				router.ServeHTTP(resp, req)
+				done <- true
+			}()
 
 			if tt.method == "GET" {
-				// GET should set SSE headers
+				// Wait for SSE handler to set headers
+				time.Sleep(20 * time.Millisecond)
 				assert.Equal(t, "text/event-stream", resp.Header().Get("Content-Type"))
+				cancel()
+				select {
+				case <-done:
+				case <-time.After(200 * time.Millisecond):
+				}
 			} else {
-				// Other methods should return 404 or method not allowed
+				// Non-GET methods return immediately (404)
+				select {
+				case <-done:
+				case <-time.After(200 * time.Millisecond):
+				}
+				cancel()
 				assert.NotEqual(t, http.StatusOK, resp.Code)
 			}
 		})
@@ -407,6 +438,8 @@ func TestSSEConcurrentEvents(t *testing.T) {
 	router.GET("/api/ui/v1/executions/events", handler.StreamExecutionEventsHandler)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/ui/v1/executions/events", nil)
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
 	resp := httptest.NewRecorder()
 
 	done := make(chan bool)
@@ -442,8 +475,11 @@ func TestSSEConcurrentEvents(t *testing.T) {
 		// Handler still running, which is good
 	}
 
-	req.Context().Done()
-	time.Sleep(50 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+	}
 }
 
 // Helper function to verify SSE response format
@@ -464,6 +500,8 @@ func TestSSEResponseFormat(t *testing.T) {
 	router.GET("/api/ui/v1/executions/events", handler.StreamExecutionEventsHandler)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/ui/v1/executions/events", nil)
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
 	resp := httptest.NewRecorder()
 
 	go func() {
@@ -481,7 +519,7 @@ func TestSSEResponseFormat(t *testing.T) {
 		assert.Contains(t, []string{"*", "null"}, corsOrigin)
 	}
 
-	req.Context().Done()
+	cancel()
 	time.Sleep(20 * time.Millisecond)
 }
 
@@ -496,6 +534,8 @@ func TestSSEWithQueryParameters(t *testing.T) {
 
 	// Test with query parameters (should be ignored but not cause errors)
 	req := httptest.NewRequest(http.MethodGet, "/api/ui/v1/executions/events?filter=test&limit=10", nil)
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
 	resp := httptest.NewRecorder()
 
 	go func() {
@@ -507,7 +547,7 @@ func TestSSEWithQueryParameters(t *testing.T) {
 	// Should still set SSE headers
 	verifySSEHeaders(t, resp)
 
-	req.Context().Done()
+	cancel()
 	time.Sleep(20 * time.Millisecond)
 }
 
@@ -555,6 +595,8 @@ func TestSSEWithInvalidStorage(t *testing.T) {
 	router.GET("/api/ui/v1/executions/events", handler.StreamExecutionEventsHandler)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/ui/v1/executions/events", nil)
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
 	resp := httptest.NewRecorder()
 
 	// Test that handler works correctly with valid storage
@@ -568,7 +610,7 @@ func TestSSEWithInvalidStorage(t *testing.T) {
 	// Verify headers are set correctly
 	assert.Equal(t, "text/event-stream", resp.Header().Get("Content-Type"))
 
-	req.Context().Done()
+	cancel()
 	select {
 	case <-done:
 	case <-time.After(100 * time.Millisecond):
@@ -586,6 +628,8 @@ func TestSSEPerformance(t *testing.T) {
 	router.GET("/api/ui/v1/executions/events", handler.StreamExecutionEventsHandler)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/ui/v1/executions/events", nil)
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
 	resp := httptest.NewRecorder()
 
 	start := time.Now()
@@ -614,7 +658,7 @@ func TestSSEPerformance(t *testing.T) {
 	// Should handle events quickly (not block)
 	assert.Less(t, elapsed, 200*time.Millisecond, "SSE should handle events quickly")
 
-	req.Context().Done()
+	cancel()
 	select {
 	case <-done:
 	case <-time.After(100 * time.Millisecond):

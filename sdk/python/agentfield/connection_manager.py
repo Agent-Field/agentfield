@@ -5,6 +5,7 @@ Provides resilient connection handling for AgentField server connectivity.
 Handles automatic reconnection, graceful degradation, and connection health monitoring.
 """
 
+from agentfield.types import AgentStatus
 import asyncio
 import time
 from enum import Enum
@@ -143,6 +144,8 @@ class ConnectionManager:
                     vc_metadata=self.agent._build_vc_metadata(),
                     version=self.agent.version,
                     agent_metadata=self.agent._build_agent_metadata(),
+                    tags=self.agent.agent_tags,
+                    instance_id=getattr(self.agent, "agent_instance_id", "") or "",
                 )
             finally:
                 # Restore original logging levels
@@ -152,6 +155,17 @@ class ConnectionManager:
             if success:
                 if payload:
                     self.agent._apply_discovery_response(payload)
+
+                # Check for pending_approval status (tag approval required)
+                if payload and payload.get("status") == "pending_approval":
+                    pending_tags = payload.get("pending_tags", [])
+                    log_info(
+                        f"Node '{self.agent.node_id}' registered but awaiting tag approval "
+                        f"(pending tags: {pending_tags})"
+                    )
+                    await self.agent.agentfield_handler._wait_for_approval()
+                    log_info(f"Node '{self.agent.node_id}' tag approval granted")
+
                 if self.agent.did_manager and not self.agent.did_enabled:
                     self.agent._register_agent_with_did()
                 self.state = ConnectionState.CONNECTED
@@ -233,6 +247,7 @@ class ConnectionManager:
         self.state = ConnectionState.CONNECTED
         self.last_successful_connection = time.time()
         self.agent.agentfield_connected = True
+        self.agent._current_status = AgentStatus.READY
 
         log_info("Connected to AgentField server")
 
@@ -246,6 +261,7 @@ class ConnectionManager:
         """Handle connection failure"""
         self.state = ConnectionState.DEGRADED
         self.agent.agentfield_connected = False
+        self.agent._current_status = AgentStatus.DEGRADED
 
         log_warn("AgentField server unavailable - running in degraded mode")
 

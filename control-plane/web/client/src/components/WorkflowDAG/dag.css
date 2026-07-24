@@ -77,15 +77,15 @@
 /* Custom handle styles - Dark theme compatible */
 .react-flow__handle {
   border: 2px solid var(--border);
-  background: var(--bg-elevated);
+  background: hsl(var(--card));
   width: 8px;
   height: 8px;
   transition: all var(--transition-fast);
 }
 
 .react-flow__handle:hover {
-  background: var(--bg-hover);
-  border-color: var(--text-tertiary);
+  background: hsl(var(--accent));
+  border-color: hsl(var(--muted-foreground));
   transform: scale(1.2);
 }
 
@@ -99,7 +99,7 @@
 
 /* Minimap styling - Dark theme compatible */
 .react-flow__minimap {
-  background-color: color-mix(in oklch, var(--bg-elevated) 95%, transparent) !important;
+  background-color: color-mix(in oklch, hsl(var(--card)) 95%, transparent) !important;
   border: 1px solid var(--border) !important;
   border-radius: var(--radius-lg) !important;
   box-shadow: var(--shadow-lg) !important;
@@ -107,8 +107,8 @@
 }
 
 .react-flow__minimap-mask {
-  fill: color-mix(in oklch, var(--accent-secondary) 10%, transparent) !important;
-  stroke: var(--accent-secondary) !important;
+  fill: color-mix(in oklch, hsl(var(--secondary)) 10%, transparent) !important;
+  stroke: hsl(var(--secondary)) !important;
   stroke-width: 2 !important;
 }
 
@@ -118,28 +118,28 @@
 }
 
 .react-flow__controls-button {
-  background: var(--bg-elevated) !important;
+  background: hsl(var(--card)) !important;
   border: 1px solid var(--border) !important;
   border-radius: var(--radius-md) !important;
-  color: var(--text-primary) !important;
+  color: hsl(var(--foreground)) !important;
   transition: all var(--transition-fast) !important;
   backdrop-filter: blur(8px) !important;
-  fill: var(--text-primary) !important;
+  fill: hsl(var(--foreground)) !important;
 }
 
 .react-flow__controls-button:hover {
-  background: var(--bg-hover) !important;
-  border-color: var(--text-tertiary) !important;
+  background: hsl(var(--accent)) !important;
+  border-color: hsl(var(--muted-foreground)) !important;
   transform: translateY(-1px) !important;
-  color: var(--text-primary) !important;
-  fill: var(--text-primary) !important;
+  color: hsl(var(--foreground)) !important;
+  fill: hsl(var(--foreground)) !important;
 }
 
 .react-flow__controls-button svg {
   width: 16px !important;
   height: 16px !important;
-  fill: var(--text-primary) !important;
-  color: var(--text-primary) !important;
+  fill: hsl(var(--foreground)) !important;
+  color: hsl(var(--foreground)) !important;
 }
 
 /* Panel styling */
@@ -149,7 +149,7 @@
 
 /* Background - Linear.app precision */
 .react-flow__background {
-  background: var(--bg-primary) !important; /* Pure black like Linear */
+  background: hsl(var(--background)) !important; /* Pure black like Linear */
 }
 
 /* Remove background dots completely */
@@ -159,7 +159,7 @@
 
 /* Selection styling - Dark theme compatible */
 .react-flow__node.selected {
-  box-shadow: 0 0 0 2px var(--accent-secondary), 0 0 0 4px color-mix(in oklch, var(--accent-secondary) 20%, transparent) !important;
+  box-shadow: 0 0 0 2px hsl(var(--secondary)), 0 0 0 4px color-mix(in oklch, hsl(var(--secondary)) 20%, transparent) !important;
 }
 
 /* Multi-scale zoom mode specific styles */
@@ -199,13 +199,13 @@
   font-size: 14px;
   font-weight: 600;
   line-height: 1.2;
-  color: var(--text-primary);
+  color: hsl(var(--foreground));
 }
 
 .workflow-info-secondary {
   font-size: 11px;
   font-weight: 400;
-  color: var(--text-tertiary);
+  color: hsl(var(--muted-foreground));
   font-family: var(--font-mono); /* For counts and IDs */
 }
 
@@ -296,7 +296,7 @@
 /* Execution panel overlay */
 .execution-panel-overlay {
   backdrop-filter: blur(2px);
-  background: color-mix(in srgb, var(--bg-primary) 12%, transparent);
+  background: color-mix(in srgb, hsl(var(--background)) 12%, transparent);
 }
 
 /* Tooltip styling */
@@ -435,16 +435,16 @@
 .react-flow__node-input,
 .react-flow__node-output,
 .react-flow__node-group {
-  background: var(--bg-elevated) !important;
+  background: hsl(var(--card)) !important;
   border: 1px solid var(--border) !important;
-  color: var(--text-primary) !important;
+  color: hsl(var(--foreground)) !important;
 }
 
 /* Fix hover panels and tooltips */
 .react-flow__node:hover,
 .react-flow__node.selected {
-  background: var(--bg-elevated) !important;
-  color: var(--text-primary) !important;
+  background: hsl(var(--card)) !important;
+  color: hsl(var(--foreground)) !important;
 }
 
 /* Fix any remaining white backgrounds */
@@ -454,8 +454,8 @@
 
 /* Override any default ReactFlow styles that might be white */
 .react-flow__attribution {
-  background: var(--bg-elevated) !important;
-  color: var(--text-tertiary) !important;
+  background: hsl(var(--card)) !important;
+  color: hsl(var(--muted-foreground)) !important;
   border: 1px solid var(--border) !important;
 }
 
@@ -463,29 +463,29 @@
 .view-mode-selector,
 .zoom-controls,
 .dag-controls {
-  background: var(--bg-elevated) !important;
-  color: var(--text-primary) !important;
+  background: hsl(var(--card)) !important;
+  color: hsl(var(--foreground)) !important;
   border: 1px solid var(--border) !important;
 }
 
 .view-mode-selector button,
 .zoom-controls button,
 .dag-controls button {
-  background: var(--bg-elevated) !important;
-  color: var(--text-primary) !important;
+  background: hsl(var(--card)) !important;
+  color: hsl(var(--foreground)) !important;
   border: 1px solid var(--border) !important;
 }
 
 .view-mode-selector button:hover,
 .zoom-controls button:hover,
 .dag-controls button:hover {
-  background: var(--bg-hover) !important;
-  color: var(--text-primary) !important;
+  background: hsl(var(--accent)) !important;
+  color: hsl(var(--foreground)) !important;
 }
 
 /* Enhanced Layout Controls Styling */
 .layout-controls {
-  background: color-mix(in oklch, var(--bg-elevated) 95%, transparent) !important;
+  background: color-mix(in oklch, hsl(var(--card)) 95%, transparent) !important;
   backdrop-filter: blur(8px) !important;
   border: 1px solid var(--border) !important;
   border-radius: var(--radius-lg) !important;
@@ -510,7 +510,7 @@
     color-mix(in srgb, var(--status-warning) 86%, transparent),
     color-mix(in srgb, var(--status-warning) 70%, transparent)
   ) !important;
-  color: color-mix(in srgb, var(--status-warning) 85%, var(--text-primary)) !important;
+  color: color-mix(in srgb, var(--status-warning) 85%, hsl(var(--foreground))) !important;
   font-weight: 600 !important;
   text-shadow: 0 1px 2px color-mix(in srgb, var(--foreground) 15%, transparent) !important;
 }
@@ -543,7 +543,7 @@
 }
 
 .small-graph-mode {
-  color: var(--text-tertiary) !important;
+  color: hsl(var(--muted-foreground)) !important;
 }
 
 /* Layout loading state */
@@ -586,7 +586,7 @@
 /* Hover card content for layout descriptions */
 .layout-description-card {
   max-width: 280px !important;
-  background: var(--bg-elevated) !important;
+  background: hsl(var(--card)) !important;
   border: 1px solid var(--border) !important;
   border-radius: var(--radius-lg) !important;
   box-shadow: var(--shadow-lg) !important;
@@ -595,11 +595,11 @@
 
 .layout-description-title {
   font-weight: 600 !important;
-  color: var(--text-primary) !important;
+  color: hsl(var(--foreground)) !important;
 }
 
 .layout-description-text {
-  color: var(--text-secondary) !important;
+  color: hsl(var(--muted-foreground)) !important;
   line-height: 1.4 !important;
 }
 

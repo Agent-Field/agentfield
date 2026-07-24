@@ -160,29 +160,14 @@ export class LayoutManager {
   }
 
   /**
-   * Get available layout types based on graph size
+   * Get available layout types — unified order for all graph sizes
    */
-  getAvailableLayouts(nodeCount: number): AllLayoutType[] {
-    if (this.isLargeGraph(nodeCount)) {
-      // Large graphs: All layouts available, but ELK layouts preferred
-      return [...ELKLayoutEngine.getAvailableLayouts(), 'tree', 'flow'];
-    } else {
-      // Small graphs: All layouts available, but Dagre layouts preferred
-      return ['tree', 'flow', ...ELKLayoutEngine.getAvailableLayouts()];
-    }
+  getAvailableLayouts(_nodeCount: number): AllLayoutType[] {
+    return ['tree', 'flow', 'layered', 'box', 'rectpacking'];
   }
 
-  /**
-   * Get the default layout based on graph size
-   */
-  getDefaultLayout(nodeCount: number): AllLayoutType {
-    if (this.isLargeGraph(nodeCount)) {
-      // Large graphs: Default to box layout for performance
-      return 'box';
-    } else {
-      // Small graphs: Default to tree layout
-      return 'tree';
-    }
+  getDefaultLayout(_nodeCount: number): AllLayoutType {
+    return 'tree';
   }
 
   /**
@@ -239,13 +224,15 @@ export class LayoutManager {
     onProgress?.(0);
 
     try {
-      if (layoutType === 'tree' || layoutType === 'flow') {
-        // Use Dagre layout
-        const result = this.applyDagreLayout(nodes, edges, layoutType);
+      if (layoutType === 'tree') {
+        const result = this.applyWrappedTreeLayout(nodes, edges);
+        onProgress?.(100);
+        return result;
+      } else if (layoutType === 'flow') {
+        const result = this.applyDagreLayout(nodes, edges, 'flow');
         onProgress?.(100);
         return result;
       } else {
-        // Use ELK layout
         onProgress?.(25);
         const result = await this.elkEngine.applyLayout(nodes, edges, layoutType as ELKLayoutType);
         onProgress?.(100);
@@ -254,27 +241,167 @@ export class LayoutManager {
     } catch (error) {
       console.error('Layout application failed:', error);
       onProgress?.(100);
-      return { nodes, edges }; // Return original on failure
+      return { nodes, edges };
     }
   }
 
-  /**
-   * Apply Dagre layout (existing implementation)
-   */
+  private static readonly WRAP_THRESHOLD = 6;
+  private static readonly LEVEL_GAP = 160;
+  private static readonly NODE_GAP_X = 40;
+  private static readonly ROW_GAP = 30;
+  private static readonly MARGIN = 60;
+
+  private applyWrappedTreeLayout(
+    nodes: Node[],
+    edges: Edge[],
+  ): { nodes: Node[]; edges: Edge[] } {
+    if (nodes.length === 0) return { nodes, edges };
+
+    const dimMap = new Map<string, { width: number; height: number }>();
+    for (const node of nodes) {
+      dimMap.set(node.id, this.calculateNodeDimensions(node.data));
+    }
+
+    const parentOf = new Map<string, string>();
+    for (const edge of edges) {
+      parentOf.set(edge.target, edge.source);
+    }
+
+    const nodeIds = new Set(nodes.map((n) => n.id));
+    const roots = nodes.filter((n) => !parentOf.has(n.id) || !nodeIds.has(parentOf.get(n.id)!));
+
+    const depthOf = new Map<string, number>();
+    const queue: Array<{ id: string; depth: number }> = roots.map((n) => ({
+      id: n.id,
+      depth: 0,
+    }));
+
+    const childrenOf = new Map<string, string[]>();
+    for (const edge of edges) {
+      if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) continue;
+      const list = childrenOf.get(edge.source) ?? [];
+      list.push(edge.target);
+      childrenOf.set(edge.source, list);
+    }
+
+    while (queue.length > 0) {
+      const item = queue.shift()!;
+      if (depthOf.has(item.id)) continue;
+      depthOf.set(item.id, item.depth);
+      for (const childId of childrenOf.get(item.id) ?? []) {
+        if (!depthOf.has(childId)) {
+          queue.push({ id: childId, depth: item.depth + 1 });
+        }
+      }
+    }
+
+    for (const node of nodes) {
+      if (!depthOf.has(node.id)) depthOf.set(node.id, 0);
+    }
+
+    const levels = new Map<number, Node[]>();
+    for (const node of nodes) {
+      const d = depthOf.get(node.id) ?? 0;
+      const list = levels.get(d) ?? [];
+      list.push(node);
+      levels.set(d, list);
+    }
+
+    for (const [, nodesAtLevel] of levels) {
+      nodesAtLevel.sort((a, b) => {
+        const aTime = (a.data as any)?.started_at ?? '';
+        const bTime = (b.data as any)?.started_at ?? '';
+        if (aTime !== bTime) return aTime < bTime ? -1 : 1;
+        return a.id.localeCompare(b.id);
+      });
+    }
+
+    const maxDepth = Math.max(0, ...levels.keys());
+    const avgNodeWidth =
+      nodes.reduce((s, n) => s + (dimMap.get(n.id)?.width ?? 240), 0) / nodes.length;
+    const nodeHeight = 100;
+
+    const maxColumnsPerRow = Math.max(
+      LayoutManager.WRAP_THRESHOLD,
+      Math.floor(1600 / (avgNodeWidth + LayoutManager.NODE_GAP_X)),
+    );
+
+    interface LevelMeta {
+      cols: number;
+      rows: number;
+      totalHeight: number;
+      levelWidth: number;
+    }
+    const levelMeta = new Map<number, LevelMeta>();
+    for (let d = 0; d <= maxDepth; d++) {
+      const nodesAtLevel = levels.get(d) ?? [];
+      const count = nodesAtLevel.length;
+      const cols = Math.min(count, maxColumnsPerRow);
+      const rowCount = Math.ceil(count / cols);
+      const totalHeight =
+        rowCount * nodeHeight + (rowCount - 1) * LayoutManager.ROW_GAP;
+      const levelWidth =
+        cols * avgNodeWidth + (cols - 1) * LayoutManager.NODE_GAP_X;
+      levelMeta.set(d, { cols, rows: rowCount, totalHeight, levelWidth });
+    }
+
+    const maxLevelWidth = Math.max(
+      0,
+      ...[...levelMeta.values()].map((m) => m.levelWidth),
+    );
+    const centerX = LayoutManager.MARGIN + maxLevelWidth / 2;
+
+    const levelY = new Map<number, number>();
+    let currentY = LayoutManager.MARGIN;
+    for (let d = 0; d <= maxDepth; d++) {
+      levelY.set(d, currentY);
+      const meta = levelMeta.get(d)!;
+      currentY += meta.totalHeight + LayoutManager.LEVEL_GAP;
+    }
+
+    const positionMap = new Map<string, { x: number; y: number }>();
+    for (let d = 0; d <= maxDepth; d++) {
+      const nodesAtLevel = levels.get(d) ?? [];
+      const meta = levelMeta.get(d)!;
+      const baseY = levelY.get(d)!;
+      const startX = centerX - meta.levelWidth / 2;
+
+      for (let i = 0; i < nodesAtLevel.length; i++) {
+        const node = nodesAtLevel[i];
+        const col = i % meta.cols;
+        const row = Math.floor(i / meta.cols);
+        const dim = dimMap.get(node.id) ?? { width: 240, height: 100 };
+
+        const cellCenterX =
+          startX + col * (avgNodeWidth + LayoutManager.NODE_GAP_X) + avgNodeWidth / 2;
+
+        positionMap.set(node.id, {
+          x: cellCenterX - dim.width / 2,
+          y: baseY + row * (nodeHeight + LayoutManager.ROW_GAP),
+        });
+      }
+    }
+
+    const layoutedNodes = nodes.map((node) => ({
+      ...node,
+      position: positionMap.get(node.id) ?? { x: 0, y: 0 },
+    }));
+
+    return { nodes: layoutedNodes, edges };
+  }
+
   private applyDagreLayout(nodes: Node[], edges: Edge[], layoutType: DagreLayoutType): { nodes: Node[]; edges: Edge[] } {
     const g = new dagre.graphlib.Graph();
     g.setDefaultEdgeLabel(() => ({}));
 
-    // Calculate average node width for better spacing
     const nodeDimensions = nodes.map(node => this.calculateNodeDimensions(node.data));
     const avgWidth = nodeDimensions.reduce((sum, dim) => sum + dim.width, 0) / nodeDimensions.length;
     const maxWidth = Math.max(...nodeDimensions.map(dim => dim.width));
 
-    // Configure layout with dynamic spacing based on actual node sizes
     const direction = layoutType === 'tree' ? 'TB' : 'LR';
     const spacing = direction === 'TB'
-      ? { rankSep: 140, nodeSep: Math.max(100, avgWidth * 0.4) }  // Tree layout: top-to-bottom
-      : { rankSep: Math.max(280, maxWidth * 1.2), nodeSep: 120 }; // Flow layout: left-to-right
+      ? { rankSep: 140, nodeSep: Math.max(100, avgWidth * 0.4) }
+      : { rankSep: Math.max(280, maxWidth * 1.2), nodeSep: 120 };
 
     g.setGraph({
       rankdir: direction,
@@ -284,7 +411,6 @@ export class LayoutManager {
       marginy: 60,
     });
 
-    // Add nodes to the graph with their actual dimensions
     nodes.forEach((node, index) => {
       const dimensions = nodeDimensions[index];
       g.setNode(node.id, {
@@ -293,15 +419,12 @@ export class LayoutManager {
       });
     });
 
-    // Add edges to the graph
     edges.forEach((edge) => {
       g.setEdge(edge.source, edge.target);
     });
 
-    // Calculate layout
     dagre.layout(g);
 
-    // Apply positions to nodes using their actual dimensions
     const layoutedNodes = nodes.map((node, index) => {
       const nodeWithPosition = g.node(node.id);
       const dimensions = nodeDimensions[index];

@@ -1,17 +1,24 @@
 agentfield:
   port: 8080
+  shutdown_timeout: 30s  # Graceful shutdown drain timeout for in-flight requests
+  registration:
+    serverless_discovery_allowed_hosts: [] # Optional extra hosts allowed for server-side /discover fetches; localhost/loopback are always allowed.
   execution_cleanup:
     enabled: true
     retention_period: 72h
-    cleanup_interval: 1h
+    cleanup_interval: 5m
     batch_size: 200
     preserve_recent_duration: 1h
+    stale_execution_timeout: 10m
   execution_queue:
     agent_call_timeout: 1800s  # Timeout for agent HTTP calls (0s or -1s to disable)
     webhook_timeout: 10s          # Per-attempt timeout for webhook deliveries
     webhook_max_attempts: 3       # Number of attempts before marking the webhook as failed
     webhook_retry_backoff: 1s     # Initial backoff between webhook retries (exponential)
     webhook_max_retry_backoff: 5s # Upper bound for webhook retry backoff
+  approval:
+    webhook_secret: ""                 # Required for HMAC auth on approval webhook callbacks; empty disables the endpoint
+    default_expiry_hours: 72           # Default approval expiry (hours)
 
 ui:
   enabled: true
@@ -23,6 +30,7 @@ api:
     allowed_origins:
       - "http://localhost:3000"
       - "http://localhost:5173"
+      - "http://localhost:8001"
       - "http://localhost:8080"
     allowed_methods:
       - "GET"
@@ -36,16 +44,41 @@ api:
       - "Accept"
       - "Authorization"
       - "X-Requested-With"
+      - "X-API-Key"
+      - "X-Admin-Token"
+      - "X-Caller-DID"
+      - "X-DID-Signature"
+      - "X-DID-Timestamp"
     exposed_headers:
       - "Content-Length"
       - "X-Total-Count"
     allow_credentials: true
+
+telemetry:
+  enabled: true
+  mode: "anonymous"
+  endpoint: "https://agentfield.ai/api/oss/telemetry"
+  # Empty uses $AGENTFIELD_HOME/telemetry/install_id. In Docker,
+  # AGENTFIELD_HOME=/data and the data volume keeps this stable across restarts.
+  install_id_path: ""
+  timeout: 800ms
+
+logging:
+  level: "info"            # Log level: "debug", "info", "warn", "error"
+  redact_payloads: true    # Omit execution input/output from structured log events (prevents sensitive data leaks)
 
 storage:
   mode: "local"
   local:
     database_path: ""
     kv_store_path: ""
+  postgres:
+    host: "localhost"
+    port: 5433
+    database: "agentfield_dev"
+    user: "agentfield"
+    password: "agentfield"
+    sslmode: "disable"
   vector:
     enabled: true
     distance: "cosine"
@@ -71,3 +104,71 @@ features:
       encryption: "AES-256-GCM"
       backup_enabled: true
       backup_interval: "24h"
+    authorization:
+      enabled: true
+      did_auth_enabled: false
+      domain: "localhost:8080"
+      timestamp_window_seconds: 300
+      default_approval_duration_hours: 24
+      admin_token: "admin-secret"
+      internal_token: "internal-secret-token"
+      tag_approval_rules:
+        default_mode: "auto"
+        rules:
+          - tags: ["sensitive", "financial", "payments"]
+            approval: "manual"
+            reason: "Sensitive/financial tags require admin review"
+          - tags: ["public", "analytics"]
+            approval: "auto"
+            reason: "Auto-approved"
+      access_policies:
+        - name: "analytics_to_data_service"
+          caller_tags: ["analytics"]
+          target_tags: ["data-service"]
+          allow_functions: ["query_*", "get_*", "analyze_*"]
+          deny_functions: ["delete_*", "update_*"]
+          constraints:
+            limit:
+              operator: "<="
+              value: 1000
+          action: "allow"
+          priority: 100
+        - name: "payments_to_payments"
+          caller_tags: ["payments"]
+          target_tags: ["payments"]
+          allow_functions: ["process_*", "get_*"]
+          deny_functions: ["refund_*"]
+          constraints:
+            amount:
+              operator: "<="
+              value: 10000
+          action: "allow"
+          priority: 90
+  tracing:
+    enabled: false           # Enable OpenTelemetry distributed tracing export
+    exporter: "otlp-http"    # "otlp-http" or "otlp-grpc"
+    endpoint: "localhost:4318"
+    service_name: "agentfield"
+    insecure: false          # WARNING: Set true only for local dev; production must use TLS
+  connector:
+    enabled: true
+    token: "test-connector-token-123"
+    capabilities:
+      policy_management:
+        enabled: true
+        read_only: false
+      tag_management:
+        enabled: true
+        read_only: false
+      did_management:
+        enabled: false
+      reasoner_management:
+        enabled: true
+        read_only: false
+      status_read:
+        enabled: true
+      observability_config:
+        enabled: false
+      config_management:
+        enabled: true
+        read_only: false

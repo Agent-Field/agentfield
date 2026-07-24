@@ -1,9 +1,16 @@
 import WebSocket from 'ws';
 import type { MemoryChangeEvent } from './MemoryInterface.js';
+import { MemoryClientBase, MemoryRequestOptions } from './MemoryClient.js';
 
 export type MemoryEventHandler = (event: MemoryChangeEvent) => Promise<void> | void;
 
-export class MemoryEventClient {
+export interface MemoryEventHistoryOptions extends MemoryRequestOptions {
+  patterns?: string[],
+  since?: Date,
+  limit?: number,
+};
+
+export class MemoryEventClient extends MemoryClientBase {
   private readonly url: string;
   private ws?: WebSocket;
   private handlers: MemoryEventHandler[] = [];
@@ -12,10 +19,13 @@ export class MemoryEventClient {
   private reconnectPending = false;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private readonly headers: Record<string, string>;
+  private readonly apiKey?: string;
 
-  constructor(baseUrl: string, headers?: Record<string, string | number | boolean | undefined>) {
+  constructor(baseUrl: string, headers?: Record<string, string | number | boolean | undefined>, apiKey?: string) {
+    super(baseUrl, headers);
     this.url = `${baseUrl.replace(/^http/, 'ws')}/api/v1/memory/events/ws`;
     this.headers = this.buildForwardHeaders(headers ?? {});
+    this.apiKey = apiKey;
   }
 
   start() {
@@ -100,5 +110,55 @@ export class MemoryEventClient {
       }
     });
     return sanitized;
+  }
+
+
+  async history(options: MemoryEventHistoryOptions = {}): Promise<MemoryChangeEvent[]> {
+    const {
+      patterns,
+      since,
+      limit = 100,
+      scope,
+      scopeId,
+      metadata,
+    } = options;
+
+    try {
+      const headers = this.buildHeaders(options);
+      if (this.apiKey) {
+        headers['X-API-Key'] = this.apiKey;
+      }
+
+      const params: Record<string, any> = {
+        limit,
+      };
+
+      if (patterns && patterns.length > 0) {
+        params.patterns = patterns.join(",");
+      }
+
+      if (since) {
+        params.since = since.toISOString();
+      }
+
+      if (scope) {
+        params.scope = scope;
+      }
+
+      const resolvedScopeId = this.resolveScopeId(scope, scopeId, metadata);
+      if (resolvedScopeId) {
+        params.scope_id = resolvedScopeId;
+      }
+
+      const res = await this.http.get('/api/v1/memory/events/history', {
+        params: params,
+        headers: headers
+      });
+
+      return (res.data ?? []) as MemoryChangeEvent[];
+    } catch (e) {
+      console.error(`Failed to get event history: ${e}`);
+      return [];
+    }
   }
 }

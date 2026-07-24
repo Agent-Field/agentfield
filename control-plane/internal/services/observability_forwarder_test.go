@@ -116,6 +116,13 @@ func (m *mockObservabilityStore) ListAgents(ctx context.Context, filters types.A
 	return []*types.AgentNode{}, nil
 }
 
+// testHTTPClient returns a plain http.Client for use in tests that need
+// to connect to httptest.NewServer (loopback). The production code uses
+// an SSRF-safe client that rejects loopback connections.
+func testHTTPClient() *http.Client {
+	return &http.Client{Timeout: 5 * time.Second}
+}
+
 // Test config normalization
 func TestNormalizeObservabilityConfig(t *testing.T) {
 	t.Run("uses defaults when values are zero", func(t *testing.T) {
@@ -288,7 +295,12 @@ func TestObservabilityForwarder_TransformExecutionEvent(t *testing.T) {
 		AgentNodeID: "agent-789",
 		Status:      "succeeded",
 		Timestamp:   time.Now(),
-		Data:        map[string]interface{}{"key": "value"},
+		Data: map[string]interface{}{
+			"reasoner_id":    "summarizer",
+			"context":        map[string]interface{}{"analysis_group": "summary.short_form"},
+			"retry_count":    2,
+			"error_category": "provider_timeout",
+		},
 	}
 
 	obsEvent := forwarder.transformExecutionEvent(execEvent)
@@ -303,7 +315,10 @@ func TestObservabilityForwarder_TransformExecutionEvent(t *testing.T) {
 	require.Equal(t, "wf-456", data["workflow_id"])
 	require.Equal(t, "agent-789", data["agent_node_id"])
 	require.Equal(t, "succeeded", data["status"])
-	require.Equal(t, execEvent.Data, data["payload"])
+	require.Equal(t, "summarizer", data["reasoner_id"])
+	require.Equal(t, 2, data["retry_count"])
+	require.Equal(t, "provider_timeout", data["error_category"])
+	require.Equal(t, map[string]interface{}{"analysis_group": "summary.short_form"}, data["context"])
 }
 
 // Test event transformation - node events
@@ -464,6 +479,7 @@ func TestObservabilityForwarder_WebhookDelivery(t *testing.T) {
 		BatchTimeout: 100 * time.Millisecond,
 		WorkerCount:  1,
 		HTTPTimeout:  5 * time.Second,
+		HTTPClient:   testHTTPClient(),
 	}
 
 	forwarder := NewObservabilityForwarder(store, cfg).(*observabilityForwarder)
@@ -534,6 +550,7 @@ func TestObservabilityForwarder_WebhookWithSignature(t *testing.T) {
 		BatchSize:    1,
 		BatchTimeout: 50 * time.Millisecond,
 		WorkerCount:  1,
+		HTTPClient:   testHTTPClient(),
 	}
 
 	forwarder := NewObservabilityForwarder(store, cfg).(*observabilityForwarder)
@@ -568,8 +585,8 @@ func TestObservabilityForwarder_WebhookWithSignature(t *testing.T) {
 // Test webhook delivery with custom headers
 func TestObservabilityForwarder_WebhookWithCustomHeaders(t *testing.T) {
 	var (
-		mu                 sync.Mutex
-		customHeader       string
+		mu                  sync.Mutex
+		customHeader        string
 		authorizationHeader string
 	)
 
@@ -597,6 +614,7 @@ func TestObservabilityForwarder_WebhookWithCustomHeaders(t *testing.T) {
 		BatchSize:    1,
 		BatchTimeout: 50 * time.Millisecond,
 		WorkerCount:  1,
+		HTTPClient:   testHTTPClient(),
 	}
 
 	forwarder := NewObservabilityForwarder(store, cfg).(*observabilityForwarder)
@@ -654,6 +672,7 @@ func TestObservabilityForwarder_DeadLetterQueueOnFailure(t *testing.T) {
 		MaxAttempts:     2, // Only 2 retries to speed up test
 		RetryBackoff:    10 * time.Millisecond,
 		MaxRetryBackoff: 50 * time.Millisecond,
+		HTTPClient:      testHTTPClient(),
 	}
 
 	forwarder := NewObservabilityForwarder(store, cfg).(*observabilityForwarder)
@@ -726,6 +745,7 @@ func TestObservabilityForwarder_Redrive(t *testing.T) {
 	cfg := ObservabilityForwarderConfig{
 		MaxAttempts:  2,
 		RetryBackoff: 10 * time.Millisecond,
+		HTTPClient:   testHTTPClient(),
 	}
 
 	forwarder := NewObservabilityForwarder(store, cfg)
@@ -806,6 +826,7 @@ func TestObservabilityForwarder_RedrivePartialFailure(t *testing.T) {
 	cfg := ObservabilityForwarderConfig{
 		MaxAttempts:  1, // Single attempt per entry
 		RetryBackoff: 10 * time.Millisecond,
+		HTTPClient:   testHTTPClient(),
 	}
 
 	forwarder := NewObservabilityForwarder(store, cfg)
@@ -850,6 +871,7 @@ func TestObservabilityForwarder_FiltersNodeHeartbeats(t *testing.T) {
 		BatchSize:    10,
 		BatchTimeout: 200 * time.Millisecond,
 		WorkerCount:  1,
+		HTTPClient:   testHTTPClient(),
 	}
 
 	forwarder := NewObservabilityForwarder(store, cfg)
@@ -907,6 +929,7 @@ func TestObservabilityForwarder_FiltersReasonerHeartbeats(t *testing.T) {
 		BatchSize:    10,
 		BatchTimeout: 200 * time.Millisecond,
 		WorkerCount:  1,
+		HTTPClient:   testHTTPClient(),
 	}
 
 	forwarder := NewObservabilityForwarder(store, cfg)
@@ -991,9 +1014,10 @@ func TestObservabilityForwarder_BatchingBySize(t *testing.T) {
 	})
 
 	cfg := ObservabilityForwarderConfig{
-		BatchSize:    3,                     // Send every 3 events
-		BatchTimeout: 10 * time.Second,      // Long timeout to ensure size-based batching
+		BatchSize:    3,                // Send every 3 events
+		BatchTimeout: 10 * time.Second, // Long timeout to ensure size-based batching
 		WorkerCount:  1,
+		HTTPClient:   testHTTPClient(),
 	}
 
 	forwarder := NewObservabilityForwarder(store, cfg).(*observabilityForwarder)
@@ -1050,6 +1074,7 @@ func TestObservabilityForwarder_BatchingByTimeout(t *testing.T) {
 		BatchSize:    100,                    // Large batch size
 		BatchTimeout: 100 * time.Millisecond, // Short timeout
 		WorkerCount:  1,
+		HTTPClient:   testHTTPClient(),
 	}
 
 	forwarder := NewObservabilityForwarder(store, cfg).(*observabilityForwarder)

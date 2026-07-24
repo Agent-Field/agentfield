@@ -140,7 +140,7 @@ export function StatusRefreshButton({
       </Button>
 
       {showLastVerified && lastVerifiedText && (
-        <span className="text-body-small whitespace-nowrap">
+        <span className="text-sm text-muted-foreground whitespace-nowrap">
           Verified {lastVerifiedText}
         </span>
       )}

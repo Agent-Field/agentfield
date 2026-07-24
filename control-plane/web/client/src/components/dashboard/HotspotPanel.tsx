@@ -83,7 +83,7 @@ function HotspotRow({ hotspot, rank, maxFailed }: HotspotRowProps) {
       )}
     >
       {/* Rank badge */}
-      <div className="absolute left-2 top-2 flex h-5 w-5 items-center justify-center rounded-full bg-background border border-border text-[10px] font-mono font-medium text-muted-foreground">
+      <div className="absolute left-2 top-2 flex h-5 w-5 items-center justify-center rounded-full bg-background border border-border text-micro font-mono font-medium text-muted-foreground">
         {rank}
       </div>
 
@@ -97,7 +97,7 @@ function HotspotRow({ hotspot, rank, maxFailed }: HotspotRowProps) {
           </div>
           <Badge
             variant="outline"
-            className="flex-shrink-0 rounded-full border-destructive/40 text-destructive bg-destructive/5 text-[10px]"
+            className="flex-shrink-0 rounded-full border-destructive/40 text-destructive bg-destructive/5 text-micro"
           >
             {hotspot.contribution_pct.toFixed(0)}% of errors
           </Badge>
@@ -111,7 +111,7 @@ function HotspotRow({ hotspot, rank, maxFailed }: HotspotRowProps) {
               style={{ width: `${progressWidth}%` }}
             />
           </div>
-          <div className="flex justify-between text-[10px] text-muted-foreground">
+          <div className="flex justify-between text-micro text-muted-foreground">
             <span>
               {hotspot.failed_executions} failed / {hotspot.total_executions}{" "}
               total
@@ -124,7 +124,7 @@ function HotspotRow({ hotspot, rank, maxFailed }: HotspotRowProps) {
 
         {/* Top error */}
         {hotspot.top_errors.length > 0 && (
-          <p className="text-[10px] text-muted-foreground truncate">
+          <p className="text-micro text-muted-foreground truncate">
             <span className="text-destructive/70">Top:</span>{" "}
             {hotspot.top_errors[0].message}
             {hotspot.top_errors[0].count > 1 && (

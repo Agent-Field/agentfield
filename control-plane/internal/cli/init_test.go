@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -242,6 +243,51 @@ func TestView_SelectedItemAlignment(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestView_TextSteps(t *testing.T) {
+	sampleErr := errors.New("sample error")
+	tests := []struct {
+		name     string
+		model    initModel
+		contains []string
+	}{
+		{
+			name: "step 0 shows project prompt and error",
+			model: initModel{
+				step:      0,
+				textInput: "demo",
+				err:       sampleErr,
+			},
+			contains: []string{"Project name", "demo", sampleErr.Error()},
+		},
+		{
+			name: "step 2 shows author prompt",
+			model: initModel{
+				step:      2,
+				textInput: "Jane",
+			},
+			contains: []string{"Author name", "Jane", "Press Enter to continue"},
+		},
+		{
+			name: "step 3 shows email prompt and error",
+			model: initModel{
+				step:      3,
+				textInput: "bad-email",
+				err:       sampleErr,
+			},
+			contains: []string{"Author email", "bad-email", sampleErr.Error()},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			view := tt.model.View()
+			for _, want := range tt.contains {
+				require.Contains(t, view, want)
+			}
+		})
 	}
 }
 

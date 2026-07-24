@@ -1,24 +1,15 @@
 import type {
   AgentNode,
   AgentNodeSummary,
-  AgentNodeDetailsForUI,
   AgentNodeDetailsForUIWithPackage,
-  MCPHealthResponse,
-  MCPServerActionResponse,
-  MCPToolsResponse,
-  MCPOverallStatusResponse,
-  MCPToolTestRequest,
-  MCPToolTestResponse,
-  MCPServerMetricsResponse,
-  MCPHealthEventResponse,
-  MCPHealthResponseModeAware,
-  MCPError,
   AppMode,
   EnvResponse,
   SetEnvRequest,
   ConfigSchemaResponse,
   AgentStatus,
-  AgentStatusUpdate
+  AgentStatusUpdate,
+  MCPHealthResponseModeAware,
+  MCPServerMetrics,
 } from '../types/agentfield';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/ui/v1';
@@ -56,8 +47,33 @@ export function getGlobalApiKey(): string | null {
   return globalApiKey;
 }
 
+// Admin token for accessing admin-only permission management routes.
+// Stored separately from the API key since it provides elevated privileges.
+const ADMIN_TOKEN_STORAGE_KEY = "af_admin_token";
+
+let globalAdminToken: string | null = (() => {
+  try {
+    const stored = localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY);
+    if (stored) {
+      const key = decryptKey(stored);
+      if (key) return key;
+    }
+  } catch {
+    // localStorage might not be available
+  }
+  return null;
+})();
+
+export function setGlobalAdminToken(token: string | null) {
+  globalAdminToken = token;
+}
+
+export function getGlobalAdminToken(): string | null {
+  return globalAdminToken;
+}
+
 /**
- * Enhanced fetch wrapper with MCP-specific error handling, retry logic, and timeout support
+ * Enhanced fetch wrapper with retry logic and timeout support
  */
 async function fetchWrapper<T>(url: string, options?: RequestInit & { timeout?: number }): Promise<T> {
   const { timeout = 10000, ...fetchOptions } = options || {};
@@ -85,16 +101,6 @@ async function fetchWrapper<T>(url: string, options?: RequestInit & { timeout?: 
         message: 'Request failed with status ' + response.status
       }));
 
-      // Create MCP-specific error if applicable
-      if (url.includes('/mcp/') && errorData.code) {
-        const mcpError = new Error(errorData.message || `HTTP error! status: ${response.status}`) as MCPError;
-        mcpError.code = errorData.code;
-        mcpError.details = errorData.details;
-        mcpError.isRetryable = errorData.is_retryable || false;
-        mcpError.retryAfterMs = errorData.retry_after_ms;
-        throw mcpError;
-      }
-
       throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
     }
 
@@ -108,41 +114,6 @@ async function fetchWrapper<T>(url: string, options?: RequestInit & { timeout?: 
 
     throw error;
   }
-}
-
-/**
- * Retry wrapper for MCP operations with exponential backoff
- */
-async function retryMCPOperation<T>(
-  operation: () => Promise<T>,
-  maxRetries: number = 3,
-  baseDelayMs: number = 1000
-): Promise<T> {
-  let lastError: MCPError | Error;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await operation();
-    } catch (error) {
-      lastError = error as MCPError | Error;
-
-      // Don't retry if it's not an MCP error or not retryable
-      if (!('isRetryable' in lastError) || !lastError.isRetryable) {
-        throw lastError;
-      }
-
-      // Don't retry on last attempt
-      if (attempt === maxRetries) {
-        throw lastError;
-      }
-
-      // Calculate delay with exponential backoff
-      const delay = lastError.retryAfterMs || (baseDelayMs * Math.pow(2, attempt));
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-  }
-
-  throw lastError!;
 }
 
 export async function getNodesSummary(): Promise<{ nodes: AgentNodeSummary[], count: number }> {
@@ -159,219 +130,6 @@ export function streamNodeEvents(): EventSource {
     ? `${API_BASE_URL}/nodes/events?api_key=${encodeURIComponent(apiKey)}`
     : `${API_BASE_URL}/nodes/events`;
   return new EventSource(url);
-}
-
-// ============================================================================
-// MCP (Model Context Protocol) API Functions
-// ============================================================================
-
-// MCP Health API
-export async function getMCPHealth(
-  nodeId: string,
-  mode: AppMode = 'user'
-): Promise<MCPHealthResponse> {
-  return fetchWrapper<MCPHealthResponse>(`/nodes/${nodeId}/mcp/health?mode=${mode}`);
-}
-
-// MCP Server Management
-/**
- * Restart a specific MCP server with retry logic
- */
-export async function restartMCPServer(
-  nodeId: string,
-  serverId: string
-): Promise<MCPServerActionResponse> {
-  return retryMCPOperation(() =>
-    fetchWrapper<MCPServerActionResponse>(`/nodes/${nodeId}/mcp/servers/${serverId}/restart`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
-    })
-  );
-}
-
-/**
- * Stop a specific MCP server
- */
-export async function stopMCPServer(
-  nodeId: string,
-  serverId: string
-): Promise<MCPServerActionResponse> {
-  return retryMCPOperation(() =>
-    fetchWrapper<MCPServerActionResponse>(`/nodes/${nodeId}/mcp/servers/${serverId}/stop`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
-    })
-  );
-}
-
-/**
- * Start a specific MCP server
- */
-export async function startMCPServer(
-  nodeId: string,
-  serverId: string
-): Promise<MCPServerActionResponse> {
-  return retryMCPOperation(() =>
-    fetchWrapper<MCPServerActionResponse>(`/nodes/${nodeId}/mcp/servers/${serverId}/start`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
-    })
-  );
-}
-
-// MCP Tools API
-export async function getMCPTools(
-  nodeId: string,
-  alias: string
-): Promise<MCPToolsResponse> {
-  return fetchWrapper<MCPToolsResponse>(`/nodes/${nodeId}/mcp/servers/${alias}/tools`);
-}
-
-// Overall MCP Status
-export async function getOverallMCPStatus(
-  mode: AppMode = 'user'
-): Promise<MCPOverallStatusResponse> {
-  return fetchWrapper<MCPOverallStatusResponse>(`/mcp/status?mode=${mode}`);
-}
-
-// Enhanced Node Details with MCP
-export async function getNodeDetailsWithMCP(
-  nodeId: string,
-  mode: AppMode = 'user'
-): Promise<AgentNodeDetailsForUI> {
-  return fetchWrapper<AgentNodeDetailsForUI>(`/nodes/${nodeId}/details?include_mcp=true&mode=${mode}`, {
-    timeout: 8000 // 8 second timeout for node details
-  });
-}
-
-// ============================================================================
-// Enhanced MCP API Functions
-// ============================================================================
-
-/**
- * Test MCP tool execution with parameters
- */
-export async function testMCPTool(
-  nodeId: string,
-  serverId: string,
-  toolName: string,
-  params: Record<string, any>,
-  timeoutMs?: number
-): Promise<MCPToolTestResponse> {
-  const request: MCPToolTestRequest = {
-    node_id: nodeId,
-    server_alias: serverId,
-    tool_name: toolName,
-    parameters: params,
-    timeout_ms: timeoutMs
-  };
-
-  return retryMCPOperation(() =>
-    fetchWrapper<MCPToolTestResponse>(`/nodes/${nodeId}/mcp/servers/${serverId}/tools/${toolName}/test`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request)
-    })
-  );
-}
-
-/**
- * Get MCP server performance metrics
- */
-export async function getMCPServerMetrics(
-  nodeId: string,
-  serverId?: string
-): Promise<MCPServerMetricsResponse> {
-  const endpoint = serverId
-    ? `/nodes/${nodeId}/mcp/servers/${serverId}/metrics`
-    : `/nodes/${nodeId}/mcp/metrics`;
-
-  return fetchWrapper<MCPServerMetricsResponse>(endpoint);
-}
-
-/**
- * Subscribe to MCP health events via Server-Sent Events
- */
-export function subscribeMCPHealthEvents(nodeId: string): EventSource {
-  const apiKey = getGlobalApiKey();
-  const url = apiKey
-    ? `${API_BASE_URL}/nodes/${nodeId}/mcp/events?api_key=${encodeURIComponent(apiKey)}`
-    : `${API_BASE_URL}/nodes/${nodeId}/mcp/events`;
-  return new EventSource(url);
-}
-
-/**
- * Get recent MCP health events
- */
-export async function getMCPHealthEvents(
-  nodeId: string,
-  limit: number = 50,
-  since?: string
-): Promise<MCPHealthEventResponse> {
-  const params = new URLSearchParams({ limit: limit.toString() });
-  if (since) {
-    params.append('since', since);
-  }
-
-  return fetchWrapper<MCPHealthEventResponse>(`/nodes/${nodeId}/mcp/events/history?${params}`);
-}
-
-/**
- * Enhanced MCP health check with mode-aware responses
- */
-export async function getMCPHealthModeAware(
-  nodeId: string,
-  mode: AppMode = 'user'
-): Promise<MCPHealthResponseModeAware> {
-  return fetchWrapper<MCPHealthResponseModeAware>(`/nodes/${nodeId}/mcp/health?mode=${mode}`, {
-    timeout: 5000 // 5 second timeout for MCP health checks
-  });
-}
-
-/**
- * Bulk MCP server actions (start/stop/restart multiple servers)
- */
-export async function bulkMCPServerAction(
-  nodeId: string,
-  serverIds: string[],
-  action: 'start' | 'stop' | 'restart'
-): Promise<MCPServerActionResponse[]> {
-  return retryMCPOperation(() =>
-    fetchWrapper<MCPServerActionResponse[]>(`/nodes/${nodeId}/mcp/servers/bulk/${action}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ server_ids: serverIds })
-    })
-  );
-}
-
-/**
- * Get MCP server configuration
- */
-export async function getMCPServerConfig(
-  nodeId: string,
-  serverId: string
-): Promise<{ config: Record<string, any>; schema?: Record<string, any> }> {
-  return fetchWrapper<{ config: Record<string, any>; schema?: Record<string, any> }>(
-    `/nodes/${nodeId}/mcp/servers/${serverId}/config`
-  );
-}
-
-/**
- * Update MCP server configuration
- */
-export async function updateMCPServerConfig(
-  nodeId: string,
-  serverId: string,
-  config: Record<string, any>
-): Promise<MCPServerActionResponse> {
-  return retryMCPOperation(() =>
-    fetchWrapper<MCPServerActionResponse>(`/nodes/${nodeId}/mcp/servers/${serverId}/config`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config })
-    })
-  );
 }
 
 // ============================================================================
@@ -425,9 +183,31 @@ export async function getNodeDetailsWithPackageInfo(
   nodeId: string,
   mode: AppMode = 'user'
 ): Promise<AgentNodeDetailsForUIWithPackage> {
-  return fetchWrapper<AgentNodeDetailsForUIWithPackage>(`/nodes/${nodeId}/details?include_mcp=true&mode=${mode}`, {
+  return fetchWrapper<AgentNodeDetailsForUIWithPackage>(`/nodes/${nodeId}/details?mode=${mode}`, {
     timeout: 8000 // 8 second timeout for node details
   });
+}
+
+/** Mode-aware MCP health summary (optional control-plane surface). */
+export async function getMCPHealthModeAware(
+  nodeId: string,
+  mode: AppMode = 'user'
+): Promise<MCPHealthResponseModeAware> {
+  return fetchWrapper<MCPHealthResponseModeAware>(
+    `/nodes/${nodeId}/mcp/health?mode=${mode}`,
+    { timeout: 8000 }
+  );
+}
+
+/** Per-server or node-level MCP metrics (optional control-plane surface). */
+export async function getMCPServerMetrics(
+  nodeId: string,
+  serverId?: string
+): Promise<MCPServerMetrics> {
+  const path = serverId
+    ? `/nodes/${nodeId}/mcp/servers/${encodeURIComponent(serverId)}/metrics`
+    : `/nodes/${nodeId}/mcp/metrics`;
+  return fetchWrapper<MCPServerMetrics>(path);
 }
 
 // ============================================================================
@@ -567,4 +347,200 @@ export async function registerServerlessAgent(invocationUrl: string): Promise<{
 
     throw error;
   }
+}
+
+// ============================================================================
+// Agent node process logs (UI proxy → NDJSON)
+// ============================================================================
+
+/** NDJSON v1 from agent process log ring (Python / Go / TypeScript SDKs). */
+export type NodeLogEntry = {
+  v: number;
+  seq: number;
+  ts: string;
+  stream: string;
+  line: string;
+  truncated?: boolean;
+  /** Optional severity when SDKs emit it (e.g. log, info, warn, error). */
+  level?: string;
+  /** Optional logical source (e.g. sdk id, logger name). */
+  source?: string;
+};
+
+export type NodeLogProxyEffective = {
+  connect_timeout: string;
+  stream_idle_timeout: string;
+  max_stream_duration: string;
+  max_tail_lines: number;
+};
+
+export type NodeLogProxySettingsResponse = {
+  effective: NodeLogProxyEffective;
+  env_locks: Record<string, boolean>;
+};
+
+function nodeLogsAuthHeaders(): HeadersInit {
+  const h: Record<string, string> = {};
+  if (globalApiKey) {
+    h["X-API-Key"] = globalApiKey;
+  }
+  return h;
+}
+
+/**
+ * Typed error thrown by node-logs fetch/stream helpers.
+ *
+ * Carries the HTTP status code and (when available) the stable machine code
+ * from the response body so callers can branch on structured fields instead
+ * of string-matching the human message.
+ */
+export class NodeLogsError extends Error {
+  readonly status: number;
+  readonly code?: string;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = "NodeLogsError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+async function nodeLogsHttpError(response: Response): Promise<NodeLogsError> {
+  let msg = `HTTP ${response.status}`;
+  let code: string | undefined;
+  try {
+    const j = (await response.json()) as {
+      message?: string;
+      error?: string;
+    };
+    if (j.error) code = String(j.error);
+    if (j.message) msg = j.message;
+    else if (j.error) msg = String(j.error);
+  } catch {
+    try {
+      const t = await response.text();
+      if (t) msg = t.slice(0, 200);
+    } catch {
+      /* ignore */
+    }
+  }
+  return new NodeLogsError(msg, response.status, code);
+}
+
+export function parseNodeLogsNDJSON(text: string): NodeLogEntry[] {
+  const out: NodeLogEntry[] = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      out.push(JSON.parse(line) as NodeLogEntry);
+    } catch {
+      /* skip malformed */
+    }
+  }
+  return out;
+}
+
+/**
+ * One-shot tail or bounded fetch (not for long-lived follow streams).
+ */
+export async function fetchNodeLogsText(
+  nodeId: string,
+  params: { tail_lines?: string; since_seq?: string; follow?: string },
+  init?: RequestInit
+): Promise<string> {
+  const sp = new URLSearchParams();
+  if (params.tail_lines != null) sp.set("tail_lines", params.tail_lines);
+  if (params.since_seq != null) sp.set("since_seq", params.since_seq);
+  if (params.follow != null) sp.set("follow", params.follow);
+  const q = sp.toString();
+  const path = `/nodes/${encodeURIComponent(nodeId)}/logs${q ? `?${q}` : ""}`;
+  const headers = new Headers(nodeLogsAuthHeaders());
+  if (init?.headers) {
+    const extra = new Headers(init.headers);
+    extra.forEach((v, k) => headers.set(k, v));
+  }
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...init,
+    headers,
+  });
+  if (!response.ok) {
+    throw await nodeLogsHttpError(response);
+  }
+  return response.text();
+}
+
+/**
+ * Stream NDJSON log lines (use follow=1 on the agent/proxy).
+ */
+export async function* streamNodeLogsEntries(
+  nodeId: string,
+  params: { tail_lines?: string; since_seq?: string; follow?: string },
+  signal: AbortSignal
+): AsyncGenerator<NodeLogEntry, void, undefined> {
+  const sp = new URLSearchParams();
+  if (params.tail_lines != null) sp.set("tail_lines", params.tail_lines);
+  if (params.since_seq != null) sp.set("since_seq", params.since_seq);
+  if (params.follow != null) sp.set("follow", params.follow);
+  const q = sp.toString();
+  const path = `/nodes/${encodeURIComponent(nodeId)}/logs${q ? `?${q}` : ""}`;
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    signal,
+    headers: nodeLogsAuthHeaders(),
+  });
+  if (!response.ok) {
+    throw await nodeLogsHttpError(response);
+  }
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("No response body");
+  }
+  const dec = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      if (buf.trim()) {
+        try {
+          yield JSON.parse(buf) as NodeLogEntry;
+        } catch {
+          /* ignore trailing garbage */
+        }
+      }
+      break;
+    }
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split("\n");
+    buf = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        yield JSON.parse(line) as NodeLogEntry;
+      } catch {
+        /* skip */
+      }
+    }
+  }
+}
+
+export async function getNodeLogProxySettings(): Promise<NodeLogProxySettingsResponse> {
+  return fetchWrapper<NodeLogProxySettingsResponse>("/settings/node-log-proxy");
+}
+
+export async function putNodeLogProxySettings(
+  body: Partial<{
+    connect_timeout: string;
+    stream_idle_timeout: string;
+    max_stream_duration: string;
+    max_tail_lines: number;
+  }>
+): Promise<{ effective: NodeLogProxyEffective }> {
+  return fetchWrapper<{ effective: NodeLogProxyEffective }>(
+    "/settings/node-log-proxy",
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
 }

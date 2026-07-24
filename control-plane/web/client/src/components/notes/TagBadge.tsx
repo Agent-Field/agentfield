@@ -43,7 +43,7 @@ export function TagBadge({
     transition-all duration-fast ease-smooth
     ${sizeClasses}
     ${tagColor}
-    ${onClick ? 'cursor-pointer interactive-hover' : ''}
+    ${onClick ? 'cursor-pointer transition-colors cursor-pointer hover:bg-accent' : ''}
     ${className}
   `.trim();
 
@@ -80,7 +80,7 @@ export function TagBadge({
         <Button
           variant="ghost"
           size="sm"
-          className="h-4 w-4 p-0 hover:bg-bg-hover rounded-full"
+          className="h-4 w-4 p-0 hover:bg-accent rounded-full"
           onClick={handleRemove}
           aria-label={`Remove ${tag} tag`}
         >

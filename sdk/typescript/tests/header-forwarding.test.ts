@@ -42,12 +42,13 @@ describe('header forwarding', () => {
 
     expect(axiosInstance.post).toHaveBeenCalledWith(
       '/api/v1/execute/test-target',
-      { input: { foo: 'bar' } },
+      JSON.stringify({ input: { foo: 'bar' } }),
       {
-        headers: {
+        headers: expect.objectContaining({
           Authorization: 'Bearer tenant-token',
+          'Content-Type': 'application/json',
           'X-Run-ID': 'run-123'
-        }
+        })
       }
     );
   });

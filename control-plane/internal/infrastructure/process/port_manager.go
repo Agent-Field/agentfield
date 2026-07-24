@@ -4,6 +4,8 @@ package process
 import (
 	"fmt"
 	"net"
+	"sync"
+	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
 )
@@ -11,6 +13,7 @@ import (
 // DefaultPortManager provides a default implementation for managing network ports.
 // It keeps track of reserved ports in memory.
 type DefaultPortManager struct {
+	mu            sync.Mutex
 	reservedPorts map[int]bool
 }
 
@@ -26,10 +29,10 @@ func NewPortManager() interfaces.PortManager {
 // It checks both system availability and internal reservations.
 // Returns the first free port found, or an error if no port is available in the range.
 func (pm *DefaultPortManager) FindFreePort(startPort int) (int, error) {
-	// The search range is typically small, e.g., 100 ports.
-	// This can be made configurable if needed.
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
 	for port := startPort; port <= startPort+100; port++ {
-		if pm.IsPortAvailable(port) && !pm.reservedPorts[port] {
+		if !pm.reservedPorts[port] && pm.IsPortAvailable(port) {
 			return port, nil
 		}
 	}
@@ -46,6 +49,14 @@ func (pm *DefaultPortManager) IsPortAvailable(port int) bool {
 	}
 	// If listening was successful, close the listener immediately as we only wanted to check.
 	listener.Close()
+	// A successful bind is not proof on Windows: without SO_EXCLUSIVEADDRUSE a
+	// probe bind can succeed while another process is actively listening on
+	// the same port (observed with uvicorn agent nodes). If something accepts
+	// a connection, the port is taken.
+	if dial, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 250*time.Millisecond); err == nil {
+		dial.Close()
+		return false
+	}
 	return true
 }
 
@@ -53,6 +64,8 @@ func (pm *DefaultPortManager) IsPortAvailable(port int) bool {
 // It first checks if the port is system-available before reserving.
 // Returns an error if the port is not available or cannot be reserved.
 func (pm *DefaultPortManager) ReservePort(port int) error {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
 	if !pm.IsPortAvailable(port) {
 		return fmt.Errorf("port %d is not available at the system level", port)
 	}
@@ -67,6 +80,8 @@ func (pm *DefaultPortManager) ReservePort(port int) error {
 // This makes the port available for future reservations by this manager.
 // It does not affect the system-level availability of the port.
 func (pm *DefaultPortManager) ReleasePort(port int) error {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
 	if _, ok := pm.reservedPorts[port]; !ok {
 		return fmt.Errorf("port %d was not reserved by this manager", port)
 	}

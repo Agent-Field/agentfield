@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -24,6 +25,12 @@ type DefaultDevService struct {
 	portManager    interfaces.PortManager
 	fileSystem     interfaces.FileSystemAdapter
 }
+
+var (
+	absPathForDevMode = filepath.Abs
+	agentPortStart    = 8001
+	agentPortEnd      = 8999
+)
 
 func NewDevService(
 	processManager interfaces.ProcessManager,
@@ -39,7 +46,7 @@ func NewDevService(
 
 func (ds *DefaultDevService) RunInDevMode(path string, options domain.DevOptions) error {
 	// Convert to absolute path
-	absPath, err := filepath.Abs(path)
+	absPath, err := absPathForDevMode(path)
 	if err != nil {
 		return fmt.Errorf("failed to resolve path: %w", err)
 	}
@@ -69,15 +76,7 @@ func (ds *DefaultDevService) GetDevStatus(path string) (*domain.DevStatus, error
 func (ds *DefaultDevService) runDev(packagePath string, options domain.DevOptions) error {
 	fmt.Printf("🔧 Development Mode: %s\n", packagePath)
 
-	// Temporarily disable MCP server startup - let Python SDK manage them
-	// Config loading removed since MCP manager is disabled
 	var agentCmd *exec.Cmd // Declare agentCmd here to be accessible in defer and signal handler
-
-	// Defer StopAll to ensure it's called on any exit path from runDev
-	defer func() {
-		// MCP server management disabled - Python SDK handles MCP servers
-		fmt.Println("\n✅ MCP server management delegated to Python SDK.")
-	}()
 
 	// Setup signal handling to gracefully shut down
 	sigs := make(chan os.Signal, 1)
@@ -97,11 +96,6 @@ func (ds *DefaultDevService) runDev(packagePath string, options domain.DevOption
 			}
 		}
 	}()
-
-	// MCP server startup disabled - Python SDK manages MCP servers
-	if options.Verbose {
-		fmt.Println("ℹ️ MCP server management delegated to Python SDK.")
-	}
 
 	// 1. Start agent process (let Python SDK choose its own port)
 	fmt.Printf("📡 Starting agent process...\n")
@@ -166,7 +160,7 @@ func (ds *DefaultDevService) getFreePort() (int, error) {
 	}
 
 	// Fallback: direct port checking
-	for port := 8001; port <= 8999; port++ {
+	for port := agentPortStart; port <= agentPortEnd; port++ {
 		if ds.isPortAvailable(port) {
 			return port, nil
 		}
@@ -184,7 +178,7 @@ func (ds *DefaultDevService) isPortAvailable(port int) bool {
 	}
 
 	// Fallback: direct port checking
-	conn, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	conn, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
 		return false
 	}
@@ -200,7 +194,7 @@ func (ds *DefaultDevService) startDevProcess(packagePath string, port int, optio
 	if port > 0 {
 		env = append(env, fmt.Sprintf("PORT=%d", port))
 	}
-	env = append(env, "AGENTFIELD_SERVER_URL=http://localhost:8080")
+	env = append(env, fmt.Sprintf("AGENTFIELD_SERVER_URL=%s", resolveServerURL()))
 	env = append(env, "AGENTFIELD_DEV_MODE=true")
 
 	// Load environment variables from package .env file
@@ -254,7 +248,13 @@ func (ds *DefaultDevService) startDevProcess(packagePath string, port int, optio
 
 // discoverAgentPort discovers the port the agent actually chose by scanning common ports
 func (ds *DefaultDevService) discoverAgentPort(timeout time.Duration) (int, error) {
-	client := &http.Client{Timeout: 2 * time.Second}
+	// Use the smaller of 2s and the total timeout for per-request deadlines,
+	// so short timeouts (e.g., in tests) are actually respected.
+	perReq := 2 * time.Second
+	if timeout < perReq {
+		perReq = timeout
+	}
+	client := &http.Client{Timeout: perReq}
 	deadline := time.Now().Add(timeout)
 
 	fmt.Printf("🔍 Discovering agent port...\n")
@@ -264,8 +264,10 @@ func (ds *DefaultDevService) discoverAgentPort(timeout time.Duration) (int, erro
 	for time.Now().Before(deadline) {
 		checkCount++
 
-		// Try ports in range 8001-8999
-		for port := 8001; port <= 8999; port++ {
+		for port := agentPortStart; port <= agentPortEnd; port++ {
+			if time.Now().After(deadline) {
+				break
+			}
 			resp, err := client.Get(fmt.Sprintf("http://localhost:%d/health", port))
 
 			if err == nil && resp.StatusCode == 200 {
@@ -419,9 +421,13 @@ func (ds *DefaultDevService) loadDevEnvFile(packagePath string) (map[string]stri
 			key := strings.TrimSpace(parts[0])
 			value := strings.TrimSpace(parts[1])
 
-			// Remove quotes if present
-			if (strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"")) ||
-				(strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'")) {
+			// Match the config writer: decode quoted escape sequences instead of
+			// passing them through to the launched process.
+			if strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"") {
+				if unquoted, err := strconv.Unquote(value); err == nil {
+					value = unquoted
+				}
+			} else if strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'") {
 				value = value[1 : len(value)-1]
 			}
 

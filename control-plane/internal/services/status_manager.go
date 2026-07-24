@@ -57,11 +57,6 @@ func cloneAgentStatus(status *types.AgentStatus) *types.AgentStatus {
 
 	clone := *status
 
-	if status.MCPStatus != nil {
-		mcpCopy := *status.MCPStatus
-		clone.MCPStatus = &mcpCopy
-	}
-
 	if status.StateTransition != nil {
 		transitionCopy := *status.StateTransition
 		clone.StateTransition = &transitionCopy
@@ -177,13 +172,28 @@ func (sm *StatusManager) GetAgentStatus(ctx context.Context, nodeID string) (*ty
 
 		// Create status based on health check result
 		now := time.Now()
+
+		// Preserve admin-controlled lifecycle status (e.g., pending_approval) from storage.
+		// Live health checks prove liveness but must not override admin decisions.
+		var preservedLifecycle types.AgentLifecycleStatus
+		agent, agentErr := sm.storage.GetAgent(ctx, nodeID)
+		if agentErr == nil && agent != nil {
+			if agent.LifecycleStatus == types.AgentStatusPendingApproval {
+				preservedLifecycle = types.AgentStatusPendingApproval
+			}
+		}
+
 		if healthCheckSuccessful && agentStatusResp.Status == "running" {
+			lifecycle := types.AgentStatusReady
+			if preservedLifecycle == types.AgentStatusPendingApproval {
+				lifecycle = types.AgentStatusPendingApproval
+			}
 			// Agent is active and running
 			status = &types.AgentStatus{
 				State:           types.AgentStateActive,
 				HealthScore:     85, // Good health from live verification
 				LastSeen:        now,
-				LifecycleStatus: types.AgentStatusReady,
+				LifecycleStatus: lifecycle,
 				HealthStatus:    types.HealthStatusActive,
 				LastUpdated:     now,
 				LastVerified:    &now, // Set when live health check was performed
@@ -284,11 +294,40 @@ func (sm *StatusManager) GetAgentStatusSnapshot(ctx context.Context, nodeID stri
 
 // UpdateAgentStatus updates the agent status with reconciliation
 func (sm *StatusManager) UpdateAgentStatus(ctx context.Context, nodeID string, update *types.AgentStatusUpdate) error {
+	// Resolve the agent node, supporting multi-version agents via the
+	// composite primary key (id, version). GetAgent only returns
+	// version="" rows; fall back to GetAgentVersion when a version is
+	// provided in the update.
+	resolvedAgent, resolveErr := sm.storage.GetAgent(ctx, nodeID)
+	if (resolveErr != nil || resolvedAgent == nil) && update.Version != "" {
+		resolvedAgent, resolveErr = sm.storage.GetAgentVersion(ctx, nodeID, update.Version)
+	}
+
+	// Protect pending_approval from non-admin updates. The tag approval service
+	// transitions agents out of pending_approval by modifying storage directly
+	// (not through UpdateAgentStatus). Therefore ALL updates flowing through this
+	// method must be blocked when the agent is pending_approval, to prevent
+	// heartbeats, health checks, lease renewals, and transition timeouts from
+	// overriding the admin-controlled state.
+	if resolveErr == nil && resolvedAgent != nil {
+		if resolvedAgent.LifecycleStatus == types.AgentStatusPendingApproval {
+			// Allow health score cache updates, but not lifecycle/state changes
+			if update.HealthScore != nil {
+				sm.cacheMutex.Lock()
+				if cached, exists := sm.statusCache[nodeID]; exists && cached.Status != nil {
+					cached.Status.HealthScore = *update.HealthScore
+				}
+				sm.cacheMutex.Unlock()
+			}
+			return nil
+		}
+	}
+
 	// Get current status using snapshot (no live health check) to preserve the true "old" state
 	// for event broadcasting. Using GetAgentStatus here would perform a live health check,
 	// which could return the same state as the update, causing oldStatus == newStatus
 	// and preventing status change events from being broadcast.
-	currentStatus, err := sm.GetAgentStatusSnapshot(ctx, nodeID, nil)
+	currentStatus, err := sm.GetAgentStatusSnapshot(ctx, nodeID, resolvedAgent)
 	if err != nil {
 		return fmt.Errorf("failed to get current status: %w", err)
 	}
@@ -314,8 +353,16 @@ func (sm *StatusManager) UpdateAgentStatus(ctx context.Context, nodeID string, u
 					newStatus.LifecycleStatus = types.AgentStatusOffline
 				}
 			case types.AgentStateActive:
-				// Agent is coming online - set lifecycle to ready if it was offline
-				if newStatus.LifecycleStatus == types.AgentStatusOffline || newStatus.LifecycleStatus == "" {
+				// Agent is coming online - set lifecycle to ready if it was offline,
+				// empty, or stuck in "starting". Once the agent is confirmed active
+				// (via heartbeat priority or successful HTTP health check), we should
+				// advance it out of "starting" — otherwise SDKs that never explicitly
+				// transition to "ready" (e.g. the Python SDK, which only ever sends
+				// status="starting" in its enhanced heartbeats) leave the agent wedged
+				// in "starting" indefinitely. See issue #484.
+				if newStatus.LifecycleStatus == types.AgentStatusOffline ||
+					newStatus.LifecycleStatus == "" ||
+					newStatus.LifecycleStatus == types.AgentStatusStarting {
 					newStatus.LifecycleStatus = types.AgentStatusReady
 				}
 			case types.AgentStateStarting:
@@ -336,13 +383,16 @@ func (sm *StatusManager) UpdateAgentStatus(ctx context.Context, nodeID string, u
 		newStatus.LifecycleStatus = *update.LifecycleStatus
 	}
 
-	if update.MCPStatus != nil {
-		newStatus.MCPStatus = update.MCPStatus
-	}
-
 	// Update metadata
 	newStatus.LastUpdated = time.Now()
 	newStatus.Source = update.Source
+
+	// Heartbeats are direct proof of life — always refresh LastSeen so that
+	// reconciliation (which checks LastHeartbeat staleness) doesn't mark the
+	// agent inactive while heartbeats are actively flowing.
+	if update.Source == types.StatusSourceHeartbeat {
+		newStatus.LastSeen = time.Now()
+	}
 
 	// Update backward compatibility fields
 	newStatus.HealthStatus = newStatus.ToLegacyHealthStatus()
@@ -350,8 +400,12 @@ func (sm *StatusManager) UpdateAgentStatus(ctx context.Context, nodeID string, u
 		newStatus.LifecycleStatus = newStatus.ToLegacyLifecycleStatus()
 	}
 
-	// Persist to storage
-	if err := sm.persistStatus(ctx, nodeID, &newStatus); err != nil {
+	// Persist to storage — use the resolved agent's version for the composite key
+	agentVersion := ""
+	if resolvedAgent != nil {
+		agentVersion = resolvedAgent.Version
+	}
+	if err := sm.persistStatus(ctx, nodeID, agentVersion, &newStatus); err != nil {
 		return fmt.Errorf("failed to persist status: %w", err)
 	}
 
@@ -380,9 +434,12 @@ func (sm *StatusManager) UpdateAgentStatus(ctx context.Context, nodeID string, u
 	return nil
 }
 
-// UpdateFromHeartbeat updates status based on heartbeat data
-func (sm *StatusManager) UpdateFromHeartbeat(ctx context.Context, nodeID string, lifecycleStatus *types.AgentLifecycleStatus, mcpStatus *types.MCPStatusInfo) error {
-	currentStatus, err := sm.GetAgentStatus(ctx, nodeID)
+// UpdateFromHeartbeat updates status based on heartbeat data.
+// Uses snapshot (not live health check) to avoid overriding admin-controlled states
+// and to prevent the heartbeat handler from contaminating the cache with HTTP check
+// results — the heartbeat itself is the proof of life.
+func (sm *StatusManager) UpdateFromHeartbeat(ctx context.Context, nodeID string, lifecycleStatus *types.AgentLifecycleStatus, version string) error {
+	currentStatus, err := sm.GetAgentStatusSnapshot(ctx, nodeID, nil)
 	if err != nil {
 		// If agent doesn't exist, create new status
 		currentStatus = types.NewAgentStatus(types.AgentStateStarting, types.StatusSourceHeartbeat)
@@ -395,15 +452,46 @@ func (sm *StatusManager) UpdateFromHeartbeat(ctx context.Context, nodeID string,
 	// The health monitor requires consecutive failures before marking inactive,
 	// so there is no need to suppress heartbeats here.
 
-	// Update from heartbeat
-	currentStatus.UpdateFromHeartbeat(lifecycleStatus, mcpStatus)
+	// Don't let a "starting" heartbeat regress an agent that has already been
+	// promoted to "ready" or "degraded". Some SDKs (notably the Python SDK prior
+	// to 0.1.69) never transition their internal status out of "starting", and
+	// every enhanced heartbeat carries status="starting". Without this guard,
+	// each heartbeat would clobber the promoted lifecycle status and the agent
+	// would oscillate between "starting" and whatever reconciliation promoted it
+	// to. The heartbeat itself is still processed (LastSeen/State refresh), we
+	// just ignore the regressive lifecycle signal. See issue #484.
+	if lifecycleStatus != nil && *lifecycleStatus == types.AgentStatusStarting {
+		switch currentStatus.LifecycleStatus {
+		case types.AgentStatusReady, types.AgentStatusDegraded:
+			lifecycleStatus = nil
+		}
+	}
 
-	// Persist changes
+	// Update from heartbeat
+	currentStatus.UpdateFromHeartbeat(lifecycleStatus)
+
+	// Persist changes — derive State from lifecycle so UpdateAgentStatus keeps them in sync.
 	update := &types.AgentStatusUpdate{
 		LifecycleStatus: lifecycleStatus,
-		MCPStatus:       mcpStatus,
 		Source:          types.StatusSourceHeartbeat,
 		Reason:          "heartbeat update",
+		Version:         version,
+	}
+	if lifecycleStatus != nil {
+		var derivedState types.AgentState
+		switch *lifecycleStatus {
+		case types.AgentStatusReady:
+			derivedState = types.AgentStateActive
+		case types.AgentStatusStarting:
+			derivedState = types.AgentStateStarting
+		case types.AgentStatusDegraded:
+			derivedState = types.AgentStateActive
+		case types.AgentStatusOffline:
+			derivedState = types.AgentStateInactive
+		}
+		if derivedState != "" {
+			update.State = &derivedState
+		}
 	}
 
 	return sm.UpdateAgentStatus(ctx, nodeID, update)
@@ -441,23 +529,18 @@ func (sm *StatusManager) handleStateTransition(nodeID string, status *types.Agen
 		return fmt.Errorf("invalid state transition from %s to %s", status.State, newState)
 	}
 
-	// Start transition
+	// Record and complete in one step. Every update that requests a state does
+	// so on direct evidence — a ready heartbeat or lease renewal, a health
+	// check result, reconciliation of a fresh heartbeat — so there is nothing
+	// to hold open. starting→active used to be left pending here, which kept
+	// State=starting (persisted as health_status "unknown") while the same
+	// update set lifecycle to "ready". SDKs whose only keep-alive carries
+	// phase=ready (the Go SDK renews its status lease every 2 minutes, exactly
+	// MaxTransitionTime) re-created the pending transition on every renewal, so
+	// the transition-timeout sweeper never completed it and the node reported
+	// health "unknown" indefinitely.
 	status.StartTransition(newState, reason)
-
-	// Track active transition
-	sm.transitionMutex.Lock()
-	sm.activeTransitions[nodeID] = status.StateTransition
-	sm.transitionMutex.Unlock()
-
-	// For immediate transitions, complete right away
-	if sm.isImmediateTransition(status.State, newState) {
-		status.CompleteTransition()
-
-		// Remove from active transitions
-		sm.transitionMutex.Lock()
-		delete(sm.activeTransitions, nodeID)
-		sm.transitionMutex.Unlock()
-	}
+	status.CompleteTransition()
 
 	return nil
 }
@@ -468,7 +551,7 @@ func (sm *StatusManager) isValidTransition(from, to types.AgentState) bool {
 		types.AgentStateInactive: {types.AgentStateStarting, types.AgentStateActive},
 		types.AgentStateStarting: {types.AgentStateActive, types.AgentStateInactive},
 		types.AgentStateActive:   {types.AgentStateInactive, types.AgentStateStopping},
-		types.AgentStateStopping: {types.AgentStateInactive},
+		types.AgentStateStopping: {types.AgentStateInactive, types.AgentStateActive, types.AgentStateStarting},
 	}
 
 	allowed, exists := validTransitions[from]
@@ -485,14 +568,10 @@ func (sm *StatusManager) isValidTransition(from, to types.AgentState) bool {
 	return false
 }
 
-// isImmediateTransition checks if a transition should complete immediately
-func (sm *StatusManager) isImmediateTransition(from, to types.AgentState) bool {
-	// Most transitions are immediate except starting->active which may take time
-	return !(from == types.AgentStateStarting && to == types.AgentStateActive)
-}
-
-// persistStatus persists the status to storage
-func (sm *StatusManager) persistStatus(ctx context.Context, nodeID string, status *types.AgentStatus) error {
+// persistStatus persists the status to storage.
+// The version parameter is required for UpdateAgentHeartbeat which uses the composite
+// primary key (id, version) to match the correct row.
+func (sm *StatusManager) persistStatus(ctx context.Context, nodeID string, version string, status *types.AgentStatus) error {
 	// DEFENSIVE: Enforce lifecycle_status consistency with state before persisting.
 	// This ensures that even if the auto-sync logic didn't run (e.g., state wasn't changing),
 	// the lifecycle_status will be correct in storage. This fixes the bug where offline nodes
@@ -537,9 +616,16 @@ func (sm *StatusManager) persistStatus(ctx context.Context, nodeID string, statu
 		return fmt.Errorf("failed to update lifecycle status: %w", err)
 	}
 
-	// Update heartbeat timestamp
-	if err := sm.storage.UpdateAgentHeartbeat(ctx, nodeID, status.LastSeen); err != nil {
-		return fmt.Errorf("failed to update heartbeat: %w", err)
+	// Only update the heartbeat timestamp for heartbeat sources. Health checks and
+	// reconciliation should NOT overwrite LastHeartbeat — it must reflect when the
+	// agent actually sent a heartbeat, not when a status update was persisted.
+	// Without this guard, a health check can overwrite a fresh heartbeat timestamp
+	// with a stale LastSeen from the cached snapshot, causing reconciliation to
+	// falsely mark the agent inactive.
+	if status.Source == types.StatusSourceHeartbeat {
+		if err := sm.storage.UpdateAgentHeartbeat(ctx, nodeID, version, status.LastSeen); err != nil {
+			return fmt.Errorf("failed to update heartbeat: %w", err)
+		}
 	}
 
 	return nil
@@ -564,10 +650,9 @@ func (sm *StatusManager) notifyStatusChanged(nodeID string, oldStatus, newStatus
 
 // broadcastStatusEvents broadcasts status change events using enhanced event system
 func (sm *StatusManager) broadcastStatusEvents(nodeID string, oldStatus, newStatus *types.AgentStatus) {
-	// Get updated agent for events
 	ctx := context.Background()
 	agent, err := sm.storage.GetAgent(ctx, nodeID)
-	if err != nil {
+	if err != nil || agent == nil {
 		logger.Logger.Error().Err(err).Str("node_id", nodeID).Msg("❌ Failed to get agent for event broadcasting")
 		return
 	}
@@ -661,6 +746,43 @@ func (sm *StatusManager) needsReconciliation(agent *types.AgentNode) bool {
 		return true
 	}
 
+	// Agents stuck in "starting" beyond the max transition time should be reconciled.
+	// Without this, agents that register but never send a "ready" heartbeat stay in
+	// "starting" forever because the check above only triggers for health_status="active".
+	if agent.LifecycleStatus == types.AgentStatusStarting && timeSinceHeartbeat > sm.config.MaxTransitionTime {
+		return true
+	}
+
+	// Agents stuck in "starting" with a FRESH heartbeat past the startup grace period
+	// must also be reconciled. This is the common case behind issue #484: SDKs that
+	// send heartbeats but never explicitly transition out of "starting" (e.g. the
+	// Python SDK, whose enhanced heartbeats always carry status="starting"). The fresh
+	// heartbeat proves the agent is alive, and time-since-registration past the grace
+	// period proves it has finished starting up — without this rule, such agents stay
+	// wedged in "starting" indefinitely, and the staleness branch above never fires
+	// because the heartbeat is always fresh.
+	if agent.LifecycleStatus == types.AgentStatusStarting &&
+		timeSinceHeartbeat <= sm.config.HeartbeatStaleThreshold &&
+		!agent.RegisteredAt.IsZero() &&
+		time.Since(agent.RegisteredAt) > sm.config.MaxTransitionTime {
+		return true
+	}
+
+	// Agents whose health_status is still "unknown" despite a FRESH heartbeat
+	// past the startup grace period are wedged and must be reconciled. This is
+	// the lease-renewal variant of the stuck-"starting" case above: nodes whose
+	// only keep-alive is the status lease (PATCH /nodes/:id/status — the Go
+	// SDK) used to trap in a never-completing starting→active transition that
+	// persisted health "unknown" alongside lifecycle "ready". The fresh
+	// heartbeat proves liveness, so reconciliation promotes them. Serverless
+	// nodes never heartbeat, so the freshness requirement keeps them out.
+	if agent.HealthStatus == types.HealthStatusUnknown &&
+		timeSinceHeartbeat <= sm.config.HeartbeatStaleThreshold &&
+		!agent.RegisteredAt.IsZero() &&
+		time.Since(agent.RegisteredAt) > sm.config.MaxTransitionTime {
+		return true
+	}
+
 	return false
 }
 
@@ -677,7 +799,14 @@ func (sm *StatusManager) reconcileAgentStatus(ctx context.Context, agent *types.
 		newLifecycleStatus = types.AgentStatusOffline
 	} else {
 		newHealthStatus = types.HealthStatusActive
-		if agent.LifecycleStatus == "" || agent.LifecycleStatus == types.AgentStatusOffline {
+		// Promote empty/offline/stuck-starting agents to ready. Before the fix for
+		// issue #484, "starting" was preserved here, which meant agents that
+		// reconciliation *should* have rescued (fresh heartbeat, registered past the
+		// grace period, still in "starting") got re-saved as "starting" and stayed
+		// stuck forever.
+		if agent.LifecycleStatus == "" ||
+			agent.LifecycleStatus == types.AgentStatusOffline ||
+			agent.LifecycleStatus == types.AgentStatusStarting {
 			newLifecycleStatus = types.AgentStatusReady
 		} else {
 			newLifecycleStatus = agent.LifecycleStatus
@@ -739,11 +868,18 @@ func (sm *StatusManager) checkTransitionTimeouts() {
 				Dur("duration", now.Sub(transition.StartedAt)).
 				Msg("🔄 Transition timeout, forcing completion")
 
-			// Force complete the transition
+			// Force complete the transition, but not if the agent is now pending_approval
+			// (e.g., tags were revoked while a transition was in progress).
 			ctx := context.Background()
-			if status, err := sm.GetAgentStatus(ctx, nodeID); err == nil {
+			if agent, agentErr := sm.storage.GetAgent(ctx, nodeID); agentErr == nil && agent != nil && agent.LifecycleStatus == types.AgentStatusPendingApproval {
+				logger.Logger.Debug().Str("node_id", nodeID).Msg("cancelling stale transition: agent is pending_approval")
+			} else if status, err := sm.GetAgentStatus(ctx, nodeID); err == nil {
 				status.CompleteTransition()
-				if err := sm.persistStatus(ctx, nodeID, status); err != nil {
+				ver := ""
+				if agent != nil {
+					ver = agent.Version
+				}
+				if err := sm.persistStatus(ctx, nodeID, ver, status); err != nil {
 					logger.Logger.Warn().
 						Err(err).
 						Str("node_id", nodeID).

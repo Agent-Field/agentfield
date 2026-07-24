@@ -1,15 +1,8 @@
-import { Upload, Eye, Code } from "@/components/ui/icon-bridge";
-import { useState } from "react";
+
+import { ArrowUp, FileText, CheckCircle, XCircle } from "@/components/ui/icon-bridge";
 import type { WorkflowExecution } from "../../types/executions";
-import { Badge } from "../ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
-import { CopyButton } from "../ui/copy-button";
-import {
-  SegmentedControl,
-  type SegmentedControlOption,
-} from "../ui/segmented-control";
-import { JsonViewer } from "./JsonViewer";
-import { EnhancedJsonViewer } from "../reasoners/EnhancedJsonViewer";
+import { CollapsibleSection } from "./CollapsibleSection";
+import { UnifiedJsonViewer } from "@/components/ui/UnifiedJsonViewer";
 
 interface OutputDataPanelProps {
   execution: WorkflowExecution;
@@ -23,73 +16,84 @@ function formatBytes(bytes?: number): string {
   return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${sizes[i]}`;
 }
 
-const DATA_VIEW_OPTIONS: ReadonlyArray<SegmentedControlOption> = [
-  { value: "formatted", label: "Formatted", icon: Eye },
-  { value: "json", label: "JSON", icon: Code },
-] as const;
-
 export function OutputDataPanel({ execution }: OutputDataPanelProps) {
-  const [viewMode, setViewMode] = useState<"formatted" | "json">("formatted");
-  const jsonString = JSON.stringify(execution.output_data, null, 2);
+  const outputData = execution.output_data;
+  const hasOutputData = (() => {
+    if (outputData === null || outputData === undefined) return false;
+    if (typeof outputData === "string") return outputData.trim().length > 0;
+    if (Array.isArray(outputData)) return outputData.length > 0;
+    if (typeof outputData === "object") return Object.keys(outputData).length > 0;
+    return Boolean(outputData);
+  })();
+
+  const normalizedStatus = execution.status?.toLowerCase() ?? "";
+  const isCompleted = normalizedStatus === "succeeded";
+  const isFailed = ["failed", "error", "timeout"].includes(normalizedStatus);
+  const isRunning = ["running", "pending"].includes(normalizedStatus);
+
+  const badge = (
+    <span className="text-sm text-muted-foreground bg-muted/50 px-2 py-0.5 rounded">
+      {formatBytes(execution.output_size)}
+    </span>
+  );
+
+  const getEmptyStateContent = () => {
+    if (isRunning) {
+      return {
+        icon: FileText,
+        title: "Execution in progress",
+        description: "Output data will appear here when the execution completes"
+      };
+    }
+
+    if (isFailed) {
+      return {
+        icon: XCircle,
+        title: "Execution failed",
+        description: "No output data was generated due to execution failure"
+      };
+    }
+
+    if (isCompleted && !hasOutputData) {
+      return {
+        icon: CheckCircle,
+        title: "No output data",
+        description: "This execution completed successfully but didn't return any data"
+      };
+    }
+
+    return {
+      icon: FileText,
+      title: "No output data",
+      description: "Output data will appear here when available"
+    };
+  };
+
+  const emptyState = getEmptyStateContent();
+  const EmptyIcon = emptyState.icon;
 
   return (
-    <Card className="h-fit">
-      <CardHeader className="pb-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Upload className="w-4 h-4" />
-            <CardTitle className="text-base font-medium">Output Data</CardTitle>
-          </div>
-          <div className="flex items-center gap-2">
-            {/* View Mode Toggle - only show if there's output data */}
-            {execution.output_data && (
-              <SegmentedControl
-                value={viewMode}
-                onValueChange={(mode) => setViewMode(mode as "formatted" | "json")}
-                options={DATA_VIEW_OPTIONS}
-                size="sm"
-                optionClassName="min-w-[110px]"
-              />
-            )}
-            <Badge variant="secondary" className="text-xs font-mono">
-              {formatBytes(execution.output_size)}
-            </Badge>
-            {execution.output_data && (
-              <CopyButton
-                value={jsonString}
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6 p-0 hover:bg-muted/80 [&_svg]:h-3 [&_svg]:w-3"
-                tooltip="Copy output JSON"
-              />
-            )}
-          </div>
+    <CollapsibleSection
+      title="Output Data"
+      icon={ArrowUp}
+      badge={badge}
+      defaultOpen={true}
+      contentClassName="p-0"
+    >
+      {hasOutputData ? (
+        <UnifiedJsonViewer
+          data={outputData}
+        />
+      ) : (
+        <div className="p-6 text-center text-muted-foreground">
+          <EmptyIcon className="w-8 h-8 mx-auto mb-2 opacity-50" />
+          <p className="text-sm">{emptyState.title}</p>
+          <p className="text-xs mt-1">{emptyState.description}</p>
         </div>
-      </CardHeader>
-
-      <CardContent className="pt-0">
-        {execution.output_data ? (
-          <div className="border border-border rounded-md">
-            {viewMode === "formatted" ? (
-              <EnhancedJsonViewer
-                data={execution.output_data}
-                className="max-h-96 overflow-auto p-3"
-                maxInlineHeight={300}
-              />
-            ) : (
-              <JsonViewer
-                data={execution.output_data}
-                collapsed={2}
-                className="max-h-96 overflow-auto p-3"
-              />
-            )}
-          </div>
-        ) : (
-          <div className="flex items-center justify-center h-24 text-muted-foreground bg-muted/20 rounded-lg border border-border">
-            <span className="text-sm">No output data available</span>
-          </div>
-        )}
-      </CardContent>
-    </Card>
+      )}
+    </CollapsibleSection>
   );
 }
+
+// Alias for backwards compatibility
+export { OutputDataPanel as RedesignedOutputDataPanel };

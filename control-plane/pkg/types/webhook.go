@@ -40,16 +40,26 @@ type ExecutionWebhookStateUpdate struct {
 
 // ExecutionWebhookPayload defines the shape AgentField sends to webhook consumers.
 type ExecutionWebhookPayload struct {
-	Event        string      `json:"event"`
-	ExecutionID  string      `json:"execution_id"`
-	RunID        string      `json:"workflow_id"`
-	Status       string      `json:"status"`
-	Target       string      `json:"target"`
-	TargetType   string      `json:"type"`
-	DurationMS   *int64      `json:"duration_ms,omitempty"`
-	Result       interface{} `json:"result,omitempty"`
-	ErrorMessage *string     `json:"error_message,omitempty"`
-	Timestamp    string      `json:"timestamp"`
+	Event         string                 `json:"event"`
+	ExecutionID   string                 `json:"execution_id"`
+	RunID         string                 `json:"workflow_id"`
+	AgentNodeID   string                 `json:"agent_node_id"`
+	ReasonerID    string                 `json:"reasoner_id"`
+	Status        string                 `json:"status"`
+	StatusReason  *string                `json:"status_reason,omitempty"`
+	Target        string                 `json:"target"`
+	TargetType    string                 `json:"type"`
+	StartedAt     string                 `json:"started_at"`
+	CompletedAt   *string                `json:"completed_at,omitempty"`
+	DurationMS    *int64                 `json:"duration_ms,omitempty"`
+	RetryCount    int                    `json:"retry_count"`
+	ErrorCategory *string                `json:"error_category,omitempty"`
+	SessionID     *string                `json:"session_id,omitempty"`
+	ActorID       *string                `json:"actor_id,omitempty"`
+	Context       map[string]interface{} `json:"context,omitempty"`
+	Result        interface{}            `json:"result,omitempty"`
+	ErrorMessage  *string                `json:"error_message,omitempty"`
+	Timestamp     string                 `json:"timestamp"`
 }
 
 // CloneWithoutSecret returns a shallow copy of the webhook metadata without the secret.

@@ -3,7 +3,8 @@ import type {
   VCStatusSummary,
   WorkflowVCChainResponse,
   VCVerificationResponse,
-  AuditTrailEntry
+  AuditTrailEntry,
+  VCStatusData
 } from '../types/did';
 import {
   getVCStatusSummary,
@@ -22,7 +23,7 @@ export function useVCVerification() {
   const [error, setError] = useState<string | null>(null);
   const [verificationResult, setVerificationResult] = useState<VCVerificationResponse | null>(null);
 
-  const verifyVCDocument = useCallback(async (vcDocument: any) => {
+  const verifyVCDocument = useCallback(async (vcDocument: unknown) => {
     try {
       setLoading(true);
       setError(null);
@@ -169,13 +170,7 @@ export function useAuditTrail(workflowId: string) {
  * Hook for managing execution VC status
  */
 export function useExecutionVCStatus(executionId: string) {
-  const [vcStatus, setVCStatus] = useState<{
-    has_vc: boolean;
-    vc_id?: string;
-    status: string;
-    created_at?: string;
-    vc_document?: any; // Include vc_document for download functionality
-  } | null>(null);
+  const [vcStatus, setVCStatus] = useState<VCStatusData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 

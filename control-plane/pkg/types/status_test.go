@@ -4,16 +4,17 @@ import "testing"
 
 func TestNormalizeExecutionStatus(t *testing.T) {
 	cases := map[string]string{
-		"":              string(ExecutionStatusUnknown),
-		"  ":            string(ExecutionStatusUnknown),
-		"Completed":     string(ExecutionStatusSucceeded),
-		"success":       string(ExecutionStatusSucceeded),
-		"FAILED":        string(ExecutionStatusFailed),
-		"canceled":      string(ExecutionStatusCancelled),
-		"TIMED_OUT":     string(ExecutionStatusTimeout),
-		"waiting":       string(ExecutionStatusQueued),
-		"processing":    string(ExecutionStatusRunning),
-		"custom-status": string(ExecutionStatusUnknown),
+		"":                  string(ExecutionStatusUnknown),
+		"  ":                string(ExecutionStatusUnknown),
+		"Completed":         string(ExecutionStatusSucceeded),
+		"success":           string(ExecutionStatusSucceeded),
+		"FAILED":            string(ExecutionStatusFailed),
+		"canceled":          string(ExecutionStatusCancelled),
+		"TIMED_OUT":         string(ExecutionStatusTimeout),
+		"waiting":           string(ExecutionStatusWaiting),
+		"awaiting_approval": string(ExecutionStatusWaiting),
+		"processing":        string(ExecutionStatusRunning),
+		"custom-status":     string(ExecutionStatusUnknown),
 	}
 
 	for input, expected := range cases {
@@ -25,7 +26,7 @@ func TestNormalizeExecutionStatus(t *testing.T) {
 
 func TestIsTerminalExecutionStatus(t *testing.T) {
 	terminals := []string{"succeeded", "failed", "cancelled", "timeout", "completed"}
-	nonTerminals := []string{"pending", "queued", "running", "processing"}
+	nonTerminals := []string{"pending", "queued", "waiting", "running", "processing"}
 
 	for _, status := range terminals {
 		if !IsTerminalExecutionStatus(status) {

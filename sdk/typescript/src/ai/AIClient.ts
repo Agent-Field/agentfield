@@ -16,6 +16,12 @@ import { createCohere } from '@ai-sdk/cohere';
 import type { z } from 'zod';
 import type { AIConfig } from '../types/agent.js';
 import { StatelessRateLimiter } from './RateLimiter.js';
+import {
+  isOpenRouterRequest,
+  mergeOpenRouterAttributionHeaders,
+} from './openrouterAttribution.js';
+import { withOpenRouterUsageInclude } from './openrouterUsage.js';
+import { recordAiSdkUsage } from '../usage/aiUsage.js';
 
 export type ZodSchema<T> = z.Schema<T, z.ZodTypeDef, any>;
 
@@ -93,19 +99,16 @@ export class AIClient {
   async generate<T>(prompt: string, options: AIRequestOptions & { schema: ZodSchema<T> }): Promise<T>;
   async generate(prompt: string, options?: AIRequestOptions): Promise<string>;
   async generate<T = any>(prompt: string, options: AIRequestOptions = {}): Promise<T | string> {
+    const { provider, modelName } = this.resolveModelChoice(options);
     const model = this.buildModel(options);
 
     if (options.schema) {
       const schema = options.schema;
-      // Default to 'json' mode for better compatibility across providers
-      // 'auto' mode uses tool calling which some models/providers don't support well
-      const mode = options.mode ?? 'json';
       const call = async () =>
         generateObject({
           model: model,
           prompt,
           output: 'object',
-          mode,
           system: options.system,
           temperature: options.temperature ?? this.config.temperature,
           maxOutputTokens: options.maxTokens ?? this.config.maxTokens,
@@ -114,6 +117,7 @@ export class AIClient {
         });
 
       const response = await this.withRateLimitRetry(call);
+      recordAiSdkUsage({ source: response, model: modelName, provider });
       return response.object as T;
     }
 
@@ -127,9 +131,14 @@ export class AIClient {
       });
 
     const response = await this.withRateLimitRetry(call);
+    recordAiSdkUsage({ source: response, model: modelName, provider });
     return (response).text as string;
   }
 
+  // NOTE: stream() usage is deliberately NOT captured. The AI SDK's
+  // streamResult.usage/.totalUsage promises "automatically consume the
+  // stream": attaching to them would force full background consumption of a
+  // stream the caller may abandon early, changing stream semantics.
   async stream(prompt: string, options: AIRequestOptions = {}): Promise<AIStream> {
     const model = this.buildModel(options);
     const streamResult = streamText({
@@ -165,9 +174,32 @@ export class AIClient {
     return (result).embeddings as number[][];
   }
 
+  /**
+   * Build and return the AI model instance for a given set of options.
+   * Exposed for use by the tool-calling loop.
+   */
+  getModel(options: AIRequestOptions = {}) {
+    return this.buildModel(options);
+  }
+
+  /**
+   * Resolve the effective provider/model pair for a request without building
+   * the model. Used by usage tracking to attribute token/cost entries to the
+   * model actually called.
+   */
+  resolveModelChoice(options: AIRequestOptions = {}): {
+    provider: NonNullable<AIConfig['provider']>;
+    modelName: string;
+  } {
+    return {
+      provider: options.provider ?? this.config.provider ?? 'openai',
+      modelName: options.model ?? this.config.model ?? 'gpt-4o'
+    };
+  }
+
   private buildModel(options: AIRequestOptions) {
-    const provider = options.provider ?? this.config.provider ?? 'openai';
-    const modelName = options.model ?? this.config.model ?? 'gpt-4o';
+    const { provider, modelName } = this.resolveModelChoice(options);
+    const openRouterHeaders = this.openRouterHeaders(provider, modelName);
 
     switch (provider) {
       case 'anthropic': {
@@ -227,28 +259,38 @@ export class AIClient {
       }
 
       case 'openrouter': {
-        // OpenRouter is OpenAI-compatible
+        // OpenRouter is OpenAI-compatible but doesn't support Responses API.
+        // The custom fetch opts requests into OpenRouter usage accounting so
+        // responses carry the native cost figure for usage tracking.
         const openrouter = createOpenAI({
           apiKey: this.config.apiKey,
-          baseURL: this.config.baseUrl ?? 'https://openrouter.ai/api/v1'
+          baseURL: this.config.baseUrl ?? 'https://openrouter.ai/api/v1',
+          headers: openRouterHeaders,
+          fetch: withOpenRouterUsageInclude() as any,
         });
-        return openrouter(modelName);
+        return openrouter.chat(modelName);
       }
 
       case 'ollama': {
-        // Ollama is OpenAI-compatible
+        // Ollama is OpenAI-compatible but doesn't support Responses API
         const ollama = createOpenAI({
           apiKey: this.config.apiKey ?? 'ollama', // Ollama doesn't need real key
           baseURL: this.config.baseUrl ?? 'http://localhost:11434/v1'
         });
-        return ollama(modelName);
+        return ollama.chat(modelName);
       }
 
       case 'openai':
       default: {
+        // openRouterHeaders is only set when this request is actually bound
+        // for OpenRouter (e.g. openrouter baseUrl through the openai
+        // provider) — opt those into usage accounting too.
         const openai = createOpenAI({
           apiKey: this.config.apiKey,
-          baseURL: this.config.baseUrl
+          baseURL: this.config.baseUrl,
+          ...(openRouterHeaders
+            ? { headers: openRouterHeaders, fetch: withOpenRouterUsageInclude() as any }
+            : {})
         });
         return openai(modelName);
       }
@@ -258,6 +300,7 @@ export class AIClient {
   private buildEmbeddingModel(options: AIEmbeddingOptions) {
     const provider = options.provider ?? this.config.provider ?? 'openai';
     const modelName = options.model ?? this.config.embeddingModel ?? 'text-embedding-3-small';
+    const openRouterHeaders = this.openRouterHeaders(provider, modelName);
 
     // Providers without embedding support
     const noEmbeddingProviders = ['anthropic', 'xai', 'deepseek', 'groq'];
@@ -302,11 +345,22 @@ export class AIClient {
               ? 'https://openrouter.ai/api/v1'
               : provider === 'ollama'
                 ? 'http://localhost:11434/v1'
-                : undefined)
+                : undefined),
+          ...(openRouterHeaders ? { headers: openRouterHeaders } : {})
         });
         return openai.embedding(modelName);
       }
     }
+  }
+
+  private openRouterHeaders(provider: AIConfig['provider'], model: string): Record<string, string> | undefined {
+    if (!isOpenRouterRequest({ provider, model, baseUrl: this.config.baseUrl })) {
+      return undefined;
+    }
+    return mergeOpenRouterAttributionHeaders(this.config.openRouterHeaders, {
+      siteUrl: this.config.openRouterSiteUrl,
+      appName: this.config.openRouterAppName,
+    });
   }
 
   private getRateLimiter() {

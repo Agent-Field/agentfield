@@ -42,7 +42,6 @@ export function SegmentedStatusFilter({
                         {Icon && (
                             <Icon
                                 size={14}
-                                weight={isActive ? "bold" : "regular"}
                             />
                         )}
                         <span>{option.label}</span>

@@ -11,30 +11,33 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
+	"sync"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
-	coreservices "github.com/Agent-Field/agentfield/control-plane/internal/core/services" // Core services
-	"github.com/Agent-Field/agentfield/control-plane/internal/events"                     // Event system
-	"github.com/Agent-Field/agentfield/control-plane/internal/handlers"                   // Agent handlers
-	"github.com/Agent-Field/agentfield/control-plane/internal/handlers/ui"                // UI handlers
+	coreservices "github.com/Agent-Field/agentfield/control-plane/internal/core/services"
+	"github.com/Agent-Field/agentfield/control-plane/internal/embedding"
+	"github.com/Agent-Field/agentfield/control-plane/internal/encryption"
+	"github.com/Agent-Field/agentfield/control-plane/internal/events"
+	"github.com/Agent-Field/agentfield/control-plane/internal/handlers"
 	"github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/communication"
 	"github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/process"
 	infrastorage "github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/storage"
+	"github.com/Agent-Field/agentfield/control-plane/internal/knowledge"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/observability"
+	"github.com/Agent-Field/agentfield/control-plane/internal/server/apicatalog"
+	"github.com/Agent-Field/agentfield/control-plane/internal/server/knowledgebase"
 	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
-	"github.com/Agent-Field/agentfield/control-plane/internal/services" // Services
+	"github.com/Agent-Field/agentfield/control-plane/internal/services"
+	_ "github.com/Agent-Field/agentfield/control-plane/internal/sources/all" // register first-party trigger Sources
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/internal/utils"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/adminpb"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
-	client "github.com/Agent-Field/agentfield/control-plane/web/client"
 
-	"github.com/gin-contrib/cors" // CORS middleware
 	"github.com/gin-gonic/gin"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -52,25 +55,52 @@ type AgentFieldServer struct {
 	presenceManager       *services.PresenceManager
 	statusManager         *services.StatusManager // Add StatusManager for unified status management
 	agentService          interfaces.AgentService // Add AgentService for lifecycle management
-	agentClient           interfaces.AgentClient  // Add AgentClient for MCP communication
+	agentClient           interfaces.AgentClient  // Add AgentClient for agent communication
 	config                *config.Config
 	storageHealthOverride func(context.Context) gin.H
 	cacheHealthOverride   func(context.Context) gin.H
 	// DID Services
-	keystoreService *services.KeystoreService
-	didService      *services.DIDService
-	vcService       *services.VCService
-	didRegistry     *services.DIDRegistry
-	agentfieldHome  string
+	keystoreService     *services.KeystoreService
+	didService          *services.DIDService
+	vcService           *services.VCService
+	didRegistry         *services.DIDRegistry
+	didWebService       *services.DIDWebService
+	accessPolicyService *services.AccessPolicyService
+	tagApprovalService  *services.TagApprovalService
+	tagVCVerifier       *services.TagVCVerifier
+	agentfieldHome      string
+	// LLM health monitoring
+	llmHealthMonitor *services.LLMHealthMonitor
 	// Cleanup service
-	cleanupService        *handlers.ExecutionCleanupService
-	payloadStore          services.PayloadStore
-	registryWatcherCancel context.CancelFunc
-	adminGRPCServer       *grpc.Server
-	adminListener         net.Listener
-	adminGRPCPort            int
-	webhookDispatcher        services.WebhookDispatcher
-	observabilityForwarder   services.ObservabilityForwarder
+	cleanupService         *handlers.ExecutionCleanupService
+	payloadStore           services.PayloadStore
+	registryWatcherCancel  context.CancelFunc
+	adminGRPCServer        *grpc.Server
+	adminListener          net.Listener
+	adminGRPCPort          int
+	webhookDispatcher      services.WebhookDispatcher
+	observabilityForwarder services.ObservabilityForwarder
+	executionTracer        *observability.ExecutionTracer
+	tracerShutdown         func(context.Context) error
+	telemetryService       *observability.TelemetryService
+	configMu               sync.RWMutex
+	// Trigger / webhook plugin system
+	triggerDispatcher *services.TriggerDispatcher
+	sourceManager     *services.SourceManager
+	triggerHandlers   *handlers.TriggerHandlers
+	// cancelDispatcher forwards execution-cancelled events to remote SDK
+	// workers so they can cooperatively short-circuit in-flight reasoner
+	// code (raise CancelledError / abort signals / cancel contexts).
+	cancelDispatcher *services.CancelDispatcher
+	// Agentic API
+	apiCatalog *apicatalog.Catalog
+	kb         *knowledgebase.KB
+	// Native scope-aware RAG knowledge store (embed-on-write/search).
+	knowledgeService *knowledge.Service
+	// HTTP server for graceful shutdown support
+	httpServerMu sync.RWMutex
+	httpServer   *http.Server
+	stopping     bool
 }
 
 // NewAgentFieldServer creates a new instance of the AgentFieldServer.
@@ -95,6 +125,16 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Overlay database-stored config if AGENTFIELD_CONFIG_SOURCE=db
+	if src := os.Getenv("AGENTFIELD_CONFIG_SOURCE"); src == "db" {
+		if err := overlayDBConfig(cfg, storageProvider); err != nil {
+			fmt.Printf("Warning: failed to load config from database: %v\n", err)
+		}
+	}
+
+	// Configure execution event payload redaction from logging config.
+	handlers.SetRedactPayloads(cfg.Logging.ShouldRedactPayloads())
 
 	Router := gin.Default()
 
@@ -180,6 +220,10 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 
 		fmt.Println("📋 Creating DID registry...")
 		didRegistry = services.NewDIDRegistryWithStorage(storageProvider)
+		if passphrase := cfg.Features.DID.Keystore.EncryptionPassphrase; passphrase != "" {
+			didRegistry.SetEncryptionService(encryption.NewEncryptionService(passphrase))
+			fmt.Println("🔐 Master seed encryption enabled")
+		}
 
 		fmt.Println("🆔 Creating DID service...")
 		didService = services.NewDIDService(&cfg.Features.DID, keystoreService, didRegistry)
@@ -230,7 +274,123 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		fmt.Println("⚠️ DID and VC services are DISABLED in configuration")
 	}
 
+	// Initialize DIDWebService if DID is enabled
+	var didWebService *services.DIDWebService
+
+	if cfg.Features.DID.Enabled && didService != nil {
+		// Determine domain for did:web identifiers
+		domain := cfg.Features.DID.Authorization.Domain
+		if domain == "" {
+			domain = fmt.Sprintf("localhost:%d", cfg.AgentField.Port)
+		}
+
+		// Create DIDWebService
+		fmt.Printf("🌐 Creating DID Web service with domain: %s\n", domain)
+		didWebService = services.NewDIDWebService(domain, didService, storageProvider)
+
+		if cfg.Features.DID.Authorization.Enabled {
+			if cfg.Features.DID.Authorization.AdminToken == "" {
+				logger.Logger.Error().Msg("⚠️  SECURITY WARNING: Authorization is enabled but no admin_token is configured! Admin routes (tag approval, policy management) are unprotected. Set AGENTFIELD_AUTHORIZATION_ADMIN_TOKEN for production use.")
+			}
+			if cfg.Features.DID.Authorization.TagApprovalRules.DefaultMode == "" || cfg.Features.DID.Authorization.TagApprovalRules.DefaultMode == "auto" {
+				logger.Logger.Warn().Msg("⚠️  Tag approval default_mode is 'auto' — all agent tags will be auto-approved. Set tag_approval_rules.default_mode to 'manual' for production.")
+			}
+		}
+	}
+
+	// Initialize tag approval service (uses config-based rules)
+	var tagApprovalService *services.TagApprovalService
+	if cfg.Features.DID.Authorization.Enabled {
+		tagApprovalService = services.NewTagApprovalService(
+			cfg.Features.DID.Authorization.TagApprovalRules,
+			storageProvider,
+		)
+		if tagApprovalService.IsEnabled() {
+			logger.Logger.Info().Msg("🏷️  Tag approval service enabled with rules")
+		}
+	}
+
+	// Initialize access policy service (tag-based authorization)
+	var accessPolicyService *services.AccessPolicyService
+	if cfg.Features.DID.Authorization.Enabled {
+		accessPolicyService = services.NewAccessPolicyService(storageProvider)
+		if err := accessPolicyService.Initialize(context.Background()); err != nil {
+			logger.Logger.Warn().Err(err).Msg("Failed to initialize access policy service")
+		} else {
+			logger.Logger.Info().Msg("📋 Access policy service initialized")
+		}
+
+		// Seed access policies from config file
+		if len(cfg.Features.DID.Authorization.AccessPolicies) > 0 {
+			ctx := context.Background()
+			seededCount := 0
+			for _, policyCfg := range cfg.Features.DID.Authorization.AccessPolicies {
+				desc := ""
+				if policyCfg.Name != "" {
+					desc = "Seeded from config"
+				}
+				constraints := make(map[string]types.AccessConstraint)
+				for k, v := range policyCfg.Constraints {
+					constraints[k] = types.AccessConstraint{
+						Operator: v.Operator,
+						Value:    v.Value,
+					}
+				}
+				_, err := accessPolicyService.AddPolicy(ctx, &types.AccessPolicyRequest{
+					Name:           policyCfg.Name,
+					CallerTags:     policyCfg.CallerTags,
+					TargetTags:     policyCfg.TargetTags,
+					AllowFunctions: policyCfg.AllowFunctions,
+					DenyFunctions:  policyCfg.DenyFunctions,
+					Constraints:    constraints,
+					Action:         policyCfg.Action,
+					Priority:       policyCfg.Priority,
+					Description:    desc,
+				})
+				if err != nil {
+					logger.Logger.Debug().
+						Err(err).
+						Str("policy_name", policyCfg.Name).
+						Msg("Failed to seed access policy from config (may already exist)")
+				} else {
+					seededCount++
+				}
+			}
+			if seededCount > 0 {
+				logger.Logger.Info().
+					Int("seeded_count", seededCount).
+					Int("total_config_policies", len(cfg.Features.DID.Authorization.AccessPolicies)).
+					Msg("Seeded access policies from config")
+			}
+		}
+	}
+
+	// Initialize tag VC verifier for cryptographic tag verification at call time
+	var tagVCVerifier *services.TagVCVerifier
+	if cfg.Features.DID.Authorization.Enabled && vcService != nil {
+		tagVCVerifier = services.NewTagVCVerifier(storageProvider, vcService)
+		logger.Logger.Info().Msg("🔐 Tag VC verifier initialized")
+	}
+
+	// Wire VC service into tag approval service for VC issuance on approval
+	if tagApprovalService != nil && vcService != nil {
+		tagApprovalService.SetVCService(vcService)
+		logger.Logger.Info().Msg("🏷️  Tag approval service configured for VC issuance")
+	}
+
+	// Wire revocation callback to clear status cache and presence lease
+	if tagApprovalService != nil {
+		tagApprovalService.SetOnRevokeCallback(func(ctx context.Context, agentID string) {
+			presenceManager.Forget(agentID)
+			_ = statusManager.RefreshAgentStatus(ctx, agentID)
+		})
+	}
+
 	payloadStore := services.NewFilePayloadStore(dirs.PayloadsDir)
+
+	// Configure SSRF-safe webhook client allowlist. Hosts/CIDRs listed here
+	// bypass the private-IP check (e.g. for internal Docker/K8s service names).
+	services.SetWebhookAllowedHosts(cfg.AgentField.Registration.WebhookAllowedHosts)
 
 	webhookDispatcher := services.NewWebhookDispatcher(storageProvider, services.WebhookDispatcherConfig{
 		Timeout:         cfg.AgentField.ExecutionQueue.WebhookTimeout,
@@ -257,6 +417,52 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		logger.Logger.Warn().Err(err).Msg("failed to start observability forwarder")
 	}
 
+	// Initialize OpenTelemetry distributed tracing
+	var executionTracer *observability.ExecutionTracer
+	var tracerShutdown func(context.Context) error
+	if cfg.Features.Tracing.Enabled {
+		tracer, shutdown, err := observability.InitTracer(context.Background(), observability.TracerConfig{
+			Enabled:     cfg.Features.Tracing.Enabled,
+			Exporter:    cfg.Features.Tracing.Exporter,
+			Endpoint:    cfg.Features.Tracing.Endpoint,
+			ServiceName: cfg.Features.Tracing.ServiceName,
+			Insecure:    cfg.Features.Tracing.Insecure,
+		})
+		if err != nil {
+			logger.Logger.Warn().Err(err).Msg("failed to initialize OTel tracer")
+		} else if tracer != nil {
+			executionTracer = observability.NewExecutionTracer(tracer)
+			tracerShutdown = shutdown
+			logger.Logger.Info().
+				Str("endpoint", cfg.Features.Tracing.Endpoint).
+				Str("service_name", cfg.Features.Tracing.ServiceName).
+				Msg("OpenTelemetry tracing enabled")
+		}
+	}
+
+	var telemetryService *observability.TelemetryService
+	if cfg.Telemetry.IsEnabled() {
+		service, err := observability.NewTelemetryService(cfg.Telemetry, agentfieldHome, cfg.Storage.Mode, cfg.Telemetry.AgentFieldVersion)
+		if err != nil {
+			logger.Logger.Warn().Err(err).Msg("failed to initialize anonymous OSS telemetry")
+		} else {
+			telemetryService = service
+		}
+	}
+
+	// Initialize LLM health monitor
+	var llmHealthMonitor *services.LLMHealthMonitor
+	if cfg.AgentField.LLMHealth.Enabled && len(cfg.AgentField.LLMHealth.Endpoints) > 0 {
+		llmHealthMonitor = services.NewLLMHealthMonitor(cfg.AgentField.LLMHealth, uiService)
+		handlers.SetLLMHealthMonitor(llmHealthMonitor)
+		logger.Logger.Info().
+			Int("endpoints", len(cfg.AgentField.LLMHealth.Endpoints)).
+			Msg("LLM health monitor configured")
+	}
+
+	// Initialize per-agent concurrency limiter
+	handlers.InitConcurrencyLimiter(cfg.AgentField.ExecutionQueue.MaxConcurrentPerAgent)
+
 	// Initialize execution cleanup service
 	cleanupService := handlers.NewExecutionCleanupService(storageProvider, cfg.AgentField.ExecutionCleanup)
 
@@ -269,30 +475,96 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		}
 	}
 
+	triggerDispatcher := services.NewTriggerDispatcher(storageProvider, vcService)
+	sourceManager := services.NewSourceManager(storageProvider, triggerDispatcher)
+	triggerHandlers := handlers.NewTriggerHandlers(storageProvider, triggerDispatcher, sourceManager)
+	handlers.SetTriggerSourceManager(sourceManager)
+
+	cancelDispatcher := services.NewCancelDispatcher(storageProvider, services.CancelDispatcherConfig{
+		InternalToken: cfg.Features.DID.Authorization.InternalToken,
+	})
+
+	// Native RAG knowledge store: pick the embedding provider from config,
+	// falling back to the deterministic FakeEmbedder when no OpenAI key is set.
+	embedder, isOpenAI := embedding.NewFromConfig(embedding.ProviderConfig{
+		Provider: cfg.Features.Knowledge.Provider,
+		APIKey:   cfg.Features.Knowledge.OpenAI.APIKey,
+		Model:    cfg.Features.Knowledge.OpenAI.Model,
+	})
+	logger.Logger.Info().
+		Bool("openai", isOpenAI).
+		Int("dimensions", embedder.Dimensions()).
+		Msg("knowledge store embedding provider initialized")
+	knowledgeService := knowledge.NewService(storageProvider, embedder)
+
 	return &AgentFieldServer{
-		storage:               storageProvider,
-		cache:                 cacheProvider,
-		Router:                Router,
-		uiService:             uiService,
-		executionsUIService:   executionsUIService,
-		healthMonitor:         healthMonitor,
-		presenceManager:       presenceManager,
-		statusManager:         statusManager,
-		agentService:          agentService,
-		agentClient:           agentClient,
-		config:                cfg,
-		keystoreService:       keystoreService,
-		didService:            didService,
-		vcService:             vcService,
-		didRegistry:           didRegistry,
-		agentfieldHome:        agentfieldHome,
-		cleanupService:        cleanupService,
-		payloadStore:          payloadStore,
-		webhookDispatcher:        webhookDispatcher,
-		observabilityForwarder:   observabilityForwarder,
-		registryWatcherCancel:    nil,
-		adminGRPCPort:            adminPort,
+		storage:                storageProvider,
+		cache:                  cacheProvider,
+		Router:                 Router,
+		uiService:              uiService,
+		executionsUIService:    executionsUIService,
+		healthMonitor:          healthMonitor,
+		presenceManager:        presenceManager,
+		statusManager:          statusManager,
+		agentService:           agentService,
+		agentClient:            agentClient,
+		config:                 cfg,
+		keystoreService:        keystoreService,
+		didService:             didService,
+		vcService:              vcService,
+		didRegistry:            didRegistry,
+		didWebService:          didWebService,
+		accessPolicyService:    accessPolicyService,
+		tagApprovalService:     tagApprovalService,
+		tagVCVerifier:          tagVCVerifier,
+		agentfieldHome:         agentfieldHome,
+		llmHealthMonitor:       llmHealthMonitor,
+		cleanupService:         cleanupService,
+		payloadStore:           payloadStore,
+		webhookDispatcher:      webhookDispatcher,
+		observabilityForwarder: observabilityForwarder,
+		executionTracer:        executionTracer,
+		tracerShutdown:         tracerShutdown,
+		telemetryService:       telemetryService,
+		registryWatcherCancel:  nil,
+		adminGRPCPort:          adminPort,
+		triggerDispatcher:      triggerDispatcher,
+		sourceManager:          sourceManager,
+		triggerHandlers:        triggerHandlers,
+		cancelDispatcher:       cancelDispatcher,
+		apiCatalog:             initAPICatalog(),
+		kb:                     initKnowledgeBase(),
+		knowledgeService:       knowledgeService,
 	}, nil
+}
+
+// configReloadFn returns a function that reloads config from the database,
+// or nil if AGENTFIELD_CONFIG_SOURCE is not set to "db".
+// The returned function acquires configMu to prevent data races with
+// concurrent readers of s.config.
+func (s *AgentFieldServer) configReloadFn() handlers.ConfigReloadFunc {
+	if src := os.Getenv("AGENTFIELD_CONFIG_SOURCE"); src != "db" {
+		return nil
+	}
+	return func() error {
+		s.configMu.Lock()
+		defer s.configMu.Unlock()
+		return overlayDBConfig(s.config, s.storage)
+	}
+}
+
+// initAPICatalog creates and populates the API endpoint catalog.
+func initAPICatalog() *apicatalog.Catalog {
+	catalog := apicatalog.New()
+	catalog.RegisterBatch(apicatalog.DefaultEntries())
+	return catalog
+}
+
+// initKnowledgeBase creates and populates the built-in knowledge base.
+func initKnowledgeBase() *knowledgebase.KB {
+	kb := knowledgebase.New()
+	knowledgebase.LoadDefaultContent(kb)
+	return kb
 }
 
 // Start initializes and starts the AgentFieldServer.
@@ -304,15 +576,14 @@ func (s *AgentFieldServer) Start() error {
 	go s.statusManager.Start()
 
 	if s.presenceManager != nil {
-		go s.presenceManager.Start()
+		// Recover presence leases BEFORE starting the sweep loop so the first
+		// sweep sees all previously-registered agents instead of an empty map.
+		ctx := context.Background()
+		if err := s.presenceManager.RecoverFromDatabase(ctx, s.storage); err != nil {
+			logger.Logger.Error().Err(err).Msg("Failed to recover presence leases from database")
+		}
 
-		// Recover presence leases from database
-		go func() {
-			ctx := context.Background()
-			if err := s.presenceManager.RecoverFromDatabase(ctx, s.storage); err != nil {
-				logger.Logger.Error().Err(err).Msg("Failed to recover presence leases from database")
-			}
-		}()
+		go s.presenceManager.Start()
 	}
 
 	// Start health monitor service in background
@@ -326,11 +597,42 @@ func (s *AgentFieldServer) Start() error {
 		}
 	}()
 
+	// Start LLM health monitor in background
+	if s.llmHealthMonitor != nil {
+		go s.llmHealthMonitor.Start()
+	}
+
 	// Start execution cleanup service in background
 	ctx := context.Background()
 	if err := s.cleanupService.Start(ctx); err != nil {
 		logger.Logger.Error().Err(err).Msg("Failed to start execution cleanup service")
 		// Don't fail server startup if cleanup service fails to start
+	}
+
+	// Start cancel dispatcher: forwards bus ExecutionCancelledEvent to
+	// remote workers via HTTP callback. Best-effort; missing endpoint on
+	// older SDKs is treated as a no-op.
+	if s.cancelDispatcher != nil {
+		s.cancelDispatcher.Start(ctx)
+	}
+
+	// Start OpenTelemetry execution tracer in background
+	if s.executionTracer != nil {
+		s.executionTracer.Start(ctx)
+	}
+
+	// Start anonymous OSS usage telemetry. Best-effort only.
+	if s.telemetryService != nil {
+		s.telemetryService.Start(ctx)
+	}
+
+	// Boot loop-kind triggers (cron etc.) so a server restart resumes existing schedules.
+	if s.sourceManager != nil {
+		go func() {
+			if err := s.sourceManager.LoadAll(context.Background()); err != nil {
+				logger.Logger.Warn().Err(err).Msg("source manager: LoadAll failed")
+			}
+		}()
 	}
 
 	// Start reasoner event heartbeat (30 second intervals)
@@ -352,9 +654,59 @@ func (s *AgentFieldServer) Start() error {
 		return fmt.Errorf("failed to start admin gRPC server: %w", err)
 	}
 
-	// TODO: Implement WebSocket, gRPC
-	// Start HTTP server
-	return s.Router.Run(":" + strconv.Itoa(s.config.AgentField.Port))
+	// Start HTTP server (using net/http.Server for graceful shutdown support)
+	addr := ":" + strconv.Itoa(s.config.AgentField.Port)
+	httpServer := &http.Server{
+		Addr:    addr,
+		Handler: s.Router,
+	}
+	if !s.setHTTPServer(httpServer) {
+		return nil
+	}
+	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("failed to start HTTP server on %s: %w", addr, err)
+	}
+	return nil
+}
+
+func (s *AgentFieldServer) setHTTPServer(httpServer *http.Server) bool {
+	s.httpServerMu.Lock()
+	defer s.httpServerMu.Unlock()
+	if s.stopping {
+		return false
+	}
+	s.httpServer = httpServer
+	return true
+}
+
+func (s *AgentFieldServer) getHTTPServer() *http.Server {
+	s.httpServerMu.RLock()
+	defer s.httpServerMu.RUnlock()
+	return s.httpServer
+}
+
+func (s *AgentFieldServer) shutdownHTTPServer() error {
+	httpServer := s.getHTTPServer()
+	if httpServer == nil {
+		return nil
+	}
+
+	var shutdownTimeout time.Duration
+	if s.config != nil {
+		shutdownTimeout = s.config.AgentField.ShutdownTimeout
+	}
+	if shutdownTimeout <= 0 {
+		shutdownTimeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	if err := httpServer.Shutdown(ctx); err != nil {
+		logger.Logger.Error().Err(err).Msg("HTTP server shutdown timed out, forcing close")
+		_ = httpServer.Close()
+		return err
+	}
+	logger.Logger.Info().Msg("HTTP server shut down gracefully")
+	return nil
 }
 
 func (s *AgentFieldServer) startAdminGRPCServer() error {
@@ -417,6 +769,12 @@ func (s *AgentFieldServer) ListReasoners(ctx context.Context, _ *adminpb.ListRea
 
 // Stop gracefully shuts down the AgentFieldServer.
 func (s *AgentFieldServer) Stop() error {
+	s.httpServerMu.Lock()
+	s.stopping = true
+	s.httpServerMu.Unlock()
+
+	httpShutdownErr := s.shutdownHTTPServer()
+
 	if s.adminGRPCServer != nil {
 		s.adminGRPCServer.GracefulStop()
 	}
@@ -434,13 +792,20 @@ func (s *AgentFieldServer) Stop() error {
 	}
 
 	// Stop health monitor service
-	s.healthMonitor.Stop()
+	if s.healthMonitor != nil {
+		s.healthMonitor.Stop()
+	}
 
 	// Stop execution cleanup service
 	if s.cleanupService != nil {
 		if err := s.cleanupService.Stop(); err != nil {
 			logger.Logger.Error().Err(err).Msg("Failed to stop execution cleanup service")
 		}
+	}
+
+	// Stop cancel dispatcher
+	if s.cancelDispatcher != nil {
+		s.cancelDispatcher.Stop()
 	}
 
 	if s.registryWatcherCancel != nil {
@@ -453,6 +818,11 @@ func (s *AgentFieldServer) Stop() error {
 		s.uiService.StopHeartbeat()
 	}
 
+	// Stop loop-source goroutines.
+	if s.sourceManager != nil {
+		s.sourceManager.StopAll()
+	}
+
 	// Stop observability forwarder
 	if s.observabilityForwarder != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -462,694 +832,70 @@ func (s *AgentFieldServer) Stop() error {
 		}
 	}
 
-	// TODO: Implement graceful shutdown for HTTP, WebSocket, gRPC
-	return nil
-}
-
-// unregisterAgentFromMonitoring removes an agent from health monitoring
-func (s *AgentFieldServer) unregisterAgentFromMonitoring(c *gin.Context) {
-	nodeID := c.Param("node_id")
-	if nodeID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "node_id is required"})
-		return
+	// Stop OpenTelemetry execution tracer and flush remaining spans
+	if s.executionTracer != nil {
+		s.executionTracer.Stop()
 	}
-
-	if s.healthMonitor != nil {
-		s.healthMonitor.UnregisterAgent(nodeID)
-		c.JSON(http.StatusOK, gin.H{
-			"success": true,
-			"message": fmt.Sprintf("Agent %s unregistered from health monitoring", nodeID),
-		})
-	} else {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "health monitor not available"})
+	if s.telemetryService != nil {
+		s.telemetryService.Stop()
 	}
-}
-
-// healthCheckHandler provides comprehensive health check for container orchestration
-func (s *AgentFieldServer) healthCheckHandler(c *gin.Context) {
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
-	defer cancel()
-
-	healthStatus := gin.H{
-		"status":    "healthy",
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
-		"version":   "1.0.0", // TODO: Get from build info
-		"checks":    gin.H{},
-	}
-
-	allHealthy := true
-	checks := healthStatus["checks"].(gin.H)
-
-	// Storage health check
-	if s.storage != nil || s.storageHealthOverride != nil {
-		storageHealth := s.checkStorageHealth(ctx)
-		checks["storage"] = storageHealth
-		if storageHealth["status"] != "healthy" {
-			allHealthy = false
-		}
-	} else {
-		checks["storage"] = gin.H{
-			"status":  "unhealthy",
-			"message": "storage not initialized",
-		}
-		allHealthy = false
-	}
-
-	// Cache health check
-	if s.cache != nil || s.cacheHealthOverride != nil {
-		cacheHealth := s.checkCacheHealth(ctx)
-		checks["cache"] = cacheHealth
-		if cacheHealth["status"] != "healthy" {
-			allHealthy = false
-		}
-	} else {
-		checks["cache"] = gin.H{
-			"status":  "healthy",
-			"message": "cache not configured (optional)",
-		}
-	}
-
-	// Overall status
-	if !allHealthy {
-		healthStatus["status"] = "unhealthy"
-		c.JSON(http.StatusServiceUnavailable, healthStatus)
-		return
-	}
-
-	c.JSON(http.StatusOK, healthStatus)
-}
-
-// checkStorageHealth performs storage-specific health checks
-func (s *AgentFieldServer) checkStorageHealth(ctx context.Context) gin.H {
-	if s.storageHealthOverride != nil {
-		return s.storageHealthOverride(ctx)
-	}
-
-	startTime := time.Now()
-
-	// For local storage, try a basic operation
-	if err := ctx.Err(); err != nil {
-		return gin.H{
-			"status":  "unhealthy",
-			"message": "context timeout during storage check",
-		}
-	}
-
-	return gin.H{
-		"status":        "healthy",
-		"message":       "storage is responsive",
-		"response_time": time.Since(startTime).Milliseconds(),
-	}
-}
-
-// checkCacheHealth performs cache-specific health checks
-func (s *AgentFieldServer) checkCacheHealth(ctx context.Context) gin.H {
-	if s.cacheHealthOverride != nil {
-		return s.cacheHealthOverride(ctx)
-	}
-
-	startTime := time.Now()
-
-	// Try a simple cache operation
-	testKey := "health_check_" + fmt.Sprintf("%d", time.Now().Unix())
-	testValue := "ok"
-
-	// Set a test value
-	if err := s.cache.Set(testKey, testValue, time.Minute); err != nil {
-		return gin.H{
-			"status":        "unhealthy",
-			"message":       fmt.Sprintf("cache set operation failed: %v", err),
-			"response_time": time.Since(startTime).Milliseconds(),
-		}
-	}
-
-	// Get the test value
-	var retrieved string
-	if err := s.cache.Get(testKey, &retrieved); err != nil {
-		return gin.H{
-			"status":        "unhealthy",
-			"message":       fmt.Sprintf("cache get operation failed: %v", err),
-			"response_time": time.Since(startTime).Milliseconds(),
-		}
-	}
-
-	// Clean up
-	if err := s.cache.Delete(testKey); err != nil {
-		return gin.H{
-			"status":        "unhealthy",
-			"message":       fmt.Sprintf("cache delete operation failed: %v", err),
-			"response_time": time.Since(startTime).Milliseconds(),
-		}
-	}
-
-	return gin.H{
-		"status":        "healthy",
-		"message":       "cache is responsive",
-		"response_time": time.Since(startTime).Milliseconds(),
-	}
-}
-
-func (s *AgentFieldServer) setupRoutes() {
-	// Configure CORS from configuration
-	corsConfig := cors.Config{
-		AllowOrigins:     s.config.API.CORS.AllowedOrigins,
-		AllowMethods:     s.config.API.CORS.AllowedMethods,
-		AllowHeaders:     s.config.API.CORS.AllowedHeaders,
-		ExposeHeaders:    s.config.API.CORS.ExposedHeaders,
-		AllowCredentials: s.config.API.CORS.AllowCredentials,
-	}
-
-	// Fallback to defaults if not configured
-	if len(corsConfig.AllowOrigins) == 0 {
-		corsConfig.AllowOrigins = []string{"http://localhost:3000", "http://localhost:5173"}
-	}
-	if len(corsConfig.AllowMethods) == 0 {
-		corsConfig.AllowMethods = []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}
-	}
-	if len(corsConfig.AllowHeaders) == 0 {
-		corsConfig.AllowHeaders = []string{"Origin", "Content-Type", "Accept", "Authorization", "X-API-Key"}
-	}
-
-	s.Router.Use(cors.New(corsConfig))
-
-	// Add request logging middleware
-	s.Router.Use(gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
-		return fmt.Sprintf("%s - [%s] \"%s %s %s %d %s \"%s\" %s\"\n",
-			param.ClientIP,
-			param.TimeStamp.Format(time.RFC1123),
-			param.Method,
-			param.Path,
-			param.Request.Proto,
-			param.StatusCode,
-			param.Latency,
-			param.Request.UserAgent(),
-			param.ErrorMessage,
-		)
-	}))
-
-	// Add timeout middleware for all routes (1 hour for long-running executions)
-	s.Router.Use(func(c *gin.Context) {
-		// Set a timeout for the request
-		ctx := c.Request.Context()
-		timeoutCtx, cancel := context.WithTimeout(ctx, 3600*time.Second)
+	if s.tracerShutdown != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-
-		c.Request = c.Request.WithContext(timeoutCtx)
-		c.Next()
-	})
-
-	// API key authentication middleware (supports headers + api_key query param)
-	s.Router.Use(middleware.APIKeyAuth(middleware.AuthConfig{
-		APIKey:    s.config.API.Auth.APIKey,
-		SkipPaths: s.config.API.Auth.SkipPaths,
-	}))
-	if s.config.API.Auth.APIKey != "" {
-		logger.Logger.Info().Msg("🔐 API key authentication enabled")
-	}
-
-	// Expose Prometheus metrics
-	s.Router.GET("/metrics", gin.WrapH(promhttp.Handler()))
-
-	// Public health check endpoint for load balancers and container orchestration (e.g., Railway, K8s)
-	s.Router.GET("/health", s.healthCheckHandler)
-
-	// Serve UI files - embedded or filesystem based on availability
-	if s.config.UI.Enabled {
-		// Check if UI is embedded in the binary
-		if s.config.UI.Mode == "embedded" && client.IsUIEmbedded() {
-			// Use embedded UI
-			client.RegisterUIRoutes(s.Router)
-			fmt.Println("Using embedded UI files")
-		} else {
-			// Use filesystem UI
-			distPath := s.config.UI.DistPath
-			if distPath == "" {
-				// Get the executable path and find UI dist relative to it
-				execPath, err := os.Executable()
-				if err != nil {
-					distPath = filepath.Join("apps", "platform", "agentfield", "web", "client", "dist")
-					if _, statErr := os.Stat(distPath); os.IsNotExist(statErr) {
-						distPath = filepath.Join("web", "client", "dist")
-					}
-				} else {
-					execDir := filepath.Dir(execPath)
-					// Look for web/client/dist relative to the executable directory
-					distPath = filepath.Join(execDir, "web", "client", "dist")
-
-					// If that doesn't exist, try going up one level (if binary is in apps/platform/agentfield/)
-					if _, err := os.Stat(distPath); os.IsNotExist(err) {
-						distPath = filepath.Join(filepath.Dir(execDir), "apps", "platform", "agentfield", "web", "client", "dist")
-					}
-
-					// Final fallback to current working directory
-					if _, err := os.Stat(distPath); os.IsNotExist(err) {
-						altPath := filepath.Join("apps", "platform", "agentfield", "web", "client", "dist")
-						if _, altErr := os.Stat(altPath); altErr == nil {
-							distPath = altPath
-						} else {
-							distPath = filepath.Join("web", "client", "dist")
-						}
-					}
-				}
-			}
-
-			// Serve static files from filesystem
-			s.Router.StaticFS("/ui", http.Dir(distPath))
-
-			// Root redirect
-			s.Router.GET("/", func(c *gin.Context) {
-				c.Redirect(http.StatusMovedPermanently, "/ui/")
-			})
-
-			fmt.Printf("Using filesystem UI files from: %s\n", distPath)
+		if err := s.tracerShutdown(ctx); err != nil {
+			logger.Logger.Error().Err(err).Msg("Failed to shutdown OTel tracer provider")
 		}
 	}
 
-	// UI API routes - Moved before API routes to prevent route conflicts
-	if s.config.UI.Enabled { // Only add UI API routes if UI is generally enabled
-		uiAPI := s.Router.Group("/api/ui/v1")
-		{
-			// Agents management group - All agent-related operations
-			agents := uiAPI.Group("/agents")
-			{
-				// Package API endpoints
-				packagesHandler := ui.NewPackageHandler(s.storage)
-				agents.GET("/packages", packagesHandler.ListPackagesHandler)
-				agents.GET("/packages/:packageId/details", packagesHandler.GetPackageDetailsHandler)
+	// TODO: Implement graceful shutdown for WebSocket
+	return httpShutdownErr
+}
 
-				// Agent lifecycle management endpoints
-				lifecycleHandler := ui.NewLifecycleHandler(s.storage, s.agentService)
-				agents.GET("/running", lifecycleHandler.ListRunningAgentsHandler)
+// setupRoutes composes the full HTTP surface by delegating to focused
+// registration methods. Ordering matters: global middleware must be installed
+// before any route; UI API routes are registered before /api/v1 to avoid path
+// collisions; and NoRoute/Smart404 must be installed last so it only catches
+// truly unknown paths.
+//
+// Each register* method lives in its own routes_*.go file to keep auth posture
+// and concern boundaries obvious. This function is pure composition and
+// contains no handler logic.
+func (s *AgentFieldServer) setupRoutes() {
+	s.applyGlobalMiddleware()
 
-				// Individual agent operations
-				agents.GET("/:agentId/details", func(c *gin.Context) {
-					// TODO: Implement agent details
-					c.JSON(http.StatusOK, gin.H{"message": "Agent details endpoint"})
-				})
-				agents.GET("/:agentId/status", lifecycleHandler.GetAgentStatusHandler)
-				agents.POST("/:agentId/start", lifecycleHandler.StartAgentHandler)
-				agents.POST("/:agentId/stop", lifecycleHandler.StopAgentHandler)
-				agents.POST("/:agentId/reconcile", lifecycleHandler.ReconcileAgentHandler)
+	s.registerPublicRoutes()
+	s.registerDIDWellKnownRoutes()
+	s.registerARDPublicRoutes()
 
-				// Configuration endpoints
-				configHandler := ui.NewConfigHandler(s.storage)
-				agents.GET("/:agentId/config/schema", configHandler.GetConfigSchemaHandler)
-				agents.GET("/:agentId/config", configHandler.GetConfigHandler)
-				agents.POST("/:agentId/config", configHandler.SetConfigHandler)
+	s.registerUIStatic()
+	s.registerUIAPI()
 
-				// Environment file endpoints
-				envHandler := ui.NewEnvHandler(s.storage, s.agentService, s.agentfieldHome)
-				agents.GET("/:agentId/env", envHandler.GetEnvHandler)
-				agents.PUT("/:agentId/env", envHandler.PutEnvHandler)
-				agents.PATCH("/:agentId/env", envHandler.PatchEnvHandler)
-				agents.DELETE("/:agentId/env/:key", envHandler.DeleteEnvVarHandler)
-
-				// Agent execution history endpoints
-				agentExecutionHandler := ui.NewExecutionHandler(s.storage, s.payloadStore, s.webhookDispatcher)
-				agents.GET("/:agentId/executions", agentExecutionHandler.ListExecutionsHandler)
-				agents.GET("/:agentId/executions/:executionId", agentExecutionHandler.GetExecutionDetailsHandler)
-			}
-
-			// Nodes management group - All node-related operations
-			nodes := uiAPI.Group("/nodes")
-			{
-				// Nodes UI endpoints
-				uiNodesHandler := ui.NewNodesHandler(s.uiService)
-				nodes.GET("/summary", uiNodesHandler.GetNodesSummaryHandler)
-				nodes.GET("/events", uiNodesHandler.StreamNodeEventsHandler)
-
-				// Unified status endpoints
-				nodes.GET("/:nodeId/status", uiNodesHandler.GetNodeStatusHandler)
-				nodes.POST("/:nodeId/status/refresh", uiNodesHandler.RefreshNodeStatusHandler)
-				nodes.POST("/status/bulk", uiNodesHandler.BulkNodeStatusHandler)
-				nodes.POST("/status/refresh", uiNodesHandler.RefreshAllNodeStatusHandler)
-
-				// Individual node operations
-				nodes.GET("/:nodeId/details", uiNodesHandler.GetNodeDetailsHandler)
-
-				// DID and VC management endpoints for nodes
-				didHandler := ui.NewDIDHandler(s.storage, s.didService, s.vcService)
-				nodes.GET("/:nodeId/did", didHandler.GetNodeDIDHandler)
-				nodes.GET("/:nodeId/vc-status", didHandler.GetNodeVCStatusHandler)
-
-				// MCP management endpoints for nodes
-				mcpHandler := ui.NewMCPHandler(s.uiService, s.agentClient)
-				nodes.GET("/:nodeId/mcp/health", mcpHandler.GetMCPHealthHandler)
-				nodes.GET("/:nodeId/mcp/events", mcpHandler.GetMCPEventsHandler)
-				nodes.GET("/:nodeId/mcp/metrics", mcpHandler.GetMCPMetricsHandler)
-				nodes.POST("/:nodeId/mcp/servers/:alias/restart", mcpHandler.RestartMCPServerHandler)
-				nodes.GET("/:nodeId/mcp/servers/:alias/tools", mcpHandler.GetMCPToolsHandler)
-			}
-
-			// Executions management group
-			executions := uiAPI.Group("/executions")
-			{
-				// Executions UI endpoints
-				uiExecutionsHandler := ui.NewExecutionHandler(s.storage, s.payloadStore, s.webhookDispatcher)
-				executions.GET("/summary", uiExecutionsHandler.GetExecutionsSummaryHandler)
-				executions.GET("/stats", uiExecutionsHandler.GetExecutionStatsHandler)
-				executions.GET("/enhanced", uiExecutionsHandler.GetEnhancedExecutionsHandler)
-				executions.GET("/events", uiExecutionsHandler.StreamExecutionEventsHandler)
-
-				// Timeline endpoint for hourly aggregated data
-				timelineHandler := ui.NewExecutionTimelineHandler(s.storage)
-				executions.GET("/timeline", timelineHandler.GetExecutionTimelineHandler)
-
-				// Recent activity endpoint
-				recentActivityHandler := ui.NewRecentActivityHandler(s.storage)
-				executions.GET("/recent", recentActivityHandler.GetRecentActivityHandler)
-
-				// Individual execution operations
-				executions.GET("/:execution_id/details", uiExecutionsHandler.GetExecutionDetailsGlobalHandler)
-				executions.POST("/:execution_id/webhook/retry", uiExecutionsHandler.RetryExecutionWebhookHandler)
-
-				// Execution notes endpoints for UI
-				executions.POST("/note", handlers.AddExecutionNoteHandler(s.storage))
-				executions.GET("/:execution_id/notes", handlers.GetExecutionNotesHandler(s.storage))
-
-				// DID and VC management endpoints for executions
-				didHandler := ui.NewDIDHandler(s.storage, s.didService, s.vcService)
-				executions.GET("/:execution_id/vc", didHandler.GetExecutionVCHandler)
-				executions.GET("/:execution_id/vc-status", didHandler.GetExecutionVCStatusHandler)
-				executions.POST("/:execution_id/verify-vc", didHandler.VerifyExecutionVCComprehensiveHandler)
-			}
-
-			// Workflows management group
-			workflows := uiAPI.Group("/workflows")
-			{
-				workflows.GET("/:workflowId/dag", handlers.GetWorkflowDAGHandler(s.storage))
-				workflows.DELETE("/:workflowId/cleanup", handlers.CleanupWorkflowHandler(s.storage))
-				didHandler := ui.NewDIDHandler(s.storage, s.didService, s.vcService)
-				workflows.POST("/vc-status", didHandler.GetWorkflowVCStatusBatchHandler)
-				workflows.GET("/:workflowId/vc-chain", didHandler.GetWorkflowVCChainHandler)
-				workflows.POST("/:workflowId/verify-vc", didHandler.VerifyWorkflowVCComprehensiveHandler)
-
-				// Workflow notes SSE streaming
-				workflowNotesHandler := ui.NewExecutionHandler(s.storage, s.payloadStore, s.webhookDispatcher)
-				workflows.GET("/:workflowId/notes/events", workflowNotesHandler.StreamWorkflowNodeNotesHandler)
-			}
-
-			// Reasoners management group
-			reasoners := uiAPI.Group("/reasoners")
-			{
-				reasonersHandler := ui.NewReasonersHandler(s.storage)
-				reasoners.GET("/all", reasonersHandler.GetAllReasonersHandler)
-				reasoners.GET("/events", reasonersHandler.StreamReasonerEventsHandler)
-				reasoners.GET("/:reasonerId/details", reasonersHandler.GetReasonerDetailsHandler)
-				reasoners.GET("/:reasonerId/metrics", reasonersHandler.GetPerformanceMetricsHandler)
-				reasoners.GET("/:reasonerId/executions", reasonersHandler.GetExecutionHistoryHandler)
-				reasoners.GET("/:reasonerId/templates", reasonersHandler.GetExecutionTemplatesHandler)
-				reasoners.POST("/:reasonerId/templates", reasonersHandler.SaveExecutionTemplateHandler)
-			}
-
-			// MCP system-wide endpoints
-			mcp := uiAPI.Group("/mcp")
-			{
-				mcpHandler := ui.NewMCPHandler(s.uiService, s.agentClient)
-				mcp.GET("/status", mcpHandler.GetMCPStatusHandler)
-			}
-
-			// Dashboard endpoints
-			dashboard := uiAPI.Group("/dashboard")
-			{
-				dashboardHandler := ui.NewDashboardHandler(s.storage, s.agentService)
-				dashboard.GET("/summary", dashboardHandler.GetDashboardSummaryHandler)
-				dashboard.GET("/enhanced", dashboardHandler.GetEnhancedDashboardSummaryHandler)
-			}
-
-			// DID system-wide endpoints
-			did := uiAPI.Group("/did")
-			{
-				didHandler := ui.NewDIDHandler(s.storage, s.didService, s.vcService)
-				did.GET("/status", didHandler.GetDIDSystemStatusHandler)
-				did.GET("/export/vcs", didHandler.ExportVCsHandler)
-				did.GET("/:did/resolution-bundle", didHandler.GetDIDResolutionBundleHandler)
-				did.GET("/:did/resolution-bundle/download", didHandler.DownloadDIDResolutionBundleHandler)
-			}
-
-			// VC system-wide endpoints
-			vc := uiAPI.Group("/vc")
-			{
-				didHandler := ui.NewDIDHandler(s.storage, s.didService, s.vcService)
-				vc.GET("/:vcId/download", didHandler.DownloadVCHandler)
-				vc.POST("/verify", didHandler.VerifyVCHandler)
-			}
-
-			// Identity & Trust endpoints (DID Explorer and Credentials)
-			identityHandler := ui.NewIdentityHandlers(s.storage)
-			identityHandler.RegisterRoutes(uiAPI)
-		}
-
-		uiAPIV2 := s.Router.Group("/api/ui/v2")
-		{
-			workflowRunsHandler := ui.NewWorkflowRunHandler(s.storage)
-			uiAPIV2.GET("/workflow-runs", workflowRunsHandler.ListWorkflowRunsHandler)
-			uiAPIV2.GET("/workflow-runs/:run_id", workflowRunsHandler.GetWorkflowRunDetailHandler)
-		}
-	}
-
-	// Agent API routes
 	agentAPI := s.Router.Group("/api/v1")
 	{
-		// Health check endpoint for container orchestration
-		agentAPI.GET("/health", s.healthCheckHandler)
-
-		// Discovery endpoints
-		discovery := agentAPI.Group("/discovery")
-		{
-			discovery.GET("/capabilities", handlers.DiscoveryCapabilitiesHandler(s.storage))
-		}
-
-		// Node management endpoints
-		agentAPI.POST("/nodes/register", handlers.RegisterNodeHandler(s.storage, s.uiService, s.didService, s.presenceManager))
-		agentAPI.POST("/nodes", handlers.RegisterNodeHandler(s.storage, s.uiService, s.didService, s.presenceManager))
-		agentAPI.POST("/nodes/register-serverless", handlers.RegisterServerlessAgentHandler(s.storage, s.uiService, s.didService, s.presenceManager))
-		agentAPI.GET("/nodes", handlers.ListNodesHandler(s.storage))
-		agentAPI.GET("/nodes/:node_id", handlers.GetNodeHandler(s.storage))
-		agentAPI.POST("/nodes/:node_id/heartbeat", handlers.HeartbeatHandler(s.storage, s.uiService, s.healthMonitor, s.statusManager, s.presenceManager))
-		agentAPI.DELETE("/nodes/:node_id/monitoring", s.unregisterAgentFromMonitoring)
-
-		// New unified status API endpoints
-		agentAPI.GET("/nodes/:node_id/status", handlers.GetNodeStatusHandler(s.statusManager))
-		agentAPI.POST("/nodes/:node_id/status/refresh", handlers.RefreshNodeStatusHandler(s.statusManager))
-		agentAPI.POST("/nodes/status/bulk", handlers.BulkNodeStatusHandler(s.statusManager, s.storage))
-		agentAPI.POST("/nodes/status/refresh", handlers.RefreshAllNodeStatusHandler(s.statusManager, s.storage))
-
-		// Enhanced lifecycle management endpoints
-		agentAPI.POST("/nodes/:node_id/start", handlers.StartNodeHandler(s.statusManager, s.storage))
-		agentAPI.POST("/nodes/:node_id/stop", handlers.StopNodeHandler(s.statusManager, s.storage))
-		agentAPI.POST("/nodes/:node_id/lifecycle/status", handlers.UpdateLifecycleStatusHandler(s.storage, s.uiService, s.statusManager))
-		agentAPI.PATCH("/nodes/:node_id/status", handlers.NodeStatusLeaseHandler(s.storage, s.statusManager, s.presenceManager, handlers.DefaultLeaseTTL))
-		agentAPI.POST("/nodes/:node_id/actions/ack", handlers.NodeActionAckHandler(s.storage, s.presenceManager, handlers.DefaultLeaseTTL))
-		agentAPI.POST("/nodes/:node_id/shutdown", handlers.NodeShutdownHandler(s.storage, s.statusManager, s.presenceManager))
-		agentAPI.POST("/actions/claim", handlers.ClaimActionsHandler(s.storage, s.presenceManager, handlers.DefaultLeaseTTL))
-
-		// TODO: Add other node routes (DeleteNode)
-
-		// Reasoner execution endpoints (legacy)
-		agentAPI.POST("/reasoners/:reasoner_id", handlers.ExecuteReasonerHandler(s.storage))
-
-		// Skill execution endpoints (legacy)
-		agentAPI.POST("/skills/:skill_id", handlers.ExecuteSkillHandler(s.storage))
-
-		// Unified execution endpoints (path-based)
-		agentAPI.POST("/execute/:target", handlers.ExecuteHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout))
-		agentAPI.POST("/execute/async/:target", handlers.ExecuteAsyncHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout))
-		agentAPI.GET("/executions/:execution_id", handlers.GetExecutionStatusHandler(s.storage))
-		agentAPI.POST("/executions/batch-status", handlers.BatchExecutionStatusHandler(s.storage))
-		agentAPI.POST("/executions/:execution_id/status", handlers.UpdateExecutionStatusHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout))
-
-		// Execution notes endpoints for app.note() feature
-		agentAPI.POST("/executions/note", handlers.AddExecutionNoteHandler(s.storage))
-		agentAPI.GET("/executions/:execution_id/notes", handlers.GetExecutionNotesHandler(s.storage))
-		agentAPI.POST("/workflow/executions/events", handlers.WorkflowExecutionEventHandler(s.storage))
-
-		// Workflow endpoints will be reintroduced once the simplified execution pipeline lands.
-
-		// Memory endpoints
-		agentAPI.POST("/memory/set", handlers.SetMemoryHandler(s.storage))
-		agentAPI.POST("/memory/get", handlers.GetMemoryHandler(s.storage))
-		agentAPI.POST("/memory/delete", handlers.DeleteMemoryHandler(s.storage))
-		agentAPI.GET("/memory/list", handlers.ListMemoryHandler(s.storage))
-
-		// Vector Memory endpoints (RESTful)
-		agentAPI.POST("/memory/vector", handlers.SetVectorHandler(s.storage))
-		agentAPI.GET("/memory/vector/:key", handlers.GetVectorHandler(s.storage))
-		agentAPI.POST("/memory/vector/search", handlers.SimilaritySearchHandler(s.storage))
-		agentAPI.DELETE("/memory/vector/:key", handlers.DeleteVectorHandler(s.storage))
-
-		// Legacy Vector Memory endpoints (for backward compatibility)
-		agentAPI.POST("/memory/vector/set", handlers.SetVectorHandler(s.storage))
-		agentAPI.POST("/memory/vector/delete", handlers.DeleteVectorHandler(s.storage))
-		agentAPI.DELETE("/memory/vector/namespace", handlers.DeleteNamespaceVectorsHandler(s.storage))
-
-		// Memory events endpoints
-		memoryEventsHandler := handlers.NewMemoryEventsHandler(s.storage)
-		agentAPI.GET("/memory/events/ws", memoryEventsHandler.WebSocketHandler)
-		agentAPI.GET("/memory/events/sse", memoryEventsHandler.SSEHandler)
-		agentAPI.GET("/memory/events/history", handlers.GetEventHistoryHandler(s.storage))
-
-		// DID/VC endpoints - use service-backed handlers if DID is enabled
-		logger.Logger.Debug().
-			Bool("did_enabled", s.config.Features.DID.Enabled).
-			Bool("did_service_available", s.didService != nil).
-			Bool("vc_service_available", s.vcService != nil).
-			Msg("DID Route Registration Check")
-
-		if s.config.Features.DID.Enabled && s.didService != nil && s.vcService != nil {
-			logger.Logger.Debug().Msg("Registering DID routes - all conditions met")
-			// Create DID handlers instance with services
-			didHandlers := handlers.NewDIDHandlers(s.didService, s.vcService)
-
-			// Register service-backed DID routes
-			didHandlers.RegisterRoutes(agentAPI)
-
-			// Add af server DID endpoint
-			agentAPI.GET("/did/agentfield-server", func(c *gin.Context) {
-				// Get af server ID dynamically
-				agentfieldServerID, err := s.didService.GetAgentFieldServerID()
-				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{
-						"error":   "Failed to get af server ID",
-						"details": fmt.Sprintf("AgentField server ID error: %v", err),
-					})
-					return
-				}
-
-				// Get the actual af server DID from the registry
-				registry, err := s.didService.GetRegistry(agentfieldServerID)
-				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{
-						"error":   "Failed to get af server DID",
-						"details": fmt.Sprintf("Registry error: %v", err),
-					})
-					return
-				}
-
-				if registry == nil {
-					c.JSON(http.StatusNotFound, gin.H{
-						"error":   "AgentField server DID not found",
-						"details": "No DID registry exists for af server 'default'. The DID system may not be properly initialized.",
-					})
-					return
-				}
-
-				if registry.RootDID == "" {
-					c.JSON(http.StatusInternalServerError, gin.H{
-						"error":   "AgentField server DID is empty",
-						"details": "Registry exists but root DID is empty. The DID system may be corrupted.",
-					})
-					return
-				}
-
-				c.JSON(http.StatusOK, gin.H{
-					"agentfield_server_id":  "default",
-					"agentfield_server_did": registry.RootDID,
-					"message":               "AgentField server DID retrieved successfully",
-				})
-			})
-		} else {
-			logger.Logger.Warn().
-				Bool("did_enabled", s.config.Features.DID.Enabled).
-				Bool("did_service_available", s.didService != nil).
-				Bool("vc_service_available", s.vcService != nil).
-				Msg("DID routes NOT registered - conditions not met")
-		}
-		// Note: Removed unused/unimplemented DID endpoint placeholders for system simplification
-
-		// Settings API routes (observability webhook configuration)
-		settings := agentAPI.Group("/settings")
-		{
-			obsHandler := ui.NewObservabilityWebhookHandler(s.storage, s.observabilityForwarder)
-			settings.GET("/observability-webhook", obsHandler.GetWebhookHandler)
-			settings.POST("/observability-webhook", obsHandler.SetWebhookHandler)
-			settings.DELETE("/observability-webhook", obsHandler.DeleteWebhookHandler)
-			settings.GET("/observability-webhook/status", obsHandler.GetStatusHandler)
-			settings.POST("/observability-webhook/redrive", obsHandler.RedriveHandler)
-			settings.GET("/observability-webhook/dlq", obsHandler.GetDeadLetterQueueHandler)
-			settings.DELETE("/observability-webhook/dlq", obsHandler.ClearDeadLetterQueueHandler)
-		}
+		s.registerCoreRoutes(agentAPI)
+		s.registerMemoryRoutes(agentAPI)
+		s.registerKnowledgeRoutes(agentAPI)
+		s.registerDIDRoutes(agentAPI)
+		s.registerObservabilityRoutes(agentAPI)
+		s.registerAdminRoutes(agentAPI)
+		s.registerConnectorRoutes(agentAPI)
+		s.registerAgenticRoutes(agentAPI)
+		s.registerTriggerRoutes(agentAPI)
+		s.registerARDRoutes(agentAPI)
 	}
 
-	// SPA fallback - serve index.html for all /ui/* routes that don't match static files
-	// Only add this if we're NOT using embedded UI (since embedded UI handles its own NoRoute)
-	if s.config.UI.Enabled && (s.config.UI.Mode != "embedded" || !client.IsUIEmbedded()) {
-		s.Router.NoRoute(func(c *gin.Context) {
-			// Only handle /ui/* paths
-			if strings.HasPrefix(c.Request.URL.Path, "/ui/") {
-				// Check if it's a static asset by looking for common web asset file extensions
-				// This prevents reasoner IDs with dots (like "deepresearchagent.meta_research_methodology_reasoner")
-				// from being treated as static assets
-				path := strings.ToLower(c.Request.URL.Path)
-				isStaticAsset := strings.HasSuffix(path, ".js") ||
-					strings.HasSuffix(path, ".css") ||
-					strings.HasSuffix(path, ".html") ||
-					strings.HasSuffix(path, ".ico") ||
-					strings.HasSuffix(path, ".png") ||
-					strings.HasSuffix(path, ".jpg") ||
-					strings.HasSuffix(path, ".jpeg") ||
-					strings.HasSuffix(path, ".gif") ||
-					strings.HasSuffix(path, ".svg") ||
-					strings.HasSuffix(path, ".woff") ||
-					strings.HasSuffix(path, ".woff2") ||
-					strings.HasSuffix(path, ".ttf") ||
-					strings.HasSuffix(path, ".eot") ||
-					strings.HasSuffix(path, ".map") ||
-					strings.HasSuffix(path, ".json") ||
-					strings.HasSuffix(path, ".xml") ||
-					strings.HasSuffix(path, ".txt")
-
-				if isStaticAsset {
-					// Let it 404 for missing static assets
-					c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
-					return
-				}
-
-				// For SPA routes (including reasoner detail pages), serve index.html from filesystem
-				distPath := s.config.UI.DistPath
-				if distPath == "" {
-					// Get the executable path and find UI dist relative to it
-					execPath, err := os.Executable()
-					if err != nil {
-						distPath = filepath.Join("apps", "platform", "agentfield", "web", "client", "dist")
-						if _, statErr := os.Stat(distPath); os.IsNotExist(statErr) {
-							distPath = filepath.Join("web", "client", "dist")
-						}
-					} else {
-						execDir := filepath.Dir(execPath)
-						// Look for web/client/dist relative to the executable directory
-						distPath = filepath.Join(execDir, "web", "client", "dist")
-
-						// If that doesn't exist, try going up one level (if binary is in apps/platform/agentfield/)
-						if _, err := os.Stat(distPath); os.IsNotExist(err) {
-							distPath = filepath.Join(filepath.Dir(execDir), "apps", "platform", "agentfield", "web", "client", "dist")
-						}
-
-						// Final fallback to current working directory
-						if _, err := os.Stat(distPath); os.IsNotExist(err) {
-							altPath := filepath.Join("apps", "platform", "agentfield", "web", "client", "dist")
-							if _, altErr := os.Stat(altPath); altErr == nil {
-								distPath = altPath
-							} else {
-								distPath = filepath.Join("web", "client", "dist")
-							}
-						}
-					}
-				}
-				c.File(filepath.Join(distPath, "index.html"))
-			} else {
-				// For non-UI paths, return 404
-				c.JSON(http.StatusNotFound, gin.H{"error": "endpoint not found"})
-			}
-		})
-	}
+	s.registerKBRoutes()
+	s.registerPprofRoutes()
+	s.register404()
 }
+
+var absPathForServerID = filepath.Abs
 
 // generateAgentFieldServerID creates a deterministic af server ID based on the agentfield home directory.
 // This ensures each agentfield instance has a unique ID while being deterministic for the same installation.
 func generateAgentFieldServerID(agentfieldHome string) string {
 	// Use the absolute path of agentfield home to generate a deterministic ID
-	absPath, err := filepath.Abs(agentfieldHome)
+	absPath, err := absPathForServerID(agentfieldHome)
 	if err != nil {
 		// Fallback to the original path if absolute path fails
 		absPath = agentfieldHome

@@ -187,7 +187,7 @@ export function ExecutionRetryPanel({ execution }: ExecutionRetryPanelProps) {
           {renderCopyAction(curlCommand, "cURL", true)}
           {renderCopyAction(pythonCode, "Python", true)}
 
-          <div className="flex items-center gap-2 text-body-small ml-auto">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground ml-auto">
             <Badge variant="secondary" className="text-xs">
               {execution.agent_node_id}.{execution.reasoner_id}
             </Badge>
@@ -264,17 +264,17 @@ export function ExecutionRetryPanel({ execution }: ExecutionRetryPanelProps) {
           <TabsContent value="curl" className="mt-4">
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <p className="text-body-small">
+                <p className="text-sm text-muted-foreground">
                   Terminal command to retry this execution
                 </p>
                 {renderCopyAction(curlCommand, "Copy")}
               </div>
               <div className="relative">
-                <pre className="bg-muted/50 p-3 rounded-lg text-xs font-mono overflow-x-auto max-h-32">
+                <pre className="json-hl-root bg-muted/50 p-3 rounded-lg text-xs font-mono overflow-x-auto max-h-32">
                   <code>{curlCommand}</code>
                 </pre>
               </div>
-              <div className="text-body-small">
+              <div className="text-sm text-muted-foreground">
                 💡 Add <code>| jq</code> for pretty JSON output
               </div>
             </div>
@@ -283,17 +283,17 @@ export function ExecutionRetryPanel({ execution }: ExecutionRetryPanelProps) {
           <TabsContent value="python" className="mt-4">
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <p className="text-body-small">
+                <p className="text-sm text-muted-foreground">
                   Python script using requests library
                 </p>
                 {renderCopyAction(pythonCode, "Copy")}
               </div>
               <div className="relative">
-                <pre className="bg-muted/50 p-3 rounded-lg text-xs font-mono overflow-x-auto max-h-32">
+                <pre className="json-hl-root bg-muted/50 p-3 rounded-lg text-xs font-mono overflow-x-auto max-h-32">
                   <code>{pythonCode}</code>
                 </pre>
               </div>
-              <div className="text-body-small">
+              <div className="text-sm text-muted-foreground">
                 📦 Install: <code>pip install requests</code>
               </div>
             </div>

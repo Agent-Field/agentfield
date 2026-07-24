@@ -1,6 +1,9 @@
 """Shared testing utilities for AgentField SDK unit tests."""
 
 from __future__ import annotations
+from typing import Callable
+from typing import Coroutine
+
 
 import asyncio
 import threading
@@ -30,6 +33,8 @@ class DummyAgentFieldClient:
         vc_metadata=None,
         version: str = "1.0.0",
         agent_metadata=None,
+        tags=None,
+        instance_id: Optional[str] = None,
     ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         self.register_calls.append(
             {
@@ -41,6 +46,8 @@ class DummyAgentFieldClient:
                 "vc_metadata": vc_metadata,
                 "version": version,
                 "agent_metadata": agent_metadata,
+                "tags": tags,
+                "instance_id": instance_id,
             }
         )
         return True, {"resolved_base_url": base_url}
@@ -57,6 +64,8 @@ class DummyAgentFieldClient:
         vc_metadata=None,
         version: str = "1.0.0",
         agent_metadata=None,
+        tags=None,
+        instance_id: Optional[str] = None,
     ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         return await self.register_agent(
             node_id=node_id,
@@ -67,6 +76,8 @@ class DummyAgentFieldClient:
             vc_metadata=vc_metadata,
             version=version,
             agent_metadata=agent_metadata,
+            tags=tags,
+            instance_id=instance_id,
         )
 
     async def send_enhanced_heartbeat(
@@ -84,6 +95,26 @@ class DummyAgentFieldClient:
         return True
 
 
+class InlineTestingDispatcher:
+    def __init__(self):
+        self._started = True
+
+    def start(self):
+        self._started = True
+
+    def submit(self, coro_factory: Callable[[], Coroutine[Any, Any, None]]):
+        coro = coro_factory()
+        try:
+            coro.send(None)
+        except StopIteration:
+            pass
+        except RuntimeWarning:
+            pass
+
+    async def shutdown(self, timeout: int = 5):
+        self._started = False
+
+
 @dataclass
 class StubAgent:
     """Light-weight stand-in for Agent used across module tests."""
@@ -99,16 +130,15 @@ class StubAgent:
     async_config: Any = None
     client: DummyAgentFieldClient = field(default_factory=DummyAgentFieldClient)
     did_manager: Any = None
-    mcp_handler: Any = field(
-        default_factory=lambda: type(
-            "MCP", (), {"_get_mcp_server_health": lambda self: []}
-        )()
-    )
     reasoners: List[Dict[str, Any]] = field(default_factory=list)
     skills: List[Dict[str, Any]] = field(default_factory=list)
+    agent_tags: List[str] = field(default_factory=list)
     agentfield_connected: bool = True
     _current_status: AgentStatus = AgentStatus.STARTING
     callback_candidates: List[str] = field(default_factory=list)
+    _notification_dispatcher: InlineTestingDispatcher = field(
+        default_factory=InlineTestingDispatcher
+    )
 
     def _build_vc_metadata(self):
         return {"agent_default": True}
@@ -264,6 +294,11 @@ def create_test_agent(
             self.api_base = f"{base_url}/api/v1"
             self.async_config = async_config
             self.api_key = api_key
+            self.did_credentials: Optional[Tuple[str, str]] = None
+
+        def set_did_credentials(self, did: str, private_key_jwk: str) -> bool:
+            self.did_credentials = (did, private_key_jwk)
+            return True
 
     def _agentfield_client_factory(
         base_url: str, async_config: Any = None, api_key: Optional[str] = None
@@ -372,37 +407,22 @@ def create_test_agent(
 
             return decorator
 
-    class _FakeAgentMCP:
-        def __init__(self, agent_instance: Any):
-            self.agent = agent_instance
-
-        def _detect_agent_directory(self) -> str:
-            return "."
-
-        def _get_mcp_server_health(self) -> Dict[str, Any]:
-            return {}
-
-    class _FakeMCPManager:
-        def __init__(self, *args, **kwargs):
-            self._status: Dict[str, Any] = {}
-
-        def get_all_status(self) -> Dict[str, Any]:
-            return self._status
-
-    class _FakeMCPClientRegistry:
-        def __init__(self, *args, **kwargs):
-            pass
-
-    class _FakeDynamicSkillManager:
-        def __init__(self, *args, **kwargs):
-            pass
-
     class _FakeDIDManager:
         def __init__(self, agentfield_server: str, node: str, api_key: Optional[str] = None):
             self.agentfield_server = agentfield_server
             self.node_id = node
             self.api_key = api_key
             self.registered: Dict[str, Any] = {}
+            self.identity_package = SimpleNamespace(
+                agent_did=SimpleNamespace(
+                    did=f"did:agent:{node}",
+                    private_key_jwk='{"kty":"OKP","crv":"Ed25519","d":"fake-key"}',
+                    public_key_jwk='{"kty":"OKP","crv":"Ed25519","x":"fake-pub"}',
+                ),
+                reasoner_dids={},
+                skill_dids={},
+                agentfield_server_id="test-server",
+            )
 
         def register_agent(self, reasoners: List[dict], skills: List[dict]) -> bool:
             self.registered = {"reasoners": reasoners, "skills": skills}
@@ -415,6 +435,7 @@ def create_test_agent(
             session_id: str,
             caller: str,
             target: str,
+            parent_vc_id: Optional[str] = None,
         ) -> Any:
             return SimpleNamespace(
                 execution_id=execution_id,
@@ -423,6 +444,7 @@ def create_test_agent(
                 caller_did=f"did:caller:{caller}",
                 target_did=f"did:target:{target}",
                 agent_node_did=f"did:agent:{self.node_id}",
+                parent_vc_id=parent_vc_id,
             )
 
         def get_agent_did(self) -> str:
@@ -506,14 +528,10 @@ def create_test_agent(
     monkeypatch.setattr("agentfield.agent.AgentFieldClient", _agentfield_client_factory)
     monkeypatch.setattr("agentfield.agent.MemoryClient", _FakeMemoryClient)
     monkeypatch.setattr("agentfield.agent.MemoryEventClient", _FakeMemoryEventClient)
-    monkeypatch.setattr("agentfield.agent.AgentMCP", _FakeAgentMCP)
-    monkeypatch.setattr("agentfield.agent.MCPManager", _FakeMCPManager)
-    monkeypatch.setattr("agentfield.agent.MCPClientRegistry", _FakeMCPClientRegistry)
-    monkeypatch.setattr(
-        "agentfield.agent.DynamicMCPSkillManager", _FakeDynamicSkillManager
-    )
     monkeypatch.setattr("agentfield.agent.DIDManager", _FakeDIDManager)
     monkeypatch.setattr("agentfield.agent.VCGenerator", _FakeVCGenerator)
+    monkeypatch.setattr("agentfield.agent_vc.DIDManager", _FakeDIDManager)
+    monkeypatch.setattr("agentfield.agent_vc.VCGenerator", _FakeVCGenerator)
     monkeypatch.setattr(
         AgentWorkflow, "notify_call_start", _record_call_start, raising=False
     )

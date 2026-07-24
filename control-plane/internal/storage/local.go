@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/boltdb/bolt"
@@ -75,7 +75,10 @@ func (ls *LocalStorage) getWorkflowExecutionByID(ctx context.Context, q DBTX, ex
 		       status, started_at, completed_at, duration_ms,
 		       state_version, last_event_sequence, active_children, pending_children,
 		       pending_terminal_status, status_reason, lease_owner, lease_expires_at,
-		       error_message, retry_count, workflow_name, workflow_tags, notes, created_at, updated_at
+		       error_message, retry_count,
+		       approval_request_id, approval_request_url, approval_status, approval_response,
+		       approval_requested_at, approval_responded_at, approval_callback_url, approval_expires_at,
+		       workflow_name, workflow_tags, notes, created_at, updated_at
 		FROM workflow_executions WHERE execution_id = ?`
 
 	row := q.QueryRowContext(ctx, query, executionID)
@@ -88,6 +91,8 @@ func (ls *LocalStorage) getWorkflowExecutionByID(ctx context.Context, q DBTX, ex
 	var statusReason sql.NullString
 	var leaseOwner sql.NullString
 	var leaseExpires sql.NullTime
+	var approvalRequestID, approvalRequestURL, approvalStatus, approvalResponse, approvalCallbackURL sql.NullString
+	var approvalRequestedAt, approvalRespondedAt, approvalExpiresAt sql.NullTime
 	err := row.Scan(
 		&execution.WorkflowID, &execution.ExecutionID, &execution.AgentFieldRequestID,
 		&runID, &execution.SessionID, &execution.ActorID, &execution.AgentNodeID,
@@ -98,7 +103,10 @@ func (ls *LocalStorage) getWorkflowExecutionByID(ctx context.Context, q DBTX, ex
 		&execution.StateVersion, &execution.LastEventSequence, &execution.ActiveChildren, &execution.PendingChildren,
 		&pendingTerminal, &statusReason,
 		&leaseOwner, &leaseExpires,
-		&execution.ErrorMessage, &execution.RetryCount, &execution.WorkflowName,
+		&execution.ErrorMessage, &execution.RetryCount,
+		&approvalRequestID, &approvalRequestURL, &approvalStatus, &approvalResponse,
+		&approvalRequestedAt, &approvalRespondedAt, &approvalCallbackURL, &approvalExpiresAt,
+		&execution.WorkflowName,
 		&workflowTagsJSON, &notesJSON, &execution.CreatedAt, &execution.UpdatedAt,
 	)
 
@@ -138,6 +146,33 @@ func (ls *LocalStorage) getWorkflowExecutionByID(ctx context.Context, q DBTX, ex
 	if leaseExpires.Valid {
 		t := leaseExpires.Time
 		execution.LeaseExpiresAt = &t
+	}
+	if approvalRequestID.Valid {
+		execution.ApprovalRequestID = &approvalRequestID.String
+	}
+	if approvalRequestURL.Valid {
+		execution.ApprovalRequestURL = &approvalRequestURL.String
+	}
+	if approvalStatus.Valid {
+		execution.ApprovalStatus = &approvalStatus.String
+	}
+	if approvalResponse.Valid {
+		execution.ApprovalResponse = &approvalResponse.String
+	}
+	if approvalRequestedAt.Valid {
+		t := approvalRequestedAt.Time
+		execution.ApprovalRequestedAt = &t
+	}
+	if approvalRespondedAt.Valid {
+		t := approvalRespondedAt.Time
+		execution.ApprovalRespondedAt = &t
+	}
+	if approvalCallbackURL.Valid {
+		execution.ApprovalCallbackURL = &approvalCallbackURL.String
+	}
+	if approvalExpiresAt.Valid {
+		t := approvalExpiresAt.Time
+		execution.ApprovalExpiresAt = &t
 	}
 
 	// Unmarshal workflow tags
@@ -446,6 +481,8 @@ type LocalStorage struct {
 	vectorStore               vectorStore
 	eventBus                  *events.ExecutionEventBus // Event bus for real-time updates
 	workflowExecutionEventBus *events.EventBus[*types.WorkflowExecutionEvent]
+	executionLogEventBus      *events.EventBus[*types.ExecutionLogEntry]
+	ftsEnabled                bool
 }
 
 // NewLocalStorage creates a new instance of LocalStorage.
@@ -458,6 +495,7 @@ func NewLocalStorage(config LocalStorageConfig) *LocalStorage {
 		subscribers:               make(map[string][]chan types.MemoryChangeEvent),
 		eventBus:                  events.NewExecutionEventBus(),
 		workflowExecutionEventBus: events.NewEventBus[*types.WorkflowExecutionEvent](),
+		executionLogEventBus:      events.NewEventBus[*types.ExecutionLogEntry](),
 	}
 }
 
@@ -471,6 +509,7 @@ func NewPostgresStorage(config PostgresStorageConfig) *LocalStorage {
 		subscribers:               make(map[string][]chan types.MemoryChangeEvent),
 		eventBus:                  events.NewExecutionEventBus(),
 		workflowExecutionEventBus: events.NewEventBus[*types.WorkflowExecutionEvent](),
+		executionLogEventBus:      events.NewEventBus[*types.ExecutionLogEntry](),
 	}
 }
 
@@ -514,7 +553,7 @@ func (ls *LocalStorage) initializeSQLite(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to convert database path to absolute path: %w", err)
 		}
-		log.Printf("⚠️  WARNING: Database path was relative (%s), converted to absolute path: %s", dbPath, absPath)
+		logger.Logger.Warn().Msgf("Database path was relative (%s), converted to absolute path: %s", dbPath, absPath)
 		dbPath = absPath
 	}
 
@@ -524,7 +563,7 @@ func (ls *LocalStorage) initializeSQLite(ctx context.Context) error {
 		return fmt.Errorf("failed to create database directory %s: %w", dbDir, err)
 	}
 
-	log.Printf("📁 Initializing SQLite database at: %s", dbPath)
+	logger.Logger.Info().Msgf("Initializing SQLite database at: %s", dbPath)
 
 	busyTimeout := resolveEnvInt("AGENTFIELD_SQLITE_BUSY_TIMEOUT_MS", 60000)
 	if busyTimeout <= 0 {
@@ -592,7 +631,7 @@ func resolveEnvInt(key string, fallback int) int {
 	}
 	value, err := strconv.Atoi(raw)
 	if err != nil {
-		log.Printf("⚠️  Invalid integer for %s=%s, using fallback %d", key, raw, fallback)
+		logger.Logger.Warn().Msgf("Invalid integer for %s=%s, using fallback %d", key, raw, fallback)
 		return fallback
 	}
 	return value
@@ -713,7 +752,7 @@ func (ls *LocalStorage) applyPostgresConnectionSettings(db *sqlDatabase, cfg Pos
 		maxOpen = 25
 	}
 	maxIdle := cfg.MaxIdleConns
-	if maxIdle < 0 {
+	if maxIdle <= 0 {
 		maxIdle = 5
 	}
 
@@ -875,7 +914,14 @@ func (ls *LocalStorage) createSchema(ctx context.Context) error {
 	}
 
 	if err := ls.setupWorkflowExecutionFTS(); err != nil {
-		return err
+		if strings.Contains(err.Error(), "no such module: fts5") {
+			ls.ftsEnabled = false
+			logger.Logger.Warn().Msg("FTS5 module not available, full-text search will be degraded")
+		} else {
+			return err
+		}
+	} else {
+		ls.ftsEnabled = true
 	}
 
 	if err := ls.ensureSQLiteIndexes(); err != nil {
@@ -1047,6 +1093,7 @@ func (ls *LocalStorage) ensurePostgresIndexes(ctx context.Context) error {
 		"CREATE INDEX IF NOT EXISTS idx_workflow_executions_parent_workflow_id ON workflow_executions(parent_workflow_id)",
 		"CREATE INDEX IF NOT EXISTS idx_workflow_executions_root_workflow_id ON workflow_executions(root_workflow_id)",
 		"CREATE INDEX IF NOT EXISTS idx_workflow_executions_status ON workflow_executions(status)",
+		"CREATE INDEX IF NOT EXISTS idx_agent_nodes_group_id ON agent_nodes(group_id)",
 	}
 
 	for _, stmt := range indexStatements {
@@ -1146,6 +1193,7 @@ func (ls *LocalStorage) ensureSQLiteIndexes() error {
 		"CREATE INDEX IF NOT EXISTS idx_agent_nodes_team ON agent_nodes(team_id)",
 		"CREATE INDEX IF NOT EXISTS idx_agent_nodes_health ON agent_nodes(health_status)",
 		"CREATE INDEX IF NOT EXISTS idx_agent_nodes_lifecycle ON agent_nodes(lifecycle_status)",
+		"CREATE INDEX IF NOT EXISTS idx_agent_nodes_group_id ON agent_nodes(group_id)",
 		"CREATE INDEX IF NOT EXISTS idx_agent_dids_agent_node ON agent_dids(agent_node_id)",
 		"CREATE INDEX IF NOT EXISTS idx_agent_dids_agentfield_server ON agent_dids(agentfield_server_id)",
 		"CREATE INDEX IF NOT EXISTS idx_component_dids_agent_did ON component_dids(agent_did)",
@@ -1159,6 +1207,9 @@ func (ls *LocalStorage) ensureSQLiteIndexes() error {
 		"CREATE INDEX IF NOT EXISTS idx_execution_vcs_status ON execution_vcs(status)",
 		"CREATE INDEX IF NOT EXISTS idx_execution_vcs_parent_vc_id ON execution_vcs(parent_vc_id)",
 		"CREATE INDEX IF NOT EXISTS idx_execution_vcs_created_at ON execution_vcs(created_at)",
+		"CREATE INDEX IF NOT EXISTS idx_execution_vcs_kind ON execution_vcs(kind)",
+		"CREATE INDEX IF NOT EXISTS idx_execution_vcs_trigger_id ON execution_vcs(trigger_id)",
+		"CREATE INDEX IF NOT EXISTS idx_execution_vcs_event_id ON execution_vcs(event_id)",
 		"CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_vcs_execution_unique ON execution_vcs(execution_id, issuer_did, target_did)",
 		"CREATE INDEX IF NOT EXISTS idx_workflow_vcs_workflow_id ON workflow_vcs(workflow_id)",
 		"CREATE INDEX IF NOT EXISTS idx_workflow_vcs_session_id ON workflow_vcs(session_id)",
@@ -1259,7 +1310,41 @@ func (ls *LocalStorage) runPostgresMigrations(ctx context.Context) error {
                         applied_at TIMESTAMPTZ DEFAULT NOW(),
                         description TEXT
                 );`)
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to create schema_migrations table: %w", err)
+	}
+
+	migrations := []struct {
+		version     string
+		description string
+		sql         string
+	}{
+		{
+			version:     "015",
+			description: "Backfill group_id on agent_nodes with id",
+			sql:         `UPDATE agent_nodes SET group_id = id WHERE group_id = '' OR group_id IS NULL;`,
+		},
+	}
+
+	for _, m := range migrations {
+		var count int
+		err := ls.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = $1`, m.version).Scan(&count)
+		if err != nil {
+			return fmt.Errorf("failed to check migration %s: %w", m.version, err)
+		}
+		if count > 0 {
+			continue
+		}
+		if _, err := ls.db.ExecContext(ctx, m.sql); err != nil {
+			return fmt.Errorf("failed to apply migration %s: %w", m.version, err)
+		}
+		if _, err := ls.db.ExecContext(ctx, `INSERT INTO schema_migrations (version, description) VALUES ($1, $2)`, m.version, m.description); err != nil {
+			return fmt.Errorf("failed to record migration %s: %w", m.version, err)
+		}
+		logger.Logger.Info().Msgf("Applied postgres migration %s: %s", m.version, m.description)
+	}
+
+	return nil
 }
 
 // buildExecutionVCTableSQL returns the CREATE TABLE statement for execution VC storage.
@@ -1284,9 +1369,14 @@ func buildExecutionVCTableSQL(tableName string, includeIfNotExists bool) string 
 		document_size_bytes INTEGER DEFAULT 0,
 		input_hash TEXT NOT NULL,
 		output_hash TEXT NOT NULL,
-		status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('unknown', 'pending', 'queued', 'running', 'succeeded', 'failed', 'cancelled', 'timeout', 'revoked')),
+		status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('unknown', 'pending', 'queued', 'running', 'waiting', 'paused', 'succeeded', 'failed', 'cancelled', 'timeout', 'revoked')),
 		parent_vc_id TEXT,
 		child_vc_ids TEXT DEFAULT '[]',
+		kind TEXT NOT NULL DEFAULT 'execution',
+		trigger_id TEXT,
+		source_name TEXT,
+		event_type TEXT,
+		event_id TEXT,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY (parent_vc_id) REFERENCES %s(vc_id) ON DELETE SET NULL
@@ -1305,7 +1395,7 @@ func buildWorkflowVCTableSQL(tableName string, includeIfNotExists bool) string {
 		workflow_id TEXT NOT NULL,
 		session_id TEXT NOT NULL,
 		component_vc_ids TEXT DEFAULT '[]',
-		status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('unknown', 'pending', 'in_progress', 'running', 'succeeded', 'failed', 'cancelled', 'timeout')),
+		status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('unknown', 'pending', 'in_progress', 'running', 'waiting', 'paused', 'succeeded', 'failed', 'cancelled', 'timeout')),
 		start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		end_time TIMESTAMP,
 		total_steps INTEGER DEFAULT 0,
@@ -1373,7 +1463,7 @@ func (ls *LocalStorage) ensureExecutionVCSchema() error {
 		return nil
 	}
 
-	log.Printf("Migrating execution_vcs table to remove component_dids foreign keys for VC persistence")
+	logger.Logger.Info().Msg("Migrating execution_vcs table to remove component_dids foreign keys for VC persistence")
 
 	tx, err := ls.db.Begin()
 	if err != nil {
@@ -1439,7 +1529,7 @@ func (ls *LocalStorage) ensureWorkflowVCSchema() error {
 		return nil
 	}
 
-	log.Printf("Migrating workflow_vcs table to update status constraint")
+	logger.Logger.Info().Msg("Migrating workflow_vcs table to update status constraint")
 
 	tx, err := ls.db.Begin()
 	if err != nil {
@@ -1604,6 +1694,11 @@ func (ls *LocalStorage) runMigrations() error {
 			description: "Add document size column to workflow_vcs",
 			sql:         `ALTER TABLE workflow_vcs ADD COLUMN document_size_bytes INTEGER DEFAULT 0;`,
 		},
+		{
+			version:     "015",
+			description: "Backfill group_id on agent_nodes with id",
+			sql:         `UPDATE agent_nodes SET group_id = id WHERE group_id = '' OR group_id IS NULL;`,
+		},
 	}
 
 	// Apply each migration if not already applied
@@ -1622,14 +1717,16 @@ func (ls *LocalStorage) runMigrations() error {
 		}
 
 		// Apply the migration
-		log.Printf("Applying migration %s: %s", migration.version, migration.description)
+		logger.Logger.Info().Msgf("Applying migration %s: %s", migration.version, migration.description)
 
 		// Execute the migration SQL
 		_, err = ls.db.Exec(migration.sql)
 		if err != nil {
 			// For ALTER TABLE operations, check if column already exists
 			if strings.Contains(err.Error(), "duplicate column name") {
-				log.Printf("Column already exists for migration %s, marking as applied", migration.version)
+				logger.Logger.Info().Msgf("Column already exists for migration %s, marking as applied", migration.version)
+			} else if strings.Contains(err.Error(), "no such module: fts5") {
+				logger.Logger.Warn().Msgf("FTS5 module not available, skipping migration %s (search will be degraded)", migration.version)
 			} else {
 				return fmt.Errorf("failed to apply migration %s: %w", migration.version, err)
 			}
@@ -1642,7 +1739,7 @@ func (ls *LocalStorage) runMigrations() error {
 			return fmt.Errorf("failed to record migration %s: %w", migration.version, err)
 		}
 
-		log.Printf("Successfully applied migration %s", migration.version)
+		logger.Logger.Info().Msgf("Successfully applied migration %s", migration.version)
 	}
 
 	return nil
@@ -1927,14 +2024,14 @@ func (ls *LocalStorage) StoreWorkflowExecution(ctx context.Context, execution *t
 // storeWorkflowExecutionInternal performs the actual storage operation
 func (ls *LocalStorage) storeWorkflowExecutionInternal(ctx context.Context, execution *types.WorkflowExecution) error {
 	// DIAGNOSTIC: Log concurrent transaction attempt
-	log.Printf("🔒 CONCURRENCY_DEBUG: Starting transaction for execution %s", execution.ExecutionID)
+	logger.Logger.Debug().Str("execution_id", execution.ExecutionID).Msg("starting transaction for workflow execution")
 
 	// Begin transaction for atomic operation
 	tx, err := ls.db.BeginTx(ctx, nil)
 	if err != nil {
 		// DIAGNOSTIC: Log database lock errors
 		if ls.isRetryableError(err) {
-			log.Printf("🚨 DATABASE_LOCK: Failed to begin transaction for execution %s: %v", execution.ExecutionID, err)
+			logger.Logger.Warn().Err(err).Str("execution_id", execution.ExecutionID).Msg("database lock: failed to begin transaction")
 		}
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -1944,7 +2041,7 @@ func (ls *LocalStorage) storeWorkflowExecutionInternal(ctx context.Context, exec
 	if err := ls.executeWorkflowInsert(ctx, tx, execution); err != nil {
 		// DIAGNOSTIC: Log insert/update failures
 		if ls.isRetryableError(err) {
-			log.Printf("🚨 DATABASE_LOCK: Failed to execute workflow insert for execution %s: %v", execution.ExecutionID, err)
+			logger.Logger.Warn().Err(err).Str("execution_id", execution.ExecutionID).Msg("database lock: failed to execute workflow insert")
 		}
 		return err
 	}
@@ -1953,12 +2050,12 @@ func (ls *LocalStorage) storeWorkflowExecutionInternal(ctx context.Context, exec
 	if err := tx.Commit(); err != nil {
 		// DIAGNOSTIC: Log commit failures
 		if ls.isRetryableError(err) {
-			log.Printf("🚨 DATABASE_LOCK: Failed to commit transaction for execution %s: %v", execution.ExecutionID, err)
+			logger.Logger.Warn().Err(err).Str("execution_id", execution.ExecutionID).Msg("database lock: failed to commit transaction")
 		}
 		return fmt.Errorf("failed to commit workflow execution transaction: %w", err)
 	}
 
-	log.Printf("✅ CONCURRENCY_DEBUG: Successfully committed transaction for execution %s", execution.ExecutionID)
+	logger.Logger.Debug().Str("execution_id", execution.ExecutionID).Msg("successfully committed workflow execution transaction")
 	return nil
 }
 
@@ -2004,7 +2101,7 @@ func (ls *LocalStorage) retryDatabaseOperation(ctx context.Context, operationID 
 		err := operation()
 		if err == nil {
 			if attempt > 0 {
-				log.Printf("🔄 RETRY_SUCCESS: Operation succeeded on attempt %d for %s", attempt+1, operationID)
+				logger.Logger.Debug().Msgf("retry succeeded on attempt %d for %s", attempt+1, operationID)
 			}
 			return nil
 		}
@@ -2013,7 +2110,7 @@ func (ls *LocalStorage) retryDatabaseOperation(ctx context.Context, operationID 
 
 		// Check if error is retryable
 		if !ls.isRetryableError(err) {
-			log.Printf("❌ NON_RETRYABLE: Operation failed with non-retryable error for %s: %v", operationID, err)
+			logger.Logger.Debug().Err(err).Msgf("non-retryable error for %s", operationID)
 			return err
 		}
 
@@ -2024,7 +2121,7 @@ func (ls *LocalStorage) retryDatabaseOperation(ctx context.Context, operationID 
 
 		// Calculate delay with exponential backoff
 		delay := time.Duration(1<<uint(attempt)) * baseDelay
-		log.Printf("🔄 RETRY_ATTEMPT: Retrying operation for %s in %v (attempt %d/%d): %v", operationID, delay, attempt+1, maxRetries, err)
+		logger.Logger.Debug().Msgf("retrying operation for %s in %v (attempt %d/%d): %v", operationID, delay, attempt+1, maxRetries, err)
 
 		// Wait with context cancellation support
 		select {
@@ -2035,7 +2132,7 @@ func (ls *LocalStorage) retryDatabaseOperation(ctx context.Context, operationID 
 		}
 	}
 
-	log.Printf("🚨 RETRY_EXHAUSTED: All retry attempts failed for %s: %v", operationID, lastErr)
+	logger.Logger.Warn().Err(lastErr).Msgf("all retry attempts exhausted for %s", operationID)
 	return fmt.Errorf("operation failed after %d retries: %w", maxRetries, lastErr)
 }
 
@@ -2047,10 +2144,15 @@ const sqliteWorkflowExecutionInsertQuery = `INSERT INTO workflow_executions (
 	status, started_at, completed_at, duration_ms,
 	state_version, last_event_sequence, active_children, pending_children,
 	pending_terminal_status, status_reason, lease_owner, lease_expires_at,
-	error_message, retry_count, workflow_name, workflow_tags, notes, created_at, updated_at
+	error_message, retry_count,
+	approval_request_id, approval_request_url, approval_status, approval_response,
+	approval_requested_at, approval_responded_at, approval_callback_url, approval_expires_at,
+	workflow_name, workflow_tags, notes, created_at, updated_at
 ) VALUES (
 	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+	?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+	?, ?, ?, ?, ?, ?, ?, ?,
+	?, ?, ?, ?, ?
 )`
 
 // executeWorkflowInsert performs the actual database insert/update operation
@@ -2064,7 +2166,7 @@ func (ls *LocalStorage) executeWorkflowInsert(ctx context.Context, q DBTX, execu
 	// If execution exists, validate the state transition
 	if existingExecution != nil {
 		if err := validateExecutionStateTransition(existingExecution.Status, execution.Status); err != nil {
-			log.Printf("Invalid workflow execution state transition blocked: execution_id=%s, current=%s, new=%s",
+			logger.Logger.Warn().Msgf("Invalid workflow execution state transition blocked: execution_id=%s, current=%s, new=%s",
 				execution.ExecutionID, existingExecution.Status, execution.Status)
 
 			// Add execution ID to the error for better context
@@ -2087,7 +2189,11 @@ func (ls *LocalStorage) executeWorkflowInsert(ctx context.Context, q DBTX, execu
 				status = ?, completed_at = ?, duration_ms = ?,
 				state_version = ?, last_event_sequence = ?, active_children = ?, pending_children = ?,
 				pending_terminal_status = ?, status_reason = ?, lease_owner = ?, lease_expires_at = ?,
-				output_data = ?, output_size = ?, error_message = ?, notes = ?, updated_at = ?
+				output_data = ?, output_size = ?, error_message = ?,
+				approval_request_id = ?, approval_request_url = ?, approval_status = ?,
+				approval_response = ?, approval_requested_at = ?, approval_responded_at = ?,
+				approval_callback_url = ?, approval_expires_at = ?,
+				notes = ?, updated_at = ?
 			WHERE execution_id = ?`
 
 		_, err = q.ExecContext(ctx, updateQuery,
@@ -2095,13 +2201,16 @@ func (ls *LocalStorage) executeWorkflowInsert(ctx context.Context, q DBTX, execu
 			execution.StateVersion, execution.LastEventSequence, execution.ActiveChildren, execution.PendingChildren,
 			execution.PendingTerminalStatus, execution.StatusReason, execution.LeaseOwner, execution.LeaseExpiresAt,
 			execution.OutputData, execution.OutputSize, execution.ErrorMessage,
+			execution.ApprovalRequestID, execution.ApprovalRequestURL, execution.ApprovalStatus,
+			execution.ApprovalResponse, execution.ApprovalRequestedAt, execution.ApprovalRespondedAt,
+			execution.ApprovalCallbackURL, execution.ApprovalExpiresAt,
 			notesJSON, time.Now(), execution.ExecutionID)
 
 		if err != nil {
 			return fmt.Errorf("failed to update workflow execution: %w", err)
 		}
 
-		log.Printf("Successfully updated workflow execution: execution_id=%s, status=%s", execution.ExecutionID, execution.Status)
+		logger.Logger.Debug().Msgf("Successfully updated workflow execution: execution_id=%s, status=%s", execution.ExecutionID, execution.Status)
 		return nil
 	}
 
@@ -2137,7 +2246,11 @@ func (ls *LocalStorage) executeWorkflowInsert(ctx context.Context, q DBTX, execu
 		execution.Status, execution.StartedAt, execution.CompletedAt, execution.DurationMS,
 		execution.StateVersion, execution.LastEventSequence, execution.ActiveChildren, execution.PendingChildren,
 		execution.PendingTerminalStatus, execution.StatusReason, execution.LeaseOwner, execution.LeaseExpiresAt,
-		execution.ErrorMessage, execution.RetryCount, execution.WorkflowName,
+		execution.ErrorMessage, execution.RetryCount,
+		execution.ApprovalRequestID, execution.ApprovalRequestURL, execution.ApprovalStatus,
+		execution.ApprovalResponse, execution.ApprovalRequestedAt, execution.ApprovalRespondedAt,
+		execution.ApprovalCallbackURL, execution.ApprovalExpiresAt,
+		execution.WorkflowName,
 		workflowTagsJSON, notesJSON, execution.CreatedAt, execution.UpdatedAt,
 	)
 
@@ -2145,7 +2258,7 @@ func (ls *LocalStorage) executeWorkflowInsert(ctx context.Context, q DBTX, execu
 		return fmt.Errorf("failed to insert workflow execution: %w", err)
 	}
 
-	log.Printf("Successfully inserted new workflow execution: execution_id=%s, status=%s", execution.ExecutionID, execution.Status)
+	logger.Logger.Debug().Msgf("Successfully inserted new workflow execution: execution_id=%s, status=%s", execution.ExecutionID, execution.Status)
 	return nil
 }
 
@@ -2176,7 +2289,7 @@ func (ls *LocalStorage) UpdateWorkflowExecution(ctx context.Context, executionID
 
 		// Wait before retrying with exponential backoff
 		delay := baseDelay * time.Duration(1<<attempt) // 50ms, 100ms, 200ms
-		log.Printf("🔄 RETRY: Database locked, retrying workflow update for %s in %v (attempt %d/%d)", executionID, delay, attempt+1, maxRetries+1)
+		logger.Logger.Debug().Msgf("database locked, retrying workflow update for %s in %v (attempt %d/%d)", executionID, delay, attempt+1, maxRetries+1)
 
 		select {
 		case <-time.After(delay):
@@ -2408,22 +2521,35 @@ func (ls *LocalStorage) QueryWorkflowExecutions(ctx context.Context, filters typ
 		workflow_executions.lease_owner, workflow_executions.lease_expires_at,
 		workflow_executions.error_message,
 			workflow_executions.retry_count, workflow_executions.workflow_name, workflow_executions.workflow_tags,
-			workflow_executions.notes, workflow_executions.created_at, workflow_executions.updated_at
+			workflow_executions.notes, workflow_executions.created_at, workflow_executions.updated_at,
+			workflow_executions.approval_request_id, workflow_executions.approval_request_url,
+			workflow_executions.approval_status, workflow_executions.approval_response,
+			workflow_executions.approval_requested_at, workflow_executions.approval_responded_at,
+			workflow_executions.approval_callback_url, workflow_executions.approval_expires_at
 		FROM workflow_executions`
 
 	var conditions []string
 	var args []interface{}
 
-	// Check if we need FTS5 search
+	// Check if we need search
 	var ftsJoin string
 	if filters.Search != nil && *filters.Search != "" {
-		// Sanitize search input to prevent FTS5 syntax errors
 		sanitizedSearch := sanitizeFTS5Query(*filters.Search)
 		if sanitizedSearch != "" {
-			// Use FTS5 MATCH for efficient full-text search
-			ftsJoin = " INNER JOIN workflow_executions_fts ON workflow_executions.id = workflow_executions_fts.rowid"
-			conditions = append(conditions, "workflow_executions_fts MATCH ?")
-			args = append(args, sanitizedSearch)
+			if ls.ftsEnabled {
+				// Use FTS5 MATCH for efficient full-text search when available.
+				ftsJoin = " INNER JOIN workflow_executions_fts ON workflow_executions.id = workflow_executions_fts.rowid"
+				conditions = append(conditions, "workflow_executions_fts MATCH ?")
+				args = append(args, sanitizedSearch)
+			} else {
+				searchTerm := strings.Trim(strings.TrimSpace(sanitizedSearch), "\"")
+				if searchTerm == "" {
+					searchTerm = strings.TrimSpace(*filters.Search)
+				}
+				like := "%" + searchTerm + "%"
+				conditions = append(conditions, `(workflow_executions.execution_id LIKE ? OR workflow_executions.workflow_id LIKE ? OR workflow_executions.agent_node_id LIKE ? OR workflow_executions.session_id LIKE ? OR workflow_executions.workflow_name LIKE ?)`)
+				args = append(args, like, like, like, like, like)
+			}
 		}
 	}
 
@@ -2454,6 +2580,10 @@ func (ls *LocalStorage) QueryWorkflowExecutions(ctx context.Context, filters typ
 	if filters.Status != nil {
 		conditions = append(conditions, "workflow_executions.status = ?")
 		args = append(args, *filters.Status)
+	}
+	if filters.ApprovalRequestID != nil {
+		conditions = append(conditions, "workflow_executions.approval_request_id = ?")
+		args = append(args, *filters.ApprovalRequestID)
 	}
 	if filters.StartTime != nil {
 		conditions = append(conditions, "workflow_executions.started_at >= ?")
@@ -2520,6 +2650,8 @@ func (ls *LocalStorage) QueryWorkflowExecutions(ctx context.Context, filters typ
 		var runID sql.NullString
 		var leaseOwner sql.NullString
 		var leaseExpires sql.NullTime
+		var approvalRequestID, approvalRequestURL, approvalStatus, approvalResponse, approvalCallbackURL sql.NullString
+		var approvalRequestedAt, approvalRespondedAt, approvalExpiresAt sql.NullTime
 
 		err := rows.Scan(
 			&execution.ID, &execution.WorkflowID, &execution.ExecutionID,
@@ -2535,6 +2667,10 @@ func (ls *LocalStorage) QueryWorkflowExecutions(ctx context.Context, filters typ
 			&execution.ErrorMessage, &execution.RetryCount,
 			&execution.WorkflowName, &workflowTagsJSON, &notesJSON, &execution.CreatedAt,
 			&execution.UpdatedAt,
+			&approvalRequestID, &approvalRequestURL,
+			&approvalStatus, &approvalResponse,
+			&approvalRequestedAt, &approvalRespondedAt,
+			&approvalCallbackURL, &approvalExpiresAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan workflow execution row: %w", err)
@@ -2566,6 +2702,33 @@ func (ls *LocalStorage) QueryWorkflowExecutions(ctx context.Context, filters typ
 		if leaseExpires.Valid {
 			t := leaseExpires.Time
 			execution.LeaseExpiresAt = &t
+		}
+		if approvalRequestID.Valid {
+			execution.ApprovalRequestID = &approvalRequestID.String
+		}
+		if approvalRequestURL.Valid {
+			execution.ApprovalRequestURL = &approvalRequestURL.String
+		}
+		if approvalStatus.Valid {
+			execution.ApprovalStatus = &approvalStatus.String
+		}
+		if approvalResponse.Valid {
+			execution.ApprovalResponse = &approvalResponse.String
+		}
+		if approvalRequestedAt.Valid {
+			t := approvalRequestedAt.Time
+			execution.ApprovalRequestedAt = &t
+		}
+		if approvalRespondedAt.Valid {
+			t := approvalRespondedAt.Time
+			execution.ApprovalRespondedAt = &t
+		}
+		if approvalCallbackURL.Valid {
+			execution.ApprovalCallbackURL = &approvalCallbackURL.String
+		}
+		if approvalExpiresAt.Valid {
+			t := approvalExpiresAt.Time
+			execution.ApprovalExpiresAt = &t
 		}
 
 		if len(workflowTagsJSON) > 0 {
@@ -3030,6 +3193,7 @@ func (ls *LocalStorage) populateWorkflowCleanupCounts(ctx context.Context, targe
 	result.DeletedRecords["workflow_executions"] = ls.countWorkflowExecutions(ctx, workflowIDs, runIDs)
 	result.DeletedRecords["workflow_execution_events"] = ls.countWorkflowExecutionEvents(ctx, workflowIDs, runIDs)
 	result.DeletedRecords["workflows"] = ls.countWorkflows(ctx, workflowIDs)
+	result.DeletedRecords["workflow_runs"] = ls.countWorkflowRuns(ctx, targets.primaryWorkflowID, workflowIDs, runIDs)
 }
 
 func (ls *LocalStorage) performWorkflowCleanup(ctx context.Context, tx DBTX, targets *workflowCleanupTargets) error {
@@ -4298,14 +4462,15 @@ func (ls *LocalStorage) RegisterAgent(ctx context.Context, agent *types.AgentNod
 func (ls *LocalStorage) executeRegisterAgent(ctx context.Context, q DBTX, agent *types.AgentNode) error {
 	query := `
 		INSERT INTO agent_nodes (
-			id, team_id, base_url, version, deployment_type, invocation_url, reasoners, skills,
+			id, version, group_id, team_id, base_url, traffic_weight, deployment_type, invocation_url, reasoners, skills,
 			communication_config, health_status, lifecycle_status, last_heartbeat,
-			registered_at, features, metadata
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
+			registered_at, features, metadata, proposed_tags, approved_tags, instance_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id, version) DO UPDATE SET
+			group_id = excluded.group_id,
 			team_id = excluded.team_id,
 			base_url = excluded.base_url,
-			version = excluded.version,
+			traffic_weight = excluded.traffic_weight,
 			deployment_type = excluded.deployment_type,
 			invocation_url = excluded.invocation_url,
 			reasoners = excluded.reasoners,
@@ -4315,7 +4480,10 @@ func (ls *LocalStorage) executeRegisterAgent(ctx context.Context, q DBTX, agent 
 			lifecycle_status = excluded.lifecycle_status,
 			last_heartbeat = excluded.last_heartbeat,
 			features = excluded.features,
-			metadata = excluded.metadata;`
+			metadata = excluded.metadata,
+			proposed_tags = excluded.proposed_tags,
+			approved_tags = excluded.approved_tags,
+			instance_id = CASE WHEN excluded.instance_id = '' THEN agent_nodes.instance_id ELSE excluded.instance_id END;`
 
 	reasonersJSON, err := json.Marshal(agent.Reasoners)
 	if err != nil {
@@ -4333,15 +4501,30 @@ func (ls *LocalStorage) executeRegisterAgent(ctx context.Context, q DBTX, agent 
 	if err != nil {
 		return fmt.Errorf("failed to marshal agent features: %w", err)
 	}
+	types.SyncAgentSessionsToMetadata(agent)
 	metadataJSON, err := json.Marshal(agent.Metadata)
 	if err != nil {
 		return fmt.Errorf("failed to marshal agent metadata: %w", err)
 	}
+	proposedTagsJSON, err := json.Marshal(agent.ProposedTags)
+	if err != nil {
+		return fmt.Errorf("failed to marshal proposed tags: %w", err)
+	}
+	approvedTagsJSON, err := json.Marshal(agent.ApprovedTags)
+	if err != nil {
+		return fmt.Errorf("failed to marshal approved tags: %w", err)
+	}
+
+	trafficWeight := agent.TrafficWeight
+	if trafficWeight == 0 {
+		trafficWeight = 100
+	}
 
 	_, err = q.ExecContext(ctx, query,
-		agent.ID, agent.TeamID, agent.BaseURL, agent.Version, agent.DeploymentType, agent.InvocationURL,
+		agent.ID, agent.Version, agent.GroupID, agent.TeamID, agent.BaseURL, trafficWeight, agent.DeploymentType, agent.InvocationURL,
 		reasonersJSON, skillsJSON, commConfigJSON, agent.HealthStatus, agent.LifecycleStatus,
-		agent.LastHeartbeat, agent.RegisteredAt, featuresJSON, metadataJSON,
+		agent.LastHeartbeat, agent.RegisteredAt, featuresJSON, metadataJSON, proposedTagsJSON, approvedTagsJSON,
+		agent.InstanceID,
 	)
 
 	if err != nil {
@@ -4351,7 +4534,9 @@ func (ls *LocalStorage) executeRegisterAgent(ctx context.Context, q DBTX, agent 
 	return nil
 }
 
-// GetAgent retrieves an agent node record from SQLite by ID.
+// GetAgent retrieves the default (unversioned) agent node record by ID.
+// It filters for version = ” to return only the default agent.
+// Use GetAgentVersion for a specific version, or ListAgentVersions for all versions.
 func (ls *LocalStorage) GetAgent(ctx context.Context, id string) (*types.AgentNode, error) {
 	// Check context cancellation early
 	if err := ctx.Err(); err != nil {
@@ -4360,22 +4545,27 @@ func (ls *LocalStorage) GetAgent(ctx context.Context, id string) (*types.AgentNo
 
 	query := `
 		SELECT
-			id, team_id, base_url, version, deployment_type, invocation_url, reasoners, skills,
+			id, version, group_id, team_id, base_url, traffic_weight, deployment_type, invocation_url, reasoners, skills,
 			communication_config, health_status, lifecycle_status, last_heartbeat,
-			registered_at, features, metadata
-		FROM agent_nodes WHERE id = ?`
+			registered_at, features, metadata, proposed_tags, approved_tags, COALESCE(instance_id, '')
+		FROM agent_nodes WHERE id = ?
+		ORDER BY CASE WHEN version = '' THEN 0 ELSE 1 END, version ASC
+		LIMIT 1`
 
 	row := ls.db.QueryRowContext(ctx, query, id)
 
 	agent := &types.AgentNode{}
 	var reasonersJSON, skillsJSON, commConfigJSON, featuresJSON, metadataJSON []byte
+	var proposedTagsJSON, approvedTagsJSON []byte
 	var healthStatusStr, lifecycleStatusStr string
 	var invocationURL sql.NullString
+	var lastHeartbeat, registeredAt sql.NullTime
 
 	err := row.Scan(
-		&agent.ID, &agent.TeamID, &agent.BaseURL, &agent.Version, &agent.DeploymentType, &invocationURL,
+		&agent.ID, &agent.Version, &agent.GroupID, &agent.TeamID, &agent.BaseURL, &agent.TrafficWeight, &agent.DeploymentType, &invocationURL,
 		&reasonersJSON, &skillsJSON, &commConfigJSON, &healthStatusStr, &lifecycleStatusStr,
-		&agent.LastHeartbeat, &agent.RegisteredAt, &featuresJSON, &metadataJSON,
+		&lastHeartbeat, &registeredAt, &featuresJSON, &metadataJSON,
+		&proposedTagsJSON, &approvedTagsJSON, &agent.InstanceID,
 	)
 
 	if err != nil {
@@ -4385,6 +4575,12 @@ func (ls *LocalStorage) GetAgent(ctx context.Context, id string) (*types.AgentNo
 		return nil, fmt.Errorf("failed to get agent node with ID '%s': %w", id, err)
 	}
 
+	if lastHeartbeat.Valid {
+		agent.LastHeartbeat = lastHeartbeat.Time
+	}
+	if registeredAt.Valid {
+		agent.RegisteredAt = registeredAt.Time
+	}
 	agent.HealthStatus = types.HealthStatus(healthStatusStr)
 	agent.LifecycleStatus = types.AgentLifecycleStatus(lifecycleStatusStr)
 	if invocationURL.Valid && strings.TrimSpace(invocationURL.String) != "" {
@@ -4417,6 +4613,17 @@ func (ls *LocalStorage) GetAgent(ctx context.Context, id string) (*types.AgentNo
 			return nil, fmt.Errorf("failed to unmarshal agent metadata: %w", err)
 		}
 	}
+	types.HydrateAgentSessions(agent)
+	if len(proposedTagsJSON) > 0 {
+		if err := json.Unmarshal(proposedTagsJSON, &agent.ProposedTags); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal agent proposed tags: %w", err)
+		}
+	}
+	if len(approvedTagsJSON) > 0 {
+		if err := json.Unmarshal(approvedTagsJSON, &agent.ApprovedTags); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal agent approved tags: %w", err)
+		}
+	}
 	if strings.TrimSpace(agent.DeploymentType) == "" {
 		if agent.InvocationURL != nil && strings.TrimSpace(*agent.InvocationURL) != "" {
 			agent.DeploymentType = "serverless"
@@ -4436,39 +4643,226 @@ func (ls *LocalStorage) GetAgent(ctx context.Context, id string) (*types.AgentNo
 		}
 	}
 
+	// Reconstruct agent-level ProposedTags and ApprovedTags from per-component fields.
+	// These fields are not stored in dedicated columns but are derived from the
+	// reasoners/skills JSON blobs.
+	reconstructAgentLevelTags(agent)
+
 	return agent, nil
+}
+
+// GetAgentVersion retrieves a specific (id, version) agent node.
+func (ls *LocalStorage) GetAgentVersion(ctx context.Context, id string, version string) (*types.AgentNode, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during get agent version: %w", err)
+	}
+
+	query := `
+		SELECT
+			id, version, group_id, team_id, base_url, traffic_weight, deployment_type, invocation_url, reasoners, skills,
+			communication_config, health_status, lifecycle_status, last_heartbeat,
+			registered_at, features, metadata, proposed_tags, approved_tags, COALESCE(instance_id, '')
+		FROM agent_nodes WHERE id = ? AND version = ?`
+
+	row := ls.db.QueryRowContext(ctx, query, id, version)
+	return ls.scanAgentNode(row)
+}
+
+// DeleteAgentVersion deletes a specific agent version row from the agent_nodes table.
+func (ls *LocalStorage) DeleteAgentVersion(ctx context.Context, id string, version string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during delete agent version: %w", err)
+	}
+
+	_, err := ls.db.ExecContext(ctx, `DELETE FROM agent_nodes WHERE id = ? AND version = ?`, id, version)
+	if err != nil {
+		return fmt.Errorf("failed to delete agent version id='%s' version='%s': %w", id, version, err)
+	}
+	return nil
+}
+
+// ListAgentVersions returns all versioned agents with the given ID (version != ”).
+func (ls *LocalStorage) ListAgentVersions(ctx context.Context, id string) ([]*types.AgentNode, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during list agent versions: %w", err)
+	}
+
+	query := `
+		SELECT
+			id, version, group_id, team_id, base_url, traffic_weight, deployment_type, invocation_url, reasoners, skills,
+			communication_config, health_status, lifecycle_status, last_heartbeat,
+			registered_at, features, metadata, proposed_tags, approved_tags, COALESCE(instance_id, '')
+		FROM agent_nodes WHERE id = ? AND version != '' ORDER BY registered_at DESC`
+
+	rows, err := ls.db.QueryContext(ctx, query, id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list agent versions for '%s': %w", id, err)
+	}
+	defer rows.Close()
+
+	return ls.scanAgentNodes(ctx, rows)
+}
+
+// scanAgentNode scans a single row into an AgentNode, applying post-processing.
+func (ls *LocalStorage) scanAgentNode(row *sql.Row) (*types.AgentNode, error) {
+	agent := &types.AgentNode{}
+	var reasonersJSON, skillsJSON, commConfigJSON, featuresJSON, metadataJSON []byte
+	var proposedTagsJSON, approvedTagsJSON []byte
+	var healthStatusStr, lifecycleStatusStr string
+	var invocationURL sql.NullString
+	var lastHeartbeat, registeredAt sql.NullTime
+
+	err := row.Scan(
+		&agent.ID, &agent.Version, &agent.GroupID, &agent.TeamID, &agent.BaseURL, &agent.TrafficWeight, &agent.DeploymentType, &invocationURL,
+		&reasonersJSON, &skillsJSON, &commConfigJSON, &healthStatusStr, &lifecycleStatusStr,
+		&lastHeartbeat, &registeredAt, &featuresJSON, &metadataJSON,
+		&proposedTagsJSON, &approvedTagsJSON, &agent.InstanceID,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("agent node with ID '%s' version '%s' not found", agent.ID, agent.Version)
+		}
+		return nil, fmt.Errorf("failed to scan agent node: %w", err)
+	}
+
+	if lastHeartbeat.Valid {
+		agent.LastHeartbeat = lastHeartbeat.Time
+	}
+	if registeredAt.Valid {
+		agent.RegisteredAt = registeredAt.Time
+	}
+	ls.postProcessAgentNode(agent, healthStatusStr, lifecycleStatusStr, invocationURL,
+		reasonersJSON, skillsJSON, commConfigJSON, featuresJSON, metadataJSON, proposedTagsJSON, approvedTagsJSON)
+	return agent, nil
+}
+
+// scanAgentNodes scans multiple rows into AgentNode slices, applying post-processing.
+func (ls *LocalStorage) scanAgentNodes(ctx context.Context, rows *sql.Rows) ([]*types.AgentNode, error) {
+	agents := []*types.AgentNode{}
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during agent list iteration: %w", err)
+		}
+
+		agent := &types.AgentNode{}
+		var reasonersJSON, skillsJSON, commConfigJSON, featuresJSON, metadataJSON []byte
+		var proposedTagsJSON, approvedTagsJSON []byte
+		var healthStatusStr, lifecycleStatusStr string
+		var invocationURL sql.NullString
+		var lastHeartbeat, registeredAt sql.NullTime
+
+		err := rows.Scan(
+			&agent.ID, &agent.Version, &agent.GroupID, &agent.TeamID, &agent.BaseURL, &agent.TrafficWeight, &agent.DeploymentType, &invocationURL,
+			&reasonersJSON, &skillsJSON, &commConfigJSON, &healthStatusStr, &lifecycleStatusStr,
+			&lastHeartbeat, &registeredAt, &featuresJSON, &metadataJSON,
+			&proposedTagsJSON, &approvedTagsJSON, &agent.InstanceID,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan agent node row: %w", err)
+		}
+
+		if lastHeartbeat.Valid {
+			agent.LastHeartbeat = lastHeartbeat.Time
+		}
+		if registeredAt.Valid {
+			agent.RegisteredAt = registeredAt.Time
+		}
+		ls.postProcessAgentNode(agent, healthStatusStr, lifecycleStatusStr, invocationURL,
+			reasonersJSON, skillsJSON, commConfigJSON, featuresJSON, metadataJSON, proposedTagsJSON, approvedTagsJSON)
+		agents = append(agents, agent)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error after listing agent nodes: %w", err)
+	}
+	return agents, nil
+}
+
+// postProcessAgentNode applies common post-processing to a scanned AgentNode.
+func (ls *LocalStorage) postProcessAgentNode(agent *types.AgentNode, healthStatusStr, lifecycleStatusStr string, invocationURL sql.NullString,
+	reasonersJSON, skillsJSON, commConfigJSON, featuresJSON, metadataJSON, proposedTagsJSON, approvedTagsJSON []byte) {
+
+	agent.HealthStatus = types.HealthStatus(healthStatusStr)
+	agent.LifecycleStatus = types.AgentLifecycleStatus(lifecycleStatusStr)
+	if invocationURL.Valid && strings.TrimSpace(invocationURL.String) != "" {
+		url := strings.TrimSpace(invocationURL.String)
+		agent.InvocationURL = &url
+	}
+
+	if len(reasonersJSON) > 0 {
+		_ = json.Unmarshal(reasonersJSON, &agent.Reasoners)
+	}
+	if len(skillsJSON) > 0 {
+		_ = json.Unmarshal(skillsJSON, &agent.Skills)
+	}
+	if len(commConfigJSON) > 0 {
+		_ = json.Unmarshal(commConfigJSON, &agent.CommunicationConfig)
+	}
+	if len(featuresJSON) > 0 {
+		_ = json.Unmarshal(featuresJSON, &agent.Features)
+	}
+	if len(metadataJSON) > 0 {
+		_ = json.Unmarshal(metadataJSON, &agent.Metadata)
+	}
+	types.HydrateAgentSessions(agent)
+	if len(proposedTagsJSON) > 0 {
+		_ = json.Unmarshal(proposedTagsJSON, &agent.ProposedTags)
+	}
+	if len(approvedTagsJSON) > 0 {
+		_ = json.Unmarshal(approvedTagsJSON, &agent.ApprovedTags)
+	}
+
+	if strings.TrimSpace(agent.DeploymentType) == "" {
+		if agent.InvocationURL != nil && strings.TrimSpace(*agent.InvocationURL) != "" {
+			agent.DeploymentType = "serverless"
+		} else if agent.Metadata.Custom != nil {
+			if v, ok := agent.Metadata.Custom["serverless"]; ok && fmt.Sprint(v) == "true" {
+				agent.DeploymentType = "serverless"
+			}
+		}
+		if strings.TrimSpace(agent.DeploymentType) == "" {
+			agent.DeploymentType = "long_running"
+		}
+	}
+	if agent.DeploymentType == "serverless" && (agent.InvocationURL == nil || strings.TrimSpace(*agent.InvocationURL) == "") {
+		if trimmed := strings.TrimSpace(agent.BaseURL); trimmed != "" {
+			execURL := strings.TrimSuffix(trimmed, "/") + "/execute"
+			agent.InvocationURL = &execURL
+		}
+	}
+
+	reconstructAgentLevelTags(agent)
 }
 
 // ListAgents retrieves agent node records from SQLite based on filters.
 func (ls *LocalStorage) ListAgents(ctx context.Context, filters types.AgentFilters) ([]*types.AgentNode, error) {
-	// Check context cancellation early
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("context cancelled during list agents: %w", err)
 	}
-	// Build query with filters
+
 	query := `
 		SELECT
-			id, team_id, base_url, version, deployment_type, invocation_url, reasoners, skills,
+			id, version, group_id, team_id, base_url, traffic_weight, deployment_type, invocation_url, reasoners, skills,
 			communication_config, health_status, lifecycle_status, last_heartbeat,
-			registered_at, features, metadata
+			registered_at, features, metadata, proposed_tags, approved_tags, COALESCE(instance_id, '')
 		FROM agent_nodes`
 
 	var conditions []string
 	var args []interface{}
 
-	// Add health status filter
 	if filters.HealthStatus != nil {
 		conditions = append(conditions, "health_status = ?")
 		args = append(args, string(*filters.HealthStatus))
 	}
-
-	// Add team ID filter
 	if filters.TeamID != nil {
 		conditions = append(conditions, "team_id = ?")
 		args = append(args, *filters.TeamID)
 	}
+	if filters.GroupID != nil {
+		conditions = append(conditions, "group_id = ?")
+		args = append(args, *filters.GroupID)
+	}
 
-	// Add WHERE clause if there are conditions
 	if len(conditions) > 0 {
 		query += " WHERE " + conditions[0]
 		for i := 1; i < len(conditions); i++ {
@@ -4484,86 +4878,60 @@ func (ls *LocalStorage) ListAgents(ctx context.Context, filters types.AgentFilte
 	}
 	defer rows.Close()
 
-	agents := []*types.AgentNode{}
+	return ls.scanAgentNodes(ctx, rows)
+}
+
+// ListAgentsByGroup returns all agents belonging to a specific group.
+func (ls *LocalStorage) ListAgentsByGroup(ctx context.Context, groupID string) ([]*types.AgentNode, error) {
+	return ls.ListAgents(ctx, types.AgentFilters{GroupID: &groupID})
+}
+
+// ListAgentGroups returns distinct agent groups with summary info for a team.
+func (ls *LocalStorage) ListAgentGroups(ctx context.Context, teamID string) ([]types.AgentGroupSummary, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during list agent groups: %w", err)
+	}
+
+	var query string
+	if ls.mode == "postgres" {
+		query = `
+			SELECT group_id, team_id, COUNT(*) as node_count, STRING_AGG(DISTINCT version, ',') as versions
+			FROM agent_nodes
+			WHERE team_id = $1
+			GROUP BY group_id, team_id
+			ORDER BY group_id`
+	} else {
+		query = `
+			SELECT group_id, team_id, COUNT(*) as node_count, GROUP_CONCAT(DISTINCT version) as versions
+			FROM agent_nodes
+			WHERE team_id = ?
+			GROUP BY group_id, team_id
+			ORDER BY group_id`
+	}
+
+	rows, err := ls.db.QueryContext(ctx, query, teamID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list agent groups: %w", err)
+	}
+	defer rows.Close()
+
+	var groups []types.AgentGroupSummary
 	for rows.Next() {
-		// Check context cancellation during iteration
-		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("context cancelled during agent list iteration: %w", err)
+		var g types.AgentGroupSummary
+		var versionsStr sql.NullString
+		if err := rows.Scan(&g.GroupID, &g.TeamID, &g.NodeCount, &versionsStr); err != nil {
+			return nil, fmt.Errorf("failed to scan agent group row: %w", err)
 		}
-
-		agent := &types.AgentNode{}
-		var reasonersJSON, skillsJSON, commConfigJSON, featuresJSON, metadataJSON []byte
-		var healthStatusStr, lifecycleStatusStr string
-		var invocationURL sql.NullString
-
-		err := rows.Scan(
-			&agent.ID, &agent.TeamID, &agent.BaseURL, &agent.Version, &agent.DeploymentType, &invocationURL,
-			&reasonersJSON, &skillsJSON, &commConfigJSON, &healthStatusStr, &lifecycleStatusStr,
-			&agent.LastHeartbeat, &agent.RegisteredAt, &featuresJSON, &metadataJSON,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan agent node row: %w", err)
+		if versionsStr.Valid && versionsStr.String != "" {
+			g.Versions = strings.Split(versionsStr.String, ",")
 		}
-
-		agent.HealthStatus = types.HealthStatus(healthStatusStr)
-		agent.LifecycleStatus = types.AgentLifecycleStatus(lifecycleStatusStr)
-		if invocationURL.Valid && strings.TrimSpace(invocationURL.String) != "" {
-			url := strings.TrimSpace(invocationURL.String)
-			agent.InvocationURL = &url
-		}
-
-		if len(reasonersJSON) > 0 {
-			if err := json.Unmarshal(reasonersJSON, &agent.Reasoners); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal agent reasoners: %w", err)
-			}
-		}
-		if len(skillsJSON) > 0 {
-			if err := json.Unmarshal(skillsJSON, &agent.Skills); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal agent skills: %w", err)
-			}
-		}
-		if len(commConfigJSON) > 0 {
-			if err := json.Unmarshal(commConfigJSON, &agent.CommunicationConfig); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal agent communication config: %w", err)
-			}
-		}
-		if len(featuresJSON) > 0 {
-			if err := json.Unmarshal(featuresJSON, &agent.Features); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal agent features: %w", err)
-			}
-		}
-		if len(metadataJSON) > 0 {
-			if err := json.Unmarshal(metadataJSON, &agent.Metadata); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal agent metadata: %w", err)
-			}
-		}
-		if strings.TrimSpace(agent.DeploymentType) == "" {
-			if agent.InvocationURL != nil && strings.TrimSpace(*agent.InvocationURL) != "" {
-				agent.DeploymentType = "serverless"
-			} else if agent.Metadata.Custom != nil {
-				if v, ok := agent.Metadata.Custom["serverless"]; ok && fmt.Sprint(v) == "true" {
-					agent.DeploymentType = "serverless"
-				}
-			}
-			if strings.TrimSpace(agent.DeploymentType) == "" {
-				agent.DeploymentType = "long_running"
-			}
-		}
-		if agent.DeploymentType == "serverless" && (agent.InvocationURL == nil || strings.TrimSpace(*agent.InvocationURL) == "") {
-			if trimmed := strings.TrimSpace(agent.BaseURL); trimmed != "" {
-				execURL := strings.TrimSuffix(trimmed, "/") + "/execute"
-				agent.InvocationURL = &execURL
-			}
-		}
-
-		agents = append(agents, agent)
+		groups = append(groups, g)
 	}
-
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error after listing agent nodes: %w", err)
+		return nil, fmt.Errorf("error after listing agent groups: %w", err)
 	}
 
-	return agents, nil
+	return groups, nil
 }
 
 // UpdateAgentHealth updates the health status of an agent node in SQLite.
@@ -4661,25 +5029,22 @@ func (ls *LocalStorage) UpdateAgentHealthAtomic(ctx context.Context, id string, 
 }
 
 // UpdateAgentHeartbeat updates only the heartbeat timestamp of an agent node in SQLite.
-func (ls *LocalStorage) UpdateAgentHeartbeat(ctx context.Context, id string, heartbeatTime time.Time) error {
-	// Check context cancellation early
+// If version is empty, it updates the default (unversioned) agent.
+func (ls *LocalStorage) UpdateAgentHeartbeat(ctx context.Context, id string, version string, heartbeatTime time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("context cancelled during update agent heartbeat: %w", err)
 	}
 
-	// Begin transaction for atomic operation
 	tx, err := ls.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction for agent heartbeat update: %w", err)
 	}
 	defer rollbackTx(tx, "UpdateAgentHeartbeat:"+id)
 
-	// Execute the heartbeat update using the transaction
-	if err := ls.executeUpdateAgentHeartbeat(ctx, tx, id, heartbeatTime); err != nil {
+	if err := ls.executeUpdateAgentHeartbeat(ctx, tx, id, version, heartbeatTime); err != nil {
 		return err
 	}
 
-	// Commit transaction
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit agent heartbeat transaction: %w", err)
 	}
@@ -4688,16 +5053,15 @@ func (ls *LocalStorage) UpdateAgentHeartbeat(ctx context.Context, id string, hea
 }
 
 // executeUpdateAgentHeartbeat performs the actual heartbeat timestamp update using DBTX interface
-func (ls *LocalStorage) executeUpdateAgentHeartbeat(ctx context.Context, q DBTX, id string, heartbeatTime time.Time) error {
+func (ls *LocalStorage) executeUpdateAgentHeartbeat(ctx context.Context, q DBTX, id string, version string, heartbeatTime time.Time) error {
 	query := `
 		UPDATE agent_nodes
 		SET last_heartbeat = ?
-		WHERE id = ?;`
+		WHERE id = ? AND version = ?;`
 
-	// Store timestamp in UTC format with timezone info
-	_, err := q.ExecContext(ctx, query, heartbeatTime.UTC().Format(time.RFC3339Nano), id)
+	_, err := q.ExecContext(ctx, query, heartbeatTime.UTC().Format(time.RFC3339Nano), id, version)
 	if err != nil {
-		return fmt.Errorf("failed to update agent heartbeat for ID '%s': %w", id, err)
+		return fmt.Errorf("failed to update agent heartbeat for ID '%s' version '%s': %w", id, version, err)
 	}
 
 	return nil
@@ -4746,26 +5110,167 @@ func (ls *LocalStorage) executeUpdateAgentLifecycleStatus(ctx context.Context, q
 	return nil
 }
 
-// SetConfig stores a configuration key-value pair in SQLite.
-func (ls *LocalStorage) SetConfig(ctx context.Context, key string, value interface{}) error {
-	// Fast-fail if context is already cancelled
+// UpdateAgentVersion updates only the version field for an agent node.
+func (ls *LocalStorage) UpdateAgentVersion(ctx context.Context, id string, version string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during update agent version: %w", err)
+	}
+
+	tx, err := ls.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction for agent version update: %w", err)
+	}
+	defer rollbackTx(tx, "UpdateAgentVersion:"+id)
+
+	query := `UPDATE agent_nodes SET version = ? WHERE id = ?;`
+	if _, err := tx.ExecContext(ctx, query, version, id); err != nil {
+		return fmt.Errorf("failed to update agent version for ID '%s': %w", id, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit agent version transaction: %w", err)
+	}
+
+	return nil
+}
+
+// UpdateAgentTrafficWeight sets the traffic_weight for a specific (id, version) pair.
+func (ls *LocalStorage) UpdateAgentTrafficWeight(ctx context.Context, id string, version string, weight int) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during update traffic weight: %w", err)
+	}
+
+	result, err := ls.db.ExecContext(ctx,
+		`UPDATE agent_nodes SET traffic_weight = ? WHERE id = ? AND version = ?`,
+		weight, id, version)
+	if err != nil {
+		return fmt.Errorf("failed to update traffic weight: %w", err)
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("agent (id=%s, version=%s) not found", id, version)
+	}
+	return nil
+}
+
+// SetConfig upserts a configuration entry in the database.
+// On conflict (duplicate key), it increments the version and updates the value.
+func (ls *LocalStorage) SetConfig(ctx context.Context, key string, value string, updatedBy string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
-	// TODO: Implement configuration storage in SQLite
-	return fmt.Errorf("SetConfig not yet implemented for LocalStorage")
+	db := ls.requireSQLDB()
+	now := time.Now().UTC()
+
+	if ls.mode == "postgres" {
+		_, err := db.ExecContext(ctx, `
+			INSERT INTO config_storage (key, value, version, created_by, updated_by, created_at, updated_at)
+			VALUES ($1, $2, 1, $3, $3, $4, $4)
+			ON CONFLICT (key) DO UPDATE SET
+				value = EXCLUDED.value,
+				version = config_storage.version + 1,
+				updated_by = EXCLUDED.updated_by,
+				updated_at = EXCLUDED.updated_at`,
+			key, value, updatedBy, now)
+		return err
+	}
+
+	// SQLite
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO config_storage (key, value, version, created_by, updated_by, created_at, updated_at)
+		VALUES (?, ?, 1, ?, ?, ?, ?)
+		ON CONFLICT (key) DO UPDATE SET
+			value = excluded.value,
+			version = config_storage.version + 1,
+			updated_by = excluded.updated_by,
+			updated_at = excluded.updated_at`,
+		key, value, updatedBy, updatedBy, now, now)
+	return err
 }
 
-// GetConfig retrieves a configuration value from SQLite by key.
-func (ls *LocalStorage) GetConfig(ctx context.Context, key string) (interface{}, error) {
-	// Fast-fail if context is already cancelled
+// GetConfig retrieves a configuration entry by key.
+func (ls *LocalStorage) GetConfig(ctx context.Context, key string) (*ConfigEntry, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	// TODO: Implement configuration retrieval from SQLite
-	return nil, fmt.Errorf("GetConfig not yet implemented for LocalStorage")
+	db := ls.requireSQLDB()
+	var entry ConfigEntry
+
+	var placeholder string
+	if ls.mode == "postgres" {
+		placeholder = "$1"
+	} else {
+		placeholder = "?"
+	}
+
+	row := db.QueryRowContext(ctx,
+		fmt.Sprintf(`SELECT key, value, version, COALESCE(created_by, ''), COALESCE(updated_by, ''), created_at, updated_at
+		FROM config_storage WHERE key = %s`, placeholder), key)
+
+	err := row.Scan(&entry.Key, &entry.Value, &entry.Version,
+		&entry.CreatedBy, &entry.UpdatedBy, &entry.CreatedAt, &entry.UpdatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get config %q: %w", key, err)
+	}
+	return &entry, nil
+}
+
+// ListConfigs returns all stored configuration entries.
+func (ls *LocalStorage) ListConfigs(ctx context.Context) ([]*ConfigEntry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	db := ls.requireSQLDB()
+	rows, err := db.QueryContext(ctx,
+		`SELECT key, value, version, COALESCE(created_by, ''), COALESCE(updated_by, ''), created_at, updated_at
+		FROM config_storage ORDER BY key`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list configs: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []*ConfigEntry
+	for rows.Next() {
+		var entry ConfigEntry
+		if err := rows.Scan(&entry.Key, &entry.Value, &entry.Version,
+			&entry.CreatedBy, &entry.UpdatedBy, &entry.CreatedAt, &entry.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan config row: %w", err)
+		}
+		entries = append(entries, &entry)
+	}
+	return entries, rows.Err()
+}
+
+// DeleteConfig removes a configuration entry by key.
+func (ls *LocalStorage) DeleteConfig(ctx context.Context, key string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	db := ls.requireSQLDB()
+	var placeholder string
+	if ls.mode == "postgres" {
+		placeholder = "$1"
+	} else {
+		placeholder = "?"
+	}
+
+	result, err := db.ExecContext(ctx,
+		fmt.Sprintf(`DELETE FROM config_storage WHERE key = %s`, placeholder), key)
+	if err != nil {
+		return fmt.Errorf("failed to delete config %q: %w", key, err)
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("config %q not found", key)
+	}
+	return nil
 }
 
 // SubscribeToMemoryChanges implements the StorageProvider SubscribeToMemoryChanges method using local pub/sub.
@@ -5542,13 +6047,17 @@ func (ls *LocalStorage) executeReasonerHistoryQuery(tx DBTX, nodeID, localReason
 	combinedQuery := `
 		WITH execution_data AS (
 			SELECT
-				execution_id, status, input_data, output_data, error_message, duration_ms, started_at,
+				execution_id, agent_node_id, reasoner_id, status, status_reason,
+				input_data, output_data, error_message, duration_ms, retry_count,
+				session_id, actor_id, started_at, completed_at,
 				COUNT(*) OVER() as total_count,
 				ROW_NUMBER() OVER(ORDER BY started_at DESC) as row_num
 			FROM workflow_executions
 			WHERE agent_node_id = ? AND reasoner_id = ?
 		)
-		SELECT execution_id, status, input_data, output_data, error_message, duration_ms, started_at, total_count
+		SELECT execution_id, agent_node_id, reasoner_id, status, status_reason,
+		       input_data, output_data, error_message, duration_ms, retry_count,
+		       session_id, actor_id, started_at, completed_at, total_count
 		FROM execution_data
 		WHERE row_num > ? AND row_num <= ?
 		ORDER BY started_at DESC`
@@ -5567,18 +6076,41 @@ func (ls *LocalStorage) executeReasonerHistoryQuery(tx DBTX, nodeID, localReason
 		var inputData, outputData sql.NullString
 		var errorMessage sql.NullString
 		var durationMs sql.NullInt64
+		var statusReason sql.NullString
+		var sessionID sql.NullString
+		var actorID sql.NullString
+		var completedAt sql.NullTime
 
 		err := rows.Scan(
-			&record.ExecutionID, &record.Status, &inputData, &outputData,
-			&errorMessage, &durationMs, &record.Timestamp, &total,
+			&record.ExecutionID, &record.AgentNodeID, &record.ReasonerID,
+			&record.Status, &statusReason, &inputData, &outputData,
+			&errorMessage, &durationMs, &record.RetryCount, &sessionID,
+			&actorID, &record.StartedAt, &completedAt, &total,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan execution record: %w", err)
 		}
 
-		// Parse input data
+		record.Timestamp = record.StartedAt
+		if statusReason.Valid {
+			record.StatusReason = &statusReason.String
+			record.ErrorCategory = &statusReason.String
+		}
+		if completedAt.Valid {
+			record.CompletedAt = &completedAt.Time
+		}
+		if sessionID.Valid {
+			record.SessionID = &sessionID.String
+		}
+		if actorID.Valid {
+			record.ActorID = &actorID.String
+		}
+
 		if inputData.Valid && inputData.String != "" {
-			if err := json.Unmarshal([]byte(inputData.String), &record.Input); err != nil {
+			payload := types.DecodeStoredExecutionPayload(json.RawMessage(inputData.String))
+			record.Input = payload.Input
+			record.Context = payload.Context
+			if record.Input == nil {
 				record.Input = map[string]interface{}{"raw": inputData.String}
 			}
 		}
@@ -5627,13 +6159,17 @@ func (ls *LocalStorage) executeReasonerHistoryQueryDirect(ctx context.Context, n
 	combinedQuery := `
 		WITH execution_data AS (
 			SELECT
-				execution_id, status, input_data, output_data, error_message, duration_ms, started_at,
+				execution_id, agent_node_id, reasoner_id, status, status_reason,
+				input_data, output_data, error_message, duration_ms, retry_count,
+				session_id, actor_id, started_at, completed_at,
 				COUNT(*) OVER() as total_count,
 				ROW_NUMBER() OVER(ORDER BY started_at DESC) as row_num
 			FROM workflow_executions
 			WHERE agent_node_id = ? AND reasoner_id = ?
 		)
-		SELECT execution_id, status, input_data, output_data, error_message, duration_ms, started_at, total_count
+		SELECT execution_id, agent_node_id, reasoner_id, status, status_reason,
+		       input_data, output_data, error_message, duration_ms, retry_count,
+		       session_id, actor_id, started_at, completed_at, total_count
 		FROM execution_data
 		WHERE row_num > ? AND row_num <= ?
 		ORDER BY started_at DESC`
@@ -5657,18 +6193,41 @@ func (ls *LocalStorage) executeReasonerHistoryQueryDirect(ctx context.Context, n
 		var inputData, outputData sql.NullString
 		var errorMessage sql.NullString
 		var durationMs sql.NullInt64
+		var statusReason sql.NullString
+		var sessionID sql.NullString
+		var actorID sql.NullString
+		var completedAt sql.NullTime
 
 		err := rows.Scan(
-			&record.ExecutionID, &record.Status, &inputData, &outputData,
-			&errorMessage, &durationMs, &record.Timestamp, &total,
+			&record.ExecutionID, &record.AgentNodeID, &record.ReasonerID,
+			&record.Status, &statusReason, &inputData, &outputData,
+			&errorMessage, &durationMs, &record.RetryCount, &sessionID,
+			&actorID, &record.StartedAt, &completedAt, &total,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan execution record: %w", err)
 		}
 
-		// Parse input data
+		record.Timestamp = record.StartedAt
+		if statusReason.Valid {
+			record.StatusReason = &statusReason.String
+			record.ErrorCategory = &statusReason.String
+		}
+		if completedAt.Valid {
+			record.CompletedAt = &completedAt.Time
+		}
+		if sessionID.Valid {
+			record.SessionID = &sessionID.String
+		}
+		if actorID.Valid {
+			record.ActorID = &actorID.String
+		}
+
 		if inputData.Valid && inputData.String != "" {
-			if err := json.Unmarshal([]byte(inputData.String), &record.Input); err != nil {
+			payload := types.DecodeStoredExecutionPayload(json.RawMessage(inputData.String))
+			record.Input = payload.Input
+			record.Context = payload.Context
+			if record.Input == nil {
 				record.Input = map[string]interface{}{"raw": inputData.String}
 			}
 		}
@@ -5717,6 +6276,11 @@ func (ls *LocalStorage) GetExecutionEventBus() *events.ExecutionEventBus {
 // GetWorkflowExecutionEventBus returns the bus for workflow execution events.
 func (ls *LocalStorage) GetWorkflowExecutionEventBus() *events.EventBus[*types.WorkflowExecutionEvent] {
 	return ls.workflowExecutionEventBus
+}
+
+// GetExecutionLogEventBus returns the bus for structured execution logs.
+func (ls *LocalStorage) GetExecutionLogEventBus() *events.EventBus[*types.ExecutionLogEntry] {
+	return ls.executionLogEventBus
 }
 
 // AgentField Server DID operations
@@ -5797,7 +6361,7 @@ func (ls *LocalStorage) StoreAgentFieldServerDID(ctx context.Context, agentfield
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	log.Printf("Successfully stored af server DID: agentfield_server_id=%s, root_did=%s", agentfieldServerID, rootDID)
+	logger.Logger.Debug().Msgf("Successfully stored af server DID: agentfield_server_id=%s, root_did=%s", agentfieldServerID, rootDID)
 	return nil
 }
 
@@ -5907,7 +6471,7 @@ func (ls *LocalStorage) StoreAgentDIDWithComponents(ctx context.Context, agentID
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	log.Printf("Successfully stored agent DID with %d components: agent_id=%s, did=%s", len(components), agentID, agentDID)
+	logger.Logger.Debug().Msgf("Successfully stored agent DID with %d components: agent_id=%s, did=%s", len(components), agentID, agentDID)
 	return nil
 }
 
@@ -5986,7 +6550,7 @@ func (ls *LocalStorage) StoreDID(ctx context.Context, did string, didDocument, p
 	if err != nil {
 		// Check if this is a unique constraint violation (duplicate DID)
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") || strings.Contains(err.Error(), "did_registry.did") {
-			log.Printf("Duplicate DID registry entry detected: %s", did)
+			logger.Logger.Warn().Msgf("Duplicate DID registry entry detected: %s", did)
 			return &DuplicateDIDError{
 				DID:  did,
 				Type: "registry",
@@ -5995,7 +6559,7 @@ func (ls *LocalStorage) StoreDID(ctx context.Context, did string, didDocument, p
 		return fmt.Errorf("failed to store DID: %w", err)
 	}
 
-	log.Printf("Successfully stored DID registry entry: %s", did)
+	logger.Logger.Debug().Msgf("Successfully stored DID registry entry: %s", did)
 	return nil
 }
 
@@ -6221,7 +6785,7 @@ func (ls *LocalStorage) StoreAgentDID(ctx context.Context, agentID, agentDID, ag
 		if execErr != nil {
 			// Check if this is a unique constraint violation (duplicate agent DID)
 			if strings.Contains(execErr.Error(), "UNIQUE constraint failed") || strings.Contains(execErr.Error(), "agent_dids") {
-				log.Printf("Duplicate agent DID entry detected: agent_id=%s, agentfield_server_id=%s", agentID, agentfieldServerDID)
+				logger.Logger.Warn().Msgf("Duplicate agent DID entry detected: agent_id=%s, agentfield_server_id=%s", agentID, agentfieldServerDID)
 				return &DuplicateDIDError{
 					DID:  fmt.Sprintf("agent:%s@%s", agentID, agentfieldServerDID),
 					Type: "agent",
@@ -6251,7 +6815,7 @@ func (ls *LocalStorage) StoreAgentDID(ctx context.Context, agentID, agentDID, ag
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	log.Printf("Successfully stored agent DID entry: agent_id=%s, did=%s", agentID, agentDID)
+	logger.Logger.Debug().Msgf("Successfully stored agent DID entry: agent_id=%s, did=%s", agentID, agentDID)
 	return nil
 }
 
@@ -6429,7 +6993,7 @@ func (ls *LocalStorage) StoreComponentDID(ctx context.Context, componentID, comp
 		if execErr != nil {
 			// Check if this is a unique constraint violation (duplicate component DID)
 			if strings.Contains(execErr.Error(), "UNIQUE constraint failed") || strings.Contains(execErr.Error(), "component_dids") {
-				log.Printf("Duplicate component DID entry detected: agent_did=%s, function_name=%s, component_type=%s", agentDID, componentName, componentType)
+				logger.Logger.Warn().Msgf("Duplicate component DID entry detected: agent_did=%s, function_name=%s, component_type=%s", agentDID, componentName, componentType)
 				return &DuplicateDIDError{
 					DID:  fmt.Sprintf("component:%s/%s@%s", componentType, componentName, agentDID),
 					Type: "component",
@@ -6459,7 +7023,7 @@ func (ls *LocalStorage) StoreComponentDID(ctx context.Context, componentID, comp
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	log.Printf("Successfully stored component DID entry: component_did=%s, agent_did=%s, type=%s", componentDID, agentDID, componentType)
+	logger.Logger.Debug().Msgf("Successfully stored component DID entry: component_did=%s, agent_did=%s, type=%s", componentDID, agentDID, componentType)
 	return nil
 }
 
@@ -6603,6 +7167,58 @@ func (ls *LocalStorage) StoreExecutionVC(ctx context.Context, vcID, executionID,
 	return nil
 }
 
+// StoreExecutionVCRecord persists an ExecutionVC including the kind
+// discriminator, parent_vc_id chain pointer, and trigger-event metadata.
+// Used by all new VC writers — the older scalar StoreExecutionVC stays for
+// backward compatibility with existing call sites.
+func (ls *LocalStorage) StoreExecutionVCRecord(ctx context.Context, vc *types.ExecutionVC) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during store execution VC: %w", err)
+	}
+	if vc == nil {
+		return fmt.Errorf("execution VC is nil")
+	}
+	kind := vc.Kind
+	if kind == "" {
+		kind = types.ExecutionVCKindExecution
+	}
+	created := vc.CreatedAt
+	if created.IsZero() {
+		created = time.Now()
+	}
+
+	query := `
+		INSERT INTO execution_vcs (
+			vc_id, execution_id, workflow_id, session_id, issuer_did, target_did,
+			caller_did, vc_document, signature, storage_uri, document_size_bytes,
+			input_hash, output_hash, status, parent_vc_id, kind,
+			trigger_id, source_name, event_type, event_id, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(vc_id) DO UPDATE SET
+			status = excluded.status,
+			vc_document = excluded.vc_document,
+			signature = excluded.signature,
+			storage_uri = excluded.storage_uri,
+			document_size_bytes = excluded.document_size_bytes,
+			parent_vc_id = excluded.parent_vc_id,
+			kind = excluded.kind,
+			trigger_id = excluded.trigger_id,
+			source_name = excluded.source_name,
+			event_type = excluded.event_type,
+			event_id = excluded.event_id;`
+
+	_, err := ls.db.ExecContext(ctx, query,
+		vc.VCID, vc.ExecutionID, vc.WorkflowID, vc.SessionID, vc.IssuerDID, vc.TargetDID,
+		vc.CallerDID, []byte(vc.VCDocument), vc.Signature, vc.StorageURI, vc.DocumentSize,
+		vc.InputHash, vc.OutputHash, vc.Status, vc.ParentVCID, kind,
+		vc.TriggerID, vc.SourceName, vc.EventType, vc.EventID, created,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to store execution VC record: %w", err)
+	}
+	return nil
+}
+
 func (ls *LocalStorage) GetExecutionVC(ctx context.Context, vcID string) (*types.ExecutionVCInfo, error) {
 	// Check context cancellation early
 	if err := ctx.Err(); err != nil {
@@ -6611,7 +7227,8 @@ func (ls *LocalStorage) GetExecutionVC(ctx context.Context, vcID string) (*types
 
 	query := `
 		SELECT vc_id, execution_id, workflow_id, session_id, issuer_did, target_did,
-			   caller_did, input_hash, output_hash, status, created_at, storage_uri, document_size_bytes
+			   caller_did, input_hash, output_hash, status, created_at, storage_uri, document_size_bytes,
+			   parent_vc_id, kind, trigger_id, source_name, event_type, event_id
 		FROM execution_vcs WHERE vc_id = ?`
 
 	row := ls.db.QueryRowContext(ctx, query, vcID)
@@ -6619,7 +7236,8 @@ func (ls *LocalStorage) GetExecutionVC(ctx context.Context, vcID string) (*types
 
 	err := row.Scan(&info.VCID, &info.ExecutionID, &info.WorkflowID, &info.SessionID,
 		&info.IssuerDID, &info.TargetDID, &info.CallerDID, &info.InputHash,
-		&info.OutputHash, &info.Status, &info.CreatedAt, &info.StorageURI, &info.DocumentSize)
+		&info.OutputHash, &info.Status, &info.CreatedAt, &info.StorageURI, &info.DocumentSize,
+		&info.ParentVCID, &info.Kind, &info.TriggerID, &info.SourceName, &info.EventType, &info.EventID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("execution VC %s not found", vcID)
@@ -6708,7 +7326,8 @@ func (ls *LocalStorage) ListExecutionVCs(ctx context.Context, filters types.VCFi
 		SELECT evc.vc_id, evc.execution_id, evc.workflow_id, evc.session_id,
 		       evc.issuer_did, evc.target_did, evc.caller_did, evc.input_hash,
 		       evc.output_hash, evc.status, evc.created_at, evc.storage_uri,
-		       evc.document_size_bytes, we.agent_node_id, we.workflow_name
+		       evc.document_size_bytes, we.agent_node_id, we.workflow_name,
+		       evc.parent_vc_id, evc.kind, evc.trigger_id, evc.source_name, evc.event_type, evc.event_id
 		FROM execution_vcs evc
 		LEFT JOIN workflow_executions we ON we.execution_id = evc.execution_id`
 
@@ -6744,7 +7363,8 @@ func (ls *LocalStorage) ListExecutionVCs(ctx context.Context, filters types.VCFi
 		err := rows.Scan(&info.VCID, &info.ExecutionID, &info.WorkflowID, &info.SessionID,
 			&info.IssuerDID, &info.TargetDID, &info.CallerDID, &info.InputHash,
 			&info.OutputHash, &info.Status, &info.CreatedAt, &info.StorageURI,
-			&info.DocumentSize, &info.AgentNodeID, &info.WorkflowName)
+			&info.DocumentSize, &info.AgentNodeID, &info.WorkflowName,
+			&info.ParentVCID, &info.Kind, &info.TriggerID, &info.SourceName, &info.EventType, &info.EventID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan execution VC: %w", err)
 		}
@@ -7034,11 +7654,17 @@ func (ls *LocalStorage) storeWorkflowExecutionEventTx(ctx context.Context, tx DB
 		payload = "{}"
 	}
 
+	// Persist recorded_at explicitly: the GORM model's autoCreateTime does
+	// not apply to this raw INSERT, and a NULL recorded_at breaks listing.
+	if event.RecordedAt.IsZero() {
+		event.RecordedAt = time.Now().UTC()
+	}
+
 	query := `
 		INSERT INTO workflow_execution_events (
 			execution_id, workflow_id, run_id, parent_execution_id, sequence, previous_sequence,
-			event_type, status, status_reason, payload, emitted_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			event_type, status, status_reason, payload, emitted_at, recorded_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	result, err := tx.ExecContext(ctx, query,
 		event.ExecutionID,
@@ -7052,6 +7678,7 @@ func (ls *LocalStorage) storeWorkflowExecutionEventTx(ctx context.Context, tx DB
 		event.StatusReason,
 		payload,
 		event.EmittedAt,
+		event.RecordedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to insert workflow execution event: %w", err)
@@ -7059,9 +7686,6 @@ func (ls *LocalStorage) storeWorkflowExecutionEventTx(ctx context.Context, tx DB
 
 	if id, err := result.LastInsertId(); err == nil {
 		event.EventID = id
-	}
-	if event.RecordedAt.IsZero() {
-		event.RecordedAt = time.Now().UTC()
 	}
 
 	return nil
@@ -7100,6 +7724,7 @@ func (ls *LocalStorage) ListWorkflowExecutionEvents(ctx context.Context, executi
 		var status sql.NullString
 		var statusReason sql.NullString
 		var payload sql.NullString
+		var recordedAt sql.NullTime
 
 		if err := rows.Scan(
 			&evt.EventID,
@@ -7114,9 +7739,17 @@ func (ls *LocalStorage) ListWorkflowExecutionEvents(ctx context.Context, executi
 			&statusReason,
 			&payload,
 			&evt.EmittedAt,
-			&evt.RecordedAt,
+			&recordedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan workflow execution event: %w", err)
+		}
+
+		// Rows written before recorded_at was persisted have NULL here;
+		// fall back to emitted_at rather than failing the whole listing.
+		if recordedAt.Valid {
+			evt.RecordedAt = recordedAt.Time
+		} else {
+			evt.RecordedAt = evt.EmittedAt
 		}
 
 		if runID.Valid {
@@ -7147,6 +7780,333 @@ func (ls *LocalStorage) ListWorkflowExecutionEvents(ctx context.Context, executi
 	}
 
 	return events, nil
+}
+
+// StoreExecutionLogEntry inserts a structured execution log entry and publishes it to subscribers.
+func (ls *LocalStorage) StoreExecutionLogEntry(ctx context.Context, entry *types.ExecutionLogEntry) error {
+	if entry == nil {
+		return fmt.Errorf("execution log entry is nil")
+	}
+	if strings.TrimSpace(entry.ExecutionID) == "" {
+		return fmt.Errorf("execution_id is required")
+	}
+	if strings.TrimSpace(entry.WorkflowID) == "" {
+		entry.WorkflowID = entry.ExecutionID
+	}
+	if strings.TrimSpace(entry.Level) == "" {
+		entry.Level = "info"
+	}
+	if strings.TrimSpace(entry.Source) == "" {
+		entry.Source = "sdk.logger"
+	}
+	if entry.EmittedAt.IsZero() {
+		entry.EmittedAt = time.Now().UTC()
+	}
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+
+	return ls.retryDatabaseOperation(ctx, entry.ExecutionID, func() error {
+		tx, err := ls.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("failed to begin execution log transaction: %w", err)
+		}
+		defer rollbackTx(tx, "StoreExecutionLogEntry:"+entry.ExecutionID)
+
+		if err := ls.storeExecutionLogEntryTx(ctx, tx, entry); err != nil {
+			return err
+		}
+
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("failed to commit execution log transaction: %w", err)
+		}
+
+		entryCopy := *entry
+		ls.executionLogEventBus.Publish(&entryCopy)
+		return nil
+	})
+}
+
+// StoreExecutionLogEntries atomically stores a batch of structured execution logs for one execution.
+func (ls *LocalStorage) StoreExecutionLogEntries(ctx context.Context, executionID string, entries []*types.ExecutionLogEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+
+	return ls.retryDatabaseOperation(ctx, executionID, func() error {
+		tx, err := ls.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("failed to begin execution log batch transaction: %w", err)
+		}
+		defer rollbackTx(tx, "StoreExecutionLogEntries:"+executionID)
+
+		for _, entry := range entries {
+			if entry == nil {
+				continue
+			}
+			if err := ls.storeExecutionLogEntryTx(ctx, tx, entry); err != nil {
+				return err
+			}
+		}
+
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("failed to commit execution log batch transaction: %w", err)
+		}
+
+		for _, entry := range entries {
+			if entry == nil {
+				continue
+			}
+			entryCopy := *entry
+			ls.executionLogEventBus.Publish(&entryCopy)
+		}
+		return nil
+	})
+}
+
+func (ls *LocalStorage) storeExecutionLogEntryTx(ctx context.Context, tx DBTX, entry *types.ExecutionLogEntry) error {
+	var nextSeq int64 = 1
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(sequence), 0) + 1 FROM execution_logs WHERE execution_id = ?`,
+		entry.ExecutionID,
+	).Scan(&nextSeq); err != nil {
+		return fmt.Errorf("failed to compute execution log sequence: %w", err)
+	}
+	entry.Sequence = nextSeq
+
+	attributes := "{}"
+	if len(entry.Attributes) > 0 {
+		attributes = string(entry.Attributes)
+	}
+
+	// Persist recorded_at explicitly: the GORM model's autoCreateTime does
+	// not apply to this raw INSERT, so omitting the column stores NULL and
+	// every read silently takes the legacy emitted_at fallback.
+	if entry.RecordedAt.IsZero() {
+		entry.RecordedAt = time.Now().UTC()
+	}
+
+	query := `
+		INSERT INTO execution_logs (
+			execution_id, workflow_id, run_id, root_workflow_id, parent_execution_id, sequence,
+			agent_node_id, reasoner_id, level, source, event_type, message, attributes,
+			system_generated, sdk_language, attempt, span_id, step_id, error_category, emitted_at,
+			recorded_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	result, err := tx.ExecContext(ctx, query,
+		entry.ExecutionID,
+		entry.WorkflowID,
+		entry.RunID,
+		entry.RootWorkflowID,
+		entry.ParentExecutionID,
+		entry.Sequence,
+		entry.AgentNodeID,
+		entry.ReasonerID,
+		entry.Level,
+		entry.Source,
+		entry.EventType,
+		entry.Message,
+		attributes,
+		entry.SystemGenerated,
+		entry.SDKLanguage,
+		entry.Attempt,
+		entry.SpanID,
+		entry.StepID,
+		entry.ErrorCategory,
+		entry.EmittedAt,
+		entry.RecordedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to insert execution log entry: %w", err)
+	}
+	if id, err := result.LastInsertId(); err == nil {
+		entry.EventID = id
+	}
+	return nil
+}
+
+// ListExecutionLogEntries retrieves structured execution logs ordered by sequence.
+func (ls *LocalStorage) ListExecutionLogEntries(ctx context.Context, executionID string, afterSeq *int64, limit int, levels []string, nodeIDs []string, sources []string, query string) ([]*types.ExecutionLogEntry, error) {
+	baseQuery := `
+		SELECT event_id, execution_id, workflow_id, run_id, root_workflow_id, parent_execution_id, sequence,
+		       agent_node_id, reasoner_id, level, source, event_type, message, attributes, system_generated,
+		       sdk_language, attempt, span_id, step_id, error_category, emitted_at, recorded_at
+		FROM execution_logs
+		WHERE execution_id = ?`
+	args := []interface{}{executionID}
+
+	appendIn := func(column string, values []string) {
+		if len(values) == 0 {
+			return
+		}
+		holders := make([]string, 0, len(values))
+		for _, value := range values {
+			if strings.TrimSpace(value) == "" {
+				continue
+			}
+			holders = append(holders, "?")
+			args = append(args, value)
+		}
+		if len(holders) > 0 {
+			baseQuery += " AND " + column + " IN (" + strings.Join(holders, ",") + ")"
+		}
+	}
+
+	if afterSeq != nil {
+		baseQuery += " AND sequence > ?"
+		args = append(args, *afterSeq)
+	}
+	appendIn("level", levels)
+	appendIn("agent_node_id", nodeIDs)
+	appendIn("source", sources)
+	if trimmed := strings.TrimSpace(query); trimmed != "" {
+		baseQuery += " AND (message LIKE ? OR attributes LIKE ?)"
+		like := "%" + trimmed + "%"
+		args = append(args, like, like)
+	}
+
+	descendingTail := afterSeq == nil && limit > 0
+	if descendingTail {
+		baseQuery += " ORDER BY sequence DESC"
+		baseQuery += fmt.Sprintf(" LIMIT %d", limit)
+	} else {
+		baseQuery += " ORDER BY sequence ASC"
+		if limit > 0 {
+			baseQuery += fmt.Sprintf(" LIMIT %d", limit)
+		}
+	}
+
+	rows, err := ls.db.QueryContext(ctx, baseQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query execution logs: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []*types.ExecutionLogEntry
+	for rows.Next() {
+		entry := &types.ExecutionLogEntry{}
+		var runID, rootWorkflowID, parentExecutionID, reasonerID, eventType, sdkLanguage, spanID, stepID, errorCategory sql.NullString
+		var attributes sql.NullString
+		var attempt sql.NullInt64
+		var emittedAt sql.NullTime
+		var recordedAt sql.NullTime
+		if err := rows.Scan(
+			&entry.EventID,
+			&entry.ExecutionID,
+			&entry.WorkflowID,
+			&runID,
+			&rootWorkflowID,
+			&parentExecutionID,
+			&entry.Sequence,
+			&entry.AgentNodeID,
+			&reasonerID,
+			&entry.Level,
+			&entry.Source,
+			&eventType,
+			&entry.Message,
+			&attributes,
+			&entry.SystemGenerated,
+			&sdkLanguage,
+			&attempt,
+			&spanID,
+			&stepID,
+			&errorCategory,
+			&emittedAt,
+			&recordedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan execution log entry: %w", err)
+		}
+
+		if runID.Valid {
+			entry.RunID = &runID.String
+		}
+		if rootWorkflowID.Valid {
+			entry.RootWorkflowID = &rootWorkflowID.String
+		}
+		if parentExecutionID.Valid {
+			entry.ParentExecutionID = &parentExecutionID.String
+		}
+		if reasonerID.Valid {
+			entry.ReasonerID = &reasonerID.String
+		}
+		if eventType.Valid {
+			entry.EventType = &eventType.String
+		}
+		if sdkLanguage.Valid {
+			entry.SDKLanguage = &sdkLanguage.String
+		}
+		if spanID.Valid {
+			entry.SpanID = &spanID.String
+		}
+		if stepID.Valid {
+			entry.StepID = &stepID.String
+		}
+		if errorCategory.Valid {
+			entry.ErrorCategory = &errorCategory.String
+		}
+		if attempt.Valid {
+			value := int(attempt.Int64)
+			entry.Attempt = &value
+		}
+		if emittedAt.Valid {
+			entry.EmittedAt = emittedAt.Time
+		}
+		if recordedAt.Valid {
+			entry.RecordedAt = recordedAt.Time
+		} else {
+			entry.RecordedAt = entry.EmittedAt
+		}
+		if attributes.Valid {
+			entry.Attributes = json.RawMessage(attributes.String)
+		} else {
+			entry.Attributes = json.RawMessage("{}")
+		}
+
+		entries = append(entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating execution logs: %w", err)
+	}
+	if descendingTail {
+		for left, right := 0, len(entries)-1; left < right; left, right = left+1, right-1 {
+			entries[left], entries[right] = entries[right], entries[left]
+		}
+	}
+	return entries, nil
+}
+
+// PruneExecutionLogEntries trims old or excessive execution logs for a single execution.
+func (ls *LocalStorage) PruneExecutionLogEntries(ctx context.Context, executionID string, maxEntries int, olderThan time.Time) error {
+	if strings.TrimSpace(executionID) == "" {
+		return nil
+	}
+	if !olderThan.IsZero() {
+		if _, err := ls.db.ExecContext(ctx,
+			`DELETE FROM execution_logs WHERE execution_id = ? AND emitted_at < ?`,
+			executionID, olderThan,
+		); err != nil {
+			return fmt.Errorf("failed to prune execution logs by age: %w", err)
+		}
+	}
+	if maxEntries > 0 {
+		if _, err := ls.db.ExecContext(ctx, `
+			DELETE FROM execution_logs
+			WHERE execution_id = ?
+			  AND event_id NOT IN (
+			    SELECT event_id FROM execution_logs
+			    WHERE execution_id = ?
+			    ORDER BY sequence DESC
+			    LIMIT ?
+			  )`,
+			executionID, executionID, maxEntries,
+		); err != nil {
+			return fmt.Errorf("failed to prune execution logs by count: %w", err)
+		}
+	}
+	return nil
 }
 
 // StoreExecutionWebhookEvent records webhook delivery attempts for SQLite deployments.
@@ -7330,4 +8290,711 @@ func (ls *LocalStorage) ListExecutionWebhookEventsBatch(ctx context.Context, exe
 	}
 
 	return results, nil
+}
+
+// =============================================================================
+// DID Document Operations (did:web Resolution)
+// =============================================================================
+
+// StoreDIDDocument stores a DID document record.
+func (ls *LocalStorage) StoreDIDDocument(ctx context.Context, record *types.DIDDocumentRecord) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during store DID document: %w", err)
+	}
+
+	query := `
+		INSERT INTO did_documents (
+			did, agent_id, did_document, public_key_jwk, revoked_at, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(did) DO UPDATE SET
+			agent_id = excluded.agent_id,
+			did_document = excluded.did_document,
+			public_key_jwk = excluded.public_key_jwk,
+			updated_at = excluded.updated_at`
+
+	_, err := ls.db.ExecContext(ctx, query,
+		record.DID, record.AgentID, record.DIDDocument, record.PublicKeyJWK,
+		record.RevokedAt, record.CreatedAt, record.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to store DID document: %w", err)
+	}
+
+	return nil
+}
+
+// GetDIDDocument retrieves a DID document by its DID.
+func (ls *LocalStorage) GetDIDDocument(ctx context.Context, did string) (*types.DIDDocumentRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during get DID document: %w", err)
+	}
+
+	query := `
+		SELECT did, agent_id, did_document, public_key_jwk, revoked_at, created_at, updated_at
+		FROM did_documents WHERE did = ?`
+
+	row := ls.db.QueryRowContext(ctx, query, did)
+
+	record := &types.DIDDocumentRecord{}
+	var revokedAt sql.NullTime
+
+	err := row.Scan(
+		&record.DID, &record.AgentID, &record.DIDDocument, &record.PublicKeyJWK,
+		&revokedAt, &record.CreatedAt, &record.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("DID document not found: %s", did)
+		}
+		return nil, fmt.Errorf("failed to get DID document: %w", err)
+	}
+
+	if revokedAt.Valid {
+		record.RevokedAt = &revokedAt.Time
+	}
+
+	return record, nil
+}
+
+// GetDIDDocumentByAgentID retrieves a DID document by agent ID.
+func (ls *LocalStorage) GetDIDDocumentByAgentID(ctx context.Context, agentID string) (*types.DIDDocumentRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during get DID document by agent ID: %w", err)
+	}
+
+	query := `
+		SELECT did, agent_id, did_document, public_key_jwk, revoked_at, created_at, updated_at
+		FROM did_documents WHERE agent_id = ? AND revoked_at IS NULL
+		ORDER BY created_at DESC LIMIT 1`
+
+	row := ls.db.QueryRowContext(ctx, query, agentID)
+
+	record := &types.DIDDocumentRecord{}
+	var revokedAt sql.NullTime
+
+	err := row.Scan(
+		&record.DID, &record.AgentID, &record.DIDDocument, &record.PublicKeyJWK,
+		&revokedAt, &record.CreatedAt, &record.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("DID document not found for agent: %s", agentID)
+		}
+		return nil, fmt.Errorf("failed to get DID document by agent ID: %w", err)
+	}
+
+	if revokedAt.Valid {
+		record.RevokedAt = &revokedAt.Time
+	}
+
+	return record, nil
+}
+
+// RevokeDIDDocument revokes a DID document by setting its revoked_at timestamp.
+func (ls *LocalStorage) RevokeDIDDocument(ctx context.Context, did string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during revoke DID document: %w", err)
+	}
+
+	query := `UPDATE did_documents SET revoked_at = ?, updated_at = ? WHERE did = ?`
+
+	now := time.Now()
+	result, err := ls.db.ExecContext(ctx, query, now, now, did)
+	if err != nil {
+		return fmt.Errorf("failed to revoke DID document: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("DID document not found: %s", did)
+	}
+
+	return nil
+}
+
+// ListDIDDocuments lists all DID documents.
+func (ls *LocalStorage) ListDIDDocuments(ctx context.Context) ([]*types.DIDDocumentRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during list DID documents: %w", err)
+	}
+
+	query := `
+		SELECT did, agent_id, did_document, public_key_jwk, revoked_at, created_at, updated_at
+		FROM did_documents ORDER BY created_at DESC`
+
+	rows, err := ls.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list DID documents: %w", err)
+	}
+	defer rows.Close()
+
+	var records []*types.DIDDocumentRecord
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during scan: %w", err)
+		}
+
+		record := &types.DIDDocumentRecord{}
+		var revokedAt sql.NullTime
+
+		err := rows.Scan(
+			&record.DID, &record.AgentID, &record.DIDDocument, &record.PublicKeyJWK,
+			&revokedAt, &record.CreatedAt, &record.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan DID document: %w", err)
+		}
+
+		if revokedAt.Valid {
+			record.RevokedAt = &revokedAt.Time
+		}
+
+		records = append(records, record)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating DID documents: %w", err)
+	}
+
+	return records, nil
+}
+
+// ListAgentsByLifecycleStatus lists agents filtered by lifecycle status.
+func (ls *LocalStorage) ListAgentsByLifecycleStatus(ctx context.Context, status types.AgentLifecycleStatus) ([]*types.AgentNode, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during list agents by lifecycle status: %w", err)
+	}
+
+	query := `
+		SELECT
+			id, version, group_id, team_id, base_url, traffic_weight, deployment_type, invocation_url, reasoners, skills,
+			communication_config, health_status, lifecycle_status, last_heartbeat,
+			registered_at, features, metadata, proposed_tags, approved_tags, COALESCE(instance_id, '')
+		FROM agent_nodes WHERE lifecycle_status = ? ORDER BY registered_at DESC`
+
+	rows, err := ls.db.QueryContext(ctx, query, string(status))
+	if err != nil {
+		return nil, fmt.Errorf("failed to list agents by lifecycle status: %w", err)
+	}
+	defer rows.Close()
+
+	return ls.scanAgentNodes(ctx, rows)
+}
+
+// reconstructAgentLevelTags ensures agent-level ProposedTags and ApprovedTags
+// are populated. If the dedicated DB columns were empty (e.g., on older records),
+// it reconstructs them from per-reasoner/per-skill fields as a fallback.
+func reconstructAgentLevelTags(agent *types.AgentNode) {
+	// Only reconstruct if DB columns were empty
+	if len(agent.ApprovedTags) == 0 {
+		seen := make(map[string]struct{})
+		for _, r := range agent.Reasoners {
+			for _, t := range r.ApprovedTags {
+				if _, exists := seen[t]; !exists {
+					seen[t] = struct{}{}
+					agent.ApprovedTags = append(agent.ApprovedTags, t)
+				}
+			}
+		}
+		for _, sk := range agent.Skills {
+			for _, t := range sk.ApprovedTags {
+				if _, exists := seen[t]; !exists {
+					seen[t] = struct{}{}
+					agent.ApprovedTags = append(agent.ApprovedTags, t)
+				}
+			}
+		}
+		types.HydrateAgentSessions(agent)
+		for _, session := range agent.Sessions {
+			for _, t := range session.ApprovedTags {
+				if _, exists := seen[t]; !exists {
+					seen[t] = struct{}{}
+					agent.ApprovedTags = append(agent.ApprovedTags, t)
+				}
+			}
+		}
+	}
+
+	if len(agent.ProposedTags) == 0 {
+		proposedSeen := make(map[string]struct{})
+		for _, r := range agent.Reasoners {
+			source := r.ProposedTags
+			if len(source) == 0 {
+				source = r.Tags
+			}
+			for _, t := range source {
+				if _, exists := proposedSeen[t]; !exists {
+					proposedSeen[t] = struct{}{}
+					agent.ProposedTags = append(agent.ProposedTags, t)
+				}
+			}
+		}
+		for _, sk := range agent.Skills {
+			source := sk.ProposedTags
+			if len(source) == 0 {
+				source = sk.Tags
+			}
+			for _, t := range source {
+				if _, exists := proposedSeen[t]; !exists {
+					proposedSeen[t] = struct{}{}
+					agent.ProposedTags = append(agent.ProposedTags, t)
+				}
+			}
+		}
+		types.HydrateAgentSessions(agent)
+		for _, session := range agent.Sessions {
+			source := session.ProposedTags
+			if len(source) == 0 {
+				source = session.Tags
+			}
+			for _, t := range source {
+				if _, exists := proposedSeen[t]; !exists {
+					proposedSeen[t] = struct{}{}
+					agent.ProposedTags = append(agent.ProposedTags, t)
+				}
+			}
+		}
+	}
+}
+
+// ============================================================================
+// Access Policy Storage
+// ============================================================================
+
+// GetAccessPolicies retrieves all enabled access policies, sorted by priority descending.
+func (ls *LocalStorage) GetAccessPolicies(ctx context.Context) ([]*types.AccessPolicy, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during get access policies: %w", err)
+	}
+
+	query := `
+		SELECT id, name, caller_tags, target_tags, allow_functions, deny_functions,
+		       constraints, action, priority, enabled, description, created_at, updated_at
+		FROM access_policies WHERE enabled = true ORDER BY priority DESC, created_at DESC`
+
+	rows, err := ls.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get access policies: %w", err)
+	}
+	defer rows.Close()
+
+	var policies []*types.AccessPolicy
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during scan: %w", err)
+		}
+
+		policy, err := scanAccessPolicy(rows)
+		if err != nil {
+			return nil, err
+		}
+		policies = append(policies, policy)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating access policies: %w", err)
+	}
+
+	return policies, nil
+}
+
+// GetAccessPolicyByID retrieves a single access policy by its ID.
+func (ls *LocalStorage) GetAccessPolicyByID(ctx context.Context, id int64) (*types.AccessPolicy, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during get access policy: %w", err)
+	}
+
+	query := `
+		SELECT id, name, caller_tags, target_tags, allow_functions, deny_functions,
+		       constraints, action, priority, enabled, description, created_at, updated_at
+		FROM access_policies WHERE id = ?`
+
+	row := ls.db.QueryRowContext(ctx, query, id)
+
+	policy := &types.AccessPolicy{}
+	var callerTagsJSON, targetTagsJSON, allowFuncsJSON, denyFuncsJSON, constraintsJSON string
+	var description sql.NullString
+
+	err := row.Scan(
+		&policy.ID, &policy.Name, &callerTagsJSON, &targetTagsJSON,
+		&allowFuncsJSON, &denyFuncsJSON, &constraintsJSON,
+		&policy.Action, &policy.Priority, &policy.Enabled, &description,
+		&policy.CreatedAt, &policy.UpdatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("access policy with ID %d not found: %w", id, err)
+	}
+
+	if description.Valid {
+		policy.Description = &description.String
+	}
+	if err := unmarshalAccessPolicyJSON(policy, callerTagsJSON, targetTagsJSON, allowFuncsJSON, denyFuncsJSON, constraintsJSON); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal access policy %d: %w", id, err)
+	}
+
+	return policy, nil
+}
+
+// CreateAccessPolicy creates a new access policy.
+func (ls *LocalStorage) CreateAccessPolicy(ctx context.Context, policy *types.AccessPolicy) error {
+	if ls.mode == "postgres" {
+		return ls.createAccessPolicyPostgres(ctx, policy)
+	}
+
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during create access policy: %w", err)
+	}
+
+	callerTagsJSON, targetTagsJSON, allowFuncsJSON, denyFuncsJSON, constraintsJSON, err := marshalAccessPolicyJSON(policy)
+	if err != nil {
+		return fmt.Errorf("failed to marshal access policy fields: %w", err)
+	}
+
+	query := `
+		INSERT INTO access_policies (
+			name, caller_tags, target_tags, allow_functions, deny_functions,
+			constraints, action, priority, enabled, description, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	result, err := ls.db.ExecContext(ctx, query,
+		policy.Name, callerTagsJSON, targetTagsJSON,
+		allowFuncsJSON, denyFuncsJSON, constraintsJSON,
+		policy.Action, policy.Priority, policy.Enabled, policy.Description,
+		policy.CreatedAt, policy.UpdatedAt,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint") {
+			return fmt.Errorf("access policy with name %q already exists", policy.Name)
+		}
+		return fmt.Errorf("failed to create access policy: %w", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err == nil {
+		policy.ID = id
+	}
+
+	return nil
+}
+
+// createAccessPolicyPostgres creates an access policy using PostgreSQL's RETURNING clause.
+func (ls *LocalStorage) createAccessPolicyPostgres(ctx context.Context, policy *types.AccessPolicy) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during create access policy: %w", err)
+	}
+
+	callerTagsJSON, targetTagsJSON, allowFuncsJSON, denyFuncsJSON, constraintsJSON, err := marshalAccessPolicyJSON(policy)
+	if err != nil {
+		return fmt.Errorf("failed to marshal access policy fields: %w", err)
+	}
+
+	query := `
+		INSERT INTO access_policies (
+			name, caller_tags, target_tags, allow_functions, deny_functions,
+			constraints, action, priority, enabled, description, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		RETURNING id`
+
+	row := ls.db.DB.QueryRowContext(ctx, query,
+		policy.Name, callerTagsJSON, targetTagsJSON,
+		allowFuncsJSON, denyFuncsJSON, constraintsJSON,
+		policy.Action, policy.Priority, policy.Enabled, policy.Description,
+		policy.CreatedAt, policy.UpdatedAt,
+	)
+
+	if err := row.Scan(&policy.ID); err != nil {
+		if strings.Contains(err.Error(), "duplicate key") {
+			return fmt.Errorf("access policy with name %q already exists", policy.Name)
+		}
+		return fmt.Errorf("failed to create access policy: %w", err)
+	}
+
+	return nil
+}
+
+// UpdateAccessPolicy updates an existing access policy.
+func (ls *LocalStorage) UpdateAccessPolicy(ctx context.Context, policy *types.AccessPolicy) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during update access policy: %w", err)
+	}
+
+	callerTagsJSON, targetTagsJSON, allowFuncsJSON, denyFuncsJSON, constraintsJSON, err := marshalAccessPolicyJSON(policy)
+	if err != nil {
+		return fmt.Errorf("failed to marshal access policy fields: %w", err)
+	}
+
+	query := `
+		UPDATE access_policies SET
+			name = ?, caller_tags = ?, target_tags = ?, allow_functions = ?,
+			deny_functions = ?, constraints = ?, action = ?, priority = ?,
+			enabled = ?, description = ?, updated_at = ?
+		WHERE id = ?`
+
+	result, err := ls.db.ExecContext(ctx, query,
+		policy.Name, callerTagsJSON, targetTagsJSON,
+		allowFuncsJSON, denyFuncsJSON, constraintsJSON,
+		policy.Action, policy.Priority, policy.Enabled, policy.Description,
+		policy.UpdatedAt, policy.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update access policy: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("access policy with ID %d not found", policy.ID)
+	}
+
+	return nil
+}
+
+// DeleteAccessPolicy deletes an access policy by ID.
+func (ls *LocalStorage) DeleteAccessPolicy(ctx context.Context, id int64) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during delete access policy: %w", err)
+	}
+
+	query := `DELETE FROM access_policies WHERE id = ?`
+
+	result, err := ls.db.ExecContext(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete access policy: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("access policy with ID %d not found", id)
+	}
+
+	return nil
+}
+
+// scanAccessPolicy scans a row into an AccessPolicy struct.
+func scanAccessPolicy(rows *sql.Rows) (*types.AccessPolicy, error) {
+	policy := &types.AccessPolicy{}
+	var callerTagsJSON, targetTagsJSON, allowFuncsJSON, denyFuncsJSON, constraintsJSON string
+	var description sql.NullString
+
+	err := rows.Scan(
+		&policy.ID, &policy.Name, &callerTagsJSON, &targetTagsJSON,
+		&allowFuncsJSON, &denyFuncsJSON, &constraintsJSON,
+		&policy.Action, &policy.Priority, &policy.Enabled, &description,
+		&policy.CreatedAt, &policy.UpdatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan access policy: %w", err)
+	}
+
+	if description.Valid {
+		policy.Description = &description.String
+	}
+	if err := unmarshalAccessPolicyJSON(policy, callerTagsJSON, targetTagsJSON, allowFuncsJSON, denyFuncsJSON, constraintsJSON); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal access policy %d: %w", policy.ID, err)
+	}
+
+	return policy, nil
+}
+
+// unmarshalAccessPolicyJSON populates the JSON fields of an AccessPolicy.
+// Returns an error if any JSON field cannot be deserialized, preventing
+// corrupted data from silently producing empty policy rules.
+func unmarshalAccessPolicyJSON(policy *types.AccessPolicy, callerTags, targetTags, allowFuncs, denyFuncs, constraints string) error {
+	if callerTags != "" {
+		if err := json.Unmarshal([]byte(callerTags), &policy.CallerTags); err != nil {
+			return fmt.Errorf("failed to unmarshal caller_tags: %w", err)
+		}
+	}
+	if targetTags != "" {
+		if err := json.Unmarshal([]byte(targetTags), &policy.TargetTags); err != nil {
+			return fmt.Errorf("failed to unmarshal target_tags: %w", err)
+		}
+	}
+	if allowFuncs != "" {
+		if err := json.Unmarshal([]byte(allowFuncs), &policy.AllowFunctions); err != nil {
+			return fmt.Errorf("failed to unmarshal allow_functions: %w", err)
+		}
+	}
+	if denyFuncs != "" {
+		if err := json.Unmarshal([]byte(denyFuncs), &policy.DenyFunctions); err != nil {
+			return fmt.Errorf("failed to unmarshal deny_functions: %w", err)
+		}
+	}
+	if constraints != "" {
+		if err := json.Unmarshal([]byte(constraints), &policy.Constraints); err != nil {
+			return fmt.Errorf("failed to unmarshal constraints: %w", err)
+		}
+	}
+	return nil
+}
+
+// marshalAccessPolicyJSON serializes the JSON fields of an AccessPolicy for storage.
+func marshalAccessPolicyJSON(policy *types.AccessPolicy) (callerTags, targetTags, allowFuncs, denyFuncs, constraints string, err error) {
+	ct, err := json.Marshal(policy.CallerTags)
+	if err != nil {
+		return "", "", "", "", "", fmt.Errorf("caller_tags: %w", err)
+	}
+	tt, err := json.Marshal(policy.TargetTags)
+	if err != nil {
+		return "", "", "", "", "", fmt.Errorf("target_tags: %w", err)
+	}
+	af, err := json.Marshal(policy.AllowFunctions)
+	if err != nil {
+		return "", "", "", "", "", fmt.Errorf("allow_functions: %w", err)
+	}
+	df, err := json.Marshal(policy.DenyFunctions)
+	if err != nil {
+		return "", "", "", "", "", fmt.Errorf("deny_functions: %w", err)
+	}
+	cn, err := json.Marshal(policy.Constraints)
+	if err != nil {
+		return "", "", "", "", "", fmt.Errorf("constraints: %w", err)
+	}
+	return string(ct), string(tt), string(af), string(df), string(cn), nil
+}
+
+// ========== Agent Tag VC operations ==========
+
+// StoreAgentTagVC stores or replaces an agent's tag VC.
+func (ls *LocalStorage) StoreAgentTagVC(ctx context.Context, agentID, agentDID, vcID, vcDocument, signature string, issuedAt time.Time, expiresAt *time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during store agent tag VC: %w", err)
+	}
+
+	query := `
+		INSERT INTO agent_tag_vcs (agent_id, agent_did, vc_id, vc_document, signature, issued_at, expires_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(agent_id) DO UPDATE SET
+			agent_did = excluded.agent_did,
+			vc_id = excluded.vc_id,
+			vc_document = excluded.vc_document,
+			signature = excluded.signature,
+			issued_at = excluded.issued_at,
+			expires_at = excluded.expires_at,
+			revoked_at = NULL,
+			updated_at = excluded.updated_at`
+
+	now := time.Now()
+	_, err := ls.db.ExecContext(ctx, query, agentID, agentDID, vcID, vcDocument, signature, issuedAt, expiresAt, now, now)
+	if err != nil {
+		return fmt.Errorf("failed to store agent tag VC: %w", err)
+	}
+	return nil
+}
+
+// GetAgentTagVC retrieves an agent's tag VC record.
+func (ls *LocalStorage) GetAgentTagVC(ctx context.Context, agentID string) (*types.AgentTagVCRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during get agent tag VC: %w", err)
+	}
+
+	query := `
+		SELECT id, agent_id, agent_did, vc_id, vc_document, signature, issued_at, expires_at, revoked_at
+		FROM agent_tag_vcs WHERE agent_id = ?`
+
+	row := ls.db.QueryRowContext(ctx, query, agentID)
+
+	record := &types.AgentTagVCRecord{}
+	var expiresAt, revokedAt sql.NullTime
+	var signature sql.NullString
+
+	err := row.Scan(
+		&record.ID, &record.AgentID, &record.AgentDID, &record.VCID,
+		&record.VCDocument, &signature, &record.IssuedAt, &expiresAt, &revokedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("agent tag VC not found for agent %s", agentID)
+		}
+		return nil, fmt.Errorf("failed to get agent tag VC: %w", err)
+	}
+
+	if signature.Valid {
+		record.Signature = signature.String
+	}
+	if expiresAt.Valid {
+		record.ExpiresAt = &expiresAt.Time
+	}
+	if revokedAt.Valid {
+		record.RevokedAt = &revokedAt.Time
+	}
+
+	return record, nil
+}
+
+// ListAgentTagVCs returns all non-revoked agent tag VCs.
+func (ls *LocalStorage) ListAgentTagVCs(ctx context.Context) ([]*types.AgentTagVCRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during list agent tag VCs: %w", err)
+	}
+
+	query := `
+		SELECT id, agent_id, agent_did, vc_id, vc_document, signature, issued_at, expires_at, revoked_at
+		FROM agent_tag_vcs WHERE revoked_at IS NULL`
+
+	rows, err := ls.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list agent tag VCs: %w", err)
+	}
+	defer rows.Close()
+
+	var records []*types.AgentTagVCRecord
+	for rows.Next() {
+		record := &types.AgentTagVCRecord{}
+		var expiresAt, revokedAt sql.NullTime
+		var signature sql.NullString
+
+		if err := rows.Scan(
+			&record.ID, &record.AgentID, &record.AgentDID, &record.VCID,
+			&record.VCDocument, &signature, &record.IssuedAt, &expiresAt, &revokedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan agent tag VC: %w", err)
+		}
+
+		if signature.Valid {
+			record.Signature = signature.String
+		}
+		if expiresAt.Valid {
+			record.ExpiresAt = &expiresAt.Time
+		}
+		if revokedAt.Valid {
+			record.RevokedAt = &revokedAt.Time
+		}
+		records = append(records, record)
+	}
+
+	return records, rows.Err()
+}
+
+// RevokeAgentTagVC marks an agent's tag VC as revoked.
+func (ls *LocalStorage) RevokeAgentTagVC(ctx context.Context, agentID string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during revoke agent tag VC: %w", err)
+	}
+
+	query := `UPDATE agent_tag_vcs SET revoked_at = ?, updated_at = ? WHERE agent_id = ? AND revoked_at IS NULL`
+
+	now := time.Now()
+	result, err := ls.db.ExecContext(ctx, query, now, now, agentID)
+	if err != nil {
+		return fmt.Errorf("failed to revoke agent tag VC: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("no active agent tag VC found for agent %s", agentID)
+	}
+
+	return nil
 }

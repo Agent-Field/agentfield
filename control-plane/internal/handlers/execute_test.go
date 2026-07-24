@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/events"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
@@ -50,6 +51,11 @@ func (m *MockStorageProvider) MarkStaleExecutions(ctx context.Context, staleAfte
 	return args.Int(0), args.Error(1)
 }
 
+func (m *MockStorageProvider) MarkStaleWorkflowExecutions(ctx context.Context, staleAfter time.Duration, limit int) (int, error) {
+	args := m.Called(ctx, staleAfter, limit)
+	return args.Int(0), args.Error(1)
+}
+
 // Add other required methods as no-ops for the interface
 func (m *MockStorageProvider) Initialize(ctx context.Context, config interface{}) error { return nil }
 func (m *MockStorageProvider) Close(ctx context.Context) error                          { return nil }
@@ -80,6 +86,30 @@ func (m *MockStorageProvider) StoreWorkflowExecutionEvent(ctx context.Context, e
 }
 func (m *MockStorageProvider) ListWorkflowExecutionEvents(ctx context.Context, executionID string, afterSeq *int64, limit int) ([]*types.WorkflowExecutionEvent, error) {
 	return nil, nil
+}
+func (m *MockStorageProvider) StoreExecutionLogEntry(ctx context.Context, entry *types.ExecutionLogEntry) error {
+	return nil
+}
+func (m *MockStorageProvider) ListExecutionLogEntries(ctx context.Context, executionID string, afterSeq *int64, limit int, levels []string, nodeIDs []string, sources []string, query string) ([]*types.ExecutionLogEntry, error) {
+	return nil, nil
+}
+func (m *MockStorageProvider) CreateExecutionUsage(ctx context.Context, rows []*types.ExecutionUsage) error {
+	return nil
+}
+func (m *MockStorageProvider) GetUsageStats(ctx context.Context, since *time.Time) (*types.UsageStatsAggregation, error) {
+	return &types.UsageStatsAggregation{}, nil
+}
+func (m *MockStorageProvider) GetUsageTimeseries(ctx context.Context, since *time.Time, now time.Time, buckets int) (*types.UsageTimeseries, error) {
+	return &types.UsageTimeseries{}, nil
+}
+func (m *MockStorageProvider) GetUsageTimeseriesByModel(ctx context.Context, since *time.Time, now time.Time, buckets int) ([]types.UsageModelSeries, error) {
+	return nil, nil
+}
+func (m *MockStorageProvider) GetExecutionUsageTotals(ctx context.Context, executionID string) (*float64, int64, error) {
+	return nil, 0, nil
+}
+func (m *MockStorageProvider) PruneExecutionLogEntries(ctx context.Context, executionID string, maxEntries int, olderThan time.Time) error {
+	return nil
 }
 func (m *MockStorageProvider) StoreWorkflowRunEvent(ctx context.Context, event *types.WorkflowRunEvent) error {
 	return nil
@@ -113,6 +143,18 @@ func (m *MockStorageProvider) QueryWorkflows(ctx context.Context, filters types.
 }
 func (m *MockStorageProvider) CreateOrUpdateSession(ctx context.Context, session *types.Session) error {
 	return nil
+}
+func (m *MockStorageProvider) GetExecutionEventBus() *events.ExecutionEventBus {
+	return events.NewExecutionEventBus()
+}
+func (m *MockStorageProvider) GetWorkflowExecutionEventBus() *events.EventBus[*types.WorkflowExecutionEvent] {
+	return events.NewEventBus[*types.WorkflowExecutionEvent]()
+}
+func (m *MockStorageProvider) GetExecutionLogEventBus() *events.EventBus[*types.ExecutionLogEntry] {
+	return events.NewEventBus[*types.ExecutionLogEntry]()
+}
+func (m *MockStorageProvider) GetWorkflowRunEventBus() *events.EventBus[*types.WorkflowRunEvent] {
+	return events.NewEventBus[*types.WorkflowRunEvent]()
 }
 func (m *MockStorageProvider) GetSession(ctx context.Context, sessionID string) (*types.Session, error) {
 	return nil, nil
@@ -149,6 +191,12 @@ func (m *MockStorageProvider) GetLockStatus(ctx context.Context, key string) (*t
 func (m *MockStorageProvider) RegisterAgent(ctx context.Context, agent *types.AgentNode) error {
 	return nil
 }
+func (m *MockStorageProvider) GetAgentVersion(ctx context.Context, id string, version string) (*types.AgentNode, error) {
+	return nil, nil
+}
+func (m *MockStorageProvider) ListAgentVersions(ctx context.Context, id string) ([]*types.AgentNode, error) {
+	return nil, nil
+}
 func (m *MockStorageProvider) ListAgents(ctx context.Context, filters types.AgentFilters) ([]*types.AgentNode, error) {
 	return nil, nil
 }
@@ -158,7 +206,7 @@ func (m *MockStorageProvider) UpdateAgentHealth(ctx context.Context, id string, 
 func (m *MockStorageProvider) UpdateAgentHealthAtomic(ctx context.Context, id string, status types.HealthStatus, expectedLastHeartbeat *time.Time) error {
 	return nil
 }
-func (m *MockStorageProvider) UpdateAgentHeartbeat(ctx context.Context, id string, heartbeatTime time.Time) error {
+func (m *MockStorageProvider) UpdateAgentHeartbeat(ctx context.Context, id string, version string, heartbeatTime time.Time) error {
 	return nil
 }
 func (m *MockStorageProvider) UpdateAgentLifecycleStatus(ctx context.Context, id string, status types.AgentLifecycleStatus) error {
@@ -258,6 +306,9 @@ func (m *MockStorageProvider) StoreAgentDIDWithComponents(ctx context.Context, a
 func (m *MockStorageProvider) StoreExecutionVC(ctx context.Context, vcID, executionID, workflowID, sessionID, issuerDID, targetDID, callerDID, inputHash, outputHash, status string, vcDocument []byte, signature string, storageURI string, documentSizeBytes int64) error {
 	return nil
 }
+func (m *MockStorageProvider) StoreExecutionVCRecord(ctx context.Context, vc *types.ExecutionVC) error {
+	return nil
+}
 func (m *MockStorageProvider) GetExecutionVC(ctx context.Context, vcID string) (*types.ExecutionVCInfo, error) {
 	return nil, nil
 }
@@ -340,7 +391,7 @@ func TestBatchExecutionStatusHandler(t *testing.T) {
 		{
 			name: "too many execution IDs",
 			requestBody: BatchStatusRequest{
-				ExecutionIDs: make([]string, 51), // Exceeds max batch size of 50
+				ExecutionIDs: make([]string, 501), // Exceeds max batch size of 500
 			},
 			setupMocks:     func(mockStorage *MockStorageProvider) {},
 			expectedStatus: http.StatusBadRequest,

@@ -49,8 +49,8 @@ func TestStopCommand(t *testing.T) {
 		errorMsg := err.Error()
 		require.True(t,
 			strings.Contains(strings.ToLower(errorMsg), "not installed") ||
-			strings.Contains(strings.ToLower(errorMsg), "not running") ||
-			strings.Contains(strings.ToLower(errorMsg), "not found"),
+				strings.Contains(strings.ToLower(errorMsg), "not running") ||
+				strings.Contains(strings.ToLower(errorMsg), "not found"),
 			"Expected error about agent not found/installed/running, got: %s", errorMsg)
 	}
 }
@@ -69,42 +69,6 @@ func TestConfigCommand(t *testing.T) {
 	err := cmd.Execute()
 	// May error if no config, but validates command structure
 	_ = err
-}
-
-// TestAddCommand tests the add command
-func TestAddCommand(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	resetCLIStateForTest()
-
-	cmd := NewAddCommand()
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
-
-	// Test missing argument
-	cmd.SetArgs([]string{})
-	err := cmd.Execute()
-	require.Error(t, err)
-
-	// Test with argument
-	cmd.SetArgs([]string{"test-package"})
-	err = cmd.Execute()
-	// May error if package doesn't exist, but validates command structure
-	_ = err
-}
-
-// TestMCPCommand tests the MCP command
-func TestMCPCommand(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	resetCLIStateForTest()
-
-	cmd := NewMCPCommand()
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
-	cmd.SetArgs([]string{})
-
-	// Should display help
-	err := cmd.Execute()
-	require.NoError(t, err)
 }
 
 // TestVCCommand tests the VC command
@@ -184,17 +148,23 @@ func TestLogsCommand(t *testing.T) {
 
 // TestInitCommand tests the init command
 func TestInitCommand(t *testing.T) {
+	wd := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
+	oldWD, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(wd))
+	t.Cleanup(func() {
+		_ = os.Chdir(oldWD)
+	})
 	resetCLIStateForTest()
 
 	cmd := NewInitCommand()
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
-	cmd.SetArgs([]string{})
+	cmd.SetArgs([]string{"demo-agent", "--non-interactive", "--language", "python", "--author", "Jane Doe", "--email", "jane@example.com"})
 
-	err := cmd.Execute()
-	// May error if already initialized, but validates command structure
-	_ = err
+	err = cmd.Execute()
+	require.NoError(t, err)
 }
 
 // TestRootCommandFlags tests various root command flags

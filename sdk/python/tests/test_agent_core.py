@@ -23,7 +23,11 @@ def make_agent_stub():
     )
     agent._async_execution_manager = None
     agent._current_execution_context = None
-    agent.client = SimpleNamespace(api_base="http://agentfield/api/v1")
+    agent.client = SimpleNamespace(
+        api_base="http://agentfield/api/v1",
+        _get_auth_headers=lambda: {},
+    )
+    agent._background_tasks = set()
     return agent
 
 
@@ -71,11 +75,31 @@ async def test_cleanup_async_resources(monkeypatch):
         async def stop(self):
             self.stopped = True
 
+    class DummyNotificationDispatcher:
+        def __init__(self):
+            self.stopped = False
+
+        async def shutdown(self):
+            self.stopped = True
+
+    async def dummy_async_task(sleep_delay: int):
+        await asyncio.sleep(sleep_delay)
+
     manager = DummyManager()
+    notification_dispatcher = DummyNotificationDispatcher()
     agent._async_execution_manager = manager
+    agent._notification_dispatcher = notification_dispatcher
+
+    for i in range(1, 6):
+        task = asyncio.create_task(dummy_async_task(i))
+        agent._background_tasks.add(task)
+        task.add_done_callback(agent._background_tasks.discard)
+
     await agent._cleanup_async_resources()
     assert manager.stopped is True
     assert agent._async_execution_manager is None
+    assert len(agent._background_tasks) == 0
+    assert notification_dispatcher.stopped is True
 
 
 @pytest.mark.asyncio
@@ -142,6 +166,6 @@ async def test_note_sends_async_request(monkeypatch):
     agent.note("hello", tags=["debug"])
     await asyncio.gather(*tasks)
 
-    assert called["url"].startswith("http://agentfield/api/ui/v1")
+    assert called["url"].startswith("http://agentfield/api/v1")
     assert called["json"]["message"] == "hello"
     assert called["json"]["tags"] == ["debug"]

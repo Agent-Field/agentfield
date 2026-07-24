@@ -2,6 +2,8 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -25,26 +27,57 @@ func NewWorkflowRunHandler(storage storage.StorageProvider) *WorkflowRunHandler 
 }
 
 type WorkflowRunSummary struct {
-	WorkflowID       string         `json:"workflow_id"`
-	RunID            string         `json:"run_id"`
-	RootExecutionID  string         `json:"root_execution_id"`
-	Status           string         `json:"status"`
-	DisplayName      string         `json:"display_name"`
-	CurrentTask      string         `json:"current_task"`
-	RootReasoner     string         `json:"root_reasoner"`
-	AgentID          *string        `json:"agent_id,omitempty"`
-	SessionID        *string        `json:"session_id,omitempty"`
-	ActorID          *string        `json:"actor_id,omitempty"`
-	TotalExecutions  int            `json:"total_executions"`
-	MaxDepth         int            `json:"max_depth"`
-	ActiveExecutions int            `json:"active_executions"`
-	StatusCounts     map[string]int `json:"status_counts"`
-	StartedAt        time.Time      `json:"started_at"`
-	UpdatedAt        time.Time      `json:"updated_at"`
-	CompletedAt      *time.Time     `json:"completed_at,omitempty"`
-	DurationMs       *int64         `json:"duration_ms,omitempty"`
-	LatestActivity   time.Time      `json:"latest_activity"`
-	Terminal         bool           `json:"terminal"`
+	WorkflowID      string `json:"workflow_id"`
+	RunID           string `json:"run_id"`
+	RootExecutionID string `json:"root_execution_id"`
+	// RootExecutionStatus is the status of the root execution row, which is
+	// the unit the user actually controls via Pause/Resume/Cancel. The
+	// aggregate Status field above can drift from this when in-flight
+	// children are still running after the user pauses or cancels the
+	// root — see execute.go's dispatch-time guard for the full story.
+	RootExecutionStatus string         `json:"root_execution_status,omitempty"`
+	RootErrorCategory   string         `json:"root_error_category,omitempty"`
+	RootErrorMessage    string         `json:"root_error_message,omitempty"`
+	Status              string         `json:"status"`
+	DisplayName         string         `json:"display_name"`
+	CurrentTask         string         `json:"current_task"`
+	RootReasoner        string         `json:"root_reasoner"`
+	AgentID             *string        `json:"agent_id,omitempty"`
+	SessionID           *string        `json:"session_id,omitempty"`
+	ActorID             *string        `json:"actor_id,omitempty"`
+	TotalExecutions     int            `json:"total_executions"`
+	MaxDepth            int            `json:"max_depth"`
+	ActiveExecutions    int            `json:"active_executions"`
+	StatusCounts        map[string]int `json:"status_counts"`
+	StartedAt           time.Time      `json:"started_at"`
+	UpdatedAt           time.Time      `json:"updated_at"`
+	CompletedAt         *time.Time     `json:"completed_at,omitempty"`
+	DurationMs          *int64         `json:"duration_ms,omitempty"`
+	LatestActivity      time.Time      `json:"latest_activity"`
+	Terminal            bool           `json:"terminal"`
+	// Trigger describes the inbound webhook (or schedule) that originated
+	// this run, when one exists. Populated by walking the root execution's
+	// VC chain back to the parent trigger_event VC. Nil for runs invoked
+	// directly or by another reasoner.
+	Trigger *types.TriggerEventMetadata `json:"trigger,omitempty"`
+	Lineage *RunLineageMetadata         `json:"lineage,omitempty"`
+	Golden  *GoldenRunMetadata          `json:"golden,omitempty"`
+}
+
+type RunLineageMetadata struct {
+	Kind                 string `json:"kind,omitempty"`
+	SourceRunID          string `json:"source_run_id,omitempty"`
+	SourceExecutionID    string `json:"source_execution_id,omitempty"`
+	RestartedExecutionID string `json:"restarted_execution_id,omitempty"`
+	Reuse                string `json:"reuse,omitempty"`
+	Scope                string `json:"scope,omitempty"`
+}
+
+type GoldenRunMetadata struct {
+	Name    string   `json:"name,omitempty"`
+	Tags    []string `json:"tags,omitempty"`
+	SavedBy string   `json:"saved_by,omitempty"`
+	SavedAt string   `json:"saved_at,omitempty"`
 }
 
 type WorkflowRunListResponse struct {
@@ -57,20 +90,36 @@ type WorkflowRunListResponse struct {
 
 type WorkflowRunDetailResponse struct {
 	Run struct {
-		RunID           string         `json:"run_id"`
-		RootWorkflowID  string         `json:"root_workflow_id"`
-		RootExecutionID string         `json:"root_execution_id,omitempty"`
-		Status          string         `json:"status"`
-		TotalSteps      int            `json:"total_steps"`
-		CompletedSteps  int            `json:"completed_steps"`
-		FailedSteps     int            `json:"failed_steps"`
-		ReturnedSteps   int            `json:"returned_steps"`
-		StatusCounts    map[string]int `json:"status_counts,omitempty"`
-		CreatedAt       string         `json:"created_at"`
-		UpdatedAt       string         `json:"updated_at"`
-		CompletedAt     *string        `json:"completed_at,omitempty"`
+		RunID           string              `json:"run_id"`
+		RootWorkflowID  string              `json:"root_workflow_id"`
+		RootExecutionID string              `json:"root_execution_id,omitempty"`
+		Status          string              `json:"status"`
+		TotalSteps      int                 `json:"total_steps"`
+		CompletedSteps  int                 `json:"completed_steps"`
+		FailedSteps     int                 `json:"failed_steps"`
+		ReturnedSteps   int                 `json:"returned_steps"`
+		StatusCounts    map[string]int      `json:"status_counts,omitempty"`
+		CreatedAt       string              `json:"created_at"`
+		UpdatedAt       string              `json:"updated_at"`
+		CompletedAt     *string             `json:"completed_at,omitempty"`
+		Lineage         *RunLineageMetadata `json:"lineage,omitempty"`
+		Golden          *GoldenRunMetadata  `json:"golden,omitempty"`
 	} `json:"run"`
 	Executions []apiWorkflowExecution `json:"executions"`
+}
+
+type workflowRunMetadataReader interface {
+	GetWorkflowRun(ctx context.Context, runID string) (*types.WorkflowRun, error)
+}
+
+type workflowRunMetadataWriter interface {
+	StoreWorkflowRun(ctx context.Context, run *types.WorkflowRun) error
+	GetWorkflowRun(ctx context.Context, runID string) (*types.WorkflowRun, error)
+}
+
+type saveGoldenRunRequest struct {
+	Name string   `json:"name,omitempty"`
+	Tags []string `json:"tags,omitempty"`
 }
 
 type apiWorkflowExecution struct {
@@ -81,12 +130,17 @@ type apiWorkflowExecution struct {
 	AgentNodeID       string  `json:"agent_node_id"`
 	ReasonerID        string  `json:"reasoner_id"`
 	Status            string  `json:"status"`
+	StatusReason      *string `json:"status_reason,omitempty"`
 	StartedAt         string  `json:"started_at"`
 	CompletedAt       *string `json:"completed_at,omitempty"`
 	WorkflowDepth     int     `json:"workflow_depth"`
 	ActiveChildren    int     `json:"active_children"`
 	PendingChildren   int     `json:"pending_children"`
 	LastUpdatedAt     *string `json:"last_updated_at,omitempty"`
+	// Approval fields (populated when execution has an approval request)
+	ApprovalRequestID  *string `json:"approval_request_id,omitempty"`
+	ApprovalRequestURL *string `json:"approval_request_url,omitempty"`
+	ApprovalStatus     *string `json:"approval_status,omitempty"`
 }
 
 func (h *WorkflowRunHandler) ListWorkflowRunsHandler(c *gin.Context) {
@@ -121,6 +175,9 @@ func (h *WorkflowRunHandler) ListWorkflowRunsHandler(c *gin.Context) {
 			filter.StartTime = &ts
 		}
 	}
+	if search := strings.TrimSpace(c.Query("search")); search != "" {
+		filter.Search = &search
+	}
 
 	// Use the efficient aggregation method that scales to millions of nodes
 	runAggregations, totalRuns, err := h.storage.QueryRunSummaries(ctx, filter)
@@ -133,10 +190,23 @@ func (h *WorkflowRunHandler) ListWorkflowRunsHandler(c *gin.Context) {
 		return
 	}
 
-	// Convert aggregations to API response format
+	// Convert aggregations to API response format. Best-effort trigger
+	// enrichment per row — populates summary.Trigger when the run was
+	// dispatched by a webhook/schedule. TriggerForRun tries the direct
+	// dispatcher-recorded workflow_id mapping first, then falls back to
+	// the DID/VC chain. We swallow errors so the list never fails on
+	// metadata.
 	summaries := make([]WorkflowRunSummary, 0, len(runAggregations))
 	for _, agg := range runAggregations {
-		summaries = append(summaries, convertAggregationToSummary(agg))
+		summary := convertAggregationToSummary(agg)
+		h.enrichRunMetadata(ctx, &summary)
+		summary.Trigger = handlers.TriggerForRun(
+			ctx,
+			h.storage,
+			summary.RunID,
+			summary.RootExecutionID,
+		)
+		summaries = append(summaries, summary)
 	}
 
 	totalCount := totalRuns
@@ -156,6 +226,89 @@ func (h *WorkflowRunHandler) ListWorkflowRunsHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+func (h *WorkflowRunHandler) SaveGoldenRunHandler(c *gin.Context) {
+	ctx := c.Request.Context()
+	runID := strings.TrimSpace(c.Param("run_id"))
+	if runID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "run_id is required"})
+		return
+	}
+	store, ok := h.storage.(workflowRunMetadataWriter)
+	if !ok {
+		c.JSON(http.StatusNotImplemented, gin.H{"error": "workflow run metadata is not available for this storage backend"})
+		return
+	}
+
+	var req saveGoldenRunRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid request body: %v", err)})
+		return
+	}
+
+	filter := types.ExecutionFilter{RunID: &runID, SortBy: "started_at", SortDescending: false, Limit: 10000}
+	executions, err := h.storage.QueryExecutionRecords(ctx, filter)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query run executions"})
+		return
+	}
+	if len(executions) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "workflow run not found"})
+		return
+	}
+	if deriveOverallStatusForUI(executions) != string(types.ExecutionStatusSucceeded) {
+		c.JSON(http.StatusConflict, gin.H{"error": "only succeeded runs can be saved as golden"})
+		return
+	}
+
+	now := time.Now().UTC()
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		name = runID
+	}
+	metadata := map[string]interface{}{}
+	if existing, err := store.GetWorkflowRun(ctx, runID); err == nil && existing != nil {
+		metadata = decodeWorkflowRunMetadata(existing.Metadata)
+	}
+	metadata["golden"] = GoldenRunMetadata{
+		Name:    name,
+		Tags:    sanitizeStringList(req.Tags),
+		SavedBy: "user",
+		SavedAt: now.Format(time.RFC3339),
+	}
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to encode golden metadata"})
+		return
+	}
+
+	rootExecutionID := executions[0].ExecutionID
+	for _, exec := range executions {
+		if exec.ParentExecutionID == nil || *exec.ParentExecutionID == "" {
+			rootExecutionID = exec.ExecutionID
+			break
+		}
+	}
+	run := &types.WorkflowRun{
+		RunID:           runID,
+		RootWorkflowID:  runID,
+		RootExecutionID: &rootExecutionID,
+		Status:          string(types.ExecutionStatusSucceeded),
+		TotalSteps:      len(executions),
+		CompletedSteps:  len(executions),
+		Metadata:        json.RawMessage(encoded),
+		CreatedAt:       executions[0].StartedAt,
+		UpdatedAt:       now,
+	}
+	if err := store.StoreWorkflowRun(ctx, run); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save golden run"})
+		return
+	}
+
+	summary := summarizeRun(runID, executions)
+	h.enrichRunMetadata(ctx, &summary)
+	c.JSON(http.StatusOK, summary)
+}
+
 // convertAggregationToSummary converts a storage.RunSummaryAggregation to WorkflowRunSummary
 func convertAggregationToSummary(agg *storage.RunSummaryAggregation) WorkflowRunSummary {
 	summary := WorkflowRunSummary{
@@ -170,9 +323,20 @@ func convertAggregationToSummary(agg *storage.RunSummaryAggregation) WorkflowRun
 		LatestActivity:   agg.LatestStarted,
 	}
 
-	// Set root execution ID
+	// Set root execution ID + status. The root status is what the lifecycle
+	// controls in the UI key off so they can reflect what the user actually
+	// controls, not the children-aggregated value.
 	if agg.RootExecutionID != nil {
 		summary.RootExecutionID = *agg.RootExecutionID
+	}
+	if agg.RootStatus != nil {
+		summary.RootExecutionStatus = *agg.RootStatus
+	}
+	if agg.RootErrorCategory != nil {
+		summary.RootErrorCategory = *agg.RootErrorCategory
+	}
+	if agg.RootErrorMessage != nil {
+		summary.RootErrorMessage = *agg.RootErrorMessage
 	}
 
 	// Set display name from root reasoner or run ID
@@ -200,7 +364,9 @@ func convertAggregationToSummary(agg *storage.RunSummaryAggregation) WorkflowRun
 
 	// Check if terminal
 	summary.Terminal = summary.Status == string(types.ExecutionStatusSucceeded) ||
-		summary.Status == string(types.ExecutionStatusFailed)
+		summary.Status == string(types.ExecutionStatusFailed) ||
+		summary.Status == string(types.ExecutionStatusTimeout) ||
+		summary.Status == string(types.ExecutionStatusCancelled)
 
 	// Calculate duration if completed
 	if summary.Terminal {
@@ -213,30 +379,35 @@ func convertAggregationToSummary(agg *storage.RunSummaryAggregation) WorkflowRun
 	return summary
 }
 
-// deriveStatusFromCounts determines overall workflow status from status counts
+// deriveStatusFromCounts determines overall workflow status from status counts.
+// Priority: active (running/waiting/pending/queued) > failed > timeout > cancelled > succeeded.
 func deriveStatusFromCounts(statusCounts map[string]int, activeExecutions int) string {
+	// If there are active executions (running, waiting, pending, queued), the workflow is running
+	if activeExecutions > 0 {
+		return string(types.ExecutionStatusRunning)
+	}
+
 	// If there are any failed executions, the workflow is failed
 	if statusCounts[string(types.ExecutionStatusFailed)] > 0 {
 		return string(types.ExecutionStatusFailed)
 	}
 
-	// If there are active executions, the workflow is running
-	if activeExecutions > 0 {
-		return string(types.ExecutionStatusRunning)
+	// If there are any timed-out executions, the workflow timed out
+	if statusCounts[string(types.ExecutionStatusTimeout)] > 0 {
+		return string(types.ExecutionStatusTimeout)
 	}
 
-	// If all executions succeeded, the workflow succeeded
-	totalSucceeded := statusCounts[string(types.ExecutionStatusSucceeded)]
-	totalAll := 0
-	for _, count := range statusCounts {
-		totalAll += count
+	// If there are any cancelled executions, the workflow is cancelled
+	if statusCounts[string(types.ExecutionStatusCancelled)] > 0 {
+		return string(types.ExecutionStatusCancelled)
 	}
 
-	if totalSucceeded == totalAll && totalAll > 0 {
-		return string(types.ExecutionStatusSucceeded)
+	// If there are any paused executions (and no active ones), the workflow is paused
+	if statusCounts[string(types.ExecutionStatusPaused)] > 0 {
+		return string(types.ExecutionStatusPaused)
 	}
 
-	// Default to succeeded if no active work
+	// All executions are in terminal non-error states (succeeded) or no executions exist
 	return string(types.ExecutionStatusSucceeded)
 }
 
@@ -249,10 +420,11 @@ func (h *WorkflowRunHandler) GetWorkflowRunDetailHandler(c *gin.Context) {
 	}
 
 	filter := types.ExecutionFilter{
-		RunID:          &runID,
-		SortBy:         "started_at",
-		SortDescending: false,
-		Limit:          10000,
+		RunID:           &runID,
+		SortBy:          "started_at",
+		SortDescending:  false,
+		Limit:           10000,
+		ExcludePayloads: true,
 	}
 
 	executions, err := h.storage.QueryExecutionRecords(ctx, filter)
@@ -285,6 +457,10 @@ func (h *WorkflowRunHandler) GetWorkflowRunDetailHandler(c *gin.Context) {
 		detail.Run.CompletedAt = dag.CompletedAt
 	}
 	_ = name
+	if metadata := h.loadRunMetadata(ctx, runID); metadata != nil {
+		detail.Run.Lineage = metadata.Lineage
+		detail.Run.Golden = metadata.Golden
+	}
 
 	if agg := h.loadRunSummary(ctx, runID); agg != nil {
 		detail.Run.TotalSteps = agg.TotalExecutions
@@ -314,6 +490,9 @@ func (h *WorkflowRunHandler) GetWorkflowRunDetailHandler(c *gin.Context) {
 			detail.Run.RootExecutionID = fallbackSummary.RootExecutionID
 		}
 	}
+
+	// Enrich executions in waiting status with approval data from workflow executions
+	h.enrichApprovalData(ctx, apiExecutions)
 
 	detail.Executions = apiExecutions
 
@@ -375,6 +554,7 @@ func summarizeRun(runID string, executions []*types.Execution) WorkflowRunSummar
 		normalized := types.NormalizeExecutionStatus(exec.Status)
 		summary.StatusCounts[normalized]++
 		if normalized == string(types.ExecutionStatusRunning) ||
+			normalized == string(types.ExecutionStatusWaiting) ||
 			normalized == string(types.ExecutionStatusPending) ||
 			normalized == string(types.ExecutionStatusQueued) {
 			active++
@@ -398,6 +578,105 @@ func summarizeRun(runID string, executions []*types.Execution) WorkflowRunSummar
 	}
 
 	return summary
+}
+
+type parsedRunMetadata struct {
+	Lineage *RunLineageMetadata
+	Golden  *GoldenRunMetadata
+}
+
+func (h *WorkflowRunHandler) enrichRunMetadata(ctx context.Context, summary *WorkflowRunSummary) {
+	if summary == nil {
+		return
+	}
+	metadata := h.loadRunMetadata(ctx, summary.RunID)
+	if metadata == nil {
+		return
+	}
+	summary.Lineage = metadata.Lineage
+	summary.Golden = metadata.Golden
+}
+
+func (h *WorkflowRunHandler) loadRunMetadata(ctx context.Context, runID string) *parsedRunMetadata {
+	reader, ok := h.storage.(workflowRunMetadataReader)
+	if !ok {
+		return nil
+	}
+	run, err := reader.GetWorkflowRun(ctx, runID)
+	if err != nil || run == nil || len(run.Metadata) == 0 {
+		return nil
+	}
+	metadata := decodeWorkflowRunMetadata(run.Metadata)
+	if len(metadata) == 0 {
+		return nil
+	}
+
+	parsed := &parsedRunMetadata{}
+	if raw, ok := metadata["lineage"]; ok {
+		if encoded, err := json.Marshal(raw); err == nil {
+			var lineage RunLineageMetadata
+			if err := json.Unmarshal(encoded, &lineage); err == nil {
+				parsed.Lineage = &lineage
+			}
+		}
+	}
+	if raw, ok := metadata["golden"]; ok {
+		if encoded, err := json.Marshal(raw); err == nil {
+			var golden GoldenRunMetadata
+			if err := json.Unmarshal(encoded, &golden); err == nil {
+				parsed.Golden = &golden
+			}
+		}
+	}
+	if parsed.Lineage == nil && parsed.Golden == nil {
+		return nil
+	}
+	return parsed
+}
+
+func decodeWorkflowRunMetadata(raw json.RawMessage) map[string]interface{} {
+	metadata := map[string]interface{}{}
+	if len(raw) == 0 {
+		return metadata
+	}
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return map[string]interface{}{}
+	}
+	return metadata
+}
+
+func sanitizeStringList(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func deriveOverallStatusForUI(executions []*types.Execution) string {
+	counts := make(map[string]int)
+	active := 0
+	for _, exec := range executions {
+		if exec == nil {
+			continue
+		}
+		status := types.NormalizeExecutionStatus(exec.Status)
+		counts[status]++
+		switch status {
+		case string(types.ExecutionStatusRunning), string(types.ExecutionStatusWaiting), string(types.ExecutionStatusPending), string(types.ExecutionStatusQueued):
+			active++
+		}
+	}
+	return deriveStatusFromCounts(counts, active)
 }
 
 func (h *WorkflowRunHandler) loadRunSummary(ctx context.Context, runID string) *storage.RunSummaryAggregation {
@@ -462,7 +741,7 @@ func buildAPIExecutions(nodes []handlers.WorkflowDAGNode) []apiWorkflowExecution
 		pendingChildren := 0
 		for _, child := range children {
 			switch types.NormalizeExecutionStatus(child.Status) {
-			case string(types.ExecutionStatusRunning):
+			case string(types.ExecutionStatusRunning), string(types.ExecutionStatusWaiting):
 				activeChildren++
 			case string(types.ExecutionStatusPending), string(types.ExecutionStatusQueued):
 				pendingChildren++
@@ -483,6 +762,7 @@ func buildAPIExecutions(nodes []handlers.WorkflowDAGNode) []apiWorkflowExecution
 			AgentNodeID:     node.AgentNodeID,
 			ReasonerID:      node.ReasonerID,
 			Status:          node.Status,
+			StatusReason:    node.StatusReason,
 			StartedAt:       node.StartedAt,
 			CompletedAt:     node.CompletedAt,
 			WorkflowDepth:   node.WorkflowDepth,
@@ -492,6 +772,25 @@ func buildAPIExecutions(nodes []handlers.WorkflowDAGNode) []apiWorkflowExecution
 		apiNodes = append(apiNodes, apiNode)
 	}
 	return apiNodes
+}
+
+// enrichApprovalData looks up workflow executions for any api nodes in waiting status
+// and populates their approval fields.
+func (h *WorkflowRunHandler) enrichApprovalData(ctx context.Context, executions []apiWorkflowExecution) {
+	for i := range executions {
+		// Only look up approval data for executions that have a waiting-related status
+		normalized := types.NormalizeExecutionStatus(executions[i].Status)
+		if normalized != types.ExecutionStatusWaiting {
+			continue
+		}
+		wfExec, err := h.storage.GetWorkflowExecution(ctx, executions[i].ExecutionID)
+		if err != nil || wfExec == nil {
+			continue
+		}
+		executions[i].ApprovalRequestID = wfExec.ApprovalRequestID
+		executions[i].ApprovalRequestURL = wfExec.ApprovalRequestURL
+		executions[i].ApprovalStatus = wfExec.ApprovalStatus
+	}
 }
 
 func parsePositiveInt(value string, fallback int) int {

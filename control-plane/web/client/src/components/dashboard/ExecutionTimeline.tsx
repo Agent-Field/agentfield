@@ -139,7 +139,7 @@ export const ExecutionTimeline = memo(function ExecutionTimeline({ className }: 
             <Analytics className="h-5 w-5 text-primary" />
             <div>
               <h3 className="text-sm font-medium text-foreground">Execution Timeline</h3>
-              <p className="text-body-small">Last 24 hours</p>
+              <p className="text-sm text-muted-foreground">Last 24 hours</p>
             </div>
           </div>
           <button
@@ -160,7 +160,7 @@ export const ExecutionTimeline = memo(function ExecutionTimeline({ className }: 
         <div className="flex items-center justify-center h-64">
           <div className="flex flex-col items-center space-y-2">
             <Renew className="h-8 w-8 text-muted-foreground animate-spin" />
-            <p className="text-body-small">Loading execution timeline...</p>
+            <p className="text-sm text-muted-foreground">Loading execution timeline...</p>
           </div>
         </div>
       </div>
@@ -176,7 +176,7 @@ export const ExecutionTimeline = memo(function ExecutionTimeline({ className }: 
             <Analytics className="h-5 w-5 text-primary" />
             <div>
               <h3 className="text-sm font-medium text-foreground">Execution Timeline</h3>
-              <p className="text-body-small">Last 24 hours</p>
+              <p className="text-sm text-muted-foreground">Last 24 hours</p>
             </div>
           </div>
           <button
@@ -199,7 +199,7 @@ export const ExecutionTimeline = memo(function ExecutionTimeline({ className }: 
             <Warning className="h-12 w-12" style={{ color: "var(--status-error)" }} />
             <div>
               <p className="text-sm font-medium text-foreground mb-1">Failed to load timeline data</p>
-              <p className="text-body-small mb-3">{error?.message || "An unexpected error occurred"}</p>
+              <p className="text-sm text-muted-foreground mb-3">{error?.message || "An unexpected error occurred"}</p>
               <button
                 onClick={handleRefresh}
                 disabled={loading}
@@ -229,7 +229,7 @@ export const ExecutionTimeline = memo(function ExecutionTimeline({ className }: 
             <Analytics className="h-5 w-5 text-primary" />
             <div>
               <h3 className="text-sm font-medium text-foreground">Execution Timeline</h3>
-              <p className="text-body-small">Last 24 hours</p>
+              <p className="text-sm text-muted-foreground">Last 24 hours</p>
             </div>
           </div>
           <button
@@ -252,7 +252,7 @@ export const ExecutionTimeline = memo(function ExecutionTimeline({ className }: 
             <Analytics className="h-12 w-12 text-muted-foreground" />
             <div>
               <p className="text-sm font-medium text-foreground mb-1">No execution data available</p>
-              <p className="text-body-small">No executions have been recorded in the last 24 hours</p>
+              <p className="text-sm text-muted-foreground">No executions have been recorded in the last 24 hours</p>
             </div>
           </div>
         </div>
@@ -276,7 +276,7 @@ export const ExecutionTimeline = memo(function ExecutionTimeline({ className }: 
             <h3 className="text-sm font-medium text-foreground">
               Execution Timeline
             </h3>
-            <p className="text-body-small">Last 24 hours</p>
+            <p className="text-sm text-muted-foreground">Last 24 hours</p>
           </div>
         </div>
         <button
@@ -297,22 +297,22 @@ export const ExecutionTimeline = memo(function ExecutionTimeline({ className }: 
       {/* Key Metrics Row */}
       <div className="grid grid-cols-3 gap-4 mb-6">
         <div className="text-center">
-          <div className="text-heading-3">
+          <div className="text-base font-semibold">
             {metrics.totalExecutions.toLocaleString()}
           </div>
-          <div className="text-body-small">Total Executions</div>
+          <div className="text-sm text-muted-foreground">Total Executions</div>
         </div>
         <div className="text-center">
-          <div className="text-heading-3" style={{ color: "var(--status-success)" }}>
+          <div className="text-base font-semibold" style={{ color: "var(--status-success)" }}>
             {metrics.avgSuccessRate.toFixed(1)}%
           </div>
-          <div className="text-body-small">Avg Success Rate</div>
+          <div className="text-sm text-muted-foreground">Avg Success Rate</div>
         </div>
         <div className="text-center">
-          <div className="text-heading-3" style={{ color: "var(--status-error)" }}>
+          <div className="text-base font-semibold" style={{ color: "var(--status-error)" }}>
             {metrics.totalErrors}
           </div>
-          <div className="text-body-small">Total Errors</div>
+          <div className="text-sm text-muted-foreground">Total Errors</div>
         </div>
       </div>
 
@@ -548,7 +548,7 @@ export const ExecutionTimeline = memo(function ExecutionTimeline({ className }: 
       <div className="flex items-center justify-center space-x-6 mt-4 pt-4 border-t border-border">
         <div className="flex items-center space-x-2">
           <div className="w-3 h-0.5 bg-primary"></div>
-          <span className="text-body-small">
+          <span className="text-sm text-muted-foreground">
             Execution Volume
           </span>
         </div>
@@ -561,7 +561,7 @@ export const ExecutionTimeline = memo(function ExecutionTimeline({ className }: 
               height: "0px"
             }}
           ></div>
-          <span className="text-body-small">Success Rate</span>
+          <span className="text-sm text-muted-foreground">Success Rate</span>
         </div>
       </div>
     </div>

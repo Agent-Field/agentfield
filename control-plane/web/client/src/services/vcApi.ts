@@ -9,7 +9,8 @@ import type {
   VCStatusSummary,
   AuditTrailEntry,
   ComprehensiveVCVerificationResult,
-  WorkflowVCStatusBatchResponse
+  WorkflowVCStatusBatchResponse,
+  ProvenanceVerificationResponse
 } from '../types/did';
 import { normalizeExecutionStatus, isSuccessStatus, isFailureStatus } from '../utils/status';
 import { getGlobalApiKey } from './api';
@@ -106,11 +107,121 @@ export async function verifyVC(vcDocument: any): Promise<VCVerificationResponse>
   });
 }
 
+export interface VerifyProvenanceAuditOptions {
+  verbose?: boolean;
+}
+
+/**
+ * Verify exported provenance JSON (workflow audit, execution bundle, or bare W3C VC).
+ * POST /api/ui/v1/did/verify-audit — same logic as `af vc verify`.
+ */
+export async function verifyProvenanceAudit(
+  document: unknown,
+  options?: VerifyProvenanceAuditOptions,
+): Promise<ProvenanceVerificationResponse> {
+  const body =
+    typeof document === 'string' ? document : JSON.stringify(document);
+  const params = new URLSearchParams();
+  if (options?.verbose) params.set('verbose', 'true');
+  const q = params.toString();
+  const path = `/did/verify-audit${q ? `?${q}` : ''}`;
+  return fetchWrapper<ProvenanceVerificationResponse>(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+  });
+}
+
 /**
  * Get workflow VC chain for a specific workflow
  */
 export async function getWorkflowVCChain(workflowId: string): Promise<WorkflowVCChainResponse> {
   return fetchWrapper<WorkflowVCChainResponse>(`/workflows/${workflowId}/vc-chain`);
+}
+
+/**
+ * Same JSON shape as GET /api/ui/v1/workflows/:id/vc-chain — valid input for `af verify <file.json>`
+ * (legacy WorkflowVCChainResponse; CLI normalizes to EnhancedVCChain).
+ */
+export async function downloadWorkflowVCAuditFile(
+  workflowId: string,
+  filename?: string,
+): Promise<void> {
+  const chain = await getWorkflowVCChain(workflowId);
+  const blob = new Blob([JSON.stringify(chain, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download =
+    filename ?? `workflow-${workflowId.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 48)}-vc-audit.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Download a self-contained, offline HTML artifact for a workflow run.
+ *
+ * The server returns the same versioned share bundle as `af share`, inlined
+ * into a standalone HTML document, as an `attachment`. We fetch it with the
+ * authenticated header set (so it works in cloud mode where the browser would
+ * not otherwise attach the X-API-Key) and hand it to the browser as a download,
+ * honouring the filename from Content-Disposition when present.
+ *
+ * Pass `redact` to strip every input/output preview from the artifact.
+ */
+export async function downloadWorkflowShareFile(
+  workflowId: string,
+  options?: { redact?: boolean },
+): Promise<void> {
+  const headers = new Headers();
+  const apiKey = getGlobalApiKey();
+  if (apiKey) {
+    headers.set("X-API-Key", apiKey);
+  }
+  const query = options?.redact ? "?redact=1" : "";
+  const response = await fetch(
+    `${API_BASE_URL}/workflows/${workflowId}/share${query}`,
+    { headers },
+  );
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({
+      error: `Request failed with status ${response.status}`,
+    }));
+    throw new Error(
+      errorData.error ?? errorData.message ?? `HTTP error! status: ${response.status}`,
+    );
+  }
+
+  const blob = await response.blob();
+  const fallback = `run-${workflowId.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 48)}.html`;
+  const filename =
+    filenameFromContentDisposition(response.headers.get("Content-Disposition")) ??
+    fallback;
+
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Extract the filename from a Content-Disposition header, if one is present.
+ * Handles the quoted `attachment; filename="run-x.html"` form the share
+ * endpoint emits.
+ */
+function filenameFromContentDisposition(header: string | null): string | null {
+  if (!header) return null;
+  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(header);
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
 }
 
 /**
@@ -241,8 +352,6 @@ export async function getExecutionVCStatus(executionId: string): Promise<{
   original_status?: string;
 }> {
   try {
-    // DEBUG: Log the execution ID being requested
-    console.log('DEBUG: getExecutionVCStatus called for executionId:', executionId);
 
     // Try to get execution VC directly from a dedicated endpoint first
     try {
@@ -256,25 +365,18 @@ export async function getExecutionVCStatus(executionId: string): Promise<{
         document_size_bytes?: number;
         original_status?: string;
       }>(`/executions/${executionId}/vc-status`);
-
-      console.log('DEBUG: Direct endpoint response:', result);
       return result;
     } catch (directError) {
       // If direct endpoint doesn't exist, fall back to export method
       console.warn('Direct VC status endpoint not available, using fallback method');
-      console.log('DEBUG: Direct endpoint error:', directError);
 
       const response = await exportVCs({
         limit: 100, // Get more VCs to search through
       });
 
-      console.log('DEBUG: Export VCs response:', response);
-
       const executionVC = response.execution_vcs.find(vc => vc.execution_id === executionId);
 
       if (executionVC) {
-        console.log('DEBUG: Found execution VC in export:', executionVC);
-        console.log('DEBUG: ExecutionVCInfo does not include vc_document field');
         return {
           has_vc: true,
           vc_id: executionVC.vc_id,
@@ -286,8 +388,6 @@ export async function getExecutionVCStatus(executionId: string): Promise<{
           // Note: vc_document is not available in ExecutionVCInfo type
         };
       }
-
-      console.log('DEBUG: No execution VC found in export for executionId:', executionId);
       return {
         has_vc: false,
         status: 'none'
@@ -307,12 +407,9 @@ export async function getExecutionVCStatus(executionId: string): Promise<{
  */
 export async function getExecutionVCDocument(executionId: string): Promise<ExecutionVC> {
   try {
-    console.log('DEBUG: getExecutionVCDocument called for executionId:', executionId);
 
     // Try to get the full execution VC from the backend
     const result = await fetchWrapper<ExecutionVC>(`/executions/${executionId}/vc`);
-
-    console.log('DEBUG: getExecutionVCDocument response:', result);
 
     if (!result.vc_document) {
       throw new Error('VC document not found or not available for download');
@@ -342,7 +439,6 @@ export async function getExecutionVCDocument(executionId: string): Promise<Execu
  */
 export async function getExecutionVCDocumentEnhanced(executionId: string): Promise<any> {
   try {
-    console.log('DEBUG: getExecutionVCDocumentEnhanced called for executionId:', executionId);
 
     // Get the execution VC
     const executionVC = await getExecutionVCDocument(executionId);
@@ -417,8 +513,6 @@ export async function getExecutionVCDocumentEnhanced(executionId: string): Promi
         export_timestamp: new Date().toISOString()
       }
     };
-
-    console.log('DEBUG: Enhanced execution VC chain created:', enhancedChain);
     return enhancedChain;
   } catch (error) {
     console.error('Failed to get enhanced execution VC document:', error);
@@ -455,10 +549,6 @@ export async function getWorkflowAuditTrail(workflowId: string): Promise<AuditTr
  */
 export async function downloadVCDocument(vc: ExecutionVC): Promise<void> {
   try {
-    // DEBUG: Log the VC object to understand what data we have
-    console.log('DEBUG: downloadVCDocument called with VC:', vc);
-    console.log('DEBUG: vc.vc_document type:', typeof vc.vc_document);
-    console.log('DEBUG: vc.vc_document value:', vc.vc_document);
 
     if (!vc.vc_document) {
       console.error('DEBUG: vc_document is missing or undefined');
@@ -468,8 +558,6 @@ export async function downloadVCDocument(vc: ExecutionVC): Promise<void> {
     const vcDocument = typeof vc.vc_document === 'string'
       ? JSON.parse(vc.vc_document)
       : vc.vc_document;
-
-    console.log('DEBUG: Parsed VC document:', vcDocument);
 
     const blob = new Blob([JSON.stringify(vcDocument, null, 2)], {
       type: 'application/json'
@@ -706,7 +794,6 @@ export async function getDIDResolutionBundle(did: string): Promise<{
  */
 export async function downloadDIDResolutionBundle(did: string): Promise<void> {
   try {
-    console.log('DEBUG: downloadDIDResolutionBundle called for DID:', did);
 
     const response = await fetch(`${API_BASE_URL}/did/${encodeURIComponent(did)}/resolution-bundle/download`);
 

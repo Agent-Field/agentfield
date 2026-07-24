@@ -83,7 +83,7 @@ export const ConfigurationWizard: React.FC<ConfigurationWizardProps> = ({
                 <Package className="h-6 w-6 text-blue-600" />
               </div>
               <div className="flex-1">
-                <h3 className="text-heading-3">{pkg.name}</h3>
+                <h3 className="text-base font-semibold">{pkg.name}</h3>
                 <p className="text-gray-600 mt-1">{pkg.description}</p>
                 <div className="flex items-center gap-4 mt-3 text-sm text-gray-500">
                   <span>Version: {pkg.version}</span>

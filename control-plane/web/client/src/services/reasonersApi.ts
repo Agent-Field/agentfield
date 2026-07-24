@@ -391,18 +391,15 @@ export const reasonersApi = {
     const url = apiKey
       ? `${API_BASE_URL}/reasoners/events?api_key=${encodeURIComponent(apiKey)}`
       : `${API_BASE_URL}/reasoners/events`;
-    console.log('🔄 Attempting to create SSE connection to:', url);
     const eventSource = new EventSource(url);
 
     eventSource.onopen = () => {
-      console.log('✅ Reasoner SSE connection opened successfully');
       onConnect?.();
     };
 
     eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        console.log('📡 Received reasoner event:', data);
         onEvent(data);
       } catch (error) {
         console.error('❌ Failed to parse SSE event data:', error, 'Raw data:', event.data);
@@ -426,7 +423,6 @@ export const reasonersApi = {
   closeEventStream: (eventSource: EventSource): void => {
     if (eventSource) {
       eventSource.close();
-      console.log('🔌 Reasoner SSE connection closed');
     }
   }
 };

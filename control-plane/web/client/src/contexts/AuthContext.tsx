@@ -1,10 +1,12 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { setGlobalApiKey } from "../services/api";
+import { setGlobalApiKey, setGlobalAdminToken } from "../services/api";
 
 interface AuthContextType {
   apiKey: string | null;
   setApiKey: (key: string | null) => void;
+  adminToken: string | null;
+  setAdminToken: (token: string | null) => void;
   isAuthenticated: boolean;
   authRequired: boolean;
   clearAuth: () => void;
@@ -12,6 +14,7 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 const STORAGE_KEY = "af_api_key";
+const ADMIN_TOKEN_STORAGE_KEY = "af_admin_token";
 
 // Simple obfuscation for localStorage; not meant as real security.
 const encryptKey = (key: string): string => btoa(key.split("").reverse().join(""));
@@ -44,6 +47,19 @@ const initStoredKey = (() => {
 export function AuthProvider({ children }: { children: ReactNode }) {
   // Initialize with pre-loaded key so it's available immediately
   const [apiKey, setApiKeyState] = useState<string | null>(initStoredKey);
+  const [adminToken, setAdminTokenState] = useState<string | null>(() => {
+    try {
+      const stored = localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY);
+      if (stored) {
+        const token = decryptKey(stored);
+        if (token) {
+          setGlobalAdminToken(token);
+          return token;
+        }
+      }
+    } catch { /* localStorage might not be available */ }
+    return null;
+  });
   const [authRequired, setAuthRequired] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -106,14 +122,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const setAdminToken = (token: string | null) => {
+    setAdminTokenState(token);
+    setGlobalAdminToken(token);
+    if (token) {
+      localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, encryptKey(token));
+    } else {
+      localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+    }
+  };
+
   const clearAuth = () => {
     setApiKeyState(null);
     setGlobalApiKey(null);
     localStorage.removeItem(STORAGE_KEY);
+    setAdminTokenState(null);
+    setGlobalAdminToken(null);
+    localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
   };
 
   if (loading) {
-    return <div className="flex items-center justify-center min-h-screen">Loading...</div>;
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-3 text-muted-foreground">
+          <div className="size-5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+          <span className="text-sm">Connecting…</span>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -121,6 +157,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       value={{
         apiKey,
         setApiKey,
+        adminToken,
+        setAdminToken,
         isAuthenticated: !authRequired || !!apiKey,
         authRequired,
         clearAuth,
