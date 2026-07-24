@@ -1,0 +1,14 @@
+config_version: v1
+name: {{yamlQuote .NodeID}}
+version: 1.0.0
+description: {{yamlQuote (printf "Run the %s Python AgentField scaffold locally." .ProjectName)}}
+author: {{yamlQuote .AuthorName}}
+language: python
+entrypoint:
+  start: python main.py
+  healthcheck: /health
+agent_node:
+  node_id: {{yamlQuote .NodeID}}
+  default_port: {{.AgentPort}}
+user_environment:
+  required: []

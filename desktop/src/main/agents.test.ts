@@ -33,6 +33,7 @@ function makeDeps(overrides: Partial<ControlPlaneStartDeps> = {}): ControlPlaneS
 describe('planControlPlaneLaunch', () => {
   it('prefers launchd on darwin when the server agent is loaded', () => {
     expect(planControlPlaneLaunch('darwin', true)).toBe('launchd')
+    expect(planControlPlaneLaunch('darwin', true, 8080)).toBe('launchd')
   })
 
   it('direct-spawns on darwin when the server agent is not loaded', () => {
@@ -43,6 +44,10 @@ describe('planControlPlaneLaunch', () => {
     expect(planControlPlaneLaunch('win32', true)).toBe('spawn')
     expect(planControlPlaneLaunch('linux', true)).toBe('spawn')
   })
+
+  it('direct-spawns for a non-default port — launchd only serves 8080', () => {
+    expect(planControlPlaneLaunch('darwin', true, 9091)).toBe('spawn')
+  })
 })
 
 describe('startControlPlane', () => {
@@ -51,7 +56,7 @@ describe('startControlPlane', () => {
     const spawnServer = vi.fn(() => new Promise<AgentActionResult>(() => {}))
     const deps = makeDeps({ serverAgentLoaded: async () => true, run, spawnServer })
 
-    const result = await startControlPlane(30_000, deps)
+    const result = await startControlPlane(8080, 30_000, deps)
 
     expect(result).toEqual({ ok: true, message: 'control plane running' })
     expect(run).toHaveBeenCalledWith('launchctl', [
@@ -66,12 +71,26 @@ describe('startControlPlane', () => {
     const spawnServer = vi.fn(() => new Promise<AgentActionResult>(() => {}))
     const deps = makeDeps({ serverAgentLoaded: async () => false, run, spawnServer })
 
-    const result = await startControlPlane(30_000, deps)
+    const result = await startControlPlane(8080, 30_000, deps)
 
     expect(result).toEqual({ ok: true, message: 'control plane running' })
     expect(spawnServer).toHaveBeenCalledTimes(1)
     // No kickstart attempted.
     expect(run).not.toHaveBeenCalled()
+  })
+
+  it('direct-spawns on a custom port even with the launchd agent loaded, and pins the port', async () => {
+    const run = vi.fn(async () => ({ code: 0, stdout: '' }))
+    const spawnServer = vi.fn(() => new Promise<AgentActionResult>(() => {}))
+    const checkHealth = vi.fn(async () => HEALTHY)
+    const deps = makeDeps({ serverAgentLoaded: async () => true, run, spawnServer, checkHealth })
+
+    const result = await startControlPlane(9091, 30_000, deps)
+
+    expect(result.ok).toBe(true)
+    expect(run).not.toHaveBeenCalled() // launchd path skipped entirely
+    expect(spawnServer).toHaveBeenCalledWith(9091)
+    expect(checkHealth).toHaveBeenCalledWith('http://localhost:9091')
   })
 
   it('never touches launchctl off darwin', async () => {
@@ -80,12 +99,13 @@ describe('startControlPlane', () => {
     const spawnServer = vi.fn(() => new Promise<AgentActionResult>(() => {}))
     const deps = makeDeps({ platform: 'win32', serverAgentLoaded, run, spawnServer })
 
-    const result = await startControlPlane(30_000, deps)
+    const result = await startControlPlane(8080, 30_000, deps)
 
     expect(result.ok).toBe(true)
     expect(serverAgentLoaded).not.toHaveBeenCalled()
     expect(run).not.toHaveBeenCalled()
     expect(spawnServer).toHaveBeenCalledTimes(1)
+    expect(spawnServer).toHaveBeenCalledWith(8080)
   })
 
   it('falls back to a direct spawn when kickstart fails', async () => {
@@ -93,7 +113,7 @@ describe('startControlPlane', () => {
     const spawnServer = vi.fn(() => new Promise<AgentActionResult>(() => {}))
     const deps = makeDeps({ serverAgentLoaded: async () => true, run, spawnServer })
 
-    const result = await startControlPlane(30_000, deps)
+    const result = await startControlPlane(8080, 30_000, deps)
 
     expect(result.ok).toBe(true)
     expect(run).toHaveBeenCalledTimes(1) // kickstart attempted once
@@ -105,7 +125,7 @@ describe('startControlPlane', () => {
     const spawnServer = vi.fn(async () => ({ ok: false, message: 'af not found on PATH' }))
     const deps = makeDeps({ serverAgentLoaded: async () => true, run, spawnServer })
 
-    const result = await startControlPlane(30_000, deps)
+    const result = await startControlPlane(8080, 30_000, deps)
 
     expect(result).toEqual({ ok: false, message: 'af not found on PATH' })
   })
@@ -121,7 +141,7 @@ describe('startControlPlane', () => {
       })
     })
 
-    const result = await startControlPlane(30_000, deps)
+    const result = await startControlPlane(8080, 30_000, deps)
 
     expect(result).toEqual({ ok: false, message: 'another app is using the port' })
   })
@@ -137,7 +157,7 @@ describe('startControlPlane', () => {
       }
     })
 
-    const result = await startControlPlane(2_000, deps)
+    const result = await startControlPlane(8080, 2_000, deps)
 
     expect(result).toEqual({
       ok: false,

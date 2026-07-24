@@ -63,7 +63,7 @@ func installMarkerBlock(skill Skill, canonicalCurrentDir, targetPath string) (In
 // uninstallMarkerBlock strips a skill's marker block from a target file. If
 // the file is empty after the strip, it is removed.
 func uninstallMarkerBlock(skill Skill, targetPath string) error {
-	data, err := os.ReadFile(targetPath)
+	data, err := reconcileReadFile(targetPath)
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -73,14 +73,16 @@ func uninstallMarkerBlock(skill Skill, targetPath string) error {
 	cleaned := strings.TrimRight(stripMarkerBlock(string(data), skill), "\n")
 	if cleaned == "" {
 		// Don't leave an empty file lying around if it was created solely for our block.
-		_ = os.Remove(targetPath)
+		if err := reconcileRemove(targetPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove %s: %w", targetPath, err)
+		}
 		return nil
 	}
 	tmp := targetPath + ".af-tmp"
-	if err := os.WriteFile(tmp, []byte(cleaned+"\n"), 0o644); err != nil {
+	if err := reconcileWriteFile(tmp, []byte(cleaned+"\n"), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", tmp, err)
 	}
-	return os.Rename(tmp, targetPath)
+	return reconcileRename(tmp, targetPath)
 }
 
 // stripMarkerBlock removes any agentfield-skill block for the named skill

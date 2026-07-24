@@ -50,6 +50,8 @@ type TelemetryConfig struct {
 	InstallIDPath string        `yaml:"install_id_path" mapstructure:"install_id_path"`
 	InstallID     string        `yaml:"install_id" mapstructure:"install_id"`
 	Timeout       time.Duration `yaml:"timeout" mapstructure:"timeout"`
+	// AgentFieldVersion is runtime build metadata and is never read from config.
+	AgentFieldVersion string `yaml:"-" mapstructure:"-"`
 }
 
 // IsEnabled returns true unless telemetry was explicitly disabled.
