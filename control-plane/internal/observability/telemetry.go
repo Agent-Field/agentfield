@@ -3,6 +3,7 @@ package observability
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -26,10 +28,15 @@ import (
 const (
 	defaultTelemetryQueueSize = 256
 	telemetrySubscriberID     = "anonymous-oss-telemetry"
+	telemetrySchemaVersion    = 2
 )
+
+var telemetryVersionPattern = regexp.MustCompile(`^v?[0-9]+(?:\.[0-9]+){0,3}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
 
 // TelemetryEvent is the sanitized event payload sent to the hosted ingest API.
 type TelemetryEvent struct {
+	SchemaVersion          int                    `json:"telemetry_schema_version"`
+	EventID                string                 `json:"telemetry_event_id,omitempty"`
 	EventName              string                 `json:"event_name"`
 	AnonymousInstallIDHash string                 `json:"anonymous_install_id_hash"`
 	EventTime              string                 `json:"event_time"`
@@ -48,6 +55,7 @@ type TelemetryService struct {
 	cfg         config.TelemetryConfig
 	storageMode string
 	installHash string
+	eventIDKey  []byte
 	runtimeName string
 	version     string
 	timeout     time.Duration
@@ -87,8 +95,9 @@ func NewTelemetryService(cfg config.TelemetryConfig, agentfieldHome, storageMode
 
 	return &TelemetryService{
 		cfg:         cfg,
-		storageMode: storageMode,
+		storageMode: normalizeStorageMode(storageMode),
 		installHash: hashInstallID(installID),
+		eventIDKey:  eventIdentityKey(installID),
 		runtimeName: detectRuntime(),
 		version:     emptyTo(version, "unknown"),
 		timeout:     timeout,
@@ -140,6 +149,11 @@ func randomHex(bytesLen int) (string, error) {
 func hashInstallID(id string) string {
 	sum := sha256.Sum256([]byte(id))
 	return hex.EncodeToString(sum[:])
+}
+
+func eventIdentityKey(installID string) []byte {
+	sum := sha256.Sum256([]byte("agentfield-telemetry-event-id:" + installID))
+	return sum[:]
 }
 
 func detectRuntime() string {
@@ -202,24 +216,42 @@ func (s *TelemetryService) Stop() {
 }
 
 func (s *TelemetryService) Enqueue(eventName string, properties map[string]interface{}) {
+	s.enqueue(eventName, properties, "")
+}
+
+func (s *TelemetryService) enqueue(eventName string, properties map[string]interface{}, identityMaterial string) {
 	if s == nil {
 		return
 	}
 	event := TelemetryEvent{
+		SchemaVersion:          telemetrySchemaVersion,
 		EventName:              eventName,
 		AnonymousInstallIDHash: s.installHash,
 		EventTime:              time.Now().UTC().Format(time.RFC3339),
 		Component:              "control-plane",
 		AgentFieldVersion:      s.version,
 		Runtime:                s.runtimeName,
-		StorageMode:            s.storageMode,
+		StorageMode:            normalizeStorageMode(s.storageMode),
 		Properties:             sanitizeProperties(properties),
+	}
+	if identityMaterial != "" && len(s.eventIDKey) != 0 {
+		event.EventID = s.eventIdentity(eventName, identityMaterial)
 	}
 	select {
 	case s.queue <- event:
 	default:
 		logger.Logger.Debug().Str("event", eventName).Msg("anonymous telemetry queue full; dropping event")
 	}
+}
+
+// eventIdentity returns a stable, opaque identifier suitable for idempotent
+// ingestion. Raw execution and workflow identifiers never leave the process.
+func (s *TelemetryService) eventIdentity(eventName, identityMaterial string) string {
+	mac := hmac.New(sha256.New, s.eventIDKey)
+	_, _ = mac.Write([]byte(eventName))
+	_, _ = mac.Write([]byte{0})
+	_, _ = mac.Write([]byte(identityMaterial))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 func (s *TelemetryService) worker() {
@@ -288,9 +320,6 @@ func (s *TelemetryService) handleNodeEvent(event events.NodeEvent) {
 		props["reasoner_count_bucket"] = countBucket(len(node.Reasoners))
 		props["skill_count_bucket"] = countBucket(len(node.Skills))
 		props["deployment_type"] = emptyTo(node.DeploymentType, "long_running")
-		if node.Version != "" {
-			props["agent_version"] = node.Version
-		}
 		if sdkLanguage, sdkVersion := extractSDKMetadata(node.Metadata); sdkLanguage != "" {
 			props["sdk_language"] = sdkLanguage
 			if sdkVersion != "" {
@@ -306,18 +335,80 @@ func (s *TelemetryService) handleNodeEvent(event events.NodeEvent) {
 }
 
 func (s *TelemetryService) handleExecutionEvent(event events.ExecutionEvent) {
+	eventName, outcome, terminal := telemetryExecutionOutcome(event)
+	if eventName == "" {
+		return
+	}
+	props := executionProperties(event)
+	if terminal {
+		props["status"] = outcome
+		props["outcome"] = outcome
+	}
+	identityMaterial := ""
+	if hasStableCallbackIdentity(event, outcome) {
+		identityMaterial = event.ExecutionID
+	} else {
+		// Updated/timeout transitions can legitimately recur (for example,
+		// timeout -> running -> timeout), so they must not share a dedupe key.
+		// Events without execution IDs likewise receive a unique identity.
+		identityMaterial, _ = randomHex(32)
+		if identityMaterial == "" {
+			identityMaterial = strconv.FormatInt(time.Now().UnixNano(), 10)
+		}
+	}
+	identityMaterial += "\x00" + outcome
+	s.enqueue(eventName, props, identityMaterial)
+}
+
+func hasStableCallbackIdentity(event events.ExecutionEvent, outcome string) bool {
+	if event.ExecutionID == "" {
+		return false
+	}
+	switch event.Type {
+	case events.ExecutionCompleted:
+		return outcome == string(types.ExecutionStatusSucceeded)
+	case events.ExecutionFailed:
+		return outcome == string(types.ExecutionStatusFailed)
+	case events.ExecutionCancelledEvent:
+		return outcome == string(types.ExecutionStatusCancelled)
+	default:
+		return false
+	}
+}
+
+func telemetryExecutionOutcome(event events.ExecutionEvent) (eventName, outcome string, terminal bool) {
+	status := types.NormalizeExecutionStatus(event.Status)
 	switch event.Type {
 	case events.ExecutionCreated:
-		s.Enqueue("execution_created", executionProperties(event))
+		return "execution_created", string(types.ExecutionStatusPending), false
+	case events.ExecutionStarted:
+		return "execution_started", string(types.ExecutionStatusRunning), false
 	case events.ExecutionCompleted:
-		props := executionProperties(event)
-		props["status"] = "succeeded"
-		s.Enqueue("execution_completed", props)
+		return "execution_completed", string(types.ExecutionStatusSucceeded), true
 	case events.ExecutionFailed:
-		props := executionProperties(event)
-		props["status"] = "failed"
-		s.Enqueue("execution_failed", props)
+		switch status {
+		case string(types.ExecutionStatusTimeout):
+			return "execution_timed_out", string(types.ExecutionStatusTimeout), true
+		case string(types.ExecutionStatusCancelled):
+			return "execution_cancelled", string(types.ExecutionStatusCancelled), true
+		default:
+			return "execution_failed", string(types.ExecutionStatusFailed), true
+		}
+	case events.ExecutionCancelledEvent:
+		return "execution_cancelled", string(types.ExecutionStatusCancelled), true
+	case events.ExecutionUpdated:
+		switch status {
+		case string(types.ExecutionStatusSucceeded):
+			return "execution_completed", status, true
+		case string(types.ExecutionStatusFailed):
+			return "execution_failed", status, true
+		case string(types.ExecutionStatusCancelled):
+			return "execution_cancelled", status, true
+		case string(types.ExecutionStatusTimeout):
+			return "execution_timed_out", status, true
+		}
 	}
+	return "", "", false
 }
 
 func executionProperties(event events.ExecutionEvent) map[string]interface{} {
@@ -328,16 +419,28 @@ func executionProperties(event events.ExecutionEvent) map[string]interface{} {
 	}
 	if data, ok := event.Data.(map[string]interface{}); ok {
 		if targetType, ok := stringProp(data, "target_type"); ok {
-			props["target_type"] = targetType
+			props["target_type"] = normalizeTargetType(targetType)
 		}
 		if mode, ok := stringProp(data, "execution_mode"); ok {
-			props["execution_mode"] = mode
+			props["execution_mode"] = normalizeExecutionMode(mode)
 		}
 		if duration, ok := int64Prop(data, "duration_ms"); ok {
 			props["duration_bucket_ms"] = durationBucket(duration)
 		}
-		if category, ok := stringProp(data, "error_category"); ok {
-			props["error_category"] = errorCategory(category)
+		if category, ok := stringProp(data, "failure_category"); ok {
+			props["failure_category"] = errorCategory(category)
+		} else if category, ok := stringProp(data, "error_category"); ok {
+			// Accept the legacy internal key, but emit the V2 property name.
+			props["failure_category"] = errorCategory(category)
+		}
+		if root, ok := data["is_root_execution"].(bool); ok {
+			props["is_root_execution"] = root
+		}
+		if depth, ok := int64Prop(data, "workflow_depth"); ok {
+			props["workflow_depth_bucket"] = workflowDepthBucket(depth)
+		}
+		if source, ok := stringProp(data, "transition_source"); ok {
+			props["transition_source"] = normalizeTransitionSource(source)
 		}
 	}
 	return props
@@ -414,7 +517,6 @@ func sanitizeProperties(in map[string]interface{}) map[string]interface{} {
 		"go_arch":               {},
 		"storage_mode":          {},
 		"deployment_type":       {},
-		"agent_version":         {},
 		"reasoner_count_bucket": {},
 		"skill_count_bucket":    {},
 		"sdk_language":          {},
@@ -422,8 +524,12 @@ func sanitizeProperties(in map[string]interface{}) map[string]interface{} {
 		"execution_mode":        {},
 		"target_type":           {},
 		"status":                {},
+		"outcome":               {},
 		"duration_bucket_ms":    {},
-		"error_category":        {},
+		"failure_category":      {},
+		"is_root_execution":     {},
+		"workflow_depth_bucket": {},
+		"transition_source":     {},
 		"usage_context":         {},
 	}
 	out := make(map[string]interface{}, len(in))
@@ -434,7 +540,26 @@ func sanitizeProperties(in map[string]interface{}) map[string]interface{} {
 		switch v := value.(type) {
 		case string:
 			if trimmed := strings.TrimSpace(v); trimmed != "" {
-				out[key] = trimmed
+				switch key {
+				case "deployment_type":
+					out[key] = normalizeDeploymentType(trimmed)
+				case "storage_mode":
+					out[key] = normalizeStorageMode(trimmed)
+				case "target_type":
+					out[key] = normalizeTargetType(trimmed)
+				case "execution_mode":
+					out[key] = normalizeExecutionMode(trimmed)
+				case "transition_source":
+					out[key] = normalizeTransitionSource(trimmed)
+				case "failure_category":
+					out[key] = errorCategory(trimmed)
+				case "sdk_version":
+					if normalized := normalizeTelemetryVersion(trimmed); normalized != "" {
+						out[key] = normalized
+					}
+				default:
+					out[key] = trimmed
+				}
 			}
 		case int, int64, float64, bool:
 			out[key] = v
@@ -444,6 +569,90 @@ func sanitizeProperties(in map[string]interface{}) map[string]interface{} {
 		return nil
 	}
 	return out
+}
+
+func normalizeDeploymentType(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "long_running":
+		return "long_running"
+	case "serverless":
+		return "serverless"
+	default:
+		return "unknown"
+	}
+}
+
+func normalizeStorageMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "local":
+		return "local"
+	case "postgres":
+		return "postgres"
+	default:
+		return "unknown"
+	}
+}
+
+func normalizeTargetType(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "reasoner":
+		return "reasoner"
+	case "skill":
+		return "skill"
+	default:
+		return "unknown"
+	}
+}
+
+func normalizeExecutionMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "sync":
+		return "sync"
+	case "async":
+		return "async"
+	default:
+		return "unknown"
+	}
+}
+
+func normalizeTransitionSource(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "execution_controller":
+		return "execution_controller"
+	case "status_callback":
+		return "status_callback"
+	case "replay":
+		return "replay"
+	case "cancel_api":
+		return "cancel_api"
+	case "cancel_tree":
+		return "cancel_tree"
+	default:
+		return "unknown"
+	}
+}
+
+func normalizeTelemetryVersion(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) == 0 || len(value) > 32 || !telemetryVersionPattern.MatchString(value) {
+		return ""
+	}
+	return value
+}
+
+func workflowDepthBucket(depth int64) string {
+	switch {
+	case depth <= 0:
+		return "0"
+	case depth == 1:
+		return "1"
+	case depth == 2:
+		return "2"
+	case depth <= 5:
+		return "3-5"
+	default:
+		return "6+"
+	}
 }
 
 func countBucket(n int) string {
@@ -481,7 +690,25 @@ func errorCategory(value string) string {
 	if value == "" {
 		return "unknown"
 	}
-	for _, allowed := range []string{"timeout", "cancelled", "permission_denied", "agent_unavailable", "agent_restart_orphaned", "validation", "unknown"} {
+	for _, allowed := range []string{
+		"agent_restart_orphaned",
+		"permission_denied",
+		"concurrency_limit",
+		"target_not_found",
+		"node_unavailable",
+		"agent_unavailable",
+		"agent_unreachable",
+		"llm_unavailable",
+		"agent_timeout",
+		"bad_response",
+		"approval_rejected",
+		"internal_error",
+		"agent_error",
+		"validation",
+		"cancelled",
+		"timeout",
+		"unknown",
+	} {
 		if strings.Contains(value, allowed) {
 			return allowed
 		}

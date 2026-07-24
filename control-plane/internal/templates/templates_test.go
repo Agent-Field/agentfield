@@ -81,37 +81,40 @@ func TestGetTemplateFiles(t *testing.T) {
 			name:     "python templates",
 			language: "python",
 			want: map[string]string{
-				"python/.env.example.tmpl":     ".env.example",
-				"python/.gitignore.tmpl":       ".gitignore",
-				"python/README.md.tmpl":        "README.md",
-				"python/main.py.tmpl":          "main.py",
-				"python/reasoners.py.tmpl":     "reasoners.py",
-				"python/requirements.txt.tmpl": "requirements.txt",
+				"python/agentfield-package.yaml.tmpl": "agentfield-package.yaml",
+				"python/.env.example.tmpl":            ".env.example",
+				"python/.gitignore.tmpl":              ".gitignore",
+				"python/README.md.tmpl":               "README.md",
+				"python/main.py.tmpl":                 "main.py",
+				"python/reasoners.py.tmpl":            "reasoners.py",
+				"python/requirements.txt.tmpl":        "requirements.txt",
 			},
 		},
 		{
 			name:     "go templates",
 			language: "go",
 			want: map[string]string{
-				"go/.env.example.tmpl": ".env.example",
-				"go/.gitignore.tmpl":   ".gitignore",
-				"go/README.md.tmpl":    "README.md",
-				"go/go.mod.tmpl":       "go.mod",
-				"go/main.go.tmpl":      "main.go",
-				"go/reasoners.go.tmpl": "reasoners.go",
+				"go/agentfield-package.yaml.tmpl": "agentfield-package.yaml",
+				"go/.env.example.tmpl":            ".env.example",
+				"go/.gitignore.tmpl":              ".gitignore",
+				"go/README.md.tmpl":               "README.md",
+				"go/go.mod.tmpl":                  "go.mod",
+				"go/main.go.tmpl":                 "main.go",
+				"go/reasoners.go.tmpl":            "reasoners.go",
 			},
 		},
 		{
 			name:     "typescript templates",
 			language: "typescript",
 			want: map[string]string{
-				"typescript/.env.example.tmpl":  ".env.example",
-				"typescript/.gitignore.tmpl":    ".gitignore",
-				"typescript/README.md.tmpl":     "README.md",
-				"typescript/main.ts.tmpl":       "main.ts",
-				"typescript/package.json.tmpl":  "package.json",
-				"typescript/reasoners.ts.tmpl":  "reasoners.ts",
-				"typescript/tsconfig.json.tmpl": "tsconfig.json",
+				"typescript/agentfield-package.yaml.tmpl": "agentfield-package.yaml",
+				"typescript/.env.example.tmpl":            ".env.example",
+				"typescript/.gitignore.tmpl":              ".gitignore",
+				"typescript/README.md.tmpl":               "README.md",
+				"typescript/main.ts.tmpl":                 "main.ts",
+				"typescript/package.json.tmpl":            "package.json",
+				"typescript/reasoners.ts.tmpl":            "reasoners.ts",
+				"typescript/tsconfig.json.tmpl":           "tsconfig.json",
 			},
 		},
 		{
@@ -147,6 +150,15 @@ func TestGetTemplateFiles(t *testing.T) {
 				if got[wantPath] != wantDest {
 					t.Fatalf("GetTemplateFiles(%q)[%q] = %q, want %q", tt.language, wantPath, got[wantPath], wantDest)
 				}
+			}
+			manifestCount := 0
+			for _, destination := range got {
+				if destination == "agentfield-package.yaml" {
+					manifestCount++
+				}
+			}
+			if manifestCount != 1 {
+				t.Fatalf("GetTemplateFiles(%q) mapped %d manifests to the scaffold root, want 1", tt.language, manifestCount)
 			}
 		})
 	}

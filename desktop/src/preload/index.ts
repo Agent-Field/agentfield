@@ -15,6 +15,7 @@ const api: AgentFieldApi = {
     return () => ipcRenderer.removeListener('agentfield:install-progress', wrapped)
   },
   agentAction: (action, name) => ipcRenderer.invoke('agentfield:agent-action', action, name),
+  startControlPlane: () => ipcRenderer.invoke('agentfield:start-control-plane'),
   getEnvReports: () => ipcRenderer.invoke('agentfield:env-reports'),
   setAgentSecret: (agent, key, value) =>
     ipcRenderer.invoke('agentfield:secret-set', agent, key, value),

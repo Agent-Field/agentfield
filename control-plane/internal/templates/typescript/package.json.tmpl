@@ -1,9 +1,10 @@
 {
-  "name": "{{.ProjectName}}",
+  "name": {{jsonQuote .ProjectName}},
   "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
+    "start": "tsx main.ts",
     "dev": "tsx main.ts",
     "lint": "tsc --noEmit"
   },
