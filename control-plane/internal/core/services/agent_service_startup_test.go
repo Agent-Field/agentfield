@@ -43,8 +43,9 @@ func newStartupTestService(t *testing.T, pm *mockPortManager) *DefaultAgentServi
 	).(*DefaultAgentService)
 }
 
-// Contract: a strict-port failure triggers exactly one retry, on a different
-// port than the one that failed.
+// Contract: an automatically allocated port that encounters a strict-port
+// failure triggers exactly one retry on a different port than the one that
+// failed.
 func TestStartWithPortRetry_RetriesOnceOnPortConflict(t *testing.T) {
 	pm := newMockPortManager()
 	reserved := -1
@@ -63,7 +64,7 @@ func TestStartWithPortRetry_RetriesOnceOnPortConflict(t *testing.T) {
 		return 777, nil, false
 	}
 
-	pid, port, err := captureRetry(t, service, 8001, attempt)
+	pid, port, err := captureRetry(t, service, 8001, true, attempt)
 	if err != nil {
 		t.Fatalf("expected retry to succeed, got %v", err)
 	}
@@ -96,7 +97,7 @@ func TestStartWithPortRetry_NoRetryOnNonConflictFailure(t *testing.T) {
 		return 0, errors.New("boom: import error"), false
 	}
 
-	_, _, err := captureRetry(t, service, 8001, attempt)
+	_, _, err := captureRetry(t, service, 8001, true, attempt)
 	if err == nil {
 		t.Fatalf("expected failure to propagate")
 	}
@@ -116,7 +117,7 @@ func TestStartWithPortRetry_SuccessRunsOnce(t *testing.T) {
 		return 55, nil, false
 	}
 
-	pid, port, err := captureRetry(t, service, 8001, attempt)
+	pid, port, err := captureRetry(t, service, 8001, true, attempt)
 	if err != nil || attempts != 1 {
 		t.Fatalf("expected one successful attempt, got attempts=%d err=%v", attempts, err)
 	}
@@ -139,7 +140,7 @@ func TestStartWithPortRetry_NoDistinctPortDoesNotRetry(t *testing.T) {
 		return 0, errors.New("assigned port unavailable"), true
 	}
 
-	_, _, err := captureRetry(t, service, 8001, attempt)
+	_, _, err := captureRetry(t, service, 8001, true, attempt)
 	if err == nil {
 		t.Fatalf("expected failure to propagate")
 	}
@@ -148,13 +149,40 @@ func TestStartWithPortRetry_NoDistinctPortDoesNotRetry(t *testing.T) {
 	}
 }
 
+// Contract: a caller-supplied port is never reassigned after a strict-port
+// conflict because external configuration can depend on that exact port.
+func TestStartWithPortRetry_ExplicitPortDoesNotRetry(t *testing.T) {
+	pm := newMockPortManager()
+	service := newStartupTestService(t, pm)
+
+	var attempts int
+	attempt := func(p int) (int, error, bool) {
+		attempts++
+		if p != 9123 {
+			t.Errorf("attempted port = %d, want explicitly requested port 9123", p)
+		}
+		return 0, errors.New("assigned port unavailable"), true
+	}
+
+	_, port, err := captureRetry(t, service, 9123, false, attempt)
+	if err == nil {
+		t.Fatal("expected conflict failure to propagate")
+	}
+	if attempts != 1 {
+		t.Errorf("explicit port must not retry, got %d attempts", attempts)
+	}
+	if port != 9123 {
+		t.Errorf("returned port = %d, want explicitly requested port 9123", port)
+	}
+}
+
 // captureRetry runs startWithPortRetry while swallowing its progress output.
-func captureRetry(t *testing.T, s *DefaultAgentService, initial int, fn func(int) (int, error, bool)) (int, int, error) {
+func captureRetry(t *testing.T, s *DefaultAgentService, initial int, retryOnConflict bool, fn func(int) (int, error, bool)) (int, int, error) {
 	t.Helper()
 	var pid, port int
 	var err error
 	_ = captureStdout(t, func() {
-		pid, port, err = s.startWithPortRetry(initial, fn)
+		pid, port, err = s.startWithPortRetry(initial, retryOnConflict, fn)
 	})
 	return pid, port, err
 }

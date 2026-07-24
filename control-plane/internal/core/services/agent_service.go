@@ -97,19 +97,20 @@ func (as *DefaultAgentService) runAgentGuarded(name string, options domain.RunOp
 	// 3. Allocate port
 	fmt.Printf("🔍 Searching for available port...\n")
 	port := options.Port
-	if port == 0 {
+	autoAssignedPort := port == 0
+	if autoAssignedPort {
 		port, err = as.portManager.FindFreePort(8001)
 		if err != nil {
 			return nil, fmt.Errorf("failed to allocate port: %w", err)
 		}
 	}
 
-	// 4-5. Start the process and wait for readiness. Retry exactly once on a
-	// fresh port if the node exits with a strict-port bind conflict: the
-	// assigned port looked free but the bind lost a race (commonly a
-	// just-stopped node's port lingering on mirrored-network setups), and the
-	// SDK exits fast so the control plane can reallocate — which is what we do.
-	pid, port, startErr := as.startWithPortRetry(port, func(p int) (int, error, bool) {
+	// 4-5. Start the process and wait for readiness. Automatically allocated
+	// ports retry exactly once on a fresh port if the node exits with a
+	// strict-port bind conflict. A caller-supplied port is never reassigned:
+	// callers may have firewall, proxy, or service-discovery configuration that
+	// targets that exact port.
+	pid, port, startErr := as.startWithPortRetry(port, autoAssignedPort, func(p int) (int, error, bool) {
 		return as.attemptStart(agentNode, name, p)
 	})
 	if startErr != nil {
@@ -182,13 +183,14 @@ func (as *DefaultAgentService) attemptStart(agentNode packages.InstalledPackage,
 	return pid, nil, false
 }
 
-// startWithPortRetry runs attemptFn on the initial port and, if it fails with a
-// strict-port conflict, retries exactly once on a fresh port. It returns the
-// final pid, the port actually used, and any error.
-func (as *DefaultAgentService) startWithPortRetry(initialPort int, attemptFn func(port int) (pid int, err error, portConflict bool)) (int, int, error) {
+// startWithPortRetry runs attemptFn on the initial port. When retryOnConflict
+// is true (for an automatically allocated port), a strict-port conflict is
+// retried exactly once on a fresh port. It returns the final pid, the port
+// actually used, and any error.
+func (as *DefaultAgentService) startWithPortRetry(initialPort int, retryOnConflict bool, attemptFn func(port int) (pid int, err error, portConflict bool)) (int, int, error) {
 	port := initialPort
 	pid, err, conflict := attemptFn(port)
-	if err == nil || !conflict {
+	if err == nil || !conflict || !retryOnConflict {
 		return pid, port, err
 	}
 
