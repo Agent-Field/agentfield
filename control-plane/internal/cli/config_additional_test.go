@@ -51,7 +51,26 @@ func TestPackageConfigManagerEnvFiles(t *testing.T) {
 		require.Contains(t, content, "PLAIN=value")
 		require.Contains(t, content, `API_KEY="abc 123"`)
 		require.Contains(t, content, `QUOTE="a\"b"`)
+		require.Equal(t, map[string]string{
+			"API_KEY": "abc 123",
+			"PLAIN":   "value",
+			"QUOTE":   `a"b`,
+		}, mustLoadEnvFile(t, pcm, pkgDir))
 	})
+
+	t.Run("save env round trips newlines", func(t *testing.T) {
+		pkgDir := t.TempDir()
+		pcm := &PackageConfigManager{}
+		require.NoError(t, pcm.saveEnvFile(pkgDir, map[string]string{"MULTILINE": "first\nsecond"}))
+		require.Equal(t, "first\nsecond", mustLoadEnvFile(t, pcm, pkgDir)["MULTILINE"])
+	})
+}
+
+func mustLoadEnvFile(t *testing.T, pcm *PackageConfigManager, pkgDir string) map[string]string {
+	t.Helper()
+	envVars, err := pcm.loadEnvFile(pkgDir)
+	require.NoError(t, err)
+	return envVars
 }
 
 func TestPackageConfigManagerLoadAndMutateVariables(t *testing.T) {

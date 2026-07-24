@@ -77,3 +77,23 @@ func TestFindManifestDir_WalksToManifest(t *testing.T) {
 		t.Fatalf("got %q, want %q", got, nested)
 	}
 }
+
+func TestFindManifestDir_RejectsSubdirSymlinkOutsideRoot(t *testing.T) {
+	root := t.TempDir()
+	external := t.TempDir()
+	requireManifest := func(dir string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, "agentfield-package.yaml"), []byte("name: x\nversion: 1\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	requireManifest(external)
+	link := filepath.Join(root, "selected")
+	if err := os.Symlink(external, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	if _, err := findManifestDir(root, "selected"); err == nil {
+		t.Fatal("expected symlinked subdirectory outside root to be rejected")
+	}
+}

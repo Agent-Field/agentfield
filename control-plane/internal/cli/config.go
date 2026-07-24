@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -475,9 +476,13 @@ func (pcm *PackageConfigManager) loadEnvFile(packagePath string) (map[string]str
 			key := strings.TrimSpace(parts[0])
 			value := strings.TrimSpace(parts[1])
 
-			// Remove quotes if present
-			if (strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"")) ||
-				(strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'")) {
+			// strconv.Quote is used by saveEnvFile, so unquote double-quoted
+			// values to preserve escaped quotes, backslashes, and newlines.
+			if strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"") {
+				if unquoted, err := strconv.Unquote(value); err == nil {
+					value = unquoted
+				}
+			} else if strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'") {
 				value = value[1 : len(value)-1]
 			}
 
@@ -498,9 +503,10 @@ func (pcm *PackageConfigManager) saveEnvFile(packagePath string, envVars map[str
 	lines = append(lines, "")
 
 	for key, value := range envVars {
-		// Quote values that contain spaces or special characters
+		// Use Go string quoting so every value can be parsed back without loss.
+		// This covers embedded quotes, backslashes, and newlines as well as spaces.
 		if strings.ContainsAny(value, " \t\n\r\"'\\$") {
-			value = fmt.Sprintf("\"%s\"", strings.ReplaceAll(value, "\"", "\\\""))
+			value = strconv.Quote(value)
 		}
 		lines = append(lines, fmt.Sprintf("%s=%s", key, value))
 	}

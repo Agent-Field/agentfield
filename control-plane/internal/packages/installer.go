@@ -1018,11 +1018,26 @@ func ResolvePackageSubdir(root, subdir string) (string, error) {
 		rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("--path %q resolves outside the package root", subdir)
 	}
-	manifest := filepath.Join(target, "agentfield-package.yaml")
+	// A lexical containment check is not sufficient: target may be a symlink
+	// that escapes the cloned package root. Resolve both paths before reading the
+	// manifest and require the physical target to remain inside the physical root.
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve package root: %w", err)
+	}
+	resolvedTarget, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve --path %q: %w", subdir, err)
+	}
+	if rel, err := filepath.Rel(resolvedRoot, resolvedTarget); err != nil ||
+		rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("--path %q resolves outside the package root", subdir)
+	}
+	manifest := filepath.Join(resolvedTarget, "agentfield-package.yaml")
 	if _, err := os.Stat(manifest); err != nil {
 		return "", fmt.Errorf("no agentfield-package.yaml found for --path %q (expected at %s)", subdir, manifest)
 	}
-	return target, nil
+	return resolvedTarget, nil
 }
 
 // hasRequirementsFile checks if requirements.txt exists
