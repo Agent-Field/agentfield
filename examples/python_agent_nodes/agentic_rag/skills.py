@@ -177,20 +177,35 @@ def find_quote_in_chunk(claim: str, chunk_text: str, min_length: int = 20) -> st
     return best_sentence
 
 
+def _token_set(text: str) -> set:
+    """Return the set of whitespace-delimited lower-case tokens."""
+    return set(text.lower().split())
+
+
+def _jaccard_similarity(a: set, b: set) -> float:
+    """Compute the Jaccard similarity between two token sets."""
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
 def deduplicate_chunks(
     chunks: List[Dict], similarity_threshold: float = 0.9
 ) -> List[Dict]:
-    """Remove duplicate chunks based on text similarity"""
+    """Remove duplicate chunks based on text similarity."""
     unique_chunks = []
-    seen_texts = set()
 
     for chunk in chunks:
-        text_normalized = " ".join(chunk["text"].lower().split())
+        chunk_tokens = _token_set(chunk["text"])
 
-        # Simple deduplication based on normalized text
-        if text_normalized not in seen_texts:
-            unique_chunks.append(chunk)
-            seen_texts.add(text_normalized)
+        if any(
+            _jaccard_similarity(chunk_tokens, _token_set(unique["text"]))
+            >= similarity_threshold
+            for unique in unique_chunks
+        ):
+            continue
+
+        unique_chunks.append(chunk)
 
     return unique_chunks
 
