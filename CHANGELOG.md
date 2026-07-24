@@ -6,6 +6,256 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.117-rc.4] - 2026-07-24
+
+
+### Added
+
+- Feat(cli): health-aware list/stop, startup failure diagnostics, port retry, doctor --probe (#820)
+
+* feat(cli): warn before af stop interrupts running executions
+
+`af stop <node>` gracefully killed nodes with long-running executions in
+flight with no warning. Running executions are queryable from the control
+plane, so query them before signalling the process:
+
+- running executions found + TTY   → list count/ids/age and prompt to confirm
+- running executions found + no TTY → warn (count/ids/age) and proceed
+- --force                           → stop immediately, no query/warning/prompt
+- control plane unreachable         → note it and proceed (best-effort, as before)
+
+The check runs only once we have confirmed the process is genuinely ours and
+alive, so a dead/stale node still reconciles cleanly without spurious queries.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): surface af run startup logs and retry once on strict-port bind conflict
+
+Two operational failures in the `af run` path made a failed start opaque and
+non-recoverable:
+
+- On any startup failure the CLI only printed "did not become ready within 30s";
+  the real traceback/exit reason lived in the node log, reachable only via a
+  separate `af logs`. Now the last ~15 lines of the node's log are printed
+  inline on failure, plus a "Full logs: af logs <node>" pointer.
+
+- When a node was assigned a port that looked free but lost the bind race (a
+  just-stopped node's port lingering under mirrored networking), the SDK exited
+  with AGENTFIELD_STRICT_PORT "assigned port N is unavailable" and nothing
+  retried. The run path now detects that strict-port exit from the node log and
+  retries exactly once on a fresh port (the failed port is reserved first so it
+  is never reused), logging "Port <p> unavailable, retrying on a fresh port".
+
+The port-alloc/start/wait section is refactored into attemptStart +
+startWithPortRetry so the retry decision and port-change logic are unit-testable
+without the real health-poll.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): reconcile af list registry status with control-plane health
+
+`af list` showed only the local registry's view, which is a claim, not a fact:
+a node the registry calls "running" can be dead on the control plane (or a
+registry "stopped" node can still be live). Add a HEALTH column that fetches the
+control plane's node view (GET /api/v1/nodes?show_all=true, so inactive nodes
+are included) and reconciles it with each node's registry status:
+
+- statuses agree           → plain health (e.g. "active")
+- statuses disagree        → health + "(mismatch)" and a footer explaining it
+- node absent from CP       → "not on control plane (mismatch)" when registry running
+- control plane unreachable → "unknown (control plane unreachable)", never an error
+
+The same health/health_discrepancy fields are added to `af list --json` for the
+agent-driven flow. A missing control plane never fails the command.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): add af doctor --probe to smoke-test detected provider CLIs
+
+`af doctor` reported a provider as available whenever its binary was on PATH,
+but a present binary can still return instant empty completions (broken auth,
+model outage) — the doctor called it healthy while every real call failed.
+
+Add an opt-in `--probe` flag that runs a minimal one-shot prompt against each
+DETECTED provider CLI (claude -p, codex exec, gemini -p, opencode run) with a
+per-provider 60s timeout and classifies the result:
+
+- ok      → non-empty completion
+- empty   → exit 0 but no output (the silently-broken case a PATH check misses)
+- error   → non-zero exit (stderr head captured)
+- timeout → no response within the timeout
+
+Probes run only for providers doctor already detects; without --probe the
+command is unchanged. Output and help note that a probe consumes a trivial
+amount of provider quota. The classifier is a pure function so ok/empty/error/
+timeout are table-tested from (exit code, stdout, timed-out) tuples.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix: preserve explicit agent ports on startup conflict
+
+* chore(skills): sync embedded skill mirrors on branch
+
+Realigns embedded mirrors with skills/ sources inherited from the main
+merge so skillkit drift tests pass branch-locally.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (f11cb69)
+
+
+
+### Fixed
+
+- Fix(cli): make af config write through to the secret store + pre-install requirements visibility (#819)
+
+* fix(cli): make af config write through to the node-scoped secret store
+
+`af config <node> --set K=V` (and interactive `af config <node>`) only ever
+wrote the package `.env`, but `af run` resolves a node's environment from the
+encrypted secret store, not that file — so configured values looked saved yet
+never reached the running process, and `af config` even told users to run
+`af run` with settings it would ignore.
+
+Mirror every value set via `af config` into the node-scoped secret store (the
+same one `af secrets set K --node <node>` uses), keeping the `.env` for `af dev`
+and the web UI env editor. `--unset` now removes from both destinations so an
+unset value cannot linger and get re-injected. Success/interactive copy now
+states both destinations truthfully.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): add actionable fix command to missing-secret startup errors
+
+When a required secret is missing and stdin is not a TTY, `af run` hard-failed
+with an error that listed variable names but no way to fix them. Pair each unset
+variable (and every option of an unsatisfied require_one_of group) with the exact
+command that resolves it — `af secrets set <VAR> --node <name>` — and name the
+node in the message so the command is copy-pasteable.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): add af show-requirements to inspect a node before installing
+
+There was no way to see what environment variables a node needs until after
+installing it. `af show-requirements <path-or-git-url>` resolves the source
+WITHOUT installing — a local path is parsed in place; a Git URL (with optional
+@ref and //subdir selector) is shallow-cloned into a temp directory that is
+removed afterwards, so nothing is written under ~/.agentfield.
+
+It prints the node name, required variables, optional variables with their
+defaults, and require_one_of groups, pairing each required variable with the
+exact `af secrets set <VAR> --node <name>` command. Supports `-o json`. The gap
+is now also called out in `af install --help`.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): point post-install guidance at af secrets + explicit next steps
+
+The post-install output told users to run `af config <node> --set VAR=...` for
+missing required variables — a command that only wrote the package .env, which
+`af run` ignores. Point it at `af secrets set <VAR> --node <name>` (which `af run`
+reads) for both missing required variables and unsatisfied require_one_of groups,
+and always print explicit next steps (`af run <name>`, `af list`) so a first-time
+user is never left guessing.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: document af show-requirements and write-through af config
+
+Document the new `af show-requirements` command and the now write-through
+`af config` behavior in the agent-node installation guide, consistent with the
+existing `af secrets` guidance: `af config --set/--unset` mirrors into the
+node-scoped secret store `af run` reads (keeping the `.env` for `af dev` and the
+web UI), and the non-interactive missing-secret error now includes the fix
+command. Adds both commands to the lifecycle reference table.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(config): preserve env values and contain subdirs
+
+* fix(packages): report missing --path subdirs as missing manifests again
+
+The symlink-containment hardening made EvalSymlinks fail first on absent
+subdirectories, surfacing a raw lstat error instead of the documented
+'no agentfield-package.yaml found (expected at <path>)' message and
+breaking four tests that pin that contract. Handle not-exist explicitly
+before the resolution error path.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* chore(skills): sync embedded skill mirrors on branch
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(cli,packages): cover requirements CLI branches and subdir error paths
+
+Closes the patch-coverage gap: no-configuration and unlabeled
+require_one_of rendering plus inspect-error propagation in
+af show-requirements, and the root-resolution / manifest-missing error
+branches of ResolvePackageSubdir.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (4a64cde)
+
+
+
+### Other
+
+- Replace N+1 execution fetches in batch-status handler with one batch fetch (#811)
+
+* issue/batch-status-n-plus-1: replace N+1 execution fetches in batch-status handler with one batch fetch
+
+handleBatchStatus now issues a single GetExecutionRecordsBatch query
+regardless of how many execution IDs are requested, instead of looping
+GetExecutionRecord per ID. Missing IDs preserve the prior per-ID
+'not_found' response. Requests with more than 500 IDs are rejected with
+a 400 before hitting storage. Storage layer gains GetExecutionRecordsBatch
+on LocalStorage and the StorageProvider/ExecutionStore interfaces; test
+stubs updated to satisfy the new interface.
+
+* fix: preserve batch status partial results
+
+* chore(skills): sync embedded skill mirrors on branch
+
+Realigns embedded mirrors with skills/ sources inherited from the main
+merge so skillkit drift tests pass branch-locally.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (984996d)
+
+- InMemoryBackend: deep-copy values on Set/Get to fix data race (#807)
+
+* issue/inmemory-deepcopy: deep-copy map/slice values in InMemoryBackend Set/Get and SetVector/GetVector to prevent data races
+
+* test: add deep-copy helper coverage for []any, []float64, nil/default paths
+
+Exercises the previously-uncovered branches in deepCopyAny ([]any
+recursion, []float64 copying, default passthrough) and
+deepCopyFloat64Slice (nil input handling) to satisfy the patch-coverage
+gate at 80%. No production code changes.
+
+* fix(sdk): reject cyclic in-memory values
+
+* chore(skills): sync embedded skill mirrors on branch
+
+Realigns embedded mirrors with skills/ sources inherited from the main
+merge so skillkit drift tests pass branch-locally.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (7793bc8)
+
 ## [0.1.117-rc.3] - 2026-07-24
 
 
