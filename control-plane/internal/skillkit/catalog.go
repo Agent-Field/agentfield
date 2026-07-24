@@ -30,7 +30,7 @@ var Catalog = []Skill{
 	{
 		Name:        "agentfield",
 		Aliases:     []string{"agentfield-multi-reasoner-builder"},
-		Version:     "0.5.1",
+		Version:     "0.5.2",
 		Description: "Design and ship a multi-agent system on AgentField. Derive the orchestration from the problem: decompose by cognitive jobs, place each slot on the autonomy spectrum, assign a verification rung, choose the dynamism rung with budgets. Composite intelligence, deep dynamic call graphs, live SDK docs from agentfield.ai, async-first smoke tests. For an agent installed on this machine via af/Desktop, use agentfield-personal instead.",
 		EmbedRoot:   "skill_data/agentfield",
 		EntryFile:   "SKILL.md",

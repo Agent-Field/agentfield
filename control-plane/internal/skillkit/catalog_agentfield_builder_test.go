@@ -20,8 +20,8 @@ func TestAgentfieldBuilderSourceFrontmatterContract(t *testing.T) {
 	if err := parseBuilderSkillFrontmatter(content, &frontmatter); err != nil {
 		t.Fatalf("parse source frontmatter: %v", err)
 	}
-	if frontmatter.Name != "agentfield" || frontmatter.Version != "0.5.1" {
-		t.Fatalf("source frontmatter = %+v, want name=agentfield version=0.5.1", frontmatter)
+	if frontmatter.Name != "agentfield" || frontmatter.Version != "0.5.2" {
+		t.Fatalf("source frontmatter = %+v, want name=agentfield version=0.5.2", frontmatter)
 	}
 	if !containsString(frontmatter.Aliases, "agentfield-multi-reasoner-builder") {
 		t.Fatalf("source aliases = %v, want agentfield-multi-reasoner-builder", frontmatter.Aliases)
