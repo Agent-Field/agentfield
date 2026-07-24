@@ -84,3 +84,36 @@ func TestShowRequirements_RejectsUnknownOutputFormat(t *testing.T) {
 	cmd.SilenceErrors = true
 	require.Error(t, cmd.Execute())
 }
+
+func TestShowRequirements_TextNoConfigurationNeeded(t *testing.T) {
+	cmd := NewShowRequirementsCommand()
+	cmd.SetArgs([]string{"testdata/show-requirements-bare"})
+
+	out := captureOutput(t, func() {
+		require.NoError(t, cmd.Execute())
+	})
+
+	require.Contains(t, out, "This node needs no user configuration.")
+	require.Contains(t, out, "Install: af install testdata/show-requirements-bare")
+}
+
+func TestShowRequirements_TextUnlabeledRequireOneOfGroup(t *testing.T) {
+	cmd := NewShowRequirementsCommand()
+	cmd.SetArgs([]string{"testdata/show-requirements-unlabeled"})
+
+	out := captureOutput(t, func() {
+		require.NoError(t, cmd.Execute())
+	})
+
+	require.Contains(t, out, "At least one of")
+	require.Contains(t, out, "one of these")
+}
+
+func TestShowRequirements_InspectErrorPropagates(t *testing.T) {
+	cmd := NewShowRequirementsCommand()
+	cmd.SetArgs([]string{"testdata/does-not-exist"})
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+
+	require.Error(t, cmd.Execute())
+}
