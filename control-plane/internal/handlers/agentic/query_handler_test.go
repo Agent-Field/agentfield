@@ -325,3 +325,61 @@ func TestQueryHandler_ResponseStructure(t *testing.T) {
 		})
 	}
 }
+
+func TestQueryHandler_OffsetPastEndReturnsEmptyPage(t *testing.T) {
+	execStore := &handlerTestStorage{mockStatusStorage: &mockStatusStorage{}}
+	execStore.On("QueryExecutionRecords", mock.Anything, mock.Anything).Return([]*types.Execution{
+		{ExecutionID: "exec-1"},
+		{ExecutionID: "exec-2"},
+	}, nil)
+
+	cases := []struct {
+		name  string
+		body  string
+		store *handlerTestStorage
+	}{
+		{
+			name:  "executions",
+			body:  `{"resource":"executions","limit":5,"offset":10}`,
+			store: execStore,
+		},
+		{
+			name: "workflows",
+			body: `{"resource":"workflows","limit":5,"offset":10}`,
+			store: &handlerTestStorage{
+				mockStatusStorage: &mockStatusStorage{},
+				queryWorkflowsFn: func(context.Context, types.WorkflowFilters) ([]*types.Workflow, error) {
+					return []*types.Workflow{{WorkflowID: "wf-1"}, {WorkflowID: "wf-2"}}, nil
+				},
+			},
+		},
+		{
+			name: "sessions",
+			body: `{"resource":"sessions","limit":5,"offset":10}`,
+			store: &handlerTestStorage{
+				mockStatusStorage: &mockStatusStorage{},
+				querySessionsFn: func(context.Context, types.SessionFilters) ([]*types.Session, error) {
+					return []*types.Session{{SessionID: "sess-1"}, {SessionID: "sess-2"}}, nil
+				},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			router := gin.New()
+			router.POST("/query", QueryHandler(tc.store))
+
+			req := httptest.NewRequest(http.MethodPost, "/query", bytes.NewBufferString(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+
+			require.Equal(t, http.StatusOK, rec.Code)
+			resp := decodeEnvelope(t, rec.Body)
+			require.True(t, resp.OK)
+			data := resp.Data.(map[string]interface{})
+			assert.Equal(t, float64(2), data["total"])
+			assert.Empty(t, data["results"])
+		})
+	}
+}

@@ -278,3 +278,26 @@ func TestBatchHandler_PreservesCallerIdentityThroughAuthenticatedRoute(t *testin
 	assert.Equal(t, float64(http.StatusOK), result["status"])
 	assert.Equal(t, "calling-agent", result["body"].(map[string]interface{})["caller_agent_id"])
 }
+
+func TestBatchHandler_ForwardsAgentNodeIDToSubRequests(t *testing.T) {
+	router := gin.New()
+	router.GET("/api/v1/echo-node", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"agent_node_id": c.GetHeader("X-Agent-Node-ID")})
+	})
+	router.POST("/api/v1/agentic/batch", BatchHandler(router))
+
+	body := `{"operations":[{"id":"echo","method":"GET","path":"/api/v1/echo-node"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agentic/batch", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agent-Node-ID", "node-7")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp AgenticResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	results := resp.Data.(map[string]interface{})["results"].([]interface{})
+	result := results[0].(map[string]interface{})
+	assert.Equal(t, float64(http.StatusOK), result["status"])
+	assert.Equal(t, "node-7", result["body"].(map[string]interface{})["agent_node_id"])
+}
