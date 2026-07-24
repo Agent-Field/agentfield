@@ -192,7 +192,7 @@ export interface DesktopSettings {
   /** Installed agent names to start once the control plane is healthy. */
   autostartAgents: string[]
   /**
-   * Keep the AgentField skills (agentfield: building agents; agentfield-use:
+   * Keep the AgentField skill catalog (building agents, personal agents,
    * calling installed ones) installed in detected coding agents (Claude
    * Code, Codex, …) via `af skill install` — so they know how to use this.
    */

@@ -216,22 +216,19 @@ function syncTray(enabled: boolean): void {
 }
 
 // Keep the AgentField skills present in detected coding agents (Claude Code,
-// Codex, Gemini, …): the builder skill (agentfield) and the consumer skill
-// (agentfield-use — how to discover and call installed agents). One install
-// per skill, sequential so concurrent runs never race on skillkit's state
-// file. Idempotent — skillkit tracks versions in ~/.agentfield/skills/
-// .state.json — and pure best-effort: an older CLI without agentfield-use in
-// its catalog fails that one invocation and nothing else.
-function syncSkills(names = ['agentfield', 'agentfield-use']): void {
-  const [head, ...rest] = names
-  if (!head) return
-  spawn(getCliCommand(), ['skill', 'install', head, '--non-interactive'], {
+// Codex, Gemini, …). A no-name `af skill install` installs the CLI's ENTIRE
+// skill catalog (builder, personal-agent, consumer, and whatever ships next),
+// so new catalog skills reach existing installs without a desktop release —
+// hardcoding names here is how agentfield-personal was silently missed. One
+// process, so concurrent runs never race on skillkit's state file. Idempotent
+// — skillkit tracks versions in ~/.agentfield/skills/.state.json — and pure
+// best-effort: failures are ignored.
+function syncSkills(): void {
+  spawn(getCliCommand(), ['skill', 'install', '--non-interactive'], {
     windowsHide: true,
     stdio: 'ignore',
     env: childEnv()
-  })
-    .on('error', () => {})
-    .on('close', () => syncSkills(rest))
+  }).on('error', () => {})
 }
 
 // Register (or clear) the OS login item. Dev builds skip it — registering
