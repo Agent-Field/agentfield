@@ -189,7 +189,12 @@ class MiniMaxProvider(MediaProvider):
                 if response.status >= 400 or data.get("base_resp", {}).get("status_code") != 0:
                     raise RuntimeError(f"MiniMax music generation failed ({response.status}): {data}")
         audio = data.get("data", {}).get("audio")
-        output = AudioOutput(data=audio if audio and body["output_format"] == "hex" else None, format=body.get("audio_setting", {}).get("format", "mp3"), url=audio if body["output_format"] == "url" else None)
+        audio_data = (
+            base64.b64encode(bytes.fromhex(audio)).decode("ascii")
+            if audio and body["output_format"] == "hex"
+            else None
+        )
+        output = AudioOutput(data=audio_data, format=body.get("audio_setting", {}).get("format", "mp3"), url=audio if body["output_format"] == "url" else None)
         return MultimodalResponse(text=prompt, audio=output, images=[], files=[], raw_response=data)
 
 

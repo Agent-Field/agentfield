@@ -18,6 +18,7 @@ from agentfield.agent_ai import AgentAI
 from agentfield.media_providers import (
     FalProvider,
     LiteLLMProvider,
+    MiniMaxProvider,
     OpenRouterProvider,
     MediaProvider,
     get_provider,
@@ -178,6 +179,68 @@ class TestFalProvider:
 
         result = fal_provider._parse_image_size("512x512")
         assert result == {"width": 512, "height": 512}
+
+
+class _MiniMaxResponse:
+    def __init__(self, payload):
+        self.status = 200
+        self.payload = payload
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def json(self):
+        return self.payload
+
+
+class _MiniMaxSession:
+    def __init__(self, payload):
+        self.payload = payload
+        self.request = None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    def post(self, endpoint, **kwargs):
+        self.request = (endpoint, kwargs)
+        return _MiniMaxResponse(self.payload)
+
+
+class TestMiniMaxProvider:
+    @pytest.mark.asyncio
+    async def test_generate_music_url_output(self):
+        session = _MiniMaxSession(
+            {"base_resp": {"status_code": 0}, "data": {"audio": "https://example.test/music.mp3"}}
+        )
+        provider = MiniMaxProvider(api_key="test-key")
+
+        with patch("aiohttp.ClientSession", return_value=session):
+            result = await provider.generate_music("ambient piano", output_format="url")
+
+        assert result.audio.url == "https://example.test/music.mp3"
+        assert result.audio.data is None
+        assert session.request[1]["json"]["output_format"] == "url"
+
+    @pytest.mark.asyncio
+    async def test_generate_music_hex_output_uses_audiooutput_base64_contract(self):
+        audio_bytes = b"minimax-music"
+        session = _MiniMaxSession(
+            {"base_resp": {"status_code": 0}, "data": {"audio": audio_bytes.hex()}}
+        )
+        provider = MiniMaxProvider(api_key="test-key")
+
+        with patch("aiohttp.ClientSession", return_value=session):
+            result = await provider.generate_music("ambient piano", output_format="hex")
+
+        assert result.audio.url is None
+        assert result.audio.get_bytes() == audio_bytes
+        assert session.request[1]["json"]["output_format"] == "hex"
 
     def test_fal_provider_parse_image_size_invalid_fallback(self, fal_provider):
         """FalProvider should fallback to square_hd for invalid sizes."""
