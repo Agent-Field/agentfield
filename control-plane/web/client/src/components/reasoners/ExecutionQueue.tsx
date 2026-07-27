@@ -1,5 +1,5 @@
 import { useRef, useState, forwardRef, useImperativeHandle, type KeyboardEvent, type MouseEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Badge } from '../ui/badge';

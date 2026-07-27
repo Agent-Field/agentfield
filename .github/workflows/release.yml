@@ -58,7 +58,7 @@ permissions:
 env:
   GO_VERSION: '1.25.x'
   PYTHON_VERSION: '3.11'
-  NODE_VERSION: '20'
+  NODE_VERSION: '22'
 
 jobs:
   prepare:

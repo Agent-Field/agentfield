@@ -1,5 +1,5 @@
 import { Fragment, useState } from "react";
-import { useSearchParams, useNavigate } from "react-router-dom";
+import { useSearchParams, useNavigate } from 'react-router';
 import type { UseQueryResult } from "@tanstack/react-query";
 import { useRunDAG, useStepDetail } from "@/hooks/queries";
 import { formatDuration } from "@/components/RunTrace";

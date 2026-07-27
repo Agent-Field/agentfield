@@ -42,7 +42,7 @@ const {
   getWorkflowDAGLightweightMock: vi.fn(),
 }));
 
-vi.mock("react-router-dom", () => ({
+vi.mock("react-router", () => ({
   useNavigate: () => navigateMock,
   useSearchParams: () => [searchParamsState.value, vi.fn()],
   Link: ({

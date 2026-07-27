@@ -87,6 +87,9 @@
   ],
   "author": "AgentField Team",
   "overrides": {
-    "esbuild": "0.28.1"
+    "esbuild": "0.28.1",
+    "postcss": "8.5.18",
+    "body-parser": "1.20.6"
   }
 }
+

@@ -1,5 +1,5 @@
 import type { KeyboardEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { cn } from '@/lib/utils';
 import type { ReasonerCardProps } from '../../types/reasoners';
 import { ReasonerStatusDot } from './ReasonerStatusDot';

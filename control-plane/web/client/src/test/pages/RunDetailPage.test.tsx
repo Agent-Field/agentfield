@@ -1,7 +1,7 @@
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from 'react-router';
 
 import { RunDetailPage } from "@/pages/RunDetailPage";
 import type { WorkflowDAGLightweightResponse } from "@/types/workflows";
@@ -29,8 +29,8 @@ const state = vi.hoisted(() => ({
   navigateSpy: vi.fn(),
 }));
 
-vi.mock("react-router-dom", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("react-router-dom")>();
+vi.mock("react-router", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react-router")>();
   return {
     ...actual,
     useNavigate: () => state.navigateSpy,

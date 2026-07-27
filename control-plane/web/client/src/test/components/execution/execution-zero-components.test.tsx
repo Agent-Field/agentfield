@@ -12,7 +12,7 @@ import { StepProvenanceCard } from "@/components/StepProvenanceCard";
 const navigate = vi.fn();
 const modalSpy = vi.fn();
 
-vi.mock("react-router-dom", () => ({
+vi.mock("react-router", () => ({
   useNavigate: () => navigate,
 }));
 
