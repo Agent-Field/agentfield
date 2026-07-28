@@ -122,6 +122,9 @@ result = await app.ai_generate_video(
 result.videos[0].save("video.mp4")
 ```
 
+Note: `AIConfig(minimax_api_key=..., minimax_base_url=...)` takes precedence over
+the `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` environment variables when both are set.
+
 ## Human-in-the-Loop Approvals
 
 The Python SDK provides a first-class waiting state for pausing agent execution mid-reasoner and waiting for human approval:
