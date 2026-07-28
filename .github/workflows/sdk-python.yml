@@ -35,7 +35,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install .[dev]
-          pip install ruff
+          # Pinned: ruff 0.16.0 flags ~2700 pre-existing violations (I001,
+          # BLE001, C408, ...) repo-wide; bump deliberately alongside the fixes.
+          pip install "ruff==0.15.22"
 
       - name: Lint
         working-directory: sdk/python
