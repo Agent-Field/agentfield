@@ -435,9 +435,7 @@ class FalProvider(MediaProvider):
 
         # Merge additional kwargs
         fal_args.update(kwargs)
-        response_format = kwargs.get("output_format") or kwargs.get(
-            "response_format"
-        )
+        response_format = kwargs.get("output_format") or kwargs.get("response_format")
         output_format = response_format if isinstance(response_format, str) else format
 
         try:
@@ -770,10 +768,24 @@ class MiniMaxProvider(MediaProvider):
             body["duration"] = int(duration)
         if resolution:
             body["resolution"] = resolution.upper()
-        if extra:
-            body.update(extra)
-        if kwargs:
-            body.update(kwargs)
+        overrides = {**(extra or {}), **kwargs}
+        # Validated/normalized above — merging them from extra/kwargs would
+        # bypass those checks (e.g. a fractional duration or lowercase
+        # resolution).
+        reserved = {
+            "model",
+            "prompt",
+            "first_frame_image",
+            "duration",
+            "resolution",
+        } & overrides.keys()
+        if reserved:
+            raise ValueError(
+                "extra/kwargs may not override validated request fields: "
+                f"{sorted(reserved)}"
+            )
+        if overrides:
+            body.update(overrides)
 
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -1168,8 +1180,7 @@ class OpenRouterProvider(MediaProvider):
         user_content: Any = prompt
         if image_urls:
             user_content = [{"type": "text", "text": prompt}] + [
-                {"type": "image_url", "image_url": {"url": url}}
-                for url in image_urls
+                {"type": "image_url", "image_url": {"url": url}} for url in image_urls
             ]
 
         body: Dict[str, Any] = {
@@ -1218,9 +1229,7 @@ class OpenRouterProvider(MediaProvider):
             b64_json = None
             if url.startswith("data:image/") and "base64," in url:
                 b64_json = url.split("base64,", 1)[1]
-            images.append(
-                ImageOutput(url=url, b64_json=b64_json, revised_prompt=None)
-            )
+            images.append(ImageOutput(url=url, b64_json=b64_json, revised_prompt=None))
 
         for choice in payload.get("choices", []) or []:
             message = choice.get("message", {}) or {}
@@ -1557,9 +1566,7 @@ class OpenRouterProvider(MediaProvider):
                     buf += raw_chunk
                     while b"\n" in buf:
                         raw_line, buf = buf.split(b"\n", 1)
-                        decoded = raw_line.decode(
-                            "utf-8", errors="replace"
-                        ).strip()
+                        decoded = raw_line.decode("utf-8", errors="replace").strip()
                         if not decoded.startswith("data: "):
                             continue
                         data_str = decoded[len("data: ") :]
@@ -1586,9 +1593,7 @@ class OpenRouterProvider(MediaProvider):
                                 )
                             b64_chunks.append(chunk)
                         if audio_delta.get("transcript"):
-                            transcript_parts.append(
-                                audio_delta["transcript"]
-                            )
+                            transcript_parts.append(audio_delta["transcript"])
 
         b64_full = "".join(b64_chunks)
         transcript = "".join(transcript_parts)

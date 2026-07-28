@@ -116,6 +116,7 @@ async def test_minimax_video_lifecycle_uses_cn_endpoint_and_request_shape(monkey
 
 @pytest.mark.asyncio
 async def test_minimax_video_checks_api_errors_and_failed_tasks(monkeypatch):
+    monkeypatch.delenv("MINIMAX_BASE_URL", raising=False)
     error_session = CaptureSession(
         FakeResponse(
             {
@@ -181,6 +182,31 @@ async def test_minimax_video_validates_credentials_model_and_duration(monkeypatc
         await provider.generate_image("An image")
     with pytest.raises(NotImplementedError, match="audio generation"):
         await provider.generate_audio("Audio")
+
+
+@pytest.mark.asyncio
+async def test_minimax_video_rejects_extra_and_kwargs_overriding_validated_fields():
+    provider = MiniMaxProvider(api_key="unit-value")
+
+    with pytest.raises(ValueError, match="duration"):
+        await provider.generate_video(
+            "A landscape",
+            model="minimax/video-model",
+            extra={"duration": 3.5},
+        )
+    with pytest.raises(ValueError, match="first_frame_image"):
+        await provider.generate_video(
+            "A landscape",
+            model="minimax/video-model",
+            image_url="https://cdn.example.com/frame.png",
+            first_frame_image="https://cdn.example.com/other.png",
+        )
+    with pytest.raises(ValueError, match="model"):
+        await provider.generate_video(
+            "A landscape",
+            model="minimax/video-model",
+            extra={"model": "other-model"},
+        )
 
 
 @pytest.mark.asyncio
