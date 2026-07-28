@@ -223,3 +223,40 @@ async def test_claude_uses_project_dir_as_root_over_cwd(monkeypatch):
     )
 
     assert captured["options"].kwargs["cwd"] == "/root"
+
+
+@pytest.mark.asyncio
+async def test_execute_strips_model_variant_suffix(monkeypatch):
+    from agentfield.harness.providers.claude import ClaudeCodeProvider
+
+    captured: dict[str, Any] = {}
+
+    class FakeClaudeAgentOptions:
+        def __init__(self, **kwargs: Any) -> None:
+            self.kwargs = kwargs
+
+    def fake_query(*, prompt: str, options: FakeClaudeAgentOptions):
+        _ = prompt
+        captured["options"] = options
+        return _AsyncStream(
+            [
+                {
+                    "type": "result",
+                    "result": "final",
+                    "session_id": "sess-1",
+                    "cost_usd": 0.01,
+                    "num_turns": 1,
+                }
+            ]
+        )
+
+    fake_sdk = ModuleType("claude_agent_sdk")
+    setattr(fake_sdk, "ClaudeAgentOptions", FakeClaudeAgentOptions)
+    setattr(fake_sdk, "query", fake_query)
+    monkeypatch.setitem(__import__("sys").modules, "claude_agent_sdk", fake_sdk)
+
+    provider = ClaudeCodeProvider()
+    raw = await provider.execute("hello", {"model": "sonnet#high"})
+
+    assert captured["options"].kwargs["model"] == "sonnet"
+    assert raw.is_error is False

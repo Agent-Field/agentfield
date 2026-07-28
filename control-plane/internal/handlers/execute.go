@@ -35,6 +35,7 @@ type ExecutionStore interface {
 	ListAgentVersions(ctx context.Context, id string) ([]*types.AgentNode, error)
 	CreateExecutionRecord(ctx context.Context, execution *types.Execution) error
 	GetExecutionRecord(ctx context.Context, executionID string) (*types.Execution, error)
+	GetExecutionRecordsBatch(ctx context.Context, executionIDs []string) (map[string]*types.Execution, error)
 	UpdateExecutionRecord(ctx context.Context, executionID string, update func(*types.Execution) (*types.Execution, error)) (*types.Execution, error)
 	QueryExecutionRecords(ctx context.Context, filter types.ExecutionFilter) ([]*types.Execution, error)
 	RegisterExecutionWebhook(ctx context.Context, webhook *types.ExecutionWebhook) error
@@ -123,6 +124,10 @@ type executionStatusUpdateRequest struct {
 	DurationMS   *int64                 `json:"duration_ms,omitempty"`
 	CompletedAt  *time.Time             `json:"completed_at,omitempty"`
 	Progress     *int                   `json:"progress,omitempty"`
+	// Usage is the optional token/cost usage object the agent SDK attaches at
+	// the top level of the status-callback body. It is a sibling of Result, so
+	// it is never persisted into the result payload. Absent = no-op.
+	Usage map[string]interface{} `json:"usage,omitempty"`
 }
 
 type replayHit struct {
@@ -184,6 +189,10 @@ const (
 	maxWebhookHeaders      = 20
 	maxWebhookHeaderLength = 512
 	maxWebhookSecretLength = 4096
+
+	// maxBatchStatusIDs caps the number of execution IDs a single
+	// batch-status request may fetch, matching the storage-layer cap.
+	maxBatchStatusIDs = 500
 )
 
 // ExecuteHandler handles synchronous execution requests.
@@ -258,6 +267,7 @@ func (c *executionController) handleSync(ctx *gin.Context) {
 		writeExecutionError(ctx, err)
 		return
 	}
+	plan.executionMode = "sync"
 
 	if plan.replayHit != nil {
 		if err := c.completeReplayHit(reqCtx, plan); err != nil {
@@ -371,7 +381,17 @@ func (c *executionController) handleSync(ctx *gin.Context) {
 		return
 	}
 
-	// Agent returned HTTP 200 (synchronous result), process completion normally
+	// Agent returned HTTP 200 (synchronous result). Extract any token/cost
+	// usage the SDK attached to the result envelope, persist it (best-effort),
+	// and strip it so it never leaks into the stored/returned result payload.
+	if callErr == nil {
+		if usageRaw, stripped := extractUsageFromResult(resultBody); usageRaw != nil {
+			resultBody = stripped
+			c.ingestUsage(reqCtx, plan.exec, usageRaw)
+		}
+	}
+
+	// Process completion normally
 	job := completionJob{
 		controller: c,
 		plan:       plan,
@@ -678,6 +698,7 @@ func (c *executionController) handleAsync(ctx *gin.Context) {
 		writeExecutionError(ctx, err)
 		return
 	}
+	plan.executionMode = "async"
 
 	if plan.replayHit != nil {
 		if err := c.completeReplayHit(reqCtx, plan); err != nil {
@@ -791,19 +812,41 @@ func (c *executionController) handleBatchStatus(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if len(request.ExecutionIDs) > maxBatchStatusIDs {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("batch status supports at most %d execution IDs, got %d", maxBatchStatusIDs, len(request.ExecutionIDs))})
+		return
+	}
+
+	// Use one storage fetch for the normal path. If it fails, fall back to
+	// individual reads so the established per-ID error contract is preserved.
+	records, err := c.store.GetExecutionRecordsBatch(reqCtx, request.ExecutionIDs)
 
 	response := make(BatchStatusResponse, len(request.ExecutionIDs))
 	for _, id := range request.ExecutionIDs {
-		exec, err := c.store.GetExecutionRecord(reqCtx, id)
 		if err != nil {
-			response[id] = ExecutionStatusResponse{
-				ExecutionID: id,
-				Status:      "error",
-				Error:       pointerString(fmt.Sprintf("load execution: %v", err)),
+			exec, getErr := c.store.GetExecutionRecord(reqCtx, id)
+			if getErr != nil {
+				response[id] = ExecutionStatusResponse{
+					ExecutionID: id,
+					Status:      "error",
+					Error:       pointerString(fmt.Sprintf("load execution: %v", getErr)),
+				}
+				continue
 			}
+			if exec == nil {
+				response[id] = ExecutionStatusResponse{
+					ExecutionID: id,
+					Status:      "not_found",
+				}
+				continue
+			}
+			response[id] = c.renderStatusWithApproval(reqCtx, exec)
 			continue
 		}
-		if exec == nil {
+
+		exec, ok := records[id]
+		if !ok || exec == nil {
+			// Missing IDs preserve the prior per-ID response behavior.
 			response[id] = ExecutionStatusResponse{
 				ExecutionID: id,
 				Status:      "not_found",
@@ -956,6 +999,10 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 		elapsed = time.Duration(*updated.DurationMS) * time.Millisecond
 	}
 
+	// Persist token/cost usage reported alongside the status callback.
+	// Best-effort: failures are logged and never fail the status update.
+	c.ingestUsage(reqCtx, updated, req.Usage)
+
 	c.updateWorkflowExecutionStatus(reqCtx, executionID, normalizedStatus, req.StatusReason)
 
 	if isTerminal {
@@ -966,8 +1013,9 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 	}
 
 	eventData := map[string]interface{}{
-		"error":    req.Error,
-		"progress": req.Progress,
+		"error":             req.Error,
+		"progress":          req.Progress,
+		"transition_source": "status_callback",
 	}
 	if req.StatusReason != nil && strings.TrimSpace(*req.StatusReason) != "" {
 		eventData["status_reason"] = strings.TrimSpace(*req.StatusReason)
@@ -1035,6 +1083,65 @@ func (c *executionController) publishExecutionEvent(exec *types.Execution, statu
 	c.publishExecutionEventWithReasonerInfo(exec, status, data, nil, nil)
 }
 
+// enrichExecutionLifecycleData adds low-cardinality lifecycle dimensions used by
+// observability consumers. It does not mutate execution state or include payloads.
+func enrichExecutionLifecycleData(data map[string]interface{}, exec *types.Execution, status string) {
+	if data == nil || exec == nil {
+		return
+	}
+
+	data["is_root_execution"] = exec.ParentExecutionID == nil || strings.TrimSpace(*exec.ParentExecutionID) == ""
+	if _, ok := data["workflow_depth"]; !ok {
+		if data["is_root_execution"] == true {
+			data["workflow_depth"] = 0
+		}
+	}
+	if exec.DurationMS != nil {
+		data["duration_ms"] = *exec.DurationMS
+	}
+
+	switch status {
+	case string(types.ExecutionStatusSucceeded):
+		data["outcome"] = "succeeded"
+	case string(types.ExecutionStatusFailed):
+		data["outcome"] = "failed"
+		data["failure_category"] = canonicalFailureCategory(exec.StatusReason, "unknown")
+	case string(types.ExecutionStatusCancelled):
+		data["outcome"] = "cancelled"
+		data["failure_category"] = "cancelled"
+	case string(types.ExecutionStatusTimeout):
+		data["outcome"] = "timeout"
+		data["failure_category"] = "timeout"
+	}
+}
+
+func canonicalFailureCategory(statusReason *string, fallback string) string {
+	if statusReason == nil {
+		return fallback
+	}
+	category := strings.TrimSpace(*statusReason)
+	if separator := strings.Index(category, ":"); separator >= 0 {
+		category = strings.TrimSpace(category[:separator])
+	}
+	switch category {
+	case string(ErrorCategoryLLMUnavailable),
+		string(ErrorCategoryConcurrencyLimit),
+		string(ErrorCategoryAgentTimeout),
+		string(ErrorCategoryAgentError),
+		string(ErrorCategoryAgentUnreachable),
+		string(ErrorCategoryBadResponse),
+		string(ErrorCategoryInternal),
+		"agent_restart_orphaned",
+		"validation",
+		"permission_denied",
+		"node_unavailable",
+		"target_not_found":
+		return category
+	default:
+		return fallback
+	}
+}
+
 func (c *executionController) publishExecutionEventWithReasonerInfo(exec *types.Execution, status string, data map[string]interface{}, agent *types.AgentNode, reasonerID *string) {
 	if exec == nil {
 		return
@@ -1056,6 +1163,7 @@ func (c *executionController) publishExecutionEventWithReasonerInfo(exec *types.
 	if data == nil {
 		data = make(map[string]interface{})
 	}
+	enrichExecutionLifecycleData(data, exec, status)
 
 	// Add reasoner_id to the event data
 	rID := exec.ReasonerID
@@ -1096,6 +1204,7 @@ func (c *executionController) publishExecutionEventWithReasonerInfo(exec *types.
 	}
 	if workflowExec, err := c.store.GetWorkflowExecution(context.Background(), exec.ExecutionID); err == nil && workflowExec != nil {
 		data["retry_count"] = workflowExec.RetryCount
+		data["workflow_depth"] = workflowExec.WorkflowDepth
 	}
 
 	// Add reasoner definitions if agent info is available
@@ -1182,7 +1291,9 @@ func (c *executionController) publishExecutionStartedEvent(plan *preparedExecuti
 	}
 
 	data := map[string]interface{}{
-		"target_type": plan.targetType,
+		"target_type":       plan.targetType,
+		"execution_mode":    plan.executionMode,
+		"transition_source": "execution_controller",
 	}
 
 	// Include input payload info (not the full payload, just metadata)
@@ -1344,6 +1455,7 @@ type preparedExecution struct {
 	agent             *types.AgentNode
 	target            *parsedTarget
 	targetType        string
+	executionMode     string
 	llmEndpoint       string
 	webhookRegistered bool
 	webhookError      *string
@@ -1705,6 +1817,9 @@ func (c *executionController) completeReplayHit(ctx context.Context, plan *prepa
 	}
 
 	eventData := map[string]interface{}{
+		"target_type":       plan.targetType,
+		"execution_mode":    plan.executionMode,
+		"transition_source": "replay",
 		"replay": map[string]interface{}{
 			"source_execution_id": plan.replayHit.SourceExecutionID,
 			"source_run_id":       plan.replayHit.SourceRunID,
@@ -1887,7 +2002,11 @@ func (c *executionController) completeExecution(ctx context.Context, plan *prepa
 			if plan.webhookRegistered || (updated != nil && updated.WebhookRegistered) {
 				c.triggerWebhook(plan.exec.ExecutionID)
 			}
-			eventData := map[string]interface{}{}
+			eventData := map[string]interface{}{
+				"target_type":       plan.targetType,
+				"execution_mode":    plan.executionMode,
+				"transition_source": "execution_controller",
+			}
 			if !c.redactPayloads {
 				if payload := decodeJSON(result); payload != nil {
 					eventData["result"] = payload
@@ -1972,7 +2091,11 @@ func (c *executionController) failExecution(ctx context.Context, plan *preparedE
 				c.triggerWebhook(plan.exec.ExecutionID)
 			}
 			eventData := map[string]interface{}{
-				"error": errMsg,
+				"error":             errMsg,
+				"target_type":       plan.targetType,
+				"execution_mode":    plan.executionMode,
+				"failure_category":  string(category),
+				"transition_source": "execution_controller",
 			}
 			if !c.redactPayloads {
 				if payload := decodeJSON(result); payload != nil {
@@ -2698,6 +2821,16 @@ func (j asyncExecutionJob) process() {
 			Msg("agent accepted execution for async processing")
 		return
 	}
+
+	// Extract, persist (best-effort), and strip token/cost usage from the
+	// synchronous result envelope so it never leaks into the stored payload.
+	if callErr == nil {
+		if usageRaw, stripped := extractUsageFromResult(resultBody); usageRaw != nil {
+			resultBody = stripped
+			j.controller.ingestUsage(bgCtx, j.plan.exec, usageRaw)
+		}
+	}
+
 	job := completionJob{
 		controller: j.controller,
 		plan:       &j.plan,

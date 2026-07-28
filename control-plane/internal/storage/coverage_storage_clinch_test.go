@@ -249,6 +249,7 @@ func TestStorageClinchConfigAndExecutionLogBranches(t *testing.T) {
 			Message:     "second error",
 			Attributes:  json.RawMessage(`{"trace":"abc"}`),
 			EmittedAt:   now.Add(-2 * time.Minute),
+			RecordedAt:  now.Add(-90 * time.Second),
 		}
 		entryThree := &types.ExecutionLogEntry{
 			ExecutionID: "exec-log-branches",
@@ -277,7 +278,9 @@ func TestStorageClinchConfigAndExecutionLogBranches(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, filtered, 1)
 		require.Equal(t, entryTwo.EventID, filtered[0].EventID)
-		require.Equal(t, entryTwo.EmittedAt, filtered[0].RecordedAt)
+		// recorded_at is persisted by the INSERT now; an explicit value must
+		// round-trip instead of falling back to emitted_at.
+		require.Equal(t, entryTwo.RecordedAt, filtered[0].RecordedAt.UTC().Truncate(time.Second))
 		require.JSONEq(t, `{"trace":"abc"}`, string(filtered[0].Attributes))
 
 		require.NoError(t, ls.PruneExecutionLogEntries(ctx, "exec-log-branches", 2, now.Add(-150*time.Second)))

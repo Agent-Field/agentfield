@@ -252,6 +252,8 @@ KEY2=value2
 # Comment line
 KEY3="quoted value"
 KEY4='single quoted'
+KEY5="a\"b"
+KEY6="first\nsecond"
 `
 	require.NoError(t, os.WriteFile(envPath, []byte(envContent), 0644))
 
@@ -267,6 +269,8 @@ KEY4='single quoted'
 	assert.Equal(t, "value2", envVars["KEY2"])
 	assert.Equal(t, "quoted value", envVars["KEY3"])
 	assert.Equal(t, "single quoted", envVars["KEY4"])
+	assert.Equal(t, `a"b`, envVars["KEY5"])
+	assert.Equal(t, "first\nsecond", envVars["KEY6"])
 	assert.NotContains(t, envVars, "# Comment line")
 }
 

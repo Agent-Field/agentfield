@@ -52,9 +52,9 @@ curl -s http://localhost:8080/api/v1/did/workflow/$run_id/vc-chain | head -c 120
 
 ## Anonymous Telemetry
 
-The Docker stack enables anonymous usage telemetry by default to help us improve AgentField. It records coarse product signals such as startup, agent registration, SDK language, runtime type, and execution status buckets.
+The Docker stack enables anonymous usage telemetry by default to help us improve AgentField. It records coarse product signals such as startup, agent registration, SDK language, runtime type, and execution status buckets. The pseudonymous identifier represents the persisted installation, not a person or account.
 
-It does not collect prompts, inputs, outputs, logs, secrets, API keys, raw IP addresses, hostnames, user IDs, DIDs, or raw error text. Disable it with:
+The telemetry payload does not include prompts, inputs, outputs, logs, secrets, API keys, IP addresses, hostnames, user IDs, DIDs, or raw error text. Disable it with:
 
 ```bash
 AGENTFIELD_TELEMETRY_ENABLED=false docker compose up

@@ -72,6 +72,21 @@ func (s *cancelHandlerStorage) GetExecutionRecord(ctx context.Context, execution
 	return &copy, nil
 }
 
+func (s *cancelHandlerStorage) GetExecutionRecordsBatch(ctx context.Context, executionIDs []string) (map[string]*types.Execution, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make(map[string]*types.Execution, len(executionIDs))
+	for _, id := range executionIDs {
+		exec, ok := s.executionRecords[id]
+		if !ok {
+			continue
+		}
+		copy := *exec
+		result[id] = &copy
+	}
+	return result, nil
+}
+
 func (s *cancelHandlerStorage) GetWorkflowExecution(ctx context.Context, executionID string) (*types.WorkflowExecution, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

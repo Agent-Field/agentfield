@@ -25,7 +25,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Pre-download Go modules for caching
+# third_party holds local module replacements referenced by go.mod
 COPY control-plane/go.mod control-plane/go.sum ./control-plane/
+COPY control-plane/third_party/ ./control-plane/third_party/
 RUN cd control-plane && go mod download
 
 # Build the AgentField CLI (af)

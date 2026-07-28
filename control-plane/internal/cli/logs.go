@@ -18,6 +18,7 @@ import (
 var (
 	logsFollow bool
 	logsTail   int
+	logsJSON   bool
 )
 
 // NewLogsCommand creates the logs command
@@ -31,19 +32,25 @@ Shows the most recent log entries from the agent node's log file.
 
 Examples:
   af logs email-helper
-  af logs data-analyzer --follow`,
+  af logs data-analyzer --follow
+  af logs email-helper --json --tail 100`,
 		Args: cobra.ExactArgs(1),
 		RunE: runLogsCommand,
 	}
 
 	cmd.Flags().BoolVarP(&logsFollow, "follow", "f", false, "Follow log output")
 	cmd.Flags().IntVarP(&logsTail, "tail", "n", 50, "Number of lines to show from the end")
+	cmd.Flags().BoolVar(&logsJSON, "json", false, "Emit a machine-readable JSON envelope ({node, log_path, lines}) instead of raw log text")
 
 	return cmd
 }
 
 func runLogsCommand(cmd *cobra.Command, args []string) error {
 	agentNodeName := args[0]
+
+	if logsJSON {
+		return runLogsCommandJSON(agentNodeName)
+	}
 
 	logViewer := &LogViewer{
 		AgentFieldHome: getAgentFieldHomeDir(),
@@ -57,6 +64,30 @@ func runLogsCommand(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// runLogsCommandJSON emits the last --tail log lines as a JSON envelope.
+// --follow is a live stream and cannot be combined with a JSON snapshot.
+func runLogsCommandJSON(agentNodeName string) error {
+	if logsFollow {
+		return nodeJSONError("invalid_flags", "--follow cannot be combined with --json", "Poll 'af logs <node> --json --tail N' instead of following.")
+	}
+
+	logViewer := &LogViewer{
+		AgentFieldHome: getAgentFieldHomeDir(),
+		Tail:           logsTail,
+	}
+
+	logPath, lines, err := logViewer.CollectLogLines(agentNodeName)
+	if err != nil {
+		return nodeJSONError("logs_failed", err.Error(), "Run 'af list --json' to see installed nodes.")
+	}
+
+	return nodeJSONSuccess(map[string]interface{}{
+		"node":     agentNodeName,
+		"log_path": logPath,
+		"lines":    lines,
+	})
 }
 
 // LogViewer handles viewing agent node logs
@@ -102,6 +133,60 @@ func (lv *LogViewer) ViewLogs(agentNodeName string) error {
 	} else {
 		return lv.tailLogs(logFile, lv.Tail)
 	}
+}
+
+// CollectLogLines returns the node's log file path and its last Tail lines
+// for structured (JSON) output. A missing log file yields empty lines rather
+// than an error, mirroring the human command's behavior for nodes that have
+// not run yet.
+func (lv *LogViewer) CollectLogLines(agentNodeName string) (string, []string, error) {
+	registryPath := filepath.Join(lv.AgentFieldHome, "installed.yaml")
+	registry := &packages.InstallationRegistry{
+		Installed: make(map[string]packages.InstalledPackage),
+	}
+
+	if data, err := os.ReadFile(registryPath); err == nil {
+		if err := yaml.Unmarshal(data, registry); err != nil {
+			return "", nil, fmt.Errorf("failed to parse registry: %w", err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", nil, fmt.Errorf("failed to read registry: %w", err)
+	}
+
+	agentNode, exists := registry.Installed[agentNodeName]
+	if !exists {
+		return "", nil, fmt.Errorf("agent node %s not installed", agentNodeName)
+	}
+
+	logFile := agentNode.Runtime.LogFile
+	if _, err := os.Stat(logFile); os.IsNotExist(err) {
+		return logFile, []string{}, nil
+	}
+
+	lines, err := tailFileLines(logFile, lv.Tail)
+	if err != nil {
+		return logFile, nil, fmt.Errorf("failed to read log file: %w", err)
+	}
+	return logFile, lines, nil
+}
+
+// tailFileLines returns the last n lines of the file at path.
+func tailFileLines(path string, n int) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	text := strings.TrimRight(string(data), "\n")
+	if text == "" {
+		return []string{}, nil
+	}
+
+	lines := strings.Split(text, "\n")
+	if n > 0 && len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return lines, nil
 }
 
 // tailLogs shows the last N lines of the log file

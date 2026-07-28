@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
 	"github.com/gin-gonic/gin"
@@ -625,6 +626,11 @@ func TestApprovalWebhook_HaxSignatureRejectsNonNumericTimestamp(t *testing.T) {
 
 func TestApprovalWebhook_CallbackNotification(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+
+	// Allow loopback for httptest server — the SSRF-safe client blocks
+	// private IPs by default; tests need the allowlist to reach 127.0.0.1.
+	services.SetWebhookAllowedHosts([]string{"127.0.0.1"})
+	t.Cleanup(func() { services.SetWebhookAllowedHosts(nil) })
 
 	agent := &types.AgentNode{ID: "agent-1"}
 	store := newTestExecutionStorage(agent)

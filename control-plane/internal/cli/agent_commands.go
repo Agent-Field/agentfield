@@ -70,6 +70,7 @@ func NewAgentCommand() *cobra.Command {
 	cmd.AddCommand(newAgentSearchCmd())
 	cmd.AddCommand(newAgentQueryCmd())
 	cmd.AddCommand(newAgentRunCmd())
+	cmd.AddCommand(newAgentExecCmd())
 	cmd.AddCommand(newAgentAgentSummaryCmd())
 	cmd.AddCommand(newAgentKBCmd())
 	cmd.AddCommand(newAgentBatchCmd())
@@ -169,6 +170,7 @@ func newAgentQueryCmd() *cobra.Command {
 	var status string
 	var agentID string
 	var runID string
+	var executionID string
 	var since string
 	var until string
 	var limit int
@@ -178,10 +180,19 @@ func newAgentQueryCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "query",
 		Short: "Run unified resource query",
+		Long: `Run a unified resource query against the control plane.
+
+Resources: runs, executions, agents, workflows, sessions, events.
+
+The events resource returns persisted execution lifecycle events
+(status transitions, approval waits/resolutions) sorted by emitted_at
+ascending — a pollable snapshot of the SSE event stream, filtered by
+--execution-id or fanned out across a run with --run-id (one of the two
+is required). It does not include live in-flight SSE-only data.`,
 		Run: func(cmd *cobra.Command, args []string) {
 			resource = strings.TrimSpace(resource)
 			if resource == "" {
-				agentError("missing_required_flag", "--resource is required", "Set --resource to one of runs, executions, agents, workflows, sessions.")
+				agentError("missing_required_flag", "--resource is required", "Set --resource to one of runs, executions, agents, workflows, sessions, events.")
 			}
 
 			filters := map[string]string{}
@@ -193,6 +204,9 @@ func newAgentQueryCmd() *cobra.Command {
 			}
 			if v := strings.TrimSpace(runID); v != "" {
 				filters["run_id"] = v
+			}
+			if v := strings.TrimSpace(executionID); v != "" {
+				filters["execution_id"] = v
 			}
 			if v := strings.TrimSpace(since); v != "" {
 				filters["since"] = v
@@ -225,10 +239,11 @@ func newAgentQueryCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVarP(&resource, "resource", "r", "", "Resource type: runs, executions, agents, workflows, sessions")
+	cmd.Flags().StringVarP(&resource, "resource", "r", "", "Resource type: runs, executions, agents, workflows, sessions, events")
 	cmd.Flags().StringVar(&status, "status", "", "Status filter")
 	cmd.Flags().StringVar(&agentID, "agent-id", "", "Agent ID filter")
 	cmd.Flags().StringVar(&runID, "run-id", "", "Run ID filter")
+	cmd.Flags().StringVar(&executionID, "execution-id", "", "Execution ID filter (events resource)")
 	cmd.Flags().StringVar(&since, "since", "", "RFC3339 lower time bound")
 	cmd.Flags().StringVar(&until, "until", "", "RFC3339 upper time bound")
 	cmd.Flags().IntVar(&limit, "limit", 20, "Result limit")
@@ -587,6 +602,8 @@ func proxyToServer(method, path string, body interface{}) {
 				if _, hasHint := errMap["hint"]; !hasHint {
 					errMap["hint"] = defaultHintForStatus(statusCode)
 				}
+			} else if errStr, ok := payload["error"].(string); ok {
+				payload["error"] = structuredErrorFromString(payload, errStr, statusCode)
 			}
 		}
 
@@ -631,6 +648,44 @@ func readBatchInput(file string) ([]byte, error) {
 		return nil, fmt.Errorf("file %q is empty", source)
 	}
 	return data, nil
+}
+
+// structuredErrorFromString converts legacy {"error":"..."} responses into the
+// structured envelope error object {code,message,hint}. Handlers that return
+// {"error":"some_code","message":"detail"} keep the error string as the code;
+// otherwise the code is derived from the HTTP status.
+func structuredErrorFromString(payload map[string]interface{}, errStr string, statusCode int) map[string]interface{} {
+	code := defaultCodeForStatus(statusCode)
+	message := errStr
+	if msg, ok := payload["message"].(string); ok && strings.TrimSpace(msg) != "" {
+		code = errStr
+		message = msg
+	}
+	return map[string]interface{}{
+		"code":    code,
+		"message": message,
+		"hint":    defaultHintForStatus(statusCode),
+	}
+}
+
+func defaultCodeForStatus(statusCode int) string {
+	switch statusCode {
+	case http.StatusBadRequest:
+		return "bad_request"
+	case http.StatusUnauthorized:
+		return "unauthorized"
+	case http.StatusForbidden:
+		return "forbidden"
+	case http.StatusNotFound:
+		return "not_found"
+	case http.StatusConflict:
+		return "conflict"
+	default:
+		if statusCode >= 500 {
+			return "server_error"
+		}
+		return "request_failed"
+	}
 }
 
 func defaultHintForStatus(statusCode int) string {
@@ -707,13 +762,14 @@ func agentHelpData() map[string]interface{} {
 			},
 			{
 				"name":        "query",
-				"description": "Query runs/executions/agents/workflows/sessions",
-				"usage":       "af agent query --resource runs [--status] [--agent-id] [--run-id] [--since] [--until] [--limit] [--offset] [--include]",
+				"description": "Query runs/executions/agents/workflows/sessions/events",
+				"usage":       "af agent query --resource runs [--status] [--agent-id] [--run-id] [--execution-id] [--since] [--until] [--limit] [--offset] [--include]",
 				"flags": []map[string]string{
 					{"name": "resource", "short": "r", "type": "string (required)"},
 					{"name": "status", "short": "", "type": "string"},
 					{"name": "agent-id", "short": "", "type": "string"},
 					{"name": "run-id", "short": "", "type": "string"},
+					{"name": "execution-id", "short": "", "type": "string"},
 					{"name": "since", "short": "", "type": "string(RFC3339)"},
 					{"name": "until", "short": "", "type": "string(RFC3339)"},
 					{"name": "limit", "short": "", "type": "int"},
@@ -721,6 +777,7 @@ func agentHelpData() map[string]interface{} {
 					{"name": "include", "short": "", "type": "string(csv)"},
 				},
 				"example": "af agent query -r executions --agent-id analyst --status completed --limit 25",
+				"notes":   "resource=events returns persisted execution lifecycle events sorted by emitted_at ascending; requires --execution-id or --run-id. It is a pollable snapshot of the SSE stream, not a live subscription.",
 			},
 			{
 				"name":        "run",
@@ -735,6 +792,66 @@ func agentHelpData() map[string]interface{} {
 				"usage":       "af agent agent-summary --id <agent_id>",
 				"flags":       []map[string]string{{"name": "id", "short": "", "type": "string (required)"}},
 				"example":     "af agent agent-summary --id sec-analyst",
+			},
+			{
+				"name":        "exec pause",
+				"description": "Pause a running execution",
+				"usage":       "af agent exec pause --id <execution_id> [--reason <text>]",
+				"flags": []map[string]string{
+					{"name": "id", "short": "", "type": "string (required)"},
+					{"name": "reason", "short": "", "type": "string"},
+				},
+				"example": "af agent exec pause --id exec_123 --reason 'manual review'",
+			},
+			{
+				"name":        "exec resume",
+				"description": "Resume a paused execution",
+				"usage":       "af agent exec resume --id <execution_id>",
+				"flags":       []map[string]string{{"name": "id", "short": "", "type": "string (required)"}},
+				"example":     "af agent exec resume --id exec_123",
+			},
+			{
+				"name":        "exec cancel",
+				"description": "Cancel an execution",
+				"usage":       "af agent exec cancel --id <execution_id> [--reason <text>]",
+				"flags": []map[string]string{
+					{"name": "id", "short": "", "type": "string (required)"},
+					{"name": "reason", "short": "", "type": "string"},
+				},
+				"example": "af agent exec cancel --id exec_123 --reason 'wrong input'",
+			},
+			{
+				"name":        "exec restart",
+				"description": "Restart a workflow from an execution point",
+				"usage":       "af agent exec restart --id <execution_id> [--scope] [--reuse] [--fork] [--model] [--input] [--reason]",
+				"flags": []map[string]string{
+					{"name": "id", "short": "", "type": "string (required)"},
+					{"name": "scope", "short": "", "type": "string (workflow|execution)"},
+					{"name": "reuse", "short": "", "type": "string (succeeded-before|all-succeeded|none)"},
+					{"name": "fork", "short": "", "type": "bool"},
+					{"name": "model", "short": "", "type": "string"},
+					{"name": "input", "short": "", "type": "string (JSON or @path)"},
+					{"name": "reason", "short": "", "type": "string"},
+				},
+				"example": "af agent exec restart --id exec_123 --scope workflow --reuse succeeded-before",
+			},
+			{
+				"name":        "exec approval-status",
+				"description": "Get the approval status for an execution",
+				"usage":       "af agent exec approval-status --id <execution_id>",
+				"flags":       []map[string]string{{"name": "id", "short": "", "type": "string (required)"}},
+				"example":     "af agent exec approval-status --id exec_123",
+			},
+			{
+				"name":        "exec approve",
+				"description": "Resolve a pending approval for an execution",
+				"usage":       "af agent exec approve --id <execution_id> --decision <approved|rejected|request_changes> [--reason <text>]",
+				"flags": []map[string]string{
+					{"name": "id", "short": "", "type": "string (required)"},
+					{"name": "decision", "short": "", "type": "string (required)"},
+					{"name": "reason", "short": "", "type": "string"},
+				},
+				"example": "af agent exec approve --id exec_123 --decision approved",
 			},
 			{
 				"name":        "kb topics",
@@ -790,14 +907,33 @@ func agentHelpData() map[string]interface{} {
 			"af agent discover -q run",
 			"af agent search \"review pull request\"",
 			"af agent query -r runs --limit 10",
+			"af call <node>.<reasoner> --schema",
+			"af call <node>.<reasoner> --async -o json",
+			"af wait <run_id> -o json",
+			"af tail <run_id>",
 			"af agent run --id <run_id>",
 			"af agent kb topics",
 			"af agent kb guide --goal 'build swe agent'",
 		},
+		// golden_path is the end-to-end loop a harness follows to go from a cold
+		// start to a result: discover → install → run → schema → call → wait.
+		// Each step is ordered and self-contained so an agent can execute them in
+		// sequence without prior context.
+		"golden_path": []map[string]interface{}{
+			{"step": 1, "command": "af doctor", "purpose": "Confirm the CLI can reach a running control plane and inspect the environment"},
+			{"step": 2, "command": "af catalog -o json", "purpose": "Browse installable agent nodes (name, description, install source)"},
+			{"step": 3, "command": "af install <source>", "purpose": "Install a node from the catalog, a git URL, or a local path"},
+			{"step": 4, "command": "af secrets set <KEY> <value>", "purpose": "Provide the API keys the node needs (e.g. model-provider keys)"},
+			{"step": 5, "command": "af run <node>", "purpose": "Start the node so its reasoners register with the control plane"},
+			{"step": 6, "command": "af ls   # or: af agent discover -q <term>", "purpose": "List the reasoners now available to call"},
+			{"step": 7, "command": "af call <node>.<reasoner> --schema", "purpose": "Fetch a reasoner's input schema before calling it"},
+			{"step": 8, "command": "af call <node>.<reasoner> --async -o json", "purpose": "Trigger the reasoner; get {\"run_id\":...,\"status\":\"accepted\"} back as JSON"},
+			{"step": 9, "command": "af wait <run_id> -o json   # or: af tail <run_id>", "purpose": "Block for the final status+result as JSON, or stream progress live"},
+		},
 		"auth": map[string]interface{}{
 			"method":           "Set X-API-Key header via --api-key or AGENTFIELD_API_KEY",
 			"public_endpoints": []string{"GET /api/v1/agentic/kb/topics", "GET /api/v1/agentic/kb/articles", "GET /api/v1/agentic/kb/articles/:article_id", "GET /api/v1/agentic/kb/guide"},
-			"requires_auth":    []string{"GET /api/v1/agentic/status", "GET /api/v1/agentic/discover", "GET /api/v1/agentic/reasoners", "POST /api/v1/agentic/query", "GET /api/v1/agentic/run/:run_id", "GET /api/v1/agentic/agent/:agent_id/summary", "POST /api/v1/agentic/batch"},
+			"requires_auth":    []string{"GET /api/v1/agentic/status", "GET /api/v1/agentic/discover", "GET /api/v1/agentic/reasoners", "POST /api/v1/agentic/query", "GET /api/v1/agentic/run/:run_id", "GET /api/v1/agentic/agent/:agent_id/summary", "POST /api/v1/agentic/batch", "POST /api/v1/executions/:execution_id/pause", "POST /api/v1/executions/:execution_id/resume", "POST /api/v1/executions/:execution_id/cancel", "POST /api/v1/executions/:execution_id/restart", "GET /api/v1/executions/:execution_id/approval-status", "POST /api/v1/executions/:execution_id/approval-response"},
 		},
 		"response_schemas": map[string]interface{}{
 			"success": map[string]interface{}{

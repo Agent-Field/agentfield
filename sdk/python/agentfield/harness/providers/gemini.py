@@ -5,7 +5,12 @@ from __future__ import annotations
 import time
 from typing import Dict, Optional
 
-from agentfield.harness._cli import estimate_cli_cost, run_cli, strip_ansi
+from agentfield.harness._cli import (
+    estimate_cli_cost,
+    resolve_model_and_variant,
+    run_cli,
+    strip_ansi,
+)
 from agentfield.harness._availability import ensure_cli_available, provider_unavailable
 from agentfield.harness._result import FailureType, Metrics, RawResult
 
@@ -30,8 +35,11 @@ class GeminiProvider:
         elif permission_mode == "plan":
             cmd.extend(["--approval-mode", "plan"])
 
-        if options.get("model"):
-            cmd.extend(["-m", str(options["model"])])
+        # gemini has no reasoning-effort flag; strip any "#variant" suffix so
+        # the CLI still receives a valid model id.
+        model_value, _variant_value = resolve_model_and_variant(options)
+        if model_value:
+            cmd.extend(["-m", model_value])
         cmd.extend(["-p", prompt])
 
         env: Dict[str, str] = {}
@@ -92,7 +100,7 @@ class GeminiProvider:
             error_message = None
 
         estimated_cost = estimate_cli_cost(
-            model=str(options.get("model", "")),
+            model=model_value or "",
             prompt=prompt,
             result_text=result_text,
         )

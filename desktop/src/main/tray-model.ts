@@ -45,3 +45,22 @@ export function trayIconBase(state: TrayState, darkTaskbar: boolean): string {
   const activity = state === 'running' ? 'active' : 'inactive'
   return `tray-${activity}-${darkTaskbar ? 'light' : 'dark'}`
 }
+
+/** The slice of Electron's nativeTheme the tray reads. */
+export interface ThemeSignals {
+  shouldUseDarkColors: boolean
+  shouldUseDarkColorsForSystemIntegratedUI: boolean
+}
+
+/**
+ * Whether the taskbar/status area is dark. Windows themes the taskbar with the
+ * *system* theme, which users often set independently from the *apps* theme
+ * that `shouldUseDarkColors` reports (dark taskbar + light apps is common) —
+ * feeding the app theme here painted near-black glyphs onto dark taskbars.
+ * Linux status areas track the one theme `shouldUseDarkColors` reflects.
+ */
+export function darkTaskbar(theme: ThemeSignals, platform: string = process.platform): boolean {
+  return platform === 'win32'
+    ? theme.shouldUseDarkColorsForSystemIntegratedUI
+    : theme.shouldUseDarkColors
+}

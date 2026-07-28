@@ -26,8 +26,16 @@ type Options struct {
 	// Provider name: "opencode", "claude-code".
 	Provider string
 
-	// Model identifier passed to the coding agent.
+	// Model identifier passed to the coding agent. It may carry a
+	// reasoning-effort variant after a "#" separator (e.g.
+	// "openrouter/z-ai/glm-5.2#high"); providers strip the suffix and map
+	// the variant to their effort control when they have one.
 	Model string
+
+	// Variant is the provider-specific reasoning-effort variant (e.g.
+	// "high", "max", "minimal"). When set it wins over a "#variant" suffix
+	// on Model. Providers without an effort control drop it.
+	Variant string
 
 	// MaxTurns limits the number of agent iterations.
 	MaxTurns int

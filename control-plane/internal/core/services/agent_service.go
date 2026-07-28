@@ -97,41 +97,27 @@ func (as *DefaultAgentService) runAgentGuarded(name string, options domain.RunOp
 	// 3. Allocate port
 	fmt.Printf("🔍 Searching for available port...\n")
 	port := options.Port
-	if port == 0 {
+	autoAssignedPort := port == 0
+	if autoAssignedPort {
 		port, err = as.portManager.FindFreePort(8001)
 		if err != nil {
 			return nil, fmt.Errorf("failed to allocate port: %w", err)
 		}
 	}
 
-	fmt.Printf("✅ Assigned port: %d\n", port)
-
-	// 4. Start agent node process
-	fmt.Printf("📡 Starting agent node process...\n")
-	processConfig, err := as.buildProcessConfig(agentNode, port)
-	if err != nil {
-		return nil, err
-	}
-	pid, err := as.processManager.Start(processConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to start agent node: %w", err)
-	}
-
-	// 5. Wait for agent node to be ready
-	healthPath := "/health"
-	expectedNodeID := name
-	if metadata, err := packages.ParsePackageMetadata(agentNode.Path); err == nil {
-		healthPath = metadata.HealthcheckPath()
-		if metadata.AgentNode.NodeID != "" {
-			expectedNodeID = metadata.AgentNode.NodeID
-		}
-	}
-	if err := as.waitForAgentNode(port, healthPath, expectedNodeID, nodeReadyTimeout()); err != nil {
-		// Kill the process if it failed to start properly
-		if stopErr := as.processManager.Stop(pid); stopErr != nil {
-			return nil, fmt.Errorf("agent node failed to start: %w (additionally failed to stop process: %v)", err, stopErr)
-		}
-		return nil, fmt.Errorf("agent node failed to start: %w", err)
+	// 4-5. Start the process and wait for readiness. Automatically allocated
+	// ports retry exactly once on a fresh port if the node exits with a
+	// strict-port bind conflict. A caller-supplied port is never reassigned:
+	// callers may have firewall, proxy, or service-discovery configuration that
+	// targets that exact port.
+	pid, port, startErr := as.startWithPortRetry(port, autoAssignedPort, func(p int) (int, error, bool) {
+		return as.attemptStart(agentNode, name, p)
+	})
+	if startErr != nil {
+		// Surface the node's own log inline so the real traceback / exit reason
+		// is visible without a separate `af logs` round-trip.
+		as.printStartupFailureDiagnostics(agentNode, name)
+		return nil, startErr
 	}
 
 	fmt.Printf("🧠 Agent node registered with AgentField Server\n")
@@ -157,6 +143,124 @@ func (as *DefaultAgentService) runAgentGuarded(name string, options domain.RunOp
 	runningAgent.StartedAt = time.Now()
 
 	return &runningAgent, nil
+}
+
+// attemptStart builds the process config, starts the node on the given port,
+// and waits for it to answer its health check. On failure it stops the process
+// and reports whether the failure was a strict-port bind conflict (detected
+// from the node's own log), which the caller uses to decide on a fresh-port
+// retry.
+func (as *DefaultAgentService) attemptStart(agentNode packages.InstalledPackage, name string, port int) (pid int, err error, portConflict bool) {
+	fmt.Printf("✅ Assigned port: %d\n", port)
+
+	fmt.Printf("📡 Starting agent node process...\n")
+	processConfig, err := as.buildProcessConfig(agentNode, port)
+	if err != nil {
+		return 0, err, false
+	}
+	pid, err = as.processManager.Start(processConfig)
+	if err != nil {
+		return 0, fmt.Errorf("failed to start agent node: %w", err), false
+	}
+
+	healthPath := "/health"
+	expectedNodeID := name
+	if metadata, err := packages.ParsePackageMetadata(agentNode.Path); err == nil {
+		healthPath = metadata.HealthcheckPath()
+		if metadata.AgentNode.NodeID != "" {
+			expectedNodeID = metadata.AgentNode.NodeID
+		}
+	}
+
+	if waitErr := as.waitForAgentNode(port, healthPath, expectedNodeID, nodeReadyTimeout()); waitErr != nil {
+		// Read the log before killing so a strict-port exit is still visible.
+		conflict := logIndicatesPortConflict(readLogTailLines(agentNode.Runtime.LogFile, 40))
+		if stopErr := as.processManager.Stop(pid); stopErr != nil {
+			return 0, fmt.Errorf("agent node failed to start: %w (additionally failed to stop process: %v)", waitErr, stopErr), conflict
+		}
+		return 0, fmt.Errorf("agent node failed to start: %w", waitErr), conflict
+	}
+	return pid, nil, false
+}
+
+// startWithPortRetry runs attemptFn on the initial port. When retryOnConflict
+// is true (for an automatically allocated port), a strict-port conflict is
+// retried exactly once on a fresh port. It returns the final pid, the port
+// actually used, and any error.
+func (as *DefaultAgentService) startWithPortRetry(initialPort int, retryOnConflict bool, attemptFn func(port int) (pid int, err error, portConflict bool)) (int, int, error) {
+	port := initialPort
+	pid, err, conflict := attemptFn(port)
+	if err == nil || !conflict || !retryOnConflict {
+		return pid, port, err
+	}
+
+	retryPort, rerr := as.freshRetryPort(port)
+	if rerr != nil || retryPort == port {
+		// No distinct fresh port to try — keep the original failure.
+		return pid, port, err
+	}
+
+	fmt.Printf("⚠️  Port %d unavailable, retrying on a fresh port\n", port)
+	pid, err, _ = attemptFn(retryPort)
+	return pid, retryPort, err
+}
+
+// freshRetryPort excludes the port that just failed to bind, then asks the port
+// manager for a new one, so the retry never reuses the conflicting port.
+func (as *DefaultAgentService) freshRetryPort(failedPort int) (int, error) {
+	_ = as.portManager.ReservePort(failedPort)
+	return as.portManager.FindFreePort(8001)
+}
+
+// printStartupFailureDiagnostics prints the tail of the node's log so the real
+// exit reason (traceback, bind error, missing dependency, …) is visible inline,
+// plus a pointer to the full logs.
+func (as *DefaultAgentService) printStartupFailureDiagnostics(agentNode packages.InstalledPackage, name string) {
+	lines := readLogTailLines(agentNode.Runtime.LogFile, 15)
+	if len(lines) > 0 {
+		fmt.Printf("\n📄 Last %d line(s) of %s log:\n", len(lines), name)
+		for _, line := range lines {
+			fmt.Printf("    %s\n", line)
+		}
+	}
+	fmt.Printf("💡 Full logs: af logs %s\n", name)
+}
+
+// readLogTailLines returns the last n lines of the file at path. A missing or
+// unreadable file yields nil so callers treat "no log" and "no diagnostic info"
+// the same way.
+func readLogTailLines(path string, n int) []string {
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	text := strings.TrimRight(string(data), "\n")
+	if text == "" {
+		return nil
+	}
+	lines := strings.Split(text, "\n")
+	if n > 0 && len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return lines
+}
+
+// logIndicatesPortConflict reports whether the node's log tail shows the SDK's
+// strict-port bind failure — the node was assigned a port that turned out to be
+// unavailable at bind time and exited so the control plane can reallocate. The
+// SDK logs "AGENTFIELD_STRICT_PORT set but the assigned port N is unavailable"
+// and raises "assigned port N is unavailable"; both contain "assigned port" and
+// "unavailable".
+func logIndicatesPortConflict(lines []string) bool {
+	for _, line := range lines {
+		if strings.Contains(line, "assigned port") && strings.Contains(line, "unavailable") {
+			return true
+		}
+	}
+	return false
 }
 
 // StopAgent stops a running agent with robust error handling

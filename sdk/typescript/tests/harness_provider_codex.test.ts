@@ -65,6 +65,55 @@ describe('codex provider', () => {
     expect(result.messages).toHaveLength(2);
   });
 
+  it('passes the model via -m and a #variant suffix as model_reasoning_effort', async () => {
+    vi.spyOn(cli, 'runCli').mockResolvedValue({
+      stdout: '{"type":"turn.completed","text":"ok"}\n',
+      stderr: '',
+      exitCode: 0,
+    });
+
+    const provider = new CodexProvider();
+    const result = await provider.execute('hello', { model: 'gpt-5.3-codex#high' });
+
+    expect(cli.runCli).toHaveBeenCalledWith(
+      ['codex', 'exec', '--json', '-m', 'gpt-5.3-codex', '-c', 'model_reasoning_effort=high', 'hello'],
+      { cwd: undefined, env: undefined }
+    );
+    expect(result.metrics.model).toBe('gpt-5.3-codex');
+  });
+
+  it('lets an explicit variant option win over the model suffix', async () => {
+    vi.spyOn(cli, 'runCli').mockResolvedValue({
+      stdout: '{"type":"turn.completed","text":"ok"}\n',
+      stderr: '',
+      exitCode: 0,
+    });
+
+    const provider = new CodexProvider();
+    await provider.execute('hello', { model: 'gpt-5.3-codex#low', variant: 'max' });
+
+    expect(cli.runCli).toHaveBeenCalledWith(
+      ['codex', 'exec', '--json', '-m', 'gpt-5.3-codex', '-c', 'model_reasoning_effort=max', 'hello'],
+      { cwd: undefined, env: undefined }
+    );
+  });
+
+  it('passes a bare model via -m with no effort config', async () => {
+    vi.spyOn(cli, 'runCli').mockResolvedValue({
+      stdout: '{"type":"turn.completed","text":"ok"}\n',
+      stderr: '',
+      exitCode: 0,
+    });
+
+    const provider = new CodexProvider();
+    await provider.execute('hello', { model: 'gpt-5.5' });
+
+    expect(cli.runCli).toHaveBeenCalledWith(
+      ['codex', 'exec', '--json', '-m', 'gpt-5.5', 'hello'],
+      { cwd: undefined, env: undefined }
+    );
+  });
+
   it('returns helpful message when binary is not found', async () => {
     vi.spyOn(cli, 'runCli').mockRejectedValue(new Error('spawn codex ENOENT'));
 

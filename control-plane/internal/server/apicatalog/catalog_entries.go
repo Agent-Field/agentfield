@@ -90,6 +90,7 @@ func DefaultEntries() []EndpointEntry {
 		// --- Approval ---
 		{Method: "POST", Path: "/api/v1/executions/:execution_id/request-approval", Group: "approval", Summary: "Request approval for an execution", AuthLevel: "api_key", Tags: []string{"approval", "request"}},
 		{Method: "GET", Path: "/api/v1/executions/:execution_id/approval-status", Group: "approval", Summary: "Get approval status", AuthLevel: "api_key", Tags: []string{"approval", "status"}},
+		{Method: "POST", Path: "/api/v1/executions/:execution_id/approval-response", Group: "approval", Summary: "Resolve a pending approval (approved/rejected/request_changes)", AuthLevel: "api_key", Tags: []string{"approval", "resolve"}},
 		{Method: "POST", Path: "/api/v1/agents/:node_id/executions/:execution_id/request-approval", Group: "approval", Summary: "Request approval (agent-scoped)", AuthLevel: "api_key", Tags: []string{"approval", "request", "agent-scoped"}},
 		{Method: "GET", Path: "/api/v1/agents/:node_id/executions/:execution_id/approval-status", Group: "approval", Summary: "Get approval status (agent-scoped)", AuthLevel: "api_key", Tags: []string{"approval", "status", "agent-scoped"}},
 		{Method: "POST", Path: "/api/v1/webhooks/approval-response", Group: "approval", Summary: "Webhook for approval responses (HMAC-signed)", AuthLevel: "webhook", Tags: []string{"approval", "webhook"}},

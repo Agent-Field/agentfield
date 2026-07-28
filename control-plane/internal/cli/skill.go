@@ -93,7 +93,7 @@ func newSkillInstallCommand() *cobra.Command {
 				targets = picked
 			}
 
-			report, err := skillkit.Install(skillkit.InstallOptions{
+			installOpts := skillkit.InstallOptions{
 				SkillName:     skillName,
 				Version:       version,
 				Targets:       targets,
@@ -101,7 +101,25 @@ func newSkillInstallCommand() *cobra.Command {
 				AllRegistered: allTargets,
 				Force:         force,
 				DryRun:        dryRun,
-			})
+			}
+
+			// With no explicit skill name, install the whole catalog — both the
+			// build skill (agentfield) and the drive skill (agentfield-use) — so a
+			// harness that installs skills lands the golden-loop docs too, not just
+			// the first catalog entry. An explicit `af skill install <name>` still
+			// installs exactly that one skill.
+			if skillName == "" {
+				reports, err := skillkit.InstallAll(installOpts)
+				if err != nil {
+					return err
+				}
+				for _, report := range reports {
+					printInstallReport(report, dryRun)
+				}
+				return nil
+			}
+
+			report, err := skillkit.Install(installOpts)
 			if err != nil {
 				return err
 			}
@@ -277,12 +295,13 @@ func runInteractivePicker() ([]string, error) {
 	dim := color.New(color.Faint)
 	green := color.New(color.FgGreen)
 
-	bold.Println("\nInstall agentfield skill")
+	bold.Println("\nInstall agentfield skills")
 	fmt.Println()
-	fmt.Println("  This skill teaches any coding agent how to design and ship")
-	fmt.Println("  multi-agent systems on AgentField. It composes reasoners into")
-	fmt.Println("  deep, dynamic, parallel call graphs, fetches live SDK docs from")
-	fmt.Println("  agentfield.ai, and ends with a live async smoke test.")
+	fmt.Println("  Installs both AgentField skills into the targets you pick:")
+	fmt.Println("    • agentfield      (build) — design and ship multi-agent systems:")
+	fmt.Println("      deep, dynamic, parallel reasoner graphs with a live smoke test.")
+	fmt.Println("    • agentfield-use  (drive) — discover and call agents already")
+	fmt.Println("      running on a control plane: the discover → call → wait loop.")
 	fmt.Println()
 	bold.Println("  Targets")
 	fmt.Println()

@@ -84,8 +84,17 @@ func isVouchedRewriteEndpoint(baseURL string) bool {
 
 // marshalRequest serializes the request, applying provider-specific parameter
 // rewrites. For vouched OpenAI endpoints with newer models, max_tokens is
-// rewritten to max_completion_tokens.
+// rewritten to max_completion_tokens. OpenRouter requests are opted into
+// native usage accounting so responses carry usage.cost.
 func (c *Client) marshalRequest(req *Request) ([]byte, error) {
+	// OpenRouter only reports the native cost of a call when the request
+	// carries {"usage": {"include": true}}; opt in here so both the sync and
+	// streaming paths get provider cost accounting. Requests that already set
+	// Usage explicitly are left alone.
+	if req.Usage == nil && c.config.IsOpenRouter() {
+		req.Usage = &RequestUsage{Include: true}
+	}
+
 	model := req.Model
 	if model == "" {
 		model = c.config.Model

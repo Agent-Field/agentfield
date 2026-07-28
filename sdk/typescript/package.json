@@ -1,12 +1,13 @@
 {
   "name": "@agentfield/sdk",
-  "version": "0.1.109-rc.7",
+  "version": "0.1.117",
   "description": "AgentField TypeScript SDK",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "src/triggers/fixtures"
   ],
   "scripts": {
     "build": "tsup",

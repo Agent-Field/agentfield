@@ -59,6 +59,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	if err != nil {
 		logger.Logger.Fatal().Err(err).Msg("Failed to load configuration")
 	}
+	cfg.Telemetry.AgentFieldVersion = version
 
 	// Override port from flag if provided
 	if cmd.Flags().Lookup("port").Changed {
@@ -168,6 +169,9 @@ func runServer(cmd *cobra.Command, args []string) {
 	// healthy AgentField already answers on our port, exit 0 instead of dying,
 	// so a launchd-managed second instance stops cleanly rather than
 	// relaunch-looping on the lock timeout.
+	// Surface the build version on runtime introspection surfaces (e.g. the
+	// embedded MCP server's serverInfo).
+	server.SetBuildVersion(version)
 	agentfieldServer, err := server.NewAgentFieldServer(cfg)
 	if err != nil {
 		if server.ExitCleanIfAlreadyRunning(err, cfg.AgentField.Port) {

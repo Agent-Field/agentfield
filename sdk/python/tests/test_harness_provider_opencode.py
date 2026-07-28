@@ -581,3 +581,75 @@ async def test_opencode_windows_hands_prompt_over_stdin(
     # ...and argv carries only the fixed flags, no positional prompt.
     assert captured["cmd"][:4] == ["opencode", "run", "--format", "json"]
     assert all("too large" not in part for part in captured["cmd"])
+
+
+@pytest.mark.asyncio
+async def test_opencode_model_variant_suffix_maps_to_variant_flag(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None, input_text=None):
+        _ = (env, cwd, timeout, input_text)
+        captured["cmd"] = cmd
+        return "ok\n", "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
+
+    provider = OpenCodeProvider()
+    raw = await provider.execute("hello", {"model": "openrouter/z-ai/glm-5.2#high"})
+
+    assert captured["cmd"] == [
+        "opencode",
+        "run",
+        "--format",
+        "json",
+        "-m",
+        "openrouter/z-ai/glm-5.2",
+        "--variant",
+        "high",
+        "hello",
+    ]
+    assert raw.is_error is False
+    assert raw.metrics.model == "openrouter/z-ai/glm-5.2"
+
+
+@pytest.mark.asyncio
+async def test_opencode_explicit_variant_option_wins_over_suffix(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None, input_text=None):
+        _ = (env, cwd, timeout, input_text)
+        captured["cmd"] = cmd
+        return "ok\n", "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
+
+    provider = OpenCodeProvider()
+    await provider.execute("hello", {"model": "openai/gpt-5#low", "variant": "max"})
+
+    m_idx = captured["cmd"].index("-m")
+    assert captured["cmd"][m_idx + 1] == "openai/gpt-5"
+    v_idx = captured["cmd"].index("--variant")
+    assert captured["cmd"][v_idx + 1] == "max"
+
+
+@pytest.mark.asyncio
+async def test_opencode_bare_model_has_no_variant_flag(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None, input_text=None):
+        _ = (env, cwd, timeout, input_text)
+        captured["cmd"] = cmd
+        return "ok\n", "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.opencode.run_cli", fake_run_cli)
+
+    provider = OpenCodeProvider()
+    await provider.execute("hello", {"model": "deepseek/deepseek-v4-flash"})
+
+    assert "--variant" not in captured["cmd"]

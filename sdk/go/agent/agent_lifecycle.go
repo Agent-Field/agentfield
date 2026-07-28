@@ -134,6 +134,7 @@ func (a *Agent) registerNode(ctx context.Context) error {
 	for _, reasoner := range a.reasoners {
 		reasoners = append(reasoners, types.ReasonerDefinition{
 			ID:             reasoner.Name,
+			Description:    reasoner.Description,
 			InputSchema:    reasoner.InputSchema,
 			OutputSchema:   reasoner.OutputSchema,
 			Tags:           reasoner.Tags,

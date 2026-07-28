@@ -185,6 +185,13 @@ func (s *AgentFieldServer) registerUIAPI() {
 			executions.POST("/:execution_id/verify-vc", didHandler.VerifyExecutionVCComprehensiveHandler)
 		}
 
+		// Token/cost usage aggregation group
+		usage := uiAPI.Group("/usage")
+		{
+			usageHandler := ui.NewUsageHandler(s.storage)
+			usage.GET("/stats", usageHandler.GetUsageStatsHandler)
+		}
+
 		// LLM health status endpoint and execution queue status
 		llmHandler := ui.NewExecutionLogsHandler(s.storage, s.llmHealthMonitor, func() config.ExecutionLogsConfig {
 			return s.config.AgentField.ExecutionLogs

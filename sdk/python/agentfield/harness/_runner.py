@@ -189,11 +189,18 @@ def _resolve_options(
 
 def _accumulate_metrics(
     all_raws: List[RawResult],
-) -> tuple[Optional[float], int, str, List[Dict[str, Any]]]:
+) -> tuple[Optional[float], int, str, List[Dict[str, Any]], Dict[str, Any]]:
     total_cost: Optional[float] = None
     total_turns = 0
     session_id = ""
     all_messages: List[Dict[str, Any]] = []
+    tokens: Dict[str, Any] = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "model": None,
+    }
 
     for raw in all_raws:
         if raw.metrics.total_cost_usd is not None:
@@ -202,8 +209,30 @@ def _accumulate_metrics(
         if raw.metrics.session_id:
             session_id = raw.metrics.session_id
         all_messages.extend(raw.messages)
+        tokens["input_tokens"] += raw.metrics.input_tokens
+        tokens["output_tokens"] += raw.metrics.output_tokens
+        tokens["cache_read_tokens"] += raw.metrics.cache_read_tokens
+        tokens["cache_creation_tokens"] += raw.metrics.cache_creation_tokens
+        if raw.metrics.model and not tokens["model"]:
+            tokens["model"] = raw.metrics.model
 
-    return total_cost, total_turns, session_id, all_messages
+    return total_cost, total_turns, session_id, all_messages, tokens
+
+
+def _token_result_kwargs(tokens: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the HarnessResult token kwargs from an aggregated token dict."""
+    input_tokens = tokens.get("input_tokens", 0)
+    output_tokens = tokens.get("output_tokens", 0)
+    cache_read = tokens.get("cache_read_tokens", 0)
+    cache_creation = tokens.get("cache_creation_tokens", 0)
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cache_read_tokens": cache_read,
+        "cache_creation_tokens": cache_creation,
+        "total_tokens": input_tokens + output_tokens,
+        "model": tokens.get("model"),
+    }
 
 
 class HarnessRunner:
@@ -307,6 +336,7 @@ class HarnessRunner:
                 )
 
             elapsed = int((time.monotonic() - start_time) * 1000)
+            _cost, _turns, _sid, _msgs, _tokens = _accumulate_metrics([raw])
             return HarnessResult(
                 result=raw.result,
                 parsed=None,
@@ -318,6 +348,7 @@ class HarnessRunner:
                 duration_ms=elapsed,
                 session_id=raw.metrics.session_id,
                 messages=raw.messages,
+                **_token_result_kwargs(_tokens),
             )
         finally:
             if schema is not None:
@@ -441,7 +472,7 @@ class HarnessRunner:
 
         if validated is not None:
             elapsed = int((time.monotonic() - start_time) * 1000)
-            cost, turns, sid, msgs = _accumulate_metrics(all_raws)
+            cost, turns, sid, msgs, tokens = _accumulate_metrics(all_raws)
             return HarnessResult(
                 result=initial_raw.result,
                 parsed=validated,
@@ -451,6 +482,7 @@ class HarnessRunner:
                 duration_ms=elapsed,
                 session_id=sid,
                 messages=msgs,
+                **_token_result_kwargs(tokens),
             )
 
         _retryable = {FailureType.CRASH, FailureType.NO_OUTPUT, FailureType.NONE}
@@ -464,7 +496,7 @@ class HarnessRunner:
             and not os.path.exists(output_path)
         ):
             elapsed = int((time.monotonic() - start_time) * 1000)
-            cost, turns, sid, msgs = _accumulate_metrics(all_raws)
+            cost, turns, sid, msgs, tokens = _accumulate_metrics(all_raws)
             provider_error = initial_raw.error_message or "Provider execution failed."
             return HarnessResult(
                 result=initial_raw.result,
@@ -480,6 +512,7 @@ class HarnessRunner:
                 duration_ms=elapsed,
                 session_id=sid,
                 messages=msgs,
+                **_token_result_kwargs(tokens),
             )
 
         last_session_id = initial_raw.metrics.session_id
@@ -558,7 +591,7 @@ class HarnessRunner:
 
             if validated is not None:
                 elapsed = int((time.monotonic() - start_time) * 1000)
-                cost, turns, sid, msgs = _accumulate_metrics(all_raws)
+                cost, turns, sid, msgs, tokens = _accumulate_metrics(all_raws)
                 logger.info("Schema validation succeeded on retry %d", retry_num + 1)
                 return HarnessResult(
                     result=retry_raw.result,
@@ -569,10 +602,11 @@ class HarnessRunner:
                     duration_ms=elapsed,
                     session_id=sid,
                     messages=msgs,
+                    **_token_result_kwargs(tokens),
                 )
 
         elapsed = int((time.monotonic() - start_time) * 1000)
-        cost, turns, sid, msgs = _accumulate_metrics(all_raws)
+        cost, turns, sid, msgs, tokens = _accumulate_metrics(all_raws)
         final_diagnosis = diagnose_output_failure(output_path, schema)
         return HarnessResult(
             result=all_raws[-1].result,
@@ -588,4 +622,5 @@ class HarnessRunner:
             duration_ms=elapsed,
             session_id=sid,
             messages=msgs,
+            **_token_result_kwargs(tokens),
         )

@@ -184,6 +184,17 @@ func TestMergeDBConfigAppliesNonZeroDBValues(t *testing.T) {
 	require.Equal(t, "file-api-key", cfg.API.Auth.APIKey)
 }
 
+func TestMergeDBConfigAppliesExplicitMCPDisable(t *testing.T) {
+	cfg := baseConfigForDBTests()
+	enabled := true
+	cfg.Features.MCP.Enabled = &enabled
+	disabled := false
+
+	mergeDBConfig(&cfg, &config.Config{Features: config.FeatureConfig{MCP: config.MCPConfig{Enabled: &disabled}}})
+
+	require.False(t, cfg.Features.MCP.IsEnabled())
+}
+
 func TestMergeDBConfigDoesNotOverrideARDGuardrails(t *testing.T) {
 	cfg := baseConfigForDBTests()
 	cfg.AgentField.ARD = config.ARDConfig{

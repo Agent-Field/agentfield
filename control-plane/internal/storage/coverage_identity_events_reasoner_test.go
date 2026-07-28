@@ -163,19 +163,71 @@ func TestExecutionEventAndLogCoverage(t *testing.T) {
 		require.NoError(t, ls.StoreWorkflowExecutionEvent(ctx, event))
 		require.NotZero(t, event.EventID)
 		require.False(t, event.RecordedAt.IsZero())
-		_, err = ls.db.ExecContext(ctx, `UPDATE workflow_execution_events SET recorded_at = ? WHERE event_id = ?`, event.RecordedAt, event.EventID)
-		require.NoError(t, err)
 
+		// The insert must persist recorded_at itself — listing previously
+		// failed with a NULL-scan error because the raw INSERT omitted it.
 		stored, err := ls.ListWorkflowExecutionEvents(ctx, "exec-events-1", nil, 10)
 		require.NoError(t, err)
 		require.Len(t, stored, 1)
 		require.Equal(t, json.RawMessage("{}"), stored[0].Payload)
 		require.Equal(t, &status, stored[0].Status)
+		require.False(t, stored[0].RecordedAt.IsZero())
 
 		after := int64(1)
 		stored, err = ls.ListWorkflowExecutionEvents(ctx, "exec-events-1", &after, 10)
 		require.NoError(t, err)
 		require.Empty(t, stored)
+
+		// Legacy rows written before recorded_at was persisted have NULL;
+		// listing must fall back to emitted_at instead of erroring.
+		_, err = ls.db.ExecContext(ctx, `UPDATE workflow_execution_events SET recorded_at = NULL WHERE event_id = ?`, event.EventID)
+		require.NoError(t, err)
+		stored, err = ls.ListWorkflowExecutionEvents(ctx, "exec-events-1", nil, 10)
+		require.NoError(t, err)
+		require.Len(t, stored, 1)
+		require.Equal(t, emittedAt, stored[0].RecordedAt.UTC().Truncate(time.Second))
+	})
+
+	t.Run("persists recorded_at for execution logs", func(t *testing.T) {
+		ls, ctx := setupLocalStorage(t)
+
+		// Distinct timestamps so the NULL-read fallback (recorded_at ->
+		// emitted_at) cannot masquerade as persistence: if the raw INSERT
+		// drops recorded_at again, the listed value comes back as emittedAt
+		// and this test fails.
+		emittedAt := time.Now().UTC().Add(-2 * time.Minute).Truncate(time.Second)
+		recordedAt := time.Now().UTC().Truncate(time.Second)
+
+		entry := &types.ExecutionLogEntry{
+			ExecutionID: "exec-logs-recorded",
+			WorkflowID:  "wf-logs-recorded",
+			Level:       "info",
+			Message:     "recorded-at roundtrip",
+			EmittedAt:   emittedAt,
+			RecordedAt:  recordedAt,
+		}
+		require.NoError(t, ls.StoreExecutionLogEntry(ctx, entry))
+
+		stored, err := ls.ListExecutionLogEntries(ctx, "exec-logs-recorded", nil, 10, nil, nil, nil, "")
+		require.NoError(t, err)
+		require.Len(t, stored, 1)
+		require.Equal(t, recordedAt, stored[0].RecordedAt.UTC().Truncate(time.Second))
+
+		// The batch path funnels through the same Tx helper; a zero
+		// RecordedAt must be stamped before the INSERT, not after it.
+		batch := []*types.ExecutionLogEntry{{
+			ExecutionID: "exec-logs-recorded-batch",
+			WorkflowID:  "wf-logs-recorded",
+			Level:       "info",
+			Message:     "batch recorded-at",
+			EmittedAt:   emittedAt,
+		}}
+		require.NoError(t, ls.StoreExecutionLogEntries(ctx, "exec-logs-recorded-batch", batch))
+		stored, err = ls.ListExecutionLogEntries(ctx, "exec-logs-recorded-batch", nil, 10, nil, nil, nil, "")
+		require.NoError(t, err)
+		require.Len(t, stored, 1)
+		require.False(t, stored[0].RecordedAt.IsZero())
+		require.NotEqual(t, emittedAt, stored[0].RecordedAt.UTC().Truncate(time.Second))
 	})
 
 	t.Run("stores lists and prunes execution logs", func(t *testing.T) {

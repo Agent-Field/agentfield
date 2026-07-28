@@ -20,6 +20,8 @@ import {
   isOpenRouterRequest,
   mergeOpenRouterAttributionHeaders,
 } from './openrouterAttribution.js';
+import { withOpenRouterUsageInclude } from './openrouterUsage.js';
+import { recordAiSdkUsage } from '../usage/aiUsage.js';
 
 export type ZodSchema<T> = z.Schema<T, z.ZodTypeDef, any>;
 
@@ -97,6 +99,7 @@ export class AIClient {
   async generate<T>(prompt: string, options: AIRequestOptions & { schema: ZodSchema<T> }): Promise<T>;
   async generate(prompt: string, options?: AIRequestOptions): Promise<string>;
   async generate<T = any>(prompt: string, options: AIRequestOptions = {}): Promise<T | string> {
+    const { provider, modelName } = this.resolveModelChoice(options);
     const model = this.buildModel(options);
 
     if (options.schema) {
@@ -114,6 +117,7 @@ export class AIClient {
         });
 
       const response = await this.withRateLimitRetry(call);
+      recordAiSdkUsage({ source: response, model: modelName, provider });
       return response.object as T;
     }
 
@@ -127,9 +131,14 @@ export class AIClient {
       });
 
     const response = await this.withRateLimitRetry(call);
+    recordAiSdkUsage({ source: response, model: modelName, provider });
     return (response).text as string;
   }
 
+  // NOTE: stream() usage is deliberately NOT captured. The AI SDK's
+  // streamResult.usage/.totalUsage promises "automatically consume the
+  // stream": attaching to them would force full background consumption of a
+  // stream the caller may abandon early, changing stream semantics.
   async stream(prompt: string, options: AIRequestOptions = {}): Promise<AIStream> {
     const model = this.buildModel(options);
     const streamResult = streamText({
@@ -173,9 +182,23 @@ export class AIClient {
     return this.buildModel(options);
   }
 
+  /**
+   * Resolve the effective provider/model pair for a request without building
+   * the model. Used by usage tracking to attribute token/cost entries to the
+   * model actually called.
+   */
+  resolveModelChoice(options: AIRequestOptions = {}): {
+    provider: NonNullable<AIConfig['provider']>;
+    modelName: string;
+  } {
+    return {
+      provider: options.provider ?? this.config.provider ?? 'openai',
+      modelName: options.model ?? this.config.model ?? 'gpt-4o'
+    };
+  }
+
   private buildModel(options: AIRequestOptions) {
-    const provider = options.provider ?? this.config.provider ?? 'openai';
-    const modelName = options.model ?? this.config.model ?? 'gpt-4o';
+    const { provider, modelName } = this.resolveModelChoice(options);
     const openRouterHeaders = this.openRouterHeaders(provider, modelName);
 
     switch (provider) {
@@ -236,11 +259,14 @@ export class AIClient {
       }
 
       case 'openrouter': {
-        // OpenRouter is OpenAI-compatible but doesn't support Responses API
+        // OpenRouter is OpenAI-compatible but doesn't support Responses API.
+        // The custom fetch opts requests into OpenRouter usage accounting so
+        // responses carry the native cost figure for usage tracking.
         const openrouter = createOpenAI({
           apiKey: this.config.apiKey,
           baseURL: this.config.baseUrl ?? 'https://openrouter.ai/api/v1',
           headers: openRouterHeaders,
+          fetch: withOpenRouterUsageInclude() as any,
         });
         return openrouter.chat(modelName);
       }
@@ -256,10 +282,15 @@ export class AIClient {
 
       case 'openai':
       default: {
+        // openRouterHeaders is only set when this request is actually bound
+        // for OpenRouter (e.g. openrouter baseUrl through the openai
+        // provider) — opt those into usage accounting too.
         const openai = createOpenAI({
           apiKey: this.config.apiKey,
           baseURL: this.config.baseUrl,
-          ...(openRouterHeaders ? { headers: openRouterHeaders } : {})
+          ...(openRouterHeaders
+            ? { headers: openRouterHeaders, fetch: withOpenRouterUsageInclude() as any }
+            : {})
         });
         return openai(modelName);
       }

@@ -268,6 +268,21 @@ func (s *testExecutionStorage) GetExecutionRecord(ctx context.Context, execution
 	return &copy, nil
 }
 
+func (s *testExecutionStorage) GetExecutionRecordsBatch(ctx context.Context, executionIDs []string) (map[string]*types.Execution, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make(map[string]*types.Execution, len(executionIDs))
+	for _, id := range executionIDs {
+		execution, ok := s.executionRecords[id]
+		if !ok {
+			continue
+		}
+		copy := *execution
+		result[id] = &copy
+	}
+	return result, nil
+}
+
 func (s *testExecutionStorage) UpdateExecutionRecord(ctx context.Context, executionID string, update func(*types.Execution) (*types.Execution, error)) (*types.Execution, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -371,6 +386,21 @@ func (s *testExecutionStorage) ListExecutionLogEntries(ctx context.Context, exec
 	return out, nil
 }
 
+func (s *testExecutionStorage) CreateExecutionUsage(ctx context.Context, rows []*types.ExecutionUsage) error {
+	return nil
+}
+func (s *testExecutionStorage) GetUsageStats(ctx context.Context, since *time.Time) (*types.UsageStatsAggregation, error) {
+	return &types.UsageStatsAggregation{}, nil
+}
+func (s *testExecutionStorage) GetUsageTimeseries(ctx context.Context, since *time.Time, now time.Time, buckets int) (*types.UsageTimeseries, error) {
+	return &types.UsageTimeseries{}, nil
+}
+func (s *testExecutionStorage) GetUsageTimeseriesByModel(ctx context.Context, since *time.Time, now time.Time, buckets int) ([]types.UsageModelSeries, error) {
+	return nil, nil
+}
+func (s *testExecutionStorage) GetExecutionUsageTotals(ctx context.Context, executionID string) (*float64, int64, error) {
+	return nil, 0, nil
+}
 func (s *testExecutionStorage) PruneExecutionLogEntries(ctx context.Context, executionID string, maxEntries int, olderThan time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

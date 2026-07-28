@@ -229,7 +229,7 @@ class AgentServer:
                     log_error(f"Shutdown endpoint error: {e}")
                 return {
                     "status": "error",
-                    "message": f"Failed to initiate shutdown: {str(e)}",
+                    "message": "Failed to initiate shutdown",
                 }
 
         @self.agent.get("/status")
@@ -291,7 +291,7 @@ class AgentServer:
             except Exception as e:
                 if self.agent.dev_mode:
                     log_error(f"Status endpoint error: {e}")
-                return {"status": "error", "message": f"Failed to get status: {str(e)}"}
+                return {"status": "error", "message": "Failed to get status"}
 
         @self.agent.get("/info")
         async def node_info():
@@ -886,6 +886,9 @@ class AgentServer:
 
             # Start connection manager (non-blocking)
             connected = await self.agent.connection_manager.start()
+
+            # Start notification dispatcher
+            self.agent._notification_dispatcher.start()
 
             # Connect memory event client - works independently of AgentField server connection
             if self.agent.memory_event_client:

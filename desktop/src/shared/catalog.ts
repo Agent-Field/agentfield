@@ -19,40 +19,40 @@ export const CATALOG: CatalogEntry[] = [
   {
     name: 'swe-planner',
     description:
-      'Autonomous software-engineering fleet: plan, code, test, and ship production-grade PRs',
+      'Software factory — turn any issue into a production-ready pull request, end to end',
     source: 'https://github.com/Agent-Field/SWE-AF',
     language: 'python'
   },
   {
     name: 'swe-planner-go',
     description:
-      'Go port of the SWE fleet: same planning/execution reasoners, one static binary',
+      'Software factory — turn any issue into a production-ready pull request, end to end',
     source: 'https://github.com/Agent-Field/SWE-AF//go',
     language: 'go'
   },
   {
     name: 'pr-af',
-    description: 'Turns a plain task description into a draft pull request on GitHub',
+    description: 'Code review — deep, evidence-backed review of any GitHub pull request',
     source: 'https://github.com/Agent-Field/pr-af',
     language: 'python'
   },
   {
     name: 'pr-af-go',
-    description: 'Go port of the PR review agent: same reasoners, one static binary',
+    description: 'Code review — deep, evidence-backed review of any GitHub pull request',
     source: 'https://github.com/Agent-Field/pr-af//go',
     language: 'go'
   },
   {
     name: 'sec-af',
     description:
-      'Code security auditor: scans repositories and proves exploitability with verdicts and traces',
+      'Security auditor — find vulnerabilities in your codebase and prove which ones are exploitable',
     source: 'https://github.com/Agent-Field/sec-af',
     language: 'python'
   },
   {
     name: 'cloudsecurity-af',
     description:
-      'Cloud security posture: read-only attack-path scans across AWS, GCP, and Azure',
+      'Cloud security — map real attack paths across your AWS, GCP, and Azure accounts',
     source: 'https://github.com/Agent-Field/cloudsecurity-af',
     language: 'python'
   }

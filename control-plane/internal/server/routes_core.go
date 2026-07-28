@@ -134,6 +134,10 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	// agents handle external approval service communication directly.
 	agentAPI.POST("/executions/:execution_id/request-approval", handlers.RequestApprovalHandler(s.storage))
 	agentAPI.GET("/executions/:execution_id/approval-status", handlers.GetApprovalStatusHandler(s.storage))
+	// Authenticated approval resolution by execution ID — same resolution
+	// logic as the HMAC webhook below, for operators/CLIs that hold an API
+	// key rather than the webhook secret.
+	agentAPI.POST("/executions/:execution_id/approval-response", handlers.ResolveApprovalHandler(s.storage))
 
 	// Agent-scoped approval routes — enforce that the execution belongs to the requesting agent.
 	agentAPI.POST("/agents/:node_id/executions/:execution_id/request-approval", handlers.AgentScopedRequestApprovalHandler(s.storage))

@@ -99,6 +99,30 @@ describe('harness runner', () => {
     expect(runner.isTransient('permission denied')).toBe(false);
   });
 
+  it('resolveOptions threads variant from config with per-call override winning', () => {
+    const cfg: HarnessConfig = {
+      provider: 'opencode',
+      model: 'openai/gpt-5',
+      variant: 'low',
+    };
+
+    const runner = new HarnessRunner(cfg);
+    expect(runner.resolveOptions(cfg, {}).variant).toBe('low');
+    expect(runner.resolveOptions(cfg, { variant: 'max' }).variant).toBe('max');
+  });
+
+  it('run threads variant through to the provider options', async () => {
+    const cwd = makeTempDir();
+    const provider = new MockProvider();
+    vi.spyOn(factory, 'buildProvider').mockResolvedValue(provider);
+
+    const runner = new HarnessRunner();
+    await runner.run('hello', { provider: 'opencode', model: 'openai/gpt-5#low', variant: 'max', cwd });
+
+    expect(provider.lastOptions?.model).toBe('openai/gpt-5#low');
+    expect(provider.lastOptions?.variant).toBe('max');
+  });
+
   it('run without schema returns plain HarnessResult', async () => {
     const cwd = makeTempDir();
     const provider = new MockProvider([

@@ -9,8 +9,12 @@ package main
 // into these helpers.
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"math"
 	"net/http"
@@ -331,6 +335,559 @@ func fetchExecStats(apiKey string) execStats {
 	return stats
 }
 
+// ---- Usage stats (tokens / cost) -------------------------------------------
+
+// usageStatsURL is the UI usage endpoint. Like the executions stats endpoint it
+// sits behind the API key, so it takes the same key. The window is one of
+// 1h|24h|7d|30d|all; the server defaults it to 24h when omitted/invalid.
+func usageStatsURL(window string) string {
+	return fmt.Sprintf("http://localhost:%d/api/ui/v1/usage/stats?window=%s", serverPort(), window)
+}
+
+// usageStatus mirrors fleetStatus: the outcome of trying to read usage stats.
+type usageStatus int
+
+const (
+	usageOK           usageStatus = iota // stats read successfully
+	usageAuthRequired                    // server demands a key we don't have (or ours was rejected)
+	usageUnavailable                     // server unreachable / unexpected response
+	usageAbsent                          // endpoint not found (older server) → hide the section entirely
+)
+
+// usageGroup is one grouped bucket (by model / provider / harness). Provider is
+// only populated for model groups. CostUSD is a pointer because the server emits
+// null when no priced usage was recorded.
+type usageGroup struct {
+	Key          string
+	Provider     string
+	CostUSD      *float64
+	InputTokens  int64
+	OutputTokens int64
+	TotalTokens  int64
+	Entries      int64
+}
+
+// seriesPoint is one bucket of the 24h token timeseries the tray charts. T is
+// the bucket start; CostUSD is nil when no priced usage landed in the bucket.
+type seriesPoint struct {
+	T           time.Time
+	TotalTokens int64
+	CostUSD     *float64
+}
+
+// modelSeries is one model's per-bucket token contribution to the stacked chart,
+// aligned to the same bucket grid as usageStats.Series. Key is the model id (or
+// the literal "other" for the aggregated long tail). Tokens is zero-filled to
+// the grid, so it can be stacked directly.
+type modelSeries struct {
+	Key    string
+	Tokens []float64
+}
+
+// usageStats is the slice of the usage aggregation the tray renders.
+type usageStats struct {
+	Status        usageStatus
+	Window        string
+	CostUSD       *float64
+	InputTokens   int64
+	OutputTokens  int64
+	TotalTokens   int64
+	Executions    int64
+	ByModel       []usageGroup
+	ByProvider    []usageGroup
+	ByHarness     []usageGroup
+	LastUpdated   *time.Time
+	BucketSeconds int           // width of each series bucket; 0 when no series
+	Series        []seriesPoint // ascending, zero-filled; empty when the server omits it
+	// SeriesByModel is the per-model breakdown of the timeseries (top-3 desc plus
+	// an optional final "other"), on the same bucket grid as Series. Empty when
+	// the server omits "series_by_model" (older control plane), in which case the
+	// tray falls back to the single-series chart.
+	SeriesByModel []modelSeries
+}
+
+// hasData reports whether there is anything worth rendering: a successful fetch
+// that actually recorded some tokens. Empty windows collapse the whole section.
+func (u usageStats) hasData() bool {
+	return u.Status == usageOK && u.TotalTokens > 0
+}
+
+// hasSeries reports whether the server returned a token timeseries (newer
+// control planes only). An older server omits the "series" key entirely, in
+// which case this is false and the chart row is simply hidden.
+func (u usageStats) hasSeries() bool {
+	return len(u.Series) > 0
+}
+
+// hasSeriesByModel reports whether the server returned a per-model breakdown of
+// the timeseries (newest control planes only). When false the tray falls back to
+// the single-series area chart.
+func (u usageStats) hasSeriesByModel() bool {
+	for _, m := range u.SeriesByModel {
+		if len(m.Tokens) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// showUsageChart is the (GUI-free, unit-tested) predicate the darwin tray uses to
+// decide whether to show a timeseries chart row: there must be usage to chart
+// and a series to chart it from. When the series is present but all-zero the
+// renderer still draws a flat baseline, so this stays true in that case.
+func showUsageChart(u usageStats) bool {
+	return u.hasData() && u.hasSeries()
+}
+
+// showStackedChart reports whether to draw the richer stacked-by-model chart
+// (preferred) rather than the single-series fallback: it needs usage plus a
+// per-model breakdown.
+func showStackedChart(u usageStats) bool {
+	return u.hasData() && u.hasSeriesByModel()
+}
+
+// stackedChartData assembles the numeric layers and hues the stacked-area
+// renderer consumes, in bottom-to-top draw order (rank 0 at the bottom, "other"
+// gray on top). It is GUI-free so it can be unit-tested; the renderer itself
+// lives in chart_render.go. The chart is pure graphics — it carries no text — so
+// no axis labels or peak value are computed here.
+func stackedChartData(u usageStats) (layers [][]float64, colors []color.NRGBA) {
+	// Normalize every model series to the common bucket count.
+	n := len(u.Series)
+	for _, m := range u.SeriesByModel {
+		if len(m.Tokens) > n {
+			n = len(m.Tokens)
+		}
+	}
+	rank := 0
+	for _, m := range u.SeriesByModel {
+		vals := make([]float64, n)
+		copy(vals, m.Tokens)
+		layers = append(layers, vals)
+		colors = append(colors, stackedLayerColor(m.Key, rank))
+		if m.Key != "other" {
+			rank++
+		}
+	}
+	return layers, colors
+}
+
+// seriesTokenValues projects the timeseries onto the per-bucket token counts the
+// chart renderer consumes.
+func seriesTokenValues(pts []seriesPoint) []float64 {
+	out := make([]float64, len(pts))
+	for i, p := range pts {
+		out[i] = float64(p.TotalTokens)
+	}
+	return out
+}
+
+// usageGroupJSON is the wire shape of one grouped bucket.
+type usageGroupJSON struct {
+	Key          string   `json:"key"`
+	Provider     string   `json:"provider"`
+	CostUSD      *float64 `json:"cost_usd"`
+	InputTokens  int64    `json:"input_tokens"`
+	OutputTokens int64    `json:"output_tokens"`
+	TotalTokens  int64    `json:"total_tokens"`
+	Entries      int64    `json:"entries"`
+}
+
+func toUsageGroups(in []usageGroupJSON) []usageGroup {
+	out := make([]usageGroup, 0, len(in))
+	for _, g := range in {
+		out = append(out, usageGroup{
+			Key:          g.Key,
+			Provider:     g.Provider,
+			CostUSD:      g.CostUSD,
+			InputTokens:  g.InputTokens,
+			OutputTokens: g.OutputTokens,
+			TotalTokens:  g.TotalTokens,
+			Entries:      g.Entries,
+		})
+	}
+	return out
+}
+
+// parseUsageStats extracts the usage aggregation from a
+// GET /api/ui/v1/usage/stats response body. It tolerates null/missing fields:
+// unknown keys are ignored and absent numbers default to zero.
+func parseUsageStats(body []byte) (usageStats, error) {
+	var payload struct {
+		Window string `json:"window"`
+		Totals struct {
+			CostUSD             *float64 `json:"cost_usd"`
+			InputTokens         int64    `json:"input_tokens"`
+			OutputTokens        int64    `json:"output_tokens"`
+			TotalTokens         int64    `json:"total_tokens"`
+			ExecutionsWithUsage int64    `json:"executions_with_usage"`
+		} `json:"totals"`
+		ByModel     []usageGroupJSON `json:"by_model"`
+		ByProvider  []usageGroupJSON `json:"by_provider"`
+		ByHarness   []usageGroupJSON `json:"by_harness"`
+		LastUpdated *string          `json:"last_updated"`
+		// Series is a pointer so an absent "series" key (older server) is
+		// distinguishable from a present-but-empty one, and both degrade to no
+		// chart. Newer servers send bucket_seconds + an ascending, zero-filled
+		// points array.
+		Series *struct {
+			BucketSeconds int `json:"bucket_seconds"`
+			Points        []struct {
+				T           string   `json:"t"`
+				TotalTokens int64    `json:"total_tokens"`
+				CostUSD     *float64 `json:"cost_usd"`
+			} `json:"points"`
+		} `json:"series"`
+		// SeriesByModel is the per-model breakdown of the timeseries. It is a
+		// slice (absent → nil → no stacked chart) of {key, points[]} where each
+		// point mirrors a bucket. Parsed tolerantly: a bad entry contributes zero
+		// rather than failing the whole parse.
+		SeriesByModel []struct {
+			Key    string `json:"key"`
+			Points []struct {
+				TotalTokens int64 `json:"total_tokens"`
+			} `json:"points"`
+		} `json:"series_by_model"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return usageStats{}, err
+	}
+	u := usageStats{
+		Status:       usageOK,
+		Window:       payload.Window,
+		CostUSD:      payload.Totals.CostUSD,
+		InputTokens:  payload.Totals.InputTokens,
+		OutputTokens: payload.Totals.OutputTokens,
+		TotalTokens:  payload.Totals.TotalTokens,
+		Executions:   payload.Totals.ExecutionsWithUsage,
+		ByModel:      toUsageGroups(payload.ByModel),
+		ByProvider:   toUsageGroups(payload.ByProvider),
+		ByHarness:    toUsageGroups(payload.ByHarness),
+		LastUpdated:  parseTimePtr(payload.LastUpdated),
+	}
+	if payload.Series != nil {
+		u.BucketSeconds = payload.Series.BucketSeconds
+		pts := make([]seriesPoint, 0, len(payload.Series.Points))
+		for _, p := range payload.Series.Points {
+			sp := seriesPoint{TotalTokens: p.TotalTokens, CostUSD: p.CostUSD}
+			// The timestamp is informational (the chart plots by position); a
+			// bad/absent one just leaves the zero time rather than failing.
+			if t := parseTimePtr(&p.T); t != nil {
+				sp.T = *t
+			}
+			pts = append(pts, sp)
+		}
+		u.Series = pts
+	}
+	for _, m := range payload.SeriesByModel {
+		if m.Key == "" && len(m.Points) == 0 {
+			continue
+		}
+		toks := make([]float64, 0, len(m.Points))
+		for _, p := range m.Points {
+			toks = append(toks, float64(p.TotalTokens))
+		}
+		u.SeriesByModel = append(u.SeriesByModel, modelSeries{Key: m.Key, Tokens: toks})
+	}
+	return u, nil
+}
+
+// fetchUsageStats reads usage for a window, authenticating with apiKey when
+// non-empty. It mirrors fetchFleet's status mapping — 401/403 → auth required —
+// and additionally maps 404 to usageAbsent so an older control plane without the
+// endpoint simply hides the section instead of showing an error.
+func fetchUsageStats(window, apiKey string) usageStats {
+	// Request the 24h token timeseries (buckets=48 → 30-min buckets over 24h)
+	// used by the chart row. usageStatsURL already carries "?window=…", so this
+	// appends as an extra query param; older servers ignore it and simply omit
+	// the "series" key, which parseUsageStats tolerates.
+	req, err := http.NewRequest(http.MethodGet, usageStatsURL(window)+"&buckets="+strconv.Itoa(usageSeriesBuckets)+"&series_by=model", nil)
+	if err != nil {
+		return usageStats{Status: usageUnavailable}
+	}
+	if apiKey != "" {
+		req.Header.Set("X-API-Key", apiKey)
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return usageStats{Status: usageUnavailable}
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		if err != nil {
+			return usageStats{Status: usageUnavailable}
+		}
+		stats, err := parseUsageStats(body)
+		if err != nil {
+			return usageStats{Status: usageUnavailable}
+		}
+		return stats
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return usageStats{Status: usageAuthRequired}
+	case http.StatusNotFound:
+		return usageStats{Status: usageAbsent}
+	default:
+		return usageStats{Status: usageUnavailable}
+	}
+}
+
+// ---- Usage presentation helpers (pure) -------------------------------------
+
+// formatTokens renders a token count compactly: "1.2M", "45.3k", "999".
+func formatTokens(n int64) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fk", float64(n)/1_000)
+	default:
+		return strconv.FormatInt(n, 10)
+	}
+}
+
+// formatCost renders a dollar cost: "$1.23" normally, more precision for tiny
+// amounts ("$0.0042"), and an em dash when the cost is unknown (null).
+func formatCost(c *float64) string {
+	if c == nil {
+		return "—"
+	}
+	v := *c
+	switch {
+	case v == 0:
+		return "$0.00"
+	case v < 0.01:
+		return fmt.Sprintf("$%.4f", v)
+	default:
+		return fmt.Sprintf("$%.2f", v)
+	}
+}
+
+// shortModelName trims a model id down to something that fits a menu row: it
+// drops any provider path prefix ("openrouter/anthropic/claude-…" → "claude-…"),
+// strips the common "claude-" vendor prefix, and truncates the rest.
+func shortModelName(key string) string {
+	s := key
+	if i := strings.LastIndex(s, "/"); i >= 0 {
+		s = s[i+1:]
+	}
+	s = strings.TrimPrefix(s, "claude-")
+	const max = 22
+	if len(s) > max {
+		s = strings.TrimSpace(s[:max-1]) + "…"
+	}
+	if s == "" {
+		return key
+	}
+	return s
+}
+
+// usageHeadline titles the Usage submenu parent, e.g.
+// "Usage (24h) — $1.23 · 3.0M tokens", dropping the cost when it is unknown.
+func usageHeadline(u usageStats) string {
+	label := "Usage (" + u.Window + ")"
+	if u.CostUSD != nil {
+		return fmt.Sprintf("%s — %s · %s tokens", label, formatCost(u.CostUSD), formatTokens(u.TotalTokens))
+	}
+	return fmt.Sprintf("%s — %s tokens", label, formatTokens(u.TotalTokens))
+}
+
+// usageSeriesBuckets is how many buckets the tray asks the usage endpoint to
+// split the 24h window into for the chart row: 48 → 30-minute buckets.
+const usageSeriesBuckets = 48
+
+// usageModelTitle is the per-model row title used alongside a rendered bar image
+// (the image carries the proportion, so the text drops the Unicode bar):
+// "opus-4-8 — 1.2M · $0.90".
+func usageModelTitle(g usageGroup) string {
+	return fmt.Sprintf("%s — %s · %s",
+		shortModelName(g.Key), formatTokens(g.TotalTokens), formatCost(g.CostUSD))
+}
+
+// modelShare is the model's fraction (0..1) of the window's total tokens, used
+// to size its bar image.
+func modelShare(g usageGroup, windowTotalTokens int64) float64 {
+	if windowTotalTokens <= 0 {
+		return 0
+	}
+	return float64(g.TotalTokens) / float64(windowTotalTokens)
+}
+
+// relativeTime renders how long ago t was relative to now, in friendly units:
+// "just now", "8 minutes ago", "3 hours ago", "2 days ago".
+func relativeTime(t, now time.Time) string {
+	d := now.Sub(t)
+	if d < 0 {
+		d = 0
+	}
+	switch {
+	case d < 45*time.Second:
+		return "just now"
+	case d < 90*time.Second:
+		return "1 minute ago"
+	case d < time.Hour:
+		return fmt.Sprintf("%d minutes ago", int(math.Round(d.Minutes())))
+	case d < 2*time.Hour:
+		return "1 hour ago"
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%d hours ago", int(d.Hours()))
+	case d < 48*time.Hour:
+		return "1 day ago"
+	default:
+		return fmt.Sprintf("%d days ago", int(d.Hours()/24))
+	}
+}
+
+// usageFooter is the "Last updated: …" footer row, or "" (hidden) when the
+// server reported no last-updated timestamp.
+func usageFooter(t *time.Time, now time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return "Last updated: " + relativeTime(*t, now)
+}
+
+// parseTimePtr parses an optional RFC3339 timestamp pointer, yielding nil for a
+// nil or unparseable value so callers can simply omit the corresponding row.
+func parseTimePtr(s *string) *time.Time {
+	if s == nil || *s == "" {
+		return nil
+	}
+	parsed, err := time.Parse(time.RFC3339, *s)
+	if err != nil {
+		return nil
+	}
+	return &parsed
+}
+
+// ---- Claude subscription quota (best-effort, read-only) --------------------
+//
+// These helpers read the user's existing Claude Code OAuth token from the macOS
+// Keychain (in the _darwin file) and query Anthropic's OAuth usage endpoint for
+// the 5-hour and 7-day rate-limit windows. Everything here is best-effort and
+// degrades silently: a missing token, a failed request, or an unexpected shape
+// simply hides the rows. The token is never logged, persisted, or sent anywhere
+// except api.anthropic.com.
+
+// claudeUsageURL is Anthropic's OAuth usage endpoint. It is queried with a
+// bearer token and the oauth beta header.
+const claudeUsageURL = "https://api.anthropic.com/api/oauth/usage"
+
+// claudeOAuthBetaHeader is the beta gate the usage endpoint requires.
+const claudeOAuthBetaHeader = "oauth-2025-04-20"
+
+// claudeQuota is the slice of the OAuth usage response the tray renders: the two
+// rolling rate-limit windows, each a utilization percentage and a reset time.
+type claudeQuota struct {
+	OK            bool
+	FiveHourPct   float64
+	FiveHourReset *time.Time
+	SevenDayPct   float64
+	SevenDayReset *time.Time
+}
+
+// parseClaudeCodeToken extracts the OAuth access token from the JSON blob the
+// macOS Keychain stores under the "Claude Code-credentials" item.
+func parseClaudeCodeToken(keychainJSON []byte) (string, error) {
+	var payload struct {
+		ClaudeAiOauth struct {
+			AccessToken string `json:"accessToken"`
+		} `json:"claudeAiOauth"`
+	}
+	if err := json.Unmarshal(keychainJSON, &payload); err != nil {
+		return "", err
+	}
+	if payload.ClaudeAiOauth.AccessToken == "" {
+		return "", fmt.Errorf("no access token in keychain payload")
+	}
+	return payload.ClaudeAiOauth.AccessToken, nil
+}
+
+// parseClaudeQuota extracts the 5h/7d utilization + reset times from the OAuth
+// usage response. It parses defensively: the endpoint returns many optional
+// fields, and any that are missing/null leave the corresponding value zeroed or
+// nil so the row can degrade gracefully.
+func parseClaudeQuota(body []byte) (claudeQuota, error) {
+	var payload struct {
+		FiveHour struct {
+			Utilization *float64 `json:"utilization"`
+			ResetsAt    *string  `json:"resets_at"`
+		} `json:"five_hour"`
+		SevenDay struct {
+			Utilization *float64 `json:"utilization"`
+			ResetsAt    *string  `json:"resets_at"`
+		} `json:"seven_day"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return claudeQuota{}, err
+	}
+	q := claudeQuota{OK: true}
+	if payload.FiveHour.Utilization != nil {
+		q.FiveHourPct = *payload.FiveHour.Utilization
+	}
+	q.FiveHourReset = parseTimePtr(payload.FiveHour.ResetsAt)
+	if payload.SevenDay.Utilization != nil {
+		q.SevenDayPct = *payload.SevenDay.Utilization
+	}
+	q.SevenDayReset = parseTimePtr(payload.SevenDay.ResetsAt)
+	return q, nil
+}
+
+// fetchClaudeQuota queries the OAuth usage endpoint at baseURL with the given
+// token. Any failure (no token, transport error, non-200, bad body) yields
+// OK=false so the caller hides the rows. baseURL is a parameter purely so the
+// function is testable against an httptest server; production always passes
+// claudeUsageURL.
+func fetchClaudeQuota(baseURL, token string) claudeQuota {
+	if token == "" {
+		return claudeQuota{}
+	}
+	req, err := http.NewRequest(http.MethodGet, baseURL, nil)
+	if err != nil {
+		return claudeQuota{}
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("anthropic-beta", claudeOAuthBetaHeader)
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return claudeQuota{}
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return claudeQuota{}
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return claudeQuota{}
+	}
+	q, err := parseClaudeQuota(body)
+	if err != nil {
+		return claudeQuota{}
+	}
+	return q
+}
+
+// claudeQuotaTitle is the rate-limit row title used alongside a rendered bar
+// image (the image carries the proportion, so the text drops the Unicode bar):
+// "Claude 5h — 24% (resets 3:00 PM)". The reset clock is omitted when unknown.
+func claudeQuotaTitle(label string, pct float64, reset *time.Time, now time.Time) string {
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	line := fmt.Sprintf("%s — %d%%", label, int(math.Round(pct)))
+	if reset != nil {
+		line += fmt.Sprintf(" (resets %s)", reset.Local().Format("3:04 PM"))
+	}
+	return line
+}
+
 // ---- API key storage -------------------------------------------------------
 
 // effectiveAPIKey is the key the tray should present to the API: an explicit
@@ -354,6 +911,8 @@ func storedAPIKey() string {
 func saveAPIKey(key string) error {
 	return writeFileAtomic(credentialsPath(), []byte(strings.TrimSpace(key)+"\n"), 0o600)
 }
+
+// ---- Tray settings (persisted preferences) ---------------------------------
 
 // ---- Presentation helpers (pure, so they're unit-tested on any OS) ----------
 //
@@ -417,7 +976,119 @@ func metricResponse(s execStats) string {
 	if !s.OK || s.Total == 0 {
 		return ""
 	}
-	return fmt.Sprintf("Response — %d ms avg", int(math.Round(s.AvgMS)))
+	return fmt.Sprintf("Response — %s avg", formatDurationMS(s.AvgMS))
+}
+
+// formatDurationMS renders an average duration at a human scale: raw
+// milliseconds under a second, seconds under a minute, then minutes+seconds
+// ("742 ms", "8.3 s", "2m 43s"). Long-running agent workflows make multi-minute
+// averages common, where "162867 ms" is unreadable.
+func formatDurationMS(ms float64) string {
+	if ms < 0 {
+		ms = 0
+	}
+	switch {
+	case ms < 1000:
+		return fmt.Sprintf("%d ms", int(math.Round(ms)))
+	case ms < 60_000:
+		return fmt.Sprintf("%.1f s", ms/1000)
+	default:
+		total := int(math.Round(ms / 1000))
+		return fmt.Sprintf("%dm %ds", total/60, total%60)
+	}
+}
+
+// sparkIconSize is the pixel size of menu-item icons (16pt @2x), matching the
+// embedded PNGs in assets/icons.
+const sparkIconSize = 32
+
+// sparkMaxSamples caps the history ring feeding the sparkline: one column per
+// icon pixel, so older samples would not be visible anyway.
+const sparkMaxSamples = sparkIconSize
+
+// pushSparkSample appends v to a bounded sample ring, dropping the oldest
+// sample once the ring is full.
+func pushSparkSample(ring []float64, v float64) []float64 {
+	ring = append(ring, v)
+	if len(ring) > sparkMaxSamples {
+		ring = ring[len(ring)-sparkMaxSamples:]
+	}
+	return ring
+}
+
+// levelSparkColor maps a traffic-light rating to the sparkline tint, matching
+// the palette of the colored dot/glyph icons.
+func levelSparkColor(lvl metricLevel) color.NRGBA {
+	switch lvl {
+	case levelGood:
+		return color.NRGBA{48, 209, 88, 255}
+	case levelWarn:
+		return color.NRGBA{255, 204, 0, 255}
+	case levelBad:
+		return color.NRGBA{255, 69, 58, 255}
+	default:
+		return color.NRGBA{152, 152, 157, 255}
+	}
+}
+
+// sparklineIconPNG renders a 32×32 menu-item icon: a 2px line over a faint
+// area fill, on a transparent background, in the given color. With fewer than
+// two samples (or an all-equal series) it draws a flat mid-height line, so the
+// row shows a calm baseline until history accumulates rather than nothing.
+func sparklineIconPNG(samples []float64, c color.NRGBA) []byte {
+	const (
+		size = sparkIconSize
+		top  = 7  // keep vertical margins so the line doesn't touch the box
+		bot  = 25 // baseline of the area fill
+	)
+	img := image.NewNRGBA(image.Rect(0, 0, size, size))
+
+	lo, hi := math.Inf(1), math.Inf(-1)
+	for _, v := range samples {
+		lo, hi = math.Min(lo, v), math.Max(hi, v)
+	}
+	flat := len(samples) < 2 || hi-lo < 1e-9
+
+	// yAt maps the sample interpolated at column x to a pixel row.
+	yAt := func(x int) int {
+		if flat {
+			return (top + bot) / 2
+		}
+		pos := float64(x) / float64(size-1) * float64(len(samples)-1)
+		i := int(pos)
+		frac := pos - float64(i)
+		v := samples[i]
+		if i+1 < len(samples) {
+			v += frac * (samples[i+1] - samples[i])
+		}
+		return bot - int(math.Round((v-lo)/(hi-lo)*float64(bot-top)))
+	}
+
+	fill := color.NRGBA{c.R, c.G, c.B, 56}
+	prevY := yAt(0)
+	for x := 0; x < size; x++ {
+		y := yAt(x)
+		// Faint area under the line down to the baseline.
+		for fy := y + 1; fy <= bot; fy++ {
+			img.SetNRGBA(x, fy, fill)
+		}
+		// 2px line, connecting vertically to the previous column so steep
+		// segments stay continuous.
+		yLo, yHi := y, prevY
+		if yLo > yHi {
+			yLo, yHi = yHi, yLo
+		}
+		for ly := yLo; ly <= yHi+1; ly++ {
+			img.SetNRGBA(x, ly, c)
+		}
+		prevY = y
+	}
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil
+	}
+	return buf.Bytes()
 }
 
 // metricMemory is the server-memory row, or "" when unknown.

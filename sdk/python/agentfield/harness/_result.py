@@ -33,6 +33,13 @@ class Metrics:
     total_cost_usd: Optional[float] = None
     usage: Optional[Dict[str, Any]] = None
     session_id: str = ""
+    # Token accounting parsed from the provider's result message. Left at 0 when
+    # the provider's output does not expose token counts.
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
+    model: Optional[str] = None
 
 
 @dataclass
@@ -58,6 +65,15 @@ class HarnessResult:
     duration_ms: int = 0
     session_id: str = ""
     messages: List[Dict[str, Any]] = field(default_factory=list)
+    # Token accounting aggregated across all provider attempts. Zero when the
+    # provider does not report token counts.
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
+    total_tokens: int = 0
+    # Model slug reported by the provider (if any).
+    model: Optional[str] = None
 
     @property
     def text(self) -> str:

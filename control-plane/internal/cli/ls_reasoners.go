@@ -17,6 +17,7 @@ type lsOptions struct {
 	all          bool
 	node         string
 	live         bool
+	entrypoints  bool
 	outputFormat string
 	stdout       io.Writer
 	stdoutTTY    bool
@@ -29,10 +30,12 @@ type reasonerListResponse struct {
 }
 
 type reasonerListItem struct {
-	Node      string  `json:"node"`
-	Reasoner  string  `json:"reasoner"`
-	LastRunAt *string `json:"last_run_at,omitempty"`
-	Status    string  `json:"status"`
+	Node        string   `json:"node"`
+	Reasoner    string   `json:"reasoner"`
+	Description string   `json:"description,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	LastRunAt   *string  `json:"last_run_at,omitempty"`
+	Status      string   `json:"status"`
 }
 
 func NewReasonerListCommand() *cobra.Command {
@@ -57,6 +60,7 @@ func NewReasonerListCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.all, "all", false, "Show every reasoner")
 	cmd.Flags().StringVar(&opts.node, "node", "", "Filter to a single node")
 	cmd.Flags().BoolVar(&opts.live, "live", false, "Only show reasoners whose node is live")
+	cmd.Flags().BoolVarP(&opts.entrypoints, "entrypoints", "e", false, "Only show reasoners tagged as entry points")
 	cmd.Flags().StringVarP(&opts.outputFormat, "output", "o", "", "Output format: pretty, json, yaml")
 	return cmd
 }
@@ -81,6 +85,9 @@ func runReasonerList(ctx context.Context, query string, opts *lsOptions) error {
 	}
 	if opts.live {
 		values.Set("live", "true")
+	}
+	if opts.entrypoints {
+		values.Set("entrypoints", "true")
 	}
 	resp, err := makeRequest(ctx, http.MethodGet, appendQuery("/api/v1/reasoners", values), nil, "application/json")
 	if err != nil {
@@ -107,10 +114,36 @@ func renderReasonerList(out io.Writer, resp reasonerListResponse, recentHeader b
 	}
 	for _, item := range resp.Reasoners {
 		name := item.Node + "." + item.Reasoner
-		fmt.Fprintf(out, "%-28s %-12s %s\n", name, relativeTime(item.LastRunAt), item.Status)
+		fmt.Fprintf(out, "%-28s %-12s %-6s %s\n", name, relativeTime(item.LastRunAt), item.Status, describeReasoner(item))
 	}
 	if resp.Total > resp.Shown {
 		fmt.Fprintf(out, "\n%d more recent  -  %d total  -  use `af ls --all`\n", resp.Total-resp.Shown, resp.Total)
+	}
+}
+
+// describeReasoner renders the trailing description column: entry points are
+// labeled so callers can spot a node's intended surface, and long descriptions
+// are truncated to keep rows on one line.
+func describeReasoner(item reasonerListItem) string {
+	const maxLen = 80
+	desc := strings.Join(strings.Fields(item.Description), " ")
+	if len(desc) > maxLen {
+		desc = desc[:maxLen-1] + "…"
+	}
+	entry := false
+	for _, tag := range item.Tags {
+		if strings.EqualFold(strings.TrimSpace(tag), "entrypoint") {
+			entry = true
+			break
+		}
+	}
+	switch {
+	case entry && desc != "":
+		return "[entrypoint] " + desc
+	case entry:
+		return "[entrypoint]"
+	default:
+		return desc
 	}
 }
 

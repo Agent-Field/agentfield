@@ -134,7 +134,7 @@ func (r *EnvResolver) Resolve(env UserEnvironmentConfig) (map[string]string, err
 	}
 
 	if len(missing) > 0 || len(missingGroups) > 0 {
-		return nil, missingEnvError(missing, missingGroups)
+		return nil, missingEnvError(r.NodeName, missing, missingGroups)
 	}
 	return resolved, nil
 }
@@ -278,16 +278,42 @@ func orJoin(items []string) string {
 }
 
 // missingEnvError formats a single error covering unset required variables and
-// any unsatisfied require_one_of groups.
-func missingEnvError(missing []string, groups []RequireOneOfGroup) error {
+// any unsatisfied require_one_of groups. Each unset variable is paired with the
+// exact command that fixes it — `af secrets set <VAR> --node <name>` — so a
+// non-interactive startup failure tells the operator what to run, naming the
+// node so the command is copy-pasteable.
+func missingEnvError(nodeName string, missing []string, groups []RequireOneOfGroup) error {
+	node := nodeName
+	if node == "" || node == globalScope {
+		node = "<name>"
+	}
+	fix := func(name string) string {
+		return fmt.Sprintf("af secrets set %s --node %s", name, node)
+	}
+
 	var parts []string
 	if len(missing) > 0 {
-		parts = append(parts, "missing required environment variables: "+strings.Join(missing, ", "))
+		hints := make([]string, len(missing))
+		for i, name := range missing {
+			hints[i] = fmt.Sprintf("%s (%s)", name, fix(name))
+		}
+		parts = append(parts, "missing required environment variables: "+strings.Join(hints, ", "))
 	}
 	for _, g := range groups {
-		parts = append(parts, "at least one of "+orJoin(g.OptionNames())+" is required")
+		names := g.OptionNames()
+		fixes := make([]string, len(names))
+		for i, name := range names {
+			fixes[i] = fix(name)
+		}
+		parts = append(parts, fmt.Sprintf("at least one of %s is required — set one with: %s",
+			orJoin(names), strings.Join(fixes, " or ")))
 	}
-	return errors.New(strings.Join(parts, "; "))
+
+	msg := strings.Join(parts, "; ")
+	if nodeName != "" && nodeName != globalScope {
+		msg = "node " + nodeName + ": " + msg
+	}
+	return errors.New(msg)
 }
 
 // promptAndValidate prompts until the value satisfies the variable's validation

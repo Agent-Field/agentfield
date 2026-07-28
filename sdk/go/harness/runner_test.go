@@ -602,3 +602,30 @@ func TestRunner_BuildProvider_UsesFactory(t *testing.T) {
 		})
 	}
 }
+
+// TestOpenCodeProvider_OpenRouterOverlayUsesBaseModel ensures the OpenRouter
+// attribution overlay keys off the BASE model: a "#variant" reasoning-effort
+// suffix neither defeats the openrouter/ prefix match nor leaks into the
+// per-model config overlay key.
+func TestOpenCodeProvider_OpenRouterOverlayUsesBaseModel(t *testing.T) {
+	p := NewOpenCodeProvider("opencode", "")
+	var capturedEnv map[string]string
+	p.runCLI = func(ctx context.Context, cmd []string, env map[string]string, cwd string, timeout int, _ []byte) (*CLIResult, error) {
+		capturedEnv = env
+		return &CLIResult{Stdout: "ok\n", ReturnCode: 0}, nil
+	}
+
+	raw, err := p.Execute(context.Background(), "test prompt", Options{
+		Model: "openrouter/openai/gpt-4o#high",
+	})
+	require.NoError(t, err)
+	require.False(t, raw.IsError)
+
+	var overlay map[string]any
+	require.NoError(t, json.Unmarshal([]byte(capturedEnv["OPENCODE_CONFIG_CONTENT"]), &overlay))
+	models := overlay["provider"].(map[string]any)["openrouter"].(map[string]any)["models"].(map[string]any)
+	_, hasBase := models["openai/gpt-4o"]
+	assert.True(t, hasBase, "overlay must key the BASE model slug")
+	_, hasSuffixed := models["openai/gpt-4o#high"]
+	assert.False(t, hasSuffixed, "the #variant suffix must not leak into the overlay key")
+}
