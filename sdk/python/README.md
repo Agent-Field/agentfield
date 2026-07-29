@@ -83,6 +83,48 @@ result = await app.ai(
 
 See `examples/python_agent_nodes/tool_calling/` for a complete orchestrator + worker example.
 
+## MiniMax Video Generation
+
+Set an API key and choose a video model from the MiniMax video API documentation:
+
+```bash
+export MINIMAX_API_KEY="..."
+export MINIMAX_VIDEO_MODEL="..."
+```
+
+The global API base is used by default. Set `MINIMAX_BASE_URL` to select a region:
+
+```bash
+export MINIMAX_BASE_URL="https://api.minimax.io/v1"
+# China: https://api.minimaxi.com/v1
+```
+
+Use the `minimax/` model prefix to route the request to the MiniMax media provider:
+
+```python
+import os
+
+from agentfield import Agent, AIConfig
+
+app = Agent(
+    node_id="video-agent",
+    agentfield_server="http://localhost:8080",
+    ai_config=AIConfig(
+        video_model=f"minimax/{os.environ['MINIMAX_VIDEO_MODEL']}",
+    ),
+)
+
+result = await app.ai_generate_video(
+    "A camera moves through a futuristic city",
+    duration=6,
+    resolution="1080p",
+)
+result.videos[0].save("video.mp4")
+```
+
+Note: `AIConfig(minimax_api_key=..., minimax_base_url=...)` takes precedence over
+the `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` environment variables when both are set.
+
 ## Human-in-the-Loop Approvals
 
 The Python SDK provides a first-class waiting state for pausing agent execution mid-reasoner and waiting for human approval:

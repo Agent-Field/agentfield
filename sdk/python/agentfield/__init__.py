@@ -38,6 +38,7 @@ from .media_providers import (
     MediaProvider,
     FalProvider,
     LiteLLMProvider,
+    MiniMaxProvider,
     OpenRouterProvider,
     get_provider,
     register_provider,
@@ -127,6 +128,7 @@ __all__ = [
     "MediaProvider",
     "FalProvider",
     "LiteLLMProvider",
+    "MiniMaxProvider",
     "OpenRouterProvider",
     "get_provider",
     "register_provider",
@@ -181,4 +183,4 @@ __all__ = [
     "reasoner",
 ]
 
-__version__ = "0.1.118-rc.1"
+__version__ = "0.1.118-rc.2"

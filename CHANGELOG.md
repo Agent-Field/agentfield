@@ -6,6 +6,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.118-rc.2] - 2026-07-29
+
+
+### Added
+
+- Feat(python-sdk): add MiniMax video provider routing (#783)
+
+* feat(python-sdk): add MiniMax video provider
+
+* fix(sdk/python): keep MiniMax video extra/kwargs from bypassing validation
+
+extra/kwargs merged into the request body after the validated fields were
+set, so extra={"duration": 3.5} skipped the whole-number check and
+extra={"resolution": ...} skipped normalization. Reject overrides of the
+validated field names, and isolate the error-path test from an inherited
+MINIMAX_BASE_URL so it passes on machines that export it.
+
+Addresses review feedback on #783.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(sdk/python): note AIConfig precedence over MiniMax env vars
+
+Addresses review feedback on #783.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: octo-patch <266937838+octo-patch@users.noreply.github.com>
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (2638699)
+
+
+
+### Fixed
+
+- Fix(agentic_rag): honor similarity_threshold in deduplicate_chunks (#832)
+
+deduplicate_chunks accepted a similarity_threshold parameter but never
+used it -- deduplication was a plain exact-match lookup against a set of
+normalized chunk texts, so near-duplicate chunks (the ones overlapping
+chunk windows and multi-pass retrieval actually produce) always survived
+regardless of the threshold passed in. Compare each candidate against the
+chunks already kept using a word-overlap (Jaccard) text_similarity helper
+and drop it when the score meets the threshold. Identical text scores 1.0,
+so the default threshold of 0.9 still removes exact duplicates as before.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (cd93749)
+
 ## [0.1.118-rc.1] - 2026-07-28
 
 

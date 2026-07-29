@@ -398,10 +398,23 @@ class AIConfig(BaseModel):
         default="wav", description="Default format for audio output (wav, mp3)."
     )
 
-    # Fal.ai settings
+    # Media provider settings
     fal_api_key: Optional[str] = Field(
         default=None,
         description="Fal.ai API key. If not set, uses FAL_KEY environment variable.",
+    )
+    minimax_api_key: Optional[str] = Field(
+        default=None,
+        description=(
+            "MiniMax API key. If not set, uses MINIMAX_API_KEY environment variable."
+        ),
+    )
+    minimax_base_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "MiniMax API base URL. Uses https://api.minimax.io/v1 by default; "
+            "set https://api.minimaxi.com/v1 for the China endpoint."
+        ),
     )
     video_model: str = Field(
         default="fal-ai/minimax-video/image-to-video",

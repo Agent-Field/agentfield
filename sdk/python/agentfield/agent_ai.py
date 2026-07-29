@@ -366,6 +366,7 @@ class AgentAI:
         self._initialization_complete = False
         self._rate_limiter = None
         self._fal_provider_instance = None
+        self._minimax_provider_instance = None
         self._openrouter_provider_instance = None
         self._media_router_instance = None
 
@@ -400,12 +401,27 @@ class AgentAI:
         return self._openrouter_provider_instance
 
     @property
+    def _minimax_provider(self):
+        """Lazy-initialized MiniMax provider for video generation."""
+        if self._minimax_provider_instance is None:
+            from agentfield.media_providers import MiniMaxProvider
+
+            config = self.agent.ai_config
+            api_key = getattr(config, "minimax_api_key", None)
+            base_url = getattr(config, "minimax_base_url", None)
+            self._minimax_provider_instance = MiniMaxProvider(
+                api_key=api_key if isinstance(api_key, str) else None,
+                base_url=base_url if isinstance(base_url, str) else None,
+            )
+        return self._minimax_provider_instance
+
+    @property
     def _media_router(self):
         """
         Lazy-initialized MediaRouter for prefix-based provider dispatch.
 
         Returns:
-            MediaRouter: Configured router with fal, openrouter, and litellm providers
+            MediaRouter: Configured router with registered media providers
         """
         if self._media_router_instance is None:
             from agentfield.media_providers import LiteLLMProvider
@@ -414,6 +430,7 @@ class AgentAI:
             router = MediaRouter()
             router.register("fal-ai/", self._fal_provider)
             router.register("fal/", self._fal_provider)
+            router.register("minimax/", self._minimax_provider)
             router.register("openrouter/", self._openrouter_provider)
             router.register("", LiteLLMProvider())  # catch-all fallback
             self._media_router_instance = router
@@ -2003,10 +2020,11 @@ class AgentAI:
         """
         Generate video from text or image.
 
-        This method generates videos using Fal.ai's video generation models.
-        Supports both text-to-video and image-to-video generation.
+        Routes video generation requests by model prefix. MiniMax models use
+        the ``minimax/`` prefix and support text-to-video and image-to-video.
 
         Supported Providers:
+        - MiniMax: Models prefixed with "minimax/"
         - Fal.ai: Models like "fal-ai/minimax-video/image-to-video",
           "fal-ai/kling-video/v1/standard/text-to-video",
           "fal-ai/luma-dream-machine"

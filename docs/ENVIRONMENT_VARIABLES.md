@@ -123,6 +123,13 @@ The same concept applies to **Docker**:
 
 Many Python examples also require model provider credentials (for example `OPENAI_API_KEY`), depending on the `AIConfig` you choose.
 
+### MiniMax video generation
+
+- `MINIMAX_API_KEY`: API key used by the Python SDK's MiniMax media provider.
+- `MINIMAX_BASE_URL` (optional): API base URL. Defaults to `https://api.minimax.io/v1`; use `https://api.minimaxi.com/v1` for the China endpoint.
+
+MiniMax video models are routed with the `minimax/` model prefix. The model suffix is sent unchanged to the video generation API.
+
 ### OpenRouter attribution
 
 OpenRouter attribution is request metadata, not authentication. AgentField SDKs send these as `HTTP-Referer`, `X-OpenRouter-Title`, and `X-Title` for OpenRouter requests.
