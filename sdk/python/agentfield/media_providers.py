@@ -174,7 +174,11 @@ class MiniMaxProvider(MediaProvider):
         raise NotImplementedError(f"{self.name} does not support speech generation")
 
     async def generate_music(self, prompt: str, model: Optional[str] = None, duration: Optional[int] = None, **kwargs) -> MultimodalResponse:
-        import base64, os, aiohttp
+        import base64
+        import os
+
+        import aiohttp
+
         key = self._api_key or os.environ.get("MINIMAX_API_KEY", "")
         if not key:
             raise ValueError("MiniMax API key required. Set MINIMAX_API_KEY or pass api_key.")
