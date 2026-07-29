@@ -10,7 +10,7 @@ import {
   Code,
   WarningCircle,
 } from "@/components/ui/icon-bridge";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from 'react-router';
 import type { WorkflowExecution } from "../../types/executions";
 import { cn } from "../../lib/utils";
 import { statusTone } from "../../lib/theme";

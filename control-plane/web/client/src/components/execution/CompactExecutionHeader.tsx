@@ -13,7 +13,7 @@ import {
   GitBranch,
 } from "@/components/ui/icon-bridge";
 import { formatDurationHumanReadable } from "@/components/ui/data-formatters";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from 'react-router';
 import type { WorkflowExecution } from "../../types/executions";
 import { Button } from "../ui/button";
 import {

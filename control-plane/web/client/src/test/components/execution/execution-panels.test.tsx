@@ -20,7 +20,7 @@ const navigate = vi.fn();
 const successNotification = vi.fn();
 const errorNotification = vi.fn();
 
-vi.mock("react-router-dom", () => ({
+vi.mock("react-router", () => ({
   useNavigate: () => navigate,
 }));
 

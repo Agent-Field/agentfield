@@ -10,7 +10,7 @@ import {
   WarningAlt,
 } from "@/components/ui/icon-bridge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from 'react-router';
 import {
   getStatusLabel,
   getStatusTheme,

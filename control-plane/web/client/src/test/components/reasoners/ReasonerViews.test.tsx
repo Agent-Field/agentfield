@@ -14,7 +14,7 @@ const clipboardWriteTextMock = vi.fn();
 const createObjectUrlMock = vi.fn(() => "blob:mock");
 const revokeObjectUrlMock = vi.fn();
 
-vi.mock("react-router-dom", () => ({
+vi.mock("react-router", () => ({
   useNavigate: () => navigateMock,
 }));
 

@@ -478,8 +478,9 @@ export function ExecutionForm({ schema, formData, onChange, validationErrors }: 
       <BaseAutoForm
         schema={provider}
         withSubmit={false}
-        defaultValues={initialValues}
-        onFormInit={handleFormInit}
+        // ZodProvider from dynamic JSON schemas does not preserve FieldValues.
+        defaultValues={initialValues as never}
+        onFormInit={handleFormInit as never}
         uiComponents={uiComponents}
         formComponents={fieldComponents}
       />

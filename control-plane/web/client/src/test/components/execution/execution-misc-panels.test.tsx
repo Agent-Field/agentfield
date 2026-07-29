@@ -12,7 +12,7 @@ import { RedesignedErrorPanel } from "@/components/execution/RedesignedErrorPane
 const navigate = vi.fn();
 const dataModalSpy = vi.fn();
 
-vi.mock("react-router-dom", () => ({
+vi.mock("react-router", () => ({
   useNavigate: () => navigate,
 }));
 

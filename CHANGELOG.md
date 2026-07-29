@@ -6,6 +6,67 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.118-rc.1] - 2026-07-28
+
+
+### CI
+
+- Ci(sdk-python): pin ruff to 0.15.22 (#831)
+
+ruff 0.16.0 released and the workflow installs unpinned ruff, so the Lint
+step now fails with ~2700 pre-existing violations (I001, BLE001, C408, ...)
+on every sdk-python PR — current main itself is red under 0.16.0 and clean
+under 0.15.22. Pin the version CI actually validated against; bump
+deliberately alongside the rule fixes.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (d65fbe0)
+
+
+
+### Chores
+
+- Chore(skills): sync embedded agentfield-use mirror after #827 (#828)
+
+#827 updated the canonical skills/agentfield-use/SKILL.md without running
+scripts/sync-embedded-skills.sh, so TestEmbeddedSkillSyncCheck now fails on
+main and leaks a red coverage gate into every PR that merges main.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (f718199)
+
+
+
+### Fixed
+
+- Fix(security): close open Dependabot vulnerability alerts (#830)
+
+* fix(security): resolve open Dependabot vulnerability alerts
+
+Bump vulnerable direct and transitive dependencies across Go and npm
+lockfiles, and migrate the web client from react-router-dom v7 to
+react-router v8 (required for the RSC CSRF advisory patch).
+
+- google.golang.org/grpc 1.80.0 -> 1.82.1 (control-plane)
+- react-router 8.3.0 (replaces react-router-dom; React >=19.2.7)
+- next 15.5.18 -> 15.5.22, sharp -> 0.35.3 (rag_evaluation UI)
+- js-yaml -> 4.3.0, brace-expansion -> 1.1.16/2.1.2, postcss -> >=8.5.18
+- fast-uri -> 3.1.4 (desktop, mastra-bench)
+- CI Node for control-plane/web builds: 20 -> 22
+
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+
+* fix(security): bump hono and @hono/node-server in mastra-bench
+
+Override transitive hono to 4.12.32 and @hono/node-server to 2.0.12
+to clear remaining moderate Dependabot alerts (JSX context isolation,
+cx() XSS, API Gateway header de-dupe, Windows serve-static path traversal).
+
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+
+---------
+
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com> (fc4bdde)
+
 ## [0.1.117] - 2026-07-24
 
 ## [0.1.117-rc.5] - 2026-07-24
