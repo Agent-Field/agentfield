@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { formatCompactRelativeTime } from "@/utils/dateFormat";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate } from 'react-router';
 import { useAgents, useAgentTagSummaries } from "@/hooks/queries";
 import { getNodeDetails } from "@/services/api";
 import { getARDDashboard } from "@/services/ardApi";

@@ -13,7 +13,7 @@ const navigate = vi.fn();
 const getBezierPath = vi.fn();
 const getEdgeParams = vi.fn();
 
-vi.mock("react-router-dom", () => ({
+vi.mock("react-router", () => ({
   useNavigate: () => navigate,
 }));
 

@@ -8,7 +8,7 @@ const routeState = vi.hoisted(() => ({
   reasonerId: "planner-1",
 }));
 
-vi.mock("react-router-dom", () => {
+vi.mock("react-router", () => {
   const navigate = vi.fn();
   const ReactRouterDom = {
     BrowserRouter: ({ children }: React.PropsWithChildren) => <>{children}</>,

@@ -21,7 +21,7 @@ const pageState = vi.hoisted(() => ({
   fetch: vi.fn(),
 }));
 
-vi.mock("react-router-dom", () => ({
+vi.mock("react-router", () => ({
   Link: ({ children, to, ...props }: React.PropsWithChildren<{ to: string } & React.AnchorHTMLAttributes<HTMLAnchorElement>>) => (
     <a href={to} {...props}>
       {children}

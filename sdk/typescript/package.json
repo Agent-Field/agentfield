@@ -1,6 +1,6 @@
 {
   "name": "@agentfield/sdk",
-  "version": "0.1.117",
+  "version": "0.1.118-rc.1",
   "description": "AgentField TypeScript SDK",
   "type": "module",
   "main": "dist/index.js",
@@ -87,6 +87,8 @@
   ],
   "author": "AgentField Team",
   "overrides": {
-    "esbuild": "0.28.1"
+    "esbuild": "0.28.1",
+    "postcss": "8.5.18",
+    "body-parser": "1.20.6"
   }
 }

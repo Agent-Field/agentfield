@@ -7,7 +7,7 @@ import {
   XCircle,
   Loader2,
 } from "@/components/ui/icon-bridge";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from 'react-router';
 import type { WorkflowExecution } from "../../types/executions";
 import { getStatusLabel, getStatusTheme, normalizeExecutionStatus } from "../../utils/status";
 import { Button } from "../ui/button";

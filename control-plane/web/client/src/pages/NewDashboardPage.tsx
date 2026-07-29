@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from 'react-router';
 import { useQuery } from "@tanstack/react-query";
 import { useSSESync } from "@/hooks/useSSEQuerySync";
 import { AlertTriangle, ArrowRight, CheckCircle, Layers } from "lucide-react";

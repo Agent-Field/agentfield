@@ -24,7 +24,7 @@ const comparisonState = vi.hoisted(() => ({
   stepDetails: {} as Record<string, WorkflowExecution>,
 }));
 
-vi.mock("react-router-dom", () => ({
+vi.mock("react-router", () => ({
   useNavigate: () => comparisonState.navigate,
   useSearchParams: () => [new URLSearchParams(comparisonState.search)],
 }));

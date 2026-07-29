@@ -17,7 +17,7 @@ const navigateMock = vi.fn();
 const useDIDStatusMock = vi.fn();
 const clipboardWriteTextMock = vi.fn();
 
-vi.mock("react-router-dom", () => ({
+vi.mock("react-router", () => ({
   useNavigate: () => navigateMock,
 }));
 
