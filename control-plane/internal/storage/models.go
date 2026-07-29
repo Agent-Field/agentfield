@@ -585,3 +585,29 @@ type ConfigStorageModel struct {
 }
 
 func (ConfigStorageModel) TableName() string { return "config_storage" }
+
+// ExecutionUsageModel persists one token/cost usage entry reported by an agent
+// SDK in an execution result envelope's "usage" object. Multiple rows may share
+// an execution_id (one per LLM/harness entry). Costs are nullable — an entry may
+// report tokens without a resolvable cost.
+type ExecutionUsageModel struct {
+	ID                  int64     `gorm:"column:id;primaryKey;autoIncrement"`
+	ExecutionID         string    `gorm:"column:execution_id;not null;index:idx_execution_usage_execution"`
+	WorkflowID          string    `gorm:"column:workflow_id;not null;index:idx_execution_usage_workflow"`
+	AgentNodeID         string    `gorm:"column:agent_node_id;not null;index:idx_execution_usage_agent_node_id"`
+	Reasoner            string    `gorm:"column:reasoner;not null;default:''"`
+	Source              string    `gorm:"column:source;not null;default:''"`
+	Provider            string    `gorm:"column:provider;not null;default:''"`
+	Model               string    `gorm:"column:model;not null;default:'';index:idx_execution_usage_model"`
+	Harness             string    `gorm:"column:harness;not null;default:''"`
+	InputTokens         int64     `gorm:"column:input_tokens;not null;default:0"`
+	OutputTokens        int64     `gorm:"column:output_tokens;not null;default:0"`
+	CacheReadTokens     int64     `gorm:"column:cache_read_tokens;not null;default:0"`
+	CacheCreationTokens int64     `gorm:"column:cache_creation_tokens;not null;default:0"`
+	TotalTokens         int64     `gorm:"column:total_tokens;not null;default:0"`
+	CostUSD             *float64  `gorm:"column:cost_usd"`
+	CostSource          string    `gorm:"column:cost_source;not null;default:''"`
+	CreatedAt           time.Time `gorm:"column:created_at;autoCreateTime;index:idx_execution_usage_created_at"`
+}
+
+func (ExecutionUsageModel) TableName() string { return "execution_usage" }

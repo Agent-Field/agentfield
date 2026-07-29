@@ -50,6 +50,48 @@ func TestInitialize_WrapsRegisterNodeError(t *testing.T) {
 	assert.Contains(t, err.Error(), "register node:")
 }
 
+// Validation contract: a reasoner registered with WithDescription must carry
+// that description in the node-registration payload sent to the control plane
+// (it was previously local-only, used for CLI help).
+func TestRegisterNode_TransmitsReasonerDescription(t *testing.T) {
+	var payload types.NodeRegistrationRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"registered"}`))
+	}))
+	defer server.Close()
+
+	a, err := New(Config{
+		NodeID:        "node-desc",
+		Version:       "1.0.0",
+		AgentFieldURL: server.URL,
+		Logger:        log.New(io.Discard, "", 0),
+	})
+	require.NoError(t, err)
+	a.RegisterReasoner("implement_issue",
+		func(context.Context, map[string]any) (any, error) { return nil, nil },
+		WithDescription("Implement one scoped issue on a branch"),
+		WithReasonerTags("entrypoint"),
+	)
+	a.RegisterReasoner("run_coder",
+		func(context.Context, map[string]any) (any, error) { return nil, nil },
+	)
+
+	require.NoError(t, a.registerNode(context.Background()))
+
+	byID := map[string]types.ReasonerDefinition{}
+	for _, r := range payload.Reasoners {
+		byID[r.ID] = r
+	}
+	require.Len(t, byID, 2)
+	assert.Equal(t, "Implement one scoped issue on a branch", byID["implement_issue"].Description)
+	assert.Contains(t, byID["implement_issue"].Tags, "entrypoint")
+	assert.Empty(t, byID["run_coder"].Description)
+}
+
 func TestInitialize_ContinuesWhenDIDOrReadyUpdatesFail(t *testing.T) {
 	agentDID, _ := testDIDCredentials(t)
 	var statusCalls int

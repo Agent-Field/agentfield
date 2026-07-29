@@ -2,6 +2,7 @@ import type { HarnessProvider } from './base.js';
 import type { RawResult } from '../types.js';
 import { createRawResult, createMetrics } from '../types.js';
 import { runCli } from '../cli.js';
+import { resolveModelAndVariant } from '../modelVariant.js';
 
 export class GeminiProvider implements HarnessProvider {
   private readonly bin: string;
@@ -19,8 +20,11 @@ export class GeminiProvider implements HarnessProvider {
     if (options.permissionMode === 'auto') {
       cmd.push('--sandbox');
     }
-    if (options.model) {
-      cmd.push('-m', String(options.model));
+    // gemini has no reasoning-effort flag; strip any "#variant" suffix so
+    // the CLI still receives a valid model id.
+    const { model: modelValue } = resolveModelAndVariant(options);
+    if (modelValue) {
+      cmd.push('-m', modelValue);
     }
     cmd.push('-p', prompt);
 

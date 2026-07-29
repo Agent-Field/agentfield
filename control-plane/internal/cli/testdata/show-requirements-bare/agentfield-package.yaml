@@ -1,0 +1,5 @@
+config_version: v1
+name: bare-demo
+version: 0.0.1
+description: A node with no user configuration.
+main: app.py

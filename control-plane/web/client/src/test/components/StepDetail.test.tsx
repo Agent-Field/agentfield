@@ -18,7 +18,7 @@ vi.mock("@tanstack/react-query", () => ({
   }),
 }));
 
-vi.mock("react-router-dom", () => ({
+vi.mock("react-router", () => ({
   Link: ({
     to,
     children,

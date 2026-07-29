@@ -77,13 +77,22 @@ func BatchHandler(router *gin.Engine) gin.HandlerFunc {
 					return
 				}
 
-				// Copy auth headers
+				// Copy authentication and caller-identity headers. Nested requests
+				// traverse the router's middleware stack again, so both the
+				// credential and the identity from which authorization decisions
+				// are derived must be preserved.
 				httpReq.Header.Set("Content-Type", "application/json")
 				if apiKey := c.GetHeader("X-API-Key"); apiKey != "" {
 					httpReq.Header.Set("X-API-Key", apiKey)
 				}
 				if auth := c.GetHeader("Authorization"); auth != "" {
 					httpReq.Header.Set("Authorization", auth)
+				}
+				if callerAgentID := c.GetHeader("X-Caller-Agent-ID"); callerAgentID != "" {
+					httpReq.Header.Set("X-Caller-Agent-ID", callerAgentID)
+				}
+				if agentNodeID := c.GetHeader("X-Agent-Node-ID"); agentNodeID != "" {
+					httpReq.Header.Set("X-Agent-Node-ID", agentNodeID)
 				}
 
 				// Execute against the router

@@ -2,6 +2,7 @@ import type { HarnessProvider } from './base.js';
 import type { RawResult } from '../types.js';
 import { createRawResult, createMetrics } from '../types.js';
 import { runCli, parseJsonl, extractFinalText } from '../cli.js';
+import { resolveModelAndVariant } from '../modelVariant.js';
 
 export class CodexProvider implements HarnessProvider {
   private readonly bin: string;
@@ -19,6 +20,19 @@ export class CodexProvider implements HarnessProvider {
     if (options.permissionMode === 'auto') {
       cmd.push('--full-auto');
     }
+
+    // Model via -m; reasoning effort has no dedicated flag — it's the
+    // model_reasoning_effort config key. The effort comes from a "#variant"
+    // suffix on the model (or an explicit options.variant), e.g.
+    // "gpt-5.3-codex#high".
+    const { model: modelValue, variant: variantValue } = resolveModelAndVariant(options);
+    if (modelValue) {
+      cmd.push('-m', modelValue);
+    }
+    if (variantValue) {
+      cmd.push('-c', `model_reasoning_effort=${variantValue}`);
+    }
+
     cmd.push(prompt);
 
     const startApi = Date.now();
@@ -50,7 +64,7 @@ export class CodexProvider implements HarnessProvider {
       return createRawResult({
         result: resultText,
         messages: events,
-        metrics: createMetrics({ durationApiMs: Date.now() - startApi, numTurns, sessionId }),
+        metrics: createMetrics({ durationApiMs: Date.now() - startApi, numTurns, sessionId, model: modelValue }),
         isError,
         errorMessage: isError ? stderr.trim() : undefined,
       });

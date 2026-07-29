@@ -398,6 +398,7 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 | Auto-REST from decorators | Every `@app.reasoner()` → `POST /api/v1/execute/...` |
 | Python, Go, TypeScript SDKs | Native patterns per language |
 | MCP server integration | `af add --mcp --url <server>` |
+| Zero-setup MCP for AI harnesses | Control plane serves MCP at `<server>/mcp` → [docs](docs/mcp-integration.md) |
 | Config storage API | `POST /api/v1/configs/:key` - database-backed |
 | Docker + Kubernetes ready | Stateless control plane, horizontal scaling |
 
@@ -509,6 +510,8 @@ Built something with AgentField? [Submit your project to be featured on the exam
 The control plane is a stateless Go service. Agents connect from anywhere - your laptop, Docker, Kubernetes. They register capabilities, the control plane routes calls between them, tracks execution as DAGs, and enforces policies. [Full architecture docs →](https://agentfield.ai/docs/learn/architecture?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-architecture)
 
 ## Learn More
+
+AgentField sends privacy-minimized installation and lifecycle telemetry by default; no prompts or execution payloads are sent. Set `AGENTFIELD_TELEMETRY_ENABLED=false` to disable it. [Telemetry details](docs/ENVIRONMENT_VARIABLES.md#anonymous-telemetry).
 
 The thinking behind AgentField - essays on AI backends, harness orchestration, and the infrastructure production agents actually need.
 

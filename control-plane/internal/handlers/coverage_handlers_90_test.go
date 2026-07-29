@@ -14,6 +14,7 @@ import (
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"
 	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
+	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 	"github.com/gin-gonic/gin"
@@ -497,6 +498,12 @@ func TestExecuteReasonerAndWebhookHelpersCoverage(t *testing.T) {
 
 		ctrl := &webhookApprovalController{}
 		response := `{"decision":"approved"}`
+
+		// Allowlist loopback so the httptest server is reachable via the
+		// SSRF-safe client used by notifyApprovalCallback (#435).
+		services.SetWebhookAllowedHosts([]string{"127.0.0.1"})
+		t.Cleanup(func() { services.SetWebhookAllowedHosts(nil) })
+
 		ctrl.notifyApprovalCallback(server.URL, "exec-1", "approved", "running", "ok", &response, "req-1")
 		ctrl.notifyApprovalCallback(server.URL+"/fail", "exec-2", "rejected", "cancelled", "", nil, "req-2")
 		ctrl.notifyApprovalCallback("http://127.0.0.1:1", "exec-3", "approved", "running", "", nil, "req-3")

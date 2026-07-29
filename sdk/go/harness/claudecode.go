@@ -46,8 +46,13 @@ func (p *ClaudeCodeProvider) Execute(ctx context.Context, prompt string, options
 	// stream-json ("--output-format=stream-json requires --verbose").
 	cmd := []string{p.BinPath, "--print", "--output-format", "stream-json", "--verbose"}
 
-	if options.Model != "" {
-		cmd = append(cmd, "--model", options.Model)
+	// Strip any "#variant" reasoning-effort suffix so the CLI receives a
+	// valid model id. claude-code has no effort flag, so the variant is
+	// dropped (the Python provider logs this at debug level; this package
+	// has no provider-level logger).
+	modelValue, _ := options.resolveModelAndVariant()
+	if modelValue != "" {
+		cmd = append(cmd, "--model", modelValue)
 	}
 
 	if options.MaxTurns > 0 {
@@ -181,6 +186,7 @@ func (p *ClaudeCodeProvider) parseJSONOutput(stdout string, raw *RawResult) {
 	var resultText string
 	var sessionID string
 	var cost *float64
+	var tokens tokenUsage
 	numTurns := 0
 
 	for _, line := range strings.Split(stdout, "\n") {
@@ -211,6 +217,13 @@ func (p *ClaudeCodeProvider) parseJSONOutput(stdout string, raw *RawResult) {
 			if turns, ok := msg["num_turns"].(float64); ok {
 				numTurns = int(turns)
 			}
+			// The result event carries an Anthropic-native usage object
+			// (input_tokens / output_tokens / cache_read_input_tokens /
+			// cache_creation_input_tokens); mirror the Python provider's
+			// _parse_usage.
+			if usage, ok := msg["usage"].(map[string]any); ok {
+				tokens = usageFromMap(usage)
+			}
 		case "assistant":
 			if resultText == "" {
 				resultText = extractAssistantText(msg)
@@ -224,6 +237,10 @@ func (p *ClaudeCodeProvider) parseJSONOutput(stdout string, raw *RawResult) {
 	raw.Messages = messages
 	raw.Metrics.SessionID = sessionID
 	raw.Metrics.CostUSD = cost
+	raw.Metrics.InputTokens = tokens.inputTokens
+	raw.Metrics.OutputTokens = tokens.outputTokens
+	raw.Metrics.CacheReadTokens = tokens.cacheReadTokens
+	raw.Metrics.CacheCreationTokens = tokens.cacheCreationTokens
 	raw.Metrics.NumTurns = numTurns
 	if numTurns == 0 && len(messages) > 0 {
 		raw.Metrics.NumTurns = len(messages)

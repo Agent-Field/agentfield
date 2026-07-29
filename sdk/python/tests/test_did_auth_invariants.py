@@ -142,7 +142,9 @@ class TestSignatureDeterminism:
         same signature out (Ed25519 determinism property).
         """
         try:
-            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: F401
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+                Ed25519PrivateKey,  # noqa: F401
+            )
         except ImportError:
             pytest.skip("cryptography library not available")
 

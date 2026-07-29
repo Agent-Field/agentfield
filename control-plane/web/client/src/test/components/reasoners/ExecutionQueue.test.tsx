@@ -10,7 +10,7 @@ const executeReasonerAsyncMock = vi.fn();
 const getExecutionStatusMock = vi.fn();
 const clipboardWriteTextMock = vi.fn();
 
-vi.mock("react-router-dom", () => ({
+vi.mock("react-router", () => ({
   useNavigate: () => navigateMock,
 }));
 

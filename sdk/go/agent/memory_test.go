@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -493,4 +494,262 @@ func TestAgentWithCustomMemoryBackend(t *testing.T) {
 	val, found, _ := customBackend.Get(ScopeSession, "test-session", "custom-key")
 	assert.True(t, found)
 	assert.Equal(t, "custom-value", val)
+}
+
+func TestInMemoryBackend_DeepCopy(t *testing.T) {
+	backend := NewInMemoryBackend()
+
+	t.Run("Set deep-copies map - mutation does not affect stored value", func(t *testing.T) {
+		input := map[string]any{"key": "original", "nested": map[string]any{"a": 1}}
+		err := backend.Set(ScopeSession, "s1", "map-key", input)
+		require.NoError(t, err)
+
+		input["key"] = "mutated"
+		input["new-field"] = "added"
+		if nested, ok := input["nested"].(map[string]any); ok {
+			nested["a"] = 999
+		}
+
+		val, found, err := backend.Get(ScopeSession, "s1", "map-key")
+		require.NoError(t, err)
+		require.True(t, found)
+
+		retrieved, ok := val.(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "original", retrieved["key"])
+		assert.NotContains(t, retrieved, "new-field")
+		if nested, ok := retrieved["nested"].(map[string]any); ok {
+			assert.Equal(t, 1, nested["a"])
+		} else {
+			t.Fatal("expected nested map")
+		}
+	})
+
+	t.Run("Get deep-copies map - mutation does not affect stored value", func(t *testing.T) {
+		err := backend.Set(ScopeSession, "s2", "map2", map[string]any{"x": "y", "inner": map[string]any{"z": "w"}})
+		require.NoError(t, err)
+
+		val1, found, err := backend.Get(ScopeSession, "s2", "map2")
+		require.NoError(t, err)
+		require.True(t, found)
+
+		m1, ok := val1.(map[string]any)
+		require.True(t, ok)
+		m1["x"] = "mutated"
+		if inner, ok := m1["inner"].(map[string]any); ok {
+			inner["z"] = "also-mutated"
+		}
+		m1["new-key"] = "new-value"
+
+		val2, found, err := backend.Get(ScopeSession, "s2", "map2")
+		require.NoError(t, err)
+		require.True(t, found)
+
+		m2, ok := val2.(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "y", m2["x"])
+		assert.NotContains(t, m2, "new-key")
+		if inner, ok := m2["inner"].(map[string]any); ok {
+			assert.Equal(t, "w", inner["z"])
+		} else {
+			t.Fatal("expected nested map")
+		}
+	})
+
+	t.Run("SetVector deep-copies embedding and metadata", func(t *testing.T) {
+		embedding := []float64{1.0, 2.0, 3.0}
+		metadata := map[string]any{"kind": "original", "tags": map[string]any{"env": "dev"}}
+
+		err := backend.SetVector(ScopeSession, "s3", "vec1", embedding, metadata)
+		require.NoError(t, err)
+
+		embedding[0] = 999.0
+		metadata["kind"] = "mutated"
+		if tags, ok := metadata["tags"].(map[string]any); ok {
+			tags["env"] = "prod"
+		}
+		metadata["added"] = "extra"
+		embedding = append(embedding, 4.0)
+
+		retrievedEmb, retrievedMeta, found, err := backend.GetVector(ScopeSession, "s3", "vec1")
+		require.NoError(t, err)
+		require.True(t, found)
+
+		assert.Equal(t, []float64{1.0, 2.0, 3.0}, retrievedEmb)
+		assert.Equal(t, "original", retrievedMeta["kind"])
+		assert.NotContains(t, retrievedMeta, "added")
+		if tags, ok := retrievedMeta["tags"].(map[string]any); ok {
+			assert.Equal(t, "dev", tags["env"])
+		} else {
+			t.Fatal("expected nested metadata map")
+		}
+	})
+
+	t.Run("GetVector deep-copies embedding and metadata", func(t *testing.T) {
+		err := backend.SetVector(ScopeSession, "s4", "vec2", []float64{0.1, 0.2}, map[string]any{"meta": "orig"})
+		require.NoError(t, err)
+
+		emb1, meta1, found, err := backend.GetVector(ScopeSession, "s4", "vec2")
+		require.NoError(t, err)
+		require.True(t, found)
+
+		emb1[0] = 555.0
+		meta1["meta"] = "changed"
+
+		emb2, meta2, found, err := backend.GetVector(ScopeSession, "s4", "vec2")
+		require.NoError(t, err)
+		require.True(t, found)
+
+		assert.Equal(t, []float64{0.1, 0.2}, emb2)
+		assert.Equal(t, "orig", meta2["meta"])
+	})
+}
+
+func TestInMemoryBackend_DeepCopyConcurrent(t *testing.T) {
+	backend := NewInMemoryBackend()
+
+	err := backend.Set(ScopeSession, "s1", "shared", map[string]any{"counter": 0})
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			val, found, _ := backend.Get(ScopeSession, "s1", "shared")
+			if found {
+				if m, ok := val.(map[string]any); ok {
+					m["counter"] = i
+				}
+			}
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			val, found, _ := backend.Get(ScopeSession, "s1", "shared")
+			if found {
+				if m, ok := val.(map[string]any); ok {
+					_ = m["counter"]
+				}
+			}
+		}
+	}()
+
+	wg.Wait()
+}
+
+func TestDeepCopyAny_SliceAny(t *testing.T) {
+	t.Run("shallow []any copy", func(t *testing.T) {
+		orig := []any{"a", "b", 42}
+		copied, err := deepCopyAny(orig)
+		require.NoError(t, err)
+
+		assert.Equal(t, orig, copied)
+		orig[0] = "mutated"
+		assert.NotEqual(t, "mutated", copied.([]any)[0])
+	})
+
+	t.Run("nested []any recursion", func(t *testing.T) {
+		orig := []any{
+			"outer",
+			[]any{"inner1", "inner2"},
+			map[string]any{"key": "val"},
+		}
+		copiedAny, err := deepCopyAny(orig)
+		require.NoError(t, err)
+		copied := copiedAny.([]any)
+
+		orig[0] = "changed"
+		orig[1].([]any)[0] = "changed-inner"
+		orig[2].(map[string]any)["key"] = "changed-map"
+
+		assert.Equal(t, "outer", copied[0])
+		assert.Equal(t, "inner1", copied[1].([]any)[0])
+		assert.Equal(t, "val", copied[2].(map[string]any)["key"])
+	})
+
+	t.Run("empty []any", func(t *testing.T) {
+		orig := []any{}
+		copied, err := deepCopyAny(orig)
+		require.NoError(t, err)
+		assert.Equal(t, []any{}, copied)
+	})
+}
+
+func TestDeepCopyAny_SliceFloat64(t *testing.T) {
+	t.Run("float64 slice is copied not shared", func(t *testing.T) {
+		orig := []float64{1.0, 2.0, 3.0}
+		copiedAny, err := deepCopyAny(orig)
+		require.NoError(t, err)
+		copied := copiedAny.([]float64)
+
+		orig[0] = 999.0
+		assert.Equal(t, []float64{1.0, 2.0, 3.0}, copied)
+	})
+
+	t.Run("empty []float64", func(t *testing.T) {
+		orig := []float64{}
+		copiedAny, err := deepCopyAny(orig)
+		require.NoError(t, err)
+		copied := copiedAny.([]float64)
+		assert.Equal(t, []float64{}, copied)
+	})
+}
+
+func TestDeepCopyAny_DefaultPassthrough(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value any
+	}{
+		{"string", "hello"},
+		{"integer", 42},
+		{"float", 3.14},
+		{"boolean", true},
+		{"nil", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			copied, err := deepCopyAny(tc.value)
+			require.NoError(t, err)
+			assert.Equal(t, tc.value, copied)
+		})
+	}
+}
+
+func TestInMemoryBackendRejectsCyclicValues(t *testing.T) {
+	backend := NewInMemoryBackend()
+	cycle := map[string]any{}
+	cycle["self"] = cycle
+
+	err := backend.Set(ScopeSession, "session", "key", cycle)
+	require.ErrorIs(t, err, ErrCyclicMemoryValue)
+
+	_, found, err := backend.Get(ScopeSession, "session", "key")
+	require.NoError(t, err)
+	assert.False(t, found)
+}
+
+func TestInMemoryBackendRejectsCyclicVectorMetadata(t *testing.T) {
+	backend := NewInMemoryBackend()
+	cycle := []any{nil}
+	cycle[0] = cycle
+
+	err := backend.SetVector(ScopeSession, "session", "key", []float64{1}, map[string]any{"cycle": cycle})
+	require.ErrorIs(t, err, ErrCyclicMemoryValue)
+
+	_, _, found, err := backend.GetVector(ScopeSession, "session", "key")
+	require.NoError(t, err)
+	assert.False(t, found)
+}
+
+func TestDeepCopyFloat64Slice_Nil(t *testing.T) {
+	assert.Nil(t, deepCopyFloat64Slice(nil))
+}
+
+func TestDeepCopyFloat64Slice_Empty(t *testing.T) {
+	result := deepCopyFloat64Slice([]float64{})
+	assert.NotNil(t, result)
+	assert.Empty(t, result)
 }

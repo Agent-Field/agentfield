@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"
+	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 
@@ -547,7 +548,9 @@ func (c *webhookApprovalController) notifyApprovalCallback(callbackURL, executio
 		return
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	// Use SSRF-safe client to prevent the control plane from being used as
+	// a proxy to internal services via a malicious callback_url (CWE-918).
+	client := services.NewSSRFSafeClient(5 * time.Second)
 	resp, err := client.Post(callbackURL, "application/json", bytes.NewReader(body))
 	if err != nil {
 		logger.Logger.Warn().Err(err).Str("callback_url", callbackURL).Str("execution_id", executionID).Msg("approval callback delivery failed")

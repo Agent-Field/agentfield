@@ -177,20 +177,37 @@ def find_quote_in_chunk(claim: str, chunk_text: str, min_length: int = 20) -> st
     return best_sentence
 
 
+def text_similarity(text1: str, text2: str) -> float:
+    """Calculate word-overlap (Jaccard) similarity between two texts"""
+    words1 = set(text1.lower().split())
+    words2 = set(text2.lower().split())
+
+    if not words1 or not words2:
+        return 1.0 if words1 == words2 else 0.0
+
+    return len(words1 & words2) / len(words1 | words2)
+
+
 def deduplicate_chunks(
     chunks: List[Dict], similarity_threshold: float = 0.9
 ) -> List[Dict]:
     """Remove duplicate chunks based on text similarity"""
     unique_chunks = []
-    seen_texts = set()
+    seen_texts = []
 
     for chunk in chunks:
         text_normalized = " ".join(chunk["text"].lower().split())
 
-        # Simple deduplication based on normalized text
-        if text_normalized not in seen_texts:
+        # A chunk is a duplicate when it is at least `similarity_threshold`
+        # similar to a chunk we already kept (identical text scores 1.0)
+        is_duplicate = any(
+            text_similarity(text_normalized, seen) >= similarity_threshold
+            for seen in seen_texts
+        )
+
+        if not is_duplicate:
             unique_chunks.append(chunk)
-            seen_texts.add(text_normalized)
+            seen_texts.append(text_normalized)
 
     return unique_chunks
 

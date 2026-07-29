@@ -89,6 +89,21 @@ func (s *cancelHandlerErrorStorage) GetExecutionRecord(_ context.Context, _ stri
 	return &copy, nil
 }
 
+func (s *cancelHandlerErrorStorage) GetExecutionRecordsBatch(_ context.Context, executionIDs []string) (map[string]*types.Execution, error) {
+	if s.getExecErr != nil {
+		return nil, s.getExecErr
+	}
+	result := make(map[string]*types.Execution, len(executionIDs))
+	if s.exec == nil {
+		return result, nil
+	}
+	for _, id := range executionIDs {
+		copy := *s.exec
+		result[id] = &copy
+	}
+	return result, nil
+}
+
 func (s *cancelHandlerErrorStorage) GetWorkflowExecution(_ context.Context, _ string) (*types.WorkflowExecution, error) {
 	if s.getWorkflowErr != nil {
 		return nil, s.getWorkflowErr
@@ -167,6 +182,21 @@ func (s *workflowEventStoreStub) GetExecutionRecord(_ context.Context, _ string)
 	}
 	copy := *s.exec
 	return &copy, nil
+}
+
+func (s *workflowEventStoreStub) GetExecutionRecordsBatch(_ context.Context, executionIDs []string) (map[string]*types.Execution, error) {
+	result := make(map[string]*types.Execution, len(executionIDs))
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
+	if s.exec == nil {
+		return result, nil
+	}
+	for _, id := range executionIDs {
+		copy := *s.exec
+		result[id] = &copy
+	}
+	return result, nil
 }
 
 func (s *workflowEventStoreStub) CreateExecutionRecord(_ context.Context, execution *types.Execution) error {

@@ -10,7 +10,7 @@ const pageState = vi.hoisted(() => ({
   useQueryResult: {
     data: {
       executions: { today: 12 },
-      success_rate: 0.91,
+      success_rate: 91,
       agents: { running: 3 },
     },
     isLoading: false,
@@ -43,8 +43,8 @@ const pageState = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("react-router-dom", async () => {
-  const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
+vi.mock("react-router", async () => {
+  const actual = await vi.importActual<typeof import("react-router")>("react-router");
   return {
     ...actual,
     useNavigate: () => pageState.navigate,
@@ -147,7 +147,7 @@ describe("NewDashboardPage", () => {
     pageState.useQueryResult = {
       data: {
         executions: { today: 12 },
-        success_rate: 0.91,
+        success_rate: 91,
         agents: { running: 3 },
       },
       isLoading: false,

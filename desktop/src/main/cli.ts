@@ -25,7 +25,7 @@
 // No electron imports: the bundled path is injected by main, so probing,
 // selection, and provisioning stay unit-testable.
 
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentActionResult, CliStatus } from '../shared/types'
@@ -139,7 +139,17 @@ export function probeCli(candidate: CliCandidate): Promise<ProbedCandidate> {
       resolve({ ...candidate, responds, version: responds ? parseAfVersion(output) : null })
     }
 
-    const child = spawn(candidate.command, ['version'], { windowsHide: true, env: childEnv() })
+    // spawn() can throw synchronously (e.g. Windows UNKNOWN when the PATH
+    // resolves `af` to a non-PE file such as a WSL Linux binary). Without the
+    // try/catch that rejects this promise, and one bad candidate then fails
+    // the whole probeAll — the app hangs before creating its tray or window.
+    let child: ChildProcessWithoutNullStreams
+    try {
+      child = spawn(candidate.command, ['version'], { windowsHide: true, env: childEnv() })
+    } catch {
+      done(false)
+      return
+    }
     const timer = setTimeout(() => {
       child.kill()
       done(false)

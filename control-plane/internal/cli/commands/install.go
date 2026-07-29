@@ -57,6 +57,9 @@ contain its own agentfield-package.yaml; that subtree becomes the package root.
 --path is relative to the source root and may not escape it. It composes with an
 @ref pin on a Git URL.
 
+To see what environment variables a node needs BEFORE installing it, run
+"af show-requirements <path-or-git-url>".
+
 Examples:
   agentfield install ./my-agent
   agentfield install https://github.com/user/agent-repo

@@ -61,7 +61,7 @@ func TestEnvHandlerCoverage(t *testing.T) {
 		rec = performJSONRequest(router, http.MethodGet, "/api/ui/v1/agents/agent-1/env?packageId=pkg-missing", nil)
 		require.Equal(t, http.StatusNotFound, rec.Code)
 
-		require.NoError(t, os.WriteFile(filepath.Join(installPath, ".env"), []byte("SECRET_KEY=supersecret\nVISIBLE=value\n"), 0600))
+		require.NoError(t, os.WriteFile(filepath.Join(installPath, ".env"), []byte("SECRET_KEY=supersecret\nVISIBLE=\"a\\\"b\"\nMULTILINE=\"first\\nsecond\"\n"), 0600))
 		rec = performJSONRequest(router, http.MethodGet, "/api/ui/v1/agents/agent-1/env?packageId=pkg", nil)
 		require.Equal(t, http.StatusOK, rec.Code)
 		var body EnvResponse
@@ -69,6 +69,8 @@ func TestEnvHandlerCoverage(t *testing.T) {
 		require.True(t, body.FileExists)
 		require.Contains(t, body.MaskedKeys, "SECRET_KEY")
 		require.Contains(t, body.Variables["SECRET_KEY"], "...")
+		require.Equal(t, `a"b`, body.Variables["VISIBLE"])
+		require.Equal(t, "first\nsecond", body.Variables["MULTILINE"])
 	})
 
 	t.Run("put env validation and success", func(t *testing.T) {
@@ -169,17 +171,17 @@ func TestReasonersHandlerCoverage(t *testing.T) {
 			require.NotNil(t, filters.HealthStatus)
 			require.Equal(t, active, *filters.HealthStatus)
 			return []*types.AgentNode{
-			{
-				ID:            "agent-1",
-				Version:       "1.0.0",
-				HealthStatus:  types.HealthStatusActive,
-				LastHeartbeat: now,
-				Reasoners: []types.ReasonerDefinition{
-					{ID: "plan", Tags: []string{"alpha"}},
-					{ID: "search", Tags: []string{"beta"}},
+				{
+					ID:            "agent-1",
+					Version:       "1.0.0",
+					HealthStatus:  types.HealthStatusActive,
+					LastHeartbeat: now,
+					Reasoners: []types.ReasonerDefinition{
+						{ID: "plan", Tags: []string{"alpha"}},
+						{ID: "search", Tags: []string{"beta"}},
+					},
 				},
-			},
-		}, nil
+			}, nil
 		}
 		rec = performJSONRequest(router, http.MethodGet, "/api/ui/v1/reasoners?status=online&search=plan&limit=1&offset=0", nil)
 		require.Equal(t, http.StatusOK, rec.Code)

@@ -2,7 +2,9 @@ package services
 
 import (
 	"context"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -406,4 +408,96 @@ func TestPresenceManager_RecoverFromDatabase_SkipsNilNodes(t *testing.T) {
 
 	// Verify the valid agent has a lease
 	assert.True(t, pm.HasLease("valid-agent"))
+}
+
+// TestPresenceManager_Start_Idempotent verifies that calling Start() multiple
+// times does not spawn additional sweep goroutines. Regression test for the
+// duplicate sweep goroutine guard.
+func TestPresenceManager_Start_Idempotent(t *testing.T) {
+	pm, _ := setupPresenceManagerTest(t)
+
+	// Use long intervals so no sweeps fire during the test. This isolates the
+	// goroutine count to the sweep loop itself (no callback goroutines).
+	pm.config.HeartbeatTTL = 1 * time.Hour
+	pm.config.SweepInterval = 1 * time.Hour
+	pm.config.HardEvictTTL = 1 * time.Hour
+
+	// Allow the runtime goroutine count to settle before measuring.
+	time.Sleep(50 * time.Millisecond)
+	before := runtime.NumGoroutine()
+
+	pm.Start()
+
+	// The first Start() must spawn exactly one sweep goroutine.
+	require.Eventually(t, func() bool {
+		return runtime.NumGoroutine() > before
+	}, 500*time.Millisecond, 5*time.Millisecond,
+		"first Start() should spawn a sweep goroutine")
+
+	afterFirst := runtime.NumGoroutine()
+
+	// Calling Start() multiple times must NOT spawn additional goroutines.
+	pm.Start()
+	pm.Start()
+	pm.Start()
+
+	// Give any (incorrectly) spawned goroutines time to start.
+	time.Sleep(100 * time.Millisecond)
+
+	afterMultiple := runtime.NumGoroutine()
+
+	// Tolerate ±1 for runtime fluctuations (GC, finalizer goroutines, etc.).
+	// With the bug present, afterMultiple would exceed afterFirst by ~3.
+	delta := afterMultiple - afterFirst
+	assert.LessOrEqual(t, delta, 1,
+		"multiple Start() calls should not spawn additional sweep goroutines (delta=%d)", delta)
+}
+
+// TestPresenceManager_ExpireCallback_OncePerExpiration verifies that the
+// expireCallback fires at most once per expired node lease per sweep cycle.
+// Even across multiple sweep cycles, a single expired lease (without a fresh
+// Touch in between) must only trigger the callback once.
+func TestPresenceManager_ExpireCallback_OncePerExpiration(t *testing.T) {
+	pm, provider := setupPresenceManagerTest(t)
+
+	// Register the agent in storage so UpdateAgentStatus can look it up.
+	// Without this, markInactive returns early before invoking the callback.
+	ctx := context.Background()
+	nodeID := "node-once-per-expire"
+	require.NoError(t, provider.RegisterAgent(ctx, &types.AgentNode{
+		ID:            nodeID,
+		BaseURL:       "http://localhost:9999",
+		LastHeartbeat: time.Now(),
+	}))
+
+	var callbackCount int32
+	pm.SetExpireCallback(func(id string) {
+		atomic.AddInt32(&callbackCount, 1)
+	})
+
+	// Short intervals for fast, deterministic sweeps across multiple cycles.
+	pm.config.HeartbeatTTL = 500 * time.Millisecond
+	pm.config.SweepInterval = 100 * time.Millisecond
+	// Long hard-evict TTL so the lease stays around (we want to verify no
+	// duplicate callbacks fire while the lease lingers in MarkedOffline state).
+	pm.config.HardEvictTTL = 1 * time.Hour
+
+	pm.Start()
+
+	// Touch with an already-expired timestamp so the first sweep marks it
+	// offline and invokes the callback.
+	pm.Touch(nodeID, "", time.Now().Add(-10*time.Second))
+
+	// Wait for the callback to fire at least once.
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt32(&callbackCount) >= 1
+	}, 3*time.Second, 50*time.Millisecond,
+		"expire callback should fire at least once")
+
+	// Wait through multiple additional sweep cycles to ensure no duplicate
+	// callbacks fire for the same expired lease.
+	time.Sleep(500 * time.Millisecond)
+
+	assert.Equal(t, int32(1), atomic.LoadInt32(&callbackCount),
+		"expire callback should fire exactly once per expired node lease")
 }

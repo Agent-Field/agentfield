@@ -22,10 +22,12 @@ type ReasonerCatalogStore interface {
 }
 
 type ReasonerCatalogRow struct {
-	Node      string  `json:"node"`
-	Reasoner  string  `json:"reasoner"`
-	LastRunAt *string `json:"last_run_at,omitempty"`
-	Status    string  `json:"status"`
+	Node        string   `json:"node"`
+	Reasoner    string   `json:"reasoner"`
+	Description string   `json:"description,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	LastRunAt   *string  `json:"last_run_at,omitempty"`
+	Status      string   `json:"status"`
 }
 
 type ReasonerCatalogResponse struct {
@@ -70,6 +72,7 @@ func ListReasonersHandler(store ReasonerCatalogStore) gin.HandlerFunc {
 		nodeFilter := strings.TrimSpace(c.Query("node"))
 		liveOnly := parseQueryBool(c.Query("live"))
 		showAll := parseQueryBool(c.Query("all"))
+		entrypointsOnly := parseQueryBool(c.Query("entrypoints"))
 
 		rows := make([]ReasonerCatalogRow, 0)
 		for _, agent := range agents {
@@ -84,6 +87,9 @@ func ListReasonersHandler(store ReasonerCatalogStore) gin.HandlerFunc {
 				continue
 			}
 			for _, reasoner := range agent.Reasoners {
+				if entrypointsOnly && !hasTag(reasoner.Tags, types.TagEntrypoint) {
+					continue
+				}
 				fullName := agent.ID + "." + reasoner.ID
 				if query != "" && !fuzzyReasonerMatch(fullName, query) {
 					continue
@@ -93,11 +99,19 @@ func ListReasonersHandler(store ReasonerCatalogStore) gin.HandlerFunc {
 					formatted := ts.Format(time.RFC3339)
 					lastRun = &formatted
 				}
+				description := strings.TrimSpace(reasoner.Description)
+				if description == "" {
+					if fromMeta := extractDescription(agent.Metadata, reasoner.ID); fromMeta != nil {
+						description = strings.TrimSpace(*fromMeta)
+					}
+				}
 				rows = append(rows, ReasonerCatalogRow{
-					Node:      agent.ID,
-					Reasoner:  reasoner.ID,
-					LastRunAt: lastRun,
-					Status:    status,
+					Node:        agent.ID,
+					Reasoner:    reasoner.ID,
+					Description: description,
+					Tags:        reasoner.Tags,
+					LastRunAt:   lastRun,
+					Status:      status,
 				})
 			}
 		}
@@ -110,6 +124,13 @@ func ListReasonersHandler(store ReasonerCatalogStore) gin.HandlerFunc {
 			}
 			if leftOK && !left.Equal(right) {
 				return left.After(right)
+			}
+			// Among never-run (or same-timestamp) rows, surface declared entry
+			// points first so a fresh registry lists callable surfaces on top.
+			leftEntry := hasTag(rows[i].Tags, types.TagEntrypoint)
+			rightEntry := hasTag(rows[j].Tags, types.TagEntrypoint)
+			if leftEntry != rightEntry {
+				return leftEntry
 			}
 			return rows[i].Node+"."+rows[i].Reasoner < rows[j].Node+"."+rows[j].Reasoner
 		})
@@ -254,6 +275,15 @@ func reasonerNodeStatus(agent *types.AgentNode) string {
 	default:
 		return "stale"
 	}
+}
+
+func hasTag(tags []string, want string) bool {
+	for _, tag := range tags {
+		if strings.EqualFold(strings.TrimSpace(tag), want) {
+			return true
+		}
+	}
+	return false
 }
 
 func fuzzyReasonerMatch(value, query string) bool {

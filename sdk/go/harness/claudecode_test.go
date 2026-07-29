@@ -145,3 +145,35 @@ func TestClaudeCodeProvider_ParsesStreamJSONFixture(t *testing.T) {
 		assert.Equal(t, 1, raw.Metrics.NumTurns)
 	})
 }
+
+// TestClaudeCodeProvider_StripsModelVariantSuffix mirrors the Python
+// test_execute_strips_model_variant_suffix: claude-code has no reasoning-
+// effort control, so a "#variant" suffix is stripped from --model (the CLI
+// must receive a valid model id) and the variant is dropped.
+func TestClaudeCodeProvider_StripsModelVariantSuffix(t *testing.T) {
+	p := NewClaudeCodeProvider("claude")
+
+	var gotCmd []string
+	p.runCLI = func(_ context.Context, cmd []string, _ map[string]string, _ string, _ int, _ []byte) (*CLIResult, error) {
+		gotCmd = append([]string(nil), cmd...)
+		return &CLIResult{
+			Stdout:     `{"type":"result","result":"OK","session_id":"s1","num_turns":1}`,
+			ReturnCode: 0,
+		}, nil
+	}
+
+	raw, err := p.Execute(context.Background(), "hello", Options{Model: "sonnet#high"})
+	require.NoError(t, err)
+	require.False(t, raw.IsError, "unexpected error: %s", raw.ErrorMessage)
+
+	require.Contains(t, gotCmd, "--model")
+	for i, arg := range gotCmd {
+		if arg == "--model" {
+			require.Greater(t, len(gotCmd), i+1)
+			assert.Equal(t, "sonnet", gotCmd[i+1],
+				"--model must carry the base model, not the #variant-suffixed string")
+		}
+	}
+	assert.NotContains(t, gotCmd, "sonnet#high")
+	assert.NotContains(t, gotCmd, "--variant")
+}

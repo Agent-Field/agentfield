@@ -188,6 +188,9 @@ func TestTelemetryConfigDefaultsAndEnvOverrides(t *testing.T) {
 	if cfg.Telemetry.Timeout != 800*time.Millisecond {
 		t.Fatalf("unexpected timeout %s", cfg.Telemetry.Timeout)
 	}
+	if cfg.Telemetry.InstallIDPath != "" {
+		t.Fatalf("default install ID path must resolve under AgentField home, got %q", cfg.Telemetry.InstallIDPath)
+	}
 
 	t.Setenv("AGENTFIELD_TELEMETRY_ENABLED", "false")
 	t.Setenv("AGENTFIELD_TELEMETRY_ENDPOINT", "https://example.test/telemetry")

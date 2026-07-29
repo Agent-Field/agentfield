@@ -215,6 +215,15 @@ func TestDashboardPureHelpersCoverage(t *testing.T) {
 			{Status: string(types.ExecutionStatusSucceeded)},
 			{Status: string(types.ExecutionStatusFailed)},
 		}))
+		require.Equal(t, 100.0, (&DashboardHandler{}).calculateSuccessRate(nil))
+		require.Equal(t, 100.0, (&DashboardHandler{}).calculateSuccessRate([]*types.Execution{
+			{Status: string(types.ExecutionStatusRunning)},
+		}))
+		require.Equal(t, 50.0, (&DashboardHandler{}).calculateSuccessRate([]*types.Execution{
+			{Status: string(types.ExecutionStatusSucceeded)},
+			{Status: string(types.ExecutionStatusFailed)},
+			{Status: string(types.ExecutionStatusRunning)},
+		}))
 	})
 }
 

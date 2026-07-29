@@ -417,9 +417,14 @@ install_binary() {
   # Create install directory
   mkdir -p "$install_dir"
 
-  # Copy binary
-  cp "$binary_path" "$install_dir/agentfield"
-  chmod +x "$install_dir/agentfield"
+  # Stage to a temp file and rename into place. Overwriting an existing binary
+  # in place (cp onto the same inode) poisons the macOS kernel's cached
+  # code-signature state for that vnode, and every subsequent exec is killed
+  # with SIGKILL even though codesign --verify passes. mv gives upgrades a
+  # fresh inode and is atomic.
+  cp "$binary_path" "$install_dir/agentfield.tmp.$$"
+  chmod +x "$install_dir/agentfield.tmp.$$"
+  mv -f "$install_dir/agentfield.tmp.$$" "$install_dir/agentfield"
 
   # Create symlink for convenience (best effort)
   local symlink_created=0
@@ -548,14 +553,14 @@ verify_installation() {
 # Install the agentfield skills into coding-agent integrations (Claude Code,
 # Codex, Gemini, OpenCode, Aider, Windsurf, Cursor). Delegated to the
 # freshly-installed `af` binary so the install logic stays in one place.
-# Two skills ship with the binary: agentfield (building agents) and
-# agentfield-use (calling installed agents) — `af skill install` handles one
-# skill per invocation, so loop.
+# A no-name `af skill install` installs the binary's ENTIRE skill catalog
+# (agentfield, agentfield-personal, agentfield-use, and whatever ships next)
+# — never hardcode skill names here, or new catalog skills silently miss
+# existing installs.
 # Honors $SKILL_MODE: all (default) | all-targets | interactive | none.
 install_skill() {
   local install_dir="$1"
   local af_bin="$install_dir/agentfield"
-  local skill
 
   if [[ ! -x "$af_bin" ]]; then
     print_warning "af binary not executable, skipping skill install"
@@ -572,24 +577,17 @@ install_skill() {
       ;;
     all)
       printf "\n"
-      print_info "Installing skills into all detected coding agents..."
-      for skill in agentfield agentfield-use; do
-        "$af_bin" skill install "$skill" --all || print_warning "Skill install ($skill) reported errors"
-      done
+      print_info "Installing the skill catalog into all detected coding agents..."
+      "$af_bin" skill install --all || print_warning "Skill install reported errors"
       ;;
     all-targets)
       printf "\n"
-      print_info "Installing skills into all registered coding agents (even undetected)..."
-      for skill in agentfield agentfield-use; do
-        "$af_bin" skill install "$skill" --all-targets || print_warning "Skill install ($skill) reported errors"
-      done
+      print_info "Installing the skill catalog into all registered coding agents (even undetected)..."
+      "$af_bin" skill install --all-targets || print_warning "Skill install reported errors"
       ;;
     interactive|*)
       printf "\n"
       "$af_bin" skill install || print_warning "Skill install reported errors"
-      printf "\n"
-      print_info "Also installing the agentfield-use skill (calling installed agents)..."
-      "$af_bin" skill install agentfield-use --non-interactive || print_warning "Skill install (agentfield-use) reported errors"
       ;;
   esac
 }
@@ -652,9 +650,13 @@ install_tray() {
     fi
   fi
 
-  cp "$tray_path" "$INSTALL_DIR/af-tray"
-  chmod +x "$INSTALL_DIR/af-tray"
-  xattr -d com.apple.quarantine "$INSTALL_DIR/af-tray" 2>/dev/null || true
+  # Stage + rename for the same reason as install_binary: cp onto an existing
+  # inode makes the macOS kernel SIGKILL the binary on every exec after an
+  # upgrade.
+  cp "$tray_path" "$INSTALL_DIR/af-tray.tmp.$$"
+  chmod +x "$INSTALL_DIR/af-tray.tmp.$$"
+  xattr -d com.apple.quarantine "$INSTALL_DIR/af-tray.tmp.$$" 2>/dev/null || true
+  mv -f "$INSTALL_DIR/af-tray.tmp.$$" "$INSTALL_DIR/af-tray"
 
   # Delegate .app-bundle + launchd setup to the tray binary itself, so all of
   # that logic lives in one place (Go) and stays testable — mirroring how the

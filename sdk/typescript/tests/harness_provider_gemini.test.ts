@@ -75,6 +75,22 @@ describe('gemini provider', () => {
     });
     expect(result.isError).toBe(false);
   });
+
+  it('strips a #variant model suffix (gemini has no effort flag)', async () => {
+    vi.spyOn(cli, 'runCli').mockResolvedValue({
+      stdout: 'ok\n',
+      stderr: '',
+      exitCode: 0,
+    });
+
+    const provider = new GeminiProvider();
+    await provider.execute('hello', { model: 'gemini-2.5-pro#high' });
+
+    expect(cli.runCli).toHaveBeenCalledWith(['gemini', '-m', 'gemini-2.5-pro', '-p', 'hello'], {
+      cwd: undefined,
+      env: undefined,
+    });
+  });
 });
 
 describe('provider factory', () => {

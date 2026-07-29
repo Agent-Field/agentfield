@@ -177,3 +177,17 @@ func pickedByIndex(indexes ...int) []string {
 type assertErr string
 
 func (e assertErr) Error() string { return string(e) }
+
+// TestSkillInstallExplicitNameDryRun covers the explicit-skill-name install
+// path (`af skill install <name>`), which is unchanged by the no-name
+// install-all behavior and must keep resolving to a single named skill.
+func TestSkillInstallExplicitNameDryRun(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AGENTFIELD_HOME", home)
+
+	cmd := newSkillInstallCommand()
+	cmd.SetArgs([]string{"agentfield", "--dry-run", "--all-targets"})
+	_ = captureOutput(t, func() {
+		require.NoError(t, cmd.Execute())
+	})
+}

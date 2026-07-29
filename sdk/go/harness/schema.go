@@ -117,6 +117,94 @@ func codexStrictJSONSchema(schema map[string]any) map[string]any {
 	return strict
 }
 
+// codexSchemaStrictExpressible reports whether a strict-rewritten schema can be
+// enforced server-side via codex's --output-schema. OpenAI's strict-mode
+// validator (probed live against codex-cli 0.144.1) requires, on EVERY node:
+//
+//   - a "type" key, unless the node is a $ref or an anyOf/oneOf/allOf
+//     combinator — so bare {} nodes (Go `any` / Python `Any` fields) are out;
+//   - for objects: "additionalProperties" supplied and false, plus "required"
+//     listing every property key. Free-form maps (map[string]any /
+//     dict[str, Any] — an object node with no "properties") cannot satisfy
+//     this without forcing the model to emit an empty object, so they are out;
+//   - typed maps (additionalProperties as a subschema) are rejected outright.
+//
+// format / minItems / default / anyOf-with-null / $defs+$ref all pass the
+// validator and stay expressible. When this returns false the runner keeps the
+// codex-native prompt + --output-last-message but drops --output-schema,
+// leaving enforcement to local validation — the server would 400 the request
+// with invalid_json_schema otherwise.
+func codexSchemaStrictExpressible(schema map[string]any) bool {
+	// $ref targets live in $defs/definitions; every definition must itself be
+	// expressible for any reference to it to be.
+	for _, defKey := range []string{"$defs", "definitions"} {
+		if defs, ok := schema[defKey].(map[string]any); ok {
+			for _, value := range defs {
+				m, ok := value.(map[string]any)
+				if !ok || !codexSchemaStrictExpressible(m) {
+					return false
+				}
+			}
+		}
+	}
+
+	if _, ok := schema["$ref"].(string); ok {
+		return true // target checked via the $defs walk above
+	}
+
+	for _, key := range []string{"anyOf", "oneOf", "allOf"} {
+		if branch, ok := schema[key].([]any); ok {
+			for _, item := range branch {
+				m, ok := item.(map[string]any)
+				if !ok || !codexSchemaStrictExpressible(m) {
+					return false
+				}
+			}
+			return true
+		}
+	}
+
+	switch typeValue := schema["type"].(type) {
+	case string:
+		switch typeValue {
+		case "object":
+			props, ok := schema["properties"].(map[string]any)
+			if !ok {
+				return false // free-form map — strict mode would force {}
+			}
+			if ap, ok := schema["additionalProperties"].(bool); !ok || ap {
+				return false
+			}
+			for _, value := range props {
+				m, ok := value.(map[string]any)
+				if !ok || !codexSchemaStrictExpressible(m) {
+					return false
+				}
+			}
+			return true
+		case "array":
+			items, ok := schema["items"].(map[string]any)
+			if !ok {
+				return false // tuple/itemless arrays — not expressible
+			}
+			return codexSchemaStrictExpressible(items)
+		default:
+			return true // primitive leaf
+		}
+	case []any:
+		// e.g. ["string","null"]; only primitive members are safely strict.
+		for _, tv := range typeValue {
+			s, ok := tv.(string)
+			if !ok || s == "object" || s == "array" {
+				return false
+			}
+		}
+		return len(typeValue) > 0
+	default:
+		return false // no type, no $ref, no combinator — e.g. {} for Any
+	}
+}
+
 // BuildCodexNativeSuffix constructs the prompt suffix for codex's native
 // structured output. Unlike BuildPromptSuffix (which asks the model to Write a
 // file), this tells the model to emit its final JSON answer directly — the

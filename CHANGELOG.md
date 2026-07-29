@@ -6,6 +6,1496 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.118-rc.1] - 2026-07-28
+
+
+### CI
+
+- Ci(sdk-python): pin ruff to 0.15.22 (#831)
+
+ruff 0.16.0 released and the workflow installs unpinned ruff, so the Lint
+step now fails with ~2700 pre-existing violations (I001, BLE001, C408, ...)
+on every sdk-python PR — current main itself is red under 0.16.0 and clean
+under 0.15.22. Pin the version CI actually validated against; bump
+deliberately alongside the rule fixes.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (d65fbe0)
+
+
+
+### Chores
+
+- Chore(skills): sync embedded agentfield-use mirror after #827 (#828)
+
+#827 updated the canonical skills/agentfield-use/SKILL.md without running
+scripts/sync-embedded-skills.sh, so TestEmbeddedSkillSyncCheck now fails on
+main and leaks a red coverage gate into every PR that merges main.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (f718199)
+
+
+
+### Fixed
+
+- Fix(security): close open Dependabot vulnerability alerts (#830)
+
+* fix(security): resolve open Dependabot vulnerability alerts
+
+Bump vulnerable direct and transitive dependencies across Go and npm
+lockfiles, and migrate the web client from react-router-dom v7 to
+react-router v8 (required for the RSC CSRF advisory patch).
+
+- google.golang.org/grpc 1.80.0 -> 1.82.1 (control-plane)
+- react-router 8.3.0 (replaces react-router-dom; React >=19.2.7)
+- next 15.5.18 -> 15.5.22, sharp -> 0.35.3 (rag_evaluation UI)
+- js-yaml -> 4.3.0, brace-expansion -> 1.1.16/2.1.2, postcss -> >=8.5.18
+- fast-uri -> 3.1.4 (desktop, mastra-bench)
+- CI Node for control-plane/web builds: 20 -> 22
+
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+
+* fix(security): bump hono and @hono/node-server in mastra-bench
+
+Override transitive hono to 4.12.32 and @hono/node-server to 2.0.12
+to clear remaining moderate Dependabot alerts (JSX context isolation,
+cx() XSS, API Gateway header de-dupe, Windows serve-static path traversal).
+
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+
+---------
+
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com> (fc4bdde)
+
+## [0.1.117] - 2026-07-24
+
+## [0.1.117-rc.5] - 2026-07-24
+
+
+### Added
+
+- Feat(control-plane): embedded MCP server at /mcp (zero-setup harness integration) (#817)
+
+* feat(control-plane): add AGENTFIELD_MCP_ENABLED config toggle
+
+Introduce MCPConfig under features with an IsEnabled() default of true so
+the embedded MCP server ships on by default. AGENTFIELD_MCP_ENABLED=false
+flips it off via the existing env-override precedence path.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(control-plane): embedded MCP server handler and tools
+
+Add a stateless streamable-HTTP JSON-RPC 2.0 handler that exposes AgentField
+discovery and execution as MCP tools, calling the existing service layer
+directly (no loopback HTTP). Supports initialize, notifications, ping,
+tools/list and tools/call; rejects batch arrays; unknown methods return
+-32601.
+
+Five tools: discover_agents, get_reasoner_schema, execute_reasoner (starts an
+async run), get_run, and wait_run (server-side poll with a hard timeout cap so
+a tool call can never hang a harness). Results are single compact-JSON text
+content blocks; validation/business failures come back as isError tool
+results rather than transport errors.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(control-plane): serve MCP at /mcp on the control-plane port
+
+Register the embedded MCP server on the same Gin router as the REST API:
+POST /mcp (JSON-RPC), GET /mcp -> 405, OPTIONS /mcp -> 204. The route is
+gated by AGENTFIELD_MCP_ENABLED and simply not registered (so /mcp 404s) when
+disabled. It lives behind the same global API-key auth and trust domain as
+/api/v1 — no extra process, no extra setup; harnesses connect with one
+command.
+
+Thread the build version through server.SetBuildVersion so the MCP
+serverInfo reports the real control-plane version.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(skills): document zero-setup MCP in agentfield-use
+
+Add an "MCP (zero-setup)" section near the top of the agentfield-use skill
+(both the repo copy and the embedded skill_data copy, kept identical): the
+control plane serves MCP at <server>/mcp, with the one-liner claude mcp add
+command and a generic streamable-HTTP note for other clients. The CLI/REST
+flow remains the documented full-power path. Bump the skill version to 0.4.0.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: MCP integration guide
+
+Add docs/mcp-integration.md covering the endpoint, the five tools, the
+security posture (same trust domain and API-key auth as the REST API), the
+disable flag, and an example tool-call flow. Link it from the README feature
+table.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix: enforce MCP execution authorization
+
+* chore(skills): sync embedded agentfield-use mirror on branch
+
+Branch-local drift: this PR merged main (incl. #827's skill edit) while
+carrying its own mirror copy; sync-embedded-skills.sh realigns them so the
+skillkit drift tests pass regardless of #828.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (b9a07d0)
+
+## [0.1.117-rc.4] - 2026-07-24
+
+
+### Added
+
+- Feat(cli): health-aware list/stop, startup failure diagnostics, port retry, doctor --probe (#820)
+
+* feat(cli): warn before af stop interrupts running executions
+
+`af stop <node>` gracefully killed nodes with long-running executions in
+flight with no warning. Running executions are queryable from the control
+plane, so query them before signalling the process:
+
+- running executions found + TTY   → list count/ids/age and prompt to confirm
+- running executions found + no TTY → warn (count/ids/age) and proceed
+- --force                           → stop immediately, no query/warning/prompt
+- control plane unreachable         → note it and proceed (best-effort, as before)
+
+The check runs only once we have confirmed the process is genuinely ours and
+alive, so a dead/stale node still reconciles cleanly without spurious queries.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): surface af run startup logs and retry once on strict-port bind conflict
+
+Two operational failures in the `af run` path made a failed start opaque and
+non-recoverable:
+
+- On any startup failure the CLI only printed "did not become ready within 30s";
+  the real traceback/exit reason lived in the node log, reachable only via a
+  separate `af logs`. Now the last ~15 lines of the node's log are printed
+  inline on failure, plus a "Full logs: af logs <node>" pointer.
+
+- When a node was assigned a port that looked free but lost the bind race (a
+  just-stopped node's port lingering under mirrored networking), the SDK exited
+  with AGENTFIELD_STRICT_PORT "assigned port N is unavailable" and nothing
+  retried. The run path now detects that strict-port exit from the node log and
+  retries exactly once on a fresh port (the failed port is reserved first so it
+  is never reused), logging "Port <p> unavailable, retrying on a fresh port".
+
+The port-alloc/start/wait section is refactored into attemptStart +
+startWithPortRetry so the retry decision and port-change logic are unit-testable
+without the real health-poll.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): reconcile af list registry status with control-plane health
+
+`af list` showed only the local registry's view, which is a claim, not a fact:
+a node the registry calls "running" can be dead on the control plane (or a
+registry "stopped" node can still be live). Add a HEALTH column that fetches the
+control plane's node view (GET /api/v1/nodes?show_all=true, so inactive nodes
+are included) and reconciles it with each node's registry status:
+
+- statuses agree           → plain health (e.g. "active")
+- statuses disagree        → health + "(mismatch)" and a footer explaining it
+- node absent from CP       → "not on control plane (mismatch)" when registry running
+- control plane unreachable → "unknown (control plane unreachable)", never an error
+
+The same health/health_discrepancy fields are added to `af list --json` for the
+agent-driven flow. A missing control plane never fails the command.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): add af doctor --probe to smoke-test detected provider CLIs
+
+`af doctor` reported a provider as available whenever its binary was on PATH,
+but a present binary can still return instant empty completions (broken auth,
+model outage) — the doctor called it healthy while every real call failed.
+
+Add an opt-in `--probe` flag that runs a minimal one-shot prompt against each
+DETECTED provider CLI (claude -p, codex exec, gemini -p, opencode run) with a
+per-provider 60s timeout and classifies the result:
+
+- ok      → non-empty completion
+- empty   → exit 0 but no output (the silently-broken case a PATH check misses)
+- error   → non-zero exit (stderr head captured)
+- timeout → no response within the timeout
+
+Probes run only for providers doctor already detects; without --probe the
+command is unchanged. Output and help note that a probe consumes a trivial
+amount of provider quota. The classifier is a pure function so ok/empty/error/
+timeout are table-tested from (exit code, stdout, timed-out) tuples.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix: preserve explicit agent ports on startup conflict
+
+* chore(skills): sync embedded skill mirrors on branch
+
+Realigns embedded mirrors with skills/ sources inherited from the main
+merge so skillkit drift tests pass branch-locally.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (f11cb69)
+
+
+
+### Fixed
+
+- Fix(cli): make af config write through to the secret store + pre-install requirements visibility (#819)
+
+* fix(cli): make af config write through to the node-scoped secret store
+
+`af config <node> --set K=V` (and interactive `af config <node>`) only ever
+wrote the package `.env`, but `af run` resolves a node's environment from the
+encrypted secret store, not that file — so configured values looked saved yet
+never reached the running process, and `af config` even told users to run
+`af run` with settings it would ignore.
+
+Mirror every value set via `af config` into the node-scoped secret store (the
+same one `af secrets set K --node <node>` uses), keeping the `.env` for `af dev`
+and the web UI env editor. `--unset` now removes from both destinations so an
+unset value cannot linger and get re-injected. Success/interactive copy now
+states both destinations truthfully.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): add actionable fix command to missing-secret startup errors
+
+When a required secret is missing and stdin is not a TTY, `af run` hard-failed
+with an error that listed variable names but no way to fix them. Pair each unset
+variable (and every option of an unsatisfied require_one_of group) with the exact
+command that resolves it — `af secrets set <VAR> --node <name>` — and name the
+node in the message so the command is copy-pasteable.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): add af show-requirements to inspect a node before installing
+
+There was no way to see what environment variables a node needs until after
+installing it. `af show-requirements <path-or-git-url>` resolves the source
+WITHOUT installing — a local path is parsed in place; a Git URL (with optional
+@ref and //subdir selector) is shallow-cloned into a temp directory that is
+removed afterwards, so nothing is written under ~/.agentfield.
+
+It prints the node name, required variables, optional variables with their
+defaults, and require_one_of groups, pairing each required variable with the
+exact `af secrets set <VAR> --node <name>` command. Supports `-o json`. The gap
+is now also called out in `af install --help`.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): point post-install guidance at af secrets + explicit next steps
+
+The post-install output told users to run `af config <node> --set VAR=...` for
+missing required variables — a command that only wrote the package .env, which
+`af run` ignores. Point it at `af secrets set <VAR> --node <name>` (which `af run`
+reads) for both missing required variables and unsatisfied require_one_of groups,
+and always print explicit next steps (`af run <name>`, `af list`) so a first-time
+user is never left guessing.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: document af show-requirements and write-through af config
+
+Document the new `af show-requirements` command and the now write-through
+`af config` behavior in the agent-node installation guide, consistent with the
+existing `af secrets` guidance: `af config --set/--unset` mirrors into the
+node-scoped secret store `af run` reads (keeping the `.env` for `af dev` and the
+web UI), and the non-interactive missing-secret error now includes the fix
+command. Adds both commands to the lifecycle reference table.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(config): preserve env values and contain subdirs
+
+* fix(packages): report missing --path subdirs as missing manifests again
+
+The symlink-containment hardening made EvalSymlinks fail first on absent
+subdirectories, surfacing a raw lstat error instead of the documented
+'no agentfield-package.yaml found (expected at <path>)' message and
+breaking four tests that pin that contract. Handle not-exist explicitly
+before the resolution error path.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* chore(skills): sync embedded skill mirrors on branch
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(cli,packages): cover requirements CLI branches and subdir error paths
+
+Closes the patch-coverage gap: no-configuration and unlabeled
+require_one_of rendering plus inspect-error propagation in
+af show-requirements, and the root-resolution / manifest-missing error
+branches of ResolvePackageSubdir.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (4a64cde)
+
+
+
+### Other
+
+- Replace N+1 execution fetches in batch-status handler with one batch fetch (#811)
+
+* issue/batch-status-n-plus-1: replace N+1 execution fetches in batch-status handler with one batch fetch
+
+handleBatchStatus now issues a single GetExecutionRecordsBatch query
+regardless of how many execution IDs are requested, instead of looping
+GetExecutionRecord per ID. Missing IDs preserve the prior per-ID
+'not_found' response. Requests with more than 500 IDs are rejected with
+a 400 before hitting storage. Storage layer gains GetExecutionRecordsBatch
+on LocalStorage and the StorageProvider/ExecutionStore interfaces; test
+stubs updated to satisfy the new interface.
+
+* fix: preserve batch status partial results
+
+* chore(skills): sync embedded skill mirrors on branch
+
+Realigns embedded mirrors with skills/ sources inherited from the main
+merge so skillkit drift tests pass branch-locally.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (984996d)
+
+- InMemoryBackend: deep-copy values on Set/Get to fix data race (#807)
+
+* issue/inmemory-deepcopy: deep-copy map/slice values in InMemoryBackend Set/Get and SetVector/GetVector to prevent data races
+
+* test: add deep-copy helper coverage for []any, []float64, nil/default paths
+
+Exercises the previously-uncovered branches in deepCopyAny ([]any
+recursion, []float64 copying, default passthrough) and
+deepCopyFloat64Slice (nil input handling) to satisfy the patch-coverage
+gate at 80%. No production code changes.
+
+* fix(sdk): reject cyclic in-memory values
+
+* chore(skills): sync embedded skill mirrors on branch
+
+Realigns embedded mirrors with skills/ sources inherited from the main
+merge so skillkit drift tests pass branch-locally.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (7793bc8)
+
+## [0.1.117-rc.3] - 2026-07-24
+
+
+### Other
+
+- Add tests for agentic handlers: query, batch, discover (#810)
+
+* issue/agentic-handler-tests: add tests for query, batch, and discover handlers
+
+Adds three new test files covering edge cases and missing code paths:
+- query_handler_test.go: default limit clamping, invalid RFC3339 dates,
+  offset out-of-bounds, missing resource field, response structure
+- batch_test.go: invalid JSON, single/max operations, POST bodies,
+  sub-request errors, auth header propagation, concurrent integrity
+- discover_test.go: method filter, limit clamp >100, combined filters,
+  see_also references, Smart404 suggestions with auth filtering
+
+Coverage: 91.5% -> 92.6% (BatchHandler: 79.4% -> 94.1%,
+DiscoverHandler: 92.3% -> 100.0%)
+
+* fix(agentic): preserve batch caller identity
+
+* chore(skills): sync embedded skill mirrors on branch
+
+Realigns embedded mirrors with skills/ sources inherited from the main
+merge so skillkit drift tests pass branch-locally.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(agentic): cover past-end offset branches and node-ID batch forwarding
+
+Closes the patch-coverage gap on the caller-identity fix: the empty-page
+branches for executions/workflows/sessions (only agents was exercised)
+and the X-Agent-Node-ID forwarding branch in batch sub-requests.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (fde785d)
+
+## [0.1.117-rc.2] - 2026-07-24
+
+
+### Other
+
+- Register pprof debug endpoints behind admin-token auth (#809)
+
+* issue/pprof-admin-endpoints: register pprof debug endpoints behind admin-token auth
+
+Add /debug/pprof/ routes gated by X-Admin-Token (returns 401 on missing/wrong
+token, 200 with valid token). Named profiles (goroutine, heap, etc.) share the
+same gating. When no admin token is configured the endpoints are open,
+consistent with existing AdminTokenAuth behavior.
+
+* fix(server): complete pprof admin endpoint handling
+
+* chore(skills): sync embedded skill mirrors on branch
+
+Realigns embedded mirrors with skills/ sources inherited from the main
+merge so skillkit drift tests pass branch-locally.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (a2e13d0)
+
+## [0.1.117-rc.1] - 2026-07-24
+
+
+### Documentation
+
+- Docs(skills): agentfield-use — default to full batch dispatch; canary-validate after node reconfig (#827)
+
+Two additions to the concurrency guidance:
+
+- Make the batch default explicit: when N independent jobs arrive, dispatch
+  all of them up front and poll as a group, rather than one-at-a-time.
+
+- Add the one exception: right after a node's runtime config changes
+  (provider/model/bin path via af secrets set + restart), send ONE
+  representative call and verify it did real work (nonzero cost/duration,
+  plausible output) before fanning out. A misconfigured harness can crash
+  instantly while the run still reports succeeded-with-empty-results, and
+  an agent that posts externally (e.g. GitHub reviews) publishes that
+  garbage under the user's identity once per dispatched call.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (613138b)
+
+
+
+### Other
+
+- Issue/presence-start-guard: guard PresenceManager.Start against duplicate sweep goroutines (#808)
+
+Start() now uses sync.Once (mirroring the existing stopOnce pattern) to
+ensure only one sweep loop is ever spawned per PresenceManager instance.
+
+Adds two regression tests:
+- TestPresenceManager_Start_Idempotent: counts goroutines before/after
+  multiple Start() calls to assert no duplicate sweep loops spawn.
+- TestPresenceManager_ExpireCallback_OncePerExpiration: counts callback
+  invocations across multiple sweep cycles to assert the callback fires
+  at most once per expired node lease.
+
+Verification: temporarily reverted the startOnce guard and confirmed
+TestPresenceManager_Start_Idempotent fails with delta=3 (3 extra
+goroutines spawned by duplicate Start() calls), proving the regression
+test catches the bug. Restored the guard; all presence manager tests
+pass and go vet is clean. (4aaf3b0)
+
+## [0.1.116] - 2026-07-24
+
+## [0.1.116-rc.1] - 2026-07-24
+
+
+### Fixed
+
+- Fix(skills): sync the full catalog, unblock legacy reconcile, retire the /agentfield shim (#826)
+
+* fix(skillkit): retire the /agentfield command shim, clean up stale links
+
+The shim predates slash-invocable skills: Claude Code now registers
+/agentfield from the skill itself, so the bundled commands/agentfield.md
+only produced a duplicate picker entry. Drop it from the package (skill
+bumped to 0.5.2 so machines already on 0.5.1 actually reinstall), and
+teach the claude-code target to remove command links whose target lives
+under the skill's canonical store but is no longer shipped — so existing
+machines lose the shim on their next skill update instead of keeping a
+dangling symlink. User files, live links, and other skills' commands are
+untouched; a blocked commands dir still surfaces through installCommands'
+existing error path.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop,installer): install the full skill catalog, not a hardcoded list
+
+Both the desktop syncSkills and install.sh looped over a hardcoded
+[agentfield, agentfield-use], so agentfield-personal (new in v0.1.115)
+never reached existing installs — updates bumped the two known skills
+and silently skipped new catalog entries. A no-name `af skill install`
+already installs the binary's entire catalog in one process, so call
+that instead everywhere; future catalog additions now propagate without
+touching the desktop app or the installer script.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(skillkit): reconcile tolerates legacy manual-method targets
+
+Legacy standalone agentfield-multi-reasoner-builder installs recorded
+cursor/windsurf integrations with method "manual" — nothing on disk, the
+user pasted rules into the app's settings UI. removeRecordedTarget only
+knew symlink and marker-block, so reconciliation errored and blocked
+every `af skill install` on such machines (hit in the wild upgrading to
+v0.1.115). Manual targets are now removable no-ops; genuinely unknown
+methods still fail loud.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (bac67d0)
+
+## [0.1.115] - 2026-07-23
+
+## [0.1.115-rc.2] - 2026-07-23
+
+
+### Other
+
+- Improve anonymous OSS telemetry (#823) (809fb86)
+
+## [0.1.115-rc.1] - 2026-07-23
+
+
+### Added
+
+- Feat: user-built subharness agents — personal-agent skill path, installable scaffolds, skill routing + cleanup (#822)
+
+* docs: add builder delivery routing
+
+* docs: add usage skill builder fallback
+
+* fix(skill): quote agentfield frontmatter description
+
+* fix(skills): harden agentfield-use frontmatter
+
+* feat: make generated language scaffolds installable
+
+* fix(skill): clarify builder coverage evidence
+
+* fix(skillkit): sync agentfield skill embeds
+
+* feat(skillkit): reconcile obsolete alias installs
+
+* fix(skill): make builder fallback handoff explicit
+
+* fix(skillkit): reconcile aliases before update validation
+
+* test(packages): cover managed TypeScript installs
+
+* test(skillkit): strengthen alias reconciliation coverage
+
+* test(skillkit): verify reconciliation runs once per operation
+
+* test(skillkit): cover reconciliation failure seams
+
+* test(templates): preserve punctuated scaffold metadata
+
+* fix(skill): clarify fallback authorization guard
+
+* fix(templates): quote generated TypeScript package name
+
+* test(templates): require explicit empty scaffold environment
+
+* test(templates): enforce one scaffold manifest per language
+
+* Align skill catalog mirrors
+
+* test(skillkit): strengthen catalog routing contracts
+
+* test: verify integrated repository contracts
+
+* refactor(skills): split personal-agent flow into its own agentfield-personal skill
+
+The 0.6.0 builder skill routed every request through a coverage pre-check
+and a deliverable question before the original repo workflow could start —
+a behavior change for everyone already using the skill. Split instead:
+
+- skills/agentfield: reverted to the pre-gate body (byte-identical to
+  main); frontmatter gains version 0.5.1 and a one-sentence description
+  pointer to agentfield-personal. Existing repo-builder behavior unchanged.
+- skills/agentfield-personal (new, 0.1.0): standalone personal-agent
+  skill — stable source in ~/agentfield-agents, v1 manifest, scoped
+  secrets via the af CLI, install/run, registration + live-call
+  verification, Desktop handoff. Selection happens at skill-routing
+  level via its description, not via an in-skill gate.
+- skills/agentfield-use: the no-coverage fallback keeps the offer and
+  authorization boundaries but drops the coverage_precheck_complete
+  marker protocol and bounce-limit that served the removed gate.
+
+Catalog/embed register the new skill; contract tests pin the reverted
+builder (routing-gate text banned), the personal lifecycle contract, and
+the simplified use-skill offer.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (f69b2c3)
+
+- Feat(desktop): redesign UI around install and usage jobs (#814)
+
+* feat(desktop): redesign UI around install and usage jobs
+
+Align the Electron app with the product/design specs: marketplace-style agents, denser activity, home usage totals, and shared theme tokens so the local sub-harness is clearer at a glance.
+
+* feat(desktop): polish onboarding and empty states
+
+* Delete PRODUCT.md
+
+* feat(desktop): add appearance override
+
+* fix(desktop): keep Windows controls clear of header
+
+* fix(desktop): reserve Linux overlay controls
+
+* fix(desktop): preserve collision-free UI keys
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (20955b2)
+
+## [0.1.114] - 2026-07-22
+
+
+### Added
+
+- Feat(desktop): let the app own its control plane on a configurable / auto-picked free port (#815)
+
+* feat(desktop): free-port selection and a dynamic control-plane base URL
+
+New ports module: prefer 8080, walk to the next free port, fall back to an
+OS-assigned one. agentfield.ts gains an active base URL (getBaseUrl /
+setActiveControlPlanePort) that every HTTP helper now defaults to, so no
+consumer hard-codes 8080.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): controlPlanePort setting + last-used port persistence
+
+controlPlanePort pins the port exactly (null = automatic); the app-managed
+lastControlPlanePort records where the app last started/adopted a control
+plane so a restarted app can rediscover it. Both normalized to a valid TCP
+port or null.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): own the control plane on a chosen port
+
+Autostart now discovers before it starts: probe the candidate ports (the
+configured one, or default + last-used) and adopt any recognized AgentField;
+otherwise start af server on the configured port exactly, or in automatic
+mode on the first free port from 8080 up — so a squatted 8080 never blocks
+the app or spawns a duplicate control plane. The effective port is persisted
+for the next launch, every af invocation gets AGENTFIELD_SERVER so agents
+register with the app's control plane, the spawned server is pinned via
+AGENTFIELD_PORT, the macOS launchd path is only used for the default port,
+and the tray/open-web-ui follow the live base URL.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): control-plane port field in Settings
+
+Empty means automatic (8080 when free, else the next open port); a number
+pins the port. Committed on blur/Enter, invalid input reverts to the saved
+value.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (485712c)
+
+## [0.1.114-rc.2] - 2026-07-22
+
+
+### Added
+
+- Feat(cli): surface the harness golden path (af wait, catalog, golden_path help, JSON envelopes) (#816)
+
+* feat(cli): emit a JSON envelope for af call --async under -o json
+
+`af call --async` printed a bare run-id string on stdout for every output
+format, so a harness parsing `-o json` got a non-JSON token. Under an
+explicitly requested machine format (-o json/-o yaml) it now emits
+{"run_id": "...", "status": "accepted"} so parsers get valid JSON/YAML.
+
+The default and pretty paths keep the bare run-id line that shell scripts
+capture via RUN_ID=$(af call node.reasoner --async), so that contract does
+not regress.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): surface the golden path in af agent help
+
+The machine-friendly `af agent help` payload taught discovery and
+introspection but never execution: quick_start omitted `af call` and
+`af tail` entirely, so a harness could find agents but was never shown how
+to run one.
+
+Add a `golden_path` field — an ordered array of {step, command, purpose}
+covering the full driving loop (doctor → catalog → install → secrets →
+run → ls/discover → call --schema → call --async → wait/tail) — and add
+`af call` and `af tail` entries to quick_start.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): install both AgentField skills when no skill name is given
+
+`af skill install` with no argument resolved to Catalog[0] and installed
+only the `agentfield` build skill, never `agentfield-use` — the drive
+skill that documents the discover → call → wait loop. A first-time user
+therefore never got the golden-loop docs.
+
+Add skillkit.InstallAll, which installs every catalog skill into the
+resolved targets, and call it from `af skill install` when no skill name
+is passed. Explicit `af skill install <name>` is unchanged. The
+interactive picker copy now names both skills (build + drive).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): add a shared control-plane-unreachable hint
+
+`af call`/`af ls`/`af tail` emitted a raw Go dial error when the control
+plane was down, with no guidance — while `af agent` commands already
+appended a reachability hint. Every CLI command that talks to the control
+plane routes through makeRequest, so wrap a transport-level failure there
+with a shared, actionable hint:
+
+  Control plane not reachable at <url>. Start it with `af server` or
+  launch the AgentField desktop app.
+
+A cancelled context (Ctrl-C / caller-handled timeout) is passed through
+unwrapped so only genuine connectivity failures get the hint.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): add af wait to block on an async run
+
+`af call --async` returns a run_id, but there was no first-class way to
+block until that run finished — a harness had to poll or tail. Add
+`af wait <run_id> [--timeout <sec, default 600>]`: it polls the run
+overview (the same /api/v1/agentic/run/:run_id API `af agent run --id`
+uses) until every execution is terminal, prints the final status and
+result as JSON, and maps outcomes to exit codes — 0 on succeeded, 1 on
+failed/cancelled, 2 on timeout.
+
+A 404 (records not yet written after an async accept) is treated as
+"not ready" so a freshly-accepted run keeps polling. The command also
+exercises the shared control-plane-unreachable hint, covered here by a
+cross-command test over call/ls/tail/wait.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): add af catalog to browse installable agent nodes
+
+There was no CLI way to discover installable nodes — the only curated
+catalog lived in the desktop app (desktop/src/shared/catalog.ts). Add
+`af catalog`, backed by an in-binary catalog seeded from that same
+curated list (name, description, install source, docs URL), so a harness
+can browse nodes before `af install` and works offline.
+
+Supports `-o json`/`-o yaml`; the human table ends with the hint
+`af install <source>`.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(cli): cover af wait/catalog command paths for the patch gate
+
+Add behavior tests for the previously-untested command wiring and
+error paths surfaced by the coverage patch gate:
+
+- af wait: pretty output, invalid-format/empty-id (exit 2), a control
+  plane 5xx (exit 3), the nil-opts default path, end-to-end command
+  execution, and rootExecutionResult (explicit root, last-execution
+  fallback, non-JSON, empty).
+- af catalog: end-to-end command execution under -o json.
+- af skill install <name>: the explicit-name path stays single-skill.
+- makeRequest: a cancelled context is passed through unwrapped, not
+  relabeled as an unreachable-control-plane error.
+
+Raises control-plane patch coverage back over the 80% floor.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (d6197f0)
+
+## [0.1.114-rc.1] - 2026-07-22
+
+
+### Fixed
+
+- Fix(sdk-go): survive OpenAI's strict validator on codex --output-schema (#818)
+
+The server behind codex exec now validates --output-schema against OpenAI
+strict-mode rules (probed live on codex-cli 0.144.1): every object node
+needs additionalProperties:false and a full required array, every node
+needs a type (or \$ref / anyOf), and free-form maps, typed maps, and
+boolean subschemas (invopop's output for `any` fields) are rejected with
+invalid_json_schema — killing every schema-enforced codex role
+(Agent-Field/SWE-AF#106).
+
+Three coordinated changes:
+
+- schema.go: codexSchemaStrictExpressible classifies a strict-rewritten
+  schema against the probed validator rules, so the runner knows when
+  --output-schema would be refused (map[string]any / any fields cannot be
+  expressed without forcing an empty object).
+- runner.go: for inexpressible schemas the runner still writes the schema
+  file and keeps the codex-native prompt, but hands the provider an empty
+  schemaPath — codex runs with --output-last-message only and the
+  existing local validation enforces the schema.
+- codex.go: --output-last-message is decoupled from --output-schema, and
+  a rejected schema (invalid_json_schema in the CLI output) triggers one
+  reactive rerun without the flag, so future validator tightening
+  degrades to local validation instead of failing the role.
+
+Live-verified: the real SWE-AF GitInitResult and Architecture strict
+schemas are ACCEPTED by the validator; PRD (boolean subschema via
+AskUserFormField.default_value) is correctly gated to the fallback path.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (d0dec79)
+
+## [0.1.113] - 2026-07-21
+
+## [0.1.113-rc.1] - 2026-07-21
+
+
+### Added
+
+- Feat: node-declared reasoner descriptions + entry points in discovery and af ls (#805)
+
+* feat(control-plane): per-reasoner descriptions + entrypoint surfacing in discovery and catalog
+
+ReasonerDefinition/SkillDefinition gain a description field (rides in the
+reasoners JSON blob — no migration). Discovery prefers the record-level
+description and falls back to the legacy agent metadata map; the serverless
+ingest path stops dropping the description it already parsed. The reasoner
+catalog (af ls backend) returns description+tags, supports entrypoints=true,
+and sorts entrypoint-tagged rows first among never-run rows. Adds
+types.TagEntrypoint as the shared tag convention.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): af ls shows reasoner descriptions and supports --entrypoints
+
+Rows render a trailing description column ([entrypoint]-labeled when the
+reasoner carries the entrypoint tag, truncated to one line); -e/--entrypoints
+filters to entry points so a caller browsing a node sees its intended surface.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(sdk-go): transmit reasoner descriptions to the control plane
+
+WithDescription was captured locally for CLI help but never sent at
+registration. ReasonerDefinition gains the description field and registerNode
+copies it, so discovery and af ls can surface it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(sdk-python): description kwarg on @reasoner/@skill with docstring default
+
+@app.reasoner(description=...) / @app.skill(description=...) register a
+caller-facing summary with the control plane; without it, the first paragraph
+of the function docstring (whitespace-collapsed) is used. Routers forward the
+kwarg through include_router unchanged. Payloads without a description are
+byte-identical to before, so older control planes are unaffected.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (075dd32)
+
+## [0.1.112] - 2026-07-21
+
+## [0.1.112-rc.3] - 2026-07-21
+
+
+### Fixed
+
+- Fix: prevent exception details in agent server responses (#800)
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (26c8428)
+
+## [0.1.112-rc.2] - 2026-07-21
+
+
+### Chores
+
+- Chore(deps): bump axios (#802)
+
+Bumps the npm_and_yarn group with 1 update in the /sdk/typescript directory: [axios](https://github.com/axios/axios).
+
+
+Updates `axios` from 1.16.0 to 1.18.0
+- [Release notes](https://github.com/axios/axios/releases)
+- [Changelog](https://github.com/axios/axios/blob/v1.x/CHANGELOG.md)
+- [Commits](https://github.com/axios/axios/compare/v1.16.0...v1.18.0)
+
+---
+updated-dependencies:
+- dependency-name: axios
+  dependency-version: 1.18.0
+  dependency-type: direct:production
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (4867040)
+
+## [0.1.112-rc.1] - 2026-07-20
+
+
+### Other
+
+- Fix/fire and forget (#723)
+
+* fix: fixed the blocking fire and forget issue.
+
+- Wrapped all functions (`notify_call_start`, `notify_call_complete` and `notify_call_error`) into `asyncio.Task` so parent function don't have to await them.
+- Converted the `_emit_execution_transition_log` to sync as underlying code is sync and execute it to a separate thread.
+
+* revert: I reverted the execution of `_emit_execution_transition_log` method using `asyncio.to_thread()` because of mismatch order.
+
+- Considering the `log_execution` inside the function is a lightweight function which don't takeover the `event_loop` for long time.
+
+* lint: Removed unused import
+
+* fix: Added missing background task cleanup in `_cleanup_async_resources` method.
+
+* fix: Fixed the `F401` lint error from `test_did_auth_invariants` test.
+
+* test: Updated the test for updated `_cleanup_async_resources`.
+
+- Initially mock `Agent` is created through __new__ which by pass __init__ and it doesn't contain `_background_tasks` property.
+- I added `_background_tasks` property and added new assert in `test_cleanup_async_resources` test.
+
+* fix: Used a queue type notification dispatcher to maintain the order of notification.
+-  class used a queue internally to maintain order. It itself run as background task so it will not block it's parent coroutine.
+- Initialization is done inside life cycle (lazily) so that queue and task attached them self with the ASGI optimized event loop (uvloop)
+- Some tests are modified as a new property introduced, so a similar dummy class also introduced for tests.
+
+* test: fix  test and added test for
+- Previously I tested againest a blank  set which result true always but now 5 async tasks will be added to  to check is the set is empty or not after calling .
+- As notification dispatcher's shutdown method also linked to  so I created a dummpy class to check if it's shutdown is called properly or not.
+
+* fix(sdk/python): lazily start the notification dispatcher on first submit
+
+submit() previously dropped notifications silently whenever the queue was
+not yet initialized, and start() only ran inside the AgentServer lifespan.
+Any execution path that never runs that lifespan — CLI `call` mode
+(asyncio.run on a tracked function) or mounting the Agent app in uvicorn
+directly — lost all workflow telemetry, where the pre-#622 code delivered
+it inline.
+
+submit() now starts the dispatcher lazily on the running loop, so it still
+binds to uvicorn's uvloop when serving; the lifespan start() remains as an
+idempotent fast path. The no-running-loop fallback keeps the old
+drop-with-dev-log behavior.
+
+Also removes the unused _create_coro_factory helper and the unreferenced
+is_start() method (and its mirror in the test helper), and drops the
+now-unneeded manual dispatcher start in test_agent_integration so that
+test exercises the lazy path.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(sdk/python): behavior tests for the non-blocking notification path
+
+Four tests derived from the #622 validation contract rather than the
+implementation, using a fake control-plane client whose event POSTs are
+slow and recorded in arrival order:
+
+- execute_with_tracking returns without waiting for the start/complete
+  telemetry POSTs (the pre-fix inline awaits could never beat a single
+  POST delay)
+- events for each execution arrive running -> terminal, under concurrent
+  executions including a failing reasoner
+- _cleanup_async_resources delivers every queued event before the HTTP
+  client closes
+- a dispatcher that was never explicitly started still delivers
+  (regression test for the CLI-call-mode silent drop)
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* chore(sdk/python): fix typos and format nits in the dispatcher change
+
+- "dilivery" -> "delivery" in the dispatcher error log
+- ruff-format the two hunks the fix introduced (keyword spacing in
+  wait_for's timeout, range(1, 6) in the cleanup test)
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (b2a5eef)
+
+## [0.1.111] - 2026-07-20
+
+## [0.1.111-rc.3] - 2026-07-20
+
+
+### Added
+
+- Feat(sdk/python): model#variant reasoning-effort support across harness providers (#801)
+
+* feat(sdk/python): split_model_variant + resolve_model_and_variant harness helpers
+
+Parse the 'provider/model#variant' model-string syntax so a reasoning-effort
+variant can travel through config surfaces that only hold a model string.
+An explicit options['variant'] wins over the suffix.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(sdk/python): opencode provider passes --variant reasoning effort
+
+'model#variant' (or an explicit variant option) now maps to opencode run's
+--variant flag; the -m flag and cost/metrics reporting use the base model id.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(sdk/python): codex provider passes -m and model_reasoning_effort
+
+codex exec previously received no model at all — options['model'] was only
+used for cost estimation, so every run used the CLI's own default. Pass
+-m <model>, and map a '#variant' suffix to -c model_reasoning_effort=<v>.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): claude/gemini providers strip #variant model suffix
+
+Neither runtime has a reasoning-effort control; strip the suffix so the
+underlying CLI/SDK still receives a valid model id instead of 'model#variant'.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: model selection and #variant reasoning-effort syntax for harness providers
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(sdk/go): model#variant reasoning-effort parity in harness providers
+
+Mirrors the Python SDK: SplitModelVariant + Options.Variant (explicit field
+wins over the suffix), opencode passes --variant, codex adds
+-c model_reasoning_effort, claudecode/gemini strip the suffix. The
+OpenRouter-attribution overlay and usage recording key off the base model
+so a suffix neither defeats the prefix match nor pollutes attribution.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(sdk/typescript): model#variant reasoning-effort parity in harness providers
+
+Mirrors the Python SDK: splitModelVariant/resolveModelAndVariant helper,
+variant?: string through HarnessConfig/HarnessOptions, opencode passes
+--variant, codex now passes -m at all (it previously sent no model to the
+CLI — same bug the Python provider had) plus -c model_reasoning_effort,
+claude/gemini strip the suffix. Attribution overlay and usage metrics key
+off the base model.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (c500750)
+
+## [0.1.111-rc.2] - 2026-07-20
+
+
+### Other
+
+- Token/cost usage tracking end-to-end + tray usage UI (#795)
+
+* feat(sdk/python): capture and transport token/cost usage per execution
+
+Record token usage even when pricing fails (the OpenRouter gap: unknown
+model slugs made litellm.completion_cost return None and the tokens were
+discarded with the cost). Adds OpenRouter native cost accounting
+(usage.include), Anthropic-native usage-shape extraction incl. cache
+tokens, Claude Code harness token capture, and a per-execution
+contextvar-scoped CostTracker whose serialized summary is attached to
+the execution result envelope (sync 200 body and async status callback)
+under the "usage" key.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(control-plane): persist execution usage and serve stats/timeseries API
+
+New execution_usage table (goose migration 034 for Postgres, GORM
+auto-migrate covers SQLite) populated by tolerant ingestion of the SDK's
+"usage" envelope key on both the sync-200 and async-callback paths. New
+GET /api/ui/v1/usage/stats endpoint with window filtering, by-model /
+by-provider / by-agent / by-harness aggregation, zero-filled bucket
+timeseries (?buckets=N) and per-model series (&series_by=model).
+Existing execution-details responses now carry cost/total_tokens, which
+the web UI already renders. Includes a cross-language golden test
+pinning the Python SDK's serialized payload against the Go parser.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(af-tray): usage glance UI, lifecycle status badge, vendored systray fork
+
+The tray's menu-bar item now shows the af badge with a lifecycle glyph
+(green dot running, rotating arc starting, gray ring stopped). The Usage
+submenu is a minimal glance surface: a 48-bucket token histogram
+(stacked per model), top-3 model rows and Claude 5h/7d subscription
+quota gauges (read-only, via the user's existing Claude Code Keychain
+credentials), all on a uniform leading-slot grid so every title aligns.
+Success row gains a live sparkline icon; response latency is humanized.
+
+Vendors fyne.io/systray v1.12.2 as third_party/systray with two additive
+patches (SetImage / SetStatusImage) lifting the stock 16x16 menu-image
+clamp — see third_party/systray/PATCHES.md.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(docker): copy third_party module replacements before go mod download
+
+The go.mod replace directive for the vendored systray fork points at
+control-plane/third_party/systray, which was not present in the build
+context when Dockerfiles copied only go.mod/go.sum for the module
+download cache layer, failing the control-plane image and functional
+test builds.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(usage): namespace the sync-200 usage envelope key so user payloads survive
+
+The sync result path reserved a top-level "usage" key in dict results and
+relied on the control plane stripping it back out — silently mutating any
+agent result that legitimately returns its own "usage" key (review finding
+on #795).
+
+Usage now travels under the reserved "__agentfield_usage__" envelope key
+(USAGE_ENVELOPE_KEY / usageEnvelopeKey); the control plane extracts and
+strips exactly that key and never touches user data. Regression tests pin
+that a user-owned "usage" key — top-level or nested — passes through
+byte-for-byte. The async status-callback path already carried usage as a
+typed sibling field of "result" and is unchanged.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(sdk/typescript): capture and transport token/cost usage per execution
+
+Port of the Python SDK's usage tracking to the TypeScript SDK, emitting the
+same cross-language wire contract:
+
+- CostTracker bound to the ExecutionContext (AsyncLocalStorage-isolated per
+  execution; local agent.call() rolls child usage into the parent tracker).
+- LLM capture in AIClient generate paths (AI SDK v6 usage incl. cache token
+  details) and across ToolCalling loop turns; OpenRouter requests opt into
+  native cost accounting (usage: {include: true}) via a fetch wrapper, with
+  cost read from the provider's raw usage. stream() usage is intentionally
+  not captured — draining the usage promise would consume abandoned streams.
+- Claude Code harness runs record tokens + provider-reported cost.
+- Transport: "usage" field on all terminal async status reports;
+  "__agentfield_usage__" reserved sibling key on object-shaped sync-200
+  results (user payloads, including a user-owned "usage" key, untouched).
+
+44 new vitest tests; suite 730 green, tsc + tsup clean.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(sdk/go): capture and transport token/cost usage per execution
+
+Port of the Python SDK's usage tracking to the Go SDK, emitting the same
+cross-language wire contract:
+
+- CostTracker bound per execution via context (fresh tracker at every
+  handler entrypoint: execute, reasoner sync/async, skill), read back to
+  attach usage after the handler returns.
+- LLM capture at the Agent.AI / AIWithTools / AIStream chokepoints; ai.Usage
+  gains cache read/creation tokens (OpenAI prompt_tokens_details and
+  Anthropic-native shapes) and provider-reported cost. OpenRouter requests
+  opt into native cost accounting (usage: {include: true}) at the request
+  marshal chokepoint; tool-call loops capture per-turn usage.
+- Harness runs record tokens + cost: token fields threaded through
+  harness.Metrics/Result and populated from already-parsed provider output
+  (claude code, codex, opencode).
+- Transport: "usage" field on async terminal status payloads;
+  "__agentfield_usage__" reserved sibling key on object-shaped sync-200
+  results (user payloads, including a user-owned "usage" key, untouched).
+- Fixes a pre-existing SSE decoder bug that dropped bytes returned alongside
+  io.EOF — the read where a terminal usage-accounting chunk arrives.
+
+28 new tests; go build/vet/test green, -race clean on the new paths.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): pin Go and TypeScript SDK usage payloads as goldens
+
+Extends the cross-language golden contract test to all three SDKs: the
+verbatim Serialize()/serialize() outputs of the Go and TypeScript trackers
+(generated by running each SDK's serializer) parse to the same rows as the
+Python fixture. Row assertions are shared; only the priced entry's
+cost_source differs by design (litellm for Python, provider for Go/TS).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): compare usage windows by epoch, not raw timestamps
+
+Found by live end-to-end verification of the Go/TS SDK usage transport: on
+a control plane running in a non-UTC timezone, /usage/stats returned zeros
+for every bounded window (1h/24h/7d/30d) while window=all showed the rows.
+
+GORM stamps execution_usage.created_at with time.Now() in server-local
+time, SQLite stores timestamps as text, and text comparison across mixed
+UTC offsets is lexicographic — so "created_at >= <UTC since>" silently
+excluded in-range rows (and ORDER BY created_at could pick the wrong
+oldest/latest row). CI runners are UTC, which is why the existing window
+tests never caught it.
+
+All window filters and oldest/latest orderings now go through the existing
+dialect-portable epoch expression (SQLite strftime / PostgreSQL EXTRACT).
+The new regression test pins the behavior with rows whose created_at
+carries a fixed -04:00 offset; it fails on the old code even on UTC hosts.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (22e8cc0)
+
+## [0.1.111-rc.1] - 2026-07-19
+
+
+### Added
+
+- Feat(sdk/typescript): trigger system parity — dispatch, sugar, testing, demo (#510, #511, #512) (#796)
+
+Implements the three remaining sub-issues of the TypeScript SDK trigger
+parity epic (#507):
+
+#510 — Dispatch envelope unwrap + TriggerContext injection
+- New src/triggers/dispatch.ts: isTriggerEnvelope(), unwrapEnvelope(),
+  applyTriggerTransform() — detects {event, _meta} envelope shape from
+  the control plane dispatcher, constructs TriggerContext, applies the
+  matched binding's transform
+- ReasonerContext gains trigger?: TriggerContext field
+- Agent.ts runReasoner() and local call() path wired to unwrap envelopes
+- Direct calls (no envelope) pass through unchanged
+
+#511 — onEvent/onSchedule sugar + test helpers + fixtures
+- Agent.ts: app.onEvent(spec, handler) and app.onSchedule(cron, handler)
+  sugar methods that forward to app.reasoner() with triggers
+- New src/triggers/testing.ts: simulateTrigger(), simulateSchedule(),
+  loadFixture() for unit testing without a control plane
+- Copied 6 fixture JSONs from Python SDK (stripe, github, slack, cron,
+  generic_hmac, generic_bearer)
+
+#512 — examples/triggers-demo-ts + skill docs
+- New examples/triggers-demo-ts/: agent.ts (3 deterministic reasoners),
+  Dockerfile, docker-compose.yml, README.md, fire-events.sh
+- New skills/agentfield-multi-reasoner-builder/references/triggers.md
+  with Python + TypeScript scaffold reference
+
+Tests: 744 pass (75 files), including 74 new trigger-specific tests.
+Build: tsc clean, tsup ESM+DTS success. (95fe429)
+
+
+
+### Fixed
+
+- Fix(security): SSRF protection for approval callback_url (#435) (#790)
+
+* fix(security): SSRF protection for approval callback_url (#435)
+
+The approval callback_url field was accepted without SSRF validation and
+dispatched via a plain http.Client, allowing an attacker to use the
+control plane as a proxy to internal services (cloud metadata, RFC-1918,
+loopback).
+
+Changes:
+- Validate callback_url at registration time using services.ValidateWebhookURL()
+  to reject private/internal targets (localhost, 169.254.x, 10.x, 172.16.x,
+  192.168.x, ::1) before the URL is persisted.
+- Replace the plain http.Client in notifyApprovalCallback with
+  services.NewSSRFSafeClient() which enforces DNS-rebinding-safe private-IP
+  blocking at dial time.
+- Add comprehensive test coverage for both registration rejection and
+  runtime transport enforcement.
+
+Fixes #435
+
+* fix(test): allowlist loopback in webhook helper test for SSRF-safe client
+
+The existing TestExecuteReasonerAndWebhookHelpersCoverage test calls
+notifyApprovalCallback against a httptest server (127.0.0.1). After
+switching to NewSSRFSafeClient (#435), the SSRF transport rejects
+loopback as a private IP, causing the test to hang waiting for
+callbacks that never arrive.
+
+Fix: set services.SetWebhookAllowedHosts([]string{"127.0.0.1"})
+before the callback calls so the httptest server is reachable. (7fb1193)
+
+## [0.1.110] - 2026-07-18
+
+
+### Fixed
+
+- Fix(install): replace binaries atomically to avoid macOS SIGKILL on upgrade (#797)
+
+cp onto an existing binary reuses the inode, which poisons the macOS
+kernel's cached code-signature state for that vnode. Every exec after an
+upgrade is then killed with SIGKILL ("zsh: killed af") even though
+codesign --verify passes on disk. Stage to a temp file and mv into place
+so upgrades always land on a fresh inode. Applies to both the agentfield
+binary and the af-tray binary.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (1a55ddc)
+
+## [0.1.110-rc.5] - 2026-07-18
+
+
+### Fixed
+
+- Fix(desktop): survive a CLI probe candidate that throws on spawn (#793)
+
+spawn() can throw synchronously - on Windows it raises UNKNOWN when PATH
+resolves af to a non-PE file, e.g. the WSL Linux binary seen through the
+interop PATH of a dev launch. The throw happened inside probeCli's promise
+executor before any listeners attached, so the promise rejected, Promise.all
+in probeAll rejected with it, and app.whenReady's await initializeCli died
+before the tray or window were created: the app ran headless with no UI.
+
+Catch the throw and treat that candidate as not responding, matching
+probeCli's documented never-rejects contract.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (7784f32)
+
+
+
+### Testing
+
+- Test(sdk/python): expand verification.py coverage to 100% (#398) (#794)
+
+Add test_verification_extended.py covering:
+- _resolve_public_key: valid did:key resolution, invalid multicodec prefix,
+  admin key fallback, decode exceptions
+- _evaluate_constraints: all operators (==, >, <, >=, <=), invalid float
+  (fail-closed), missing params, None threshold, function-keyed constraints
+- refresh(): success path populating all caches, partial failure (one
+  endpoint 500), timestamp/initialized state, API key header propagation
+- verify_signature: full Ed25519 crypto with valid/invalid signatures,
+  nonce support, wrong key, admin key fallback
+
+Coverage on verification.py: 71% -> 100%
+
+Closes #398 (50d18c3)
+
+## [0.1.110-rc.4] - 2026-07-17
+
+
+### Fixed
+
+- Fix(control-plane): dashboard success rate defaults to 100% and actually covers 24h (#792)
+
+* fix(control-plane): dashboard success rate covers a rolling 24h window
+
+The summary endpoint computed success_rate from calendar-today (UTC)
+executions only, returned 0 when nothing had run, and counted in-flight
+executions as failures. An idle system therefore showed a red 0% under a
+label claiming "last 24 hours".
+
+Compute the rate over executions started in the rolling last-24h window,
+count only terminal executions in the denominator, and report 100 when
+none have finished - no completed runs means nothing has failed.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(web): stop double-scaling the dashboard success rate
+
+The summary endpoint returns success_rate as a 0-100 percentage, but the
+dashboard multiplied it by 100 again before display. The test fixtures
+mirrored the same wrong 0-1 scale, so the tautology passed while a real
+server response would have rendered 9100%. Align the fixtures with the
+actual API contract.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (623084e)
+
+- Fix(desktop): correct Windows tray icon theme and DPI rendering (#791)
+
+* feat(desktop): generate multi-size ICO tray glyphs
+
+The Windows tray ignores PNG scale-factor representations
+(electron/electron#33044) and upscales the 16px bitmap on >100% displays,
+so make-icons.mjs now also emits one .ico per tray variant with
+16/20/24/32/48 frames (20 covers the common 125% scaling). The PNGs stay
+for the Linux representation path.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): render the Windows tray glyph correctly
+
+Two fixes for the washed-out / blurry tray icon on Windows:
+
+- Pick the light/dark glyph from the *system* (taskbar) theme via
+  nativeTheme.shouldUseDarkColorsForSystemIntegratedUI instead of
+  shouldUseDarkColors, which tracks the separately-configurable *apps*
+  theme. With mixed themes (dark taskbar + light apps is common) the
+  tray wore a near-invisible glyph that read as the offline icon. The
+  poll re-checks the theme too, since Windows does not reliably emit
+  nativeTheme 'updated' for system-theme-only flips.
+- Load the tray image from the multi-size .ico on win32 so Electron
+  serves a DPI-correct frame; scale-factor PNG representations are
+  ignored by the Windows tray (electron/electron#33044) and the 16px
+  bitmap got upscaled on >100% displays.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (6da0607)
+
+## [0.1.110-rc.3] - 2026-07-17
+
+
+### Chores
+
+- Chore(deps): bump mcp in /sdk/python in the uv group across 1 directory (#785)
+
+Bumps the uv group with 1 update in the /sdk/python directory: [mcp](https://github.com/modelcontextprotocol/python-sdk).
+
+
+Updates `mcp` from 1.27.0 to 1.28.1
+- [Release notes](https://github.com/modelcontextprotocol/python-sdk/releases)
+- [Changelog](https://github.com/modelcontextprotocol/python-sdk/blob/main/RELEASE.md)
+- [Commits](https://github.com/modelcontextprotocol/python-sdk/compare/v1.27.0...v1.28.1)
+
+---
+updated-dependencies:
+- dependency-name: mcp
+  dependency-version: 1.28.1
+  dependency-type: indirect
+  dependency-group: uv
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (75e942a)
+
 ## [0.1.110-rc.2] - 2026-07-17
 
 

@@ -516,3 +516,72 @@ func TestQueryRunSummariesClampsLimit(t *testing.T) {
 func pointerTime(t time.Time) *time.Time {
 	return &t
 }
+
+func TestGetExecutionRecordsBatch(t *testing.T) {
+	ls, ctx := setupLocalStorage(t)
+
+	base := time.Date(2024, 3, 4, 5, 6, 7, 0, time.UTC)
+
+	seeded := []*types.Execution{
+		{
+			ExecutionID: "batch-exec-1",
+			RunID:       "run-batch",
+			AgentNodeID: "agent-1",
+			ReasonerID:  "reasoner.a",
+			NodeID:      "node-1",
+			Status:      string(types.ExecutionStatusSucceeded),
+			StartedAt:   base,
+			CreatedAt:   base,
+			UpdatedAt:   base,
+		},
+		{
+			ExecutionID: "batch-exec-2",
+			RunID:       "run-batch",
+			AgentNodeID: "agent-1",
+			ReasonerID:  "reasoner.b",
+			NodeID:      "node-1",
+			Status:      string(types.ExecutionStatusRunning),
+			StartedAt:   base.Add(time.Minute),
+			CreatedAt:   base.Add(time.Minute),
+			UpdatedAt:   base.Add(time.Minute),
+		},
+		{
+			ExecutionID: "batch-exec-3",
+			RunID:       "run-batch",
+			AgentNodeID: "agent-1",
+			ReasonerID:  "reasoner.c",
+			NodeID:      "node-1",
+			Status:      string(types.ExecutionStatusFailed),
+			StartedAt:   base.Add(2 * time.Minute),
+			CreatedAt:   base.Add(2 * time.Minute),
+			UpdatedAt:   base.Add(2 * time.Minute),
+		},
+	}
+	for _, exec := range seeded {
+		require.NoError(t, ls.CreateExecutionRecord(ctx, exec))
+	}
+
+	// Mixed list: existing + missing IDs.
+	requested := []string{"batch-exec-2", "batch-exec-missing", "batch-exec-1", "also-missing"}
+	result, err := ls.GetExecutionRecordsBatch(ctx, requested)
+	require.NoError(t, err)
+	require.Len(t, result, 2)
+	require.Contains(t, result, "batch-exec-1")
+	require.Contains(t, result, "batch-exec-2")
+	require.NotContains(t, result, "batch-exec-missing")
+	require.Equal(t, "reasoner.b", result["batch-exec-2"].ReasonerID)
+
+	// Empty input is a no-op.
+	empty, err := ls.GetExecutionRecordsBatch(ctx, nil)
+	require.NoError(t, err)
+	require.NotNil(t, empty)
+	require.Empty(t, empty)
+
+	// Over-sized batch is rejected without hitting the DB.
+	oversized := make([]string, maxBatchExecutionIDs+1)
+	for i := range oversized {
+		oversized[i] = "x"
+	}
+	_, err = ls.GetExecutionRecordsBatch(ctx, oversized)
+	require.Error(t, err)
+}

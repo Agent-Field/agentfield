@@ -27,10 +27,11 @@ type PresenceManager struct {
 	statusManager *StatusManager
 	config        PresenceManagerConfig
 
-	leases   map[string]*presenceLease
-	mu       sync.RWMutex
-	stopCh   chan struct{}
-	stopOnce sync.Once
+	leases    map[string]*presenceLease
+	mu        sync.RWMutex
+	stopCh    chan struct{}
+	stopOnce  sync.Once
+	startOnce sync.Once
 
 	expireCallback func(string)
 }
@@ -58,7 +59,9 @@ func NewPresenceManager(statusManager *StatusManager, config PresenceManagerConf
 }
 
 func (pm *PresenceManager) Start() {
-	go pm.loop()
+	pm.startOnce.Do(func() {
+		go pm.loop()
+	})
 }
 
 func (pm *PresenceManager) Stop() {

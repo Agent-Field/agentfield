@@ -1,3 +1,4 @@
+from typing import Coroutine
 import asyncio
 import inspect
 import os
@@ -48,7 +49,12 @@ from agentfield.memory_events import MemoryEventClient
 from agentfield.logger import log_debug, log_error, log_info, log_warn, set_cp_client
 from agentfield.router import AgentRouter
 from agentfield.connection_manager import ConnectionManager
-from agentfield.cost_tracker import CostTracker
+from agentfield.cost_tracker import (
+    USAGE_ENVELOPE_KEY,
+    CostTracker,
+    reset_current_cost_tracker,
+    set_current_cost_tracker,
+)
 from agentfield.decorator_metadata import (
     resolve_reasoner_metadata,
     split_direct_registration_arg,
@@ -71,6 +77,7 @@ from agentfield.sessions import (
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
+from starlette.responses import Response as StarletteResponse
 from pydantic import BaseModel, ValidationError
 from dataclasses import dataclass, field
 import weakref
@@ -121,6 +128,9 @@ class ReasonerEntry:
     input_types: Dict[str, tuple]  # (type, default) tuples - not Pydantic model
     output_type: type
     tags: List[str] = field(default_factory=list)
+    # Human/agent-facing summary sent to the control plane and surfaced by
+    # discovery + `af ls`. Defaults to the function docstring's first paragraph.
+    description: str = ""
     vc_enabled: Optional[bool] = None
     # Trigger bindings declared via @reasoner(triggers=[...]) or sugar
     # decorators @on_event / @on_schedule. The control plane upserts a
@@ -140,7 +150,21 @@ class SkillEntry:
     input_types: Dict[str, tuple]  # (type, default) tuples
     output_type: type
     tags: List[str] = field(default_factory=list)
+    # Same contract as ReasonerEntry.description.
+    description: str = ""
     vc_enabled: Optional[bool] = None
+
+
+def _docstring_summary(func: Callable) -> str:
+    """First paragraph of the function docstring, whitespace-collapsed.
+
+    Used as the default reasoner/skill description sent to the control plane —
+    a one-to-few-line summary reads well in discovery listings, while the rest
+    of the docstring (Args/Returns) stays local.
+    """
+    doc = inspect.getdoc(func) or ""
+    first_paragraph = doc.split("\n\n", 1)[0]
+    return " ".join(first_paragraph.split())
 
 
 # Import aiohttp for fire-and-forget HTTP calls
@@ -501,6 +525,73 @@ def _bind_trigger_payload(
     return (), {}
 
 
+class _NotificationDispatcher:
+    _SHUTDOWN = object()
+
+    def __init__(self, dev_mode: bool):
+        self._queue: asyncio.Queue[Any] | None = None
+        self._dispatcher_task: asyncio.Task[Any] | None = None
+        self._dev_mode = dev_mode
+
+    def start(self):
+        if self._dispatcher_task is not None:
+            return
+        self._queue = asyncio.Queue()
+        self._dispatcher_task = asyncio.create_task(self._run())
+
+    def submit(self, coro_factory: Callable[[], Coroutine[Any, Any, None]]):
+        if self._queue is None:
+            # Lazily start on first submit so execution paths that never run
+            # the server lifespan (CLI `call` mode, direct ASGI mounts) still
+            # deliver notifications. submit() is always invoked from a
+            # coroutine, so the dispatcher task binds to the running loop
+            # (uvicorn's uvloop when serving).
+            try:
+                self.start()
+            except RuntimeError:
+                if self._dev_mode:
+                    log_error(
+                        "Notification dropped: no running event loop to start "
+                        "the notification dispatcher"
+                    )
+                return
+        self._queue.put_nowait(coro_factory)
+
+    async def _run(self):
+        if self._queue is None or self._dispatcher_task is None:
+            return
+        while True:
+            coro_factory = await self._queue.get()
+            if coro_factory is _NotificationDispatcher._SHUTDOWN:
+                self._queue.task_done()
+                break
+            try:
+                await coro_factory()
+            except Exception as e:
+                if self._dev_mode:
+                    log_error(f"Notification delivery failed: {e}")
+            finally:
+                self._queue.task_done()
+
+    async def shutdown(self, timeout: int = 5):
+        if self._dispatcher_task is None or self._queue is None:
+            return
+        self._queue.put_nowait(_NotificationDispatcher._SHUTDOWN)
+        try:
+            await asyncio.wait_for(self._dispatcher_task, timeout=timeout)
+        except asyncio.TimeoutError:
+            self._dispatcher_task.cancel()
+            try:
+                await self._dispatcher_task
+            except asyncio.CancelledError:
+                pass
+        except Exception as e:
+            if self._dev_mode:
+                log_error(f"Notification dispatcher shutdown failed: {e}")
+        finally:
+            self._dispatcher_task = None
+
+
 class Agent(FastAPI):
     """
     AgentField Agent - FastAPI subclass for creating AI agent nodes.
@@ -712,6 +803,9 @@ class Agent(FastAPI):
         # prevent GC of fire-and-forget async execution tasks
         self._background_tasks: set[asyncio.Task] = set()
 
+        # Manage background notifications in order
+        self._notification_dispatcher = _NotificationDispatcher(dev_mode=self.dev_mode)
+
         # Cooperative cancel registry. The control plane's cancel dispatcher
         # POSTs /_internal/executions/{id}/cancel to signal that the user's
         # reasoner code should stop. We track the active asyncio.Task per
@@ -842,6 +936,52 @@ class Agent(FastAPI):
         """Get the current execution's cost summary."""
         return self.cost_tracker.summary()
 
+    @staticmethod
+    def _usage_summary_or_none(tracker: Optional[CostTracker]) -> Optional[dict]:
+        """Return the transport ``usage`` object, or None when there's nothing.
+
+        Omitting the key entirely when there are no entries is part of the
+        usage contract, so callers should skip attaching ``usage`` on None.
+        """
+        if tracker is None or not tracker.has_entries:
+            return None
+        usage = tracker.serialize()
+        if not usage.get("entries"):
+            return None
+        return usage
+
+    def _wrap_sync_result_with_usage(
+        self, result: Any, tracker: Optional[CostTracker]
+    ) -> Any:
+        """Attach usage to the synchronous 200 body.
+
+        The control plane stores the whole sync body as the result and pulls
+        usage back out by stripping the reserved ``__agentfield_usage__`` key
+        (see the Go ``extractUsageFromResult``). The key is namespaced so a
+        user result that legitimately contains its own ``usage`` key is never
+        touched; ``__agentfield_``-prefixed keys are reserved for transport.
+        Usage is merged as a sibling key into the result *object* — NOT
+        wrapped in a ``{"result": ...}`` envelope, which would double-nest the
+        stored result.
+
+        Only dict results can carry usage this way; non-dict results (lists,
+        scalars) are returned unchanged and their usage flows via the async
+        status-callback path instead (the production path). No-usage results
+        are also returned unchanged (backward compatible). Response objects
+        (e.g. cancellation JSONResponse) pass through untouched.
+        """
+        usage = self._usage_summary_or_none(tracker)
+        if usage is None or isinstance(result, StarletteResponse):
+            return result
+        encoded = jsonable_encoder(result)
+        if isinstance(encoded, dict):
+            merged = dict(encoded)
+            merged[USAGE_ENVELOPE_KEY] = usage
+            return merged
+        # Non-dict result: cannot merge a top-level usage key without changing
+        # the result's type/shape. Leave it to the async callback path.
+        return result
+
     @property
     def harness_runner(self) -> "HarnessRunner":
         if self._harness_runner is None:
@@ -911,6 +1051,9 @@ class Agent(FastAPI):
             if entry.vc_enabled is not None
             else self._agent_vc_enabled,
         }
+        description = getattr(entry, "description", "")
+        if description:
+            metadata["description"] = description
         triggers = getattr(entry, "triggers", None)
         accepts_webhook = getattr(entry, "accepts_webhook", "warn")
         if kind == "reasoner":
@@ -1817,6 +1960,7 @@ class Agent(FastAPI):
         name: Optional[str] = None,
         tags: Optional[List[str]] = None,
         *,
+        description: Optional[str] = None,
         vc_enabled: Optional[bool] = None,
         require_realtime_validation: bool = False,
         triggers: Optional[List[Any]] = None,
@@ -1830,6 +1974,7 @@ class Agent(FastAPI):
         name: Optional[str] = None,
         tags: Optional[List[str]] = None,
         *,
+        description: Optional[str] = None,
         vc_enabled: Optional[bool] = None,
         require_realtime_validation: bool = False,
         triggers: Optional[List[Any]] = None,
@@ -1842,6 +1987,7 @@ class Agent(FastAPI):
         name: Optional[str] = None,
         tags: Optional[List[str]] = None,
         *,
+        description: Optional[str] = None,
         vc_enabled: Optional[bool] = None,
         require_realtime_validation: bool = False,
         triggers: Optional[List[Any]] = None,
@@ -1857,6 +2003,11 @@ class Agent(FastAPI):
             path (str, optional): The API endpoint path for this reasoner. Defaults to /reasoners/{function_name}.
             name (str, optional): Explicit AgentField registration ID. Defaults to the function name.
             tags (List[str] | None, optional): Organizational tags that travel with the reasoner metadata.
+                The "entrypoint" tag marks a reasoner as an intended external entry point; discovery
+                and `af ls` surface those first.
+            description (str, optional): Caller-facing summary registered with the control plane and
+                shown by discovery / `af ls` — say what the reasoner does and when to call it.
+                Defaults to the first paragraph of the function docstring.
             vc_enabled (bool | None, optional): Override VC generation for this reasoner. True forces VC creation,
                 False disables it, and None inherits the agent-level policy.
             triggers (list, optional): EventTrigger / ScheduleTrigger declarations. Same shape as the
@@ -1867,6 +2018,7 @@ class Agent(FastAPI):
         direct_registration, decorator_path = split_direct_registration_arg(path)
         decorator_name = name
         decorator_tags = tags
+        decorator_description = description
         kwarg_triggers = list(triggers) if triggers else None
         kwarg_accepts_webhook = accepts_webhook
 
@@ -2005,33 +2157,48 @@ class Agent(FastAPI):
                         },
                     )
 
-                # Sync path: wrap the coroutine in a Task so the cancel
-                # callback can call task.cancel() and have CancelledError
-                # propagate into the reasoner. Without this wrapping the
-                # await happens inside the FastAPI request handler frame
-                # directly and there's no Task handle to cancel.
-                if execution_id_header:
-                    from .cancel import (
-                        register_execution_task,
-                        deregister_execution,
-                    )
-                    sync_task = asyncio.create_task(run_reasoner())
-                    await register_execution_task(self, execution_id_header, sync_task)
-                    try:
-                        return await sync_task
-                    except asyncio.CancelledError:
-                        return JSONResponse(
-                            status_code=499,
-                            content={
-                                "status": "cancelled",
-                                "execution_id": execution_id_header,
-                                "reason": "cancelled_by_control_plane",
-                            },
+                # Sync path: bind a fresh per-execution cost tracker so LLM /
+                # harness usage recorded during the reasoner is isolated to this
+                # request (concurrent requests each get their own tracker) and
+                # can be attached to the 200 body afterward.
+                sync_tracker = CostTracker()
+                usage_token = set_current_cost_tracker(sync_tracker)
+                try:
+                    # Wrap the coroutine in a Task so the cancel callback can
+                    # call task.cancel() and have CancelledError propagate into
+                    # the reasoner. Without this wrapping the await happens
+                    # inside the FastAPI request handler frame directly and
+                    # there's no Task handle to cancel.
+                    if execution_id_header:
+                        from .cancel import (
+                            register_execution_task,
+                            deregister_execution,
                         )
-                    finally:
-                        await deregister_execution(self, execution_id_header)
+                        sync_task = asyncio.create_task(run_reasoner())
+                        await register_execution_task(
+                            self, execution_id_header, sync_task
+                        )
+                        try:
+                            result = await sync_task
+                            return self._wrap_sync_result_with_usage(
+                                result, sync_tracker
+                            )
+                        except asyncio.CancelledError:
+                            return JSONResponse(
+                                status_code=499,
+                                content={
+                                    "status": "cancelled",
+                                    "execution_id": execution_id_header,
+                                    "reason": "cancelled_by_control_plane",
+                                },
+                            )
+                        finally:
+                            await deregister_execution(self, execution_id_header)
 
-                return await run_reasoner()
+                    result = await run_reasoner()
+                    return self._wrap_sync_result_with_usage(result, sync_tracker)
+                finally:
+                    reset_current_cost_tracker(usage_token)
 
             # 🔥 ENHANCED: Comprehensive function replacement for unified tracking
             # Use weakref to avoid circular reference: Agent → tracked_func → Agent
@@ -2092,6 +2259,8 @@ class Agent(FastAPI):
                 input_types=input_fields,  # Store (type, default) tuples, not Pydantic model
                 output_type=return_type,
                 tags=resolved_tags,
+                description=(decorator_description or "").strip()
+                or _docstring_summary(func),
                 vc_enabled=vc_setting,
                 triggers=list(merged_triggers or []),
                 accepts_webhook=resolved_accepts_webhook,
@@ -2246,12 +2415,15 @@ class Agent(FastAPI):
 
         if hasattr(self, "workflow_handler") and self.workflow_handler:
             execution_context.reasoner_name = reasoner_id
-            await self.workflow_handler.notify_call_start(
-                execution_context.execution_id,
-                execution_context,
-                reasoner_id,
-                payload_dict,
-                parent_execution_id=execution_context.parent_execution_id,
+
+            self._notification_dispatcher.submit(
+                lambda: self.workflow_handler.notify_call_start(
+                    execution_context.execution_id,
+                    execution_context,
+                    reasoner_id,
+                    payload_dict,
+                    parent_execution_id=execution_context.parent_execution_id,
+                )
             )
 
         start_time = time.time()
@@ -2359,29 +2531,36 @@ class Agent(FastAPI):
 
             if hasattr(self, "workflow_handler") and self.workflow_handler:
                 end_time = time.time()
-                await self.workflow_handler.notify_call_complete(
-                    execution_context.execution_id,
-                    execution_context.workflow_id,
-                    result,
-                    int((end_time - start_time) * 1000),
-                    execution_context,
-                    input_data=payload_dict,
-                    parent_execution_id=execution_context.parent_execution_id,
+
+                self._notification_dispatcher.submit(
+                    lambda: self.workflow_handler.notify_call_complete(
+                        execution_context.execution_id,
+                        execution_context.workflow_id,
+                        result,
+                        int((end_time - start_time) * 1000),
+                        execution_context,
+                        input_data=payload_dict,
+                        parent_execution_id=execution_context.parent_execution_id,
+                    )
                 )
 
             return result
         except asyncio.CancelledError as cancel_err:
             if hasattr(self, "workflow_handler") and self.workflow_handler:
                 end_time = time.time()
-                await self.workflow_handler.notify_call_error(
-                    execution_context.execution_id,
-                    execution_context.workflow_id,
-                    "Execution cancelled by upstream client",
-                    int((end_time - start_time) * 1000),
-                    execution_context,
-                    input_data=payload_dict,
-                    parent_execution_id=execution_context.parent_execution_id,
+
+                self._notification_dispatcher.submit(
+                    lambda: self.workflow_handler.notify_call_error(
+                        execution_context.execution_id,
+                        execution_context.workflow_id,
+                        "Execution cancelled by upstream client",
+                        int((end_time - start_time) * 1000),
+                        execution_context,
+                        input_data=payload_dict,
+                        parent_execution_id=execution_context.parent_execution_id,
+                    )
                 )
+
             raise cancel_err
         except ExecuteError as exec_err:
             # Propagate upstream HTTP status codes from cross-agent calls.
@@ -2389,15 +2568,20 @@ class Agent(FastAPI):
             # (unhandled exception) and then 502 at the outer control plane.
             if hasattr(self, "workflow_handler") and self.workflow_handler:
                 end_time = time.time()
-                await self.workflow_handler.notify_call_error(
-                    execution_context.execution_id,
-                    execution_context.workflow_id,
-                    str(exec_err),
-                    int((end_time - start_time) * 1000),
-                    execution_context,
-                    input_data=payload_dict,
-                    parent_execution_id=execution_context.parent_execution_id,
+                error_msg = str(exec_err)
+
+                self._notification_dispatcher.submit(
+                    lambda: self.workflow_handler.notify_call_error(
+                        execution_context.execution_id,
+                        execution_context.workflow_id,
+                        error_msg,
+                        int((end_time - start_time) * 1000),
+                        execution_context,
+                        input_data=payload_dict,
+                        parent_execution_id=execution_context.parent_execution_id,
+                    )
                 )
+
             detail = {"error": str(exec_err)}
             if exec_err.error_details:
                 detail["error_details"] = exec_err.error_details
@@ -2409,28 +2593,37 @@ class Agent(FastAPI):
             if hasattr(self, "workflow_handler") and self.workflow_handler:
                 end_time = time.time()
                 detail = getattr(http_exc, "detail", None) or str(http_exc)
-                await self.workflow_handler.notify_call_error(
-                    execution_context.execution_id,
-                    execution_context.workflow_id,
-                    detail,
-                    int((end_time - start_time) * 1000),
-                    execution_context,
-                    input_data=payload_dict,
-                    parent_execution_id=execution_context.parent_execution_id,
+
+                self._notification_dispatcher.submit(
+                    lambda: self.workflow_handler.notify_call_error(
+                        execution_context.execution_id,
+                        execution_context.workflow_id,
+                        detail,
+                        int((end_time - start_time) * 1000),
+                        execution_context,
+                        input_data=payload_dict,
+                        parent_execution_id=execution_context.parent_execution_id,
+                    )
                 )
+
             raise
         except Exception as exc:
             if hasattr(self, "workflow_handler") and self.workflow_handler:
                 end_time = time.time()
-                await self.workflow_handler.notify_call_error(
-                    execution_context.execution_id,
-                    execution_context.workflow_id,
-                    str(exc),
-                    int((end_time - start_time) * 1000),
-                    execution_context,
-                    input_data=payload_dict,
-                    parent_execution_id=execution_context.parent_execution_id,
+                error_msg = str(exc)
+
+                self._notification_dispatcher.submit(
+                    lambda: self.workflow_handler.notify_call_error(
+                        execution_context.execution_id,
+                        execution_context.workflow_id,
+                        error_msg,
+                        int((end_time - start_time) * 1000),
+                        execution_context,
+                        input_data=payload_dict,
+                        parent_execution_id=execution_context.parent_execution_id,
+                    )
                 )
+
             raise
         finally:
             reset_execution_context(context_token)
@@ -2472,7 +2665,17 @@ class Agent(FastAPI):
         )
 
         start_time = time.time()
-        reasoner_task = asyncio.create_task(reasoner_coro())
+        # Bind a fresh per-execution cost tracker BEFORE spawning the reasoner
+        # task so the task's copied context inherits it. LLM / harness calls in
+        # the reasoner record into this tracker; we read it back to attach usage
+        # to the status callback. Concurrent executions each run in their own
+        # task context, so trackers never cross-contaminate.
+        usage_tracker = CostTracker()
+        usage_token = set_current_cost_tracker(usage_tracker)
+        try:
+            reasoner_task = asyncio.create_task(reasoner_coro())
+        finally:
+            reset_current_cost_tracker(usage_token)
 
         async def _watchdog() -> None:
             # Poll active-elapsed time and cancel the reasoner if the active
@@ -2517,6 +2720,9 @@ class Agent(FastAPI):
                 "execution_id": execution_id,
                 "reasoner": reasoner_name,
             }
+            usage_summary = self._usage_summary_or_none(usage_tracker)
+            if usage_summary is not None:
+                payload["usage"] = usage_summary
             log_info(f"Execution {execution_id} completed asynchronously")
         except asyncio.CancelledError:
             if pause_clock.timed_out:
@@ -2589,6 +2795,12 @@ class Agent(FastAPI):
             # Deregister the cancel hook regardless of outcome.
             from .cancel import deregister_execution
             await deregister_execution(self, execution_id)
+        # Attach usage on non-success terminal states too — a reasoner that
+        # failed or was cancelled may still have consumed tokens before ending.
+        if "usage" not in payload:
+            usage_summary = self._usage_summary_or_none(usage_tracker)
+            if usage_summary is not None:
+                payload["usage"] = usage_summary
         await self._post_execution_status(callback_url, payload, execution_id)
 
     async def _post_execution_status(
@@ -2711,6 +2923,7 @@ class Agent(FastAPI):
         path: Optional[str] = None,
         name: Optional[str] = None,
         *,
+        description: Optional[str] = None,
         vc_enabled: Optional[bool] = None,
         require_realtime_validation: bool = False,
     ) -> Callable[P, T]: ...
@@ -2722,6 +2935,7 @@ class Agent(FastAPI):
         path: Optional[str] = None,
         name: Optional[str] = None,
         *,
+        description: Optional[str] = None,
         vc_enabled: Optional[bool] = None,
         require_realtime_validation: bool = False,
     ) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
@@ -2732,6 +2946,7 @@ class Agent(FastAPI):
         path: Optional[str] = None,
         name: Optional[str] = None,
         *,
+        description: Optional[str] = None,
         vc_enabled: Optional[bool] = None,
         require_realtime_validation: bool = False,
     ):
@@ -2755,6 +2970,8 @@ class Agent(FastAPI):
             path (str, optional): Custom API endpoint path for this skill.
                                 Defaults to "/skills/{function_name}".
             name (str, optional): Explicit AgentField registration ID. Defaults to the function name.
+            description (str, optional): Caller-facing summary registered with the control plane and
+                shown by discovery. Defaults to the first paragraph of the function docstring.
             vc_enabled (bool | None, optional): Override VC generation for this skill. True forces VC creation,
                 False disables it, and None inherits the agent-level policy.
 
@@ -2834,6 +3051,7 @@ class Agent(FastAPI):
         direct_registration, decorator_tags = split_direct_registration_arg(tags)
         decorator_path = path
         decorator_name = name
+        decorator_description = description
 
         def decorator(func: Callable) -> Callable:
             # Extract function metadata
@@ -3093,6 +3311,8 @@ class Agent(FastAPI):
                 input_types=input_fields,  # Store (type, default) tuples, not Pydantic model
                 output_type=return_type,
                 tags=resolved_tags,
+                description=(decorator_description or "").strip()
+                or _docstring_summary(func),
                 vc_enabled=vc_setting,
             )
             # NOTE: Legacy self.skills.append() removed - skills property generates list on-demand
@@ -3112,39 +3332,50 @@ class Agent(FastAPI):
                 self._current_execution_context = child_context
                 input_payload = _build_invocation_payload(args, kwargs)
 
-                await self.workflow_handler.notify_call_start(
-                    child_context.execution_id,
-                    child_context,
-                    skill_id,
-                    input_payload,
-                    parent_execution_id=current_context.execution_id,
+                self._notification_dispatcher.submit(
+                    lambda: self.workflow_handler.notify_call_start(
+                        child_context.execution_id,
+                        child_context,
+                        skill_id,
+                        input_payload,
+                        parent_execution_id=current_context.execution_id,
+                    )
                 )
 
                 start_time = time.time()
                 try:
                     result = await original_func(*args, **kwargs)
                     duration_ms = int((time.time() - start_time) * 1000)
-                    await self.workflow_handler.notify_call_complete(
-                        child_context.execution_id,
-                        child_context.workflow_id,
-                        result,
-                        duration_ms,
-                        child_context,
-                        input_data=input_payload,
-                        parent_execution_id=current_context.execution_id,
+
+                    self._notification_dispatcher.submit(
+                        lambda: self.workflow_handler.notify_call_complete(
+                            child_context.execution_id,
+                            child_context.workflow_id,
+                            result,
+                            duration_ms,
+                            child_context,
+                            input_data=input_payload,
+                            parent_execution_id=current_context.execution_id,
+                        )
                     )
+
                     return result
                 except Exception as exc:
                     duration_ms = int((time.time() - start_time) * 1000)
-                    await self.workflow_handler.notify_call_error(
-                        child_context.execution_id,
-                        child_context.workflow_id,
-                        str(exc),
-                        duration_ms,
-                        child_context,
-                        input_data=input_payload,
-                        parent_execution_id=current_context.execution_id,
+                    error_msg = str(exc)
+
+                    self._notification_dispatcher.submit(
+                        lambda: self.workflow_handler.notify_call_error(
+                            child_context.execution_id,
+                            child_context.workflow_id,
+                            error_msg,
+                            duration_ms,
+                            child_context,
+                            input_data=input_payload,
+                            parent_execution_id=current_context.execution_id,
+                        )
                     )
+
                     raise
                 finally:
                     reset_execution_context(token)
@@ -3525,7 +3756,7 @@ class Agent(FastAPI):
         Returns:
             HarnessResult with .result (text), .parsed (validated schema), .text property.
         """
-        return await self.harness_runner.run(
+        result = await self.harness_runner.run(
             prompt,
             schema=schema,
             provider=provider,
@@ -3541,6 +3772,89 @@ class Agent(FastAPI):
             schema_mode=schema_mode,
             **kwargs,
         )
+        # Record harness usage into the current execution's cost tracker so the
+        # per-reasoner usage rollup includes coding-agent runs alongside plain
+        # LLM calls. The runner call above executes within the reasoner's async
+        # context, so the tracker bound by the endpoint is still current here.
+        self._record_harness_usage(result, provider=provider, model=model)
+        return result
+
+    def _record_harness_usage(
+        self,
+        result: "HarnessResult",
+        *,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+    ) -> None:
+        """Record a harness run's token/cost usage into the current tracker.
+
+        No-op when the harness reported neither tokens nor cost (the common
+        case for providers that don't expose usage) so we don't emit empty
+        entries. Cost is threaded even when tokens are unknown, and vice versa.
+        """
+        try:
+            from agentfield.cost_tracker import (
+                derive_provider,
+                get_current_cost_tracker,
+            )
+
+            input_tokens = getattr(result, "input_tokens", 0) or 0
+            output_tokens = getattr(result, "output_tokens", 0) or 0
+            cache_read = getattr(result, "cache_read_tokens", 0) or 0
+            cache_creation = getattr(result, "cache_creation_tokens", 0) or 0
+            cost = getattr(result, "cost_usd", None)
+
+            if not any(
+                (input_tokens, output_tokens, cache_read, cache_creation)
+            ) and cost is None:
+                return
+
+            tracker = get_current_cost_tracker()
+            if tracker is None:
+                tracker = getattr(self, "cost_tracker", None)
+            if tracker is None:
+                return
+
+            resolved_provider = (
+                str(provider) if provider else self._harness_provider_name()
+            )
+            harness_name = (
+                resolved_provider.replace("-", "_") if resolved_provider else None
+            )
+            model_name = (
+                getattr(result, "model", None)
+                or model
+                or self._harness_model_name()
+                or (resolved_provider or "harness")
+            )
+            total = getattr(result, "total_tokens", 0) or (
+                input_tokens + output_tokens
+            )
+            ctx = self._get_current_execution_context()
+            tracker.record(
+                model=str(model_name),
+                prompt_tokens=input_tokens,
+                completion_tokens=output_tokens,
+                total_tokens=total,
+                cost_usd=cost,
+                reasoner_name=getattr(ctx, "reasoner_name", None) if ctx else None,
+                source="harness",
+                provider=derive_provider(str(model_name)),
+                harness=harness_name,
+                cache_read_tokens=cache_read,
+                cache_creation_tokens=cache_creation,
+                cost_source="provider" if cost is not None else None,
+            )
+        except Exception as exc:  # pragma: no cover - best effort, never fatal
+            log_debug(f"Failed to record harness usage: {exc}")
+
+    def _harness_provider_name(self) -> Optional[str]:
+        cfg = getattr(self, "harness_config", None)
+        return getattr(cfg, "provider", None) if cfg else None
+
+    def _harness_model_name(self) -> Optional[str]:
+        cfg = getattr(self, "harness_config", None)
+        return getattr(cfg, "model", None) if cfg else None
 
     async def harness_doctor(
         self, providers: Optional[List[str]] = None
@@ -4381,6 +4695,29 @@ class Agent(FastAPI):
             except Exception as e:
                 if self.dev_mode:
                     log_debug(f"Error cleaning up AsyncExecutionManager: {e}")
+
+        if self._background_tasks:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*self._background_tasks, return_exceptions=True),
+                    timeout=5,
+                )
+                if self.dev_mode:
+                    log_debug("Background tasks are cleaned up")
+            except Exception as e:
+                if self.dev_mode:
+                    log_error(f"Error cleaning up background tasks: {e}")
+            finally:
+                self._background_tasks.clear()
+        try:
+            await self._notification_dispatcher.shutdown()
+            if self.dev_mode:
+                log_debug(
+                    "Notification dispatcher queue cleared and dispatcher shutdown"
+                )
+        except Exception as e:
+            if self.dev_mode:
+                log_error(f"Error while shutdown notification dispatcher: {e}")
 
         if getattr(self, "client", None) is not None:
             try:

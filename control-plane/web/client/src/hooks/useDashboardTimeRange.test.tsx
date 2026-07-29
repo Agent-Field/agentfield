@@ -1,12 +1,12 @@
 import { renderHook, act } from '@testing-library/react';
 import { useDashboardTimeRange } from './useDashboardTimeRange';
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { MemoryRouter, useSearchParams } from 'react-router-dom';
+import { MemoryRouter, useSearchParams } from 'react-router';
 import React from 'react';
 
 // Mock the useSearchParams hook
-vi.mock('react-router-dom', async () => {
-    const originalModule = await vi.importActual('react-router-dom');
+vi.mock('react-router', async () => {
+    const originalModule = await vi.importActual('react-router');
     return {
         ...originalModule,
         useSearchParams: vi.fn(),

@@ -779,8 +779,21 @@ func (h *DashboardHandler) getExecutionsSummaryAndSuccessRate(ctx context.Contex
 		return ExecutionsSummary{}, 0, err
 	}
 
-	// Calculate success rate from today's executions
-	successRate := h.calculateSuccessRate(todayExecutions)
+	// Success rate covers the rolling last-24h window, which spans the tail of
+	// yesterday's calendar window plus all of today's.
+	cutoff := now.Add(-24 * time.Hour)
+	last24h := make([]*types.Execution, 0, len(todayExecutions)+len(yesterdayExecutions))
+	for _, exec := range todayExecutions {
+		if !exec.StartedAt.Before(cutoff) {
+			last24h = append(last24h, exec)
+		}
+	}
+	for _, exec := range yesterdayExecutions {
+		if !exec.StartedAt.Before(cutoff) {
+			last24h = append(last24h, exec)
+		}
+	}
+	successRate := h.calculateSuccessRate(last24h)
 
 	return ExecutionsSummary{
 		Today:     len(todayExecutions),
@@ -788,20 +801,26 @@ func (h *DashboardHandler) getExecutionsSummaryAndSuccessRate(ctx context.Contex
 	}, successRate, nil
 }
 
-// calculateSuccessRate calculates the success rate from executions
+// calculateSuccessRate returns the percentage of terminal executions that
+// succeeded. In-flight executions don't count against the rate, and with no
+// terminal executions at all there is nothing failing, so it reports 100.
 func (h *DashboardHandler) calculateSuccessRate(executions []*types.Execution) float64 {
-	if len(executions) == 0 {
-		return 0.0
-	}
-
 	successCount := 0
+	terminalCount := 0
 	for _, exec := range executions {
+		if !types.IsTerminalExecutionStatus(exec.Status) {
+			continue
+		}
+		terminalCount++
 		if types.NormalizeExecutionStatus(exec.Status) == types.ExecutionStatusSucceeded {
 			successCount++
 		}
 	}
+	if terminalCount == 0 {
+		return 100.0
+	}
 
-	return float64(successCount) / float64(len(executions)) * 100.0
+	return float64(successCount) / float64(terminalCount) * 100.0
 }
 
 // getPackagesSummary collects package statistics

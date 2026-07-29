@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -75,7 +76,7 @@ func runConfigCommand(cmd *cobra.Command, args []string) {
 			fmt.Printf("❌ Failed to set variable: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("✅ Set %s for package %s\n", parts[0], packageName)
+		fmt.Printf("✅ Saved %s for %s (secret store + .env). `af run %s` will pick it up.\n", parts[0], packageName, packageName)
 		return
 	}
 
@@ -153,12 +154,19 @@ func (pcm *PackageConfigManager) InteractiveConfig(packageName string) error {
 		fmt.Println()
 	}
 
-	// Save environment file
+	// Save environment file (read by `af dev` and the web UI env editor).
 	if err := pcm.saveEnvFile(packagePath, envVars); err != nil {
 		return fmt.Errorf("failed to save environment file: %w", err)
 	}
 
-	fmt.Printf("✅ Environment configuration saved to: %s/.env\n", packagePath)
+	// Write-through to the encrypted secret store so `af run` picks these up: it
+	// resolves a node's environment from the store, not the package .env. Without
+	// this mirror the .env looks configured but the values never reach the process.
+	if err := pcm.writeNodeSecrets(packageName, envVars); err != nil {
+		return err
+	}
+
+	fmt.Printf("✅ Saved configuration for %s (secret store + %s/.env)\n", packageName, packagePath)
 	fmt.Printf("💡 Run 'af run %s' to start the agent with these settings\n", packageName)
 
 	return nil
@@ -333,8 +341,48 @@ func (pcm *PackageConfigManager) SetVariable(packageName, key, value string) err
 	// Set the variable
 	envVars[key] = value
 
-	// Save environment file
-	return pcm.saveEnvFile(packagePath, envVars)
+	// Persist to the package .env (read by `af dev` and the web UI env editor).
+	if err := pcm.saveEnvFile(packagePath, envVars); err != nil {
+		return err
+	}
+
+	// Write-through to the node-scoped encrypted secret store so `af run` — which
+	// resolves a node's environment from the store, not the package .env — picks
+	// it up. This keeps `af config --set` coherent with
+	// `af secrets set <KEY> --node <package>`; without it the value looks saved but
+	// never reaches the running process.
+	return pcm.setNodeSecret(packageName, key, value)
+}
+
+// setNodeSecret stores a single value as a node-scoped secret in the same
+// encrypted store `af secrets set <KEY> --node <package>` writes to.
+func (pcm *PackageConfigManager) setNodeSecret(packageName, key, value string) error {
+	store, err := packages.NewSecretStore(pcm.AgentFieldHome)
+	if err != nil {
+		return fmt.Errorf("failed to open secret store: %w", err)
+	}
+	if err := store.Set(packageName, key, value); err != nil {
+		return fmt.Errorf("failed to write %s to secret store: %w", key, err)
+	}
+	return nil
+}
+
+// writeNodeSecrets mirrors a whole configured environment into the node-scoped
+// encrypted secret store, skipping empty values.
+func (pcm *PackageConfigManager) writeNodeSecrets(packageName string, envVars map[string]string) error {
+	store, err := packages.NewSecretStore(pcm.AgentFieldHome)
+	if err != nil {
+		return fmt.Errorf("failed to open secret store: %w", err)
+	}
+	for key, value := range envVars {
+		if value == "" {
+			continue
+		}
+		if err := store.Set(packageName, key, value); err != nil {
+			return fmt.Errorf("failed to write %s to secret store: %w", key, err)
+		}
+	}
+	return nil
 }
 
 // UnsetVariable removes an environment variable
@@ -354,8 +402,21 @@ func (pcm *PackageConfigManager) UnsetVariable(packageName, key string) error {
 	// Remove the variable
 	delete(envVars, key)
 
-	// Save environment file
-	return pcm.saveEnvFile(packagePath, envVars)
+	// Save environment file.
+	if err := pcm.saveEnvFile(packagePath, envVars); err != nil {
+		return err
+	}
+
+	// Mirror the removal into the node-scoped secret store so a value unset here
+	// does not linger and get re-injected by `af run` (which reads the store).
+	store, err := packages.NewSecretStore(pcm.AgentFieldHome)
+	if err != nil {
+		return fmt.Errorf("failed to open secret store: %w", err)
+	}
+	if err := store.Delete(packageName, key); err != nil {
+		return fmt.Errorf("failed to remove %s from secret store: %w", key, err)
+	}
+	return nil
 }
 
 // loadPackageMetadata loads package metadata and returns the package path
@@ -415,9 +476,13 @@ func (pcm *PackageConfigManager) loadEnvFile(packagePath string) (map[string]str
 			key := strings.TrimSpace(parts[0])
 			value := strings.TrimSpace(parts[1])
 
-			// Remove quotes if present
-			if (strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"")) ||
-				(strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'")) {
+			// strconv.Quote is used by saveEnvFile, so unquote double-quoted
+			// values to preserve escaped quotes, backslashes, and newlines.
+			if strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"") {
+				if unquoted, err := strconv.Unquote(value); err == nil {
+					value = unquoted
+				}
+			} else if strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'") {
 				value = value[1 : len(value)-1]
 			}
 
@@ -438,9 +503,10 @@ func (pcm *PackageConfigManager) saveEnvFile(packagePath string, envVars map[str
 	lines = append(lines, "")
 
 	for key, value := range envVars {
-		// Quote values that contain spaces or special characters
+		// Use Go string quoting so every value can be parsed back without loss.
+		// This covers embedded quotes, backslashes, and newlines as well as spaces.
 		if strings.ContainsAny(value, " \t\n\r\"'\\$") {
-			value = fmt.Sprintf("\"%s\"", strings.ReplaceAll(value, "\"", "\\\""))
+			value = strconv.Quote(value)
 		}
 		lines = append(lines, fmt.Sprintf("%s=%s", key, value))
 	}

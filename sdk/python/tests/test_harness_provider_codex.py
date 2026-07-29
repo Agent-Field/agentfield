@@ -296,3 +296,48 @@ async def test_codex_project_dir_is_root_and_plan_maps_to_read_only(
     assert "--full-auto" not in cmd
     assert "--skip-git-repo-check" in cmd
     assert captured["cwd"] == "/root"
+
+
+@pytest.mark.asyncio
+async def test_codex_passes_model_and_reasoning_effort(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+        _ = (env, cwd, timeout)
+        captured["cmd"] = cmd
+        return '{"type":"turn.completed","text":"ok"}\n', "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.codex.run_cli", fake_run_cli)
+    provider = CodexProvider()
+    raw = await provider.execute("hello", {"model": "gpt-5.3-codex#high"})
+
+    cmd = captured["cmd"]
+    m_idx = cmd.index("-m")
+    assert cmd[m_idx + 1] == "gpt-5.3-codex"
+    c_idx = cmd.index("-c")
+    assert cmd[c_idx + 1] == "model_reasoning_effort=high"
+    assert cmd[-1] == "hello"
+    assert raw.metrics.model == "gpt-5.3-codex"
+
+
+@pytest.mark.asyncio
+async def test_codex_bare_model_has_no_effort_config(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_run_cli(cmd, *, env=None, cwd=None, timeout=None):
+        _ = (env, cwd, timeout)
+        captured["cmd"] = cmd
+        return '{"type":"turn.completed","text":"ok"}\n', "", 0
+
+    monkeypatch.setattr("agentfield.harness.providers.codex.run_cli", fake_run_cli)
+    provider = CodexProvider()
+    await provider.execute("hello", {"model": "gpt-5.5"})
+
+    cmd = captured["cmd"]
+    m_idx = cmd.index("-m")
+    assert cmd[m_idx + 1] == "gpt-5.5"
+    assert "-c" not in cmd

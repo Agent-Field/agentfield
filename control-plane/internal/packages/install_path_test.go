@@ -231,3 +231,23 @@ func TestInstallPathGoSubdirBuildsRelativeToSubdir(t *testing.T) {
 		t.Fatalf("build must be rooted at the subdir, not the repo root")
 	}
 }
+
+func TestResolvePackageSubdir_ErrorBranches(t *testing.T) {
+	t.Run("nonexistent root fails resolution", func(t *testing.T) {
+		_, err := ResolvePackageSubdir(filepath.Join(t.TempDir(), "gone"), "sub")
+		if err == nil || !strings.Contains(err.Error(), "failed to resolve package root") {
+			t.Fatalf("expected root resolution error, got %v", err)
+		}
+	})
+
+	t.Run("existing subdir without manifest names the expected path", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(root, "empty"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		_, err := ResolvePackageSubdir(root, "empty")
+		if err == nil || !strings.Contains(err.Error(), "agentfield-package.yaml") {
+			t.Fatalf("expected missing-manifest error, got %v", err)
+		}
+	})
+}

@@ -930,6 +930,7 @@ func RegisterServerlessAgentHandler(storageProvider storage.StorageProvider, uiS
 			outputSchemaBytes, _ := json.Marshal(r.OutputSchema)
 			reasoners[i] = types.ReasonerDefinition{
 				ID:           r.ID,
+				Description:  r.Description,
 				InputSchema:  json.RawMessage(inputSchemaBytes),
 				OutputSchema: json.RawMessage(outputSchemaBytes),
 				Tags:         r.Tags,
@@ -946,6 +947,7 @@ func RegisterServerlessAgentHandler(storageProvider storage.StorageProvider, uiS
 			inputSchemaBytes, _ := json.Marshal(s.InputSchema)
 			skills[i] = types.SkillDefinition{
 				ID:          s.ID,
+				Description: s.Description,
 				InputSchema: json.RawMessage(inputSchemaBytes),
 				Tags:        s.Tags,
 			}

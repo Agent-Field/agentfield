@@ -96,6 +96,45 @@ func TestDiscoveryCapabilities_WithFiltersAndSchemas(t *testing.T) {
 	assert.Empty(t, resp.Capabilities[0].Skills)
 }
 
+// Validation contract: a description registered on the reasoner/skill record
+// itself (new SDKs) must win over the legacy agent-level metadata map, and
+// records without one must still fall back to that map (old SDKs).
+func TestDiscoveryCapabilities_RecordLevelDescriptions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	InvalidateDiscoveryCache()
+
+	agents := buildDiscoveryAgents()
+	// agent-alpha's reasoner+skill gain record-level descriptions that differ
+	// from the metadata map entries; agent-beta stays metadata-map-only.
+	agents[0].Reasoners[0].Description = "Record-level reasoner description"
+	agents[0].Skills[0].Description = "Record-level skill description"
+
+	lister := &stubAgentLister{agents: agents}
+	router := gin.New()
+	router.GET("/api/v1/discovery/capabilities", DiscoveryCapabilitiesHandler(lister))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/discovery/capabilities", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp DiscoveryResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Len(t, resp.Capabilities, 2)
+
+	alpha := resp.Capabilities[0]
+	require.Equal(t, "agent-alpha", alpha.AgentID)
+	require.NotNil(t, alpha.Reasoners[0].Description)
+	assert.Equal(t, "Record-level reasoner description", *alpha.Reasoners[0].Description)
+	require.NotNil(t, alpha.Skills[0].Description)
+	assert.Equal(t, "Record-level skill description", *alpha.Skills[0].Description)
+
+	beta := resp.Capabilities[1]
+	require.Equal(t, "agent-beta", beta.AgentID)
+	require.NotNil(t, beta.Reasoners[0].Description)
+	assert.Equal(t, "Performs comprehensive research", *beta.Reasoners[0].Description)
+}
+
 func TestDiscoveryCapabilities_Formats(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	InvalidateDiscoveryCache()

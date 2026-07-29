@@ -6,7 +6,7 @@ import {
   Users,
 } from "@/components/ui/icon-bridge";
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from 'react-router';
 import type { WorkflowExecution } from "../../types/executions";
 import { Button } from "../ui/button";
 import { Card, CardContent } from "../ui/card";
