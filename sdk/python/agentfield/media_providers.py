@@ -157,56 +157,6 @@ class MediaProvider(ABC):
         raise NotImplementedError(f"{self.name} does not support music generation")
 
 
-class MiniMaxProvider(MediaProvider):
-    """MiniMax music generation provider for global and China endpoints."""
-
-    def __init__(self, api_key: Optional[str] = None, region: str = "global_en"):
-        self._api_key = api_key
-        self.region = region
-
-    @property
-    def name(self) -> str:
-        return "minimax"
-
-    @property
-    def supported_modalities(self) -> List[str]:
-        return ["music"]
-
-    async def generate_image(self, prompt: str, model: Optional[str] = None, size: str = "1024x1024", quality: str = "standard", **kwargs) -> MultimodalResponse:
-        raise NotImplementedError(f"{self.name} does not support image generation")
-
-    async def generate_audio(self, text: str, model: Optional[str] = None, voice: str = "alloy", format: str = "wav", *, system: Optional[str] = None, **kwargs) -> MultimodalResponse:
-        raise NotImplementedError(f"{self.name} does not support speech generation")
-
-    async def generate_music(self, prompt: str, model: Optional[str] = None, duration: Optional[int] = None, **kwargs) -> MultimodalResponse:
-        import base64
-        import os
-
-        import aiohttp
-
-        key = self._api_key or os.environ.get("MINIMAX_API_KEY", "")
-        if not key:
-            raise ValueError("MiniMax API key required. Set MINIMAX_API_KEY or pass api_key.")
-        endpoint = "https://api.minimaxi.com/v1/music_generation" if self.region == "cn_zh" else "https://api.minimax.io/v1/music_generation"
-        body = {"model": model or "music-3.0", "prompt": prompt, "output_format": kwargs.pop("output_format", "url"), "stream": kwargs.pop("stream", False)}
-        if duration is not None:
-            body["audio_setting"] = {"sample_rate": kwargs.pop("sample_rate", 44100), "bitrate": kwargs.pop("bitrate", 256000), "format": kwargs.pop("format", "mp3"), "duration": duration}
-        body.update({k: v for k, v in kwargs.items() if k in {"lyrics", "lyrics_optimizer", "is_instrumental", "audio_setting", "aigc_watermark", "cover_feature_id"}})
-        async with aiohttp.ClientSession() as session:
-            async with session.post(endpoint, json=body, headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"}) as response:
-                data = await response.json()
-                if response.status >= 400 or data.get("base_resp", {}).get("status_code") != 0:
-                    raise RuntimeError(f"MiniMax music generation failed ({response.status}): {data}")
-        audio = data.get("data", {}).get("audio")
-        audio_data = (
-            base64.b64encode(bytes.fromhex(audio)).decode("ascii")
-            if audio and body["output_format"] == "hex"
-            else None
-        )
-        output = AudioOutput(data=audio_data, format=body.get("audio_setting", {}).get("format", "mp3"), url=audio if body["output_format"] == "url" else None)
-        return MultimodalResponse(text=prompt, audio=output, images=[], files=[], raw_response=data)
-
-
 class FalProvider(MediaProvider):
     """
     Fal.ai provider for image, audio, and video generation.
@@ -721,7 +671,7 @@ class MiniMaxProvider(MediaProvider):
 
     @property
     def supported_modalities(self) -> List[str]:
-        return ["video"]
+        return ["video", "music"]
 
     async def generate_image(
         self,
@@ -744,6 +694,85 @@ class MiniMaxProvider(MediaProvider):
         **kwargs,
     ) -> MultimodalResponse:
         raise NotImplementedError("minimax does not support audio generation")
+
+    async def generate_music(
+        self,
+        prompt: str,
+        model: Optional[str] = None,
+        duration: Optional[int] = None,
+        **kwargs,
+    ) -> MultimodalResponse:
+        """Generate music via the MiniMax music_generation endpoint."""
+        import base64
+        import os
+
+        import aiohttp
+
+        api_key = self._api_key or os.environ.get("MINIMAX_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "MiniMax API key required. Set MINIMAX_API_KEY or pass api_key "
+                "to MiniMaxProvider."
+            )
+        body = {
+            "model": model or "music-3.0",
+            "prompt": prompt,
+            "output_format": kwargs.pop("output_format", "url"),
+            "stream": kwargs.pop("stream", False),
+        }
+        if duration is not None:
+            body["audio_setting"] = {
+                "sample_rate": kwargs.pop("sample_rate", 44100),
+                "bitrate": kwargs.pop("bitrate", 256000),
+                "format": kwargs.pop("format", "mp3"),
+                "duration": duration,
+            }
+        body.update(
+            {
+                k: v
+                for k, v in kwargs.items()
+                if k
+                in {
+                    "lyrics",
+                    "lyrics_optimizer",
+                    "is_instrumental",
+                    "audio_setting",
+                    "aigc_watermark",
+                    "cover_feature_id",
+                }
+            }
+        )
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{self._base_url}/music_generation",
+                json=body,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+            ) as response:
+                data = await response.json()
+                if (
+                    response.status >= 400
+                    or data.get("base_resp", {}).get("status_code") != 0
+                ):
+                    raise RuntimeError(
+                        f"MiniMax music generation failed ({response.status}): {data}"
+                    )
+        audio = data.get("data", {}).get("audio")
+        audio_data = (
+            base64.b64encode(bytes.fromhex(audio)).decode("ascii")
+            if audio and body["output_format"] == "hex"
+            else None
+        )
+        output = AudioOutput(
+            data=audio_data,
+            format=body.get("audio_setting", {}).get("format", "mp3"),
+            url=audio if body["output_format"] == "url" else None,
+        )
+        return MultimodalResponse(
+            text=prompt, audio=output, images=[], files=[], raw_response=data
+        )
 
     @staticmethod
     def _strip_prefix(model: str) -> str:
@@ -1936,7 +1965,6 @@ _PROVIDERS: Dict[str, type] = {
     "litellm": LiteLLMProvider,
     "minimax": MiniMaxProvider,
     "openrouter": OpenRouterProvider,
-    "minimax": MiniMaxProvider,
 }
 
 
