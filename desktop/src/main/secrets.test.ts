@@ -1,5 +1,6 @@
 import yaml from 'js-yaml'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import type { CpClient, PackageInfo } from './cpClient'
 import {
   buildEnvReport,
   buildSecretsInventory,
@@ -8,6 +9,7 @@ import {
   parseUserEnvironment,
   specIsEmpty
 } from './secrets'
+import { getEnvReports, revokeAgentSecret, setAgentSecret } from './secrets'
 
 // Abridged from SWE-AF's real agentfield-package.yaml — the exact shapes
 // ParsePackageMetadata reads (control-plane/internal/packages/installer.go).
@@ -217,5 +219,43 @@ describe('buildSecretsInventory', () => {
     const refs = [{ key: 'GH_TOKEN', scope: 'other-agent' }]
     const inventory = buildSecretsInventory(refs, specs)
     expect(inventory[0]).toMatchObject({ scope: 'other-agent', usedBy: [] })
+  })
+})
+
+describe('control-plane secret management', () => {
+  const pkg: PackageInfo = {
+    id: 'agent-id', name: 'agent', version: '1', status: 'stopped',
+    install_path: '/pkg', configuration_required: true, configuration_complete: false,
+    description: '', author: ''
+  }
+
+  function client(): CpClient {
+    return {
+      listPackages: vi.fn(async () => ({ packages: [pkg], total: 1 })),
+      listAgentSecrets: vi.fn(async () => ({
+        secrets: [
+          { key: 'SET_KEY', is_set: true, scope: 'global' as const },
+          { key: 'UNSET_KEY', is_set: false }
+        ]
+      })),
+      setAgentSecret: vi.fn(async () => {}),
+      deleteAgentSecret: vi.fn(async () => {})
+    } as unknown as CpClient
+  }
+
+  it('reports declared set and unset keys from the API', async () => {
+    const reports = await getEnvReports({ cpClient: client() })
+    expect(reports[0].vars.map(({ name, status }) => ({ name, status }))).toEqual([
+      { name: 'SET_KEY', status: 'stored' },
+      { name: 'UNSET_KEY', status: 'missing' }
+    ])
+  })
+
+  it('sets and deletes without sending a scope', async () => {
+    const cpClient = client()
+    await setAgentSecret('agent-id', 'SET_KEY', 'value', { cpClient })
+    await revokeAgentSecret('agent-id', 'SET_KEY', { cpClient })
+    expect(cpClient.setAgentSecret).toHaveBeenCalledWith('agent-id', 'SET_KEY', 'value')
+    expect(cpClient.deleteAgentSecret).toHaveBeenCalledWith('agent-id', 'SET_KEY')
   })
 })

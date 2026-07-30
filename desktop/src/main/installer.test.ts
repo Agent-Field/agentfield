@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { CATALOG } from '../shared/catalog'
-import { installCommand, installFromSource, parseRepoSource, sanitizeInstallOutput } from './installer'
+import { CpApiError, type CpClient } from './cpClient'
+import { installAgent, installCommand, installFromSource, parseRepoSource, sanitizeInstallOutput, updateAgent } from './installer'
 
 describe('installCommand', () => {
   it('builds a plain install for a catalog entry', () => {
@@ -70,6 +71,38 @@ describe('installFromSource', () => {
     // Never spawned af install: no progress lines were forwarded.
     expect(lines).toEqual([])
     expect(result.message).toMatch(/github\.com/)
+  })
+})
+
+function installClient(overrides: Partial<CpClient> = {}): CpClient {
+  return {
+    hasInstallApi: vi.fn(async () => true),
+    installPackage: vi.fn(async () => ({ job_id: 'job' })),
+    updatePackage: vi.fn(async () => ({ job_id: 'job' })),
+    watchInstallJob: vi.fn(async (_id, onLine) => {
+      onLine('Cloning')
+      onLine('Installed')
+      return { id: 'job', source: '', kind: 'install', status: 'succeeded', lines: ['Cloning', 'Installed'] }
+    }),
+    ...overrides
+  } as unknown as CpClient
+}
+
+describe('control-plane installs', () => {
+  it('preserves progress callbacks and terminal success/failure', async () => {
+    const lines: string[] = []
+    expect(await installAgent(CATALOG[0].name, (line) => lines.push(line), false, { cpClient: installClient() })).toEqual({ ok: true, message: `${CATALOG[0].name} installed` })
+    expect(lines).toEqual(['Cloning', 'Installed'])
+    const failed = installClient({ watchInstallJob: vi.fn(async () => ({ id: 'job', source: '', kind: 'install' as const, status: 'failed' as const, error: 'clone failed', lines: [] })) })
+    expect(await installAgent(CATALOG[0].name, () => {}, false, { cpClient: failed })).toEqual({ ok: false, message: 'clone failed' })
+  })
+
+  it('surfaces conflict and old-control-plane errors without fallback', async () => {
+    const conflict = installClient({ installPackage: vi.fn(async () => { throw new CpApiError({ status: 409, message: 'another install is running' }) }) })
+    expect((await installAgent(CATALOG[0].name, () => {}, false, { cpClient: conflict })).message).toMatch(/another install/i)
+    const old = installClient({ hasInstallApi: vi.fn(async () => false) })
+    expect((await installAgent(CATALOG[0].name, () => {}, false, { cpClient: old })).message).toMatch(/update AgentField CLI/)
+    expect((await updateAgent(CATALOG[0].name, () => {}, { cpClient: old })).message).toMatch(/update AgentField CLI/)
   })
 })
 

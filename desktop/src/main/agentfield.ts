@@ -1,17 +1,10 @@
-// TODO(af-cli): this module currently reads ~/.agentfield/installed.yaml directly;
-// a sibling branch is adding `af list -o json` — swap readInstalledAgents() to shell
-// out to that once it lands, so the CLI stays the single source of truth for
-// registry parsing.
-//
 // This is THE single data-access module for AgentField Desktop. Everything that
 // touches the AgentField installation (~/.agentfield) or the control plane HTTP
 // API lives here and nowhere else. It deliberately does NOT import from
 // 'electron' so it stays unit-testable under plain vitest.
 
-import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import yaml from 'js-yaml'
 import type {
   AgentBadge,
   AgentFieldSnapshot,
@@ -26,6 +19,7 @@ import type {
 } from '../shared/types'
 
 import { DEFAULT_CONTROL_PLANE_PORT, baseUrlForPort } from './ports'
+import { createCpClient, type CpClient, type PackageInfo } from './cpClient'
 
 export const DEFAULT_BASE_URL = baseUrlForPort(DEFAULT_CONTROL_PLANE_PORT)
 
@@ -107,57 +101,31 @@ export async function checkControlPlane(
   }
 }
 
-function toInstalledAgent(key: string, entry: unknown): InstalledAgent {
-  const record = isRecord(entry) ? entry : {}
-  const runtime = isRecord(record.runtime) ? record.runtime : {}
+export function packageToInstalledAgent(pkg: PackageInfo): InstalledAgent {
   return {
-    name: typeof record.name === 'string' && record.name !== '' ? record.name : key,
-    version: typeof record.version === 'string' ? record.version : '',
-    description: typeof record.description === 'string' ? record.description : '',
-    language: typeof record.language === 'string' ? record.language : undefined,
-    status: typeof record.status === 'string' ? record.status : 'unknown',
-    path: typeof record.path === 'string' && record.path !== '' ? record.path : null,
-    port: typeof runtime.port === 'number' ? runtime.port : null,
-    pid: typeof runtime.pid === 'number' ? runtime.pid : null
+    name: pkg.name,
+    version: pkg.version,
+    description: pkg.description,
+    status: pkg.status,
+    path: pkg.install_path || null,
+    port: pkg.port ?? null,
+    pid: pkg.process_id ?? null
   }
 }
 
 /**
- * Read <homeDir>/installed.yaml (the local agent-node registry).
- *  - Missing file or missing ~/.agentfield dir -> { exists: false, agents: [] }
- *    (graceful empty state, NOT an error).
- *  - Malformed YAML -> error surfaced as a string in the result; never throws,
- *    so nothing blows up across the IPC boundary.
+ * Read installed packages through the control-plane API. Failures are surfaced
+ * as strings so nothing throws across the IPC boundary.
  */
 export async function readInstalledAgents(
-  homeDir: string = getAgentFieldHome()
+  cpClient: CpClient = createCpClient()
 ): Promise<RegistryResult> {
-  const registryPath = path.join(homeDir, 'installed.yaml')
-  let text: string
   try {
-    text = await fs.readFile(registryPath, 'utf8')
+    const response = await cpClient.listPackages()
+    return { exists: true, agents: response.packages.map(packageToInstalledAgent) }
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code
-    if (code === 'ENOENT' || code === 'ENOTDIR') {
-      return { exists: false, agents: [] }
-    }
     return { exists: false, agents: [], error: errorMessage(err) }
   }
-
-  let doc: unknown
-  try {
-    doc = yaml.load(text)
-  } catch (err) {
-    return {
-      exists: true,
-      agents: [],
-      error: `Failed to parse ${registryPath}: ${errorMessage(err)}`
-    }
-  }
-
-  const installed = isRecord(doc) && isRecord(doc.installed) ? doc.installed : {}
-  const agents = Object.entries(installed).map(([key, entry]) => toInstalledAgent(key, entry))
-  return { exists: true, agents }
 }
 
 /**
@@ -361,8 +329,8 @@ export async function fetchUsageStats(
 
 export interface SnapshotOptions {
   baseUrl?: string
-  homeDir?: string
   fetchImpl?: FetchLike
+  cpClient?: CpClient
 }
 
 /**
@@ -375,7 +343,7 @@ export async function getSnapshot(options: SnapshotOptions = {}): Promise<AgentF
 
   const [controlPlane, registry] = await Promise.all([
     checkControlPlane(baseUrl, fetchImpl),
-    readInstalledAgents(options.homeDir)
+    readInstalledAgents(options.cpClient)
   ])
 
   // Only consult a recognized control plane; an unrelated service on the

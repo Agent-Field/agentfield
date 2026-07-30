@@ -1,7 +1,7 @@
-import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { CpClient, PackageInfo } from './cpClient'
 import {
   DEFAULT_BASE_URL,
   checkControlPlane,
@@ -20,23 +20,6 @@ import { DEFAULT_CONTROL_PLANE_PORT } from './ports'
 import { installCommand, sanitizeInstallOutput } from './installer'
 import { CATALOG, catalogEntry } from '../shared/catalog'
 
-const tmpDirs: string[] = []
-
-async function makeHome(installedYaml?: string): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agentfield-desktop-test-'))
-  tmpDirs.push(dir)
-  if (installedYaml !== undefined) {
-    await fs.writeFile(path.join(dir, 'installed.yaml'), installedYaml, 'utf8')
-  }
-  return dir
-}
-
-afterEach(async () => {
-  await Promise.all(
-    tmpDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true }))
-  )
-})
-
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -44,32 +27,24 @@ function jsonResponse(body: unknown, status = 200): Response {
   })
 }
 
-const REGISTRY_FIXTURE = `installed:
-  pr-af:
-    name: pr-af
-    version: 0.1.0
-    description: Opens draft pull requests from a task description
-    path: /home/abir/.agentfield/packages/pr-af
-    source: local
-    source_path: ./fix-praf
-    installed_at: "2026-07-08T10:35:03-04:00"
-    status: running
-    language: python
-    runtime:
-      port: 9001
-      pid: 4242
-      started_at: "2026-07-08T10:36:00-04:00"
-      log_file: /home/abir/.agentfield/logs/pr-af.log
-  swe-af:
-    version: 0.2.1
-    description: Software engineering agent
-    status: stopped
-    runtime:
-      port: null
-      pid: null
-      started_at: null
-      log_file: /home/abir/.agentfield/logs/swe-af.log
-`
+const API_PACKAGES: PackageInfo[] = [
+  {
+    id: 'pr-af', name: 'pr-af', version: '0.1.0',
+    description: 'Opens draft pull requests from a task description',
+    status: 'running', install_path: '/home/abir/.agentfield/packages/pr-af',
+    port: 9001, process_id: 4242, configuration_required: false,
+    configuration_complete: true, author: ''
+  },
+  {
+    id: 'swe-af', name: 'swe-af', version: '0.2.1',
+    description: 'Software engineering agent', status: 'stopped', install_path: '',
+    configuration_required: false, configuration_complete: true, author: ''
+  }
+]
+
+function packagesClient(packages = API_PACKAGES): CpClient {
+  return { listPackages: vi.fn(async () => ({ packages, total: packages.length })) } as unknown as CpClient
+}
 
 describe('active base URL', () => {
   afterEach(() => setActiveControlPlanePort(DEFAULT_CONTROL_PLANE_PORT))
@@ -99,11 +74,8 @@ describe('getAgentFieldHome', () => {
 })
 
 describe('readInstalledAgents', () => {
-  // Contract: registry with running + stopped entries (including null runtime
-  // fields and a missing optional language) parses into a correct agents array.
-  it('parses running and stopped entries, null runtime fields, optional language', async () => {
-    const home = await makeHome(REGISTRY_FIXTURE)
-    const result = await readInstalledAgents(home)
+  it('maps running and stopped API packages, including absent runtime fields', async () => {
+    const result = await readInstalledAgents(packagesClient())
 
     expect(result.exists).toBe(true)
     expect(result.error).toBeUndefined()
@@ -114,7 +86,6 @@ describe('readInstalledAgents', () => {
       name: 'pr-af',
       version: '0.1.0',
       description: 'Opens draft pull requests from a task description',
-      language: 'python',
       status: 'running',
       path: '/home/abir/.agentfield/packages/pr-af',
       port: 9001,
@@ -127,7 +98,6 @@ describe('readInstalledAgents', () => {
       name: 'swe-af',
       version: '0.2.1',
       description: 'Software engineering agent',
-      language: undefined,
       status: 'stopped',
       path: null,
       port: null,
@@ -135,32 +105,17 @@ describe('readInstalledAgents', () => {
     })
   })
 
-  // Contract: missing installed.yaml (or missing ~/.agentfield entirely) is a
-  // graceful empty state, not an error.
-  it('returns { exists: false, agents: [] } when installed.yaml is missing', async () => {
-    const home = await makeHome() // dir exists, no installed.yaml
-    expect(await readInstalledAgents(home)).toEqual({ exists: false, agents: [] })
-  })
-
-  it('returns { exists: false, agents: [] } when the home dir itself is missing', async () => {
-    const home = await makeHome()
-    const missing = path.join(home, 'does-not-exist')
-    expect(await readInstalledAgents(missing)).toEqual({ exists: false, agents: [] })
-  })
-
-  // Contract: malformed YAML surfaces as an error string — never throws.
-  it('surfaces malformed YAML as an error string without throwing', async () => {
-    const home = await makeHome('installed:\n  pr-af: [unclosed\n')
-    const result = await readInstalledAgents(home)
-    expect(result.exists).toBe(true)
-    expect(result.agents).toEqual([])
-    expect(result.error).toContain('installed.yaml')
-  })
-
-  it('treats a YAML doc without an installed map as an empty registry', async () => {
-    const home = await makeHome('something_else: true\n')
-    const result = await readInstalledAgents(home)
+  it('maps an empty package list to an existing empty registry', async () => {
+    const result = await readInstalledAgents(packagesClient([]))
     expect(result).toEqual({ exists: true, agents: [] })
+  })
+
+  it('surfaces API failures without throwing', async () => {
+    const client = packagesClient()
+    vi.mocked(client.listPackages).mockRejectedValue(new Error('offline'))
+    expect(await readInstalledAgents(client)).toEqual({
+      exists: false, agents: [], error: 'offline'
+    })
   })
 })
 
@@ -522,9 +477,9 @@ describe('install catalog', () => {
 describe('installCommand', () => {
   // Contract: the renderer sends catalog *names* over IPC; only vetted
   // sources ever reach spawn, and unknown names are refused.
-  it('builds `af install <source>` for a catalog name', () => {
+  it('builds a control-plane install preview for a catalog name', () => {
     expect(installCommand(CATALOG[0].name)).toEqual({
-      command: 'af',
+      command: 'control-plane',
       args: ['install', CATALOG[0].source]
     })
   })
@@ -561,7 +516,6 @@ describe('getSnapshot', () => {
   }
 
   it('composes control plane + registry with cross-checked badges', async () => {
-    const home = await makeHome(REGISTRY_FIXTURE)
     const fetchImpl = routedFetch({
       '/health': () => jsonResponse({ status: 'healthy' }),
       // Control plane sees pr-af but not swe-af.
@@ -597,7 +551,7 @@ describe('getSnapshot', () => {
         })
     })
 
-    const snapshot = await getSnapshot({ homeDir: home, fetchImpl })
+    const snapshot = await getSnapshot({ cpClient: packagesClient(), fetchImpl })
 
     expect(snapshot.controlPlane.baseUrl).toBe('http://localhost:8080')
     expect(snapshot.controlPlane.reachable).toBe(true)
@@ -630,13 +584,12 @@ describe('getSnapshot', () => {
   })
 
   it('falls back to registry status when the nodes endpoint fails', async () => {
-    const home = await makeHome(REGISTRY_FIXTURE)
     const fetchImpl = routedFetch({
       '/health': () => jsonResponse({ status: 'healthy' }),
       '/api/v1/nodes': () => jsonResponse({ error: 'boom' }, 500)
     })
 
-    const snapshot = await getSnapshot({ homeDir: home, fetchImpl })
+    const snapshot = await getSnapshot({ cpClient: packagesClient(), fetchImpl })
     const badges = Object.fromEntries(
       snapshot.registry.agents.map((a) => [a.name, a.badge])
     )
@@ -645,7 +598,6 @@ describe('getSnapshot', () => {
   })
 
   it('does not consult the nodes view of an unrecognized service on the port', async () => {
-    const home = await makeHome(REGISTRY_FIXTURE)
     const requested: string[] = []
     const fetchImpl: FetchLike = async (input) => {
       requested.push(String(input))
@@ -653,7 +605,7 @@ describe('getSnapshot', () => {
       return jsonResponse({ status: 'alive', nodes: [] })
     }
 
-    const snapshot = await getSnapshot({ homeDir: home, fetchImpl })
+    const snapshot = await getSnapshot({ cpClient: packagesClient(), fetchImpl })
 
     expect(snapshot.controlPlane.recognized).toBe(false)
     // Badges fall back to registry statuses — the foreign 200 on /api/v1/nodes
@@ -672,15 +624,15 @@ describe('getSnapshot', () => {
   })
 
   it('reports an unreachable control plane and an absent registry gracefully', async () => {
-    const home = await makeHome()
-    const missing = path.join(home, 'nope')
     const fetchImpl: FetchLike = async () => {
       throw new TypeError('fetch failed')
     }
 
-    const snapshot = await getSnapshot({ homeDir: missing, fetchImpl })
+    const unavailable = packagesClient()
+    vi.mocked(unavailable.listPackages).mockRejectedValue(new Error('fetch failed'))
+    const snapshot = await getSnapshot({ cpClient: unavailable, fetchImpl })
     expect(snapshot.controlPlane.reachable).toBe(false)
-    expect(snapshot.registry).toEqual({ exists: false, agents: [], error: undefined })
+    expect(snapshot.registry).toEqual({ exists: false, agents: [], error: 'fetch failed' })
     expect(snapshot.usage).toBeNull()
   })
 })
