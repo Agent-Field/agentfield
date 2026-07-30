@@ -57,6 +57,14 @@ func (s *AgentFieldServer) registerUIAPI() {
 			agents.GET("/packages", packagesHandler.ListPackagesHandler)
 			agents.GET("/packages/:packageId/details", packagesHandler.GetPackageDetailsHandler)
 
+			// Package install/update/uninstall endpoints (async jobs)
+			installHandler := ui.NewPackageInstallHandler(s.packageJobs)
+			agents.POST("/packages/install", installHandler.InstallPackageHandler)
+			agents.GET("/packages/install/jobs", installHandler.ListInstallJobsHandler)
+			agents.GET("/packages/install/jobs/:jobId", installHandler.GetInstallJobHandler)
+			agents.POST("/packages/:packageId/uninstall", installHandler.UninstallPackageHandler)
+			agents.POST("/packages/:packageId/update", installHandler.UpdatePackageHandler)
+
 			// Agent lifecycle management endpoints
 			lifecycleHandler := ui.NewLifecycleHandler(s.storage, s.agentService)
 			agents.GET("/running", lifecycleHandler.ListRunningAgentsHandler)
@@ -76,6 +84,12 @@ func (s *AgentFieldServer) registerUIAPI() {
 			agents.GET("/:agentId/config/schema", configHandler.GetConfigSchemaHandler)
 			agents.GET("/:agentId/config", configHandler.GetConfigHandler)
 			agents.POST("/:agentId/config", configHandler.SetConfigHandler)
+
+			// Encrypted secret store endpoints (the store RunAgent injects from)
+			secretsHandler := ui.NewAgentSecretsHandler(s.storage, s.agentfieldHome)
+			agents.GET("/:agentId/secrets", secretsHandler.ListAgentSecretsHandler)
+			agents.PUT("/:agentId/secrets", secretsHandler.SetAgentSecretHandler)
+			agents.DELETE("/:agentId/secrets/:key", secretsHandler.DeleteAgentSecretHandler)
 
 			// Environment file endpoints
 			envHandler := ui.NewEnvHandler(s.storage, s.agentService, s.agentfieldHome)
