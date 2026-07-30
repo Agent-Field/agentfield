@@ -636,3 +636,30 @@ describe('getSnapshot', () => {
     expect(snapshot.usage).toBeNull()
   })
 })
+
+// Catalog rows (install_status uninstalled / other) are filtered from the
+// installed-agents listing; absent install_status keeps the row (old CP).
+it('readInstalledAgents filters catalog and uninstalled rows', async () => {
+  const pkg = (over: Record<string, unknown>) => ({
+    id: 'x', name: 'x', version: '1', status: 'not_configured', install_path: '/p',
+    configuration_required: false, configuration_complete: true,
+    description: '', author: '', ...over
+  })
+  const cpClient = {
+    listPackages: async () => ({
+      packages: [
+        pkg({ name: 'installed-one', install_status: 'installed' }),
+        pkg({ name: 'running-one', install_status: 'running' }),
+        pkg({ name: 'stopped-one', install_status: 'stopped' }),
+        pkg({ name: 'catalog-one', install_status: 'uninstalled' }),
+        pkg({ name: 'weird-one', install_status: 'not_configured' }),
+        pkg({ name: 'legacy-cp-row' })
+      ],
+      total: 6
+    })
+  } as never
+  const result = await readInstalledAgents(cpClient)
+  expect(result.agents.map((a) => a.name)).toEqual([
+    'installed-one', 'running-one', 'stopped-one', 'legacy-cp-row'
+  ])
+})

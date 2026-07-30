@@ -19,7 +19,7 @@ import type {
 } from '../shared/types'
 
 import { DEFAULT_CONTROL_PLANE_PORT, baseUrlForPort } from './ports'
-import { createCpClient, type CpClient, type PackageInfo } from './cpClient'
+import { createCpClient, isInstalledPackage, type CpClient, type PackageInfo } from './cpClient'
 
 export const DEFAULT_BASE_URL = baseUrlForPort(DEFAULT_CONTROL_PLANE_PORT)
 
@@ -122,7 +122,10 @@ export async function readInstalledAgents(
 ): Promise<RegistryResult> {
   try {
     const response = await cpClient.listPackages()
-    return { exists: true, agents: response.packages.map(packageToInstalledAgent) }
+    return {
+      exists: true,
+      agents: response.packages.filter(isInstalledPackage).map(packageToInstalledAgent)
+    }
   } catch (err) {
     return { exists: false, agents: [], error: errorMessage(err) }
   }

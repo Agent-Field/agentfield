@@ -6,7 +6,7 @@ import type {
   SecretsListResult,
   StoredSecret
 } from '../shared/types'
-import { CpApiError, createCpClient, type CpClient } from './cpClient'
+import { CpApiError, createCpClient, isInstalledPackage, type CpClient } from './cpClient'
 
 const GLOBAL_SCOPE = 'global'
 
@@ -195,7 +195,7 @@ export async function getEnvReports(
 ): Promise<AgentEnvReport[]> {
   try {
     const packages = await deps.cpClient.listPackages()
-    return await Promise.all(packages.packages.map(async (pkg) => {
+    return await Promise.all(packages.packages.filter(isInstalledPackage).map(async (pkg) => {
       const { secrets } = await deps.cpClient.listAgentSecrets(pkg.id)
       const vars: AgentEnvVar[] = secrets.map((secret) => ({
         name: secret.key,
@@ -243,7 +243,7 @@ export async function listStoredSecrets(
       deps.cpClient.listAllSecrets(),
       deps.cpClient.listPackages()
     ])
-    const declarations = await Promise.all(packages.packages.map(async (pkg) => ({
+    const declarations = await Promise.all(packages.packages.filter(isInstalledPackage).map(async (pkg) => ({
       id: pkg.id,
       name: pkg.name,
       keys: new Set((await deps.cpClient.listAgentSecrets(pkg.id)).secrets.map((secret) => secret.key))
@@ -278,7 +278,7 @@ export async function revokeStoredSecret(
     if (scope === GLOBAL_SCOPE) {
       const packages = await deps.cpClient.listPackages()
       agent = ''
-      for (const pkg of packages.packages) {
+      for (const pkg of packages.packages.filter(isInstalledPackage)) {
         const declared = await deps.cpClient.listAgentSecrets(pkg.id)
         if (declared.secrets.some((secret) => secret.key === key && secret.scope === GLOBAL_SCOPE)) {
           agent = pkg.id

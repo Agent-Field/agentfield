@@ -21,11 +21,30 @@ export interface InstallJob {
   finished_at?: string
 }
 
+/**
+ * True when a listing row represents a package actually present on disk.
+ * The listing also contains catalog/marketplace rows; `install_status` is the
+ * registry-backed discriminator. Older control planes omit the field — then
+ * every row is kept (no way to tell, and hiding real installs is worse).
+ */
+export function isInstalledPackage(pkg: PackageInfo): boolean {
+  if (pkg.install_status === undefined) return true
+  return ['installed', 'running', 'stopped'].includes(pkg.install_status)
+}
+
 export interface PackageInfo {
   id: string
   name: string
   version: string
   status: string
+  /**
+   * Raw registry-backed install state ("installed" | "running" | "stopped" |
+   * "uninstalled" | ...). Absent on control planes older than the sync
+   * reconciliation fix; `status` above is a derived configuration summary,
+   * not an install indicator.
+   */
+  install_status?: string
+  installed_at?: string
   install_path: string
   configuration_required: boolean
   configuration_complete: boolean
