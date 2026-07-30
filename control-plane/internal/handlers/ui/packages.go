@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
@@ -30,10 +31,16 @@ type PackageListResponse struct {
 
 // PackageInfo represents package information in the list
 type PackageInfo struct {
-	ID                    string `json:"id"`
-	Name                  string `json:"name"`
-	Version               string `json:"version"`
-	Status                string `json:"status"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Status  string `json:"status"`
+	// InstallStatus is the raw registry-backed state ("installed", "running",
+	// "stopped", "uninstalled", ...), unlike Status which is a derived
+	// configuration summary. Clients listing actually-installed packages
+	// (e.g. the desktop app) must filter on this.
+	InstallStatus         string `json:"install_status"`
+	InstalledAt           string `json:"installed_at,omitempty"`
 	InstallPath           string `json:"install_path"`
 	ConfigurationRequired bool   `json:"configuration_required"`
 	ConfigurationComplete bool   `json:"configuration_complete"`
@@ -150,11 +157,15 @@ func (h *PackageHandler) ListPackagesHandler(c *gin.Context) {
 			Name:                  pkg.Name,
 			Version:               pkg.Version,
 			Status:                packageStatus,
+			InstallStatus:         string(pkg.Status),
 			InstallPath:           pkg.InstallPath,
 			ConfigurationRequired: configRequired,
 			ConfigurationComplete: configComplete,
 			Description:           h.safeStringValue(pkg.Description),
 			Author:                h.safeStringValue(pkg.Author),
+		}
+		if !pkg.InstalledAt.IsZero() {
+			packageInfo.InstalledAt = pkg.InstalledAt.UTC().Format(time.RFC3339)
 		}
 
 		// TODO: Add runtime information when agent lifecycle management is implemented
