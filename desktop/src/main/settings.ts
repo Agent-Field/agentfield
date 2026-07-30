@@ -7,6 +7,7 @@ import { dirname } from 'node:path'
 import type { DesktopSettings } from '../shared/types'
 
 export const DEFAULT_SETTINGS: DesktopSettings = {
+  cloud: { enabled: false, serverUrl: '', apiKey: '' },
   openAtLogin: false,
   appearance: 'system',
   autostartControlPlane: true,
@@ -34,10 +35,19 @@ function normalizePort(value: unknown): number | null {
  */
 export function normalizeSettings(raw: unknown): DesktopSettings {
   const obj = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
+  const cloud =
+    typeof obj.cloud === 'object' && obj.cloud !== null
+      ? (obj.cloud as Record<string, unknown>)
+      : {}
   const agents = Array.isArray(obj.autostartAgents)
     ? [...new Set(obj.autostartAgents.filter((n): n is string => typeof n === 'string'))]
     : DEFAULT_SETTINGS.autostartAgents
   return {
+    cloud: {
+      enabled: Boolean(cloud.enabled),
+      serverUrl: typeof cloud.serverUrl === 'string' ? cloud.serverUrl.trim() : '',
+      apiKey: typeof cloud.apiKey === 'string' ? cloud.apiKey.trim() : ''
+    },
     openAtLogin:
       typeof obj.openAtLogin === 'boolean' ? obj.openAtLogin : DEFAULT_SETTINGS.openAtLogin,
     appearance:

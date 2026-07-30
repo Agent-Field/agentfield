@@ -7,6 +7,7 @@ import {
   checkControlPlane,
   deriveAgentBadge,
   fetchControlPlaneNodes,
+  fetchDashboardMetrics,
   fetchExecutions,
   fetchUsageStats,
   getAgentFieldHome,
@@ -19,6 +20,7 @@ import {
 import { DEFAULT_CONTROL_PLANE_PORT } from './ports'
 import { installCommand, sanitizeInstallOutput } from './installer'
 import { CATALOG, catalogEntry } from '../shared/catalog'
+import { setCloudConnection } from './connection'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -64,6 +66,51 @@ describe('active base URL', () => {
     }
     await checkControlPlane(undefined, fetchImpl)
     expect(seen).toEqual(['http://localhost:9091/health'])
+  })
+})
+
+describe('raw control-plane fetch authentication', () => {
+  afterEach(() => setActiveControlPlanePort(DEFAULT_CONTROL_PLANE_PORT))
+
+  async function callRawReaders(fetchImpl: FetchLike): Promise<void> {
+    await checkControlPlane(undefined, fetchImpl)
+    await fetchControlPlaneNodes(undefined, fetchImpl)
+    await fetchExecutions(undefined, fetchImpl)
+    await fetchDashboardMetrics(undefined, fetchImpl)
+    await fetchUsageStats(undefined, fetchImpl)
+  }
+
+  it('adds X-API-Key to every raw reader in cloud mode', async () => {
+    setCloudConnection('https://cp.example', 'cloud-key')
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/health')) return jsonResponse({ status: 'healthy' })
+      if (url.includes('/nodes')) return jsonResponse({ nodes: [] })
+      if (url.includes('/workflow-runs')) return jsonResponse({ runs: [] })
+      if (url.includes('/dashboard/summary')) return jsonResponse({})
+      return jsonResponse({ totals: {} })
+    }) as FetchLike
+    await callRawReaders(fetchImpl)
+    expect(vi.mocked(fetchImpl).mock.calls).toHaveLength(5)
+    for (const [, init] of vi.mocked(fetchImpl).mock.calls) {
+      expect(new Headers(init?.headers).get('X-API-Key')).toBe('cloud-key')
+    }
+  })
+
+  it('omits X-API-Key from every raw reader in local mode', async () => {
+    setActiveControlPlanePort(8080)
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/health')) return jsonResponse({ status: 'healthy' })
+      if (url.includes('/nodes')) return jsonResponse({ nodes: [] })
+      if (url.includes('/workflow-runs')) return jsonResponse({ runs: [] })
+      if (url.includes('/dashboard/summary')) return jsonResponse({})
+      return jsonResponse({ totals: {} })
+    }) as FetchLike
+    await callRawReaders(fetchImpl)
+    for (const [, init] of vi.mocked(fetchImpl).mock.calls) {
+      expect(new Headers(init?.headers).has('X-API-Key')).toBe(false)
+    }
   })
 })
 

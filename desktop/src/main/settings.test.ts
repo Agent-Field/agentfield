@@ -10,6 +10,7 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }))
 describe('normalizeSettings', () => {
   it('accepts a valid shape as-is', () => {
     const s = {
+      cloud: { enabled: true, serverUrl: 'https://cloud.example', apiKey: 'secret' },
       openAtLogin: true,
       appearance: 'dark' as const,
       autostartControlPlane: false,
@@ -56,6 +57,20 @@ describe('normalizeSettings', () => {
     expect(normalizeSettings({ openAtLogin: 'yes', autostartAgents: 42 })).toEqual(
       DEFAULT_SETTINGS
     )
+  })
+
+  it('normalizes cloud profile values and defaults old settings', () => {
+    expect(normalizeSettings({}).cloud).toEqual(DEFAULT_SETTINGS.cloud)
+    expect(
+      normalizeSettings({
+        cloud: { enabled: 'yes', serverUrl: '  https://cp.example/  ', apiKey: ' key ' }
+      }).cloud
+    ).toEqual({ enabled: true, serverUrl: 'https://cp.example/', apiKey: 'key' })
+    expect(normalizeSettings({ cloud: { enabled: 0, serverUrl: 7, apiKey: null } }).cloud).toEqual({
+      enabled: false,
+      serverUrl: '',
+      apiKey: ''
+    })
   })
 
   it('drops non-string agent names and dedupes', () => {
@@ -118,6 +133,7 @@ describe('load/save round trip', () => {
   it('persists and reloads settings', async () => {
     const file = join(dir, 'nested', 'settings.json')
     const s = {
+      cloud: { enabled: true, serverUrl: 'https://cloud.example', apiKey: 'round-trip-key' },
       openAtLogin: true,
       appearance: 'light' as const,
       autostartControlPlane: true,

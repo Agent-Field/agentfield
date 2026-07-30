@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { setCloudConnection, setLocalPort } from './connection'
 import {
   CpApiError,
   createCpClient,
@@ -29,6 +30,7 @@ const job = (status: InstallJob['status'], lines: string[] = []): InstallJob => 
 })
 
 describe('createCpClient', () => {
+  afterEach(() => setLocalPort(8080))
   // Contract 1: every wrapper uses the documented method, path, body, and result.
   it('wraps all management endpoints', async () => {
     const payloads: unknown[] = [
@@ -108,6 +110,15 @@ describe('createCpClient', () => {
     expect(new Headers(calls[0][1]?.headers).has('X-API-Key')).toBe(false)
     expect(calls[1][0]).toBe('http://two/api/ui/v1/agents/packages')
     expect(new Headers(calls[1][1]?.headers).get('X-API-Key')).toBe('cloud-key')
+  })
+
+  it('uses the default connection-state API key provider', async () => {
+    const fetchImpl = mockFetch([json({ packages: [], total: 0 })])
+    setCloudConnection('https://cp.example', 'state-key')
+    await createCpClient({ fetchImpl }).listPackages()
+    const [url, init] = vi.mocked(fetchImpl).mock.calls[0]
+    expect(url).toBe('https://cp.example/api/ui/v1/agents/packages')
+    expect(new Headers(init?.headers).get('X-API-Key')).toBe('state-key')
   })
 
   // Contract 4: HTTP errors retain status and parsed server details.

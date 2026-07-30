@@ -1,5 +1,5 @@
-import { getBaseUrl, type FetchLike } from './agentfield'
-export type { FetchLike } from './agentfield'
+import { getApiKey, getBaseUrl } from './connection'
+export type FetchLike = typeof fetch
 
 const READ_TIMEOUT_MS = 3_000
 const MUTATION_TIMEOUT_MS = 10_000
@@ -243,7 +243,7 @@ async function apiError(response: Response): Promise<CpApiError> {
  */
 export function createCpClient(options: CpClientOptions = {}): CpClient {
   const baseUrl = options.baseUrl ?? getBaseUrl
-  const apiKey = options.apiKey ?? (() => null)
+  const apiKey = options.apiKey ?? getApiKey
   const fetchImpl = options.fetchImpl ?? fetch
   const sleep =
     options.sleep ?? ((milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)))

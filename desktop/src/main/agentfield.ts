@@ -20,6 +20,7 @@ import type {
 
 import { DEFAULT_CONTROL_PLANE_PORT, baseUrlForPort } from './ports'
 import { createCpClient, isInstalledPackage, type CpClient, type PackageInfo } from './cpClient'
+import * as connection from './connection'
 
 export const DEFAULT_BASE_URL = baseUrlForPort(DEFAULT_CONTROL_PLANE_PORT)
 
@@ -30,14 +31,12 @@ export const DEFAULT_BASE_URL = baseUrlForPort(DEFAULT_CONTROL_PLANE_PORT)
 // the tray, open-web-ui, AGENTFIELD_SERVER for spawned `af` — reads it via
 // getBaseUrl() so nothing in the app hard-codes 8080.
 
-let activeBaseUrl = DEFAULT_BASE_URL
-
 export function getBaseUrl(): string {
-  return activeBaseUrl
+  return connection.getBaseUrl()
 }
 
 export function setActiveControlPlanePort(port: number): void {
-  activeBaseUrl = baseUrlForPort(port)
+  connection.setLocalPort(port)
 }
 
 const HTTP_TIMEOUT_MS = 3000
@@ -59,6 +58,13 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
+function authHeaders(): Headers {
+  const headers = new Headers()
+  const apiKey = connection.getApiKey()
+  if (apiKey !== null) headers.set('X-API-Key', apiKey)
+  return headers
+}
+
 /**
  * Probe GET {baseUrl}/health.
  *  - 200 {"status":"healthy",...}   -> { reachable: true, recognized: true,  healthy: true }
@@ -76,6 +82,7 @@ export async function checkControlPlane(
 ): Promise<ControlPlaneStatus> {
   try {
     const res = await fetchImpl(`${baseUrl}/health`, {
+      headers: authHeaders(),
       signal: AbortSignal.timeout(HTTP_TIMEOUT_MS)
     })
     let raw: unknown
@@ -148,6 +155,7 @@ export async function fetchControlPlaneNodes(
 ): Promise<Map<string, string> | null> {
   try {
     const res = await fetchImpl(`${baseUrl}/api/v1/nodes?show_all=true`, {
+      headers: authHeaders(),
       signal: AbortSignal.timeout(HTTP_TIMEOUT_MS)
     })
     if (!res.ok) return null
@@ -237,7 +245,7 @@ export async function fetchExecutions(
   try {
     const res = await fetchImpl(
       `${baseUrl}/api/ui/v2/workflow-runs?page=1&page_size=25&sort_by=updated_at&sort_order=desc`,
-      { signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) }
+      { headers: authHeaders(), signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) }
     )
     if (!res.ok) return null
     const body: unknown = await res.json()
@@ -265,6 +273,7 @@ export async function fetchDashboardMetrics(
 ): Promise<DashboardMetrics | null> {
   try {
     const res = await fetchImpl(`${baseUrl}/api/ui/v1/dashboard/summary`, {
+      headers: authHeaders(),
       signal: AbortSignal.timeout(HTTP_TIMEOUT_MS)
     })
     if (!res.ok) return null
@@ -306,11 +315,12 @@ function parseUsageGroups(value: unknown): UsageGroup[] {
  * the whole Home. Never throws across IPC.
  */
 export async function fetchUsageStats(
-  baseUrl: string = DEFAULT_BASE_URL,
+  baseUrl: string = getBaseUrl(),
   fetchImpl: FetchLike = fetch
 ): Promise<UsageStats | null> {
   try {
     const res = await fetchImpl(`${baseUrl}/api/ui/v1/usage/stats?window=24h`, {
+      headers: authHeaders(),
       signal: AbortSignal.timeout(HTTP_TIMEOUT_MS)
     })
     if (res.status === 404 || res.status === 401 || res.status === 403) return null
