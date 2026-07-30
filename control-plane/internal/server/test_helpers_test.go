@@ -28,3 +28,16 @@ func (s *stubPackageStorage) StoreAgentPackage(ctx context.Context, pkg *types.A
 	s.packages[pkg.ID] = pkg
 	return nil
 }
+
+func (s *stubPackageStorage) UpdateAgentPackage(ctx context.Context, pkg *types.AgentPackage) error {
+	s.packages[pkg.ID] = pkg
+	return nil
+}
+
+func (s *stubPackageStorage) QueryAgentPackages(ctx context.Context, filters types.PackageFilters) ([]*types.AgentPackage, error) {
+	out := make([]*types.AgentPackage, 0, len(s.packages))
+	for _, pkg := range s.packages {
+		out = append(out, pkg)
+	}
+	return out, nil
+}

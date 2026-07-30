@@ -19,10 +19,16 @@ import (
 type packageStorage interface {
 	GetAgentPackage(ctx context.Context, packageID string) (*types.AgentPackage, error)
 	StoreAgentPackage(ctx context.Context, pkg *types.AgentPackage) error
+	UpdateAgentPackage(ctx context.Context, pkg *types.AgentPackage) error
+	QueryAgentPackages(ctx context.Context, filters types.PackageFilters) ([]*types.AgentPackage, error)
 }
 
 var storePackage = func(storageProvider packageStorage, ctx context.Context, pkg *types.AgentPackage) error {
 	return storageProvider.StoreAgentPackage(ctx, pkg)
+}
+
+var updatePackage = func(storageProvider packageStorage, ctx context.Context, pkg *types.AgentPackage) error {
+	return storageProvider.UpdateAgentPackage(ctx, pkg)
 }
 
 // InstallationRegistry mirrors the structure of installed.yaml
@@ -47,23 +53,26 @@ type InstalledPackage struct {
 	} `yaml:"runtime"`
 }
 
-// SyncPackagesFromRegistry ensures all packages in installed.yaml are present in the database.
+// SyncPackagesFromRegistry reconciles the database with installed.yaml: every
+// registry entry is upserted with an installed status (upgrading pre-seeded
+// catalog rows), and previously-installed rows missing from the registry are
+// downgraded to uninstalled. An absent registry file means nothing is
+// installed and only triggers the downgrade pass.
 func SyncPackagesFromRegistry(agentfieldHome string, storageProvider packageStorage) error {
 	ctx := context.Background()
 	registryPath := filepath.Join(agentfieldHome, "installed.yaml")
-	data, err := os.ReadFile(registryPath)
-	if err != nil {
-		return nil // No registry, nothing to sync
-	}
 	var registry InstallationRegistry
-	if err := yaml.Unmarshal(data, &registry); err != nil {
-		return err
+	if data, err := os.ReadFile(registryPath); err == nil {
+		if err := yaml.Unmarshal(data, &registry); err != nil {
+			return err
+		}
 	}
+
 	for pkgName, pkg := range registry.Installed {
-		// Check if package exists in DB
-		_, err := storageProvider.GetAgentPackage(ctx, pkgName)
-		if err == nil {
-			continue // Already present
+		existing, err := storageProvider.GetAgentPackage(ctx, pkgName)
+		if err == nil && existing != nil && installedStatus(existing.Status) &&
+			existing.InstallPath == pkg.Path && existing.Version == pkg.Version {
+			continue // Already reconciled
 		}
 		// Load agentfield-package.yaml
 		packageYamlPath := filepath.Join(pkg.Path, "agentfield-package.yaml")
@@ -90,9 +99,47 @@ func SyncPackagesFromRegistry(agentfieldHome string, storageProvider packageStor
 			InstalledAt:         now,
 			UpdatedAt:           now,
 		}
+		if existing != nil {
+			// Preserve identity fields the catalog row may carry.
+			agentPkg.InstalledAt = existing.InstalledAt
+			if agentPkg.InstalledAt.IsZero() {
+				agentPkg.InstalledAt = now
+			}
+			agentPkg.ConfigurationStatus = existing.ConfigurationStatus
+			_ = updatePackage(storageProvider, ctx, agentPkg)
+			continue
+		}
 		_ = storePackage(storageProvider, ctx, agentPkg)
 	}
+
+	// Downgrade rows that claim to be installed but are gone from the registry.
+	all, err := storageProvider.QueryAgentPackages(ctx, types.PackageFilters{})
+	if err != nil {
+		return nil // Listing failure must not break startup sync
+	}
+	for _, row := range all {
+		if !installedStatus(row.Status) {
+			continue
+		}
+		if _, present := registry.Installed[row.ID]; present {
+			continue
+		}
+		row.Status = types.PackageStatusUninstalled
+		row.UpdatedAt = time.Now()
+		_ = updatePackage(storageProvider, ctx, row)
+	}
 	return nil
+}
+
+// installedStatus reports whether a package status implies the package is on
+// disk (running/stopped are lifecycle refinements of installed).
+func installedStatus(status types.PackageStatus) bool {
+	switch status {
+	case types.PackageStatusInstalled, types.PackageStatusRunning, types.PackageStatusStopped:
+		return true
+	default:
+		return false
+	}
 }
 
 // StartPackageRegistryWatcher watches the installed.yaml registry and keeps storage in sync.
