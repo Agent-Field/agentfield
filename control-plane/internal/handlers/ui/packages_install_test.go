@@ -69,6 +69,22 @@ func TestInstallPackageHandlerAccepted(t *testing.T) {
 	}
 }
 
+func TestInstallPackageHandlerPassesForce(t *testing.T) {
+	manager := &stubPackageJobManager{
+		startInstall: func(source string, force bool) (*packagejobs.Job, error) {
+			if source != "https://github.com/owner/repo" || !force {
+				t.Fatalf("request source=%q force=%v", source, force)
+			}
+			return &packagejobs.Job{ID: "job-force"}, nil
+		},
+	}
+	ctx, response := testContext(http.MethodPost, "/", []byte(`{"source":"https://github.com/owner/repo","force":true}`))
+	NewPackageInstallHandler(manager).InstallPackageHandler(ctx)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 // Contracts 2 and 3: validation maps to 400 and busy maps to 409.
 func TestInstallPackageHandlerErrors(t *testing.T) {
 	tests := []struct {
@@ -106,7 +122,7 @@ func TestGetInstallJobHandlerUnknown(t *testing.T) {
 // Contract 7: unknown uninstall targets map to 404.
 func TestUninstallPackageHandlerUnknown(t *testing.T) {
 	manager := &stubPackageJobManager{uninstall: func(string) error { return packagejobs.ErrNotFound }}
-	ctx, response := testContext(http.MethodDelete, "/", nil, gin.Param{Key: "packageId", Value: "missing"})
+	ctx, response := testContext(http.MethodPost, "/", nil, gin.Param{Key: "packageId", Value: "missing"})
 	NewPackageInstallHandler(manager).UninstallPackageHandler(ctx)
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("status=%d", response.Code)
@@ -156,7 +172,13 @@ func TestInstallPackageHandlerRejectsMalformedJSON(t *testing.T) {
 
 // Exercises the successful get and list handler branches.
 func TestPackageInstallJobReadHandlers(t *testing.T) {
-	job := &packagejobs.Job{ID: "job-1"}
+	job := &packagejobs.Job{
+		ID:          "job-1",
+		Status:      packagejobs.StatusFailed,
+		Lines:       []string{"installing", "failed"},
+		Error:       "installation failed",
+		PackageName: "demo-package",
+	}
 	manager := &stubPackageJobManager{jobs: map[string]*packagejobs.Job{"job-1": job}}
 	handler := NewPackageInstallHandler(manager)
 
@@ -164,6 +186,22 @@ func TestPackageInstallJobReadHandlers(t *testing.T) {
 	handler.GetInstallJobHandler(ctx)
 	if response.Code != http.StatusOK {
 		t.Fatalf("get status=%d body=%s", response.Code, response.Body.String())
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode job response: %v", err)
+	}
+	if body["status"] != string(packagejobs.StatusFailed) {
+		t.Fatalf("status field=%v", body["status"])
+	}
+	if lines, ok := body["lines"].([]interface{}); !ok || len(lines) != 2 {
+		t.Fatalf("lines field=%v", body["lines"])
+	}
+	if body["error"] != "installation failed" {
+		t.Fatalf("error field=%v", body["error"])
+	}
+	if body["package_name"] != "demo-package" {
+		t.Fatalf("package_name field=%v", body["package_name"])
 	}
 
 	ctx, response = testContext(http.MethodGet, "/", nil)
@@ -202,7 +240,7 @@ func TestUninstallPackageHandlerSuccessAndInternalError(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			manager := &stubPackageJobManager{uninstall: func(string) error { return test.err }}
-			ctx, response := testContext(http.MethodDelete, "/", nil, gin.Param{Key: "packageId", Value: "demo"})
+			ctx, response := testContext(http.MethodPost, "/", nil, gin.Param{Key: "packageId", Value: "demo"})
 			NewPackageInstallHandler(manager).UninstallPackageHandler(ctx)
 			if response.Code != test.want {
 				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
