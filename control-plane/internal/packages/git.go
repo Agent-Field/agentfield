@@ -274,23 +274,17 @@ func (gi *GitInstaller) cloneRepository(info *GitPackageInfo) (string, error) {
 		return "", fmt.Errorf("failed to create temp directory: %w", err)
 	}
 
-	// Build git clone command with optimizations
-	args := []string{"clone"}
-
-	// Shallow clone for efficiency (only latest commit)
-	args = append(args, "--depth", "1")
-
-	// Clone specific branch/tag if specified
+	// Fixed-shape invocations: the user-influenced values (ref, clone URL)
+	// only ever occupy option-value or post-"--" positional slots, so git can
+	// never parse them as flags. validateCloneArgs above additionally rejects
+	// dash-prefixed values. Shallow clone (--depth 1) for efficiency.
+	var cmd *exec.Cmd
 	if info.Ref != "" {
-		args = append(args, "--branch", info.Ref)
+		cmd = exec.Command("git", "clone", "--depth", "1", "--branch", info.Ref, "--", info.CloneURL, tempDir)
+	} else {
+		cmd = exec.Command("git", "clone", "--depth", "1", "--", info.CloneURL, tempDir)
 	}
-
-	// "--" ends option parsing so the URL and target directory can never be
-	// interpreted as git flags, even if validation is bypassed upstream.
-	args = append(args, "--", info.CloneURL, tempDir)
-
-	// Execute git clone
-	cmd := exec.Command("git", args...)
+	args := cmd.Args[1:]
 
 	// Capture both stdout and stderr for better error messages
 	var stdout, stderr bytes.Buffer
