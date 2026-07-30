@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -135,4 +137,133 @@ func TestSyncAbsentRegistryStillDowngrades(t *testing.T) {
 	}
 	require.NoError(t, SyncPackagesFromRegistry(t.TempDir(), storage))
 	require.Equal(t, types.PackageStatusUninstalled, storage.packages["stale-agent"].Status)
+}
+
+func TestSyncPackagesFromRegistryInstalledAtContracts(t *testing.T) {
+	t.Parallel()
+
+	knownInstalledAt := time.Date(2026, 7, 30, 21, 48, 53, 0, time.UTC)
+	tests := []struct {
+		name        string
+		installedAt string
+		assert      func(*testing.T, time.Time)
+	}{
+		{
+			name:        "uses registry timestamp",
+			installedAt: knownInstalledAt.Format(time.RFC3339),
+			assert: func(t *testing.T, got time.Time) {
+				require.Equal(t, knownInstalledAt, got)
+			},
+		},
+		{
+			name: "falls back to current time when absent",
+			assert: func(t *testing.T, got time.Time) {
+				require.False(t, got.IsZero())
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			agentfieldHome := t.TempDir()
+			pkgDir := filepath.Join(agentfieldHome, "timestamp-agent")
+			require.NoError(t, os.MkdirAll(pkgDir, 0o755))
+			installed := `installed:
+  timestamp-agent:
+    name: Timestamp Agent
+    version: 1.0.0
+    path: ` + pkgDir + `
+`
+			if tt.installedAt != "" {
+				installed += `    installed_at: "` + tt.installedAt + `"
+`
+			}
+			require.NoError(t, os.WriteFile(filepath.Join(agentfieldHome, "installed.yaml"), []byte(installed), 0o644))
+			require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "agentfield-package.yaml"),
+				[]byte("name: Timestamp Agent\nversion: 1.0.0\n"), 0o644))
+
+			storage := newStubPackageStorage()
+			require.NoError(t, SyncPackagesFromRegistry(agentfieldHome, storage))
+			tt.assert(t, storage.packages["timestamp-agent"].InstalledAt)
+		})
+	}
+}
+
+func TestSyncPackagesFromRegistryPreservesExistingFields(t *testing.T) {
+	t.Parallel()
+
+	agentfieldHome := t.TempDir()
+	pkgDir := filepath.Join(agentfieldHome, "configured-agent")
+	require.NoError(t, os.MkdirAll(pkgDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(agentfieldHome, "installed.yaml"), []byte(`installed:
+  configured-agent:
+    name: Configured Agent
+    version: 2.0.0
+    path: `+pkgDir+`
+    installed_at: "2026-07-30T17:48:53-04:00"
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "agentfield-package.yaml"),
+		[]byte("name: Configured Agent\nversion: 2.0.0\n"), 0o644))
+
+	priorInstalledAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	storage := newStubPackageStorage()
+	storage.packages["configured-agent"] = &types.AgentPackage{
+		ID:                  "configured-agent",
+		Name:                "Configured Agent",
+		Version:             "1.0.0",
+		Status:              types.PackageStatusUninstalled,
+		ConfigurationStatus: types.ConfigurationStatus("configured"),
+		InstalledAt:         priorInstalledAt,
+	}
+
+	require.NoError(t, SyncPackagesFromRegistry(agentfieldHome, storage))
+	got := storage.packages["configured-agent"]
+	require.Equal(t, types.PackageStatusInstalled, got.Status)
+	require.Equal(t, priorInstalledAt, got.InstalledAt)
+	require.Equal(t, types.ConfigurationStatus("configured"), got.ConfigurationStatus)
+}
+
+func TestSyncPackagesFromRegistryIsIdempotentForInstalledAt(t *testing.T) {
+	t.Parallel()
+
+	agentfieldHome := t.TempDir()
+	pkgDir := filepath.Join(agentfieldHome, "idempotent-agent")
+	require.NoError(t, os.MkdirAll(pkgDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(agentfieldHome, "installed.yaml"), []byte(`installed:
+  idempotent-agent:
+    name: Idempotent Agent
+    version: 1.0.0
+    path: `+pkgDir+`
+    installed_at: "2026-07-30T17:48:53-04:00"
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "agentfield-package.yaml"),
+		[]byte("name: Idempotent Agent\nversion: 1.0.0\n"), 0o644))
+
+	storage := newStubPackageStorage()
+	require.NoError(t, SyncPackagesFromRegistry(agentfieldHome, storage))
+	first := storage.packages["idempotent-agent"].InstalledAt
+	require.NoError(t, SyncPackagesFromRegistry(agentfieldHome, storage))
+	require.Equal(t, first, storage.packages["idempotent-agent"].InstalledAt)
+}
+
+type listingErrorPackageStorage struct {
+	*stubPackageStorage
+	err error
+}
+
+func (s *listingErrorPackageStorage) QueryAgentPackages(context.Context, types.PackageFilters) ([]*types.AgentPackage, error) {
+	return nil, s.err
+}
+
+func TestSyncPackagesFromRegistryIgnoresStorageListingFailure(t *testing.T) {
+	t.Parallel()
+
+	storage := &listingErrorPackageStorage{
+		stubPackageStorage: newStubPackageStorage(),
+		err:                errors.New("storage unavailable"),
+	}
+	require.NoError(t, SyncPackagesFromRegistry(t.TempDir(), storage))
 }

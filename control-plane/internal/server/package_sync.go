@@ -87,6 +87,10 @@ func SyncPackagesFromRegistry(agentfieldHome string, storageProvider packageStor
 		// Convert schema to JSON for storage
 		schemaJson, _ := json.Marshal(packageYaml)
 		now := time.Now()
+		installedAt := now
+		if parsed, err := time.Parse(time.RFC3339, pkg.InstalledAt); err == nil && !parsed.IsZero() {
+			installedAt = parsed
+		}
 		agentPkg := &types.AgentPackage{
 			ID:                  pkgName,
 			Name:                pkg.Name,
@@ -96,7 +100,7 @@ func SyncPackagesFromRegistry(agentfieldHome string, storageProvider packageStor
 			ConfigurationSchema: schemaJson,
 			Status:              types.PackageStatusInstalled,
 			ConfigurationStatus: types.ConfigurationStatusDraft,
-			InstalledAt:         now,
+			InstalledAt:         installedAt,
 			UpdatedAt:           now,
 		}
 		if existing != nil {
