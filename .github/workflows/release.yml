@@ -508,13 +508,16 @@ jobs:
             sdk/python/dist/*.whl
             sdk/python/dist/*.tar.gz
 
-  # Desktop installers — unsigned for now (signing/notarization is a known
-  # follow-up): DMG + zip on macOS (Apple Silicon), NSIS .exe on Windows
-  # (x64), attached to the same release as the CLI binaries so users download
-  # whichever they want. Runs for staging (RC prereleases) and production
-  # alike. The bundled af CLI is built from the release commit with the
-  # embedded web UI + sqlite FTS (parity with build-single-binary.sh), so the
-  # installed app is fully self-contained on a fresh machine.
+  # Desktop installers — DMG + zip on macOS (Apple Silicon), NSIS .exe on
+  # Windows (x64), attached to the same release as the CLI binaries so users
+  # download whichever they want. Runs for staging (RC prereleases) and
+  # production alike. The bundled af CLI is built from the release commit with
+  # the embedded web UI + sqlite FTS (parity with build-single-binary.sh), so
+  # the installed app is fully self-contained on a fresh machine.
+  #
+  # macOS builds are Developer ID signed + notarized via the CSC_LINK /
+  # CSC_KEY_PASSWORD / APPLE_* secrets. Windows builds are still unsigned
+  # (Authenticode is a separate follow-up).
   desktop-installers:
     needs:
       - prepare
@@ -531,7 +534,8 @@ jobs:
     permissions:
       contents: write
     env:
-      # No signing identities in CI yet; package unsigned.
+      # Never auto-discover identities from the runner keychain; macOS signing
+      # uses the explicit CSC_LINK cert, Windows stays unsigned.
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
       - name: Checkout release commit
@@ -584,9 +588,78 @@ jobs:
           AF_CLI_VERSION: ${{ needs.prepare.outputs.tag_name }}
         run: npm run bundle-cli -- full
 
-      - name: Build installers
+      # electron-builder signs every Mach-O in the bundle (including the
+      # bundled af/af-tray) with the Developer ID cert + hardened runtime,
+      # then notarizes and staples the .app before packing DMG/zip from it.
+      # Missing secrets degrade the artifact instead of blocking the release:
+      # no CSC_LINK → unsigned (ad-hoc) build, no APPLE_APP_SPECIFIC_PASSWORD
+      # → signed but un-notarized build, each with a workflow warning.
+      - name: Build installers (macOS, signed + notarized)
+        if: runner.os == 'macOS'
+        working-directory: desktop
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$CSC_LINK" ] || [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ]; then
+            echo "::warning::signing/notarization secrets incomplete; electron-builder will skip what it lacks credentials for"
+            # Partial APPLE_* env makes electron-builder hard-fail, and an
+            # unsigned app can never notarize; drop the set entirely so it
+            # degrades to a skip-with-warning instead.
+            unset APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
+          fi
+          npm run dist
+
+      - name: Build installers (Windows)
+        if: runner.os == 'Windows'
         working-directory: desktop
         run: npm run dist
+
+      # The .app inside the DMG is already notarized + stapled; notarizing and
+      # stapling the DMG container as well makes the download pass Gatekeeper
+      # even offline. Then hard-verify what is about to ship: a signing or
+      # notarization regression must fail the release here, not on users'
+      # machines.
+      - name: Notarize DMG + verify Gatekeeper acceptance (macOS)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CSC_LINK" ] || [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ]; then
+            echo "::warning::signing/notarization secrets incomplete; skipping DMG notarization and Gatekeeper verification"
+            exit 0
+          fi
+          shopt -s nullglob
+          dmgs=(desktop/release/*.dmg)
+          if [ ${#dmgs[@]} -eq 0 ]; then
+            echo "no dmg found under desktop/release" >&2
+            exit 1
+          fi
+          for dmg in "${dmgs[@]}"; do
+            xcrun notarytool submit "$dmg" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              --wait
+            xcrun stapler staple "$dmg"
+            xcrun stapler validate "$dmg"
+          done
+          apps=(desktop/release/mac*/*.app)
+          if [ ${#apps[@]} -eq 0 ]; then
+            echo "no packed .app found under desktop/release" >&2
+            exit 1
+          fi
+          for app in "${apps[@]}"; do
+            xcrun stapler validate "$app"
+            spctl --assess --type execute -vv "$app"
+          done
 
       - name: Attach installers to the release
         shell: bash

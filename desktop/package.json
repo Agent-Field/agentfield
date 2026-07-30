@@ -52,7 +52,10 @@
         "dmg",
         "zip"
       ],
-      "darkModeSupport": true
+      "darkModeSupport": true,
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "notarize": true
     },
     "win": {
       "target": [
