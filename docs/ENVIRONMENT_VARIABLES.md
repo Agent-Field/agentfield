@@ -164,3 +164,17 @@ OpenRouter attribution is request metadata, not authentication. AgentField SDKs 
 - `AGENTFIELD_OPENROUTER_ATTRIBUTION=false`: Disable OpenRouter attribution headers/env propagation.
 
 Explicit SDK config or explicit request headers win over env defaults. `AGENTFIELD_API_KEY`, SDK `api_key` / `apiKey`, Go `WithAPIKey`, and the `X-API-Key` header are only for AgentField control-plane authentication and are not used for OpenRouter attribution.
+
+### Infron
+
+- `INFRON_API_KEY`: API key for the Infron gateway. When it is the only gateway key set, the Go SDK's `ai.DefaultConfig()` points at `https://llm.onerouter.pro/v1`. A gateway key already configured above keeps precedence, so adding this key never reroutes an existing deployment.
+
+Infron is OpenAI-compatible and serves the standard `<provider>/<model>` ids, so a model moves across by prefix alone (`infron/moonshotai/kimi-k2.6`). The `infron/` prefix is a routing marker only and is stripped before the request is sent, since the gateway serves the bare id.
+
+Attribution is sent as `HTTP-Referer` and `X-Title`:
+
+- `AGENTFIELD_INFRON_SITE_URL` (default: `https://agentfield.ai`)
+- `AGENTFIELD_INFRON_APP_NAME` (default: `AgentField AI`)
+- `AGENTFIELD_INFRON_ATTRIBUTION=false`: Disable Infron attribution headers.
+
+When the `AGENTFIELD_INFRON_*` vars are unset, the attribution values documented above are used as fallbacks, so a deployment that already declares its identity keeps it after switching gateways.
