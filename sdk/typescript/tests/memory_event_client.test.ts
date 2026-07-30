@@ -123,12 +123,32 @@ describe('MemoryEventClient exported methods', () => {
     });
   });
 
+  it('passes subscription filters to the websocket server', () => {
+    const client = new MemoryEventClient('http://localhost:8080');
+
+    client.start({
+      patterns: ['user_*', 'cart.*'],
+      scope: 'session',
+      scopeId: 'session/1 & 2'
+    });
+
+    const socketUrl = new URL(MockWebSocket.instances[0].url);
+    expect(socketUrl.pathname).toBe('/api/v1/memory/events/ws');
+    expect(socketUrl.searchParams.get('patterns')).toBe('user_*,cart.*');
+    expect(socketUrl.searchParams.get('scope')).toBe('session');
+    expect(socketUrl.searchParams.get('scope_id')).toBe('session/1 & 2');
+  });
+
   it('swallows malformed websocket messages and supports reconnect scheduling and stop cleanup', async () => {
     vi.useFakeTimers();
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const client = new MemoryEventClient('http://localhost:8080');
 
-    client.start();
+    client.start({
+      patterns: ['memo:*'],
+      scope: 'workflow',
+      scopeId: 'workflow-1'
+    });
     const firstSocket = MockWebSocket.instances[0];
 
     await firstSocket.emit('message', Buffer.from('{bad-json'));
@@ -143,6 +163,7 @@ describe('MemoryEventClient exported methods', () => {
     expect(firstSocket.terminate).toHaveBeenCalledTimes(1);
 
     const secondSocket = MockWebSocket.instances[1];
+    expect(secondSocket.url).toBe(firstSocket.url);
     client.stop();
     expect(secondSocket.terminate).toHaveBeenCalledTimes(1);
 
