@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -248,13 +249,18 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 	return nil
 }
 
+// safeGitRefPattern matches refs (branches, tags, commits) that cannot be
+// mistaken for git options: they must start with an alphanumeric character.
+// Ref values can originate from user input (CLI args or the HTTP install
+// API), so anything option-like could otherwise smuggle flags such as
+// --upload-pack into the git invocation.
+var safeGitRefPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
+
 // validateCloneArgs rejects ref/URL values that git would parse as options
-// rather than positional arguments. The clone URL and ref can originate from
-// user input (CLI args or the HTTP install API), so a value starting with "-"
-// could otherwise smuggle flags like --upload-pack into the git invocation.
+// rather than positional arguments.
 func validateCloneArgs(info *GitPackageInfo) error {
-	if strings.HasPrefix(info.Ref, "-") {
-		return fmt.Errorf("invalid git ref %q: must not start with '-'", info.Ref)
+	if info.Ref != "" && !safeGitRefPattern.MatchString(info.Ref) {
+		return fmt.Errorf("invalid git ref %q: must start with an alphanumeric character and contain only [A-Za-z0-9._/-]", info.Ref)
 	}
 	if strings.HasPrefix(info.CloneURL, "-") {
 		return fmt.Errorf("invalid clone URL %q: must not start with '-'", info.CloneURL)
@@ -276,11 +282,11 @@ func (gi *GitInstaller) cloneRepository(info *GitPackageInfo) (string, error) {
 
 	// Fixed-shape invocations: the user-influenced values (ref, clone URL)
 	// only ever occupy option-value or post-"--" positional slots, so git can
-	// never parse them as flags. validateCloneArgs above additionally rejects
-	// dash-prefixed values. Shallow clone (--depth 1) for efficiency.
+	// never parse them as flags. The ref is re-validated inline against the
+	// anchored safeGitRefPattern immediately before use.
 	var cmd *exec.Cmd
-	if info.Ref != "" {
-		cmd = exec.Command("git", "clone", "--depth", "1", "--branch", info.Ref, "--", info.CloneURL, tempDir)
+	if ref := info.Ref; ref != "" && safeGitRefPattern.MatchString(ref) {
+		cmd = exec.Command("git", "clone", "--depth", "1", "--branch", ref, "--", info.CloneURL, tempDir)
 	} else {
 		cmd = exec.Command("git", "clone", "--depth", "1", "--", info.CloneURL, tempDir)
 	}
