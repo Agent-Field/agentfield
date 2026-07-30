@@ -143,8 +143,11 @@ bundled CLI meanwhile and Settings shows an "Update AgentField" button that
 installs the bundled copy into the managed location (never over a newer
 one; `Version: dev` builds are trusted as-is). On a machine with no CLI at
 all, first launch auto-provisions `~/.agentfield/bin` (both `agentfield`
-and the `af` alias, Windows user PATH registered) so terminals and coding
-agents get a working `af` too.
+and the `af` alias) so terminals and coding agents get a working `af` too —
+and puts that directory on the user PATH: registered in the user-scope PATH
+on Windows, appended to the shell startup file (`.bashrc`/`.bash_profile`,
+`.zshrc`, or fish's `config.fish`) on macOS/Linux, mirroring the curl
+installer's entry so whichever ran first wins and the other is a no-op.
 
 Unless switched off in Settings, the app also installs the CLI's full skill
 catalog on launch (`af skill install --non-interactive` with no name):
@@ -218,8 +221,6 @@ Packaging is unsigned for now (no notarization/signing identities configured).
 
 - Control plane URL is hard-coded to `http://localhost:8080` (not configurable yet).
 - No stop control for the control plane itself yet (the app only starts it).
-- macOS/Linux shell PATH setup stays with the curl installer — the app only
-  provisions `~/.agentfield/bin` there (absolute path always works).
 - The macOS `af-tray` companion installs its own `~/Applications/AgentField.app`
   wrapper — a second bundle named "AgentField" distinct from this desktop app in
   `/Applications`. Harmless (the tray bundle is `LSUIElement`, menu-bar only) but
