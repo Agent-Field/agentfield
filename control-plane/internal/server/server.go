@@ -158,6 +158,11 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 
 	// Async package install/update job manager (HTTP install API)
 	packageJobs := packagejobs.NewManager(registryStorage, agentfieldHome, agentService)
+	// Sync the DB immediately after API-driven registry mutations so clients
+	// read their own writes; the fsnotify watcher covers CLI-driven changes.
+	packageJobs.SetOnRegistryChange(func() {
+		_ = SyncPackagesFromRegistry(agentfieldHome, storageProvider)
+	})
 
 	// Initialize StatusManager for unified status management
 	statusManagerConfig := services.StatusManagerConfig{

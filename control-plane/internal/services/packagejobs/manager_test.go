@@ -372,3 +372,37 @@ func TestManagerHelperEdgeCases(t *testing.T) {
 		t.Fatalf("listed jobs=%d", len(got))
 	}
 }
+
+// The registry-change hook fires after successful installs and uninstalls,
+// and not after failures — API reads stay consistent with API writes.
+func TestRegistryChangeHook(t *testing.T) {
+	inst := &stubInstaller{}
+	manager := newManager(inst, &stubAgentService{}, t.TempDir())
+	calls := 0
+	manager.SetOnRegistryChange(func() { calls++ })
+
+	job, err := manager.StartInstall("https://github.com/o/r", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForJob(t, manager, job.ID)
+	if calls != 1 {
+		t.Fatalf("after install calls = %d, want 1", calls)
+	}
+
+	inst.installErr = errors.New("boom")
+	job, _ = manager.StartInstall("https://github.com/o/r2", false)
+	waitForJob(t, manager, job.ID)
+	if calls != 1 {
+		t.Fatalf("after failed install calls = %d, want 1", calls)
+	}
+	inst.installErr = nil
+
+	inst.installed = []domain.InstalledPackage{{Name: "gone"}}
+	if err := manager.Uninstall("gone"); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("after uninstall calls = %d, want 2", calls)
+	}
+}

@@ -78,6 +78,27 @@ type Manager struct {
 	jobs           map[string]*Job
 	order          []string
 	active         bool
+	// onRegistryChange runs synchronously after a mutation lands in
+	// installed.yaml so API reads are consistent with API writes (the
+	// fsnotify watcher also syncs, but asynchronously).
+	onRegistryChange func()
+}
+
+// SetOnRegistryChange registers a hook invoked after every successful
+// install/update/uninstall. The server wires this to the registry→DB sync.
+func (m *Manager) SetOnRegistryChange(fn func()) {
+	m.mu.Lock()
+	m.onRegistryChange = fn
+	m.mu.Unlock()
+}
+
+func (m *Manager) notifyRegistryChange() {
+	m.mu.RLock()
+	fn := m.onRegistryChange
+	m.mu.RUnlock()
+	if fn != nil {
+		fn()
+	}
 }
 
 // NewManager constructs the package service exactly as the CLI container does.
@@ -208,6 +229,7 @@ func (m *Manager) run(jobID string, force bool) {
 	}
 	if err == nil {
 		m.appendLine(jobID, fmt.Sprintf("install completed: %s", packageName))
+		m.notifyRegistryChange()
 	}
 	m.finish(jobID, packageName, err)
 }
@@ -275,6 +297,7 @@ func (m *Manager) Uninstall(packageName string) error {
 	if err := m.installer.UninstallPackage(packageName); err != nil {
 		return err
 	}
+	m.notifyRegistryChange()
 	return nil
 }
 
