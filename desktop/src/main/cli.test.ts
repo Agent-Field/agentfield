@@ -1,3 +1,6 @@
+import { promises as fs } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   type ProbedCandidate,
@@ -5,7 +8,9 @@ import {
   compareVersions,
   effectiveMinVersion,
   parseAfVersion,
+  posixPathEntry,
   probeCli,
+  registerPosixUserPath,
   selectCli
 } from './cli'
 
@@ -169,5 +174,78 @@ describe('probeCli', () => {
       responds: false,
       version: null
     })
+  })
+})
+
+describe('posixPathEntry', () => {
+  const HOME = '/home/u'
+  const BIN = '/home/u/.agentfield/bin'
+  const EXPORT = `export PATH="${BIN}:$PATH"`
+
+  it('writes ~/.zshrc for zsh with the same export line as the curl installer', () => {
+    expect(posixPathEntry('/bin/zsh', HOME, BIN, () => false)).toEqual({
+      rcFile: join(HOME, '.zshrc'),
+      line: EXPORT
+    })
+  })
+
+  it('prefers ~/.bashrc for bash, falls back to an existing ~/.bash_profile', () => {
+    const bashrc = join(HOME, '.bashrc')
+    const profile = join(HOME, '.bash_profile')
+    expect(posixPathEntry('/bin/bash', HOME, BIN, (p) => p === bashrc)?.rcFile).toBe(bashrc)
+    expect(posixPathEntry('/bin/bash', HOME, BIN, (p) => p === profile)?.rcFile).toBe(profile)
+    // Neither exists yet — .bashrc gets created, like the installer.
+    expect(posixPathEntry('/bin/bash', HOME, BIN, () => false)?.rcFile).toBe(bashrc)
+  })
+
+  it('uses fish syntax in the fish config file', () => {
+    expect(posixPathEntry('/usr/bin/fish', HOME, BIN, () => false)).toEqual({
+      rcFile: join(HOME, '.config', 'fish', 'config.fish'),
+      line: `set -gx PATH ${BIN} $PATH`
+    })
+  })
+
+  it('returns null for unknown or missing shells', () => {
+    expect(posixPathEntry('/bin/tcsh', HOME, BIN, () => false)).toBeNull()
+    expect(posixPathEntry(undefined, HOME, BIN, () => false)).toBeNull()
+  })
+})
+
+describe('registerPosixUserPath', () => {
+  const freshHome = () => fs.mkdtemp(join(tmpdir(), 'af-desktop-path-'))
+
+  it('appends a commented PATH entry to the shell startup file', async () => {
+    const home = await freshHome()
+    const bin = join(home, '.agentfield', 'bin')
+    await registerPosixUserPath(bin, '/bin/zsh', home)
+    const rc = await fs.readFile(join(home, '.zshrc'), 'utf8')
+    expect(rc).toBe(`\n# AgentField CLI\nexport PATH="${bin}:$PATH"\n`)
+  })
+
+  it('is idempotent and defers to an entry the curl installer already wrote', async () => {
+    const home = await freshHome()
+    const bin = join(home, '.agentfield', 'bin')
+    const curlEntry = `# AgentField CLI\nexport PATH="${bin}:$PATH"\n`
+    await fs.writeFile(join(home, '.zshrc'), curlEntry)
+    await registerPosixUserPath(bin, '/bin/zsh', home)
+    await registerPosixUserPath(bin, '/bin/zsh', home)
+    expect(await fs.readFile(join(home, '.zshrc'), 'utf8')).toBe(curlEntry)
+  })
+
+  it('creates the fish config directory when needed', async () => {
+    const home = await freshHome()
+    const bin = join(home, '.agentfield', 'bin')
+    await registerPosixUserPath(bin, '/usr/bin/fish', home)
+    const rc = await fs.readFile(join(home, '.config', 'fish', 'config.fish'), 'utf8')
+    expect(rc).toContain(`set -gx PATH ${bin} $PATH`)
+  })
+
+  it('never rejects for unknown shells or unwritable locations', async () => {
+    const home = await freshHome()
+    const bin = join(home, '.agentfield', 'bin')
+    await expect(registerPosixUserPath(bin, '/bin/tcsh', home)).resolves.toBeUndefined()
+    // A regular file where the rc's parent dir should be → mkdir/append fails.
+    await fs.writeFile(join(home, '.config'), 'not a directory')
+    await expect(registerPosixUserPath(bin, '/usr/bin/fish', home)).resolves.toBeUndefined()
   })
 })

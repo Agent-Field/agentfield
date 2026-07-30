@@ -26,8 +26,9 @@
 // selection, and provisioning stay unit-testable.
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { promises as fs } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, promises as fs } from 'node:fs'
+import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
 import type { AgentActionResult, CliStatus } from '../shared/types'
 import { getAgentFieldHome } from './agentfield'
 import { childEnv } from './env'
@@ -267,14 +268,15 @@ export async function installBundledCli(bundledPath: string): Promise<AgentActio
   }
 
   if (process.platform === 'win32') registerWindowsUserPath(binDir)
+  else await registerPosixUserPath(binDir)
   return { ok: true, message: `AgentField CLI installed to ${binDir}` }
 }
 
 /**
  * Best-effort: put ~/.agentfield/bin on the user PATH so `af` also works in
  * terminals (and for coding agents running shell commands). User-scope only,
- * idempotent, and never blocks the caller. macOS/Linux PATH setup remains the
- * curl installer's job — editing shell profiles from a GUI app is too rude.
+ * idempotent, and never blocks the caller. macOS/Linux go through
+ * registerPosixUserPath below.
  */
 function registerWindowsUserPath(binDir: string): void {
   const script =
@@ -285,4 +287,67 @@ function registerWindowsUserPath(binDir: string): void {
     windowsHide: true,
     stdio: 'ignore'
   }).on('error', () => {})
+}
+
+export interface PosixPathEntry {
+  rcFile: string
+  line: string
+}
+
+/**
+ * Which startup file the user's shell reads and how a PATH entry is phrased
+ * there. Must stay in lockstep with the curl installer's configure_path
+ * (scripts/install.sh): both write the same entry into the same file, and
+ * each skips when the file already mentions binDir — so whichever installer
+ * runs first wins and the other becomes a no-op. Unknown shells get null
+ * (best effort, same as the installer).
+ */
+export function posixPathEntry(
+  shell: string | undefined,
+  home: string,
+  binDir: string,
+  fileExists: (path: string) => boolean = existsSync
+): PosixPathEntry | null {
+  const exportLine = `export PATH="${binDir}:$PATH"`
+  switch (shell?.split('/').pop()) {
+    case 'bash': {
+      const bashrc = join(home, '.bashrc')
+      const profile = join(home, '.bash_profile')
+      const rcFile = fileExists(bashrc) || !fileExists(profile) ? bashrc : profile
+      return { rcFile, line: exportLine }
+    }
+    case 'zsh':
+      return { rcFile: join(home, '.zshrc'), line: exportLine }
+    case 'fish':
+      return {
+        rcFile: join(home, '.config', 'fish', 'config.fish'),
+        line: `set -gx PATH ${binDir} $PATH`
+      }
+    default:
+      return null
+  }
+}
+
+/**
+ * macOS/Linux counterpart of registerWindowsUserPath: append a PATH entry
+ * for ~/.agentfield/bin to the user's shell startup file. Same contract —
+ * best-effort (a failure never fails the CLI install), idempotent (skipped
+ * when the file already mentions binDir, e.g. the curl installer configured
+ * it), and never rejects.
+ */
+export async function registerPosixUserPath(
+  binDir: string,
+  shell: string | undefined = process.env.SHELL,
+  home: string = homedir()
+): Promise<void> {
+  try {
+    const entry = posixPathEntry(shell, home, binDir)
+    if (!entry) return
+    const current = await fs.readFile(entry.rcFile, 'utf8').catch(() => '')
+    if (current.includes(binDir)) return
+    await fs.mkdir(dirname(entry.rcFile), { recursive: true })
+    await fs.appendFile(entry.rcFile, `\n# AgentField CLI\n${entry.line}\n`)
+  } catch {
+    // best effort — the managed copy still works by absolute path
+  }
 }
