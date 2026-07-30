@@ -2,6 +2,7 @@ package packagejobs
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/domain"
+	infrastorage "github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/storage"
 )
 
 type stubInstaller struct {
@@ -20,6 +22,9 @@ type stubInstaller struct {
 	afterInstall []domain.InstalledPackage
 	calls        *[]string
 	lastOptions  domain.InstallOptions
+	listErr      error
+	infoErr      error
+	uninstallErr error
 }
 
 func (s *stubInstaller) InstallPackage(_ string, options domain.InstallOptions) error {
@@ -41,14 +46,17 @@ func (s *stubInstaller) UninstallPackage(name string) error {
 	if s.calls != nil {
 		*s.calls = append(*s.calls, "remove:"+name)
 	}
-	return nil
+	return s.uninstallErr
 }
 func (s *stubInstaller) ListInstalledPackages() ([]domain.InstalledPackage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]domain.InstalledPackage(nil), s.installed...), nil
+	return append([]domain.InstalledPackage(nil), s.installed...), s.listErr
 }
 func (s *stubInstaller) GetPackageInfo(name string) (*domain.InstalledPackage, error) {
+	if s.infoErr != nil {
+		return nil, s.infoErr
+	}
 	for _, pkg := range s.installed {
 		if pkg.Name == name {
 			copy := pkg
@@ -59,25 +67,28 @@ func (s *stubInstaller) GetPackageInfo(name string) (*domain.InstalledPackage, e
 }
 
 type stubAgentService struct {
-	running bool
-	calls   *[]string
+	running   bool
+	calls     *[]string
+	statusErr error
+	stopErr   error
+	runErr    error
 }
 
 func (s *stubAgentService) RunAgent(name string, _ domain.RunOptions) (*domain.RunningAgent, error) {
 	if s.calls != nil {
 		*s.calls = append(*s.calls, "start:"+name)
 	}
-	return &domain.RunningAgent{Name: name}, nil
+	return &domain.RunningAgent{Name: name}, s.runErr
 }
 func (s *stubAgentService) StopAgent(name string) error {
 	if s.calls != nil {
 		*s.calls = append(*s.calls, "stop:"+name)
 	}
 	s.running = false
-	return nil
+	return s.stopErr
 }
 func (s *stubAgentService) GetAgentStatus(name string) (*domain.AgentStatus, error) {
-	return &domain.AgentStatus{Name: name, IsRunning: s.running}, nil
+	return &domain.AgentStatus{Name: name, IsRunning: s.running}, s.statusErr
 }
 func (s *stubAgentService) ListRunningAgents() ([]domain.RunningAgent, error) { return nil, nil }
 
@@ -223,4 +234,141 @@ func TestJobLinesAreCapped(t *testing.T) {
 	}
 	close(release)
 	waitForJob(t, manager, job.ID)
+}
+
+// Exercises the real NewManager constructor without starting an installation.
+func TestNewManagerRejectsInvalidSource(t *testing.T) {
+	home := t.TempDir()
+	registry := infrastorage.NewLocalRegistryStorage(
+		infrastorage.NewFileSystemAdapter(),
+		filepath.Join(home, "installed.json"),
+	)
+	manager := NewManager(registry, home, &stubAgentService{})
+	if _, err := manager.StartInstall("not-a-github-url", false); !errors.Is(err, ErrInvalidSource) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// Exercises validation branches for malformed repository and subdirectory components.
+func TestValidateSourceEdgeCases(t *testing.T) {
+	invalid := []string{
+		"https://github.com/owner",
+		"https://github.com/./repo",
+		"https://github.com/-owner/repo",
+		"https://github.com/owner/-repo",
+		"https://github.com/owner/repo//",
+		"https://github.com/owner/repo//../bad",
+		"https://github.com/owner/repo///bad",
+		"https://github.com/owner/repo//bad?query",
+		"https://github.com/owner/repo//-bad",
+		"https://github.com/owner/repo//bad//part",
+	}
+	for _, source := range invalid {
+		if _, err := ValidateSource(source); !errors.Is(err, ErrInvalidSource) {
+			t.Errorf("source %q: err = %v", source, err)
+		}
+	}
+	if got, err := ValidateSource(" https://github.com/owner/repo/ "); err != nil || got != "https://github.com/owner/repo" {
+		t.Fatalf("got %q, err = %v", got, err)
+	}
+}
+
+// Exercises update registry not-found, read, YAML, entry, and invalid-source failures.
+func TestStartUpdateRegistryFailures(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		setup   func(string)
+		want    error
+	}{
+		{name: "missing", want: ErrNotFound},
+		{name: "read", setup: func(home string) {
+			requireDir := filepath.Join(home, "installed.yaml")
+			if err := os.Mkdir(requireDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "yaml", content: "installed: ["},
+		{name: "entry", content: "installed: {}\n", want: ErrNotFound},
+		{name: "source", content: "installed:\n  demo:\n    source_path: invalid\n", want: ErrInvalidSource},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			if test.setup != nil {
+				test.setup(home)
+			} else if test.content != "" {
+				if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte(test.content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			manager := newManager(&stubInstaller{}, &stubAgentService{}, home)
+			_, err := manager.StartUpdate("demo")
+			if err == nil || (test.want != nil && !errors.Is(err, test.want)) {
+				t.Fatalf("err = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
+// Exercises uninstall status, stop, and installer failure propagation.
+func TestUninstallPropagatesOperationFailures(t *testing.T) {
+	boom := errors.New("boom")
+	tests := []struct {
+		name  string
+		inst  *stubInstaller
+		agent *stubAgentService
+	}{
+		{"status", &stubInstaller{installed: []domain.InstalledPackage{{Name: "demo"}}}, &stubAgentService{statusErr: boom}},
+		{"stop", &stubInstaller{installed: []domain.InstalledPackage{{Name: "demo"}}}, &stubAgentService{running: true, stopErr: boom}},
+		{"remove", &stubInstaller{installed: []domain.InstalledPackage{{Name: "demo"}}, uninstallErr: boom}, &stubAgentService{}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := newManager(test.inst, test.agent, t.TempDir()).Uninstall("demo"); !errors.Is(err, boom) {
+				t.Fatalf("err = %v", err)
+			}
+		})
+	}
+}
+
+// Exercises nil agent service, list failures, absent append targets, and job eviction.
+func TestManagerHelperEdgeCases(t *testing.T) {
+	manager := newManager(&stubInstaller{listErr: errors.New("list")}, nil, t.TempDir())
+	if got, err := ValidateSource("https://github.com/owner/repo//agents/demo/"); err != nil ||
+		got != "https://github.com/owner/repo//agents/demo" {
+		t.Fatalf("source=%q err=%v", got, err)
+	}
+	source, options := splitSubdir("https://github.com/owner/repo//agents/demo", true)
+	if source != "https://github.com/owner/repo" || options.Path != "agents/demo" || !options.Force {
+		t.Fatalf("source=%q options=%+v", source, options)
+	}
+	if running, err := manager.isRunning("demo"); err != nil || running {
+		t.Fatalf("running=%v err=%v", running, err)
+	}
+	if got := manager.installedNames(); len(got) != 0 {
+		t.Fatalf("names=%v", got)
+	}
+	if got := manager.discoverPackageName(nil); got != "" {
+		t.Fatalf("name=%q", got)
+	}
+	manager.appendLine("missing", "ignored")
+	if job, ok := manager.GetJob("missing"); ok || job != nil {
+		t.Fatalf("job=%v ok=%v", job, ok)
+	}
+
+	manager.mu.Lock()
+	for i := 0; i <= maxJobs; i++ {
+		id := fmt.Sprintf("job-%d", i)
+		manager.jobs[id] = &Job{ID: id}
+		manager.order = append(manager.order, id)
+	}
+	manager.evictLocked()
+	manager.mu.Unlock()
+	if len(manager.order) != maxJobs {
+		t.Fatalf("jobs=%d", len(manager.order))
+	}
+	if got := manager.ListJobs(); len(got) != maxJobs {
+		t.Fatalf("listed jobs=%d", len(got))
+	}
 }

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -160,4 +162,92 @@ func TestAgentSecretsComplexValueRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	require.True(t, bytes.Equal([]byte(want), []byte(got)))
+}
+
+// Exercises malformed-JSON binding and the oversized-value validation branch.
+func TestAgentSecretsRejectsMalformedAndOversizedPut(t *testing.T) {
+	router, _ := newAgentSecretsTestRouter(t)
+	for _, body := range []string{
+		`{`,
+		`{"key":"VALID_KEY","value":"` + strings.Repeat("x", maxAgentSecretValueBytes+1) + `"}`,
+	} {
+		response := agentSecretsRequest(t, router, http.MethodPut, "/agents/agent-x/secrets", body)
+		require.Equal(t, http.StatusBadRequest, response.Code)
+	}
+}
+
+// Exercises secret-store constructor failures in all three handlers.
+func TestAgentSecretsStoreOpenFailures(t *testing.T) {
+	_, home := newAgentSecretsTestRouter(t)
+	blockedHome := filepath.Join(home, "not-a-directory")
+	require.NoError(t, os.WriteFile(blockedHome, []byte("block"), 0o600))
+
+	store := setupTestStorage(t)
+	require.NoError(t, store.StoreAgentPackage(context.Background(), &types.AgentPackage{
+		ID:                  "agent-x",
+		Name:                agentSecretsTestScope,
+		ConfigurationSchema: json.RawMessage(`{"user_environment":{}}`),
+	}))
+	handler := NewAgentSecretsHandler(store, blockedHome)
+	failureRouter := gin.New()
+	failureRouter.GET("/agents/:agentId/secrets", handler.ListAgentSecretsHandler)
+	failureRouter.PUT("/agents/:agentId/secrets", handler.SetAgentSecretHandler)
+	failureRouter.DELETE("/agents/:agentId/secrets/:key", handler.DeleteAgentSecretHandler)
+
+	for _, test := range []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{"list", http.MethodGet, "/agents/agent-x/secrets", ""},
+		{"set", http.MethodPut, "/agents/agent-x/secrets", `{"key":"KEY","value":"secret"}`},
+		{"delete", http.MethodDelete, "/agents/agent-x/secrets/KEY", ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := agentSecretsRequest(t, failureRouter, test.method, test.path, test.body)
+			require.Equal(t, http.StatusInternalServerError, response.Code)
+		})
+	}
+}
+
+// Exercises List, Set, and Delete failures after a store opens successfully.
+func TestAgentSecretsCorruptStoreFailures(t *testing.T) {
+	router, home := newAgentSecretsTestRouter(t)
+	store, err := packages.NewSecretStore(home)
+	require.NoError(t, err)
+	require.NoError(t, store.Set(agentSecretsTestScope, "KEY", "value"))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(home, "secrets", agentSecretsTestScope+".enc"),
+		[]byte("not encrypted data"),
+		0o600,
+	))
+
+	for _, test := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodGet, "/agents/agent-x/secrets", ""},
+		{http.MethodPut, "/agents/agent-x/secrets", `{"key":"KEY","value":"secret"}`},
+		{http.MethodDelete, "/agents/agent-x/secrets/KEY", ""},
+	} {
+		response := agentSecretsRequest(t, router, test.method, test.path, test.body)
+		require.Equal(t, http.StatusInternalServerError, response.Code)
+	}
+}
+
+// Exercises the ID fallback used when a package has no name.
+func TestAgentSecretScopeFallsBackToID(t *testing.T) {
+	require.Equal(t, "agent-x", agentSecretScope(&types.AgentPackage{ID: "agent-x"}))
+}
+
+// Exercises invalid schema and de-duplication/empty-name branches.
+func TestDeclaredAgentSecretKeysEdgeCases(t *testing.T) {
+	require.Nil(t, declaredAgentSecretKeys(json.RawMessage(`{`)))
+	schema := json.RawMessage(`{"user_environment":{
+		"required":[{"name":""},{"name":"KEY"}],
+		"require_one_of":[{"options":[{"name":""},{"name":"KEY"}]}]
+	}}`)
+	require.Equal(t, []string{"KEY"}, declaredAgentSecretKeys(schema))
 }

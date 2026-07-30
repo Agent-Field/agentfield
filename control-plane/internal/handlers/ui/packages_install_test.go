@@ -138,3 +138,75 @@ func TestUpdatePackageHandlerMappings(t *testing.T) {
 		})
 	}
 }
+
+// Exercises the malformed-JSON bind-error branch before the manager is called.
+func TestInstallPackageHandlerRejectsMalformedJSON(t *testing.T) {
+	manager := &stubPackageJobManager{
+		startInstall: func(string, bool) (*packagejobs.Job, error) {
+			t.Fatal("manager should not be called")
+			return nil, nil
+		},
+	}
+	ctx, response := testContext(http.MethodPost, "/", []byte(`{`))
+	NewPackageInstallHandler(manager).InstallPackageHandler(ctx)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+// Exercises the successful get and list handler branches.
+func TestPackageInstallJobReadHandlers(t *testing.T) {
+	job := &packagejobs.Job{ID: "job-1"}
+	manager := &stubPackageJobManager{jobs: map[string]*packagejobs.Job{"job-1": job}}
+	handler := NewPackageInstallHandler(manager)
+
+	ctx, response := testContext(http.MethodGet, "/", nil, gin.Param{Key: "jobId", Value: "job-1"})
+	handler.GetInstallJobHandler(ctx)
+	if response.Code != http.StatusOK {
+		t.Fatalf("get status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	ctx, response = testContext(http.MethodGet, "/", nil)
+	handler.ListInstallJobsHandler(ctx)
+	if response.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+// Exercises missing route-parameter branches for uninstall and update.
+func TestPackageOperationHandlersRequirePackageID(t *testing.T) {
+	manager := &stubPackageJobManager{}
+	handler := NewPackageInstallHandler(manager)
+	for _, invoke := range []func(*gin.Context){
+		handler.UninstallPackageHandler,
+		handler.UpdatePackageHandler,
+	} {
+		ctx, response := testContext(http.MethodPost, "/", nil)
+		invoke(ctx)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
+	}
+}
+
+// Exercises successful uninstall and the default internal-error mapping.
+func TestUninstallPackageHandlerSuccessAndInternalError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{name: "success", want: http.StatusOK},
+		{name: "internal", err: errors.New("plain failure"), want: http.StatusInternalServerError},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			manager := &stubPackageJobManager{uninstall: func(string) error { return test.err }}
+			ctx, response := testContext(http.MethodDelete, "/", nil, gin.Param{Key: "packageId", Value: "demo"})
+			NewPackageInstallHandler(manager).UninstallPackageHandler(ctx)
+			if response.Code != test.want {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
