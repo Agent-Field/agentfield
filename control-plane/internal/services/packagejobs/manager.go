@@ -109,7 +109,8 @@ func ValidateSource(source string) (string, error) {
 	repoRaw = strings.TrimSuffix(repoRaw, "/")
 	parts := strings.Split(repoRaw, "/")
 	if len(parts) != 2 || !repoPartRE.MatchString(parts[0]) || !repoPartRE.MatchString(parts[1]) ||
-		parts[0] == "." || parts[0] == ".." || parts[1] == "." || parts[1] == ".." {
+		parts[0] == "." || parts[0] == ".." || parts[1] == "." || parts[1] == ".." ||
+		strings.HasPrefix(parts[0], "-") || strings.HasPrefix(parts[1], "-") {
 		return "", ErrInvalidSource
 	}
 	normalized := prefix + strings.Join(parts, "/")
@@ -119,6 +120,11 @@ func ValidateSource(source string) (string, error) {
 	subdir = strings.TrimSuffix(subdir, "/")
 	if subdir == "" || strings.Contains(subdir, "..") || strings.HasPrefix(subdir, "/") || !subdirPartRE.MatchString(subdir) {
 		return "", ErrInvalidSource
+	}
+	for _, segment := range strings.Split(subdir, "/") {
+		if segment == "" || strings.HasPrefix(segment, "-") {
+			return "", ErrInvalidSource
+		}
 	}
 	return normalized + "//" + subdir, nil
 }

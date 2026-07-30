@@ -248,8 +248,26 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 	return nil
 }
 
+// validateCloneArgs rejects ref/URL values that git would parse as options
+// rather than positional arguments. The clone URL and ref can originate from
+// user input (CLI args or the HTTP install API), so a value starting with "-"
+// could otherwise smuggle flags like --upload-pack into the git invocation.
+func validateCloneArgs(info *GitPackageInfo) error {
+	if strings.HasPrefix(info.Ref, "-") {
+		return fmt.Errorf("invalid git ref %q: must not start with '-'", info.Ref)
+	}
+	if strings.HasPrefix(info.CloneURL, "-") {
+		return fmt.Errorf("invalid clone URL %q: must not start with '-'", info.CloneURL)
+	}
+	return nil
+}
+
 // cloneRepository clones the Git repository with optimizations
 func (gi *GitInstaller) cloneRepository(info *GitPackageInfo) (string, error) {
+	if err := validateCloneArgs(info); err != nil {
+		return "", err
+	}
+
 	// Create temporary directory
 	tempDir, err := os.MkdirTemp("", "agentfield-git-install-")
 	if err != nil {
@@ -267,8 +285,9 @@ func (gi *GitInstaller) cloneRepository(info *GitPackageInfo) (string, error) {
 		args = append(args, "--branch", info.Ref)
 	}
 
-	// Add URLs
-	args = append(args, info.CloneURL, tempDir)
+	// "--" ends option parsing so the URL and target directory can never be
+	// interpreted as git flags, even if validation is bypassed upstream.
+	args = append(args, "--", info.CloneURL, tempDir)
 
 	// Execute git clone
 	cmd := exec.Command("git", args...)
