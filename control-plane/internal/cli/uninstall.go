@@ -7,12 +7,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	uninstallForce bool
-)
-
 // NewUninstallCommand creates the uninstall command
 func NewUninstallCommand() *cobra.Command {
+	var uninstallForce bool
+
 	cmd := &cobra.Command{
 		Use:   "uninstall <package-name>",
 		Short: "Uninstall an agent node package",
@@ -28,7 +26,9 @@ Examples:
   agentfield uninstall my-agent
   agentfield uninstall sentiment-analyzer --force`,
 		Args: cobra.ExactArgs(1),
-		RunE: runUninstallCommand,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runUninstallCommand(args[0], uninstallForce)
+		},
 	}
 
 	cmd.Flags().BoolVarP(&uninstallForce, "force", "f", false, "Force uninstall even if agent node is running")
@@ -36,13 +36,11 @@ Examples:
 	return cmd
 }
 
-func runUninstallCommand(cmd *cobra.Command, args []string) error {
-	packageName := args[0]
-
+func runUninstallCommand(packageName string, force bool) error {
 	// Create uninstaller
 	uninstaller := &packages.PackageUninstaller{
 		AgentFieldHome: getAgentFieldHomeDir(),
-		Force:          uninstallForce,
+		Force:          force,
 	}
 
 	// Uninstall package
