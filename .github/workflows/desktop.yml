@@ -68,3 +68,50 @@ jobs:
       - name: Package (unsigned, unpacked)
         working-directory: desktop
         run: npm run dist:dir
+
+  # Manual-dispatch-only: prove the macOS signing/notarization secrets work
+  # without cutting a release. Imports the Developer ID cert into a keychain
+  # (the same thing electron-builder does with CSC_LINK) and authenticates
+  # against Apple's notary service. Run it after rotating the cert or the
+  # app-specific password.
+  verify-signing-secrets:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-14
+    steps:
+      - name: Import Developer ID cert into a temporary keychain
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CSC_LINK" ] || [ -z "$CSC_KEY_PASSWORD" ]; then
+            echo "CSC_LINK / CSC_KEY_PASSWORD secrets not set" >&2
+            exit 1
+          fi
+          printf '%s' "$CSC_LINK" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p ci-temp verify.keychain
+          security unlock-keychain -p ci-temp verify.keychain
+          security import "$RUNNER_TEMP/cert.p12" -k verify.keychain \
+            -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign
+          # -v lists only identities whose full chain verifies; an import that
+          # yields zero valid identities would also break electron-builder.
+          security find-identity -v -p codesigning verify.keychain | tee identities.txt
+          grep -q "Developer ID Application" identities.txt
+
+      - name: Authenticate against the Apple notary service
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "$APPLE_ID" ] || [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] || [ -z "$APPLE_TEAM_ID" ]; then
+            echo "APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID secrets not set" >&2
+            exit 1
+          fi
+          # history performs a real authenticated API call; bad credentials
+          # fail with HTTP 401 and a non-zero exit.
+          xcrun notarytool history \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID"
