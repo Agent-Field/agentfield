@@ -72,6 +72,24 @@ describe('installFromSource', () => {
     expect(lines).toEqual([])
     expect(result.message).toMatch(/github\.com/)
   })
+
+  it('installs a normalized GitHub source without force', async () => {
+    const client = installClient()
+    const result = await installFromSource(
+      '  https://github.com/Agent-Field/pr-af/  ',
+      () => {},
+      { cpClient: client }
+    )
+
+    expect(client.installPackage).toHaveBeenCalledWith(
+      'https://github.com/Agent-Field/pr-af',
+      undefined
+    )
+    expect(result).toEqual({
+      ok: true,
+      message: 'Installed from https://github.com/Agent-Field/pr-af'
+    })
+  })
 })
 
 function installClient(overrides: Partial<CpClient> = {}): CpClient {
@@ -97,12 +115,88 @@ describe('control-plane installs', () => {
     expect(await installAgent(CATALOG[0].name, () => {}, false, { cpClient: failed })).toEqual({ ok: false, message: 'clone failed' })
   })
 
+  it('forwards force for reinstall-in-place updates', async () => {
+    const client = installClient()
+    await installAgent(CATALOG[0].name, () => {}, true, { cpClient: client })
+    expect(client.installPackage).toHaveBeenCalledWith(CATALOG[0].source, true)
+  })
+
   it('surfaces conflict and old-control-plane errors without fallback', async () => {
     const conflict = installClient({ installPackage: vi.fn(async () => { throw new CpApiError({ status: 409, message: 'another install is running' }) }) })
     expect((await installAgent(CATALOG[0].name, () => {}, false, { cpClient: conflict })).message).toMatch(/another install/i)
     const old = installClient({ hasInstallApi: vi.fn(async () => false) })
     expect((await installAgent(CATALOG[0].name, () => {}, false, { cpClient: old })).message).toMatch(/update AgentField CLI/)
     expect((await updateAgent(CATALOG[0].name, () => {}, { cpClient: old })).message).toMatch(/update AgentField CLI/)
+  })
+
+  it('maps mid-request 404s to the update-required result', async () => {
+    const missing = new CpApiError({ status: 404, message: 'not found' })
+    const install = installClient({
+      installPackage: vi.fn(async () => { throw missing })
+    })
+    expect(await installAgent(CATALOG[0].name, () => {}, false, { cpClient: install })).toEqual({
+      ok: false,
+      message: 'Control plane update required — update AgentField CLI'
+    })
+
+    const update = installClient({
+      updatePackage: vi.fn(async () => { throw missing })
+    })
+    expect(await updateAgent(CATALOG[0].name, () => {}, { cpClient: update })).toEqual({
+      ok: false,
+      message: 'Control plane update required — update AgentField CLI'
+    })
+  })
+
+  it('reports network failures during install', async () => {
+    const client = installClient({
+      installPackage: vi.fn(async () => { throw new TypeError('offline') })
+    })
+    expect(await installAgent(CATALOG[0].name, () => {}, false, { cpClient: client })).toEqual({
+      ok: false,
+      message: 'Could not reach the control plane — start the control plane and try again'
+    })
+  })
+
+  it('falls back from a failed job error to its last line and then a default', async () => {
+    const failedWithLine = installClient({
+      watchInstallJob: vi.fn(async () => ({
+        id: 'job',
+        source: '',
+        kind: 'install' as const,
+        status: 'failed' as const,
+        lines: ['clone failed']
+      }))
+    })
+    expect(await installAgent(CATALOG[0].name, () => {}, false, { cpClient: failedWithLine })).toEqual({
+      ok: false,
+      message: 'clone failed'
+    })
+
+    const failedEmpty = installClient({
+      watchInstallJob: vi.fn(async () => ({
+        id: 'job',
+        source: '',
+        kind: 'install' as const,
+        status: 'failed' as const,
+        lines: []
+      }))
+    })
+    expect(await installAgent(CATALOG[0].name, () => {}, false, { cpClient: failedEmpty })).toEqual({
+      ok: false,
+      message: 'Install failed'
+    })
+  })
+
+  it('rejects unknown catalog names at the async function boundary', async () => {
+    await expect(installAgent('not-in-catalog', () => {})).resolves.toEqual({
+      ok: false,
+      message: '"not-in-catalog" is not in the install catalog'
+    })
+    await expect(updateAgent('not-in-catalog', () => {})).resolves.toEqual({
+      ok: false,
+      message: '"not-in-catalog" is not in the install catalog'
+    })
   })
 })
 

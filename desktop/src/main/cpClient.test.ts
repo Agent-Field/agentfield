@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
-import { CpApiError, createCpClient, type FetchLike, type InstallJob } from './cpClient'
+import {
+  CpApiError,
+  createCpClient,
+  isInstalledPackage,
+  type FetchLike,
+  type InstallJob,
+  type PackageInfo
+} from './cpClient'
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -153,6 +160,61 @@ describe('createCpClient', () => {
     expect(lines).toEqual(['one', 'two', 'three'])
   })
 
+  it('reports when a job disappears while it is being watched', async () => {
+    let clock = 0
+    const client = createCpClient({
+      fetchImpl: mockFetch([
+        json(job('running', ['one'])),
+        json({ error: 'not found' }, 404)
+      ]),
+      now: () => clock,
+      sleep: async (ms) => { clock += ms }
+    })
+
+    await expect(
+      client.watchInstallJob('job/1', () => undefined, { intervalMs: 10, timeoutMs: 100 })
+    ).rejects.toThrow('disappeared')
+  })
+
+  it('rethrows non-404 API errors while watching a job', async () => {
+    let clock = 0
+    const failure = new CpApiError({ status: 500, message: 'server failed' })
+    const getInstallJob = vi
+      .fn()
+      .mockResolvedValueOnce(job('running'))
+      .mockRejectedValueOnce(failure)
+    const client = createCpClient({
+      now: () => clock,
+      sleep: async (ms) => { clock += ms }
+    })
+    client.getInstallJob = getInstallJob
+
+    await expect(
+      client.watchInstallJob('job/1', () => undefined, { intervalMs: 10, timeoutMs: 100 })
+    ).rejects.toBe(failure)
+  })
+
+  it('does not replay lines when the retained job log shrinks', async () => {
+    let clock = 0
+    const firstLines = Array.from({ length: 10 }, (_, index) => `line ${index + 1}`)
+    const retainedLines = firstLines.slice(4)
+    const lines: string[] = []
+    const client = createCpClient({
+      fetchImpl: mockFetch([
+        json(job('running', firstLines)),
+        json(job('succeeded', retainedLines))
+      ]),
+      now: () => clock,
+      sleep: async (ms) => { clock += ms }
+    })
+
+    await client.watchInstallJob('job/1', (line) => lines.push(line), {
+      intervalMs: 10,
+      timeoutMs: 100
+    })
+    expect(lines).toEqual(firstLines)
+  })
+
   // Contract 6: polling rejects once its injected deadline is reached.
   it('times out while watching a non-terminal job', async () => {
     let clock = 0
@@ -178,5 +240,44 @@ describe('createCpClient', () => {
     const calls = vi.mocked(fetchImpl).mock.calls
     expect(JSON.parse(String(calls[0][1]?.body))).toEqual({ key: 'TOKEN', value: 'value' })
     expect(calls[1][0]).toBe('http://cp/api/ui/v1/agents/agent/secrets/TOKEN?scope=global')
+  })
+
+  it('omits force from install requests when it is undefined', async () => {
+    const fetchImpl = mockFetch([json({ job_id: 'job' })])
+    const client = createCpClient({ fetchImpl })
+    await client.installPackage('https://github.com/acme/agent')
+
+    expect(JSON.parse(String(vi.mocked(fetchImpl).mock.calls[0][1]?.body))).toEqual({
+      source: 'https://github.com/acme/agent'
+    })
+  })
+})
+
+describe('isInstalledPackage', () => {
+  const pkg = (install_status?: string): PackageInfo =>
+    ({
+      id: 'pkg',
+      name: 'Package',
+      version: '1.0.0',
+      status: 'configured',
+      install_status,
+      install_path: '/tmp/pkg',
+      configuration_required: false,
+      configuration_complete: true,
+      description: '',
+      author: ''
+    })
+
+  it.each([
+    [undefined, true],
+    ['installed', true],
+    ['running', true],
+    ['stopped', true],
+    ['uninstalled', false],
+    ['not_configured', false],
+    ['catalog', false],
+    ['', false]
+  ])('maps install_status %s to %s', (installStatus, expected) => {
+    expect(isInstalledPackage(pkg(installStatus))).toBe(expected)
   })
 })

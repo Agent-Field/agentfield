@@ -75,6 +75,20 @@ describe('HTTP agent management', () => {
     expect(client.stopAgent).toHaveBeenCalledBefore(vi.mocked(client.startAgent))
   })
 
+  it('restart does not start when stopping fails', async () => {
+    const client = managementClient({
+      stopAgent: vi.fn(async () => {
+        throw new CpApiError({ status: 500, message: 'could not stop' })
+      })
+    })
+
+    expect(await runAgentAction('restart', 'agent', { cpClient: client })).toEqual({
+      ok: false,
+      message: 'could not stop'
+    })
+    expect(client.startAgent).not.toHaveBeenCalled()
+  })
+
   it('maps server and unreachable errors', async () => {
     const server = managementClient({ startAgent: vi.fn(async () => { throw new CpApiError({ status: 400, message: 'configuration missing' }) }) })
     expect(await runAgentAction('start', 'agent', { cpClient: server })).toEqual({ ok: false, message: 'configuration missing' })
@@ -88,6 +102,32 @@ describe('HTTP agent management', () => {
     expect(client.stopAgent).not.toHaveBeenCalled()
     const old = managementClient({ hasInstallApi: vi.fn(async () => false) })
     expect((await uninstallAgent('agent', { cpClient: old })).message).toMatch(/update AgentField CLI/)
+  })
+
+  it('maps a mid-flight uninstall 404 to the old-control-plane message', async () => {
+    const client = managementClient({
+      uninstallPackage: vi.fn(async () => {
+        throw new CpApiError({ status: 404, message: 'route not found' })
+      })
+    })
+
+    expect(await uninstallAgent('agent', { cpClient: client })).toEqual({
+      ok: false,
+      message: 'Control plane update required — update AgentField CLI'
+    })
+  })
+
+  it('maps an offline uninstall to the management fallback message', async () => {
+    const client = managementClient({
+      uninstallPackage: vi.fn(async () => {
+        throw new TypeError('fetch failed')
+      })
+    })
+
+    expect(await uninstallAgent('agent', { cpClient: client })).toEqual({
+      ok: false,
+      message: 'Could not reach the control plane — start the control plane and try again'
+    })
   })
 })
 
