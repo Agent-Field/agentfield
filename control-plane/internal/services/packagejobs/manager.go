@@ -282,6 +282,19 @@ func (m *Manager) isRunning(name string) (bool, error) {
 }
 
 func (m *Manager) Uninstall(packageName string) error {
+	m.mu.Lock()
+	if m.active {
+		m.mu.Unlock()
+		return ErrBusy
+	}
+	m.active = true
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		m.active = false
+		m.mu.Unlock()
+	}()
+
 	if _, err := m.installer.GetPackageInfo(packageName); err != nil {
 		return ErrNotFound
 	}

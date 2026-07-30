@@ -406,3 +406,129 @@ func TestRegistryChangeHook(t *testing.T) {
 		t.Fatalf("after uninstall calls = %d, want 2", calls)
 	}
 }
+
+func TestRegistryChangeHookRunsBeforeJobSucceeds(t *testing.T) {
+	release := make(chan struct{})
+	inst := &stubInstaller{
+		block:        release,
+		afterInstall: []domain.InstalledPackage{{Name: "demo"}},
+	}
+	manager := newManager(inst, &stubAgentService{}, t.TempDir())
+	var jobID string
+	var status JobStatus
+	manager.SetOnRegistryChange(func() {
+		job, ok := manager.GetJob(jobID)
+		if !ok {
+			t.Errorf("job %q not found in hook", jobID)
+			return
+		}
+		status = job.Status
+	})
+
+	job, err := manager.StartInstall("https://github.com/o/r", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobID = job.ID
+	close(release)
+	if got := waitForJob(t, manager, job.ID); got.Status != StatusSucceeded {
+		t.Fatalf("status = %s", got.Status)
+	}
+	if status != StatusRunning {
+		t.Fatalf("status observed by hook = %s, want %s", status, StatusRunning)
+	}
+}
+
+func TestUpdateRegistryChangeHook(t *testing.T) {
+	tests := []struct {
+		name       string
+		installErr error
+		wantCalls  int
+	}{
+		{name: "success", wantCalls: 1},
+		{name: "failure", installErr: errors.New("boom"), wantCalls: 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.WriteFile(filepath.Join(home, "installed.yaml"), []byte("installed:\n  demo:\n    source_path: owner/repo@main\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			inst := &stubInstaller{
+				installed:  []domain.InstalledPackage{{Name: "demo"}},
+				installErr: test.installErr,
+			}
+			manager := newManager(inst, &stubAgentService{}, home)
+			calls := 0
+			manager.SetOnRegistryChange(func() { calls++ })
+
+			job, err := manager.StartUpdate("demo")
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitForJob(t, manager, job.ID)
+			if calls != test.wantCalls {
+				t.Fatalf("hook calls = %d, want %d", calls, test.wantCalls)
+			}
+		})
+	}
+}
+
+func TestSourceFromRegistry(t *testing.T) {
+	tests := []struct {
+		name    string
+		source  string
+		want    string
+		wantErr error
+	}{
+		{name: "resolved ref", source: "owner/repo@sha", want: "https://github.com/owner/repo"},
+		{name: "bare repository", source: "owner/repo", want: "https://github.com/owner/repo"},
+		{name: "subdirectory ref", source: "owner/repo//subdir@ref", want: "https://github.com/owner/repo//subdir"},
+		{name: "at before final subdirectory segment", source: "owner/repo//sub@dir/agent", wantErr: ErrInvalidSource},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := sourceFromRegistry(test.source)
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("err = %v, want %v", err, test.wantErr)
+			}
+			if got != test.want {
+				t.Fatalf("source = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestUninstallIsBusyDuringInstallAndSucceedsAfterward(t *testing.T) {
+	release := make(chan struct{})
+	var calls []string
+	inst := &stubInstaller{
+		block:        release,
+		installed:    []domain.InstalledPackage{{Name: "demo"}},
+		afterInstall: []domain.InstalledPackage{{Name: "demo"}},
+		calls:        &calls,
+	}
+	manager := newManager(inst, &stubAgentService{}, t.TempDir())
+	job, err := manager.StartInstall("https://github.com/o/r", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := manager.Uninstall("demo"); !errors.Is(err, ErrBusy) {
+		t.Fatalf("uninstall during install err = %v, want %v", err, ErrBusy)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("calls during install = %v, want none", calls)
+	}
+
+	close(release)
+	if got := waitForJob(t, manager, job.ID); got.Status != StatusSucceeded {
+		t.Fatalf("install status = %s", got.Status)
+	}
+	if err := manager.Uninstall("demo"); err != nil {
+		t.Fatalf("uninstall after install: %v", err)
+	}
+	if got := strings.Join(calls, ","); got != "install,remove:demo" {
+		t.Fatalf("calls = %s", got)
+	}
+}
