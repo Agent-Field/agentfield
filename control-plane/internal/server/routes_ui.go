@@ -90,6 +90,9 @@ func (s *AgentFieldServer) registerUIAPI() {
 			agents.GET("/:agentId/secrets", secretsHandler.ListAgentSecretsHandler)
 			agents.PUT("/:agentId/secrets", secretsHandler.SetAgentSecretHandler)
 			agents.DELETE("/:agentId/secrets/:key", secretsHandler.DeleteAgentSecretHandler)
+			// Store-wide secret references (key + scope, never values),
+			// mirroring `af secrets ls` for management UIs.
+			uiAPI.GET("/secrets", secretsHandler.ListAllSecretsHandler)
 
 			// Environment file endpoints
 			envHandler := ui.NewEnvHandler(s.storage, s.agentService, s.agentfieldHome)

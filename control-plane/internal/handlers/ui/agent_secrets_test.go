@@ -29,7 +29,10 @@ func newAgentSecretsTestRouter(t *testing.T) (*gin.Engine, string) {
 		Name: agentSecretsTestScope,
 		ConfigurationSchema: json.RawMessage(`{
 			"user_environment": {
-				"required": [{"name": "OPENAI_API_KEY", "type": "secret"}],
+				"required": [
+					{"name": "OPENAI_API_KEY", "type": "secret"},
+					{"name": "NODE_SCOPED_KEY", "type": "secret", "scope": "node"}
+				],
 				"require_one_of": [{"options": [{"name": "ANTHROPIC_API_KEY", "type": "secret"}]}]
 			}
 		}`),
@@ -41,6 +44,7 @@ func newAgentSecretsTestRouter(t *testing.T) (*gin.Engine, string) {
 	router.GET("/agents/:agentId/secrets", handler.ListAgentSecretsHandler)
 	router.PUT("/agents/:agentId/secrets", handler.SetAgentSecretHandler)
 	router.DELETE("/agents/:agentId/secrets/:key", handler.DeleteAgentSecretHandler)
+	router.GET("/secrets", handler.ListAllSecretsHandler)
 	return router, agentfieldHome
 }
 
@@ -88,7 +92,8 @@ func TestAgentSecretsListNamesOnly(t *testing.T) {
 	require.NotContains(t, response.Body.String(), "sk-test")
 	require.JSONEq(t, `{"secrets":[
 		{"key":"ANTHROPIC_API_KEY","is_set":false},
-		{"key":"OPENAI_API_KEY","is_set":true}
+		{"key":"NODE_SCOPED_KEY","is_set":false},
+		{"key":"OPENAI_API_KEY","is_set":true,"scope":"global"}
 	]}`, response.Body.String())
 }
 
@@ -193,6 +198,7 @@ func TestAgentSecretsStoreOpenFailures(t *testing.T) {
 	failureRouter.GET("/agents/:agentId/secrets", handler.ListAgentSecretsHandler)
 	failureRouter.PUT("/agents/:agentId/secrets", handler.SetAgentSecretHandler)
 	failureRouter.DELETE("/agents/:agentId/secrets/:key", handler.DeleteAgentSecretHandler)
+	failureRouter.GET("/secrets", handler.ListAllSecretsHandler)
 
 	for _, test := range []struct {
 		name   string
@@ -203,6 +209,7 @@ func TestAgentSecretsStoreOpenFailures(t *testing.T) {
 		{"list", http.MethodGet, "/agents/agent-x/secrets", ""},
 		{"set", http.MethodPut, "/agents/agent-x/secrets", `{"key":"KEY","value":"secret"}`},
 		{"delete", http.MethodDelete, "/agents/agent-x/secrets/KEY", ""},
+		{"list-all", http.MethodGet, "/secrets", ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			response := agentSecretsRequest(t, failureRouter, test.method, test.path, test.body)
@@ -229,8 +236,9 @@ func TestAgentSecretsCorruptStoreFailures(t *testing.T) {
 		body   string
 	}{
 		{http.MethodGet, "/agents/agent-x/secrets", ""},
-		{http.MethodPut, "/agents/agent-x/secrets", `{"key":"KEY","value":"secret"}`},
-		{http.MethodDelete, "/agents/agent-x/secrets/KEY", ""},
+		{http.MethodPut, "/agents/agent-x/secrets", `{"key":"KEY","value":"secret","scope":"node"}`},
+		{http.MethodDelete, "/agents/agent-x/secrets/KEY?scope=node", ""},
+		{http.MethodGet, "/secrets", ""},
 	} {
 		response := agentSecretsRequest(t, router, test.method, test.path, test.body)
 		require.Equal(t, http.StatusInternalServerError, response.Code)
@@ -242,12 +250,139 @@ func TestAgentSecretScopeFallsBackToID(t *testing.T) {
 	require.Equal(t, "agent-x", agentSecretScope(&types.AgentPackage{ID: "agent-x"}))
 }
 
-// Exercises invalid schema and de-duplication/empty-name branches.
-func TestDeclaredAgentSecretKeysEdgeCases(t *testing.T) {
-	require.Nil(t, declaredAgentSecretKeys(json.RawMessage(`{`)))
+// Exercises invalid schema, de-duplication/empty-name branches, and the
+// global-unless-node scope defaulting rule.
+func TestDeclaredAgentSecretsEdgeCases(t *testing.T) {
+	require.Nil(t, declaredAgentSecrets(json.RawMessage(`{`)))
 	schema := json.RawMessage(`{"user_environment":{
-		"required":[{"name":""},{"name":"KEY"}],
-		"require_one_of":[{"options":[{"name":""},{"name":"KEY"}]}]
+		"required":[{"name":""},{"name":"KEY"},{"name":"NODE_KEY","scope":"node"}],
+		"require_one_of":[{"options":[{"name":""},{"name":"KEY"},{"name":"WEIRD","scope":"bogus"}]}]
 	}}`)
-	require.Equal(t, []string{"KEY"}, declaredAgentSecretKeys(schema))
+	require.Equal(t, map[string]string{
+		"KEY":      "global",
+		"NODE_KEY": "node",
+		"WEIRD":    "global",
+	}, declaredAgentSecrets(schema))
+}
+
+// Scope contract 1+2: undeclared keys default to the global scope; keys the
+// manifest declares scope:node land in the node scope — mirroring af secrets.
+func TestAgentSecretsScopeDefaults(t *testing.T) {
+	router, home := newAgentSecretsTestRouter(t)
+	require.Equal(t, http.StatusNoContent, agentSecretsRequest(t, router, http.MethodPut,
+		"/agents/agent-x/secrets", `{"key":"UNDECLARED_KEY","value":"v1"}`).Code)
+	require.Equal(t, http.StatusNoContent, agentSecretsRequest(t, router, http.MethodPut,
+		"/agents/agent-x/secrets", `{"key":"NODE_SCOPED_KEY","value":"v2"}`).Code)
+
+	store, err := packages.NewSecretStore(home)
+	require.NoError(t, err)
+	globalKeys, err := store.List("global")
+	require.NoError(t, err)
+	require.Equal(t, []string{"UNDECLARED_KEY"}, globalKeys)
+	nodeKeys, err := store.List(agentSecretsTestScope)
+	require.NoError(t, err)
+	require.Equal(t, []string{"NODE_SCOPED_KEY"}, nodeKeys)
+}
+
+// Scope contract 3: explicit scope overrides the manifest default; anything
+// other than node/global is rejected on both PUT and DELETE.
+func TestAgentSecretsScopeOverrides(t *testing.T) {
+	router, home := newAgentSecretsTestRouter(t)
+	require.Equal(t, http.StatusNoContent, agentSecretsRequest(t, router, http.MethodPut,
+		"/agents/agent-x/secrets", `{"key":"NODE_SCOPED_KEY","value":"v","scope":"global"}`).Code)
+	require.Equal(t, http.StatusNoContent, agentSecretsRequest(t, router, http.MethodPut,
+		"/agents/agent-x/secrets", `{"key":"UNDECLARED_KEY","value":"v","scope":"node"}`).Code)
+	require.Equal(t, http.StatusBadRequest, agentSecretsRequest(t, router, http.MethodPut,
+		"/agents/agent-x/secrets", `{"key":"UNDECLARED_KEY","value":"v","scope":"bogus"}`).Code)
+	require.Equal(t, http.StatusBadRequest, agentSecretsRequest(t, router, http.MethodDelete,
+		"/agents/agent-x/secrets/UNDECLARED_KEY?scope=bogus", "").Code)
+
+	store, err := packages.NewSecretStore(home)
+	require.NoError(t, err)
+	globalKeys, err := store.List("global")
+	require.NoError(t, err)
+	require.Equal(t, []string{"NODE_SCOPED_KEY"}, globalKeys)
+	nodeKeys, err := store.List(agentSecretsTestScope)
+	require.NoError(t, err)
+	require.Equal(t, []string{"UNDECLARED_KEY"}, nodeKeys)
+}
+
+// Scope contract 4+5: the listing reports effective resolution — node scope
+// shadows global — and includes undeclared node-scoped keys (the runner
+// injects them) while omitting undeclared global keys (it does not).
+func TestAgentSecretsListEffectiveResolution(t *testing.T) {
+	router, home := newAgentSecretsTestRouter(t)
+	store, err := packages.NewSecretStore(home)
+	require.NoError(t, err)
+	require.NoError(t, store.Set("global", "OPENAI_API_KEY", "global-v"))
+	require.NoError(t, store.Set(agentSecretsTestScope, "OPENAI_API_KEY", "node-v"))
+	require.NoError(t, store.Set(agentSecretsTestScope, "UNDECLARED_NODE", "v"))
+	require.NoError(t, store.Set("global", "UNDECLARED_GLOBAL", "v"))
+
+	response := agentSecretsRequest(t, router, http.MethodGet, "/agents/agent-x/secrets", "")
+	require.Equal(t, http.StatusOK, response.Code)
+	require.JSONEq(t, `{"secrets":[
+		{"key":"ANTHROPIC_API_KEY","is_set":false},
+		{"key":"NODE_SCOPED_KEY","is_set":false},
+		{"key":"OPENAI_API_KEY","is_set":true,"scope":"node"},
+		{"key":"UNDECLARED_NODE","is_set":true,"scope":"node"}
+	]}`, response.Body.String())
+}
+
+// Scope contract 6: DELETE uses the same defaulting rule as PUT and honors an
+// explicit ?scope= override without touching the other scope's copy.
+func TestAgentSecretsDeleteScopes(t *testing.T) {
+	router, home := newAgentSecretsTestRouter(t)
+	store, err := packages.NewSecretStore(home)
+	require.NoError(t, err)
+	require.NoError(t, store.Set("global", "OPENAI_API_KEY", "global-v"))
+	require.NoError(t, store.Set(agentSecretsTestScope, "OPENAI_API_KEY", "node-v"))
+
+	// Default for a global-declared key deletes the global copy only.
+	require.Equal(t, http.StatusNoContent, agentSecretsRequest(t, router, http.MethodDelete,
+		"/agents/agent-x/secrets/OPENAI_API_KEY", "").Code)
+	nodeKeys, err := store.List(agentSecretsTestScope)
+	require.NoError(t, err)
+	require.Equal(t, []string{"OPENAI_API_KEY"}, nodeKeys)
+	globalKeys, err := store.List("global")
+	require.NoError(t, err)
+	require.Empty(t, globalKeys)
+
+	// Explicit node override removes the remaining node copy.
+	require.Equal(t, http.StatusNoContent, agentSecretsRequest(t, router, http.MethodDelete,
+		"/agents/agent-x/secrets/OPENAI_API_KEY?scope=node", "").Code)
+	nodeKeys, err = store.List(agentSecretsTestScope)
+	require.NoError(t, err)
+	require.Empty(t, nodeKeys)
+}
+
+// Scope contract 7: the store-wide listing returns key+scope rows across all
+// scopes and never values.
+func TestListAllSecrets(t *testing.T) {
+	router, home := newAgentSecretsTestRouter(t)
+	store, err := packages.NewSecretStore(home)
+	require.NoError(t, err)
+	require.NoError(t, store.Set("global", "SHARED_KEY", "shh-1"))
+	require.NoError(t, store.Set(agentSecretsTestScope, "NODE_KEY", "shh-2"))
+
+	response := agentSecretsRequest(t, router, http.MethodGet, "/secrets", "")
+	require.Equal(t, http.StatusOK, response.Code)
+	require.NotContains(t, response.Body.String(), "shh-")
+	require.JSONEq(t, `{"secrets":[
+		{"key":"SHARED_KEY","scope":"global"},
+		{"key":"NODE_KEY","scope":"test-node"}
+	]}`, response.Body.String())
+}
+
+// Exercises the global-scope List failure branch after node List succeeds.
+func TestAgentSecretsListGlobalScopeFailure(t *testing.T) {
+	router, home := newAgentSecretsTestRouter(t)
+	store, err := packages.NewSecretStore(home)
+	require.NoError(t, err)
+	require.NoError(t, store.Set(agentSecretsTestScope, "KEY", "value"))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(home, "secrets", "global.enc"), []byte("not encrypted"), 0o600))
+
+	response := agentSecretsRequest(t, router, http.MethodGet, "/agents/agent-x/secrets", "")
+	require.Equal(t, http.StatusInternalServerError, response.Code)
 }

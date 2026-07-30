@@ -12,7 +12,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const maxAgentSecretValueBytes = 32 * 1024
+const (
+	maxAgentSecretValueBytes = 32 * 1024
+	globalSecretScope        = "global"
+)
 
 var agentSecretKeyPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 
@@ -30,14 +33,24 @@ func NewAgentSecretsHandler(storage storage.StorageProvider, agentfieldHome stri
 type agentSecretStatus struct {
 	Key   string `json:"key"`
 	IsSet bool   `json:"is_set"`
+	// Scope reports where the stored value lives ("node" or "global");
+	// empty when the key is not set anywhere.
+	Scope string `json:"scope,omitempty"`
 }
 
 type setAgentSecretRequest struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
+	// Scope optionally forces "node" or "global". When empty the manifest's
+	// declared scope for the key wins, defaulting to global — the same rule
+	// `af secrets set` and the desktop app follow.
+	Scope string `json:"scope"`
 }
 
-// ListAgentSecretsHandler lists secret names and whether each is set.
+// ListAgentSecretsHandler lists secret names and whether each resolves for
+// this agent. Resolution mirrors the runner (EnvResolver): node scope first,
+// then global. Undeclared node-scoped keys are included because the runner
+// injects them; undeclared global keys are not injected, so they are omitted.
 func (h *AgentSecretsHandler) ListAgentSecretsHandler(c *gin.Context) {
 	agentPackage, ok := h.resolveAgentPackage(c)
 	if !ok {
@@ -49,33 +62,58 @@ func (h *AgentSecretsHandler) ListAgentSecretsHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to open secret store"})
 		return
 	}
-	storedKeys, err := store.List(agentSecretScope(agentPackage))
+	nodeKeys, err := store.List(agentSecretScope(agentPackage))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list secrets"})
+		return
+	}
+	globalKeys, err := store.List(globalSecretScope)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list secrets"})
 		return
 	}
 
-	statuses := make(map[string]bool, len(storedKeys))
-	for _, key := range declaredAgentSecretKeys(agentPackage.ConfigurationSchema) {
-		statuses[key] = false
+	inNode := make(map[string]bool, len(nodeKeys))
+	for _, key := range nodeKeys {
+		inNode[key] = true
 	}
-	for _, key := range storedKeys {
-		statuses[key] = true
+	inGlobal := make(map[string]bool, len(globalKeys))
+	for _, key := range globalKeys {
+		inGlobal[key] = true
 	}
 
-	keys := make([]string, 0, len(statuses))
-	for key := range statuses {
+	listed := make(map[string]struct{})
+	for key := range declaredAgentSecrets(agentPackage.ConfigurationSchema) {
+		listed[key] = struct{}{}
+	}
+	for _, key := range nodeKeys {
+		listed[key] = struct{}{}
+	}
+
+	keys := make([]string, 0, len(listed))
+	for key := range listed {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+
 	secrets := make([]agentSecretStatus, 0, len(keys))
 	for _, key := range keys {
-		secrets = append(secrets, agentSecretStatus{Key: key, IsSet: statuses[key]})
+		status := agentSecretStatus{Key: key}
+		switch {
+		case inNode[key]:
+			status.IsSet = true
+			status.Scope = "node"
+		case inGlobal[key]:
+			status.IsSet = true
+			status.Scope = globalSecretScope
+		}
+		secrets = append(secrets, status)
 	}
 	c.JSON(http.StatusOK, gin.H{"secrets": secrets})
 }
 
-// SetAgentSecretHandler stores one node-scoped secret.
+// SetAgentSecretHandler stores one secret in the scope selected by the
+// request, the manifest declaration, or the global default, in that order.
 func (h *AgentSecretsHandler) SetAgentSecretHandler(c *gin.Context) {
 	agentPackage, ok := h.resolveAgentPackage(c)
 	if !ok {
@@ -95,22 +133,7 @@ func (h *AgentSecretsHandler) SetAgentSecretHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "secret value must be non-empty and at most 32KiB"})
 		return
 	}
-
-	store, err := packages.NewSecretStore(h.agentfieldHome)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to open secret store"})
-		return
-	}
-	if err := store.Set(agentSecretScope(agentPackage), req.Key, req.Value); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to store secret"})
-		return
-	}
-	c.Status(http.StatusNoContent)
-}
-
-// DeleteAgentSecretHandler deletes one node-scoped secret.
-func (h *AgentSecretsHandler) DeleteAgentSecretHandler(c *gin.Context) {
-	agentPackage, ok := h.resolveAgentPackage(c)
+	scope, ok := h.selectScope(c, agentPackage, req.Key, req.Scope)
 	if !ok {
 		return
 	}
@@ -120,11 +143,77 @@ func (h *AgentSecretsHandler) DeleteAgentSecretHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to open secret store"})
 		return
 	}
-	if err := store.Delete(agentSecretScope(agentPackage), c.Param("key")); err != nil {
+	if err := store.Set(scope, req.Key, req.Value); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to store secret"})
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// DeleteAgentSecretHandler deletes one secret. The scope defaults exactly as
+// SetAgentSecretHandler's does and can be forced with ?scope=node|global.
+func (h *AgentSecretsHandler) DeleteAgentSecretHandler(c *gin.Context) {
+	agentPackage, ok := h.resolveAgentPackage(c)
+	if !ok {
+		return
+	}
+	key := c.Param("key")
+	scope, ok := h.selectScope(c, agentPackage, key, c.Query("scope"))
+	if !ok {
+		return
+	}
+
+	store, err := packages.NewSecretStore(h.agentfieldHome)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to open secret store"})
+		return
+	}
+	if err := store.Delete(scope, key); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete secret"})
 		return
 	}
 	c.Status(http.StatusNoContent)
+}
+
+// ListAllSecretsHandler lists every stored secret reference (key + scope)
+// across the global scope and all node scopes. Values are never returned.
+// This backs store-wide management UIs, mirroring `af secrets ls`.
+func (h *AgentSecretsHandler) ListAllSecretsHandler(c *gin.Context) {
+	store, err := packages.NewSecretStore(h.agentfieldHome)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to open secret store"})
+		return
+	}
+	refs, err := store.ListAll()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list secrets"})
+		return
+	}
+	secrets := make([]gin.H, 0, len(refs))
+	for _, ref := range refs {
+		secrets = append(secrets, gin.H{"key": ref.Key, "scope": ref.Scope})
+	}
+	c.JSON(http.StatusOK, gin.H{"secrets": secrets})
+}
+
+// selectScope maps a requested scope ("", "node", "global") to the concrete
+// store scope for this agent, falling back to the manifest's declaration and
+// then to global. Responds 400 and returns ok=false on anything else.
+func (h *AgentSecretsHandler) selectScope(c *gin.Context, agentPackage *types.AgentPackage, key, requested string) (string, bool) {
+	switch requested {
+	case "node":
+		return agentSecretScope(agentPackage), true
+	case globalSecretScope:
+		return globalSecretScope, true
+	case "":
+		if declaredAgentSecrets(agentPackage.ConfigurationSchema)[key] == "node" {
+			return agentSecretScope(agentPackage), true
+		}
+		return globalSecretScope, true
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "scope must be \"node\" or \"global\""})
+		return "", false
+	}
 }
 
 func (h *AgentSecretsHandler) resolveAgentPackage(c *gin.Context) (*types.AgentPackage, bool) {
@@ -143,16 +232,19 @@ func agentSecretScope(agentPackage *types.AgentPackage) string {
 	return agentPackage.ID
 }
 
-func declaredAgentSecretKeys(schema json.RawMessage) []string {
+// declaredAgentSecrets returns the manifest-declared environment keys mapped
+// to their declared scope ("node" or "global"; global is the default, the
+// same rule packages.UserEnvironmentVar.SecretScope applies).
+func declaredAgentSecrets(schema json.RawMessage) map[string]string {
+	type declaredVar struct {
+		Name  string `json:"name"`
+		Scope string `json:"scope"`
+	}
 	var manifest struct {
 		UserEnvironment struct {
-			Required []struct {
-				Name string `json:"name"`
-			} `json:"required"`
+			Required     []declaredVar `json:"required"`
 			RequireOneOf []struct {
-				Options []struct {
-					Name string `json:"name"`
-				} `json:"options"`
+				Options []declaredVar `json:"options"`
 			} `json:"require_one_of"`
 		} `json:"user_environment"`
 	}
@@ -160,23 +252,24 @@ func declaredAgentSecretKeys(schema json.RawMessage) []string {
 		return nil
 	}
 
-	seen := make(map[string]struct{})
-	for _, variable := range manifest.UserEnvironment.Required {
-		if variable.Name != "" {
-			seen[variable.Name] = struct{}{}
+	declared := make(map[string]string)
+	record := func(v declaredVar) {
+		if v.Name == "" {
+			return
 		}
+		scope := globalSecretScope
+		if v.Scope == "node" {
+			scope = "node"
+		}
+		declared[v.Name] = scope
+	}
+	for _, variable := range manifest.UserEnvironment.Required {
+		record(variable)
 	}
 	for _, group := range manifest.UserEnvironment.RequireOneOf {
 		for _, variable := range group.Options {
-			if variable.Name != "" {
-				seen[variable.Name] = struct{}{}
-			}
+			record(variable)
 		}
 	}
-	keys := make([]string, 0, len(seen))
-	for key := range seen {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
+	return declared
 }
