@@ -1,12 +1,15 @@
 import { join, resolve } from 'node:path'
 import { BrowserWindow, Menu, app, ipcMain, nativeTheme, shell } from 'electron'
 import { CATALOG } from '../shared/catalog'
+import { RAILWAY_TEMPLATE_URL } from '../shared/cloudLinks'
 import { DEEP_LINK_SCHEME, type View, deepLinkFromArgv, parseDeepLink } from '../shared/deeplink'
 import type { DesktopSettings } from '../shared/types'
 import { spawn } from 'node:child_process'
 import { getBaseUrl, getSnapshot, setActiveControlPlanePort } from './agentfield'
 import { type AgentAction, runAgentAction, startControlPlane, uninstallAgent } from './agents'
 import { runAutostart } from './autostart'
+import { testCloudConnection, applyConnectionProfile } from './cloud'
+import { isCloudActive } from './connection'
 import { getCliCommand, initializeCli, installBundledCli, refreshCliStatus } from './cli'
 import { childEnv, initUserPath } from './env'
 import { installAgent, installFromSource, updateAgent } from './installer'
@@ -275,6 +278,7 @@ function main(): void {
   app.whenReady().then(async () => {
     installAppMenu()
     settings = await loadSettings(settingsFile())
+    applyConnectionProfile(settings)
     nativeTheme.themeSource = settings.appearance
     applyLoginItem(settings)
 
@@ -289,7 +293,7 @@ function main(): void {
     // with no AgentField at all this provisions the bundled CLI, so a
     // desktop-app-only install still gets a working `af`.
     await initializeCli(bundledCliPath())
-    if (settings.installSkills) syncSkills()
+    if (settings.installSkills && !isCloudActive()) syncSkills()
 
     // macOS only: provision + install the af-tray menu-bar companion so a
     // desktop-app-only install gets the menu-bar icon. Runs after initializeCli
@@ -375,6 +379,12 @@ function main(): void {
       return runAgentAction(action as AgentAction, name)
     })
     ipcMain.handle('agentfield:start-control-plane', async () => {
+      if (isCloudActive()) {
+        return {
+          ok: false,
+          message: 'Cloud control plane active — local server management is disabled'
+        }
+      }
       const port = settings.controlPlanePort ?? (await pickFreePort())
       setActiveControlPlanePort(port)
       const result = await startControlPlane(port)
@@ -460,6 +470,12 @@ function main(): void {
     // checks from Settings still work anywhere.
     if (app.isPackaged) updater.startAutoCheck()
     ipcMain.handle('agentfield:settings-get', () => settings)
+    ipcMain.handle('agentfield:cloud-test', (_event, url: string, apiKey: string) =>
+      testCloudConnection(url, apiKey)
+    )
+    ipcMain.handle('agentfield:cloud-deploy-railway', () =>
+      shell.openExternal(RAILWAY_TEMPLATE_URL)
+    )
     ipcMain.handle('agentfield:settings-set', async (_event, patch: unknown) => {
       const prev = settings
       settings = mergeSettings(settings, patch)
@@ -470,6 +486,7 @@ function main(): void {
       // macOS: reflect a flipped tray toggle (install ↔ uninstall) right away.
       if (settings.trayCompanion !== prev.trayCompanion) syncTray(settings.trayCompanion)
       await saveSettings(settingsFile(), settings)
+      applyConnectionProfile(settings)
       return settings
     })
 

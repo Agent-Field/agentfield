@@ -1239,6 +1239,21 @@ section > .section-title {
   margin-bottom: 0;
 }
 
+.cloud-input {
+  width: min(300px, 36vw);
+}
+
+.cloud-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.cloud-checks {
+  margin-top: 4px;
+  font-size: 11.5px;
+}
+
 .switch {
   -webkit-app-region: no-drag;
   position: relative;

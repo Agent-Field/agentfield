@@ -1,8 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AgentFieldApi } from '../shared/types'
 
+type PreloadApi = AgentFieldApi & {
+  cloudDeployRailway(): Promise<void>
+}
+
 // Sandboxed preload: only contextBridge/ipcRenderer are used, no Node APIs.
-const api: AgentFieldApi = {
+const api: PreloadApi = {
   getSnapshot: () => ipcRenderer.invoke('agentfield:snapshot'),
   getCatalog: () => ipcRenderer.invoke('agentfield:catalog'),
   install: (name) => ipcRenderer.invoke('agentfield:install', name),
@@ -24,6 +28,8 @@ const api: AgentFieldApi = {
   revokeSecret: (key, scope) => ipcRenderer.invoke('agentfield:secrets-revoke', key, scope),
   getSettings: () => ipcRenderer.invoke('agentfield:settings-get'),
   setSettings: (patch) => ipcRenderer.invoke('agentfield:settings-set', patch),
+  cloudTest: (url, apiKey) => ipcRenderer.invoke('agentfield:cloud-test', url, apiKey),
+  cloudDeployRailway: () => ipcRenderer.invoke('agentfield:cloud-deploy-railway'),
   getCliStatus: () => ipcRenderer.invoke('agentfield:cli-status'),
   updateCli: () => ipcRenderer.invoke('agentfield:cli-update'),
   getAppUpdateStatus: () => ipcRenderer.invoke('agentfield:app-update-get'),
