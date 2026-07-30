@@ -1,0 +1,370 @@
+import { getBaseUrl, type FetchLike } from './agentfield'
+export type { FetchLike } from './agentfield'
+
+const READ_TIMEOUT_MS = 3_000
+const MUTATION_TIMEOUT_MS = 10_000
+const DEFAULT_WATCH_INTERVAL_MS = 1_000
+const DEFAULT_WATCH_TIMEOUT_MS = 15 * 60_000
+
+export type InstallJobStatus = 'pending' | 'running' | 'succeeded' | 'failed'
+export type InstallJobKind = 'install' | 'update' | 'uninstall'
+
+export interface InstallJob {
+  id: string
+  source: string
+  kind: InstallJobKind
+  status: InstallJobStatus
+  package_name?: string
+  error?: string
+  lines: string[]
+  started_at?: string
+  finished_at?: string
+}
+
+export interface PackageInfo {
+  id: string
+  name: string
+  version: string
+  status: string
+  install_path: string
+  configuration_required: boolean
+  configuration_complete: boolean
+  running_node_id?: string
+  last_started?: string
+  process_id?: number
+  port?: number
+  description: string
+  author: string
+}
+
+export interface PackageListResponse {
+  packages: PackageInfo[]
+  total: number
+}
+
+export interface AgentEndpoints {
+  health: string
+  reasoners: string
+  skills: string
+}
+
+export interface StartAgentResponse {
+  agent_id: string
+  status: string
+  pid: number
+  port: number
+  started_at: string
+  log_file: string
+  message: string
+  endpoints: AgentEndpoints
+}
+
+export interface StopAgentResponse {
+  agent_id: string
+  status: string
+  message: string
+}
+
+export interface AgentStatusResponse {
+  agent_id: string
+  name: string
+  is_running: boolean
+  status: string
+  pid?: number
+  port?: number
+  uptime?: string
+  last_seen?: string
+  configuration_required?: boolean
+  configuration_status?: string
+  endpoints?: AgentEndpoints
+  message?: string
+}
+
+export interface RunningAgent {
+  agent_id: string
+  name: string
+  status: string
+  pid: number
+  port: number
+  started_at: string
+  log_file: string
+  package?: {
+    name: string
+    version: string
+    description: string
+    author: string
+  }
+  endpoints?: AgentEndpoints
+}
+
+export interface RunningAgentsResponse {
+  running_agents: RunningAgent[]
+  total_count: number
+}
+
+export type SecretScope = 'node' | 'global'
+
+export interface AgentSecretStatus {
+  key: string
+  is_set: boolean
+  scope?: SecretScope
+}
+
+export interface SecretReference {
+  key: string
+  scope: string
+}
+
+export interface CpClientOptions {
+  baseUrl?: () => string
+  apiKey?: () => string | null
+  fetchImpl?: FetchLike
+  /** Test seam used by job polling. */
+  sleep?: (milliseconds: number) => Promise<void>
+  /** Test seam used by job polling. */
+  now?: () => number
+}
+
+export interface WatchInstallJobOptions {
+  intervalMs?: number
+  timeoutMs?: number
+}
+
+export class CpApiError extends Error {
+  readonly status: number
+  readonly code?: string | number
+
+  constructor(details: { status: number; code?: string | number; message: string }) {
+    super(details.message)
+    this.name = 'CpApiError'
+    this.status = details.status
+    this.code = details.code
+  }
+}
+
+export interface CpClient {
+  /** POST /api/ui/v1/agents/packages/install. */
+  installPackage(source: string, force?: boolean): Promise<{ job_id: string }>
+  /** GET /api/ui/v1/agents/packages/install/jobs/:jobId. */
+  getInstallJob(jobId: string): Promise<InstallJob>
+  /** GET /api/ui/v1/agents/packages/install/jobs. */
+  listInstallJobs(): Promise<InstallJob[]>
+  /** POST /api/ui/v1/agents/packages/:packageId/uninstall. */
+  uninstallPackage(packageId: string): Promise<{ package_id: string; status: string }>
+  /** POST /api/ui/v1/agents/packages/:packageId/update. */
+  updatePackage(packageId: string): Promise<{ job_id: string }>
+  /** GET /api/ui/v1/agents/packages. */
+  listPackages(): Promise<PackageListResponse>
+  /** POST /api/ui/v1/agents/:agentId/start. */
+  startAgent(
+    agentId: string,
+    options?: { port?: number; detach?: boolean }
+  ): Promise<StartAgentResponse>
+  /** POST /api/ui/v1/agents/:agentId/stop. */
+  stopAgent(agentId: string): Promise<StopAgentResponse>
+  /** GET /api/ui/v1/agents/:agentId/status. */
+  getAgentStatus(agentId: string): Promise<AgentStatusResponse>
+  /** GET /api/ui/v1/agents/running. */
+  listRunningAgents(): Promise<RunningAgentsResponse>
+  /** GET /api/ui/v1/agents/:agentId/secrets. */
+  listAgentSecrets(agentId: string): Promise<{ secrets: AgentSecretStatus[] }>
+  /** PUT /api/ui/v1/agents/:agentId/secrets. */
+  setAgentSecret(
+    agentId: string,
+    key: string,
+    value: string,
+    scope?: SecretScope
+  ): Promise<void>
+  /** DELETE /api/ui/v1/agents/:agentId/secrets/:key. */
+  deleteAgentSecret(agentId: string, key: string, scope?: SecretScope): Promise<void>
+  /** GET /api/ui/v1/secrets. */
+  listAllSecrets(): Promise<{ secrets: SecretReference[] }>
+  /** Probes GET /api/ui/v1/agents/packages/install/jobs for install-route support. */
+  hasInstallApi(): Promise<boolean>
+  /** Polls GET /api/ui/v1/agents/packages/install/jobs/:jobId until terminal. */
+  watchInstallJob(
+    jobId: string,
+    onLine: (line: string) => void,
+    options?: WatchInstallJobOptions
+  ): Promise<InstallJob>
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+async function apiError(response: Response): Promise<CpApiError> {
+  let body: unknown
+  try {
+    body = await response.json()
+  } catch {
+    body = undefined
+  }
+  const record = isRecord(body) ? body : undefined
+  const serverMessage =
+    typeof record?.error === 'string'
+      ? record.error
+      : typeof record?.message === 'string'
+        ? record.message
+        : undefined
+  const code =
+    typeof record?.code === 'string' || typeof record?.code === 'number'
+      ? record.code
+      : undefined
+  return new CpApiError({
+    status: response.status,
+    code,
+    message: serverMessage ?? `Control plane request failed with status ${response.status}`
+  })
+}
+
+/**
+ * Creates a typed client for the control-plane `/api/ui/v1` management API.
+ * The base URL and API key providers are evaluated for every request.
+ */
+export function createCpClient(options: CpClientOptions = {}): CpClient {
+  const baseUrl = options.baseUrl ?? getBaseUrl
+  const apiKey = options.apiKey ?? (() => null)
+  const fetchImpl = options.fetchImpl ?? fetch
+  const sleep =
+    options.sleep ?? ((milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)))
+  const now = options.now ?? Date.now
+
+  async function request<T>(
+    path: string,
+    init: Omit<RequestInit, 'signal'> = {},
+    mutation = false,
+    noContent = false
+  ): Promise<T> {
+    const headers = new Headers(init.headers)
+    const key = apiKey()
+    if (key !== null) headers.set('X-API-Key', key)
+    if (init.body !== undefined) headers.set('Content-Type', 'application/json')
+
+    const response = await fetchImpl(`${baseUrl().replace(/\/+$/, '')}${path}`, {
+      ...init,
+      headers,
+      signal: AbortSignal.timeout(mutation ? MUTATION_TIMEOUT_MS : READ_TIMEOUT_MS)
+    })
+    if (!response.ok) throw await apiError(response)
+    if (noContent) return undefined as T
+    return (await response.json()) as T
+  }
+
+  const client: CpClient = {
+    installPackage(source, force) {
+      const body = force === undefined ? { source } : { source, force }
+      return request('/api/ui/v1/agents/packages/install', {
+        method: 'POST',
+        body: JSON.stringify(body)
+      }, true)
+    },
+    getInstallJob(jobId) {
+      return request(`/api/ui/v1/agents/packages/install/jobs/${encodeURIComponent(jobId)}`)
+    },
+    listInstallJobs() {
+      return request('/api/ui/v1/agents/packages/install/jobs')
+    },
+    uninstallPackage(packageId) {
+      return request(
+        `/api/ui/v1/agents/packages/${encodeURIComponent(packageId)}/uninstall`,
+        { method: 'POST' },
+        true
+      )
+    },
+    updatePackage(packageId) {
+      return request(
+        `/api/ui/v1/agents/packages/${encodeURIComponent(packageId)}/update`,
+        { method: 'POST' },
+        true
+      )
+    },
+    listPackages() {
+      return request('/api/ui/v1/agents/packages')
+    },
+    startAgent(agentId, startOptions) {
+      return request(
+        `/api/ui/v1/agents/${encodeURIComponent(agentId)}/start`,
+        { method: 'POST', body: JSON.stringify(startOptions ?? {}) },
+        true
+      )
+    },
+    stopAgent(agentId) {
+      return request(
+        `/api/ui/v1/agents/${encodeURIComponent(agentId)}/stop`,
+        { method: 'POST' },
+        true
+      )
+    },
+    getAgentStatus(agentId) {
+      return request(`/api/ui/v1/agents/${encodeURIComponent(agentId)}/status`)
+    },
+    listRunningAgents() {
+      return request('/api/ui/v1/agents/running')
+    },
+    listAgentSecrets(agentId) {
+      return request(`/api/ui/v1/agents/${encodeURIComponent(agentId)}/secrets`)
+    },
+    setAgentSecret(agentId, key, value, scope) {
+      const body = scope === undefined ? { key, value } : { key, value, scope }
+      return request(
+        `/api/ui/v1/agents/${encodeURIComponent(agentId)}/secrets`,
+        { method: 'PUT', body: JSON.stringify(body) },
+        true,
+        true
+      )
+    },
+    deleteAgentSecret(agentId, key, scope) {
+      const query = scope === undefined ? '' : `?scope=${encodeURIComponent(scope)}`
+      return request(
+        `/api/ui/v1/agents/${encodeURIComponent(agentId)}/secrets/${encodeURIComponent(key)}${query}`,
+        { method: 'DELETE' },
+        true,
+        true
+      )
+    },
+    listAllSecrets() {
+      return request('/api/ui/v1/secrets')
+    },
+    async hasInstallApi() {
+      try {
+        await client.listInstallJobs()
+        return true
+      } catch (error) {
+        if (error instanceof CpApiError && error.status === 404) return false
+        throw error
+      }
+    },
+    async watchInstallJob(jobId, onLine, watchOptions = {}) {
+      const intervalMs = watchOptions.intervalMs ?? DEFAULT_WATCH_INTERVAL_MS
+      const timeoutMs = watchOptions.timeoutMs ?? DEFAULT_WATCH_TIMEOUT_MS
+      const startedAt = now()
+      let emittedLineCount = 0
+
+      for (;;) {
+        if (now() - startedAt >= timeoutMs) {
+          throw new Error(`Timed out waiting for install job ${jobId}`)
+        }
+        let job: InstallJob
+        try {
+          job = await client.getInstallJob(jobId)
+        } catch (error) {
+          if (error instanceof CpApiError && error.status === 404) {
+            throw new CpApiError({
+              status: 404,
+              code: error.code,
+              message: `Install job ${jobId} disappeared`
+            })
+          }
+          throw error
+        }
+        for (const line of job.lines.slice(emittedLineCount)) onLine(line)
+        emittedLineCount = Math.max(emittedLineCount, job.lines.length)
+        if (job.status === 'succeeded' || job.status === 'failed') return job
+        await sleep(intervalMs)
+      }
+    }
+  }
+
+  return client
+}
