@@ -472,9 +472,11 @@ jobs:
           if [ "${ENVIRONMENT}" = "staging" ]; then
             # Staging: use staging-X.Y.Z-rc.N prefix
             echo "tags=${image}:staging-${VERSION}" >> "$GITHUB_OUTPUT"
+            echo "cloud_tags=${image}-cloud:staging-${VERSION}" >> "$GITHUB_OUTPUT"
           else
             # Production: version tag + latest
             echo "tags=${image}:${TAG_NAME},${image}:latest" >> "$GITHUB_OUTPUT"
+            echo "cloud_tags=${image}-cloud:${TAG_NAME},${image}-cloud:latest" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Set up Docker Buildx
@@ -497,6 +499,18 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.docker_meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push control plane cloud image
+        if: needs.prepare.outputs.publish_docker == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: deployments/docker/Dockerfile.control-plane-cloud
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.docker_meta.outputs.cloud_tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
