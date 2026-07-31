@@ -49,7 +49,7 @@ resource "railway_project" "cp" {
 resource "railway_service" "cp" {
   name         = "control-plane"
   project_id   = railway_project.cp.id
-  source_image = "agentfield/control-plane-cloud:staging-0.1.118-rc.7"
+  source_image = "agentfield/control-plane-cloud:staging-0.1.118-rc.8"
 }
 resource "railway_variable" "api_key" {
   name           = "AGENTFIELD_API_KEY"
