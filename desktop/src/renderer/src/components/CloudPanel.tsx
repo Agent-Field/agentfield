@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import type { AgentFieldApi, CloudTestResult, DesktopSettings } from '../../../shared/types'
-
-type CloudDeployApi = AgentFieldApi & {
-  cloudDeployRailway(): Promise<void>
-}
+import type {
+  CloudDeployResult,
+  CloudTestResult,
+  DesktopSettings,
+  RailwayStatus
+} from '../../../shared/types'
 
 type Confirmation = {
   mode: 'cloud' | 'local'
@@ -20,6 +21,14 @@ export function CloudPanel() {
   const [result, setResult] = useState<CloudTestResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null)
+  const [railway, setRailway] = useState<RailwayStatus | null>(null)
+  const [railwayBusy, setRailwayBusy] = useState<'login' | 'deploy' | 'destroy' | null>(null)
+  const [workspaceId, setWorkspaceId] = useState('')
+  const [deployLines, setDeployLines] = useState<string[]>([])
+  const [deployResult, setDeployResult] = useState<CloudDeployResult | null>(null)
+  const [deleteText, setDeleteText] = useState('')
+  const [showDestroy, setShowDestroy] = useState(false)
+  const [destroyed, setDestroyed] = useState(false)
 
   useEffect(() => {
     void window.agentfield.getSettings().then((next) => {
@@ -28,6 +37,25 @@ export function CloudPanel() {
       setApiKey(next.cloud?.apiKey ?? '')
     })
   }, [])
+
+  useEffect(() => {
+    void window.agentfield.railwayStatus().then(setRailway).catch((err) => {
+      setError(err instanceof Error ? err.message : String(err))
+    })
+    return window.agentfield.onCloudDeployProgress((line) => {
+      setDeployLines((lines) => [...lines.slice(-199), line])
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!railway?.loggedIn) {
+      setWorkspaceId('')
+    } else if (railway.workspaces.length === 1) {
+      setWorkspaceId(railway.workspaces[0].id)
+    } else if (!railway.workspaces.some((workspace) => workspace.id === workspaceId)) {
+      setWorkspaceId('')
+    }
+  }, [railway, workspaceId])
 
   useEffect(() => {
     if (!confirmation) return
@@ -107,8 +135,75 @@ export function CloudPanel() {
     }
   }
 
-  // TODO(integration): fold into AgentFieldApi
-  const deployApi = window.agentfield as CloudDeployApi
+  const refreshRailway = async () => setRailway(await window.agentfield.railwayStatus())
+
+  const railwayLogin = async () => {
+    setRailwayBusy('login')
+    setError(null)
+    try {
+      const login = await window.agentfield.railwayLogin()
+      if (!login.ok) setError(login.message)
+      await refreshRailway()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setRailwayBusy(null)
+    }
+  }
+
+  const railwayLogout = async () => {
+    await window.agentfield.railwayLogout()
+    setDeployResult(null)
+    await refreshRailway()
+  }
+
+  const deploy = async () => {
+    if (!workspaceId) return
+    setRailwayBusy('deploy')
+    setDeployLines([])
+    setDeployResult(null)
+    setDestroyed(false)
+    setError(null)
+    try {
+      const nextResult = await window.agentfield.cloudDeploy(workspaceId)
+      setDeployResult(nextResult)
+      if (nextResult.ok) {
+        const next = await window.agentfield.getSettings()
+        setSettings(next)
+        setServerUrl(next.cloud.serverUrl)
+        setApiKey(next.cloud.apiKey)
+      }
+      await refreshRailway()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setRailwayBusy(null)
+    }
+  }
+
+  const destroy = async () => {
+    if (deleteText !== 'delete') return
+    setRailwayBusy('destroy')
+    setError(null)
+    try {
+      const result = await window.agentfield.cloudDestroy()
+      if (!result.ok) {
+        setError(result.message)
+        return
+      }
+      const next = await window.agentfield.getSettings()
+      setSettings(next)
+      setShowDestroy(false)
+      setDeleteText('')
+      setDeployResult(null)
+      setDestroyed(true)
+      await refreshRailway()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setRailwayBusy(null)
+    }
+  }
 
   if (!settings) {
     return (
@@ -258,21 +353,113 @@ export function CloudPanel() {
         </div>
         <div className="panel cloud-railway">
           <div className="cloud-railway-content">
-            <span className="row-title">Host your own cloud control plane</span>
-            <ol className="cloud-steps">
-              <li>Deploy the AgentField control plane template on Railway.</li>
-              <li>
-                Copy its public URL and the AGENTFIELD_API_KEY value from the service variables.
-              </li>
-              <li>Paste both above, then Test and Save.</li>
-            </ol>
-            <button
-              className="action-button"
-              type="button"
-              onClick={() => void deployApi.cloudDeployRailway()}
-            >
-              Open Railway template
-            </button>
+            {!railway ? (
+              <span className="row-sub">Checking one-click deploy…</span>
+            ) : !railway.engineAvailable ? (
+              <div className="cloud-engine-info">
+                <span className="row-title">One-click deploy isn't bundled in this build</span>
+                <span className="row-sub">You can still use the Railway template below.</span>
+              </div>
+            ) : !railway.loggedIn ? (
+              <>
+                <span className="row-title">Deploy to your Railway account</span>
+                <span className="row-sub cloud-railway-copy">
+                  This deploys the control plane to your Railway account; usage is billed by Railway.
+                </span>
+                <button
+                  className="action-button primary"
+                  type="button"
+                  disabled={railwayBusy !== null}
+                  onClick={() => void railwayLogin()}
+                >
+                  {railwayBusy === 'login' && <span className="cloud-spinner" aria-hidden="true" />}
+                  {railwayBusy === 'login' ? 'Waiting for browser…' : 'Log in with Railway'}
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="cloud-railway-heading">
+                  <span className="row-title">
+                    {railway.hasDeployment ? 'Deployed' : 'Ready to deploy'}
+                  </span>
+                  <button className="cloud-link-button" type="button" onClick={() => void railwayLogout()}>
+                    Log out
+                  </button>
+                </div>
+                {railway.workspaces.length > 1 && (
+                  <label className="cloud-workspace-field">
+                    <span className="row-sub">Railway workspace</span>
+                    <select
+                      className="env-input cloud-input"
+                      value={workspaceId}
+                      disabled={railwayBusy !== null}
+                      onChange={(event) => setWorkspaceId(event.target.value)}
+                    >
+                      <option value="">Choose a workspace…</option>
+                      {railway.workspaces.map((workspace) => (
+                        <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                {railway.workspaces.length === 0 && (
+                  <div className="callout warning">No Railway workspace is available for this account.</div>
+                )}
+                <div className="cloud-actions">
+                  <button
+                    className="action-button primary"
+                    type="button"
+                    disabled={!workspaceId || railwayBusy !== null}
+                    onClick={() => void deploy()}
+                  >
+                    {railwayBusy === 'deploy' && <span className="cloud-spinner" aria-hidden="true" />}
+                    {railwayBusy === 'deploy'
+                      ? 'Deploying…'
+                      : railway.hasDeployment
+                        ? 'Re-run deploy'
+                        : 'Deploy control plane'}
+                  </button>
+                  {railway.hasDeployment && (
+                    <button className="cloud-link-button danger" type="button" onClick={() => setShowDestroy(true)}>
+                      Tear down
+                    </button>
+                  )}
+                </div>
+                {deployLines.length > 0 && (
+                  <div className="cloud-deploy-log" role="log" aria-live="polite">
+                    {deployLines.map((line, index) => (
+                      <span className="install-progress-line" key={`${index}-${line}`}>{line}</span>
+                    ))}
+                  </div>
+                )}
+                {deployResult && (
+                  <div className={`callout ${deployResult.ok ? 'success' : 'error'}`} role="status">
+                    {deployResult.ok
+                      ? `✓ Deployed — connected to ${displayHost(deployResult.url ?? settings.cloud.serverUrl)}`
+                      : deployResult.message}
+                  </div>
+                )}
+                {showDestroy && (
+                  <div className="cloud-destroy-confirm">
+                    <label className="row-sub" htmlFor="cloud-delete-confirm">Type <strong>delete</strong> to tear down this deployment.</label>
+                    <div className="cloud-actions">
+                      <input id="cloud-delete-confirm" className="env-input" value={deleteText} onChange={(event) => setDeleteText(event.target.value)} />
+                      <button className="action-button danger" disabled={deleteText !== 'delete' || railwayBusy !== null} onClick={() => void destroy()}>
+                        {railwayBusy === 'destroy' ? 'Tearing down…' : 'Tear down'}
+                      </button>
+                      <button className="action-button" disabled={railwayBusy !== null} onClick={() => setShowDestroy(false)}>Cancel</button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+            {destroyed && <div className="callout">Deployment removed. AgentField is using the local control plane.</div>}
+            <span className="cloud-railway-footnote">
+              Powered by bundled OpenTofu.{' '}
+              <button className="cloud-link-button" type="button" onClick={() => void window.agentfield.cloudDeployRailway()}>
+                Use the Railway template instead
+              </button>
+            </span>
           </div>
         </div>
       </section>

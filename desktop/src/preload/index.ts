@@ -1,12 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AgentFieldApi } from '../shared/types'
 
-type PreloadApi = AgentFieldApi & {
-  cloudDeployRailway(): Promise<void>
-}
-
 // Sandboxed preload: only contextBridge/ipcRenderer are used, no Node APIs.
-const api: PreloadApi = {
+const api: AgentFieldApi = {
   getSnapshot: () => ipcRenderer.invoke('agentfield:snapshot'),
   getCatalog: () => ipcRenderer.invoke('agentfield:catalog'),
   install: (name) => ipcRenderer.invoke('agentfield:install', name),
@@ -30,6 +26,16 @@ const api: PreloadApi = {
   setSettings: (patch) => ipcRenderer.invoke('agentfield:settings-set', patch),
   cloudTest: (url, apiKey) => ipcRenderer.invoke('agentfield:cloud-test', url, apiKey),
   cloudDeployRailway: () => ipcRenderer.invoke('agentfield:cloud-deploy-railway'),
+  railwayStatus: () => ipcRenderer.invoke('agentfield:railway-status'),
+  railwayLogin: () => ipcRenderer.invoke('agentfield:railway-login'),
+  railwayLogout: () => ipcRenderer.invoke('agentfield:railway-logout'),
+  cloudDeploy: (workspaceId) => ipcRenderer.invoke('agentfield:cloud-deploy', workspaceId),
+  cloudDestroy: () => ipcRenderer.invoke('agentfield:cloud-destroy'),
+  onCloudDeployProgress: (listener) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, line: string) => listener(line)
+    ipcRenderer.on('agentfield:cloud-deploy-progress', wrapped)
+    return () => ipcRenderer.removeListener('agentfield:cloud-deploy-progress', wrapped)
+  },
   getCliStatus: () => ipcRenderer.invoke('agentfield:cli-status'),
   updateCli: () => ipcRenderer.invoke('agentfield:cli-update'),
   getAppUpdateStatus: () => ipcRenderer.invoke('agentfield:app-update-get'),

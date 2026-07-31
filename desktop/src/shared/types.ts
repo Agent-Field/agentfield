@@ -228,6 +228,19 @@ export interface CloudTestResult {
   message: string
 }
 
+export interface RailwayStatus {
+  loggedIn: boolean
+  engineAvailable: boolean
+  hasDeployment: boolean
+  workspaces: Array<{ id: string; name: string }>
+}
+
+export interface CloudDeployResult {
+  ok: boolean
+  url?: string
+  message: string
+}
+
 /** A newer app release found on GitHub (the desktop app's update channel). */
 export interface AppUpdateInfo {
   /** Release version without the v prefix (e.g. "0.1.110"). */
@@ -311,6 +324,12 @@ export interface AgentFieldApi {
   cloudTest(url: string, apiKey: string): Promise<CloudTestResult>
   /** Open the guided Railway deployment flow for a hosted control plane. */
   cloudDeployRailway(): Promise<boolean>
+  railwayStatus(): Promise<RailwayStatus>
+  railwayLogin(): Promise<{ ok: boolean; message: string; workspaces?: RailwayStatus['workspaces'] }>
+  railwayLogout(): Promise<void>
+  cloudDeploy(workspaceId: string): Promise<CloudDeployResult>
+  cloudDestroy(): Promise<{ ok: boolean; message: string }>
+  onCloudDeployProgress(listener: (line: string) => void): () => void
   getSnapshot(): Promise<AgentFieldSnapshot>
   getCatalog(): Promise<CatalogEntry[]>
   /** Install a catalog entry by name. Resolves when `af install` exits. */
