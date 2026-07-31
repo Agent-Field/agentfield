@@ -69,9 +69,10 @@ func SyncPackagesFromRegistry(agentfieldHome string, storageProvider packageStor
 	}
 
 	for pkgName, pkg := range registry.Installed {
+		status := packageStatusFromRegistry(pkg.Status)
 		existing, err := storageProvider.GetAgentPackage(ctx, pkgName)
 		if err == nil && existing != nil && installedStatus(existing.Status) &&
-			existing.InstallPath == pkg.Path && existing.Version == pkg.Version {
+			existing.Status == status && existing.InstallPath == pkg.Path && existing.Version == pkg.Version {
 			continue // Already reconciled
 		}
 		// Load agentfield-package.yaml
@@ -98,7 +99,7 @@ func SyncPackagesFromRegistry(agentfieldHome string, storageProvider packageStor
 			Description:         &pkg.Description,
 			InstallPath:         pkg.Path,
 			ConfigurationSchema: schemaJson,
-			Status:              types.PackageStatusInstalled,
+			Status:              status,
 			ConfigurationStatus: types.ConfigurationStatusDraft,
 			InstalledAt:         installedAt,
 			UpdatedAt:           now,
@@ -133,6 +134,17 @@ func SyncPackagesFromRegistry(agentfieldHome string, storageProvider packageStor
 		_ = updatePackage(storageProvider, ctx, row)
 	}
 	return nil
+}
+
+func packageStatusFromRegistry(status string) types.PackageStatus {
+	switch status {
+	case string(types.PackageStatusRunning):
+		return types.PackageStatusRunning
+	case string(types.PackageStatusStopped):
+		return types.PackageStatusStopped
+	default:
+		return types.PackageStatusInstalled
+	}
 }
 
 // installedStatus reports whether a package status implies the package is on

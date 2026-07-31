@@ -47,6 +47,98 @@ schema:
 	require.NotEmpty(t, pkg.ConfigurationSchema)
 }
 
+func TestSyncPackagesFromRegistryMapsRunningStatus(t *testing.T) {
+	t.Parallel()
+
+	agentfieldHome := t.TempDir()
+	pkgDir := filepath.Join(agentfieldHome, "running-agent")
+	require.NoError(t, os.MkdirAll(pkgDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(agentfieldHome, "installed.yaml"), []byte(`installed:
+  running-agent:
+    name: Running Agent
+    version: 1.0.0
+    path: `+pkgDir+`
+    status: running
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "agentfield-package.yaml"),
+		[]byte("name: Running Agent\nversion: 1.0.0\n"), 0o644))
+
+	storage := newStubPackageStorage()
+	require.NoError(t, SyncPackagesFromRegistry(agentfieldHome, storage))
+	require.Equal(t, types.PackageStatusRunning, storage.packages["running-agent"].Status)
+}
+
+func TestSyncPackagesFromRegistryUpdatesLifecycleStatus(t *testing.T) {
+	t.Parallel()
+
+	agentfieldHome := t.TempDir()
+	pkgDir := filepath.Join(agentfieldHome, "lifecycle-agent")
+	require.NoError(t, os.MkdirAll(pkgDir, 0o755))
+	registryPath := filepath.Join(agentfieldHome, "installed.yaml")
+	runningRegistry := `installed:
+  lifecycle-agent:
+    name: Lifecycle Agent
+    version: 1.0.0
+    path: ` + pkgDir + `
+    status: running
+`
+	require.NoError(t, os.WriteFile(registryPath, []byte(runningRegistry), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "agentfield-package.yaml"),
+		[]byte("name: Lifecycle Agent\nversion: 1.0.0\n"), 0o644))
+
+	storage := newStubPackageStorage()
+	require.NoError(t, SyncPackagesFromRegistry(agentfieldHome, storage))
+	require.Equal(t, types.PackageStatusRunning, storage.packages["lifecycle-agent"].Status)
+
+	stoppedRegistry := `installed:
+  lifecycle-agent:
+    name: Lifecycle Agent
+    version: 1.0.0
+    path: ` + pkgDir + `
+    status: stopped
+`
+	require.NoError(t, os.WriteFile(registryPath, []byte(stoppedRegistry), 0o644))
+	require.NoError(t, SyncPackagesFromRegistry(agentfieldHome, storage))
+	require.Equal(t, types.PackageStatusStopped, storage.packages["lifecycle-agent"].Status)
+}
+
+func TestSyncPackagesFromRegistryDefaultsUnknownStatusToInstalled(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		status string
+	}{
+		{name: "missing"},
+		{name: "unknown", status: "unknown"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			agentfieldHome := t.TempDir()
+			pkgDir := filepath.Join(agentfieldHome, "default-agent")
+			require.NoError(t, os.MkdirAll(pkgDir, 0o755))
+			installed := `installed:
+  default-agent:
+    name: Default Agent
+    version: 1.0.0
+    path: ` + pkgDir + "\n"
+			if tt.status != "" {
+				installed += "    status: " + tt.status + "\n"
+			}
+			require.NoError(t, os.WriteFile(filepath.Join(agentfieldHome, "installed.yaml"), []byte(installed), 0o644))
+			require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "agentfield-package.yaml"),
+				[]byte("name: Default Agent\nversion: 1.0.0\n"), 0o644))
+
+			storage := newStubPackageStorage()
+			require.NoError(t, SyncPackagesFromRegistry(agentfieldHome, storage))
+			require.Equal(t, types.PackageStatusInstalled, storage.packages["default-agent"].Status)
+		})
+	}
+}
+
 func TestSyncPackagesSkipsExistingEntries(t *testing.T) {
 	t.Parallel()
 
