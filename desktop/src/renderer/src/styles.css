@@ -5,6 +5,8 @@
 /* --- tokens ------------------------------------------------------------------ */
 
 :root {
+  /* Native widgets (select popups, scrollbars) follow the app theme. */
+  color-scheme: light;
   /* Surfaces — cool neutral, chroma toward accent hue (~250) */
   --bg: oklch(0.97 0.005 250);
   --bg-elevated: oklch(1 0 0);
@@ -90,6 +92,7 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
+    color-scheme: dark;
     --bg: oklch(0.19 0.01 250);
     --bg-elevated: oklch(0.22 0.012 250);
     --sidebar: oklch(0.14 0.012 250);
@@ -2447,4 +2450,11 @@ a.action-button {
     animation: none;
     background: var(--pill);
   }
+}
+
+/* Native select popup: explicit colors so options stay readable even where
+   the platform ignores color-scheme for the dropdown list. */
+select.env-input option {
+  background: var(--bg-elevated);
+  color: var(--text);
 }
