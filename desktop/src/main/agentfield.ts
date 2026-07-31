@@ -113,7 +113,7 @@ export function packageToInstalledAgent(pkg: PackageInfo): InstalledAgent {
     name: pkg.name,
     version: pkg.version,
     description: pkg.description,
-    status: pkg.status,
+    status: pkg.install_status ?? pkg.status,
     path: pkg.install_path || null,
     port: pkg.port ?? null,
     pid: pkg.process_id ?? null
@@ -180,8 +180,9 @@ export async function fetchControlPlaneNodes(
  * `nodeHealth` is the node's health_status on the control plane, or null when
  * it is not registered there at all.
  *
- * CP view unavailable — trust the registry:
- *   'running' -> 'running' | 'stopped' -> 'stopped' | other/absent -> 'unknown'
+ * CP view unavailable — trust affirmative registry lifecycle states:
+ *   'running' -> 'running' | 'stopped' -> 'stopped'
+ *   'installed' / other / absent -> 'unknown'
  * CP view available — cross-check. Registration presence (not health) proves
  * a running registry entry is live, so transient health dips cannot flicker
  * the badge; health only matters for stopped entries, where an ACTIVE node
@@ -191,6 +192,8 @@ export async function fetchControlPlaneNodes(
  *   registry stopped + health active           -> 'unknown'  (conflict)
  *   registry stopped + otherwise               -> 'stopped'  (stopped nodes stay
  *                                                  registered as inactive/unknown)
+ *   registry installed + health active         -> 'running'  (live evidence)
+ *   registry installed + otherwise             -> 'stopped'  (on disk, not live)
  *   other/absent registry status               -> 'unknown'
  */
 export function deriveAgentBadge(
@@ -208,6 +211,9 @@ export function deriveAgentBadge(
   }
   if (registryStatus === 'stopped') {
     return nodeHealth === 'active' ? 'unknown' : 'stopped'
+  }
+  if (registryStatus === 'installed') {
+    return nodeHealth === 'active' ? 'running' : 'stopped'
   }
   return 'unknown'
 }

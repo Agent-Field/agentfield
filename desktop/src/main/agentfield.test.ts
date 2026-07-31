@@ -33,13 +33,15 @@ const API_PACKAGES: PackageInfo[] = [
   {
     id: 'pr-af', name: 'pr-af', version: '0.1.0',
     description: 'Opens draft pull requests from a task description',
-    status: 'running', install_path: '/home/abir/.agentfield/packages/pr-af',
+    status: 'configured', install_status: 'running',
+    install_path: '/home/abir/.agentfield/packages/pr-af',
     port: 9001, process_id: 4242, configuration_required: false,
     configuration_complete: true, author: ''
   },
   {
     id: 'swe-af', name: 'swe-af', version: '0.2.1',
-    description: 'Software engineering agent', status: 'stopped', install_path: '',
+    description: 'Software engineering agent', status: 'not_configured',
+    install_status: 'stopped', install_path: '',
     configuration_required: false, configuration_complete: true, author: ''
   }
 ]
@@ -157,6 +159,15 @@ describe('readInstalledAgents', () => {
     expect(result).toEqual({ exists: true, agents: [] })
   })
 
+  it('prefers install_status and falls back to status for old servers', async () => {
+    const lifecycle = { ...API_PACKAGES[0], status: 'not_configured', install_status: 'installed' }
+    const legacy = { ...API_PACKAGES[1], status: 'running', install_status: undefined }
+
+    const result = await readInstalledAgents(packagesClient([lifecycle, legacy]))
+
+    expect(result.agents.map((agent) => agent.status)).toEqual(['installed', 'running'])
+  })
+
   it('surfaces API failures without throwing', async () => {
     const client = packagesClient()
     vi.mocked(client.listPackages).mockRejectedValue(new Error('offline'))
@@ -176,6 +187,8 @@ describe('deriveAgentBadge', () => {
     ['running', false, 'active', 'running'],
     ['stopped', false, null, 'stopped'],
     ['stopped', false, 'active', 'stopped'],
+    ['installed', false, null, 'unknown'],
+    ['installed', false, 'active', 'unknown'],
     ['error', false, null, 'unknown'],
     [undefined, false, null, 'unknown'],
     // CP view available -> cross-check
@@ -189,6 +202,9 @@ describe('deriveAgentBadge', () => {
     ['stopped', true, 'inactive', 'stopped'],
     ['stopped', true, 'unknown', 'stopped'],
     ['stopped', true, null, 'stopped'],
+    ['installed', true, 'active', 'running'],
+    ['installed', true, 'inactive', 'stopped'],
+    ['installed', true, null, 'stopped'],
     ['error', true, 'active', 'unknown'],
     [undefined, true, null, 'unknown']
   ] as const)(
