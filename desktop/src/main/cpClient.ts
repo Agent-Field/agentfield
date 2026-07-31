@@ -127,6 +127,13 @@ export interface AgentSecretStatus {
   key: string
   is_set: boolean
   scope?: SecretScope
+  declared_scope?: SecretScope
+  description?: string
+  secret?: boolean
+  default?: string
+  requirement?: 'required' | 'one_of' | 'optional' | ''
+  group?: string
+  group_description?: string
 }
 
 export interface SecretReference {
@@ -185,7 +192,7 @@ export interface CpClient {
   getAgentStatus(agentId: string): Promise<AgentStatusResponse>
   /** GET /api/ui/v1/agents/running. */
   listRunningAgents(): Promise<RunningAgentsResponse>
-  /** GET /api/ui/v1/agents/:agentId/secrets. */
+  /** GET /api/ui/v1/agents/:agentId/secrets?include=env. */
   listAgentSecrets(agentId: string): Promise<{ secrets: AgentSecretStatus[] }>
   /** PUT /api/ui/v1/agents/:agentId/secrets. */
   setAgentSecret(
@@ -335,7 +342,7 @@ export function createCpClient(options: CpClientOptions = {}): CpClient {
     },
     async listAgentSecrets(agentId) {
       const response = await request<{ secrets: AgentSecretStatus[] | null }>(
-        `/api/ui/v1/agents/${encodeURIComponent(agentId)}/secrets`
+        `/api/ui/v1/agents/${encodeURIComponent(agentId)}/secrets?include=env`
       )
       return { ...response, secrets: response.secrets ?? [] }
     },

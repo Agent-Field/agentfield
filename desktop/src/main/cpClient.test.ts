@@ -83,7 +83,7 @@ describe('createCpClient', () => {
       ['http://cp/api/ui/v1/agents/agent%2Fname/stop', 'POST'],
       ['http://cp/api/ui/v1/agents/agent%2Fname/status', 'GET'],
       ['http://cp/api/ui/v1/agents/running', 'GET'],
-      ['http://cp/api/ui/v1/agents/agent%2Fname/secrets', 'GET'],
+      ['http://cp/api/ui/v1/agents/agent%2Fname/secrets?include=env', 'GET'],
       ['http://cp/api/ui/v1/agents/agent%2Fname/secrets', 'PUT'],
       ['http://cp/api/ui/v1/agents/agent%2Fname/secrets/TOKEN?scope=node', 'DELETE'],
       ['http://cp/api/ui/v1/secrets', 'GET']

@@ -1,6 +1,6 @@
 import yaml from 'js-yaml'
 import { describe, expect, it, vi } from 'vitest'
-import type { CpClient, PackageInfo } from './cpClient'
+import type { AgentSecretStatus, CpClient, PackageInfo } from './cpClient'
 import {
   buildEnvReport,
   buildSecretsInventory,
@@ -251,6 +251,74 @@ describe('control-plane secret management', () => {
       { name: 'SET_KEY', status: 'stored' },
       { name: 'UNSET_KEY', status: 'missing' }
     ])
+    expect(reports[0].vars.every((variable) => variable.required && variable.secret)).toBe(true)
+    expect(reports[0].satisfied).toBe(false)
+  })
+
+  it('maps enriched environment metadata, groups, defaults, and optionals', async () => {
+    const cpClient = client()
+    const enrichedSecrets: AgentSecretStatus[] = [
+        {
+          key: 'ANTHROPIC_API_KEY', is_set: false, scope: 'global',
+          declared_scope: 'global', description: 'Anthropic API key (Claude)', secret: true,
+          default: '', requirement: 'one_of', group: 'llm_provider',
+          group_description: 'an LLM provider key'
+        },
+        {
+          key: 'OPENROUTER_API_KEY', is_set: true, scope: 'global',
+          declared_scope: 'global', description: 'OpenRouter API key', secret: true,
+          default: '', requirement: 'one_of', group: 'llm_provider',
+          group_description: 'an LLM provider key'
+        },
+        {
+          key: 'GH_TOKEN', is_set: false, scope: 'global', declared_scope: 'global',
+          description: 'GitHub token', secret: true, default: '', requirement: 'required'
+        },
+        {
+          key: 'SWE_DEFAULT_RUNTIME', is_set: false, declared_scope: 'node',
+          description: 'Runtime override', secret: false, default: '', requirement: 'optional'
+        },
+        {
+          key: 'AGENTFIELD_SERVER', is_set: false, description: 'Control-plane URL',
+          default: 'http://localhost:8080', requirement: 'optional'
+        },
+        { key: 'UNDECLARED_KEY', is_set: true, scope: 'node' as const }
+      ]
+    vi.mocked(cpClient.listAgentSecrets).mockResolvedValue({ secrets: enrichedSecrets })
+
+    const [report] = await getEnvReports({ cpClient })
+
+    expect(report.satisfied).toBe(false)
+    expect(report.vars).toEqual([
+      expect.objectContaining({
+        name: 'ANTHROPIC_API_KEY', required: true, group: 'llm_provider',
+        groupDescription: 'an LLM provider key', status: 'missing'
+      }),
+      expect.objectContaining({
+        name: 'OPENROUTER_API_KEY', required: true, group: 'llm_provider',
+        status: 'stored', storedScopes: ['global']
+      }),
+      expect.objectContaining({ name: 'GH_TOKEN', required: true, status: 'missing' }),
+      expect.objectContaining({
+        name: 'SWE_DEFAULT_RUNTIME', required: false, secret: false, scope: 'node',
+        status: 'missing'
+      }),
+      expect.objectContaining({
+        name: 'AGENTFIELD_SERVER', required: false, secret: false, scope: 'global',
+        status: 'default'
+      }),
+      expect.objectContaining({
+        name: 'UNDECLARED_KEY', required: false, secret: false, scope: 'global',
+        group: undefined, status: 'stored', storedScopes: ['agent']
+      })
+    ])
+
+    vi.mocked(cpClient.listAgentSecrets).mockResolvedValue({
+      secrets: enrichedSecrets.map((secret) =>
+        secret.key === 'GH_TOKEN' ? { ...secret, is_set: true } : secret
+      )
+    })
+    expect((await getEnvReports({ cpClient }))[0].satisfied).toBe(true)
   })
 
   it('sets and deletes without sending a scope', async () => {

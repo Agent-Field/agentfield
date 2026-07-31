@@ -197,21 +197,58 @@ export async function getEnvReports(
     const packages = await deps.cpClient.listPackages()
     return await Promise.all(packages.packages.filter(isInstalledPackage).map(async (pkg) => {
       const { secrets } = await deps.cpClient.listAgentSecrets(pkg.id)
-      const vars: AgentEnvVar[] = secrets.map((secret) => ({
-        name: secret.key,
-        description: '',
-        secret: true,
-        scope: secret.scope ?? GLOBAL_SCOPE,
-        required: true,
-        status: secret.is_set ? 'stored' : 'missing',
-        storedScopes: secret.is_set
-          ? [secret.scope === 'node' ? pkg.name : secret.scope ?? GLOBAL_SCOPE]
-          : []
-      }))
+      const hasEnvMetadata = secrets.some((secret) => Boolean(secret.requirement))
+      const vars: AgentEnvVar[] = secrets.map((secret) => {
+        if (!hasEnvMetadata) {
+          return {
+            name: secret.key,
+            description: '',
+            secret: true,
+            scope: secret.scope ?? GLOBAL_SCOPE,
+            required: true,
+            status: secret.is_set ? 'stored' : 'missing',
+            storedScopes: secret.is_set
+              ? [secret.scope === 'node' ? pkg.name : secret.scope ?? GLOBAL_SCOPE]
+              : []
+          }
+        }
+
+        const status: EnvVarStatus = secret.is_set
+          ? 'stored'
+          : secret.default
+            ? 'default'
+            : 'missing'
+        return {
+          name: secret.key,
+          description: secret.description ?? '',
+          secret: secret.secret ?? false,
+          scope: secret.declared_scope ?? GLOBAL_SCOPE,
+          // Group members are `required: true` by app convention (see
+          // AgentEnvVar.required) — EnvEditor's Optional bucket filters on
+          // !required, and the gate below exempts grouped vars instead.
+          required: secret.requirement === 'required' || secret.requirement === 'one_of',
+          group: secret.requirement === 'one_of' ? secret.group || undefined : undefined,
+          groupDescription:
+            secret.requirement === 'one_of' ? secret.group_description || undefined : undefined,
+          status,
+          storedScopes: secret.is_set
+            ? [secret.scope === 'node' ? pkg.name : secret.scope ?? GLOBAL_SCOPE]
+            : []
+        }
+      })
+      const groups = new Set(vars.flatMap((variable) => variable.group ? [variable.group] : []))
+      const requiredOk = vars.every((variable) =>
+        variable.group || !variable.required || variable.status !== 'missing'
+      )
+      const groupsOk = [...groups].every((group) =>
+        vars.some((variable) => variable.group === group && variable.status !== 'missing')
+      )
       return {
         agent: pkg.name,
         vars,
-        satisfied: vars.every((variable) => variable.status !== 'missing')
+        satisfied: hasEnvMetadata
+          ? requiredOk && groupsOk
+          : vars.every((variable) => variable.status !== 'missing')
       }
     }))
   } catch (err) {
