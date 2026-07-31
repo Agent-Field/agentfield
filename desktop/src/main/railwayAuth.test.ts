@@ -112,7 +112,10 @@ describe('loginWithRailway', () => {
       client_id: 'rlwy_oaci_onEklvmksh1hRUiCo7E2zX12',
     })
     expect(isLoggedIn({ storePath, codec: reverseCodec })).toBe(true)
-    expect(statSync(storePath).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') {
+      // Windows ignores POSIX modes (ACLs apply instead); assert only where chmod is real.
+      expect(statSync(storePath).mode & 0o777).toBe(0o600)
+    }
   })
 
   it('rejects a bad state with a CSRF failure page', async () => {
