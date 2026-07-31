@@ -1240,18 +1240,174 @@ section > .section-title {
 }
 
 .cloud-input {
-  width: min(300px, 36vw);
+  width: 100%;
+  min-height: 32px;
 }
 
 .cloud-actions {
   display: flex;
-  justify-content: flex-end;
-  gap: 6px;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.cloud-form {
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.cloud-field {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.cloud-field .row-sub {
+  white-space: normal;
+  margin-bottom: var(--space-2);
+}
+
+.cloud-input-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.cloud-key-row {
+  position: relative;
+}
+
+.cloud-key-row .cloud-input {
+  padding-right: 62px;
+}
+
+.cloud-key-toggle {
+  position: absolute;
+  right: 3px;
+  top: 50%;
+  min-width: 54px;
+  transform: translateY(-50%);
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.cloud-key-toggle:active:not(:disabled) {
+  transform: translateY(-50%) scale(0.985);
+}
+
+.cloud-status-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--neutral);
+}
+
+.cloud-status-dot.connected {
+  background: var(--ok);
+}
+
+.cloud-status-title {
+  line-height: 1.45;
+}
+
+.cloud-spinner {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border: 2px solid color-mix(in oklch, currentColor 30%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: cloud-spin 0.8s linear infinite;
+}
+
+@keyframes cloud-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.callout.success {
+  background: color-mix(in oklch, var(--ok) 10%, transparent);
+  color: var(--ok);
+}
+
+.callout.warning {
+  background: color-mix(in oklch, var(--warn) 12%, transparent);
+  color: var(--warn);
+}
+
+.cloud-confirmation {
+  font-weight: var(--weight-body);
+}
+
+.cloud-result {
+  display: block;
+}
+
+.cloud-result-heading {
+  font-weight: var(--weight-body);
 }
 
 .cloud-checks {
-  margin-top: 4px;
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-1);
   font-size: 11.5px;
+}
+
+.cloud-checks li {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  align-items: baseline;
+  column-gap: var(--space-1);
+  color: var(--text-secondary);
+}
+
+.cloud-check-icon {
+  text-align: center;
+  font-weight: 700;
+}
+
+.cloud-checks .passed .cloud-check-icon {
+  color: var(--ok);
+}
+
+.cloud-checks .warning .cloud-check-icon {
+  color: var(--warn);
+}
+
+.cloud-checks .failed .cloud-check-icon {
+  color: var(--danger);
+}
+
+.cloud-checks .pending .cloud-check-icon {
+  color: var(--neutral);
+}
+
+.cloud-railway {
+  padding: var(--space-4);
+}
+
+.cloud-railway-content {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.cloud-steps {
+  margin: var(--space-2) 0 var(--space-3);
+  padding-left: var(--space-5);
+  color: var(--text-secondary);
+  font-size: var(--text-secondary-size);
+}
+
+.cloud-steps li + li {
+  margin-top: var(--space-1);
 }
 
 .switch {
@@ -1648,6 +1804,17 @@ code {
     animation: none;
     border-top-color: color-mix(in oklch, var(--ok) 30%, transparent);
     opacity: 0.85;
+  }
+
+  .cloud-spinner {
+    animation: none;
+    border-color: transparent;
+  }
+
+  .cloud-spinner::after {
+    content: '…';
+    display: block;
+    transform: translate(-1px, -8px);
   }
 
   .view-content {
