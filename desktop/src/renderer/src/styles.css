@@ -55,9 +55,9 @@
 
   /* Type */
   --font-sans:
-    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable', 'Segoe UI', system-ui,
-    sans-serif;
-  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+        -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable",
+        "Segoe UI", system-ui, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --text-brand: 13.5px;
   --text-title: 19px;
   --text-section: 12px;
@@ -114,12 +114,12 @@
 }
 
 /* Solid surfaces off macOS — panel translucency must not depend on vibrancy. */
-body:not([data-platform='darwin']) {
+body:not([data-platform="darwin"]) {
   --panel: var(--bg-elevated);
 }
 
 @media (prefers-color-scheme: dark) {
-  body:not([data-platform='darwin']) {
+    body:not([data-platform="darwin"]) {
     --panel: var(--bg-elevated);
   }
 }
@@ -148,11 +148,11 @@ body {
   user-select: text;
 }
 
-body[data-platform='darwin'] {
+body[data-platform="darwin"] {
   background: transparent;
 }
 
-body[data-platform='darwin'] .sidebar {
+body[data-platform="darwin"] .sidebar {
   background: transparent;
 }
 
@@ -213,7 +213,7 @@ code,
   padding: 14px 10px;
 }
 
-body[data-platform='darwin'] .sidebar {
+body[data-platform="darwin"] .sidebar {
   padding-top: 48px;
 }
 
@@ -352,7 +352,7 @@ body[data-platform='darwin'] .sidebar {
 
 /* macOS: vibrancy is the sidebar's material only — the canvas stays solid so
    system blur never bleeds under content (§3.6). */
-body[data-platform='darwin'] .main {
+body[data-platform="darwin"] .main {
   background: var(--bg);
 }
 
@@ -1312,6 +1312,52 @@ section > .section-title {
   line-height: 1.45;
 }
 
+.cloud-status-strip {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+}
+
+.cloud-tabs {
+    align-self: flex-start;
+    display: inline-flex;
+    gap: 2px;
+    padding: 3px;
+    margin-left: 4px;
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-pill);
+    background: var(--empty-surface);
+}
+
+.cloud-tab {
+    border: 0;
+    border-radius: var(--radius-pill);
+    padding: 5px 14px;
+    background: transparent;
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: var(--text-chip);
+    font-weight: var(--weight-chip);
+    cursor: pointer;
+}
+
+.cloud-tab:hover {
+    color: var(--text);
+    background: var(--pill);
+}
+
+.cloud-tab.active {
+    color: var(--accent-ink);
+    background: var(--accent-soft);
+}
+
+@media (prefers-color-scheme: dark) {
+    .cloud-tab.active {
+        color: var(--accent);
+    }
+}
+
 .cloud-spinner {
   flex: none;
   width: 12px;
@@ -1398,6 +1444,20 @@ section > .section-title {
   flex-direction: column;
   align-items: flex-start;
   gap: var(--space-3);
+}
+
+.cloud-guided-state {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-3);
+}
+
+.cloud-progress-title {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
 }
 
 .cloud-railway-copy,
@@ -1658,7 +1718,8 @@ section > .section-title {
   background: currentColor;
   opacity: var(--dot-rest);
   transform: scale(0.72);
-  animation: dot-field-flow var(--dot-duration) cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    animation: dot-field-flow var(--dot-duration) cubic-bezier(0.4, 0, 0.2, 1)
+        infinite;
   animation-delay: var(--dot-delay);
 }
 
@@ -1871,7 +1932,7 @@ code {
   }
 
   .cloud-spinner::after {
-    content: '…';
+        content: "…";
     display: block;
     transform: translate(-1px, -8px);
   }
