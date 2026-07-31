@@ -8,6 +8,7 @@ import {
   type InstallJob,
   type PackageInfo
 } from './cpClient'
+import { readInstalledAgents } from './agentfield'
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -94,6 +95,34 @@ describe('createCpClient', () => {
     expect(JSON.parse(String(calls[6][1]?.body))).toEqual({ port: 9000, detach: false })
   })
 
+  it('normalizes Go nil slices in list responses', async () => {
+    const fetchImpl = mockFetch([
+      json({ packages: null, total: 0 }),
+      json(null),
+      json({ running_agents: null, total_count: 0 }),
+      json({ secrets: null }),
+      json({ secrets: null })
+    ])
+    const client = createCpClient({ fetchImpl })
+
+    await expect(client.listPackages()).resolves.toEqual({ packages: [], total: 0 })
+    await expect(client.listInstallJobs()).resolves.toEqual([])
+    await expect(client.listRunningAgents()).resolves.toEqual({
+      running_agents: [],
+      total_count: 0
+    })
+    await expect(client.listAgentSecrets('agent')).resolves.toEqual({ secrets: [] })
+    await expect(client.listAllSecrets()).resolves.toEqual({ secrets: [] })
+  })
+
+  it('maps a null packages wire value to an empty installed-agent registry', async () => {
+    const client = createCpClient({
+      fetchImpl: mockFetch([json({ packages: null, total: 0 })])
+    })
+
+    await expect(readInstalledAgents(client)).resolves.toEqual({ exists: true, agents: [] })
+  })
+
   // Contracts 2 and 3: auth is conditional and late-bound providers are re-read.
   it('late-binds base URL and API key on every call', async () => {
     let host = 'http://one'
@@ -169,6 +198,18 @@ describe('createCpClient', () => {
     })
     expect(result.status).toBe(terminal)
     expect(lines).toEqual(['one', 'two', 'three'])
+  })
+
+  it('normalizes null job lines while watching', async () => {
+    const emitted: string[] = []
+    const client = createCpClient({
+      fetchImpl: mockFetch([json({ ...job('succeeded'), lines: null })])
+    })
+
+    const result = await client.watchInstallJob('job/1', (line) => emitted.push(line))
+
+    expect(result.lines).toEqual([])
+    expect(emitted).toEqual([])
   })
 
   it('reports when a job disappears while it is being watched', async () => {

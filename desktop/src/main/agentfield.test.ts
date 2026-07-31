@@ -290,6 +290,11 @@ describe('fetchControlPlaneNodes', () => {
     )
   })
 
+  it('treats a null nodes slice as an empty control-plane view', async () => {
+    const fetchImpl: FetchLike = async () => jsonResponse({ nodes: null, count: 0 })
+    expect(await fetchControlPlaneNodes('http://localhost:8080', fetchImpl)).toEqual(new Map())
+  })
+
   it('returns null on a non-200 response', async () => {
     const fetchImpl: FetchLike = async () => jsonResponse({ error: 'nope' }, 500)
     expect(await fetchControlPlaneNodes('http://localhost:8080', fetchImpl)).toBeNull()
@@ -356,6 +361,15 @@ describe('fetchExecutions', () => {
       durationMs: 45,
       terminal: true,
       errorMessage: null
+    })
+  })
+
+  it('treats a null runs slice as empty activity', async () => {
+    const fetchImpl: FetchLike = async () =>
+      jsonResponse({ runs: null, total_count: 0 })
+    await expect(fetchExecutions('http://localhost:8080', fetchImpl)).resolves.toEqual({
+      running: [],
+      recent: []
     })
   })
 

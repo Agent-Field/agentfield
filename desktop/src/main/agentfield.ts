@@ -160,9 +160,11 @@ export async function fetchControlPlaneNodes(
     })
     if (!res.ok) return null
     const body: unknown = await res.json()
-    if (!isRecord(body) || !Array.isArray(body.nodes)) return null
+    if (!isRecord(body) || !('nodes' in body)) return null
+    const nodes = body.nodes ?? []
+    if (!Array.isArray(nodes)) return null
     const health = new Map<string, string>()
-    for (const node of body.nodes) {
+    for (const node of nodes) {
       if (!isRecord(node) || typeof node.id !== 'string' || node.id === '') continue
       health.set(node.id, typeof node.health_status === 'string' ? node.health_status : 'unknown')
     }
@@ -249,8 +251,10 @@ export async function fetchExecutions(
     )
     if (!res.ok) return null
     const body: unknown = await res.json()
-    if (!isRecord(body) || !Array.isArray(body.runs)) return null
-    const summaries = body.runs
+    if (!isRecord(body) || !('runs' in body)) return null
+    const runs = body.runs ?? []
+    if (!Array.isArray(runs)) return null
+    const summaries = runs
       .filter(isRecord)
       .map(toExecutionSummary)
       .filter((s): s is ExecutionSummary => s !== null)

@@ -278,11 +278,15 @@ export function createCpClient(options: CpClientOptions = {}): CpClient {
         body: JSON.stringify(body)
       }, true)
     },
-    getInstallJob(jobId) {
-      return request(`/api/ui/v1/agents/packages/install/jobs/${encodeURIComponent(jobId)}`)
+    async getInstallJob(jobId) {
+      const job = await request<Omit<InstallJob, 'lines'> & { lines: string[] | null }>(
+        `/api/ui/v1/agents/packages/install/jobs/${encodeURIComponent(jobId)}`
+      )
+      return { ...job, lines: job.lines ?? [] }
     },
-    listInstallJobs() {
-      return request('/api/ui/v1/agents/packages/install/jobs')
+    async listInstallJobs() {
+      const jobs = await request<InstallJob[] | null>('/api/ui/v1/agents/packages/install/jobs')
+      return jobs ?? []
     },
     uninstallPackage(packageId) {
       return request(
@@ -298,8 +302,13 @@ export function createCpClient(options: CpClientOptions = {}): CpClient {
         true
       )
     },
-    listPackages() {
-      return request('/api/ui/v1/agents/packages')
+    async listPackages() {
+      const response = await request<
+        Omit<PackageListResponse, 'packages'> & { packages: PackageInfo[] | null }
+      >(
+        '/api/ui/v1/agents/packages'
+      )
+      return { ...response, packages: response.packages ?? [] }
     },
     startAgent(agentId, startOptions) {
       return request(
@@ -318,11 +327,17 @@ export function createCpClient(options: CpClientOptions = {}): CpClient {
     getAgentStatus(agentId) {
       return request(`/api/ui/v1/agents/${encodeURIComponent(agentId)}/status`)
     },
-    listRunningAgents() {
-      return request('/api/ui/v1/agents/running')
+    async listRunningAgents() {
+      const response = await request<
+        Omit<RunningAgentsResponse, 'running_agents'> & { running_agents: RunningAgent[] | null }
+      >('/api/ui/v1/agents/running')
+      return { ...response, running_agents: response.running_agents ?? [] }
     },
-    listAgentSecrets(agentId) {
-      return request(`/api/ui/v1/agents/${encodeURIComponent(agentId)}/secrets`)
+    async listAgentSecrets(agentId) {
+      const response = await request<{ secrets: AgentSecretStatus[] | null }>(
+        `/api/ui/v1/agents/${encodeURIComponent(agentId)}/secrets`
+      )
+      return { ...response, secrets: response.secrets ?? [] }
     },
     setAgentSecret(agentId, key, value, scope) {
       const body = scope === undefined ? { key, value } : { key, value, scope }
@@ -342,8 +357,9 @@ export function createCpClient(options: CpClientOptions = {}): CpClient {
         true
       )
     },
-    listAllSecrets() {
-      return request('/api/ui/v1/secrets')
+    async listAllSecrets() {
+      const response = await request<{ secrets: SecretReference[] | null }>('/api/ui/v1/secrets')
+      return { ...response, secrets: response.secrets ?? [] }
     },
     async hasInstallApi() {
       try {
