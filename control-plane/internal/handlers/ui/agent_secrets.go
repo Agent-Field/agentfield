@@ -35,7 +35,25 @@ type agentSecretStatus struct {
 	IsSet bool   `json:"is_set"`
 	// Scope reports where the stored value lives ("node" or "global");
 	// empty when the key is not set anywhere.
-	Scope string `json:"scope,omitempty"`
+	Scope            string `json:"scope,omitempty"`
+	DeclaredScope    string `json:"declared_scope,omitempty"`
+	Description      string `json:"description,omitempty"`
+	Secret           bool   `json:"secret,omitempty"`
+	Default          string `json:"default,omitempty"`
+	Requirement      string `json:"requirement,omitempty"`
+	Group            string `json:"group,omitempty"`
+	GroupDescription string `json:"group_description,omitempty"`
+}
+
+type declaredAgentEnvironmentVar struct {
+	Name             string `json:"name"`
+	Description      string `json:"description"`
+	Type             string `json:"type"`
+	Scope            string `json:"scope"`
+	Default          string `json:"default"`
+	Requirement      string `json:"-"`
+	Group            string `json:"-"`
+	GroupDescription string `json:"-"`
 }
 
 type setAgentSecretRequest struct {
@@ -82,9 +100,18 @@ func (h *AgentSecretsHandler) ListAgentSecretsHandler(c *gin.Context) {
 		inGlobal[key] = true
 	}
 
+	includeEnvironment := c.Query("include") == "env"
+	declared := declaredAgentSecrets(agentPackage.ConfigurationSchema)
 	listed := make(map[string]struct{})
-	for key := range declaredAgentSecrets(agentPackage.ConfigurationSchema) {
+	for key := range declared {
 		listed[key] = struct{}{}
+	}
+	var environment map[string]declaredAgentEnvironmentVar
+	if includeEnvironment {
+		environment = declaredAgentEnvironment(agentPackage.ConfigurationSchema)
+		for key := range environment {
+			listed[key] = struct{}{}
+		}
 	}
 	for _, key := range nodeKeys {
 		listed[key] = struct{}{}
@@ -106,6 +133,17 @@ func (h *AgentSecretsHandler) ListAgentSecretsHandler(c *gin.Context) {
 		case inGlobal[key]:
 			status.IsSet = true
 			status.Scope = globalSecretScope
+		}
+		if includeEnvironment {
+			if variable, ok := environment[key]; ok {
+				status.DeclaredScope = variable.Scope
+				status.Description = variable.Description
+				status.Secret = variable.Type == "secret"
+				status.Default = variable.Default
+				status.Requirement = variable.Requirement
+				status.Group = variable.Group
+				status.GroupDescription = variable.GroupDescription
+			}
 		}
 		secrets = append(secrets, status)
 	}
@@ -270,6 +308,49 @@ func declaredAgentSecrets(schema json.RawMessage) map[string]string {
 		for _, variable := range group.Options {
 			record(variable)
 		}
+	}
+	return declared
+}
+
+func declaredAgentEnvironment(schema json.RawMessage) map[string]declaredAgentEnvironmentVar {
+	var manifest struct {
+		UserEnvironment struct {
+			Required     []declaredAgentEnvironmentVar `json:"required"`
+			Optional     []declaredAgentEnvironmentVar `json:"optional"`
+			RequireOneOf []struct {
+				ID          string                        `json:"id"`
+				Description string                        `json:"description"`
+				Options     []declaredAgentEnvironmentVar `json:"options"`
+			} `json:"require_one_of"`
+		} `json:"user_environment"`
+	}
+	if json.Unmarshal(schema, &manifest) != nil {
+		return nil
+	}
+
+	declared := make(map[string]declaredAgentEnvironmentVar)
+	record := func(v declaredAgentEnvironmentVar, requirement, group, groupDescription string) {
+		if v.Name == "" {
+			return
+		}
+		if v.Scope != "node" {
+			v.Scope = globalSecretScope
+		}
+		v.Requirement = requirement
+		v.Group = group
+		v.GroupDescription = groupDescription
+		declared[v.Name] = v
+	}
+	for _, variable := range manifest.UserEnvironment.Required {
+		record(variable, "required", "", "")
+	}
+	for _, group := range manifest.UserEnvironment.RequireOneOf {
+		for _, variable := range group.Options {
+			record(variable, "one_of", group.ID, group.Description)
+		}
+	}
+	for _, variable := range manifest.UserEnvironment.Optional {
+		record(variable, "optional", "", "")
 	}
 	return declared
 }

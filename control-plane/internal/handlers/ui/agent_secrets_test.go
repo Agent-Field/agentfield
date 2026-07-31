@@ -30,10 +30,14 @@ func newAgentSecretsTestRouter(t *testing.T) (*gin.Engine, string) {
 		ConfigurationSchema: json.RawMessage(`{
 			"user_environment": {
 				"required": [
-					{"name": "OPENAI_API_KEY", "type": "secret"},
+					{"name": "OPENAI_API_KEY", "description": "OpenAI key", "type": "secret"},
 					{"name": "NODE_SCOPED_KEY", "type": "secret", "scope": "node"}
 				],
-				"require_one_of": [{"options": [{"name": "ANTHROPIC_API_KEY", "type": "secret"}]}]
+				"require_one_of": [{"id":"llm_provider","description":"an LLM provider key","options": [{"name": "ANTHROPIC_API_KEY", "description":"Anthropic key", "type": "secret"}]}],
+				"optional": [
+					{"name":"SWE_DEFAULT_RUNTIME","description":"Coding runtime"},
+					{"name":"AGENTFIELD_SERVER","description":"Control-plane URL","default":"http://localhost:8080"}
+				]
 			}
 		}`),
 	})
@@ -95,6 +99,44 @@ func TestAgentSecretsListNamesOnly(t *testing.T) {
 		{"key":"NODE_SCOPED_KEY","is_set":false},
 		{"key":"OPENAI_API_KEY","is_set":true,"scope":"global"}
 	]}`, response.Body.String())
+}
+
+func TestAgentSecretsListIncludesEnvironmentMetadataOptIn(t *testing.T) {
+	router, home := newAgentSecretsTestRouter(t)
+	store, err := packages.NewSecretStore(home)
+	require.NoError(t, err)
+	require.NoError(t, store.Set(agentSecretsTestScope, "ANTHROPIC_API_KEY", "node-value"))
+	require.NoError(t, store.Set(agentSecretsTestScope, "UNDECLARED_NODE", "value"))
+
+	response := agentSecretsRequest(t, router, http.MethodGet, "/agents/agent-x/secrets?include=env", "")
+	require.Equal(t, http.StatusOK, response.Code)
+	require.NotContains(t, response.Body.String(), "node-value")
+	require.JSONEq(t, `{"secrets":[
+		{"key":"AGENTFIELD_SERVER","is_set":false,"declared_scope":"global","description":"Control-plane URL","default":"http://localhost:8080","requirement":"optional"},
+		{"key":"ANTHROPIC_API_KEY","is_set":true,"scope":"node","declared_scope":"global","description":"Anthropic key","secret":true,"requirement":"one_of","group":"llm_provider","group_description":"an LLM provider key"},
+		{"key":"NODE_SCOPED_KEY","is_set":false,"declared_scope":"node","secret":true,"requirement":"required"},
+		{"key":"OPENAI_API_KEY","is_set":false,"declared_scope":"global","description":"OpenAI key","secret":true,"requirement":"required"},
+		{"key":"SWE_DEFAULT_RUNTIME","is_set":false,"declared_scope":"global","description":"Coding runtime","requirement":"optional"},
+		{"key":"UNDECLARED_NODE","is_set":true,"scope":"node"}
+	]}`, response.Body.String())
+}
+
+func TestAgentSecretsListLegacyShapeIgnoresOtherIncludeValues(t *testing.T) {
+	router, _ := newAgentSecretsTestRouter(t)
+	for _, path := range []string{
+		"/agents/agent-x/secrets",
+		"/agents/agent-x/secrets?include=other",
+	} {
+		response := agentSecretsRequest(t, router, http.MethodGet, path, "")
+		require.Equal(t, http.StatusOK, response.Code)
+		require.JSONEq(t, `{"secrets":[
+			{"key":"ANTHROPIC_API_KEY","is_set":false},
+			{"key":"NODE_SCOPED_KEY","is_set":false},
+			{"key":"OPENAI_API_KEY","is_set":false}
+		]}`, response.Body.String())
+		require.NotContains(t, response.Body.String(), "SWE_DEFAULT_RUNTIME")
+		require.NotContains(t, response.Body.String(), "description")
+	}
 }
 
 // Validation contract 3: DELETE removes the secret and remains idempotent.
