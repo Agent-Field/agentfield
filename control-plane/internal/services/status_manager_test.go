@@ -694,7 +694,7 @@ func TestStatusManager_UpdateAgentStatus_ActivePromotesStarting(t *testing.T) {
 // TestStatusManager_ReadyLeaseRenewalPromotesHealthImmediately reproduces the Go SDK
 // "unknown forever" wedge: an agent registers (health "unknown", lifecycle "starting")
 // and its ONLY keep-alive is the status lease (PATCH /nodes/:id/status with
-// phase=ready → State=active + lifecycle=ready, Source=manual). The starting→active
+// phase=ready → State=active + lifecycle=ready, Source=heartbeat). The starting→active
 // transition used to be held open as "pending" instead of completing, so State stayed
 // "starting" and health persisted as "unknown" while lifecycle said "ready" — and
 // because the Go SDK renews the lease every 2 minutes (exactly MaxTransitionTime),
@@ -725,7 +725,7 @@ func TestStatusManager_ReadyLeaseRenewalPromotesHealthImmediately(t *testing.T) 
 	renewal := &types.AgentStatusUpdate{
 		State:           &active,
 		LifecycleStatus: &ready,
-		Source:          types.StatusSourceManual,
+		Source:          types.StatusSourceHeartbeat,
 		Version:         "1.0.0",
 	}
 	require.NoError(t, sm.UpdateAgentStatus(ctx, "lease-node", renewal))
@@ -741,6 +741,85 @@ func TestStatusManager_ReadyLeaseRenewalPromotesHealthImmediately(t *testing.T) 
 	stable, err := provider.GetAgent(ctx, "lease-node")
 	require.NoError(t, err)
 	assert.Equal(t, types.HealthStatusActive, stable.HealthStatus)
+}
+
+func TestStatusManager_LeaseRenewalRefreshesLastSeenButManualUpdateDoesNot(t *testing.T) {
+	provider, ctx := setupStatusManagerStorage(t)
+	registerTestAgent(t, provider, ctx, "lease-liveness-node")
+
+	sm := NewStatusManager(provider, StatusManagerConfig{}, nil, nil)
+	before, err := sm.GetAgentStatusSnapshot(ctx, "lease-liveness-node", nil)
+	require.NoError(t, err)
+
+	time.Sleep(time.Millisecond)
+	require.NoError(t, sm.UpdateAgentStatus(ctx, "lease-liveness-node", &types.AgentStatusUpdate{
+		Source:  types.StatusSourceHeartbeat,
+		Version: "1.0.0",
+		Reason:  "status lease renewal",
+	}))
+
+	afterLease, err := sm.GetAgentStatusSnapshot(ctx, "lease-liveness-node", nil)
+	require.NoError(t, err)
+	assert.True(t, afterLease.LastSeen.After(before.LastSeen),
+		"a lease renewal must advance the cached status snapshot's LastSeen")
+
+	time.Sleep(time.Millisecond)
+	require.NoError(t, sm.UpdateAgentStatus(ctx, "lease-liveness-node", &types.AgentStatusUpdate{
+		Source: types.StatusSourceManual,
+		Reason: "admin metadata update",
+	}))
+
+	afterManual, err := sm.GetAgentStatusSnapshot(ctx, "lease-liveness-node", nil)
+	require.NoError(t, err)
+	assert.Equal(t, afterLease.LastSeen, afterManual.LastSeen,
+		"a genuinely manual update must preserve LastSeen")
+}
+
+func TestStatusManager_ReconciliationUsesLeaseHeartbeatFreshness(t *testing.T) {
+	provider, ctx := setupStatusManagerStorage(t)
+
+	now := time.Now()
+	for _, node := range []*types.AgentNode{
+		{
+			ID:              "current-lease",
+			TeamID:          "team",
+			Version:         "1.0.0",
+			HealthStatus:    types.HealthStatusActive,
+			LifecycleStatus: types.AgentStatusReady,
+			LastHeartbeat:   now.Add(-time.Second),
+			Reasoners:       []types.ReasonerDefinition{},
+			Skills:          []types.SkillDefinition{},
+		},
+		{
+			ID:              "expired-lease",
+			TeamID:          "team",
+			Version:         "1.0.0",
+			HealthStatus:    types.HealthStatusActive,
+			LifecycleStatus: types.AgentStatusReady,
+			LastHeartbeat:   now.Add(-2 * time.Minute),
+			Reasoners:       []types.ReasonerDefinition{},
+			Skills:          []types.SkillDefinition{},
+		},
+	} {
+		require.NoError(t, provider.RegisterAgent(ctx, node))
+	}
+
+	sm := NewStatusManager(provider, StatusManagerConfig{
+		HeartbeatStaleThreshold: 30 * time.Second,
+	}, nil, nil)
+	sm.performReconciliation()
+
+	current, err := provider.GetAgent(ctx, "current-lease")
+	require.NoError(t, err)
+	assert.Equal(t, types.HealthStatusActive, current.HealthStatus,
+		"a current lease heartbeat must keep the agent active")
+	assert.Equal(t, types.AgentStatusReady, current.LifecycleStatus)
+
+	expired, err := provider.GetAgent(ctx, "expired-lease")
+	require.NoError(t, err)
+	assert.Equal(t, types.HealthStatusInactive, expired.HealthStatus,
+		"the agent must become inactive after lease renewals stop")
+	assert.Equal(t, types.AgentStatusOffline, expired.LifecycleStatus)
 }
 
 // TestStatusManager_NeedsReconciliation_UnknownHealthFreshHeartbeat covers the

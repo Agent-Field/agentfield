@@ -82,7 +82,10 @@ func NodeStatusLeaseHandler(storageProvider storage.StorageProvider, statusManag
 		}
 
 		update := &types.AgentStatusUpdate{
-			Source:  types.StatusSourceManual,
+			// A lease renewal is the Go SDK's proof-of-life signal. Classifying it
+			// as a heartbeat keeps the status snapshot and persisted heartbeat in
+			// sync without changing the public lease wire contract.
+			Source:  types.StatusSourceHeartbeat,
 			Version: agent.Version,
 		}
 
