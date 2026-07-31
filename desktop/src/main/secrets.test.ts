@@ -252,7 +252,9 @@ describe('control-plane secret management', () => {
       { name: 'UNSET_KEY', status: 'missing' }
     ])
     expect(reports[0].vars.every((variable) => variable.required && variable.secret)).toBe(true)
-    expect(reports[0].satisfied).toBe(false)
+    // Without metadata a missing key may be an unused one-of alternative, so
+    // the report must not veto Start — the control plane decides at start time.
+    expect(reports[0].satisfied).toBe(true)
   })
 
   it('maps enriched environment metadata, groups, defaults, and optionals', async () => {

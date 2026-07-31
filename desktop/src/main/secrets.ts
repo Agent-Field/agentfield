@@ -243,12 +243,14 @@ export async function getEnvReports(
       const groupsOk = [...groups].every((group) =>
         vars.some((variable) => variable.group === group && variable.status !== 'missing')
       )
+      // Without metadata, a require_one_of group member is indistinguishable
+      // from a hard-required key, so an unset alternative (e.g. one of two
+      // LLM-provider keys) must not veto Start. Report the keys as declared,
+      // but leave the verdict to the control plane's start-time resolution.
       return {
         agent: pkg.name,
         vars,
-        satisfied: hasEnvMetadata
-          ? requiredOk && groupsOk
-          : vars.every((variable) => variable.status !== 'missing')
+        satisfied: hasEnvMetadata ? requiredOk && groupsOk : true
       }
     }))
   } catch (err) {
