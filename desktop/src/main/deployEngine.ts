@@ -148,6 +148,12 @@ function stateSubdomain(state: TfState | null): string | null {
   return null
 }
 
+function stateWorkspaceId(state: TfState | null): string | null {
+  const resource = state?.resources?.find((item) => item.type === 'railway_project')
+  const value = resource?.instances?.[0]?.attributes?.workspace_id
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
 function writeConfig(workspaceDir: string, binaryDir?: string | null): string | null {
   if (!binaryDir) return null
   const mirror = join(binaryDir, 'providers')
@@ -337,8 +343,15 @@ export async function runDestroy(opts: DeployEngineOptions, deps: DeploySpawnDep
   const state = readState(opts.workspaceDir)
   const apiKey = stateOutput(state, 'api_key') ?? generateApiKey()
   const subdomain = stateSubdomain(state) ?? (opts.projectName ?? 'agentfield')
+  // The provider validates workspace_id (UUID) even on destroy, and callers
+  // tearing down don't re-prompt for a workspace — the project's own state
+  // records which workspace it was created in.
+  const workspaceId = stateWorkspaceId(state) ?? opts.workspaceId
+  if (!workspaceId) {
+    return { ok: false, message: 'Could not determine the Railway workspace of this deployment — sign in and re-run deploy first.' }
+  }
   const cliConfig = writeConfig(opts.workspaceDir, opts.binaryDir)
-  const result = await runCommand(binary, ['destroy', '-auto-approve', '-input=false', '-json'], opts.workspaceDir, deployEnv(opts, apiKey, subdomain, cliConfig, deps), deps, true, opts.onLine)
+  const result = await runCommand(binary, ['destroy', '-auto-approve', '-input=false', '-json'], opts.workspaceDir, deployEnv({ ...opts, workspaceId }, apiKey, subdomain, cliConfig, deps), deps, true, opts.onLine)
   if (result.code !== 0 || result.lastError) return { ok: false, message: result.lastError ?? 'Destroy failed.' }
   return { ok: true, message: 'Railway deployment destroyed.' }
 }

@@ -237,4 +237,34 @@ describe('destroy', () => {
     const failed = harness([{ stdout: '{"type":"diagnostic","diagnostic":{"severity":"error","summary":"delete denied"}}\n', code: 1 }])
     expect(await runDestroy(fixture.opts, failed.deps)).toEqual({ ok: false, message: 'delete denied' })
   })
+
+  it('recovers the workspace id from state — tear-down has no workspace picker', async () => {
+    const fixture = workspace()
+    mkdirSync(fixture.opts.workspaceDir, { recursive: true })
+    writeFileSync(join(fixture.opts.workspaceDir, 'terraform.tfstate'), JSON.stringify({
+      resources: [
+        { type: 'railway_project', name: 'cp', instances: [{ attributes: { workspace_id: 'ws-from-state' } }] },
+        { type: 'railway_service_domain', name: 'cp', instances: [{ attributes: { subdomain: 'agentfield-dead' } }] }
+      ],
+      outputs: { api_key: { value: 'prior-key' } }
+    }))
+    const fake = harness([{ stdout: '{"type":"apply_complete","@message":"Destroyed"}\n' }])
+    expect(await runDestroy({ ...fixture.opts, workspaceId: '' }, fake.deps)).toEqual({
+      ok: true,
+      message: 'Railway deployment destroyed.'
+    })
+    expect(fake.calls[0].env.TF_VAR_workspace_id).toBe('ws-from-state')
+  })
+
+  it('refuses with a clear message when no workspace id is known', async () => {
+    const fixture = workspace()
+    mkdirSync(fixture.opts.workspaceDir, { recursive: true })
+    writeFileSync(join(fixture.opts.workspaceDir, 'terraform.tfstate'), deployedState())
+    const fake = harness([])
+    expect(await runDestroy({ ...fixture.opts, workspaceId: '' }, fake.deps)).toEqual({
+      ok: false,
+      message: 'Could not determine the Railway workspace of this deployment — sign in and re-run deploy first.'
+    })
+    expect(fake.calls).toHaveLength(0)
+  })
 })
