@@ -12,6 +12,7 @@
     "test": "vitest run",
     "icons": "electron scripts/make-icons.mjs",
     "bundle-cli": "node scripts/bundle-cli.mjs",
+    "fetch:deploy-engine": "node scripts/fetch-deploy-engine.mjs",
     "dist": "npm run build && electron-builder",
     "dist:dir": "npm run build && electron-builder --dir"
   },
@@ -39,6 +40,10 @@
           "af.exe",
           "af-tray"
         ]
+      },
+      {
+        "from": "vendor/deploy-engine",
+        "to": "bin/deploy-engine"
       }
     ],
     "directories": {
@@ -93,4 +98,3 @@
     "postcss": "8.5.18"
   }
 }
-

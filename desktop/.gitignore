@@ -8,6 +8,7 @@ release/
 # by the release pipeline); only the .gitkeep is tracked
 vendor/*
 !vendor/.gitkeep
+vendor/deploy-engine/
 
 # The root .gitignore excludes build/, but electron-builder reads the app
 # icons from desktop/build — track exactly those.
