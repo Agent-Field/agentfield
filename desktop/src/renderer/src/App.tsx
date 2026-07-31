@@ -45,7 +45,7 @@ const VIEW_TITLES: Record<View, string> = {
   agents: 'Agents',
   activity: 'Activity',
   settings: 'Settings',
-  cloud: 'Cloud'
+  cloud: 'Remote'
 }
 
 // ⌘1–⌘5 (Ctrl on Win/Linux) in nav order (DESIGN.md §4.17).

@@ -316,6 +316,27 @@ body[data-platform="darwin"] .sidebar {
   opacity: 0.75;
 }
 
+.nav-item-label {
+  min-width: 0;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.nav-item-tag {
+  flex: none;
+  padding: 2px 5px;
+  border: 1px solid color-mix(in oklch, var(--accent) 38%, var(--hairline));
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: 10px;
+  font-weight: var(--weight-chip);
+  line-height: 1;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .nav-item:hover {
   background: var(--pill);
   color: var(--text);

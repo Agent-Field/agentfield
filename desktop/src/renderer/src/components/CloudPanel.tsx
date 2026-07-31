@@ -113,7 +113,7 @@ export function CloudPanel() {
     const saveCloud = async () => {
         if (!result?.ok) {
             const proceed = window.confirm(
-                "The connection has not passed its test. Switch to this cloud control plane anyway?",
+                "The connection has not passed its test. Switch to this remote control plane anyway?",
             );
             if (!proceed) return;
         }
@@ -269,12 +269,12 @@ export function CloudPanel() {
                 <div className="row-main">
                     <span className="row-title cloud-status-title">
                         {enabled
-                            ? `Cloud: ${displayHost(cloud?.serverUrl || serverUrl)}`
+                            ? `Remote: ${displayHost(cloud?.serverUrl || serverUrl)}`
                             : "Local control plane"}
                     </span>
                     {enabled && (
                         <span className="row-sub">
-                            Local server management is disabled while this cloud
+                            Local server management is disabled while this remote
                             connection is active.
                         </span>
                     )}
@@ -293,7 +293,7 @@ export function CloudPanel() {
             <div
                 className="cloud-tabs"
                 role="tablist"
-                aria-label="Cloud connection method"
+                aria-label="Remote connection method"
             >
                 {CLOUD_TABS.map((tab) => (
                     <button
@@ -390,7 +390,7 @@ export function CloudPanel() {
                             disabled={!canSubmit || busy}
                             onClick={() => void saveCloud()}
                         >
-                            {saving ? "Saving…" : "Save & switch to cloud"}
+                            {saving ? "Saving…" : "Save & switch to Remote"}
                         </button>
                     </div>
                     {result && <CloudTestFeedback result={result} />}
