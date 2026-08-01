@@ -611,11 +611,19 @@ jobs:
       - name: Assert deploy engine is bundled
         working-directory: desktop
         shell: bash
+        # Plain file tests only: this step runs under bash -e -o pipefail,
+        # where an `ls existing missing | grep` pipeline reports the missing
+        # arg's exit status even when the other file exists (the v0.1.119
+        # false positive that blocked the macOS DMG).
         run: |
-          ls vendor/deploy-engine/tofu vendor/deploy-engine/tofu.exe 2>/dev/null | grep -q . \
-            || { echo "::error::vendor/deploy-engine has no tofu binary; run fetch:deploy-engine"; exit 1; }
-          test -d vendor/deploy-engine/providers \
-            || { echo "::error::vendor/deploy-engine/providers mirror is missing; offline provider install would fail"; exit 1; }
+          if [ ! -f vendor/deploy-engine/tofu ] && [ ! -f vendor/deploy-engine/tofu.exe ]; then
+            echo "::error::vendor/deploy-engine has no tofu binary; run fetch:deploy-engine"
+            exit 1
+          fi
+          if [ ! -d vendor/deploy-engine/providers ]; then
+            echo "::error::vendor/deploy-engine/providers mirror is missing; offline provider install would fail"
+            exit 1
+          fi
 
       # electron-builder signs every Mach-O in the bundle (including the
       # bundled af/af-tray) with the Developer ID cert + hardened runtime,
