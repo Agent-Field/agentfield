@@ -598,6 +598,25 @@ jobs:
           AF_CLI_VERSION: ${{ needs.prepare.outputs.tag_name }}
         run: npm run bundle-cli -- full
 
+      # One-click Railway deploy needs OpenTofu + the Railway provider in
+      # vendor/deploy-engine so extraResources can pack them into the app.
+      - name: Fetch deploy engine (OpenTofu + Railway provider)
+        working-directory: desktop
+        run: npm run fetch:deploy-engine
+
+      # electron-builder silently skips a missing extraResources source, so a
+      # broken or removed fetch would ship installers whose Remote tab says
+      # "one-click deploy isn't bundled" (every build up to v0.1.118 did).
+      # Fail the release here instead of degrading the artifact.
+      - name: Assert deploy engine is bundled
+        working-directory: desktop
+        shell: bash
+        run: |
+          ls vendor/deploy-engine/tofu vendor/deploy-engine/tofu.exe 2>/dev/null | grep -q . \
+            || { echo "::error::vendor/deploy-engine has no tofu binary; run fetch:deploy-engine"; exit 1; }
+          test -d vendor/deploy-engine/providers \
+            || { echo "::error::vendor/deploy-engine/providers mirror is missing; offline provider install would fail"; exit 1; }
+
       # electron-builder signs every Mach-O in the bundle (including the
       # bundled af/af-tray) with the Developer ID cert + hardened runtime,
       # then notarizes and staples the .app before packing DMG/zip from it.
