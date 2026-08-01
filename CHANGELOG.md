@@ -6,6 +6,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.118-rc.9] - 2026-08-01
+
+
+### Added
+
+- Feat(cloud-image): bundle the opencode coding harness (#849)
+
+* feat(cloud-image): bundle the opencode coding harness
+
+A fresh cloud deploy could run agents but not their LLM work: SWE-AF
+style nodes spawn a coding-harness CLI, and the image shipped none -
+every LLM role failed at spawn in ~500ms. Verified live on a Railway
+deploy: installing opencode in the container took a role from instant
+failure to a successful PRD via OpenRouter. Pin 1.18.10, the version
+verified in that test.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cloud-image): install latest opencode, cache-bust per release
+
+Drop the version pin: each release image now ships the newest opencode.
+Because release.yml builds with a persistent gha layer cache, the install
+moves after the af binary COPY so the layer actually re-resolves every
+release instead of being restored from cache. The docker.yml smoke test
+gains an opencode --version check so a broken upstream release fails CI
+rather than shipping a harness-less image.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (ccfa986)
+
+
+
+### Fixed
+
+- Fix(sdk): extract opencode token usage from step_finish parts (Go + Python) (#850)
+
+opencode reports cost AND tokens inside each step_finish event's part
+object, but both SDKs read only the cost from there - tokens went
+through a generic extractor that looks for top-level/item/turn usage
+shapes (Codex), so opencode runs recorded real cost with all-zero token
+counts. Sum part.tokens across steps exactly like cost (per-step
+values), fold reasoning into output_tokens (the envelope has no
+reasoning field), map cache.read/cache.write to the cache fields, and
+fall back to the generic extractor when no step carried tokens. Shape
+sourced from opencode's session schema (info.ts / session-data.ts).
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (4bfe2d1)
+
 ## [0.1.118-rc.8] - 2026-07-31
 
 

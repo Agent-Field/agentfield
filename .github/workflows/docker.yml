@@ -67,6 +67,7 @@ jobs:
             node --version
             npm --version
             go version
+            opencode --version
           '
 
   # Summary job that depends on all critical checks

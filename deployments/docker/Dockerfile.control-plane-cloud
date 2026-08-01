@@ -77,6 +77,17 @@ ENV PATH=/usr/local/go/bin:$PATH
 COPY --from=go-builder /app/bin/af /usr/local/bin/af
 COPY --from=go-builder /app/control-plane/config /etc/agentfield/config
 
+# opencode coding harness, so agent nodes can do LLM work out of the box
+# (SWE-AF-style agents spawn a harness CLI; without one, every LLM role
+# fails at spawn on a fresh cloud deploy). OpenRouter-compatible — pairs
+# with the OPENROUTER_API_KEY most cloud deployers configure.
+# Unpinned so each release ships the current harness — and deliberately
+# placed AFTER the `af` COPY: release.yml builds with a persistent layer
+# cache (type=gha), and any earlier position would restore this layer from
+# cache and freeze whatever version the first build resolved. The `af`
+# binary changes every release, so everything after it rebuilds fresh.
+RUN npm install -g opencode-ai
+
 # Everything stateful (SQLite, BoltDB, installed.yaml, secrets keyring,
 # agent package dirs) lives under one mount point.
 ENV AGENTFIELD_HOME=/data
