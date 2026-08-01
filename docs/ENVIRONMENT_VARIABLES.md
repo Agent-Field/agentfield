@@ -45,6 +45,30 @@ If set, the control plane requires an API key for most endpoints.
 
 - `AGENTFIELD_API_KEY` or `AGENTFIELD_API_AUTH_API_KEY`: API key checked by the control plane.
 
+It is optional only for a control plane used from the machine it runs on. The
+endpoints that install packages or read and write credentials — package
+install/update/uninstall, the secret store, agent `env` and agent `config` —
+additionally require the caller to be on the local host while no key is set, and
+refuse everything else with `401`. That covers the default single-user setup
+without a key, and means any other topology needs one:
+
+- another machine on the network, including a browser on your laptop pointed at
+  a control plane running on a server
+- a container, where a client on the host reaches the server through a bridge
+  network rather than loopback
+- anything behind a reverse proxy or tunnel
+
+The reverse-proxy case needs a key for a different reason than the others: the
+check looks at the connection's real peer address, so if the proxy runs on the
+same host as the control plane, every forwarded request already looks local and
+the restriction protects nothing. Forwarded headers such as `X-Forwarded-For`
+are deliberately ignored here — trusting them would let any caller claim to be
+local — so a proxied deployment must set a key.
+
+Clients send the key as the `X-API-Key` header (or `Authorization: Bearer`). For
+the CLI, `af auth login` stores it and every later command sends it
+automatically.
+
 ### UI
 
 - `AGENTFIELD_UI_ENABLED` (default: `true`)
