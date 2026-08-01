@@ -13,11 +13,12 @@ backends or add new ones without changing agent code.
 """
 
 import ipaddress
+import json
 import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from agentfield.openrouter_attribution import merge_attribution_headers
 from agentfield.multimodal_response import (
@@ -31,6 +32,51 @@ from agentfield.multimodal_response import (
 
 MINIMAX_GLOBAL_BASE_URL = "https://api.minimax.io/v1"
 MINIMAX_CN_BASE_URL = "https://api.minimaxi.com/v1"
+MINIMAX_H3_MODEL = "MiniMax-H3"
+MINIMAX_H3_VIDEO_METADATA: Dict[str, Any] = {
+    "release_date": "2026-07-31",
+    "api_version": "v2",
+    "input_modes": [
+        "text_to_video",
+        "image_to_video",
+        "first_last_frame_to_video",
+        "reference_to_video",
+    ],
+    "input_modalities": ["text", "image", "video", "audio"],
+    "output_modalities": ["video", "audio"],
+    "resolutions": ["2K"],
+    "duration_seconds": {"min": 4, "max": 15, "integer": True},
+    "pricing": {
+        "global_en": {
+            "currency": "USD",
+            "output_video": {"unit": "second", "rates": {"2K": 0.13}},
+            "input_reference_video": {
+                "unit": "second",
+                "rates": {"2K": 0.02},
+            },
+            "input_reference_audio": {"free": True},
+            "input_reference_images": {
+                "unit": "image",
+                "free_count": 5,
+                "additional_image": 0.03,
+            },
+        },
+        "cn_zh": {
+            "currency": "CNY",
+            "output_video": {"unit": "second", "rates": {"2K": 0.8}},
+            "input_reference_video": {
+                "unit": "second",
+                "rates": {"2K": 0.8},
+            },
+            "input_reference_audio": {"free": True},
+            "input_reference_images": {
+                "unit": "image",
+                "free_count": 5,
+                "additional_image": 0.2,
+            },
+        },
+    },
+}
 
 
 # Fal image size presets
@@ -653,6 +699,27 @@ class FalProvider(MediaProvider):
 class MiniMaxProvider(MediaProvider):
     """MiniMax provider for asynchronous video generation."""
 
+    DEFAULT_VIDEO_MODEL = MINIMAX_H3_MODEL
+    H3_MODEL_METADATA = {MINIMAX_H3_MODEL: MINIMAX_H3_VIDEO_METADATA}
+    H3_CONTENT_TYPES = {"text", "image_url", "video_url", "audio_url"}
+    H3_CONTENT_ROLES = {
+        "first_frame",
+        "last_frame",
+        "reference_image",
+        "reference_video",
+        "reference_audio",
+    }
+    H3_RATIOS = {"adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"}
+    H3_TASK_STATUSES = {
+        "queued",
+        "running",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "expired",
+    }
+    H3_MAX_REQUEST_BODY_BYTES = 64 * 1024 * 1024
+
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -673,6 +740,11 @@ class MiniMaxProvider(MediaProvider):
     @property
     def supported_modalities(self) -> List[str]:
         return ["video", "music"]
+
+    @property
+    def video_model_metadata(self) -> Dict[str, Dict[str, Any]]:
+        """Return provider-owned metadata for supported video models."""
+        return self.H3_MODEL_METADATA
 
     async def generate_image(
         self,
@@ -947,6 +1019,488 @@ class MiniMaxProvider(MediaProvider):
             if file_id:
                 return file_id
         return str(payload.get("file_id") or "")
+    def _require_api_key(self) -> str:
+        import os
+
+        api_key = self._api_key or os.environ.get("MINIMAX_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "MiniMax API key required. Set MINIMAX_API_KEY or pass api_key "
+                "to MiniMaxProvider."
+            )
+        return api_key
+
+    def _base_url_for_version(self, version: str) -> str:
+        if re.search(r"/v\d+$", self._base_url):
+            return re.sub(r"/v\d+$", f"/{version}", self._base_url)
+        return f"{self._base_url}/{version}"
+
+    def _uses_cn_endpoint(self) -> bool:
+        return urlparse(self._base_url).hostname == "api.minimaxi.com"
+
+    @staticmethod
+    def _video_client_timeout() -> Any:
+        import aiohttp
+
+        return aiohttp.ClientTimeout(total=None, connect=30.0, sock_read=120.0)
+
+    @staticmethod
+    def _normalize_task_id(task_id: str) -> str:
+        normalized = str(task_id or "").strip()
+        if not normalized:
+            raise ValueError("MiniMax video task_id is required")
+        return normalized
+
+    @classmethod
+    def _validate_h3_content(cls, content: List[Dict[str, Any]]) -> Dict[str, bool]:
+        if not isinstance(content, list) or not content:
+            raise ValueError("MiniMax-H3 video content must be a non-empty list")
+
+        text_count = 0
+        unroled_images = 0
+        role_counts = {role: 0 for role in cls.H3_CONTENT_ROLES}
+        allowed_roles = {
+            "image_url": {None, "first_frame", "last_frame", "reference_image"},
+            "video_url": {"reference_video"},
+            "audio_url": {"reference_audio"},
+        }
+
+        for item in content:
+            if not isinstance(item, dict):
+                raise ValueError("MiniMax-H3 content entries must be objects")
+            content_type = item.get("type")
+            if content_type not in cls.H3_CONTENT_TYPES:
+                raise ValueError(
+                    "MiniMax-H3 content type must be text, image_url, video_url, "
+                    "or audio_url"
+                )
+
+            role = item.get("role")
+            if role is not None and role not in cls.H3_CONTENT_ROLES:
+                raise ValueError(f"Unsupported MiniMax-H3 content role: {role}")
+
+            if content_type == "text":
+                text = item.get("text")
+                if not isinstance(text, str) or not text.strip():
+                    raise ValueError("MiniMax-H3 content requires non-empty text")
+                if len(text) > 7000:
+                    raise ValueError(
+                        "MiniMax-H3 text content cannot exceed 7000 characters"
+                    )
+                if role is not None:
+                    raise ValueError("MiniMax-H3 text content cannot define a role")
+                text_count += 1
+                continue
+
+            media = item.get(content_type)
+            if not isinstance(media, dict) or not isinstance(media.get("url"), str):
+                raise ValueError(
+                    f"MiniMax-H3 {content_type} content requires a nested url"
+                )
+            if not media["url"].strip():
+                raise ValueError(f"MiniMax-H3 {content_type} url cannot be empty")
+            if role not in allowed_roles[content_type]:
+                raise ValueError(
+                    f"MiniMax-H3 {content_type} content does not support role {role}"
+                )
+            if role is None:
+                unroled_images += 1
+            else:
+                role_counts[role] += 1
+
+        if text_count == 0:
+            raise ValueError("MiniMax-H3 video content requires a text entry")
+        if unroled_images + role_counts["first_frame"] > 1:
+            raise ValueError("MiniMax-H3 content supports at most one first frame")
+        if role_counts["last_frame"] > 1:
+            raise ValueError("MiniMax-H3 content supports at most one last frame")
+        if role_counts["reference_image"] > 9:
+            raise ValueError(
+                "MiniMax-H3 content supports at most nine reference images"
+            )
+        if role_counts["reference_video"] > 3:
+            raise ValueError(
+                "MiniMax-H3 content supports at most three reference videos"
+            )
+        if role_counts["reference_audio"] > 3:
+            raise ValueError(
+                "MiniMax-H3 content supports at most three reference audio clips"
+            )
+
+        has_frames = bool(
+            unroled_images or role_counts["first_frame"] or role_counts["last_frame"]
+        )
+        has_references = bool(
+            role_counts["reference_image"]
+            or role_counts["reference_video"]
+            or role_counts["reference_audio"]
+        )
+        if has_frames and has_references:
+            raise ValueError(
+                "MiniMax-H3 frame inputs and reference inputs are mutually exclusive"
+            )
+        if role_counts["last_frame"] and not (
+            unroled_images or role_counts["first_frame"]
+        ):
+            raise ValueError("MiniMax-H3 last_frame requires a first_frame")
+        if role_counts["reference_audio"] and not (
+            role_counts["reference_image"] or role_counts["reference_video"]
+        ):
+            raise ValueError(
+                "MiniMax-H3 reference_audio requires a reference image or video"
+            )
+
+        return {
+            "text_only": not has_frames and not has_references,
+            "has_frames": has_frames,
+            "has_references": has_references,
+        }
+
+    def _build_h3_request(
+        self,
+        *,
+        content: List[Dict[str, Any]],
+        duration: float,
+        model: str = MINIMAX_H3_MODEL,
+        resolution: str = "2K",
+        ratio: Optional[str] = None,
+        callback_url: Optional[str] = None,
+        aigc_watermark: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        send_model = self._strip_prefix(model)
+        if send_model != MINIMAX_H3_MODEL:
+            raise ValueError(f"MiniMax v2 video generation requires {MINIMAX_H3_MODEL}")
+        if isinstance(duration, bool) or not float(duration).is_integer():
+            raise ValueError("MiniMax-H3 video duration must be a whole number")
+        normalized_duration = int(duration)
+        if not 4 <= normalized_duration <= 15:
+            raise ValueError(
+                "MiniMax-H3 video duration must be between 4 and 15 seconds"
+            )
+        normalized_resolution = str(resolution).upper()
+        if normalized_resolution != "2K":
+            raise ValueError("MiniMax-H3 video resolution must be 2K")
+
+        content_info = self._validate_h3_content(content)
+        if ratio is not None and ratio not in self.H3_RATIOS:
+            raise ValueError(f"Unsupported MiniMax-H3 video ratio: {ratio}")
+        if content_info["text_only"]:
+            if ratio is None or ratio == "adaptive":
+                raise ValueError(
+                    "MiniMax-H3 text-to-video requires a non-adaptive ratio"
+                )
+            normalized_ratio = ratio
+        elif content_info["has_frames"]:
+            normalized_ratio = "adaptive"
+        else:
+            normalized_ratio = ratio or "adaptive"
+
+        body: Dict[str, Any] = {
+            "model": send_model,
+            "content": content,
+            "resolution": normalized_resolution,
+            "duration": normalized_duration,
+            "ratio": normalized_ratio,
+        }
+        if callback_url is not None:
+            if not callback_url.strip():
+                raise ValueError("MiniMax-H3 callback_url cannot be empty")
+            body["callback_url"] = callback_url
+        if aigc_watermark is not None:
+            if not self._uses_cn_endpoint():
+                raise ValueError(
+                    "aigc_watermark is only supported by the China endpoint"
+                )
+            body["aigc_watermark"] = aigc_watermark
+
+        body_size = len(
+            json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        )
+        if body_size > self.H3_MAX_REQUEST_BODY_BYTES:
+            raise ValueError("MiniMax-H3 request body cannot exceed 64 MB")
+        return body
+
+    async def _request_v2(
+        self,
+        session: Any,
+        method: str,
+        path: str,
+        operation: str,
+        *,
+        json_body: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        api_key = self._require_api_key()
+        request = getattr(session, method)
+        kwargs: Dict[str, Any] = {
+            "headers": {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+        }
+        if json_body is not None:
+            kwargs["json"] = json_body
+        if params:
+            kwargs["params"] = params
+        url = f"{self._base_url_for_version('v2')}{path}"
+        async with request(url, **kwargs) as response:
+            return await self._read_response(response, operation)
+
+    async def create_video_task(
+        self,
+        *,
+        content: List[Dict[str, Any]],
+        duration: float,
+        model: str = MINIMAX_H3_MODEL,
+        resolution: str = "2K",
+        ratio: Optional[str] = None,
+        callback_url: Optional[str] = None,
+        aigc_watermark: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """Create a MiniMax-H3 v2 video generation task."""
+        import aiohttp
+
+        body = self._build_h3_request(
+            content=content,
+            duration=duration,
+            model=model,
+            resolution=resolution,
+            ratio=ratio,
+            callback_url=callback_url,
+            aigc_watermark=aigc_watermark,
+        )
+        async with aiohttp.ClientSession(
+            timeout=self._video_client_timeout()
+        ) as session:
+            return await self._request_v2(
+                session,
+                "post",
+                "/video_generation",
+                "create",
+                json_body=body,
+            )
+
+    async def query_video_task(self, task_id: str) -> Dict[str, Any]:
+        """Query a MiniMax-H3 v2 video generation task."""
+        import aiohttp
+
+        normalized_task_id = quote(self._normalize_task_id(task_id), safe="")
+        async with aiohttp.ClientSession(
+            timeout=self._video_client_timeout()
+        ) as session:
+            return await self._request_v2(
+                session,
+                "get",
+                f"/query/video_generation/{normalized_task_id}",
+                "query",
+            )
+
+    async def list_video_tasks(
+        self,
+        *,
+        page_num: Optional[int] = None,
+        page_size: Optional[int] = None,
+        status: Optional[str] = None,
+        task_ids: Optional[List[str]] = None,
+        model: Optional[str] = None,
+        task_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """List MiniMax-H3 v2 video generation tasks."""
+        import aiohttp
+
+        params: Dict[str, Any] = {}
+        if page_num is not None:
+            if page_num < 1:
+                raise ValueError("page_num must be at least 1")
+            params["page_num"] = page_num
+        if page_size is not None:
+            if page_size < 1:
+                raise ValueError("page_size must be at least 1")
+            params["page_size"] = page_size
+        if status is not None:
+            if status not in self.H3_TASK_STATUSES:
+                raise ValueError(f"Unsupported MiniMax-H3 task status: {status}")
+            params["filter.status"] = status
+        if task_ids:
+            params["filter.task_ids"] = task_ids
+        if model is not None:
+            params["filter.model"] = self._strip_prefix(model)
+        if task_type is not None:
+            params["filter.task_type"] = task_type
+
+        async with aiohttp.ClientSession(
+            timeout=self._video_client_timeout()
+        ) as session:
+            return await self._request_v2(
+                session,
+                "get",
+                "/query/video_generation",
+                "list",
+                params=params,
+            )
+
+    async def delete_video_task(self, task_id: str) -> Dict[str, Any]:
+        """Cancel or delete a MiniMax-H3 v2 video generation task."""
+        import aiohttp
+
+        normalized_task_id = quote(self._normalize_task_id(task_id), safe="")
+        async with aiohttp.ClientSession(
+            timeout=self._video_client_timeout()
+        ) as session:
+            return await self._request_v2(
+                session,
+                "delete",
+                f"/video_generation/{normalized_task_id}",
+                "delete",
+            )
+
+    def _estimate_h3_cost_usd(self, usage: Dict[str, Any]) -> Optional[float]:
+        if urlparse(self._base_url).hostname != "api.minimax.io":
+            return None
+        pricing = MINIMAX_H3_VIDEO_METADATA["pricing"]["global_en"]
+        output_seconds = float(usage.get("output_seconds") or 0)
+        input_seconds = float(usage.get("input_seconds") or 0)
+        image_count = int(
+            usage.get("input_image_count") or usage.get("image_count") or 0
+        )
+        output_cost = output_seconds * pricing["output_video"]["rates"]["2K"]
+        input_video_cost = (
+            input_seconds * pricing["input_reference_video"]["rates"]["2K"]
+        )
+        image_cost = (
+            max(image_count - pricing["input_reference_images"]["free_count"], 0)
+            * pricing["input_reference_images"]["additional_image"]
+        )
+        return round(output_cost + input_video_cost + image_cost, 6)
+
+    async def _generate_h3_video(
+        self,
+        *,
+        prompt: str,
+        content: Optional[List[Dict[str, Any]]],
+        image_url: Optional[str],
+        duration: Optional[float],
+        resolution: Optional[str],
+        ratio: Optional[str],
+        callback_url: Optional[str],
+        aigc_watermark: Optional[bool],
+        extra: Optional[Dict[str, Any]],
+        poll_interval: float,
+        timeout: float,
+        kwargs: Dict[str, Any],
+    ) -> MultimodalResponse:
+        import asyncio
+        import time
+
+        import aiohttp
+
+        if duration is None:
+            raise ValueError("MiniMax-H3 video generation requires duration")
+        unsupported = set((extra or {})) | set(kwargs)
+        if unsupported:
+            raise ValueError(
+                f"Unsupported MiniMax-H3 video request fields: {sorted(unsupported)}"
+            )
+
+        content_items = [dict(item) for item in (content or [])]
+        if not any(item.get("type") == "text" for item in content_items):
+            content_items.insert(0, {"type": "text", "text": prompt})
+        if image_url:
+            content_items.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": image_url},
+                    "role": "first_frame",
+                }
+            )
+
+        body = self._build_h3_request(
+            content=content_items,
+            duration=duration,
+            resolution=resolution or "2K",
+            ratio=ratio,
+            callback_url=callback_url,
+            aigc_watermark=aigc_watermark,
+        )
+        client_timeout = self._video_client_timeout()
+        async with aiohttp.ClientSession(timeout=client_timeout) as session:
+            submit_data = await self._request_v2(
+                session,
+                "post",
+                "/video_generation",
+                "create",
+                json_body=body,
+            )
+            task_id = str(submit_data.get("task_id") or "")
+            if not task_id:
+                raise RuntimeError("MiniMax-H3 video create returned no task_id")
+
+            encoded_task_id = quote(task_id, safe="")
+            start_time = time.monotonic()
+            query_data: Dict[str, Any] = {}
+            task: Dict[str, Any] = {}
+            while True:
+                elapsed = time.monotonic() - start_time
+                if elapsed >= timeout:
+                    raise TimeoutError(
+                        f"MiniMax-H3 video generation timed out after {timeout}s "
+                        f"(task {task_id})"
+                    )
+                await asyncio.sleep(min(poll_interval, timeout - elapsed))
+                query_data = await self._request_v2(
+                    session,
+                    "get",
+                    f"/query/video_generation/{encoded_task_id}",
+                    "query",
+                )
+                task = query_data.get("task") or {}
+                status = str(task.get("status") or "").lower()
+                if status == "succeeded":
+                    break
+                if status in {"failed", "cancelled", "expired"}:
+                    error = task.get("error") or {}
+                    detail = error.get("message") or status
+                    raise RuntimeError(f"MiniMax-H3 video generation failed: {detail}")
+
+        video_url = (task.get("content") or {}).get("url")
+        if not video_url:
+            raise RuntimeError("MiniMax-H3 video task succeeded without a content URL")
+        _assert_safe_download_url(video_url)
+
+        task_duration = task.get("duration") or body["duration"]
+        task_resolution = task.get("resolution") or body["resolution"]
+        task_ratio = task.get("ratio") or body["ratio"]
+        usage = task.get("usage") or {}
+        cost_usd = self._estimate_h3_cost_usd(usage)
+        filename = "generated_video.mp4"
+        file_output = FileOutput(
+            url=video_url,
+            data=None,
+            mime_type="video/mp4",
+            filename=filename,
+        )
+        video_output = VideoOutput(
+            url=video_url,
+            data=None,
+            mime_type="video/mp4",
+            filename=filename,
+            duration=task_duration,
+            resolution=task_resolution,
+            aspect_ratio=task_ratio,
+            has_audio=True,
+            cost_usd=cost_usd,
+        )
+        return MultimodalResponse(
+            text=prompt,
+            audio=None,
+            images=[],
+            files=[file_output],
+            videos=[video_output],
+            raw_response={"submit": submit_data, "query": query_data},
+            cost_usd=cost_usd,
+            usage=usage,
+            cost_source="minimax_h3_metadata" if cost_usd is not None else None,
+        )
 
     async def generate_video(
         self,
@@ -955,6 +1509,10 @@ class MiniMaxProvider(MediaProvider):
         image_url: Optional[str] = None,
         duration: Optional[float] = None,
         resolution: Optional[str] = None,
+        content: Optional[List[Dict[str, Any]]] = None,
+        ratio: Optional[str] = None,
+        callback_url: Optional[str] = None,
+        aigc_watermark: Optional[bool] = None,
         extra: Optional[Dict[str, Any]] = None,
         poll_interval: float = 10.0,
         timeout: float = 600.0,
@@ -973,16 +1531,33 @@ class MiniMaxProvider(MediaProvider):
                 "MiniMax API key required. Set MINIMAX_API_KEY or pass api_key "
                 "to MiniMaxProvider."
             )
-        if not model:
-            raise ValueError("MiniMax video generation requires an explicit model")
         if poll_interval < 0:
             raise ValueError("poll_interval must be non-negative")
         if timeout <= 0:
             raise ValueError("timeout must be greater than zero")
 
-        send_model = self._strip_prefix(model)
+        send_model = self._strip_prefix(model or MINIMAX_H3_MODEL)
         if not send_model:
             raise ValueError("MiniMax video generation requires an explicit model")
+        if send_model == MINIMAX_H3_MODEL:
+            return await self._generate_h3_video(
+                prompt=prompt,
+                content=content,
+                image_url=image_url,
+                duration=duration,
+                resolution=resolution,
+                ratio=ratio,
+                callback_url=callback_url,
+                aigc_watermark=aigc_watermark,
+                extra=extra,
+                poll_interval=poll_interval,
+                timeout=timeout,
+                kwargs=kwargs,
+            )
+        if content is not None or any(
+            value is not None for value in (ratio, callback_url, aigc_watermark)
+        ):
+            raise ValueError("MiniMax v2 request fields require the MiniMax-H3 model")
 
         body: Dict[str, Any] = {"model": send_model, "prompt": prompt}
         if image_url:
