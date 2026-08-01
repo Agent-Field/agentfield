@@ -55,6 +55,11 @@ controlPlane:
   tolerations: []
   affinity: {}
 
+# Reaching the control plane through a Service, Ingress or port-forward is not
+# a local connection, so while this is disabled the endpoints that install
+# packages or handle credentials (package install/update/uninstall, the secret
+# store, agent env and agent config) refuse those callers. Enable it to manage
+# the control plane from outside its own pod; everything else works either way.
 apiAuth:
   enabled: false
   apiKey: ""
