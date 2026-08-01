@@ -45,6 +45,8 @@ func TestPrivilegedAccess_NoAPIKey(t *testing.T) {
 		{"IPv4 loopback allowed", "127.0.0.1:54321", http.StatusOK},
 		{"IPv4 loopback range allowed", "127.0.1.7:54321", http.StatusOK},
 		{"IPv6 loopback allowed", "[::1]:54321", http.StatusOK},
+		// Dual-stack hosts report an IPv4 client this way; it is genuinely local.
+		{"IPv4-mapped IPv6 loopback allowed", "[::ffff:127.0.0.1]:54321", http.StatusOK},
 		{"private LAN address rejected", "192.168.2.16:54321", http.StatusUnauthorized},
 		{"other private range rejected", "10.4.1.9:54321", http.StatusUnauthorized},
 		{"public address rejected", "203.0.113.9:54321", http.StatusUnauthorized},
@@ -75,6 +77,8 @@ func TestPrivilegedAccess_ForwardedHeadersCannotForgeLoopback(t *testing.T) {
 		{"X-Forwarded-For chain", "X-Forwarded-For", "127.0.0.1, 10.0.0.1"},
 		{"X-Real-IP", "X-Real-IP", "127.0.0.1"},
 		{"X-Forwarded-For IPv6 loopback", "X-Forwarded-For", "::1"},
+		{"X-Forwarded-For IPv4-mapped loopback", "X-Forwarded-For", "::ffff:127.0.0.1"},
+		{"Forwarded (RFC 7239)", "Forwarded", "for=127.0.0.1"},
 	}
 
 	for _, tt := range spoofHeaders {
