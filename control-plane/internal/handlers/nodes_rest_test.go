@@ -334,3 +334,49 @@ func TestNodeStatusLeaseHandler_SkipsHealthMonitorForServerless(t *testing.T) {
 	assert.False(t, healthMonitor.IsMonitoring("lease-serverless"),
 		"serverless nodes have no /status endpoint and must not be HTTP-polled")
 }
+
+func TestNodeStatusLeaseHandler_RecordsGrantedLease(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	for _, tt := range []struct {
+		name      string
+		lifecycle types.AgentLifecycleStatus
+		body      string
+	}{
+		{name: "normal", lifecycle: types.AgentStatusReady, body: `{"phase":"ready"}`},
+		{name: "pending approval", lifecycle: types.AgentStatusPendingApproval, body: `{}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			node := &types.AgentNode{
+				ID:              "lease-contract-node",
+				Version:         "1.0.0",
+				HealthStatus:    types.HealthStatusActive,
+				LifecycleStatus: tt.lifecycle,
+				LastHeartbeat:   time.Now().Add(-2 * time.Minute),
+			}
+			store := &nodeRESTStorageStub{agent: node, listAgents: []*types.AgentNode{node}}
+			statusManager := services.NewStatusManager(store, services.StatusManagerConfig{
+				ReconcileInterval:       5 * time.Millisecond,
+				HeartbeatStaleThreshold: time.Minute,
+			}, nil, nil)
+			statusManager.Start()
+			defer statusManager.Stop()
+
+			router := gin.New()
+			router.PATCH("/nodes/:node_id/status", NodeStatusLeaseHandler(store, statusManager, nil, nil, time.Minute))
+			req := httptest.NewRequest(http.MethodPatch, "/nodes/lease-contract-node/status", bytes.NewBufferString(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusOK, rec.Code)
+
+			// Several reconcile cycles elapse while the persisted heartbeat remains
+			// deliberately stale. The granted lease must prevent an inactive update.
+			time.Sleep(25 * time.Millisecond)
+			store.mu.Lock()
+			updates := append([]types.HealthStatus(nil), store.healthUpdates...)
+			store.mu.Unlock()
+			assert.NotContains(t, updates, types.HealthStatusInactive)
+		})
+	}
+}

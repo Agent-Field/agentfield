@@ -37,6 +37,10 @@ type StatusManager struct {
 	activeTransitions map[string]*types.StateTransition
 	transitionMutex   sync.RWMutex
 
+	// Granted status leases, keyed by node ID.
+	leaseExpiries map[string]time.Time
+	leaseMutex    sync.RWMutex
+
 	// Control channels
 	stopCh chan struct{}
 
@@ -98,9 +102,40 @@ func NewStatusManager(storage storage.StorageProvider, config StatusManagerConfi
 		agentClient:       agentClient,
 		statusCache:       make(map[string]*cachedAgentStatus),
 		activeTransitions: make(map[string]*types.StateTransition),
+		leaseExpiries:     make(map[string]time.Time),
 		stopCh:            make(chan struct{}),
 		eventHandlers:     make([]StatusEventHandler, 0),
 	}
+}
+
+const grantedLeaseGrace = 30 * time.Second
+
+// RecordLease records the expiry of a status lease granted to a node.
+func (sm *StatusManager) RecordLease(nodeID string, expiresAt time.Time) {
+	sm.leaseMutex.Lock()
+	sm.leaseExpiries[nodeID] = expiresAt
+	sm.leaseMutex.Unlock()
+}
+
+func (sm *StatusManager) hasUnexpiredLease(nodeID string, now time.Time) bool {
+	sm.leaseMutex.RLock()
+	expiresAt, ok := sm.leaseExpiries[nodeID]
+	sm.leaseMutex.RUnlock()
+	if !ok {
+		return false
+	}
+
+	if now.Before(expiresAt.Add(grantedLeaseGrace)) {
+		return true
+	}
+
+	// Lease entries need no sweeper; discard them lazily once their grace period ends.
+	sm.leaseMutex.Lock()
+	if current, exists := sm.leaseExpiries[nodeID]; exists && current.Equal(expiresAt) {
+		delete(sm.leaseExpiries, nodeID)
+	}
+	sm.leaseMutex.Unlock()
+	return false
 }
 
 // Start begins the status manager background processes
@@ -735,9 +770,17 @@ func (sm *StatusManager) performReconciliation() {
 
 // needsReconciliation checks if an agent needs status reconciliation
 func (sm *StatusManager) needsReconciliation(agent *types.AgentNode) bool {
-	// Check if last heartbeat is too old (uses configurable threshold, default 60s)
-	timeSinceHeartbeat := time.Since(agent.LastHeartbeat)
-	if timeSinceHeartbeat > sm.config.HeartbeatStaleThreshold && agent.HealthStatus == types.HealthStatusActive {
+	now := time.Now()
+	timeSinceHeartbeat := now.Sub(agent.LastHeartbeat)
+
+	// A granted lease is the server's promise that it will not declare the node
+	// dead while that lease (plus a small scheduling grace) is still running.
+	// Lease-holder liveness is still guarded by the HTTP health monitor, whose
+	// consecutive probe failures can mark a dead node inactive before lease expiry.
+	// Nodes without granted leases continue to use heartbeat staleness unchanged.
+	if timeSinceHeartbeat > sm.config.HeartbeatStaleThreshold &&
+		agent.HealthStatus == types.HealthStatusActive &&
+		!sm.hasUnexpiredLease(agent.ID, now) {
 		return true
 	}
 
