@@ -20,7 +20,7 @@ import {
 import { DEFAULT_CONTROL_PLANE_PORT } from './ports'
 import { installCommand, sanitizeInstallOutput } from './installer'
 import { CATALOG, catalogEntry } from '../shared/catalog'
-import { setCloudConnection } from './connection'
+import { setCloudConnection, setLocalApiKey } from './connection'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -72,7 +72,21 @@ describe('active base URL', () => {
 })
 
 describe('raw control-plane fetch authentication', () => {
-  afterEach(() => setActiveControlPlanePort(DEFAULT_CONTROL_PLANE_PORT))
+  afterEach(() => {
+    setLocalApiKey(null)
+    setActiveControlPlanePort(DEFAULT_CONTROL_PLANE_PORT)
+  })
+
+  function readerFetch(): FetchLike {
+    return vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/health')) return jsonResponse({ status: 'healthy' })
+      if (url.includes('/nodes')) return jsonResponse({ nodes: [] })
+      if (url.includes('/workflow-runs')) return jsonResponse({ runs: [] })
+      if (url.includes('/dashboard/summary')) return jsonResponse({})
+      return jsonResponse({ totals: {} })
+    }) as FetchLike
+  }
 
   async function callRawReaders(fetchImpl: FetchLike): Promise<void> {
     await checkControlPlane(undefined, fetchImpl)
@@ -84,14 +98,7 @@ describe('raw control-plane fetch authentication', () => {
 
   it('adds X-API-Key to every raw reader in cloud mode', async () => {
     setCloudConnection('https://cp.example', 'cloud-key')
-    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input)
-      if (url.endsWith('/health')) return jsonResponse({ status: 'healthy' })
-      if (url.includes('/nodes')) return jsonResponse({ nodes: [] })
-      if (url.includes('/workflow-runs')) return jsonResponse({ runs: [] })
-      if (url.includes('/dashboard/summary')) return jsonResponse({})
-      return jsonResponse({ totals: {} })
-    }) as FetchLike
+    const fetchImpl = readerFetch()
     await callRawReaders(fetchImpl)
     expect(vi.mocked(fetchImpl).mock.calls).toHaveLength(5)
     for (const [, init] of vi.mocked(fetchImpl).mock.calls) {
@@ -99,19 +106,25 @@ describe('raw control-plane fetch authentication', () => {
     }
   })
 
+  // Default local mode has no key: the control plane authenticates the app by
+  // its loopback address, so nothing must be sent.
   it('omits X-API-Key from every raw reader in local mode', async () => {
     setActiveControlPlanePort(8080)
-    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input)
-      if (url.endsWith('/health')) return jsonResponse({ status: 'healthy' })
-      if (url.includes('/nodes')) return jsonResponse({ nodes: [] })
-      if (url.includes('/workflow-runs')) return jsonResponse({ runs: [] })
-      if (url.includes('/dashboard/summary')) return jsonResponse({})
-      return jsonResponse({ totals: {} })
-    }) as FetchLike
+    const fetchImpl = readerFetch()
     await callRawReaders(fetchImpl)
     for (const [, init] of vi.mocked(fetchImpl).mock.calls) {
       expect(new Headers(init?.headers).has('X-API-Key')).toBe(false)
+    }
+  })
+
+  it('adds X-API-Key to every raw reader when the local server needs one', async () => {
+    setActiveControlPlanePort(8080)
+    setLocalApiKey('local-secret')
+    const fetchImpl = readerFetch()
+    await callRawReaders(fetchImpl)
+    expect(vi.mocked(fetchImpl).mock.calls).toHaveLength(5)
+    for (const [, init] of vi.mocked(fetchImpl).mock.calls) {
+      expect(new Headers(init?.headers).get('X-API-Key')).toBe('local-secret')
     }
   })
 })

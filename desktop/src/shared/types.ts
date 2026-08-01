@@ -185,6 +185,14 @@ export interface DesktopSettings {
    */
   controlPlanePort: number | null
   /**
+   * API key for the LOCAL control plane, or '' when it needs none. A local
+   * server started without AGENTFIELD_API_KEY authenticates this app by its
+   * loopback address, so this stays empty for almost everyone; set it when
+   * you run your own server with authentication enabled. Like cloud.apiKey,
+   * the value lives in main-process settings on this computer.
+   */
+  localApiKey: string
+  /**
    * The port of the control plane this app last started or adopted. App-
    * managed, not a user preference: it lets a restarted app rediscover a
    * control plane it put on a non-default port instead of starting a second

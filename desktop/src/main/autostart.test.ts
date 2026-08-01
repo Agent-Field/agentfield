@@ -58,6 +58,7 @@ function settings(overrides: Partial<DesktopSettings>): DesktopSettings {
     appearance: 'system',
     autostartControlPlane: true,
     controlPlanePort: null,
+    localApiKey: '',
     lastControlPlanePort: null,
     autostartAgents: [],
     installSkills: true,

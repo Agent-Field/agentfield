@@ -240,8 +240,33 @@ async function apiError(response: Response): Promise<CpApiError> {
   return new CpApiError({
     status: response.status,
     code,
-    message: serverMessage ?? `Control plane request failed with status ${response.status}`
+    message:
+      response.status === 401
+        ? unauthorizedMessage(record, serverMessage)
+        : (serverMessage ?? `Control plane request failed with status ${response.status}`)
   })
+}
+
+/**
+ * Message for a 401 from the control plane's auth guards, whose body is
+ * `{error:"unauthorized", message:"<human readable>", help:{cli, …}}`.
+ * `error` there is a machine code, so the generic "prefer error" path above
+ * would show the user nothing but "unauthorized" — take the sentence instead,
+ * and append the CLI hint when the server offers one.
+ */
+function unauthorizedMessage(
+  record: Record<string, unknown> | undefined,
+  fallback: string | undefined
+): string {
+  const message =
+    (typeof record?.message === 'string' && record.message !== '' ? record.message : undefined) ??
+    // Older/other responses put a real sentence in `error` instead.
+    (fallback !== undefined && fallback !== 'unauthorized' ? fallback : undefined) ??
+    'The control plane rejected this request: it requires an API key.'
+  const help = record?.help
+  const cli =
+    isRecord(help) && typeof help.cli === 'string' && help.cli !== '' ? help.cli : undefined
+  return cli ? `${message} Run: ${cli}` : message
 }
 
 /**

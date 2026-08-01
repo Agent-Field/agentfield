@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getApiKey, getBaseUrl, setLocalPort } from './connection'
+import { getApiKey, getBaseUrl, setLocalApiKey, setLocalPort } from './connection'
 import { applyConnectionProfile, normalizeServerUrl, testCloudConnection } from './cloud'
 import { DEFAULT_SETTINGS } from './settings'
 
@@ -19,7 +19,10 @@ function fakeFetch(responses: Array<Response | Error>): typeof fetch {
   }) as unknown as typeof fetch
 }
 
-afterEach(() => setLocalPort(8080))
+afterEach(() => {
+  setLocalApiKey(null)
+  setLocalPort(8080)
+})
 
 describe('normalizeServerUrl', () => {
   it('normalizes host input and removes paths, queries, and trailing slashes', () => {
@@ -132,5 +135,22 @@ describe('applyConnectionProfile', () => {
     applyConnectionProfile(DEFAULT_SETTINGS)
     expect(getBaseUrl()).toBe('http://localhost:9091')
     expect(getApiKey()).toBeNull()
+  })
+
+  it('carries a configured local API key on the local profile', () => {
+    applyConnectionProfile({ ...DEFAULT_SETTINGS, localApiKey: 'local-secret' })
+    expect(getBaseUrl()).toBe('http://localhost:8080')
+    expect(getApiKey()).toBe('local-secret')
+  })
+
+  it('keeps the local key available for the switch back from cloud', () => {
+    applyConnectionProfile({
+      ...DEFAULT_SETTINGS,
+      localApiKey: 'local-secret',
+      cloud: { enabled: true, serverUrl: 'https://cp.example', apiKey: 'cloud-key' }
+    })
+    expect(getApiKey()).toBe('cloud-key')
+    applyConnectionProfile({ ...DEFAULT_SETTINGS, localApiKey: 'local-secret' })
+    expect(getApiKey()).toBe('local-secret')
   })
 })

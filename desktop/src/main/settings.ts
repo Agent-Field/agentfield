@@ -12,6 +12,7 @@ export const DEFAULT_SETTINGS: DesktopSettings = {
   appearance: 'system',
   autostartControlPlane: true,
   controlPlanePort: null,
+  localApiKey: '',
   lastControlPlanePort: null,
   autostartAgents: [],
   installSkills: true,
@@ -59,6 +60,7 @@ export function normalizeSettings(raw: unknown): DesktopSettings {
         ? obj.autostartControlPlane
         : DEFAULT_SETTINGS.autostartControlPlane,
     controlPlanePort: normalizePort(obj.controlPlanePort),
+    localApiKey: typeof obj.localApiKey === 'string' ? obj.localApiKey.trim() : '',
     lastControlPlanePort: normalizePort(obj.lastControlPlanePort),
     autostartAgents: agents,
     installSkills:

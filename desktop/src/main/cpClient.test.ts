@@ -161,6 +161,48 @@ describe('createCpClient', () => {
     expect(error).toMatchObject({ status, message: body.error })
   })
 
+  // Contract 4a: a 401 from the privileged-route guard reaches the user as the
+  // server's sentence plus its CLI hint — never the bare "unauthorized" code.
+  it('surfaces the server message and CLI hint for a 401', async () => {
+    const client = createCpClient({
+      fetchImpl: mockFetch([
+        json(
+          {
+            error: 'unauthorized',
+            message:
+              'this endpoint installs packages and manages credentials, so it is restricted to local callers while the control plane runs without authentication.',
+            help: {
+              enable_auth: 'set AGENTFIELD_API_KEY on the control plane',
+              cli: 'af auth login --server <control-plane-url>'
+            }
+          },
+          401
+        )
+      ])
+    })
+    const error = await client.installPackage('https://github.com/acme/agent').catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(CpApiError)
+    expect((error as CpApiError).status).toBe(401)
+    expect((error as CpApiError).message).toBe(
+      'this endpoint installs packages and manages credentials, so it is restricted to local callers while the control plane runs without authentication. Run: af auth login --server <control-plane-url>'
+    )
+  })
+
+  it('still explains a 401 with no usable body', async () => {
+    const client = createCpClient({ fetchImpl: mockFetch([new Response('', { status: 401 })]) })
+    const error = await client.listPackages().catch((e: unknown) => e)
+    expect(error).toMatchObject({
+      status: 401,
+      message: 'The control plane rejected this request: it requires an API key.'
+    })
+  })
+
+  it('keeps a human-readable 401 error field when no message is sent', async () => {
+    const client = createCpClient({ fetchImpl: mockFetch([json({ error: 'API key rejected' }, 401)]) })
+    const error = await client.listPackages().catch((e: unknown) => e)
+    expect(error).toMatchObject({ status: 401, message: 'API key rejected' })
+  })
+
   // Contract 4: malformed error JSON still produces a status-bearing error.
   it('retains status for malformed error JSON', async () => {
     const fetchImpl = mockFetch([new Response('{', { status: 500 })])

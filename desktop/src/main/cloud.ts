@@ -1,5 +1,5 @@
 import type { CloudTestResult, DesktopSettings } from '../shared/types'
-import { clearCloudConnection, setCloudConnection } from './connection'
+import { clearCloudConnection, setCloudConnection, setLocalApiKey } from './connection'
 
 export type { CloudTestResult } from '../shared/types'
 
@@ -175,6 +175,9 @@ export async function testCloudConnection(
 }
 
 export function applyConnectionProfile(settings: DesktopSettings): void {
+  // Kept current even while cloud is active, so switching back to local
+  // restores the local credential rather than dropping to no key at all.
+  setLocalApiKey(settings.localApiKey ?? '')
   const normalized = normalizeServerUrl(settings.cloud?.serverUrl ?? '')
   if (settings.cloud?.enabled && normalized) {
     setCloudConnection(normalized, settings.cloud.apiKey || null)

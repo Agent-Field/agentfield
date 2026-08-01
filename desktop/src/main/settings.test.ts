@@ -15,6 +15,7 @@ describe('normalizeSettings', () => {
       appearance: 'dark' as const,
       autostartControlPlane: false,
       controlPlanePort: 9091,
+      localApiKey: 'local-secret',
       lastControlPlanePort: 8081,
       autostartAgents: ['a', 'b'],
       installSkills: false,
@@ -35,6 +36,12 @@ describe('normalizeSettings', () => {
     expect(normalizeSettings({ controlPlanePort: '8080' }).controlPlanePort).toBeNull()
     expect(normalizeSettings({ lastControlPlanePort: -1 }).lastControlPlanePort).toBeNull()
     expect(normalizeSettings({ lastControlPlanePort: 9091 }).lastControlPlanePort).toBe(9091)
+  })
+
+  it('keeps a trimmed local API key and drops non-strings', () => {
+    expect(normalizeSettings({}).localApiKey).toBe('')
+    expect(normalizeSettings({ localApiKey: '  af_local_key  ' }).localApiKey).toBe('af_local_key')
+    expect(normalizeSettings({ localApiKey: 42 }).localApiKey).toBe('')
   })
 
   it('defaults trayCompanion on and coerces non-booleans', () => {
@@ -138,6 +145,7 @@ describe('load/save round trip', () => {
       appearance: 'light' as const,
       autostartControlPlane: true,
       controlPlanePort: null,
+      localApiKey: 'round-trip-local-key',
       lastControlPlanePort: 9091,
       autostartAgents: ['swe-planner'],
       installSkills: true,
