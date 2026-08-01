@@ -84,6 +84,8 @@ func (s *AgentFieldServer) applyGlobalMiddleware() {
 	}))
 	if s.config.API.Auth.APIKey != "" {
 		logger.Logger.Info().Msg("🔐 API key authentication enabled")
+	} else {
+		logger.Logger.Info().Msg("🔒 No API key configured: package install and credential endpoints are restricted to callers on this machine. Set AGENTFIELD_API_KEY to manage this control plane from anywhere else.")
 	}
 
 	// DID authentication middleware (applied globally, but only validates when headers present)
