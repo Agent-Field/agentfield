@@ -83,6 +83,48 @@ def _cost_from_events(events: list[dict[str, object]]) -> float | None:
     return total_cost if found_cost else None
 
 
+def _tokens_from_events(
+    events: list[dict[str, object]],
+) -> tuple[dict[str, int], bool]:
+    """Sum token counts from opencode ``step_finish.part.tokens`` objects."""
+    total = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+    }
+    found_tokens = False
+
+    def _int(value: object) -> int:
+        if isinstance(value, bool):
+            return 0
+        try:
+            return int(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return 0
+
+    for event in events:
+        if event.get("type") != "step_finish":
+            continue
+        part = event.get("part")
+        if not isinstance(part, dict):
+            continue
+        tokens = part.get("tokens")
+        if not isinstance(tokens, dict):
+            continue
+        found_tokens = True
+        total["input_tokens"] += _int(tokens.get("input"))
+        total["output_tokens"] += _int(tokens.get("output")) + _int(
+            tokens.get("reasoning")
+        )
+        cache = tokens.get("cache")
+        if isinstance(cache, dict):
+            total["cache_read_tokens"] += _int(cache.get("read"))
+            total["cache_creation_tokens"] += _int(cache.get("write"))
+
+    return total, found_tokens
+
+
 def _extract_opencode_event_error(events: list[dict[str, object]]) -> str | None:
     """Pull a meaningful failure message from an in-band JSON error event."""
     for event in events:
@@ -353,7 +395,9 @@ class OpenCodeProvider:
         if num_turns == 0 and result_text:
             num_turns = 1
 
-        tokens = extract_token_usage(events)
+        tokens, found_tokens = _tokens_from_events(events)
+        if not found_tokens:
+            tokens = extract_token_usage(events)
 
         return RawResult(
             result=result_text,
