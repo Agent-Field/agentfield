@@ -49,7 +49,10 @@ resource "railway_project" "cp" {
 resource "railway_service" "cp" {
   name         = "control-plane"
   project_id   = railway_project.cp.id
-  source_image = "agentfield/control-plane-cloud:staging-0.1.118-rc.8"
+  # Tracks the newest production release at deploy time. Railway resolves the
+  # tag once per deploy and never auto-repulls, so existing deployments stay
+  # on whatever "latest" meant when they were created.
+  source_image = "agentfield/control-plane-cloud:latest"
 }
 resource "railway_variable" "api_key" {
   name           = "AGENTFIELD_API_KEY"

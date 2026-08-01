@@ -73,7 +73,7 @@ describe('deployment module and execution', () => {
     const module = readFileSync(join(withMirror.opts.workspaceDir, 'main.tf'), 'utf8')
     expect(module).toContain('resource "railway_project" "cp"')
     expect(module).toContain('workspace_id = var.workspace_id')
-    expect(module).toContain('source_image = "agentfield/control-plane-cloud:staging-0.1.118-rc.8"')
+    expect(module).toContain('source_image = "agentfield/control-plane-cloud:latest"')
     expect(module).not.toMatch(/\bvolume\s*=/)
     expect(module).toContain('output "project_id"')
     expect(module).toContain('output "environment_id"')
