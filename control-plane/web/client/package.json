@@ -88,8 +88,8 @@
         "js-yaml": "4.3.0",
         "esbuild": "0.28.1",
         "ws": "8.21.0",
-        "brace-expansion@1": "1.1.16",
-        "brace-expansion@2": "2.1.2",
+        "brace-expansion@1": "1.1.18",
+        "brace-expansion@2": "2.1.4",
         "postcss": "$postcss"
     },
     "pnpm": {
@@ -97,8 +97,8 @@
             "js-yaml": "4.3.0",
             "esbuild": "0.28.1",
             "ws": "8.21.0",
-            "brace-expansion@1": "1.1.16",
-            "brace-expansion@2": "2.1.2",
+            "brace-expansion@1": "1.1.18",
+            "brace-expansion@2": "2.1.4",
             "postcss": "8.5.18"
         }
     }
