@@ -93,9 +93,7 @@ func (a *Agent) sendNote(ctx context.Context, message string, tags []string) {
 
 	// Set headers
 	req.Header.Set("Content-Type", "application/json")
-	if a.cfg.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+a.cfg.Token)
-	}
+	a.applyControlPlaneAuth(req)
 
 	// Add execution context headers
 	if execCtx.RunID != "" {
